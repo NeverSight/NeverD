@@ -550,9 +550,15 @@ stack-passed pointers and hidden-register readers remain refusal boundaries.
 `SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
 `Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` cover this extension,
 including both C routes, selected/omitted bodies and original x64 execution.
-The five private ordinary roots still have 56 unknown argument occurrences per
-route; these generic regressions do not qualify their remaining GS, pointer
-capture and incoming-slot proofs.
+The five private ordinary roots retain seven unknown argument occurrences per
+route after validated source-body specialization removed 49 unused formal
+operands. The remaining partial-stack initialization, borrowed output storage
+and post-call register values still require their own proofs. The source-only
+helpers do not erase physical aliases or establish complete Windows execution.
+Their admission now belongs to the existing optimized source-module cache:
+HighC and LLVM C share the proof, helper HighIR is lazy, and temporary helper
+preparation is released after projection. Native and unoptimized queries keep
+their separate contracts.
 Only unread private bytes can lose their stores; negative offsets, implicit
 register inputs and source call home areas retain observations. SSA version
 zero alone is not an incoming register. Recursive or indirect callees, incoming

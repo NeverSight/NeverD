@@ -12,6 +12,7 @@
 #include "SessionImpl.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
@@ -184,17 +185,46 @@ TEST_F(SessionLLVMTest, SourceBodyExpansionKeepsNativeAndUnoptimizedQueries) {
   const std::string Source = Text(*Expanded->Module);
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
   EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, false, true), Expanded);
+  ASSERT_TRUE(Expanded->PreparedHigh);
+  ASSERT_TRUE(State.ensurePipeline()) << State.LastError;
+  SourceInlineHighView Original{
+      State.PipeResult.HighFuncs, State.PipeResult.HighSources, {}};
+  std::string FirstHigh;
+  for (unsigned Query = 0; Query != 2; ++Query) {
+    auto High = projectSpecializedHighSourceCalls(
+        State.Img, *Expanded->PreparedHigh, {}, nullptr, Original);
+    ASSERT_TRUE(High);
+    std::string HighText;
+    llvm::raw_string_ostream OS(HighText);
+    CEmitterOptions Options;
+    Options.Image = &State.Img;
+    Options.SourceBodyOrigins = &High->BodyOrigins;
+    HighCEmitter().emit(High->Functions, OS, Options);
+    EXPECT_EQ(HighText.find("__builtin_trap"), std::string::npos);
+    EXPECT_NE(HighText.find("neverd_source_body_1080"), std::string::npos);
+    if (Query == 0)
+      FirstHigh = HighText;
+    else
+      EXPECT_EQ(HighText, FirstHigh);
+    EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, false, true), Expanded);
+    EXPECT_EQ(Text(*Expanded->Module), Source);
+  }
   for (const auto &[NoOpt, OriginalStorage] :
        {std::pair{true, true}, std::pair{false, false}}) {
     const auto *Kept =
         State.ensureFunctionLlvmModule(0x1000, NoOpt, OriginalStorage);
     ASSERT_TRUE(Kept) << State.LastError;
+    EXPECT_FALSE(Kept->PreparedHigh);
     const auto *Callee = Kept->Module->getFunction("body_callee");
     ASSERT_TRUE(Callee);
     EXPECT_EQ(Callee->arg_size(), 7u);
     EXPECT_NE(Text(*Kept->Module).find("__builtin_trap"), std::string::npos);
   }
   EXPECT_EQ(Text(*Expanded->Module), Source);
+  const std::weak_ptr<SourceInlineHighPreparation> Kept =
+      Expanded->PreparedHigh;
+  State.clearPipeline();
+  EXPECT_TRUE(Kept.expired());
 }
 
 TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedSourceSpillArguments) {

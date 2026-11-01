@@ -1558,6 +1558,7 @@ target_include_directories(NeverDLiftTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/loader/COFF/unwind
   ${LLVM_INCLUDE_DIRS}
 )
+target_link_libraries(NeverDLiftTests PRIVATE LLVMAsmParser)
 
 add_neverd_unittest(NeverDHighSymSimplifyTests
   core/HighSymSimplifyTests.cpp
@@ -2572,6 +2573,8 @@ add_neverd_unittest(NeverDNativePointerRelocationBoundaryTests
   BackendC
   BackendLLVM
   Types
+
+  LINK_LIBS LLVMAsmParser
 )
 
 target_compile_definitions(NeverDNativePointerRelocationBoundaryTests PRIVATE
@@ -3583,6 +3586,36 @@ if(APPLE)
                            ${scalar_index_cycle_a64_macho_exe}
                            ${writable_pointer_induction_a64_macho_exe}
                            ${writable_pointer_induction_x64_macho_exe})
+endif()
+
+# These freestanding Mach-O fixtures need no SDK or target libraries. LLD can
+# link them on non-Apple hosts so loader and IR checks run there as well.
+if(NOT APPLE)
+  find_program(MACHO_LLD_EXEC NAMES ld64.lld ld.lld lld)
+  if(MACHO_LLD_EXEC)
+    foreach(fixture_name test_bounded_mixed_pointer_table_a64_macho
+                         test_scalar_index_cycle_a64_macho)
+      set(fixture_src "${CMAKE_CURRENT_SOURCE_DIR}/format/${fixture_name}.s")
+      set(fixture_obj "${CMAKE_CURRENT_BINARY_DIR}/${fixture_name}.o")
+      set(fixture_exe "${CMAKE_CURRENT_BINARY_DIR}/${fixture_name}")
+      add_custom_command(
+        OUTPUT ${fixture_obj}
+        COMMAND ${CLANG_EXEC} -target arm64-apple-macos14 -c ${fixture_src}
+                -o ${fixture_obj}
+        DEPENDS ${fixture_src}
+        COMMENT "Assembling ${fixture_name} (AArch64 Mach-O)"
+        VERBATIM)
+      add_custom_command(
+        OUTPUT ${fixture_exe}
+        COMMAND ${MACHO_LLD_EXEC} -flavor darwin -arch arm64
+                -platform_version macos 14.0 14.0 -e _main
+                -o ${fixture_exe} ${fixture_obj}
+        DEPENDS ${fixture_obj}
+        COMMENT "Linking ${fixture_name} (AArch64 Mach-O)"
+        VERBATIM)
+      list(APPEND TEST_OBJECTS ${fixture_exe})
+    endforeach()
+  endif()
 endif()
 
 # A fixture for another architecture can include the x86-64 source of the

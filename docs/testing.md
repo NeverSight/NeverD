@@ -15475,6 +15475,14 @@ with adjacent data. Run `NeverDFunctionAdmissionTests`,
 `NeverDNativePointerRelocationBoundaryTests`,
 `NeverDMachOPointerRelocationBoundaryTests` and `NeverDSourcePatchLayoutTests`
 when changing this shared entry boundary.
+The bounded mixed-pointer walk and scalar index-cycle Mach-O fixtures also
+link with LLD on non-Apple hosts, without a target SDK. Their loader, MedIR and
+LLVM checks run there; the scalar case compiles the generated IR to AArch64
+Mach-O at O0/O2. Typed LLVM checks keep both register-offset load indices as
+numeric recurrences with zero/one seeds, separate from their table bases.
+Apple Silicon additionally executes the original fixtures
+and the rebuilt scalar program. Cross-target compilation does not establish
+native execution on an Apple host.
 `FunctionAdmission.NativeOutputRequiresEverySelectedEntry` checks mixed valid,
 truncated and unmapped selections for patch and lift output across COFF, ELF
 and Mach-O, with and without the shared analysis cache.
@@ -16850,6 +16858,11 @@ checks the optimized original-image view, repeat queries, native LLVM and the
 unoptimized view against the same session without changing the native callee's
 seven parameter positions. These are source and ABI tests, not full execution
 of Windows services.
+The same tests replay the admitted HighC helpers from the cached LLVM proof,
+check stable output without mutating the original views, exclude native and
+unoptimized queries from that cache, and release the preparation on pipeline
+invalidation. Private corpus checks compare both C query orders as well as
+single-threaded and parallel output hashes before measuring latency.
 `OverwrittenCallClobberSpills.*` checks post-call scratch stores,
 with and without flags transfers and unused restores. Both source routes keep
 the call and flags effects while discarding overwritten values. COFF, ELF and

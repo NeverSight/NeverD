@@ -654,29 +654,27 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
           : std::string();
   HighSourceMap EditedSources = S->PipeResult.HighSources;
   std::map<std::string, va_t> SourceBodyOrigins;
-  if (S->Img.Arch == Arch::X64 && S->Img.abiFormat() == BinaryFormat::COFF &&
-      !S->UsingAnalystCallContracts && S->PipeResult.OmittedCallees &&
-      S->SourceOptions.CallTypes.empty() &&
-      S->SourceOptions.StackFrame.empty() &&
-      S->SourceOptions.VariableTypes.empty() &&
-      S->SourceOptions.VariableEdits.empty() &&
-      hasUnavailableSourceStackCall(Single)) {
+  if (!S->UsingAnalystCallContracts &&
+      supportsSourceCallSpecialization(S->Img, S->PipeResult,
+                                       S->SourceOptions) &&
+      hasUnavailableSourceStackCall(Single, &S->PipeResult)) {
     // Optional source recovery must not replace the HighC view's error state
     // if the LLVM proof cannot admit this particular body.
     llvm::SaveAndRestore<std::string> ErrorScope(S->LastError);
-    if (const auto *Initial =
-            S->ensureFunctionLlvmModule(FuncEntry, true, true)) {
+    if (const auto *Prepared =
+            S->ensureFunctionLlvmModule(FuncEntry, false, true);
+        Prepared && Prepared->PreparedHigh) {
       PipelineOptions AnalysisOptions;
       S->applyAnalysisOptions(AnalysisOptions);
       AnalysisOptions.AnalysisCache = &S->AnalysisCache;
       SourceInlineHighView Original{Single, EditedSources, {}};
-      auto Specialized = specializeUnavailableSourceCalls(
-          S->Img, S->PipeResult, *Initial->Module, S->decompileDebug(),
-          AnalysisOptions, S->SourceOptions, &Original);
-      if (Specialized.High) {
-        Single = std::move(Specialized.High->Functions);
-        EditedSources = std::move(Specialized.High->Sources);
-        SourceBodyOrigins = std::move(Specialized.High->BodyOrigins);
+      auto Specialized = projectSpecializedHighSourceCalls(
+          S->Img, *Prepared->PreparedHigh, AnalysisOptions, S->decompileDebug(),
+          Original);
+      if (Specialized) {
+        Single = std::move(Specialized->Functions);
+        EditedSources = std::move(Specialized->Sources);
+        SourceBodyOrigins = std::move(Specialized->BodyOrigins);
       }
     }
   }

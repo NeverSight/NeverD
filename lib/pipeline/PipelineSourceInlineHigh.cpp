@@ -92,27 +92,62 @@ public:
 
 } // namespace
 
-bool hasUnavailableSourceStackCall(const std::vector<HighFunc> &Functions) {
-  bool Found = false;
+bool hasUnavailableSourceStackCall(const std::vector<HighFunc> &Functions,
+                                   const PipelineResult *Original) {
+  SourceInlineRequests Requests;
+  std::set<va_t> Roots;
   const auto Layout =
       getTargetRegInfo(Arch::X64).integerArgumentLayout(BinaryFormat::COFF);
   size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
   llvm::SmallPtrSet<const HighExpr *, 32> Seen;
   const auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
-    if (!E || Found || !Remaining || !Seen.insert(E.get()).second)
+    if (!E || !Remaining || !Seen.insert(E.get()).second)
       return;
     --Remaining;
     if (E->Kind == ExprKind::Call && !E->IsIndirectCall && E->CallAddr &&
         !E->SourceCallHint)
       for (unsigned P = Layout.Registers.size(); P < E->Operands.size(); ++P)
-        Found |= simpleOperand(E->Operands[P], true);
+        if (simpleOperand(E->Operands[P], true))
+          Requests[E->CallAddr].insert(P);
     E->forEachChildExpr([&](const ExprPtr &Child) { Self(Self, Child); });
   };
-  for (const auto &Function : Functions)
+  for (const auto &Function : Functions) {
+    Roots.insert(Function.Entry);
     walkStmts(Function.Body, [&](const HighStmt &Statement) {
       forEachExpr(Statement, [&](const ExprPtr &E) { Visit(Visit, E); });
     });
-  return Found;
+  }
+  return !Requests.empty() &&
+         (!Original ||
+          !sourceInlineSupports(*Original, Requests, Roots).empty());
+}
+
+std::shared_ptr<SourceInlineHighPreparation>
+prepareSpecializedHighSourceCalls(PipelineResult &Recovered,
+                                  std::map<va_t, SourceInlineBody> Bodies) {
+  if (Bodies.empty())
+    return {};
+  auto Prepared = std::make_shared<SourceInlineHighPreparation>();
+  Prepared->Bodies = std::move(Bodies);
+  auto &Kept = *(Prepared->Recovered = std::make_shared<PipelineResult>());
+  Kept.SourceImage = Recovered.SourceImage;
+  Kept.Success = Recovered.Success;
+  Kept.HighIRDeferred = true;
+  Kept.LowFuncs = std::move(Recovered.LowFuncs);
+  for (auto &Function : Recovered.MedFuncs)
+    if (Prepared->Bodies.contains(Function.Entry))
+      Kept.MedFuncs.push_back(std::move(Function));
+  Kept.CallPrototypeArguments = std::move(Recovered.CallPrototypeArguments);
+  Kept.LibraryRecognitions = std::move(Recovered.LibraryRecognitions);
+  return Prepared;
+}
+
+std::optional<SourceInlineHighView> projectSpecializedHighSourceCalls(
+    const BinaryImage &Image, SourceInlineHighPreparation &Prepared,
+    const PipelineOptions &Options, DebugContext *Debug,
+    const SourceInlineHighView &Original) {
+  return specializeHighSourceBodies(Image, *Prepared.Recovered, Options, Debug,
+                                    Prepared.Bodies, Original);
 }
 
 std::optional<SourceInlineHighView>
@@ -128,7 +163,15 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
   std::erase_if(Recovered.MedFuncs, [&](const MedFunc &Function) {
     return !Bodies.contains(Function.Entry);
   });
-  if (!Pipeline().resumeHighIR(Image, Options, Recovered, Debug))
+  const bool Ready = Pipeline().resumeHighIR(Image, Options, Recovered, Debug);
+  // Only the projected helper DAGs are used on later source queries. Release
+  // the temporary machine/MedIR preparation instead of retaining another copy
+  // of the caller and its signature analysis with each cached module.
+  std::vector<LowFunc>().swap(Recovered.LowFuncs);
+  std::vector<MedFunc>().swap(Recovered.MedFuncs);
+  std::vector<sigs::LibraryRecognition>().swap(Recovered.LibraryRecognitions);
+  Recovered.CallPrototypeArguments.clear();
+  if (!Ready)
     return std::nullopt;
 
   struct Helper {

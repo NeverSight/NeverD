@@ -22,13 +22,21 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -2127,10 +2135,11 @@ TEST_F(NativePointerRelocationBoundary,
 
 TEST_F(NativePointerRelocationBoundary,
        BoundedMixedPointerTableWalkUsesOnlyRuntimeReachableSlots) {
-#if !defined(__APPLE__)
-  GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
-#else
   const fs::path Path = fixture("test_bounded_mixed_pointer_table_a64_macho");
+#if !defined(__APPLE__)
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "AArch64 Mach-O fixture requires an Apple toolchain or LLD";
+#endif
   ASSERT_TRUE(fs::exists(Path));
 
   auto ImgOrErr = loadBinary(Path);
@@ -2147,7 +2156,7 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_EQ(Img.CodePtrRelocSlots.count(Table->VA + 32), 1u);
   EXPECT_EQ(Img.DataPtrRelocSlots.count(Table->VA + 56), 1u);
 
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
   for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
     RunResult Native = exec(Path.string(), {});
     EXPECT_EQ(Native.exitCode, 0) << Native.err;
@@ -2168,19 +2177,19 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_NE(LLVM.out.find("getelementptr i8, ptr @__nd_codeptr_"),
             std::string::npos)
       << LLVM.out;
-#endif
 }
 
 TEST_F(NativePointerRelocationBoundary,
        ScalarSelectIndexCycleRemainsNumericTableOffset) {
-#if !defined(__APPLE__)
-  GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
-#else
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "cross-target Mach-O fixtures require Clang's GNU-style "
                     "driver";
 
   const fs::path Path = fixture("test_scalar_index_cycle_a64_macho");
+#if !defined(__APPLE__)
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "AArch64 Mach-O fixture requires an Apple toolchain or LLD";
+#endif
   ASSERT_TRUE(fs::exists(Path));
 
   auto ImgOrErr = loadBinary(Path);
@@ -2199,7 +2208,7 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_FALSE(Img.isCodeAddress(Tables->VA));
   EXPECT_TRUE(Img.hasObjectDataProvenance(Tables->VA));
 
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
   for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
     RunResult Native = exec(Path.string(), {});
     EXPECT_EQ(Native.exitCode, 0) << Native.err;
@@ -2212,7 +2221,6 @@ TEST_F(NativePointerRelocationBoundary,
   // the live numeric index cycle; both table reads contribute to the result.
   EXPECT_NE(Med.out.find("PHI X28."), std::string::npos) << Med.out;
   EXPECT_NE(Med.out.find("SELECT X28."), std::string::npos) << Med.out;
-  EXPECT_NE(Med.out.find("INT_LEFT"), std::string::npos) << Med.out;
 
   RunResult LLVM = liftToLLVMIRUnopt(Path);
   ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
@@ -2223,16 +2231,79 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_NE(Probe.find("ptr @__nd_data_"), std::string_view::npos) << Probe;
 
   const fs::path LLVMPath = tmpFile("scalar_index_cycle_a64_macho.ll");
-  const fs::path IntrinsicShim =
-      tmpFile("scalar_index_cycle_a64_macho_intrinsics.s");
-  const fs::path RebuiltPath = tmpFile("scalar_index_cycle_a64_macho.rebuilt");
+  const fs::path LLVMObject = tmpFile("scalar_index_cycle_a64_macho.o");
   const size_t ModuleStart = LLVM.out.find("; ModuleID");
   ASSERT_NE(ModuleStart, std::string::npos) << LLVM.out;
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(
+      llvm::StringRef(LLVM.out).drop_front(ModuleStart), Diagnostic, Context);
+  ASSERT_NE(Module, nullptr) << Diagnostic.getMessage().str();
+  const auto *LiftedProbe = Module->getFunction("probe");
+  ASSERT_NE(LiftedProbe, nullptr);
+
+  // Register-offset loads own their scale instead of expanding it into a
+  // separate shift. Both indices must remain numeric recurrences: a table or
+  // frame address, argument, load or unknown value cannot initialize them.
+  llvm::SmallPtrSet<const llvm::Value *, 16> Seen;
+  const auto NumericIndex = [&](auto &&Self, const llvm::Value *Value) -> bool {
+    if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(Value))
+      return C->isZero() || C->isOne() || C->equalsInt(3);
+    if (!Seen.insert(Value).second)
+      return true;
+    const auto *I = llvm::dyn_cast<llvm::Instruction>(Value);
+    if (!I || !I->getType()->isIntegerTy())
+      return false;
+    switch (I->getOpcode()) {
+    case llvm::Instruction::PHI:
+    case llvm::Instruction::Select:
+    case llvm::Instruction::ICmp:
+    case llvm::Instruction::Add:
+    case llvm::Instruction::ZExt:
+    case llvm::Instruction::Trunc:
+      return llvm::all_of(I->operands(),
+                          [&](const auto &U) { return Self(Self, U.get()); });
+    default:
+      return false;
+    }
+  };
+  unsigned Loads = 0;
+  bool ZeroIndex = false, OneIndex = false;
+  for (const auto &Block : *LiftedProbe)
+    for (const auto &I : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (!Call)
+        continue;
+      const auto *Asm =
+          llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+      if (!Asm ||
+          Asm->getAsmString().find("neverd.address.load") == std::string::npos)
+        continue;
+      ++Loads;
+      ASSERT_EQ(Call->arg_size(), 3u);
+      const auto *Index = llvm::dyn_cast<llvm::PHINode>(Call->getArgOperand(1));
+      ASSERT_NE(Index, nullptr) << Probe;
+      EXPECT_TRUE(Index->getType()->isIntegerTy(64));
+      Seen.clear();
+      EXPECT_TRUE(NumericIndex(NumericIndex, Index)) << Probe;
+      for (const auto &Input : Index->incoming_values())
+        if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(Input.get())) {
+          ZeroIndex |= C->isZero();
+          OneIndex |= C->isOne();
+        }
+    }
+  EXPECT_EQ(Loads, 2u);
+  EXPECT_TRUE(ZeroIndex);
+  EXPECT_TRUE(OneIndex);
   {
     std::ofstream OS(LLVMPath);
     ASSERT_TRUE(OS) << LLVMPath;
     OS << std::string_view(LLVM.out).substr(ModuleStart);
   }
+#if defined(__APPLE__)
+  const fs::path IntrinsicShim =
+      tmpFile("scalar_index_cycle_a64_macho_intrinsics.s");
+  const fs::path RebuiltPath = tmpFile("scalar_index_cycle_a64_macho.rebuilt");
   {
     std::ofstream OS(IntrinsicShim);
     ASSERT_TRUE(OS) << IntrinsicShim;
@@ -2247,12 +2318,19 @@ TEST_F(NativePointerRelocationBoundary,
   ASSERT_EQ(SDK.exitCode, 0) << SDK.err;
   const auto Sysroot = llvm::StringRef(SDK.out).trim().str();
   ASSERT_FALSE(Sysroot.empty());
+#endif
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
+    RunResult Object =
+        exec(NEVERD_TEST_CLANG,
+             {Optimization, "-target", "arm64-apple-macos14", "-c",
+              LLVMPath.string(), "-o", LLVMObject.string()});
+    ASSERT_EQ(Object.exitCode, 0) << Object.err;
+#if defined(__APPLE__)
     RunResult Compile =
         exec(NEVERD_TEST_CLANG,
-             {Optimization, "-target", "arm64-apple-macos14", "-isysroot",
-              Sysroot, LLVMPath.string(), IntrinsicShim.string(), "-o",
+             {"-target", "arm64-apple-macos14", "-isysroot", Sysroot,
+              LLVMObject.string(), IntrinsicShim.string(), "-o",
               RebuiltPath.string()});
     ASSERT_EQ(Compile.exitCode, 0) << Compile.err;
 #if defined(__aarch64__)
@@ -2261,8 +2339,8 @@ TEST_F(NativePointerRelocationBoundary,
       EXPECT_EQ(Rebuilt.exitCode, 0) << Rebuilt.err;
     }
 #endif
-  }
 #endif
+  }
 }
 
 TEST_F(NativePointerRelocationBoundary,

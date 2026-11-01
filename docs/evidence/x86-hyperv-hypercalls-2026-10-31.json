@@ -1,4 +1,5 @@
 {
+  "published_path_normalization": "Private checkout and host-tool prefixes are rendered as <repository>/, <llvm-checkout>/, <neverc-checkout>/ and <host-tools>/. All other arguments, outcomes, timings and original artifact digests are retained.",
   "schema_version": 1,
   "scope": "Explicit returning x64 Hyper-V page register transport, with KVM and VMRUN regressions; not all x86 or Microsoft service semantics",
   "repositories": {
@@ -41,7 +42,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -61,7 +62,7 @@
             "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -114,7 +115,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -134,7 +135,7 @@
             "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -187,7 +188,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -254,7 +255,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -270,7 +271,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -324,7 +325,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -340,7 +341,7 @@
             "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -394,7 +395,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -414,7 +415,7 @@
             "sha256": "d8dd2428330d61df1ede55e10df01708edf1938dbcfc2f97412ea083e826300b"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -467,7 +468,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -487,7 +488,7 @@
             "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -540,7 +541,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -560,7 +561,7 @@
             "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -613,7 +614,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -680,7 +681,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -700,7 +701,7 @@
             "sha256": "d8dd2428330d61df1ede55e10df01708edf1938dbcfc2f97412ea083e826300b"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -753,7 +754,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -905,9 +906,9 @@
         ],
         "tools": {
           "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "<host-tools>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<host-tools>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -964,9 +965,9 @@
         ],
         "tools": {
           "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "<host-tools>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<host-tools>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1023,8 +1024,8 @@
         ],
         "tools": {
           "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<host-tools>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<host-tools>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1079,9 +1080,9 @@
         ],
         "tools": {
           "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "<host-tools>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<host-tools>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1138,9 +1139,9 @@
         ],
         "tools": {
           "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<llvm-checkout>/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "<host-tools>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<host-tools>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1197,8 +1198,8 @@
         ],
         "tools": {
           "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "<host-tools>/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "<host-tools>/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
           "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
           "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
         },
@@ -1253,7 +1254,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -1273,7 +1274,7 @@
             "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -1326,7 +1327,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -1346,7 +1347,7 @@
             "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
           },
           "llc": {
-            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "path": "<llvm-checkout>/build-intrinsics/bin/llc",
             "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
           }
         },
@@ -1399,7 +1400,7 @@
         ],
         "tools": {
           "clang": {
-            "path": "/home/ad/.local/bin/clang",
+            "path": "<host-tools>/bin/clang",
             "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "as": {
@@ -1470,91 +1471,91 @@
       "skipped": [
         {
           "name": "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86VirtualizationSource\n[ RUN      ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1212: Skipped\nrequires the qualified native virtualization SDK\n\n[  SKIPPED ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls (0 ms)\n[----------] 1 test from X86VirtualizationSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86VirtualizationSource\n[ RUN      ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1212: Skipped\nrequires the qualified native virtualization SDK\n\n[  SKIPPED ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls (0 ms)\n[----------] 1 test from X86VirtualizationSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n"
         },
         {
           "name": "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemRegisterSource\n[ RUN      ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1921: Skipped\nrequires the native control/debug register SDK\n\n[  SKIPPED ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects (0 ms)\n[----------] 1 test from X86SystemRegisterSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemRegisterSource\n[ RUN      ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1921: Skipped\nrequires the native control/debug register SDK\n\n[  SKIPPED ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects (0 ms)\n[----------] 1 test from X86SystemRegisterSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n"
         },
         {
           "name": "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86DescriptorStateSource\n[ RUN      ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1681: Skipped\nrequires the explicit descriptor-state address SDK\n\n[  SKIPPED ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects (0 ms)\n[----------] 1 test from X86DescriptorStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86DescriptorStateSource\n[ RUN      ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1681: Skipped\nrequires the explicit descriptor-state address SDK\n\n[  SKIPPED ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects (0 ms)\n[----------] 1 test from X86DescriptorStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n"
         },
         {
           "name": "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86DescriptorStateSource\n[ RUN      ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068: Skipped\nrequires the explicit descriptor-address SDK\n\n[  SKIPPED ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats (0 ms)\n[----------] 1 test from X86DescriptorStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86DescriptorStateSource\n[ RUN      ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068: Skipped\nrequires the explicit descriptor-address SDK\n\n[  SKIPPED ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats (0 ms)\n[----------] 1 test from X86DescriptorStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n"
         },
         {
           "name": "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86ScalarSystemSource\n[ RUN      ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1865: Skipped\nrequires the scalar MSR/port intrinsic SDK\n\n[  SKIPPED ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects (0 ms)\n[----------] 1 test from X86ScalarSystemSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86ScalarSystemSource\n[ RUN      ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1865: Skipped\nrequires the scalar MSR/port intrinsic SDK\n\n[  SKIPPED ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects (0 ms)\n[----------] 1 test from X86ScalarSystemSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n"
         },
         {
           "name": "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2370: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2370: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n"
         },
         {
           "name": "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2401: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2401: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n"
         },
         {
           "name": "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2506: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2506: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n"
         },
         {
           "name": "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2933: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2933: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n"
         },
         {
           "name": "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068: Skipped\nrequires the explicit descriptor-address SDK\n\n[  SKIPPED ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068: Skipped\nrequires the explicit descriptor-address SDK\n\n[  SKIPPED ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n"
         },
         {
           "name": "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SgxSource.NativeContractsRejectLostEffectsAndMode\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SgxSource\n[ RUN      ] X86SgxSource.NativeContractsRejectLostEffectsAndMode\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4778: Skipped\nnative SGX completion requires the qualified fork\n\n[  SKIPPED ] X86SgxSource.NativeContractsRejectLostEffectsAndMode (0 ms)\n[----------] 1 test from X86SgxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SgxSource.NativeContractsRejectLostEffectsAndMode\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SgxSource.NativeContractsRejectLostEffectsAndMode\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SgxSource\n[ RUN      ] X86SgxSource.NativeContractsRejectLostEffectsAndMode\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4778: Skipped\nnative SGX completion requires the qualified fork\n\n[  SKIPPED ] X86SgxSource.NativeContractsRejectLostEffectsAndMode (0 ms)\n[----------] 1 test from X86SgxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SgxSource.NativeContractsRejectLostEffectsAndMode\n"
         },
         {
           "name": "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeContractsRejectLostEffectsAndControls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeContractsRejectLostEffectsAndControls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5269: Skipped\nlinked SDK predates explicit AMX controls\n\n[  SKIPPED ] X86AmxSource.NativeContractsRejectLostEffectsAndControls (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeContractsRejectLostEffectsAndControls\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeContractsRejectLostEffectsAndControls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeContractsRejectLostEffectsAndControls\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5269: Skipped\nlinked SDK predates explicit AMX controls\n\n[  SKIPPED ] X86AmxSource.NativeContractsRejectLostEffectsAndControls (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeContractsRejectLostEffectsAndControls\n"
         },
         {
           "name": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588: Skipped\nHost does not provide AMX-TILE; native restart unqualified\n\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588: Skipped\nHost does not provide AMX-TILE; native restart unqualified\n\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
-          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n"
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n"
         }
       ],
       "junit_sha256": "4191e4ba54a6fda540e50fa948a42d3c9cadd2bc05b5ea258c0bd5a49d07a86f"
@@ -1566,55 +1567,55 @@
       "skipped": [
         {
           "name": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588: Skipped\nHost does not provide AMX-TILE; native restart unqualified\n\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588: Skipped\nHost does not provide AMX-TILE; native restart unqualified\n\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n"
         },
         {
           "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
-          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n"
+          "output": "Running main() from <repository>/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n<repository>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n"
         }
       ],
       "junit_sha256": "a2b55f6a29ca4a4d80ec3559769c3a11d1a14ad981095a8bebb76c0483366085"
     }
   },
   "tools": {
-    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
-    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
-    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58",
-    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so": "541c968491e114f75cbdae2bf6a915e6028002ff772c39a60754bcb5f76ffb28",
-    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd": "1b57b62721c7ad4b27190002b7964578ad0c57e16f12c1ca1617677122adce7f",
-    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so": "c728f2c94876ddad2f3fa6de5d40bdd0a70d68ebf452f04ddd7cf7fbfb6767c8"
+    "<llvm-checkout>/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+    "<neverc-checkout>/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+    "<repository>/build-x86/bin/neverd": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58",
+    "<repository>/build-x86/bin/libneverd.so": "541c968491e114f75cbdae2bf6a915e6028002ff772c39a60754bcb5f76ffb28",
+    "<repository>/build-x86-native/bin/neverd": "1b57b62721c7ad4b27190002b7964578ad0c57e16f12c1ca1617677122adce7f",
+    "<repository>/build-x86-native/bin/libneverd.so": "c728f2c94876ddad2f3fa6de5d40bdd0a70d68ebf452f04ddd7cf7fbfb6767c8"
   },
   "native_llvm_configuration": {
     "kind": "Local development CMake exports referencing the clean LLVM build tree, not a released SDK",
