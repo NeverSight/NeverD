@@ -12,10 +12,10 @@
 #include "../../lib/analysis/arch/x86_64/X64StreamStore.h"
 #include "../../lib/analysis/core/RecoveryArchitecture.h"
 #include "../../lib/lift/X86/X86CompatibilityReturnUndefined.h"
-#include "../../lib/lift/X86/X86ControlMoveUndefined.h"
 #include "../../lib/lift/X86/X86LegacyVectorMoveAudit.h"
 #include "../../lib/lift/X86/X86MultiplyUndefined.h"
 #include "../../lib/lift/X86/X86NativeStateAudit.h"
+#include "../../lib/lift/X86/X86RegisterMoveUndefined.h"
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
@@ -1465,8 +1465,8 @@ TEST(X86NativeStateAudit, CR4TransfersKeepNativeEffectsAndSixArbitraryFlags) {
         ASSERT_EQ(
             Dec.decodeOneForLift(Bytes.data(), Bytes.size(), CodeAddress, Insn),
             int(Bytes.size()));
-        ASSERT_TRUE(controlmoveundefined::form(Insn.Raw, Arch::X64));
-        EXPECT_FALSE(controlmoveundefined::form(Insn.Raw, Arch::X86));
+        ASSERT_TRUE(registermoveundefined::form(Insn.Raw, Arch::X64));
+        EXPECT_FALSE(registermoveundefined::form(Insn.Raw, Arch::X86));
         std::vector<LowOp> Ops, Plain;
         LowInstructionUndefinedEffects Effects;
         LowInstructionPreservedState Preserved;
@@ -1554,7 +1554,7 @@ TEST(X86NativeStateAudit, CR4AuditRejectsMismatchedBytesAndDecoderDetails) {
       ASSERT_EQ(Dec.decodeOneForLift(Bytes, sizeof(Bytes), CodeAddress, Insn),
                 4);
       Mutate(*Insn.Raw, Opcode == 0x20 ? 0 : 1, Opcode == 0x20 ? 1 : 0);
-      EXPECT_FALSE(controlmoveundefined::form(Insn.Raw, Arch::X64));
+      EXPECT_FALSE(registermoveundefined::form(Insn.Raw, Arch::X64));
       expectUnaudited(Dec, Insn);
     }
 }
@@ -1931,6 +1931,7 @@ TEST(X86NativeStateAudit, DivisionRejectsUnauditedFormsAndForgedDetails) {
 }
 
 #include "NativeCompareExchangeAuditTests.inc"
+#include "NativeDebugRegisterAuditTests.inc"
 #include "NativeLockedAddAuditTests.inc"
 #include "NativeStreamStoreAuditTests.inc"
 

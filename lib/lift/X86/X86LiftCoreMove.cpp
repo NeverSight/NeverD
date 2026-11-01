@@ -11,10 +11,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "X86ControlMoveUndefined.h"
 #include "X86FPScalarConvertState.h"
 #include "X86LiftAPXValidation.h"
 #include "X86LiftDetail.h"
+#include "X86RegisterMoveUndefined.h"
 #include "X86ScalarFPConversion.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -108,8 +108,8 @@ std::optional<bool> liftSystemRegisterMove(X86Lifter::LiftState &S,
   if (int Cr = CrIndex(Src); Cr >= 0) {
     if (auto Id = ReadCr(Cr); Id && Dst.type == X86_OP_REG) {
       S.emitIntrinsic(*Id, GPR(Dst));
-      if (controlmoveundefined::supportsControlIndex(Cr))
-        controlmoveundefined::record(S);
+      if (registermoveundefined::supportsControlIndex(Cr))
+        registermoveundefined::record(S);
       return true;
     }
     return false;
@@ -117,8 +117,8 @@ std::optional<bool> liftSystemRegisterMove(X86Lifter::LiftState &S,
   if (int Cr = CrIndex(Dst); Cr >= 0) {
     if (auto Id = WriteCr(Cr); Id && Src.type == X86_OP_REG) {
       S.emitIntrinsic(*Id, NdVar(), {GPR(Src)});
-      if (controlmoveundefined::supportsControlIndex(Cr))
-        controlmoveundefined::record(S);
+      if (registermoveundefined::supportsControlIndex(Cr))
+        registermoveundefined::record(S);
       return true;
     }
     return false;
@@ -128,6 +128,7 @@ std::optional<bool> liftSystemRegisterMove(X86Lifter::LiftState &S,
       return false;
     S.emitIntrinsic(Intrinsic::ReadDr, GPR(Dst),
                     {NdVar::scalar(static_cast<uint64_t>(Dr), 4)});
+    registermoveundefined::record(S);
     return true;
   }
   if (int Dr = DrIndex(Dst); Dr >= 0 && Src.type == X86_OP_REG) {
@@ -135,6 +136,7 @@ std::optional<bool> liftSystemRegisterMove(X86Lifter::LiftState &S,
       return false;
     S.emitIntrinsic(Intrinsic::WriteDr, NdVar(),
                     {NdVar::scalar(static_cast<uint64_t>(Dr), 4), GPR(Src)});
+    registermoveundefined::record(S);
     return true;
   }
   return std::nullopt;

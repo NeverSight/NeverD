@@ -1064,6 +1064,8 @@ TEST_F(X64ContinuationExportTest,
           request(R"("instructions":[4096.25])"),
           request(R"("instructions":[4096],"entries":[4096])"),
           request(R"("instructions":[4096],"native_timestamp_reads":1)"),
+          request(R"("instructions":[4096],"native_debug_register_access":1)"),
+          request(R"("instructions":[4096],"native_page_global_access":null)"),
           request(R"("instructions":[4096],"follow_internal_calls":1)"),
           request(R"("instructions":[4096],"follow_internal_calls":null)"),
           request(R"("entries":[4096],"follow_direct_jumps":1)"),
@@ -1387,6 +1389,7 @@ TEST_F(X64ContinuationExportTest,
 #include "X64JumpRegionContinuationTests.inc"
 #include "X64KvmContinuationExportTests.inc"
 #include "X64MpxContinuationExportTests.inc"
+#include "X64NativeRegisterExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 

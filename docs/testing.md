@@ -18005,3 +18005,16 @@ StreamingStore regressions check instruction bytes, operand metadata, alignment,
 
 `InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
 These tests check exhaustive partitions, differing predecessor domains, prefix writes, discovery opt-out, incomplete domains and exact/short budgets. Both C routes execute at O0/O2 with ASan/UBSan. Independent full-state and byte oracles cover clipped counts, both directions, overlap, zero-count invalid pointers, early terminators and loop padding. They do not establish ordinary ABI recovery.
+
+`X86NativeStateAudit.Debug*` checks 480 canonical debug-register transfers,
+six independent undefined arithmetic flags, unchanged native operations,
+DR4/DR5 refusal and raw/detail disagreement. `NativeRegisters*`,
+`NativePageGlobalWritesInvalidateGlobalTlb` and `NativeDebugAliases*` in
+`NeverDX64ContinuationSourceTests` execute both C routes at O0/O2 on native
+x64 KVM. They check all GPRs, all six admitted debug banks and CR4, all 64
+arbitrary-flag combinations, every forbidden non-PGE control-bit change and
+a stale global translation that must be flushed. Missing KVM is a skip, not
+privileged execution evidence. `NativeRegisterBindingsRemainIndependent` in
+`NeverDX64ContinuationExportTests` checks independent opt-ins and generated
+source compilation. These bounded no-fault bindings do not qualify debug
+exception delivery, DR4/DR5 aliases or arbitrary CR4 changes.
