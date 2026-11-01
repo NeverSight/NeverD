@@ -18266,6 +18266,13 @@ KernelNoFaultV1. Run `NeverDX64ContinuationSourceTests`,
 `NeverDX86NativeStateAuditTests` and `NeverDInterpreterMachineStateTests`.
 Cache placement and timing are outside these comparisons.
 
+`X64ContinuationSourceTest.Popfq*` and
+`X64ContinuationExportTest.Popfq*` execute HighC and LLVMC at O0/O2 with
+ASan/UBSan. Independent full-state and memory oracles cover unaligned stack
+loads, status/system flag combinations, ignored bits, profile rejection before
+state commit, V1/V2 versus SMAP AC, unchanged word-POPF/RTM boundaries, and
+public dispatch/resumption budgets. These tests do not execute host POPFQ.
+
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
 
 The scalar LOCK CMPXCHG audit requires read/write destination access and

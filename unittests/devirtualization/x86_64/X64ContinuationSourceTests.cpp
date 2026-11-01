@@ -1801,6 +1801,66 @@ int main(void) {
   run(Bytes, Entries, Harness, false, smapOptions(), "lock xadd");
 }
 
+TEST_F(X64ContinuationSourceTest, PopfqChecksLoadedFlagsBeforeStateCommit) {
+  for (unsigned Version : {1u, 2u, 3u}) {
+    SCOPED_TRACE(Version);
+    const std::string Prefix =
+        Version == 1 ? "neverd_step_"
+                     : "neverd_step_v" + std::to_string(Version) + "_";
+    const std::string Harness =
+        "#define POP " + Prefix + "1000\n#define MASK " +
+        (Version == 3 ? "0x244ed5ULL" : "0x204ed5ULL") + "\n#define REJECT " +
+        (Version == 3 ? "0x3100ULL" : "0x43100ULL") + R"C(
+int main(void) {
+  const unsigned bits[]={0,2,4,6,7,9,10,11,14,18,21};
+  for(unsigned pattern=0;pattern<2048+64;++pattern) {
+    uint64_t value=0;
+    if(pattern<2048) {
+      for(unsigned i=0;i<11;++i)value|=((pattern>>i)&1ULL)<<bits[i];
+      value|=~(MASK|REJECT);
+    } else value=1ULL<<(pattern-2048);
+    unsigned char memory[32],before[32];
+    memset(memory,0xa5,sizeof(memory));
+    memcpy(memory+3,&value,8);memcpy(before,memory,sizeof(memory));
+    state_v2_t s=seed_v2(0x1000);
+    s.core.flags=2|(~value&MASK);
+    s.core.gpr[4]=(uintptr_t)(memory+3);
+    state_v2_t want=s;
+    if(!(value&REJECT)) {
+      want.core.flags=2|(value&MASK);
+      want.core.gpr[4]+=8;want.core.pc=0x1001;
+    }
+    CHECK(POP(ARG(&s))==((value&REJECT)?5:0));
+    CHECK(memcmp(&s,&want,sizeof(s))==0);
+    CHECK(memcmp(memory,before,sizeof(memory))==0);
+  }
+  /* Entry rejection must happen before the guest stack is read. */
+  state_v2_t s=seed_v2(0x1000);
+  s.core.gpr[4]=0;s.core.flags|=0x100;
+  state_v2_t before=s;
+  CHECK(POP(ARG(&s))==5 && memcmp(&s,&before,sizeof(s))==0);
+  return 0;
+}
+)C";
+    run({0x9d}, {0x1000}, Harness, false,
+        Version == 1   ? options()
+        : Version == 2 ? controlsOptions()
+                       : smapOptions());
+  }
+}
+
+TEST_F(X64ContinuationSourceTest, PopfqRetainsWordAndTransactionBoundaries) {
+  auto Units = buildX64ContinuationSource(image({0x9d, 0x66, 0x9d, 0x48, 0x9d}),
+                                          {0x1000, 0x1001, 0x1003}, options());
+  ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+  ASSERT_EQ(Units->size(), 3u);
+  EXPECT_FALSE((*Units)[0].RequiresNativeExecution);
+  EXPECT_TRUE((*Units)[1].RequiresNativeExecution);
+  EXPECT_FALSE((*Units)[2].RequiresNativeExecution);
+  for (const auto &Unit : *Units)
+    EXPECT_FALSE(Unit.SupportsRtmBody);
+}
+
 TEST_F(X64ContinuationSourceTest, AccessCheckIsGuestStateAcrossFlagSnapshots) {
   run({0x0f, 0x01, 0xcb, 0x9c, 0x58, 0xfa, 0xfb, 0x0f, 0x01, 0xca, 0x90},
       {0x1000, 0x1003, 0x1004, 0x1005, 0x1006, 0x1007, 0x100a}, R"C(

@@ -216,6 +216,48 @@ static neverd_x64_state_v6 seed(void) {
 }
 )C";
 
+TEST_F(X64ContinuationExportTest,
+       PopfqResumesWithGuestFlagsAndRejectsAtomically) {
+  load({0x9d, 0x90});
+  for (bool Direct : {false, true}) {
+    const auto Request =
+        request(Direct ? R"("instructions":[4096,4097],"dispatch":"direct")"
+                       : R"("instructions":[4096,4097])");
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(Direct);
+      SCOPED_TRACE(LLVM);
+      auto [Source, Manifest] = source(Request, LLVM);
+      auto Parsed = llvm::json::parse(Manifest);
+      ASSERT_TRUE(bool(Parsed));
+      EXPECT_EQ(Parsed->getAsObject()->getInteger("native_requests"), 0);
+      EXPECT_EQ(Source.find("__writeeflags"), std::string::npos);
+      execute(Source, std::string(Seed) + R"C(
+int main(void) {
+    const uint64_t values[]={0,0x244ed7,0x100,0x1000,0x2000,
+                             0xffffffffffdb8128ULL};
+    for(unsigned i=0;i<sizeof(values)/sizeof(values[0]);++i) {
+        unsigned char stack[24],before[24];
+        memset(stack,0x5a,sizeof(stack));memcpy(stack+5,&values[i],8);
+        memcpy(before,stack,sizeof(stack));
+        neverd_x64_state_v6 s=seed(),want;
+        s.GPR[4]=(uintptr_t)(stack+5);s.RFlags=0x244ed7;want=s;
+        uint64_t budget=1;
+        const int bad=(values[i]&0x3100)!=0;
+        if(!bad) {
+            want.RFlags=(values[i]&0x244ed5)|2;
+            want.GPR[4]+=8;want.PC=0x1001;
+        }
+        CHECK(neverd_x64_continue_v6(&s,&budget)==(bad?5:9));
+        CHECK(budget==(uint64_t)bad && !memcmp(&s,&want,sizeof(s)));
+        CHECK(!memcmp(stack,before,sizeof(stack)));
+    }
+    return 0;
+}
+)C");
+    }
+  }
+}
+
 TEST_F(X64ContinuationExportTest, SoftwareInterruptStopsBeforeSelectedHandler) {
   load({0xcd, 0xff, 0xcd, 0x2d, 0xb8, 7, 0, 0, 0});
   const auto Request = request(
