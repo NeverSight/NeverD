@@ -73,6 +73,7 @@ TEST(NativeStateAudit, LockedCompareExchangeRejectsRawDetailDisagreement) {
       [](cs_insn &I) { I.detail->x86.eflags ^= X86_EFLAGS_MODIFY_CF; },
       [](cs_insn &I) { I.detail->x86.avx_sae = true; },
       [](cs_insn &I) { I.detail->x86.operands[0].size = 4; },
+      [](cs_insn &I) { I.detail->x86.operands[0].access = CS_AC_READ; },
       [](cs_insn &I) { I.detail->x86.operands[0].access = CS_AC_WRITE; },
       [](cs_insn &I) { I.detail->x86.operands[0].mem.segment = X86_REG_FS; },
       [](cs_insn &I) { I.detail->x86.operands[0].mem.base = X86_REG_RDX; },
@@ -92,7 +93,13 @@ TEST(NativeStateAudit, LockedCompareExchangeRejectsRawDetailDisagreement) {
     DecodedInsn Insn{};
     ASSERT_EQ(Dec.decodeOneForLift(Bytes, sizeof(Bytes), CodeAddress, Insn),
               int(sizeof(Bytes)));
-    ASSERT_TRUE(lockedcompareexchangeaudit::form(Insn.Raw, Arch::X64));
+    EXPECT_EQ(Insn.Raw->detail->x86.operands[0].access, CS_AC_READ_WRITE);
+    EXPECT_EQ(Insn.Raw->detail->x86.operands[1].access, CS_AC_READ);
+    ASSERT_TRUE(lockedcompareexchangeaudit::form(Insn.Raw, Arch::X64))
+        << "destination access: "
+        << unsigned(Insn.Raw->detail->x86.operands[0].access)
+        << ", source access: "
+        << unsigned(Insn.Raw->detail->x86.operands[1].access);
     Mutations[M](*Insn.Raw);
     EXPECT_FALSE(lockedcompareexchangeaudit::form(Insn.Raw, Arch::X64));
     expectUnaudited(Dec, Insn);

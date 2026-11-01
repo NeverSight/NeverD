@@ -69,9 +69,9 @@ inline bool form(const cs_insn *Insn, Arch Target) {
   const auto SegmentReg = Segment == 0x64   ? X86_REG_FS
                           : Segment == 0x65 ? X86_REG_GS
                                             : X86_REG_INVALID;
-  // Capstone marks this destination read-only. Authenticate that decoder
-  // representation; the locked raw opcode owns the unconditional RMW cycle.
-  if (X.operands[0].access != CS_AC_READ ||
+  // The destination is read/write even when the comparison fails. Require
+  // decoder metadata to agree with the locked opcode's unconditional RMW cycle.
+  if (X.operands[0].access != CS_AC_READ_WRITE ||
       !legacyaudit::memoryOperand(Insn, X.operands[0], Width, AddressSize, true,
                                   Rex, Pos + 3, 0, SegmentReg))
     return false;

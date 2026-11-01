@@ -15540,6 +15540,11 @@ role to agree with the MOVNTDQ store encoding. Native instruction-flow queries
 and comparison capture consume that same admission decision, so a valid
 streaming store remains ordinary fallthrough in each surface.
 
+The scalar locked compare-exchange form audit similarly binds the decoded
+read/write destination and read-only source to the original encoding. The
+existing atomic owner retains the single transaction and defined flags;
+disagreeing operand metadata cannot acquire a complete audit.
+
 Automatic control discovery can split a finite live MOVS/STOS count into guarded cases. The instruction prefix must preserve the register; each predecessor independently proves an exhaustive domain within `MaxControlTuples`. Fallthrough cuts and guards have synthetic provenance. Each case still proves its count and memory effects under cumulative budgets. Incomplete domains, unbounded counts and missing entry constraints remain refused.
 
 ## SNP and SEV-ES completion ownership

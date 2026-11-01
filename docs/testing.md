@@ -18055,6 +18055,11 @@ ReadPrefetch regressions check exact bytes and operand metadata, separate undefi
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
 
+The scalar LOCK CMPXCHG audit requires read/write destination access and
+read-only source access from the pinned decoder. The width/register matrix
+retains the original transaction; malformed metadata tests reject both
+read-only and write-only destinations.
+
 The shared MOVNTDQ form audit requires decoded write access on its memory
 destination and read access on its vector source. Both x86 modes cover indexed
 store forms from a retained FFmpeg function alongside malformed metadata
