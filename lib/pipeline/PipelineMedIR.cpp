@@ -124,6 +124,19 @@ MedCallReturnRanges sourceCallReturnRanges(const BinaryImage &Image,
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                          PipelineResult &Result,
                                          llvm::ArrayRef<LowFunc> Originals) {
+  if (getTargetRegInfo(Image.Arch).PointerSize >= sizeof(uint64_t)) {
+    std::vector<uint64_t> Weights(Result.MedFuncs.size(), 1);
+    for (size_t I = 0; I < Result.MedFuncs.size(); ++I)
+      for (const auto &Block : Result.MedFuncs[I].Blocks)
+        Weights[I] += Block.Ops.size();
+    // Finish independent local proofs before borrowed-frame readers inspect
+    // other functions. Each worker owns only its selected body.
+    parallelForEachWeighted(Weights, [&](auto Claim, size_t N) {
+      for (size_t I; (I = Claim()) < N;)
+        markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,
+                                     Image.abiFormat(), &Image);
+    });
+  }
   std::map<va_t, const MedFunc *> Callees;
   std::set<va_t> Complete;
   std::map<va_t, llvm::ArrayRef<LowBlock>> OriginalBlocks;

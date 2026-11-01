@@ -479,6 +479,13 @@ callee input observations, or a normal exit;
 ABI-preserved/result registers, PHIs and implicit clobber readers keep their
 values. This bounded shared proof removes avoidable HighC/LLVMC traps but does
 not recover escaping VM state or authorize a dynamic code-address fallback.
+The proof now revisits secondary integer restores after source return recovery.
+The shared exit-register query preserves provisional results in the early pass
+and explicit scalar/register-pair results in the settled pass. Both C routes
+are checked against original x64 instructions after an opaque frame-pointer
+borrow and complete later slot overwrite; returning the restored value still
+requires its real definition. This closes an unnecessary source trap, not
+general entry-state reconstruction or native Windows driver execution.
 Single-reader temporary COPY chains now share that same budget and proof.
 Their terminal register still needs the existing implicit-observation checks;
 a temporary copy cannot hide an earlier physical register definition. Both C

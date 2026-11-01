@@ -1106,14 +1106,18 @@ bool overlapsRegister(const MedVar &View, uint64_t RegOff, uint16_t Size) {
          (View.RegOff >= RegOff ? View.RegOff - RegOff < Size
                                 : RegOff - View.RegOff < View.Size);
 }
+} // namespace
 
 /// Whether a RETURN reads the \p Size bytes at \p RegOff: as part of the
 /// settled result, or as a register the caller expects back. The integer
 /// result register is always kept, as code generation keeps it for a void
 /// source function. A second integer return register carries a result only
 /// as a register pair, which a 64-bit target publishes as MultiReturn.
-bool returnReads(const MedFunc &Func, const TargetRegInfo &TRI,
-                 BinaryFormat Format, uint64_t RegOff, uint16_t Size) {
+bool sourceReturnReadsRegister(const MedFunc &Func, const TargetRegInfo &TRI,
+                               BinaryFormat Format, uint64_t RegOff,
+                               uint16_t Size) {
+  if (!Size)
+    return false;
   MedVar View;
   View.Kind = MedVar::Reg;
   View.RegOff = RegOff;
@@ -1142,7 +1146,6 @@ bool returnReads(const MedFunc &Func, const TargetRegInfo &TRI,
   return TRI.IntReturnReg2 && Holds(TRI.IntReturnReg2, TRI.PointerSize) &&
          TRI.PointerSize < 8;
 }
-} // namespace
 
 bool validateObservedCallReturnReads(
     const MedFunc &Func, const BinaryImage &Image, std::string &Diagnostic,
@@ -1299,7 +1302,8 @@ bool validateObservedCallReturnReads(
     };
     const int Slot = IntegerPosition(RegOff, Size);
     const bool Argument = TRI.isParamReg(RegOff);
-    const bool Returned = returnReads(Func, TRI, Format, RegOff, Size);
+    const bool Returned =
+        sourceReturnReadsRegister(Func, TRI, Format, RegOff, Size);
     std::vector<Site> Work{{Definition.Block, Definition.Index + 1}};
     Entered.clear();
     while (!Work.empty()) {

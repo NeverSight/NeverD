@@ -20,6 +20,7 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
+#include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -444,13 +445,11 @@ bool isCompleteSourceImageRead(const BinaryImage &Image, va_t Address,
 /// in source preparation so HighC and LLVMC discard the same transport. Calls,
 /// opaque memory accesses and exceptional edges stop the proof; a partial
 /// overwrite kills only its own bytes. Operation positions remain unchanged.
-void markUnobservedStackSpills(MedFunc &Func, Arch Architecture,
-                               BinaryFormat Format,
-                               llvm::ArrayRef<FrameAccess> Loads,
-                               llvm::ArrayRef<FrameAccess> Stores,
-                               const ValueReads &Reads,
-                               const BinaryImage *Image,
-                               std::set<const MedOp *> *Overwritten) {
+void markUnobservedStackSpills(
+    MedFunc &Func, Arch Architecture, BinaryFormat Format,
+    llvm::ArrayRef<FrameAccess> Loads, llvm::ArrayRef<FrameAccess> Stores,
+    const ValueReads &Reads, const BinaryImage *Image,
+    std::set<const MedOp *> *Overwritten, bool SettledReturns) {
   if (Func.Blocks.empty() || Func.SkippedSSA || Func.AnalystStackFrame)
     return;
   const auto &TRI = getTargetRegInfo(Architecture);
@@ -524,14 +523,11 @@ void markUnobservedStackSpills(MedFunc &Func, Arch Architecture,
     // cannot prove a physical scratch register dead before that call. Only
     // the separately checked input-observation proof can cross it.
     if (Value.Kind != MedVar::Reg || !TRI.isGeneralReg(Value.RegOff) ||
-        TRI.isReturnReg(Value.RegOff) || TRI.isReturnControlReg(Value.RegOff) ||
-        llvm::is_contained(TRI.IntReturnRegs, Value.RegOff) ||
-        TRI.isCallPreserved(Value.RegOff, Value.Size, Format) ||
-        (Func.CC == CallingConv::Win64 &&
-         TRI.isCallPreserved(Value.RegOff, Value.Size, BinaryFormat::COFF)) ||
-        llvm::any_of(Func.MultiReturn, [&](const MedReturnReg &Return) {
-          return Return.RegOff == Value.RegOff;
-        }))
+        TRI.isReturnControlReg(Value.RegOff) ||
+        sourceReturnReadsRegister(Func, TRI, Format, Value.RegOff,
+                                  Value.Size) ||
+        (!SettledReturns &&
+         llvm::is_contained(TRI.IntReturnRegs, Value.RegOff)))
       return false;
     auto Overlaps = [&](const MedVar &Other) {
       return Other.Kind == MedVar::Reg && Other.Size &&
@@ -1167,8 +1163,31 @@ void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
   markNeutralReturnSlotTransactions(Func, Architecture, Entry, NeutralAtomics,
                                     Reads);
   markUnobservedStackSpills(Func, Architecture, Format, Loads, Stores, Reads,
-                            Image, Overwritten);
+                            Image, Overwritten, /*SettledReturns=*/false);
   replaceUnwrittenCallFrameReads(Func, Architecture, Loads, Stores);
+}
+
+void markSettledSourceStackSpills(MedFunc &Func, Arch Architecture,
+                                  BinaryFormat Format,
+                                  const BinaryImage *Image) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (TRI.PointerSize < sizeof(uint64_t) ||
+      llvm::none_of(
+          Func.Blocks,
+          [&](const MedBlock &Block) {
+            return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+              return Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+                     llvm::is_contained(TRI.IntReturnRegs, Op.Output.RegOff) &&
+                     !sourceReturnReadsRegister(
+                         Func, TRI, Format, Op.Output.RegOff, Op.Output.Size);
+            });
+          }))
+    return;
+  std::vector<FrameAccess> Loads, Stores;
+  frameAccessesOf(Func, Architecture, Format, Func.EntryKind, Loads, Stores);
+  const ValueReads Reads(Func);
+  markUnobservedStackSpills(Func, Architecture, Format, Loads, Stores, Reads,
+                            Image, nullptr, /*SettledReturns=*/true);
 }
 
 std::set<unsigned> sourceRegisterInputOverwrites(

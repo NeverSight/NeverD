@@ -2187,6 +2187,65 @@ TEST(SourceStackSpills, OnlyUnreadScratchRestoresCanBeIgnored) {
   }
 }
 
+TEST(SourceStackSpills, SecondaryIntegerRestoresUseTheSettledReturnContract) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      SCOPED_TRACE(Mode);
+      MedFunc Func =
+          pushedRbx(Format == BinaryFormat::COFF ? CallingConv::Win64
+                                                 : CallingConv::SysV_AMD64);
+      auto &Ops = Func.Blocks[0].Ops;
+      Ops[4].Inputs[1] = MedVar::makeUnspecified(8, Arch::X64);
+      const auto Restored = reg(30, Mode == 2 ? x86reg::RAX : x86reg::RDX, 1);
+      Ops[7] = op(NdOp::COPY, Restored, {temp(10)});
+      // The restored value cannot survive in memory. Its physical register
+      // still matters when the settled result or an explicit reader uses it.
+      Ops[8] = op(NdOp::STORE, none(), {sp(1), MedVar::makeConst(19, 8)});
+      Ops[9] = op(NdOp::RETURN, none(), {MedVar::makeConst(19, 8)});
+      if (Mode == 1)
+        Func.MultiReturn = {{x86reg::RAX, 8, false}, {x86reg::RDX, 8, false}};
+      if (Mode == 3)
+        Ops[9].Inputs[0] = Restored;
+      markSourceStackAccesses(Func, Arch::X64, Format);
+      // Before return recovery, RDX may still become half of a pair.
+      EXPECT_FALSE(save(Func).PrologueSave);
+      markSettledSourceStackSpills(Func, Arch::X64, Format);
+      EXPECT_EQ(save(Func).PrologueSave, Mode == 0);
+      EXPECT_EQ(Func.Blocks[0].Ops.size(), 10u);
+    }
+}
+
+TEST(SourceReturnRegisters, SettledIntegerResultsKeepTheirObservedBytes) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      const auto &TRI = getTargetRegInfo(Architecture);
+      ASSERT_GE(TRI.IntReturnRegs.size(), 2u);
+      const auto Secondary = TRI.IntReturnRegs[1];
+      MedFunc Func;
+      EXPECT_TRUE(sourceReturnReadsRegister(Func, TRI, Format, TRI.IntReturnReg,
+                                            TRI.PointerSize));
+      EXPECT_TRUE(sourceReturnReadsRegister(Func, TRI, Format, TRI.StackPointer,
+                                            TRI.PointerSize));
+      EXPECT_EQ(sourceReturnReadsRegister(Func, TRI, Format, Secondary,
+                                          TRI.PointerSize),
+                TRI.PointerSize < sizeof(uint64_t));
+      Func.MultiReturn = {{TRI.IntReturnReg, TRI.PointerSize, false},
+                          {Secondary, uint16_t(TRI.PointerSize / 2), false}};
+      EXPECT_TRUE(sourceReturnReadsRegister(Func, TRI, Format, Secondary,
+                                            TRI.PointerSize));
+      if (TRI.PointerSize == sizeof(uint64_t))
+        EXPECT_FALSE(sourceReturnReadsRegister(Func, TRI, Format,
+                                               Secondary + TRI.PointerSize / 2,
+                                               TRI.PointerSize / 2));
+      EXPECT_FALSE(sourceReturnReadsRegister(Func, TRI, Format, Secondary, 0));
+    }
+}
+
 TEST(SourceStackSpills, TemporaryRestoreChainsKeepEveryRegisterObserver) {
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
