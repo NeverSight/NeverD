@@ -212,6 +212,17 @@ calling convention and parameter/return attributes. See
 [the Microsoft provider guide](microsoft-windows-types.md) for the retained
 inputs and the distinction between a compiler check and native execution.
 
+`scripts/check_microsoft_provider_abis.py --provider NDIS` inventories the
+original primary WDK profile and compares every declared `Ndis` function type
+with the published catalog on each selected target. Missing output declarations,
+refused or empty official inventories, and changed parameter, return or calling
+conventions must fail. Inline SDK routines use type-only external aliases;
+their bodies are not compared to declarations. The Python checker tests cover
+these failure paths without requiring an installed WDK. This is compiler ABI
+coverage, separate from execution against NDIS or loading a kernel driver.
+The published side compiles without the WDK's default calling convention, so
+removing an x86 `__stdcall` annotation must change the comparison result.
+
 The public [Windows ARM64 comparison harness](https://github.com/gmh5225/test_mac_intel/tree/codex/neverd-windows-arm64-20261101/arm64-windows)
 adds `rdbss.py` for the seven RDBSS callers. It links their original WDK objects
 and both recovered C routes at O0/O2 against the same observable API models,
