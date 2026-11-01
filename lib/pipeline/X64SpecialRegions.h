@@ -49,10 +49,13 @@ struct X64SpecialRegionSelection {
 /// VMEXIT fallthrough at the same call depth. Execution still stops at that
 /// boundary. The MPX profile likewise follows qualified MPX fallthroughs at
 /// the same depth; bounds faults stop before exception delivery.
+/// NativeRtmAbortRegions follows the authenticated fallback of an immediate
+/// abort pair; only its explicit environment callback executes that pair.
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
-    unsigned CalleeDepth, bool FollowDirectJumps, DebugContext *Debug);
+    unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
+    DebugContext *Debug);
 
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,

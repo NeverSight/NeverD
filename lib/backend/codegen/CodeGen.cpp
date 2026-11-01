@@ -53,9 +53,9 @@
 namespace neverd {
 
 static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
-  for (const auto *Name :
-       {"llvm.x86.vmrun.context", "llvm.x86.vmcall.kvm", "llvm.x86.vmmcall.kvm",
-        "llvm.x86.vmcall.kvm32", "llvm.x86.vmmcall.kvm32"}) {
+  for (const auto *Name : {"llvm.x86.vmrun.context", "llvm.x86.vmcall.kvm",
+                           "llvm.x86.vmmcall.kvm", "llvm.x86.vmcall.kvm32",
+                           "llvm.x86.vmmcall.kvm32", "llvm.x86.hyperv.call"}) {
     const auto *Function = Mod.getFunction(Name);
     if (Function && !Function->use_empty() && !Function->getIntrinsicID()) {
       llvm::WithColor::error()

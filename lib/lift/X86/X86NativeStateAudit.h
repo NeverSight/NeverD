@@ -13,7 +13,8 @@
 #include "X86BitTestUndefined.h"
 #include "X86DescriptorQueryAudit.h"
 #include "X86LegacyMemoryAudit.h"
-#include "X86LockedLogicAudit.h"
+#include "X86LockedBinaryAudit.h"
+#include "X86LockedCompareExchangeAudit.h"
 #include "X86LockedUnary.h"
 #include "X86ReadPrefetchAudit.h"
 #include "X86XaddAudit.h"
@@ -370,14 +371,16 @@ inline bool repTransferForm(const cs_insn *Insn, Arch Target) {
 // opaque-state preservation. Their existing semantic owners retain those
 // separate obligations.
 inline bool form(const cs_insn *Insn, Arch Target) {
+  if (Insn->id == X86_INS_CMPXCHG)
+    return lockedcompareexchangeaudit::form(Insn, Target);
   if (Insn->detail->x86.prefix[0] == X86_PREFIX_LOCK) {
     if (Insn->id == X86_INS_XADD)
       return xaddaudit::form(Insn, Target);
     if (bitundefined::isBitTest(Insn->id))
       return bitundefined::form(Insn, Target);
-    if (Insn->id == X86_INS_AND || Insn->id == X86_INS_OR ||
-        Insn->id == X86_INS_XOR)
-      return lockedlogicaudit::form(Insn, Target);
+    if (Insn->id == X86_INS_ADD || Insn->id == X86_INS_AND ||
+        Insn->id == X86_INS_OR || Insn->id == X86_INS_XOR)
+      return lockedbinaryaudit::form(Insn, Target);
   }
   // IRETQ/RETFQ select their return mode from a live descriptor. A valid
   // compatibility return can make the legacy GPR high halves arbitrary

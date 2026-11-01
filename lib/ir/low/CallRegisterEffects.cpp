@@ -6,6 +6,8 @@
 
 #include "neverd/ir/low/CallRegisterEffects.h"
 
+#include "CallStackOffsets.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -21,10 +23,12 @@
 #include "neverd/loader/ELF/ELFOperatingSystem.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
 #include <deque>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -518,8 +522,13 @@ struct StackValue {
 
   static StackValue at(int64_t Offset) { return {Range, Offset, Offset}; }
   static StackValue unknown() { return {Unknown, 0, 0}; }
-  StackValue shifted(int64_t Delta) const {
-    return {K, Lo + Delta, Hi + Delta};
+  StackValue shifted(int64_t Min, int64_t Max, bool Subtract = false) const {
+    int64_t First, Last;
+    const bool Overflow = Subtract ? llvm::SubOverflow(Lo, Max, First) ||
+                                         llvm::SubOverflow(Hi, Min, Last)
+                                   : llvm::AddOverflow(Lo, Min, First) ||
+                                         llvm::AddOverflow(Hi, Max, Last);
+    return Overflow ? unknown() : StackValue{K, First, Last};
   }
   bool operator==(const StackValue &) const = default;
 };
@@ -619,6 +628,33 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   }
   bool Unknown = false;
   int StackArgs = 0;
+  std::optional<CallStackOffsets> ScalarOffsets;
+  auto ReadRange = [&](const StackValue &A, unsigned Bytes) {
+    if (A.K == StackValue::Unknown) {
+      Unknown = true;
+      return;
+    }
+    if (A.K != StackValue::Range)
+      return;
+    int64_t Last;
+    if (llvm::AddOverflow(A.Hi, int64_t(std::max(Bytes, 1u)) - 1, Last)) {
+      Unknown = true;
+      return;
+    }
+    for (size_t K = 0; K < NumArgRegs; ++K)
+      if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
+          HomeSlot(K) <= Last)
+        HomeLoaded[K] = true;
+    if (Last >= Layout.EntryStackBase) {
+      const int64_t Count = static_cast<int64_t>(Layout.Registers.size()) +
+                            (Last - Layout.EntryStackBase) / Layout.SlotBytes +
+                            1;
+      if (Count > std::numeric_limits<int>::max())
+        Unknown = true;
+      else
+        StackArgs = std::max(StackArgs, static_cast<int>(Count));
+    }
+  };
   auto Run = [&](const LowBlock &Block, StackState &S) {
     auto ControlOf = [&](size_t OpIndex) {
       for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
@@ -653,9 +689,20 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
       auto In = [&](unsigned K) {
         return K < Op.NumInputs ? stackValueOf(S, Op.Inputs[K]) : StackValue{};
       };
-      auto Const = [&](unsigned K) -> std::optional<int64_t> {
-        if (K < Op.NumInputs && Op.Inputs[K].isConst())
-          return static_cast<int64_t>(Op.Inputs[K].Offset);
+      auto Offset =
+          [&](unsigned K) -> std::optional<std::pair<int64_t, int64_t>> {
+        if (Op.NumInputs != 2 || Op.Output.Size != 8 ||
+            Op.Inputs[0].Size != 8 || Op.Inputs[1].Size != 8)
+          return std::nullopt;
+        if (Op.Inputs[K].isConst()) {
+          const auto Bits = static_cast<int64_t>(Op.Inputs[K].Offset);
+          return std::pair{Bits, Bits};
+        }
+        if (!ScalarOffsets)
+          ScalarOffsets = finiteCallStackOffsets(F);
+        if (const auto At = ScalarOffsets->find({&Op, K});
+            At != ScalarOffsets->end())
+          return At->second;
         return std::nullopt;
       };
       const bool DirectTarget = Op.NumInputs > 0 && Op.Inputs[0].isConst();
@@ -665,48 +712,35 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         continue;
       case NdOp::INT_ADD: {
         const StackValue A = In(0), B = In(1);
-        if (A.K == StackValue::Range && Const(1))
-          Set(Op.Output, A.shifted(*Const(1)));
-        else if (B.K == StackValue::Range && Const(0))
-          Set(Op.Output, B.shifted(*Const(0)));
-        else if (A.K != StackValue::Unrelated || B.K != StackValue::Unrelated)
-          Set(Op.Output, StackValue::unknown());
-        else
-          Set(Op.Output, {});
+        StackValue Result;
+        if (A.K != StackValue::Unrelated || B.K != StackValue::Unrelated)
+          Result = StackValue::unknown();
+        if (A.K == StackValue::Range && B.K == StackValue::Unrelated) {
+          if (const auto Bounds = Offset(1))
+            Result = A.shifted(Bounds->first, Bounds->second);
+        } else if (B.K == StackValue::Range && A.K == StackValue::Unrelated)
+          if (const auto Bounds = Offset(0))
+            Result = B.shifted(Bounds->first, Bounds->second);
+        Set(Op.Output, Result);
         continue;
       }
       case NdOp::INT_SUB: {
         const StackValue A = In(0);
-        if (A.K == StackValue::Range && Const(1))
-          Set(Op.Output, A.shifted(-*Const(1)));
-        else if (A.K != StackValue::Unrelated)
-          Set(Op.Output, StackValue::unknown());
-        else
-          Set(Op.Output, {});
+        StackValue Result;
+        if (A.K != StackValue::Unrelated || In(1).K != StackValue::Unrelated)
+          Result = StackValue::unknown();
+        if (A.K == StackValue::Range && In(1).K == StackValue::Unrelated)
+          if (const auto Bounds = Offset(1))
+            Result = A.shifted(Bounds->first, Bounds->second, true);
+        Set(Op.Output, Result);
         continue;
       }
       case NdOp::LOAD:
       case NdOp::ATOMIC_XCHG:
       case NdOp::ATOMIC_ADD:
       case NdOp::ATOMIC_CMPXCHG:
-        if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-          const StackValue A = In(0);
-          if (A.K == StackValue::Unknown) {
-            Unknown = true;
-          } else if (A.K == StackValue::Range) {
-            const int64_t Last =
-                A.Hi + std::max<int64_t>(Op.Output.Size, 1) - 1;
-            for (size_t K = 0; K < NumArgRegs; ++K)
-              if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
-                  HomeSlot(K) <= Last)
-                HomeLoaded[K] = true;
-            if (Last >= Layout.EntryStackBase)
-              StackArgs = std::max<int64_t>(
-                  StackArgs,
-                  static_cast<int64_t>(Layout.Registers.size()) +
-                      (Last - Layout.EntryStackBase) / Layout.SlotBytes + 1);
-          }
-        }
+        if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          ReadRange(In(0), Op.Output.Size);
         // An atomic also stores its value operands.
         for (unsigned K = 1; K < Op.NumInputs; ++K)
           Unknown |= Escapes(In(K));
@@ -750,23 +784,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
                     static_cast<unsigned>(Op.Inputs[2].Offset)))
               FPRead = Bytes;
         }
-        if (FPRead) {
-          const StackValue A = In(1);
-          if (A.K == StackValue::Unknown) {
-            Unknown = true;
-          } else if (A.K == StackValue::Range) {
-            const int64_t Last = A.Hi + static_cast<int64_t>(*FPRead) - 1;
-            for (size_t K = 0; K < NumArgRegs; ++K)
-              if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
-                  HomeSlot(K) <= Last)
-                HomeLoaded[K] = true;
-            if (Last >= Layout.EntryStackBase)
-              StackArgs = std::max<int64_t>(
-                  StackArgs,
-                  static_cast<int64_t>(Layout.Registers.size()) +
-                      (Last - Layout.EntryStackBase) / Layout.SlotBytes + 1);
-          }
-        }
+        if (FPRead)
+          ReadRange(In(1), *FPRead);
         // Arithmetic on a stack address (a flag, an alignment mask) yields
         // no address; an operation that may dereference a pointer into the
         // incoming slots is a read this summary cannot bound.

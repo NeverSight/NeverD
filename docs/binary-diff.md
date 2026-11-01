@@ -234,6 +234,31 @@ initialization, repeated calls, incomplete analysis or a preserved helper CFG
 cannot by themselves overturn a match. Stated identities, confirmations and
 analyst rejections retain their authority.
 
+Matcher version 25 retains split call roles instead of discarding their
+conflicts. Whole-caller layouts remain strict; local review can also use a
+unique fully decoded block of a partially analyzed caller. Unknown instructions,
+addresses and indirect transfers cannot support that block. A split or local
+role can reopen a complete weak match with a preserved CFG; a changed CFG needs
+a competing body above the existing similarity threshold with more known equal
+instructions. Original complete-body preservation and analyst decisions remain
+protected. Uncertain rows never become equal through this review.
+
+The same revision reviews independent observed neighborhoods. A different
+ordered call sequence needs at least two distinct already mapped complete
+callees and no shared mapped callee with the prior body. Caller alternatives
+need at least two additional independently mapped callers and must retain all
+observed mapped source callers. They also need two agreeing callee anchors or
+more known equal instructions than the prior match. These channels retain
+separate `neighborhood` candidates; partial analysis stays partial. They do not
+accept new identities, change native facts or establish equivalence.
+
+A weak CFG-based match with changed calls and zero agreement among mapped
+neighbors also needs instruction-only coverage to meet the configured minimum
+similarity. Otherwise it remains a review candidate: matching blocks and edges
+cannot supply most of the evidence for a contradictory function identity.
+Unknown context alone does not trigger this rule. Named, exact, normalized,
+context-supported, manual and confirmed identities remain protected.
+
 Matcher version 11 also proposes candidates whose complete instruction streams
 agree after excluding NOP padding and an entry ENDBR marker. These layout edits
 can break every shared three-instruction sketch band and whole-function graph

@@ -115,3 +115,65 @@ TEST(X86KvmSource, OnlyCompleteCanonicalBytesBindAnAbi) {
   }
   EXPECT_FALSE(x86HypercallEncoding({0x0f, 0x01, 0xd8}));
 }
+
+TEST(X86KvmSource, HyperVRejectsIncompleteStateContracts) {
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    llvm::LLVMContext Context;
+    llvm::Module Module("hyperv-contract", Context);
+    llvm::IRBuilder<> B(Context);
+    auto *F = llvm::Function::Create(
+        llvm::FunctionType::get(
+            B.getVoidTy(),
+            {B.getPtrTy(), B.getPtrTy(), B.getPtrTy(), B.getInt32Ty()}, false),
+        llvm::GlobalValue::ExternalLinkage, "llvm.x86.hyperv.call", Module);
+    for (const auto Attribute :
+         {llvm::Attribute::Convergent, llvm::Attribute::NoDuplicate,
+          llvm::Attribute::NoUnwind})
+      F->addFnAttr(Attribute);
+    auto *Owner = llvm::Function::Create(
+        llvm::FunctionType::get(B.getVoidTy(), false),
+        llvm::GlobalValue::ExternalLinkage, "owner", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Owner));
+    auto *Pointer = llvm::ConstantPointerNull::get(B.getPtrTy());
+    auto *Call = B.CreateCall(F, {Pointer, Pointer, Pointer, B.getInt32(64)});
+    B.CreateRetVoid();
+    if (Mutation == 1)
+      Call->setOnlyReadsMemory();
+    if (Mutation == 2)
+      Call->setOnlyWritesMemory();
+    if (Mutation == 3)
+      Call->setDoesNotReturn();
+    if (Mutation == 4)
+      Call->setArgOperand(2, B.getInt64(7));
+    if (Mutation == 5)
+      Call->setArgOperand(3, B.getInt32(15));
+    if (Mutation == 6)
+      F->removeFnAttr(llvm::Attribute::Convergent);
+    if (Mutation == 7)
+      F->removeFnAttr(llvm::Attribute::NoDuplicate);
+    if (Mutation == 8)
+      F->removeFnAttr(llvm::Attribute::NoUnwind);
+    if (Mutation == 9)
+      Call->setCallingConv(llvm::CallingConv::Fast);
+    if (Mutation == 10)
+      llvm::BasicBlock::Create(Context, "definition", F);
+    const auto Mode = Mutation == 11 ? Arch::X86 : Arch::X64;
+    if (Mutation) {
+      EXPECT_THROW(renderX86VirtualizationNativeCall(
+                       Mode, *Call, {}, false, {"page", "gpr", "xmm", "64"}),
+                   std::invalid_argument);
+      continue;
+    }
+    auto Text = renderX86VirtualizationNativeCall(Mode, *Call, {}, false,
+                                                  {"page", "gpr", "xmm", "64"});
+    ASSERT_TRUE(Text);
+    EXPECT_NE(Text->find("__builtin_ia32_hyperv_call"), std::string::npos);
+    if (!F->getIntrinsicID()) {
+      const auto Result =
+          Codegen().compile(Module, Arch::X64, BinaryFormat::ELF);
+      EXPECT_FALSE(Result.Success);
+      EXPECT_TRUE(Result.ObjectData.empty());
+    }
+  }
+}

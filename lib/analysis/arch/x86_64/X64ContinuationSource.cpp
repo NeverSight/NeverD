@@ -15,6 +15,7 @@
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
 #include "X64ContinuationMpx.h"
+#include "X64ContinuationNativeRegisters.h"
 #include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
 #include "X64ContinuationUserInterrupts.h"
@@ -524,13 +525,16 @@ bool supportedOperation(const LowOp &Op,
                         bool WideDivision) {
   if (Op.NumInputs > std::size(Op.Inputs))
     return false;
+  const bool CompareExchange = Op.Opcode == NdOp::ATOMIC_CMPXCHG;
   const bool AtomicScalar =
       hasControlState(Options) &&
-      (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG) &&
-      Op.NumInputs == 2 && Op.Output.isTemp() &&
+      (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG ||
+       CompareExchange) &&
+      Op.NumInputs == (CompareExchange ? 3 : 2) && Op.Output.isTemp() &&
       (Op.Output.Size == 1 || Op.Output.Size == 2 || Op.Output.Size == 4 ||
        Op.Output.Size == 8) &&
       Op.Inputs[0].Size == 8 && Op.Inputs[1].Size == Op.Output.Size &&
+      (!CompareExchange || Op.Inputs[2].Size == Op.Output.Size) &&
       Op.MemoryOrdering == NdMemoryOrdering::SequentiallyConsistent;
   const bool Locked = lockedMemoryIntrinsic(Op, Options);
   if (!supportedValue(Op.Output) ||
@@ -591,7 +595,9 @@ bool supportedOperation(const LowOp &Op,
            faultAddressIntrinsic(Op, Options) || fenceIntrinsic(Op, Options) ||
            writePrefetchIntrinsic(Op, Options) || msrIntrinsic(Op, Options) ||
            descriptorQueryIntrinsic(Op, Options) ||
-           pageTableIntrinsic(Op, Options);
+           pageTableIntrinsic(Op, Options) ||
+           detail::nativeDebugRegisterOperation(Op, Options) ||
+           detail::nativePageGlobalOperation(Op, Options);
   }
   default:
     // Admission and arithmetic widths use the scalar owner. The operation
@@ -992,6 +998,9 @@ struct Writer {
       store(offsetof(State, RFlags), Packed);
     } else if (msrIntrinsic(Op, Options)) {
       msr(Op);
+    } else if (detail::nativePageGlobalOperation(Op, Options)) {
+      detail::guardNativePageGlobalWrite(*this, Op);
+      Block->Ops.push_back(Op);
     } else if (faultAddressIntrinsic(Op, Options)) {
       if (Op.Inputs[0].Offset == uint64_t(Intrinsic::ReadCr2))
         emit(NdOp::COPY, Op.Output, {load(offsetof(StateV4, CR2))});
@@ -1148,6 +1157,20 @@ buildInstruction(SpecializationInstruction Instruction,
     Kind = Call ? Exit::Call : Exit::Return;
   } else if (Instruction.Origin.Control == LowInstructionControl::Branch) {
     Kind = Exit::Jump;
+    if (!Instruction.Ops.empty() &&
+        Instruction.Ops.back().Opcode == NdOp::INDIR_BR &&
+        Instruction.Ops.back().Inputs[0].isConst()) {
+      // Ordinary LowIR names a constant memory slot. Reuse the authenticated
+      // machine-exit projection to obtain its live target, as raw regions do.
+      auto Expanded = expandX64MachineExit(
+          Instruction,
+          {1, Result.Address, SpecializationX64MachineExitKind::Jump},
+          NdVar::tmp(ScratchBase - 16, 8));
+      if (!Expanded)
+        return Expanded.takeError();
+      Instruction.Ops = std::move(Expanded->Ops);
+      Instruction.UndefinedEffects = std::move(Expanded->UndefinedEffects);
+    }
   }
   auto RequireNative = [&](llvm::StringRef Reason) {
     Result.RequiresNativeExecution = true;
@@ -1199,7 +1222,7 @@ buildInstruction(SpecializationInstruction Instruction,
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
   const auto Hypercall =
-      Options.NativeKvmHypercalls &&
+      (Options.NativeKvmHypercalls || Options.NativeHyperVHypercallEntry) &&
               Instruction.ProfileProjection ==
                   InterpreterProfileProjection::X64HypercallV1
           ? x86HypercallEncoding(Instruction.NativeBytes)
@@ -1488,6 +1511,20 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Hypercall && Options.NativeHyperVHypercallEntry) {
+    // SetVpRegisters can replace the caller's execution state. It is outside
+    // this returning transport even when it would target a different VP.
+    const auto Number = W.temporary(), ReplacesState = W.temporary(1);
+    W.emit(NdOp::INT_AND, Number,
+           {W.read(NdVar::reg(x86reg::RCX, 8)), constant(0xffff)});
+    W.emit(NdOp::INT_EQUAL, ReplacesState, {Number, constant(0x51)});
+    W.rejectIf(ReplacesState);
+    W.emit(NdOp::INTRINSIC, {},
+           {constant(uint64_t(Intrinsic::X86HyperVCall), 2),
+            constant(*Options.NativeHyperVHypercallEntry),
+            W.address(offsetof(State, GPR)), W.address(offsetof(State, ZMM)),
+            constant(sizeof(State{}.ZMM[0]), 4)});
+    W.leave(Exit::Continue, constant(Instruction.Fallthrough.Address, 8));
   } else if (Hypercall) {
     const auto Status = W.temporary();
     W.emit(
@@ -1620,12 +1657,20 @@ buildX64ContinuationSource(const BinaryImage &Image,
         *Options.NullSegmentBasePolicy != X64NullSegmentBasePolicy::Preserve)))
     return invalid(
         "null segment base policy requires V6 or later and a valid policy");
+  if (Options.NativeHyperVHypercallEntry &&
+      (!*Options.NativeHyperVHypercallEntry || Options.NativeKvmHypercalls ||
+       !Controls))
+    return invalid("Hyper-V requires a nonzero native page, an x64 control "
+                   "profile and no competing KVM ABI");
   if (Options.NativeTimestampReads && !Controls)
     return invalid("native timestamp source requires an x64 host profile");
   if (Options.NativeWritePrefetch && !Controls)
     return invalid("native write prefetch source requires an x64 host profile");
   if (Options.NativePageTableAccess && !Controls)
     return invalid("native paging requires a controls profile");
+  if ((Options.NativeDebugRegisterAccess || Options.NativePageGlobalAccess) &&
+      !Controls)
+    return invalid("native debug and CR4 access require a controls profile");
   if (Options.NativeDescriptorQueries && !Controls)
     return invalid("native descriptor queries require an x64 control profile");
   if ((Options.SegmentBaseMSRAddressBits ||

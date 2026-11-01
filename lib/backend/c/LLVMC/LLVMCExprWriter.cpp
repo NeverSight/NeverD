@@ -1850,9 +1850,9 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
           *SyntheticFrame, SyntheticFrame->getModule()->getDataLayout()))
     if (const auto It = Opts.FrameVariables->find(Disp);
         It != Opts.FrameVariables->end()) {
-      if ((AccessSize && AccessSize != It->second.Type->Size) || FrameRecord)
+      if (AccessSize && AccessSize != It->second.Type->Size)
         throw std::runtime_error(
-            "The named stack slot is not an independent scalar in LLVM C");
+            "The named stack slot has an incompatible access width in LLVM C");
       if (!Remember(Off, VariableSym{It->second.Name, It->second.Type}))
         throw std::runtime_error(
             "The named stack slot cannot preserve its storage identity");

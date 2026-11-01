@@ -30,6 +30,18 @@ callees. HighC also preserves wide small immediates at unprototyped calls, where
 default int promotion cannot initialize a complete stack word. This closes
 that proof gap, not alias-dependent parameter holes or native kernel entry ABIs.
 
+Incoming-stack summaries now reuse complete finite scalar covers for indexed
+offsets. A bounded private load no longer turns an otherwise unused Win64
+home spill into an argument read. Joins, clobbers, independent roots, budget
+exhaustion and signed address overflow retain conservative results.
+LLVM C also keeps fixed and indexed frame accesses in one object, including
+analyst-named slots: separate scalar stores and indexed byte-array reads
+previously produced different results from the original instructions.
+Both routes pass independent native read/write comparisons across pipeline
+optimization, names and O0/O2. The five remaining ordinary roots still have
+56 unproved argument occurrences per route; this does not establish their
+alias exclusions, residual call outputs or complete Windows execution.
+
 ELF relocation immutability also requires a dynamic-loader contract and full
 protected pages. An interpreterless static entry and a partial final RELRO page
 retain runtime storage; the target's maximum base page governs the proof.
@@ -38,6 +50,26 @@ folds. x86/x64/ARM/ARM64 model checks cover page-crossing reads; native ARM page
 configurations remain separate coverage.
 
 ## Open
+
+Explicit continuation exports now include a separately bounded environment
+driver. A caller-provided callback receives the complete boundary state and
+can return another physical PC/stack for resumption. Invalid state and
+instruction exhaustion remain final; declined and nonprogressing callbacks
+consume their independent invocation budget. Both dispatch strategies and C
+routes execute public complete-state/memory controls at O0/O2. This closes the
+manual handoff-loop interface gap, not the implementation of Windows services,
+ordinary parameter inference, or automatic ordinary/state conversion.
+
+Guarded scalar index ranges now preserve the comparison/selected-value
+relationship through machine-width wrapping, low-byte transport and
+complementary masks. The stack proof and LLVM pointer projection share the
+mask shape owner. Public regressions cover all native architectures/formats
+and conservative refusals. A private Windows snapshot comparison executes one
+complete calculation function and its original security-cookie callee through
+both C routes at O0/O2 over nine input cases. This establishes that bounded
+function comparison, not complete execution of the five remaining roots.
+Their 56 ordinary argument occurrences and automatic ordinary/state composition
+remain open; range facts alone do not exclude GS/callee or alias observers.
 
 Explicit machine-region C now accepts authenticated entry-object exclusions through a shared entry guard. Both C routes check whole-range nonwrapping and frame separation before guest/state/tape effects; object aliases and equal roots with disjoint ranges remain valid. Owned execution tests cover all four state layouts, optional alignment, full-width endpoints and exact wrapper budgets. This closes the source-contract gap; ordinary ABI inference, accessibility and other caller memory premises remain separate.
 

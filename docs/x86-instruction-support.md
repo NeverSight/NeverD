@@ -283,6 +283,12 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 | AMX physical execution and restart qualification | All five tile-memory forms now retain addr64 SP/BP provenance through an isolated native leaf, with independent full-width stride and both C routes. Current local hardware has no AMX. Controlled address/completion and instrumented signal-unwind tests do not qualify physical AMX arithmetic, tile faults or restart. |
 | VMCALL/VMMCALL outside an explicit ABI | Ordinary raw lifting refuses to infer a hypervisor ABI. The [explicit KVM binding](x86-kvm-hypercalls.md) supplies all five natural-width inputs, the rAX result and unknown memory effects through native LLVM/NeverC interfaces and both x64 C routes. Arbitrary hypervisor state, service-specific extra outputs, transferring services and fault/event delivery remain outside that contract. |
 
+The [explicit Hyper-V page binding](x86-hyperv-hypercalls.md) now carries
+ordinary, rep and fast register outputs through both C routes and a native
+LLVM/NeverC page-call intrinsic. Caller-state replacement and services with
+additional environment dependencies remain outside this contract.
+
+
 ADCX/ADOX now have complete form-specific undefined-output audits for legacy
 x86/x64 and APX/NDD x64, alongside BMI2 values, BEXTR, bit counts, BMI logic and
 TBM. ADOX uses OF as an **unsigned carry**, and each instruction preserves the

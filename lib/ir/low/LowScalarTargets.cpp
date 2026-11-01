@@ -10,6 +10,7 @@
 #include "LowScalarTargets.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/CallRegisterBody.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 
 #include <algorithm>
@@ -59,8 +60,11 @@ Values readRegister(const State &S, const NdVar &V) {
 }
 } // namespace
 
-std::optional<std::map<va_t, std::vector<va_t>>>
-finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
+namespace {
+std::optional<LowScalarOperandValues>
+finiteOperandValues(llvm::ArrayRef<LowBlock> Blocks,
+                    llvm::ArrayRef<uint8_t> Roots,
+                    const LowScalarOperandQueries &Queries, size_t &Remaining) {
   const auto Spend = [&](size_t N) {
     if (N > Remaining) {
       Remaining = 0;
@@ -69,24 +73,15 @@ finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
     Remaining -= N;
     return true;
   };
-  const size_t MaxValues = limits::kMaxComputedBranchValues;
+  const size_t MaxValues = limits::kMaxScalarValueSet;
   std::map<int, size_t> Ids;
-  std::set<va_t> BranchOccurrences;
-  for (size_t B = 0; B != F.Blocks.size(); ++B) {
-    if (!Spend(1) || !Ids.emplace(F.Blocks[B].Id, B).second)
+  for (size_t B = 0; B != Blocks.size(); ++B) {
+    if (!Spend(1) || !Ids.emplace(Blocks[B].Id, B).second)
       return {};
-    for (const LowOp &Op : F.Blocks[B].Ops) {
-      if (!Spend(1))
-        return {};
-      // An x87 normalization can clone one machine branch into several
-      // state-specific blocks. Such occurrences need a joint target owner.
-      if (Op.Opcode == NdOp::INDIR_BR &&
-          !BranchOccurrences.insert(Op.Addr).second)
-        return {};
-    }
   }
-  std::vector<std::optional<State>> Entries(F.Blocks.size());
-  std::vector<bool> Queued(F.Blocks.size());
+
+  std::vector<std::optional<State>> Entries(Blocks.size());
+  std::vector<bool> Queued(Blocks.size());
   std::deque<size_t> Work;
   const auto Queue = [&](size_t B) {
     if (!Queued[B]) {
@@ -94,17 +89,13 @@ finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
       Work.push_back(B);
     }
   };
-  for (size_t B = 0; B != F.Blocks.size(); ++B) {
-    const auto &Block = F.Blocks[B];
-    if (Block.StartAddr == F.Entry || Block.Preds.empty() ||
-        !Block.ExceptionalPreds.empty() ||
-        F.ModuleAnalysisRoots.count(Block.StartAddr) ||
-        F.OrdinaryModuleAnalysisRoots.count(Block.StartAddr)) {
+  for (size_t B = 0; B != Blocks.size(); ++B) {
+    if (Roots[B]) {
       Entries[B] = State{};
       Queue(B);
     }
   }
-  std::map<va_t, std::vector<va_t>> Targets;
+  LowScalarOperandValues ValuesAt;
   while (!Work.empty()) {
     const size_t B = Work.front();
     Work.pop_front();
@@ -119,20 +110,23 @@ finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
       const auto I = Temps.find({V.Offset, V.Size});
       return I == Temps.end() ? Values{} : I->second;
     };
-    for (const LowOp &Op : F.Blocks[B].Ops) {
+    for (const LowOp &Op : Blocks[B].Ops) {
       if (!Spend(1))
         return {};
       if (Instruction != Op.Addr) {
         Temps.clear();
         Instruction = Op.Addr;
       }
-      if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs == 1) {
-        const auto Value = Read(Op.Inputs[0]);
-        if (Value.empty())
-          Targets.erase(Op.Addr);
-        else
-          Targets[Op.Addr] = Value;
-      }
+      if (const auto At = Queries.find(&Op); At != Queries.end())
+        for (unsigned Input : At->second) {
+          if (!Spend(1) || Input >= Op.NumInputs)
+            return {};
+          auto Value = Read(Op.Inputs[Input]);
+          if (Value.empty())
+            ValuesAt.erase({&Op, Input});
+          else
+            ValuesAt[{&Op, Input}] = std::move(Value);
+        }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
           Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::ATOMIC_XCHG ||
           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
@@ -167,7 +161,7 @@ finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
           }
         } else if (!A.empty() && (Op.NumInputs == 1 || !C.empty()) &&
                    A.size() * std::max(size_t{1}, C.size()) <=
-                       limits::kMaxComputedBranchProduct) {
+                       limits::kMaxScalarValueProduct) {
           const Values Right = C.empty() ? Values{0} : C;
           for (uint64_t L : A)
             for (uint64_t R : Right) {
@@ -197,30 +191,26 @@ finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
       canonicalize(Result);
       if (Result.size() > MaxValues)
         Result.clear();
-      if (!Spend(1 + Registers.size() + Result.size()))
+      if (!Spend(1 + (Out.isTemp() ? Temps.size() : Registers.size()) +
+                 Result.size()))
         return {};
-      if (Out.isTemp()) {
-        for (auto I = Temps.lower_bound({Out.Offset, 0});
-             I != Temps.end() && I->first.first == Out.Offset;)
-          I = Temps.erase(I);
-        if (!Result.empty())
-          Temps[{Out.Offset, Out.Size}] = std::move(Result);
-      } else {
-        if (Out.Offset > UINT64_MAX - Out.Size) {
-          Registers.clear();
-          continue;
-        }
-        for (auto I = Registers.begin(); I != Registers.end();)
-          if (I->first.first < Out.Offset + Out.Size &&
-              Out.Offset < I->first.first + I->first.second)
-            I = Registers.erase(I);
-          else
-            ++I;
-        if (!Result.empty())
-          Registers[{Out.Offset, Out.Size}] = std::move(Result);
+      State &Written = Out.isTemp() ? Temps : Registers;
+      if (Out.Offset > UINT64_MAX - Out.Size) {
+        Written.clear();
+        continue;
       }
+      // Temporary byte intervals overlap just like register intervals. A
+      // partial write cannot leave a stale full-width scalar fact behind.
+      for (auto I = Written.begin(); I != Written.end();)
+        if (I->first.first < Out.Offset + Out.Size &&
+            Out.Offset < I->first.first + I->first.second)
+          I = Written.erase(I);
+        else
+          ++I;
+      if (!Result.empty())
+        Written[{Out.Offset, Out.Size}] = std::move(Result);
     }
-    for (int Succ : F.Blocks[B].Succs) {
+    for (int Succ : Blocks[B].Succs) {
       const auto Found = Ids.find(Succ);
       if (!Spend(1 + Registers.size()) || Found == Ids.end())
         return {};
@@ -251,6 +241,59 @@ finiteScalarBranchTargets(const LowFunc &F, size_t &Remaining) {
       }
     }
   }
+  return ValuesAt;
+}
+} // namespace
+
+std::optional<LowScalarOperandValues>
+finiteScalarOperandValues(CallRegisterBodyView Function,
+                          const LowScalarOperandQueries &Queries,
+                          size_t &Remaining) {
+  if (!Function.Complete || Function.UnsafeIndirectBranches ||
+      Function.HasIndependentRoots)
+    return {};
+  std::vector<uint8_t> Roots(Function.Blocks.size());
+  for (size_t B = 0; B != Function.Blocks.size(); ++B)
+    Roots[B] = B == 0 || Function.Blocks[B].Preds.empty() ||
+               !Function.Blocks[B].ExceptionalPreds.empty();
+  return finiteOperandValues(Function.Blocks, Roots, Queries, Remaining);
+}
+
+std::optional<std::map<va_t, std::vector<va_t>>>
+finiteScalarBranchTargets(const LowFunc &Function, size_t &Remaining) {
+  std::vector<uint8_t> Roots(Function.Blocks.size());
+  std::set<va_t> BranchOccurrences;
+  LowScalarOperandQueries Queries;
+  for (size_t B = 0; B != Function.Blocks.size(); ++B) {
+    const auto &Block = Function.Blocks[B];
+    if (!Remaining)
+      return {};
+    --Remaining;
+    Roots[B] = Block.StartAddr == Function.Entry || Block.Preds.empty() ||
+               !Block.ExceptionalPreds.empty() ||
+               Function.ModuleAnalysisRoots.count(Block.StartAddr) ||
+               Function.OrdinaryModuleAnalysisRoots.count(Block.StartAddr);
+    for (const LowOp &Op : Block.Ops) {
+      if (!Remaining)
+        return {};
+      --Remaining;
+      // An x87 normalization can clone a branch into state-specific blocks.
+      // Such occurrences require their own joint target owner.
+      if (Op.Opcode == NdOp::INDIR_BR) {
+        if (!BranchOccurrences.insert(Op.Addr).second)
+          return {};
+        if (Op.NumInputs == 1)
+          Queries.emplace(&Op, std::vector<unsigned>{0});
+      }
+    }
+  }
+  const auto Values =
+      finiteOperandValues(Function.Blocks, Roots, Queries, Remaining);
+  if (!Values)
+    return {};
+  std::map<va_t, std::vector<va_t>> Targets;
+  for (const auto &[Query, Cover] : *Values)
+    Targets.emplace(Query.first->Addr, Cover);
   return Targets;
 }
 

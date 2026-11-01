@@ -273,12 +273,13 @@ std::vector<std::pair<uint32_t, uint32_t>> dataInitializerCandidates(
 
 } // namespace
 
-std::vector<std::pair<uint32_t, uint32_t>>
-blockCallCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
-                    llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
-                    llvm::ArrayRef<uint32_t> SMatch,
-                    llvm::ArrayRef<uint8_t> STrusted,
-                    const ComparisonControl &Control) {
+std::vector<std::pair<uint32_t, uint32_t>> blockCallCandidates(
+    const Program &P, llvm::ArrayRef<uint32_t> PMatch,
+    llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
+    llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint8_t> STrusted,
+    const ComparisonControl &Control, llvm::ArrayRef<uint32_t> WeakP,
+    llvm::ArrayRef<uint32_t> WeakS) {
+  const bool Review = !WeakP.empty();
   struct BlockRole {
     uint64_t Key;
     bool Secondary;
@@ -294,13 +295,14 @@ blockCallCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
         return;
       const uint32_t B = PMatch[A];
       if (!PTrusted[A] || B == NoIndex || !STrusted[B] ||
-          P.Functions[A].has(TraitIncomplete) ||
-          S.Functions[B].has(TraitIncomplete))
+          (!Review && (P.Functions[A].has(TraitIncomplete) ||
+                       S.Functions[B].has(TraitIncomplete))))
         continue;
       std::vector<BlockRole> Roles;
       for (bool Secondary : {false, true}) {
         const auto &Image = Secondary ? S : P;
         const auto Map = Secondary ? SMatch : PMatch;
+        const auto Weak = Secondary ? WeakS : WeakP;
         const uint32_t FI = Secondary ? B : A;
         const auto &F = Image.Functions[FI];
         for (uint32_t BI = 0; BI < F.BlockCount; ++BI) {
@@ -348,13 +350,14 @@ blockCallCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
               break;
             if (I.Callee == NoIndex)
               continue;
-            if (I.Flow == InstructionFlow::Call)
+            if (I.Flow == InstructionFlow::Call || Review)
               Calls.push_back(I.Callee);
             if (I.Callee == FI) {
               H.add("self");
-            } else if (Map[I.Callee] != NoIndex) {
+            } else if (Map[I.Callee] != NoIndex &&
+                       (!Review || Weak[I.Callee] == NoIndex)) {
               H.add("mapped").add(Secondary ? I.Callee : Map[I.Callee]);
-            } else if (I.Flow == InstructionFlow::Call) {
+            } else if (I.Flow == InstructionFlow::Call || Review) {
               H.add("provisional_call");
               Provisional = true;
             } else {
@@ -379,13 +382,29 @@ blockCallCandidates(const Program &P, llvm::ArrayRef<uint32_t> PMatch,
           const auto &X = Roles[I].Calls, &Y = Roles[I + 1].Calls;
           if (X.size() == Y.size())
             for (size_t N = 0; N < X.size(); ++N)
-              if (PMatch[X[N]] == NoIndex && SMatch[Y[N]] == NoIndex)
+              if (Review
+                      ? ((PMatch[X[N]] == NoIndex && WeakS[Y[N]] != NoIndex) ||
+                         (SMatch[Y[N]] == NoIndex && WeakP[X[N]] != NoIndex))
+                      : (PMatch[X[N]] == NoIndex && SMatch[Y[N]] == NoIndex))
                 Observations[A].emplace_back(X[N], Y[N]);
         }
         I = J;
       }
     }
   });
+  if (Review) {
+    std::vector<std::pair<uint32_t, uint32_t>> Result;
+    for (const auto &Caller : Observations)
+      for (const auto &[A, B] : Caller) {
+        if (Control.stop())
+          return {};
+        if (P.Functions[A].hasBody() && S.Functions[B].hasBody())
+          Result.emplace_back(A, B);
+      }
+    llvm::sort(Result);
+    Result.erase(std::unique(Result.begin(), Result.end()), Result.end());
+    return Result;
+  }
   Relations Forward, Reverse;
   for (const auto &Caller : Observations)
     for (const auto &[A, B] : Caller) {
@@ -714,6 +733,188 @@ InitializerCandidates initializerCandidates(
   return Result;
 }
 
+std::vector<NeighborhoodReviewCandidate> neighborhoodReviewCandidates(
+    const Program &P, const ProgramFeatures &PF,
+    llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
+    llvm::ArrayRef<uint8_t> PTrusted, const Program &S,
+    const ProgramFeatures &SF, llvm::ArrayRef<uint32_t> SMatch,
+    llvm::ArrayRef<uint32_t> WeakS, llvm::ArrayRef<uint8_t> STrusted,
+    const ComparisonControl &Control) {
+  struct Neighbors {
+    std::vector<uint32_t> Callers, Callees;
+    uint64_t Sequence = 0;
+  };
+  const size_t PrimaryCount = P.Functions.size();
+  std::vector<Neighbors> Known(PrimaryCount + S.Functions.size());
+  parallelForEach(Known.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const bool Secondary = I >= PrimaryCount;
+      const auto &Features = Secondary ? SF : PF;
+      const auto Map = Secondary ? SMatch : PMatch;
+      const auto Trusted = Secondary ? STrusted : PTrusted;
+      const uint32_t FI = Secondary ? I - PrimaryCount : I;
+      const auto Weak = Secondary ? WeakS : WeakP;
+      if ((Map[FI] != NoIndex && Weak[FI] == NoIndex) ||
+          !(Secondary ? S : P).Functions[FI].hasBody())
+        continue;
+      auto &Out = Known[I];
+      for (const auto &[Graph, Targets] :
+           {std::pair{&Features.Callers, &Out.Callers},
+            std::pair{&Features.Callees, &Out.Callees}}) {
+        for (uint32_t N : Graph->of(FI))
+          if (N != FI && Trusted[N] && Map[N] != NoIndex &&
+              (Graph == &Features.Callers ||
+               (!(Secondary ? S : P).Functions[N].has(TraitIncomplete) &&
+                !(Secondary ? P : S).Functions[Map[N]].has(TraitIncomplete))))
+            Targets->push_back(Secondary ? N : Map[N]);
+        llvm::sort(*Targets);
+        Targets->erase(std::unique(Targets->begin(), Targets->end()),
+                       Targets->end());
+      }
+      if (Out.Callees.size() < limits::diff::kMinNeighborhoodReviewAnchors)
+        continue;
+      StableHash H;
+      const auto Calls = Features.CallSites.of(FI);
+      bool Complete = !Calls.empty();
+      const auto &Image = Secondary ? S : P;
+      if (Image.Functions[FI].has(TraitIncomplete))
+        for (const auto &B : Image.blocks(Image.Functions[FI]))
+          for (const auto &I : Image.instructions(B))
+            if (I.Flow == InstructionFlow::Unknown ||
+                I.Flow == InstructionFlow::IndirectCall ||
+                I.Flow == InstructionFlow::IndirectJump)
+              Complete = false;
+      H.add(Calls.size());
+      for (uint32_t N : Calls) {
+        if (Control.stop())
+          return;
+        if (N == NoIndex || N == FI || !Trusted[N] || Map[N] == NoIndex ||
+            (Secondary ? S : P).Functions[N].has(TraitIncomplete) ||
+            (Secondary ? P : S).Functions[Map[N]].has(TraitIncomplete)) {
+          Complete = false;
+          break;
+        }
+        H.add(Secondary ? N : Map[N]);
+      }
+      if (Complete)
+        Out.Sequence = H.value();
+    }
+  });
+  if (Control.stop())
+    return {};
+  struct Entry {
+    uint64_t Key;
+    bool Secondary;
+    uint32_t Function;
+  };
+  std::vector<Entry> Entries;
+  for (size_t I = 0; I < Known.size(); ++I)
+    if (Known[I].Sequence)
+      Entries.push_back({Known[I].Sequence, I >= PrimaryCount,
+                         uint32_t(I >= PrimaryCount ? I - PrimaryCount : I)});
+  llvm::sort(Entries, [](const auto &A, const auto &B) {
+    return std::tie(A.Key, A.Secondary, A.Function) <
+           std::tie(B.Key, B.Secondary, B.Function);
+  });
+  const auto Eligible = [&](uint32_t A, uint32_t B) {
+    return P.Functions[A].hasBody() && S.Functions[B].hasBody() &&
+           ((WeakP[A] != NoIndex && SMatch[B] == NoIndex) ||
+            (WeakS[B] != NoIndex && PMatch[A] == NoIndex));
+  };
+  std::vector<NeighborhoodReviewCandidate> Result;
+  for (size_t I = 0; I < Entries.size();) {
+    if (Control.stop())
+      return {};
+    size_t J = I + 1;
+    while (J < Entries.size() && Entries[J].Key == Entries[I].Key)
+      ++J;
+    if (J - I <= limits::diff::kMaxSketchBucket)
+      for (size_t X = I; X < J; ++X)
+        for (size_t Y = I; Y < J; ++Y) {
+          const uint32_t A = Entries[X].Function, B = Entries[Y].Function;
+          if (Entries[X].Secondary || !Entries[Y].Secondary || !Eligible(A, B))
+            continue;
+          const auto &Prior = PMatch[A] == NoIndex
+                                  ? Known[SMatch[B]]
+                                  : Known[PrimaryCount + PMatch[A]];
+          const auto &From =
+              PMatch[A] == NoIndex ? Known[PrimaryCount + B] : Known[A];
+          if (Prior.Sequence != Entries[I].Key &&
+              llvm::none_of(From.Callees, [&](uint32_t C) {
+                return std::binary_search(Prior.Callees.begin(),
+                                          Prior.Callees.end(), C);
+              }))
+            Result.push_back({A, B, true, false});
+        }
+    I = J;
+  }
+  for (bool Secondary : {false, true}) {
+    const auto &Features = Secondary ? PF : SF;
+    const auto Map = Secondary ? SMatch : PMatch;
+    const auto Weak = Secondary ? WeakS : WeakP;
+    for (uint32_t F = 0; F < Weak.size(); ++F) {
+      if (Control.stop())
+        return {};
+      if (Weak[F] == NoIndex)
+        continue;
+      const auto &From = Known[Secondary ? PrimaryCount + F : F];
+      const auto &Prior = Known[Secondary ? Map[F] : PrimaryCount + Map[F]];
+      const size_t Exclusive = llvm::count_if(From.Callers, [&](uint32_t C) {
+        return !std::binary_search(Prior.Callers.begin(), Prior.Callers.end(),
+                                   C);
+      });
+      if (Exclusive < limits::diff::kMinNeighborhoodReviewAnchors)
+        continue;
+      // Intersect from the rarest caller; a popular allocator never creates
+      // an unbounded Cartesian product of candidate functions.
+      llvm::ArrayRef<uint32_t> Candidates;
+      bool First = true;
+      for (uint32_t C : From.Callers) {
+        const auto Targets = Features.Callees.of(Secondary ? SMatch[C] : C);
+        if (First || Targets.size() < Candidates.size()) {
+          Candidates = Targets;
+          First = false;
+        }
+      }
+      if (Candidates.size() > limits::diff::kMaxSketchBucket)
+        continue;
+      for (uint32_t C : Candidates) {
+        const uint32_t A = Secondary ? C : F, B = Secondary ? F : C;
+        if (!Eligible(A, B))
+          continue;
+        const auto &Other = Known[Secondary ? C : PrimaryCount + C];
+        if (!std::includes(Other.Callers.begin(), Other.Callers.end(),
+                           From.Callers.begin(), From.Callers.end()))
+          continue;
+        unsigned Shared = 0;
+        for (uint32_t N : From.Callees)
+          Shared +=
+              std::binary_search(Other.Callees.begin(), Other.Callees.end(), N);
+        Result.push_back(
+            {A, B, false,
+             Shared >= limits::diff::kMinNeighborhoodReviewAnchors});
+      }
+    }
+  }
+  llvm::sort(Result, [](const auto &A, const auto &B) {
+    return std::tie(A.Primary, A.Secondary) < std::tie(B.Primary, B.Secondary);
+  });
+  size_t Count = 0;
+  for (const auto C : Result) {
+    if (Count && Result[Count - 1].Primary == C.Primary &&
+        Result[Count - 1].Secondary == C.Secondary) {
+      Result[Count - 1].OrderedCallees |= C.OrderedCallees;
+      Result[Count - 1].BothDirections |= C.BothDirections;
+    } else {
+      Result[Count++] = C;
+    }
+  }
+  Result.resize(Count);
+  return Result;
+}
+
 std::vector<std::pair<uint32_t, uint32_t>> inlineCallerCandidates(
     const Program &P, const ProgramFeatures &PF,
     llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
@@ -821,7 +1022,8 @@ std::vector<std::pair<uint32_t, uint32_t>> conflictingCallCandidates(
     llvm::ArrayRef<uint32_t> PMatch, llvm::ArrayRef<uint32_t> WeakP,
     const Program &S, const ProgramFeatures &SF,
     llvm::ArrayRef<uint32_t> SMatch, llvm::ArrayRef<uint32_t> WeakS,
-    const ComparisonControl &Control) {
+    const ComparisonControl &Control,
+    std::vector<std::pair<uint32_t, uint32_t>> *Split) {
   const size_t PrimaryCount = P.Functions.size();
   const size_t Total = PrimaryCount + S.Functions.size();
   std::vector<std::optional<uint64_t>> Keys(Total);
@@ -838,8 +1040,11 @@ std::vector<std::pair<uint32_t, uint32_t>> conflictingCallCandidates(
                                nullptr, Control, Secondary ? WeakS : WeakP);
     }
   });
-  // Merge aligned occurrences once. Even a caller agreeing with the current
-  // body match contributes: contradictory observations cannot choose a winner.
+  // Keep each observed role, including a split across old and new targets.
+  // Such a split cannot establish identity, but it does contradict an
+  // unqualified weak body match. Requiring unanimous callers here would hide
+  // precisely the helper-extraction alternatives this review must retain.
+  std::vector<std::pair<uint32_t, uint32_t>> Observations;
   Relations Forward, Reverse;
   for (uint32_t A = 0; A < PrimaryCount; ++A) {
     if (Control.stop())
@@ -856,28 +1061,32 @@ std::vector<std::pair<uint32_t, uint32_t>> conflictingCallCandidates(
         return {};
       if (ASites[I].Operand != NoIndex || ASites[I].Target == A)
         continue;
+      Observations.emplace_back(ASites[I].Target, BSites[I].Target);
       recordRelation(Forward, ASites[I].Target, BSites[I].Target);
       recordRelation(Reverse, BSites[I].Target, ASites[I].Target);
     }
   }
   std::vector<std::pair<uint32_t, uint32_t>> Candidates;
-  for (uint32_t A = 0; A < PrimaryCount; ++A) {
+  for (const auto &[A, B] : Observations) {
     if (Control.stop())
       return {};
-    const auto It = Forward.find(A);
-    if (It == Forward.end() || It->second.Conflict)
-      continue;
-    const uint32_t B = It->second.Other;
-    const auto Back = Reverse.find(B);
-    if (Back == Reverse.end() || Back->second.Conflict ||
-        Back->second.Other != A)
-      continue;
     // Only reopen a weak match against one still-unmatched endpoint. Stable
     // identities and two already paired endpoints cannot be displaced here.
-    if (((PMatch[A] == NoIndex && WeakS[B] != NoIndex) ||
-         (SMatch[B] == NoIndex && WeakP[A] != NoIndex)) &&
-        P.Functions[A].hasBody() && S.Functions[B].hasBody())
+    if (!(((PMatch[A] == NoIndex && WeakS[B] != NoIndex) ||
+           (SMatch[B] == NoIndex && WeakP[A] != NoIndex)) &&
+          P.Functions[A].hasBody() && S.Functions[B].hasBody()))
+      continue;
+    if (!Forward.find(A)->second.Conflict && !Reverse.find(B)->second.Conflict)
       Candidates.emplace_back(A, B);
+    else if (Split)
+      Split->emplace_back(A, B);
+  }
+  llvm::sort(Candidates);
+  Candidates.erase(std::unique(Candidates.begin(), Candidates.end()),
+                   Candidates.end());
+  if (Split) {
+    llvm::sort(*Split);
+    Split->erase(std::unique(Split->begin(), Split->end()), Split->end());
   }
   return Candidates;
 }

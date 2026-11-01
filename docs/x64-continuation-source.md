@@ -1,5 +1,8 @@
 # Explicit x64 continuation C
 
+The alternative [Hyper-V page binding](x86-hyperv-hypercalls.md) publishes
+ordinary, fast and rep result registers through a native page call.
+
 The [`native_kvm_hypercalls` binding](x86-kvm-hypercalls.md) explicitly owns
 returning VMCALL/VMMCALL with the KVM five-register input ABI. Unbound raw
 hypercalls remain native boundaries; an opcode never selects a hypervisor ABI.
@@ -132,6 +135,48 @@ layout, instruction steps, and:
 uint64_t neverd_x64_continue_v6(neverd_x64_state_v6 *state, uint64_t *budget);
 ```
 
+The translation also defines a companion environment driver:
+
+```c
+typedef int (*neverd_x64_environment_v6)(neverd_x64_state_v6 *state,
+                                        uint64_t boundary, void *context);
+uint64_t neverd_x64_run_v6(neverd_x64_state_v6 *state, uint64_t *budget,
+                          uint64_t *environment_budget,
+                          neverd_x64_environment_v6 environment, void *context);
+```
+
+The other profiles use their own version suffix and state layout. Calling this
+companion with a provider explicitly enables environment handoff. It runs the
+same selected-instruction driver, then passes its completed boundary and full
+state to the provider. The provider can execute a native service, handle a
+context transition, or supply another explicitly bound environment operation.
+It returns nonzero to resume at the updated `state->PC`, or zero to stop with
+the last translated boundary status. All provider changes remain visible on
+either return; the driver never restores a lexical return address, an earlier
+stack or presumed callee-preserved registers. The provider is responsible for
+the actual native semantics and for returning a state in the selected
+profile's invocation domain. An ordinary C callback's ABI alone does not
+establish that contract or implement a Windows service.
+
+`environment_budget` counts provider invocations, including declined requests
+and requests that leave PC unchanged. It is decremented before the invocation.
+This bounds handoff loops independently of the translated-instruction budget;
+it does not bound the work or time inside one provider invocation. Provider
+execution does not consume translated-instruction units. A null provider,
+zero environment budget or zero remaining instruction budget returns the
+original boundary without invoking the provider. Invalid state (5) and
+exhausted instruction budget (9) always return directly. A final translated
+CALL therefore still returns CALL (1) with its completed physical stack write
+when it consumes the last instruction unit. The caller may replenish the
+budgets explicitly before another invocation. Both counters must be disjoint
+from each other, state storage and guest accesses, and the provider must not
+change them. The companion adds no work to `neverd_x64_continue_vN`.
+
+The manifest names `environment_driver` and describes its explicit binding.
+This interface composes checked state regions with caller-provided execution;
+it does not infer missing ordinary parameters, automatically convert an
+ordinary function to state C, or certify complete Windows execution.
+
 Initialize all architectural inputs from the intended machine context, including
 GPRs in x86 encoding order, RFLAGS, PC, vector containers, FS/GS bases, controls,
 segment caches and descriptor tables. Zero-initialization alone is not a valid
@@ -145,6 +190,11 @@ an intervening callback. The environment can change every state field and guest
 byte before resuming. No source parameter count or callee preservation is
 assumed. Arbitrary-value slots represent caller-selected choices
 for each dynamic instruction; reusing them selects a subset of allowed runs.
+
+Memory-indirect jumps read their target from the live guest memory, including
+RIP-relative slots. Changing a slot between invocations changes the completed
+PC; register jumps use the register value directly. These transfers preserve
+the guest stack and do not invoke the target as a host function.
 
 The driver continues ordinary instructions and jumps to listed addresses. Each
 successful instruction consumes one budget unit, including a stopping transfer.
@@ -418,6 +468,18 @@ shadow-stack checks, interrupt delivery and RTM aborts remain unsupported.
 These rules follow [Intel SDM revision 090, UIRET and user interrupts section
 9.7](https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf).
 
+## Ordered scalar memory operations
+
+The control-state profiles retain one sequentially consistent transaction for
+canonical x64 scalar LOCK CMPXCHG and LOCK ADD, alongside XCHG/XADD. The strict
+lifter audit checks raw encoding against operand widths, registers, addressing
+and prefix metadata. CMPXCHG keeps the old-value accumulator, partial-register
+rules and all six comparison flags on both outcomes. Live FS/GS bases remain
+part of the effective address. The existing invocation domain still excludes
+faults, MMIO and concurrent writes; this is not general transaction support or
+an ordinary function ABI proof. Unaudited wider compare-exchange forms remain
+native boundaries.
+
 ## Native environment bindings
 
 All bindings below are disabled by default. They must match the executing
@@ -431,6 +493,8 @@ machine environment; enabling them is not an emulation implementation.
 | `native_speculation_control_msrs: true` | Real IA32_SPEC_CTRL and IA32_PRED_CMD writes; feature support and valid values are required |
 | `native_descriptor_queries: true` | Real SGDT, memory VERW and register LSL in the bound descriptor environment |
 | `native_page_table_access: true` | Real CR3 accesses, mapping changes and TLB invalidation |
+| `native_debug_register_access: true` | Real supervisor DR0–3, DR6 and DR7 transfers |
+| `native_page_global_access: true` | Real CR4 reads and writes restricted to changing PGE, including TLB invalidation |
 
 Native descriptor and paging bindings must agree with the declared architectural
 context. Both address spaces must retain accessible generated code, host stack
@@ -438,6 +502,44 @@ and state storage across native CR3 writes. Other MSRs and unsupported system
 effects retain status 4. A zero native-request count describes the selected
 instructions under these declarations; it is not evidence that a complete OS
 has run.
+
+The debug binding requires valid register values and a supervisor environment
+in which GD and enabled breakpoints do not trap the generated code, state or
+compiler stack. DR4/DR5 aliases remain native requests because their behavior
+depends on CR4.DE. The PGE binding compares each write against the live CR4 and
+rejects any non-PGE change with status 5 before committing explicit state or
+writing CR4. Successful writes execute MOV CR4, preserving its serializing and
+TLB effects. Generated code, stack and state mappings must remain accessible.
+Both bindings require a controls profile. Their six undefined arithmetic flags
+use independent caller-supplied slots; DF and other explicit state are preserved.
+These are native bindings, not scalar simulations of the debug or paging banks.
+
+## Immediate-abort RTM regions
+
+With `kernel-events-v6`, `native_rtm_abort_regions: true` emits the optional
+`neverd_x64_rtm_abort_environment_v6` callback. It accepts only an authenticated
+canonical rel32 XBEGIN immediately followed by XABORT imm8. The transaction
+runs in one native assembly block, so neither a C return nor a translated step
+can split its checkpoint. On abort, the callback zero-extends the actual EAX
+status into RAX and resumes at the original signed fallback address. Other
+explicit state stays intact. Entry selection follows this fallback; an explicit
+instruction list still selects exactly its requested PCs.
+
+Pass this callback as the provider to `neverd_x64_run_v6`, or call it from an
+existing provider before handling other boundaries. One environment-budget
+unit owns the pair, including an abort before XABORT; the translated-instruction
+budget counts only the subsequent translated steps. A fallback that returns to
+XBEGIN consumes another environment unit. The original XBEGIN remains a native
+request in the instruction manifest. The separate
+`native_rtm_abort_environment.regions` receipts bind all nine original bytes,
+the immediate and the fallback. They do not certify other native requests,
+including an independently entered XABORT.
+
+Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
+faults. If CPUID does not advertise RTM, the provider declines without changing
+explicit state. It never substitutes a constant abort status. Other transaction
+bodies and prefixed encodings remain unsupported. The instruction behavior and
+abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
 
 ## SDK and verification
 
