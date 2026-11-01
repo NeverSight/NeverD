@@ -264,6 +264,7 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 
 | Instructions or family | Missing contract |
 | --- | --- |
+| SNP/RMP and VMGEXIT outside the decoder-ID baseline | The October 2026 AMD manual also defines PSMASH, PVALIDATE, RMPADJUST, RMPUPDATE, RMPQUERY, RMPREAD, RMPOPT, RMPCHKD and VMGEXIT. The pinned decoder has no public IDs for them; F2/F3 forms of `0F 01 FC` and `0F 01 D9` are reported as CLZERO and VMMCALL. Raw-byte admission rejects those aliases before lifting. The LLVM fork has assembler records for the first five families but no corresponding native IR interfaces; the other four also lack assembler records. Decode identity, complete register/flag and memory contracts, native intrinsics and NeverC interfaces remain open. See the [dated inventory](evidence/x86-snp-census-2026-10-31.json); this is outside the 1,665-ID census, not completed support. |
 | LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns LSS/LFS/LGS GPR, selector, descriptor/cache and fallthrough state under Intel operand rules, including null SS at CPL0 and declared clear/preserve FS/GS base policies. i386/compatibility forms, other processor qualification and fault delivery remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
 | Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
@@ -287,7 +288,6 @@ The [explicit Hyper-V page binding](x86-hyperv-hypercalls.md) now carries
 ordinary, rep and fast register outputs through both C routes and a native
 LLVM/NeverC page-call intrinsic. Caller-state replacement and services with
 additional environment dependencies remain outside this contract.
-
 
 ADCX/ADOX now have complete form-specific undefined-output audits for legacy
 x86/x64 and APX/NDD x64, alongside BMI2 values, BEXTR, bit counts, BMI logic and

@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "scope": "Decoder and native-intrinsic inventory outside the 1665-ID baseline; not implementation or execution qualification",
+  "neverd_revision": "725eae73a5e96b997595204f564b0c4c328b1d56",
+  "capstone_revision": "34a97d53024fae79c5a8e07dc2b94804711b5c37",
+  "llvm_revision": "b5130e83dbd7372fc3c9738e20fc2d3df500a3fa",
+  "primary_document": {
+    "title": "AMD64 Architecture Programmer Manual Volume 3, 24594, revision 3.39, October 2026",
+    "mirror": "https://kib.kiev.ua/x86docs/AMD/AMD64/24594_APM_v3-r3.39.pdf",
+    "sha256": "b598514b19f204d973040d9867a7ffc48c949009a8b3dc86b20c9188e721ee45"
+  },
+  "decoder_probe_sha256": "84b54ac1c7473cb527668f5c19daa49ccc31edff92370a974a45113e77814a02",
+  "decoder_library_sha256": "9c065e9bacac559e81dbe5ef1759f33713621769b496f056f4b7597b69cd9b41",
+  "cases": [
+    {
+      "mode_bits": 32,
+      "instruction": "psmash",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "pvalidate",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "rmpadjust",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "rmpupdate",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "rmpquery",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "rmpread",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "rmpopt",
+      "decoder_id": 78,
+      "mnemonic": "clzero",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "rmpchkd",
+      "decoder_id": 78,
+      "mnemonic": "clzero",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "vmgexit-f2",
+      "decoder_id": 1020,
+      "mnemonic": "vmmcall",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 32,
+      "instruction": "vmgexit-f3",
+      "decoder_id": 1020,
+      "mnemonic": "vmmcall",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "psmash",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "pvalidate",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "rmpadjust",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "rmpupdate",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "rmpquery",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "rmpread",
+      "decoder_id": 0,
+      "mnemonic": "invalid",
+      "decoded_bytes": 0
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "rmpopt",
+      "decoder_id": 78,
+      "mnemonic": "clzero",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "rmpchkd",
+      "decoder_id": 78,
+      "mnemonic": "clzero",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "vmgexit-f2",
+      "decoder_id": 1020,
+      "mnemonic": "vmmcall",
+      "decoded_bytes": 4
+    },
+    {
+      "mode_bits": 64,
+      "instruction": "vmgexit-f3",
+      "decoder_id": 1020,
+      "mnemonic": "vmmcall",
+      "decoded_bytes": 4
+    }
+  ],
+  "llvm_assembler_records_present": [
+    "PSMASH",
+    "PVALIDATE32",
+    "PVALIDATE64",
+    "RMPUPDATE",
+    "RMPADJUST",
+    "RMPQUERY"
+  ],
+  "llvm_assembler_records_missing": [
+    "RMPREAD",
+    "RMPOPT",
+    "RMPCHKD",
+    "VMGEXIT"
+  ],
+  "native_ir_intrinsics": "No corresponding declarations in llvm/include/llvm/IR/IntrinsicsX86.td at the recorded revision",
+  "lifting": "Canonical hypercall binding rejects prefixed VMMCALL; liftCacheZero rejects F2/F3 before effects. Decode aliases are not admitted as semantics.",
+  "artifacts_root": "/mnt/data/neverd-hyperv-context-20261031"
+}

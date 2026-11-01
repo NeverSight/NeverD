@@ -1,0 +1,1667 @@
+{
+  "schema_version": 1,
+  "scope": "Explicit returning x64 Hyper-V page register transport, with KVM and VMRUN regressions; not all x86 or Microsoft service semantics",
+  "repositories": {
+    "neverd_implementation": "d6f3bbc5b3",
+    "neverd_qualified_build": "725eae73a5e96b997595204f564b0c4c328b1d56",
+    "llvm_implementation_and_build": "b5130e83dbd7372fc3c9738e20fc2d3df500a3fa",
+    "neverc_implementation": "0c7b3f2f0",
+    "neverc_direct_matrix_build": "0c7b3f2f0",
+    "neverc_source_and_regression_build": "1656dff5f59207797ddc99699607a710daeeeeaf",
+    "neverc_published": "a5ae1710958c4ab8a04949a22bba9ed695c3b647",
+    "neverc_post_build_merge": "Only unrelated C++ translation metadata, fixtures and documentation; the qualified x86 implementation is unchanged",
+    "sdk_release": "not-created",
+    "production_sdk_pin": "neverd-llvm-v23.0.0-r6",
+    "production_llvm_submodule": "03270359c2ed8f6806533d3832a947bf883a6f69"
+  },
+  "native_hyperv": {
+    "profiles": 22,
+    "original_candidate_pairs": 8448,
+    "native_page_calls": 16896,
+    "source_pairs": 4608,
+    "microsoft_service_semantics_qualified": false,
+    "records": [
+      {
+        "name": "hyperv-high-llvm",
+        "qualification_sha256": "bf0514aaebd7460bcf34c9528ebc26e83c9b21b8f3f69941887d6399266d04f6",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": "3c4a0bb07c443ac1f835e82fcf6c2862d77c19309c375069401bea1ea246da37",
+        "manifest_sha256": "0572d9b607a63f72d3cb31aa43fe86e8b44fd12287732a39999699be1a2e33fb",
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "8f6728822efd96d2ca2f741b5cf8287fdb4afb2274af396126421a10abc0ad94",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "b03761b1c45106225b90e8730d2fb98ba2a4bd90534ebdc816e009fb02931ca4",
+          "O2.o": "ea2e63bc719fde726da3cfa9fb3d84679d9430b1b6ac0e8dae3155a70ecabfb5",
+          "O0.ll": "49c1e62d9ed1626b8a3d2cfff29b389f2f5530acff4bcc865ea43ad9f9bd4a74",
+          "guest.c": "a8e5a183e4385ff5c5414673ba84d71d6ca01cb19566315229b4e42d891f7b87",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "250920a7d626a242ee6895ab5ec3e0c83e609107eb8dd7891b9e11042bb78693",
+          "O2.bin": "7ff588ecda0c16600894639b2765b7c1dadcf739ae70a192a6b1f5c053b8651a",
+          "O0.elf": "245ba89e44a3fe6ad5546cd16f51eadc258f11f5e2912deff1941b30c1e0eefa",
+          "O2.elf": "6ac025b57a25c8d1f0c6178678c1c39fed42b8714658317cae4d20984366a84b",
+          "O0.o": "7a6520939026132166aa2cfd2ce44c557b99823a19e3a7355ae9af23260dbb5c",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-high-llvm-new",
+        "qualification_sha256": "1282fa87d04bc56c1444aac2743429c8c54e6c323343e724caffcb0e25f4edf1",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": true,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": "3c4a0bb07c443ac1f835e82fcf6c2862d77c19309c375069401bea1ea246da37",
+        "manifest_sha256": "0572d9b607a63f72d3cb31aa43fe86e8b44fd12287732a39999699be1a2e33fb",
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "8f6728822efd96d2ca2f741b5cf8287fdb4afb2274af396126421a10abc0ad94",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "b03761b1c45106225b90e8730d2fb98ba2a4bd90534ebdc816e009fb02931ca4",
+          "O2.o": "0dd9c16facd252b1f14fc0003551d9005ac6afacee57615f99b94053eecddded",
+          "O0.ll": "49c1e62d9ed1626b8a3d2cfff29b389f2f5530acff4bcc865ea43ad9f9bd4a74",
+          "guest.c": "a8e5a183e4385ff5c5414673ba84d71d6ca01cb19566315229b4e42d891f7b87",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "d643e8aa013c1b262ccd267e8e6adb2688a83bd6606f064d16fad2e90f4b2bee",
+          "O2.bin": "8feeb290bc568f487efcbaf7a5cb975b47315a77a46ae11e69c6c994db35190b",
+          "O0.elf": "245ba89e44a3fe6ad5546cd16f51eadc258f11f5e2912deff1941b30c1e0eefa",
+          "O2.elf": "cc1f0ffe5fa67217b28a504f9918af63e6dd2df4b248c479e60e7a2cd88a1c21",
+          "O0.o": "7a6520939026132166aa2cfd2ce44c557b99823a19e3a7355ae9af23260dbb5c",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-high-neverc",
+        "qualification_sha256": "f1012dc424a5bde21d474f970c34123d8d0c615460c8fece2671097a7f6cf1af",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": "3c4a0bb07c443ac1f835e82fcf6c2862d77c19309c375069401bea1ea246da37",
+        "manifest_sha256": "0572d9b607a63f72d3cb31aa43fe86e8b44fd12287732a39999699be1a2e33fb",
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "919379803d8e99d6109640d821c90b8daf8fa077c79ecf0366d07a20b5c1686a",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.o": "b45821d7d115b7c95e36b83118af09443514757158821bed204b9e6563c8d2bb",
+          "guest.c": "a8e5a183e4385ff5c5414673ba84d71d6ca01cb19566315229b4e42d891f7b87",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "2bc839bb91e39a66ab32707f0234a6f33a75dcd262b650a957f3b8093901fe9f",
+          "O2.bin": "6699731df60d717939a5bbd3dd7000f4de37729b8a7b4282ed4ef570e32ab25a",
+          "O0.elf": "0fba0306e6e1cdc99e879b818f89c1a946c5703075c9f2152fd38e1ac22b39cd",
+          "O2.elf": "be1ce0dd11a63bddb5089c138e942ffc3ae965e316b98b53fc21fd4ff4708823",
+          "O0.o": "f203b21835557a48d536aa7e4a3e4ad05424486a8cd58d3c1f95a4edc4e5baeb",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-ir-llvm",
+        "qualification_sha256": "1d4fe895224aa039e096a620e11111b24e4da052865fac607e2458f8cea77265",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": true,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "d3868bad9cd7ddfb53fdf10c0b7ed2cbbd739b37cc0a26d468ddfd9f4b755d9f",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "11bf3686e0913d2eb8f239d8cd1a781efef8fd9a50a25442e0eebf348cb8d54d",
+          "O2.o": "4d6d33847a55acf181cfba1a0f46e62a04832d1b9e798c4a9b012b267ddd1343",
+          "O0.ll": "11bf3686e0913d2eb8f239d8cd1a781efef8fd9a50a25442e0eebf348cb8d54d",
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "main.o": "fbf27d391842ef1411f3c44f965ce79eb8420df7992f79b69676d146e6a8e902",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "b657c462ec0c3ba5bf1d84304d66867e213a9de71e4b2d247026fdd8a91faa67",
+          "O2.bin": "0011349585b95a61617e2dd2cd4289fa5b683b841fc878f780e4c5aba9a9620c",
+          "O0.elf": "b17d7d7f2d9456f6bd25adbdc430dd796bd9a2320d026196dc1b098ccc4bd31f",
+          "O2.elf": "54f852a9a57ec38cc97af1729c8a1405918bac27e768c3d6b5e55b764dd465eb",
+          "O0.o": "4fe2fab45b168b9723e2c2cf4d3099bf67483aa4c2a59de5d21526adf1a19ec0",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-ir-llvm-new",
+        "qualification_sha256": "6fcf89a30d257853af7a1c7bc482fe4b29f827fa4fc702f32677ff4e8073cb7f",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": true,
+        "llvm_only": true,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "d3868bad9cd7ddfb53fdf10c0b7ed2cbbd739b37cc0a26d468ddfd9f4b755d9f",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "11bf3686e0913d2eb8f239d8cd1a781efef8fd9a50a25442e0eebf348cb8d54d",
+          "O2.o": "4d6d33847a55acf181cfba1a0f46e62a04832d1b9e798c4a9b012b267ddd1343",
+          "O0.ll": "11bf3686e0913d2eb8f239d8cd1a781efef8fd9a50a25442e0eebf348cb8d54d",
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "main.o": "fbf27d391842ef1411f3c44f965ce79eb8420df7992f79b69676d146e6a8e902",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "8ca64c1fc42fc6fd8f1d588249b122c17d84f548414f4a1f6f4f9aebd225b8b2",
+          "O2.bin": "0011349585b95a61617e2dd2cd4289fa5b683b841fc878f780e4c5aba9a9620c",
+          "O0.elf": "b17d7d7f2d9456f6bd25adbdc430dd796bd9a2320d026196dc1b098ccc4bd31f",
+          "O2.elf": "54f852a9a57ec38cc97af1729c8a1405918bac27e768c3d6b5e55b764dd465eb",
+          "O0.o": "4fe2fab45b168b9723e2c2cf4d3099bf67483aa4c2a59de5d21526adf1a19ec0",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-llvm",
+        "qualification_sha256": "f9b78f16786a3b282f138c4313dcc6bc330e4a3f8e208fe8b4e5e13bcdc3124f",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "d8dd2428330d61df1ede55e10df01708edf1938dbcfc2f97412ea083e826300b"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "3c9bb418d38610a83e766bd75fe4087c0c4aacf982df635f59e96929b61e9f44",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "f76e96980c34d22c868a3de35a416a4a7236ac9d4858559a8b15b24c60d25cc1",
+          "O2.o": "5f352deda628ae87432ad8d09766135ba3ba2af218b4a8dafee9faaa1c10fd06",
+          "O0.ll": "54fea6dec138cd267bd34966445f1b466537f7326df9a6ffcddc87e3e55f8ebf",
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "485d286f39668a5a764404511b740a50d516db1dc894f75a15122a602c83ce80",
+          "O2.bin": "74f7776bdb72332f6f6613ef750748888045d59f2639200e52c96e491f0f95f6",
+          "O0.elf": "86338888f51140d8312314c115c2113758589eda6d93b7c873ddd840c0f7ce50",
+          "O2.elf": "2754cf8d117af5e144ab9bb7fd9d54f72eeea980e26633b24d04eae6f7607b12",
+          "O0.o": "ed0844bd18cfac263dddd546c4e7c70b57c1d345bb53f2297ab3b17a5f0d2846",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-llvm-llvm",
+        "qualification_sha256": "b9539bdc04d07da26f2d7375e0147578b0faa30cea2b0f659e60d764500118e2",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": "720c77607648caf5a56ef7f78ddb417eb09b7ab6e61df7a4123f0d00cb796b59",
+        "manifest_sha256": "005a3eccca6f05e4ff80e6aa603302e58ab60305ba646d248f49c122c4d3a96f",
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "32dbe20af35b4dd5fa0dc6dc55696dbd422c18509dd6d71d7111d1317c89b785",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "48e9eebc1e043df1344d858489928570cb3d2868201dd9c7ec8522a33b8c1142",
+          "O2.o": "58cf9d6ca4d4ce3781b761a517710bbecfd91d4b5418132f23e349e24fc6f5b7",
+          "O0.ll": "504608f5f524b4439a1501c57fa6061613d556470af33376e9fac851910a7260",
+          "guest.c": "2849e5a0fed629dd4b083319e9eb55f33ea5920bdac5e1de59bf5647563a23b8",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "ba4243213b6904e84e2839fe05c09b92986eaa9bf89ab8290829a959a7440b39",
+          "O2.bin": "23a7fa5f2db8252e9fb9c2697c444297e010cab741b684e99c2e02399111f25e",
+          "O0.elf": "4008ba7c33fca8145c900a1e4e97e25d0faea145d424217e93e8b10a9924a2fe",
+          "O2.elf": "bbd01684d0cfc1451dd0e4a08f87161bcf39326c54b78bc4433c4ef5758ec362",
+          "O0.o": "99757a276e2e93e4148cfa845428e4262bdd9002e592019e80b6e775ef9e4ccc",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-llvm-llvm-new",
+        "qualification_sha256": "615b2d9020eb6f0a475225c43e2352377b0e5d66ba37b5544af47c14b91c4bae",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": true,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": "720c77607648caf5a56ef7f78ddb417eb09b7ab6e61df7a4123f0d00cb796b59",
+        "manifest_sha256": "005a3eccca6f05e4ff80e6aa603302e58ab60305ba646d248f49c122c4d3a96f",
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "32dbe20af35b4dd5fa0dc6dc55696dbd422c18509dd6d71d7111d1317c89b785",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "48e9eebc1e043df1344d858489928570cb3d2868201dd9c7ec8522a33b8c1142",
+          "O2.o": "8a91afc7527ebccfef107306bd1dfd082f73453519b89fb23a59f41fdd356c70",
+          "O0.ll": "504608f5f524b4439a1501c57fa6061613d556470af33376e9fac851910a7260",
+          "guest.c": "2849e5a0fed629dd4b083319e9eb55f33ea5920bdac5e1de59bf5647563a23b8",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "d46b44ee454a253b92fa84e70995d0cb7e2a14f84fb7d88067fc532b11f7dadc",
+          "O2.bin": "ebe84225e787e8aa7635d86a15935ac05b118a8889230e9ca652f3df0cd8ff7b",
+          "O0.elf": "4008ba7c33fca8145c900a1e4e97e25d0faea145d424217e93e8b10a9924a2fe",
+          "O2.elf": "339146bc341f32bdf6fd51541f19bd5a29bd3f10ce9d9f6cf6af917653f926e3",
+          "O0.o": "99757a276e2e93e4148cfa845428e4262bdd9002e592019e80b6e775ef9e4ccc",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-llvm-neverc",
+        "qualification_sha256": "149e74c72699e74aa9444428e9dd9ed3f19dba663ac52d5897e4efed6d902309",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": "720c77607648caf5a56ef7f78ddb417eb09b7ab6e61df7a4123f0d00cb796b59",
+        "manifest_sha256": "005a3eccca6f05e4ff80e6aa603302e58ab60305ba646d248f49c122c4d3a96f",
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "9a1ab1ff7aeff8321f6d38e691a5753db58cc12831b65a00c146f1104abe19c0",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.o": "75fe8ef570939a2de4f0001c726be2bcd0432c25ab286fc11122f6efbb3b4fea",
+          "guest.c": "2849e5a0fed629dd4b083319e9eb55f33ea5920bdac5e1de59bf5647563a23b8",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "099535947f9a296102e05bdef5bd0802ba4bc958e3fd0358a4adfb2d75966428",
+          "O2.bin": "ceaaf2a88692cdcb11776307c0a179ac2c93014d1a65ccdb3c0c015351f2453c",
+          "O0.elf": "5e6fcd7dd18fbc0c79d47791aa20e6895c4a2a5f60edd7a3facf4aabaff94e24",
+          "O2.elf": "648b13bff3759fc72f706cc3c2754b7e73b0ffd56b18bcc04bf3a7c34265d03a",
+          "O0.o": "6ab09f7efe9eeab5f313467cfca50f1a16e23be872406b10ea159664ae04e603",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-llvm-new",
+        "qualification_sha256": "8520ea0d8cb14fcbe99a9fb327065271a3f644f79f08a416da2e08b8e3d752ba",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "d8dd2428330d61df1ede55e10df01708edf1938dbcfc2f97412ea083e826300b"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": true,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "3c9bb418d38610a83e766bd75fe4087c0c4aacf982df635f59e96929b61e9f44",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.ll": "f76e96980c34d22c868a3de35a416a4a7236ac9d4858559a8b15b24c60d25cc1",
+          "O2.o": "c2075f8e61615ce66c2261385a7daac5b7c3b81c6e9ace0d12affa70880013cf",
+          "O0.ll": "54fea6dec138cd267bd34966445f1b466537f7326df9a6ffcddc87e3e55f8ebf",
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "1684daa0d27ab0d35a2c278f8aa24d9887938496201509f0f358d6491e380db1",
+          "O2.bin": "0eaec605a0836d25bff0e2c7c8f2a979e665be340bcf0c524af184622bede4ae",
+          "O0.elf": "86338888f51140d8312314c115c2113758589eda6d93b7c873ddd840c0f7ce50",
+          "O2.elf": "346f8ba6266919af1569dd75b880d6ee0c7f1c7e608983abf28db71d9c63ed66",
+          "O0.o": "ed0844bd18cfac263dddd546c4e7c70b57c1d345bb53f2297ab3b17a5f0d2846",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      },
+      {
+        "name": "hyperv-neverc",
+        "qualification_sha256": "f063c8c5b6fec90fad96bbec672a1a163da0c63dc11a7463a5240283bde606ac",
+        "passed": true,
+        "hypervisor": "KVM Hyper-V ABI with synthetic userspace service",
+        "microsoft_service_semantics_qualified": false,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 384,
+            "native_hypercalls": 768
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "d8dd2428330d61df1ede55e10df01708edf1938dbcfc2f97412ea083e826300b"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "8606249b984dd208263d1073d7e841a53f7ed097e04fdc722644ede5c3287e2b",
+          "original.o": "21d00da2b524724ef16fc5d18af8c49daafd59365cc128d477d0dec32119c858",
+          "O2.o": "2f5c5eebf71bc5814b19ba426f01587469ba54f388bd840b26282499451b2233",
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner": "9128a533a6606ef4b1b979006d7f93bb2651b5d2c48a5ab1df4e09d99d5148db",
+          "commands.json": "787ce3ff6e85ff918234079da96902b0d73268786be64a8c939c57cb118e96ab",
+          "O2.bin": "7cf3efec5a58d8ea829a1a3ffb533af4fcf1d3acb4518013f5987c589fac2754",
+          "O0.elf": "878efa78345e22afcf31c3dd7405b1f2e5f251feb54f98043823a802ea0436da",
+          "O2.elf": "786e768a1d1bcbab83e85729930306a2e012a11cde0c331f5c808a50dd327f9c",
+          "O0.o": "a7db1eebd9d6f03b0fc2de225dc3fe61306f6c73261b09113073c9ea1e6f280b",
+          "O0.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350",
+          "O2.log": "4ab0822cdce71b4a57bf52b38b4ef20bfa4cb8d1576479dfc76caeda10dac350"
+        },
+        "fixture_sha256": {
+          "guest.c": "295d3f85571c9636825d8846a6091b20caa5b5a24b8cc7def2cb0ea0989241e9",
+          "runner.c": "71946c9055076d5356f3cad8c1af5f78e08f9f3c7dfd78aba4fc9cce7de939be",
+          "original.S": "dda2931adc43ac591f8cf7e29fb54255415183a8c04814de23fa23bb5db1c9f1"
+        },
+        "scope": "Hyper-V native page register transport with a synthetic KVM userspace service; not Microsoft service semantics"
+      }
+    ]
+  },
+  "host_page_abi": {
+    "profiles": 6,
+    "full_bank_comparisons": 9216,
+    "live_fp_cases": 3072,
+    "scope": "Independent synthetic assembly page, SysV/Win64 callers, all strides, unaligned banks, live stack and FP values; no hypervisor service emulation",
+    "records": [
+      {
+        "name": "context-llvm",
+        "qualification_sha256": "c696f677b60efdedc76906e9d30a8ad5474aae5d2452b21373d8e5775c9ac885",
+        "contract": "hyperv-page-register-transport",
+        "service_semantics_qualified": false,
+        "records": [
+          {
+            "optimization": "0",
+            "comparisons": 1536,
+            "live_fp_cases": 512,
+            "object_sha256": "ef048b05ba48215620b56ae181a3c6931778a9c319f41e76853a9f1c5f50452d"
+          },
+          {
+            "optimization": "2",
+            "comparisons": 1536,
+            "live_fp_cases": 512,
+            "object_sha256": "b1f0a8a7453298b6aef56c899653f1e1c1f0cea07a1a5e3df03ad82568291a2f"
+          }
+        ]
+      },
+      {
+        "name": "context-llvm-new",
+        "qualification_sha256": "164fdc2ed1c5242c594a72365e73395bf54167c72d5b1b74ec9fdf30fa653036",
+        "contract": "hyperv-page-register-transport",
+        "service_semantics_qualified": false,
+        "records": [
+          {
+            "optimization": "0",
+            "comparisons": 1536,
+            "live_fp_cases": 512,
+            "object_sha256": "ef048b05ba48215620b56ae181a3c6931778a9c319f41e76853a9f1c5f50452d"
+          },
+          {
+            "optimization": "2",
+            "comparisons": 1536,
+            "live_fp_cases": 512,
+            "object_sha256": "bc0c1d5824b3aaa53185ba74401423a5a5ff23f1b6b2331612b4982efd2bb7b5"
+          }
+        ]
+      },
+      {
+        "name": "context-neverc",
+        "qualification_sha256": "75b5c0dda11d4fdc8ebda48104c54850543f3bbef05ae2cadcecceb61a0b1db3",
+        "contract": "hyperv-page-register-transport",
+        "service_semantics_qualified": false,
+        "records": [
+          {
+            "optimization": "0",
+            "comparisons": 1536,
+            "live_fp_cases": 512,
+            "object_sha256": "75cbe7170fc371c92c9a5ae92d5b23ad0d6d3903a4a2d290ef1a1d6e26c22c55"
+          },
+          {
+            "optimization": "2",
+            "comparisons": 1536,
+            "live_fp_cases": 512,
+            "object_sha256": "adf4af06e6c2f2250c8ca1354c1cca3bd6617d10e8ffbad85452c8bf117c2327"
+          }
+        ]
+      }
+    ]
+  },
+  "portable_source": {
+    "profiles": 8,
+    "full_state_and_ram_cases": 8192,
+    "scope": "HighC/LLVMC, switch/direct dispatch, O0/O2 with ASan/UBSan; independent provider; extra invalid-state and zero-budget checks"
+  },
+  "vmrun_regression": {
+    "profiles": 12,
+    "contexts": 600,
+    "invalid_vmcb_cr2_pairs": 192,
+    "ida_counterexamples": 12,
+    "addr32_rax_cases": 12,
+    "scope": "Fresh NeverD C through NeverC and both full LLVM pass managers; QEMU TCG SVM, XCR0=7; not physical AMD execution",
+    "records": [
+      {
+        "name": "vmrun-high-llvm",
+        "qualification_sha256": "52840fc01491b3c566b4ee7c32299fed4ec7754d23df3787e8f475cac3c3064e",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "tools": {
+          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+        },
+        "codegen_pass_manager": "default",
+        "fixture_sha256": "57b39ffc0a2d369f174ade7ab18f0e7d42b32240c47ccef4b76e825626617614",
+        "verifier_sha256": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "neverd_source_sha256": null,
+        "neverd_continuation_sha256": "6bb728b813b691ce9f4760d2d8624f782e863e385565e01de62edd5acf30ba05",
+        "continuation_fixture_sha256": "c080af9e6b6d353b03b24e99a2dcf1bc43c5a676a00e075766b027bd4560652c",
+        "files": {
+          "commands.json": "75a0b6fdbae13395cca4099767004f7384f7254a5ebdc7af5b2c8f8cc597c1b0",
+          "guest-64-O0.bc": "d9aaf120ab2d556061311f7a73db68a824e3e414996688c59055fc06807935b1",
+          "guest-64-O0.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O0.c": "60c9f850435a2e90c53b500c19bc59519e93514801f727e817c3c12b92ac6af2",
+          "guest-64-O0.elf": "9d640ede34d5067eba7a899e69aa7d136cd4d775c991e2935b9dcbc815530974",
+          "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O0.ll": "2b0c9e5bbd73fe0feb97e0a09cfd4f183dd351634221f715befd598f7e4e626a",
+          "guest-64-O0.multiboot": "da527ad90958a078565f53c81b9413e5ee69117fcb0dbc76ac003331f34b8b61",
+          "guest-64-O0.o": "87ab511a0e44c2ff2cc62a647c3a011d1cb070c548ef7e11238e65457abbf0cd",
+          "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O0.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384",
+          "guest-64-O2.bc": "df0d601d6b941c021ab1a3d4b35d3a3c9adc1beb4e6dabf531928af8365f37b6",
+          "guest-64-O2.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O2.c": "60c9f850435a2e90c53b500c19bc59519e93514801f727e817c3c12b92ac6af2",
+          "guest-64-O2.elf": "c37537e9bc7ee493f190d361d01a54d6572a56d580053360b78e8a4a569df6b6",
+          "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O2.ll": "af3db28e5dc8ec4ebc608e46ed83b04f8ffb0e0bff9c21593efdafb0482f99d7",
+          "guest-64-O2.multiboot": "f03ef8f7b3669be12af4083384f5c85ff0173165c1ee0c1d098ba7becffb003a",
+          "guest-64-O2.o": "21fd2c163fecdd2e4c0ba47ee4ed729a850a94bff42a2509b0d3f0f3bae81c04",
+          "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O2.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384"
+        },
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification"
+      },
+      {
+        "name": "vmrun-high-llvm-new",
+        "qualification_sha256": "b9eb515323728f2efd952afdae6337aee93eae97532ceae3f6e340cbbb8b0cfe",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "tools": {
+          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+        },
+        "codegen_pass_manager": "new",
+        "fixture_sha256": "57b39ffc0a2d369f174ade7ab18f0e7d42b32240c47ccef4b76e825626617614",
+        "verifier_sha256": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "neverd_source_sha256": null,
+        "neverd_continuation_sha256": "6bb728b813b691ce9f4760d2d8624f782e863e385565e01de62edd5acf30ba05",
+        "continuation_fixture_sha256": "c080af9e6b6d353b03b24e99a2dcf1bc43c5a676a00e075766b027bd4560652c",
+        "files": {
+          "commands.json": "92979f44cec9953c0e4d95c5bfa5ef2e379b2880f4103a3c255034279174c738",
+          "guest-64-O0.bc": "f9183d4596932cdadeb0bbd72c9c130767909defe856c7618372da74944152c3",
+          "guest-64-O0.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O0.c": "60c9f850435a2e90c53b500c19bc59519e93514801f727e817c3c12b92ac6af2",
+          "guest-64-O0.elf": "9d640ede34d5067eba7a899e69aa7d136cd4d775c991e2935b9dcbc815530974",
+          "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O0.ll": "ca7e319d62520d4652964d7217fdfffb0dfd71174b7bc2673a768b2f4198ce3b",
+          "guest-64-O0.multiboot": "da527ad90958a078565f53c81b9413e5ee69117fcb0dbc76ac003331f34b8b61",
+          "guest-64-O0.o": "87ab511a0e44c2ff2cc62a647c3a011d1cb070c548ef7e11238e65457abbf0cd",
+          "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O0.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384",
+          "guest-64-O2.bc": "dd45e85506737839b850d748824a2676dd81628cce6a98858d8f2e599cf1e1f6",
+          "guest-64-O2.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O2.c": "60c9f850435a2e90c53b500c19bc59519e93514801f727e817c3c12b92ac6af2",
+          "guest-64-O2.elf": "717d38a6d2423996eb8c80c4d41be225daf36a00bf1755c7461478959aaf5de2",
+          "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O2.ll": "6e0907019cd26f0460c4616be016e0c0bb7c101e513823cdb23d89310c4ac4c4",
+          "guest-64-O2.multiboot": "f01f8b94a22a003f51f340c63044118f50048adc67b6b5ae0ccf97234e490f3a",
+          "guest-64-O2.o": "bc6a29d7cb76b0602f9c0d6911acca42d6118ea74e629118f7faa2a8326cd2f0",
+          "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O2.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384"
+        },
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification"
+      },
+      {
+        "name": "vmrun-high-neverc",
+        "qualification_sha256": "62a341e3a4bdf0611b42b53913a8e63aa581d61f1c8dd6dc4f5482298532ceb1",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "tools": {
+          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+        },
+        "codegen_pass_manager": "default",
+        "fixture_sha256": "57b39ffc0a2d369f174ade7ab18f0e7d42b32240c47ccef4b76e825626617614",
+        "verifier_sha256": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "neverd_source_sha256": null,
+        "neverd_continuation_sha256": "6bb728b813b691ce9f4760d2d8624f782e863e385565e01de62edd5acf30ba05",
+        "continuation_fixture_sha256": "c080af9e6b6d353b03b24e99a2dcf1bc43c5a676a00e075766b027bd4560652c",
+        "files": {
+          "commands.json": "af6c9b7beb9be85593d18ecc42e3dd922f4ddf850ae7acfeb0d5bdf0c47871b6",
+          "guest-64-O0.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O0.c": "60c9f850435a2e90c53b500c19bc59519e93514801f727e817c3c12b92ac6af2",
+          "guest-64-O0.elf": "94f6806777d63c0e48db832bde93a1e2489c28a77558ce0feaa34e2fc44d15b1",
+          "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O0.ll": "60f7af77d98214ddc7d72bbd224a065e668423736ffdd01276cec5e762319c96",
+          "guest-64-O0.multiboot": "ca4707cd8e2f87ba3ba8d522e438c0b179951ed156ec9341c545157f0647ac42",
+          "guest-64-O0.o": "28ce9dbfb9958785ca0a7b041d82374dd8e432a32bb7965b5953f5927a8fcedf",
+          "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O0.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384",
+          "guest-64-O2.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O2.c": "60c9f850435a2e90c53b500c19bc59519e93514801f727e817c3c12b92ac6af2",
+          "guest-64-O2.elf": "d89571011855904aab0cfb94ab349e18144c4b8168e0c673911d169bdef48766",
+          "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O2.ll": "422690d383fdc0762c66c0d4beae1f36e180c03b3a9605befb0f44b7f939946a",
+          "guest-64-O2.multiboot": "37ab09717e793ef885bf33ebc9ab24efcf972632c5ef94d780556111b84023cb",
+          "guest-64-O2.o": "8330f8af2d1abce8dc9cec7b57d1f4bc30151ac3131a5a3199623bc5f3cd9d82",
+          "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O2.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384"
+        },
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification"
+      },
+      {
+        "name": "vmrun-llvm-llvm",
+        "qualification_sha256": "5a26b75aee95e427932bf2f207019d64491874ded8ee26054993085dd5019c7f",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "tools": {
+          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+        },
+        "codegen_pass_manager": "default",
+        "fixture_sha256": "57b39ffc0a2d369f174ade7ab18f0e7d42b32240c47ccef4b76e825626617614",
+        "verifier_sha256": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "neverd_source_sha256": null,
+        "neverd_continuation_sha256": "20e93dbb35f9231153fca513ba3ac7414345777e8b2063e1b641f8d3d4ba1cc1",
+        "continuation_fixture_sha256": "c080af9e6b6d353b03b24e99a2dcf1bc43c5a676a00e075766b027bd4560652c",
+        "files": {
+          "commands.json": "29c3034d22bfb94ebe2ebbb3b1ab6081ca5b1e19ec53632c56f86c1b9d112e05",
+          "guest-64-O0.bc": "1fb20184d56a06f544f63e1081bab500ca0144a28acdae385a58b2fc567806ed",
+          "guest-64-O0.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O0.c": "7eac9601c60d5070a5dd300a01d521e36058842f247372b95a115b7450717e20",
+          "guest-64-O0.elf": "e9a9616667e6fde1e9dd5545e1432fb7cf275638d38c1c96fdcc65f0f5212a36",
+          "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O0.ll": "105458309459d6979a01a6394137c821ec9b8dddf67d7cda9293633eb020fbb5",
+          "guest-64-O0.multiboot": "d517248f3483eb322608e62fcd00dd9015b7f867872cc7938542c15f878102b9",
+          "guest-64-O0.o": "9d188565c75e634f04ff685eda13133aad9fc8bd9f3ba7488b52399d2e1b9363",
+          "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O0.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384",
+          "guest-64-O2.bc": "7004928ceac14ac0f53824def995a0e74e7793507de64cfebd317fe1845f9a5d",
+          "guest-64-O2.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O2.c": "7eac9601c60d5070a5dd300a01d521e36058842f247372b95a115b7450717e20",
+          "guest-64-O2.elf": "510d34f48e4802208b5e883b461472aae57346f6d65ceb28b28edf5c19454592",
+          "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O2.ll": "88353b29b1c1a112646e0b947911bc5283e1be2589b02eb896c225af0a14e934",
+          "guest-64-O2.multiboot": "8ad157e8c00006be3156d9ffe52b79dcf64563ebc15ab738ccb0c18d4ecae850",
+          "guest-64-O2.o": "71b3dbae71a09668b0e0dd88bbea28915950c211de04153327772c269e155df4",
+          "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O2.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384"
+        },
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification"
+      },
+      {
+        "name": "vmrun-llvm-llvm-new",
+        "qualification_sha256": "04b54246971085e30dfb6fe229bfa6b1ebee4722934a5de8983aee73aabbaa97",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "tools": {
+          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+          "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+        },
+        "codegen_pass_manager": "new",
+        "fixture_sha256": "57b39ffc0a2d369f174ade7ab18f0e7d42b32240c47ccef4b76e825626617614",
+        "verifier_sha256": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "neverd_source_sha256": null,
+        "neverd_continuation_sha256": "20e93dbb35f9231153fca513ba3ac7414345777e8b2063e1b641f8d3d4ba1cc1",
+        "continuation_fixture_sha256": "c080af9e6b6d353b03b24e99a2dcf1bc43c5a676a00e075766b027bd4560652c",
+        "files": {
+          "commands.json": "55da4f23474a85d8633dd0ba3b43f5bc5673b6aa79f5fa5434f0e01b1fe71302",
+          "guest-64-O0.bc": "3bed55fb17d33192c7a1deacc6f877f2c8fe8a88cfc12e9413da4ca75cae2ec5",
+          "guest-64-O0.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O0.c": "7eac9601c60d5070a5dd300a01d521e36058842f247372b95a115b7450717e20",
+          "guest-64-O0.elf": "e9a9616667e6fde1e9dd5545e1432fb7cf275638d38c1c96fdcc65f0f5212a36",
+          "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O0.ll": "aed47221b28b0b612e7fca102242b029ff9473084204327db85b66bc7c6d7f90",
+          "guest-64-O0.multiboot": "d517248f3483eb322608e62fcd00dd9015b7f867872cc7938542c15f878102b9",
+          "guest-64-O0.o": "9d188565c75e634f04ff685eda13133aad9fc8bd9f3ba7488b52399d2e1b9363",
+          "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O0.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384",
+          "guest-64-O2.bc": "d5aab2a17f9a51c31ee00067c450b440e6c6a3cef0754bd52fa88279f7bd9ca9",
+          "guest-64-O2.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O2.c": "7eac9601c60d5070a5dd300a01d521e36058842f247372b95a115b7450717e20",
+          "guest-64-O2.elf": "04aab15589bfc376100684c45a11c146398769ac4adef184c62b6492142df5cc",
+          "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O2.ll": "f14e4c8bc190ea05fa3e4bc73b1580d01eb5e2c43c9398be1e13e6c9e4a28301",
+          "guest-64-O2.multiboot": "f835af8e3b2702fbe0515697ae36a43f24b45499e1a23a41d08a0098204836ca",
+          "guest-64-O2.o": "6d43c746ca7c108efea1332c93b087e58ece789c699b27824a20ae0e4f228c7b",
+          "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O2.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384"
+        },
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification"
+      },
+      {
+        "name": "vmrun-llvm-neverc",
+        "qualification_sha256": "4bae33e772353fe36467ecdcdd36cba237bf940d04a94d04de1007f8715dad51",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "tools": {
+          "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+          "/home/ad/.local/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "/home/ad/.local/bin/ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "/usr/bin/objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "/usr/local/bin/qemu-system-x86_64": "7dcf38a7fa3478a269fe6890854f9a4ce4f14d7600f023d03fa1a28cf23e04c0"
+        },
+        "codegen_pass_manager": "default",
+        "fixture_sha256": "57b39ffc0a2d369f174ade7ab18f0e7d42b32240c47ccef4b76e825626617614",
+        "verifier_sha256": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "neverd_source_sha256": null,
+        "neverd_continuation_sha256": "20e93dbb35f9231153fca513ba3ac7414345777e8b2063e1b641f8d3d4ba1cc1",
+        "continuation_fixture_sha256": "c080af9e6b6d353b03b24e99a2dcf1bc43c5a676a00e075766b027bd4560652c",
+        "files": {
+          "commands.json": "ec0f43135f934c9e43bc222fecca153f34c23526d26d80e11565ccdfcefaff9e",
+          "guest-64-O0.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O0.c": "7eac9601c60d5070a5dd300a01d521e36058842f247372b95a115b7450717e20",
+          "guest-64-O0.elf": "50fab472ea95695f3852dad34b46e0be19fea0111abae89738d9a04440ead3dc",
+          "guest-64-O0.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O0.ll": "1b6cc3588939b573e8ce71c8dd7461dd5bb4dbc402a700f9a1d703ad7b8f60c2",
+          "guest-64-O0.multiboot": "19aecad2b118b4bcd6e46f615910e92ef38739920e783a9e14090dc23ffbeedc",
+          "guest-64-O0.o": "f3b0f13cf4bfe0b2558c0937527908ee6474e5c4114a907c2929177512920f24",
+          "guest-64-O0.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O0.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384",
+          "guest-64-O2.boot.o": "4f162d93693a09acc2b8404527c8fa040dc5dbdc5607c3c4786b2704f515a66f",
+          "guest-64-O2.c": "7eac9601c60d5070a5dd300a01d521e36058842f247372b95a115b7450717e20",
+          "guest-64-O2.elf": "fea58c4b7f62248dadf233938988bc419b172ecb828419666e01f6bc76b33d94",
+          "guest-64-O2.ld": "02aeba374de0500b31d988dc530909394f6da0a764f5e3e69027e12707e2ad0f",
+          "guest-64-O2.ll": "e5782a438f0f6a7c57b3ae28d1f197b694f0941385e7cf2b346c9ca0fb06e776",
+          "guest-64-O2.multiboot": "8b4ff8be57bca43baf33de0d6ae5d8c9c0b7f9977d8abb3596496055963ad511",
+          "guest-64-O2.o": "74ec198e30316dbf6af52d6346efdf8b1fbc1ba2c99373a68223a298a464d6f2",
+          "guest-64-O2.run.log": "6d734f08a96ebeba901e302ce50ddf3387f6eaaa553a9fd5b4a255b5d19cb331",
+          "guest-64-O2.s": "25e32590bf52f7ea0cdd5da81eaff7754af2ebef07ca3dcd783c058b0c9ab384"
+        },
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification"
+      }
+    ]
+  },
+  "kvm_regression": {
+    "records": [
+      {
+        "name": "kvm-llvm",
+        "qualification_sha256": "8ece97f778e47e0220d364bde882b4e6ffa123f93577b38074f130e0b2542f54",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 256,
+            "native_hypercalls": 512
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 256,
+            "native_hypercalls": 512
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "fed83937e4896b9bd5911b88e085900b26ec44d83d187df1472493989c12c12c",
+          "original.o": "b6e7c316d434483ccf65b4e84fdad50417ec2e2e62ab69f58a9559dc846fa5ca",
+          "O2.ll": "daa95494afbe4c05e797d05fbe02c69cb59dd0c1246e48049eda603d70429481",
+          "O2.o": "b53b33019b433b85b52f14bab95f95a9bb06352b0c4930243299aa25cd1ab689",
+          "O0.ll": "40f1a95cb41b5c4fc350b1a1b2763e90a298757f7fb842877ab2be42027f4e7f",
+          "guest.c": "aec4bd391fff7c744588e1b93be6f97e6cc230e885397112fd8da467eb725baa",
+          "runner": "cf54579c6af5bb13d9922238dccdfc988b0be7855cedee98ec85d34a6465998a",
+          "commands.json": "dd1855dcb75ac78d9fc54268af250306b5749b40a8bb3a34b34192a7042f87dc",
+          "O2.bin": "cc27257b1de7f347c02b67431647a5d67567db81de6430cc56fe4585a947f516",
+          "O0.elf": "173ffe523178544b15a3ac915bcd380ab04ecf6ac3e9eef70674a3b22e91235a",
+          "O2.elf": "0d4d6525f1a0b954eb845e40683c9204eef96d6b18147dbc4350d51be478a03c",
+          "O0.o": "d7156353a5e4c42ee0fb3010e261fb348fa731d0e49ec8b6cd9cb24fdc18f912",
+          "O0.log": "1a087ef7686d0478aac6a5fc0d5697e85619cb9903dc048d2c52f2fa85db2283",
+          "O2.log": "1a087ef7686d0478aac6a5fc0d5697e85619cb9903dc048d2c52f2fa85db2283"
+        },
+        "fixture_sha256": {
+          "guest.c": "aec4bd391fff7c744588e1b93be6f97e6cc230e885397112fd8da467eb725baa",
+          "guest32.c": "c52292a39e51f9530e38b7298f91e503efcc14ed5db4498a3abb4333969cbe38",
+          "original32.S": "bc0c7401617fdc541b62c6f7edb3dde7c69cb682feaa7e6e3957c401f2b15f64",
+          "runner.c": "543d146fa03e5091f5b1afdae4fff8c08801286423cc0a08ad60254742926eca",
+          "original.S": "1f045613b7af3361dbcc3499a3d9929752af43f9931f2c171c4215c1e8038c93"
+        },
+        "scope": "Native KVM ABI transport with an isolated userspace service; not every KVM service or arbitrary hypervisor semantics"
+      },
+      {
+        "name": "kvm-llvm-new",
+        "qualification_sha256": "00337c1720ff3146a57c8bd8475c7d594b080c38b0e5719f1c5636caa43fabc2",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 256,
+            "native_hypercalls": 512
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 256,
+            "native_hypercalls": 512
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          },
+          "llc": {
+            "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+            "sha256": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b"
+          }
+        },
+        "new_pass_manager": true,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "fed83937e4896b9bd5911b88e085900b26ec44d83d187df1472493989c12c12c",
+          "original.o": "b6e7c316d434483ccf65b4e84fdad50417ec2e2e62ab69f58a9559dc846fa5ca",
+          "O2.ll": "daa95494afbe4c05e797d05fbe02c69cb59dd0c1246e48049eda603d70429481",
+          "O2.o": "b53b33019b433b85b52f14bab95f95a9bb06352b0c4930243299aa25cd1ab689",
+          "O0.ll": "40f1a95cb41b5c4fc350b1a1b2763e90a298757f7fb842877ab2be42027f4e7f",
+          "guest.c": "aec4bd391fff7c744588e1b93be6f97e6cc230e885397112fd8da467eb725baa",
+          "runner": "cf54579c6af5bb13d9922238dccdfc988b0be7855cedee98ec85d34a6465998a",
+          "commands.json": "2be5f17df9f6fe57514e9f766b7894fda89616d0f902c059a4392e851ce22d18",
+          "O2.bin": "cc27257b1de7f347c02b67431647a5d67567db81de6430cc56fe4585a947f516",
+          "O0.elf": "173ffe523178544b15a3ac915bcd380ab04ecf6ac3e9eef70674a3b22e91235a",
+          "O2.elf": "0d4d6525f1a0b954eb845e40683c9204eef96d6b18147dbc4350d51be478a03c",
+          "O0.o": "d7156353a5e4c42ee0fb3010e261fb348fa731d0e49ec8b6cd9cb24fdc18f912",
+          "O0.log": "1a087ef7686d0478aac6a5fc0d5697e85619cb9903dc048d2c52f2fa85db2283",
+          "O2.log": "1a087ef7686d0478aac6a5fc0d5697e85619cb9903dc048d2c52f2fa85db2283"
+        },
+        "fixture_sha256": {
+          "guest.c": "aec4bd391fff7c744588e1b93be6f97e6cc230e885397112fd8da467eb725baa",
+          "guest32.c": "c52292a39e51f9530e38b7298f91e503efcc14ed5db4498a3abb4333969cbe38",
+          "original32.S": "bc0c7401617fdc541b62c6f7edb3dde7c69cb682feaa7e6e3957c401f2b15f64",
+          "runner.c": "543d146fa03e5091f5b1afdae4fff8c08801286423cc0a08ad60254742926eca",
+          "original.S": "1f045613b7af3361dbcc3499a3d9929752af43f9931f2c171c4215c1e8038c93"
+        },
+        "scope": "Native KVM ABI transport with an isolated userspace service; not every KVM service or arbitrary hypervisor semantics"
+      },
+      {
+        "name": "kvm-neverc",
+        "qualification_sha256": "4191715cbb567fac3f00a5d76f8ff7153c8545f842353dfe74f5f07f8469384a",
+        "passed": true,
+        "profiles": [
+          {
+            "optimization": "O0",
+            "original_source_pairs": 256,
+            "native_hypercalls": 512
+          },
+          {
+            "optimization": "O2",
+            "original_source_pairs": 256,
+            "native_hypercalls": 512
+          }
+        ],
+        "tools": {
+          "clang": {
+            "path": "/home/ad/.local/bin/clang",
+            "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "as": {
+            "path": "/usr/bin/as",
+            "sha256": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b"
+          },
+          "ld": {
+            "path": "/usr/bin/ld",
+            "sha256": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075"
+          },
+          "objcopy": {
+            "path": "/usr/bin/objcopy",
+            "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "compiler": {
+            "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+            "sha256": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be"
+          }
+        },
+        "new_pass_manager": false,
+        "llvm_only": false,
+        "code_bits": 64,
+        "source_sha256": null,
+        "manifest_sha256": null,
+        "files": {
+          "link.ld": "46fdb28aea826147d11538e7d5c773a9cd0bfba7a07f343ae82bb24d64d61f8e",
+          "O0.bin": "1e49216096ffb80f0d371a456fc25123cf9e1f256c4c6202619baf03a67ffda6",
+          "original.o": "b6e7c316d434483ccf65b4e84fdad50417ec2e2e62ab69f58a9559dc846fa5ca",
+          "O2.o": "3b012343c10bc47b3cdfb8f03fbf136fed0ea0ff1bd2101ca638382e0c01d6dc",
+          "guest.c": "aec4bd391fff7c744588e1b93be6f97e6cc230e885397112fd8da467eb725baa",
+          "runner": "cf54579c6af5bb13d9922238dccdfc988b0be7855cedee98ec85d34a6465998a",
+          "commands.json": "e701c832f717c8e42c460ace979a4ffc9ff8bacdb4263d3756c433fa3bf5dd8e",
+          "O2.bin": "07713aa5ced831852d9a3a6a5754e064a396fe1c1da13121c9605a8635a39a29",
+          "O0.elf": "78d543cdfa60cc8002c1798e3504a508d7a0eac3405f57bdd8d269fc36d97150",
+          "O2.elf": "995f0939c9645f291b66fe5f15119236c9df9e59ede9347c429a0686333a6bfc",
+          "O0.o": "764fa698228b7d04baeeb435ec65469a3229f09823f5dc17de5b31d452c31023",
+          "O0.log": "1a087ef7686d0478aac6a5fc0d5697e85619cb9903dc048d2c52f2fa85db2283",
+          "O2.log": "1a087ef7686d0478aac6a5fc0d5697e85619cb9903dc048d2c52f2fa85db2283"
+        },
+        "fixture_sha256": {
+          "guest.c": "aec4bd391fff7c744588e1b93be6f97e6cc230e885397112fd8da467eb725baa",
+          "guest32.c": "c52292a39e51f9530e38b7298f91e503efcc14ed5db4498a3abb4333969cbe38",
+          "original32.S": "bc0c7401617fdc541b62c6f7edb3dde7c69cb682feaa7e6e3957c401f2b15f64",
+          "runner.c": "543d146fa03e5091f5b1afdae4fff8c08801286423cc0a08ad60254742926eca",
+          "original.S": "1f045613b7af3361dbcc3499a3d9929752af43f9931f2c171c4215c1e8038c93"
+        },
+        "scope": "Native KVM ABI transport with an isolated userspace service; not every KVM service or arbitrary hypervisor semantics"
+      }
+    ]
+  },
+  "checks": {
+    "llvm_lit": {
+      "passed": 13,
+      "log_sha256": "f9a77adb26f0d1fa25f5026d05ab365a162c0dd1451141cd2c5837f71eb3c8dc"
+    },
+    "neverc_frontend": {
+      "passed": 7,
+      "log_sha256": "c6e07967e3b2b0255591b33b16b6b6283c269c9eb0b934c75dd97f8db3c056a0"
+    },
+    "neverc_generated_tables": {
+      "passed": 83,
+      "log_sha256": "9194d906e65bc9aad873e07737a5f2389d9ff0ae23646465e28c56b223214960"
+    },
+    "neverd_r6": {
+      "total": 622,
+      "passed": 600,
+      "failed": 0,
+      "skipped": [
+        {
+          "name": "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86VirtualizationSource\n[ RUN      ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1212: Skipped\nrequires the qualified native virtualization SDK\n\n[  SKIPPED ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls (0 ms)\n[----------] 1 test from X86VirtualizationSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls\n"
+        },
+        {
+          "name": "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemRegisterSource\n[ RUN      ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1921: Skipped\nrequires the native control/debug register SDK\n\n[  SKIPPED ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects (0 ms)\n[----------] 1 test from X86SystemRegisterSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects\n"
+        },
+        {
+          "name": "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86DescriptorStateSource\n[ RUN      ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1681: Skipped\nrequires the explicit descriptor-state address SDK\n\n[  SKIPPED ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects (0 ms)\n[----------] 1 test from X86DescriptorStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects\n"
+        },
+        {
+          "name": "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86DescriptorStateSource\n[ RUN      ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068: Skipped\nrequires the explicit descriptor-address SDK\n\n[  SKIPPED ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats (0 ms)\n[----------] 1 test from X86DescriptorStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats\n"
+        },
+        {
+          "name": "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86ScalarSystemSource\n[ RUN      ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1865: Skipped\nrequires the scalar MSR/port intrinsic SDK\n\n[  SKIPPED ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects (0 ms)\n[----------] 1 test from X86ScalarSystemSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects\n"
+        },
+        {
+          "name": "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2370: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls\n"
+        },
+        {
+          "name": "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2401: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls\n"
+        },
+        {
+          "name": "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2506: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.TransactionCommitRetainsSurroundingMemory\n"
+        },
+        {
+          "name": "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2933: Skipped\nrequires the qualified native system SDK\n\n[  SKIPPED ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects\n"
+        },
+        {
+          "name": "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SystemStateSource\n[ RUN      ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068: Skipped\nrequires the explicit descriptor-address SDK\n\n[  SKIPPED ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats (0 ms)\n[----------] 1 test from X86SystemStateSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats\n"
+        },
+        {
+          "name": "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86SgxSource.NativeContractsRejectLostEffectsAndMode\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86SgxSource\n[ RUN      ] X86SgxSource.NativeContractsRejectLostEffectsAndMode\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4778: Skipped\nnative SGX completion requires the qualified fork\n\n[  SKIPPED ] X86SgxSource.NativeContractsRejectLostEffectsAndMode (0 ms)\n[----------] 1 test from X86SgxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86SgxSource.NativeContractsRejectLostEffectsAndMode\n"
+        },
+        {
+          "name": "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeContractsRejectLostEffectsAndControls\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeContractsRejectLostEffectsAndControls\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5269: Skipped\nlinked SDK predates explicit AMX controls\n\n[  SKIPPED ] X86AmxSource.NativeContractsRejectLostEffectsAndControls (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeContractsRejectLostEffectsAndControls\n"
+        },
+        {
+          "name": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588: Skipped\nHost does not provide AMX-TILE; native restart unqualified\n\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+          "output": "Running main() from /mnt/data/neverd-x86-compress-expand/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n"
+        }
+      ],
+      "junit_sha256": "4191e4ba54a6fda540e50fa948a42d3c9cadd2bc05b5ea258c0bd5a49d07a86f"
+    },
+    "neverd_current_llvm": {
+      "total": 622,
+      "passed": 612,
+      "failed": 0,
+      "skipped": [
+        {
+          "name": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from X86AmxSource\n[ RUN      ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5588: Skipped\nHost does not provide AMX-TILE; native restart unqualified\n\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes (0 ms)\n[----------] 1 test from X86AmxSource (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF\n"
+        },
+        {
+          "name": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+          "output": "Running main() from /home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/_deps/googletest-src/googletest/src/gtest_main.cc\nNote: Google Test filter = NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess\n[ RUN      ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1811: Skipped\nNeverC targets x64\n\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO (0 ms)\n[----------] 1 test from NativeFormats/X86SystemRegisterAccess (0 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (0 ms total)\n[  PASSED  ] 0 tests.\n[  SKIPPED ] 1 test, listed below:\n[  SKIPPED ] NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO\n"
+        }
+      ],
+      "junit_sha256": "a2b55f6a29ca4a4d80ec3559769c3a11d1a14ad981095a8bebb76c0483366085"
+    }
+  },
+  "tools": {
+    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc": "bd52f4f59dc97b254cae0c81f7e50b1db7cc3ca61c2a4052921f8ae81d4c014b",
+    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "06b5a5ee0e21a41f5e7802275100a4e1d0ebd7c1a78e8a4c0fbbc1f4e3fc86be",
+    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/neverd": "7893d10fff38cf34815da65b93a607038871399f0e9bbb688c04a54ea80dcc58",
+    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/libneverd.so": "541c968491e114f75cbdae2bf6a915e6028002ff772c39a60754bcb5f76ffb28",
+    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/neverd": "1b57b62721c7ad4b27190002b7964578ad0c57e16f12c1ca1617677122adce7f",
+    "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/libneverd.so": "c728f2c94876ddad2f3fa6de5d40bdd0a70d68ebf452f04ddd7cf7fbfb6767c8"
+  },
+  "native_llvm_configuration": {
+    "kind": "Local development CMake exports referencing the clean LLVM build tree, not a released SDK",
+    "generated_intrinsics_sha256": "09c810b8e11e1343fa37d34ac4a0f72b58acaf0a4a0f2dc58bb0d80931585b9e",
+    "config_sha256": "76911762f6aaf39e317c2c302ecacee7a25f39cd4d8864d21d880bf9cb48bc63"
+  },
+  "logs_root": "/mnt/data/neverd-hyperv-context-20261031",
+  "source_equivalence_between_sdk_builds": {
+    "svm-continuation-llvm.c": {
+      "native_sha256": "20e93dbb35f9231153fca513ba3ac7414345777e8b2063e1b641f8d3d4ba1cc1",
+      "r6_sha256": "20e93dbb35f9231153fca513ba3ac7414345777e8b2063e1b641f8d3d4ba1cc1",
+      "identical": true
+    },
+    "svm-continuation-high.json": {
+      "native_sha256": "32521cab134fb19d090ec04bb8971af79413eebc239ffe77c64646a7a06f5ae0",
+      "r6_sha256": "32521cab134fb19d090ec04bb8971af79413eebc239ffe77c64646a7a06f5ae0",
+      "identical": true
+    },
+    "svm-continuation-high.c": {
+      "native_sha256": "6bb728b813b691ce9f4760d2d8624f782e863e385565e01de62edd5acf30ba05",
+      "r6_sha256": "6bb728b813b691ce9f4760d2d8624f782e863e385565e01de62edd5acf30ba05",
+      "identical": true
+    },
+    "hyperv-high.json": {
+      "native_sha256": "0572d9b607a63f72d3cb31aa43fe86e8b44fd12287732a39999699be1a2e33fb",
+      "r6_sha256": "0572d9b607a63f72d3cb31aa43fe86e8b44fd12287732a39999699be1a2e33fb",
+      "identical": true
+    },
+    "hyperv-high.c": {
+      "native_sha256": "3c4a0bb07c443ac1f835e82fcf6c2862d77c19309c375069401bea1ea246da37",
+      "r6_sha256": "3c4a0bb07c443ac1f835e82fcf6c2862d77c19309c375069401bea1ea246da37",
+      "identical": true
+    },
+    "hyperv-llvm.json": {
+      "native_sha256": "005a3eccca6f05e4ff80e6aa603302e58ab60305ba646d248f49c122c4d3a96f",
+      "r6_sha256": "005a3eccca6f05e4ff80e6aa603302e58ab60305ba646d248f49c122c4d3a96f",
+      "identical": true
+    },
+    "svm-continuation-llvm.json": {
+      "native_sha256": "654e68cabc81af394d6c94731bafc6090d40e882b419e65b11c73c91f0a974bc",
+      "r6_sha256": "654e68cabc81af394d6c94731bafc6090d40e882b419e65b11c73c91f0a974bc",
+      "identical": true
+    },
+    "hyperv-llvm.c": {
+      "native_sha256": "720c77607648caf5a56ef7f78ddb417eb09b7ab6e61df7a4123f0d00cb796b59",
+      "r6_sha256": "720c77607648caf5a56ef7f78ddb417eb09b7ab6e61df7a4123f0d00cb796b59",
+      "identical": true
+    }
+  }
+}
