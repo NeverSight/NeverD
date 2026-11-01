@@ -12,6 +12,7 @@
 #include "SessionImpl.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -146,6 +147,54 @@ TEST_F(SessionLLVMTest, ExactAddressZeroIgnoresHelperNamesAndDeclarations) {
 
   EXPECT_EQ(State.findNativeLlvmFunction(0), Source);
   EXPECT_TRUE(State.LastError.empty());
+}
+
+TEST_F(SessionLLVMTest, SourceBodyExpansionKeepsNativeAndUnoptimizedQueries) {
+  State.PipeRan = false;
+  State.Img.Format = BinaryFormat::COFF;
+  State.Img.Entry = State.Img.Base = 0x1000;
+  State.OnlyFunctionEntries = {0x1000};
+  Segment Code;
+  Code.VA = 0x1000;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Data = {0x48, 0x83, 0xec, 0x38,       // sub rsp,56
+               0x48, 0x89, 0x54, 0x24, 0x30, // mov [rsp+48],rdx
+               0xe8, 0x72, 0,    0,    0,    // call 1080h
+               0x48, 0x83, 0xc4, 0x38, 0xc3};
+  Code.Data.resize(0x80, 0xcc);
+  const uint8_t Body[] = {0x48, 0x8b, 0x44, 0x24, 0x38, // mov rax,[rsp+56]
+                          0x48, 0x33, 0x01, 0xc3};      // xor rax,[rcx]; ret
+  Code.Data.insert(Code.Data.end(), std::begin(Body), std::end(Body));
+  Code.Size = Code.FileSz = Code.Data.size();
+  State.Img.Segments.push_back(std::move(Code));
+  for (const auto &[Entry, Name] :
+       {std::pair{0x1000, "body_caller"}, std::pair{0x1080, "body_callee"}}) {
+    auto Symbol = Symbol::makeFunc(Entry);
+    Symbol.Name = Name;
+    State.Img.Symbols.push_back(std::move(Symbol));
+  }
+  const auto Text = [](llvm::Module &Module) {
+    std::string Result;
+    llvm::raw_string_ostream OS(Result);
+    EXPECT_TRUE(LLVMCEmitter().emit(Module, OS));
+    return Result;
+  };
+  const auto *Expanded = State.ensureFunctionLlvmModule(0x1000, false, true);
+  ASSERT_TRUE(Expanded) << State.LastError;
+  const std::string Source = Text(*Expanded->Module);
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, false, true), Expanded);
+  for (const auto &[NoOpt, OriginalStorage] :
+       {std::pair{true, true}, std::pair{false, false}}) {
+    const auto *Kept =
+        State.ensureFunctionLlvmModule(0x1000, NoOpt, OriginalStorage);
+    ASSERT_TRUE(Kept) << State.LastError;
+    const auto *Callee = Kept->Module->getFunction("body_callee");
+    ASSERT_TRUE(Callee);
+    EXPECT_EQ(Callee->arg_size(), 7u);
+    EXPECT_NE(Text(*Kept->Module).find("__builtin_trap"), std::string::npos);
+  }
+  EXPECT_EQ(Text(*Expanded->Module), Source);
 }
 
 TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedSourceSpillArguments) {

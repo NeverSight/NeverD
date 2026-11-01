@@ -82,6 +82,17 @@ inline constexpr size_t kPipelineHighIRSourceWorkBudget = 250000;
 inline constexpr size_t kIncomingStackLeafOperations = 256;
 inline constexpr size_t kIncomingStackLeafCallees = 32;
 
+// lib/pipeline/PipelineSourceInline.cpp
+// Source call arguments can contain a short chain of ABI carrier casts.
+inline constexpr unsigned kSourceInlineOperandDepth = 16;
+// An interactive source view can include the root and its EH continuations.
+inline constexpr size_t kSourceInlineRoots = 8;
+// Recover only a small set of complete support bodies on this lazy path.
+inline constexpr size_t kSourceInlineCallees = 4;
+// Exclude large helpers before expansion; cap aggregate duplicated IR too.
+inline constexpr size_t kSourceInlineBodyOperations = 1024;
+inline constexpr size_t kSourceInlineExpansionOperations = 16384;
+
 // lib/pipeline/PipelineLibraryRecognition.cpp
 inline constexpr size_t kPipelineLibraryRecognitionConflictWork = 250000;
 inline constexpr size_t

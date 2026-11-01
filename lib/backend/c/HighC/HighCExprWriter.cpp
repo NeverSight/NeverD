@@ -236,7 +236,7 @@ std::string HighCWriter::varName(const MedVar &V) const {
     const TypeRef Stated = statedVariableType(V);
     if (Stated)
       StatedLocalTypes[Name] = Stated;
-    if (Opts.SourceMap) {
+    if (Opts.SourceMap && !sourceBodyOrigin(*CurrentFunc)) {
       // Recording the value again under the name its entry holds changes
       // nothing, unless the width differs from the entry's and the entry is
       // not yet ambiguous.
@@ -8254,7 +8254,7 @@ void HighCWriter::noteImageObject(va_t Addr, const TypeRef &Ty, bool Written,
     Obj.WeakType = false;
   }
   Obj.Written |= Written;
-  if (Opts.SourceMap && CurrentFunc) {
+  if (Opts.SourceMap && CurrentFunc && !sourceBodyOrigin(*CurrentFunc)) {
     SourceVariable Variable;
     Variable.Function = CurrentFunc->Entry;
     Variable.Address = Addr;
