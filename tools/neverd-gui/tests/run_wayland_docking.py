@@ -17,6 +17,15 @@ import tempfile
 import time
 
 
+def shell_eval(env: dict[str, str], script: str) -> bool:
+    result = subprocess.run([
+        "gdbus", "call", "--session", "--dest", "org.gnome.Shell",
+        "--object-path", "/org/gnome/Shell", "--method",
+        "org.gnome.Shell.Eval", script,
+    ], env=env, capture_output=True, text=True)
+    return result.returncode == 0 and result.stdout.startswith("(true,")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scale", default="1")
@@ -61,6 +70,17 @@ def main() -> int:
                 socket = root / "runtime" / "neverd-docking"
                 deadline = time.monotonic() + 15
                 while not socket.exists():
+                    if compositor.poll() is not None or time.monotonic() > deadline:
+                        log.seek(0)
+                        print(log.read(), file=sys.stderr)
+                        return 1
+                    time.sleep(0.1)
+                # GNOME animates mapping, maximizing and restoring by
+                # transforming the window and picks input through that
+                # transform, so a pointer event sent meanwhile lands beside
+                # its target. Turn the animations off once Shell answers.
+                while not shell_eval(
+                        env, "imports.gi.St.Settings.get().inhibit_animations()"):
                     if compositor.poll() is not None or time.monotonic() > deadline:
                         log.seek(0)
                         print(log.read(), file=sys.stderr)
