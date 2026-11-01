@@ -15,6 +15,7 @@
 
 #include "../../pipeline/PipelineCallAbiDetail.h"
 #include "../../pipeline/PipelineFunctionNames.h"
+#include "../../pipeline/PipelineSourceInline.h"
 #include "../../pipeline/PipelineSourceStackAccesses.h"
 #include "../plugin/PluginManager.h"
 #include "FunctionAuditReason.h"
@@ -1273,6 +1274,18 @@ struct Session {
         setError(std::string("native LLVM optimization failed: ") +
                  optimizationStopReasonName(Optimization.Stop));
         return nullptr;
+      }
+    }
+    if (!NoOpt && OriginalImageStorage && !UsingAnalystCallContracts) {
+      PipelineOptions AnalysisOptions;
+      applyAnalysisOptions(AnalysisOptions);
+      AnalysisOptions.AnalysisCache = &AnalysisCache;
+      auto Specialized = specializeUnavailableSourceCalls(
+          Img, PipeResult, *Candidate, decompileDebug(), AnalysisOptions,
+          SourceOptions);
+      if (Specialized.Module) {
+        Candidate = std::move(Specialized.Module);
+        Sources = std::move(Specialized.Sources);
       }
     }
     std::string FinalVerifyError;

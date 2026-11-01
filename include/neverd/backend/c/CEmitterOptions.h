@@ -132,6 +132,10 @@ struct CEmitterOptions {
   const DataAccessWidths *AccessWidths = nullptr;
   /// Optional source-map sink. Recording never changes the emitted C text.
   CSourceMap *SourceMap = nullptr;
+  /// HighC-only helper names and the original bodies they specialize. These
+  /// functions have no native entry ABI. Suppress native-variable editing
+  /// identities for them rather than inventing addresses for generated code.
+  const std::map<std::string, va_t> *SourceBodyOrigins = nullptr;
   /// Receives the names the text spells (CSourceMap::Names) without the
   /// marked render a source map needs.
   std::vector<CSourceName> *SourceNames = nullptr;

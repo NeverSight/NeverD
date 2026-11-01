@@ -3,6 +3,18 @@
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+The latest ordinary source qualification reduces the former 56 missing
+argument occurrences to **7 in each C route**, across four of the five roots.
+Actual-body specialization removes 47 unused stack-formal occurrences in one
+caller and two in another, without declaring their physical slots unobservable.
+The second caller now has no missing ordinary argument. HighC keeps structured
+callers and emits separate source helpers; LLVM C inlines the same admitted
+bodies. The remaining occurrences are two registry-query stack inputs, four
+device-property-query register inputs and one hibernation-adjustment register
+input. Partial home spills, nested observers, complete Windows execution and
+automatic ordinary/state composition remain open. Counts of 56 below describe
+earlier qualifications, not the current source output.
+
 HighC integer call results now keep their lifted carrier in both expressions
 and local declarations. Direct and indirect MedIR calls use the same result
 type authority, including provisional expressions. A signed 32-bit API result

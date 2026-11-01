@@ -81,6 +81,16 @@ The `SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
 `Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` tests exercise this
 boundary, including original machine code and both C routes at O0/O2.
 
+Ordinary C also has a separate, bounded call-body specialization path in
+[`PipelineSourceInline.cpp`](../lib/pipeline/PipelineSourceInline.cpp). It can
+replace a missing *formal operand* by expanding an admitted actual body whose
+formal is unused, while retaining pointer reads, writes and physical stack
+storage. HighC emits a separately named source helper; LLVM C inlines the body.
+Neither representation changes the native function signature or supplies
+unknown values. The native ABI, unknown spilled bytes, incomplete helper inputs
+and external service implementations still require their own proofs. Public
+execution controls are in `NeverDSourceInlineCallsTests`.
+
 An entry request can include `"callee_depth": 1` together with
 `"follow_internal_calls": true`. Each discovery wave selects original direct
 CALL targets in mapped image code. Repeated targets and recursive edges share
