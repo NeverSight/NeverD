@@ -524,13 +524,16 @@ bool supportedOperation(const LowOp &Op,
                         bool WideDivision) {
   if (Op.NumInputs > std::size(Op.Inputs))
     return false;
+  const bool CompareExchange = Op.Opcode == NdOp::ATOMIC_CMPXCHG;
   const bool AtomicScalar =
       hasControlState(Options) &&
-      (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG) &&
-      Op.NumInputs == 2 && Op.Output.isTemp() &&
+      (Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_XCHG ||
+       CompareExchange) &&
+      Op.NumInputs == (CompareExchange ? 3 : 2) && Op.Output.isTemp() &&
       (Op.Output.Size == 1 || Op.Output.Size == 2 || Op.Output.Size == 4 ||
        Op.Output.Size == 8) &&
       Op.Inputs[0].Size == 8 && Op.Inputs[1].Size == Op.Output.Size &&
+      (!CompareExchange || Op.Inputs[2].Size == Op.Output.Size) &&
       Op.MemoryOrdering == NdMemoryOrdering::SequentiallyConsistent;
   const bool Locked = lockedMemoryIntrinsic(Op, Options);
   if (!supportedValue(Op.Output) ||

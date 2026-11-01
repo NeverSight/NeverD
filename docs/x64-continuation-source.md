@@ -468,6 +468,18 @@ shadow-stack checks, interrupt delivery and RTM aborts remain unsupported.
 These rules follow [Intel SDM revision 090, UIRET and user interrupts section
 9.7](https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf).
 
+## Ordered scalar memory operations
+
+The control-state profiles retain one sequentially consistent transaction for
+canonical x64 scalar LOCK CMPXCHG and LOCK ADD, alongside XCHG/XADD. The strict
+lifter audit checks raw encoding against operand widths, registers, addressing
+and prefix metadata. CMPXCHG keeps the old-value accumulator, partial-register
+rules and all six comparison flags on both outcomes. Live FS/GS bases remain
+part of the effective address. The existing invocation domain still excludes
+faults, MMIO and concurrent writes; this is not general transaction support or
+an ordinary function ABI proof. Unaudited wider compare-exchange forms remain
+native boundaries.
+
 ## Native environment bindings
 
 All bindings below are disabled by default. They must match the executing

@@ -1930,6 +1930,8 @@ TEST(X86NativeStateAudit, DivisionRejectsUnauditedFormsAndForgedDetails) {
   }
 }
 
+#include "NativeCompareExchangeAuditTests.inc"
+#include "NativeLockedAddAuditTests.inc"
 #include "NativeStreamStoreAuditTests.inc"
 
 } // namespace
