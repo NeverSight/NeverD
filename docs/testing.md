@@ -17009,6 +17009,17 @@ multi-step temporary COPYs and terminal scratch restores, while preserving
 earlier return/preserved/SP register definitions, value returns, PHIs and
 call-clobber observations. `TemporaryRestoreChainsRespectTheTargetWidth`
 checks x86/x64/ARM32/AArch64 frame widths across COFF/ELF/Mach-O.
+`SecondaryIntegerRestoresUseTheSettledReturnContract` keeps provisional
+secondary results until return recovery finishes; explicit register-pair and
+primary results remain observed. `SourceReturnRegisters` checks the shared
+exit-byte query across the same architectures and formats.
+`NeverDSourceStackSpillObserverTests` executes independently authored original
+x64 instructions and both generated C routes after an opaque frame-pointer
+borrow, a secondary-register restore and a complete later slot overwrite.
+COFF/ELF/Mach-O, source optimization on/off and host O0/O2 under UBSan must
+agree on the result and exactly one provider call. A returned secondary value
+remains guarded. Native execution uses Linux x64 with an explicit provider
+stub; it does not execute a Windows service or qualify native driver behavior.
 `TemporaryRestoreChainsExecuteBothSourceRoutes` in
 `NeverDWin64CallContractTests` compiles and executes the same scratch-frame
 projection through HighC and LLVMC, temporary and register endpoints, and all

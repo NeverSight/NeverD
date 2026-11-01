@@ -64,6 +64,15 @@ void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
                              const BinaryImage *Image = nullptr,
                              std::set<const MedOp *> *Overwritten = nullptr);
 
+/// Revisit scratch spills after source return recovery has settled. Only
+/// source-dead secondary integer restores gain permission to cross the byte
+/// overwrite proof; explicit results, calls and exceptional observers keep
+/// their normal checks. This adds source annotations without changing native
+/// operations or certifying destruction of the restored physical register.
+void markSettledSourceStackSpills(MedFunc &Func, Arch Architecture,
+                                  BinaryFormat Format,
+                                  const BinaryImage *Image = nullptr);
+
 /// Positional Win64 register inputs whose only uses are source-proved dead
 /// spills and dead identity transports. Every implicit call observation must
 /// follow a full overwrite or have a bound unread-register proof. The caller
