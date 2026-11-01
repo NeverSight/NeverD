@@ -16755,6 +16755,18 @@ operations, branching/nonordinary returns, image addresses, unpreserved RBX,
 unmodeled exception metadata, CLD/STD and native calls. Boundary controls run
 both source routes with and without optimization; the original CALL-slot read must still fail before source
 expansion. Opaque and general dynamic machine-state returns remain separate.
+`NeverDX64FillReturnTests` statically checks a complete scalar/SSE fill's RCX
+cursor through both source routes, retains its original call and other clobbers,
+and compares the pure result expression against independent cursor loops.
+Changing any of the 233 instruction bytes, a writable/truncated mapping, a stale
+call binding, exceptional successor or a partial result retains unavailability. Current source operands,
+following call positions, unused results and fixed versus dynamic lengths have
+separate controls. `scripts/isa/x86/verify_fill_return.py --output REPORT.json`
+optionally uses Unicorn to single-step the public fixture in synthetic memory.
+It checks 12,624 count/alignment/address cases, RAX/RCX, complete fill extents and
+neighbor bytes. It stops before RET, loads no executable and starts no native
+process or VM. This instruction check is separate from whole-image execution
+qualification and does not establish general dynamic call-state recovery.
 `Win64CallContract.RegisterQueryWindowsSourceCompilesWithItsHeaders` compiles
 both unmodified C units for the Windows x64 target with Clang's freestanding
 headers. HighC includes `<intrin.h>` for the Microsoft CPUID spelling and its

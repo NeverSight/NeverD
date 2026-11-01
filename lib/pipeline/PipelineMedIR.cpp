@@ -17,6 +17,7 @@
 #include "PipelineSEHRuntimeMemory.h"
 #include "PipelineSourceStackAccesses.h"
 #include "PipelineTrimStorage.h"
+#include "X86/X64FillReturn.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -343,6 +344,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
   parallelForEachWeighted(CallerWeights, [&](auto Claim, size_t N) {
     for (size_t I; (I = Claim()) < N;) {
       replaceKnownSourceCallArguments(Result.MedFuncs[I], Facts);
+      recoverX64FillReturns(Result.MedFuncs[I], Image);
       // Call-input recovery has settled as well. Reuse this worker instead
       // of creating another large-stack coordinator for each source query.
       markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,

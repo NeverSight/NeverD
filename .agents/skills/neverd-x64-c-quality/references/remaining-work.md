@@ -561,10 +561,17 @@ stack-passed pointers and hidden-register readers remain refusal boundaries.
 `SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
 `Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` cover this extension,
 including both C routes, selected/omitted bodies and original x64 execution.
-The five private ordinary roots retain seven unknown argument occurrences per
+The five private ordinary roots retain four unknown argument occurrences per
 route after validated source-body specialization removed 49 unused formal
-operands. The remaining partial-stack initialization, borrowed output storage
-and post-call register values still require their own proofs. The source-only
+operands and a complete fill-loop return proof recovered three RCX values.
+`X86/X64FillReturn.cpp` authenticates the entire scalar/SSE body and retains the
+original call, memory writes and fault behavior. Its occurrence-bound result
+expression is shared by both source routes and SDK replay; it does not infer
+scratch results from an ABI or a function name. Public static controls mutate
+every instruction byte; isolated instruction stepping covers 12,624 synthetic
+cases without executing a sample or RET. The remaining two partial-stack
+initializers and two general post-call register values still require their own
+proofs. The source-only
 helpers do not erase physical aliases or establish complete Windows execution.
 Their admission now belongs to the existing optimized source-module cache:
 HighC and LLVM C share the proof, helper HighIR is lazy, and temporary helper
