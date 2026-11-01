@@ -22,7 +22,7 @@
 namespace {
 
 using namespace neverd;
-using med_calling_conv_detail::preserveFPStackHomes;
+using med_calling_conv_detail::preserveStackReadHomes;
 
 MedOp fpRead(int64_t Offset, unsigned Bytes, bool Scalar, Arch Architecture) {
   MedOp Op;
@@ -59,7 +59,7 @@ TEST(MedFPStackHomes, OverlappingPairsPropagateWithoutRepeatedRootQueries) {
       };
       std::set<int64_t> Homes = {4 + Seed * 4};
 
-      preserveFPStackHomes(F, 4, 4, trace, Homes);
+      preserveStackReadHomes(F, 4, 4, trace, Homes);
 
       std::set<int64_t> Expected;
       for (int I = 0; I <= 12; ++I)
@@ -88,7 +88,7 @@ TEST(MedFPStackHomes, AdjacentComponentsAndUnalignedSeedsStayIndependent) {
     if (Seed.count(12))
       Expected.insert(16);
 
-    preserveFPStackHomes(F, 4, 4, trace, Seed);
+    preserveStackReadHomes(F, 4, 4, trace, Seed);
 
     EXPECT_EQ(Seed, Expected);
   }
@@ -115,7 +115,7 @@ TEST(MedFPStackHomes, ForcedHomesSeedPairsRegardlessOfReadOrder) {
       };
       std::set<int64_t> Homes;
 
-      preserveFPStackHomes(F, 4, 4, trace, Homes);
+      preserveStackReadHomes(F, 4, 4, trace, Homes);
 
       std::set<int64_t> Expected;
       for (int Offset = 4; Offset <= (Packed ? 28 : 24); Offset += 4)
@@ -150,7 +150,7 @@ TEST(MedFPStackHomes, OnlyAuthenticatedAndResolvedMemoryReadsSeedHomes) {
       };
       std::set<int64_t> Homes;
 
-      preserveFPStackHomes(F, Base, Slot, trace, Homes);
+      preserveStackReadHomes(F, Base, Slot, trace, Homes);
 
       std::set<int64_t> Expected;
       for (unsigned Offset = 32; Offset < 48; Offset += Slot)
@@ -158,6 +158,65 @@ TEST(MedFPStackHomes, OnlyAuthenticatedAndResolvedMemoryReadsSeedHomes) {
       EXPECT_EQ(Homes, Expected);
       EXPECT_LE(Queries, 3u);
     }
+}
+
+TEST(MedFPStackHomes, IntegerReadsShareEveryWrittenHomeInEitherOrder) {
+  for (unsigned Slot : {4u, 8u})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(testing::Message() << Slot << ':' << Reverse);
+      MedFunc Function;
+      Function.Blocks.resize(1);
+      auto &Ops = Function.Blocks[0].Ops;
+      for (unsigned I = 0; I < 3; ++I) {
+        MedOp Read;
+        Read.Opcode = NdOp::LOAD;
+        Read.Output.Kind = MedVar::Temp;
+        Read.Output.Size = 2 * Slot;
+        Read.addInput(MedVar::makeConst(I * Slot, 8));
+        Ops.push_back(Read);
+      }
+      MedOp Write;
+      Write.Opcode = NdOp::STORE;
+      Write.addInput(MedVar::makeConst(3 * Slot, 8));
+      Write.addInput(MedVar::makeConst(17, 2 * Slot));
+      Ops.push_back(Write);
+      if (Reverse)
+        std::reverse(Ops.begin(), Ops.end());
+      unsigned Queries = 0;
+      auto trace = [&](const MedVar &Address) -> std::optional<int64_t> {
+        ++Queries;
+        return Address.ConstVal;
+      };
+      std::set<int64_t> Homes;
+      preserveStackReadHomes(Function, 0, Slot, trace, Homes);
+      std::set<int64_t> Expected;
+      for (unsigned I = 0; I < 5; ++I)
+        Expected.insert(I * Slot);
+      EXPECT_EQ(Homes, Expected);
+      EXPECT_LE(Queries, 4u);
+    }
+}
+
+TEST(MedFPStackHomes, OrderedAndUnalignedIntegerReadsKeepTheirHomes) {
+  for (bool Ordered : {false, true}) {
+    MedFunc Function;
+    Function.Blocks.resize(1);
+    MedOp Read;
+    Read.Opcode = NdOp::LOAD;
+    Read.Output.Kind = MedVar::Temp;
+    Read.Output.Size = 16;
+    Read.addInput(MedVar::makeConst(Ordered ? 0 : 1, 8));
+    if (Ordered)
+      Read.MemoryOrdering = NdMemoryOrdering::Acquire;
+    Function.Blocks[0].Ops.push_back(Read);
+    auto trace = [](const MedVar &Address) -> std::optional<int64_t> {
+      return Address.ConstVal;
+    };
+    std::set<int64_t> Homes;
+    preserveStackReadHomes(Function, 0, 8, trace, Homes);
+    EXPECT_EQ(Homes, (Ordered ? std::set<int64_t>{0, 8}
+                              : std::set<int64_t>{0, 8, 16}));
+  }
 }
 
 } // namespace

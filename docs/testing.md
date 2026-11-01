@@ -204,6 +204,15 @@ With `--kernel`, the WDK fixtures cover SD Port's
 byte-width offset, PortCls's callback and fifth argument, and Stream Class's
 void result. Their synthetic imports retain the original compiler's x86
 decoration. This checks source reconstruction and ABI, not driver execution.
+`AAPCS64CallContract.AVectorStackCopyForwardsBothScalarArguments` executes
+both C routes from a compiler-style fourteen-argument forwarder whose Q0 load
+copies two scalar stack slots. COFF and ELF, source optimization on/off and
+O0/O2 C builds compare every argument with independent nonzero values under
+UBSan. This checks values as well as the API compiler types; matching function
+types alone cannot detect a lost argument. `LowToMedIntegerStackABI` checks
+wide loads and mutable or straddling homes across x86, x64, ARM32 and AArch64 in
+COFF, ELF and Mach-O. `MedFPStackHomes` includes overlapping integer reads,
+complete wide writes, ordered reads and reversed traversal order.
 `NeverDCOFFOrdinalImportTests` checks delayed ordinal imports across the three
 authenticated SDK targets and an unqualified ARM32 control, with case variants,
 other modules, adjacent ordinals and malformed reserved bits. The SDK-linked device-creation callers

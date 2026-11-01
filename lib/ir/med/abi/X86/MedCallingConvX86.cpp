@@ -268,8 +268,7 @@ void med_calling_conv_detail::detectCdeclStackParams(MedFunc &Func,
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
       if (auto Read = med_calling_conv_detail::stackMemoryRead(Op))
-        if (auto Off = Read->AddressInput == 1 ? rawStackArgOffset(Op.Inputs[1])
-                                               : stackArgOffset(Op.Inputs[0])) {
+        if (auto Off = rawStackArgOffset(Op.Inputs[Read->AddressInput])) {
           Offsets.insert(4 + ((*Off - 4) / 4) * 4);
           int LastSlot = static_cast<int>((*Off - 4 + Read->Bytes - 1) / 4);
           MaxIdx = std::max(MaxIdx, LastSlot);
@@ -334,10 +333,6 @@ void med_calling_conv_detail::detectCdeclStackParams(MedFunc &Func,
   std::set<int64_t> MutableArgOffsets;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Off = stackArgOffset(Op.Inputs[0]))
-          MutableArgOffsets.insert(*Off); // direct write to the home slot
       // The stack address can thread through these value-preserving operations
       // before reaching its real use.  They are not escapes themselves; keep
       // this list in sync with traceOff above.  In particular, i386 address
@@ -372,8 +367,8 @@ void med_calling_conv_detail::detectCdeclStackParams(MedFunc &Func,
   med_calling_conv_detail::preserveCallStackHomes(
       Func, TargetArch, Format, Image, 4, 4, rawStackArgOffset,
       MutableArgOffsets);
-  med_calling_conv_detail::preserveFPStackHomes(Func, 4, 4, rawStackArgOffset,
-                                                MutableArgOffsets);
+  med_calling_conv_detail::preserveStackReadHomes(Func, 4, 4, rawStackArgOffset,
+                                                  MutableArgOffsets);
 
   // The home slot of each mutable parameter is [frame_end + Off] (the entry-SP
   // offset equals the frame_end offset).  Record it so the emitter seeds that
@@ -573,7 +568,7 @@ std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op) {
   return StackMemoryRead{1, Bytes, Scalar};
 }
 
-void preserveFPStackHomes(
+void preserveStackReadHomes(
     const MedFunc &Func, int64_t Base, unsigned Slot,
     llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
     std::set<int64_t> &MutableSlots) {
@@ -584,8 +579,17 @@ void preserveFPStackHomes(
   llvm::SmallVector<std::pair<int64_t, int64_t>, 8> DependentRanges;
   for (const auto &Block : Func.Blocks)
     for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        if (const auto Offset = Trace(Op.Inputs[0])) {
+          const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
+          const int64_t Last =
+              Base + ((*Offset - Base + Op.Inputs[1].Size - 1) / Slot) * Slot;
+          for (int64_t Home = First; Home <= Last; Home += Slot)
+            MutableSlots.insert(Home);
+        }
       const auto Read = stackMemoryRead(Op);
-      if (!Read || Read->AddressInput != 1)
+      if (!Read)
         continue;
       const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
       if (!Offset)
@@ -596,7 +600,10 @@ void preserveFPStackHomes(
       const unsigned ByteOffset = *Offset - First;
       const bool Pair = ByteOffset == 0 && Slot == 4 && Read->Bytes == 8;
       const bool Keep =
-          !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot);
+          Op.MemoryOrdering != NdMemoryOrdering::None ||
+          (Read->AddressInput == 1
+               ? !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot)
+               : ByteOffset != 0 && ByteOffset + Read->Bytes > Slot);
       if (Keep) {
         for (int64_t Home = First; Home <= Last; Home += Slot)
           MutableSlots.insert(Home);

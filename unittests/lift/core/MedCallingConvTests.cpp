@@ -8231,6 +8231,70 @@ TEST(LowToMedIntegerStackABI, Win64HomeAreaIsNotAnIncomingStackParameter) {
   }
 }
 
+TEST(LowToMedIntegerStackABI, AlignedWideReadsComposeEveryIncomingSlot) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(testing::Message()
+                   << int(Architecture) << ':' << int(Format));
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Layout = TRI.integerArgumentLayout(Format);
+      const unsigned Slots =
+          Architecture == Arch::X86 ? 0 : Layout.Registers.size();
+      auto Function =
+          convertIntegerStackInput(Architecture, Format, Layout.EntryStackBase,
+                                   2 * Layout.SlotBytes, false, false);
+      ASSERT_EQ(Function.Params.size(), Slots + 2);
+      bool SawComposition = false;
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Op : Block.Ops) {
+          EXPECT_NE(Op.Opcode, NdOp::LOAD);
+          if (Op.Opcode != NdOp::CONCAT)
+            continue;
+          ASSERT_EQ(Op.NumInputs, 2u);
+          EXPECT_EQ(Op.Inputs[0].Kind, MedVar::Param);
+          EXPECT_EQ(Op.Inputs[0].Id, Slots + 1);
+          EXPECT_EQ(Op.Inputs[1].Kind, MedVar::Param);
+          EXPECT_EQ(Op.Inputs[1].Id, Slots);
+          EXPECT_EQ(Op.Inputs[0].Size, Layout.SlotBytes);
+          EXPECT_EQ(Op.Inputs[1].Size, Layout.SlotBytes);
+          SawComposition = true;
+        }
+      EXPECT_TRUE(SawComposition);
+      EXPECT_TRUE(verifyMedFunc(Function, "wide-incoming-stack-read"));
+    }
+}
+
+TEST(LowToMedIntegerStackABI, WideMutableAndStraddlingReadsSeedEveryHome) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Mutable : {false, true}) {
+        SCOPED_TRACE(testing::Message() << int(Architecture) << ':'
+                                        << int(Format) << ':' << Mutable);
+        const auto Layout =
+            getTargetRegInfo(Architecture).integerArgumentLayout(Format);
+        const unsigned Slots = Mutable ? 2 : 3;
+        const unsigned Registers =
+            Architecture == Arch::X86 ? 0 : Layout.Registers.size();
+        auto Function = convertIntegerStackInput(
+            Architecture, Format, Layout.EntryStackBase + (Mutable ? 0 : 1),
+            2 * Layout.SlotBytes, false, Mutable);
+        ASSERT_EQ(Function.Params.size(), Registers + Slots);
+        std::vector<std::pair<int, int64_t>> Expected;
+        for (unsigned I = 0; I < Slots; ++I)
+          Expected.emplace_back(Registers + I,
+                                Layout.EntryStackBase + I * Layout.SlotBytes);
+        EXPECT_EQ(Function.MutableStackParamHomes, Expected);
+        bool SawRead = false;
+        for (const auto &Block : Function.Blocks)
+          for (const auto &Op : Block.Ops)
+            SawRead |= Op.Opcode == NdOp::LOAD;
+        EXPECT_TRUE(SawRead);
+        EXPECT_TRUE(verifyMedFunc(Function, "wide-mutable-stack-read"));
+      }
+}
+
 TEST(LowToMedIntegerStackABI, Win64SubslotRetainsTheFifthParameterIdentity) {
   auto Med = convertIntegerStackInput(Arch::X64, BinaryFormat::COFF, 43, 2,
                                       false, false);

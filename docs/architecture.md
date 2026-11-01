@@ -537,6 +537,13 @@ i386 stack arguments. The shared instruction-owned memory reader includes
 scalar and packed FP sources, so converting a memory operand cannot erase its
 CALL-slot observation. Ordinary disjoint arguments still recover normally, and
 known local return-PC writes retain their explicit source materialization.
+The ABI owner composes slot-aligned wide incoming loads from every parameter
+slot they cover. A SIMD load used to copy two scalar stack arguments does not
+invent a vector argument or an uninitialized local. `preserveStackReadHomes`
+shares the byte ranges of direct writes and overlapping reads across register
+ABIs and i386: mutable, ordered and unaligned crossing reads retain every
+physical home they need. Connected ranges merge once; adjacent independent
+ranges remain separate. Both C routes consume that same recovered MedIR.
 The reader first lets every CALL without an exact slot write any byte; when
 the loads stay separated even then, it skips the costlier slot bounds
 (registration replay, offset ranges, SEH handler bounds and upper bounds),
