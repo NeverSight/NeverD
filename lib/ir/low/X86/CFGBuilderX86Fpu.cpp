@@ -1132,6 +1132,8 @@ class X87CallEffectIndex {
       return x86SystemStateShapeIsValid(
           static_cast<Intrinsic>(Op.Inputs[0].Offset),
           x86SystemStateLowShape(Op, Architecture));
+    if (static_cast<Intrinsic>(Op.Inputs[0].Offset) == Intrinsic::X86HleState)
+      return x86HleShapeIsValid(x86HleLowShape(Op, Architecture));
     // These VMX/SVM operations leave x87 state unchanged on fallthrough.
     // VMLAUNCH/VMRESUME reach it only on VM-entry failure. VMRUN, whose guest
     // can change unsaved registers and floating state, is not in this family.

@@ -65,6 +65,8 @@ enum class InterpreterProfileProjection : uint8_t {
   X64HypercallV1,
   /// SNP/VMGEXIT require the explicit native RMP or SEV-ES environment.
   X64SnpV1,
+  /// HLE requires a native memory/publication boundary outside external TSX.
+  X64HleV1,
 };
 
 } // namespace neverd::analysis

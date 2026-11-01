@@ -899,6 +899,10 @@ target_compile_definitions(NeverDX86LegacyEncodingSourceTests PRIVATE
   NEVERD_TEST_LEGACY_ATOMIC=1
 )
 
+add_neverd_unittest(NeverDX86HleSourceTests
+  x86/X86HleSourceTests.cpp
+  LINK_COMPONENTS BackendC CodeGen)
+
 add_neverd_unittest(NeverDX86RepStateTests
   x86_64/X86RepStateTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)

@@ -22,6 +22,7 @@
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86FPStateHelpers.h"
 #include "../render/X86/X86FourSource.h"
+#include "../render/X86/X86Hle.h"
 #include "../render/X86/X86RepState.h"
 #include "../render/X86/X86Sgx.h"
 #include "../render/X86/X86SystemState.h"
@@ -4101,6 +4102,15 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
   const llvm::Function *Callee = Call.getCalledFunction();
   if (!Callee)
     return false;
+  if (Callee->getName() == "llvm.x86.hle.context") {
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    emitIndent(Indent);
+    OS << renderX86HleNativeCall(Opts.TheArch, Call, !Call.use_empty(),
+                                 Arguments);
+    return true;
+  }
   if (Callee->getName() == "llvm.x86.vmrun.context" ||
       Callee->getName() == "llvm.x86.hyperv.call" ||
       isX86KvmHypercallNativeName(Callee->getName()) ||

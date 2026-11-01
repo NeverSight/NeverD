@@ -22,6 +22,7 @@
 #include "../render/X86/X86BoundedLeaf.h"
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86FourSource.h"
+#include "../render/X86/X86Hle.h"
 #include "../render/X86/X86RepState.h"
 #include "../render/X86/X86Sgx.h"
 #include "../render/X86/X86SystemState.h"
@@ -2403,6 +2404,8 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // Operands added for the intrinsic's spelling have no width.
     if (OpBytes.size() != OpStrs.size())
       OpBytes.clear();
+    if (E.IntrinsicId == Intrinsic::X86HleState)
+      return renderX86HleExpression(Opts.TheArch, E, OpStrs);
     if (isX86VirtualizationIntrinsic(E.IntrinsicId))
       return renderX86VirtualizationExpression(Opts.TheArch, E, OpStrs);
     auto Rendered = renderIntrinsicCall(

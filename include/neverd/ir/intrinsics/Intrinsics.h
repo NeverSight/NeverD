@@ -532,6 +532,9 @@ enum class Intrinsic : uint16_t {
 #undef NEVERD_X86_SNP
   X86SevVmgexit,
 
+  // Append-only: an HLE memory step publishes its original GPR destinations.
+  X86HleState,
+
   _Count = 16000
 };
 

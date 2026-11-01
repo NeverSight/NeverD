@@ -776,7 +776,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     // rather than pretending the architectural state transition succeeded.
     if (isX86BoundedLeafIntrinsic(Id) || isX86BoundedLeafPending(Id) ||
         isX86SgxIntrinsic(Id) || Id == Intrinsic::X86Invalidate ||
-        Id == Intrinsic::X86MsrAccess || isX86VirtualizationIntrinsic(Id))
+        Id == Intrinsic::X86MsrAccess || Id == Intrinsic::X86HleState ||
+        isX86VirtualizationIntrinsic(Id))
       return false;
   }
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {

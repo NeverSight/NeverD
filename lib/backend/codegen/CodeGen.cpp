@@ -60,6 +60,7 @@ static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
            "llvm.x86.vmcall.kvm32",
            "llvm.x86.vmmcall.kvm32",
            "llvm.x86.hyperv.call",
+           "llvm.x86.hle.context",
            "llvm.x86.vmgexit.sev",
 #define NEVERD_X86_SNP(Id, Name, ...) "llvm.x86." #Name ".context",
 #include "neverd/ir/intrinsics/X86/X86Snp.def"
@@ -68,7 +69,7 @@ static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
     const auto *Function = Mod.getFunction(Name);
     if (Function && !Function->use_empty() && !Function->getIntrinsicID()) {
       llvm::WithColor::error()
-          << "native virtualization requires an LLVM SDK with " << Name
+          << "native x86 execution requires an LLVM SDK with " << Name
           << " support\n";
       return false;
     }

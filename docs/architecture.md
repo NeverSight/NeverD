@@ -29,6 +29,15 @@ shared across architectures and format-owned tests stay with their consumers.
 Directory moves do not change component targets, intrinsic identities, exported
 symbols or instruction semantics.
 
+`ir/intrinsics/X86/X86Hle.h` owns HLE's native ABI and original-register
+publication map. LowIR, Low-to-Med, Med verification and the C/LLVM adapters
+share that shape. `lift/X86/X86HleEncoding.h` admits original memory forms;
+`X64ContinuationHle.h` computes original addresses and signed bit indexes.
+HLE has its own renderer and LLVM adapter beneath their X86 directories.
+It does not acquire a VMX/SVM or ordinary atomic-memory contract. The explicit
+source step uses a private native bank and aborts elision before publication;
+external transaction state and faults require a different owner.
+
 `X86DescriptorState.h` owns descriptor-state operand shapes; LowIR,
 Low-to-Med, Med verification and source output use that contract.
 `X86DescriptorStateNative.h` owns register widths, native API names, memory

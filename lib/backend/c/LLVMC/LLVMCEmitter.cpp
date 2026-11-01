@@ -31,6 +31,7 @@
 #include "../render/X86/X86DescriptorState.h"
 #include "../render/X86/X86FPStateHelpers.h"
 #include "../render/X86/X86FourSource.h"
+#include "../render/X86/X86Hle.h"
 #include "../render/X86/X86ScalarSystem.h"
 #include "../render/X86/X86SystemRegister.h"
 #include "../render/X86/X86SystemState.h"
@@ -2379,7 +2380,8 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
         Fn.getName() == "llvm.x86.vmrun.context" ||
         Fn.getName() == "llvm.x86.hyperv.call" ||
         isX86KvmHypercallNativeName(Fn.getName()) ||
-        isX86SnpNativeName(Fn.getName()))
+        isX86SnpNativeName(Fn.getName()) ||
+        Fn.getName() == "llvm.x86.hle.context")
       continue;
     if (llvmc::isCStackAllocationFunction(Fn))
       continue;

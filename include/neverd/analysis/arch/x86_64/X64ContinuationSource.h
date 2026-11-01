@@ -434,6 +434,12 @@ struct X64ContinuationSourceOptions {
   /// must exclude state, budget, generated code and the compiler frame. The
   /// context publishes normal-completion GPR/flags, not exception state.
   bool NativeSnpInstructions = false;
+  /// Execute native HLE operations with PAUSE before state publication. Entry
+  /// is outside external HLE/RTM and long-mode LAHF is available. Original RAM
+  /// accesses complete normally and exclude state, budget, code and compiler
+  /// frame. This binding does not serialize transactions or native faults.
+  bool NativeHleSteps = false;
+
   /// Bind SEV-ES VMGEXIT to a returning GHCB/MSR service, with optional RAX
   /// VMGEXITParameter. Private CPU state and the compiler environment must be
   /// preserved; service memory excludes state, budget, code and compiler stack.

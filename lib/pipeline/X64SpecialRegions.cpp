@@ -14,6 +14,7 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/lift/X86/X86SnpEncoding.h"
@@ -210,6 +211,25 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         }
         if (!Resumes.empty())
           Region["vmexit_successors"] = std::move(Resumes);
+      }
+      if (SourceOptions.NativeHleSteps) {
+        llvm::json::Array Resumes;
+        for (va_t Address : Audit.UnsupportedInstructions) {
+          const auto Bytes = bytesAt(Image, Address);
+          for (unsigned Size = 1; Size <= 15 && Size <= Bytes.size(); ++Size) {
+            if (!x86HleEncoding(Bytes.take_front(Size)))
+              continue;
+            const va_t Resume = Address + Size;
+            if (Image.isCodeAddress(Resume)) {
+              if (auto Error = Enqueue(Resume, Depth))
+                return std::move(Error);
+              Resumes.push_back(hex(Resume));
+            }
+            break;
+          }
+        }
+        if (!Resumes.empty())
+          Region["hle_successors"] = std::move(Resumes);
       }
       if (SourceOptions.NativeSnpInstructions ||
           SourceOptions.NativeSevGuestExit) {

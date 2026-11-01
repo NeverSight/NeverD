@@ -23,6 +23,7 @@
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
 #include "neverd/ir/intrinsics/X86/X86BoundedLeaf.h"
+#include "neverd/ir/intrinsics/X86/X86Hle.h"
 #include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Sgx.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
@@ -386,6 +387,26 @@ inline ApxAtomicIntrinsicShape apxAtomicLowShape(const LowOp &Op,
                                 ? Op.Inputs[ControlIndex].Size
                                 : uint16_t{0},
   };
+}
+
+inline X86HleShape x86HleLowShape(const LowOp &Op, Arch A = Arch::Unknown) {
+  X86HleShape S;
+  S.TargetArch = A;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].Offset == uint16_t(Intrinsic::X86HleState);
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputSizes[I] = V.Size;
+    S.ScalarInputs[I] = V.isConst() || V.isReg() || V.isTemp();
+    if (I == 4 && V.isConst())
+      S.Control = V.Offset;
+  }
+  return S;
 }
 
 inline X86VirtualizationShape x86VirtualizationLowShape(const LowOp &Op,

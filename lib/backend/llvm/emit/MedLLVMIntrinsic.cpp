@@ -143,6 +143,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   if (isX86SystemStateIntrinsic(IC) || IC == I::X86MsrAccess)
     return emitX86SystemState(Op, IC, Builder);
 
+  if (IC == Intrinsic::X86HleState)
+    return emitX86Hle(Op, Builder);
   if (isX86VirtualizationIntrinsic(IC))
     return emitX86Virtualization(Op, IC, Builder);
 

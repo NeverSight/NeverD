@@ -304,3 +304,5 @@ SIDEEFFECT(Intrinsic::X86HyperVCall);
 #include "neverd/ir/intrinsics/X86/X86Snp.def"
 #undef NEVERD_X86_SNP
 SIDEEFFECT(Intrinsic::X86SevVmgexit);
+
+SIDEEFFECT(Intrinsic::X86HleState);

@@ -18082,3 +18082,17 @@ with native builtins, direct LLVM IR and the exported C. It checks unaligned
 objects, integer/FP liveness and fault-before-publication. Its deterministic
 Linux signal service qualifies register/flags transport, not AMD RMP or actual
 SEV-ES service semantics. See [the explicit contract](x86-snp-state.md).
+
+### Native HLE memory and source publication
+
+`NeverDX86HleSourceTests` checks the 136 native operation/width/hint forms,
+raw memory/prefix admission, original GPR destinations, exact native effects
+and old-SDK object refusal. The HLE cases in `NeverDX64ContinuationExportTests`
+check the full represented state, budgets, AH and extended GPR writes,
+immediate sign extension, RIP/SIB and addr32/FS/GS bit-address wrapping in
+both C routes and dispatch forms. Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to
+save the 136-form source and manifest for the independent native matrix.
+NeverC's `tests/neverc/X86/verify_hle_context.py --source SOURCE --manifest JSON`
+compares that actual export with raw prefixed CPU instructions. Omit the two
+source options for direct builtin/LLVM tests. A CPU without HLE qualifies the
+native fallback path, not physical transactional commit or rollback.

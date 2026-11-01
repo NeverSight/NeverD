@@ -100,6 +100,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_page_global_access",
                                        "native_rtm_abort_regions",
                                        "native_kvm_hypercalls",
+                                       "native_hle_steps",
                                        "native_snp_instructions",
                                        "native_sev_guest_exit",
                                        "native_hyperv_hypercall_entry",
@@ -193,6 +194,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_page_global_access", &Options.NativePageGlobalAccess},
       {"native_rtm_abort_regions", &Result.NativeRtmAbortRegions},
       {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
+      {"native_hle_steps", &Options.NativeHleSteps},
       {"native_snp_instructions", &Options.NativeSnpInstructions},
       {"native_sev_guest_exit", &Options.NativeSevGuestExit},
       {"follow_internal_calls", &Result.FollowInternalCalls},
@@ -664,6 +666,15 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                              "SetVpRegisters refused; service writes exclude "
                              "state, budget, code and compiler stack; "
                            : "") +
+           std::string(
+               Request->Options.NativeHleSteps
+                   ? "native HLE operations with PAUSE before state "
+                     "publication; "
+                     "entry outside external HLE/RTM; long-mode LAHF; "
+                     "nonfaulting original RAM excludes state, budget, code "
+                     "and compiler frame; no transaction or fault "
+                     "serialization; "
+                   : "") +
            std::string(Request->Options.NativeSnpInstructions
                            ? "native SNP supervisor RMP/paging environment; "
                              "nonfaulting completion; instruction memory, RMP "

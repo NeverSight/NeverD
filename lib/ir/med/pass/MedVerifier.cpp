@@ -132,6 +132,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               !intrinsicApxAtomicShapeIsValid(Id, apxAtomicMedShape(Op)))
             Err("APX atomic intrinsic has an invalid operand/output contract",
                 Blk.Id, Op.Addr);
+          if (Id == Intrinsic::X86HleState &&
+              !x86HleShapeIsValid(x86HleMedShape(Op)))
+            Err("invalid x86 HLE state contract", Blk.Id, Op.Addr);
           const bool IsVirtualization = isX86VirtualizationIntrinsic(Id);
           if (IsVirtualization &&
               !x86VirtualizationShapeIsValid(Id, x86VirtualizationMedShape(Op)))

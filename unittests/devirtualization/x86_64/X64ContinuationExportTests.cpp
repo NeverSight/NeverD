@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../lift/NeverDLiftFixture.h"
+#include "../../lift/x86/X86HleTestCases.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
 
@@ -1388,6 +1389,7 @@ TEST_F(X64ContinuationExportTest,
 }
 #include "X64AlignmentContinuationTests.inc"
 #include "X64ContinuationEnvironmentTests.inc"
+#include "X64HleContinuationExportTests.inc"
 #include "X64HyperVContinuationExportTests.inc"
 #include "X64JumpRegionContinuationTests.inc"
 #include "X64KvmContinuationExportTests.inc"

@@ -862,6 +862,11 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
                                      "invalid operand/output contract");
           continue;
         }
+        if (Id == Intrinsic::X86HleState) {
+          if (!x86HleShapeIsValid(x86HleLowShape(Op, TheArch)))
+            llvm::report_fatal_error("invalid x86 HLE state contract");
+          continue;
+        }
         if (isX86VirtualizationIntrinsic(Id)) {
           if (!x86VirtualizationShapeIsValid(
                   Id, x86VirtualizationLowShape(Op, TheArch)))

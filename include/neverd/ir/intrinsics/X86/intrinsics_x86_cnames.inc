@@ -314,3 +314,5 @@ C(Intrinsic::X86HyperVCall, "__builtin_ia32_hyperv_call");
 #include "neverd/ir/intrinsics/X86/X86Snp.def"
 #undef NEVERD_X86_SNP
 C(Intrinsic::X86SevVmgexit, "__builtin_ia32_vmgexit_sev");
+
+C(Intrinsic::X86HleState, "__neverd_x86_hle_state");

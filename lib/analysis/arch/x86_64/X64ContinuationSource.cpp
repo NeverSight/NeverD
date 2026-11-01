@@ -14,6 +14,7 @@
 #include "X64ArchitecturalValues.h"
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationFredReturns.h"
+#include "X64ContinuationHle.h"
 #include "X64ContinuationMpx.h"
 #include "X64ContinuationNativeRegisters.h"
 #include "X64ContinuationSvm.h"
@@ -1222,6 +1223,11 @@ buildInstruction(SpecializationInstruction Instruction,
                              InterpreterProfileProjection::X64FredReturnV1
           ? detail::x64FredReturn(Instruction.NativeBytes)
           : std::nullopt;
+  const auto Hle =
+      Options.NativeHleSteps && Instruction.ProfileProjection ==
+                                    InterpreterProfileProjection::X64HleV1
+          ? x86HleEncoding(Instruction.NativeBytes)
+          : std::nullopt;
   auto Snp =
       Instruction.ProfileProjection == InterpreterProfileProjection::X64SnpV1
           ? x86SnpEncoding(Instruction.NativeBytes)
@@ -1263,13 +1269,13 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
-       !Hypercall && !Snp &&
+       !Hypercall && !Snp && !Hle &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
-       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp))
+       !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1520,6 +1526,8 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
+  } else if (Hle) {
+    detail::emitX64HleStep(W, *Hle, Instruction.Fallthrough.Address);
   } else if (Snp) {
     if (Snp->Id == Intrinsic::X86SevVmgexit)
       W.emit(
@@ -1681,6 +1689,8 @@ buildX64ContinuationSource(const BinaryImage &Image,
        !Controls))
     return invalid("Hyper-V requires a nonzero native page, an x64 control "
                    "profile and no competing KVM ABI");
+  if (Options.NativeHleSteps && !Controls)
+    return invalid("native HLE steps require an x64 control profile");
   if ((Options.NativeSnpInstructions || Options.NativeSevGuestExit) &&
       !Controls)
     return invalid("native SNP/SEV-ES requires an x64 control profile");

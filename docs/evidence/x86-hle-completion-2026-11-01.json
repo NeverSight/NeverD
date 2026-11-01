@@ -1,0 +1,1496 @@
+{
+  "schema_version": 1,
+  "scope": "HLE native operation contexts and explicit x64 source publication",
+  "physical_transaction_commit_qualified": false,
+  "full_rtm_or_external_transaction_continuation_qualified": false,
+  "native_fault_continuation_qualified": false,
+  "revisions": {
+    "llvm": "c1e6817d7f48352e3e6fa631aed022cba3a4f491",
+    "neverc": "f36fe14254513ba43e410ec76d5680352d63bc68",
+    "capstone": "5730b43d4e25af8e2999ea14dcd9813098b0f8c7"
+  },
+  "neverd_parent_revision": "cdd2944c566aa3ef49bbb60628779f938a1020ec",
+  "neverd_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "published_sdk_unchanged": "neverd-llvm-v23.0.0-r6",
+  "native_sdk": "local development build of the recorded LLVM revision; not a release asset",
+  "broad_regression_capstone_revision": "1c080919765640ec6e2d3ae782a56819037c8284",
+  "final_capstone_validation": "The subsequent exchange metadata and default-16-bit prefix revision is covered by final HLE/source and atomic/undefined-effect regressions on rebuilt consumers.",
+  "neverd": {
+    "neverd-focused-final": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-focused-final.xml",
+      "sha256": "c4e92e610ed04119e02270ddc727f762e8e9e38d6d35a8b0c8ec6a20eaf5ea3c",
+      "tests": 13,
+      "passed": 13,
+      "skipped": []
+    },
+    "neverd-native-full": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-native-full.xml",
+      "sha256": "92d46c7c1ebfb00359f4b23252676c27c5a71d7c5b6ec4ace8737d5d1fd9e113",
+      "tests": 657,
+      "passed": 626,
+      "skipped": [
+        "X86VirtualizationSource.NeverCCompilesBothRoutesToNativeIntrinsics",
+        "X86SystemStateSource.NeverCCompilesBothRoutesToNativeSystemCalls",
+        "X86ImplicitMsrSource.NeverCRetainsNativeCompletionAndRestart",
+        "X86SgxSource.NeverCCompletionMatchesOriginalRegistersAndFlags",
+        "X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures",
+        "X86AmxSource.NeverCCompilesBothRoutesWithoutAssembly",
+        "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64ELF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64COFF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64MachO",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64ELF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64COFF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64MachO",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64ELF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64COFF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64MachO",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR16",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR32",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR64",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL16",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL32",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL64"
+      ]
+    },
+    "neverd-native-neverc": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-native-neverc.xml",
+      "sha256": "fbdfc48de0a45cf95abc6b6a8d6de5c7f301b2de8008172e23c35cc89505ae90",
+      "tests": 31,
+      "passed": 21,
+      "skipped": [
+        "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO"
+      ]
+    },
+    "neverd-r6-full": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-r6-full.xml",
+      "sha256": "3b64b2b0b9dc2d354557c41661067dc391062c0cbb253f648eb033cf6e2f8130",
+      "tests": 657,
+      "passed": 614,
+      "skipped": [
+        "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
+        "X86VirtualizationSource.NeverCCompilesBothRoutesToNativeIntrinsics",
+        "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
+        "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+        "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+        "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
+        "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+        "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+        "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+        "X86SystemStateSource.NeverCCompilesBothRoutesToNativeSystemCalls",
+        "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+        "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
+        "X86ImplicitMsrSource.NeverCRetainsNativeCompletionAndRestart",
+        "X86SgxSource.NeverCCompletionMatchesOriginalRegistersAndFlags",
+        "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+        "X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures",
+        "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
+        "X86AmxSource.NeverCCompilesBothRoutesWithoutAssembly",
+        "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64ELF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64COFF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64MachO",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64ELF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64COFF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64MachO",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64ELF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64COFF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64MachO",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR16",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR32",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR64",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL16",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL32",
+        "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL64"
+      ]
+    },
+    "neverd-r6-neverc": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-r6-neverc.xml",
+      "sha256": "bc3d449d5da2422d4ec7272c028f9d11dc898b19c511d5acccc8a7a23dd42ce6",
+      "tests": 43,
+      "passed": 21,
+      "skipped": [
+        "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
+        "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
+        "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+        "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+        "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
+        "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+        "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+        "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+        "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+        "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
+        "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+        "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
+        "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+        "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO"
+      ]
+    },
+    "neverd-final-atomic": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-final-atomic.xml",
+      "sha256": "494075abd3075e33904041311baf7f86006071133016c45aa91ae84798243b2d",
+      "tests": 89,
+      "passed": 89,
+      "skipped": []
+    },
+    "neverd-final-hle-native": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-final-hle-native.xml",
+      "sha256": "28165b4c21401596da87a102d59e2ab032cee26d014e86062d56c8f744b4316e",
+      "tests": 13,
+      "passed": 13,
+      "skipped": []
+    },
+    "neverd-final-hle-r6": {
+      "file": "/mnt/data/neverd-hle-20261031/neverd-final-hle-r6.xml",
+      "sha256": "72c75f29a8d3d5332dc1c89ad0f250fa8a7fb29fcf052e1f161b9dad31e1ffdd",
+      "tests": 13,
+      "passed": 13,
+      "skipped": []
+    }
+  },
+  "neverc_frontend": {
+    "file": "/mnt/data/neverd-hle-20261031/neverc-merged-frontend.xml",
+    "sha256": "5dd8faae0e72b34cc9a82a2d9161a99e90b2a6a73edc4a2b837d8232605ee48e",
+    "tests": 13,
+    "passed": 13,
+    "skipped": []
+  },
+  "llvm_lit": {
+    "passed": 13,
+    "log": "/mnt/data/neverd-hle-20261031/llvm-regression.log",
+    "sha256": "56ede57205d433ad1b3038baba9809c8706a8d4d3c2ccbb9b3b22708e144d02d"
+  },
+  "neverc_generators": {
+    "passed": 87,
+    "workflow_checks": 37,
+    "test_log_sha256": "fe8f8dd52f65fb73658faf28c65897151481fc748ea766b3771f2f2bc64085f0",
+    "sort_log_sha256": "c6a2ab0390d670babdd6a68b373e01149704c25246292c46ca045763125d66a6",
+    "workflow_log_sha256": "e86399a56705e7a6d5b646a32f3b55c344f5d78d2ed8e8b2a4cbe54be269fe4b"
+  },
+  "capstone": {
+    "hle_prefix_commit": "1c080919765640ec6e2d3ae782a56819037c8284",
+    "prefix_regression_combinations": 1344,
+    "default_16bit_initial_failures": 128,
+    "default_16bit_red_log_sha256": "f8770f9f34417f6386be64c5149f6dd443155c435b8a3a5c52ddf6c818ff7eb8",
+    "prefix_initial_failures": 160,
+    "prefix_red_log_sha256": "4d833263dc487e81f4f6fe63f7f0a8ead301ec04f9684ae9dce88aff1858e49a",
+    "unit_regression": {
+      "file": "/mnt/data/neverd-hle-20261031/capstone-final-unit.xml",
+      "sha256": "bfd1c84f9641970b70d921df47f21ef07b13dc8f64168ea2d58fa6723901bf1a",
+      "tests": 98,
+      "passed": 98,
+      "skipped": []
+    },
+    "exchange_red_combinations": 320,
+    "exchange_red_log_sha256": "c47ae86850a7d75c375f8bfec9673f37759917739d7771e260ccdfbec37af8e0",
+    "default_16bit_commit": "5730b43d4e25af8e2999ea14dcd9813098b0f8c7",
+    "exchange_metadata_commit": "00d857bdcc8b1066e7489b8cd1eaff65fa72707f",
+    "reduced_cases": {
+      "file": "/mnt/data/neverd-hle-20261031/capstone-final-reduced.xml",
+      "sha256": "4ecb6ce31b40bb52e7bc2cbd3f2271bc07087b6f063e398a8c5e162071ba3964",
+      "tests": 3,
+      "passed": 3,
+      "skipped": []
+    },
+    "x86_yaml_cases": 2911,
+    "x86_yaml_decoded_instructions": 3306,
+    "x86_yaml_log_sha256": "e4b900f5f6a3a3be6653983bbb9626b1f3b97004b4ec2e8cb6663d44b13b8620",
+    "initial_unfiltered_attempt": "An x86-only build was incorrectly run against all-architecture YAML suites. Unisolated /tmp/core handling also failed integration checks and timed out the x87 hardware test. The corrected x86/unit selection above passed in a private /tmp namespace."
+  },
+  "provider_regression": {
+    "families": 19,
+    "native_forms": 136,
+    "extra_address_and_register_forms": 10,
+    "initial_failure": "The test provider used unused high RCX bits to synthesize narrow-operation flags; it now masks only the consumed operand without changing architectural state.",
+    "initial_diagnostic_sha256": "f886fa2fadb04592518f42fbf07a6ef3dd8c48da405ac577ad515a7910427eb5"
+  },
+  "matrix_summary": {
+    "profiles": 34,
+    "pairs": 1183744,
+    "fault_before_publication": 9248,
+    "source_profiles": 24,
+    "source_pairs": 835584
+  },
+  "sdk_source_comparison": [
+    {
+      "name": "hle-high-direct-cases.h",
+      "sha256": "6398b1e16845915b26217832851e05e34cc654f23fb238e2c290a51cf0580d45",
+      "identical": true
+    },
+    {
+      "name": "hle-high-direct.c",
+      "sha256": "022d4bce0f52f34d616999f56e99de0f699f2a0f9fa41f1d0bffbc7d31147f8e",
+      "identical": true
+    },
+    {
+      "name": "hle-high-direct.json",
+      "sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
+      "identical": true
+    },
+    {
+      "name": "hle-high-switch-cases.h",
+      "sha256": "6398b1e16845915b26217832851e05e34cc654f23fb238e2c290a51cf0580d45",
+      "identical": true
+    },
+    {
+      "name": "hle-high-switch.c",
+      "sha256": "bd079993f5e689d3c40262509c79bd6e74861e38f5f5e3334a77c79cf4f82de9",
+      "identical": true
+    },
+    {
+      "name": "hle-high-switch.json",
+      "sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
+      "identical": true
+    },
+    {
+      "name": "hle-llvm-direct-cases.h",
+      "sha256": "6398b1e16845915b26217832851e05e34cc654f23fb238e2c290a51cf0580d45",
+      "identical": true
+    },
+    {
+      "name": "hle-llvm-direct.c",
+      "sha256": "d7c98b5e28234f4884be44de4706c185cc8ccd80841fb4f3414fedec08c30511",
+      "identical": true
+    },
+    {
+      "name": "hle-llvm-direct.json",
+      "sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
+      "identical": true
+    },
+    {
+      "name": "hle-llvm-switch-cases.h",
+      "sha256": "6398b1e16845915b26217832851e05e34cc654f23fb238e2c290a51cf0580d45",
+      "identical": true
+    },
+    {
+      "name": "hle-llvm-switch.c",
+      "sha256": "0b74efd4628d547a76d31ab9fcce6e4e6125982a26c09f167896c47064ca525e",
+      "identical": true
+    },
+    {
+      "name": "hle-llvm-switch.json",
+      "sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
+      "identical": true
+    }
+  ],
+  "matrix": [
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-native-llvm/qualification.json",
+      "sha256": "e76d24b347bf12432db0de06d60a35fd177f094c8792f2fa9f717f08a78baaea",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "7da0c85db8c4df97f25c4102515e03d5423aa0174fc4b450f2c7837195f498ab",
+        "O2": "2244c8a6214360a778e33f6439d9314acce7f1f8264a070e88d6019f7ae87e2a",
+        "O2.o": "166061ef416531638afaa7eeff509c502720c7e6af6381d82d9b1baf48d57d54",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "c4cc43cc44bb139b024db6ae7720c893974ec66ad6cc678d00b4aa155be85eaa",
+        "O0": "6f13332fa71582dce0b9858807b08df537ca387cfcc75b96f0a764486e51cd68",
+        "commands.json": "993a787cc48be0512e65683696f00b20640ed95199ba12ab275a2c142c8c5b51",
+        "candidate.c": "9300092c60e737c93f97983515f0017264186513df1a89f5960e5b922dce8934",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "e10da706817b3c3a844981d742bd4c8fbff792e0078d85e25732e2ca7979a3d6",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-native-llvm-ir/qualification.json",
+      "sha256": "655b265f25116f5b97d8c458debee5b120435c84a238eb60b90a08b41b819731",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": true,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0",
+        "O2": "b4710d5d1ab160dcbc950ff65c1e7259463abf899e91940e4d7ec48e6b14623f",
+        "O2.o": "b03bf091484f5cb786080534db49308979eda614f558764b7643ccc4d12b198b",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0",
+        "O0": "8a0809376428014dbdeb4bff468ed4653841e1b6efb55d864e4395520ec60d7b",
+        "commands.json": "ea35fe24175fe167f0e73ca119913cd61b0d74cb990c99552e81da996a2ecb9c",
+        "candidate.c": "9300092c60e737c93f97983515f0017264186513df1a89f5960e5b922dce8934",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "8e6510ab31dd6ce11a81a282ac63ca8688f5a52bfe250d8565868ea3258d1979",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-native-llvm-new/qualification.json",
+      "sha256": "55ddd5bc601fae2a1b7b2e8244148b722bd665f2d227d64c6de9f3bf2f2c7e5f",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "7da0c85db8c4df97f25c4102515e03d5423aa0174fc4b450f2c7837195f498ab",
+        "O2": "ebb81dfac953746c4a2ca4f3675566511a6bc8b2de2399e00fe2df54aa504415",
+        "O2.o": "c40de74c10d2d2b228b07f418cb0acc11401e514f42a3fc96b1795dc685fccea",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "c4cc43cc44bb139b024db6ae7720c893974ec66ad6cc678d00b4aa155be85eaa",
+        "O0": "6f13332fa71582dce0b9858807b08df537ca387cfcc75b96f0a764486e51cd68",
+        "commands.json": "e0b7ea6c655d2c13b5c1b9ea927afc2d041a0925e7624dde67d3adad19ce55e8",
+        "candidate.c": "9300092c60e737c93f97983515f0017264186513df1a89f5960e5b922dce8934",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "e10da706817b3c3a844981d742bd4c8fbff792e0078d85e25732e2ca7979a3d6",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-native-llvm-new-ir/qualification.json",
+      "sha256": "6cedfa7066fea4939fe4efe1a576728a676fbb4a7238881d990062d4ecfc1cba",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": true,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0",
+        "O2": "9647002e56b542204aa44b535d57c5267ac711b28e80d3d43acace4fa7bc9a0b",
+        "O2.o": "49fc8bcc53422c5fd5593af621024bc95105d3ff9d2e3dc883f1c43e20561a3f",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0",
+        "O0": "8a0809376428014dbdeb4bff468ed4653841e1b6efb55d864e4395520ec60d7b",
+        "commands.json": "94e69bcb06c5a6bd6ee03d0bfbc4656d5f05cba389848c55a4df2dfd2816e0da",
+        "candidate.c": "9300092c60e737c93f97983515f0017264186513df1a89f5960e5b922dce8934",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "8e6510ab31dd6ce11a81a282ac63ca8688f5a52bfe250d8565868ea3258d1979",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-native-neverc/qualification.json",
+      "sha256": "be7567ccec6d7c21a4cbb554620a6d42a399eb77e027b2f9db4678a144aebdae",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2": "abdb78efa92744d8b32718d189f6cc2a1304024ace686e096a0840d127972483",
+        "O2.o": "d8a8977769cc76386e70289e5e6ec58e29080d964ed1f045ae752d00285dfec7",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0": "226e788fd671660c066ecac40e5a4ba633ef33a6faf8b2996c9307202c343868",
+        "commands.json": "4d8510d15b5ce9f1d389d27f76e5e42fa61370f8df192a12b4e7879c7419db38",
+        "candidate.c": "9300092c60e737c93f97983515f0017264186513df1a89f5960e5b922dce8934",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "072033f0d9051d113db67151997b5b8febac88b92ebe8e274818e404846022b5",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-high-direct-llvm/qualification.json",
+      "sha256": "5ae1ac2c47d3df71309eb2f80fc0d61a731b873099521260b2ef2474aa18d5ec",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "022d4bce0f52f34d616999f56e99de0f699f2a0f9fa41f1d0bffbc7d31147f8e",
+      "manifest_sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "c0cc3d9d7ddd965f15d4f323ae1c57757cf8a2075efff7a21936adb9c92b93b4",
+        "O2": "7d990d0d9b09ec6d33f44994975c59580a2f54c5b0c54592bc42d20badebf340",
+        "O2.o": "578dc154c92561cc82709c6d5f31d515b669afbec775b764d23c90ed23c4c9bd",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "bd92c4a7ce97c50503fc822c4f1ef31068f621a9d654659d3f495558e70215fe",
+        "O0": "fdab7cac80f835ccd92903efc9a4038eb2f0d2265bf522d0aac69f183065af71",
+        "commands.json": "b28ad1e04f716666235e23e56a828b827b834fe91cc32adca100f6e94db2301c",
+        "candidate.c": "1b527b22c16c1d50f7162910ff0fc5aee1179dfbac8e603f1215d4ae2398595f",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a91f08807137471fcec134cbdb3e326c8a112861f38f8646c5081f26d6901602",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-high-direct-llvm-new/qualification.json",
+      "sha256": "2e0200412c61332d88689e56002b752ad3f92cf6778b03ebd296fee077d1cc1b",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "022d4bce0f52f34d616999f56e99de0f699f2a0f9fa41f1d0bffbc7d31147f8e",
+      "manifest_sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "c0cc3d9d7ddd965f15d4f323ae1c57757cf8a2075efff7a21936adb9c92b93b4",
+        "O2": "cab72bd5af873c29246dd43e154e33df301de570d3ca4b0778a2ce3a629cc0aa",
+        "O2.o": "f28912731aa5137f67393964426d40443e6e2772cd0d7b988b63db643e29879d",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "bd92c4a7ce97c50503fc822c4f1ef31068f621a9d654659d3f495558e70215fe",
+        "O0": "fdab7cac80f835ccd92903efc9a4038eb2f0d2265bf522d0aac69f183065af71",
+        "commands.json": "cd07cdf7664c3bda4ea95178623f1aa6d52a68f17286c3be1a19593d7781e5ae",
+        "candidate.c": "1b527b22c16c1d50f7162910ff0fc5aee1179dfbac8e603f1215d4ae2398595f",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a91f08807137471fcec134cbdb3e326c8a112861f38f8646c5081f26d6901602",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-high-direct-neverc/qualification.json",
+      "sha256": "21f414be015e68faddc6cb7cb0ba07b489285b5b4fcd90558818c3ce8ef2d15b",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "022d4bce0f52f34d616999f56e99de0f699f2a0f9fa41f1d0bffbc7d31147f8e",
+      "manifest_sha256": "4b7fab1299ae7c7048142e4bfa548fbe3a98abb2246507dd852fb08bb1cac79b",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2": "10e92fdeea93c5a3cc0f8511aac61eee0646d157cb5d845ec90f629959758210",
+        "O2.o": "f8322e717710c3e6b0a4e922d376f93e0ea805e0d69e291ecc5789b72586a1e9",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0": "4b61b70bb7f74cc6d4ea9f2f69bb01205a84a1837cf3f454315cc1de71512681",
+        "commands.json": "5cb05c67f17ecf7194f8e1d3cc649da47ae5ae8b78cc0440704816730180a601",
+        "candidate.c": "1b527b22c16c1d50f7162910ff0fc5aee1179dfbac8e603f1215d4ae2398595f",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "ae2ae8558b764fa70553a95c75d0dc05519332f6353ac9b6bd86bf7fecbcae64",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-high-switch-llvm/qualification.json",
+      "sha256": "bc33feb7a892c5b6a7f3044268c15ab0725c9c1b4147e6df2ac4f41e5e11b5ae",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "bd079993f5e689d3c40262509c79bd6e74861e38f5f5e3334a77c79cf4f82de9",
+      "manifest_sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "509f4674ba985683aabcbafa64f5cc3d88d3bfc023048660e62deef4c557e46c",
+        "O2": "457393daacefcd9a1c687ddc5488f72823bd8604898e68eed65479057ba21444",
+        "O2.o": "df8ddd139c7d86af8097674dbdf999aaaadbe27cb6ecee8403a1aa9a6f69902b",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "e5a1a83bdb4f759bbd33fe8d5a078368400ea054a08a7f378ed3a8b753a065eb",
+        "O0": "31ac9b785842a9368f5e8277e24bf5720c3637875704c8f3cc621890b58800dd",
+        "commands.json": "999566648fd1e7b261a3abddd5e39aa5cbe12a96e5abe3915a2db9a385ba8ba0",
+        "candidate.c": "4893bad672c85d1cd5c1e3d79d96f68f95d494e492a177a6bc7f66ff4b5a6d37",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a4ebe7d37135f6f5baaf8a31102e0de31f5e51269446eb20aa244b7c1f86c9e6",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-high-switch-llvm-new/qualification.json",
+      "sha256": "b16ef25d9c3aadf5db2cd76a3351dc6ede505033085ef7112aa9eefb9f7874dc",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "bd079993f5e689d3c40262509c79bd6e74861e38f5f5e3334a77c79cf4f82de9",
+      "manifest_sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "509f4674ba985683aabcbafa64f5cc3d88d3bfc023048660e62deef4c557e46c",
+        "O2": "bfdea023d0947ae6afd61d55ade241b5f35362df5357f9913b4f68b5c860713b",
+        "O2.o": "98c456efb5434a392c247a60ce68cdac217b3badd5533bdae8ba14cbfac7f27d",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "e5a1a83bdb4f759bbd33fe8d5a078368400ea054a08a7f378ed3a8b753a065eb",
+        "O0": "31ac9b785842a9368f5e8277e24bf5720c3637875704c8f3cc621890b58800dd",
+        "commands.json": "2095d66ff30d5f8238d3c6ab0daf2c4f198a4eb8c3d08fb99ac521e2a5dbe780",
+        "candidate.c": "4893bad672c85d1cd5c1e3d79d96f68f95d494e492a177a6bc7f66ff4b5a6d37",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a4ebe7d37135f6f5baaf8a31102e0de31f5e51269446eb20aa244b7c1f86c9e6",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-high-switch-neverc/qualification.json",
+      "sha256": "669f833177263024e3f82f2477ba32be975544d8d2a076b2f3962c1092dd4937",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "bd079993f5e689d3c40262509c79bd6e74861e38f5f5e3334a77c79cf4f82de9",
+      "manifest_sha256": "13162a0059e0706ecdc13944ba81383ebc5f580e6caf4893b0e29e6dbf7b848d",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2": "607b259facf096bdb71ed856cfebbc7ad158e8513c152be53a728e9c4b498d85",
+        "O2.o": "d686512a6f8cce858320718876def6b3a0c303e09e454dfa953b5ff64cef190d",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0": "92dcf52461e57e8a2192f180eb081edfc1690ccfa4f92d55aea7e48e216f5ab3",
+        "commands.json": "fcba394ecf9aa1b3362f1ec30d4843cfd9474f4077bcb60926dcacf3ea15b15d",
+        "candidate.c": "4893bad672c85d1cd5c1e3d79d96f68f95d494e492a177a6bc7f66ff4b5a6d37",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "d1b43bd3306e60653c1f3ed08f3129df147eca64185c2fb6e9f9f1564d608438",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-llvm-direct-llvm/qualification.json",
+      "sha256": "0229cd6d8b55fba6435ddc51f1ea015a152f9a27365abd8a1b78f46d5330cbc1",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "d7c98b5e28234f4884be44de4706c185cc8ccd80841fb4f3414fedec08c30511",
+      "manifest_sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "0a1778a4683038e49349c5772dabb77fcecfd2447c49234ed5273850e054e685",
+        "O2": "be0e3b7fcf2c816a83df61beeb1f30fecbc64ffdd43c18785801ca65466c5cf9",
+        "O2.o": "13953595ab8154e7494d2d2ca1e7628e856d87779c90a040f54c354b24e94ae2",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "eb833344b315b883b88bce745b5e825e358183f9c6cbe98810b9faf3468a66d0",
+        "O0": "3f212967f0cca23507bea73c53a244d3fd35c0c7d71ce72eb24815c2fcab43fc",
+        "commands.json": "5e0c5a5ad14ad7556098c2ade00231ab4a33edac633e95e4dfee57f763f7f97c",
+        "candidate.c": "cabd5e85f3f0e26a507879e8c81d1f5981496ec1b0de992f59ff23b7b8261545",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a9818f735f803c8377ac964106dec218b6816107b7adfd037751c23308e6ab9a",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-llvm-direct-llvm-new/qualification.json",
+      "sha256": "2db13256e7d50d998c8e6056c36f95ca9f89117a743d76b6af6a843b7ad17759",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "d7c98b5e28234f4884be44de4706c185cc8ccd80841fb4f3414fedec08c30511",
+      "manifest_sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "0a1778a4683038e49349c5772dabb77fcecfd2447c49234ed5273850e054e685",
+        "O2": "6681de7693297db29de85065ba90acb7a6b591c37a53cdf0424cfcb6dda50e01",
+        "O2.o": "f32acd3d3bde4d17fb129ae78a290b80d7d3adf8e8d5de852f747a48b0f137a9",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "eb833344b315b883b88bce745b5e825e358183f9c6cbe98810b9faf3468a66d0",
+        "O0": "3f212967f0cca23507bea73c53a244d3fd35c0c7d71ce72eb24815c2fcab43fc",
+        "commands.json": "a23ad6ecf4b6dff1de6aba73c4e52fe40773cd3cdf77f710c51e83cb4783d822",
+        "candidate.c": "cabd5e85f3f0e26a507879e8c81d1f5981496ec1b0de992f59ff23b7b8261545",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a9818f735f803c8377ac964106dec218b6816107b7adfd037751c23308e6ab9a",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-llvm-direct-neverc/qualification.json",
+      "sha256": "696ae05ed0be32bf875055f0624db375ee9f105fe9d2491156a321c917c75066",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "d7c98b5e28234f4884be44de4706c185cc8ccd80841fb4f3414fedec08c30511",
+      "manifest_sha256": "7351996c6763fb52a617afea1b8e702a6cd0658bde4d93154732d9300a6fb225",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2": "253abb61b5c0f2cfa1abc2df0680bd95e16b200824cb1ed668671dce86e47f07",
+        "O2.o": "4a6e9da9c68a0dfd8a41bf5441094d3aceafb848480c33a51c4fd4367639c45f",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0": "d704257d7e20bd381fdbb89b95f47faae774337fa8b7f17aca7750e83f09b558",
+        "commands.json": "c58df410d267dba9525f87c7735c86529d29512d79eac196322d58a8300d8fd3",
+        "candidate.c": "cabd5e85f3f0e26a507879e8c81d1f5981496ec1b0de992f59ff23b7b8261545",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "775ef08c846b6ba9e6fa041909e6187619d895966d9dc57b5b793b38d9cdcca1",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-llvm-switch-llvm/qualification.json",
+      "sha256": "5b72be35715e8cedbd79256e6c366e89d7cdb5b257fa7cd3d734b46d39fd327a",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "0b74efd4628d547a76d31ab9fcce6e4e6125982a26c09f167896c47064ca525e",
+      "manifest_sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "be6810f5826ce65950569c426e5fd4ff052c47dee34b9b99e010b123eaa9612e",
+        "O2": "0a21943a86470d1d8e539ca5177f63df034a607515555efca44e81450f8e3672",
+        "O2.o": "8146eec8aeeb487081cd2cc21def622ff5a674c5d8ac1f7ff2fd68b9fa3c55cb",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "32f08e4f384d31b4a707ff1708697e2b76b77061e3bba8deb9f2f31fa1e5e2f1",
+        "O0": "93459c1e5f7d832c087ae99a2bfd1cb827ed2e156c919fe46f74589570ffaaa9",
+        "commands.json": "56eb1475d6edb1893d1cf9e97b04a3506a11585551b7f9555015b034c21899fc",
+        "candidate.c": "1b1a78a9ac16b6dae6f45c1974d5de1cae0cf32225898f069edf49ce0d9cb84f",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "d114e29ce1d2954cf37e4ac25b85cb3eba893065f8ba496b0a0b82bb09f644d4",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-llvm-switch-llvm-new/qualification.json",
+      "sha256": "ea6864e4c258df208b112e406050fe2f1d82c6a2d3f111657f496f18d54f2bae",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "0b74efd4628d547a76d31ab9fcce6e4e6125982a26c09f167896c47064ca525e",
+      "manifest_sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2.ll": "be6810f5826ce65950569c426e5fd4ff052c47dee34b9b99e010b123eaa9612e",
+        "O2": "73467a9e6e5f60457b6e2b4c92deb23af580b3c56e8c52ca93f1ce55a9565724",
+        "O2.o": "df725c48ae8aaedb3bced0130e4b6b4fe2199902455c2cdefbbe3f9a85cabb42",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0.ll": "32f08e4f384d31b4a707ff1708697e2b76b77061e3bba8deb9f2f31fa1e5e2f1",
+        "O0": "93459c1e5f7d832c087ae99a2bfd1cb827ed2e156c919fe46f74589570ffaaa9",
+        "commands.json": "896e6968c54202dddb9c8c06c7c420cc3bf16e31a3d654a70afefac3b82ee045",
+        "candidate.c": "1b1a78a9ac16b6dae6f45c1974d5de1cae0cf32225898f069edf49ce0d9cb84f",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "d114e29ce1d2954cf37e4ac25b85cb3eba893065f8ba496b0a0b82bb09f644d4",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-source-llvm-switch-neverc/qualification.json",
+      "sha256": "c6ed535d8a5e31ab957dae5810d4cd98e1e153e0c0670e215dc10a28f3861992",
+      "passed": true,
+      "forms": 136,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 34816,
+          "fault_before_publication": 272,
+          "hardware_hle_available": 0,
+          "physical_transaction_commit_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "physical_transaction_commit_qualified": false,
+      "scope": "native HLE operations with abort-before-publication boundaries",
+      "undefined_flags_compared": false,
+      "source_sha256": "0b74efd4628d547a76d31ab9fcce6e4e6125982a26c09f167896c47064ca525e",
+      "manifest_sha256": "ab1595448bbb706f7c59bdfd5f0f4404af7fe42b5b30b1aa19d85dabb9cbe09e",
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        }
+      },
+      "fixture_sha256": {
+        "generate.py": "615e598042a16332f206c519b083f40bf790f2ded6f970647e8f7dd150c50e0b",
+        "runner.c": "05034f447f507f1776b3ad8e333ecf073e8d892e264c6ad0b5d94279e805c888"
+      },
+      "files": {
+        "original.o": "01226e2776681087b9a6362319cf5f54f9d18214a3fe496c298a9d64f62070f4",
+        "O2": "0553c1386ad0833a660226e13b32e3196ac61270dc92d4dc8b84dce49f39c9ab",
+        "O2.o": "410e28249d1dda97967494e05f8b836ef79cc65b54ff3bcdb9853e75a43d6dbc",
+        "cases.h": "1b6f901a2998d22293d5ace7923f017655352934ff8f9e8f1b26d9d0407ed527",
+        "O0": "e6a2e29d0562f93160c58521a0243b938292127f3f0c1bb4ba3e18159b4f3204",
+        "commands.json": "64ceeff640e14331ff928759468924a7ed4e8b9895e970a82fe94d562cc169ed",
+        "candidate.c": "1b1a78a9ac16b6dae6f45c1974d5de1cae0cf32225898f069edf49ce0d9cb84f",
+        "original.S": "4f0515547711559fc19bbb8401f232f7438eab2fa0a2d34614543a929d501604",
+        "O0.o": "a2d758dae4109f129d515a4afd8a2720855c2a7a8eace4e80df52cfbf749e81d",
+        "candidate.ll": "79e771842a4f22718f0fd8ad9145cf826f8d2aabca3d686211044c94e6930fb0"
+      }
+    }
+  ],
+  "snp_cross_family_regression": [
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-snp-native-llvm/qualification.json",
+      "sha256": "1797b6e1510cf0e4eead39d2225b93ea2fa1939b6e633657c9ac51b5f3a6a0c5",
+      "passed": true,
+      "scope": "native register transport with a synthetic fault service",
+      "physical_snp_qualified": false,
+      "sev_es_services_qualified": false,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 3072,
+          "native_instruction_faults": 6144,
+          "fault_before_publication": 24,
+          "live_fp_cases": 3072,
+          "physical_snp_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 3072,
+          "native_instruction_faults": 6144,
+          "fault_before_publication": 24,
+          "live_fp_cases": 3072,
+          "physical_snp_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "fixture_sha256": {
+        "candidate.c": "5e012e591b910638e429fe2d065e9fb793a864b807e7dba5d3b1b8c88036c740",
+        "candidate.ll": "ddd1726af51f261fce2aed4b76a67cd4ef0d560afa1802831edcfc8a155f738f",
+        "runner.c": "7aa14e106221c3649eb0c0a36a906f281ab934b385218eb36d5beb0f481c36f7",
+        "original.S": "2893dbe4901d459c4154dd6414a52c6540da1ff04365d82073f9332f8d726c51"
+      },
+      "files": {
+        "original.o": "6d0d06772976a22f419cb9bb39285ab5fab9d203567db829f6cf3cc89f404fc0",
+        "O2.ll": "398b4bfbcf616139a3159fc519a98eb94d34932f5274c3b4e6a2840091b99558",
+        "O2": "e88ba7c1243c8656c37bdc887486a0783fa293cd22566aec3ac349107f1cbe7a",
+        "O2.o": "32cf2ae16ffdff5b5c71ad2af63ab725af364bf6e67670a7a420d28822d96a31",
+        "O0.ll": "ee5af9cd89823db77a74a4e94708880c73bb9b514a32f08ac873a6ba8adac399",
+        "O0": "60b4265b02095f1004baddd799e54eef618eea5f111834966eb937a472c77daa",
+        "commands.json": "e2c8e6ab7c2598ef651bd02950bdd07640703c6294c4cd073d94ed02d418e7ff",
+        "candidate.c": "5e012e591b910638e429fe2d065e9fb793a864b807e7dba5d3b1b8c88036c740",
+        "O0.o": "6842e59d6fc1414f9385b646212936a8bb0891e262253a3332f4366d7cbc2192"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-snp-native-llvm-new/qualification.json",
+      "sha256": "74cd821a83fbbcb6f4b67aefcb8512ef30d4077b6091b7243145e56db0de8cdf",
+      "passed": true,
+      "scope": "native register transport with a synthetic fault service",
+      "physical_snp_qualified": false,
+      "sev_es_services_qualified": false,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 3072,
+          "native_instruction_faults": 6144,
+          "fault_before_publication": 24,
+          "live_fp_cases": 3072,
+          "physical_snp_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 3072,
+          "native_instruction_faults": 6144,
+          "fault_before_publication": 24,
+          "live_fp_cases": 3072,
+          "physical_snp_qualified": false
+        }
+      ],
+      "new_pass_manager": true,
+      "llvm_only": false,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        },
+        "llc": {
+          "path": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin/llc",
+          "sha256": "d8e7979c12407ba53d106050359817ccc32be0dd27a697e475ff360dd2cf6551"
+        }
+      },
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "fixture_sha256": {
+        "candidate.c": "5e012e591b910638e429fe2d065e9fb793a864b807e7dba5d3b1b8c88036c740",
+        "candidate.ll": "ddd1726af51f261fce2aed4b76a67cd4ef0d560afa1802831edcfc8a155f738f",
+        "runner.c": "7aa14e106221c3649eb0c0a36a906f281ab934b385218eb36d5beb0f481c36f7",
+        "original.S": "2893dbe4901d459c4154dd6414a52c6540da1ff04365d82073f9332f8d726c51"
+      },
+      "files": {
+        "original.o": "6d0d06772976a22f419cb9bb39285ab5fab9d203567db829f6cf3cc89f404fc0",
+        "O2.ll": "398b4bfbcf616139a3159fc519a98eb94d34932f5274c3b4e6a2840091b99558",
+        "O2": "6e2bb5d078a7512238c46519f0b34030c4aed35c0d85a98123e730faf19a1089",
+        "O2.o": "34a9ac65f8a7c21d5472dceb9896ba4048a29d6a04ba8201ff5354b48b7c3897",
+        "O0.ll": "ee5af9cd89823db77a74a4e94708880c73bb9b514a32f08ac873a6ba8adac399",
+        "O0": "60b4265b02095f1004baddd799e54eef618eea5f111834966eb937a472c77daa",
+        "commands.json": "819c28a5eb7a67ed1863ca73b8add88c198a7e202099bc7178e03bbe0f8ccd19",
+        "candidate.c": "5e012e591b910638e429fe2d065e9fb793a864b807e7dba5d3b1b8c88036c740",
+        "O0.o": "6842e59d6fc1414f9385b646212936a8bb0891e262253a3332f4366d7cbc2192"
+      }
+    },
+    {
+      "artifact": "/mnt/data/neverd-hle-20261031/final-snp-native-neverc/qualification.json",
+      "sha256": "f191d8d612c582fc3403ae2528e9bbdde2e2e63d6b41b1d0176abd7c80c3d18f",
+      "passed": true,
+      "scope": "native register transport with a synthetic fault service",
+      "physical_snp_qualified": false,
+      "sev_es_services_qualified": false,
+      "profiles": [
+        {
+          "optimization": "O0",
+          "pairs": 3072,
+          "native_instruction_faults": 6144,
+          "fault_before_publication": 24,
+          "live_fp_cases": 3072,
+          "physical_snp_qualified": false
+        },
+        {
+          "optimization": "O2",
+          "pairs": 3072,
+          "native_instruction_faults": 6144,
+          "fault_before_publication": 24,
+          "live_fp_cases": 3072,
+          "physical_snp_qualified": false
+        }
+      ],
+      "new_pass_manager": false,
+      "llvm_only": false,
+      "tools": {
+        "host": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "ff2f0d7bd4e203321abf41a4c91be355db75b7379c09a2aa102f63f515ebfee2"
+        }
+      },
+      "source_sha256": null,
+      "manifest_sha256": null,
+      "fixture_sha256": {
+        "candidate.c": "5e012e591b910638e429fe2d065e9fb793a864b807e7dba5d3b1b8c88036c740",
+        "candidate.ll": "ddd1726af51f261fce2aed4b76a67cd4ef0d560afa1802831edcfc8a155f738f",
+        "runner.c": "7aa14e106221c3649eb0c0a36a906f281ab934b385218eb36d5beb0f481c36f7",
+        "original.S": "2893dbe4901d459c4154dd6414a52c6540da1ff04365d82073f9332f8d726c51"
+      },
+      "files": {
+        "original.o": "6d0d06772976a22f419cb9bb39285ab5fab9d203567db829f6cf3cc89f404fc0",
+        "O2": "5f5917b0ef1a95a0a0e8fd59071190dd194dd0302a147459f50eaaa3e0ed463b",
+        "O2.o": "d3a1db4669103ac0fcdad9d93964bcc3c06842913e712f345f0b473f5b631fc8",
+        "O0": "a6afc6d603dc3c7d5745b60ba7643bf1968413378c0e59548ebc676e6286f308",
+        "commands.json": "4ee3efbad295986d2021857a60ed0327767b26da91a7058e065fac531762c4c0",
+        "candidate.c": "5e012e591b910638e429fe2d065e9fb793a864b807e7dba5d3b1b8c88036c740",
+        "O0.o": "a2fa540970b61494c6a162f91138d71a2aa00be3f986787a992e02d715f788b9"
+      }
+    }
+  ],
+  "primary_document": {
+    "title": "Intel SDM, Volume 2, XACQUIRE/XRELEASE; Volume 1 revision 090 sections 17.2.1 and 17.3.9.1",
+    "volume_2_url": "https://cdrdv2-public.intel.com/782156/325383-sdm-vol-2abcd.pdf",
+    "volume_2_sha256": "eb2115865c6085cbf19d9541b5e2161773e6f60196c6d44d9d5bc445d53e731c"
+  }
+}

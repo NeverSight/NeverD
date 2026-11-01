@@ -18,6 +18,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/lift/X86/X86SnpEncoding.h"
@@ -331,6 +332,10 @@ public:
         Result.ProfileProjection = InterpreterProfileProjection::X64MpxV1;
         Result.UndefinedEffects.Diagnostic =
             "MPX requires explicit bounds, enable and branch-state ownership";
+      } else if (ContinuationSnapshot && x86HleEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64HleV1;
+        Result.UndefinedEffects.Diagnostic =
+            "HLE requires explicit native memory and publication ownership";
       } else if (ContinuationSnapshot && x86SnpEncoding(Result.NativeBytes)) {
         Result.ProfileProjection = InterpreterProfileProjection::X64SnpV1;
         Result.UndefinedEffects.Diagnostic =
