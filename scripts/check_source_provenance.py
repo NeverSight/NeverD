@@ -415,6 +415,127 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-hle-completion-2026-11-01.json",
+        rule="private-path",
+        commits=frozenset({
+            "0893b13b74a674fb462c35711d323a2baed7f4c2",
+            "c86798cc87afb1962d01da6f70c5ae87caf93cdf",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 qualification checkout "
+            "and toolchain roots. Revisions, outcomes and artifact hashes "
+            "are retained. Only these exact historical line digests in the "
+            "publication and cleanup commits are covered; current paths, "
+            "future commits and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "5c8e87049719b559ab9f76a98307ac2a9bba8f4032fd877af6d2ee8f104066e8",
+            "6d36d025e5eec9184b091f5ee2a3252091375058ce1ffe1a7570ad81baab477e",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-hyperv-hypercalls-2026-10-31.json",
+        rule="private-path",
+        commits=frozenset({
+            "436a0797ef0ce371140ce5296c128f2adaa9a7ec",
+            "c86798cc87afb1962d01da6f70c5ae87caf93cdf",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 qualification checkout "
+            "and toolchain roots. Revisions, outcomes and artifact hashes "
+            "are retained. Only these exact historical line digests in the "
+            "publication and cleanup commits are covered; current paths, "
+            "future commits and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "0920149cb35315a6b241719976f7e3a50f4a660f837486829520a956e9577f53",
+            "0c56afef280d03fb25722cbd9dddad24d4ba4b86074160a6407e700e24905f80",
+            "0dede1a2eeb2fa71f5c135cc4a3362951147f963928c7a734d8de051dcde1c65",
+            "121beaa1c62f50174579db9004c65b34282c3ce8a21182f34b6d35bc5ec8fa3d",
+            "18d0f8c7ff16af66205886f510c36c200a59b19fb0f9ec0839fcda7c618992b7",
+            "208319c7c05fe796606afbb59a19fddc54e9055d647cc2dd2de52460c414bce2",
+            "2be1c29692dbd5da84b2bf44cf38a2cd28b527d199b32e2b4ad6051eb8d58f67",
+            "2f06334d955a56669f762d02a25962709f5cd4f77b52c75e1bb5d85f4347e6ac",
+            "38c4ab887e38f6fb342c4e30e8e6a56e5ced0a07c15b4bed83deb3ed5c65072c",
+            "39563a2a74a1428dff05ddb96a276d851c32af3401632471e2dd099b5628bd88",
+            "395e55fd3cffc496eb57542243952572e16fb24eecd8c231cac958ef97a6f604",
+            "3bd409e41bbc9f6a63191c169f28c0d45ebadbcf1c28cc8b81b192719d39f205",
+            "4246ba876527cb0942f29463e5c94b4a0f9153e4b72f6578863bb7d7770cd957",
+            "4e602737ff420485effb9c0e30a451948b0faebbd5fe95e3a172403f76876f14",
+            "557fbcdb4f245878cf826b3230e8bc2bcbabf46516b55f878342f11d0acfa8a3",
+            "5abef32298058d3854a53963ce323aeb297d7ff642b4ef49763087f85b5475c9",
+            "5d2b4e0370da3b83a082662f8d1c2569814de002eebce62a9774f039c1670373",
+            "5eef0d9ac78cb60409f09693ee6da9103bbf88183d0a0329a2d6d1dd715de012",
+            "6b764c06e3b58953bbb9d05217825c002436f52d90b3a3200f595b76a98a893d",
+            "76d7f339f1f0cba0f4c40577c6d9351336abe22a3076896010198dcd0d0d798e",
+            "7af1a5bc7395350dc75ff41e63ccbeccd6b17b0423a1eb4f62b8bc9e80251ab1",
+            "8a56452716cfe7a99dad1431b1a5df6ce414645b8e09751f22cff30f2dacfa91",
+            "8d5dda3f0b6282d53abd5a10bd90bdfae704539f89788ea6b9604b10564c1261",
+            "8f97bc38588489655af0aad8e494d45c8da25a640f433d6001f2df62faa68735",
+            "914d8a0fd2b036635a56cf2bc68671652fc2859f52ba427f0d8da9d445977203",
+            "941e385605370a0112b25bf3bba39d38cf08b85296298a9202f4709634eb4f15",
+            "a61a5892b459e4965c7ea6b79418a38e866b185a055f8028837d60e41c92bcc2",
+            "a759d74b4cf0e740e1bad0fa53b2d29bb0e54a3347ad8d99cde0ea55bbd7aa32",
+            "a778f033651d8cc8ac6319ba33b3140901504f9a3a6d0bbf426a1fae7e1c389c",
+            "ab2be4490c6129473b4481380c207f138d120fbd1b3baeda8cf3a6447a8af09d",
+            "ac05f847cde4880064a66e719675773148a207dc720d0b5791f7aa1f118d7791",
+            "ac3994f993505dda2359adcc58f48cc350d2ce1cccce695e7ad9cf33f2fc9678",
+            "b7961aabba5e47ade869200ff7e2e924394229732bf102a2bcbda80068c17298",
+            "d20837610afb0f6476b1a0fe699185c9b7db068b51800c1a229c814fceaa4765",
+            "d5889650fe535eb0a3e8d02fc4c94feaf1e03fe11f00f45cd37c141128a38fa4",
+            "d5a5b40003dc069a70820a4e514ea47e3fe33ffcf6770f2441fb57cc34c321b8",
+            "d6e7bef94f6ad02472b0de2e3fddd65e8816c25e9c4f9c822872911cf25dc9e6",
+            "dae31b1452e5a5dc075f9e4201ac993cea5d3b31531fa2e3b33f0c3cb9bde614",
+            "dbcbe62c2646375c55b24c1beb9c31eec3d61b14bd9f1d6e223d67e9fb6c0157",
+            "f12953a9c5f93a51a463c0ef28308d2e37ac6796e0668abffb059fce09ba19b7",
+            "f19b08ecb47dad559207203231f9bad560f145ef728a129a1b9e2b7b06bf4afa",
+            "f20bc68d41580bd1a41c5b16d1ce7bffc0368dcf1ec500043ad906bdaee7337d",
+            "fbacec7393016727b4157eb34aa321b0b061803993ee4a5b036867b44a097d76",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-rtm-abort-pair-2026-11-01.json",
+        rule="private-path",
+        commits=frozenset({
+            "c86798cc87afb1962d01da6f70c5ae87caf93cdf",
+            "d7f588127eb57b0e30adf02ee24b50e44c83dc37",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 qualification checkout "
+            "and toolchain roots. Revisions, outcomes and artifact hashes "
+            "are retained. Only these exact historical line digests in the "
+            "publication and cleanup commits are covered; current paths, "
+            "future commits and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "6b764c06e3b58953bbb9d05217825c002436f52d90b3a3200f595b76a98a893d",
+            "d5a5b40003dc069a70820a4e514ea47e3fe33ffcf6770f2441fb57cc34c321b8",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-snp-completion-2026-10-31.json",
+        rule="private-path",
+        commits=frozenset({
+            "738bced979e11c5b94a5cfb2d292f7309f8777bf",
+            "c86798cc87afb1962d01da6f70c5ae87caf93cdf",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 qualification checkout "
+            "and toolchain roots. Revisions, outcomes and artifact hashes "
+            "are retained. Only these exact historical line digests in the "
+            "publication and cleanup commits are covered; current paths, "
+            "future commits and external policy findings remain errors."
+        ),
+        line_sha256=frozenset({
+            "5c8e87049719b559ab9f76a98307ac2a9bba8f4032fd877af6d2ee8f104066e8",
+            "6d36d025e5eec9184b091f5ee2a3252091375058ce1ffe1a7570ad81baab477e",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/x86-kvm-hypercalls-2026-10-31.json",
         rule="private-path",
         commits=frozenset({
