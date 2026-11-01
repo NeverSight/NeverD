@@ -25,6 +25,8 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <optional>
