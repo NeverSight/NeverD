@@ -17795,6 +17795,17 @@ strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
 KVM comparisons; source export alone does not extend that native qualification.
 
+`EnvironmentResumesTheActualPhysicalContext`,
+`EnvironmentBudgetsBoundEveryProviderAttempt` and
+`EnvironmentReceivesCompletedPrivilegeState` execute the companion run driver
+through both C routes and both dispatch strategies at O0/O2 with ASan/UBSan.
+Independent full-state and memory oracles check native stack words, replacement
+stacks, arbitrary register clobbers, completed privilege contexts, provider
+declines, unchanged native requests and nonprogressing providers. Invalid
+state, null providers, zero attempt budgets and a CALL consuming the last
+instruction unit retain their stopping semantics. These providers are explicit
+test implementations; they do not qualify native Windows service execution.
+
 `DirectJumpDiscovery*` uses sized ELF symbols to retain real function extents.
 It checks jump chains at the same call depth, deeper CALL frontiers, physical
 stack arguments, cycle deduplication, indirect exits and budget rejection

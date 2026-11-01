@@ -15321,6 +15321,16 @@ Every step still checks its domain and budget; external CALL/RET retain priority
 over exhaustion, while context transitions always stop. Both C routes share
 this owner, and default requests retain their existing switch driver.
 
+`X64ContinuationEnvironment` emits the companion `neverd_x64_run_vN` entry
+without adding work to either selected-instruction driver. An explicit provider
+receives the stopping status and complete represented state, and may request
+resumption at its updated PC. The driver neither marshals ordinary parameters
+nor restores stack/register state after the provider. Provider attempts consume
+a separate caller-owned budget, including declined and nonprogressing attempts;
+invalid state and exhausted translated-instruction budgets remain final stops.
+The provider owns native effects and profile reentry. This is an execution
+interface, not an inferred Windows service contract or an ordinary ABI proof.
+
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
 returns unchanged-state refusal before guest memory, architectural writes or

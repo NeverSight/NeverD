@@ -39,6 +39,15 @@ configurations remain separate coverage.
 
 ## Open
 
+Explicit continuation exports now include a separately bounded environment
+driver. A caller-provided callback receives the complete boundary state and
+can return another physical PC/stack for resumption. Invalid state and
+instruction exhaustion remain final; declined and nonprogressing callbacks
+consume their independent invocation budget. Both dispatch strategies and C
+routes execute public complete-state/memory controls at O0/O2. This closes the
+manual handoff-loop interface gap, not the implementation of Windows services,
+ordinary parameter inference, or automatic ordinary/state conversion.
+
 Guarded scalar index ranges now preserve the comparison/selected-value
 relationship through machine-width wrapping, low-byte transport and
 complementary masks. The stack proof and LLVM pointer projection share the

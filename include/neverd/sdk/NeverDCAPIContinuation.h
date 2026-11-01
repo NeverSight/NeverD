@@ -46,6 +46,12 @@ extern "C" {
 /// their actual post-transfer PC is selected. It uses physical guest stack
 /// bytes, including callback mutations; context transitions still stop.
 /// An unimplemented native request leaves the instruction unexecuted.
+/// The additional neverd_x64_run_vN driver accepts an explicit full-state
+/// environment callback and an independent invocation budget. The provider
+/// owns native/environment effects and may replace the physical stack or PC.
+/// Invalid state and exhausted instruction budgets never invoke it; a null
+/// provider retains the original stopping behavior. This supplies no missing
+/// ordinary arguments or Windows service implementation.
 ///
 /// On success, ManifestJSON receives an independently owned JSON manifest of
 /// exact original bytes, input bindings, state offsets and the C source hash.
