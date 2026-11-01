@@ -137,15 +137,44 @@ std::set<unsigned> absentStackFormals(const MedFunc &Function) {
 
 } // namespace
 
+bool supportsSourceCallSpecialization(const BinaryImage &Image,
+                                      const PipelineResult &Original,
+                                      const SourceViewOptions &View) {
+  return Image.Arch == Arch::X64 && Image.abiFormat() == BinaryFormat::COFF &&
+         Original.OmittedCallees && View.CallTypes.empty() &&
+         View.StackFrame.empty() && View.VariableTypes.empty() &&
+         View.VariableEdits.empty();
+}
+
+std::set<va_t> sourceInlineSupports(const PipelineResult &Original,
+                                    const SourceInlineRequests &Requests,
+                                    const std::set<va_t> &Roots) {
+  if (!Original.OmittedCallees)
+    return {};
+  std::set<va_t> Supports;
+  for (const auto &Body : Original.OmittedCallees->Bodies) {
+    const auto At = Requests.find(Body->Entry);
+    if (At == Requests.end() || Roots.count(Body->Entry) ||
+        !Original.OmittedCallees->SourceOriginalBlocks.count(Body->Entry))
+      continue;
+    const auto Absent = absentStackFormals(*Body);
+    for (unsigned P : At->second)
+      if (Absent.count(P)) {
+        Supports.insert(Body->Entry);
+        break;
+      }
+    if (Supports.size() == limits::pipeline::kSourceInlineCallees)
+      break;
+  }
+  return Supports;
+}
+
 SourceInlineResult specializeUnavailableSourceCalls(
     const BinaryImage &Image, const PipelineResult &Original,
     const llvm::Module &Initial, DebugContext *Debug,
     const PipelineOptions &AnalysisOptions, const SourceViewOptions &View,
     const SourceInlineHighView *High) {
-  if (Image.Arch != Arch::X64 || Image.abiFormat() != BinaryFormat::COFF ||
-      !Original.OmittedCallees || !View.CallTypes.empty() ||
-      !View.StackFrame.empty() || !View.VariableTypes.empty() ||
-      !View.VariableEdits.empty())
+  if (!supportsSourceCallSpecialization(Image, Original, View))
     return {};
 
   std::set<va_t> Roots;
@@ -176,21 +205,7 @@ SourceInlineResult specializeUnavailableSourceCalls(
       Roots.size() > limits::pipeline::kSourceInlineRoots)
     return {};
 
-  std::set<va_t> Supports;
-  for (const auto &Body : Original.OmittedCallees->Bodies) {
-    const auto At = Requests.find(Body->Entry);
-    if (At == Requests.end() || Roots.count(Body->Entry) ||
-        !Original.OmittedCallees->SourceOriginalBlocks.count(Body->Entry))
-      continue;
-    const auto Absent = absentStackFormals(*Body);
-    for (unsigned P : At->second)
-      if (Absent.count(P)) {
-        Supports.insert(Body->Entry);
-        break;
-      }
-    if (Supports.size() == limits::pipeline::kSourceInlineCallees)
-      break;
-  }
+  const auto Supports = sourceInlineSupports(Original, Requests, Roots);
   if (Supports.empty())
     return {};
 
@@ -294,7 +309,7 @@ SourceInlineResult specializeUnavailableSourceCalls(
       llvm::InlineFunctionInfo Info;
       if (llvm::InlineFunction(*Call, Info).isSuccess()) {
         ++Expanded;
-        if (High && Target) {
+        if (Target) {
           auto &Saved = ExpandedBodies[*Target];
           Saved.Parameters = Body.Parameters;
           Saved.Unused.insert(Body.Unused.begin(), Body.Unused.end());
@@ -317,9 +332,11 @@ SourceInlineResult specializeUnavailableSourceCalls(
       llvm::verifyModule(*Result.Module))
     return {};
   Result.Sources->refreshExpressionOrigins();
-  if (High)
-    Result.High = specializeHighSourceBodies(Image, Recovered, Options, Debug,
-                                             ExpandedBodies, *High);
+  Result.PreparedHigh =
+      prepareSpecializedHighSourceCalls(Recovered, std::move(ExpandedBodies));
+  if (High && Result.PreparedHigh)
+    Result.High = projectSpecializedHighSourceCalls(Image, *Result.PreparedHigh,
+                                                    Options, Debug, *High);
   return Result;
 }
 } // namespace neverd
