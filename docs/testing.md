@@ -1920,6 +1920,17 @@ execution of every source architecture.
 whose name binds a prototype, reads the parameters it declares, a system call
 stub's fifth on the stack too, together with any its body reads past them.
 
+`NeverDMedStackDeltaTests` isolates the shared entry-stack offset worker and its
+per-recovery root cache. It checks equal and conflicting PHI chains, both query
+orders at the depth limit, cyclic and overflowing roots, separate functions
+and targets, and bounded retention of absent values. Invalidation cases edit
+PHIs, operands and the reaching store of a saved-stack load. A call-recovery
+regression primes the index before floating-result normalization moves later
+definitions, then requires the following call's stack argument and exact
+indirect import slot to survive. Run the shared ABI suite and
+`NeverDI386CallContractTests` after changing this cache's integration;
+these exercise callers and outgoing arguments beyond the direct query tests.
+
 `NeverDFPParameterMaskTests` runs the shared ABI suite and `FPParameterMask.*`.
 The mask controls retain live bytes, earlier stores, ambiguous definitions and
 unmasked return paths while discarding only fully cleared or replaced bytes.

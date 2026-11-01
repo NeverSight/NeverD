@@ -13,6 +13,7 @@
 
 #include "../../../safety/StackSlotFlow.h"
 #include "MedABIPassDetail.h"
+#include "MedStackDeltaCache.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
@@ -218,7 +219,7 @@ struct ReachingStackPtrResult {
 
 ReachingStackPtrResult
 findReachingStackPtr(const MedFunc &Func, const TargetRegInfo &TRI, int BlockId,
-                     int BeforeIdx, MedDefSiteIndex *Defs = nullptr,
+                     int BeforeIdx, MedStackDeltaCache &StackDeltas,
                      const MedBlockIdIndex *Index = nullptr) {
   // Walk transparent predecessors once and collect every boundary at which the
   // reaching SP becomes concrete: a local SP definition, an SP PHI, or a
@@ -264,7 +265,7 @@ findReachingStackPtr(const MedFunc &Func, const TargetRegInfo &TRI, int BlockId,
   };
   auto MergeBoundary = [&](const MedVar &Value) {
     MergeBasis(Value);
-    MergeDelta(stackPtrDelta(Func, TRI, Value, 0, Defs));
+    MergeDelta(StackDeltas.query(Value));
   };
 
   while (!Worklist.empty()) {
@@ -644,12 +645,13 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
     if (P.Id >= FreshId)
       FreshId = P.Id + 1;
 
-  // Operations are inserted only after the loop below, so the index stays
-  // valid in it. DefSites also covers PHIs, so a PHI added in the loop resets
-  // it. Scanning the function for each stack-pointer chain link made call ABI
-  // recovery quadratic in a 12k-block function.
+  // Operation insertion is deferred until after this loop. Result
+  // normalization can erase operations, so it invalidates every definition
+  // and value cache below. PHI insertion resets the stack-query owner too.
+  // Indexing avoids rescanning the function for each stack-chain link.
   MedDefinitionIndex Definitions(Func);
-  MedDefSiteIndex DefSites(Func);
+  MedStackDeltaCache StackDeltas(Func, TRI);
+  MedDefSiteIndex &DefSites = StackDeltas.definitions();
   // The loop adds no blocks, so one index serves every call's walks.
   const MedBlockIdIndex BlockIds(Func);
   auto lookupDefinition = [&](const MedVar &V) { return Definitions.find(V); };
@@ -836,7 +838,13 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
           !IsDirectImport && CalleeFPReturnSize)
         if (auto SizeIt = CalleeFPReturnSize->find(CI.TargetAddr);
             SizeIt != CalleeFPReturnSize->end())
-          promoteFloatCallResult(Func, Blk, OI, SizeIt->second, TheArch);
+          if (promoteFloatCallResult(Func, Blk, OI, SizeIt->second, TheArch)) {
+            Definitions.invalidate();
+            StackDeltas.invalidate();
+            DefinedValues.clear();
+            DefinedValuesBuilt = false;
+            LeftByCalls.reset();
+          }
 
       const Section *TargetSection =
           !CI.IsIndirect && Img ? Img->getSectionFor(CI.TargetAddr) : nullptr;
@@ -1177,7 +1185,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         auto &Prev = Blk.Ops[J];
         if (Prev.Output.Kind == MedVar::Reg &&
             Prev.Output.RegOff == TRI.StackPointer) {
-          if (auto D = stackPtrDelta(Func, TRI, Prev.Output, 0, &DefSites)) {
+          if (auto D = StackDeltas.query(Prev.Output)) {
             CallSpDelta = *D;
             HaveCallSpDelta = true;
           }
@@ -1192,7 +1200,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       }
       if (!HaveCallSpBasis || !HaveCallSpDelta) {
         ReachingStackPtrResult Reaching = findReachingStackPtr(
-            Func, TRI, Blk.Id, static_cast<int>(OI), &DefSites, &BlockIds);
+            Func, TRI, Blk.Id, static_cast<int>(OI), StackDeltas, &BlockIds);
         if (!HaveCallSpBasis && Reaching.Basis) {
           buildCallSpOffsets(Func, TRI, *Reaching.Basis, 0, CallSpOffsets, 0,
                              &DefSites);
@@ -1209,7 +1217,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
       auto CallRelativeStackOffset =
           [&](const MedVar &Address) -> std::optional<int64_t> {
         if (HaveCallSpDelta)
-          if (auto Delta = stackPtrDelta(Func, TRI, Address, 0, &DefSites))
+          if (auto Delta = StackDeltas.query(Address))
             return safety::detail::checkedStackOffset(*Delta, CallSpDelta,
                                                       /*Subtract=*/true);
         return relStackOff(Func, TRI, Address, CallSpOffsets, 0, &DefSites);
@@ -2023,8 +2031,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               if (Candidate.Opcode != NdOp::STORE || Candidate.NumInputs < 2 ||
                   Candidate.MemoryAddressSpace != NdMemoryAddressSpace::Default)
                 continue;
-              auto D =
-                  stackPtrDelta(Func, TRI, Candidate.Inputs[0], 0, &DefSites);
+              auto D = StackDeltas.query(Candidate.Inputs[0]);
               if (D && *D == *TargetOffset) {
                 MedVar Value = Candidate.Inputs[1];
                 Active.erase(BlockId);
@@ -2063,7 +2070,7 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
               Merge.Output = Merged;
               Merge.Args = std::move(Incoming);
               Block->Phis.push_back(std::move(Merge));
-              DefSites.invalidate();
+              StackDeltas.invalidate();
             }
             Active.erase(BlockId);
             return Merged;

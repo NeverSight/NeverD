@@ -36,6 +36,10 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
     NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}")
 endif()
 
+add_neverd_unittest(NeverDMedStackDeltaTests
+  core/MedStackDeltaTests.cpp
+  LINK_COMPONENTS IRMed)
+
 add_neverd_unittest(NeverDRegistrationCalleeStackTests
   eh/RegistrationCRTBindingsTests.cpp
   eh/RegistrationCRTDataStackTests.cpp

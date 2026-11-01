@@ -1680,6 +1680,18 @@ bodies can supply ABI evidence without becoming output definitions. Register
 pair return evidence is also consumed by HighIR, so a packed call result and
 its definition retain both integer carriers.
 
+`abi/MedStackDeltaCache` owns the definition index and completed entry-stack
+offset queries during one call-ABI recovery. It retains only depth-zero
+answers for values with actual definitions, bounding storage by that function's
+definition inventory. Deeper queries use the original bounded worker; a warm
+root answer cannot supply another query's depth allowance. The owner is local
+to one function and target, and adding a PHI invalidates both the index and
+answers. Floating-result normalization also invalidates every definition and
+value cache when it replaces a result or removes its synthetic integer halves.
+Operation insertion is deferred until queries have finished. Any
+future operand, operation or CFG mutation during recovery must invalidate this
+owner too, including stores that feed a saved-stack reload.
+
 Loader-authenticated import slots retain the same curated call ABI as direct
 import calls. Register argument recovery can expose an untouched incoming
 parameter only after every reaching path preserves it; intervening calls,

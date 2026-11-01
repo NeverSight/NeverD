@@ -30,6 +30,11 @@ class MedDefinitionIndex {
 public:
   explicit MedDefinitionIndex(const MedFunc &Func) : Func(Func) {}
 
+  void invalidate() {
+    Definitions.clear();
+    Built = false;
+  }
+
   /// The operation that defines \p V, or null.
   const MedOp *find(const MedVar &V) {
     if (!Built) {
