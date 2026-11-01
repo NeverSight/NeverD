@@ -53,6 +53,8 @@ struct X64SpecialRegionSelection {
 /// abort pair; only its explicit environment callback executes that pair.
 /// NativeRtmRegions follows canonical XBEGIN bodies/fallbacks and XEND/XTEST
 /// fallthroughs. Its callback owns the entire transaction, including rollback.
+/// Native SGX/SMM profiles select only the supplied entries: each step either
+/// transfers to its native environment or refuses without advancing the PC.
 llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,

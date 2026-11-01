@@ -7,7 +7,7 @@
 
 TEST_F(X64ContinuationExportTest,
        SgxTransferPreservesOriginalSiteAndInputState) {
-  load({0x0f, 0x01, 0xd7, 0x90, 0xc3});
+  load({0x0f, 0x01, 0xd7, 0x66, 0x0f, 0x01, 0xd7, 0xc3});
   const char Request[] = R"JSON({"profile":"native-sgx-v13",
     "mxcsr_mask":"0xffff","instructions":[4096]})JSON";
   const char Provider[] = R"C(
@@ -27,7 +27,7 @@ __attribute__((noreturn)) static void sgx_transfer(const void *opaque,
 )C";
   const char Harness[] = R"C(
 static uint8_t image[832] __attribute__((aligned(64)));
-static neverd_x64_state_v13 state;
+static neverd_x64_state_v13 state __attribute__((aligned(64)));
 static void setup(void) {
     memset(&state,0x5a,sizeof(state)); memset(image,0,sizeof(image));
     state.PC=0x1000; state.RFlags=0x240ed7; state.CR8=13;
@@ -63,7 +63,11 @@ int main(void) {
         if(invalid==0)state.SGX.XState=0;
         if(invalid==1)++state.SGX.XState;
         if(invalid==2)state.SGX.XState=UINT64_MAX-63;
-        if(invalid==3)state.SGX.XState=(uintptr_t)&state;
+        if(invalid==3) {
+            state.SGX.XState=(uintptr_t)&state;
+            // Keep the aliased header valid: only overlap can reject it.
+            memset((uint8_t *)&state+512,0,64);
+        }
         if(invalid==4)*(uint64_t *)(image+512)=8;
         if(invalid==5)*(uint64_t *)(image+520)=1;
         if(invalid==6)image[575]=1;
@@ -136,5 +140,19 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(Code.find("__builtin_ia32_enclu_transfer_at_context"),
               std::string::npos);
     EXPECT_NE(Manifest.find("\"native_requests\": 2"), std::string::npos);
+    execute(Code, R"C(
+#include <stdlib.h>
+int main(void) {
+    neverd_x64_state_v13 state={0};
+    state.RFlags=0x202;state.MXCSR=0x1f80;state.SGX.XState=1;
+    state.PC=0x1003;neverd_x64_state_v13 before=state;
+    if(neverd_step_v13_1003((void *)&state)!=4 ||
+       memcmp(&state,&before,sizeof(state)))abort();
+    state.PC=0x1004;before=state;
+    if(neverd_step_v13_1004((void *)&state)!=4 ||
+       memcmp(&state,&before,sizeof(state)))abort();
+    return 0;
+}
+)C");
   }
 }

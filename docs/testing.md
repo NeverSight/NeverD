@@ -18364,3 +18364,23 @@ memory spaces. Omitting XRSTOR must fail the state oracle. This verifier
 requires Linux x64, KVM SMM with two address spaces, XSAVE and AVX; it fails
 explicitly when the required runtime is unavailable. See
 [the state ownership and hardware boundary](x86-smm-return.md).
+
+### Native SGX original-site input transport
+
+`X64ContinuationExportTest.SgxTransfer*` checks both C routes at O0/O2,
+all three admitted leaves, complete input-bank projection, original-PC and
+entry selection, and rejection before state/image writes. Its overlap case
+uses an aligned state with a valid aliased XSAVE header so other checks cannot
+mask a missing disjointness guard. The adjacent SMM tests also retain prefixed
+instructions as explicit native requests. Run both continuation suites because
+SGX, SMM and SVM share XSAVE admission and SIMD import.
+
+Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to capture C and manifests, then run
+`scripts/isa/x86/verify_sgx_transfer.py --sources CAPTURE --compiler NEVERC
+--compiler-source NEVERC_SOURCE --llvm-bin LLVM_BIN --keep OUTPUT`.
+NeverC and both full-LLVM pass managers compile each route at O0/O2; native
+KVM compares 9,216 input states per profile at the original ENCLU address.
+CR0.AM is enabled with both AC values. Missing XRSTOR and wrong-target mutations
+must fail. The fixture executes zero enclave instructions and requires no SGX
+device; it qualifies transport, not EPC/SSA/AEX or successful enclave execution.
+See [the complete ownership contract](x86-sgx-transfer.md).

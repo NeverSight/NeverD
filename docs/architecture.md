@@ -8872,7 +8872,9 @@ Implicit DS accesses and all enclave checks remain inside the instruction;
 address/segment/REX overrides do not change the operands. Native outputs use
 no stack scratch. Return inference accepts the validated primary completion,
 while strict scalar emulation refuses the environment-dependent operation.
-ENCLU's entry, exit, resume and asynchronous continuation remain unsupported.
+ENCLU's entry, exit, resume and asynchronous continuation remain outside this
+bounded returning ABI. The separate native SGX profile described below binds
+the original executable instruction and native enclave environment.
 Far/interrupt returns do not use the bounded system contract or ordinary ABI
 RETURN. Their terminal LowIR intrinsics retain the original instruction
 boundary; ordinary source still refuses the unowned frame and nonlocal
@@ -15678,4 +15680,8 @@ LLVM/NeverC interface restores the explicit input bank and jumps to the
 immutable original instruction site. The original ENCLU therefore owns its
 PC-dependent outputs and native enclave/AEP continuation. Neither C emitter
 relocates EENTER and substitutes a guessed RCX value or models EPC/SSA/AEX.
+SGX/SMM entry selection stops at each requested instruction because these
+profiles have no continuing software step. The reader retains raw ENCLU/RSM
+bytes, including prefixed forms; the owning projection alone admits the exact
+encoding. Other forms remain explicit native requests without state changes.
 See [the SGX state and native-runtime contract](x86-sgx-transfer.md).

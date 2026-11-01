@@ -23,6 +23,9 @@ declare an ordinary returning C enclave-call ABI or emulate EPC/SSA/AEX.
 ```
 
 Use the actual processor's MXCSR mask. `entries` selection is also supported.
+This terminal profile selects each entry instruction alone, without ordinary
+function fallthrough discovery. Returning ENCLU leaves belong to a separate
+contract; they cannot make V13 scan beyond its native transfer.
 V13 extends the V4 storage prefix to 2464 bytes. The `SGX` field starts at
 offset 2320 and contains sixteen u64 GPR slots, u64 RFLAGS and a u64 `XState`
 address. Only `SGX.XState` is an input in that transport field; the explicit
