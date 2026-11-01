@@ -17,7 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/backend/llvm/X86/LLVMX86DivRemAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86ShadowStackAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86StackEffects.h"
@@ -1706,7 +1706,8 @@ llvm::Value *MedLLVMEmitter::emitX86WideDivRem(llvm::IRBuilder<> &Builder,
                                                llvm::Value *Divisor,
                                                bool IsSigned, bool WantRem) {
   // A double-width DIV/IDIV (the hardware quotient/remainder split) is lowered
-  // back to a single native divide via inline asm, so the recompiled object
+  // back to the native quotient/remainder intrinsic (or the legacy assembly
+  // contract on older SDKs), so the recompiled object
   // never pulls in a compiler-rt division libcall that the original binary did
   // not have:
   //   * x86-64 : i128 dividend (RDX:RAX) -> divq/idivq
@@ -1733,15 +1734,22 @@ llvm::Value *MedLLVMEmitter::emitX86WideDivRem(llvm::IRBuilder<> &Builder,
   llvm::Value *Hi = Builder.CreateTrunc(HiShifted, HalfTy, "div.hi");
   llvm::Value *DivHalf = Builder.CreateTrunc(Divisor, HalfTy, "div.src");
 
-  auto *RetTy = llvm::StructType::get(*Ctx, {HalfTy, HalfTy});
-  auto *FnTy = llvm::FunctionType::get(RetTy, {HalfTy, HalfTy, HalfTy}, false);
-  auto *IA = llvm::InlineAsm::get(FnTy, x86DivRemAssembly({HalfBits, IsSigned}),
-                                  X86DivRemAsmConstraints,
-                                  /*hasSideEffects=*/true);
-
-  llvm::Value *AsmResult = Builder.CreateCall(IA, {Lo, Hi, DivHalf}, "divrem");
+  llvm::Value *Pair;
+  if (const auto ID = llvm::Intrinsic::lookupIntrinsicID(
+          x86DivRemNativeName({HalfBits, IsSigned}))) {
+    Pair = Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(Mod, ID),
+                              {Lo, Hi, DivHalf}, "divrem");
+  } else {
+    auto *RetTy = llvm::StructType::get(*Ctx, {HalfTy, HalfTy});
+    auto *FnTy =
+        llvm::FunctionType::get(RetTy, {HalfTy, HalfTy, HalfTy}, false);
+    auto *IA = llvm::InlineAsm::get(
+        FnTy, x86DivRemAssembly({HalfBits, IsSigned}), X86DivRemAsmConstraints,
+        /*hasSideEffects=*/true);
+    Pair = Builder.CreateCall(IA, {Lo, Hi, DivHalf}, "divrem");
+  }
   unsigned Idx = WantRem ? 1 : 0;
-  llvm::Value *RHalf = Builder.CreateExtractValue(AsmResult, {Idx}, "divrem.r");
+  llvm::Value *RHalf = Builder.CreateExtractValue(Pair, {Idx}, "divrem.r");
 
   if (IsSigned)
     return Builder.CreateSExt(RHalf, WideTy, "divrem.ext");

@@ -3381,3 +3381,39 @@ See [the qualification record](evidence/x86-division-2026-11-01.json) and
 [event contract](x86-event-delivery.md). Memory divisors and their access
 faults, redundant prefixes, recursive delivery faults, the legacy i386 source
 dispatcher and asynchronous scheduling retain their separate boundaries.
+
+## Native full-dividend division compiler interfaces
+
+The LLVM fork provides `llvm.x86.udivrem8/16/32/64` and
+`llvm.x86.sdivrem8/16/32/64`. Each takes the low half, high half and divisor
+as equally sized bit patterns and returns the quotient/remainder pair from
+one native DIV/IDIV. A zero divisor or out-of-range quotient retains #DE,
+including when both results are unused. The byte operation transports full AX
+without an AH/REX allocation conflict. Code32 supports 8/16/32-bit operands;
+code64 and x32 also support 64 bits. Code16 is rejected.
+
+NeverC's corresponding `__builtin_ia32_[us]divrem*` builtins return the quotient
+and store the remainder through their fourth argument only after completion.
+The Microsoft `_udiv128(high, low, divisor, remainder)` spelling uses the same
+native operation with its own argument order. It no longer lowers overflowing
+quotients to ordinary i128 arithmetic and truncation.
+
+NeverD's double-width LLVM emitter selects the intrinsic when the SDK supplies
+it. LLVM-to-C validates the native signature and effects, and shares one
+result-pair renderer with the earlier assembly contract. Generated C selects
+the NeverC builtin where available and retains a native assembly fallback for
+other compilers. The explicit continuation's invalid-state/#DE delivery checks
+remain at their existing owner before arithmetic; ordinary typed source still
+retains its division precondition contract. This compiler interface does not
+add general memory-fault recovery or original-PC event continuation.
+
+The [native division qualification](evidence/x86-native-division-2026-11-01.json)
+records 662 passing NeverD tests across the native and r6 SDKs, without skips.
+LLVM/NeverC execute 14 native i386/x64 compiler profiles with 718,848 original
+instruction comparisons, including 416,808 divide errors. The LLVM-C pair
+projection adds 27,648 comparisons across both SDKs and both C compilers;
+exported continuations add 109,824 Clang and 164,736 NeverC/full-LLVM
+comparisons. Sixteen LLVM code-generation regressions, 21 NeverC frontend
+regressions and ten generated-table tests pass. The recorded `_udiv128`
+counterexample distinguishes the old optimized-away overflow from the new
+native call. No release, SDK pin or LLVM gitlink is changed by this work.

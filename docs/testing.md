@@ -18461,3 +18461,14 @@ CDQ/CQO and full double-width dividend roundtrips without rebuilding the large
 aggregate semantic target. The same tests remain in `NeverDSemanticTests`.
 These checks do not extend the profile to memory-divisor faults, nested #DF or
 a complete legacy i386 continuation dispatcher.
+
+Native integer division also has focused LLVM-C checks in
+`NeverDLLVMCValueTests`: filter `*X86*Div*:*NativeAssemblyKeepsOperandSnapshots*`.
+They cover the original assembly contract, the new intrinsic's complete effect
+and type validation, both outputs, ignored-result faults and operand snapshots.
+Set `NEVERD_TEST_NEVERC` to exercise the native builtin branch; ordinary Clang
+executes the assembly fallback. The LLVM fork's `native-divrem.ll` checks all
+code modes/formats and NeverC's `verify_native_division.py` executes actual
+Linux i386/x64 processes, comparing native results and #DE instruction/register
+state. The latter requires host 32-bit development libraries for its i386
+harness; a missing toolchain is a failed prerequisite, never a skipped pass.

@@ -19,7 +19,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
-#include "neverd/backend/llvm/X86/LLVMX86DivRemAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/X86APXAtomic.h"
 #include "neverd/backend/llvm/X86/X86RepStateAsm.h"
 #include "neverd/backend/llvm/X86/X86SgxAsm.h"
@@ -41,6 +41,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
@@ -1536,6 +1537,8 @@ static int check_fault(void (*operation)(uint64_t,uint64_t,uint64_t,void*),
 #endif
 }
 
+#include "../x86/X86NativeDivisionTests.inc"
+
 TEST(LLVMCValues, NativeAssemblyKeepsOperandSnapshotsAcrossBranches) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "requires native Linux i386/x64 execution";
@@ -1593,7 +1596,7 @@ TEST(LLVMCValues, NativeAssemblyKeepsOperandSnapshotsAcrossBranches) {
             neverd::X86DivRemAsmConstraints, true);
         auto *Result = Builder.CreateCall(
             Assembly,
-            {llvm::ConstantInt::get(Word, Signed ? uint64_t(-43) : 43),
+            {llvm::ConstantInt::get(Word, (Signed ? uint64_t(-43) : 43) & Mask),
              llvm::ConstantInt::get(Word, Signed ? Mask : 0),
              Builder.CreateTrunc(Builder.CreateLoad(Wide, Slot), Word)});
         auto *Quotient = Builder.CreateZExtOrTrunc(

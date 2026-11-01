@@ -20,6 +20,7 @@
 #include "../render/X86/X86AtomicRmw.h"
 #include "../render/X86/X86BoundedLeaf.h"
 #include "../render/X86/X86CompressExpand.h"
+#include "../render/X86/X86DivRem.h"
 #include "../render/X86/X86FPStateHelpers.h"
 #include "../render/X86/X86FourSource.h"
 #include "../render/X86/X86Hle.h"
@@ -49,7 +50,7 @@
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
-#include "neverd/backend/llvm/X86/LLVMX86DivRemAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86SHA.h"
 #include "neverd/backend/llvm/X86/LLVMX86ShadowStackAsm.h"
@@ -4099,6 +4100,17 @@ void LLVMCWriter::writeGEP(llvm::GetElementPtrInst &GEP,
 }
 
 bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
+  if (const auto Divide = classifyX86DivRemNative(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    OS << renderX86DivRemCall(
+        *Divide,
+        {valueStr(Call.getArgOperand(0)), valueStr(Call.getArgOperand(1)),
+         valueStr(Call.getArgOperand(2))},
+        valueFeedsPrintedUse(&Call) ? getName(&Call) : "",
+        {freshVar("divide_quotient"), freshVar("divide_remainder"),
+         freshVar("divide_divisor"), freshVar("divide_ax")});
+    return true;
+  }
   const llvm::Function *Callee = Call.getCalledFunction();
   if (!Callee)
     return false;
@@ -5036,27 +5048,14 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     if ((Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64) ||
         (Divide->Bits == 64 && Opts.TheArch != Arch::X64))
       llvm::report_fatal_error("native x86 divide target/type mismatch");
-    const std::string Quotient = freshVar("divide_quotient");
-    const std::string Remainder = freshVar("divide_remainder");
     emitIndent(Indent);
-    OS << "{ uint" << Divide->Bits << "_t " << Quotient << " = "
-       << valueStr(Call.getArgOperand(0)) << ";\n";
-    emitIndent(Indent + 1);
-    OS << "uint" << Divide->Bits << "_t " << Remainder << " = "
-       << valueStr(Call.getArgOperand(1)) << ";\n";
-    emitIndent(Indent + 1);
-    OS << "__asm__ volatile(\"" << x86DivRemMnemonic(*Divide)
-       << " %2\" : \"+a\"(" << Quotient << "), \"+d\"(" << Remainder
-       << ") : \"r\"((uint" << Divide->Bits << "_t)("
-       << valueStr(Call.getArgOperand(2)) << ")) : \"cc\");\n";
-    if (ResultLive && !Call.use_empty()) {
-      emitIndent(Indent + 1);
-      OS << Name << ".field_0 = " << Quotient << ";\n";
-      emitIndent(Indent + 1);
-      OS << Name << ".field_1 = " << Remainder << ";\n";
-    }
-    emitIndent(Indent);
-    OS << "}\n";
+    OS << renderX86DivRemCall(
+        *Divide,
+        {valueStr(Call.getArgOperand(0)), valueStr(Call.getArgOperand(1)),
+         valueStr(Call.getArgOperand(2))},
+        ResultLive && !Call.use_empty() ? Name : "",
+        {freshVar("divide_quotient"), freshVar("divide_remainder"),
+         freshVar("divide_divisor"), freshVar("divide_ax")});
     return true;
   }
 

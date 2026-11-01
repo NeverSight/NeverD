@@ -84,6 +84,14 @@ Its port recognizer zero-extends a validated 8-bit immediate from the LLVM
 constant before rendering C. DX operands retain their full 16-bit value;
 the signed spelling of an instruction byte cannot choose a different port.
 
+`backend/llvm/X86/LLVMX86DivRem.h` owns the full-dividend native division
+signature and the earlier assembly contract. The LLVM emitter selects the
+available SDK interface; LLVM-to-C validates it before using the shared
+`render/X86/X86DivRem.h` result-pair renderer. The renderer snapshots all three
+operands before writing either output and retains native divide errors even
+for unused results. Explicit continuation fault delivery remains owned by
+`X64ContinuationDivision.h`, before arithmetic and state publication.
+
 `X86SystemRegisterAsm.h` owns CR/DR register selection, native width and native
 LLVM/C API names. LLVM emission and both C projections share that contract.
 The LLVM-to-C adapter validates the complete native call or legacy assembly
