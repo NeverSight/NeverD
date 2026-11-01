@@ -48,7 +48,7 @@ constexpr int SmokeDelayMs = 1500;
 
 void restoreGeometry(MainWindow &window) {
   const auto geometry = QSettings().value(GeometryKey).toByteArray();
-  if (!geometry.isEmpty() && window.restoreGeometry(geometry))
+  if (!geometry.isEmpty() && window.restoreWindowedGeometry(geometry))
     return;
   const QRect available = window.screen()->availableGeometry();
   const QSize size(
@@ -360,7 +360,7 @@ int main(int argc, char **argv) {
   if (!greet && !asksFirst)
     window.showWorkbench();
   QObject::connect(&app, &QApplication::aboutToQuit, &window, [&window] {
-    QSettings().setValue(GeometryKey, window.saveGeometry());
+    QSettings().setValue(GeometryKey, window.saveWindowedGeometry());
   });
   // Cocoa can close the window while already handling an application quit.
   // Do not reenter native termination from inside that close event.

@@ -4789,6 +4789,16 @@ controls, full-size close targets, and a padlock that opens and closes with the
 lock over the caption's own color. `doubleClickDetachStartsLocked` and
 `lockedDragsStayFloating` check the default lock, caption movement and rejected
 tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
+`quickStartChoosesWorkbenchSize` checks that accepting the startup greeting,
+including opening a recent file, maximizes the workbench, while reopening the
+dialog over a visible workbench preserves its state. `workbenchReopensWindowed`
+checks saved normal/maximized geometry, F11 from either state and legacy
+full-screen settings before loading a file. `oldFullscreenLayoutsKeepStartupGeometry`
+checks that global and project pane layouts cannot restore full screen.
+`framedWindowEdgesResize` checks native Windows hit targets and edge/corner
+drags on Quick Start and a loaded workbench, including maximize/restore.
+These workbench cases use the fixture worker when it is built. Native drag
+coverage requires the Windows platform plugin; offscreen reports it as skipped.
 `floatingEdgesResizeWithoutDocking` resizes all four edges and all four corners
 with the lock both enabled and disabled, without opening a docking preview.
 Offscreen pointer actions send Qt events to their widgets instead of native

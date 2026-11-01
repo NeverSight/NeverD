@@ -5944,6 +5944,8 @@ void MainWindow::showQuickStart() {
     }
     // A chosen file shows the workbench as it starts to load, after the
     // questions asked before the load greet alone too.
+    if (greeting)
+      maximizeWorkbenchOnShow_ = true;
     if (start == QuickStartDialog::Start::New)
       chooseLoader(file);
     else if (start == QuickStartDialog::Start::Previous)
@@ -5962,7 +5964,24 @@ void MainWindow::showWorkbench() {
   initializeLayout();
   gnome::boundMaximumSize(*this);
   show();
+  // Frameless Windows maximization must follow the first native Show so Qt
+  // retains a valid normal rectangle for the restore button and edge drags.
+  if (std::exchange(maximizeWorkbenchOnShow_, false)) {
+    if (frame_)
+      frame_->setWindowState(Qt::WindowMaximized);
+    else
+      showMaximized();
+  }
   gnome::widenResizeEdges(*this);
+}
+
+QByteArray MainWindow::saveWindowedGeometry() const {
+  return frame_ ? frame_->saveWindowedGeometry() : saveGeometry();
+}
+
+bool MainWindow::restoreWindowedGeometry(const QByteArray &geometry) {
+  return frame_ ? frame_->restoreWindowedGeometry(geometry)
+                : restoreGeometry(geometry);
 }
 
 QHash<QString, QByteArray> MainWindow::projectState() const {
