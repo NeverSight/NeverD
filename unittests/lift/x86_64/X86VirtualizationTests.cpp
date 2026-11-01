@@ -214,6 +214,49 @@ TEST(X86Virtualization, KvmAbiRequiresFiveNaturalWidthValues) {
     }
 }
 
+TEST(X86Virtualization, SgxTransferRequiresACompleteBankAndOriginalPC) {
+  LowOp Op{.Opcode = NdOp::INTRINSIC};
+  Op.addInput(NdVar::cst(uint64_t(Intrinsic::X86SgxTransferAtContext), 2));
+  Op.addInput(NdVar::reg(x86reg::RDI, 8));
+  Op.addInput(NdVar::scalar(0xffff800012345678ULL, 8));
+  const auto Valid = [&](const LowOp &Candidate, Arch A = Arch::X64) {
+    return x86VirtualizationShapeIsValid(
+        Intrinsic::X86SgxTransferAtContext,
+        x86VirtualizationLowShape(Candidate, A));
+  };
+  EXPECT_TRUE(Valid(Op));
+  EXPECT_FALSE(Valid(Op, Arch::X86));
+  EXPECT_FALSE(Valid(Op, Arch::AArch64));
+  EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X86SgxTransferAtContext));
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    auto Bad = Op;
+    switch (Mutation) {
+    case 0:
+      Bad.Inputs[1].Size = 4;
+      break;
+    case 1:
+      Bad.Inputs[2] = NdVar::reg(x86reg::RCX, 8);
+      break;
+    case 2:
+      Bad.Inputs[2].Size = 4;
+      break;
+    case 3:
+      Bad.Output = NdVar::reg(x86reg::RAX, 8);
+      break;
+    case 4:
+      Bad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 5:
+      Bad.MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 6:
+      Bad.NumInputs = 2;
+      break;
+    }
+    EXPECT_FALSE(Valid(Bad)) << Mutation;
+  }
+}
+
 TEST(X86Virtualization, VmrunContextRequiresAnExplicitPointerAndConstantWidth) {
   LowOp Op{.Opcode = NdOp::INTRINSIC};
   Op.addInput(NdVar::cst(uint64_t(Intrinsic::X86SvmRunContext), 2));

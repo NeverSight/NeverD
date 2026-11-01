@@ -345,8 +345,13 @@ public:
         Result.ProfileProjection = InterpreterProfileProjection::X64HypercallV1;
         Result.UndefinedEffects.Diagnostic =
             "hypercall requires an explicit hypervisor register/state ABI";
-      } else if (ContinuationSnapshot && Insn.Id == X86_INS_RSM &&
-                 Result.NativeBytes == std::vector<uint8_t>({0x0f, 0xaa})) {
+      } else if (ContinuationSnapshot && Insn.Id == X86_INS_ENCLU) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64SgxTransferV1;
+        Result.UndefinedEffects.Diagnostic =
+            "ENCLU transfer requires native enclave state and original code "
+            "mapping";
+      } else if (ContinuationSnapshot && Insn.Id == X86_INS_RSM) {
         Result.ProfileProjection = InterpreterProfileProjection::X64SmmReturnV1;
         Result.UndefinedEffects.Diagnostic =
             "RSM requires active SMM and explicit software state ownership";

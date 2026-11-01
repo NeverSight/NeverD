@@ -33,6 +33,7 @@ inline bool intrinsicNeverReturns(Intrinsic Id,
   case Intrinsic::X86Skinit:
   case Intrinsic::X86Sysenter:
   case Intrinsic::X86SmmReturnContext:
+  case Intrinsic::X86SgxTransferAtContext:
     return true;
   case Intrinsic::IntN:
     return Operand && isX86NoReturnInterrupt(*Operand);

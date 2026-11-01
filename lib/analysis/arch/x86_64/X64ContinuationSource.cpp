@@ -18,6 +18,7 @@
 #include "X64ContinuationHle.h"
 #include "X64ContinuationMpx.h"
 #include "X64ContinuationNativeRegisters.h"
+#include "X64ContinuationSgx.h"
 #include "X64ContinuationSmm.h"
 #include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
@@ -68,11 +69,16 @@ using StateV9 = X64ContinuationStateV9;
 using StateV10 = X64ContinuationStateV10;
 using StateV11 = X64ContinuationStateV11;
 using StateV12 = X64ContinuationStateV12;
+using StateV13 = X64ContinuationStateV13;
 using Segment = X64ContinuationSegment;
 using Exit = X64ContinuationExitV1;
 using Flags = detail::X64MachineFlags;
 constexpr uint64_t StatePointer = uint64_t{1} << 32;
 constexpr uint64_t ScratchBase = uint64_t{1} << 61;
+
+bool hasSgxState(const X64ContinuationSourceOptions &Options) {
+  return Options.Profile == X64ContinuationProfile::NativeSgxNoFaultV13;
+}
 
 bool hasSmmState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile == X64ContinuationProfile::NativeSmmNoFaultV12;
@@ -113,7 +119,7 @@ bool hasFaultAddressState(const X64ContinuationSourceOptions &Options) {
   return Options.Profile ==
              X64ContinuationProfile::KernelFaultAddressNoFaultV4 ||
          hasReturnState(Options) || hasSvmState(Options) ||
-         hasMpxState(Options) || hasSmmState(Options);
+         hasMpxState(Options) || hasSmmState(Options) || hasSgxState(Options);
 }
 
 bool hasSmapState(const X64ContinuationSourceOptions &Options) {
@@ -200,6 +206,8 @@ static_assert(offsetof(StateV11, MPXSupported) == 2408);
 static_assert(sizeof(StateV11) == 2416);
 static_assert(offsetof(StateV12, SMM) == 2320);
 static_assert(sizeof(StateV12) == 2368);
+static_assert(offsetof(StateV13, SGX) == 2320);
+static_assert(sizeof(StateV13) == 2464);
 
 llvm::Error invalid(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s",
@@ -1131,8 +1139,10 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool FredReturnState = hasFredReturnState(Options);
   const bool SvmState = hasSvmState(Options);
   const bool SmmState = hasSmmState(Options);
+  const bool SgxState = hasSgxState(Options);
   const bool MpxState = hasMpxState(Options);
-  Result.StateVersion = SmmState             ? 12
+  Result.StateVersion = SgxState             ? 13
+                        : SmmState           ? 12
                         : MpxState           ? 11
                         : SvmState           ? 10
                         : FredReturnState    ? 9
@@ -1144,7 +1154,8 @@ buildInstruction(SpecializationInstruction Instruction,
                         : Smap               ? 3
                         : Controls           ? 2
                                              : 1;
-  Result.StateBytes = SmmState             ? sizeof(StateV12)
+  Result.StateBytes = SgxState             ? sizeof(StateV13)
+                      : SmmState           ? sizeof(StateV12)
                       : MpxState           ? sizeof(StateV11)
                       : SvmState           ? sizeof(StateV10)
                       : FredReturnState    ? sizeof(StateV9)
@@ -1155,7 +1166,8 @@ buildInstruction(SpecializationInstruction Instruction,
                       : FaultAddress       ? sizeof(StateV4)
                       : Controls           ? sizeof(StateV2)
                                            : sizeof(State);
-  Function.Name = (SmmState             ? "neverd_step_v12_"
+  Function.Name = (SgxState             ? "neverd_step_v13_"
+                   : SmmState           ? "neverd_step_v12_"
                    : MpxState           ? "neverd_step_v11_"
                    : SvmState           ? "neverd_step_v10_"
                    : FredReturnState    ? "neverd_step_v9_"
@@ -1282,6 +1294,13 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.NativeBytes == std::vector<uint8_t>({0x0f, 0xaa});
   if (SmmState && !SmmReturn)
     RequireNative("the SMM profile only owns canonical native RSM");
+  const bool SgxTransfer =
+      SgxState &&
+      Instruction.ProfileProjection ==
+          InterpreterProfileProjection::X64SgxTransferV1 &&
+      Instruction.NativeBytes == std::vector<uint8_t>({0x0f, 0x01, 0xd7});
+  if (SgxState && !SgxTransfer)
+    RequireNative("the SGX profile only owns canonical original-site ENCLU");
   const auto Vmrun = SvmState && Instruction.ProfileProjection ==
                                      InterpreterProfileProjection::X64SvmRunV1
                          ? x64VmrunAddressWidth(Instruction.NativeBytes)
@@ -1309,14 +1328,15 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
-       !Hypercall && !Snp && !Hle && !SmmReturn && !UndefinedInstruction &&
+       !Hypercall && !Snp && !Hle && !SmmReturn && !SgxTransfer &&
+       !UndefinedInstruction &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
        !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle &&
-       !SmmReturn && !UndefinedInstruction))
+       !SmmReturn && !SgxTransfer && !UndefinedInstruction))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1351,7 +1371,7 @@ buildInstruction(SpecializationInstruction Instruction,
                      (Op.Opcode == NdOp::INTRINSIC && !Alignment) ||
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
-        !Interrupt && !SmmReturn && !UndefinedInstruction &&
+        !Interrupt && !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
         !supportedOperation(Op, Options, WideDivision)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
@@ -1432,8 +1452,9 @@ buildInstruction(SpecializationInstruction Instruction,
              {Guard.load(offsetof(State, PC)), constant(Result.Address)});
   const NdVar Packed = Guard.load(offsetof(State, RFlags));
   const uint64_t EntryFlags =
-      (Interrupt || FredReturn || UndefinedInstruction ||
-       UserInterrupt == detail::X64UserInterrupt::Return)
+      SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
+      : (Interrupt || FredReturn || UndefinedInstruction ||
+         UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
       : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit ||
          Vmrun || SmmReturn)
@@ -1634,6 +1655,8 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (Mpx) {
     detail::X64ContinuationMpx<Writer>(W).execute(
         *Mpx, Instruction.Fallthrough.Address);
+  } else if (SgxTransfer) {
+    detail::X64ContinuationSgx<Writer>(W).execute(Result.Address);
   } else if (SmmReturn) {
     detail::X64ContinuationSmm<Writer>(W).execute();
   } else if (Vmrun) {

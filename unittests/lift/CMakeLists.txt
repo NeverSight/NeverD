@@ -111,6 +111,15 @@ add_neverd_unittest(NeverDConstantBranchSourceTests
   LINK_COMPONENTS Pipeline BackendC
 )
 
+add_neverd_unittest(NeverDUnaryIdentitySourceTests
+  core/UnaryIdentitySourceTests.cpp
+  LINK_COMPONENTS Pipeline BackendC
+)
+if(NEVERD_TEST_CLANG_EXECUTABLE)
+  target_compile_definitions(NeverDUnaryIdentitySourceTests PRIVATE
+    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+endif()
+
 add_neverd_unittest(NeverDFiniteScalarBranchTests
   core/FiniteScalarBranchTests.cpp
   LINK_COMPONENTS IRLow Lift

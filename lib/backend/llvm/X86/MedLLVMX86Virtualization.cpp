@@ -108,19 +108,36 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
     Function->addFnAttr(llvm::Attribute::NoUnwind);
     return Builder.CreateCall(Callee, Arguments, "kvm.status");
   }
-  if (Id == Intrinsic::X86SmmReturnContext) {
+  if (Id == Intrinsic::X86SmmReturnContext ||
+      Id == Intrinsic::X86SgxTransferAtContext) {
+    const bool Sgx = Id == Intrinsic::X86SgxTransferAtContext;
     auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
                                            Builder.getInt8Ty(), Builder);
-    auto *Type = llvm::FunctionType::get(Builder.getVoidTy(),
-                                         {Builder.getPtrTy()}, false);
-    auto Callee = Mod->getOrInsertFunction("llvm.x86.rsm.context", Type);
+    std::vector<llvm::Type *> Types{Builder.getPtrTy()};
+    if (Sgx)
+      Types.push_back(Builder.getInt64Ty());
+    auto *Type = llvm::FunctionType::get(Builder.getVoidTy(), Types, false);
+    auto Callee =
+        Mod->getOrInsertFunction(std::string("llvm.x86.") + C.Mnemonic, Type);
     auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
     Function->setMemoryEffects(llvm::MemoryEffects::unknown());
     Function->addFnAttr(llvm::Attribute::Convergent);
     Function->addFnAttr(llvm::Attribute::NoDuplicate);
     Function->addFnAttr(llvm::Attribute::NoUnwind);
     Function->addFnAttr(llvm::Attribute::NoReturn);
-    Builder.CreateCall(Callee, {Pointer});
+    std::vector<llvm::Value *> Arguments{Pointer};
+    if (Sgx) {
+      if (Function->getIntrinsicID())
+        Function->addParamAttr(1, llvm::Attribute::ImmArg);
+      Arguments.push_back(Builder.getInt64(Op.Inputs[2].ConstVal));
+      auto *Owner = Builder.GetInsertBlock()->getParent();
+      auto Features =
+          Owner->getFnAttribute("target-features").getValueAsString().str();
+      Owner->addFnAttr("target-features", Features.empty()
+                                              ? "+sgx,+xsave"
+                                              : Features + ",+sgx,+xsave");
+    }
+    Builder.CreateCall(Callee, Arguments);
     return nullptr;
   }
   if (Id == Intrinsic::X86SvmRunContext) {

@@ -168,6 +168,7 @@ __attribute__((noinline)) void generated_rsm_context_{variant}(
               "complete_state_pairs": sum(p["complete_state_pairs"] for p in profiles),
               "fixture_sha256": digest(fixture),
               "fixture_header_sha256": digest(fixture.with_name("KvmTransferFixture.h")),
+              "xstate_fixture_header_sha256": digest(fixture.with_name("NativeXStateFixture.h")),
               "tools": {name: {"sha256": digest(path)} for name, path in tools.items()},
               "scope": "KVM-mediated native SMM, code64, XCR0=7; software state plus ambient SMI image"}
     (output / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")

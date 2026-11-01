@@ -45,6 +45,13 @@ extern "C" {
 /// Successful transfer abandons the compiler frame and the bounded driver;
 /// hardware consumes the ambient SMI save image. Invalid state returns 5.
 /// This does not emulate SMI entry or supply SMRAM, other MSRs or devices.
+/// native-sgx-v13 extends V4 to 2464 bytes and transports GPR/flags/x87/SIMD
+/// state to canonical ENCLU leaves 2/3/4 at the original executable address.
+/// It requires mxcsr_mask and native CPL3 code64 SGX, XCR0=7, IF=1, IOPL=0,
+/// CET disabled and the documented original enclave/runtime/memory domain.
+/// The terminal jump preserves EENTER's observable next PC; original native
+/// continuation/AEP code owns subsequent execution. It supplies no software
+/// EPC/SSA/AEX model or fault/async delivery during input transport.
 ///
 /// V6 event_delivery exports neverd_x64_deliver_event_v6 for an explicit
 /// selected fault/trap/IRQ/NMI, including compatibility entry and CPL0..3.

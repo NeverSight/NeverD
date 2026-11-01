@@ -6,7 +6,7 @@
 // Included by X64ContinuationExportTests.cpp inside its fixture namespace.
 
 TEST_F(X64ContinuationExportTest, SmmReturnImportsSoftwareOwnedState) {
-  load({0x0f, 0xaa, 0x90, 0xc3});
+  load({0x0f, 0xaa, 0x90, 0x66, 0x0f, 0xaa, 0xc3});
   const char Request[] = R"JSON({"profile":"native-smm-v12",
     "mxcsr_mask":"0xffff", "segment_base_msr_address_bits":48,
     "instructions":[4096]})JSON";
@@ -25,7 +25,7 @@ __attribute__((noreturn)) static void smm_transfer(const void *opaque) {
 )C";
   const char Harness[] = R"C(
 static uint8_t image[832] __attribute__((aligned(64)));
-static neverd_x64_state_v12 state;
+static neverd_x64_state_v12 state __attribute__((aligned(64)));
 static void setup(void) {
     memset(&state, 0x5a, sizeof(state)); memset(image,0,sizeof(image));
     state.PC=0x1000; state.RFlags=0x246; state.CR8=13;
@@ -60,7 +60,10 @@ int main(void) {
         if(invalid==0)state.SMM.XState=0;
         if(invalid==1)++state.SMM.XState;
         if(invalid==2)state.SMM.XState=UINT64_MAX-63;
-        if(invalid==3)state.SMM.XState=(uintptr_t)&state;
+        if(invalid==3) {
+            state.SMM.XState=(uintptr_t)&state;
+            memset((uint8_t *)&state+512,0,64);
+        }
         if(invalid==4)*(uint64_t *)(image+512)=8;
         if(invalid==5)*(uint64_t *)(image+520)=1;
         if(invalid==6)image[575]=1;
@@ -100,7 +103,7 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationExportTest, SmmReturnRequiresItsBoundEnvironment) {
-  load({0x0f, 0xaa, 0x90, 0xc3});
+  load({0x0f, 0xaa, 0x90, 0x66, 0x0f, 0xaa, 0xc3});
   for (
       const char *Request :
       {R"({"profile":"native-smm-v12","mxcsr_mask":"0xffff","instructions":[4096]})",
@@ -115,9 +118,23 @@ TEST_F(X64ContinuationExportTest, SmmReturnRequiresItsBoundEnvironment) {
   }
   for (bool LLVM : {false, true}) {
     auto [Code, Manifest] = source(
-        R"({"profile":"native-smm-v12","mxcsr_mask":"0xffff","segment_base_msr_address_bits":48,"instructions":[4098]})",
+        R"({"profile":"native-smm-v12","mxcsr_mask":"0xffff","segment_base_msr_address_bits":48,"instructions":[4098,4099]})",
         LLVM, 12);
     EXPECT_EQ(Code.find("__builtin_ia32_rsm_context"), std::string::npos);
-    EXPECT_NE(Manifest.find("\"native_requests\": 1"), std::string::npos);
+    EXPECT_NE(Manifest.find("\"native_requests\": 2"), std::string::npos);
+    execute(Code, R"C(
+#include <stdlib.h>
+int main(void) {
+    neverd_x64_state_v12 state={0};
+    state.RFlags=0x202;state.MXCSR=0x1f80;state.SMM.XState=1;
+    state.PC=0x1002;neverd_x64_state_v12 before=state;
+    if(neverd_step_v12_1002((void *)&state)!=4 ||
+       memcmp(&state,&before,sizeof(state)))abort();
+    state.PC=0x1003;before=state;
+    if(neverd_step_v12_1003((void *)&state)!=4 ||
+       memcmp(&state,&before,sizeof(state)))abort();
+    return 0;
+}
+)C");
   }
 }

@@ -150,7 +150,8 @@ protected:
       EXPECT_EQ(Object->getInteger("state_version"), Version);
       EXPECT_EQ(Object->getString("environment_driver"),
                 "neverd_x64_run_v" + std::to_string(Version));
-      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 12   ? 2368
+      EXPECT_EQ(Object->getInteger("state_bytes"), Version == 13   ? 2464
+                                                   : Version == 12 ? 2368
                                                    : Version == 11 ? 2416
                                                    : Version == 10 ? 2464
                                                    : Version == 9  ? 2560
@@ -1418,6 +1419,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64RtmAbortExportTests.inc"
 #include "X64RtmPrefixExportTests.inc"
 #include "X64RtmRegionExportTests.inc"
+#include "X64SgxContinuationExportTests.inc"
 #include "X64SmmContinuationExportTests.inc"
 #include "X64SnpContinuationExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"

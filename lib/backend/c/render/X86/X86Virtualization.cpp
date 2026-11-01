@@ -211,8 +211,10 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
         E && E->Type &&
         (E->Type->Kind == NdTypeKind::Int || E->Type->Kind == NdTypeKind::Ptr);
     Shape.InputSizes[I] = E && E->Type ? E->Type->Size : 0;
-    if (I == 1 && E && E->Kind == ExprKind::Const)
+    if (I == 1 && E && E->Kind == ExprKind::Const) {
       Shape.AddressWidth = E->ConstVal;
+      Shape.OriginalPC = E->ConstVal;
+    }
     if (I == 2 && E && E->Kind == ExprKind::Const)
       Shape.SnpControl = E->ConstVal;
     if (I == 3 && E && E->Kind == ExprKind::Const)
@@ -246,6 +248,9 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
            "), " + std::to_string(*Shape.VectorStride) + ")";
   if (Id == Intrinsic::X86SmmReturnContext)
     return "__builtin_ia32_rsm_context((const void *)(" + Arguments[0] + "))";
+  if (Id == Intrinsic::X86SgxTransferAtContext)
+    return "__builtin_ia32_enclu_transfer_at_context((const void *)(" +
+           Arguments[0] + "), " + std::to_string(*Shape.OriginalPC) + "ULL)";
   if (Id == Intrinsic::X86SvmRunContext)
     return "__builtin_ia32_vmrun_context((void *)(" + Arguments[0] + "), " +
            std::to_string(*Shape.AddressWidth) + ")";
@@ -369,8 +374,9 @@ bool isX86KvmHypercallNativeName(llvm::StringRef Name) {
 bool isX86VirtualizationNativeName(llvm::StringRef Name) {
   if (isX86KvmHypercallNativeName(Name) || isX86SnpNativeName(Name))
     return true;
-  if (Name == "llvm.x86.rsm.context" || Name == "llvm.x86.vmrun.context" ||
-      Name == "llvm.x86.hyperv.call")
+  if (Name == "llvm.x86.rsm.context" ||
+      Name == "llvm.x86.enclu.transfer.at.context" ||
+      Name == "llvm.x86.vmrun.context" || Name == "llvm.x86.hyperv.call")
     return true;
   if (!Name.consume_front("llvm.x86."))
     return false;
@@ -453,12 +459,15 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
     }
     return Text + ");\n";
   }
-  if (Name == "llvm.x86.rsm.context") {
+  if (Name == "llvm.x86.rsm.context" ||
+      Name == "llvm.x86.enclu.transfer.at.context") {
+    const bool Sgx = Name == "llvm.x86.enclu.transfer.at.context";
+    const unsigned Count = Sgx ? 2 : 1;
     bool Valid = TargetArch == Arch::X64 && Callee->isDeclaration() &&
                  !Callee->isVarArg() && !Call.getNumOperandBundles() &&
                  Call.getCallingConv() == llvm::CallingConv::C &&
                  Call.getType()->isVoidTy() && !ResultLive &&
-                 Call.arg_size() == 1 && Arguments.size() == 1 &&
+                 Call.arg_size() == Count && Arguments.size() == Count &&
                  Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
                  Call.doesNotReturn() &&
                  Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
@@ -468,8 +477,14 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       const auto *Type = Call.getArgOperand(0)->getType();
       Valid = Type->isPointerTy() && Type->getPointerAddressSpace() == 0;
     }
+    if (Sgx && Valid)
+      Valid = Call.getArgOperand(1)->getType()->isIntegerTy(64) &&
+              llvm::isa<llvm::ConstantInt>(Call.getArgOperand(1));
     if (!Valid)
-      throw std::invalid_argument("invalid x64 RSM context intrinsic");
+      throw std::invalid_argument("invalid x64 terminal context intrinsic");
+    if (Sgx)
+      return "__builtin_ia32_enclu_transfer_at_context((const void *)(" +
+             Arguments[0] + "), " + Arguments[1] + ");\n";
     return "__builtin_ia32_rsm_context((const void *)(" + Arguments[0] +
            "));\n";
   }

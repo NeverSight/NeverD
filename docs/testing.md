@@ -11889,6 +11889,21 @@ absorption on x86, x64, ARM and AArch64 in PE/COFF, ELF and Mach-O. Both operand
 orders simplify `x | (x & y)` and `x & (x | y)`, while a changed SSA version or
 an intervening narrowing conversion prevents the fold. The shared operation
 rewrite supplies both source routes without expanding an expression tree.
+`DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects` checks even and
+odd chains of the bitwise `INT_NOT`/`INT_NEGATE` operations across the same
+twelve architecture/format cells at 1, 2, 4, 8 and 16 bytes. Truncation and
+masking retain their conversion boundaries; the original LOAD and STORE remain.
+`ComplementPairsKeepAddressOriginsAndSSAChanges` retains exact address owners
+while rejecting a chain broken by a new register definition. The shared copy
+propagation loop reuses its SSA index and existing round budget.
+`NeverDUnaryIdentitySourceTests` compiles both C routes at O0/O2 with undefined
+behavior checks, with pipeline optimization enabled and disabled. Independently
+encoded x64 and AArch64 fixtures cover two, three and four complements, plus
+32-bit narrowing, in PE/COFF, ELF and Mach-O. Each generated program checks 262
+input words against an independent unsigned-word oracle. On Linux x64 it also
+executes the original x64 instructions, including Win64 register passing;
+AArch64 fixtures use the host-compiled oracle, not native ARM64 execution.
+Other hosts explicitly skip this source execution suite.
 `HighCSourceCalls.ReusedConverterRebuildsClobberIdentityAndOrder` checks first
 record precedence and clearing/restoring clobbers between conversions of the
 same function, against a fresh converter. The worker code-edit checks cover
@@ -18400,3 +18415,23 @@ memory spaces. Omitting XRSTOR must fail the state oracle. This verifier
 requires Linux x64, KVM SMM with two address spaces, XSAVE and AVX; it fails
 explicitly when the required runtime is unavailable. See
 [the state ownership and hardware boundary](x86-smm-return.md).
+
+### Native SGX original-site input transport
+
+`X64ContinuationExportTest.SgxTransfer*` checks both C routes at O0/O2,
+all three admitted leaves, complete input-bank projection, original-PC and
+entry selection, and rejection before state/image writes. Its overlap case
+uses an aligned state with a valid aliased XSAVE header so other checks cannot
+mask a missing disjointness guard. The adjacent SMM tests also retain prefixed
+instructions as explicit native requests. Run both continuation suites because
+SGX, SMM and SVM share XSAVE admission and SIMD import.
+
+Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to capture C and manifests, then run
+`scripts/isa/x86/verify_sgx_transfer.py --sources CAPTURE --compiler NEVERC
+--compiler-source NEVERC_SOURCE --llvm-bin LLVM_BIN --keep OUTPUT`.
+NeverC and both full-LLVM pass managers compile each route at O0/O2; native
+KVM compares 9,216 input states per profile at the original ENCLU address.
+CR0.AM is enabled with both AC values. Missing XRSTOR and wrong-target mutations
+must fail. The fixture executes zero enclave instructions and requires no SGX
+device; it qualifies transport, not EPC/SSA/AEX or successful enclave execution.
+See [the complete ownership contract](x86-sgx-transfer.md).

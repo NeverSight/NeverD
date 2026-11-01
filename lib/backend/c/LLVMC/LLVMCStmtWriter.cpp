@@ -4112,6 +4112,7 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     return true;
   }
   if (Callee->getName() == "llvm.x86.rsm.context" ||
+      Callee->getName() == "llvm.x86.enclu.transfer.at.context" ||
       Callee->getName() == "llvm.x86.vmrun.context" ||
       Callee->getName() == "llvm.x86.hyperv.call" ||
       isX86KvmHypercallNativeName(Callee->getName()) ||

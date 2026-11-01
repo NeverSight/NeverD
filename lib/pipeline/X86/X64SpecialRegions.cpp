@@ -59,6 +59,26 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
     bool NativeRtmRegions, DebugContext *Debug) {
   X64SpecialRegionSelection Selection;
+  if (SourceOptions.Profile ==
+          analysis::X64ContinuationProfile::NativeSgxNoFaultV13 ||
+      SourceOptions.Profile ==
+          analysis::X64ContinuationProfile::NativeSmmNoFaultV12) {
+    // These profiles either transfer to the original native environment or
+    // refuse the instruction. No step continues to the next source address.
+    // Ordinary ENCLU discovery cannot supply this rule: its returning leaves
+    // have a fallthrough, while this profile admits only leaves 2/3/4.
+    const std::set<va_t> Unique(Entries.begin(), Entries.end());
+    if (Unique.empty() || Unique.size() > SourceOptions.MaxInstructions)
+      return invalid("selected CFG entry budget exceeded");
+    for (va_t Entry : Unique) {
+      Selection.Addresses.push_back(Entry);
+      Selection.Regions.push_back(
+          llvm::json::Object{{"entry", hex(Entry)},
+                             {"instructions", llvm::json::Array{hex(Entry)}},
+                             {"selection", "terminal-native-profile"}});
+    }
+    return Selection;
+  }
   Decoder Decode;
   if ((CalleeDepth || FollowDirectJumps) && !Decode.init(Image))
     return invalid("selected CFG transfer decoder initialization failed");

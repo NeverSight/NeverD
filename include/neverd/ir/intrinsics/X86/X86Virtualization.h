@@ -36,6 +36,7 @@ struct X86VirtualizationShape {
   std::array<uint16_t, 5> InputSizes{};
   std::array<bool, 5> ScalarInputs{};
   std::optional<uint64_t> AddressWidth;
+  std::optional<uint64_t> OriginalPC;
   std::optional<uint64_t> VectorStride;
   std::optional<uint64_t> SnpControl;
 };
@@ -97,6 +98,12 @@ x86VirtualizationShapeIsValid(Intrinsic Id,
     return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
            Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
            Shape.ScalarInputs[0] && Shape.InputSizes[0] == 8;
+  if (Id == Intrinsic::X86SgxTransferAtContext)
+    return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
+           Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Shape.ScalarInputs[0] && Shape.ScalarInputs[1] &&
+           Shape.InputSizes[0] == 8 && Shape.InputSizes[1] == 8 &&
+           Shape.OriginalPC.has_value();
   if (Id == Intrinsic::X86SvmRunContext)
     return Shape.TargetArch != Arch::X86 && !Shape.OutputSize &&
            Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default &&

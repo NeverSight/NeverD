@@ -192,6 +192,16 @@ struct alignas(16) X64ContinuationStateV12 {
   } SMM;
 };
 
+/// V13 extends V4. SGX.XState owns x87; explicit GPR, flags and SIMD/MXCSR
+/// cells populate the remaining native bank/image immediately before transfer.
+/// Execution continues at the immutable original ENCLU, preserving its PC.
+struct alignas(16) X64ContinuationStateV13 {
+  X64ContinuationStateV4 Core;
+  struct {
+    uint64_t GPR[16] = {}, RFlags = 0, XState = 0;
+  } SGX;
+};
+
 enum class X64ContinuationExitV1 : uint64_t {
   Continue = 0,
   Call = 1,
@@ -370,6 +380,18 @@ enum class X64ContinuationProfile : uint8_t {
   /// compiler storage remain mapped and disjoint from each other and SMRAM.
   /// SegmentBaseMSRAddressBits binds the CPU's canonical MSR width.
   NativeSmmNoFaultV12,
+  /// Native CPL3 code64 SGX with XCR0=7, IF=1, IOPL=0 and CET disabled. Only
+  /// canonical ENCLU leaves 2/3/4 are admitted. Restore explicit GPRs, flags
+  /// and x87/SSE/AVX, then jump to the original immutable executable ENCLU.
+  /// EENTER's next-PC output remains the original site plus three. The old C
+  /// frame and bounded driver are abandoned; original continuations execute
+  /// natively. Native EPC/TCS/SSA, FS/GS caches, debug/supervisor state and
+  /// mappings must already match the original environment. State/image and
+  /// compiler storage are accessible and disjoint. No concurrent mutation,
+  /// faults or asynchronous delivery during input transport. SGX hardware
+  /// owns leaf execution and subsequent AEX/ERESUME, with an original native
+  /// AEP/runtime; this interface supplies no software enclave/event model.
+  NativeSgxNoFaultV13,
 };
 
 /// Bind the original processor's null FS/GS load behavior. No vendor-wide
@@ -382,7 +404,7 @@ struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;
   std::optional<uint32_t> MXCSRMask;
   /// V5..V9 require 48 or 57 according to active paging, independently of
-  /// the processor's MSR canonical width. V1..V4 and V10..V12 do not accept it.
+  /// the processor's MSR canonical width. V1..V4 and V10..V13 do not accept it.
   std::optional<unsigned> PagingAddressBits;
   /// V6 and later. Bind the actual original CPU's null LFS/LGS base transition.
   /// Without this declaration those loads reject before any state/RAM write
