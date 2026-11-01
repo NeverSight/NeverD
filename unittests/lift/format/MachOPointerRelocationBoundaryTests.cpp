@@ -12050,7 +12050,8 @@ TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
           EXPECT_EQ(Sources, Expected ? std::vector<MedVar>{Stored}
                                       : std::vector<MedVar>{});
           if (Case == Scenario::Full || Case == Scenario::DisjointAfter ||
-              Case == Scenario::Loop) {
+              Case == Scenario::Loop || Case == Scenario::Partial ||
+              Case == Scenario::UnknownAfter || Case == Scenario::AtomicAfter) {
             const auto [Nodes, Hits] =
                 MedLLVMProvenanceTestPeer::frameSlotWork(E);
             EXPECT_LE(Nodes + Hits, 48u);

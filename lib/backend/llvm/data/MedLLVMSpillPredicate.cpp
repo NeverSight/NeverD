@@ -1594,6 +1594,10 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     Unknown.Reachable = true;
     Unknown.Uninitialized = true;
     const auto Local = transfer(LoadBlock, Site.Index, std::move(Unknown));
+    // A local kill after the last exact STORE invalidates every incoming
+    // source. Earlier blocks cannot repair a write that executes after them.
+    if (Local.Invalid)
+      return false;
     if (!Local.Uninitialized && !Local.Invalid && !Local.Values.empty()) {
       Sources = Local.Values;
       return true;
