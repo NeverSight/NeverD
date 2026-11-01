@@ -79,6 +79,19 @@ void LowToMedConverter::propagate(MedFunc &Func) {
     }
   }
 
+  // A complement pair is an identity only at one unchanged bit width. Look
+  // through named SSA producers, never through a truncate or a new register
+  // definition. Producers and their effects stay for the normal DCE owner.
+  const auto PlainComplement = [](const MedOp &Op) {
+    return (Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::INT_NEGATE) &&
+           Op.NumInputs == 1 && Op.Output.Size &&
+           Op.Inputs[0].Size == Op.Output.Size && !Op.Dead &&
+           Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+           !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+           Op.MemoryOrdering == NdMemoryOrdering::None &&
+           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
+
   // Copy propagation: if def is COPY from another var, replace uses
   bool Changed = true;
   int Iters = 0;
@@ -119,6 +132,16 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Op.Inputs[I] = Replacement;
               Changed = true;
             }
+          }
+        }
+        if (PlainComplement(Op)) {
+          const auto At = Defs.find(keyOf(Op.Inputs[0]));
+          if (At != Defs.end() && PlainComplement(*At->second) &&
+              At->second->Output.Size == Op.Output.Size) {
+            const auto Value = At->second->Inputs[0];
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = Value;
+            Changed = true;
           }
         }
       }

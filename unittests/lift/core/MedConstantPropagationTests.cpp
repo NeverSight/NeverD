@@ -16,8 +16,10 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <limits>
 #include <set>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -654,6 +656,160 @@ TEST(MedConstantPropagation,
                   RetainsOuter |= Op.Opcode == Outer;
             EXPECT_EQ(RetainsOuter, Mutation != 0);
           }
+}
+
+TEST(MedConstantPropagation,
+     DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (uint16_t Width : {1, 2, 4, 8, 16})
+        for (unsigned Depth : {2u, 3u, 4u})
+          for (unsigned Barrier : {0u, 1u}) {
+            if (Barrier && Depth != 2)
+              continue;
+            SCOPED_TRACE(testing::Message()
+                         << unsigned(Architecture) << ':' << unsigned(Format)
+                         << ':' << Width << ':' << Depth << ':' << Barrier);
+            const auto &TRI = getTargetRegInfo(Architecture);
+            const auto Registers = TRI.integerArgumentLayout(Format).Registers;
+            const auto Address = NdVar::reg(
+                Registers.empty() ? TRI.IntReturnReg : Registers.front(),
+                TRI.PointerSize);
+            LowFunc Low;
+            Low.Entry = 0x1000;
+            Low.Name = "complement_chain";
+            Low.Blocks.resize(1);
+            auto &Block = Low.Blocks.front();
+            Block.Id = 0;
+            Block.StartAddr = Low.Entry;
+            Block.EndAddr = Low.Entry + 4;
+            const auto Add = [&](NdOp Opcode, NdVar Output,
+                                 std::initializer_list<NdVar> Inputs) {
+              LowOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              Op.Addr = Low.Entry;
+              for (const auto &Input : Inputs)
+                Op.addInput(Input);
+              Block.Ops.push_back(Op);
+            };
+            auto Value = NdVar::tmp(0, Width);
+            Add(NdOp::LOAD, Value, {Address});
+            for (unsigned I = 0; I < Depth; ++I) {
+              const auto Next = NdVar::tmp(I + 1, Width);
+              // Both spellings denote the same bitwise complement. Retain
+              // their shared width even for values wider than a host word.
+              Add(I % 2 || Width > sizeof(uint64_t) ? NdOp::INT_NOT
+                                                    : NdOp::INT_NEGATE,
+                  Next, {Value});
+              Value = Next;
+              if (Barrier && I == 0) {
+                const auto Narrow = NdVar::tmp(20, Width / 2);
+                const auto Extended = NdVar::tmp(21, Width);
+                if (Width > 1) {
+                  Add(NdOp::SUBBYTES, Narrow,
+                      {Value, NdVar::cst(0, TRI.PointerSize)});
+                  Add(NdOp::INT_ZEXT, Extended, {Narrow});
+                } else {
+                  Add(NdOp::INT_AND, Extended,
+                      {Value, NdVar::scalar(0x7f, Width)});
+                }
+                Value = Extended;
+              }
+            }
+            Add(NdOp::STORE, {}, {Address, Value});
+            Add(NdOp::RETURN, {}, {NdVar::cst(0, TRI.PointerSize)});
+            const auto Med =
+                LowToMedConverter().convert(Low, Architecture, Format);
+            ASSERT_TRUE(verifyMedFunc(Med, "complement-chain"));
+            unsigned Complements = 0, Loads = 0, Stores = 0;
+            std::vector<MedVar> Values;
+            for (const auto &B : Med.Blocks)
+              for (const auto &Op : B.Ops) {
+                if (Op.Dead)
+                  continue;
+                Loads += Op.Opcode == NdOp::LOAD;
+                Stores += Op.Opcode == NdOp::STORE;
+                if (Op.Opcode == NdOp::STORE)
+                  Values.push_back(Op.Inputs[1]);
+              }
+            // RISC conversion need not run the late flags DCE. Check the
+            // expression actually stored, not unconsumed pure producers.
+            std::set<std::tuple<int, int, int>> Seen;
+            while (!Values.empty()) {
+              const auto Value = Values.back();
+              Values.pop_back();
+              if (Value.isConst() || Value.Id < 0 ||
+                  !Seen.emplace(Value.Kind, Value.Id, Value.SSAVer).second)
+                continue;
+              for (const auto &B : Med.Blocks)
+                for (const auto &Op : B.Ops)
+                  if (!Op.Dead && Op.Output == Value &&
+                      Op.Output.Size == Value.Size) {
+                    Complements += Op.Opcode == NdOp::INT_NOT ||
+                                   Op.Opcode == NdOp::INT_NEGATE;
+                    Values.insert(Values.end(), Op.Inputs.begin(),
+                                  Op.Inputs.begin() + Op.NumInputs);
+                  }
+            }
+            EXPECT_EQ(Complements, Barrier ? 2u : Depth % 2);
+            EXPECT_EQ(Loads, 1u);
+            EXPECT_EQ(Stores, 1u);
+          }
+}
+TEST(MedConstantPropagation, ComplementPairsKeepAddressOriginsAndSSAChanges) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool Redefine : {false, true}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Architecture) << ':'
+                                        << unsigned(Format) << ':' << Redefine);
+        const auto &TRI = getTargetRegInfo(Architecture);
+        const auto Width = TRI.PointerSize;
+        const auto Register = NdVar::reg(TRI.IntReturnReg, Width);
+        const auto First = NdVar::tmp(0, Width);
+        const auto Last = NdVar::tmp(1, Width);
+        const auto Address = NdVar::codeAddress(0x120020, Width, 0x120000);
+        LowFunc Low;
+        Low.Entry = 0x1000;
+        Low.Name = "complement_identity";
+        Low.Blocks.resize(1);
+        auto &Block = Low.Blocks.front();
+        Block.Id = 0;
+        Block.StartAddr = Low.Entry;
+        Block.EndAddr = Low.Entry + 4;
+        const auto Add = [&](NdOp Opcode, NdVar Output,
+                             std::initializer_list<NdVar> Inputs) {
+          LowOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = Output;
+          Op.Addr = Low.Entry;
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          Block.Ops.push_back(Op);
+        };
+        Add(NdOp::INT_NOT, First, {Address});
+        Add(NdOp::COPY, Register, {First});
+        if (Redefine)
+          Add(NdOp::INT_XOR, Register, {Register, NdVar::scalar(0x55, Width)});
+        Add(NdOp::INT_NEGATE, Last, {Register});
+        Add(NdOp::RETURN, {}, {Last});
+        const auto Med = LowToMedConverter().convert(Low, Architecture, Format);
+        ASSERT_TRUE(verifyMedFunc(Med, "complement-identity"));
+        const auto &Return = Med.Blocks.front().Ops.back();
+        ASSERT_EQ(Return.Opcode, NdOp::RETURN);
+        ASSERT_EQ(Return.NumInputs, 1u);
+        if (!Redefine) {
+          EXPECT_EQ(Return.Inputs[0],
+                    MedVar::makeConst(Address.Offset, Width, Address.Provenance,
+                                      Address.AddressOwnerVA));
+        } else {
+          // The register has a new SSA definition between the complements.
+          // This is no longer the original address, regardless of equal widths.
+          EXPECT_FALSE(Return.Inputs[0].isConst());
+        }
+      }
 }
 TEST(MedConstantPropagation, AnnihilatingMaskKeepsMemoryEffectsAndProvenance) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})

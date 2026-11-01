@@ -11867,6 +11867,21 @@ absorption on x86, x64, ARM and AArch64 in PE/COFF, ELF and Mach-O. Both operand
 orders simplify `x | (x & y)` and `x & (x | y)`, while a changed SSA version or
 an intervening narrowing conversion prevents the fold. The shared operation
 rewrite supplies both source routes without expanding an expression tree.
+`DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects` checks even and
+odd chains of the bitwise `INT_NOT`/`INT_NEGATE` operations across the same
+twelve architecture/format cells at 1, 2, 4, 8 and 16 bytes. Truncation and
+masking retain their conversion boundaries; the original LOAD and STORE remain.
+`ComplementPairsKeepAddressOriginsAndSSAChanges` retains exact address owners
+while rejecting a chain broken by a new register definition. The shared copy
+propagation loop reuses its SSA index and existing round budget.
+`NeverDUnaryIdentitySourceTests` compiles both C routes at O0/O2 with undefined
+behavior checks, with pipeline optimization enabled and disabled. Independently
+encoded x64 and AArch64 fixtures cover two, three and four complements, plus
+32-bit narrowing, in PE/COFF, ELF and Mach-O. Each generated program checks 262
+input words against an independent unsigned-word oracle. On Linux x64 it also
+executes the original x64 instructions, including Win64 register passing;
+AArch64 fixtures use the host-compiled oracle, not native ARM64 execution.
+Other hosts explicitly skip this source execution suite.
 `HighCSourceCalls.ReusedConverterRebuildsClobberIdentityAndOrder` checks first
 record precedence and clearing/restoring clobbers between conversions of the
 same function, against a fresh converter. The worker code-edit checks cover
