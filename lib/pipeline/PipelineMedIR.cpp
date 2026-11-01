@@ -124,13 +124,16 @@ MedCallReturnRanges sourceCallReturnRanges(const BinaryImage &Image,
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                          PipelineResult &Result,
                                          llvm::ArrayRef<LowFunc> Originals) {
-  if (getTargetRegInfo(Image.Arch).PointerSize >= sizeof(uint64_t)) {
+  const bool HasCallerBatch =
+      Image.Arch == Arch::X64 && Image.abiFormat() == BinaryFormat::COFF;
+  if (!HasCallerBatch &&
+      getTargetRegInfo(Image.Arch).PointerSize >= sizeof(uint64_t)) {
     std::vector<uint64_t> Weights(Result.MedFuncs.size(), 1);
     for (size_t I = 0; I < Result.MedFuncs.size(); ++I)
       for (const auto &Block : Result.MedFuncs[I].Blocks)
         Weights[I] += Block.Ops.size();
-    // Finish independent local proofs before borrowed-frame readers inspect
-    // other functions. Each worker owns only its selected body.
+    // Other source ABIs have no call-input batch below. Each worker owns only
+    // its selected body.
     parallelForEachWeighted(Weights, [&](auto Claim, size_t N) {
       for (size_t I; (I = Claim()) < N;)
         markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,
@@ -165,7 +168,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                         Callees);
     markUndefinedScratchStores(Func, Image.Arch, Image.abiFormat());
   }
-  if (Image.Arch != Arch::X64 || Image.abiFormat() != BinaryFormat::COFF)
+  if (!HasCallerBatch)
     return;
   std::set<va_t> Referenced;
   std::vector<va_t> Pending;
@@ -338,8 +341,13 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
     CallerWeights.push_back(Weight);
   }
   parallelForEachWeighted(CallerWeights, [&](auto Claim, size_t N) {
-    for (size_t I; (I = Claim()) < N;)
+    for (size_t I; (I = Claim()) < N;) {
       replaceKnownSourceCallArguments(Result.MedFuncs[I], Facts);
+      // Call-input recovery has settled as well. Reuse this worker instead
+      // of creating another large-stack coordinator for each source query.
+      markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,
+                                   Image.abiFormat(), &Image);
+    }
   });
 }
 

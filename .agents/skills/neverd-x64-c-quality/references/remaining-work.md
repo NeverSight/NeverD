@@ -498,6 +498,9 @@ are checked against original x64 instructions after an opaque frame-pointer
 borrow and complete later slot overwrite; returning the restored value still
 requires its real definition. This closes an unnecessary source trap, not
 general entry-state reconstruction or native Windows driver execution.
+Win64 now reuses the settled call-input worker batch for this late proof.
+Other 64-bit source ABIs retain their weighted batch. This avoids a separate
+SDK coordinator without changing the physical overwrite receipts.
 Single-reader temporary COPY chains now share that same budget and proof.
 Their terminal register still needs the existing implicit-observation checks;
 a temporary copy cannot hide an earlier physical register definition. Both C

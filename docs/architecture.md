@@ -7137,6 +7137,14 @@ reconverting a caller from LowIR: old operation flags cannot describe that new
 sequence. HighC and LLVM C request the source projection; machine lift,
 patching and analysis keep the original stack operations.
 
+After return recovery, source preparation revisits scalar secondary-register
+restores with the shared exit-byte query. Win64 runs this local proof after
+call-input recovery in the existing weighted caller batch; other 64-bit source
+ABIs use their own weighted batch. Earlier borrowed-frame and parameter proofs
+remain authoritative, and the late source annotation grants no physical-input
+overwrite receipt. Sharing the Win64 batch avoids another large-stack
+coordinator for each SDK request.
+
 The entry-stack proof keeps definitions, joins, ambiguity and transient active
 contexts in one index. A join's anchored induction assumption lets an interior
 stack definition be checked again on the backedge; every incoming arm must
