@@ -627,6 +627,26 @@ summary. Incoming-stack and register-pair
 reconversions rebuild the same phase-local facts. The checks still precede
 source save suppression and register-call expansion. No result is cached across
 image or body mutations, and no source return type supplies a machine proof.
+
+Fresh x64 COFF source conversion can also bound an allocation after a checked
+page probe. `COFFStackProbe` authenticates the complete immutable helper and
+the direct CALL bytes, including unsigned loop tests, both page touches and
+register restoration. Under the ordinary uninterrupted 48/57-bit linear-address
+contract, a descending probe cannot return normally after traversing the
+noncanonical address gap. The shared CALL-slot owner binds that fact to the
+subsequent `sub rsp, rax` in the same original block, invalidates it on RAX
+writes, other calls and exceptional entries, and composes only query-local
+stack ranges. A helper name alone, a changed body, or a path bypassing the
+probe supplies no bound. This does not model exception resumption or alternate
+address-translation contracts. See the [Intel address rules](https://edc.intel.com/content/www/us/en/design/platforms/core-processor-series-3-datasheet-volume-1-of-2/001/linear-address-masking-lam/).
+
+Dynamic stack storage includes the ABI's outgoing register home area: Win64
+places its usable dynamic object above that area at the new SP. Both C routes
+and LLVM reserve the area using `TargetRegInfo::integerArgumentLayout`, with
+checked addition, while retaining the original size operand and pointer
+arithmetic. The allocation size is not an exact physical SP delta in source
+storage; adding the home area does not authorize aliases with independently
+represented fixed-frame objects.
 The omitted-callee reader also visits scalar direct calls carrying a proven
 private-frame address. Existing operation and extra-lift budgets still bound
 those bodies; an arity-only summary cannot stand in for their pointer effects.
@@ -886,6 +906,10 @@ its display name. Authenticated special-language bindings without a complete
 call ABI reject explicitly.
 Ordinary raw indirect calls use a feature-gated signing bridge so an
 arm64e C compiler does not impose its default authentication on a raw BLR.
+The mobile source assembler admits that exact shared C prefix before
+declarations, including after the floating-point contraction policy, and
+preserves it during method assembly. Modified prefixes and arbitrary
+conditional or mutating directives remain unsupported.
 Clang O0 can retain an intermediate resign and produce a different invalid-PAC
 diagnostic from the original branch; this is not exact exception-syndrome
 equivalence. Model rejection evidence compares exception classes; complete ESR
@@ -7038,9 +7062,16 @@ words. They are not import storage: the program may store another function
 there, so the listing keeps the variable's name, and no call through the word
 takes the function's name or its no-return contract. LLVM emission treats the
 word as callable storage, loads it for each call, and starts its mirror field at
-the function's address rather than at the file's zero. Until a call proves the
-function's type, C names it through the same opaque assembly-name alias as
-undefined data. Weak symbols, addends and words two relocations name
+the function's address rather than at the file's zero. Address-only imports
+retain their origin in `neverd.data-symbol` metadata. LLVM C uses the existing
+format-specific runtime prototype when one describes that import, including
+its required headers and calling convention. An initializer can therefore
+name an SEH personality before a protected function without declaring the
+compiler's personality symbol as an object. Data relocations with the same
+name, user-owned declarations and imports without a runtime prototype keep
+their opaque assembly-name aliases. This source declaration does not invent
+a machine call signature or make mutable import storage immutable.
+Weak symbols, addends and words two relocations name
 differently stay unknown, and a call through them still fails closed.
 
 The shared i386 get-PC recognizer requires the complete `mov r32,[esp]; ret`
@@ -15111,6 +15142,17 @@ It reuses the ABI owner's current-SP walk and original call/jump encoding
 policy; a synthetic tail call supplies no push. Explicit later stores kill only
 the bytes they write on each incoming path. Unknown call positions, incomplete
 candidate graphs and exhausted observation budgets cannot grant separation.
+When a dynamic CALL position has neither a range nor an upper bound, the same
+entry-stack owner can prove its displacement modulo a power of two. Masked
+sizes, native-width additions/subtractions and agreeing seeded PHI/copy
+components preserve this residue even if a size is negative or wraps. The
+observation guard aggregates the possible return-slot bytes within two pointer
+widths and excludes only loads disjoint from every CALL. This requires an
+authenticated native-width CALL encoding; unknown encodings retain their
+conservative footprint. Residues do not establish signed bounds or authorize
+other frame projections. Ambiguous definitions, conflicting or unseeded joins
+and exhausted proofs stay unknown.
+
 Before stack cleanup, an exact observed slot below entry SP can instead
 receive an explicit store of the original CALL's decoded next PC. The whole
 write plan must succeed within the source-frame and work limits before any

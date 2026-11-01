@@ -925,8 +925,11 @@ GP/FP registers, mixed operands, exact result bits and Darwin variadic tails
 across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
-whole-stack cases. All 200 typed
-groups emit actual Mach-O objects on five routes. Narrow register arguments
+whole-stack cases. CTest registers each of the 40 type shapes separately,
+retaining all five authentication variants and both C routes at O0/O2 within
+the ordinary per-test timeout. Stable shape names identify failures and permit
+parallel scheduling. All 200 typed groups emit actual Mach-O objects on five
+routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
@@ -6765,6 +6768,13 @@ Rosetta forces exception masks even for raw SSE, so its unmasked-trap coverage
 is unavailable. `SwiftSourceProperties` compiles actual class members with
 file-level compiler declarations. `MobileIOSNative` rejects false source,
 missing or malformed preamble prefixes and mismatched method identities.
+Its raw-call prefix cases preserve function counts, method bodies and the
+shared AArch64 signing bridge, alone or after the floating-point policy.
+Changed keys, truncated guards, injected declarations, macro overrides and
+prefixes inside a method or after a declaration remain rejected. Run
+`NeverDMobileTests` and the native Objective-C calls/Blocks acceptance workflow
+when changing this source-assembly boundary; Linux source recovery does not
+qualify native macOS execution.
 The unchanged `scripts/test_mobile_swift_backend.py` acceptance workflow
 recompiles and executes arm64/x86_64 with classic/default fixups, checks all
 858 original behavior oracles per variant, and verifies the callable inventory.
@@ -10338,6 +10348,15 @@ both C routes at O0/O2 on COFF/ELF/Mach-O; its observing callee remains a negati
 control. Run these with `NeverDMedStackAlignmentTests`,
 `NeverDHighControlFlowTests`, the SysV/i386/Win64/AAPCS64 call-contract owners and
 `NeverDPipelineOutcomeTests` after changing source stack-access analysis.
+The stack-alignment owner checks modular displacements across x86, x64, ARM
+and AArch64 with all three formats, including signed-boundary wrapping,
+extensions, ambiguous occurrences and seeded/cyclic joins. The call-return
+owner independently enumerates overlapping bytes for aligned unbounded sizes
+on x86/x64; wide reads, multiple CALL residues, unknown encodings and deferred
+observations retain their guards. `AlignedUnboundedFramesKeepSeparatedReads`
+runs separated and overlapping machine-code fixtures through both source
+pipelines with one/four threads on COFF/ELF/Mach-O. These proof tests do not
+qualify execution of arbitrary negative stack allocations.
 `PipelineSourceStackAccesses` checks source, LLVM source projection, machine
 lift, patch and analysis requests on ARM32 and x64, including a restore the
 body consumes. The Mach-O ARM/Thumb five-input MBA source tests execute both
@@ -11686,6 +11705,17 @@ Integer calls and returns retain explicit pointer conversions with preserved
 LLVM function types enabled and disabled; pointer calls and ordinary integer
 constants keep their own types. The x64/ARM64 source cases execute at O0/O2 with
 undefined-behavior traps.
+`LLVMCPointerAddresses.ReadonlyImageStringsRespectCalleeCharacterWidth`
+passes the same immutable UTF-16 bytes to a narrow `puts` declaration and a
+wide `wcslen` declaration. It retains the wide-literal check and executes
+both emitted calls at O0/O2 with two-byte `wchar_t`, independent providers,
+and pointer-type diagnostics enabled. The providers check the consumed
+characters, return value and call count without using the host wide C ABI.
+`LLVMCFrameAccess.DeclaredMembersKeepLoadCarriersAcrossMutation` reads
+declared pointer fields through integer LLVM loads and integer fields
+through pointer loads. For ELF, COFF and Mach-O output it executes at O0/O2,
+checking both the value captured before an external mutation and the later
+read composed at its use. Pointer/integer conversion diagnostics are errors.
 
 `LinkedLiteralAddsToTheDataItNames` links an ARM getter whose
 `ldr r0, [pc, r0]` reads its literal right after `bx lr`. It requires the
@@ -15700,7 +15730,17 @@ AArch64's `cset w8, eq; and w8, w8, #1` as the comparison itself, or its
 negation, and keeps a selection by a value that may hold another number.
 `NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` links
 a program against the MinGW-w64 runtime, when its compiler is installed, and
-compiles the program's whole-module LLVM C for x86-64 MinGW. The LLVMCValues
+compiles the program's whole-module LLVM C for x86-64 MinGW, including actual
+object generation at O0 and O2. Syntax-only checking cannot detect a data
+alias colliding with Clang's implicit SEH personality.
+`COFFExceptionIR.LLVMCAddressedImportKeepsItsRuntimeFunctionDeclaration`
+isolates an address initializer preceding SEH and compiles both optimization
+levels. Object relocations with the same name and other object formats retain
+their data declarations. `HighCAddressedRuntimeFunctionPrecedesSEH` checks the
+same ordering through HighC. `LLVMCAddressedImportUsesPrototypeHeadersAndWeakLinkage`
+checks prototype-owned headers, weak linkage and an unknown import control.
+These are compilation checks; native Windows exception execution remains a
+separate gate. The LLVMCValues
 cases it rests on compile and run on the host:
 `ACallerWithUnwindInformationSeesItsCalleeDeclared` declares a callee whose
 caller carries an unwind record;
@@ -17197,9 +17237,20 @@ allocation; a 32-bit result whose sign extension can raise SP remains refused.
 The successful modules pass LLVM verification.
 `NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles` retains
 the larger PE whole-module compilation fixture. Its runtime relocator uses the
-same 16-bit section-count proof. This does not establish bounds for the other
-dynamic allocations in its printf helpers: an omitted stack probe supplies no
-scalar range fact. Native Windows execution is separate from cross-compilation.
+same 16-bit section-count proof. Its `__pformat_xint` allocations now use the
+separate byte-authenticated probe normal-return proof. Native Windows execution
+is separate from cross-compilation.
+
+`SourceCallReturnWrites.OnlyTheCompleteProbeBodySuppliesAReturnBound` checks
+every helper byte, signed comparison and missing-touch mutations, writable
+code, guessed names, replaced sizes and omitted probes. Both source routes
+retain the refusal for those incomplete proofs.
+`ProbedDynamicAllocationsKeepFixedFrameValues` checks fixed-frame values and
+the last dynamic-object byte above the Win64 home area through HighC and
+LLVM C, with source optimization on/off and O0/O2 ASan/UBSan. Linux x64 also
+executes the original probe and caller bytes for 1,025 sizes from zero through
+16 KiB. This is ordinary nonfaulting execution, not exception-resumption or
+native Windows host coverage.
 
 `MedSEHEstablisherFrame.CallBeforeStackRestoreKeepsHandlerFrameLive` checks
 direct and indirect CALLs whose only SP use precedes an explicit restore at an

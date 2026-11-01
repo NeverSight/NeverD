@@ -243,6 +243,11 @@ public:
     return resolveRange(Value, 0);
   }
 
+  std::optional<uint64_t> residue(const MedVar &Value, uint64_t Alignment) {
+    Steps = 0;
+    return resolveResidue(Value, Alignment, 0);
+  }
+
   /// The largest offset \p Value can have: the longest way to it from exact
   /// offsets through copies, displacements, alignment masks and joins. A
   /// dynamic allocation in a loop has such a bound without a lower one. A
@@ -491,6 +496,119 @@ private:
     return Input
         .lshr(llvm::ConstantRange(llvm::APInt(Input.getBitWidth(), Offset * 8)))
         .zextOrTrunc(Bits);
+  }
+
+  /// Low bits survive native wrapping, independently of any signed bounds.
+  std::optional<uint64_t> scalarResidue(const MedVar &Value, uint64_t Alignment,
+                                        unsigned Depth) {
+    const uint64_t Mask = Alignment - 1;
+    if (++Steps > kMaxProofSteps ||
+        Depth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
+        !Value.Size || Value.Size > sizeof(uint64_t) ||
+        (Value.Size < sizeof(uint64_t) && Mask >> (Value.Size * 8)))
+      return std::nullopt;
+    if (Value.isConst())
+      return isAddressProvenance(Value.Provenance)
+                 ? std::nullopt
+                 : std::optional(Value.ConstVal & Mask);
+    const auto Found = Definitions.find(key(Value));
+    if (Found == Definitions.end() || Found->second.Ambiguous ||
+        !RangeActive.insert(key(Value)).second)
+      return std::nullopt;
+    const auto Clear = llvm::scope_exit([&] { RangeActive.erase(key(Value)); });
+    const MedOp *Op = Found->second.Op;
+    if (!Op || !sameOccurrence(Op->Output, Value) || Op->Dead ||
+        Op->MemoryOrdering != NdMemoryOrdering::None ||
+        Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op->IntrinsicOutputs.empty())
+      return std::nullopt;
+    if (Op->NumInputs == 1 &&
+        ((Op->Opcode == NdOp::COPY && Op->Inputs[0].Size == Value.Size) ||
+         ((Op->Opcode == NdOp::INT_ZEXT || Op->Opcode == NdOp::INT_SEXT) &&
+          Op->Inputs[0].Size < Value.Size)))
+      return scalarResidue(Op->Inputs[0], Alignment, Depth + 1);
+    if (Op->NumInputs != 2 || Op->Inputs[0].Size != Value.Size ||
+        Op->Inputs[1].Size != Value.Size)
+      return std::nullopt;
+    // A mask can fix the low bits even when its other input has no range or
+    // known bits. Do not ask that input to prove anything about its sign.
+    if (Op->Opcode == NdOp::INT_AND)
+      for (unsigned I = 0; I != Op->NumInputs; ++I) {
+        const MedVar &Input = Op->Inputs[I];
+        if (Input.isConst() && !isAddressProvenance(Input.Provenance) &&
+            !(Input.ConstVal & Mask))
+          return 0;
+      }
+    if (Op->Opcode != NdOp::INT_ADD && Op->Opcode != NdOp::INT_SUB &&
+        Op->Opcode != NdOp::INT_AND)
+      return std::nullopt;
+    const auto Left = scalarResidue(Op->Inputs[0], Alignment, Depth + 1);
+    const auto Right = scalarResidue(Op->Inputs[1], Alignment, Depth + 1);
+    if (!Left || !Right)
+      return std::nullopt;
+    if (Op->Opcode == NdOp::INT_AND)
+      return *Left & *Right;
+    return (Op->Opcode == NdOp::INT_SUB ? *Left - *Right : *Left + *Right) &
+           Mask;
+  }
+
+  std::optional<uint64_t> resolveResidue(const MedVar &Value,
+                                         uint64_t Alignment, unsigned Depth) {
+    if (++Steps > kMaxProofSteps ||
+        Depth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
+        Value.Size != TRI.PointerSize || Value.TheArch != Architecture ||
+        (Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp))
+      return std::nullopt;
+    const auto Found = Definitions.find(key(Value));
+    ValueDefinition *Definition =
+        Found == Definitions.end() ? nullptr : &Found->second;
+    if (Definition && Definition->Ambiguous)
+      return std::nullopt;
+    if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.StackPointer &&
+        (authenticatedEntryLiveIn(Value, Definition) ||
+         (Value.SSAVer == 0 && !Definition)))
+      return 0;
+    if (!Definition || !RangeActive.insert(key(Value)).second)
+      return std::nullopt;
+    const auto Clear = llvm::scope_exit([&] { RangeActive.erase(key(Value)); });
+    if (Definition->Join) {
+      bool HasCycle = false;
+      const auto Boundaries = phiComponentBoundaries(Value, Depth, HasCycle);
+      if (!Boundaries)
+        return std::nullopt;
+      std::optional<uint64_t> Agreed;
+      for (const auto &[Boundary, AtDepth] : *Boundaries) {
+        const auto Incoming = resolveResidue(Boundary, Alignment, AtDepth);
+        if (!Incoming || (Agreed && Agreed != Incoming))
+          return std::nullopt;
+        Agreed = Incoming;
+      }
+      return Agreed;
+    }
+    const MedOp *Op = Definition->Op;
+    if (!Op || !sameOccurrence(Op->Output, Value) || Op->Dead ||
+        Op->RegistrationRoot != MedOp::RegistrationRootKind::None ||
+        Op->MemoryOrdering != NdMemoryOrdering::None ||
+        Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op->IntrinsicOutputs.empty())
+      return std::nullopt;
+    if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1)
+      return resolveResidue(Op->Inputs[0], Alignment, Depth + 1);
+    if ((Op->Opcode != NdOp::INT_ADD && Op->Opcode != NdOp::INT_SUB) ||
+        Op->NumInputs != 2 || Op->Inputs[0].Size != TRI.PointerSize ||
+        Op->Inputs[1].Size != TRI.PointerSize)
+      return std::nullopt;
+    const bool Subtract = Op->Opcode == NdOp::INT_SUB;
+    for (unsigned I = 0; I != (Subtract ? 1u : 2u); ++I) {
+      const auto Base = resolveResidue(Op->Inputs[I], Alignment, Depth + 1);
+      if (!Base)
+        continue;
+      const auto Delta =
+          scalarResidue(Op->Inputs[I ^ 1u], Alignment, Depth + 1);
+      if (Delta)
+        return (Subtract ? *Base - *Delta : *Base + *Delta) & (Alignment - 1);
+    }
+    return std::nullopt;
   }
 
   /// Scalar bounds retain machine-width wrapping. Unknown scalar values have
@@ -1342,6 +1460,23 @@ entryStackOffsetUpperBounds(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
   for (size_t I = 0; I < Values.size(); ++I)
     Bounds[I] = Proof.upperBound(Values[I]);
   return Bounds;
+}
+
+std::vector<std::optional<uint64_t>>
+entryStackOffsetResidues(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                         Arch Architecture, BinaryFormat Format,
+                         uint64_t Alignment, StackEntryKind Entry) {
+  std::vector<std::optional<uint64_t>> Residues(Values.size());
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if ((TRI.PointerSize != 4 && TRI.PointerSize != 8) || Func.Blocks.empty() ||
+      Alignment < 2 || (Alignment & (Alignment - 1)) ||
+      (TRI.PointerSize == 4 && Alignment > UINT32_MAX))
+    return Residues;
+  StackOffsetProof Proof(Func, Architecture, Format, Entry,
+                         /*FollowJoins=*/true);
+  for (size_t I = 0; I < Values.size(); ++I)
+    Residues[I] = Proof.residue(Values[I], Alignment);
+  return Residues;
 }
 
 std::vector<std::optional<int64_t>> entryStackOffsetsFromProvenDefinitions(

@@ -697,6 +697,7 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
         commits=frozenset({
             "64a8b64a1d54543d27524c31aed896b89acb0fd6",
             "16e426cb58317ec165b80ae3119c8e1d54901bf0",
+            "8163d15c17052bd5242d6ff35e1cd18f8c04ca03",
         }),
         line="",
         reason=(

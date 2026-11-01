@@ -2117,6 +2117,10 @@ std::string HighCWriter::resolveCallTarget(const HighExpr &E) const {
 }
 
 std::string HighCWriter::renderCallExpr(const HighExpr &E) {
+  if (!E.IsIndirectCall && E.CallTarget == "__builtin_alloca" &&
+      E.Operands.size() == 1 && !StackAllocationSizeHelper.empty())
+    return "__builtin_alloca(" + StackAllocationSizeHelper + "(" +
+           exprStr(*E.Operands[0]) + "))";
   if (E.IntrinsicId == Intrinsic::X86FourSourceMemory)
     return renderX86FourSourceExpression(
         Opts.TheArch, E, x86NativeMemoryArguments(E), typeToC(E.Type));

@@ -2516,11 +2516,24 @@ int main(int argc, char **argv) {
 
   RunResult C = decompileToC(Exe);
   ASSERT_TRUE(C.ok()) << C.err;
+  {
+    std::ifstream Input(tmpFile("decompiled.c"));
+    const std::string Text((std::istreambuf_iterator<char>(Input)), {});
+    EXPECT_EQ(Text.find("neverd.not-decompiled:"), std::string::npos)
+        << "a compiling partial unit still omitted a runtime function";
+  }
   RunResult Syntax =
       exec(NEVERD_TEST_CLANG,
            {"--target=x86_64-w64-mingw32", "-fms-extensions", "-fsyntax-only",
             "-w", tmpFile("decompiled.c").string()});
   EXPECT_TRUE(Syntax.ok()) << Syntax.err;
+  for (const char *Level : {"-O0", "-O2"}) {
+    const auto Object = exec(
+        NEVERD_TEST_CLANG, {"--target=x86_64-w64-mingw32", "-fms-extensions",
+                            Level, "-c", "-w", tmpFile("decompiled.c").string(),
+                            "-o", tmpFile("mingw-c.obj").string()});
+    EXPECT_TRUE(Object.ok()) << Level << '\n' << Object.err;
+  }
 }
 
 TEST_F(NativePointerRelocationBoundary,

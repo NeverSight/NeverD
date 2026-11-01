@@ -1,7 +1,13 @@
-//===- COFFStackProbe.h - Checked PE32 allocating probes ------*- C++ -*-===//
+//===- COFFStackProbe.h - Checked PE stack probes -------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Authenticates complete x86 and x64 stack-probe protocols from immutable
+/// caller and helper bytes, separately from named helper ABI recognition.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LOADER_COFF_COFFSTACKPROBE_H
@@ -9,6 +15,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <cstdint>
 #include <optional>
 
 namespace neverd::coff_loader {
@@ -35,6 +42,22 @@ struct X86AllocatingStackProbeCall {
 std::optional<X86AllocatingStackProbeCall>
 getCheckedX86AllocatingStackProbeCall(const BinaryImage &Image, va_t CallVA);
 
+/// A byte-authenticated x64 page probe reached by a direct near CALL. On an
+/// uninterrupted normal return, RAX is unchanged and bounds the descending
+/// allocation. This is stronger than recognizing the helper's ABI by name.
+/// It does not model fault recovery or authorize eliding a call.
+struct X64StackProbeCall {
+  ExceptionAddressRange Helper;
+
+  // Even with 57-bit linear addresses, descending 4 KiB probes cannot cross
+  // the noncanonical hole. Include the first unprobed step in this bound;
+  // no assumption about the caller's absolute stack address is needed.
+  static constexpr uint64_t MaximumAllocation = (uint64_t{1} << 57) + 4095;
+};
+
+std::optional<X64StackProbeCall>
+getCheckedX64StackProbeCall(const BinaryImage &Image, va_t CallVA);
+
 } // namespace neverd::coff_loader
 
-#endif
+#endif // NEVERD_LOADER_COFF_COFFSTACKPROBE_H

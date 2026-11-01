@@ -46,6 +46,7 @@
 #include "neverd/ir/intrinsics/X86/X86FourSource.h"
 #include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
+#include "neverd/ir/med/MedDynamicStack.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 
 #define DEBUG_TYPE "neverd-highc-emitter"
@@ -389,7 +390,7 @@ void HighCWriter::prepareFunctionIdentifiers(
   // a distinct C identifier instead of recursively calling itself.
   std::set<std::string> LinkedRuntimeNames;
   std::set<std::string> DarwinLinkNames;
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &Expr) {
     if (!Expr || !Seen.insert(Expr.get()).second)
       return;
@@ -620,6 +621,7 @@ HighCWriter::floatToIntegerConversion(const HighExpr &E) const {
 
 void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> Names;
+  StackAllocationSizeHelper.clear();
   FloatToIntegerHelpers.clear();
   LeadingZeroHelpers.clear();
   SaturatingLaneHelpers.clear();
@@ -658,11 +660,17 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     UsesX87Extended |= Type && Type->Kind == NdTypeKind::Float &&
                        Type->Size == 10 && Type->SourceName.empty();
   };
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   bool HideEHRuntimeMemory = false;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
     if (!Seen.insert(&E).second)
       return;
+    if (StackAllocationSizeHelper.empty() && E.Kind == ExprKind::Call &&
+        !E.IsIndirectCall && E.CallTarget == "__builtin_alloca" &&
+        E.Operands.size() == 1 &&
+        dynamicStackCallArea(Opts.TheArch, Opts.Format))
+      StackAllocationSizeHelper =
+          MemoryIdentifiers.allocate("neverd_stack_allocation_size");
     if (HideEHRuntimeMemory &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
         !(E.Kind == ExprKind::Call &&
@@ -854,6 +862,13 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::writeMemoryHelpers() {
+  if (!StackAllocationSizeHelper.empty()) {
+    const uint64_t Area = dynamicStackCallArea(Opts.TheArch, Opts.Format);
+    OS << "static inline uint64_t " << StackAllocationSizeHelper
+       << "(uint64_t size) {\n"
+       << "    if (size > UINT64_MAX - " << Area << ") __builtin_trap();\n"
+       << "    return size + " << Area << ";\n}\n\n";
+  }
   for (const auto &[Key, Name] : FloatToIntegerHelpers) {
     auto [Bits, FloatBits, Signed] = Key;
     c_float::writeConversion(
@@ -1214,7 +1229,7 @@ std::string HighCWriter::atomicCompareExchangeExpr(
 
 void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                                          std::set<std::string> &Targets) {
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &Ex) {
     if (!Seen.insert(&Ex).second)
       return;
@@ -1728,7 +1743,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
         Current && Current->Kind == NdTypeKind::Struct && !Current->IsEnum &&
         cNamedTypeSpelling(Current->SourceName) == "_Block_object";
   };
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const ExprPtr &)> CheckExpr = [&](const ExprPtr &Expr) {
     if (!Expr || !Seen.insert(Expr.get()).second)
       return;
@@ -4937,7 +4952,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
     if (Opts.EmitRecordGuards)
       OS << "#endif\n";
   };
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
     if (!E || !Seen.insert(E.get()).second)
       return;
@@ -5138,7 +5153,7 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
   // can discard an unreachable or malformed environment requirement.
   const bool Portable =
       PortableInterface && Funcs.size() == 1 && &Funcs.front() == PortableBody;
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::optional<AArch64ImmediateHighBases> MemoryBases;
   const HighStmt *RequirementStatement = nullptr;
   std::function<void(const ExprPtr &)> CheckRequirement;

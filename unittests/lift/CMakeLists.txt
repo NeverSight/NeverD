@@ -2114,6 +2114,7 @@ target_compile_definitions(NeverDHighCIntegerWidthTests PRIVATE
 
 add_neverd_unittest(NeverDCPointerProjectionTests
   core/HighCPointerAddressTests.cpp
+  core/LLVMCFrameAccessTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
 target_include_directories(NeverDCPointerProjectionTests PRIVATE
@@ -2672,6 +2673,7 @@ add_neverd_unittest(NeverDAArch64ReturnProtectionTests
   LINK_COMPONENTS BackendC BackendLLVM CodeGen IRHigh IRMed IRLow Decode Lift Loader
 )
 add_neverd_unittest(NeverDAArch64AuthenticatedCallTests
+  NO_PRETTY_VALUES
   aarch64/AArch64AuthenticatedCallTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM CodeGen IRHigh IRMed IRLow Decode Lift Loader
 )

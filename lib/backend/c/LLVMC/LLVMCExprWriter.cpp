@@ -3369,9 +3369,10 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
       if (auto Acc = frameSlotAccess(LI->getPointerOperand(),
                                      llvmAccessSize(LI->getType()),
                                      /*AddressOf=*/false, /*Synthesize=*/false,
-                                     /*Overlay=*/false, LI->getType()))
-        return SourceRecorder ? SourceRecorder->expression(*LI, Acc->Text)
-                              : Acc->Text;
+                                     /*Overlay=*/false, LI->getType())) {
+        std::string Read = memberAsAccessed(*LI, Acc->Text, Acc->Type);
+        return SourceRecorder ? SourceRecorder->expression(*LI, Read) : Read;
+      }
     if (auto Acc = frameSlotAccess(LI, 0, /*AddressOf=*/true))
       return AddressText(Acc->Text);
   }

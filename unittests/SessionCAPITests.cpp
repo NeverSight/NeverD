@@ -2437,6 +2437,68 @@ TEST_F(SessionCAPITest,
   }
 }
 
+// main calls stale and keep. stale adjusts RSP by an unconstrained input, so
+// its CALL slot may overlap the fixed read below its saved frame. main is at
+// the entry, stale at +0xb and keep at +0x20.
+constexpr char UnboundedSlotBytes[] =
+    "\xe8\x06\x00\x00\x00"      // main+0x00: call stale
+    "\xe8\x16\x00\x00\x00"      // main+0x05: call keep
+    "\xc3"                      // main+0x0a: ret
+    "\x53"                      // stale: push rbx
+    "\x48\x89\xe3"              //        mov rbx, rsp
+    "\x48\x29\xfc"              //        sub rsp, rdi
+    "\xe8\x09\x00\x00\x00"      //        call keep
+    "\x48\x8b\x43\xf8"          //        mov rax, [rbx-8]
+    "\x48\x89\xdc"              //        mov rsp, rbx
+    "\x5b"                      //        pop rbx
+    "\xc3"                      //        ret
+    "\xb8\x07\x00\x00\x00\xc3"; // keep: mov eax, 7; ret
+constexpr std::string_view UnboundedSlotCode(UnboundedSlotBytes,
+                                             sizeof(UnboundedSlotBytes) - 1);
+
+TEST_F(SessionCAPITest, DecompileFunctionsNamesARefusedUnboundedCallSlot) {
+  const auto Input =
+      write("unbounded-slot.elf",
+            makeNativeELF(false, 0x400000, {}, UnboundedSlotCode));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const uint64_t Main = neverd_session_entry_addr(Session);
+  const uint64_t Stale = Main + 0xb, Keep = Main + 0x20;
+  for (const uint64_t Entry : {Main, Stale, Keep})
+    if (neverd_func_find_by_addr(Session, Entry) < 0)
+      ASSERT_EQ(neverd_func_create(Session, Entry), 0)
+          << takeString(neverd_last_error(Session));
+  const auto Name = [](uint64_t Address) {
+    return "sub_" + llvm::utohexstr(Address);
+  };
+  // The unit names the refused function at its head and defines the other,
+  // as the whole program does.
+  const neverd_va_t Selected[] = {Stale, Keep};
+  const auto Text = takeString(neverd_decompile_functions(
+      Session, Input.c_str(), NEVERD_OUTPUT_C, Selected, 2));
+  ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+  EXPECT_EQ(Text.rfind("/* neverd.not-decompiled: " + Name(Stale) + " at 0x" +
+                           llvm::utohexstr(Stale) + ": med-ir-failed",
+                       0),
+            0u)
+      << Text;
+  EXPECT_NE(Text.find("physical CALL return slot"), std::string::npos) << Text;
+  const auto Defines = [&](uint64_t Address) {
+    for (llvm::StringRef Line : llvm::split(Text, '\n'))
+      if (!Line.starts_with(" ") && !Line.starts_with("extern ") &&
+          Line.contains(Name(Address) + "(") && Line.ends_with("{"))
+        return true;
+    return false;
+  };
+  EXPECT_TRUE(Defines(Keep)) << Text;
+  EXPECT_FALSE(Defines(Stale)) << Text;
+  // Asking for that function alone fails with the reason.
+  EXPECT_TRUE(takeString(neverd_decompile(Session, Stale)).empty());
+  EXPECT_NE(
+      takeString(neverd_last_error(Session)).find("physical CALL return slot"),
+      std::string::npos);
+}
+
 // The code a data executable's entry runs, and where it and the data start.
 constexpr uint64_t DataELFBase = 0x400000;
 constexpr uint64_t DataELFEntry = DataELFBase + 0xb0;
