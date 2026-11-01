@@ -165,6 +165,16 @@ declarations on all three targets. It retains decoration, calling convention,
 parameter/return attributes and by-value record alignment, excluding only DLL
 visibility. Each published prototype is selected with its complete dependent
 types; unrelated compiler intrinsics are not compiled as replacement builtins.
+The generated side also omits the WDK's default calling-convention option;
+published declarations must retain their own conventions, so a lost x86
+`__stdcall` cannot be hidden by compiling both sides with that default.
+Use `--provider NDIS` to compare every `Ndis` function declared by the retained
+target's primary WDK profile. Its inventory comes from fresh preprocessing of
+the original official headers; a missing published declaration therefore fails
+instead of reducing the checked set. Type-only compiler aliases cover inline
+routines as well as imported functions, preserving calling conventions and
+parameter/return attributes. This checks the selected SDK version and NDIS
+profile, rather than claiming that export names establish a private API's type.
 
 `scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
 --cache /path/to/package-cache --output /path/to/call-results
@@ -182,6 +192,10 @@ Both C routes must compile, retain each API call without unknown operands,
 and match its original compiler ABI. These checks do not execute the Windows
 API or a driver. The generation must include `--ucrt` to retain the target
 SDK package identities used by this check.
+The source-call checker also omits the original default calling convention
+when compiling recovered output. It retains the target's SDK C library
+headers for standard includes such as `string.h`; API calling conventions
+must come from the emitted declarations.
 The graphics callers include twelve-argument swap-chain creation and the
 fourteen-argument `D3DCompile2`, retaining target-sized lengths, enum parameters,
 interface outputs and stack arguments on all three targets.
