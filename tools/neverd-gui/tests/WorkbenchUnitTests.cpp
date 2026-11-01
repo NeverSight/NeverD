@@ -10,6 +10,7 @@
 #include "ActionRegistry.h"
 #include "Address.h"
 #include "AddressSpace.h"
+#include "AnalysisProgress.h"
 #include "DeepLink.h"
 #include "DialogReturnKey.h"
 #include "Docking.h"
@@ -66,6 +67,7 @@
 #include <QSplitter>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QStatusBar>
 #include <QStyleOptionButton>
 #include <QStyleOptionComboBox>
 #include <QTabBar>
@@ -85,6 +87,7 @@
 #include <kddockwidgets/qtwidgets/views/Separator.h>
 #include <limits>
 #include <memory>
+#include <qpa/qwindowsysteminterface.h>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -2252,6 +2255,321 @@ private slots:
       QVERIFY(!window.isFullScreen());
       QCOMPARE(window.isMaximized(), maximized);
     }
+  }
+
+  void analysisProgressFollowsOpeningAndBackground() {
+    using Stage = AnalysisProgress::Stage;
+    AnalysisProgress progress;
+    QSignalSpy finished(&progress, &AnalysisProgress::finished);
+    QCOMPARE(progress.stage(), Stage::Idle);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: idle"));
+    // An open into the empty workbench, step by step.
+    progress.update(true, false, true, QStringLiteral("/data/input.exe"), {});
+    QCOMPARE(progress.stage(), Stage::Loading);
+    QVERIFY(progress.firstLoad());
+    QCOMPARE(progress.fileName(), QStringLiteral("input.exe"));
+    QVERIFY(progress.fraction() < 0);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: loading"));
+    progress.loadProgress(QStringLiteral("hash"), 0.5, QString());
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: loading 50%"));
+    QCOMPARE(progress.stepText(), QStringLiteral("Reading the file"));
+    // A step of the whole file has the file's name as detail.
+    progress.loadProgress(QStringLiteral("read"), -1,
+                          QStringLiteral("/data/input.exe"));
+    QVERIFY(progress.detail().isEmpty());
+    progress.loadProgress(QStringLiteral("parse"), -1,
+                          QStringLiteral("PE/COFF code literals"));
+    QCOMPARE(progress.stepText(), QStringLiteral("Parsing the format"));
+    QCOMPARE(progress.detail(), QStringLiteral("PE/COFF code literals"));
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: loading"));
+    // Loaded: the worker reports its background work after the open, finds
+    // functions, then indexes their references.
+    progress.update(false, true, true, QString(), {});
+    QCOMPARE(progress.stage(), Stage::Discovering);
+    QVERIFY(!progress.firstLoad());
+    progress.update(false, true, true, QString(),
+                    {{"state", "pending"}, {"discovery_complete", false}});
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: finding functions"));
+    progress.update(false, true, true, QString(),
+                    {{"state", "pending"}, {"discovery_complete", true}});
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: indexing references"));
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"},
+                     {"discovery_complete", true},
+                     {"done", 25},
+                     {"total", 100}});
+    QCOMPARE(progress.statusText(),
+             QStringLiteral("AU: indexing references 25%"));
+    QCOMPARE(finished.size(), 0);
+    progress.update(false, true, true, QString(),
+                    {{"state", "ready"}, {"discovery_complete", true}});
+    QCOMPARE(progress.stage(), Stage::Finished);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: analysis finished"));
+    QCOMPARE(finished.size(), 1);
+    QVERIFY(finished.at(0).at(0).toString().startsWith(
+        QStringLiteral("Analysis finished in ")));
+    // Later replies report nothing again; the indicator then rests.
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(finished.size(), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(progress.stage(), Stage::Idle, 10000);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: idle"));
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    QCOMPARE(finished.size(), 1);
+  }
+
+  void analysisProgressRestsWithoutBackgroundWork() {
+    using Stage = AnalysisProgress::Stage;
+    AnalysisProgress progress;
+    QSignalSpy finished(&progress, &AnalysisProgress::finished);
+    // Without idle-time analysis the worker indexes references only for a
+    // query that needs them.
+    progress.update(true, false, false, QStringLiteral("input"), {});
+    progress.update(false, true, false, QString(), {{"state", "pending"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    progress.update(false, true, false, QString(),
+                    {{"state", "building"}, {"done", 1}, {"total", 4}});
+    QCOMPARE(progress.statusText(),
+             QStringLiteral("AU: indexing references 25%"));
+    progress.update(false, true, false, QString(), {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    // Opening another file leaves the loaded one in view.
+    progress.update(true, true, true, QStringLiteral("other"),
+                    {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Loading);
+    QVERIFY(!progress.firstLoad());
+    // An index the worker cannot build, and progress after the open.
+    progress.update(false, true, true, QString(), {{"state", "unavailable"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    progress.loadProgress(QStringLiteral("parse"), -1, QString());
+    QCOMPARE(progress.stage(), Stage::Idle);
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    // A failed open.
+    progress.update(true, false, true, QStringLiteral("broken"), {});
+    progress.update(false, false, true, QString(), {});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    // A worker that reports no background work leaves the indicator idle once
+    // its first report is overdue.
+    progress.update(true, false, true, QStringLiteral("quiet"), {});
+    progress.update(false, true, true, QString(), {});
+    QCOMPARE(progress.stage(), Stage::Discovering);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        [&] {
+          progress.update(false, true, true, QString(), {});
+          return progress.stage();
+        }(),
+        Stage::Idle, 10000);
+    QCOMPARE(finished.size(), 0);
+  }
+
+  void analysisProgressReportsOnlyShownChanges() {
+    AnalysisProgress progress;
+    QSignalSpy changed(&progress, &AnalysisProgress::changed);
+    const QJsonObject building{
+        {"state", "building"}, {"done", 100}, {"total", 1000}};
+    progress.update(false, true, true, QString(), building);
+    const auto first = changed.size();
+    QVERIFY(first > 0);
+    // Every query reply refreshes the status bar.
+    for (int reply = 0; reply < 100; ++reply)
+      progress.update(false, true, true, QString(), building);
+    // Less than a percent shows nothing new.
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"}, {"done", 105}, {"total", 1000}});
+    QCOMPARE(changed.size(), first);
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"}, {"done", 110}, {"total", 1000}});
+    QCOMPARE(changed.size(), first + 1);
+  }
+
+  void progressStripAnimatesOnlyWhileSweepingOnScreen() {
+    const auto setState = [](Qt::ApplicationState state) {
+      QWindowSystemInterface::handleApplicationStateChanged<
+          QWindowSystemInterface::SynchronousDelivery>(state);
+    };
+    setState(Qt::ApplicationActive);
+    QWidget window;
+    auto *strip = new ProgressStrip(&window);
+    strip->setFraction(-1);
+    QVERIFY(!strip->animating());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    setState(Qt::ApplicationActive);
+    QVERIFY(strip->animating());
+    strip->setFraction(0.5);
+    QVERIFY(!strip->animating());
+    strip->setFraction(-1);
+    QVERIFY(strip->animating());
+    // While the user works in another application the bar rests.
+    setState(Qt::ApplicationInactive);
+    QVERIFY(!strip->animating());
+    setState(Qt::ApplicationActive);
+    QVERIFY(strip->animating());
+    window.hide();
+    QVERIFY(!strip->animating());
+  }
+
+  void progressStripFillsFromTheStartOfTheLine() {
+    const QColor accent = Theme::instance().chrome(QStringLiteral("Accent"));
+    ProgressStrip strip;
+    strip.resize(100, strip.sizeHint().height());
+    strip.setFraction(0.25);
+    strip.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&strip));
+    const auto filled = [&](int x) {
+      return strip.grab().toImage().pixelColor(x, strip.height() / 2) == accent;
+    };
+    QVERIFY(filled(10));
+    QVERIFY(!filled(90));
+    strip.setLayoutDirection(Qt::RightToLeft);
+    QVERIFY(!filled(10));
+    QVERIFY(filled(90));
+  }
+
+  void analysisIndicatorKeepsTheStatusTextsInPlace() {
+    AnalysisProgress progress;
+    // The status bar's own padding around its texts.
+    QStatusBar bar;
+    auto *indicator = new AnalysisIndicator(progress, &bar);
+    bar.addWidget(indicator);
+    bar.addWidget(new QLabel(QStringLiteral("Down"), &bar));
+    bar.resize(900, bar.sizeHint().height());
+    bar.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&bar));
+    const int idle = indicator->sizeHint().width();
+    progress.update(true, false, true, QStringLiteral("input"), {});
+    const int busy = indicator->sizeHint().width();
+    QVERIFY(busy > idle);
+    // A narrow status bar may still shrink it to the text it shows.
+    QVERIFY(indicator->minimumSizeHint().width() < busy);
+    // Every stage and percent fits the room the first one took.
+    progress.loadProgress(QStringLiteral("hash"), 1, QString());
+    QCOMPARE(indicator->text(), QStringLiteral("AU: loading 100%"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    progress.update(false, true, true, QString(), {{"state", "pending"}});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: finding functions"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"}, {"done", 4}, {"total", 4}});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: indexing references 100%"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: analysis finished"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    // Idle, it takes no more room than its text.
+    progress.update(false, false, true, QString(), {});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: idle"));
+    QCOMPARE(indicator->sizeHint().width(), idle);
+  }
+
+  void analysisIndicatorFitsANarrowStatusBar() {
+    AnalysisProgress progress;
+    QStatusBar bar;
+    auto *indicator = new AnalysisIndicator(progress, &bar);
+    bar.addWidget(indicator);
+    bar.addWidget(new QLabel(QStringLiteral("Down"), &bar));
+    progress.update(true, false, true, QStringLiteral("input"), {});
+    // As narrow as the status bar gets: the bar narrows, the texts stay whole.
+    bar.resize(bar.minimumSizeHint().width(), bar.sizeHint().height());
+    bar.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&bar));
+    QVERIFY(indicator->strip()->width() <
+            indicator->strip()->sizeHint().width());
+    for (const auto *label : bar.findChildren<QLabel *>())
+      if (label->isVisible())
+        QVERIFY2(label->width() >= label->sizeHint().width(),
+                 qPrintable(label->text()));
+  }
+
+  void loadCardShortensALongName() {
+    QWidget window;
+    window.resize(800, 600);
+    AnalysisProgress progress;
+    auto *card = new LoadProgressCard(progress, window);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    const QString name = QString(200, u'n') + QStringLiteral(".exe");
+    progress.update(true, false, true, QStringLiteral("/data/") + name, {});
+    QTRY_VERIFY(card->isVisible());
+    // The middle goes; the start and the extension stay.
+    const auto title = card->title();
+    QVERIFY(title.startsWith(QStringLiteral("Opening nnn")));
+    QVERIFY(title.endsWith(QStringLiteral("nnn.exe")));
+    QVERIFY(!title.contains(name));
+    const auto *label =
+        card->findChild<QLabel *>(QStringLiteral("loadProgressTitle"));
+    QVERIFY(label);
+    QVERIFY(label->fontMetrics().horizontalAdvance(title) <=
+            label->contentsRect().width());
+  }
+
+  void loadCardFitsANarrowWindow() {
+    QWidget window;
+    window.resize(300, 400);
+    auto *view = new QWidget(&window);
+    view->setGeometry(100, 0, 200, 300);
+    AnalysisProgress progress;
+    auto *card = new LoadProgressCard(progress, window);
+    card->setAnchor(view);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    progress.update(true, false, true, QStringLiteral("/data/large.exe"), {});
+    QTRY_VERIFY(card->isVisible());
+    // Narrower than the window by a margin on each side, and inside it.
+    QVERIFY(card->width() < 300);
+    const QRect inside = window.rect().adjusted(8, 8, -8, -8);
+    QVERIFY2(inside.contains(card->geometry()),
+             qPrintable(QStringLiteral("card at %1,%2 %3x%4")
+                            .arg(card->x())
+                            .arg(card->y())
+                            .arg(card->width())
+                            .arg(card->height())));
+    // Wider again, it takes its own width back.
+    window.resize(900, 600);
+    QTRY_VERIFY(card->width() > 300);
+    QVERIFY(window.rect().contains(card->geometry()));
+  }
+
+  void loadCardShowsOnlyOverAnEmptyWorkbench() {
+    QWidget window;
+    window.resize(800, 600);
+    auto *view = new QWidget(&window);
+    view->setGeometry(200, 0, 600, 500);
+    AnalysisProgress progress;
+    auto *card = new LoadProgressCard(progress, window);
+    card->setAnchor(view);
+    AnalysisIndicator indicator(progress);
+    // An open can begin while the workbench waits behind a question; the card
+    // then shows with it.  A quick load finishes before the card appears.
+    progress.update(true, false, true, QStringLiteral("/data/large.exe"), {});
+    QVERIFY(card->isHidden());
+    QTRY_VERIFY(!card->isHidden());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QVERIFY(card->isVisible());
+    QCOMPARE(card->title(), QStringLiteral("Opening large.exe"));
+    QVERIFY(card->testAttribute(Qt::WA_TransparentForMouseEvents));
+    const QPoint center = view->geometry().center();
+    QVERIFY(qAbs(card->geometry().center().x() - center.x()) <= 1);
+    QVERIFY(qAbs(card->geometry().center().y() - center.y()) <= 1);
+    progress.loadProgress(QStringLiteral("parse"), -1,
+                          QStringLiteral("ELF tables"));
+    QCOMPARE(card->step(), QStringLiteral("Parsing the format · ELF tables"));
+    QCOMPARE(indicator.text(), QStringLiteral("AU: loading"));
+    QVERIFY(indicator.strip()->isVisibleTo(&indicator));
+    progress.update(false, true, true, QString(), {});
+    QVERIFY(!card->isVisible());
+    QCOMPARE(indicator.text(), QStringLiteral("AU: finding functions"));
+    // Opening another file keeps the loaded one in view; the status bar
+    // alone reports it.
+    progress.update(true, true, true, QStringLiteral("/data/next.exe"), {});
+    QTest::qWait(600);
+    QVERIFY(!card->isVisible());
+    QCOMPARE(indicator.text(), QStringLiteral("AU: loading"));
+    progress.update(false, false, true, QString(), {});
+    QCOMPARE(indicator.text(), QStringLiteral("AU: idle"));
+    QVERIFY(!indicator.strip()->isVisibleTo(&indicator));
   }
 
   void nativeFrameKeepsTheTitleBarOnScreen() {

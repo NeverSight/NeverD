@@ -98,6 +98,10 @@ public:
   QString workerPath() const { return workerPath_; }
   bool loaded() const { return loaded_; }
   bool opening() const { return opening_; }
+  /// What the user is opening, while it opens.
+  QString openingFile() const { return opening_ ? openingFile_ : QString(); }
+  /// Whether the worker analyzes the loaded file in idle time.
+  bool idleAnalysis() const { return loadOptions_.analysis; }
   /// Whether quitting or opening another file must ask first: edits are
   /// staged or in flight, or a database the user opened lacks its edits.
   bool dirty() const {
@@ -420,7 +424,10 @@ signals:
   void functionsChanged();
   void backgroundChanged();
   void historyChanged();
-  void loadProgress(const QString &phase, double fraction);
+  /// A step of the open: the engine's phase token, the step's completed
+  /// fraction or a negative value while unknown, and the engine's detail.
+  void loadProgress(const QString &phase, double fraction,
+                    const QString &detail);
   /// level: 0 information, 1 warning, 2 error.
   void message(const QString &text, int level);
   void transitionRequested(const QString &action);
@@ -497,6 +504,8 @@ private:
   std::optional<LoadOptions> reloadOptions_;
   /// The open in flight reads the open file again.
   bool reloading_ = false;
+  /// What the open in flight opens, as the user named it.
+  QString openingFile_;
   QString projectPath_, databasePath_;
   QHash<QString, QByteArray> databaseState_;
   std::function<QHash<QString, QByteArray>()> stateProvider_;

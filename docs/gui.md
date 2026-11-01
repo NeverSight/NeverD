@@ -179,9 +179,29 @@ The workbench opens with the default desktop:
   **Exports** as tabs, and the status line under the listing;
 - **Output** across the bottom, with a command line for expressions and
   workbench commands;
-- the status bar with the background analysis indicator (`AU: idle` or busy
-  with progress), the search direction and free disk space. It shares the
-  windows' surface below a hairline, as in Visual Studio Code's Modern themes.
+- the status bar with the analysis indicator (`AU: idle`, or a slim bar beside
+  the current step and its progress), the search direction and free disk
+  space. It shares the windows' surface below a hairline, as in Visual Studio
+  Code's Modern themes.
+
+Opening a file never blocks the workbench with a wait box. While a file opens
+into the empty workbench, a card over **NeverD View-A** names the file, the
+current step with the engine's own words for it (for example `Parsing the
+format · PE/COFF code literals`), the seconds spent and a slim bar; it takes no
+input, a long file name loses its middle rather than its extension, a narrow
+window narrows the card, and an open that takes less than half a second never
+shows it. The status bar's indicator
+follows the same open and then the background analysis: `AU: loading`,
+`AU: finding functions`, `AU: indexing references` with a percentage, then
+`AU: analysis finished` for a few seconds, and **Output** records how long the
+initial analysis took. While busy, the indicator keeps room for its longest
+text, so the status texts after it stay in place; a narrow window narrows its
+bar before it cuts any text. A bar fills where the worker
+reports a fraction, such as hashing a large input or indexing references, and
+sweeps a segment where it reports only a step's start and end; both start at the
+right in right-to-left languages. A bar animates only while it is on screen and
+NeverD is the active application. Without idle-time analysis the indicator stays
+idle until a query builds the reference index.
 
 Every window is a dock: drag tabs to split, stack or float them. A tab shows
 its close button while it is current or under the pointer. Docking tabs use

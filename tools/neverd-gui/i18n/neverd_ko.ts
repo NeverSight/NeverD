@@ -2501,18 +2501,6 @@ Double-click to go to the declaration.</source>
         <translation>기록: 항목 %1개, 커서 %2</translation>
     </message>
     <message>
-        <source>AU: idle</source>
-        <translation>AU: 유휴</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: 작업 중 %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: 작업 중</translation>
-    </message>
-    <message>
         <source>Down</source>
         <translation>아래쪽</translation>
     </message>
@@ -10144,6 +10132,76 @@ Your previous graph is still available.</source>
     <message>
         <source>Work limits</source>
         <translation>작업량 제한</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: 유휴</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: 불러오는 중</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: 불러오는 중 %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: 함수 찾는 중</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: 참조 색인 중</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: 참조 색인 중 %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: 분석 완료</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>분석이 %1초 만에 완료되었습니다</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>파일 읽는 중</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>형식 분석 중</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>코드 찾는 중</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>디버그 정보 불러오는 중</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>프로젝트 여는 중</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>불러오는 중</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>%1 여는 중</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1초</translation>
     </message>
 </context>
 </TS>

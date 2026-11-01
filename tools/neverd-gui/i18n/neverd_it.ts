@@ -2507,18 +2507,6 @@ Fai doppio clic per andare alla dichiarazione.</translation>
         <translation>Cronologia: %1 voci, cursore %2</translation>
     </message>
     <message>
-        <source>AU: idle</source>
-        <translation>AU: inattivo</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: occupato %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: occupato</translation>
-    </message>
-    <message>
         <source>Down</source>
         <translation>Giù</translation>
     </message>
@@ -10180,6 +10168,76 @@ Il grafo precedente è ancora disponibile.</translation>
     <message>
         <source>Work limits</source>
         <translation>Limiti di lavoro</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: inattivo</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: caricamento</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: caricamento %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: ricerca funzioni</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: indicizzazione riferimenti</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: indicizzazione riferimenti %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: analisi completata</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>Analisi completata in %1 s</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>Lettura del file</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>Analisi del formato</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>Ricerca del codice</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>Caricamento delle informazioni di debug</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>Apertura del progetto</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>Caricamento</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>Apertura di %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 s</translation>
     </message>
 </context>
 </TS>

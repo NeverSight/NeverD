@@ -212,6 +212,17 @@ calling convention and parameter/return attributes. See
 [the Microsoft provider guide](microsoft-windows-types.md) for the retained
 inputs and the distinction between a compiler check and native execution.
 
+`scripts/check_microsoft_provider_abis.py --provider NDIS` inventories the
+original primary WDK profile and compares every declared `Ndis` function type
+with the published catalog on each selected target. Missing output declarations,
+refused or empty official inventories, and changed parameter, return or calling
+conventions must fail. Inline SDK routines use type-only external aliases;
+their bodies are not compared to declarations. The Python checker tests cover
+these failure paths without requiring an installed WDK. This is compiler ABI
+coverage, separate from execution against NDIS or loading a kernel driver.
+The published side compiles without the WDK's default calling convention, so
+removing an x86 `__stdcall` annotation must change the comparison result.
+
 The public [Windows ARM64 comparison harness](https://github.com/gmh5225/test_mac_intel/tree/codex/neverd-windows-arm64-20261101/arm64-windows)
 adds `rdbss.py` for the seven RDBSS callers. It links their original WDK objects
 and both recovered C routes at O0/O2 against the same observable API models,
@@ -4834,6 +4845,28 @@ hidden workbench waiting for Quick Start or a worker: the native window's old
 size must not overwrite the saved geometry. Cocoa restore-button input in
 `workbenchReopensWindowed` explicitly skips without event-posting permission;
 its startup state and controls are still checked before that boundary.
+`analysisProgressFollowsOpeningAndBackground` in `NeverDGuiUnits` drives the
+progress the status bar shows through an open's steps, function discovery, the
+reference index and the one report of the finished initial analysis.
+`analysisProgressRestsWithoutBackgroundWork` covers a file opened without
+idle-time analysis, opening over a loaded file, an unavailable index, late
+load progress, a failed open and a worker that reports no background work.
+`analysisProgressReportsOnlyShownChanges`
+checks that repeated query refreshes and steps below one percent report
+nothing, and `progressStripAnimatesOnlyWhileSweepingOnScreen` that the bar
+redraws on a timer only while its fraction is unknown, it is shown and the
+application is active. `progressStripFillsFromTheStartOfTheLine` checks that
+the bar fills from the right in a right-to-left layout, and
+`analysisIndicatorKeepsTheStatusTextsInPlace` that, inside a status bar with
+the theme's padding, every busy stage and percent keeps the indicator's width,
+a narrow status bar may still shrink it to its text, and idle returns it to its
+text's width; `analysisIndicatorFitsANarrowStatusBar` that the narrowest
+status bar narrows the bar before it cuts any text.
+`loadCardShowsOnlyOverAnEmptyWorkbench` checks the card's delay, text,
+centering over its view and mouse transparency, and that opening over a loaded
+file leaves it hidden; `loadCardShortensALongName` that a long name keeps its
+start and extension within the card, and `loadCardFitsANarrowWindow` that a
+narrow window narrows the card and keeps it inside.
 `clientResizeKeepsOppositeEdgesAndBounds` in `NeverDGuiAppearance` checks
 resizing through the size ceiling and starting another drag there. Cocoa's
 inferred maximization must not move the edges opposite the held edge.

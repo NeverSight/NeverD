@@ -2,6 +2,7 @@
 
 #include "../Config.h"
 #include "../ResourceLimits.h"
+#include "AnalysisProgress.h"
 #include "ChooserView.h"
 #include "CodeView.h"
 #include "ComparisonDialog.h"
@@ -1166,15 +1167,22 @@ void MainWindow::buildStatusBar() {
   auto *bar = statusBar();
   // The window manager resizes the window from its edges.
   bar->setSizeGripEnabled(false);
-  analysisLabel_ = new QLabel(bar);
+  progress_ = new AnalysisProgress(this);
+  analysisIndicator_ = new AnalysisIndicator(*progress_, bar);
   directionLabel_ = new QLabel(bar);
   diskLabel_ = new QLabel(bar);
   fileLabel_ = new QLabel(bar);
-  analysisLabel_->setToolTip(
+  analysisIndicator_->setIdleToolTip(
       tr("Background analysis: references and labels are indexed while you "
          "browse"));
-  bar->addWidget(analysisLabel_);
+  bar->addWidget(analysisIndicator_);
   applyIndicator();
+  // Instead of a modal wait, the empty workbench shows the open over its
+  // main view, and the output keeps when the initial analysis finished.
+  loadCard_ = new LoadProgressCard(*progress_, *this);
+  loadCard_->setAnchor(primaryDisassembly_);
+  connect(progress_, &AnalysisProgress::finished, output_,
+          [this](const QString &text) { output_->append(text, 0); });
   bar->addWidget(directionLabel_);
   bar->addWidget(diskLabel_);
   bar->addPermanentWidget(fileLabel_);
@@ -1236,6 +1244,8 @@ void MainWindow::connectSession() {
   });
   connect(&session_, &Session::backgroundChanged, this,
           &MainWindow::updateStatusBar);
+  connect(&session_, &Session::loadProgress, progress_,
+          &AnalysisProgress::loadProgress);
   connect(&session_, &Session::databaseSaved, this, &MainWindow::updateTitle);
   connect(&session_, &Session::historyChanged, this,
           &MainWindow::updateActions);
@@ -2711,21 +2721,10 @@ void MainWindow::updateTitle() {
 }
 
 void MainWindow::updateStatusBar() {
-  const auto &background = session_.background();
-  const auto state = background.value("state").toString();
-  QString analysis;
-  if (!session_.loaded())
-    analysis = tr("AU: idle");
-  else if (state == QLatin1String("building") ||
-           state == QLatin1String("pending")) {
-    const int total = background.value("total").toInt();
-    const int done = background.value("done").toInt();
-    analysis = total ? tr("AU: busy %1%").arg(done * 100 / std::max(1, total))
-                     : tr("AU: busy");
-  } else {
-    analysis = tr("AU: idle");
-  }
-  analysisLabel_->setText(analysis);
+  // Each query reply refreshes the bar; the progress reports only changes.
+  progress_->update(session_.opening(), session_.loaded(),
+                    session_.idleAnalysis(), session_.openingFile(),
+                    session_.background());
   directionLabel_->setText(searchDown_ ? tr("Down") : tr("Up"));
   const QString path = session_.loaded()
                            ? QFileInfo(session_.filePath()).absolutePath()
@@ -3201,7 +3200,7 @@ void MainWindow::confirmMap(const QJsonObject &facts, quint64 epoch,
 }
 
 void MainWindow::applyIndicator() {
-  analysisLabel_->setVisible(
+  analysisIndicator_->setVisible(
       QSettings().value(AnalysisIndicatorKey, true).toBool());
 }
 
@@ -6133,6 +6132,10 @@ void MainWindow::retranslateUi() {
   retitleCodeDocks();
   disassembly_->setSyncName(tr("Hex View-1"));
   updateTitle();
+  analysisIndicator_->setIdleToolTip(
+      tr("Background analysis: references and labels are indexed while you "
+         "browse"));
+  progress_->retranslate();
   updateStatusBar();
 }
 

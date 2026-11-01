@@ -53,6 +53,12 @@ QToolButton[glyphToggle="true"]:hover { background: ${ToolBarHover}; }
 QStatusBar { background: ${StatusBar}; color: ${StatusBarText}; min-height: 22px; border-top: 1px solid ${StatusBarBorder}; }
 QStatusBar QLabel { color: ${StatusBarText}; padding: 0 8px; }
 QStatusBar::item { border: none; }
+/* While a file opens into the empty workbench, a card over its main view
+   reports the step, on the surface of menus and the command palette. */
+QFrame#loadProgressCard { background: ${Menu}; border: 1px solid ${Border}; border-radius: 6px; }
+QFrame#loadProgressCard QLabel { background: transparent; color: ${MenuText}; }
+QFrame#loadProgressCard QLabel#loadProgressTitle { font-weight: 600; }
+QFrame#loadProgressCard QLabel#loadProgressStep, QFrame#loadProgressCard QLabel#loadProgressElapsed { color: ${SecondaryText}; }
 QTreeView, QListView, QTableView { background: ${Base}; alternate-background-color: ${AlternateBase}; color: ${Text}; border: none; selection-background-color: ${Highlight}; selection-color: ${HighlightedText}; outline: none; }
 /* Items keep Qt's own text margin: horizontal padding applies only to the
    items the style sheet paints, so hovered and selected text would shift. */

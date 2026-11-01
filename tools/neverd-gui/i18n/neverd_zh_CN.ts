@@ -2501,18 +2501,6 @@ Double-click to go to the declaration.</source>
         <translation>历史记录：%1 条，当前位置 %2</translation>
     </message>
     <message>
-        <source>AU: idle</source>
-        <translation>AU：空闲</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU：忙碌 %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU：忙碌</translation>
-    </message>
-    <message>
         <source>Down</source>
         <translation>向下</translation>
     </message>
@@ -10144,6 +10132,76 @@ Your previous graph is still available.</source>
     <message>
         <source>Work limits</source>
         <translation>工作量限制</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU：空闲</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU：正在加载</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU：正在加载 %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU：正在查找函数</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU：正在建立交叉引用</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU：正在建立交叉引用 %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU：分析完成</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>分析完成，用时 %1 秒</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>正在读取文件</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>正在解析文件格式</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>正在查找代码</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>正在加载调试信息</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>正在打开项目</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>正在加载</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>正在打开 %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
     </message>
 </context>
 </TS>

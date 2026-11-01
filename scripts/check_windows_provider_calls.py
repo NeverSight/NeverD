@@ -16,7 +16,7 @@ import subprocess
 import zipfile
 
 import build_wdk_driver_fixtures as wdk
-from check_microsoft_provider_abis import compiler_contracts
+from check_microsoft_provider_abis import compiler_contracts, generated_compiler
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "unittests/types/fixtures/windows_provider_calls.c"
@@ -80,6 +80,9 @@ def check(args: argparse.Namespace) -> dict:
         if preprocessing[-2] != "-E":
             raise ValueError("provider has no preprocessing command")
         compiler = preprocessing[:-2]
+        # Recovered function bodies still need the target's C library headers.
+        # API calling conventions must come from the emitted declarations.
+        emitted_compiler = generated_compiler(compiler, keep_sdk_headers=True)
         original_compiler = (provider["metadata"]["cpp_header_bridge"]["arguments"]
                              if args.rdbss else compiler)
         libraries = []
@@ -162,7 +165,7 @@ def check(args: argparse.Namespace) -> dict:
                                  if not line.startswith(("=== NeverD", "File:", "Arch:")))
                 generated = stem.with_suffix(".c")
                 generated.write_text(text + references, encoding="utf-8")
-                compiled = run(compiler + ["-Werror=incompatible-pointer-types",
+                compiled = run(emitted_compiler + ["-Werror=incompatible-pointer-types",
                                           "-Werror=incompatible-function-pointer-types",
                                           "-S", "-emit-llvm", "-O0", str(generated), "-o", "-"],
                                stem.with_suffix(".clang.log"))
