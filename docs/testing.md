@@ -16839,6 +16839,17 @@ loads and relocation-dependent values.
 source proof after SDK call recovery and checks selected/omitted bodies,
 three-function low-prefix forwarding, post-consumer opaque calls and
 optimized/unoptimized cache hits.
+`NeverDSourceInlineCallsTests` compares original Win64 instructions with both
+C routes at O0/O2 under UBSan: pointer reads, writes and pointers into outgoing
+argument slots retain the same results and memory. Source helpers avoid image
+name collisions and do not publish synthetic native-variable identities.
+Observed missing slots and nested unavailable call inputs retain their refusals.
+A direct LLVM dependency test distinguishes dead unknown PHIs from value returns
+and memory readers. `SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
+checks the optimized original-image view, repeat queries, native LLVM and the
+unoptimized view against the same session without changing the native callee's
+seven parameter positions. These are source and ABI tests, not full execution
+of Windows services.
 `OverwrittenCallClobberSpills.*` checks post-call scratch stores,
 with and without flags transfers and unused restores. Both source routes keep
 the call and flags effects while discarding overwritten values. COFF, ELF and

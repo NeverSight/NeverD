@@ -41,6 +41,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1118,6 +1119,14 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
 }
 
 void HighCWriter::writeFunction(const HighFunc &Func) {
+  const auto SourceBody = sourceBodyOrigin(Func);
+  llvm::SaveAndRestore<CSourceMap *> SourceMapScope(
+      Opts.SourceMap, SourceBody ? nullptr : Opts.SourceMap);
+  llvm::SaveAndRestore<CSourceRecorder *> RecorderScope(
+      SourceRecorder, SourceBody ? nullptr : SourceRecorder);
+  if (SourceBody && Opts.EmitComments)
+    OS << "/* Specialized C body of 0x" << llvm::utohexstr(*SourceBody)
+       << "; signature belongs to this source helper. */\n";
   if (Opts.Image && !Func.SourceTypeHint &&
       x64DispatchFrame(*Opts.Image, Func.Entry) &&
       (!EmitFunctionWrapper || Opts.TheArch != Arch::X64))
@@ -1478,7 +1487,7 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
         StatedLocalTypes[Slot.Name] = Slot.Type;
       }
     const std::string Id = "stack:" + std::to_string(Disp);
-    if (Opts.SourceMap) {
+    if (Opts.SourceMap && !sourceBodyOrigin(Func)) {
       SourceVariable Variable;
       Variable.Function = Func.Entry;
       Variable.Id = Id;
