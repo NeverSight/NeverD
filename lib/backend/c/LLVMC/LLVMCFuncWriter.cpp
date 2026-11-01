@@ -67,6 +67,7 @@
 #include <algorithm>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -5405,13 +5406,11 @@ bool LLVMCWriter::joinPrintsNext(const llvm::BasicBlock *From,
       !EHMovedContinuationBlocks.count(From))
     return false;
   const llvm::Function *Fn = From->getParent();
-  bool SeenFrom = false;
-  for (const llvm::BasicBlock &BB : *Fn) {
-    if (!SeenFrom) {
-      if (&BB == From)
-        SeenFrom = true;
-      continue;
-    }
+  // Earlier blocks cannot print next; start at the queried position so late
+  // guards do not repeatedly traverse the function's complete prefix.
+  for (auto It = std::next(From->getIterator()), End = Fn->end(); It != End;
+       ++It) {
+    const llvm::BasicBlock &BB = *It;
     if (FoldedJoinArms.count(&BB) || InlinedFallthroughBlocks.count(&BB) ||
         ConditionChainBodies.count(&BB))
       continue;
