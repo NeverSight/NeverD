@@ -16858,6 +16858,11 @@ checks the optimized original-image view, repeat queries, native LLVM and the
 unoptimized view against the same session without changing the native callee's
 seven parameter positions. These are source and ABI tests, not full execution
 of Windows services.
+The same tests replay the admitted HighC helpers from the cached LLVM proof,
+check stable output without mutating the original views, exclude native and
+unoptimized queries from that cache, and release the preparation on pipeline
+invalidation. Private corpus checks compare both C query orders as well as
+single-threaded and parallel output hashes before measuring latency.
 `OverwrittenCallClobberSpills.*` checks post-call scratch stores,
 with and without flags transfers and unused restores. Both source routes keep
 the call and flags effects while discarding overwritten values. COFF, ELF and
