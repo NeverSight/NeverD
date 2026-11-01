@@ -30,7 +30,7 @@
 
 namespace neverd {
 
-class BinaryImage;
+struct BinaryImage;
 struct TargetRegInfo;
 
 /// What one architecture's local unwind convention fixes for a function whose

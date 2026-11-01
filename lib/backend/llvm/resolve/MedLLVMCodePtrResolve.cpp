@@ -385,6 +385,16 @@ llvm::Constant *MedLLVMEmitter::resolveDeclaredFunctionInterior(va_t Address) {
       llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Address - Owner));
 }
 
+bool MedLLVMEmitter::isInCodePointerTableAddress(uint64_t VA) const {
+  if (!Img || !Img->hasExecutableCodeOwnerAt(VA))
+    return false;
+  // Storage identity belongs to this exact object/slot, not every address
+  // sharing the executable segment containing one pointer table.
+  return (Img->DataInCode.count(VA) || Img->CodePtrRelocSlots.count(VA) ||
+          Img->DataPtrRelocSlots.count(VA)) &&
+         segHasPtrRelocSlots(Img->getSegmentFor(VA));
+}
+
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     uint64_t SlotVA, uint64_t &OutSegVA,
     std::optional<uint64_t> InCodeObjectAddr) {
@@ -918,12 +928,13 @@ MedLLVMEmitter::importedSymbolIdentity(llvm::StringRef ImportName) {
     return nullptr;
   }
   if (!Symbol) {
-    // Only the symbol's address is known here; C reaches it through an
-    // opaque alias until a call proves its type.
+    // Only the symbol's address is known here. Keep its import origin so C
+    // can use an established runtime prototype, or an opaque alias if none
+    // describes it. This does not invent a machine-level call signature.
     auto *Placeholder = new llvm::GlobalVariable(
         *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
         llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
-    data_symbol::mark(*Placeholder);
+    data_symbol::markImport(*Placeholder);
     ImportedSymbolPlaceholders[Name] = Placeholder;
     Symbol = Placeholder;
   }
@@ -1876,7 +1887,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     // Redirect only into a segment that holds pointer slots; also gate out
     // frame-derived "indices" that would be stack-pointer arithmetic.
     uint64_t SegVA = 0;
-    if (auto *G = buildCodePtrSegmentGlobal(Base, SegVA)) {
+    if (auto *G = buildCodePtrSegmentGlobal(Base, SegVA, Base)) {
       bool FrameIdx = false;
       for (const auto &T : IdxTerms)
         if (varIsFrameDerived(T)) {
@@ -3397,10 +3408,10 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     // CRT tables live in .text) is likewise data at a code address. The
     // value's identity is the mirrored slot run, not a lifted function: a
     // table base has no callable identity to lose.
-    if (!RequireCodeRole) {
+    if (!RequireCodeRole && isInCodePointerTableAddress(*Proof.CommonTarget)) {
       uint64_t TableSegVA = 0;
-      if (llvm::Constant *Table =
-              buildCodePtrSegmentGlobal(*Proof.CommonTarget, TableSegVA)) {
+      if (llvm::Constant *Table = buildCodePtrSegmentGlobal(
+              *Proof.CommonTarget, TableSegVA, *Proof.CommonTarget)) {
         llvm::Type *I8Ty = llvm::Type::getInt8Ty(*Ctx);
         llvm::Constant *Offset = llvm::ConstantInt::get(
             llvm::Type::getInt64Ty(*Ctx), *Proof.CommonTarget - TableSegVA);
@@ -3450,52 +3461,19 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       !(RequireCodeRole && (Proof.SawExplicit || Proof.SawCodeDependency)))
     return nullptr;
 
-  // A code-address value that decomposes into a table base among the code
-  // plus runtime index arithmetic — an indexed access the caller could not
-  // claim, its proof polluted by the index's null-valued leaves — still has
-  // exactly one identity: the mirrored table storage. The address denotes
-  // that storage whatever the runtime index is.
+  // The memory-address owner already proves scalar offsets and preserves
+  // every runtime addend. Reuse it for escaping table addresses as well.
   if (!RequireCodeRole) {
-    uint64_t ValueBase = 0;
-    bool HaveValueBase = false;
-    std::vector<MedVar> ValueIdxTerms;
-    if (collectIndexedGlobalBase(V, ValueBase, HaveValueBase, ValueIdxTerms) &&
-        HaveValueBase && !ValueIdxTerms.empty()) {
-      uint64_t ValueSegVA = 0;
-      if (llvm::Constant *Table =
-              buildCodePtrSegmentGlobal(ValueBase, ValueSegVA)) {
-        bool FrameIdx = false;
-        for (const MedVar &T : ValueIdxTerms)
-          if (varIsFrameDerived(T)) {
-            FrameIdx = true;
-            break;
-          }
-        if (!FrameIdx) {
-          llvm::Type *I8Ty = llvm::Type::getInt8Ty(*Ctx);
-          llvm::Constant *Offset = llvm::ConstantInt::get(
-              llvm::Type::getInt64Ty(*Ctx), ValueBase - ValueSegVA);
-          llvm::Constant *TableAddr =
-              llvm::ConstantExpr::getGetElementPtr(I8Ty, Table, Offset);
-          return Builder.CreatePtrToInt(
-              TableAddr,
-              sizeToType(V.Size > 0 ? V.Size
-                                    : static_cast<uint16_t>(PointerSize)),
-              "code.table.value");
-        }
-      }
-    }
+    uint64_t Base = 0;
+    bool HaveBase = false;
+    std::vector<MedVar> Terms;
+    if (collectIndexedGlobalBase(V, Base, HaveBase, Terms) && HaveBase &&
+        !Terms.empty() && isInCodePointerTableAddress(Base))
+      if (llvm::Value *Address = tryResolveCodePtrTablePtr(V, Builder))
+        return Builder.CreatePtrToInt(
+            Address, sizeToType(V.Size > 0 ? V.Size : PointerSize),
+            "code.table.value");
   }
-
-  // A purely runtime value with code-flavoured provenance — an import
-  // call's result, say — has no static code constant to be stale about: its
-  // runtime form is the only honest materialization, and a non-callable
-  // consumer (a null test, a comparison) observes exactly what the original
-  // program observed.
-  if (!RequireCodeRole && ProofResult.Complete && Proof.SawRuntimeValue &&
-      !Proof.SawCode && !Proof.SawNonCode && !Proof.SawUnresolved &&
-      !Proof.SawConflict && !Proof.SawOwnerConflict)
-    if (llvm::Value *Runtime = getVar(V, Builder))
-      return Runtime;
 
   // An explicit code-address origin exists, but its value graph cannot be
   // emitted as one function identity.  The raw original VA is never a sound
@@ -3653,130 +3631,11 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
       // A code-bearing mixed run may still have adjacent unknown/data slots.
       // Preserve only an unadjusted value loaded through an architectural
       // register address; getVar retains its relocation-safe runtime value.
-      // A register base plus a constant field offset is as runtime as the
-      // bare register form: the base is no static table address (the domain
-      // analysis above would have produced exact seeds then), so the load
-      // keeps reading through the runtime pointer — a mirror-backed static
-      // object or a heap allocation alike.
-      const bool RuntimeWalkDomain = TargetArch == Arch::X86 &&
-                                      TargetFormat == BinaryFormat::COFF;
       if (SlotRoles.SawCode && SlotRoles.ValueAdjustment == 0 &&
           SlotRoles.Load && SlotRoles.Load->NumInputs >= 1 &&
-          (SlotRoles.Load->Inputs[0].Kind == MedVar::Reg ||
-           RuntimeWalkDomain)) {
-        if (SlotRoles.Load->Inputs[0].Kind == MedVar::Reg) {
-          if (llvm::Value *Target = getVar(V, Builder))
-            return Target;
-        }
-        if (!RuntimeWalkDomain) {
-          // Fall through to the strict checks below.
-        } else {
-        std::function<bool(const MedVar &, int)> RuntimeBased =
-            [&](const MedVar &Address, int Depth) -> bool {
-          if (Depth > 32)
-            return false;
-          if (Address.Kind == MedVar::Param)
-            return true;
-          if (Address.Kind == MedVar::Reg) {
-            // The stack and frame pointers address runtime storage.
-            const auto &TRI = getTargetRegInfo(TargetArch);
-            if (Address.RegOff == TRI.StackPointer ||
-                Address.RegOff == TRI.FramePointer)
-              return true;
-            // A live-in register is an incoming argument; a register with
-            // a definition is a computed value -- a GOT-base computation
-            // makes it a static anchor -- unless a plain copy forwards to
-            // one of the runtime forms above.
-            const MedOp *RegDef = lookupDef(Address);
-            if (!RegDef)
-              return true;
-            if (auto Forwarded = pointerPreservingInput(*RegDef))
-              return RuntimeBased(*Forwarded, Depth + 1);
-            return false;
-          }
-          if (Address.isConst())
-            return false;
-          const MedOp *Def = lookupDef(Address);
-          if (!Def)
-            return false;
-          if (Def->Opcode == NdOp::INT_ADD && Def->NumInputs >= 2) {
-            // A zero-extended narrow index over a constant base is bounded
-            // by its width times the scale: the access stays inside the
-            // mirrored run whatever the runtime value is.
-            auto BoundedIndex = [&](const MedVar &Idx) {
-              const MedOp *IdxDef = lookupDef(Idx);
-              if (!IdxDef)
-                return false;
-              if (IdxDef->Opcode == NdOp::INT_MULT && IdxDef->NumInputs >= 2 &&
-                  IdxDef->Inputs[1].isConst() && !IdxDef->Inputs[0].isConst()) {
-                const MedOp *Scaled = lookupDef(IdxDef->Inputs[0]);
-                return Scaled && Scaled->Opcode == NdOp::INT_ZEXT;
-              }
-              // A mask AND bounds the index by the mask itself, exactly as a
-              // zero extension bounds it by its width.
-              if (IdxDef->Opcode == NdOp::INT_AND && IdxDef->NumInputs >= 2) {
-                const MedVar *Mask = nullptr;
-                if (IdxDef->Inputs[1].isConst() &&
-                    !IdxDef->Inputs[0].isConst())
-                  Mask = &IdxDef->Inputs[1];
-                else if (IdxDef->Inputs[0].isConst() &&
-                         !IdxDef->Inputs[1].isConst())
-                  Mask = &IdxDef->Inputs[0];
-                return Mask && Mask->ConstVal != 0;
-              }
-              return IdxDef->Opcode == NdOp::INT_ZEXT;
-            };
-            // A static addend (a table address, a GOT-recorded offset)
-            // anchors the address: only a bounded index over it stays
-            // admissible, because the access stays inside the mirrored
-            // table's certified entries.  A scalar addend (a field offset,
-            // a frame adjustment) leaves the base's nature to the other
-            // side.
-            auto StaticAnchor = [&](const MedVar &Addend) {
-              return Addend.isConst() &&
-                     isAddressProvenance(Addend.Provenance);
-            };
-            if (Def->Inputs[1].isConst() && !Def->Inputs[0].isConst()) {
-              if (StaticAnchor(Def->Inputs[1]))
-                return BoundedIndex(Def->Inputs[0]);
-              return RuntimeBased(Def->Inputs[0], Depth + 1) ||
-                     BoundedIndex(Def->Inputs[0]);
-            }
-            if (Def->Inputs[0].isConst() && !Def->Inputs[1].isConst()) {
-              if (StaticAnchor(Def->Inputs[0]))
-                return BoundedIndex(Def->Inputs[1]);
-              return RuntimeBased(Def->Inputs[1], Depth + 1) ||
-                     BoundedIndex(Def->Inputs[1]);
-            }
-            // base + runtime index: either side rooted in a register or
-            // parameter keeps the access runtime-determined.
-            return RuntimeBased(Def->Inputs[0], Depth + 1) ||
-                   RuntimeBased(Def->Inputs[1], Depth + 1);
-          }
-          if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2 &&
-              Def->Inputs[1].isConst() && !Def->Inputs[0].isConst())
-            return RuntimeBased(Def->Inputs[0], Depth + 1);
-          if (const PhiNode *Phi = lookupPhi(Address)) {
-            bool AnyArm = false;
-            for (const auto &[Pred, Arg] : Phi->Args) {
-              if (classifyPhiIncomingEdge(*Phi, Pred) ==
-                  PhiEdgeFeasibility::Infeasible)
-                continue;
-              AnyArm = true;
-              if (!RuntimeBased(Arg, Depth + 1))
-                return false;
-            }
-            return AnyArm;
-          }
-          if (auto Forwarded = pointerPreservingInput(*Def))
-            return RuntimeBased(*Forwarded, Depth + 1);
-          return false;
-        };
-        if (RuntimeBased(SlotRoles.Load->Inputs[0], 0))
-          if (llvm::Value *Target = getVar(V, Builder))
-            return Target;
-        }
-      }
+          SlotRoles.Load->Inputs[0].Kind == MedVar::Reg)
+        if (llvm::Value *Target = getVar(V, Builder))
+          return Target;
       // The LOAD emitter has already routed this address through the mixed
       // relocation mirror. Reuse that relocation-safe runtime value only when
       // every reachable slot is a code/import field and no post-load pointer

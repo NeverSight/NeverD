@@ -47,6 +47,9 @@ bool sourceReturnReadsRegister(const MedFunc &Func, const TargetRegInfo &TRI,
 /// flow can locate restored x86 SEH stacks; this is not a reusable MedIR fact.
 /// Where that proof is incomplete, the EH3/EH4 frame protocol still places
 /// reloads of the saved stack pointer and runtime callback stacks.
+/// A byte-authenticated x64 page probe can likewise bound its subsequent
+/// same-block allocation after an uninterrupted normal return. These bounds
+/// attach only to exact fresh Low-to-Med operation identities.
 ///
 /// With \p Deferred, each such load is recorded there instead of refusing the
 /// function: whether its value is observed is known only once call arguments

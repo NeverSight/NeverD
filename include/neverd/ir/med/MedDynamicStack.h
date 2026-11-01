@@ -40,6 +40,12 @@ struct MedDynamicStackLookups {
       ReloadSources;
 };
 
+/// Outgoing call storage below a dynamic object's usable base. Win64 keeps
+/// its register home area at the new SP and places the object above it; a
+/// separately allocated source object must include both areas. This is not
+/// an adjustment to the machine's allocation-size value or stack coordinate.
+uint64_t dynamicStackCallArea(Arch Architecture, BinaryFormat Format);
+
 /// Whether \p V derives from the entry stack pointer through copies, width
 /// changes, masks, additions and subtractions, and the PHIs of a loop that
 /// allocates in each iteration.

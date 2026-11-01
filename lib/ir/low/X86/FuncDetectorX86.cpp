@@ -301,14 +301,11 @@ void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
   Dec.setText(KeptText);
 }
 
-void scanCodeAddressImmediatesX86(
-    const BinaryImage &Img, Decoder &Dec,
-    std::vector<std::pair<va_t, va_t>> &Out,
-    std::map<va_t, std::vector<va_t>> &JumpReaders,
-    const Cancellation *Control) {
+void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
+                                  std::vector<std::pair<va_t, va_t>> &Out,
+                                  const Cancellation *Control) {
   const auto &Fields = Img.CodeAddressRelocOperands;
-  const auto &DataFields = Img.DataAddressRelocOperands;
-  if (Fields.empty() && DataFields.empty())
+  if (Fields.empty())
     return;
   const bool KeptDetail = Dec.detailEnabled(), KeptText = Dec.textEnabled();
   for (const Section &Sec : Img.Sections) {
@@ -322,16 +319,11 @@ void scanCodeAddressImmediatesX86(
     const va_t End =
         std::min<va_t>(Sec.VA + Sec.Size, Seg->VA + Seg->Data.size());
     auto Field = Fields.lower_bound(Sec.VA);
-    auto DataField = DataFields.lower_bound(Sec.VA);
     for (va_t Cur = Sec.VA; Cur < End;) {
       func_detect_detail::checkCancellation(Control);
       while (Field != Fields.end() && Field->first < Cur)
         ++Field;
-      while (DataField != DataFields.end() && DataField->first < Cur)
-        ++DataField;
-      const va_t NextField = std::min(
-          Field == Fields.end() ? InvalidVA : Field->first,
-          DataField == DataFields.end() ? InvalidVA : DataField->first);
+      const va_t NextField = Field == Fields.end() ? InvalidVA : Field->first;
       if (NextField >= End)
         break;
       const uint8_t *Bytes = Seg->Data.data() + (Cur - Seg->VA);
@@ -362,21 +354,6 @@ void scanCodeAddressImmediatesX86(
                 It->second.Kind == RelocatedAddressFieldKind::Generic)
               Out.emplace_back(Cur, normalizeCodeAddress(It->second.TargetVA,
                                                          Img.Arch, Img.Mode));
-          if (DI.Id == X86_INS_JMP && X86.op_count == 1 &&
-              X86.operands[0].type == X86_OP_MEM &&
-              X86.operands[0].mem.base == X86_REG_INVALID &&
-              X86.operands[0].mem.index != X86_REG_INVALID &&
-              X86.operands[0].mem.scale == Img.getPointerSize() &&
-              Encoding.disp_size == Img.getPointerSize()) {
-            const auto It = DataFields.find(Cur + Encoding.disp_offset);
-            if (It != DataFields.end() &&
-                It->second.Width == Img.getPointerSize() &&
-                !It->second.PCRelativeFromInstructionEnd &&
-                It->second.Kind == RelocatedAddressFieldKind::Generic &&
-                It->second.TargetVA ==
-                    static_cast<uint32_t>(X86.operands[0].mem.disp))
-              JumpReaders[It->second.TargetVA].push_back(Cur);
-          }
         }
       }
       Cur = Next;

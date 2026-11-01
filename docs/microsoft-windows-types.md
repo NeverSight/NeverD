@@ -140,10 +140,23 @@ Direct3D 11/12, DXGI and D3DCompiler likewise select their exported C functions
 with the complete record and callback dependencies. These units cover device
 and swap-chain creation, root-signature serialization, factory creation and
 shader compilation; they do not infer a COM method call from a vtable slot.
-The pinned RDBSS `rxcontx.h` declares two different anonymous enums with the
-same `RX_CONTEXT_CREATE_FLAGS` typedef in C mode. The independent compiler
-rejects that unit, so it remains outside this catalog; changing a declaration
-to suppress the conflict would require a separately checked bridge.
+RDBSS is an independent kernel unit using the official mini-redirector
+profile. The pinned `rxcontx.h` gives two different anonymous enums the same
+`RX_CONTEXT_CREATE_FLAGS` typedef only in C. The generator compares both
+complete enumerator lists with the original C++ header before using its
+`RX_CONTEXT_LOWIO_FLAGS` name for the second C declaration. Other conflicts
+or different values reject the unit. Three empty-parentheses declarations
+also receive C `(void)` prototypes only after comparison with their original
+C++ types. The original SDK files remain unchanged.
+Before importing this unit, compiler-visible type aliases compare every RDBSS
+routine's parameter and return ABI between the C declarations and original
+C++ headers on the selected target. Newly imported companion routines require
+the same proof. This includes inline routines without
+comparing an inline implementation to an external LLVM declaration. Required
+record layouts are checked again after merging. The manifest retains proof
+sources, compiler arguments and hashes; no C++ method is invented as a C API.
+Every selected RDBSS declaration is also compiled after parsing, renaming and
+merging, and its ABI is compared with the original C++ header before publication.
 
 `scripts/check_microsoft_provider_abis.py --generated /path/to/microsoft-windows
 --output /path/to/abi-results --neverd build-release/bin/neverd` compares
@@ -152,6 +165,16 @@ declarations on all three targets. It retains decoration, calling convention,
 parameter/return attributes and by-value record alignment, excluding only DLL
 visibility. Each published prototype is selected with its complete dependent
 types; unrelated compiler intrinsics are not compiled as replacement builtins.
+The generated side also omits the WDK's default calling-convention option;
+published declarations must retain their own conventions, so a lost x86
+`__stdcall` cannot be hidden by compiling both sides with that default.
+Use `--provider NDIS` to compare every `Ndis` function declared by the retained
+target's primary WDK profile. Its inventory comes from fresh preprocessing of
+the original official headers; a missing published declaration therefore fails
+instead of reducing the checked set. Type-only compiler aliases cover inline
+routines as well as imported functions, preserving calling conventions and
+parameter/return attributes. This checks the selected SDK version and NDIS
+profile, rather than claiming that export names establish a private API's type.
 
 `scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
 --cache /path/to/package-cache --output /path/to/call-results
@@ -161,10 +184,18 @@ and pinned target import libraries. Add `--kernel` for SD Port, PortCls and
 Stream Class callers compiled from the WDK headers. Those driver fixtures use
 synthetic import libraries whose symbols come from the original compiler,
 including x86 stack decoration; they do not execute an API implementation.
+Add `--kernel --rdbss` for original RDBSS C++ callers, including eight-argument
+registration, byte output pointers, void and pointer results, and the three
+no-argument routines. Their recovered source is compiled as C against each
+target's compiler contract.
 Both C routes must compile, retain each API call without unknown operands,
 and match its original compiler ABI. These checks do not execute the Windows
 API or a driver. The generation must include `--ucrt` to retain the target
 SDK package identities used by this check.
+The source-call checker also omits the original default calling convention
+when compiling recovered output. It retains the target's SDK C library
+headers for standard includes such as `string.h`; API calling conventions
+must come from the emitted declarations.
 The graphics callers include twelve-argument swap-chain creation and the
 fourteen-argument `D3DCompile2`, retaining target-sized lengths, enum parameters,
 interface outputs and stack arguments on all three targets.

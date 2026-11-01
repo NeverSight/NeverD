@@ -14,6 +14,7 @@
 #include "../../../safety/StackSlotFlow.h"
 #include "../X86/RegistrationCallStacks.h"
 #include "../X86/SEHCallStackRanges.h"
+#include "../X86/X64StackProbeAllocations.h"
 #include "../abi/MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
@@ -551,6 +552,19 @@ static bool checkSourceCallReturnReads(
       }
     }
   }
+  // One period contains a return slot and a gap of the same width. Aggregate
+  // unknown CALL footprints once, so each load need not scan all calls. This
+  // query is deferred until the ordinary exact/range proofs need it.
+  const unsigned ResiduePeriod = 2 * Width;
+  const uint64_t AllResidues = (uint64_t{1} << ResiduePeriod) - 1;
+  const auto ResidueMask = [&](uint64_t Begin, uint64_t Size) {
+    if (Size >= ResiduePeriod)
+      return AllResidues;
+    const uint64_t Bits = ((uint64_t{1} << Size) - 1)
+                          << (Begin & (ResiduePeriod - 1));
+    return (Bits | (Bits >> ResiduePeriod)) & AllResidues;
+  };
+  std::map<const MedOp *, uint64_t> CallResidues;
   // Whether every load's history reaches no CALL write in Ends, which are
   // bounded from above by Bounds where they have no range. With Defer, a load
   // such a write reaches is recorded there and leaves the proof instead.
@@ -561,7 +575,7 @@ static bool checkSourceCallReturnReads(
                            size_t &Budget,
                            std::vector<MedCallReturnRead> *Defer) {
     std::vector<std::pair<int64_t, int64_t>> Ranges;
-    bool UnknownLocation = false;
+    uint64_t UnknownResidues = 0;
     for (const auto &[Call, End] : Ends) {
       if (!End)
         if (const auto Below = Bounds.find(Call); Below != Bounds.end()) {
@@ -571,7 +585,10 @@ static bool checkSourceCallReturnReads(
         }
       const auto Begin = End ? CallSlotBegin(*End) : std::nullopt;
       if (!Begin) {
-        UnknownLocation = true;
+        const auto Residue = CallResidues.find(Call);
+        UnknownResidues |= !End && Residue != CallResidues.end()
+                               ? ResidueMask(Residue->second - Width, Width)
+                               : AllResidues;
         continue;
       }
       Ranges.emplace_back(*Begin, End->Max);
@@ -585,7 +602,7 @@ static bool checkSourceCallReturnReads(
         Merged.back().second = std::max(Merged.back().second, Range.second);
     }
     auto OverlapsCall = [&](const Access &Load) {
-      if (UnknownLocation)
+      if (UnknownResidues & ResidueMask(Load.Begin, Load.End - Load.Begin))
         return true;
       const auto It = std::lower_bound(Merged.begin(), Merged.end(), Load.Begin,
                                        [](const auto &Range, int64_t Begin) {
@@ -1058,6 +1075,49 @@ static bool checkSourceCallReturnReads(
         *NeedsCalleeFacts = true;
     }
   }
+  int64_t FirstRead = INT64_MAX, LastRead = INT64_MIN;
+  for (const Access &Load : Loads) {
+    FirstRead = std::min(FirstRead, Load.Begin);
+    LastRead = std::max(LastRead, Load.End);
+  }
+  const auto MayReachRead = [&](const auto &End) {
+    const auto Begin = End ? CallSlotBegin(*End) : std::nullopt;
+    return !Begin || (*Begin < LastRead && End->Max > FirstRead);
+  };
+  if (FreshSource && llvm::any_of(CallEnds, [&](const auto &Entry) {
+        return MayReachRead(Entry.second);
+      })) {
+    const auto Allocations = x64_stack_probe::probedStackAllocations(
+        Func, *FreshSource, Image, Remaining);
+    if (!Remaining)
+      return Exhausted();
+    if (!Allocations.empty()) {
+      std::vector<const MedOp *> Pending;
+      std::vector<MedVar> PendingStacks;
+      for (const auto &[Call, End] : CallEnds)
+        if (const auto Stack = StackPointers.find(Call);
+            Stack != StackPointers.end() && MayReachRead(End)) {
+          Pending.push_back(Call);
+          PendingStacks.push_back(Stack->second);
+        }
+      const auto Bounds = entryStackOffsetRangesFromProvenDefinitions(
+          Func, PendingStacks, Allocations, Image.Arch, Image.abiFormat(),
+          Func.EntryKind);
+      for (size_t I = 0; I < Bounds.size(); ++I)
+        if (Bounds[I]) {
+          auto &End = CallEnds.at(Pending[I]);
+          if (!End)
+            End = Bounds[I];
+          else {
+            const EntryStackOffsetRange Narrowed{
+                std::max(End->Min, Bounds[I]->Min),
+                std::min(End->Max, Bounds[I]->Max)};
+            if (Narrowed.Min <= Narrowed.Max)
+              End = Narrowed;
+          }
+        }
+    }
+  }
   if (FreshSource &&
       llvm::any_of(CallEnds, [](const auto &Entry) { return !Entry.second; })) {
     const auto HandlerBounds = x86_seh::sourceHandlerCallStackRanges(
@@ -1095,6 +1155,28 @@ static bool checkSourceCallReturnReads(
       for (size_t I = 0; I < Pending.size(); ++I)
         if (Bounds[I])
           CallBelow.emplace(Pending[I], *Bounds[I]);
+    }
+  }
+  if (!Loads.empty()) {
+    std::vector<const MedOp *> Pending;
+    std::vector<MedVar> PendingStacks;
+    for (const auto &[Call, End] : CallEnds)
+      if (!End && !CallBelow.count(Call) &&
+          sourceCallReturnAddressBias(&Image, Image.Arch, Call->Addr) == Width)
+        if (const auto Found = StackPointers.find(Call);
+            Found != StackPointers.end()) {
+          Pending.push_back(Call);
+          PendingStacks.push_back(Found->second);
+        }
+    if (!Pending.empty()) {
+      if (!charge(Remaining, Pending.size()))
+        return Exhausted();
+      const auto Residues = entryStackOffsetResidues(
+          Func, PendingStacks, Image.Arch, Image.abiFormat(), ResiduePeriod,
+          Func.EntryKind);
+      for (size_t I = 0; I < Pending.size(); ++I)
+        if (Residues[I])
+          CallResidues.emplace(Pending[I], *Residues[I]);
     }
   }
   return Observe(CallEnds, CallBelow, Remaining, Deferred);

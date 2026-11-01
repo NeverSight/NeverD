@@ -1,5 +1,14 @@
 # Remaining x64 C-quality work
 
+Address-only imported runtime symbols now retain their import origin separately
+from relocated data. LLVM C uses the existing format-specific runtime prototype
+for their aliases, including headers and weak linkage. This closes the MinGW
+whole-module Clang object-generation crash when a global initializer names
+`__C_specific_handler` before an SEH function. Data objects with the same name
+and unknown imports retain opaque aliases. O0/O2 object checks cover the reduced
+case and the existing MinGW whole-module fixture; these checks do not establish
+native regenerated exception execution or remove dynamic-stack proof failures.
+
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
@@ -539,6 +548,14 @@ refused. Physical stack switches still require the explicit continuation ABI.
 The shared stack-address owner also recognizes canonical zero-extended
 32-bit memory-address containers. This closes the i386 observation gap without
 treating truncated 64-bit pointers or wider incoming registers as frame roots.
+Fresh x64 COFF conversion now consumes the uninterrupted normal-return bound
+of a completely byte-authenticated descending page probe. The fact belongs to
+the subsequent same-block RAX allocation and is invalidated by register writes
+and competing control flow. The MinGW `__pformat_xint.isra.0` omission is covered
+by this proof; names alone and altered probe bodies still provide no bound.
+Its dynamic source storage also retains the Win64 outgoing home area, with
+checked size addition shared through the ABI layout. Native exception recovery
+and aliases with independently represented fixed objects need separate proof.
 Both spill proofs share a checked private-frame extent predicate: extreme
 positive offsets cannot wrap into frame storage or Windows home slots.
 Post-recovery Win64 scalar borrows now have a shared complete-use proof over
@@ -815,7 +832,7 @@ The public constant-branch and worker chunk regressions cover these boundaries.
 | Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
 | UCRT declarations do not yet imply complete source-call coverage | Use `scripts/check_windows_ucrt_calls.py` with retained official inputs. Pointer qualifiers, variadic prefixes, pointer-only record/union tags, mixed scalar banks and x86 float/double stack arguments now have public contracts. Declared x87 scalar results retain TOP and exact source precision; real extended arithmetic still requires an 80-bit C type. Dense ARM64 HFAs retain their complete source groups in registers and ordinary COFF/ELF stack slots, and all one-to-four float/double result fields. The HFA adapter still requires an FP/HFA result; integer/void-result variants, padded or over-aligned records, Apple stack packing and nonordinary conventions remain outside it. Checked HFA results now retain their register-record shape in HighIR, avoiding artificial 192/256-bit C integers. Both C routes have Windows ARM64 target compilation, host sanitizer execution and freestanding Linux AArch64 execution matrices for import thunks/slots and single/chained calls; native Windows runtime execution remains separate. A wrapper without a source return type or observing caller still cannot infer a source aggregate result merely from residual FP registers. The strict SDK check independently compares anonymous enum values/layout and compiles the unmodified standalone output too; compiler success alone does not certify execution. |
 | Toolset coverage varies by hosted runner | Verify each compiler's actual version and path before publishing corpus artifacts. Treat unavailable versions as explicit skips. |
-| Official Windows API coverage is provider-scoped | SD Port, Stream Class, PortCls/DRM, display miniport, D3DKMT, CLFS and TPM declarations now use the same target-specific layout and compiler-ABI checks. The WDK C header's conflicting RDBSS enum typedef still needs an independently checked bridge. Private exports and other SDK versions remain unauthenticated; export names alone cannot establish parameters. Driver call fixtures are import-only, not native driver execution. |
+| Official Windows API coverage is provider-scoped | SD Port, Stream Class, PortCls/DRM, display miniport, D3DKMT, CLFS and TPM declarations use target-specific layout and compiler-ABI checks. RDBSS now compares its C enum identities and all imported routine types with the original official C++ header before import and after publishing; its three no-argument declarations retain complete prototypes. Seven original callers check both C routes on x86, x64 and ARM64. Their native Windows ARM64/x64 comparisons also check arguments, results and output buffers against independently specified API models. Private exports and other SDK versions remain unauthenticated; export names alone cannot establish parameters. These user-process models do not execute the Windows RDBSS implementation or load a kernel driver. |
 | Interior code-address bits have no portable C or general LLVM blockaddress contract | Preserve precise CLI refusal and existing-file protection at full/selected optimized/unoptimized emission. Other atomic functions must still emit. LLVM verification does not prove bit observation; close opaque transport versus inspected bits at the shared LLVM owner. |
 | Explicitly lifting an interior fragment still lacks its caller's machine state | Navigate through authenticated recovered ownership when available. A forced standalone fragment must not invent missing register or stack inputs; executable-section data addresses alone do not establish a relocatable function identity. |
 | MinGW x86 call arguments can remain unknown after function boundaries are repaired | Inspect the recovered callee ABI and each caller's actual register/stack evidence. Do not treat residual unknown arguments as evidence that an internal label is still a function. |

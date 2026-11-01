@@ -808,6 +808,7 @@ private:
   /// pointer entry is relocated to its recompiled target rather than emitted as
   /// a stale VA.
   bool segHasPtrRelocSlots(const Segment *S) const;
+  bool isInCodePointerTableAddress(uint64_t VA) const;
 
   /// True when the loader recorded a relocated code- or data-pointer slot in
   /// segment \p S, import storage aside.  In code such a slot lies only inside

@@ -14,12 +14,19 @@
 #include "neverd/ir/med/MedDynamicStack.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/TargetRegInfo.h"
 
 #include <algorithm>
 #include <functional>
 #include <set>
 
 namespace neverd {
+
+uint64_t dynamicStackCallArea(Arch Architecture, BinaryFormat Format) {
+  return getTargetRegInfo(Architecture)
+      .integerArgumentLayout(Format)
+      .CallStackBase;
+}
 
 bool medStackPointerDerived(const MedVar &V, const MedDynamicStackLookups &L,
                             int Depth) {

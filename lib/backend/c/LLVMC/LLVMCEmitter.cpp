@@ -684,8 +684,18 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
       writeImageBaseDeclaration(Identifier);
       continue;
     }
+    // Address-only imports can already have a runtime declaration even when
+    // no call in this module proves a machine signature. In particular, an
+    // object alias for an SEH personality conflicts with the compiler's own
+    // function of that link name once a preceding initializer takes it.
+    OS << "extern ";
+    if (const auto *Prototype = addressedImportPrototype(Global))
+      OS << c_library::declaration(*Prototype, Identifier, Opts.TheArch,
+                                   Opts.Format);
+    else
+      OS << "unsigned char " << Identifier << "[]";
     // The label is the symbol, with the underscore a format gives a C name.
-    OS << "extern unsigned char " << Identifier << "[] __asm__(\""
+    OS << " __asm__(\""
        << escapeCString(symbolOfCName(cNameOfGlobal(Global.getName(), true),
                                       Opts.Format, Opts.TheArch))
        << "\")";
@@ -1154,6 +1164,15 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     if (!Global.hasInitializer() && !Global.use_empty())
       if (const std::optional<va_t> Addr = parseNdDataSymbol(Global.getName()))
         NoteHeaderObject(*Addr);
+
+  for (const auto &[Global, Identifier] : ExternalDataIdentifiers) {
+    (void)Identifier;
+    if (OnlyFunction && !SelectedGlobals.count(Global))
+      continue;
+    if (const auto *Prototype = addressedImportPrototype(*Global);
+        Prototype && !Prototype->Header.empty())
+      Headers.insert(std::string(Prototype->Header));
+  }
 
   if (HasCIntrinsics)
     for (const char *Hdr : getArchIntrinsicHeaders(Opts.TheArch))
@@ -2055,6 +2074,15 @@ std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
          declarationToC(cDisplayType(Function.ReturnType),
                         Name.str() + "(" + (Params.empty() ? "void" : Params) +
                             ")");
+}
+
+const libc::LibCPrototype *LLVMCWriter::addressedImportPrototype(
+    const llvm::GlobalVariable &Global) const {
+  if (!data_symbol::isImport(Global))
+    return nullptr;
+  const auto Name = cNameOfGlobal(Global.getName(), true);
+  return userDeclaresRoutine(Name) ? nullptr
+                                   : libc::libcPrototype(Name, Opts.Format);
 }
 
 LLVMCWriter::LibraryCallee

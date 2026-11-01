@@ -18,6 +18,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/loader/COFF/COFFStackProbe.h"
 #include "neverd/loader/ExceptionFunction.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
@@ -301,6 +302,161 @@ int main(void) {
   return (uint64_t)sub_140001000() != 0x112345678ULL || calls != 2;
 }
 )C");
+}
+
+BinaryImage probedAllocationImage(unsigned Change = 0,
+                                  bool TouchObject = false) {
+  // A negative signed allocation could put the second CALL over saved R13.
+  // The first CALL probes the unsigned size before it can reach that point.
+  std::vector<uint8_t> Code = {
+      0x53,                      // push rbx
+      0x41, 0x55,                // push r13
+      0x48, 0x83, 0xec, 0x28,    // sub rsp,40
+      0x48, 0x89, 0xe3,          // mov rbx,rsp
+      0x89, 0x4b, 0x18,          // mov [rbx+24],ecx
+      0x48, 0x63, 0xc1,          // movsxd rax,ecx
+      0xe8, 0x6b, 0,    0,    0, // call +128
+      0xb9, 4,    0,    0,    0, // mov ecx,4 (unrelated definition)
+      0x48, 0x29, 0xc4,          // sub rsp,rax
+      0xe8, 0x3e, 0,    0,    0, // call +96
+      0x8b, 0x43, 0x18,          // mov eax,[rbx+24]
+      0x48, 0x89, 0xdc,          // mov rsp,rbx
+      0x48, 0x83, 0xc4, 0x28,    // add rsp,40
+      0x41, 0x5d, 0x5b, 0xc3};   // pop r13; pop rbx; ret
+  if (TouchObject) {
+    // The object's last byte lies just below the former outgoing area's end.
+    // Keeping only `size` bytes at the new SP omits its 32-byte home prefix.
+    Code.insert(Code.begin() + 29, {0xc6, 0x44, 0x04, 0x1f, 0x5a});
+    Code[35] = 0x39; // moved call to +96
+    Code.insert(Code.begin() + 42, {0x0f, 0xb6, 0x44, 0x04, 0x1f});
+  }
+  const va_t End = Entry + Code.size();
+  if (Change == 5) {
+    Code[21] = 0x48; // mov rax,rdx: the allocation no longer uses probed RAX
+    Code[22] = 0x89;
+    Code[23] = 0xd0;
+    Code[24] = Code[25] = 0x90;
+  }
+  if (Change == 6)
+    std::fill(Code.begin() + 16, Code.begin() + 21, 0x90);
+  Code.resize(96, 0xcc);
+  Code.insert(Code.end(), {0xb8, 7, 0, 0, 0, 0xc3});
+  Code.resize(128, 0xcc);
+  // Independently retained machine bytes from a MinGW page probe. The
+  // original execution below uses these bytes, including both memory touches.
+  Code.insert(Code.end(),
+              {0x51, 0x50, 0x48, 0x3d, 0,    0x10, 0,    0,    0x48, 0x8d,
+               0x4c, 0x24, 0x18, 0x72, 0x19, 0x48, 0x81, 0xe9, 0,    0x10,
+               0,    0,    0x48, 0x83, 9,    0,    0x48, 0x2d, 0,    0x10,
+               0,    0,    0x48, 0x3d, 0,    0x10, 0,    0,    0x77, 0xe7,
+               0x48, 0x29, 0xc1, 0x48, 0x83, 9,    0,    0x58, 0x59, 0xc3});
+  if (Change == 1)
+    Code[128 + 13] = 0x7c; // signed, not unsigned, size comparison
+  if (Change == 2)
+    std::fill(Code.begin() + 128 + 43, Code.begin() + 128 + 47, 0x90);
+  if (Change == 7)
+    Code[128] = 0xc3; // the name alone cannot certify a normal-return bound
+  auto Image = makeImage(std::move(Code), Win64);
+  Image.Segments[0].FileSz = Image.Segments[0].Size;
+  Section Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = Text.FileSz = Image.Segments[0].Size;
+  Text.Flags = Image.Segments[0].Flags;
+  Image.Sections.push_back(Text);
+  Image.ExceptionMetadata.Functions[0].CodeRange.End = End;
+  Image.ExceptionMetadata.rebuildIndex();
+  auto Probe = Symbol::makeFunc(Entry + 128);
+  Probe.Name = "___chkstk_ms";
+  Probe.Origin = Change == 4 ? NameOrigin::Analysis : NameOrigin::Stated;
+  Image.Symbols.push_back(Probe);
+  auto Callee = Symbol::makeFunc(Entry + 96);
+  Callee.Name = "probed_frame_helper";
+  Image.Symbols.push_back(Callee);
+  if (Change == 3)
+    Image.Segments[0].Flags = Image.Segments[0].Flags | SegmentFlags::Writable;
+  return Image;
+}
+
+TEST(SourceCallReturnWrites, OnlyTheCompleteProbeBodySuppliesAReturnBound) {
+  auto Image = probedAllocationImage();
+  ASSERT_TRUE(coff_loader::getCheckedX64StackProbeCall(Image, Entry + 16));
+  for (size_t I = 128; I < Image.Segments[0].Data.size(); ++I) {
+    SCOPED_TRACE(I);
+    Image.Segments[0].Data[I] ^= 1;
+    EXPECT_FALSE(coff_loader::getCheckedX64StackProbeCall(Image, Entry + 16));
+    Image.Segments[0].Data[I] ^= 1;
+  }
+  for (unsigned Change = 1; Change <= 7; ++Change)
+    for (bool LLVM : {false, true})
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(Change);
+        SCOPED_TRACE(LLVM);
+        SCOPED_TRACE(NoOpt);
+        const auto Changed = probedAllocationImage(Change);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.SourceProjection = true;
+        Options.LiftMode = LLVM;
+        Options.NoOpt = NoOpt;
+        Options.OnlyFunctionEntries = {Entry};
+        const auto Result = Pipeline().run(Changed, Context, Options);
+        EXPECT_FALSE(Result.Success) << "an unproved allocation was admitted";
+      }
+}
+
+TEST(SourceCallReturnWrites, ProbedDynamicAllocationsKeepFixedFrameValues) {
+  for (bool TouchObject : {false, true}) {
+    SCOPED_TRACE(TouchObject);
+    const auto Image = probedAllocationImage(0, TouchObject);
+    std::string Prelude = R"C(
+#if defined(__linux__) && defined(__x86_64__)
+#define _GNU_SOURCE
+#include <sys/mman.h>
+#include <stdint.h>
+#include <string.h>
+typedef uint64_t (__attribute__((ms_abi)) *original_fn)(uint32_t);
+__attribute__((no_sanitize("function")))
+static uint64_t run_original(original_fn function, uint32_t size) {
+  return function(size);
+}
+static const unsigned char original_code[] = {
+)C";
+    for (uint8_t Byte : Image.Segments[0].Data)
+      Prelude += std::to_string(Byte) + ",";
+    Prelude += "};\n#endif\n";
+    std::string Harness = R"C(
+static unsigned calls;
+__typeof__(probed_frame_helper()) probed_frame_helper(void) {
+  ++calls; return 7;
+}
+int main(void) {
+#if defined(__linux__) && defined(__x86_64__)
+  void *mapping = mmap(0, 4096, PROT_READ|PROT_WRITE,
+                       MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 2;
+  memcpy((char*)mapping + 64, original_code, sizeof(original_code));
+  if (mprotect(mapping, 4096, PROT_READ|PROT_EXEC)) return 3;
+  original_fn original = (original_fn)((char*)mapping + 64);
+#endif
+  for (unsigned size = 0; size <= 16384; size += 16)
+)C";
+    const std::string Expected = TouchObject ? "0x5a" : "size";
+    Harness += "    if ((uint64_t)sub_140001000(size) != " + Expected +
+               ") return 1;\n";
+    Harness += "#if defined(__linux__) && defined(__x86_64__)\n"
+               "  for (unsigned size = 0; size <= 16384; size += 16)\n"
+               "    if (run_original(original, size) != " +
+               Expected +
+               ") return 4;\n"
+               "  if (munmap(mapping, 4096)) return 5;\n#endif\n";
+    Harness += R"C(
+  return calls != 1025;
+}
+)C";
+    checkComputedSource(Image, Harness, false, Prelude);
+  }
 }
 
 TEST(WindowsKernelABI, ResumeThreadDoesNotTakeTheDispatchersAmbientRegisters) {
