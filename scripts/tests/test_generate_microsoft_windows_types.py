@@ -17,6 +17,37 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_rdbss_published_abi_must_pass_before_replacing_primary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            primary = root / "kernel.h"
+            primary.write_text("/* established declarations */\n")
+            source = root / "provider.h"
+            source.write_text("/* provider declarations */\n")
+            imported = {"declaration": 1, "prefix": "RDBSS", "renamed": [],
+                        "dependencies": [], "prototypes": ["RxStartMinirdr"]}
+            result = {"source": "/* proposed declarations */\n", "types": [],
+                      "prototypes": ["RxStartMinirdr"], "imports": [imported]}
+            unit = {"name": "RDBSS", "source": source, "headers": [], "defines": [],
+                    "default_calling_convention": "", "input_sha256": "fixture",
+                    "selected_prototypes": [],
+                    "layouts": "layouts", "parsed": {"prototypes": ["RxStartMinirdr"]},
+                    "commands": [], "metadata": {"cpp_header_bridge": {
+                        "verified_functions": ["RxStartMinirdr"]}}}
+            with patch.dict(windows.ISOLATED_PROVIDERS, {
+                    "WindowsKernel": (windows.Provider("RDBSS", ("rxprocs", "mrx")),)}), \
+                    patch.object(windows, "prepare_provider", return_value=unit), \
+                    patch.object(windows, "run", return_value=json.dumps(result)), \
+                    patch.object(windows, "checked_types", return_value={
+                        "types": [], "prototypes": ["RxStartMinirdr"]}), \
+                    patch.object(windows, "verify_layouts", return_value=1), \
+                    patch.object(windows.rdbss, "verify_abis", side_effect=ValueError(
+                        "published compiler ABI changed")):
+                with self.assertRaisesRegex(ValueError, "published compiler ABI changed"):
+                    windows.merge_providers("WindowsKernel", primary, root, ["clang"],
+                                            ["clang"], "neverd", "LLP64", "layouts")
+            self.assertEqual(primary.read_text(), "/* established declarations */\n")
+
     def test_rdbss_merge_refuses_an_unproved_companion_without_replacing_primary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

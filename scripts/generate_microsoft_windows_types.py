@@ -360,6 +360,27 @@ def merge_providers(base: str, primary: Path, output: Path,
             bridge = unit["metadata"].get("cpp_header_bridge")
             if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
                 raise ValueError("imported RDBSS routines lack an original C++ ABI proof")
+            if bridge:
+                # Recheck the actual published declarations after parsing,
+                # renaming and merging; a correct preprocessed bridge alone
+                # cannot certify the parser's emitted function types.
+                published = directory / (unit["name"] + "-published")
+                published.mkdir(exist_ok=True)
+                empty = published / "empty.h"
+                empty.write_text("", encoding="utf-8")
+                selected = published / "declarations.h"
+                selection = [neverd, "types", "--data-model", model,
+                             "--record-abi", "microsoft", "--declare", str(empty),
+                             "--declare", str(temporary), "--merge-prototypes",
+                             "--all", "--prototypes", "--spelling", "windows",
+                             "--no-offsets", "-o", str(selected)]
+                selection += ["--import-prototype=" + name for name in bridge["verified_functions"]]
+                run(selection, published / "selection.log")
+                proof = dict(bridge, commands=[])
+                rdbss.verify_abis(proof, selected, common, published,
+                                  bridge["verified_functions"], run)
+                bridge["published_abi"] = proof
+                unit["commands"] += [selection, *proof["commands"]]
             renamed = {entry["original"]: entry["name"] for entry in report["renamed"]}
             count = verify_layouts(unit["layouts"], generated_layouts,
                                    renamed, report["dependencies"])

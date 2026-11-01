@@ -155,6 +155,8 @@ the same proof. This includes inline routines without
 comparing an inline implementation to an external LLVM declaration. Required
 record layouts are checked again after merging. The manifest retains proof
 sources, compiler arguments and hashes; no C++ method is invented as a C API.
+Every selected RDBSS declaration is also compiled after parsing, renaming and
+merging, and its ABI is compared with the original C++ header before publication.
 
 `scripts/check_microsoft_provider_abis.py --generated /path/to/microsoft-windows
 --output /path/to/abi-results --neverd build-release/bin/neverd` compares
