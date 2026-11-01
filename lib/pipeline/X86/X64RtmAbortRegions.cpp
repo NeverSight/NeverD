@@ -10,8 +10,9 @@
 
 #include "X64RtmAbortRegions.h"
 
+#include "X64RtmRegions.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
-#include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -40,16 +41,11 @@ std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
       !Image.isCodeAddress(Address) ||
       !Image.isCodeAddress(Address + PairBytes - 1))
     return std::nullopt;
-  const auto Begin =
-      x86TransactionBeginEncoding({Bytes, BeginBytes}, Address, true);
-  if (!Begin)
+  const auto Fallback =
+      x64RtmFallback({Bytes, BeginBytes}, Address, AddressBits);
+  if (!Fallback)
     return std::nullopt;
-  const uint64_t Sign = uint64_t(1) << (AddressBits - 1);
-  const uint64_t Canonical =
-      (Begin->Target & (Sign - 1)) | ((Begin->Target & Sign) ? ~(Sign - 1) : 0);
-  if (Begin->Target != Canonical)
-    return std::nullopt;
-  X64RtmAbortRegion Region{Address, Begin->Target, {}};
+  X64RtmAbortRegion Region{Address, *Fallback, {}};
   Region.Bytes.append(Bytes, Bytes + PairBytes);
   return Region;
 }

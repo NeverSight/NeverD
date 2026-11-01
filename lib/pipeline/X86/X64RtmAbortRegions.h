@@ -7,8 +7,8 @@
 /// Authenticate and execute an indivisible XBEGIN / immediate XABORT region.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_LIB_PIPELINE_X64RTMABORTREGIONS_H
-#define NEVERD_LIB_PIPELINE_X64RTMABORTREGIONS_H
+#ifndef NEVERD_LIB_PIPELINE_X86_X64RTMABORTREGIONS_H
+#define NEVERD_LIB_PIPELINE_X86_X64RTMABORTREGIONS_H
 
 #include "neverd/Common.h"
 
@@ -51,4 +51,4 @@ llvm::json::Array emitX64RtmAbortEnvironment(
 
 } // namespace neverd
 
-#endif // NEVERD_LIB_PIPELINE_X64RTMABORTREGIONS_H
+#endif // NEVERD_LIB_PIPELINE_X86_X64RTMABORTREGIONS_H

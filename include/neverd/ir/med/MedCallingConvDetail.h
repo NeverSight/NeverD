@@ -37,7 +37,10 @@ struct StackMemoryRead {
   bool ScalarFP = false;
 };
 std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op);
-void preserveFPStackHomes(
+/// Keep every home reached by a write or by an overlapping mutable read.
+/// Instruction-owned packed reads and unaligned slot-crossing loads retain
+/// physical homes; aligned immutable loads compose their slot parameters.
+void preserveStackReadHomes(
     const MedFunc &Func, int64_t Base, unsigned Slot,
     llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
     std::set<int64_t> &MutableSlots);

@@ -1013,12 +1013,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         if (auto Off = rawStackOff(Op.Inputs[Read->AddressInput])) {
           auto [SlotBase, ByteOff] = slotOf(*Off);
           Offsets.insert(SlotBase);
-          // A slot-aligned load wider than one pointer slot (an 8-byte double
-          // stack argument on a 4-byte-slot target, or a 10-byte x87 long
-          // double) spans several slots; record the one its last byte is in
-          // so every covered slot is created as a parameter below.
+          // Record the slot of the last byte even for an unaligned read, so
+          // every physical home it needs has an incoming parameter below.
           const unsigned LoadSz = Read->Bytes;
-          if (Read->AddressInput == 1 || (ByteOff == 0 && LoadSz > Slot))
+          if (ByteOff + LoadSz > Slot)
             Offsets.insert(slotOf(*Off + LoadSz - 1).first);
         }
   // A tail call at the entry stack pointer hands its callee this function's
@@ -1127,10 +1125,6 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   std::set<int64_t> MutableSlots;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Off = rawStackOff(Op.Inputs[0]))
-          MutableSlots.insert(slotOf(*Off).first); // direct write
       // SP and any stack-slot address thread through copies, extends and
       // address arithmetic to reach their real use; those propagation ops are
       // not escapes. On AArch64/ARM the first stack argument sits at [sp+0], so
@@ -1164,8 +1158,8 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
 
   med_calling_conv_detail::preserveCallStackHomes(
       Func, TargetArch, Fmt, Image, Base, Slot, rawStackOff, MutableSlots);
-  med_calling_conv_detail::preserveFPStackHomes(Func, Base, Slot, rawStackOff,
-                                                MutableSlots);
+  med_calling_conv_detail::preserveStackReadHomes(Func, Base, Slot, rawStackOff,
+                                                  MutableSlots);
 
   // The home slot of each mutable stack argument is [frame_end + SlotBase].
   // Record it so the emitter seeds that headroom slot with the parameter at
@@ -1195,24 +1189,17 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       auto [SlotBase, ByteOff] = slotOf(*Off);
       uint16_t ReadSz =
           Op.Output.Size > 0 ? Op.Output.Size : static_cast<uint16_t>(Slot);
-      // A slot-aligned 8-byte scalar argument on a 4-byte-slot target (an ARM32
-      // `double` / `long long` passed on the stack as `vldr d,[sp+k]`) spans
-      // two pointer slots; rebuild it from the two slot parameters (low slot
-      // first) so it reads its arguments instead of an absolute address.  The
-      // caller passes the same value as two consecutive 4-byte slot arguments.
-      bool WidePair = ByteOff == 0 && Slot == 4 && ReadSz == 2u * Slot;
-      // A scalar that ends inside a later slot, the x86-64 `fld tbyte` of a
-      // 10-byte long double whose 16-byte home ends in padding, reads every
-      // slot it reaches.
+      // A wide load can copy several scalar arguments, as an AArch64 LDR Q
+      // forwarding two eight-byte slots. Rebuild all of its bytes from the
+      // incoming parameters, including a partial final slot (x87 long double).
       const unsigned Spanned =
-          ByteOff == 0 && ReadSz > Slot && ReadSz % Slot != 0
+          ByteOff == 0 && ReadSz > Slot
               ? (ReadSz + static_cast<unsigned>(Slot) - 1) /
                     static_cast<unsigned>(Slot)
               : 1;
       // Mutable stack-argument home (written or address-escaped): keep the load
       // as a memory read so a later write through it is observed.
-      bool Mutable = MutableSlots.count(SlotBase) ||
-                     (WidePair && MutableSlots.count(SlotBase + Slot));
+      bool Mutable = MutableSlots.count(SlotBase) != 0;
       for (unsigned K = 1; K < Spanned; ++K)
         Mutable |= MutableSlots.count(SlotBase + K * Slot) != 0;
       if (Mutable)
@@ -1230,23 +1217,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         Compositions[{BI, OI}] = std::move(Prefix);
         continue;
       }
-      // Any other read straddling the slot end (and not a clean two-slot pair)
-      // is not a clean field of this slot; leave it for a later pass.
-      if (!WidePair && ByteOff + static_cast<int64_t>(ReadSz) > Slot)
+      // An unaligned read crossing a slot end retains its physical homes.
+      if (ByteOff + static_cast<int64_t>(ReadSz) > Slot)
         continue;
-      if (WidePair) {
-        MedVar Lo, Hi;
-        Lo.Kind = Hi.Kind = MedVar::Param;
-        Lo.Id = offToIdx(SlotBase);
-        Hi.Id = offToIdx(SlotBase + Slot);
-        Lo.Size = Hi.Size = static_cast<uint16_t>(Slot);
-        Lo.RegOff = Hi.RegOff = kNoParamReg;
-        Lo.TheArch = Hi.TheArch = TargetArch;
-        Op.Opcode = NdOp::CONCAT;
-        Op.Inputs[0] = Hi;
-        Op.Inputs[1] = Lo;
-        Op.NumInputs = 2;
-      } else if (ByteOff == 0) {
+      if (ByteOff == 0) {
         MedVar Param;
         Param.Kind = MedVar::Param;
         Param.Id = offToIdx(SlotBase);

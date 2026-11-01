@@ -11,6 +11,7 @@
 #include "X64SpecialRegions.h"
 
 #include "X64RtmAbortRegions.h"
+#include "X64RtmRegions.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
@@ -55,7 +56,7 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
-    DebugContext *Debug) {
+    bool NativeRtmRegions, DebugContext *Debug) {
   X64SpecialRegionSelection Selection;
   Decoder Decode;
   if ((CalleeDepth || FollowDirectJumps) && !Decode.init(Image))
@@ -187,6 +188,38 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
           }
         if (!Resumes.empty())
           Region["rtm_abort_successors"] = std::move(Resumes);
+      }
+      if (NativeRtmRegions) {
+        llvm::json::Array Resumes;
+        const auto Resume = [&](va_t PC) -> llvm::Error {
+          if (!Image.isCodeAddress(PC))
+            return llvm::Error::success();
+          if (auto Error = Enqueue(PC, Depth))
+            return Error;
+          Resumes.push_back(hex(PC));
+          return llvm::Error::success();
+        };
+        for (va_t Address : Audit.NativeInstructionAddresses) {
+          const auto Bytes = bytesAt(Image, Address);
+          for (unsigned Size : {5u, 6u}) {
+            if (Bytes.size() < Size)
+              continue;
+            if (const auto Fallback =
+                    x64RtmFallback(Bytes.take_front(Size), Address,
+                                   *SourceOptions.PagingAddressBits)) {
+              if (auto Error = Resume(*Fallback))
+                return std::move(Error);
+              if (auto Error = Resume(Address + Size))
+                return std::move(Error);
+            }
+          }
+          if (Bytes.size() >= 3 && Bytes[0] == 0x0f && Bytes[1] == 0x01 &&
+              (Bytes[2] == 0xd5 || Bytes[2] == 0xd6))
+            if (auto Error = Resume(Address + 3))
+              return std::move(Error);
+        }
+        if (!Resumes.empty())
+          Region["rtm_successors"] = std::move(Resumes);
       }
       if (SourceOptions.Profile ==
           analysis::X64ContinuationProfile::NativeSvmNoFaultV10) {

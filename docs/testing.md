@@ -204,6 +204,15 @@ With `--kernel`, the WDK fixtures cover SD Port's
 byte-width offset, PortCls's callback and fifth argument, and Stream Class's
 void result. Their synthetic imports retain the original compiler's x86
 decoration. This checks source reconstruction and ABI, not driver execution.
+`AAPCS64CallContract.AVectorStackCopyForwardsBothScalarArguments` executes
+both C routes from a compiler-style fourteen-argument forwarder whose Q0 load
+copies two scalar stack slots. COFF and ELF, source optimization on/off and
+O0/O2 C builds compare every argument with independent nonzero values under
+UBSan. This checks values as well as the API compiler types; matching function
+types alone cannot detect a lost argument. `LowToMedIntegerStackABI` checks
+wide loads and mutable or straddling homes across x86, x64, ARM32 and AArch64 in
+COFF, ELF and Mach-O. `MedFPStackHomes` includes overlapping integer reads,
+complete wide writes, ordered reads and reversed traversal order.
 `NeverDCOFFOrdinalImportTests` checks delayed ordinal imports across the three
 authenticated SDK targets and an unqualified ARM32 control, with case variants,
 other modules, adjacent ordinals and malformed reserved bits. The SDK-linked device-creation callers
@@ -18113,6 +18122,18 @@ to test the LLVM fork's two code-generation pipelines. The script preserves
 the generated source and extends only its harness with exact EAX and CPUID
 expectations. Its report separates successful abort publication from refusal;
 see the [dated evidence](evidence/x86-rtm-abort-pair-2026-11-01.json).
+
+`X64ContinuationExportTest.RtmRegions*` exercises the complete selected RTM
+provider, its source-semantic admission, both XBEGIN exits and XEND resumption,
+and refusal when every XABORT immediate is occupied. Its 48 exports cover 12
+transaction scenarios through both C routes and dispatchers. Run
+`scripts/isa/x86/verify_rtm_regions.py --compiler NEVERC --sde SDE --sources DIR
+--keep RESULTS` after saving the test artifacts. Add `--backend-llc LLC` and
+optionally `--new-pm` for the full LLVM backend. The unmodified harness compares
+original machine code in SDE full mode, complete represented state, original
+RAM, guest-stack writes, standalone controls and private budget rollback at
+O0/O2. CPUID-disabled mode must decline. See the [domain and limits](x86-rtm-regions.md);
+processor-model results do not qualify physical hardware or fault delivery.
 
 ## SNP and SEV-ES native completion
 
