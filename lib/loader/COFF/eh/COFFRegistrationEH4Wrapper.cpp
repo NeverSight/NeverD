@@ -36,7 +36,7 @@ bool isCommonHandlerSlot(const BinaryImage &Image, va_t Slot) {
       !Image.readVA(Slot, 4) || Runtime->Name != "_except_handler4_common" ||
       !Image.isValidImportStorageSlot(Slot, Runtime->Name))
     return false;
-  return isX86SEHHandlerProvider(Runtime->Module);
+  return isX86SEH4CommonProvider(Runtime->Module);
 }
 
 bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address,

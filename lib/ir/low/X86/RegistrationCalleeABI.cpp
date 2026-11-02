@@ -79,8 +79,7 @@ const Import *checkedRuntimeImportSlot(const BinaryImage &Image, va_t Target) {
 
 bool isRaiseExceptionProvider(const Import &Import) {
   return Import.Name == "RaiseException" &&
-         (llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll") ||
-          llvm::StringRef(Import.Module).equals_insensitive("kernelbase.dll"));
+         coff_loader::isRaiseExceptionProvider(Import.Module);
 }
 
 bool isStartupInfoProvider(const Import &Import) {
@@ -203,23 +202,6 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
     if (Name == "HeapSetInformation")
       return 16;
   }
-  if ((Module.equals_insensitive("msvcrt.dll") ||
-       Module.equals_insensitive("msvcr100.dll")) &&
-      (Name == "malloc" || Name == "calloc" || Name == "realloc" ||
-       Name == "free" || Name == "memcpy" || Name == "memmove" ||
-       Name == "memset" || Name == "_initterm" || Name == "_initterm_e" ||
-       Name == "_lock" || Name == "_unlock" || Name == "_onexit" ||
-       Name == "__set_app_type" || Name == "__setusermatherr" ||
-       Name == "_configthreadlocale" || Name == "??2@YAPAXI@Z" ||
-       Name == "??_U@YAPAXI@Z" || Name == "??3@YAXPAX@Z" ||
-       Name == "??_V@YAXPAX@Z"))
-    return 0;
-  if ((Name == "log" || Name == "exp") &&
-      (Module.equals_insensitive("api-ms-win-crt-math-l1-1-0.dll") ||
-       Module.equals_insensitive("ucrtbase.dll") ||
-       Module.equals_insensitive("ucrtbased.dll") ||
-       Module.equals_insensitive("msvcrt.dll")))
-    return 0;
   return std::nullopt;
 }
 

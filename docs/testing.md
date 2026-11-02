@@ -582,6 +582,8 @@ settings. Malformed analysis call operands are rejected separately.
 An unproved dispatch selector retains both case bodies and an unknown-target
 arm in HighIR while preserving the native refusal. Damaged, oversized or
 unmarked tables cannot use that display route.
+HighC checks the unknown-target exit's original address and indirect jump
+annotation, including suppression when comments are disabled.
 The ELF control leaves the PE32 strategy disabled. These fixtures only decode
 bytes; they do not run the input program. Pair them with pipeline-outcome and
 registration-callee suites, then measure complete GOF2 analysis separately.
@@ -12664,7 +12666,7 @@ after decoding; only the unchanged typed load succeeds. The default callable
 policy refuses every data receipt. No positive acquires a registration-leaf
 memory contract or public ordinary binding-preservation flag.
 
-The portable `CRTImportQueriesKeepTheirStorageProofs` case covers nineteen
+The portable `CRTImportQueriesKeepTheirStorageProofs` case covers twenty
 CRT identity/provider combinations without optional corpus inputs. It requeries
 the same image after changing names, providers, delay flags, slot evidence,
 addends, backing bytes, conflicts, overlapping fixups, mapping or target traits.
@@ -12673,7 +12675,8 @@ current-storage checks. Run the registration-callee-stack, SEH-runtime-memory,
 read-only-bytes and pipeline-outcome owners after changing these queries.
 `RuntimeProviderSetsKeepDistinctContracts` prevents one runtime contract from
 borrowing another's DLL set, including debug runtimes, PE32/Win64 control-FP,
-math/stdio API sets and C++ exception providers. Paths, suffixes and embedded
+the legacy EH4 common handler, math/stdio API sets and C++ exception providers.
+Paths, suffixes and embedded
 NULs remain invalid identities. `ControlFPProviderIdentityDoesNotBorrowPE32Contracts`
 checks those Win64 distinctions through decoded calls and the frame proof.
 `X87ImportCall.RecognizedNamesDoNotGrantUnsupportedTransport` keeps unsupported

@@ -381,11 +381,12 @@ TEST(RegistrationCallABI, CRTImportQueriesKeepTheirStorageProofs) {
     std::optional<uint32_t> StackPop;
   };
   const Case Cases[] = {
-      {"_controlfp_s", "api-ms-win-crt-math-l1-1-0.dll", true, std::nullopt},
-      {"_controlfp_s", "api-ms-win-crt-runtime-l1-1-0.dll", true, std::nullopt},
-      {"_controlfp_s", "ucrtbase.dll", true, std::nullopt},
-      {"_controlfp_s", "ucrtbased.dll", true, std::nullopt},
-      {"_controlfp_s", "MSVCRT.dll", true, std::nullopt},
+      {"_controlfp_s", "api-ms-win-crt-math-l1-1-0.dll", true, 0},
+      {"_controlfp_s", "api-ms-win-crt-runtime-l1-1-0.dll", true, 0},
+      {"_controlfp_s", "ucrtbase.dll", true, 0},
+      {"_controlfp_s", "ucrtbased.dll", true, 0},
+      {"_controlfp_s", "MSVCRT.dll", true, 0},
+      {"_controlfp_s", "MSVCR100.dll", true, 0},
       {"log", "api-ms-win-crt-math-l1-1-0.dll", false, 0},
       {"log", "ucrtbase.dll", false, 0},
       {"log", "ucrtbased.dll", false, 0},
@@ -499,10 +500,14 @@ TEST(RegistrationCallABI, CRTImportQueriesKeepTheirStorageProofs) {
 TEST(RegistrationCallABI, RuntimeProviderSetsKeepDistinctContracts) {
   using namespace neverd::coff_loader;
   EXPECT_TRUE(isX86ControlFPProvider("MSVCRT.dll"));
+  EXPECT_TRUE(isX86ControlFPProvider("MSVCR100.dll"));
+  EXPECT_FALSE(isX64ControlFPProvider("MSVCR100.dll"));
   EXPECT_FALSE(isX64ControlFPProvider("MSVCRT.dll"));
   EXPECT_TRUE(isX64ControlFPProvider("ucrtbased.dll"));
   EXPECT_FALSE(isX86SEHHandlerProvider("ucrtbased.dll"));
   EXPECT_TRUE(isX86SEHHandlerProvider("ucrtbase.dll"));
+  EXPECT_TRUE(isX86SEH4CommonProvider("MSVCR100.dll"));
+  EXPECT_FALSE(isX86SEHHandlerProvider("MSVCR100.dll"));
   EXPECT_FALSE(isX86RegistrationRuntimeProvider("ucrtbase.dll"));
   EXPECT_TRUE(isX86ContinuationRuntimeProvider("msvcrtd.dll"));
   EXPECT_FALSE(isX86RegistrationRuntimeProvider("msvcrtd.dll"));
@@ -520,9 +525,9 @@ TEST(RegistrationCallABI, RuntimeProviderSetsKeepDistinctContracts) {
   EXPECT_FALSE(isRaiseExceptionProvider("ntdll.dll"));
   for (const auto Query :
        {isX86ControlFPProvider, isX64ControlFPProvider, isX86SEHHandlerProvider,
-        isX86RegistrationRuntimeProvider, isX86ContinuationRuntimeProvider,
-        isX86CxxExceptionProvider, isX86LegacyCRTProvider,
-        isX86MathCleanupProvider, isX64CRTStdioProvider,
+        isX86SEH4CommonProvider, isX86RegistrationRuntimeProvider,
+        isX86ContinuationRuntimeProvider, isX86CxxExceptionProvider,
+        isX86LegacyCRTProvider, isX86MathCleanupProvider, isX64CRTStdioProvider,
         isRaiseExceptionProvider}) {
     EXPECT_FALSE(Query(""));
     EXPECT_FALSE(Query("application.dll"));
