@@ -155,6 +155,50 @@ TEST(TypeParse, ReadsOneFunctionsDeclarationAgainstTheLibrary) {
   EXPECT_NE(problem("int f(int a").find("expected ')'"), std::string::npos);
 }
 
+TEST(TypeParse, PunctuationKeepsOperatorsDeclaratorsAndErrorPositions) {
+  for (const auto Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    ParseOptions Options;
+    Options.Lang = Language::Cpp;
+    auto Library = parsed(R"(
+#define SHIFT 8
+struct Pair { int value; unsigned bits:3; };
+struct Box { struct Pair pair; int slots[SHIFT >> 1]; };
+_Static_assert((3 << 2) == 12 && (SHIFT >> 1) == 4, "shifts");
+_Static_assert(2 <= 3 && 4 >= 4 && 1 < 2 && 3 > 2, "relations");
+_Static_assert(1 != 2 && !0 && (0 || 1), "logical");
+_Static_assert(((~0 & 255) ^ 3 | 16) == 252, "bitwise");
+_Static_assert(17 / 4 == 4 && 17 % 4 == 1 && 2 + 3 * 4 - 1 == 13,
+               "arithmetic");
+_Static_assert((0 ? 2 : 3) == 3, "conditional");
+_Static_assert(sizeof(((struct Box *)0)->slots) == 16, "arrow");
+_Static_assert(__builtin_offsetof(struct Box, pair.value) == 0, "dot");
+int vendor::Dispatch(int (*callback)(int), const struct Box *box, ...);
+)",
+                          Options, Model);
+    EXPECT_EQ(recordOf(Library, "Box").Size, 24u);
+    const auto *Function = Library.findPrototype("vendor::Dispatch");
+    ASSERT_NE(Function, nullptr);
+    EXPECT_TRUE(Function->Variadic);
+    ASSERT_EQ(Function->Params.size(), 2u);
+    EXPECT_EQ(Function->Params[0].Name, "callback");
+    EXPECT_EQ(Function->Params[1].Name, "box");
+    const auto Before = renderTypes(Library, {}, {});
+    for (llvm::StringRef Bad :
+         {"struct Bad { int field; @ };", "int Broken(int value, ....);",
+          "struct Bad { int field; .. };"}) {
+      const auto Result = parseCTypes(Bad, Library, Options);
+      ASSERT_FALSE(Result.ok()) << Bad.str();
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      EXPECT_EQ(Library.findPrototype("Broken"), nullptr);
+      if (Bad.contains('@')) {
+        EXPECT_EQ(Result.Problems.front().Line, 1u);
+        EXPECT_EQ(Result.Problems.front().Column, Bad.find('@') + 1);
+      }
+    }
+  }
+}
+
 TEST(TypeParse, ExpandedSpellingsSurviveDirectivesAndTheInput) {
   TypeLibrary Library(DataModel::ILP32);
   std::string Source = R"(

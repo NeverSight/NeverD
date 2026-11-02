@@ -2820,6 +2820,11 @@ structures stay in place, member offsets are bits from the record that holds
 them, and builtin sizes follow the data model (`BuiltinTypes.def`).
 Importers fill the library; renderers and frontends only read it.
 
+The C declaration lexer selects punctuation by its first byte, retaining the
+longest supported spelling before parsing declarations or constant expressions.
+Punctuation borrows the same parse input or spelling arena as identifiers;
+published types and diagnostics retain their existing ownership and positions.
+
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
 stream. MSVC flattens anonymous members into their parent, so
 `nestFlatMembers` rebuilds the nesting from offsets, bitfield storage units

@@ -415,6 +415,118 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path='docs/evidence/x86-lss-event-boundary-2026-11-02.json',
+        rule="private-path",
+        commits=frozenset({
+            '774f7ffcb67d09568e53fcc7a82f669fce38943c',
+            '80b04d3b8d0642200004c93c7feddd2572ac55b5',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 evidence source and tool "
+            "prefixes. Recorded compiler hashes, instruction outcomes and "
+            "qualification counts are unchanged. Only exact historical line "
+            "digests in the publication and cleanup commits are covered; "
+            "current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '2e2a6a5c9646572173802d66ccb5a8fde8c96a0eda136f1b25b5d1181762fa14',
+            '372b20b03af4bd50bc4ef38b10ef9336c10a98044ab3ba581b34ef2690cc7ce1',
+            '44671a6d666840bdf4b50f805add828b64f411d108e910d0ab8b8e00930d5b9a',
+            '5c8e87049719b559ab9f76a98307ac2a9bba8f4032fd877af6d2ee8f104066e8',
+            '9416b8eb2e4234c0b82609a28a4190e9ddd2067a3e7464baac3499edc71048ac',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-paged-far-pointer-2026-11-02.json',
+        rule="private-path",
+        commits=frozenset({
+            '6c1b349912dfbe3e345c3032fcb0de8d74c229aa',
+            '774f7ffcb67d09568e53fcc7a82f669fce38943c',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 evidence source and tool "
+            "prefixes. Recorded compiler hashes, instruction outcomes and "
+            "qualification counts are unchanged. Only exact historical line "
+            "digests in the publication and cleanup commits are covered; "
+            "current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            '2fe8f80c47ca9f84b97d87a6a09c6c27ecfdf49746217ee3386fc486a94352cc',
+            '33994791624a8e5a0f78722688e994a2efd9239870cb39393d3ea1ab6000b3ba',
+            '81f03eaf68ac406b15b03ba433ef4e6676115841973649cc07b19a6cd254e088',
+            '8d719206964881010b7d9472acb23f16e80c5d6ea8f3ab0605d42dc39c58c658',
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'c41295a354819f2134cf4f962fb538dd474a56cf68b8ba699bd05e3cf0968a99',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+            'f20959199f60316b106381be075cd31076ea57dc418e95c762e32c9a2a3c6e66',
+            'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-paged-retf-2026-11-02.json',
+        rule="private-path",
+        commits=frozenset({
+            '2f9cbc511389cf3f7927c900450ef43b76695c26',
+            '774f7ffcb67d09568e53fcc7a82f669fce38943c',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 evidence source and tool "
+            "prefixes. Recorded compiler hashes, instruction outcomes and "
+            "qualification counts are unchanged. Only exact historical line "
+            "digests in the publication and cleanup commits are covered; "
+            "current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '3d8801efeaaea60b1cc9ce13d76d9aaf9d90e491a68abf23907ed5c041142e42',
+            '406ea76bc2795b7b4e86b959534abab31c0022e175ceb83e9efff0ae125b28ba',
+            '470cb642f5cf48a86851f44f21793c9b2f38c5ccc6e35f7d77e86e12ad30446a',
+            '4796864015e443ff9c38176e2d362cfafacfcf6489f923fd113e519335fe5635',
+            '592b5c1814af561afab0e9cbc7e56b18aaf233238eb7150eefe524998bada98f',
+            '614b29793b87dec6ff1185f3ab31abb61cef78c5839ad8cc404c3004e44cf075',
+            '8c1612364ed81dd2b18c559195eb7d83851811a4fcb625156696438b473b9bb4',
+            'f9322b10f188bc84856a2724a028515a1351ff7eb11ffe966c2783449b9a2294',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-segment-moves-native-2026-11-02.json',
+        rule="private-path",
+        commits=frozenset({
+            '774f7ffcb67d09568e53fcc7a82f669fce38943c',
+            'ee8dac0caa54c4a67b5481c7f16ea20447babfa1',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of published x86 evidence source and tool "
+            "prefixes. Recorded compiler hashes, instruction outcomes and "
+            "qualification counts are unchanged. Only exact historical line "
+            "digests in the publication and cleanup commits are covered; "
+            "current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '09af56956857e91dff01609c312d0bc8611f28cc4e6cc2d9fbfa4b9dda961ce9',
+            '0aff43355a8ac86414d944fcf4912f270c01364463da48ecbae4ede68ec33164',
+            '1b9e92485d7b26ce1eb69f47331bae56573206af34bf3a3ec98e5204e1625511',
+            '1bba0cb6e5eef2bfa906a1b8a7d54e1115c5fce1f5ff3a1ea6f0b735aa4a648b',
+            '452e9fdcc18611c12a5a860a344825808daf47e33569e6a631dc61e13ea4784e',
+            '5a097632a25eb6cc1b7f59c84d420bf6d9c62912036b8dad4794b8146550a4b7',
+            '77da4b7d389d27ca31505d88d903f0454771342feb465dbf491cc429715d2262',
+            '840631a743cbd8a39d0050997d3837461e56e37b45a617c38367bb0e33cbbcc8',
+            '9d7021a36ba7de1e42924d5142d765df7fc843dacd422c036455170a75b52036',
+            'c803de55d35d154df769575dc6ace870045a917b4f0c1cf70ac924f217fa6296',
+            'c90785a0ea0cef78c0ca7d00d8b92aee00947eb4176ffca8ba9bde33a7101fc4',
+            'd7820f2894edf7091e295fa134e1593631c81cabdbd58be1f0364e3487b6c6c9',
+            'e0cb540f5655967709f92ae11f34555318d2f5973681a32348281fa647c43136',
+            'e4789711147c5ec8bc72d7e784c59d95a8b5c3b23595d590df7b40d1acef4b53',
+            'ed6f0390076ffb616deca8be2aa132bea6a15218e3d5da62937c69580b1c14b9',
+            'f06a72c860db72b7bb98cc2aaf9bb1a7809473ba2f2983974b1100e9f194693a',
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/x86-event-scheduling-2026-11-01.json",
         rule="private-path",
         commits=frozenset({
@@ -1148,6 +1260,32 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
         ),
         line_sha256=frozenset({
             "8507f9dd32a05243f4878770a6f932d5712d9cd9f705846a506ecd83482cdbdd",
+        }),
+    ),
+    HistoryAllowance(
+        path="docs/evidence/x86-paged-segment-moves-2026-11-02.json",
+        rule="private-path",
+        commits=frozenset({
+            "54323598076450a257620587802ca870430fdf05",
+            "905d4d0c15c25e3828565997ae4f01c333eda2b5",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of the newly integrated x86 evidence's "
+            "checkout prefix. Measurements, commands, outcomes and recorded "
+            "hashes are unchanged. Only exact line digests in its publication "
+            "and cleanup commits are covered; current and future private "
+            "paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            '81f03eaf68ac406b15b03ba433ef4e6676115841973649cc07b19a6cd254e088',
+            '8d719206964881010b7d9472acb23f16e80c5d6ea8f3ab0605d42dc39c58c658',
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'c41295a354819f2134cf4f962fb538dd474a56cf68b8ba699bd05e3cf0968a99',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+            'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
         }),
     ),
 )

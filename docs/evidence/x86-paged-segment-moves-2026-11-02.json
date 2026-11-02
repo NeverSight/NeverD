@@ -37,7 +37,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/paged/result.xml"
       ],
@@ -66,7 +66,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/paging/result.xml"
       ],
@@ -95,7 +95,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*PagedFarPointer*:*PagedLss*:*PagedSegment*:*PagedSelector*:*PagedMovSS*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/segments-efficient/result.xml"
       ],
@@ -124,7 +124,7 @@
         "taskset",
         "-c",
         "14",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*PagedIret*:*PagedInterruptReturn*:*PagedFarReturn*:*PagedReturnFaultHandler*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/returns-efficient/result.xml"
       ],
@@ -153,7 +153,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/NeverDX64ContinuationSourceTests-shard-0/result.xml"
       ],
@@ -182,7 +182,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/NeverDX64ContinuationSourceTests-shard-1/result.xml"
       ],
@@ -211,7 +211,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/NeverDX64ContinuationExportTests-shard-0/result.xml"
       ],
@@ -240,7 +240,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/native/NeverDX64ContinuationExportTests-shard-1/result.xml"
       ],
@@ -269,7 +269,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/paged/result.xml"
       ],
@@ -298,7 +298,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/paging/result.xml"
       ],
@@ -327,7 +327,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*PagedFarPointer*:*PagedLss*:*PagedSegment*:*PagedSelector*:*PagedMovSS*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/segments-efficient/result.xml"
       ],
@@ -356,7 +356,7 @@
         "taskset",
         "-c",
         "14",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*PagedIret*:*PagedInterruptReturn*:*PagedFarReturn*:*PagedReturnFaultHandler*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/returns-efficient/result.xml"
       ],
@@ -385,7 +385,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/NeverDX64ContinuationSourceTests-shard-0/result.xml"
       ],
@@ -414,7 +414,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/NeverDX64ContinuationSourceTests-shard-1/result.xml"
       ],
@@ -443,7 +443,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/NeverDX64ContinuationExportTests-shard-0/result.xml"
       ],
@@ -472,7 +472,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/final/r6/NeverDX64ContinuationExportTests-shard-1/result.xml"
       ],
@@ -1569,7 +1569,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/admission/native/paged/result.xml"
       ]
@@ -1591,7 +1591,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-segment-moves-20261102/admission/r6/paged/result.xml"
       ]

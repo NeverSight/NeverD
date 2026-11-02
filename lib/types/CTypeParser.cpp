@@ -77,11 +77,6 @@ bool sameLayout(const RecordDef &A, const RecordDef &B) {
   return true;
 }
 
-constexpr llvm::StringLiteral Punctuators[] = {
-    "...", "::", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "->", "{",
-    "}",   "(",  ")",  "[",  "]",  ";",  ",",  "*",  "&",  ":",  "=",  "<",
-    ">",   "+",  "-",  "~",  "!",  "/",  "%",  "^",  "|",  "?",  ".",  "#"};
-
 class Lexer {
 public:
   Lexer(llvm::StringRef Source, std::vector<SourceProblem> &Problems,
@@ -245,13 +240,61 @@ private:
       quoted(Result);
       return Result;
     }
-    for (const llvm::StringRef Punct : Punctuators)
-      if (C == Punct.front() && Source.substr(At).starts_with(Punct)) {
-        advance(Punct.size());
-        Result.Kind = TokenKind::Punct;
-        Result.Text = Punct;
-        return Result;
-      }
+    // Choose the longest spelling by its first byte. Large SDK headers are
+    // mostly declarations; a table walk for each bracket or semicolon adds
+    // work to every function's first type lookup.
+    const auto Rest = Source.drop_front(At);
+    const char Next = Rest.size() > 1 ? Rest[1] : '\0';
+    unsigned PunctBytes = 1;
+    switch (C) {
+    case '.':
+      PunctBytes = Rest.starts_with("...") ? 3 : 1;
+      break;
+    case ':':
+      PunctBytes = Next == ':' ? 2 : 1;
+      break;
+    case '<':
+    case '>':
+      PunctBytes = Next == C || Next == '=' ? 2 : 1;
+      break;
+    case '=':
+    case '!':
+      PunctBytes = Next == '=' ? 2 : 1;
+      break;
+    case '&':
+    case '|':
+      PunctBytes = Next == C ? 2 : 1;
+      break;
+    case '-':
+      PunctBytes = Next == '>' ? 2 : 1;
+      break;
+    case '{':
+    case '}':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case ';':
+    case ',':
+    case '*':
+    case '+':
+    case '~':
+    case '/':
+    case '%':
+    case '^':
+    case '?':
+    case '#':
+      break;
+    default:
+      PunctBytes = 0;
+      break;
+    }
+    if (PunctBytes) {
+      Result.Kind = TokenKind::Punct;
+      Result.Text = Rest.take_front(PunctBytes);
+      advance(PunctBytes);
+      return Result;
+    }
     problem(Line, Column,
             std::string("'") + C + "' cannot begin a declaration's word");
     advance();

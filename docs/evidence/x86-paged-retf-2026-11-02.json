@@ -462,7 +462,7 @@
           "taskset",
           "-c",
           "0",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
           "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/native.xml"
         ],
         "exit_code": 0
@@ -474,7 +474,7 @@
           "taskset",
           "-c",
           "0",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+          "build-x86-native/bin/NeverDX86PagingTests",
           "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/native-paging.xml"
         ],
         "exit_code": 0
@@ -486,7 +486,7 @@
           "taskset",
           "-c",
           "2",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
           "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/r6.xml"
         ],
         "exit_code": 0
@@ -498,7 +498,7 @@
           "taskset",
           "-c",
           "2",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+          "build-x86/bin/NeverDX86PagingTests",
           "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/r6-paging.xml"
         ],
         "exit_code": 0
@@ -523,7 +523,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+            "build-x86-native/bin/NeverDX64ContinuationSourceTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/native/qualified-NeverDX64ContinuationSourceTests-shard-0.xml"
           ],
           [
@@ -533,7 +533,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+            "build-x86-native/bin/NeverDX64ContinuationSourceTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/native/qualified-NeverDX64ContinuationSourceTests-shard-1.xml"
           ]
         ]
@@ -556,7 +556,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+            "build-x86-native/bin/NeverDX64ContinuationExportTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/native/qualified-NeverDX64ContinuationExportTests-shard-0.xml"
           ],
           [
@@ -566,7 +566,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+            "build-x86-native/bin/NeverDX64ContinuationExportTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/native/qualified-NeverDX64ContinuationExportTests-shard-1.xml"
           ]
         ]
@@ -589,7 +589,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+            "build-x86/bin/NeverDX64ContinuationSourceTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/r6/qualified-NeverDX64ContinuationSourceTests-shard-0.xml"
           ],
           [
@@ -599,7 +599,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+            "build-x86/bin/NeverDX64ContinuationSourceTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/r6/qualified-NeverDX64ContinuationSourceTests-shard-1.xml"
           ]
         ]
@@ -622,7 +622,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+            "build-x86/bin/NeverDX64ContinuationExportTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/r6/qualified-NeverDX64ContinuationExportTests-shard-0.xml"
           ],
           [
@@ -632,7 +632,7 @@
             "--mount",
             "python3",
             "/mnt/data/neverd-sysenter-compatibility-20261030/private-tmp-runner.py",
-            "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+            "build-x86/bin/NeverDX64ContinuationExportTests",
             "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/qualified/r6/qualified-NeverDX64ContinuationExportTests-shard-1.xml"
           ]
         ]
@@ -645,7 +645,7 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*PagedFarReturn*:*PagedInterruptReturns*:*ReturnFaultHandler*",
           "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/native-efficient.xml"
         ],
@@ -657,7 +657,7 @@
           "taskset",
           "-c",
           "14",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*PagedFarReturn*:*PagedInterruptReturns*:*ReturnFaultHandler*",
           "--gtest_output=xml:/mnt/data/neverd-paged-retf-20261102/r6-efficient.xml"
         ],
