@@ -370,6 +370,7 @@ add_neverd_unittest(NeverDWindowsProcessTests
   WindowsModuleTests.cpp
   WindowsLifetimeTests.cpp
   WindowsExportTests.cpp
+  WindowsExportNameTests.cpp
   WindowsDynamicTests.cpp
   WindowsEnvironmentTests.cpp
   WindowsHeapTests.cpp
