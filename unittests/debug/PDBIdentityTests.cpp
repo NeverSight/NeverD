@@ -1138,7 +1138,7 @@ TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
       pdb_loader_detail::recordedSectionsMatch(Trailing, Recharacterized));
 }
 
-TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
+TEST(PDBSectionTable, UnbackedHeaderTagsCannotHideASection) {
   const pdb_loader_detail::RecordedSection Recorded[] = {
       {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
       {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
@@ -1151,11 +1151,12 @@ TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
   Image.Sections.push_back(Headers);
   // A name alone cannot hide an extra section from the PDB check.
   EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  // A normalized tag also needs its original header mapping and bytes.
   Image.Sections.back().IsImageHeader = true;
-  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   Image.Sections.back().Name = "renamed header storage";
   Image.Sections[1].Size += 0x1000;
-  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   ++Image.Sections.front().Size;
   EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   --Image.Sections.front().Size;
@@ -1801,7 +1802,7 @@ TEST(PDB20IdentityIntegration, MappedHeadersSupplyNoAdditionalSegmentNumber) {
   }
 }
 
-TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
+TEST(PDB20IdentityIntegration, UnbackedHeaderStorageRejectsSectionIdentity) {
   constexpr uint32_t Signature = 0x12345678;
   constexpr uint32_t Age = 1;
   constexpr uint32_t Chars = 0x60000020;
@@ -1823,12 +1824,10 @@ TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
   Headers.IsImageHeader = true;
   Image.Sections.push_back(Headers);
   auto Context = PDBDebugContext::load(Path, Image);
-  ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
-  const auto Function = (*Context)->resolveFunction(0x401100);
-  ASSERT_TRUE(Function);
-  EXPECT_EQ(Function->Name, "code_target");
-  EXPECT_FALSE((*Context)->resolveFunction(0x400100));
-  EXPECT_EQ((*Context)->allFunctions().size(), 1u);
+  ASSERT_FALSE(bool(Context));
+  EXPECT_NE(llvm::toString(Context.takeError())
+                .find("section table does not match loaded PE image"),
+            std::string::npos);
 }
 
 TEST(PDB20IdentityIntegration, SignatureOrAgeMismatchRejectsTheCompanion) {

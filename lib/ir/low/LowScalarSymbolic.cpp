@@ -8,6 +8,8 @@
 
 #include "LowScalarSymbolic.h"
 
+#include "LowScalarWideDivision.h"
+
 #include <algorithm>
 #include <vector>
 
@@ -18,8 +20,8 @@ using symbolic::SymContext;
 using symbolic::SymRef;
 
 std::optional<SymRef> coerceGuardValue(SymContext &Ctx, SymRef Value,
-                                       uint32_t Width) {
-  if (!Value || Width == 0 || Width > 64)
+                                       uint32_t Width, uint32_t MaximumWidth) {
+  if (!Value || Width == 0 || Width > MaximumWidth)
     return std::nullopt;
   const uint32_t InputWidth = Ctx.width(Value);
   if (InputWidth == Width)
@@ -31,18 +33,19 @@ std::optional<SymRef> coerceGuardValue(SymContext &Ctx, SymRef Value,
 
 } // namespace
 
-std::optional<SymRef>
-symbolizeJumpTableIntegerOperation(SymContext &Ctx, NdOp Opcode,
-                                   uint16_t OutputSize,
-                                   llvm::ArrayRef<SymRef> RawInputs) {
-  if (OutputSize == 0 || OutputSize > sizeof(uint64_t) || RawInputs.empty() ||
+std::optional<SymRef> symbolizeJumpTableIntegerOperation(
+    SymContext &Ctx, NdOp Opcode, uint16_t OutputSize,
+    llvm::ArrayRef<SymRef> RawInputs, bool AllowDoubleWidth) {
+  const uint32_t MaximumWidth = AllowDoubleWidth ? 128 : 64;
+  if (OutputSize == 0 || OutputSize > MaximumWidth / 8 || RawInputs.empty() ||
       std::any_of(RawInputs.begin(), RawInputs.end(), [&](SymRef Input) {
-        return !Input || Ctx.width(Input) == 0 || Ctx.width(Input) > 64;
+        return !Input || Ctx.width(Input) == 0 ||
+               Ctx.width(Input) > MaximumWidth;
       }))
     return std::nullopt;
   const uint32_t OutputWidth = uint32_t(OutputSize) * 8u;
   auto finish = [&](SymRef Value) -> std::optional<SymRef> {
-    return coerceGuardValue(Ctx, Value, OutputWidth);
+    return coerceGuardValue(Ctx, Value, OutputWidth, MaximumWidth);
   };
   auto commonInputs = [&]() -> std::optional<std::vector<SymRef>> {
     uint32_t Width = 0;
@@ -51,7 +54,8 @@ symbolizeJumpTableIntegerOperation(SymContext &Ctx, NdOp Opcode,
     std::vector<SymRef> Inputs;
     Inputs.reserve(RawInputs.size());
     for (SymRef Input : RawInputs) {
-      std::optional<SymRef> Coerced = coerceGuardValue(Ctx, Input, Width);
+      std::optional<SymRef> Coerced =
+          coerceGuardValue(Ctx, Input, Width, MaximumWidth);
       if (!Coerced)
         return std::nullopt;
       Inputs.push_back(*Coerced);
@@ -135,6 +139,9 @@ symbolizeJumpTableIntegerOperation(SymContext &Ctx, NdOp Opcode,
     return std::nullopt;
   SymRef L = (*Inputs)[0];
   SymRef R = (*Inputs)[1];
+  if (AllowDoubleWidth)
+    if (const auto Narrow = narrowUnsignedDivision(Ctx, Opcode, L, R))
+      return finish(Narrow);
   switch (Opcode) {
   case NdOp::INT_ADD:
     return finish(Ctx.mkAdd(L, R));

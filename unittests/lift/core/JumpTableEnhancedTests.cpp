@@ -7633,6 +7633,62 @@ TEST_F(JTE_X86_64, ModuloBoundAcceptsExactSixtyFourBitUnsignedDivision) {
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
+TEST_F(JTE_X86_64, WideDivisionModuloKeepsHighDividendAndSignedness) {
+  for (const bool ExplicitQuotient : {false, true})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(ExplicitQuotient);
+      SCOPED_TRACE(Mutation);
+      auto Loaded = neverd::loadBinary(moduloDomainObj());
+      ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+      auto &Image = *Loaded;
+      const auto *Function =
+          Image.findSymbol(ExplicitQuotient ? "jt_modulo_u64_explicit_udiv"
+                                            : "jt_modulo_u64_direct_remainder");
+      ASSERT_NE(Function, nullptr);
+      auto Segment = std::find_if(
+          Image.Segments.begin(), Image.Segments.end(),
+          [&](const auto &S) { return S.contains(Function->Addr); });
+      ASSERT_NE(Segment, Image.Segments.end());
+      const auto Begin = Segment->Data.begin() + Function->Addr - Segment->VA;
+      const auto End = Begin + Function->Size;
+      const std::array<uint8_t, 3> HighZero{0x48, 0x31, 0xd2};
+      const std::array<uint8_t, 3> Divide{0x48, 0xf7, 0xf1};
+      const std::array<uint8_t, 7> Divisor{0x48, 0xc7, 0xc1, 5, 0, 0, 0};
+      const auto High =
+          std::search(Begin, End, HighZero.begin(), HighZero.end());
+      const auto Div = std::search(Begin, End, Divide.begin(), Divide.end());
+      const auto N = std::search(Begin, End, Divisor.begin(), Divisor.end());
+      ASSERT_NE(High, End);
+      ASSERT_NE(Div, End);
+      ASSERT_NE(N, End);
+      if (Mutation == 1) {
+        // mov rdx,rsi: the dividend's high half is unconstrained. URem still
+        // fits its divisor on a successful divide, but x-(quotient*N) no
+        // longer shares that complete dividend and must not borrow its proof.
+        High[1] = 0x89;
+        High[2] = 0xf2;
+      }
+      if (Mutation == 2)
+        Div[2] = 0xf9; // IDIV cannot borrow the unsigned remainder theorem.
+      if (Mutation == 3)
+        N[3] = 0;
+      if (Mutation == 4)
+        N[3] = 6; // The five-slot storage cannot supply the larger domain.
+      neverd::Decoder Decoder;
+      ASSERT_TRUE(Decoder.init(Image));
+      neverd::CFGBuilder Builder;
+      const auto Low =
+          Builder.build(Image, Decoder, Function->Addr, Function->Name);
+      const bool Expected =
+          Mutation == 0 || (Mutation == 1 && !ExplicitQuotient);
+      EXPECT_EQ(Low.JumpTables.size(), Expected ? 1u : 0u);
+      if (Expected) {
+        EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+        EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+      }
+    }
+}
+
 TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
   constexpr const char *Names[] = {
       "jt_modulo_factorized_six_wrong_factor",

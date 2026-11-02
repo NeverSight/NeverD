@@ -5729,6 +5729,9 @@ TEST(RegistrationTryLevel,
     llvm::LLVMContext Context;
     PipelineOptions Options;
     Options.NoOpt = true;
+    // LLVM output requires the complete native frame proof; a source-only
+    // analysis view deliberately defers that proof.
+    Options.DumpLlvm = true;
     Options.EmitDumpOutput = false;
     Options.MaxFunctions = 1;
     if (Selected)

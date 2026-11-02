@@ -7337,6 +7337,16 @@ newly reached backedge cannot reuse an entry-only domain. A complete
 single-consumer finite proof is not
 widened or vetoed by a weaker mask search. Module-wide storage mutation checks
 still run before source publication.
+Structural modulo recipes retain x86's complete double-width dividend. The
+symbolic adapter admits 128-bit words only for these bounded structural queries;
+ordinary SAT and finite-set symbolization retain their word-width limit.
+`LowScalarWideDivision` narrows unsigned division only when the complete
+dividend is a zero extension and the nonzero divisor fits its source lane. A
+low extraction of an unsigned remainder is exact only when the whole remainder
+range fits that lane. Unknown high dividend bits, signed arithmetic and native
+divide preconditions are never discarded. Call-crossing address queries reuse
+`CallRegisterEffects` through the same lane owner that handles physical PE32
+frame helpers, so a body proof cannot bypass the helper's frame exclusions.
 A bounded readonly-lookup fallback explores known scalar byte states on the
 same rooted resolver graph. It preserves unknown entry inputs, architectural
 lanes, call clobbers and the address origin of loaded pointers. Unknown branches
@@ -8077,7 +8087,10 @@ relocated owns whether a slot load can become a symbolic address, as
 segment, an explicit normalized loader protection guarantee, or complete
 PT_GNU_RELRO coverage in a linked ELF image. Names such as `.data.rel.ro` and
 `__DATA_CONST` never prove protection: `-z norelro` and a missing Mach-O
-SG_READ_ONLY flag retain writable storage. A relocatable ELF object has no
+SG_READ_ONLY flag retain writable storage. In PE images, a writable native
+section also remains writable when its normalized segment disagrees, unless an
+explicit loader protection guarantee applies; typed reads and runtime-writable
+classification use this same decision. A relocatable ELF object has no
 mapping yet, and the loader is the one that maps its sections. It gives a
 `.data.rel.ro*` section the protection the compiler asks for there: the
 section holds constant data that needs relocations, and a linker's RELRO

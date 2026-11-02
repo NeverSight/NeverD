@@ -6096,6 +6096,16 @@ bool CFGBuilder::inferBoundsFromModulo(
             localConstant(*D - 1, Op.Inputs[1], *BlockStart, 0, DirectBudget);
         return Divisor && *Divisor == Bound && *Divisor != 0;
       }
+      if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0 &&
+          Op.Output.Size && Op.Output.Size <= sizeof(uint64_t) &&
+          Op.Inputs[0].Size > Op.Output.Size &&
+          (Op.Output.Size == sizeof(uint64_t) ||
+           uint64_t(Bound) <= (uint64_t{1} << (Op.Output.Size * 8)))) {
+        Value = Op.Inputs[0];
+        From = *D - 1;
+        continue;
+      }
       if (Op.NumInputs < 1 ||
           (Op.Opcode != NdOp::COPY && Op.Opcode != NdOp::INT_ZEXT) ||
           (!Op.Inputs[0].isReg() && !Op.Inputs[0].isTemp()) ||
@@ -6293,9 +6303,33 @@ bool CFGBuilder::inferBoundsFromModulo(
           LinearEvaluator.constant(I - 1, Op.Inputs[1]);
       if (LinearEvaluator.exhausted())
         break;
-      if (Divisor && *Divisor > 0)
+      if (Divisor && *Divisor >= limits::kMinJumpTableEntries &&
+          *Divisor <= limits::kMaxJumpTableEntries) {
         recordCandidateProducer(static_cast<uint64_t>(*Divisor), Op, I,
                                 ProposalBudget);
+        // A double-width remainder can feed the architectural result through
+        // a low-lane extraction. Retain that exact output occurrence too:
+        // final graph replay must compare the selector with its own lane,
+        // rather than treating an arbitrary truncation as value equality.
+        // These remain proposals until the shared modulo theorem proves them.
+        for (size_t J = size_t(I) + 1;
+             J < RetainedInstructionSpans[RetainedSpanIndex].End; ++J) {
+          if (!ProposalBudget.consume())
+            break;
+          const LowOp &Slice = Ops[J];
+          if (Slice.Opcode == NdOp::SUBBYTES && Slice.NumInputs == 2 &&
+              sameVar(Slice.Inputs[0], Op.Output) &&
+              Slice.Inputs[1].isConst() && Slice.Inputs[1].Offset == 0 &&
+              Slice.Output.Size && Slice.Output.Size < Op.Output.Size &&
+              Slice.Output.Size <= sizeof(uint64_t) &&
+              (Slice.Output.Size == sizeof(uint64_t) ||
+               uint64_t(*Divisor) <= (uint64_t{1} << (Slice.Output.Size * 8))))
+            recordCandidateProducer(static_cast<uint64_t>(*Divisor), Slice,
+                                    static_cast<int>(J), ProposalBudget);
+          if (overlaps(Slice.Output, Op.Output))
+            break;
+        }
+      }
       if (ProposalBudget.exhausted())
         break;
       continue;

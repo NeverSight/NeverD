@@ -119,6 +119,18 @@ TEST(ImmutableImageScalar, NamesAndSectionFlagsCannotProtectWritableMappings) {
           EXPECT_FALSE(isRuntimeWritableAddress(Image, ReadVA));
           Segment.ReadOnlyAfterRelocations = false;
           Segment.Flags = SegmentFlags::Readable;
+          const bool ConflictingPESection =
+              Format == BinaryFormat::COFF && WritableSection;
+          EXPECT_EQ(Image.readOnlyAfterRelocations(ReadVA, 1),
+                    !ConflictingPESection);
+          EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1),
+                    ConflictingPESection ? std::nullopt
+                                         : std::optional<uint64_t>{0xb8});
+          EXPECT_EQ(isRuntimeWritableAddress(Image, ReadVA),
+                    ConflictingPESection);
+          EXPECT_EQ(classifyPointerRelocationAddress(Image, ReadVA).Writable,
+                    ConflictingPESection);
+          Section.Flags = SegmentFlags::Readable;
           EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
           EXPECT_FALSE(isRuntimeWritableAddress(Image, ReadVA));
           EXPECT_TRUE(isRuntimeWritableAddress(Image, TextVA - 1));

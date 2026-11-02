@@ -119,6 +119,11 @@ bool BinaryImage::readOnlyAfterRelocations(va_t Addr, uint64_t Width) const {
   if (!Seg || !Width || Seg->Size > InvalidVA - Seg->VA ||
       Width > Seg->Size - (Addr - Seg->VA))
     return false;
+  // PE sections supply the mapping permissions. A contradictory normalized
+  // segment cannot erase their write permission without a loader guarantee.
+  if (Format == BinaryFormat::COFF && !Seg->ReadOnlyAfterRelocations)
+    if (const Section *Sec = getSectionFor(Addr); Sec && Sec->isWritable())
+      return false;
   if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations)
     return true;
   // Names describe linker conventions, not runtime protection. In particular,

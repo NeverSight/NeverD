@@ -589,6 +589,13 @@ bytes; they do not run the input program. Pair them with pipeline-outcome and
 registration-callee suites, then measure complete GOF2 analysis separately.
 Display success does not establish native exception reconstruction or patch
 equivalence, which continue to use independent strict builds.
+`RegistrationTryLevel.CxxPipelineKeepsRuntimeContinuationsAcrossSelection`
+requests LLVM output explicitly to exercise that complete native proof.
+`JTE_X86_64.WideDivisionModuloKeepsHighDividendAndSignedness` checks direct
+128-bit remainders and quotient/subtract identities against unknown high
+halves, signed division, zero divisors and undersized storage. Compact selector
+recovery must also pass `ModuloBoundProbesCompactCandidatesIndependently`.
+
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
 policy with the same retained graph.
@@ -626,7 +633,10 @@ reject partial-budget cache population, and separate image identities and
 analysis levels. This plain-body proof does not qualify C++ dispatch
 dependencies or the GOF2 selector domain.
 `NeverDReadOnlyBytesTests` compares ordinary, budgeted and indexed PE32 reads
-at relocation and malformed-field boundaries. GOF2 performance qualification
+at relocation and malformed-field boundaries. The PE permission controls
+also reject a writable section paired with a read-only normalized segment in
+both typed reads and runtime-writable classification; ELF RELRO and explicit
+loader protection keep their own contracts. GOF2 performance qualification
 requires a separate whole-image static lift with elapsed time, peak RSS and
 output completeness recorded; focused test success does not establish it.
 `RegistrationCalleeRecursion.FullBudgetRefusalKeepsTheExactAllowance` uses an
@@ -10498,6 +10508,11 @@ build-release/bin/NeverDLowUndefinedDigestTests
 `PEHeaderMapping.InventoryRejectsMissingDuplicateOrChangedHeaderIdentity` covers missing, duplicate, misplaced and mismatched segment/section inventories plus altered header bytes, flags and metadata. The same inventory gate accepts layouts whose analysis loader intentionally omits the header. With emulation enabled, `WindowsProcessImage.KeepsOneOriginalHeaderRegionBesideRealSections` checks x64/AArch64 execution admission and `DriverImage.MapsVirtualZeroFillAndOriginalPermissions` checks driver admission: both retain exactly one original-byte header region alongside the real sections.
 
 `PEHeaderMapping.HeaderIdentityRequiresBothRegionsAndNativeCount` rejects changed ownership, counts, bytes, extents, permissions and restricted-load storage. `PDBSectionTable.HeaderMappingKeepsNativeSectionsAndTheirChecks` authenticates the actual PE/PDB pair through full and restricted loading while retaining code/layout rejection and trailing relocation relayout. `PDB20IdentityIntegration.MappedHeadersSupplyNoAdditionalSegmentNumber` uses an authored JG PDB with a valid native procedure and a forged header procedure: only the native procedure may resolve. These checks also cover the RSDS names used by both C output routes.
+`PDBSectionTable.UnbackedHeaderTagsCannotHideASection` and
+`PDB20IdentityIntegration.UnbackedHeaderStorageRejectsSectionIdentity` reject
+an unbacked `IsImageHeader` tag; the loaded-header tests above supply the
+positive full/restricted-load checks.
+
 
 `TerminalImportSpecialization.*` checks physical external-call target ordering,
 one stack push and the original return address with an independent scalar

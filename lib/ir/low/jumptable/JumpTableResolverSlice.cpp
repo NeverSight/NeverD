@@ -1114,7 +1114,9 @@ static ResolverValue resolverConstant(
     uint64_t Value, uint16_t Size, ConstantAddressProvenance Provenance,
     uint64_t AddressOwnerVA = InvalidVA,
     std::optional<ResolverScalarModelOrigin> ScalarModelOrigin = std::nullopt) {
-  if (Size == 0 || Size > sizeof(uint64_t))
+  // NdVar constants store an unsigned 64-bit payload, including the literal
+  // shift counts in x64's 128-bit dividend construction.
+  if (Size == 0 || Size > 2 * sizeof(uint64_t))
     return {};
   auto E = std::make_shared<ResolverValueExpr>();
   E->K = ResolverValueExpr::Kind::Constant;
@@ -1363,7 +1365,8 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     if (Node->K == ResolverValueExpr::Kind::Zero) {
       return remember(Node, budgetedResolverZero(Size, consume));
     }
-    if (Node->K == ResolverValueExpr::Kind::Constant) {
+    if (Node->K == ResolverValueExpr::Kind::Constant &&
+        (!Signed || Size <= sizeof(uint64_t))) {
       uint64_t Value = Node->Constant & resolverWidthMask(Node->Size);
       if (Signed && Node->Size < sizeof(uint64_t)) {
         const unsigned Bits = Node->Size * 8;
@@ -1688,15 +1691,29 @@ static bool provesDirectUnsignedModuloRecipe(
       return false;
     Remainder = Narrow;
   }
+  // A low-lane extraction retains an unsigned remainder when the complete
+  // range fits the selected lane. This includes x86's double-width DIV result.
+  if (Ctx.op(Remainder) == SymOp::Extract && Ctx.numOperands(Remainder) == 1 &&
+      Ctx.node(Remainder).Aux == 0 && Ctx.width(Remainder) <= 64 &&
+      (Ctx.width(Remainder) == 64 ||
+       Divisor <= (uint64_t{1} << Ctx.width(Remainder)))) {
+    const auto Wide = Ctx.operand(Remainder, 0);
+    if (Ctx.op(Wide) == SymOp::URem && Ctx.width(Wide) <= 128)
+      Remainder = Wide;
+  }
   const uint32_t Width = Ctx.width(Remainder);
-  if (Width < 2 || Width > 64)
+  if (Width < 2 || Width > 128)
     return false;
   if (Width < 64 && Divisor >= (uint64_t{1} << Width))
     return false;
-  if (NormalizedRemainder)
-    *NormalizedRemainder = Remainder;
-  if (NormalizedWidth)
-    *NormalizedWidth = Width;
+  // Wider words are admitted only by the direct remainder theorem. Keep
+  // reciprocal matching and its ring arithmetic on the original word domain.
+  if (Width <= 64) {
+    if (NormalizedRemainder)
+      *NormalizedRemainder = Remainder;
+    if (NormalizedWidth)
+      *NormalizedWidth = Width;
+  }
 
   if (Ctx.op(Remainder) != SymOp::URem || Ctx.numOperands(Remainder) != 2)
     return false;
@@ -5879,14 +5896,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
            {TRI.StackPointer, TRI.FramePointer, TRI.IntReturnReg})
         if (Begin < Register + TRI.PointerSize && Register < End)
           return false;
-    if (!consumeEvidence(CallPreservedRanges.size()))
-      return false;
-    if (std::any_of(CallPreservedRanges.begin(), CallPreservedRanges.end(),
-                    [&](const TargetRegisterRange &Range) {
-                      return Range.Bytes <= InvalidVA - Range.Offset &&
-                             Begin >= Range.Offset &&
-                             End <= Range.Offset + Range.Bytes;
-                    }))
+    if (callPreservesBytes(Call, Begin, Query.Size))
       return true;
     return Query.Space == VnodeSpace::REG && Begin >= TRI.StackPointer &&
            End <= TRI.StackPointer + TRI.PointerSize &&
@@ -9203,8 +9213,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                       bool RetainGuards = false) {
     ProofComplete = false;
     const bool RetainPathPredicates = FeasibleMask || RetainGuards;
-    if (!Value || Value->Size == 0 || Value->Size > sizeof(uint64_t) ||
-        Bound == 0 || (FeasibleMask && Bound > 64))
+    const uint16_t MaximumSize =
+        ExactModuloRecipeOnly ? 2 * sizeof(uint64_t) : sizeof(uint64_t);
+    if (!Value || Value->Size == 0 || Value->Size > MaximumSize || Bound == 0 ||
+        (FeasibleMask && Bound > 64))
       return false;
 
     const uint32_t Width = uint32_t(Value->Size) * 8u;
@@ -9359,7 +9371,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         SymbolBudgetExhausted = true;
         return {};
       }
-      if (Node->Size > sizeof(uint64_t)) {
+      if (Node->Size > MaximumSize) {
         // Finite-set symbolization may encounter an unsupported wide value
         // below a later narrow slice/mask.  Returning no child lets that
         // enclosing narrow expression fall back to a fresh unconstrained
@@ -9777,7 +9789,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             break;
           std::optional<symbolic::SymRef> Operation =
               symbolizeJumpTableIntegerOperation(Ctx, Node->Opcode, Node->Size,
-                                                 Inputs);
+                                                 Inputs, ExactModuloRecipeOnly);
           if (Operation)
             Result = *Operation;
         }
