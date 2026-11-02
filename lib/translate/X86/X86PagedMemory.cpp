@@ -1,0 +1,159 @@
+//===- X86PagedMemory.cpp - Restartable x86 RAM operands ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Plan all translations and physical spans before publishing operand bytes.
+//===----------------------------------------------------------------------===//
+
+#include "neverd/translate/X86/X86PagedMemory.h"
+
+#include "llvm/Support/Errc.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
+
+namespace neverd::translate {
+namespace {
+
+llvm::Error invalid(const char *Message) {
+  return llvm::createStringError(llvm::errc::invalid_argument, Message);
+}
+
+X86MemoryAccessResult backingFault(const GuestMemoryAccessResult &Access) {
+  X86MemoryAccessResult Result;
+  Result.Status = X86PageWalkStatus::BackingFault;
+  Result.BackingFault = Access.Fault;
+  return Result;
+}
+
+} // namespace
+
+llvm::Expected<std::unique_ptr<X86PagedMemory>>
+X86PagedMemory::create(const GuestState &RAM, const X86PagingFeatures &Features,
+                       const X86PagingState &Controls,
+                       const GuestMemoryRuntimeLimits &Limits) {
+  if (auto Error = validateX86PagingState(Features, Controls))
+    return std::move(Error);
+  for (const auto &Region : RAM.Memory)
+    if (hasPermission(Region.Permissions, MemoryPermission::Execute))
+      return invalid("physical RAM cannot carry virtual execute permissions");
+  if (RAM.AddressWidth < Features.PhysicalAddressBits)
+    return invalid("physical RAM address width is narrower than MAXPHYADDR");
+  GuestMemoryRuntimeConfig Config;
+  Config.CodeInvalidation = CodeInvalidationPolicy::RejectExecutableWrites;
+  Config.Limits = Limits;
+  auto Physical = GuestMemoryRuntime::create(RAM, Config);
+  if (!Physical)
+    return Physical.takeError();
+  return std::unique_ptr<X86PagedMemory>(
+      new X86PagedMemory(std::move(*Physical), Features, Controls));
+}
+
+X86PagedMemory::X86PagedMemory(std::unique_ptr<GuestMemoryRuntime> Physical,
+                               const X86PagingFeatures &Features,
+                               const X86PagingState &Controls)
+    : Physical(std::move(Physical)), Features(Features), Controls(Controls) {}
+
+llvm::Error X86PagedMemory::bindControls(const X86PagingState &State) {
+  if (auto Error = validateX86PagingState(Features, State))
+    return Error;
+  Controls = State;
+  return llvm::Error::success();
+}
+
+llvm::Expected<X86PagedMemory::Plan>
+X86PagedMemory::plan(const X86LinearAccess &Access, uint64_t Bytes) {
+  Plan P;
+  auto Check = checkX86LinearAccess(Controls, Access, Bytes);
+  if (!Check)
+    return Check.takeError();
+  if (*Check) {
+    P.Result.Status = X86PageWalkStatus::Exception;
+    P.Result.Exception = *Check;
+    return P;
+  }
+  auto Current = Access;
+  uint64_t Remaining = Bytes;
+  while (Remaining) {
+    auto Translation =
+        walkX86PageTables(*Physical, Features, Controls, Current);
+    if (!Translation)
+      return Translation.takeError();
+    if (Translation->Status != X86PageWalkStatus::Completed) {
+      P.Result = std::move(*Translation);
+      P.Fragments.clear();
+      return P;
+    }
+    // Limit fragments to 4 KiB even for large pages. Subsequent operand bytes
+    // can alias the physical page tables; all translations precede the store.
+    const uint64_t Size = std::min(Remaining, 4096 - (Current.Address & 4095));
+    P.Fragments.push_back({Translation->PhysicalAddress, Size});
+    Remaining -= Size;
+    if (Remaining)
+      Current.Address += Size;
+  }
+  return P;
+}
+
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::load(const X86LinearAccess &Access,
+                     llvm::MutableArrayRef<uint8_t> Output) {
+  if (Access.Kind != MemoryAccessKind::Read &&
+      Access.Kind != MemoryAccessKind::Execute)
+    return invalid("x86 paged load requires read or instruction-fetch access");
+  auto P = plan(Access, Output.size());
+  if (!P)
+    return P.takeError();
+  if (P->Result.Status != X86PageWalkStatus::Completed)
+    return P->Result;
+  std::vector<uint8_t> Bytes(Output.size());
+  size_t Offset = 0;
+  for (const auto &Fragment : P->Fragments) {
+    const auto R = Physical->loadBytes(
+        Fragment.PhysicalAddress,
+        llvm::MutableArrayRef(Bytes).slice(Offset, Fragment.Size));
+    if (R.Status == GuestMemoryAccessStatus::Fault)
+      return backingFault(R);
+    Offset += Fragment.Size;
+  }
+  std::copy(Bytes.begin(), Bytes.end(), Output.begin());
+  return P->Result;
+}
+
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::store(const X86LinearAccess &Access,
+                      llvm::ArrayRef<uint8_t> Input) {
+  if (Access.Kind != MemoryAccessKind::Write)
+    return invalid("x86 paged store requires write access");
+  auto P = plan(Access, Input.size());
+  if (!P)
+    return P.takeError();
+  if (P->Result.Status != X86PageWalkStatus::Completed)
+    return P->Result;
+  for (const auto &Fragment : P->Fragments) {
+    const auto R =
+        Physical->validateStoreBytes(Fragment.PhysicalAddress, Fragment.Size);
+    if (R.Status == GuestMemoryAccessStatus::Fault)
+      return backingFault(R);
+  }
+  size_t Offset = 0;
+  for (const auto &Fragment : P->Fragments) {
+    // No callbacks, concurrent writers, permission changes or executable
+    // generation increments can intervene between validation and commit.
+    const auto R = Physical->storeBytes(Fragment.PhysicalAddress,
+                                        Input.slice(Offset, Fragment.Size));
+    assert(R.Status == GuestMemoryAccessStatus::Completed &&
+           "validated confined physical RAM store cannot fail");
+    (void)R;
+    Offset += Fragment.Size;
+  }
+  return P->Result;
+}
+
+} // namespace neverd::translate

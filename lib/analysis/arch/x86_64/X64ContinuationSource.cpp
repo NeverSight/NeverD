@@ -631,6 +631,7 @@ bool supportedOperation(const LowOp &Op,
 }
 
 struct Writer {
+  static constexpr bool FaultableMemory = false;
   LowFunc &Function;
   LowBlock *Block;
   const X64ContinuationSourceOptions &Options;
@@ -701,6 +702,17 @@ struct Writer {
     emit(NdOp::LOAD, V, {address(Offset)});
     return V;
   }
+
+  NdVar eventValue(NdVar Pointer, uint64_t Offset, uint16_t Bytes) {
+    const auto Address = temporary(), Value = temporary(Bytes);
+    emit(NdOp::INT_ADD, Address, {Pointer, constant(Offset)});
+    emit(NdOp::LOAD, Value, {Address});
+    return Value;
+  }
+
+  void architecturalFaultIf(NdVar Bad, uint8_t, NdVar) { rejectIf(Bad); }
+  void beginEvent(NdVar) {}
+  void eventStack(NdVar) {}
 
   void store(uint64_t Offset, NdVar V) {
     emit(NdOp::STORE, {}, {address(Offset), V});

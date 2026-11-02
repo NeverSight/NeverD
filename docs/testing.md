@@ -1,5 +1,14 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+`NeverDX86PagingTests` checks the owned x86 paging and paged V6 event interfaces.
+Its KVM oracle executes original loads, stores and instruction fetches in
+legacy i386, PAE and IA-32e modes, including cross-page faults and failures
+during #PF/#DF delivery. It compares complete data pages and ordinary exception
+frames, preserving architectural undefined-state exclusions. Missing KVM and
+LA57 are explicit skips. Shared event-template edits also run the full
+`NeverDX64ContinuationSourceTests` and `NeverDX64ContinuationExportTests` on the
+native-intrinsic SDK and pinned r6 SDK. See [the contract](x86-paged-memory.md).
+
 Hyper-V page transport uses the same two source targets below. Filter
 `^(X64ContinuationExportTest\.HyperV|X86KvmSource\.HyperV)` for explicit binding,
 full state, rep/fast outputs, upper-lane preservation and invalid contracts.

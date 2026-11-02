@@ -1,3 +1,13 @@
+add_neverd_unittest(NeverDX86PagingTests
+  x86/X86PagingTests.cpp
+  x86/X86PagingNativeTests.cpp
+  x86/X64PagedEventDeliveryTests.cpp
+
+  LINK_COMPONENTS
+  Translate
+  X64PagedEventDelivery
+)
+
 add_neverd_unittest(NeverDTranslationContractTests
   ${CMAKE_SOURCE_DIR}/tools/neverd/NeverDTranslateOutput.cpp
   GuestMemoryRuntimeTests.cpp

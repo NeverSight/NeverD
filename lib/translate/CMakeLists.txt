@@ -23,6 +23,8 @@ add_neverd_component_library(NeverDTranslate
   TranslationTargetMachine.cpp
   X86/X86TranslationBlockBuilder.cpp
   X86/X86TranslationBlockLowerer.cpp
+  X86/X86Paging.cpp
+  X86/X86PagedMemory.cpp
   X86/X87PortableRuntime.cpp
 
   LINK_COMPONENTS

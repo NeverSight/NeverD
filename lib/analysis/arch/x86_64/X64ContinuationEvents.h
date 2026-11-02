@@ -27,9 +27,10 @@ namespace neverd::analysis::detail {
 /// Writer supplies
 /// temporary/emit/load/store/storeIf/write/rejectIf/exitIf/leave. Keeping this
 /// lowering above both C backends gives one owner for descriptor validation,
-/// frame accesses and final state. All checks precede writes. A pending CS
-/// accessed-bit update is forwarded into later reads: eager frame loads or
-/// committing descriptors only after frame stores would change aliased RAM.
+/// frame accesses and final state. The no-fault writer checks before writes
+/// and forwards pending CS accessed bits into later reads. The faultable
+/// writer commits descriptor updates before later accesses. Both preserve
+/// descriptor/frame aliasing and retain the original access order.
 template <class Writer>
 class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using Base = X64ContinuationSegments<Writer>;
@@ -42,6 +43,7 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using Base::descriptor;
   using Base::either;
   using Base::eq;
+  using Base::faultIf;
   using Base::k;
   using Base::less;
   using Base::load;
@@ -308,41 +310,51 @@ public:
   void interrupt(NdVar Vector, NdVar SavedPC, NdVar SavedFlags, NdVar HasError,
                  NdVar ErrorCode, NdVar Software, NdVar NMI, NdVar PageFault,
                  NdVar FaultAddress) {
+    const auto External = choose(ne(Software, k(0)), k(0), k(1));
+    Base::DeliveryExternal = External;
+    const auto GateError =
+        op(NdOp::INT_OR, {op(NdOp::INT_LEFT, {Vector, k(3)}),
+                          op(NdOp::INT_OR, {k(2), External})});
     const auto GateOffset = op(NdOp::INT_LEFT, {Vector, k(4)});
     const auto LastByte = op(NdOp::INT_ADD, {GateOffset, k(15)});
     const auto IDT = load(offsetof(V6, IDTR));
-    W.rejectIf(
-        less(load(offsetof(V6, IDTR) + offsetof(Table, Limit), 2), LastByte));
+    faultIf(
+        less(load(offsetof(V6, IDTR) + offsetof(Table, Limit), 2), LastByte),
+        13, GateError);
     W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), IDT));
     const auto GateAddress = op(NdOp::INT_ADD, {IDT, GateOffset});
     range(GateAddress, 15);
     const auto Low = readMemory(GateAddress);
     const auto High = readMemory(op(NdOp::INT_ADD, {GateAddress, k(8)}));
     const auto Type = masked(shifted(Low, 40), 31);
-    W.rejectIf(both(ne(Type, k(14)), ne(Type, k(15))));
-    W.rejectIf(eq(masked(Low, uint64_t{1} << 47), k(0)));
-    W.rejectIf(ne(masked(Low, uint64_t{31} << 35), k(0)));
-    W.rejectIf(ne(shifted(High, 32), k(0)));
+    faultIf(both(ne(Type, k(14)), ne(Type, k(15))), 13, GateError);
+    faultIf(ne(masked(Low, uint64_t{31} << 35), k(0)), 13, GateError);
+    faultIf(ne(shifted(High, 32), k(0)), 13, GateError);
     const auto OldCS = load(offsetof(V5, CS) + offsetof(Segment, Selector), 2);
     const auto CPL = masked(OldCS, 3);
-    W.rejectIf(
-        both(ne(Software, k(0)), less(masked(shifted(Low, 45), 3), CPL)));
+    faultIf(both(ne(Software, k(0)), less(masked(shifted(Low, 45), 3), CPL)),
+            13, GateError);
+    faultIf(eq(masked(Low, uint64_t{1} << 47), k(0)), 11, GateError);
     const auto CS = masked(shifted(Low, 16), 0xffff);
     const auto PC =
         op(NdOp::INT_OR,
            {op(NdOp::INT_OR,
                {masked(Low, 0xffff), masked(shifted(Low, 32), 0xffff0000)}),
             op(NdOp::INT_LEFT, {High, k(32)})});
-    canonical(PC);
-    W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
+    faultIf(eq(masked(CS, 0xfffc), k(0)), 13, External);
+    const auto CodeError = op(NdOp::INT_OR, {masked(CS, 0xfffc), External});
     const auto Code = descriptor(CS);
     const auto Access = shifted(Code.Value, 40);
-    W.rejectIf(ne(masked(Access, 0x6098), k(0x2098)));
+    faultIf(ne(masked(Access, 0x6018), k(0x2018)), 13, CodeError);
     const auto DPL = masked(shifted(Access, 5), 3);
-    W.rejectIf(less(CPL, DPL));
+    faultIf(less(CPL, DPL), 13, CodeError);
+    faultIf(eq(masked(Access, 0x80), k(0)), 11, CodeError);
     const auto NewCPL = choose(ne(masked(Access, 4), k(0)), CPL, DPL);
     const auto Inner = less(NewCPL, CPL);
-    AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
+    if constexpr (Writer::FaultableMemory)
+      accessed(Code);
+    else
+      AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
     const auto IST = masked(shifted(Low, 32), 7);
     const auto UseIST = ne(IST, k(0));
     const auto Switch = either(UseIST, Inner);
@@ -356,29 +368,42 @@ public:
         ne(masked(load(offsetof(V6, TR) + offsetof(Segment, Attributes), 2),
                   0x9f),
            k(0x8b)));
-    W.rejectIf(both(Switch, BadTR));
-    W.rejectIf(
+    const auto TssError =
+        op(NdOp::INT_OR,
+           {masked(load(offsetof(V6, TR) + offsetof(Segment, Selector), 2),
+                   0xfffc),
+            External});
+    faultIf(both(Switch, BadTR), 10, TssError);
+    faultIf(
         both(Switch,
-             less(load(offsetof(V6, TR) + offsetof(Segment, Limit), 4), Last)));
+             less(load(offsetof(V6, TR) + offsetof(Segment, Limit), 4), Last)),
+        10, TssError);
     W.rejectIf(
         both(Switch, less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), TR)));
     const auto Address =
         choose(Switch, op(NdOp::INT_ADD, {TR, TssOffset}), Code.Address);
     range(Address, 7);
     const auto OldSP = load(offsetof(State, GPR) + x86reg::RSP);
-    const auto Stack = choose(Switch, readMemory(Address), OldSP);
-    canonical(Stack);
+    NdVar Stack;
+    if constexpr (Writer::FaultableMemory)
+      Stack = W.loadMemoryIf(Switch, Address, OldSP);
+    else
+      Stack = choose(Switch, readMemory(Address), OldSP);
+    canonical(Stack, 12);
     const auto Top = masked(Stack, ~uint64_t{15});
     const auto FrameBytes = choose(ne(HasError, k(0)), k(48), k(40));
-    W.rejectIf(less(Top, FrameBytes));
+    faultIf(less(Top, FrameBytes), 12, External);
     const auto SP = op(NdOp::INT_SUB, {Top, FrameBytes});
-    range(SP, op(NdOp::INT_SUB, {FrameBytes, k(1)}));
+    range(SP, op(NdOp::INT_SUB, {FrameBytes, k(1)}), 12);
+    canonical(PC);
     const auto FrameSP = op(NdOp::INT_SUB, {Top, k(40)});
     const auto Flags = load(offsetof(State, RFlags));
     const NdVar Frame[] = {
         SavedPC, OldCS, SavedFlags, OldSP,
         load(offsetof(V5, SS) + offsetof(Segment, Selector), 2)};
-    accessed(Code);
+    if constexpr (!Writer::FaultableMemory)
+      accessed(Code);
+    W.eventStack(NewCPL);
     for (unsigned I = 5; I--;) {
       const auto Destination = op(NdOp::INT_ADD, {FrameSP, k(I * 8)});
       W.emit(NdOp::STORE, {}, {Destination, Frame[I]});

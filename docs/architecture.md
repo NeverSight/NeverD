@@ -29,6 +29,16 @@ shared across architectures and format-owned tests stay with their consumers.
 Directory moves do not change component targets, intrinsic identities, exported
 symbols or instruction semantics.
 
+`translate/X86/X86Paging` owns architectural linear-address translation over
+`GuestMemoryRuntime` physical storage. `X86PagedMemory` composes it into
+restartable operands without turning physical backing failures into #PF.
+`X64PagedEventDelivery` evaluates the existing continuation event templates
+with exact scalar values and this memory binding; source and concrete execution
+share descriptor/frame decisions. Recursive delivery owns #DF classification,
+CR2 publication and shutdown, while caller state owns instruction restart and
+device arrival. See [the paged RAM contract](x86-paged-memory.md); the existing
+generated-C dispatcher still uses its separate no-fault memory binding.
+
 `ir/intrinsics/X86/X86Hle.h` owns HLE's native ABI and original-register
 publication map. LowIR, Low-to-Med, Med verification and the C/LLVM adapters
 share that shape. `lift/X86/X86HleEncoding.h` admits original memory forms;

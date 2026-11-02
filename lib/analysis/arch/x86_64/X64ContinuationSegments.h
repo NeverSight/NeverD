@@ -64,6 +64,7 @@ protected:
   Writer &W;
   unsigned AddressBits;
   std::optional<NdVar> AccessedAddress;
+  std::optional<NdVar> DeliveryExternal;
 
   static NdVar k(uint64_t V) { return NdVar::scalar(V, 8); }
 
@@ -99,17 +100,25 @@ protected:
     return op(NdOp::SELECT, {C, A, B}, A.Size);
   }
 
-  void canonical(NdVar V) {
+  void faultIf(NdVar Bad, uint8_t Vector, NdVar Error) {
+    if (DeliveryExternal)
+      W.architecturalFaultIf(Bad, Vector, Error);
+    else
+      W.rejectIf(Bad);
+  }
+
+  void canonical(NdVar V, uint8_t Vector = 13) {
     const auto Shift = k(64 - AddressBits);
     const auto Signed =
         op(NdOp::INT_ASHR, {op(NdOp::INT_LEFT, {V, Shift}), Shift});
-    W.rejectIf(ne(V, Signed));
+    faultIf(ne(V, Signed), Vector, DeliveryExternal.value_or(k(0)));
   }
 
-  void range(NdVar Address, NdVar LastByte) {
-    W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), Address));
-    canonical(Address);
-    canonical(op(NdOp::INT_ADD, {Address, LastByte}));
+  void range(NdVar Address, NdVar LastByte, uint8_t Vector = 13) {
+    faultIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), Address), Vector,
+            DeliveryExternal.value_or(k(0)));
+    canonical(Address, Vector);
+    canonical(op(NdOp::INT_ADD, {Address, LastByte}), Vector);
   }
 
   void range(NdVar Address, uint64_t LastByte) { range(Address, k(LastByte)); }
@@ -136,13 +145,17 @@ protected:
   };
 
   Descriptor descriptor(NdVar Selector) {
+    const auto Error =
+        DeliveryExternal
+            ? op(NdOp::INT_OR, {masked(Selector, 0xfffc), *DeliveryExternal})
+            : k(0);
     const auto Local = ne(masked(Selector, 4), k(0));
     const auto BadLdt = either(
         ne(masked(load(offsetof(V6, Unusable), 1), 64), k(0)),
         ne(masked(load(offsetof(V6, LDTR) + offsetof(Segment, Attributes), 2),
                   0x9f),
            k(0x82)));
-    W.rejectIf(both(Local, BadLdt));
+    faultIf(both(Local, BadLdt), 13, Error);
     const auto Base =
         choose(Local, load(offsetof(V6, LDTR)), load(offsetof(V6, GDTR)));
     const auto Limit =
@@ -150,7 +163,7 @@ protected:
                load(offsetof(V6, GDTR) + offsetof(Table, Limit), 2));
     const auto Index = masked(Selector, 0xfff8);
     const auto Last = op(NdOp::INT_ADD, {Index, k(7)});
-    W.rejectIf(less(Limit, Last));
+    faultIf(less(Limit, Last), 13, Error);
     W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), Base));
     const auto Address = op(NdOp::INT_ADD, {Base, Index});
     range(Address, 7);

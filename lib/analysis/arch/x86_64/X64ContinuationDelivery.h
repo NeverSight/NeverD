@@ -48,8 +48,7 @@ class X64ContinuationDelivery : private X64ContinuationSegments<Writer> {
   using Kind = X64ContinuationEventKind;
 
   NdVar event(NdVar Pointer, uint64_t Offset, uint16_t Bytes = 1) {
-    const auto Value =
-        op(NdOp::LOAD, {op(NdOp::INT_ADD, {Pointer, k(Offset)})}, Bytes);
+    const auto Value = W.eventValue(Pointer, Offset, Bytes);
     return Bytes == 8 ? Value : op(NdOp::INT_ZEXT, {Value});
   }
 
@@ -144,6 +143,7 @@ public:
         choose(Software, masked(Flags, ~uint64_t{0x10000}),
                choose(either(Fault, Repeated),
                       op(NdOp::INT_OR, {Flags, k(0x10000)}), Flags));
+    W.beginEvent(NMI);
     X64ContinuationEvents<Writer>(W, Base::AddressBits)
         .interrupt(Vector, SavedPC, SavedFlags, op(NdOp::INT_ZEXT, {HasError}),
                    Error, op(NdOp::INT_ZEXT, {Software}),

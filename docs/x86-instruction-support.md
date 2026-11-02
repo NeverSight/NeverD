@@ -264,6 +264,12 @@ test resumes through a coupled SS/RSP switch and uses the new stack.
 
 ## Known remaining gaps
 
+The [owned paged-RAM and faultable IA-32e IDT path](x86-paged-memory.md) now
+implements architectural page walks, faulting operands and recursive delivery
+through #DF/shutdown. It is a separate C++ execution binding; the existing
+generated-C instruction dispatchers still have their documented successful-RAM
+contract. The distinction applies to the memory/fault gaps listed below.
+
 | Instructions or family | Missing contract |
 | --- | --- |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
@@ -3432,3 +3438,29 @@ comparisons. Sixteen LLVM code-generation regressions, 21 NeverC frontend
 regressions and ten generated-table tests pass. The recorded `_udiv128`
 counterexample distinguishes the old optimized-away overflow from the new
 native call. No release, SDK pin or LLVM gitlink is changed by this work.
+
+## Owned paged RAM and recursive delivery faults
+
+`translate/X86/X86Paging` owns the bound CPU's legacy i386, PAE and four-/five-level
+walks, page sizes, access permissions, A/D publication and architectural fault
+metadata. `X86PagedMemory` plans cross-page operands before publishing results
+or data; missing physical backing remains an embedding failure. Complete-operand
+canonical checks precede page walks, so #GP/#SS cannot be replaced by an earlier
+#PF on the first page. PAE register reload validates the complete new bank before
+replacement and reports invalid present entries as #GP.
+
+`X64PagedEventDelivery` evaluates the existing shared V6 descriptor/frame
+semantics over this RAM. Nested delivery faults retain their selector/IDT error
+codes, CR2 updates, NMI blocking and completed descriptor/frame writes. The
+exception classes select #DF or shutdown, with no synthesized reset. Same-level
+entry avoids an eager extra descriptor read after an accessed-bit write.
+
+The [contract](x86-paged-memory.md) and
+[qualification record](evidence/x86-paged-memory-2026-11-01.json) distinguish this
+C++ binding from generated source. Both SDKs pass the 440 existing continuation
+regressions plus the paged-memory/event checks. Each SDK executes 820 original
+CPU comparisons, including 240 fault/event comparisons within that total;
+five-level native execution is explicitly skipped on the non-LA57 host.
+Generated-C memory-context/commit integration, complete legacy i386 dispatch,
+SMI/SGX AEX and the documented external-device domains remain open. LLVM release
+and pin completion are not inferred from this qualification.
