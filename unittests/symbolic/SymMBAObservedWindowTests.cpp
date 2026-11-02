@@ -451,3 +451,59 @@ TEST(SymMBAObservedWindow, QuotientProductsRecoverOnlyTheirOwnRemainder) {
     }
   }
 }
+
+TEST(SymMBAObservedWindow, RecoveredDivisionKeepsTheFactsOfItsProduct) {
+  // Each shape reduced before quotient and remainder recovery existed. The
+  // recovered operation must keep the bounds and low bits that reduction
+  // used, and one value must not end up spelled two ways.
+  SymContext C;
+  const auto X = C.mkVar("x", 16), Y = C.mkVar("y", 16);
+  const auto Equivalent = [&](SymRef A, SymRef B) {
+    neverd::solver::BitVectorSolver Proof(C);
+    return Proof.check(C.mkNe(A, B)) == neverd::solver::SatResult::Unsat;
+  };
+  const auto Contains = [&](SymRef Root, SymOp Op) {
+    llvm::SmallVector<SymRef, 16> Pending{Root};
+    std::set<uint32_t> Seen;
+    while (!Pending.empty()) {
+      const auto R = Pending.pop_back_val();
+      if (!Seen.insert(R.index()).second)
+        continue;
+      if (C.op(R) == Op)
+        return true;
+      for (const auto Operand : C.operands(R))
+        Pending.push_back(Operand);
+    }
+    return false;
+  };
+  // 1025 * x stays below 2^27, so this window is 0 or 1 under a mask of 3.
+  const auto Bounded = C.mkZExt(
+      C.mkOr(C.mkConst(7, 3),
+             C.mkExtract(C.mkMul(C.mkConst(33, 1025), C.mkZExt(X, 33)), 26, 7)),
+      16);
+  EXPECT_EQ(simplifyWindow(C, Bounded), C.mkConst(16, 3));
+  // A remainder by 152 keeps x's three low bits.
+  const auto D = C.mkConst(16, 152);
+  const auto Remainder = C.mkSub(X, C.mkMul(D, C.mkUDiv(X, D)));
+  const auto LowBit =
+      C.mkAnd({C.mkConst(16, 2), C.mkOr(C.mkConst(16, 0x3FFD), Remainder),
+               C.mkOr(X, Y)});
+  const auto LowReduced = simplifyWindow(C, LowBit);
+  EXPECT_FALSE(Contains(LowReduced, SymOp::URem)) << C.toString(LowReduced);
+  EXPECT_TRUE(Equivalent(LowBit, LowReduced));
+  // The same remainder inside a longer sum takes the same spelling.
+  const auto Longer = C.mkAdd(Remainder, Y);
+  const auto LongerReduced = simplifyWindow(C, Longer);
+  EXPECT_TRUE(Contains(LongerReduced, SymOp::URem))
+      << C.toString(LongerReduced);
+  EXPECT_FALSE(Contains(LongerReduced, SymOp::UDiv))
+      << C.toString(LongerReduced);
+  EXPECT_TRUE(Equivalent(Longer, LongerReduced));
+  // A power-of-two reciprocal is a shift and stays one.
+  const auto V = C.mkVar("v", 8);
+  const auto Shift =
+      C.mkExtract(C.mkMul(C.mkConst(16, 64), C.mkZExt(V, 16)), 8, 8);
+  const auto ShiftReduced = simplifyWindow(C, Shift);
+  EXPECT_FALSE(Contains(ShiftReduced, SymOp::UDiv)) << C.toString(ShiftReduced);
+  EXPECT_TRUE(Equivalent(Shift, ShiftReduced));
+}

@@ -574,3 +574,33 @@ TEST(SymKnownBits, NonwrappingSumIntervalsRetainExactUnsignedEndpoints) {
     }
   }
 }
+
+TEST(SymKnownBits, LiteralDivisionAndRemainderBoundTheirResults) {
+  // SymContext division is total (x/0 is all ones, x%0 is x), so only a
+  // nonzero literal divisor may use ordinary unsigned bounds.
+  SymContext C;
+  auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  auto Quotient = C.mkUDiv(X, C.mkConst(8, 251));
+  auto Small = C.mkURem(C.mkAnd(X, C.mkConst(8, 96)), C.mkConst(8, 204));
+  exhaustiveBytePairs(
+      C, {Quotient, Small, C.mkURem(X, C.mkConst(8, 152)),
+          C.mkUDiv(C.mkOr(X, C.mkConst(8, 0x80)), C.mkConst(8, 3)),
+          C.mkUDiv(X, C.mkConst(8, 0)), C.mkURem(X, C.mkConst(8, 0)),
+          C.mkUDiv(X, Y), C.mkURem(X, Y), C.mkURem(Y, C.mkOr(X, Y))});
+  SymKnownBits Facts(C);
+  unsigned Work = 256;
+  auto K = Facts.query(Quotient, Work);
+  ASSERT_TRUE(K);
+  EXPECT_EQ(K->Zero.getZExtValue(), 0xFEU);
+  // A dividend below the divisor is its own remainder.
+  Work = 256;
+  K = Facts.query(Small, Work);
+  ASSERT_TRUE(K);
+  EXPECT_EQ(K->Zero.getZExtValue(), 0x9FU);
+  for (auto Dynamic : {C.mkUDiv(X, Y), C.mkURem(X, Y)}) {
+    Work = 256;
+    K = Facts.query(Dynamic, Work);
+    ASSERT_TRUE(K);
+    EXPECT_TRUE(K->isUnknown());
+  }
+}

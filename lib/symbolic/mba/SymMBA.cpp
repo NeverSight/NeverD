@@ -114,7 +114,10 @@ SymRef foldReciprocalDivision(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   auto Divisor = Scale.udiv(Multiplier);
   if (!Scale.urem(Multiplier).isZero())
     ++Divisor;
-  if (Divisor.isZero() || Divisor.getActiveBits() > InputWidth)
+  // A power of two is an exact shift already, which the window rules keep in
+  // its canonical form; spelling it as division only hides those bits.
+  if (Divisor.isZero() || Divisor.isPowerOf2() ||
+      Divisor.getActiveBits() > InputWidth)
     return Root;
   const auto Error = Divisor * Multiplier - Scale;
   const auto LastQuotient = Maximum.udiv(Divisor);
@@ -154,17 +157,42 @@ SymRef foldQuotientRemainder(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (Storage < Bytes || !Budget.consume(2 * Words + Terms.size()))
       return Root;
     Storage -= Bytes;
-    if (!Ctx.constValue(Divisor).isZero() &&
-        Ctx.constValue(Ctx.operand(Product, 0)) == -Ctx.constValue(Divisor)) {
-      llvm::SmallVector<SymRef, 8> Dividend;
-      for (unsigned J = 0; J != Terms.size(); ++J)
-        if (J != I)
-          Dividend.push_back(Terms[J]);
-      const auto Input =
-          Dividend.size() == 1 ? Dividend.front() : Ctx.mkAdd(Dividend);
-      if (Ctx.operand(Quotient, 0) == Input)
-        return Ctx.mkURem(Input, Divisor);
+    if (Ctx.constValue(Divisor).isZero() ||
+        Ctx.constValue(Ctx.operand(Product, 0)) != -Ctx.constValue(Divisor))
+      continue;
+    // The dividend's terms can be part of a longer sum. Rewriting only a sum
+    // that is exactly the remainder would leave the same value spelled two
+    // ways, which hides it from the linear MBA identities that relate them.
+    const auto Input = Ctx.operand(Quotient, 0);
+    llvm::SmallVector<SymRef, 8> Needed;
+    if (Ctx.op(Input) == SymOp::Add)
+      Needed.append(Ctx.operands(Input).begin(), Ctx.operands(Input).end());
+    else
+      Needed.push_back(Input);
+    if (Needed.size() >= Terms.size())
+      continue;
+    if (!Budget.consume(Needed.size() * Terms.size()))
+      return Root;
+    llvm::SmallVector<SymRef, 8> Rest;
+    for (unsigned J = 0; J != Terms.size(); ++J)
+      if (J != I)
+        Rest.push_back(Terms[J]);
+    bool Complete = true;
+    for (const auto Term : Needed) {
+      const auto Found = llvm::find(Rest, Term);
+      if (Found == Rest.end()) {
+        Complete = false;
+        break;
+      }
+      Rest.erase(Found);
     }
+    if (!Complete)
+      continue;
+    const auto Remainder = Ctx.mkURem(Input, Divisor);
+    if (Rest.empty())
+      return Remainder;
+    Rest.push_back(Remainder);
+    return Ctx.mkAdd(Rest);
   }
   return Root;
 }
@@ -229,6 +257,13 @@ SymRef projectBitWindow(SymContext &Ctx, SymRef Source, unsigned Low,
                           Width - Padding);
       return Padding ? Ctx.mkConcat(Value, Ctx.mkZero(Padding)) : Value;
     }
+  }
+  // x % d differs from x by a multiple of a nonzero d, so the low bits that
+  // d's trailing zeros cover are x's own.
+  if (Op == SymOp::URem && Ctx.isConst(Ctx.operand(Source, 1))) {
+    const auto Divisor = Ctx.constValue(Ctx.operand(Source, 1));
+    if (!Divisor.isZero() && Low + Width <= Divisor.countr_zero())
+      return Part(Ctx.operand(Source, 0), Low, Width);
   }
   if (Op == SymOp::Ite) {
     const auto Condition = Ctx.operand(Source, 0);

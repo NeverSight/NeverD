@@ -136,6 +136,8 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
   case SymOp::Shl:
   case SymOp::LShr:
   case SymOp::AShr:
+  case SymOp::UDiv:
+  case SymOp::URem:
   case SymOp::Ite:
   case SymOp::Eq:
   case SymOp::Ult:
@@ -192,6 +194,20 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
       Result.One = Result.One.ashr(N);
     }
     return Result;
+  }
+  if (Op == SymOp::UDiv || Op == SymOp::URem) {
+    // SymContext division is total: x/0 is all ones and x%0 is x. Only a
+    // nonzero literal divisor has the ordinary unsigned meaning LLVM's rules
+    // assume. A dividend below the divisor is its own remainder.
+    if (Children.size() != 2 || !Children[1].isConstant() ||
+        Children[1].getConstant().isZero() ||
+        Children[0].getBitWidth() != Children[1].getBitWidth())
+      return Bits(W);
+    if (Op == SymOp::UDiv)
+      return Bits::udiv(Children[0], Children[1]);
+    if (Children[0].getMaxValue().ult(Children[1].getConstant()))
+      return Children[0];
+    return Bits::urem(Children[0], Children[1]);
   }
   if (isPredicate(Op))
     return compare(R, Children, Remaining, Depth);
