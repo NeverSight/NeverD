@@ -193,6 +193,63 @@ int main(void) {
   run(Instructions, Harness);
 }
 
+TEST_F(X64ContinuationIntegerTest, SinglePrecisionSelectionsMatchNativeBits) {
+  std::vector<Bytes> Instructions;
+  for (unsigned Immediate = 0; Immediate != 256; ++Immediate)
+    Instructions.push_back({0x0f, 0xc6, 0xc1, uint8_t(Immediate)});
+  for (uint8_t Immediate : {0, 0x1b, 0x39, 0x55, 0x93, 0xaa, 0xe4, 0xff}) {
+    Instructions.push_back({0x0f, 0xc6, 0xc0, Immediate});
+    Instructions.push_back({0x45, 0x0f, 0xc6, 0xc7, Immediate});
+    Instructions.push_back({0x45, 0x0f, 0xc6, 0xff, Immediate});
+  }
+  for (const Bytes &Mask :
+       {Bytes{0x0f, 0x50, 0xc0}, Bytes{0x0f, 0x50, 0xc1},
+        Bytes{0x41, 0x0f, 0x50, 0xc7}, Bytes{0x45, 0x0f, 0x50, 0xd0}})
+    Instructions.push_back(Mask);
+  std::string Harness, Calls;
+  for (unsigned I = 0; I != Instructions.size(); ++I) {
+    Harness += original(I, Instructions[I],
+                        "(const uint8_t*,uint64_t,uint64_t,uint8_t*)",
+                        "movdqu (%rdi),%xmm0\\nmovdqu 16(%rdi),%xmm1\\n"
+                        "movdqu 32(%rdi),%xmm8\\nmovdqu 48(%rdi),%xmm15\\n"
+                        "mov %rsi,%rax\\nmov %rdx,%r10\\n",
+                        "movdqu %xmm0,(%rcx)\\nmovdqu %xmm1,16(%rcx)\\n"
+                        "movdqu %xmm8,32(%rcx)\\nmovdqu %xmm15,48(%rcx)\\n"
+                        "mov %r10,64(%rcx)\\n");
+    Calls += "original_" + std::to_string(I) + ',';
+  }
+  Harness += "static uint64_t (*native[])(const uint8_t*,uint64_t,uint64_t,"
+             "uint8_t*)={" +
+             Calls + "};\n";
+  Harness += R"C(
+int main(void) {
+  const uint32_t bits[]={0,1,0x007fffff,0x00800000,0x3f800000,
+                        0x7f7fffff,0x7f800000,0x7fc00001,0x7f800001};
+  const unsigned vectors[]={0,1,8,15};
+  for(unsigned n=0;n<sizeof(native)/sizeof(*native);++n)for(unsigned v=0;v<32;++v) {
+    uint32_t input[16],before_input[16];uint8_t output[72];
+    for(unsigned b=0;b<16;++b)
+      input[b]=bits[(b+v)%9]|(((v>>(b%4))&1u)<<31);
+    memcpy(before_input,input,sizeof(input));
+    neverd_x64_state_v6 state=seed(0x1000+n*32);
+    state.RFlags=0x202|((uint64_t)v*73&0xcd5);
+    state.MXCSR=0x1f80|((v&3)<<13)|(v&0x3f);
+    for(unsigned b=0;b<4;++b)memcpy(state.ZMM[vectors[b]],input+b*4,16);
+    neverd_x64_state_v6 expected=state;
+    expected.GPR[0]=native[n]((const uint8_t*)input,state.GPR[0],state.GPR[10],output);
+    memcpy(&expected.GPR[10],output+64,8);
+    for(unsigned b=0;b<4;++b)memcpy(expected.ZMM[vectors[b]],output+b*16,16);
+    expected.PC+=instruction_size[n];uint64_t budget=1;
+    CHECK(neverd_x64_continue_v6(&state,&budget)==9 && !budget);
+    CHECK(!memcmp(&state,&expected,sizeof(state)));
+    CHECK(!memcmp(input,before_input,sizeof(input)));
+  }
+  return 0;
+}
+)C";
+  run(Instructions, Harness);
+}
+
 TEST_F(X64ContinuationIntegerTest, WideProductsAndArbitraryFlags) {
   const std::vector<Bytes> Instructions{
       {0x48, 0xf7, 0xe1}, {0x48, 0xf7, 0xe9}, {0x48, 0x0f, 0xaf, 0xc1}};

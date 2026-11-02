@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Independent values, full state and exact encoding admission for SSE2.
+/// Independent values, full state and exact encoding admission for SSE/SSE2.
 //===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
@@ -43,7 +43,7 @@ std::vector<uint8_t> encoding(uint8_t Opcode, unsigned Destination,
   Bytes.insert(
       Bytes.end(),
       {0x0f, Opcode, uint8_t(0xc0 | ((Destination & 7) << 3) | (Source & 7))});
-  if (Opcode == 0x70)
+  if (Opcode == 0x70 || Opcode == 0xc6)
     Bytes.push_back(Immediate);
   return Bytes;
 }
@@ -93,8 +93,9 @@ void check(Arch Target, uint8_t Opcode, unsigned Destination, unsigned Source,
           llvm::APInt(Bits, Values[(Lane + I + Seed) % std::size(Values)]),
           Lane * Bits);
     if (Opcode == 0x50) {
-      Vectors.back().setBitVal(63, Seed & 1);
-      Vectors.back().setBitVal(127, Seed & 2);
+      const unsigned Bits = Prefix ? 64 : 32;
+      for (unsigned Lane = 0; Lane != 128 / Bits; ++Lane)
+        Vectors.back().setBitVal((Lane + 1) * Bits - 1, (Seed >> Lane) & 1);
     }
     State.write(SymSpace::Register, x86reg::vectorReg(I),
                 Ctx.mkConst(Vectors.back()));
@@ -115,6 +116,13 @@ void check(Arch Target, uint8_t Opcode, unsigned Destination, unsigned Source,
   const auto A = Vectors[Destination], B = Vectors[Source];
   llvm::APInt Result(128, 0);
   switch (Opcode) {
+  case 0xc6:
+    for (unsigned Lane = 0; Lane != 4; ++Lane)
+      Result.insertBits(
+          (Lane < 2 ? A : B)
+              .extractBits(32, ((Immediate >> (Lane * 2)) & 3) * 32),
+          Lane * 32);
+    break;
   case 0x70:
     for (unsigned Lane = 0; Lane != 4; ++Lane)
       Result.insertBits(B.extractBits(32, ((Immediate >> (Lane * 2)) & 3) * 32),
@@ -154,7 +162,10 @@ void check(Arch Target, uint8_t Opcode, unsigned Destination, unsigned Source,
     break;
   }
   case 0x50: {
-    const uint64_t Mask = unsigned(B[63]) | (unsigned(B[127]) << 1);
+    const unsigned Bits = Prefix ? 64 : 32;
+    uint64_t Mask = 0;
+    for (unsigned Lane = 0; Lane != 128 / Bits; ++Lane)
+      Mask |= uint64_t(B[(Lane + 1) * Bits - 1]) << Lane;
     GPRs[Destination] =
         Target == Arch::X64
             ? Mask
@@ -198,6 +209,26 @@ TEST(X86PackedSelectionAudit, EveryShuffleControlAndRegisterAlias) {
           if (testing::Test::HasFatalFailure())
             return;
         }
+}
+
+TEST(X86PackedSelectionAudit, SinglePrecisionShuffleAndMasksPreserveState) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (auto Pair : {std::array<unsigned, 2>{0, 7}, {7, 7}, {8, 15}, {15, 15}})
+      if (Target == Arch::X64 || Pair[0] < 8) {
+        for (unsigned Immediate = 0; Immediate != 256; ++Immediate) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << '/' << Pair[0] << '/' << Pair[1]
+                       << '/' << Immediate);
+          check(Target, 0xc6, Pair[0], Pair[1], Immediate, Immediate, false);
+          if (testing::Test::HasFatalFailure())
+            return;
+        }
+        for (unsigned Mask = 0; Mask != 16; ++Mask) {
+          check(Target, 0x50, Pair[0], Pair[1], 0, Mask, false);
+          if (testing::Test::HasFatalFailure())
+            return;
+        }
+      }
 }
 
 TEST(X86PackedSelectionAudit, ComparisonPackingAndMasksPreserveCompleteState) {
@@ -262,9 +293,10 @@ TEST(X86PackedSelectionAudit, InconsistentBytesDetailsAndOtherFormsRefuse) {
       [](cs_insn &I) { I.detail->x86.eflags = X86_EFLAGS_MODIFY_CF; },
       [](cs_insn &I) { I.bytes[I.size++] = 0x90; },
   };
-  for (uint8_t Opcode : {0x54, 0x70, 0x76, 0xdb, 0x6c, 0x63, 0x6b, 0x50})
+  for (uint8_t Opcode : {0x54, 0x70, 0x76, 0xdb, 0x6c, 0x63, 0x6b, 0x50, 0xc6})
     for (bool Prefix : {false, true}) {
-      if (!Prefix && Opcode != 0x54)
+      if ((!Prefix && Opcode != 0x54 && Opcode != 0x50 && Opcode != 0xc6) ||
+          (Prefix && Opcode == 0xc6))
         continue;
       for (Mutation Change : Mutations) {
         const auto Bytes = encoding(Opcode, 0, 1, 0x9c, Prefix);
@@ -277,6 +309,15 @@ TEST(X86PackedSelectionAudit, InconsistentBytesDetailsAndOtherFormsRefuse) {
       }
     }
   const std::vector<std::vector<uint8_t>> OtherForms = {
+      {0x0f, 0xc6, 0x01, 0x39},
+      {0x67, 0x0f, 0xc6, 0xc1, 0x39},
+      {0x66, 0x0f, 0xc6, 0xc1, 0x39},
+      {0x42, 0x0f, 0xc6, 0xc1, 0x39},
+      {0xc5, 0xf8, 0xc6, 0xc1, 0x39},
+      {0x67, 0x0f, 0x50, 0xc1},
+      {0x48, 0x0f, 0x50, 0xc1},
+      {0x42, 0x0f, 0x50, 0xc1},
+      {0xc5, 0xf8, 0x50, 0xc1},
       {0x0f, 0x54, 0x01},
       {0x66, 0x0f, 0x54, 0x01},
       {0x66, 0x66, 0x0f, 0x54, 0xc1},

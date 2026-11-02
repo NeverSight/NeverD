@@ -127,6 +127,18 @@ qualification.
 
 ## Invocation
 
+Legacy SHUFPS register forms select their four 32-bit lanes through primitive
+bit operations shared by both C backends. MOVMSKPS register forms use the
+existing sign-bit extraction and clear the remaining destination GPR bits.
+Their byte/detail audit admits canonical x86/x64 register encodings, including
+extended registers and aliases; memory, VEX and redundant-prefix forms need
+separate audits. These selections preserve flags, MXCSR and upper vector lanes.
+`SinglePrecisionSelectionsMatchNativeBits` compares original x64 instructions
+with both C routes at O0/O2 under ASan/UBSan, including all 256 SHUFPS controls,
+signaling-NaN bit patterns and all four-bit sign masks.
+`X86PackedSelectionAudit.SinglePrecisionShuffleAndMasksPreserveState` supplies
+an independent lane oracle for x86/x64 aliases; malformed details remain refused.
+
 Legacy 128-bit integer AND operations use the existing bit-vector lowering
 for both C backends. PAND register and memory forms, and ANDPS/ANDPD register
 forms, compute all 128 result bits while preserving upper vector lanes,
