@@ -1288,6 +1288,61 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
         }),
     ),
+    HistoryAllowance(
+        path='docs/evidence/x86-paged-rep-2026-11-02.json',
+        rule="private-path",
+        commits=frozenset({
+            '56e51d8d0622ffe1dc7397b55f61fe16e93eab13',
+            '3dc7071f621d7ef48cb230b905aad76576a873b1',
+            '1b0bfd8be4c4d834f14725ba5ea23483899dca2b',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout prefixes in the paged x86 "
+            "qualification evidence integrated during the type-query work. "
+            "Recorded hashes, measurements and outcomes are unchanged. Only "
+            "these exact line digests in the publication and cleanup commits "
+            "are covered; current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            '24513e81007d994868ac935497f4a14ae177818ccbf91087784c2eacf0a97194',
+            '3501ddadbeeb336e4d6de1d2a26f3e9adfec3e890c92eba2ec1939381c576c85',
+            '470cb642f5cf48a86851f44f21793c9b2f38c5ccc6e35f7d77e86e12ad30446a',
+            '76fbe0de402a91f7243596723e6775ddff0f915306cfb46ae1c09f8424a5e590',
+            '81f03eaf68ac406b15b03ba433ef4e6676115841973649cc07b19a6cd254e088',
+            '8d719206964881010b7d9472acb23f16e80c5d6ea8f3ab0605d42dc39c58c658',
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'b9b5c58f62ec2fdffca6a876cb24955fe31f56e7b1da9c038c0d063faa2de0a9',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'c41295a354819f2134cf4f962fb538dd474a56cf68b8ba699bd05e3cf0968a99',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+            'e6ef778711d32a20cd197d98717caa11172f2dc6610bc1c7cf1779064e48a49b',
+            'eabe2f64f4653d0eb28acf41c80668158f073e56600958bd5d0eb723ca000d31',
+            'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
+            'f9322b10f188bc84856a2724a028515a1351ff7eb11ffe966c2783449b9a2294',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-paged-segment-push-2026-11-02.json',
+        rule="private-path",
+        commits=frozenset({
+            '4857af466ea67ff33d7af7e5e7ed7114683cb099',
+            '1b0bfd8be4c4d834f14725ba5ea23483899dca2b',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout prefixes in the paged x86 "
+            "qualification evidence integrated during the type-query work. "
+            "Recorded hashes, measurements and outcomes are unchanged. Only "
+            "these exact line digests in the publication and cleanup commits "
+            "are covered; current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+        }),
+    ),
 )
 
 
