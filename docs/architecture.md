@@ -142,6 +142,15 @@ before rendering it; neither a mnemonic nor an intrinsic declaration alone
 authorizes an architectural register access. Both forms retain unknown memory
 effects, undefined arithmetic flags and native faults, including dead reads.
 
+`X86SegmentMoveNative.h` owns the four native selector-MOV identities and
+reuses the architectural segment-number table. `MedLLVMX86SegmentMove.cpp`
+selects the native SDK call or the exact r6 assembly contract, including dead
+reads. `render/X86/X86SegmentMove.cpp` owns both C projections and validates
+native signatures and legacy assembly before selecting NeverC builtins or the
+GNU fallback. Memory interfaces retain an instruction-owned two-byte operand;
+these compiler interfaces do not establish original-PC continuation or event
+ownership. The segment transition templates own that separate state domain.
+
 `X86MpxSemantics.h` shares comparison and directory/table value recipes between
 the concrete owner and `X64ContinuationMpx.h` source lowering. The independent
 V11 layout carries bounds/configuration through both C routes; the raw MPX

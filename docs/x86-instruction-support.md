@@ -174,6 +174,42 @@ verified `0f 01 de` instruction; they do not execute SKINIT or qualify reset,
 attestation, successful launch or architectural faults. Global completion and
 the later LLVM release/SDK/gitlink update remain separate work.
 
+## Native segment selector MOV interfaces
+
+The LLVM fork provides `llvm.x86.readseg`, `llvm.x86.readseg.mem`,
+`llvm.x86.writeseg` and `llvm.x86.writeseg.mem`. NeverC provides the corresponding
+header-free `__builtin_ia32_readseg`, `__builtin_ia32_readseg_mem`,
+`__builtin_ia32_writeseg` and `__builtin_ia32_writeseg_mem` builtins. Constant
+register numbers use ES=0, CS=1, SS=2, DS=3, FS=4, GS=5; writing CS is rejected.
+Register reads return exactly 16 bits; memory forms keep the two-byte operand
+inside the actual MOV. Writes also retain descriptor accesses and hidden-cache
+updates. Repeated/dead calls, unknown memory effects, physical segment definitions
+and machine scheduling boundaries survive optimization without an EFLAGS clobber.
+
+NeverD's ordinary `ReadSegment`/`WriteSegment` emit the native LLVM interfaces
+when available. HighC and LLVMC share builtin selection and the exact assembly
+fallback required by the pinned r6 SDK and stock Clang. The LLVMC boundary also
+supports the two direct native memory interfaces and validates registers,
+widths, pointer address spaces and the legacy assembly signature. The existing
+ordinary lifter still represents memory selector moves through scalar operands;
+this compiler bridge does not certify fault/restart equivalence for that split.
+
+The full LLVM fork accepts i386/x64 code and ELF/COFF/Mach-O; NeverC targets x64.
+Code16 is rejected. Ambient segment/TLS/stack invariants remain the caller's
+responsibility. MOV SS's following machine instruction is compiler-chosen;
+separate C calls do not establish an atomic stack switch or preserve original
+instruction-boundary interruptibility.
+
+The [November 2 qualification](evidence/x86-segment-moves-native-2026-11-02.json)
+compares 22 native forms on the local P and E cores through LLVM, NeverC and
+NeverC-to-LLVM at O0/O2: 27,648 state pairs, 264 boundary observations and 1,488
+fault observations (744 original/generated pairs). Invalid selectors, LDT
+permissions, exact two-byte boundaries, missing pages and read-only stores are
+included. i386 execution, other CPUs, CPL0..2 descriptor faults, #AC, asynchronous
+events and complete original GPR/flags restart state are not certified by this
+native compiler qualification. The separate continuation profiles retain their
+own admission and evidence.
+
 ## Native far-pointer compiler interfaces
 
 The LLVM fork provides `llvm.x86.lds16/32`, `llvm.x86.les16/32` and

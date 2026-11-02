@@ -60,6 +60,7 @@ add_neverd_component_library(NeverDBackendC
   render/HighC/HighCIntrinsicRender.cpp
   render/ARM/HighCIntrinsicRenderARM.cpp
   render/X86/HighCIntrinsicRenderX86.cpp
+  render/X86/X86SegmentMove.cpp
   render/LLVMC/LLVMCIntrinsicRender.cpp
   render/ARM/LLVMCIntrinsicRenderARM.cpp
   render/X86/LLVMCIntrinsicRenderX86.cpp

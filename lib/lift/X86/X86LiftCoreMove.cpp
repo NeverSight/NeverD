@@ -446,6 +446,8 @@ bool liftCoreMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
       if (std::optional<X86SegmentRegister> Segment =
               segmentRegister(X86.operands[0])) {
+        if (*Segment == X86SegmentRegister::CS)
+          return false;
         NdVar Value = L.operandRead(S, X86.operands[1]);
         if (Value.Size > 2) {
           const NdVar Low = S.makeTemp(2);

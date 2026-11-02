@@ -208,6 +208,22 @@ TEST(X86SystemSideeffect, UnmodeledSystemInstructionsStayUnlifted) {
   }
 }
 
+TEST(X86SystemSideeffect, MovCannotWriteCodeSegment) {
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(A));
+    const uint8_t Bytes[] = {0x8e, 0xc8};
+    DecodedInsn Insn{};
+    const auto Size =
+        Dec.decodeOneForLift(Bytes, sizeof(Bytes), kInstructionAddress, Insn);
+    if (Size <= 0)
+      continue;
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
 TEST(X86SystemSideeffect, WrssAndWrussRetainAddressSourceWidthAndSegment) {
   struct Case {
     std::vector<uint8_t> Bytes;

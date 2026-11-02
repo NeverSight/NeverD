@@ -26,7 +26,6 @@
 #define DEBUG_TYPE "neverd-med-llvm-x86-sideeffect"
 #include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 
@@ -788,25 +787,10 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
     return true;
   }
 
-  // A segment selector write; a read with a live result is lowered by the
-  // value emitter, and a dead read has no effect to keep.
   if (IC == I::ReadSegment || IC == I::WriteSegment) {
-    const char *Segment = Op.NumInputs >= 2 && Op.Inputs[1].isConst()
-                              ? x86SegmentRegisterName(Op.Inputs[1].ConstVal)
-                              : nullptr;
-    if (!Segment || (IC == I::WriteSegment && Op.NumInputs != 3))
-      llvm::report_fatal_error("x86 segment move has an invalid operand shape");
-    if (IC == I::ReadSegment)
-      return Op.Output.Size == 0;
-    auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
-    llvm::Value *Value =
-        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[2], Builder), I32Ty);
-    auto *FnTy =
-        llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), {I32Ty}, false);
-    auto *IA =
-        llvm::InlineAsm::get(FnTy, std::string("mov ${0:w}, %") + Segment,
-                             "r,~{memory}", /*hasSideEffects=*/true);
-    Builder.CreateCall(IA, {Value});
+    if (IC == I::ReadSegment && Op.Output.Size)
+      return false;
+    emitX86SegmentMove(Op, IC, Builder);
     return true;
   }
 

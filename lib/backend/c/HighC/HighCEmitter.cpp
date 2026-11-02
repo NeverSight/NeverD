@@ -35,6 +35,7 @@
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
 #include "neverd/backend/c/render/AArch64/AArch64WritebackMemoryC.h"
+#include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/ir/high/CxxObjectActions.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
@@ -1604,6 +1605,10 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       if ((Opts.TheArch == Arch::X64 || Opts.Format == BinaryFormat::COFF) &&
           x86SystemRegisterName(Ex.IntrinsicId, 0))
         NeedsX86SystemRegisterDispatch = true;
+      if ((Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86) &&
+          (Ex.IntrinsicId == Intrinsic::ReadSegment ||
+           Ex.IntrinsicId == Intrinsic::WriteSegment))
+        NeedsX86SegmentMoveDispatch = true;
       if (Opts.TheArch == Arch::X64 &&
           isX86DescriptorStateIntrinsic(Ex.IntrinsicId))
         NeedsX86DescriptorStateDispatch = true;
@@ -4976,6 +4981,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   writeX87CHelpers(OS, UsesX87Extended, X87Helpers);
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
+  if (NeedsX86SegmentMoveDispatch)
+    OS << X86SegmentMoveCompilerDispatch;
   if (NeedsX86DescriptorStateDispatch)
     OS << X86DescriptorStateCompilerDispatch;
   if (NeedsX86ScalarSystemDispatch)

@@ -1637,6 +1637,22 @@ not successful lift counts; unexpected refusals of other instruction IDs still
 fail the corpus test. Native far-pointer compiler interfaces are independently
 qualified in [the far-pointer record](evidence/x86-far-pointer-native-2026-10-29.json).
 They do not change the far-pointer lifter's refusal contract.
+
+`X86SegmentMoveSource.*` in `NeverDX86VirtualizationSourceTests` checks the
+four native selector-MOV interfaces through both SDKs. It covers all six read
+and five write registers, both C routes, i386/x64, three object formats and both
+pipeline optimization modes. Direct native register/memory calls compile with
+stock Clang at O0/O2 and NeverC on x64; malformed register, type, effect, target
+and legacy-assembly contracts are rejected. An executable void/pointer fixture
+reads and reloads SS and checks the two-byte result and neighboring canaries.
+Set `NEVERD_TEST_NEVERC` to the qualified compiler and
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain C, LLVM IR and native objects.
+The [native MOV evidence](evidence/x86-segment-moves-native-2026-11-02.json)
+separates the complete source/system regression counts from compiler tests and
+the independent P/E-core original-byte oracle. That oracle qualifies native
+compiler transport; it does not certify a complete restartable machine-state
+model. The production r6 SDK and LLVM gitlink remain unchanged.
+
 Both source inventories reject incomplete address fragments in addresses
 and stored/comparator values. i386 decoded absolute-address fixtures also
 check that a complete narrow displacement is normalized as a full address,

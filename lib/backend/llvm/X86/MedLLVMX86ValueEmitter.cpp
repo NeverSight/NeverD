@@ -32,7 +32,6 @@
 #define DEBUG_TYPE "neverd-med-llvm-x86-value"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
-#include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -1441,21 +1440,8 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   if (IC == I::Rdmsr)
     return emitX86ScalarSystem(Op, IC, Builder);
 
-  // A segment selector read.
-  if (IC == I::ReadSegment && Op.Output.Size > 0) {
-    const char *Segment = Op.NumInputs == 2 && Op.Inputs[1].isConst()
-                              ? x86SegmentRegisterName(Op.Inputs[1].ConstVal)
-                              : nullptr;
-    if (!Segment)
-      llvm::report_fatal_error("x86 segment read has an invalid operand shape");
-    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
-    auto *FnTy = llvm::FunctionType::get(I16Ty, {}, false);
-    auto *IA =
-        llvm::InlineAsm::get(FnTy, std::string("mov %") + Segment + ", $0",
-                             "=r", /*hasSideEffects=*/true);
-    llvm::Value *Selector = Builder.CreateCall(IA, {}, "selector");
-    return Builder.CreateZExtOrTrunc(Selector, sizeToType(Op.Output.Size));
-  }
+  if (IC == I::ReadSegment && Op.Output.Size)
+    return emitX86SegmentMove(Op, IC, Builder);
 
   // RDPMC reads the counter ECX selects into EDX:EAX, combined like RDMSR.
   if (IC == I::Rdpmc && Op.Output.Size > 0) {

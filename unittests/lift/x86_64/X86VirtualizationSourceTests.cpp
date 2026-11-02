@@ -24,6 +24,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
+#include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -31,6 +32,7 @@
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
 #include "neverd/backend/llvm/X86/X86DescriptorStateNative.h"
 #include "neverd/backend/llvm/X86/X86ScalarSystemNative.h"
+#include "neverd/backend/llvm/X86/X86SegmentMoveNative.h"
 #include "neverd/backend/llvm/X86/X86SgxAsm.h"
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
 #include "neverd/backend/llvm/X86/X86SystemStateAsm.h"
@@ -197,6 +199,7 @@ void sourceRoutes(BinaryImage &Image, bool NoOpt, va_t Address,
                          (isX86SystemStateNativeName(F.getName()) &&
                           F.getName() != "llvm.x86.xabort") ||
                          isX86ScalarSystemNativeName(F.getName()) ||
+                         isX86SegmentMoveNativeName(F.getName()) ||
                          isX86DescriptorStateNativeName(F.getName()) ||
                          isX86SystemRegisterNativeName(F.getName()) ||
                          isX86SgxNativeName(F.getName().str()) ||
@@ -5711,3 +5714,5 @@ TEST(X86AmxSource, HighCRejectsMalformedBankOwnership) {
                    std::invalid_argument);
   }
 }
+
+#include "X86SegmentMoveSourceTests.inc"

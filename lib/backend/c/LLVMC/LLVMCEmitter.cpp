@@ -59,6 +59,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
 #include "neverd/backend/c/render/SyscallHelpers.h"
+#include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64AuthenticatedCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
@@ -859,6 +860,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;
   bool NeedsX86DescriptorStateDispatch = false;
+  bool NeedsX86SegmentMoveDispatch = false;
   bool NeedsX86VirtualizationDispatch = false;
   bool NeedsX86SystemStateDispatch = false;
   bool HasFloatingArithmetic = false;
@@ -964,6 +966,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
             Headers.insert(Opts.Format == BinaryFormat::COFF ? "intrin.h"
                                                              : "x86intrin.h");
             HasCIntrinsics = true;
+            continue;
+          }
+          if (renderX86SegmentMoveCall(
+                  Opts.TheArch, *CI, "result", true,
+                  std::vector<std::string>(CI->arg_size(), "0"))) {
+            NeedsX86SegmentMoveDispatch = true;
             continue;
           }
           if (auto Descriptor = renderX86DescriptorStateCall(
@@ -1192,6 +1200,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   }
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
+  if (NeedsX86SegmentMoveDispatch)
+    OS << X86SegmentMoveCompilerDispatch;
   if (NeedsX86DescriptorStateDispatch)
     OS << X86DescriptorStateCompilerDispatch;
   if (NeedsX86ScalarSystemDispatch)

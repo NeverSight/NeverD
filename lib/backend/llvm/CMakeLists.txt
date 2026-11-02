@@ -58,6 +58,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMX86GlobalData.cpp
   X86/MedLLVMX86ShuffleEmitter.cpp
   X86/MedLLVMX86Sideeffect.cpp
+  X86/MedLLVMX86SegmentMove.cpp
   X86/MedLLVMX86SimdEmitter.cpp
   X86/MedLLVMX86ValueEmitter.cpp
   X86/MedLLVMX86Hle.cpp

@@ -416,6 +416,9 @@ private:
   /// Ordered RDMSR/WRMSR and scalar port I/O through the shared native plan.
   llvm::Value *emitX86ScalarSystem(const MedOp &Op, Intrinsic IC,
                                    llvm::IRBuilder<> &Builder);
+  /// MOV selector access, including retained ambient effects of dead reads.
+  llvm::Value *emitX86SegmentMove(const MedOp &Op, Intrinsic IC,
+                                  llvm::IRBuilder<> &Builder);
   /// SLDT/STR/SMSW with a register destination — store a system register into
   /// a GPR (value-producing).
   llvm::Value *emitX86DescriptorState(const MedOp &Op, Intrinsic IC,

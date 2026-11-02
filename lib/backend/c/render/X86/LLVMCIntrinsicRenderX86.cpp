@@ -17,11 +17,9 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
-#include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/X86SystemRegisterAsm.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -716,28 +714,6 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
       llvm::StringRef(AsmStr).contains("%dr"))
     throw std::invalid_argument(
         "x86 system register assembly needs a checked call");
-
-  {
-    llvm::StringRef Text(AsmStr);
-    if (Text.consume_front("mov ")) {
-      auto [First, Second] = Text.split(',');
-      First = First.trim();
-      Second = Second.trim();
-      const bool Read = Second == "$0";
-      const llvm::StringRef Reg = Read ? First : Second;
-      // A segment selector move (`mov %cs, $0` / `mov ${0:w}, %ds`).
-      llvm::StringRef Segment = Reg;
-      if (Segment.consume_front("%") && x86SegmentRegisterNamed(Segment) &&
-          (Read || (First == "${0:w}" && Args.size() == 1))) {
-        if (!Read)
-          return {x86SegmentWriteText(Segment, Args[0]) + ";\n", false};
-        std::string Result;
-        if (ResultLive && !ResultName.empty())
-          Result = ResultName + " = ";
-        return {Result + x86SegmentReadText(Segment) + ";\n", false};
-      }
-    }
-  }
 
   const char *X86C = lookupX86AsmToC(AsmStr.c_str());
   if (!X86C)
