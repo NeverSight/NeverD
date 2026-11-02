@@ -153,6 +153,78 @@ TEST(CallRegisterUnread, NestedMayWritesCannotKillLaterInputObservations) {
   EXPECT_TRUE(unread(Summaries.Unread, 0x2000));
 }
 
+TEST(CallRegisterUnread, ExactEntryWritesSatisfyLaterCallerReads) {
+  RegisterStep Write, Call, Read;
+  Write.Kills = ScratchBit;
+  Read.Reads[Scratch] = 8;
+  Call.Callee = 0x2000;
+  for (unsigned Mode = 0; Mode < 7; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto Callee = body({Write});
+    if (Mode == 1)
+      Callee.Blocks[0].Steps = {Read, Write};
+    if (Mode == 2) {
+      Callee.Blocks[0].Steps[0].Kills = 0;
+      Callee.Blocks[0].Steps[0].LowWrites[Scratch] = 1;
+    }
+    if (Mode == 3)
+      Callee.Incomplete = true;
+    if (Mode == 4)
+      Callee.UnknownObservers = true;
+    if (Mode == 5) {
+      RegisterStep Unknown;
+      Unknown.UnknownCall = true;
+      Callee.Blocks[0].Steps = {Unknown, Write};
+    }
+    if (Mode == 6) {
+      Callee.Blocks[0].Steps.clear();
+      Callee.Writes = ScratchBit;
+    }
+    auto Caller = body({Call, Read});
+    EXPECT_EQ(
+        unread(proveUnreadCallRegisters({{0x1000, &Caller}, {0x2000, &Callee}}),
+               0x1000),
+        Mode == 0);
+  }
+}
+
+TEST(CallRegisterUnread, ReturnFamiliesNeedAnExplicitEntryOverwrite) {
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  for (auto Register : {TRI.IntReturnReg, TRI.IntReturnReg2}) {
+    const auto Family = gprFamilyOf(Arch::X64, Register);
+    ASSERT_TRUE(Family);
+    const auto Bit = GPRFamilyMask{1} << *Family;
+    RegisterStep Write, Read;
+    Write.Kills = Bit;
+    Read.Reads[*Family] = 8;
+    for (unsigned Mode = 0; Mode < 3; ++Mode) {
+      auto F = body(Mode == 0   ? std::vector<RegisterStep>{}
+                    : Mode == 1 ? std::vector<RegisterStep>{Write}
+                                : std::vector<RegisterStep>{Read, Write});
+      const auto Proof = proveUnreadCallRegisters({{0x1000, &F}});
+      const auto At = Proof.find(0x1000);
+      const bool Proved = At != Proof.end() && (At->second & Bit);
+      EXPECT_EQ(Proved, Mode == 1);
+    }
+  }
+}
+
+TEST(CallRegisterUnread, NestedEntryWritesDoNotDependOnPrototypeArity) {
+  RegisterStep Setup, Call, Opaque;
+  Setup.Kills = (GPRFamilyMask{1} << 1) | (GPRFamilyMask{1} << 2);
+  Call.Callee = 0x2000;
+  Opaque.FixedArguments = GPRReadWidths{};
+  auto Caller = body({Setup, Call, Opaque});
+  RegisterStep NestedSetup;
+  NestedSetup.Kills = (GPRFamilyMask{1} << 8) | (GPRFamilyMask{1} << 9);
+  auto Callee = body({NestedSetup, Opaque});
+  const auto Proof =
+      proveUnreadCallRegisters({{0x1000, &Caller}, {0x2000, &Callee}});
+  ASSERT_TRUE(Proof.count(0x1000));
+  for (unsigned Family : {1u, 2u, 8u, 9u})
+    EXPECT_NE(Proof.at(0x1000) & (GPRFamilyMask{1} << Family), 0u);
+}
+
 TEST(CallRegisterUnread, EveryBypassAndLoopRetainsItsIncomingObservation) {
   RegisterStep Write, Read;
   Write.Kills = ScratchBit;

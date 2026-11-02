@@ -281,6 +281,7 @@ SIDEEFFECT(Intrinsic::X86Sidt16);
 SIDEEFFECT(Intrinsic::X86EncluPending);
 SIDEEFFECT(Intrinsic::X86GetsecPending);
 SIDEEFFECT(Intrinsic::X86EncluBounded);
+SIDEEFFECT(Intrinsic::X64CallRCX);
 SIDEEFFECT(Intrinsic::X86GetsecBounded);
 
 SIDEEFFECT(Intrinsic::X86FourSourceMemory);

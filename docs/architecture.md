@@ -467,6 +467,11 @@ use/kill construction owns register aliases and call clobbers for this analysis.
 argument inference. Opaque calls read every candidate family, and a nested
 call's may-write mask never kills a later input observation. Partial writes,
 exceptional entries, malformed successors and exhausted work remain conservative.
+An unconditional, fully defined entry prefix can kill a caller's later register
+observation across a direct call. Its own entry reads are still unioned into the
+proof. This prefix stops before any call or transfer; a conditional write or a
+prototype supplies no kill. Implicit return-register families require such an
+entry overwrite before they can be certified unread.
 Low-to-Med binds this evidence to the original direct-call occurrence and target;
 omitted-callee memoization includes it. Source scratch-restore liveness can cross
 only a still-matching call. Private-byte overwrite and escape checks stay in
@@ -16861,6 +16866,30 @@ changed blocks are rebuilt in the existing caller workers. Literal count
 definitions avoid manufacturing conditional expressions; address constants do
 not become frozen numeric lengths. This narrow result proof grants no pointer
 noncapture, caller-frame or other dynamic call-return fact.
+
+`X86/X64CallRCX.cpp` owns a separate source-only native-call transport when a
+later use needs the actual RCX left by an ordinary Win64 call. It replaces that
+occurrence with the `X64CallRCX` intrinsic, which publishes RAX and RCX from one
+call. Current source operands and a relocatable code identity remain authoritative.
+No call is replayed and no mutable cookie is reloaded. Missing register slots
+require `CallRegisterUnread` evidence; a prototype alone cannot fill them with
+zero. Stack arguments, custom conventions, exceptional successors, partial
+results, other live clobbers and targets emitted as replacement C remain outside
+this contract. Native input slots must carry full-width values; a narrowed source
+argument does not justify inventing its upper bits. A full-width source consumer
+through COPY/PHI transport is required. Partial-register mask chains alone do not
+justify a bridge, and settled source call arguments own their uses, rather than
+stale native argument lists.
+
+The two C routes and LLVM share the assembly owner in `X64CallRCXNative.h`.
+Its Windows x64 SSE2 profile prevents live AVX upper halves crossing an
+under-described call. Other target intrinsics and wider caller values are
+rejected. R12 holds the compiler stack while the call aligns RSP and reserves
+the Win64 home area. RSP is a clobber, the compiler retains a frame pointer,
+and the assembly declares memory, volatile register and unwind effects. Source
+requires Windows x64 Clang's GNU target with `-fexceptions`; analysis-only display keeps that
+compiler contract as well. This result transport neither proves borrowed memory
+unread nor establishes complete native execution of a displayed function.
 
 The shared entry-stack offset proof follows the lifter's exact zero-extension
 of a native 32-bit address into its 64-bit memory-address container. It also

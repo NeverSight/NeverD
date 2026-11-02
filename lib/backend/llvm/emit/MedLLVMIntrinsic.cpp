@@ -134,6 +134,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     return emitX86AmxState(Op, Builder);
   if (isX86RepStateIntrinsic(IC))
     return emitX86RepState(Op, IC, Builder);
+  if (IC == Intrinsic::X64CallRCX)
+    return emitX64CallRCX(Op, Builder);
   if (isX86BoundedLeafIntrinsic(IC))
     return emitX86BoundedLeaf(Op, IC, Builder);
   if (isX86BoundedLeafPending(IC))

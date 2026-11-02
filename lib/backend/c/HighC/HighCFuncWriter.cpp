@@ -1173,12 +1173,12 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
         Opts.libcVariant(), Opts.TheArch, Opts.Format);
     return;
   }
+  if (EmitFunctionWrapper)
+    OS << x86NativeFunctionPreamble(Func, Opts.TheArch);
   if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Func)) {
     writeAnalysisOnlyFunction(Func);
     return;
   }
-  if (EmitFunctionWrapper)
-    OS << x86NativeFunctionPreamble(Func, Opts.TheArch);
   writeFunctionProjection(Func);
 }
 

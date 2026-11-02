@@ -17,6 +17,7 @@
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
+#include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86BoundedLeaf.h"
@@ -2152,6 +2153,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (isX86RepStateIntrinsic(E.IntrinsicId))
     return renderX86RepExpression(
         Opts.TheArch, E, typeToC(E.Type),
+        [this](const HighExpr &V) { return intrinsicOperandStr(V); },
+        [this](const MedVar &V) { return varName(V); },
+        [this](const MedVar &V) {
+          return !Analysis.DeadVars.count(varName(V));
+        });
+  if (E.IntrinsicId == Intrinsic::X64CallRCX)
+    return renderX64CallRCXExpression(
+        Opts.TheArch, E,
         [this](const HighExpr &V) { return intrinsicOperandStr(V); },
         [this](const MedVar &V) { return varName(V); },
         [this](const MedVar &V) {

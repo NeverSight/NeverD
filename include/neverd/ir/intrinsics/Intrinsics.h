@@ -541,6 +541,9 @@ enum class Intrinsic : uint16_t {
   // Append-only: terminal SGX state transport to the original ENCLU site.
   X86SgxTransferAtContext,
 
+  // Append-only: one ordinary native Win64 call publishes RAX and RCX.
+  X64CallRCX,
+
   _Count = 16000
 };
 

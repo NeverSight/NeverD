@@ -72,6 +72,7 @@ add_neverd_component_library(NeverDBackendC
   render/X86/X86RepState.cpp
   render/X86/X86Sgx.cpp
   render/X86/X86BoundedLeaf.cpp
+  render/X86/X64CallRCX.cpp
   render/X86/X86CompressExpand.cpp
   render/X86/X86FourSource.cpp
   render/X86/X86APXAtomic.cpp
