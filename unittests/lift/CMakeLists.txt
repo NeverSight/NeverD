@@ -192,6 +192,11 @@ add_neverd_unittest(NeverDMedDceTests
   core/MedDceImplicitSpTests.cpp
   LINK_COMPONENTS IRMed)
 
+add_neverd_unittest(NeverDMedPhiRecompositionTests
+  core/MedPhiRecompositionTests.cpp
+  core/MedConstantPropagationTests.cpp
+  LINK_COMPONENTS IRMed)
+
 add_neverd_unittest(NeverDFPParameterMaskTests
   core/FPParameterMaskTests.cpp
   core/MedCallingConvTests.cpp
@@ -465,6 +470,7 @@ add_neverd_unittest(NeverDLiftTests
   core/SourceABITests.cpp
   core/AdjacentCallTests.cpp
   core/MedConstantPropagationTests.cpp
+  core/MedPhiRecompositionTests.cpp
   core/MedImmutableTableScanTests.cpp
   core/JumpTableTargetOwnerTests.cpp
   core/SourceAggregateTests.cpp
