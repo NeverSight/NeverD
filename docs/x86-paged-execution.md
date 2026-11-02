@@ -122,6 +122,15 @@ comparisons, including 3,120 fault cases; the paging/event regression adds 1,800
 comparisons. All 298 C/header/manifest artifacts match across SDKs, and the old
 source/header outputs remain unchanged.
 
+The [software-entry qualification](evidence/x86-paged-software-events-2026-11-01.json)
+extends this to 538 passing tests and the same two LA57 skips. It records 72,632
+CPU comparisons across both SDKs: 70,832 through generated C and 1,800 through
+the paging/event regression. The generated matrix includes 29,872 fault cases.
+All 330 exported artifacts match across SDKs; the earlier no-fault C/header
+outputs remain unchanged. Retained counterexamples distinguish wrong software
+restart PCs, wrong alignment/page-fault ordering and rejection of a valid
+software entry at the last canonical instruction byte.
+
 This is the scalar instruction commit domain. REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, IRQ/NMI scheduling, SMI/AEX, legacy i386 dispatch,
