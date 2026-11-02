@@ -6898,3 +6898,178 @@ int main(void) {
           Source, {Optimization, "-fsanitize=undefined"});
   }
 }
+
+TEST(FloatingCallArgumentFlow, CallsDoNotResurrectEntryPhis) {
+  const std::array Targets{std::pair{Arch::X64, BinaryFormat::COFF},
+                           std::pair{Arch::X64, BinaryFormat::ELF},
+                           std::pair{Arch::X64, BinaryFormat::MachO},
+                           std::pair{Arch::AArch64, BinaryFormat::ELF},
+                           std::pair{Arch::AArch64, BinaryFormat::MachO}};
+  for (const auto &[Architecture, Format] : Targets)
+    for (uint16_t Bytes : {4, 8, 16})
+      for (bool Indirect : {false, true})
+        for (unsigned Variant = 0; Variant != 11; ++Variant) {
+          const bool RequiredFP = Variant >= 5 && Variant <= 7;
+          const bool InPredecessor = Variant == 6 || Variant == 7;
+          // Mixed Win64 positions have a separate ABI regression.
+          if (Architecture == Arch::X64 && Format == BinaryFormat::COFF &&
+              !RequiredFP && Variant != 0)
+            continue;
+          if ((Indirect && RequiredFP) ||
+              (Architecture != Arch::X64 && Variant == 2) ||
+              (Variant == 10 && Bytes == 16))
+            continue;
+          SCOPED_TRACE(testing::Message()
+                       << unsigned(Architecture) << ':' << unsigned(Format)
+                       << ':' << Bytes << ':' << Indirect << ':' << Variant);
+          BinaryImage Image;
+          Image.Arch = Architecture;
+          Image.Format = Format;
+          Image.Bits = Bitness::Bits64;
+          const auto &TRI = getTargetRegInfo(Image.Arch);
+          const auto Integers = TRI.integerParamRegs(Format);
+          const uint64_t FP = TRI.floatingParamRegs(Format).front();
+          auto Register = [&](uint64_t Offset, uint16_t Size, int Id,
+                              int Version) {
+            MedVar V;
+            V.Kind = MedVar::Reg;
+            V.TheArch = Image.Arch;
+            V.RegOff = Offset;
+            V.Size = Size;
+            V.Id = Id;
+            V.SSAVer = Version;
+            return V;
+          };
+          MedFunc Function;
+          Function.Entry = 0x1000;
+          Function.Name = "fp_call_flow";
+          Function.ReturnType = NdType::makeVoid();
+          Function.ReturnsNoValue = true;
+          Function.Blocks.resize(InPredecessor ? 3 : 2);
+          auto &Entry = Function.Blocks.front();
+          auto &Block = Function.Blocks[1];
+          Entry.Id = 0;
+          Entry.StartAddr = Function.Entry;
+          Entry.Succs = {1};
+          Block.Id = 1;
+          Block.StartAddr = Function.Entry + 0x10;
+          Block.Preds = {0};
+          auto &CallBlock = Function.Blocks.back();
+          if (InPredecessor) {
+            Block.Succs = {2};
+            CallBlock.Id = 2;
+            CallBlock.StartAddr = Function.Entry + 0x20;
+            CallBlock.Preds = {1};
+          }
+          const auto Old = Register(FP, Bytes, 20, 1);
+          MedVar Incoming;
+          Incoming.Kind = MedVar::Param;
+          Incoming.TheArch = Image.Arch;
+          Incoming.Id = 60;
+          Incoming.RegOff = FP;
+          Incoming.Size = Bytes;
+          if (Variant == 8 || Variant == 9) {
+            MedOp Seed;
+            Seed.Opcode = NdOp::CALL;
+            Seed.Addr = Entry.StartAddr;
+            Seed.CallSiteId = 42;
+            Seed.CalleeRegisterArgs = Seed.CalleeVectorArgs =
+                Seed.CalleeStackArgs = 0;
+            Seed.Output = Register(TRI.IntReturnReg, 8, 10, 0);
+            Seed.addInput(MedVar::makeConst(0x4000, 8));
+            Entry.Ops.push_back(Seed);
+            Incoming = Register(FP, Bytes, 20, 9);
+            Function.CallClobbers.push_back({Incoming, Seed.CallSiteId});
+          } else {
+            Function.Params.push_back(Incoming);
+          }
+          PhiNode Phi;
+          Phi.Output = Old;
+          Phi.Args = {{0, Incoming}};
+          Block.Phis.push_back(Phi);
+          if (Variant == 10) {
+            // This unprototyped consumer builds the origin cache before the
+            // next call's implicit FP clobber becomes its proven result.
+            MedOp Earlier;
+            Earlier.Opcode = NdOp::CALL;
+            Earlier.Addr = Block.StartAddr;
+            Earlier.CallSiteId = 50;
+            Earlier.Output = Register(TRI.IntReturnReg, 8, 10, 0);
+            Earlier.addInput(MedVar::makeConst(0x5000, 8));
+            Block.Ops.push_back(Earlier);
+          }
+          MedOp Before;
+          Before.Opcode = NdOp::CALL;
+          Before.Addr = Block.StartAddr + 4;
+          Before.CallSiteId = 1;
+          Before.addInput(MedVar::makeConst(0x2000, 8));
+          Before.CalleeRegisterArgs = Before.CalleeVectorArgs =
+              Before.CalleeStackArgs = 0;
+          Before.Output = Register(TRI.IntReturnReg, 8, 10, 1);
+          if (Variant == 1 || (Variant >= 7 && Variant <= 9))
+            Before.PreservesCallerSaved = true;
+          if (Variant == 2)
+            Before.CallPreservedGPRs = kFPReturnWriteBit;
+          const auto PostCall = Register(FP, Bytes, 20, 2);
+          if (Variant == 4)
+            Before.Output = PostCall;
+          else if (!Before.PreservesCallerSaved && !Before.CallPreservedGPRs)
+            Function.CallClobbers.push_back({PostCall, Before.CallSiteId});
+          Block.Ops.push_back(Before);
+          const auto Prepared = Register(FP, Bytes, 20, 3);
+          if (Variant == 3) {
+            MedOp Copy;
+            Copy.Opcode = NdOp::COPY;
+            Copy.Addr = Block.StartAddr + 5;
+            Copy.Output = Prepared;
+            Copy.addInput(MedVar::makeConst(17, Bytes));
+            Block.Ops.push_back(Copy);
+          }
+          if (!RequiredFP)
+            for (unsigned K = 0; K != 2; ++K) {
+              MedOp Copy;
+              Copy.Opcode = NdOp::COPY;
+              Copy.Addr = Block.StartAddr + 6 + K;
+              Copy.Output = Register(Integers[K], 8, 30 + K, 1);
+              Copy.addInput(MedVar::makeConst(19 + K, 8));
+              Block.Ops.push_back(Copy);
+            }
+          MedOp Call;
+          Call.Opcode = Indirect ? NdOp::INDIR_CALL : NdOp::CALL;
+          Call.Addr = CallBlock.StartAddr + 0x10;
+          Call.CallSiteId = 2;
+          Call.addInput(MedVar::makeConst(0x3000, 8));
+          if (Variant == 9) {
+            Call.CalleeRegisterArgs = 2;
+            Call.CalleeStackArgs = 0;
+            Call.addInput(MedVar::makeConst(19, 8));
+            Call.addInput(MedVar::makeConst(20, 8));
+          }
+          CallBlock.Ops.push_back(Call);
+          MedOp Return;
+          Return.Opcode = NdOp::RETURN;
+          Return.Addr = Call.Addr + 5;
+          CallBlock.Ops.push_back(Return);
+          std::map<va_t, int> IntegerArity{{0x3000, 0}};
+          std::map<va_t, int> FloatingArity{{0x3000, 1}};
+          const std::map<va_t, uint16_t> FloatReturns{{0x2000, Bytes}};
+          recoverCallAbi(Function, Image.Arch, {}, &Image,
+                         RequiredFP ? &IntegerArity : nullptr, nullptr,
+                         RequiredFP ? &FloatingArity : nullptr,
+                         Variant == 10 ? &FloatReturns : nullptr);
+          ASSERT_EQ(Function.CallInfos.size(), Variant >= 8 ? 3u : 2u);
+          const auto &Args = Function.CallInfos.back().Args;
+          const size_t Expected = Variant == 0 || Variant == 8 || Variant == 9
+                                      ? 2u
+                                  : RequiredFP ? 1u
+                                               : 3u;
+          ASSERT_EQ(Args.size(), Expected);
+          if (Variant && Variant != 8 && Variant != 9) {
+            const auto &Wanted = Variant == 1 || Variant == 2 || Variant == 7
+                                     ? Old
+                                 : Variant == 3 ? Prepared
+                                                : PostCall;
+            EXPECT_EQ(Args.back(), Wanted);
+          }
+        }
+}

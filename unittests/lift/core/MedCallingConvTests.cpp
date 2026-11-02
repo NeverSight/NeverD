@@ -487,7 +487,8 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
       const auto *Info = F.findCall(Block.Id, Block.Ops.size() - 1);
       ASSERT_NE(Info, nullptr);
       const bool Incoming = P == Path::Entry || P == Path::Linear;
-      EXPECT_EQ(Info->Args.size(), Incoming ? 2u : 0u);
+      const bool AfterCall = P == Path::PriorCall || P == Path::PredecessorCall;
+      EXPECT_EQ(Info->Args.size(), Incoming || AfterCall ? 2u : 0u);
       if (Incoming) {
         ASSERT_EQ(F.Params.size(), 2u);
         EXPECT_EQ(Info->Args[0].Kind, MedVar::Param);
@@ -495,6 +496,9 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[0]), 4u);
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[1]), 8u);
       } else {
+        if (AfterCall)
+          for (const auto &Argument : Info->Args)
+            EXPECT_EQ(Argument.Kind, MedVar::Unspecified);
         EXPECT_TRUE(F.FPParamScalarBytes.empty());
         for (const auto &Parameter : F.Params)
           EXPECT_FALSE(TRI.isVectorReg(Parameter.RegOff));

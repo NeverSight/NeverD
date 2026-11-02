@@ -1287,9 +1287,16 @@ void recoverCallAbi(
       if (!SEHStackCall && !CI.IsIndirect && !IsRelocExtern &&
           !IsDirectImport && CalleeFPReturnSize)
         if (auto SizeIt = CalleeFPReturnSize->find(CI.TargetAddr);
-            SizeIt != CalleeFPReturnSize->end())
-          BoundFPResult |=
-              promoteFloatCallResult(Func, Blk, OI, SizeIt->second, TheArch);
+            SizeIt != CalleeFPReturnSize->end()) {
+          const MedVar PreviousOutput = Op.Output;
+          const size_t PreviousClobbers = Func.CallClobbers.size();
+          if (promoteFloatCallResult(Func, Blk, OI, SizeIt->second, TheArch)) {
+            BoundFPResult = true;
+            if (Op.Output != PreviousOutput ||
+                Func.CallClobbers.size() != PreviousClobbers)
+              LeftByCalls.reset();
+          }
+        }
 
       const Section *TargetSection =
           !CI.IsIndirect && Img ? Img->getSectionFor(CI.TargetAddr) : nullptr;
@@ -2918,6 +2925,20 @@ void recoverCallAbi(
             KnownFPCallee = true;
           }
         }
+        auto fpValueLeftByCall = [&](const MedOp &Previous, uint64_t Reg) {
+          uint16_t Bytes = 0;
+          for (const auto &Clobber : Func.CallClobbers)
+            if (Previous.CallSiteId &&
+                Clobber.CallSiteId == Previous.CallSiteId &&
+                Clobber.Value.Kind == MedVar::Reg &&
+                Clobber.Value.RegOff == Reg)
+              Bytes = std::max(Bytes, Clobber.Value.Size);
+          if (!Bytes)
+            Bytes = TRI.FPABIRegWidth ? TRI.FPABIRegWidth : FwdFPArgSize;
+          return valueLeftByCall(Func, Previous, Reg, Bytes, TRI, Fmt);
+        };
+        const uint16_t FPViewBytes =
+            TRI.FPABIRegWidth ? TRI.FPABIRegWidth : FwdFPArgSize;
         // For a direct call to a known FP callee, clang may hoist an FP
         // argument's setup (e.g. `cvtsi2sd`/`ucvtf` into XMM0) above a branch
         // into the dominating predecessor — `acc += cond ? h(x) : x*0.5` puts
@@ -2944,8 +2965,8 @@ void recoverCallAbi(
               if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
                   Prev.Output.RegOff == Reg)
                 return Prev.Output;
-              if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
-                return std::nullopt; // a call clobbers the caller-saved FP bank
+              if (callClobbersRegister(Prev, Reg, FPViewBytes, TRI, Fmt))
+                return fpValueLeftByCall(Prev, Reg);
             }
             for (const auto &Phi : B->Phis)
               if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg)
@@ -2960,6 +2981,7 @@ void recoverCallAbi(
           uint64_t Reg = FPRegs[K];
           std::optional<MedVar> V;
           va_t ReachingWriteAddr = 0;
+          const MedOp *Clobber = nullptr;
           for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
             auto &Prev = Blk.Ops[J];
             if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
@@ -2981,10 +3003,18 @@ void recoverCallAbi(
             // that writes a later argument register — do not stop the scan
             // there. Only a real call clobbers the caller-saved XMM bank and
             // bounds it.
-            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
-              break;
+            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL) {
+              if (V)
+                break;
+              if (callClobbersRegister(Prev, Reg, FPViewBytes, TRI, Fmt)) {
+                Clobber = &Prev;
+                break;
+              }
+            }
           }
-          if (!V)
+          if (!V && Clobber && KnownFPCallee)
+            V = fpValueLeftByCall(*Clobber, Reg);
+          if (!V && !Clobber)
             for (const auto &Phi : Blk.Phis)
               if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg) {
                 // A join of caller-saved clobbers supplies no argument setup.
@@ -2998,9 +3028,10 @@ void recoverCallAbi(
                 V = Phi.Output;
                 break;
               }
-          if (!V)
+          if (!V && !Clobber)
             V = reachingFPArgCrossBlock(Reg);
-          if (!V && KnownFPCallee && incomingFPArgument(Blk, OI, Reg)) {
+          if (!V && !Clobber && KnownFPCallee &&
+              incomingFPArgument(Blk, OI, Reg)) {
             // The callee's scalar lane width is independent of its return
             // width. Keep that evidence when promoting a forwarded input.
             uint16_t ScalarBytes = 0;
@@ -3029,6 +3060,11 @@ void recoverCallAbi(
           }
           if (!V)
             break; // FP arguments are consecutive from FP-argument 0
+          if (!KnownFPCallee && Op.NumInputs == 1 && !Op.SourceCallHint &&
+              !(VectorArgumentCallees &&
+                VectorArgumentCallees->count(CI.TargetAddr)) &&
+              callLeftovers().containsForRegister(*V, Reg))
+            break;
           FoundFP.push_back(*V);
         }
       }
