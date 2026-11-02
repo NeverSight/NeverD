@@ -514,6 +514,10 @@ The 1,280 REP policy/backing checks are separate. Both SDKs emit identical
 including 56 source files without inline assembly. Existing IRET #AC VMX/NMI
 differences remain separately counted. These results qualify the declared
 profiles, not every x86 environment or physical interrupt arrival schedule.
+After integrating `dev`'s shared HighC return-tail optimization, another 20
+REP test executions pass across both SDKs and P/E cores, with 201,312 CPU
+comparisons and all 112 exports identical to the primary captures. The evidence
+keeps this later integration gate separate from the broader primary snapshot.
 
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
 volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/PUSH/POP/REP,

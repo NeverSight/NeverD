@@ -1193,5 +1193,305 @@
     "run_focused.py": "50cfccad6833c97c3ec5ba11c698c7fecb5f82dd3fe0e8216708d3ddb1a281cf",
     "merge_qualification.py": "571c12239ecc19662812011893fc9b7c3213b8c96964225422b4e56e4f923abf",
     "private_tmp.py": "bb37523e352b56e8a66e70660146eb73901e72462aabdfb48612d1acfb0c4000"
+  },
+  "post_integration": {
+    "commit": "cfb92891677d4aa235b8d02556e5325fb448f0ff",
+    "merged_remote_commit": "68daede30bcd75079d78048fa31473bb86ae0e77",
+    "scope": "Shared HighC return-tail performance change; REP feature sources unchanged. Rebuilt and requalified the affected REP exports after merging current dev; primary broader runs remain attached to their earlier implementation commit.",
+    "passed": 20,
+    "failed": 0,
+    "skipped": 0,
+    "cpu_comparisons": 201312,
+    "export_files_identical_to_primary": 112,
+    "reports": [
+      {
+        "name": "p",
+        "sdk": "native",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-rep-20261102/post-integration/native/p/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedRepeated*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/native/p/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-rep-20261102/post-integration/native/p/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "passed": 5,
+        "sha256": "0551777904efca284a7aa799787895aed9eec2b0b34e65d5fb1c506cc5bc52d6",
+        "log_sha256": "dea84ac33de28390bd5f16832800d500effc6170230fc37ed26342c798f15df4"
+      },
+      {
+        "name": "e",
+        "sdk": "native",
+        "cpu": 12,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-rep-20261102/post-integration/native/e/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedRepeated*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/native/e/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-rep-20261102/post-integration/native/e/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "passed": 5,
+        "sha256": "7ab4f1033fa9751c12d02f6af7e95842b09933c7210af7d1151e060b7a8f133e",
+        "log_sha256": "2dd943cbe1b5a77e51f8e7d8aabb07ccd4ae69c7273f807307132f917d47ef5d"
+      },
+      {
+        "name": "p",
+        "sdk": "r6",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-rep-20261102/post-integration/r6/p/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedRepeated*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/r6/p/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-rep-20261102/post-integration/r6/p/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "passed": 5,
+        "sha256": "7cce6425b17bc3a9833542dde2c40ec4b78640caeec91a40acdcb24668a55b34",
+        "log_sha256": "4a280b4a053a6f02e6c0df9cdd3e2ae256de59672cc5d30a93ecb948db5852f6"
+      },
+      {
+        "name": "e",
+        "sdk": "r6",
+        "cpu": 12,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-rep-20261102/post-integration/r6/e/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedRepeated*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/r6/e/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-rep-20261102/post-integration/r6/e/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "passed": 5,
+        "sha256": "6e5766580758ed670b52859657e8d7fb42362c3deab9514a13a1ec123d98b545",
+        "log_sha256": "dfe6ba983953fbc835d5a6aea61dd498d23da27f5559dc4bd27f3a6bdb57e5e9"
+      }
+    ],
+    "observations": [
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedRepeatedTransfersSuspendForEvents",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 5376
+      },
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedRepeatedTransfersRetainProgressAcrossStops",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 280,
+        "policy_backing_checks": 320
+      },
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedRepeatedTransfersRepairPageFaultAndResume",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 320
+      },
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedRepeatedTransfersMatchOriginalCPU",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 44352,
+        "rep_fault_cpu_comparisons": 14944,
+        "rep_partial_fault_cpu_comparisons": 3552
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedRepeatedTransfersSuspendForEvents",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 5376
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedRepeatedTransfersRetainProgressAcrossStops",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 280,
+        "policy_backing_checks": 320
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedRepeatedTransfersRepairPageFaultAndResume",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 320
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedRepeatedTransfersMatchOriginalCPU",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 44352,
+        "rep_fault_cpu_comparisons": 14944,
+        "rep_partial_fault_cpu_comparisons": 3552
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedRepeatedTransfersSuspendForEvents",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 5376
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedRepeatedTransfersRetainProgressAcrossStops",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 280,
+        "policy_backing_checks": 320
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedRepeatedTransfersRepairPageFaultAndResume",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 320
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedRepeatedTransfersMatchOriginalCPU",
+        "processor": 0,
+        "core_type": 64,
+        "cpu_comparisons": 44352,
+        "rep_fault_cpu_comparisons": 14944,
+        "rep_partial_fault_cpu_comparisons": 3552
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedRepeatedTransfersSuspendForEvents",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 5376
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedRepeatedTransfersRetainProgressAcrossStops",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 280,
+        "policy_backing_checks": 320
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedRepeatedTransfersRepairPageFaultAndResume",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 320
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedRepeatedTransfersMatchOriginalCPU",
+        "processor": 12,
+        "core_type": 32,
+        "cpu_comparisons": 44352,
+        "rep_fault_cpu_comparisons": 14944,
+        "rep_partial_fault_cpu_comparisons": 3552
+      }
+    ],
+    "builds": [
+      {
+        "sdk": "native",
+        "receipt": "native-post-integration-receipt.json",
+        "sha256": "a80dfa1c0fcb8c4588ed36a791750d9376f0ea8e9813f53cb4817d08e7e6786f",
+        "options": [
+          "--target",
+          "NeverDX64PagedExecutionTests",
+          "--parallel",
+          "4"
+        ],
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "build_log_sha256": "4fa0e5d83bb0b4ba1edeb42f215bdec7b17f19da85d91037e579426de697c8a1"
+      },
+      {
+        "sdk": "r6",
+        "receipt": "r6-post-integration-receipt.json",
+        "sha256": "92afc7d3b474dfa8ca02b1ffbeca3cd18a9e4b6d845889a1237c2fc077c7385e",
+        "options": [
+          "--target",
+          "NeverDX64PagedExecutionTests",
+          "--parallel",
+          "4"
+        ],
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "build_log_sha256": "d545b06517a909ab02577f05b891ceed1cf6ecfd2e7dfeaf4648e51464e3e875"
+      }
+    ],
+    "changed_source_sha256": {
+      "lib/ir/high/structure/HighCFSimplify.cpp": "b9aaeb5a16cbe41ad296c4df09e30271e8b92c1233bde00fbe0e70d9ea9cd401",
+      "unittests/lift/core/HighCPointerAddressTests.cpp": "a34506e3ab28b8c9a06106f2c148d7adee2c4fdf8a0d3e8259395fe0469a9aae"
+    },
+    "format_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "script_sha256": "af1a8c25e2d0ef891e7a5d263d7b09f1acc00dccfda6b167e950e0fbbd30ef09"
   }
 }
