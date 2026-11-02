@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "JumpTableResolverDetail.h"
+#include "ResolverExactDefinitions.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -168,16 +169,9 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     }
   }
 
+  detail::ResolverExactDefinitions Definitions;
   auto budgetedReachingDefIdx = [&](int FromIdx, const NdVar &Value) {
-    const int Last = std::min(FromIdx, static_cast<int>(Ops.size()) - 1);
-    for (int I = Last; I >= 0; --I) {
-      if (!consumeWork())
-        return -1;
-      const NdVar &Output = Ops[I].Output;
-      if (Output.Space == Value.Space && Output.Offset == Value.Offset)
-        return I;
-    }
-    return -1;
+    return Definitions.previous(Ops, FromIdx, Value, consumeWork);
   };
   auto budgetedTraceIndexToRegister = [&](int FromIdx, NdVar Value) {
     for (int Depth = 0; Depth < limits::kMaxQuasiCopyDepth; ++Depth) {
