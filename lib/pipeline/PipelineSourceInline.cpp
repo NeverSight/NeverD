@@ -375,6 +375,10 @@ SourceInlineResult specializeUnavailableSourceCalls(
       }
     }
     Active.erase(&Function);
+    // Only support bodies need this admission proof. A root's remaining
+    // unknown inputs stay in its source; no caller consumes its Ready flag.
+    if (!Sizes.count(&Function))
+      return true;
     size_t Size = 0;
     for (const auto &Block : Function)
       Size += Block.size();

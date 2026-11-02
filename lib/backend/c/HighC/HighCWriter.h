@@ -1129,6 +1129,8 @@ public:
   /// Only native function declarations and frames have this context. Callees
   /// and image types retain the output's shared debug context.
   DebugContext *functionDebugContext(const HighFunc &Function) const {
+    if (Function.Entry)
+      return Dbg;
     return sourceBodyOrigin(Function) ? nullptr : Dbg;
   }
   DebugContext *Dbg;
