@@ -7076,6 +7076,160 @@ TEST(FloatingCallArgumentFlow, CallsDoNotResurrectEntryPhis) {
         }
 }
 
+TEST(SummarizedCallArguments, ConsecutiveIntegerBanksEndAtTheFirstLeftover) {
+  // Win64 positions are shared with floating arguments, so a later setup
+  // keeps an earlier leftover position (CopiedCallClobbers... variant 5).
+  // System V's integer bank is consecutive: after a leftover in RSI, a later
+  // RCX write such as clang's alignment `pop rcx` before a tail call passes
+  // nothing to this call, direct or indirect.
+  for (bool Indirect : {false, true}) {
+    SCOPED_TRACE(Indirect);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits64;
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "sysv_tail";
+    Function.CC = CallingConv::SysV_AMD64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    auto &First = Add(NdOp::CALL, Register(10, 1, x86reg::RAX),
+                      {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RSI);
+    Function.CallClobbers.push_back({Clobber, 1});
+    auto Temp = Register(100, 1, 0);
+    Temp.Kind = MedVar::Temp;
+    Add(NdOp::COPY, Temp, {Clobber});
+    Add(NdOp::COPY, Register(30, 1, x86reg::RDI), {MedVar::makeConst(17, 8)});
+    Add(NdOp::COPY, Register(20, 2, x86reg::RSI), {Temp});
+    Add(NdOp::COPY, Register(40, 1, x86reg::RCX), {MedVar::makeConst(29, 8)});
+    const auto Returned = Register(10, 2, x86reg::RAX);
+    auto &Call = Add(Indirect ? NdOp::INDIR_CALL : NdOp::CALL, Returned,
+                     {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    Add(NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 2u);
+    EXPECT_EQ(Function.CallInfos.back().Args.size(), 1u);
+  }
+}
+
+TEST(SummarizedCallArguments, LiveRegistersAfterALeftoverSetNoWin64Position) {
+  // capstone's custom-mnemonic loop calls `handle->insn_name(handle, id)`
+  // while R9 still holds the list node and R8 what an earlier call left. A
+  // later position is set up only where the call's block writes it;
+  // otherwise the first leftover ends the register arguments.
+  for (bool WrittenForCall : {false, true}) {
+    SCOPED_TRACE(WrittenForCall);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Bits = Bitness::Bits64;
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "mnemonic_lookup";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(3);
+    for (int I = 0; I < 3; ++I) {
+      Function.Blocks[I].Id = I;
+      Function.Blocks[I].StartAddr = Function.Entry + 0x20 * I;
+    }
+    Function.Blocks[0].Succs = Function.Blocks[1].Succs = {2};
+    Function.Blocks[2].Preds = {0, 1};
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](int BlockIndex, NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      auto &Block = Function.Blocks[BlockIndex];
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Block.StartAddr + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    // Each predecessor calls, then holds a real value in R9.
+    for (int Pred : {0, 1}) {
+      auto &Call = Add(Pred, NdOp::CALL, Register(10, 1 + Pred, x86reg::RAX),
+                       {MedVar::makeConst(0x2000 + Pred, 8)});
+      Call.CallSiteId = 1 + Pred;
+      Call.CalleeRegisterArgs = Call.CalleeStackArgs = 0;
+      Function.CallClobbers.push_back(
+          {Register(30, 1 + Pred, x86reg::R8), Call.CallSiteId});
+      Function.CallClobbers.push_back(
+          {Register(40, 1 + Pred, x86reg::R9), Call.CallSiteId});
+      Add(Pred, NdOp::COPY, Register(40, 3 + Pred, x86reg::R9),
+          {MedVar::makeConst(0x5000 + Pred, 8)});
+    }
+    auto &Join = Function.Blocks[2];
+    PhiNode Leftover;
+    Leftover.Output = Register(30, 3, x86reg::R8);
+    Leftover.Args = {{0, Register(30, 1, x86reg::R8)},
+                     {1, Register(30, 2, x86reg::R8)}};
+    PhiNode Node;
+    Node.Output = Register(40, 5, x86reg::R9);
+    Node.Args = {{0, Register(40, 3, x86reg::R9)},
+                 {1, Register(40, 4, x86reg::R9)}};
+    Join.Phis = {Leftover, Node};
+    Add(2, NdOp::COPY, Register(50, 1, x86reg::RCX),
+        {MedVar::makeConst(17, 8)});
+    Add(2, NdOp::COPY, Register(60, 1, x86reg::RDX),
+        {MedVar::makeConst(29, 8)});
+    if (WrittenForCall)
+      Add(2, NdOp::COPY, Register(40, 6, x86reg::R9),
+          {MedVar::makeConst(31, 8)});
+    const auto Returned = Register(10, 3, x86reg::RAX);
+    auto &Call =
+        Add(2, NdOp::INDIR_CALL, Returned, {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 3;
+    Add(2, NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 3u);
+    EXPECT_EQ(Function.CallInfos.back().Args.size(), WrittenForCall ? 4u : 2u);
+  }
+}
+
 TEST(SummarizedCallArguments, IndirectSetupCannotRegrowAClobberedTail) {
   BinaryImage Image;
   Image.Arch = Arch::X64;

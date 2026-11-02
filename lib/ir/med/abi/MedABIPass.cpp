@@ -3401,11 +3401,33 @@ void recoverCallAbi(
           const bool NoStackArguments =
               StackPart.empty() || (OpenStackArguments && !PositionalSlots);
           if (NoStackArguments) {
-            // Later real setup still establishes intervening unknown positions.
+            // Where integer and floating arguments share positions (Win64),
+            // later setup still establishes the unknown positions between:
+            // a position this call's block writes, after any earlier call,
+            // in either of its registers. A value merely live there (a list
+            // node a search loop left in R9) sets nothing. A separate integer
+            // bank is consecutive: a register written past a leftover, such
+            // as clang's alignment `pop rcx` before a tail call, sets no
+            // argument of this call.
+            const auto SetForCall = [&](size_t Slot) {
+              for (size_t K = OI; K-- > 0;) {
+                const MedOp &Prev = Blk.Ops[K];
+                if (Prev.Opcode == NdOp::CALL ||
+                    Prev.Opcode == NdOp::INDIR_CALL)
+                  return false;
+                if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size &&
+                    (Prev.Output.RegOff == IntParamRegs[Slot] ||
+                     (Slot < FPParamRegs.size() &&
+                      Prev.Output.RegOff == FPParamRegs[Slot])))
+                  return true;
+              }
+              return false;
+            };
             bool LaterSetup = false;
-            for (size_t J = I + 1; J < IntPart.size(); ++J)
+            for (size_t J = I + 1; PositionalSlots && J < IntPart.size(); ++J)
               LaterSetup |= !callLeftovers().containsForRegister(
-                  IntPart[J], IntParamRegs[IntPartSlots[J]]);
+                                IntPart[J], IntParamRegs[IntPartSlots[J]]) &&
+                            SetForCall(IntPartSlots[J]);
             if (LaterSetup)
               continue;
             for (size_t J = I; J < IntPart.size(); ++J)
