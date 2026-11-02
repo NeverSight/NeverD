@@ -147,13 +147,15 @@ struct PhiLocation {
 };
 } // namespace
 
-bool recomposeSplitPhis(MedFunc &Func) {
+bool recomposeSplitPhis(MedFunc &Func, int *NextVarId) {
   if (Func.SkippedSSA)
     return false;
   Definitions Defs;
   llvm::DenseMap<Key, PhiLocation> Phis;
   std::map<int, std::set<int>> Incoming;
-  uint64_t NextId = 0;
+  // The converter keeps allocating after this pass. Its counter also covers
+  // ids no longer used in the function, which a register view can return to.
+  uint64_t NextId = NextVarId ? uint64_t(std::max(*NextVarId, 0)) : 0;
   auto ObserveId = [&](const MedVar &V) {
     if (!V.isConst() && V.Id >= 0)
       NextId = std::max(NextId, uint64_t(V.Id) + 1);
@@ -257,7 +259,7 @@ bool recomposeSplitPhis(MedFunc &Func) {
         if (Match != Owner.Phis.end()) {
           Whole = Match->Output;
         } else {
-          if (NextId > uint64_t(std::numeric_limits<int>::max()))
+          if (NextId >= uint64_t(std::numeric_limits<int>::max()))
             continue;
           Whole.Kind = MedVar::Temp;
           Whole.Id = static_cast<int>(NextId++);
@@ -276,6 +278,10 @@ bool recomposeSplitPhis(MedFunc &Func) {
       Changed = true;
     }
   }
+  if (NextVarId)
+    *NextVarId = static_cast<int>(std::max<uint64_t>(
+        uint64_t(std::max(*NextVarId, 0)),
+        std::min<uint64_t>(NextId, std::numeric_limits<int>::max())));
   return Changed;
 }
 } // namespace neverd

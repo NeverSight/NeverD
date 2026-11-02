@@ -28,7 +28,7 @@ namespace neverd {
 
 void LowToMedConverter::propagate(MedFunc &Func) {
   propagateInvariantConstants(Func);
-  recomposeSplitPhis(Func);
+  recomposeSplitPhis(Func, &NextVarId);
   // Key by (Kind, Id, SSAVer): the MedVar Id space is shared across kinds, and
   // a stack Param's Id (its argument index, e.g. arg6) overlaps with the small
   // allocVarId() ids handed to registers/temps.  Ignoring Kind lets a Param

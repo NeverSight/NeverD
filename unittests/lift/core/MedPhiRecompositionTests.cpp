@@ -271,6 +271,27 @@ TEST(MedPhiRecomposition, FreshIdsIncludeDeclaredLocalsAndKeepTaggedZeroUses) {
   }
 }
 
+TEST(MedPhiRecomposition, FreshIdsStayAboveTheCallersAllocator) {
+  // The converter allocates more variables after propagation, and its
+  // counter can exceed every id still in the function. A recomposed PHI must
+  // take an id at or above that counter, which then moves past the PHI.
+  for (int Counter : {0, 20000}) {
+    SCOPED_TRACE(Counter);
+    auto F = diamond(4, 4, false, true);
+    int Next = Counter;
+    ASSERT_TRUE(recomposeSplitPhis(F, &Next));
+    const int Fresh = F.Blocks[3].Phis.back().Output.Id;
+    EXPECT_GE(Fresh, Counter);
+    EXPECT_GT(Next, Fresh);
+    EXPECT_TRUE(verifyMedFunc(F, "fresh identity above the allocator"));
+    // Without a recomposition the counter still covers the function's ids.
+    auto Unchanged = F;
+    int Again = Next;
+    EXPECT_FALSE(recomposeSplitPhis(Unchanged, &Again));
+    EXPECT_EQ(Again, Next);
+  }
+}
+
 TEST(MedPhiRecomposition, LoopCarriedSlicesKeepCarriesAndWholeValueIdentity) {
   auto F = diamond(4, 4, true, true);
   auto &Entry = F.Blocks[0];
