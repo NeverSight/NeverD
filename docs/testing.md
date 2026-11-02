@@ -6133,7 +6133,11 @@ parser cases without loader/call-model dependencies, for focused ASan/UBSan
 checks of this storage boundary; these are not additional distinct cases.
 Macro chains at and beyond the expansion budget, plus cycles, retain their
 invocation diagnostics when ordinary identifiers bypass recursive expansion.
-Punctuation matching keeps its original longest-first order and literal lengths.
+`TypeParse.PunctuationKeepsOperatorsDeclaratorsAndErrorPositions` checks
+longest-match operators, qualified names, callbacks, variadics, member access,
+constant expressions and transactional errors on ILP32, LP64 and LLP64. The
+first-byte punctuation dispatch retains the supported spellings and lengths;
+unknown bytes still produce their original diagnostic positions.
 
 `DWARFTypeImportGo.ReadsGosStructuresAndFuncValues` builds a real Go program
 with the selected `NEVERD_TEST_GO` compiler (or `go` on PATH). It checks both
