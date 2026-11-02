@@ -4,6 +4,7 @@
   "feature": "all canonical INT n vectors and INT3 over generated paged execution; software-entry restart PC, noncanonical saved fallthrough, explicit scalar alignment fault priority",
   "commits": {
     "neverd_implementation": "09cf2309f9de8f2f99d5f5f8db976ac313685f6c",
+    "neverd_integration": "453d4a8e80f961311de7cd8fddc64e0a062cf74e",
     "llvm": "1c67e6be645fd373c0820179c7849f52c5d723f9",
     "neverc": "64b3d564921808a96066732e066130076424d7ea"
   },
@@ -18,8 +19,8 @@
       "failed": 0,
       "skipped": 0,
       "report": "native.xml",
-      "sha256": "c330ddd8f48a576a2618153cdc251c0bd4d9851003b66d072367159207502c7f",
-      "log_sha256": "0fb1f9a66b53eb3290efc9b3bf406ed960aae3e466775eb5e044d211858d55cf",
+      "sha256": "498fbe816b66fc39afd3afaac5026b769eadef4eaaf66438c80eedd8c7f51d25",
+      "log_sha256": "b939d77fa716cea1a250d89dad6dd690aacf773f3d850c6636d7faa9f30b50e1",
       "skips": []
     },
     {
@@ -29,8 +30,8 @@
       "failed": 0,
       "skipped": 1,
       "report": "native-paging.xml",
-      "sha256": "fa1b8a03a019158fa7d378941af00ad1b1ca863de2f9166664dffd9a1390bb9e",
-      "log_sha256": "94346e2919405f8376a7bc15147f8c29b73747d78d6788d4e8bed8882d3efdae",
+      "sha256": "e5274849c7ea46e61f1653f6ae55bd02ae5c1adb17ff7678d8d4c834c18daf55",
+      "log_sha256": "0eb9865e2b978930ebe58e1209cd3eac813244a7b5c5b8a3deceaabc8cfecb18",
       "skips": [
         {
           "name": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
@@ -45,8 +46,8 @@
       "failed": 0,
       "skipped": 0,
       "report": "native/qualified-NeverDX64ContinuationSourceTests.xml",
-      "sha256": "12a08c4babd406ce2872b61cf6fb9d777b45c599221c38ee3416c1b9f4d0cebe",
-      "log_sha256": "4250dacfeb1d8aa115c21e2d3f5ffb7e221c63a1ef87040ae6cccc25ac172323",
+      "sha256": "bb09f846ed8cd6696fecd26699767c50e84bf9f07c528f22892a81bf7cc62041",
+      "log_sha256": "975177ada9e415750b506250bd7b25af47f022ceddef0052be8564cdaefbccf8",
       "skips": []
     },
     {
@@ -56,8 +57,8 @@
       "failed": 0,
       "skipped": 0,
       "report": "native/qualified-NeverDX64ContinuationExportTests.xml",
-      "sha256": "379eae2f1d19668ae17a463c25344b83d9a75abe83fc6bf8b494b0f4a3c3ea89",
-      "log_sha256": "fc982791c51002ea4b27dd3beaa49cc832e2b48ce5a8d11ed59831f8db299a2a",
+      "sha256": "d7832d288df1cd68416e75000e17a0d18cb9e775b5d64086c55ac63f4c436af4",
+      "log_sha256": "70058852a690c8ad48a7c30df7efc1c7394f81f54bb5ffb1f1cc1e0ae72195df",
       "skips": []
     },
     {
@@ -67,8 +68,8 @@
       "failed": 0,
       "skipped": 0,
       "report": "r6.xml",
-      "sha256": "e1ea709f9da4f5117ed69767ccdc1866bf9ed1ebb1e8006e48172134499b31c3",
-      "log_sha256": "d4dafd7129ac11615fd178c96e93bfce60f1919ef0624193c999c0984f80ea85",
+      "sha256": "c9a50407e3dd3d55fd88e940a6248aff55a684ddc52408b570d64bb241109849",
+      "log_sha256": "546ce5eb3ca5e13fb6b2a7edc4fe339e7982b88ce451496e194c9f8d4beb5fbc",
       "skips": []
     },
     {
@@ -78,8 +79,8 @@
       "failed": 0,
       "skipped": 1,
       "report": "r6-paging.xml",
-      "sha256": "abaf4c727ba8e66bcfa28c3b26cd9fca519c87651f36113b55108d53ffd6853f",
-      "log_sha256": "74dc9328b67a7cc60ac7a3ae359e2c8f8e80d06d4041253d31b2ab4aab597e2f",
+      "sha256": "9f50dd11dbc5b2329aacecd9a6d737e3fd6c3088aeb35819585d1829e79a8c80",
+      "log_sha256": "b47a0261b4763bde9e4089d8acf2200ec3d4c16410cd6210ec02332491525a54",
       "skips": [
         {
           "name": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
@@ -94,8 +95,8 @@
       "failed": 0,
       "skipped": 0,
       "report": "r6/qualified-NeverDX64ContinuationSourceTests.xml",
-      "sha256": "a1a8e92008adb614f0bf5383f0da5cf5841b0e6deae0289e2786d8dba51ddcdd",
-      "log_sha256": "9441b8dc2afd3985d8c1c0c37b0b3deb32078651e4ff1045dbdae890e98df7ee",
+      "sha256": "2e213a4494779be2637975490a52ff5102cd94c1c7362b3f559aad248871247a",
+      "log_sha256": "005e0bf6457b4607201dcec322c10b84106a71663765541f6e95e529b078412e",
       "skips": []
     },
     {
@@ -105,8 +106,8 @@
       "failed": 0,
       "skipped": 0,
       "report": "r6/qualified-NeverDX64ContinuationExportTests.xml",
-      "sha256": "ab62b56538520ce99f2cfec711b610579295498ba405d13ab1af37b3412e3d84",
-      "log_sha256": "c921fe0342e39da821cbe7912a06f8732227209fe8aaf436b242ac5553c54bf9",
+      "sha256": "1414a48c2dd38d60cad4f08301cdf4021b53216927b440357030b89b3b255019",
+      "log_sha256": "51940962f999abf356b97f4b42ef1f4a16f2d9f8e1e78d0e4c915614564c6ded",
       "skips": []
     }
   ],
@@ -237,11 +238,11 @@
     },
     {
       "case": "unaligned absent user page with CR0.AM and RFLAGS.AC",
+      "failing_native_cases": 192,
+      "failed_assertions": 576,
       "before": "576 comparison failures across 24 instruction forms and eight compiler profiles: model #PF/CR2 versus native #AC/unchanged CR2",
       "fix": "an explicit CPU alignment-priority binding; both orders are modeled, only BeforePaging is qualified by this host",
-      "diagnostic": "alignment-priority-red.log",
-      "failing_native_cases": 192,
-      "failed_assertions": 576
+      "diagnostic": "alignment-priority-red.log"
     },
     {
       "case": "INT3 at the last canonical instruction byte",
@@ -291,5 +292,83 @@
     "the two bound scalar fault orders do not claim every microarchitectural fault priority; native providers, LOCK, TF, paged IRQ/NMI scheduling, complete legacy i386 dispatch, SMI and SGX AEX remain open",
     "active unsupported CET/FRED/LAM/LASS controls remain refused",
     "no LLVM release or pin completion is claimed"
+  ],
+  "build_receipts": [
+    {
+      "sdk": "native",
+      "report": "native-neverd-build-receipt.json",
+      "sha256": "8df645b2de5556be8b14ea19724e1d2a72615715f78bdd67e345022176dcf5d9",
+      "configuration": "Release",
+      "requested_options": [
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "8"
+      ],
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "accelerators": {
+        "neverd_highway": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_mimalloc": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdjson": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdutf": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_tbb": {
+          "selection": "disabled",
+          "used": false
+        }
+      }
+    },
+    {
+      "sdk": "r6",
+      "report": "r6-neverd-build-receipt.json",
+      "sha256": "61a4e41228c1eb859504d444afbb7e7d47d46ee57dd4e499c4828f880049c018",
+      "configuration": "Release",
+      "requested_options": [
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "8"
+      ],
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "accelerators": {
+        "neverd_highway": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_mimalloc": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdjson": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdutf": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_tbb": {
+          "selection": "disabled",
+          "used": false
+        }
+      }
+    }
   ]
 }
