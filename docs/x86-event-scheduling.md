@@ -93,6 +93,14 @@ Capture artifacts with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` and run
 --compiler NEVERC --llvm-bin LLVM_BIN --keep OUTPUT`. This checks NeverC and
 both full LLVM backends and authenticates source hashes against manifests.
 
+The [2026-11-01 qualification](evidence/x86-event-scheduling-2026-11-01.json)
+records 686 passing regressions across the full fork and pinned r6 SDK, with
+no failures or skips. Their 36 captured source, harness, linker and manifest
+files are byte-identical. New scheduler and memory-division fixtures perform
+72,192 original-CPU comparisons through Clang; NeverC and both full LLVM
+backends add 108,288 comparisons across 24 profiles. This qualifies the
+declared instruction-boundary and successful-RAM domains above.
+
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
 revision 090, STI and Volume 3A interrupt inhibition;
 [KVM run interface](https://www.kernel.org/doc/html/latest/virt/kvm/api.html#the-kvm-run-structure),

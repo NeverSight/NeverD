@@ -3392,6 +3392,10 @@ delivery to original instruction boundaries, with persistent STI/MOV-SS
 inhibition and acknowledgment only after delivery. Controller priority and
 arrival are explicit producer inputs; this does not implement APIC/devices,
 partial-instruction interruptions, SMI entry or enclave AEX.
+The [memory-division and scheduling qualification](evidence/x86-event-scheduling-2026-11-01.json)
+records 686 passing regressions without skips, byte-identical exports across
+the full fork and r6 SDK, and 180,480 original-CPU comparisons through Clang,
+NeverC and both full LLVM code-generation pipelines.
 
 ## Native full-dividend division compiler interfaces
 

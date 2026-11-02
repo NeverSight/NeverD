@@ -1,0 +1,748 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "feature": "successful-RAM memory DIV/IDIV and bounded instruction-boundary IRQ/NMI scheduling",
+  "commits": {
+    "neverd": "d0dd0d0f9c64d23ba74144053efa32d77b458fea",
+    "llvm": "1c67e6be645fd373c0820179c7849f52c5d723f9",
+    "neverc": "64b3d564921808a96066732e066130076424d7ea"
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "regressions": [
+    {
+      "sdk": "native",
+      "target": "NeverDX86NativeStateAuditTests",
+      "passed": 50,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX86NativeStateAuditTests.xml",
+      "sha256": "437089e55916e5261f0754c36f7c18711dc46b2f2bcc8e7ac4053f6e2393ae00",
+      "log_sha256": "b9186290c944f435bc27c4e5619f5d13a82d65c799b1d3a0b928a288a66bb04b"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationExportTests",
+      "passed": 76,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX64ContinuationExportTests.xml",
+      "sha256": "7a32f44926dddea639d9cfa8c43ef53f96a114d6916cb4db1fe9debb697bebb5",
+      "log_sha256": "f728c3fcca380e4ff419316de85785af67aa3a2d51f35d55459796d006c85a9d"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86DivisionRoundTripTests",
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX86DivisionRoundTripTests.xml",
+      "sha256": "3ad01d84f35474c90288ea6cb5c40904dfdecdfcc6ccabb3ec4ee0507775860a",
+      "log_sha256": "b22dfb25c0a9cbc51746f7f100ee7b3d51484af9cd3d842de3b915d32647bb87"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDLLVMCValueTests",
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDLLVMCValueTests.xml",
+      "sha256": "bfbe1a5a3168bb372aa287a56f32ab8321f64e508fb2b2851ad8609a0814c0e7",
+      "log_sha256": "cb77b19610946d00d8f41475171983c61b874be66085dddfe1fed43f8112251b"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationSourceTests",
+      "passed": 144,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX64ContinuationSourceTests.xml",
+      "sha256": "0bb1259e43cf0aef0a5501f988bb7e3b9b9783096e5fe1332e2b70127bcb7c00",
+      "log_sha256": "e5ff5d9af25877587f938770a50ec8a16ade9423a1c091f86db348a7bb69af5a"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationSourceTests",
+      "passed": 144,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX64ContinuationSourceTests.xml",
+      "sha256": "a00ba2fd39cbcce98a3c9e437e0021c994e2d4cb2b6212819c0ce1323d71147e",
+      "log_sha256": "62f0abcb2866cebb2bcc7f29adcc5f607bf6409980c3e02b5d94d25dc46fa84e"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationExportTests",
+      "passed": 76,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX64ContinuationExportTests.xml",
+      "sha256": "2818e196200ed9c80db61f367286764d2e4e819dd6503e99b819d05a7b7172c7",
+      "log_sha256": "d5e2547a80bf7b7fd543b98d6e2179d25da45b46448348e0ece0b9aa89e4ccd7"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86NativeStateAuditTests",
+      "passed": 50,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX86NativeStateAuditTests.xml",
+      "sha256": "ae52ebe32c918f7417e31b92172de2fc4d2732ae86d2a4db7c82b8528e69f758",
+      "log_sha256": "7b4c841ee8ce23c147676526df95c312ce307eddbf2f3bc8d65e81a147bb8d7c"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86DivisionRoundTripTests",
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX86DivisionRoundTripTests.xml",
+      "sha256": "c35884c3bf264cb23d49f6b7efeba89406400d17bb1309d9c850c97316698306",
+      "log_sha256": "01e523d69a15823c094c56f88d5f0e9041eb57ff24775b4e673df5b56be8702f"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDLLVMCValueTests",
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDLLVMCValueTests.xml",
+      "sha256": "555f987f7dc93a03729591be76ee6feabe1a8360f4fd4a9095eaa4f8bc97c06d",
+      "log_sha256": "737c97eeebedbe933fef155cf53fdd9855d88d4970fe4801eb2cfe112d618669"
+    }
+  ],
+  "division_memory_encoding_audit": {
+    "raw_forms": 166122,
+    "x64": 151488,
+    "i386": 14634,
+    "includes": [
+      "all SIB bytes",
+      "address16/32/64",
+      "FS/GS",
+      "negative displacements",
+      "extended registers",
+      "forged decoder-detail rejection"
+    ]
+  },
+  "clang_native_oracles": {
+    "sdks": 2,
+    "routes": [
+      "HighC",
+      "LLVMC"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "scheduler_states_per_profile": 1024,
+    "memory_division_states_per_profile": 8000,
+    "scheduler_total": 8192,
+    "memory_division_total": 64000,
+    "comparison": "every represented state byte and 4 KiB/8 KiB of original RAM respectively"
+  },
+  "compiler_qualifications": {
+    "schedule": {
+      "schema_version": 1,
+      "tools": {
+        "neverc": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "4eb585ed3d578521b2e84e9e29efdc901e22811f09ad1a0edb2ad1db8fc028dc"
+        },
+        "llc": {
+          "path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc",
+          "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
+        },
+        "clang": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/home/ad/.local/bin/ld.lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        }
+      },
+      "family": "schedule",
+      "fixture_sha256": "ac9410b0bd609c169e1efb17c0b5ee686778c975a51b02ea1e638734191bec0f",
+      "profiles": [
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "neverc",
+          "source_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+          "ir_sha256": "7357fb08fd28743d48ad454c75ce954a1ce22ae1363da1f5dfc6a0dd5fa63180",
+          "image_sha256": "678f52d03e870f9c2ff51ee6e2eb75914abe04af090019d46d9990d9fadb6abb",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "llvm-legacy",
+          "source_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+          "ir_sha256": "7357fb08fd28743d48ad454c75ce954a1ce22ae1363da1f5dfc6a0dd5fa63180",
+          "image_sha256": "bf03f8d0bc44e00fe88c5caa916ef7fa6a33dc21899f1b6515f371b729f31341",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "llvm-new",
+          "source_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+          "ir_sha256": "7357fb08fd28743d48ad454c75ce954a1ce22ae1363da1f5dfc6a0dd5fa63180",
+          "image_sha256": "bf03f8d0bc44e00fe88c5caa916ef7fa6a33dc21899f1b6515f371b729f31341",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "neverc",
+          "source_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+          "ir_sha256": "2cf7473b99a4d802359ecf6bb3097423203553616259b04ccd32054784eb93e9",
+          "image_sha256": "28aa08fd1cfe0b4037a679850058d56474a489448992049e90159600b72ce4a4",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "llvm-legacy",
+          "source_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+          "ir_sha256": "2cf7473b99a4d802359ecf6bb3097423203553616259b04ccd32054784eb93e9",
+          "image_sha256": "d769bb8a4a7b41567770847a90ac4265f56f82eeedf1a423be331aa23b90a1ab",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "llvm-new",
+          "source_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+          "ir_sha256": "2cf7473b99a4d802359ecf6bb3097423203553616259b04ccd32054784eb93e9",
+          "image_sha256": "d32259e60a3d3a3a9e27a7f5dd500179bb1987f0eb7b713342a0a6a87fb489cc",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "neverc",
+          "source_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+          "ir_sha256": "ec59c346397f10deeaca28b9344334bbbceb67ae9c88f75872af67796acf2a93",
+          "image_sha256": "03d611ec1df2a762014865528b5bcec50442088ad739db6f458ad1176e8abcc9",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "llvm-legacy",
+          "source_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+          "ir_sha256": "ec59c346397f10deeaca28b9344334bbbceb67ae9c88f75872af67796acf2a93",
+          "image_sha256": "b0b0c038eaaa9db77b0cfc62ea27cdf077a56743c031b4bd1a8ea3ca5a8af626",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "llvm-new",
+          "source_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+          "ir_sha256": "ec59c346397f10deeaca28b9344334bbbceb67ae9c88f75872af67796acf2a93",
+          "image_sha256": "b0b0c038eaaa9db77b0cfc62ea27cdf077a56743c031b4bd1a8ea3ca5a8af626",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "neverc",
+          "source_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+          "ir_sha256": "f369f2e358984f9c777be7ddbc98d302d07557527dbcbc9f0bbd8df955f1cdb3",
+          "image_sha256": "32e3d56e67bd995a4ecb05c7b568b7d9ebeb37d1779dead9efbab783862aa0d4",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "llvm-legacy",
+          "source_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+          "ir_sha256": "f369f2e358984f9c777be7ddbc98d302d07557527dbcbc9f0bbd8df955f1cdb3",
+          "image_sha256": "74a8861e6569356c398e1209712b28a6bea82f2fec0229dd7db4ff65c52d4f0a",
+          "original_cpu_comparisons": 1024
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "llvm-new",
+          "source_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+          "ir_sha256": "f369f2e358984f9c777be7ddbc98d302d07557527dbcbc9f0bbd8df955f1cdb3",
+          "image_sha256": "2e92bbe29cf9da1d2781456a89f30a3dba56b1500b7e29d1197dc2d06aab3fc9",
+          "original_cpu_comparisons": 1024
+        }
+      ],
+      "original_cpu_comparisons": 12288,
+      "limitations": [
+        "IA-32e event delivery, not SMM/SGX or legacy task gates",
+        "successful delivery RAM; no nested delivery faults",
+        "KVM native IRQ/NMI; original instructions produce tested faults",
+        "memory division requires successful operand RAM",
+        "interrupt controller selection and priority remain producer-owned"
+      ]
+    },
+    "memory-division": {
+      "schema_version": 1,
+      "tools": {
+        "neverc": {
+          "path": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+          "sha256": "4eb585ed3d578521b2e84e9e29efdc901e22811f09ad1a0edb2ad1db8fc028dc"
+        },
+        "llc": {
+          "path": "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc",
+          "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
+        },
+        "clang": {
+          "path": "/home/ad/.local/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/home/ad/.local/bin/ld.lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "integer-runtime": {
+          "path": "/usr/lib/gcc/x86_64-linux-gnu/15/libgcc.a",
+          "sha256": "d9c2e7a0c0f3dbfc0ff2dec153b0d044cf49d66d64d736b5d1db8ae25ca9c75e"
+        }
+      },
+      "family": "memory-division",
+      "fixture_sha256": "ac9410b0bd609c169e1efb17c0b5ee686778c975a51b02ea1e638734191bec0f",
+      "profiles": [
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "neverc",
+          "source_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+          "ir_sha256": "62ae63706f5baf15607b0e77bce73f8265a8ffb1d5cf966cfd64cd36fc0bb006",
+          "image_sha256": "7ccc0f3e57b6781948426e6cfb496e7302265f22d09bbc4dfd095fc34d2de970",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "llvm-legacy",
+          "source_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+          "ir_sha256": "62ae63706f5baf15607b0e77bce73f8265a8ffb1d5cf966cfd64cd36fc0bb006",
+          "image_sha256": "26996f9b216f54cc4d32ba9afc17043f8aa61ea9242504ba7b894c404154c156",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "llvm-new",
+          "source_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+          "ir_sha256": "62ae63706f5baf15607b0e77bce73f8265a8ffb1d5cf966cfd64cd36fc0bb006",
+          "image_sha256": "26996f9b216f54cc4d32ba9afc17043f8aa61ea9242504ba7b894c404154c156",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "neverc",
+          "source_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+          "ir_sha256": "3e2774674cb908ef2fd201eeca414590c15a09db642cc3d7a75e9b9f84950532",
+          "image_sha256": "032305261bad23e52c7e904a6ba1299fd0228d0b3701dde91b550931d2db69c4",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "llvm-legacy",
+          "source_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+          "ir_sha256": "3e2774674cb908ef2fd201eeca414590c15a09db642cc3d7a75e9b9f84950532",
+          "image_sha256": "9acd246a82de43d0e2e7fd50607d34c98cbd8928d4cb8a20ab2cc975f3efbac0",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "llvm-new",
+          "source_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+          "ir_sha256": "3e2774674cb908ef2fd201eeca414590c15a09db642cc3d7a75e9b9f84950532",
+          "image_sha256": "5091595172ad32c41218ad3cce72deba71a79604e6713d57c35501e97e946987",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "neverc",
+          "source_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+          "ir_sha256": "c2a4bb096e6bb3b11aa0ca701465a9d56296c6be04983712e44bce8c4c4e6e9d",
+          "image_sha256": "62b148b2b53e05496b9cbc7cf0bb87b24ee7ab4eff97ba2fe077caa855794310",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "llvm-legacy",
+          "source_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+          "ir_sha256": "c2a4bb096e6bb3b11aa0ca701465a9d56296c6be04983712e44bce8c4c4e6e9d",
+          "image_sha256": "b19e9e5d511bcfa6de643640d7ee0de9260e4fdc5ff2b58ffdc4ba9879ade434",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "llvm-new",
+          "source_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+          "ir_sha256": "c2a4bb096e6bb3b11aa0ca701465a9d56296c6be04983712e44bce8c4c4e6e9d",
+          "image_sha256": "b19e9e5d511bcfa6de643640d7ee0de9260e4fdc5ff2b58ffdc4ba9879ade434",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "neverc",
+          "source_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+          "ir_sha256": "18ce422d6f3c95657318230263df7718e4f76f94629f6766b75cf87f526d584f",
+          "image_sha256": "cd1b8b02690d5dbc07d455083aa09118e4810da9669670d2f9a302431ac6d823",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "llvm-legacy",
+          "source_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+          "ir_sha256": "18ce422d6f3c95657318230263df7718e4f76f94629f6766b75cf87f526d584f",
+          "image_sha256": "db4aa48b7283e37360f888e6b419abb6cdc8d3ebe844faf4336467054d9eddeb",
+          "original_cpu_comparisons": 8000
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "llvm-new",
+          "source_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+          "ir_sha256": "18ce422d6f3c95657318230263df7718e4f76f94629f6766b75cf87f526d584f",
+          "image_sha256": "36ba1492a8d97c393923ae6f79db31634d9f5f9ac04274237a79708bbee26024",
+          "original_cpu_comparisons": 8000
+        }
+      ],
+      "original_cpu_comparisons": 96000,
+      "limitations": [
+        "IA-32e event delivery, not SMM/SGX or legacy task gates",
+        "successful delivery RAM; no nested delivery faults",
+        "KVM native IRQ/NMI; original instructions produce tested faults",
+        "memory division requires successful operand RAM",
+        "interrupt controller selection and priority remain producer-owned"
+      ]
+    }
+  },
+  "source_files": [
+    {
+      "path": "docs/architecture.md",
+      "sha256": "5bc1c81e7426370f4d454f40ffcd0e30dd10d8202894b83ce55151f5ac9dd284"
+    },
+    {
+      "path": "docs/testing.md",
+      "sha256": "18ae3b6e556dc79628a36d3b497c0da72d65f1f485bebb6a6818821fd6c5060a"
+    },
+    {
+      "path": "docs/x86-event-delivery.md",
+      "sha256": "ab8724d26fff1fa0b49abd076afff1e7c7b8bd86a09698872f7047220f19d3d9"
+    },
+    {
+      "path": "docs/x86-event-scheduling.md",
+      "sha256": "152fa3985368b8c6ec431afae81f3e285b6e0812ed5338196a5b74215bd0f4be"
+    },
+    {
+      "path": "docs/x86-instruction-support.md",
+      "sha256": "b36954dd14f6d0ecefa931611c6c3d0867836325959f6d40333e1e45ebefa25a"
+    },
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "7e926cb700a71cb61991c095622d035e0baba25f53bde27595d8508a0b67fdf8"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "a30d2125a2bf7b5e3f0f1242d32024495049f6b5af15905c34ac684d7f33b534"
+    },
+    {
+      "path": "lib/lift/X86/X86DivisionUndefined.h",
+      "sha256": "e0ee4e187721a6394f621d1e687b7ff0c98b8b617f0d10dc8b4864afa274b4ce"
+    },
+    {
+      "path": "lib/pipeline/CMakeLists.txt",
+      "sha256": "381d1e9ee7e875a1e8b7257010bf2d274b779b45a9eb93e5c7cefc377fa1baaa"
+    },
+    {
+      "path": "lib/pipeline/X86/X64ContinuationExport.cpp",
+      "sha256": "72facb2ac7f90f78bf8f8c0cc042cf3841033d32c57adf4669cbf5531355187b"
+    },
+    {
+      "path": "lib/pipeline/X86/X64ContinuationSchedule.cpp",
+      "sha256": "3caf6c106af822b5f9cf90f5c2a405802af57e49460c51744df25b9e99b6224f"
+    },
+    {
+      "path": "lib/pipeline/X86/X64ContinuationSchedule.h",
+      "sha256": "4ff0ec1b1d965222772560bb80e995dcd10742d57cd61681e5a1275e757d5684"
+    },
+    {
+      "path": "scripts/isa/x86/verify_event_delivery.py",
+      "sha256": "ad98b1174482db5814bda4f98ae1e33f4b1440d685964e9d5db217a23595c4c5"
+    },
+    {
+      "path": "unittests/devirtualization/NativeStateAuditTests.cpp",
+      "sha256": "b67e37f0c266fe3d031bd67ad32c09cc90521b9a69baf9f555e4ad96ad69efbe"
+    },
+    {
+      "path": "unittests/devirtualization/x86/NativeDivisionMemoryAuditTests.inc",
+      "sha256": "9583b17614050f64b89d943bf78aa5a7caf8b60771638dde387efbe59b66ae53"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
+      "sha256": "b0f68948920a3dd07b06f2661208d766d4fb65c966223bfbfe1ec6a6bbb27bc5"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64EventScheduleExportTests.inc",
+      "sha256": "d9f2117a3ee53eefb4ae15c306263c6274c53764f50687565635a01ebe7b428b"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64MemoryDivisionExportTests.inc",
+      "sha256": "0c481c20e56f50d9e82d3a5c2c76adb8d46b10ae98cdfdeca3bab1851dd77673"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/fixtures/x64_continuation_kvm.c",
+      "sha256": "ac9410b0bd609c169e1efb17c0b5ee686778c975a51b02ea1e638734191bec0f"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/run_x64_continuation_kvm.py",
+      "sha256": "e20fb0823ea4364995fe8eaa87250bc7e91753d81582517b4703e230e1268804"
+    }
+  ],
+  "source_artifacts": [
+    {
+      "name": "schedule-native-high.O0.guest.c",
+      "native_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+      "r6_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-high.O0.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-high.O2.guest.c",
+      "native_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+      "r6_sha256": "50f6836860ca67e285df38e6888b7b2f8ef71bb6dad33719bf6152064949a917",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-high.O2.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-high.c",
+      "native_sha256": "62dd8fdee720d35d6ed2ca9fb2915e43778876ecc815fb42d5a1251fbb6ceace",
+      "r6_sha256": "62dd8fdee720d35d6ed2ca9fb2915e43778876ecc815fb42d5a1251fbb6ceace",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-high.json",
+      "native_sha256": "58489268e747581a79406e3f0c8e0759fcd7dbd57cf6c40fbec61bfd04dd9589",
+      "r6_sha256": "58489268e747581a79406e3f0c8e0759fcd7dbd57cf6c40fbec61bfd04dd9589",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-high.source.c",
+      "native_sha256": "818d9c3310fe9f64450b5aa5b18007269761c39887cc12a2db2acd986875d7cd",
+      "r6_sha256": "818d9c3310fe9f64450b5aa5b18007269761c39887cc12a2db2acd986875d7cd",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.O0.guest.c",
+      "native_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+      "r6_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.O0.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.O2.guest.c",
+      "native_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+      "r6_sha256": "51ddeeeec3ac18fcb424b9664c802716f2a30ea788015e16982dc945220abab8",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.O2.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.c",
+      "native_sha256": "842950d7b5fc3fbcef4392d1f1cafbcecd59d93c846b6772c4a20d463cbaa618",
+      "r6_sha256": "842950d7b5fc3fbcef4392d1f1cafbcecd59d93c846b6772c4a20d463cbaa618",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.json",
+      "native_sha256": "75bc2abe89d60a717530eb972b38a1f78e8c882bdac519798cc33e41cbec3881",
+      "r6_sha256": "75bc2abe89d60a717530eb972b38a1f78e8c882bdac519798cc33e41cbec3881",
+      "identical_sdks": true
+    },
+    {
+      "name": "schedule-native-llvm.source.c",
+      "native_sha256": "d5419cc4e03438cb81c6b10019d5387628ee0cc912573d9ecb9fe48ae7903c6d",
+      "r6_sha256": "d5419cc4e03438cb81c6b10019d5387628ee0cc912573d9ecb9fe48ae7903c6d",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.O0.guest.c",
+      "native_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+      "r6_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.O0.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.O2.guest.c",
+      "native_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+      "r6_sha256": "cfeb4da4fcf86d9efac5762f3d7acb5532b3ab01753de24e4905899f4062ddb6",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.O2.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.c",
+      "native_sha256": "a64ab4b7ac58c27f91d3caa3737a476fb0f08879fb884e4e29b92686bcfc050f",
+      "r6_sha256": "a64ab4b7ac58c27f91d3caa3737a476fb0f08879fb884e4e29b92686bcfc050f",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.json",
+      "native_sha256": "59a105523e192f5664d181e95ad1f0200bb54949d744a677472f4828d4559655",
+      "r6_sha256": "59a105523e192f5664d181e95ad1f0200bb54949d744a677472f4828d4559655",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-high.source.c",
+      "native_sha256": "d492dbad55ba0dc7993ffeab67e6c4d4928bb65012f3aaa17b3690d780bfc08a",
+      "r6_sha256": "d492dbad55ba0dc7993ffeab67e6c4d4928bb65012f3aaa17b3690d780bfc08a",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.O0.guest.c",
+      "native_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+      "r6_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.O0.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.O2.guest.c",
+      "native_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+      "r6_sha256": "600fd75a9fc25fc655e376ce8eb8b6912a16fdf09fd63953a7ff39265aff7bd5",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.O2.ld",
+      "native_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "r6_sha256": "2508b33e401c4302d3375ee772c10622754cda36e6946a4a6c23053eec8fb076",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.c",
+      "native_sha256": "31ea55cc97ccc2f883c13bc3a2654b5bd61833029abece3d37f44d38bb78cb88",
+      "r6_sha256": "31ea55cc97ccc2f883c13bc3a2654b5bd61833029abece3d37f44d38bb78cb88",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.json",
+      "native_sha256": "38f8e3958e971cf0bd1f23b9bd582331bd4a0f8d8cabbff45c55af6a80105253",
+      "r6_sha256": "38f8e3958e971cf0bd1f23b9bd582331bd4a0f8d8cabbff45c55af6a80105253",
+      "identical_sdks": true
+    },
+    {
+      "name": "memory-division-llvm.source.c",
+      "native_sha256": "72853d7c9b47224dd1eb8baa980d54785ad229129f367694f8dffb9d6f760348",
+      "r6_sha256": "72853d7c9b47224dd1eb8baa980d54785ad229129f367694f8dffb9d6f760348",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-high-direct.c",
+      "native_sha256": "f2a58d3b57d40111cbd78b592c772d22be21c4f9d04d5ef6bd286ad623707b34",
+      "r6_sha256": "f2a58d3b57d40111cbd78b592c772d22be21c4f9d04d5ef6bd286ad623707b34",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-high-direct.json",
+      "native_sha256": "9c4c74d608043d5acd838c25bd6178ffa0e300c42539e8f282f37dff83fd6d39",
+      "r6_sha256": "9c4c74d608043d5acd838c25bd6178ffa0e300c42539e8f282f37dff83fd6d39",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-high-switch.c",
+      "native_sha256": "cb2acc6577daba7ea07773be0329ea906831a615c00d5a7277c3fac5b4974e85",
+      "r6_sha256": "cb2acc6577daba7ea07773be0329ea906831a615c00d5a7277c3fac5b4974e85",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-high-switch.json",
+      "native_sha256": "4091ffdc1bd2a4ff40ddd01f06bc766e5f46a4774e5e684652223eefac0ce262",
+      "r6_sha256": "4091ffdc1bd2a4ff40ddd01f06bc766e5f46a4774e5e684652223eefac0ce262",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-llvm-direct.c",
+      "native_sha256": "77077e1c83372e0bb31e267e52bdd945e7fd7f752f31b6c0c0556f9457f8955f",
+      "r6_sha256": "77077e1c83372e0bb31e267e52bdd945e7fd7f752f31b6c0c0556f9457f8955f",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-llvm-direct.json",
+      "native_sha256": "5792e0412642a276def4f59116a945b5cdfe6510045a73945ac9948ff7b00879",
+      "r6_sha256": "5792e0412642a276def4f59116a945b5cdfe6510045a73945ac9948ff7b00879",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-llvm-switch.c",
+      "native_sha256": "1ede36ef9382a32368adcc8f6241a726d9e153282994db529c134b2747c5b7e4",
+      "r6_sha256": "1ede36ef9382a32368adcc8f6241a726d9e153282994db529c134b2747c5b7e4",
+      "identical_sdks": true
+    },
+    {
+      "name": "scheduled-events-llvm-switch.json",
+      "native_sha256": "5932813c61c2e4b6a1752228b4b97e77e8569d947321e4c2f00f3a2c50b69130",
+      "r6_sha256": "5932813c61c2e4b6a1752228b4b97e77e8569d947321e4c2f00f3a2c50b69130",
+      "identical_sdks": true
+    }
+  ],
+  "boundaries": [
+    "Memory operands must successfully read original RAM; no generic #PF/#SS/#AC or restartable memory executor",
+    "The scheduler polls before selected original instructions, never inside REP/native services/HLE",
+    "The producer owns APIC/PIC/CR8 priority, coalescing and arrival; no device/controller model",
+    "STI inhibition and supplied MOV-SS inhibition persist across resumptions; MOV/POP SS execution remains native",
+    "Native RTM region bindings and scheduled events cannot be combined",
+    "No complete legacy i386 dispatcher, nested delivery faults/#DF, SMI entry, SGX enclave/AEX, CET/FRED",
+    "No LLVM release, production SDK pin or LLVM submodule revision change"
+  ]
+}
