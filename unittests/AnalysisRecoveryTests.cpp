@@ -211,6 +211,39 @@ TEST(AnalysisRecovery, DisplayKeepsAnUnprovedCallReturnSlotBody) {
                std::runtime_error);
 }
 
+TEST(AnalysisRecovery, OrdinaryStackLeaKeepsTheProvenFrame) {
+  auto Image = analysisImage();
+  auto &Code = Image.Segments[0].Data;
+  const std::vector<uint8_t> Entry{
+      0x55,                            // push ebp
+      0x8b, 0xec,                      // mov ebp,esp
+      0x83, 0xec, 0x20,                // sub esp,0x20
+      0xc7, 0x45, 0xfc, 0x2a, 0, 0, 0, // mov [ebp-4],42
+      0x8d, 0xa4, 0x24, 0,    0, 0, 0, // lea esp,[esp+0]
+      0xe8, 0x67, 0,    0,    0,       // call 0x401080
+      0x8b, 0x45, 0xfc,                // mov eax,[ebp-4]
+      0xc9, 0xc3};                     // leave; ret
+  std::copy(Entry.begin(), Entry.end(), Code.begin());
+  Code[0x80] = 0xc3;
+  Image.Sections[0].Data = Code;
+  Image.Symbols.push_back(Symbol::makeFunc(0x401080, 1));
+  for (bool High : {false, true}) {
+    PipelineOptions Options;
+    Options.DumpLow = !High;
+    Options.DumpHigh = High;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Image.Entry};
+    llvm::LLVMContext Context;
+    const auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedFuncs.size(), 1u);
+    EXPECT_FALSE(Result.MedFuncs.front().AnalysisOnly);
+    EXPECT_TRUE(Result.MedFuncs.front().CallReturnReads.empty());
+    if (High)
+      ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  }
+}
+
 TEST(AnalysisRecovery, FloatingNoReturnProofDoesNotEnableDisplayTables) {
   auto Image = analysisImage();
   // FLDZ forces the no-return checker through its floating-stack rebuild.

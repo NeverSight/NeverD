@@ -1184,6 +1184,17 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
+          } else if (FollowJoins && TRI.PointerSize == 4 &&
+                     Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                     Op.Inputs[0].Size == sizeof(uint64_t) &&
+                     stableScalarConstant(Op.Inputs[1]) &&
+                     Op.Inputs[1].ConstVal == 0) {
+            // LEA can return a native pointer through the memory-address
+            // container. The wide query admits only an exact zero extension
+            // of that pointer; arbitrary truncations still have no offset.
+            const auto Carrier = scalarDefinition(Op.Inputs[0]);
+            if (Carrier && *Carrier)
+              Result = resolve(Op.Inputs[0], Depth + 1);
           } else if ((Op.Opcode == NdOp::INT_ADD ||
                       Op.Opcode == NdOp::INT_SUB) &&
                      Op.NumInputs == 2) {

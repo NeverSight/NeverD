@@ -1002,6 +1002,41 @@ TEST(MedStackAlignment, WiderSeedsAndTruncatedPointersAreNotNativeAddresses) {
   EXPECT_FALSE(entryStackOffset(Func, Wide, Arch::X64, BinaryFormat::ELF));
 }
 
+TEST(MedStackAlignment, NativeAddressRoundTripsRetainExactStackCoordinates) {
+  for (Arch Architecture : {Arch::X86, Arch::ARM})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        auto Func = frameWithEntrySP(Architecture);
+        auto &Ops = Func.Blocks[0].Ops;
+        auto Wide = temp(3, Architecture);
+        Wide.Size = 8;
+        const auto Result = temp(4, Architecture);
+        Ops.push_back(op(NdOp::INT_SUB, temp(2, Architecture),
+                         reg(0, Architecture), MedVar::makeConst(32, 4)));
+        Ops.push_back(op(NdOp::INT_ZEXT, Wide, temp(2, Architecture)));
+        Ops.push_back(
+            op(NdOp::SUBBYTES, Result, Wide, MedVar::makeConst(0, 4)));
+        if (Mutation == 1)
+          Ops.back().Inputs[1].ConstVal = 1;
+        else if (Mutation == 2)
+          Ops[2].Opcode = NdOp::INT_SEXT;
+        else if (Mutation == 3)
+          Ops[2].Inputs[0].Size = 8;
+        else if (Mutation == 4)
+          Ops[2].Dead = true;
+        else if (Mutation == 5)
+          Ops[2].Output.RenameTag++;
+        else if (Mutation == 6)
+          Ops.push_back(Ops[2]);
+        const auto Expected =
+            Mutation ? std::optional<int64_t>() : std::optional<int64_t>(-32);
+        EXPECT_EQ(entryStackOffset(Func, Result, Architecture, Format),
+                  Expected);
+      }
+}
+
 TEST(MedStackAlignment, PreservesExactAndRoundedARMFrameOffsets) {
   MedFunc Func = frameWithEntrySP();
   auto &Ops = Func.Blocks[0].Ops;

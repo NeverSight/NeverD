@@ -18732,6 +18732,11 @@ checks exact zero-extended x86/ARM32 frame addresses across all three formats.
 Signed extensions, mixed-width copies and duplicate definitions are rejected;
 `WiderSeedsAndTruncatedPointersAreNotNativeAddresses` protects the entry-SP
 and native pointer-width boundaries.
+`NativeAddressRoundTripsRetainExactStackCoordinates` checks the inverse
+low-word extraction with signed, shifted, dead, ambiguous and changed-occurrence
+negative controls. `AnalysisRecovery.OrdinaryStackLeaKeepsTheProvenFrame`
+decodes an independent PE32 byte fixture containing `lea esp,[esp+0]` and a
+local read after CALL; LowIR and HighIR retain the ordinary proved frame.
 
 `AndroidErrors.*` checks signed argument narrowing, catalog holes, complete
 text and guarded bytes, process/thread borrow lifetimes, errno and `dlerror`
