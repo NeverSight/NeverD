@@ -18442,13 +18442,15 @@ relocatable targets, unknown input slots, dead versus observed PHI cycles, and
 rejected ABI/profile changes. Both source writers retain the single call's
 memory and unwind effects, including in analysis-only HighC. Set
 `NEVERD_TEST_X64_CALL_RCX_EXPORT` to an existing directory to export the synthetic
-LLVM module, C, and `probe.c` for Windows object compilation; these tests execute
-no target code. `scripts/isa/x86/verify_call_rcx.py probe.c --output CHECK_DIR`
-compiles that synthetic probe at O0/O1/O2/O3/Os and checks 640 Unicorn cases,
+LLVM module, C, and the two renderer probes `probe.c` and `probe-llvm.c` for
+Windows object compilation; these tests execute no target code.
+`scripts/isa/x86/verify_call_rcx.py probe.c --output CHECK_DIR` compiles a
+synthetic probe at O0/O1/O2/O3/Os and checks 640 Unicorn cases per probe,
 always stepping one instruction. It overwrites the volatile registers and home
 area, checks both results and nonvolatile GPR/XMM preservation, and interprets
 the compiler's COFF unwind records at the suspended call. No specimen or VM is
-started. Use `--clang`, `--objcopy`, and `--readobj` to select the tools.
+started. Run it for both probes in separate output directories. Use `--clang`,
+`--objcopy`, and `--readobj` to select the tools.
 `NeverDCallRegisterUnreadTests` distinguishes unconditional entry writes
 from partial, conditional, opaque and may-write summaries, including implicit
 return families and nested calls.

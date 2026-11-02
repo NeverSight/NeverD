@@ -311,12 +311,14 @@ TEST(X64CallRCX, LLVMAndCRetainTheCallItsMemoryAndUnwindEffects) {
   ASSERT_TRUE(M);
   EXPECT_FALSE(llvm::verifyModule(*M, &llvm::errs()));
   unsigned Calls = 0;
+  const llvm::CallInst *NativeCall = nullptr;
   for (auto &Fn : *M)
     for (auto &B : Fn)
       for (auto &Inst : B)
         if (auto *C = llvm::dyn_cast<llvm::CallInst>(&Inst))
           if (isX64CallRCX(Arch::X64, *C)) {
             ++Calls;
+            NativeCall = C;
             EXPECT_FALSE(Fn.hasFnAttribute(llvm::Attribute::NoUnwind));
             C->addFnAttr(llvm::Attribute::NoUnwind);
             EXPECT_THROW(isX64CallRCX(Arch::X64, *C), std::invalid_argument);
@@ -339,6 +341,20 @@ TEST(X64CallRCX, LLVMAndCRetainTheCallItsMemoryAndUnwindEffects) {
     llvm::raw_fd_ostream Source(std::string(Directory) + "/native.c", Error);
     ASSERT_FALSE(Error);
     Source << C;
+    ASSERT_NE(NativeCall, nullptr);
+    llvm::raw_fd_ostream Probe(std::string(Directory) + "/probe-llvm.c", Error);
+    ASSERT_FALSE(Error);
+    Probe << "#include <stdint.h>\n"
+          << X64CallRCXCompilerContract
+          << "__attribute__((noinline,target(\"arch=x86-64,no-avx,no-avx2,no-"
+             "avx512f\")))\n"
+             "uint64_t capture(uint64_t target, uint64_t a0, uint64_t a1, "
+             "uint64_t a2, uint64_t a3, uint64_t *out) {\n"
+             "struct { uint64_t field_0, field_1, field_2, field_3, field_4; } "
+             "results;\n"
+          << renderX64CallRCX(Arch::X64, *NativeCall, "results", true,
+                              {"target", "a0", "a1", "a2", "a3"})
+          << "\n*out = results.field_1; return results.field_0; }\n";
   }
 }
 

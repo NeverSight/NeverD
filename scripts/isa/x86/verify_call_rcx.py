@@ -38,8 +38,9 @@ def check_unwind(machine, text, saved, initial_sp, stop):
     for operation in operations:
         if operation.startswith("SET_FPREG reg=RBP, offset="):
             sp = machine.reg_read(reg("RBP")) - int(operation.split("=")[-1], 16)
-        elif operation.startswith("ALLOC_SMALL size="):
-            sp += int(operation.split("=")[-1])
+        elif operation.startswith(("ALLOC_SMALL size=", "ALLOC_LARGE size=")):
+            # llvm-readobj has decoded the scaled/unscaled UWOP allocation.
+            sp += int(operation.split("=")[-1], 0)
         elif operation.startswith("PUSH_NONVOL reg="):
             name = operation.split("=")[-1]
             restored[name] = read_word(machine, sp)
