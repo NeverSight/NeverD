@@ -2885,6 +2885,9 @@ void recoverCallAbi(
       // the real variadic arguments so the callee reads the wrong slots
       // (printf("p[%d]=%.3f", i, v) then prints "p[0]=0.000").
       std::vector<MedVar> FoundFP;
+      // Win64's integer and floating registers share argument positions.
+      const bool PositionalFP =
+          PositionalSlots && !CI.ArgumentsInCalleeRegisterOrder;
       // The pre-SSA read summary already proves a complete scalar register
       // prefix with no vector inputs. Missing omitted-callee FP metadata
       // cannot turn residual vector state into another argument. A count-only
@@ -2938,6 +2941,20 @@ void recoverCallAbi(
             KnownFPCallee = true;
           }
         }
+        auto fpValueLeftByCall = [&](const MedOp &Previous, uint64_t Reg) {
+          uint16_t Bytes = 0;
+          for (const auto &Clobber : Func.CallClobbers)
+            if (Previous.CallSiteId &&
+                Clobber.CallSiteId == Previous.CallSiteId &&
+                Clobber.Value.Kind == MedVar::Reg &&
+                Clobber.Value.RegOff == Reg)
+              Bytes = std::max(Bytes, Clobber.Value.Size);
+          if (!Bytes)
+            Bytes = TRI.FPABIRegWidth ? TRI.FPABIRegWidth : FwdFPArgSize;
+          return valueLeftByCall(Func, Previous, Reg, Bytes, TRI, Fmt);
+        };
+        const uint16_t FPViewBytes =
+            TRI.FPABIRegWidth ? TRI.FPABIRegWidth : FwdFPArgSize;
         // For a direct call to a known FP callee, clang may hoist an FP
         // argument's setup (e.g. `cvtsi2sd`/`ucvtf` into XMM0) above a branch
         // into the dominating predecessor — `acc += cond ? h(x) : x*0.5` puts
@@ -2964,8 +2981,8 @@ void recoverCallAbi(
               if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
                   Prev.Output.RegOff == Reg)
                 return Prev.Output;
-              if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
-                return std::nullopt; // a call clobbers the caller-saved FP bank
+              if (callClobbersRegister(Prev, Reg, FPViewBytes, TRI, Fmt))
+                return fpValueLeftByCall(Prev, Reg);
             }
             for (const auto &Phi : B->Phis)
               if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg)
@@ -2978,8 +2995,34 @@ void recoverCallAbi(
         };
         for (int K = 0; K < FPLimit; ++K) {
           uint64_t Reg = FPRegs[K];
+          int Position = K;
+          if (PositionalFP) {
+            const auto Slot = llvm::find(FPParamRegs, Reg);
+            if (Slot == FPParamRegs.end())
+              continue;
+            Position = static_cast<int>(Slot - FPParamRegs.begin());
+            if (Position >= static_cast<int>(IntParamRegs.size()) ||
+                Position >= MaxArgs)
+              continue;
+            if (FoundMask[Position]) {
+              const bool SpeculativeIncoming =
+                  Found[Position].Kind == MedVar::Param &&
+                  PromoteParams.count(Found[Position].RegOff) &&
+                  !PromotedBefore.count(Found[Position].RegOff) &&
+                  llvm::none_of(Func.Params, [&](const MedVar &P) {
+                    return P.RegOff == Found[Position].RegOff;
+                  });
+              if ((SummarizedIntegerOperands &&
+                   Position < Op.CalleeRegisterArgs) ||
+                  (!SpeculativeIncoming &&
+                   !callLeftovers().containsForRegister(
+                       Found[Position], IntParamRegs[Position])))
+                continue;
+            }
+          }
           std::optional<MedVar> V;
           va_t ReachingWriteAddr = 0;
+          const MedOp *Clobber = nullptr;
           for (int J = static_cast<int>(OI) - 1; J >= 0; --J) {
             auto &Prev = Blk.Ops[J];
             if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
@@ -3001,10 +3044,18 @@ void recoverCallAbi(
             // that writes a later argument register — do not stop the scan
             // there. Only a real call clobbers the caller-saved XMM bank and
             // bounds it.
-            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
-              break;
+            if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL) {
+              if (V)
+                break;
+              if (callClobbersRegister(Prev, Reg, FPViewBytes, TRI, Fmt)) {
+                Clobber = &Prev;
+                break;
+              }
+            }
           }
-          if (!V)
+          if (!V && Clobber && KnownFPCallee)
+            V = fpValueLeftByCall(*Clobber, Reg);
+          if (!V && !Clobber)
             for (const auto &Phi : Blk.Phis)
               if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg) {
                 // A join of caller-saved clobbers supplies no argument setup.
@@ -3018,9 +3069,10 @@ void recoverCallAbi(
                 V = Phi.Output;
                 break;
               }
-          if (!V)
+          if (!V && !Clobber)
             V = reachingFPArgCrossBlock(Reg);
-          if (!V && KnownFPCallee && incomingFPArgument(Blk, OI, Reg)) {
+          if (!V && !Clobber && KnownFPCallee &&
+              incomingFPArgument(Blk, OI, Reg)) {
             // The callee's scalar lane width is independent of its return
             // width. Keep that evidence when promoting a forwarded input.
             uint16_t ScalarBytes = 0;
@@ -3036,7 +3088,7 @@ void recoverCallAbi(
             LiveIn.Size = ScalarBytes ? ScalarBytes : FwdFPArgSize;
             LiveIn.TheArch = TheArch;
             V = LiveIn;
-            auto &Promoted = PromoteFPParams[K];
+            auto &Promoted = PromoteFPParams[Position];
             if (Promoted.Size < LiveIn.Size)
               Promoted = LiveIn;
             if (ScalarBytes) {
@@ -3047,9 +3099,29 @@ void recoverCallAbi(
               Width = std::max(Width, ScalarBytes);
             }
           }
-          if (!V)
-            break; // FP arguments are consecutive from FP-argument 0
-          FoundFP.push_back(*V);
+          if (!V) {
+            if (PositionalFP)
+              continue;
+            break; // Independent FP banks use a consecutive prefix.
+          }
+          if (!KnownFPCallee && Op.NumInputs == 1 && !Op.SourceCallHint &&
+              !(VectorArgumentCallees &&
+                VectorArgumentCallees->count(CI.TargetAddr)) &&
+              callLeftovers().containsForRegister(*V, Reg)) {
+            if (PositionalFP)
+              continue;
+            break;
+          }
+          if (PositionalFP) {
+            if (FoundMask[Position] && Found[Position].Kind == MedVar::Param &&
+                !PromotedBefore.count(Found[Position].RegOff))
+              PromoteParams.erase(Found[Position].RegOff);
+            Found[Position] = *V;
+            FoundMask[Position] = true;
+            FromStackScan[Position] = false;
+          } else {
+            FoundFP.push_back(*V);
+          }
         }
       }
 
@@ -3065,7 +3137,8 @@ void recoverCallAbi(
       // emit them.
       // The stack offset of each value the overflow run appends to FoundFP.
       std::vector<int64_t> FPOverflowOffsets;
-      if (CI.IsIndirect && !FPStackByOff.empty() && !FPParamRegs.empty() &&
+      if (!PositionalFP && CI.IsIndirect && !FPStackByOff.empty() &&
+          !FPParamRegs.empty() &&
           static_cast<int>(FoundFP.size()) ==
               static_cast<int>(FPParamRegs.size())) {
         const int NumRegArgSlots = static_cast<int>(IntParamRegs.size());
@@ -3167,12 +3240,12 @@ void recoverCallAbi(
       const bool EveryIntegerPosition =
           !CI.IsIndirect && VectorArgumentCallees &&
           VectorArgumentCallees->count(CI.TargetAddr);
-      int IntCap =
-          SummarizedRegisterPadding   ? NumIntRegArgs
-          : SummarizedIntegerOperands ? Op.CalleeRegisterArgs
-          : (CalleeHasFP && CalleeRegArgs >= 0 && !EveryIntegerPosition)
-              ? CalleeRegArgs
-              : NumIntRegArgs;
+      int IntCap = SummarizedRegisterPadding   ? NumIntRegArgs
+                   : SummarizedIntegerOperands ? Op.CalleeRegisterArgs
+                   : (!PositionalFP && CalleeHasFP && CalleeRegArgs >= 0 &&
+                      !EveryIntegerPosition)
+                       ? CalleeRegArgs
+                       : NumIntRegArgs;
 
       // Where 64-bit arguments are pair-aligned (ARM AAPCS: an even-odd
       // register pair, an 8-byte aligned stack slot), argument lanes are not
@@ -3325,7 +3398,8 @@ void recoverCallAbi(
         for (size_t I = 0; I < IntPart.size(); ++I) {
           if (IntPartSlots[I] < Known)
             continue;
-          if (!callLeftovers().contains(IntPart[I]))
+          if (!callLeftovers().containsForRegister(
+                  IntPart[I], IntParamRegs[IntPartSlots[I]]))
             continue;
           // An indirect call has no callee to say its stack slots are
           // arguments, nor has a variadic one for those past its named
@@ -3340,6 +3414,13 @@ void recoverCallAbi(
           const bool NoStackArguments =
               StackPart.empty() || (OpenStackArguments && !PositionalSlots);
           if (NoStackArguments) {
+            // Later real setup still establishes intervening unknown positions.
+            bool LaterSetup = false;
+            for (size_t J = I + 1; J < IntPart.size(); ++J)
+              LaterSetup |= !callLeftovers().containsForRegister(
+                  IntPart[J], IntParamRegs[IntPartSlots[J]]);
+            if (LaterSetup)
+              continue;
             for (size_t J = I; J < IntPart.size(); ++J)
               if (IntPart[J].Kind == MedVar::Param &&
                   !PromotedBefore.count(IntPart[J].RegOff))

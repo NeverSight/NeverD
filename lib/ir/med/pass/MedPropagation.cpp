@@ -16,6 +16,7 @@
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
+#include "neverd/ir/med/MedPhiRecomposition.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -27,6 +28,7 @@ namespace neverd {
 
 void LowToMedConverter::propagate(MedFunc &Func) {
   propagateInvariantConstants(Func);
+  recomposeSplitPhis(Func);
   // Key by (Kind, Id, SSAVer): the MedVar Id space is shared across kinds, and
   // a stack Param's Id (its argument index, e.g. arg6) overlaps with the small
   // allocVarId() ids handed to registers/temps.  Ignoring Kind lets a Param

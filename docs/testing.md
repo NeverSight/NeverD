@@ -1988,6 +1988,14 @@ Known FP consumers retain unavailable operands. Floating result producers
 remain inputs even when their blocks follow the consumer in storage order.
 Independent providers execute both C routes on both branch paths at O0/O2
 with UBSan; native Windows and Apple ARM64 execution are separate coverage.
+
+`NeverDMedCallResultControlTests` checks that an exact Win64 integer CALL
+result feeding a branch retains its primary source projection while the
+vector observation stays available as its post-call clobber. Direct and
+indirect calls, local/cross-block flows, declared FP outputs and unrelated
+or later integer values have separate controls. These are verified MedIR
+projection tests, not proof of an unknown callee's declaration. Run the
+FP-parameter and floating-call-leftover owners alongside this target.
 `Win64CallContract.LocalPointerQualifiersAgreeWithIndependentDefinitions`
 checks the same contract for explicit local declarations.
 `LLVMCValues.AtomicStoresKeepTheirOrder` writes release, sequentially
@@ -6850,6 +6858,13 @@ incoming stack read through thirty SP diamonds. SEH handler roots joining the
 protected range with the normal path build such webs. Each value's entry-SP
 offset is computed once.
 
+`NeverDMedPositionalCallArgumentsTests` checks Win64 shared integer/FP
+positions across direct/indirect calls, all mixed four-slot masks, stack
+arguments and absolute XMM positions. It retains explicit source operands,
+nonstandard callee register order and SysV's independent register banks.
+Run this focused owner and the shared ABI/call-contract suites after
+changing positional recovery.
+
 `NeverDFPParameterMaskTests` runs the shared ABI suite and `FPParameterMask.*`.
 The mask controls retain live bytes, earlier stores, ambiguous definitions and
 unmasked return paths while discarding only fully cleared or replaced bytes.
@@ -8666,6 +8681,19 @@ formula at `-O0` and `-O2`, preserving the high-bit remainder and toggle/cache
 isolation.
 
 ## Modular MBA simplification
+
+`SymMBAObservedWindow.Reciprocal*` and
+`QuotientProductsRecoverOnlyTheirOwnRemainder` (in
+`NeverDSymMBAObservedWindowTests`) check exact reciprocal division, its
+rounding/overflow/sign boundaries, matching dividend identities and shared
+work budgets. Exhaustive byte inputs and independent APInt oracles cover
+accepted and refused forms. The rewrite proves the complete unsigned input
+domain before publishing a quotient.
+`HighSymSimplify.ReciprocalArithmeticKeepsItsUnprototypedCall` compiles and
+executes retained calls and recovered division/remainder at O0/O2 over 100,000
+inputs each. `ConstantDivisorProofKeepsTrapsAndOperandEffects` retains dynamic,
+zero, truncated-zero and signed divisors, as well as nested call effects.
+Run both focused owners after changing this proof or its HighIR publication.
 
 `SymExpr.ScaledUnsignedProductSlicesUseOnlyTheirRequiredWidth` and
 `ScaledProductWindowsCoverEveryBytePairAndWideCarriers` check non-low windows
@@ -12178,6 +12206,15 @@ mutable/truncated storage, independent roots and budget refusal. Pointer tests
 cover nested recurrences, shared expression DAGs, role-neutral address leaves
 and independently materialized SELECT arms. Both suites retain ambiguous
 relocatable comparisons and distinguish adjacent objects' one-past addresses.
+`NeverDMedPhiRecompositionTests` owns correlated word-PHI regressions
+alongside the existing constant-propagation cases. Reordered edges,
+loop carries, complete complementary slices, retained partial reads,
+exceptional/incomplete inputs, fresh IDs including intrinsic outputs,
+and unchanged call/memory effects have independent controls. The default
+LowIR conversion case verifies pipeline integration. Run this target,
+the shared ABI suite and HighIR/control-flow regressions after changing
+the recomposition owner.
+
 `MedConstantPropagation` also checks full SSA identities at maximum integer
 IDs/versions, linear-budget propagation along reverse-ordered width chains,
 and width origins through seeded cycles and independent values. A complete

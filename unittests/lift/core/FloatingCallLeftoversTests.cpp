@@ -148,7 +148,11 @@ TEST(FloatingCallLeftovers, OnlyEntirelyClobberedJoinsEndSpeculativeArguments) {
             recoverCallAbi(F, Architecture, Names, &Image);
             ASSERT_EQ(F.CallInfos.size(), 3u);
             const auto &Arguments = F.CallInfos.back().Args;
-            ASSERT_EQ(Arguments.size(), Variant ? 3u : 2u);
+            // The explicit integer prefix occupies slots 0 and 1 on Win64;
+            // XMM0 cannot introduce a third argument in that convention.
+            const bool SharedSlots =
+                Architecture == Arch::X64 && Format == BinaryFormat::COFF;
+            ASSERT_EQ(Arguments.size(), Variant && !SharedSlots ? 3u : 2u);
             EXPECT_EQ(Arguments[0], MedVar::makeConst(19, 8));
             EXPECT_EQ(Arguments[1], MedVar::makeConst(29, 8));
           }

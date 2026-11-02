@@ -275,10 +275,12 @@ TEST(SummarizedCallArguments, ScalarCallsDoNotAcquireIncidentalVectorState) {
             recoverCallAbi(Function, Arch::X64, {{0x2000, "consumer"}}, &Image);
             ASSERT_EQ(Function.CallInfos.size(), 1u);
             const auto &Recovered = Function.CallInfos.front().Args;
-            ASSERT_EQ(Recovered.size(), HasVectorSummary ? 2u : 3u);
+            const bool IndependentVector =
+                !HasVectorSummary && Format != BinaryFormat::COFF;
+            ASSERT_EQ(Recovered.size(), IndependentVector ? 3u : 2u);
             EXPECT_EQ(Recovered[0], Arguments[0]);
             EXPECT_EQ(Recovered[1], Arguments[1]);
-            if (!HasVectorSummary)
+            if (IndependentVector)
               EXPECT_EQ(Recovered[2], Scratch);
           }
         }
@@ -6743,3 +6745,421 @@ TEST(Win64CallContract, RegisterQueryWindowsSourceCompilesWithItsHeaders) {
   }
 }
 } // namespace
+
+TEST(SummarizedCallArguments,
+     CopiedCallClobbersNeedActualSetupOrARequiredSlot) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  const std::array<unsigned, 7> ExpectedArgs{1, 2, 1, 2, 2, 3, 1};
+  for (unsigned Variant = 0; Variant < ExpectedArgs.size(); ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "transport_wrap";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Temp = [&](int Id) {
+      auto V = Register(Id, 1, 0);
+      V.Kind = MedVar::Temp;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    auto &First = Add(NdOp::CALL, Register(10, 1, x86reg::RAX),
+                      {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RDX);
+    Function.CallClobbers.push_back({Clobber, 1});
+    Add(NdOp::COPY, Temp(100), {Clobber});
+    auto Transport = Temp(100);
+    if (Variant == 3) {
+      Transport = Temp(101);
+      Add(NdOp::INT_ADD, Transport, {Temp(100), MedVar::makeConst(1, 8)});
+    }
+    const auto RCX = Register(30, 1, x86reg::RCX),
+               RDX = Register(20, 2, x86reg::RDX),
+               Result = Register(10, 2, x86reg::RAX);
+    Add(NdOp::COPY, RCX, {Variant == 2 ? Transport : MedVar::makeConst(17, 8)});
+    if (Variant != 2)
+      Add(NdOp::COPY, RDX, {Transport});
+    if (Variant == 5)
+      Add(NdOp::COPY, Register(40, 1, x86reg::R8), {MedVar::makeConst(29, 8)});
+    auto &Call = Add(Variant == 6 ? NdOp::INDIR_CALL : NdOp::CALL, Result,
+                     {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    std::map<va_t, int> Arity;
+    if (Variant == 1) {
+      Arity.emplace(0x3000, 2);
+      Call.CalleeRegisterArgs = 2;
+    }
+    if (Variant == 4) {
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->TargetAddress = 0x3000;
+      auto &Signature = Hint->Signature;
+      Signature.Architecture = Arch::X64;
+      Signature.HasExplicitABI = true;
+      Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Signature.ReturnType = Function.ReturnType;
+      Signature.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
+                                  x86reg::RAX, 0, 8};
+      for (auto Reg : {x86reg::RCX, x86reg::RDX}) {
+        SourceParameterTypeHint Parameter;
+        Parameter.Type = NdType::makeInt(8, false);
+        Parameter.Location = {SourceABICarrierKind::IntegerRegister, Reg, 0, 8};
+        Signature.Parameters.push_back(Parameter);
+      }
+      Call.SourceCallHint = std::move(Hint);
+      Call.addInput(RCX);
+      Call.addInput(RDX);
+    }
+    Add(NdOp::RETURN, {}, {Result});
+    // Repeating recovery cannot grow the discarded register tail back.
+    for (unsigned Repeat = 0; Repeat < 2; ++Repeat) {
+      recoverCallAbi(Function, Arch::X64, {}, &Image, &Arity, &Arity);
+      ASSERT_EQ(Function.CallInfos.size(), 2u);
+      ASSERT_EQ(Function.CallInfos.back().Args.size(), ExpectedArgs[Variant]);
+    }
+    auto SourceFunction = Function;
+    if (Variant == 0 || Variant == 6) {
+      // A saved heuristic list can predate the SSA transport analysis. HighIR
+      // reuses the same origin proof instead of reviving that trailing value.
+      SourceFunction.CallInfos.back().Args.push_back(Temp(100));
+    }
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(SourceFunction, Arch::X64);
+    unsigned ConsumerCalls = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        if (Expression && Expression->Kind == ExprKind::Call &&
+            (Expression->CallTarget == "sub_3000" ||
+             Expression->IsIndirectCall)) {
+          ++ConsumerCalls;
+          EXPECT_EQ(Expression->Operands.size(), ExpectedArgs[Variant]);
+        }
+      });
+    });
+    EXPECT_EQ(ConsumerCalls, 1u);
+    if (Variant != 0)
+      continue;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+    OS.flush();
+    EXPECT_EQ(Source.find("unknown value"), std::string::npos);
+    EXPECT_EQ(Source.find("__neverd_call_register"), std::string::npos);
+    Source += R"(
+static unsigned effects;
+int64_t sub_2000(void) {
+  if (effects != 0) __builtin_trap();
+  effects = 1;
+  return 91;
+}
+int64_t sub_3000(int64_t value) {
+  if (effects != 1) __builtin_trap();
+  effects = 2;
+  return value ^ 0x55;
+}
+int main(void) {
+  return transport_wrap() != 0x44 || effects != 2;
+}
+)";
+    for (auto Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Source, {Optimization, "-fsanitize=undefined"});
+  }
+}
+
+TEST(FloatingCallArgumentFlow, CallsDoNotResurrectEntryPhis) {
+  const std::array Targets{std::pair{Arch::X64, BinaryFormat::COFF},
+                           std::pair{Arch::X64, BinaryFormat::ELF},
+                           std::pair{Arch::X64, BinaryFormat::MachO},
+                           std::pair{Arch::AArch64, BinaryFormat::ELF},
+                           std::pair{Arch::AArch64, BinaryFormat::MachO}};
+  for (const auto &[Architecture, Format] : Targets)
+    for (uint16_t Bytes : {4, 8, 16})
+      for (bool Indirect : {false, true})
+        for (unsigned Variant = 0; Variant != 11; ++Variant) {
+          const bool RequiredFP = Variant >= 5 && Variant <= 7;
+          const bool InPredecessor = Variant == 6 || Variant == 7;
+          // Mixed Win64 positions have a separate ABI regression.
+          if (Architecture == Arch::X64 && Format == BinaryFormat::COFF &&
+              !RequiredFP && Variant != 0)
+            continue;
+          if ((Indirect && RequiredFP) ||
+              (Architecture != Arch::X64 && Variant == 2) ||
+              (Variant == 10 && Bytes == 16))
+            continue;
+          SCOPED_TRACE(testing::Message()
+                       << unsigned(Architecture) << ':' << unsigned(Format)
+                       << ':' << Bytes << ':' << Indirect << ':' << Variant);
+          BinaryImage Image;
+          Image.Arch = Architecture;
+          Image.Format = Format;
+          Image.Bits = Bitness::Bits64;
+          const auto &TRI = getTargetRegInfo(Image.Arch);
+          const auto Integers = TRI.integerParamRegs(Format);
+          const uint64_t FP = TRI.floatingParamRegs(Format).front();
+          auto Register = [&](uint64_t Offset, uint16_t Size, int Id,
+                              int Version) {
+            MedVar V;
+            V.Kind = MedVar::Reg;
+            V.TheArch = Image.Arch;
+            V.RegOff = Offset;
+            V.Size = Size;
+            V.Id = Id;
+            V.SSAVer = Version;
+            return V;
+          };
+          MedFunc Function;
+          Function.Entry = 0x1000;
+          Function.Name = "fp_call_flow";
+          Function.ReturnType = NdType::makeVoid();
+          Function.ReturnsNoValue = true;
+          Function.Blocks.resize(InPredecessor ? 3 : 2);
+          auto &Entry = Function.Blocks.front();
+          auto &Block = Function.Blocks[1];
+          Entry.Id = 0;
+          Entry.StartAddr = Function.Entry;
+          Entry.Succs = {1};
+          Block.Id = 1;
+          Block.StartAddr = Function.Entry + 0x10;
+          Block.Preds = {0};
+          auto &CallBlock = Function.Blocks.back();
+          if (InPredecessor) {
+            Block.Succs = {2};
+            CallBlock.Id = 2;
+            CallBlock.StartAddr = Function.Entry + 0x20;
+            CallBlock.Preds = {1};
+          }
+          const auto Old = Register(FP, Bytes, 20, 1);
+          MedVar Incoming;
+          Incoming.Kind = MedVar::Param;
+          Incoming.TheArch = Image.Arch;
+          Incoming.Id = 60;
+          Incoming.RegOff = FP;
+          Incoming.Size = Bytes;
+          if (Variant == 8 || Variant == 9) {
+            MedOp Seed;
+            Seed.Opcode = NdOp::CALL;
+            Seed.Addr = Entry.StartAddr;
+            Seed.CallSiteId = 42;
+            Seed.CalleeRegisterArgs = Seed.CalleeVectorArgs =
+                Seed.CalleeStackArgs = 0;
+            Seed.Output = Register(TRI.IntReturnReg, 8, 10, 0);
+            Seed.addInput(MedVar::makeConst(0x4000, 8));
+            Entry.Ops.push_back(Seed);
+            Incoming = Register(FP, Bytes, 20, 9);
+            Function.CallClobbers.push_back({Incoming, Seed.CallSiteId});
+          } else {
+            Function.Params.push_back(Incoming);
+          }
+          PhiNode Phi;
+          Phi.Output = Old;
+          Phi.Args = {{0, Incoming}};
+          Block.Phis.push_back(Phi);
+          if (Variant == 10) {
+            // This unprototyped consumer builds the origin cache before the
+            // next call's implicit FP clobber becomes its proven result.
+            MedOp Earlier;
+            Earlier.Opcode = NdOp::CALL;
+            Earlier.Addr = Block.StartAddr;
+            Earlier.CallSiteId = 50;
+            Earlier.Output = Register(TRI.IntReturnReg, 8, 10, 0);
+            Earlier.addInput(MedVar::makeConst(0x5000, 8));
+            Block.Ops.push_back(Earlier);
+          }
+          MedOp Before;
+          Before.Opcode = NdOp::CALL;
+          Before.Addr = Block.StartAddr + 4;
+          Before.CallSiteId = 1;
+          Before.addInput(MedVar::makeConst(0x2000, 8));
+          Before.CalleeRegisterArgs = Before.CalleeVectorArgs =
+              Before.CalleeStackArgs = 0;
+          Before.Output = Register(TRI.IntReturnReg, 8, 10, 1);
+          if (Variant == 1 || (Variant >= 7 && Variant <= 9))
+            Before.PreservesCallerSaved = true;
+          if (Variant == 2)
+            Before.CallPreservedGPRs = kFPReturnWriteBit;
+          const auto PostCall = Register(FP, Bytes, 20, 2);
+          if (Variant == 4)
+            Before.Output = PostCall;
+          else if (!Before.PreservesCallerSaved && !Before.CallPreservedGPRs)
+            Function.CallClobbers.push_back({PostCall, Before.CallSiteId});
+          Block.Ops.push_back(Before);
+          const auto Prepared = Register(FP, Bytes, 20, 3);
+          if (Variant == 3) {
+            MedOp Copy;
+            Copy.Opcode = NdOp::COPY;
+            Copy.Addr = Block.StartAddr + 5;
+            Copy.Output = Prepared;
+            Copy.addInput(MedVar::makeConst(17, Bytes));
+            Block.Ops.push_back(Copy);
+          }
+          if (!RequiredFP)
+            for (unsigned K = 0; K != 2; ++K) {
+              MedOp Copy;
+              Copy.Opcode = NdOp::COPY;
+              Copy.Addr = Block.StartAddr + 6 + K;
+              Copy.Output = Register(Integers[K], 8, 30 + K, 1);
+              Copy.addInput(MedVar::makeConst(19 + K, 8));
+              Block.Ops.push_back(Copy);
+            }
+          MedOp Call;
+          Call.Opcode = Indirect ? NdOp::INDIR_CALL : NdOp::CALL;
+          Call.Addr = CallBlock.StartAddr + 0x10;
+          Call.CallSiteId = 2;
+          Call.addInput(MedVar::makeConst(0x3000, 8));
+          if (Variant == 9) {
+            Call.CalleeRegisterArgs = 2;
+            Call.CalleeStackArgs = 0;
+            Call.addInput(MedVar::makeConst(19, 8));
+            Call.addInput(MedVar::makeConst(20, 8));
+          }
+          CallBlock.Ops.push_back(Call);
+          MedOp Return;
+          Return.Opcode = NdOp::RETURN;
+          Return.Addr = Call.Addr + 5;
+          CallBlock.Ops.push_back(Return);
+          std::map<va_t, int> IntegerArity{{0x3000, 0}};
+          std::map<va_t, int> FloatingArity{{0x3000, 1}};
+          const std::map<va_t, uint16_t> FloatReturns{{0x2000, Bytes}};
+          recoverCallAbi(Function, Image.Arch, {}, &Image,
+                         RequiredFP ? &IntegerArity : nullptr, nullptr,
+                         RequiredFP ? &FloatingArity : nullptr,
+                         Variant == 10 ? &FloatReturns : nullptr);
+          ASSERT_EQ(Function.CallInfos.size(), Variant >= 8 ? 3u : 2u);
+          const auto &Args = Function.CallInfos.back().Args;
+          const size_t Expected = Variant == 0 || Variant == 8 || Variant == 9
+                                      ? 2u
+                                  : RequiredFP ? 1u
+                                               : 3u;
+          ASSERT_EQ(Args.size(), Expected);
+          if (Variant && Variant != 8 && Variant != 9) {
+            const auto &Wanted = Variant == 1 || Variant == 2 || Variant == 7
+                                     ? Old
+                                 : Variant == 3 ? Prepared
+                                                : PostCall;
+            EXPECT_EQ(Args.back(), Wanted);
+          }
+        }
+}
+
+TEST(SummarizedCallArguments, IndirectSetupCannotRegrowAClobberedTail) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  const std::array<unsigned, 5> ExpectedArgs{1, 0, 3, 2, 2};
+  for (unsigned Variant = 0; Variant < ExpectedArgs.size(); ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "trimmed_indirect";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    const auto Result = Register(10, 1, x86reg::RAX);
+    auto &First = Add(NdOp::CALL, Result, {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    First.CalleeVectorArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RDX);
+    Function.CallClobbers.push_back({Clobber, 1});
+    auto Temp = Register(100, 1, 0);
+    Temp.Kind = MedVar::Temp;
+    Add(NdOp::COPY, Temp, {Clobber});
+    // Retain a captured temporary with more than one use. Its source can be
+    // unavailable even when the expression builder keeps the local itself.
+    Add(NdOp::STORE, {}, {MedVar::makeConst(0x5000, 8), Temp});
+    const auto RCXClobber = Register(30, 1, x86reg::RCX);
+    Function.CallClobbers.push_back({RCXClobber, 1});
+    Add(NdOp::COPY, Register(30, 2, x86reg::RCX),
+        {Variant == 1 || Variant == 3 ? RCXClobber : MedVar::makeConst(17, 8)});
+    Add(NdOp::COPY, Register(20, 2, x86reg::RDX),
+        {Variant == 3 ? MedVar::makeConst(29, 8) : Temp});
+    if (Variant == 2)
+      Add(NdOp::COPY, Register(40, 1, x86reg::R8), {MedVar::makeConst(29, 8)});
+    const auto Returned = Register(10, 2, x86reg::RAX);
+    auto &Call =
+        Add(NdOp::INDIR_CALL, Returned, {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    if (Variant == 4)
+      Call.CalleeRegisterArgs = 2;
+    Add(NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 2u);
+    ASSERT_EQ(Function.CallInfos.back().Args.size(), ExpectedArgs[Variant]);
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(Function, Arch::X64);
+    unsigned ConsumerCalls = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        if (Expression && Expression->Kind == ExprKind::Call &&
+            Expression->IsIndirectCall) {
+          ++ConsumerCalls;
+          EXPECT_EQ(Expression->Operands.size(), ExpectedArgs[Variant]);
+        }
+      });
+    });
+    EXPECT_EQ(ConsumerCalls, 1u);
+  }
+}

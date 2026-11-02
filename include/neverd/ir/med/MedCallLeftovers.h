@@ -20,8 +20,8 @@
 
 #include "llvm/ADT/ArrayRef.h"
 
+#include <map>
 #include <optional>
-#include <set>
 #include <tuple>
 
 namespace neverd {
@@ -48,11 +48,11 @@ std::optional<MedVar> valueLeftByCall(const MedFunc &Func, const MedOp &Call,
                                       BinaryFormat Format);
 
 /// Each call's clobber of a caller-saved register it may change whole
-/// (MedFunc::CallClobbers), and each join of nothing else.  A clobber the
-/// struct-return recovery still holds as a possible result field
-/// (MedFunc::StructReturnCandidates) is none: its call may return part of
-/// its result there.  An Unspecified value, which no variable holds, is one
-/// too (valueLeftByCall).
+/// (MedFunc::CallClobbers), and exact copies/joins of nothing else in the same
+/// carrier.  A clobber the struct-return recovery still holds as a possible
+/// result field (MedFunc::StructReturnCandidates) is none: its call may return
+/// part of its result there.  An Unspecified value, which no variable holds, is
+/// one too (valueLeftByCall).
 class ValuesLeftByCalls {
 public:
   explicit ValuesLeftByCalls(const MedFunc &Func);
@@ -66,8 +66,13 @@ public:
   /// Whether \p V holds only what earlier calls left in its register.
   bool contains(const MedVar &V) const;
 
+  /// Test an unchanged origin against an argument's destination carrier.
+  /// A temporary COPY may transport it, but another register is real setup.
+  bool containsForRegister(const MedVar &V, uint64_t RegOff) const;
+
 private:
-  std::set<std::tuple<int, int, int>> Values;
+  using ValueKey = std::tuple<int, int, int, uint16_t>;
+  std::map<ValueKey, uint64_t> Values;
 };
 
 } // namespace neverd

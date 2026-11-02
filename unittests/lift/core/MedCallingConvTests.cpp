@@ -487,7 +487,8 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
       const auto *Info = F.findCall(Block.Id, Block.Ops.size() - 1);
       ASSERT_NE(Info, nullptr);
       const bool Incoming = P == Path::Entry || P == Path::Linear;
-      EXPECT_EQ(Info->Args.size(), Incoming ? 2u : 0u);
+      const bool AfterCall = P == Path::PriorCall || P == Path::PredecessorCall;
+      EXPECT_EQ(Info->Args.size(), Incoming || AfterCall ? 2u : 0u);
       if (Incoming) {
         ASSERT_EQ(F.Params.size(), 2u);
         EXPECT_EQ(Info->Args[0].Kind, MedVar::Param);
@@ -495,6 +496,9 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[0]), 4u);
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[1]), 8u);
       } else {
+        if (AfterCall)
+          for (const auto &Argument : Info->Args)
+            EXPECT_EQ(Argument.Kind, MedVar::Unspecified);
         EXPECT_TRUE(F.FPParamScalarBytes.empty());
         for (const auto &Parameter : F.Params)
           EXPECT_FALSE(TRI.isVectorReg(Parameter.RegOff));
@@ -9498,4 +9502,109 @@ TEST(CallRegisterEffects, TailCallAtEntryStackPassesTheStackArguments) {
       {{0x1000, Forwarder(true)}, {0x2000, Target}}, Args, Args);
   EXPECT_FALSE(Moved.EntryStackArgs.count(0x1000));
   EXPECT_TRUE(Moved.EntryStackArgs.count(0x2000));
+}
+
+TEST(LowToMedCallReturnFP, PromotedResultRetiresItsImplicitClobber) {
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  for (NdOp Second : {NdOp::CALL, NdOp::INDIR_CALL})
+    for (bool Successor : {false, true})
+      for (bool Preserving : {false, true}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Second) << ':' << Successor
+                                        << ':' << Preserving);
+        const auto Med = convertTwoCallFPFlow(Second, Successor, Preserving);
+        unsigned Promoted = 0;
+        for (const auto *Call : callOps(Med)) {
+          if (Call->Output.Kind != MedVar::Reg ||
+              Call->Output.RegOff != TRI.FPReturnReg)
+            continue;
+          ++Promoted;
+          EXPECT_FALSE(std::any_of(
+              Med.CallClobbers.begin(), Med.CallClobbers.end(),
+              [&](const auto &Clobber) {
+                return Clobber.CallSiteId == Call->CallSiteId &&
+                       Clobber.Value.Kind == MedVar::Reg &&
+                       Clobber.Value.RegOff == Call->Output.RegOff &&
+                       Clobber.Value.Size == Call->Output.Size;
+              }));
+        }
+        EXPECT_GE(Promoted, 1u);
+        EXPECT_TRUE(verifyMedFunc(Med, "single-fp-call-result-identity"));
+      }
+}
+
+TEST(LowToMedCallReturnFP, LocalReadsAndJoinInputsShareTheBoundResult) {
+  for (const auto &[Architecture, Format] :
+       {std::pair{Arch::X64, BinaryFormat::COFF},
+        std::pair{Arch::X64, BinaryFormat::ELF},
+        std::pair{Arch::X64, BinaryFormat::MachO},
+        std::pair{Arch::AArch64, BinaryFormat::ELF},
+        std::pair{Arch::AArch64, BinaryFormat::MachO}})
+    for (bool BoundOutput : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << unsigned(Architecture) << ':' << unsigned(Format) << ':'
+                   << BoundOutput);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto FP = NdVar::reg(TRI.FPReturnReg, 16);
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      Low.Name = "fp_result_join";
+      Low.Blocks.resize(4);
+      for (int I = 0; I < 4; ++I) {
+        Low.Blocks[I].Id = I;
+        Low.Blocks[I].StartAddr = Low.Entry + 0x10 * I;
+        Low.Blocks[I].EndAddr = Low.Entry + 0x10 * I + 0xF;
+      }
+      Low.Blocks[0].Succs = {1, 2};
+      Low.Blocks[1].Preds = Low.Blocks[2].Preds = {0};
+      Low.Blocks[1].Succs = Low.Blocks[2].Succs = {3};
+      Low.Blocks[3].Preds = {1, 2};
+      auto Append = [&](unsigned Block, NdOp Opcode, NdVar Out,
+                        std::initializer_list<NdVar> Inputs) {
+        auto &B = Low.Blocks[Block];
+        LowOp Op;
+        Op.Opcode = Opcode;
+        Op.Addr = B.StartAddr + B.Ops.size();
+        Op.Output = Out;
+        for (const auto &In : Inputs)
+          Op.addInput(In);
+        B.Ops.push_back(Op);
+      };
+      Append(0, NdOp::CALL, BoundOutput ? FP : NdVar::reg(TRI.IntReturnReg, 8),
+             {NdVar::cst(0x2000, 8)});
+      Append(0, NdOp::STORE, {}, {NdVar::cst(0x5000, 8), FP});
+      Append(0, NdOp::COND_BR, {},
+             {NdVar::cst(0x1010, 8),
+              NdVar::reg(TRI.integerParamRegs(Format).front(), 8)});
+      Append(1, NdOp::COPY, FP, {NdVar::cst(0, 16)});
+      Append(1, NdOp::BRANCH, {}, {NdVar::cst(0x1030, 8)});
+      Append(2, NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+             {NdVar::cst(0x3000, 8)});
+      Append(2, NdOp::BRANCH, {}, {NdVar::cst(0x1030, 8)});
+      Append(3, NdOp::STORE, {}, {NdVar::cst(0x5010, 8), FP});
+      Append(3, NdOp::RETURN, {}, {NdVar::cst(0, 8)});
+      const std::set<va_t> Probes{0x3000};
+      LowToMedConverter Converter;
+      Converter.setStackProbeSlots(&Probes);
+      const auto Med = Converter.convert(Low, Architecture, Format);
+      const auto Calls = callOps(Med);
+      ASSERT_EQ(Calls.size(), 2u);
+      ASSERT_EQ(Calls[0]->Output.Kind, MedVar::Reg);
+      ASSERT_EQ(Calls[0]->Output.RegOff, TRI.FPReturnReg);
+      const auto &Result = Calls[0]->Output;
+      EXPECT_FALSE(std::any_of(Med.CallClobbers.begin(), Med.CallClobbers.end(),
+                               [&](const auto &Clobber) {
+                                 return Clobber.CallSiteId ==
+                                            Calls[0]->CallSiteId &&
+                                        Clobber.Value.Kind == MedVar::Reg &&
+                                        Clobber.Value.RegOff == Result.RegOff &&
+                                        Clobber.Value.Size == Result.Size;
+                               }));
+      bool JoinedResult = false;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Phi : Block.Phis)
+          for (const auto &[Pred, Incoming] : Phi.Args)
+            JoinedResult |= Incoming == Result;
+      EXPECT_TRUE(JoinedResult);
+      EXPECT_TRUE(verifyMedFunc(Med, "joined-fp-call-result-identity"));
+    }
 }

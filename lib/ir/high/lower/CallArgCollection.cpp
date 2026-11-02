@@ -778,14 +778,14 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   };
   // Nor does what earlier calls left in the register on every path
   // (ValuesLeftByCalls), though the register carries a parameter on entry.
-  auto LeftByCall = [&](const MedVar &LiveIn) {
+  auto LeftByCall = [&](const MedVar &LiveIn, uint64_t RegOff) {
     if (!CurMed)
       return false;
     if (LeftByCallsFor != CurMed) {
       LeftByCalls.emplace(*CurMed);
       LeftByCallsFor = CurMed;
     }
-    return LeftByCalls->contains(LiveIn);
+    return LeftByCalls->containsForRegister(LiveIn, RegOff);
   };
   auto tryPredSetupArg = [&](int K) -> bool {
     MedVar LiveIn;
@@ -936,7 +936,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       // The arguments end before such a join, and past the fixed ones an
       // import reads, before what earlier calls left.
       if (EntryJoin(LiveIn) ||
-          (K >= static_cast<int>(Fixed) && LeftByCall(LiveIn))) {
+          (K >= static_cast<int>(Fixed) && LeftByCall(LiveIn, ParamRegs[K]))) {
         std::fill(Found.begin() + K, Found.end(), nullptr);
         break;
       }
@@ -1208,7 +1208,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     if (ReachingAtCall(ParamRegs[Index], LiveIn)) {
       const bool Read =
           CallIdx < Ops.size() && Ops[CallIdx].CalleeRegisterArgs > Index;
-      return !Read && LeftByCall(LiveIn) ? nullptr : medvarToExpr(LiveIn);
+      return !Read && LeftByCall(LiveIn, ParamRegs[Index])
+                 ? nullptr
+                 : medvarToExpr(LiveIn);
     }
     // A register this function never writes, at its only call, still holds
     // its incoming value: a recovered parameter is passed straight through.
@@ -1504,6 +1506,23 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           Image && Convention && !Convention->RegparmOnlyForInternalCalls &&
           !importCalleeName(*Image, CI->TargetAddr).empty();
       size_t Recovered = CI->Args.size();
+      size_t SetupLimit = TargetLimit;
+      const auto &Call = Ops[CallIdx];
+      const bool HeuristicRegisterTail =
+          Call.NumInputs == 1 && !CI->ArgumentsInCalleeRegisterOrder &&
+          CI->FloatingRegisterArgCount <= 0 &&
+          (CI->IntegerRegisterArgCount < 0 ||
+           Recovered == static_cast<size_t>(CI->IntegerRegisterArgCount)) &&
+          Recovered <= ParamRegs.size();
+      const auto Required =
+          static_cast<size_t>(std::max<int>(Call.CalleeRegisterArgs, 0));
+      if (HeuristicRegisterTail && !CI->ArgumentsFromPrototype) {
+        while (Recovered > Required &&
+               LeftByCall(CI->Args[Recovered - 1], ParamRegs[Recovered - 1]))
+          --Recovered;
+        if (Recovered < CI->Args.size())
+          SetupLimit = std::min(SetupLimit, Recovered);
+      }
       if (SetupConvention && CI->IsIndirect && !KnownImport && !CompleteSetup) {
         // The scan gives such a call its stack arguments, though not the
         // incoming ones a tail jump passes on untouched, which recovery
@@ -1523,7 +1542,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           }
         }
       }
-      if (CompleteSetup ||
+      // An empty list may have rejected the whole clobbered register run.
+      const bool EmptyClobberPrefix = HeuristicRegisterTail && Recovered == 0 &&
+                                      Required == 0 && !ParamRegs.empty() &&
+                                      FoundSource[0] &&
+                                      LeftByCall(*FoundSource[0], ParamRegs[0]);
+      if (CompleteSetup || EmptyClobberPrefix ||
           (SetupConvention
                ? Recovered || TargetLimit < static_cast<size_t>(MaxArgs)
                : !CI->Args.empty())) {
@@ -1566,10 +1590,16 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                  Source->SSAVer == Target.SSAVer;
         };
         size_t End = FromABI.size();
-        while (!CompleteSetup && !KnownImport && End < TargetLimit &&
+        while (!CompleteSetup && !KnownImport && End < SetupLimit &&
                Found[End] && Found[End]->Kind != ExprKind::Undef &&
                !HoldsTarget(End))
           ++End;
+        // COPY transport found by this scan is no fresh argument setup.
+        if (HeuristicRegisterTail && End <= ParamRegs.size())
+          while (End > std::max(FromABI.size(), Required) &&
+                 FoundSource[End - 1] &&
+                 LeftByCall(*FoundSource[End - 1], ParamRegs[End - 1]))
+            --End;
         for (size_t I = FromABI.size(); I < End; ++I)
           FromABI.push_back(Found[I]);
         // The scan numbers registers in the convention's order, which does
@@ -1664,7 +1694,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     const auto Reaching = [&](size_t K) -> ExprPtr {
       MedVar LiveIn;
       if (!ReachingAtCall(ParamRegs[K], LiveIn, /*ParameterAtEntry=*/true) ||
-          LeftByCall(LiveIn))
+          LeftByCall(LiveIn, ParamRegs[K]))
         return nullptr;
       JoinsSeen.clear();
       return SetInFunction(LiveIn) ? medvarToExpr(LiveIn) : nullptr;

@@ -200,6 +200,11 @@ add_neverd_unittest(NeverDMedDceTests
   core/MedDceImplicitSpTests.cpp
   LINK_COMPONENTS IRMed)
 
+add_neverd_unittest(NeverDMedPhiRecompositionTests
+  core/MedPhiRecompositionTests.cpp
+  core/MedConstantPropagationTests.cpp
+  LINK_COMPONENTS IRMed)
+
 add_neverd_unittest(NeverDFPParameterMaskTests
   core/FPParameterMaskTests.cpp
   core/MedCallingConvTests.cpp
@@ -473,6 +478,7 @@ add_neverd_unittest(NeverDLiftTests
   core/SourceABITests.cpp
   core/AdjacentCallTests.cpp
   core/MedConstantPropagationTests.cpp
+  core/MedPhiRecompositionTests.cpp
   core/MedImmutableTableScanTests.cpp
   core/JumpTableTargetOwnerTests.cpp
   core/SourceAggregateTests.cpp
@@ -578,6 +584,8 @@ add_neverd_unittest(NeverDLiftTests
   core/FPParameterMaskTests.cpp
   core/MedDceImplicitSpTests.cpp
   core/MedCallLeftoversTests.cpp
+  core/MedPositionalCallArgumentsTests.cpp
+  core/MedCallResultControlTests.cpp
   core/MedStackDeltaTests.cpp
   core/MedVariadicTests.cpp
   eh/COFFExceptionTests.cpp
@@ -1764,7 +1772,16 @@ add_neverd_unittest(NeverDAAPCS64CallContractTests
 target_include_directories(NeverDAAPCS64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
+add_neverd_unittest(NeverDMedPositionalCallArgumentsTests
+  core/MedPositionalCallArgumentsTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Pipeline)
+
+add_neverd_unittest(NeverDMedCallResultControlTests
+  core/MedCallResultControlTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Pipeline)
+
 add_neverd_unittest(NeverDWin64CallContractTests
+  core/MedCallLeftoversTests.cpp
   core/FloatingCallLeftoversTests.cpp
   x86_64/Win64CallContractTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline

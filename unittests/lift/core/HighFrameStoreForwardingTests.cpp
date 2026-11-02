@@ -316,6 +316,292 @@ TEST(HighFrameStoreForwarding, RejectsMalformedOpaqueOperatorArities) {
     }
 }
 
+HighFunc frameAliasesAcrossLoop(Arch Architecture) {
+  const auto Type = NdType::makeInt(4, false);
+  auto F = roundTrip(Architecture, Type);
+  const auto PointerType =
+      NdType::makeInt(getTargetRegInfo(Architecture).PointerSize, false);
+  auto First = temporary(20, PointerType, Architecture);
+  auto Second = temporary(21, PointerType, Architecture);
+  HighStmt Anchor;
+  Anchor.Kind = StmtKind::Block;
+  Anchor.Addr = 0x1000;
+  HighStmt Effect;
+  Effect.Kind = StmtKind::While;
+  Effect.Cond = parameter(0, Type, Architecture);
+  HighStmt Call;
+  Call.Kind = StmtKind::Call;
+  Call.CallExpr = HighExpr::makeCall("effect", 0x2000, {});
+  Effect.Body = {Call};
+  HighStmt Consume;
+  Consume.Kind = StmtKind::Call;
+  Consume.CallExpr =
+      HighExpr::makeCall("consume", 0x3000, {HighExpr::makeLoad(Second, Type)});
+  F.Body = {Anchor,
+            assign(First, frameSlot(Architecture)),
+            Anchor,
+            assign(Second, HighExpr::makeBinop(
+                               NdOp::INT_SUB, First,
+                               HighExpr::makeConst(8, PointerType->Size))),
+            Anchor,
+            Effect,
+            store(Second, parameter(0, Type, Architecture)),
+            Consume,
+            returning(HighExpr::makeLoad(Second, Type))};
+  return F;
+}
+
+TEST(HighFrameStoreForwarding, EmptyAnchorsKeepEntryAliasesAcrossLoops) {
+  for (Arch Architecture : Architectures) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    auto F = frameAliasesAcrossLoop(Architecture);
+    const auto OriginalCall = F.Body[7].CallExpr;
+    forwardPrivateFrameLoads(F, Architecture);
+    EXPECT_FALSE(hasLoad(F.Body[7].CallExpr->Operands[0]));
+    // An ordinary call still kills stored bytes; only the immutable frame
+    // address remains known in the next region.
+    EXPECT_TRUE(hasLoad(F.Body.back().RetVal));
+    EXPECT_TRUE(hasLoad(OriginalCall->Operands[0]));
+    EXPECT_EQ(F.Body[5].Body[0].CallExpr->CallTarget, "effect");
+    for (unsigned I : {0u, 2u, 4u}) {
+      EXPECT_EQ(F.Body[I].Kind, StmtKind::Block);
+      EXPECT_EQ(F.Body[I].Addr, 0x1000u);
+    }
+  }
+}
+
+TEST(HighFrameStoreForwarding,
+     EffectfulAnchorsKeepEffectsAndCannotHideSkippedDefinitions) {
+  for (Arch Architecture : Architectures)
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      SCOPED_TRACE(static_cast<int>(Architecture));
+      SCOPED_TRACE(Mutation);
+      auto F = frameAliasesAcrossLoop(Architecture);
+      if (Mutation == 0)
+        F.Body[0].Val = HighExpr::makeCall("observe", 0x4000, {});
+      if (Mutation == 1) {
+        HighStmt Jump;
+        Jump.Kind = StmtKind::Goto;
+        Jump.GotoTarget = F.Body[6].Addr = 0x5000;
+        F.Body[0].Body = {Jump};
+      }
+      if (Mutation == 2)
+        F.Body[0].MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+      if (Mutation == 3)
+        F.Body.push_back(F.Body[1]);
+      if (Mutation == 4) {
+        F.Body[0].Kind = StmtKind::Goto;
+        F.Body[0].GotoTarget = 0x5000;
+        F.Body[6].Addr = 0x5000;
+      }
+      forwardPrivateFrameLoads(F, Architecture);
+      // Later executed assignments can establish local addresses after an
+      // effect. A jump that skips them, or a second write, cannot.
+      EXPECT_EQ(hasLoad(F.Body[7].CallExpr->Operands[0]),
+                Mutation == 1 || Mutation >= 3);
+      if (Mutation == 0)
+        ASSERT_TRUE(F.Body[0].Val);
+      if (Mutation == 1)
+        ASSERT_FALSE(F.Body[0].Body.empty());
+      if (Mutation == 2)
+        EXPECT_EQ(F.Body[0].MemoryOrdering,
+                  NdMemoryOrdering::SequentiallyConsistent);
+    }
+}
+
+HighFunc scopedFrameAlias(Arch A, bool Indirect) {
+  const auto T = NdType::makeInt(4, false);
+  const auto P = NdType::makeInt(getTargetRegInfo(A).PointerSize, false);
+  auto F = roundTrip(A, T);
+  auto Outer = temporary(20, P, A);
+  auto Inner = temporary(21, P, A);
+  HighStmt Barrier, Effect;
+  Effect.Kind = StmtKind::Call;
+  Effect.CallExpr = HighExpr::makeCall("effect", 0x2000, {});
+  if (Indirect) {
+    Barrier = Effect;
+    Barrier.CallExpr->IndirectTarget = HighExpr::makeConst(0x2000, P->Size);
+  } else {
+    Barrier.Kind = StmtKind::If;
+    Barrier.Cond = parameter(0, T, A);
+    Barrier.Body = {Effect};
+  }
+  HighStmt Consume;
+  Consume.Kind = StmtKind::Call;
+  Consume.CallExpr =
+      HighExpr::makeCall("consume", 0x3000, {HighExpr::makeLoad(Inner, T)});
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Cond = parameter(0, T, A);
+  Loop.Body = {
+      assign(Inner, HighExpr::makeBinop(NdOp::INT_SUB, Outer,
+                                        HighExpr::makeConst(8, P->Size))),
+      Barrier, store(Inner, parameter(0, T, A)), Consume,
+      assign(temporary(30, T, A), HighExpr::makeLoad(Inner, T))};
+  F.Body = {assign(Outer, frameSlot(A)), Loop, returning(parameter(0, T, A))};
+  return F;
+}
+
+TEST(HighFrameStoreForwarding, ScopedAddressesSurviveCallsAndInnerBranches) {
+  for (Arch A : Architectures)
+    for (bool Indirect : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(Indirect);
+      auto F = scopedFrameAlias(A, Indirect);
+      forwardPrivateFrameLoads(F, A);
+      const auto &Body = F.Body[1].Body;
+      EXPECT_FALSE(hasLoad(Body[3].CallExpr->Operands[0]));
+      EXPECT_TRUE(hasLoad(Body[4].Val));
+      EXPECT_EQ(Body[1].Kind, Indirect ? StmtKind::Call : StmtKind::If);
+    }
+}
+
+TEST(HighFrameStoreForwarding,
+     ScopedAddressesRequireDominanceAndNoOtherWrites) {
+  for (Arch A : Architectures)
+    for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(Mutation);
+      auto F = scopedFrameAlias(A, true);
+      auto &Body = F.Body[1].Body;
+      if (Mutation == 0)
+        Body.push_back(Body[0]);
+      if (Mutation == 1) {
+        auto Address = std::make_shared<HighExpr>();
+        Address->Kind = ExprKind::Addr;
+        Address->Type = Body[0].Dst->Type;
+        Address->Operands = {Body[0].Dst};
+        Body[1].CallExpr->Operands = {Address};
+      }
+      if (Mutation == 2) {
+        HighStmt Jump;
+        Jump.Kind = StmtKind::Goto;
+        Jump.GotoTarget = Body[2].Addr = 0x5000;
+        F.Body.insert(F.Body.begin(), Jump);
+      }
+      if (Mutation == 3)
+        Body[1].CallExpr->IntrinsicOutputs = {Body[0].Dst->Var};
+      forwardPrivateFrameLoads(F, A);
+      const auto &Result = F.Body[Mutation == 2 ? 2 : 1].Body;
+      EXPECT_TRUE(hasLoad(Result[3].CallExpr->Operands[0]));
+    }
+}
+
+TEST(HighFrameStoreForwarding, ValidSelectsKeepPrecedingFrameFacts) {
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(static_cast<int>(A));
+    auto F = scopedFrameAlias(A, true);
+    auto &Body = F.Body[1].Body;
+    const auto T = F.ReturnType;
+    auto Choice = std::make_shared<HighExpr>();
+    Choice->Kind = ExprKind::BinOp;
+    Choice->Op = NdOp::SELECT;
+    Choice->Type = T;
+    Choice->Operands = {parameter(0, T, A), HighExpr::makeConst(17, 4),
+                        HighExpr::makeConst(31, 4)};
+    Body.insert(Body.begin() + 3, assign(temporary(32, T, A), Choice));
+    forwardPrivateFrameLoads(F, A);
+    EXPECT_FALSE(hasLoad(Body[4].CallExpr->Operands[0]));
+    EXPECT_TRUE(hasLoad(Body[5].Val));
+    EXPECT_EQ(Body[3].Val, Choice);
+  }
+}
+
+TEST(HighFrameStoreForwarding, MalformedOrEffectfulSelectsRemainBoundaries) {
+  for (Arch A : Architectures)
+    for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(Mutation);
+      auto F = scopedFrameAlias(A, true);
+      auto &Body = F.Body[1].Body;
+      const auto T = F.ReturnType;
+      auto Choice = std::make_shared<HighExpr>();
+      Choice->Kind = ExprKind::BinOp;
+      Choice->Op = NdOp::SELECT;
+      Choice->Type = T;
+      Choice->Operands = {parameter(0, T, A), HighExpr::makeConst(17, 4),
+                          HighExpr::makeConst(31, 4)};
+      if (Mutation == 0)
+        Choice->Operands.pop_back();
+      if (Mutation == 1)
+        Choice->Operands.push_back(HighExpr::makeConst(7, 4));
+      if (Mutation == 2)
+        Choice->Operands[1] = HighExpr::makeCall("mutate", 0x4000, {});
+      Body.insert(Body.begin() + 3, assign(temporary(32, T, A), Choice));
+      forwardPrivateFrameLoads(F, A);
+      EXPECT_TRUE(hasLoad(Body[4].CallExpr->Operands[0]));
+      EXPECT_EQ(Body[3].Val, Choice);
+    }
+}
+
+TEST(HighFrameStoreForwarding, ScopedAddressLoopsExecuteWithCallWrites) {
+  const auto A = Arch::X64;
+  const auto T = NdType::makeInt(4, false);
+  std::string Source;
+  for (bool After : {false, true}) {
+    auto F = scopedFrameAlias(A, false);
+    F.Name = After ? "after_alias_loop" : "before_alias_loop";
+    F.Params.push_back({"arg1", T});
+    auto Counter = temporary(31, T, A);
+    auto Observed = temporary(30, T, A);
+    auto &Loop = F.Body[1];
+    Loop.Cond = Counter;
+    Loop.Body[1].Cond = HighExpr::makeBinop(NdOp::INT_AND, parameter(0, T, A),
+                                            HighExpr::makeConst(1, 4));
+    Loop.Body[3].CallExpr->Operands.push_back(Loop.Body[0].Dst);
+    auto Mask = temporary(32, T, A);
+    auto Choice = std::make_shared<HighExpr>();
+    Choice->Kind = ExprKind::BinOp;
+    Choice->Op = NdOp::SELECT;
+    Choice->Type = T;
+    Choice->Operands = {Loop.Body[1].Cond, HighExpr::makeConst(0xa5a5a5a5, 4),
+                        HighExpr::makeConst(0x5a5a5a5a, 4)};
+    Loop.Body[3].CallExpr->Operands.push_back(Mask);
+    Loop.Body.insert(Loop.Body.begin() + 3, assign(Mask, Choice));
+    Loop.Body.push_back(
+        assign(Counter, HighExpr::makeBinop(NdOp::INT_SUB, Counter,
+                                            HighExpr::makeConst(1, 4))));
+    F.Body.insert(F.Body.begin() + 1, assign(Counter, parameter(1, T, A)));
+    F.Body.insert(F.Body.begin() + 2, assign(Observed, parameter(0, T, A)));
+    F.Body.back().RetVal = Observed;
+    if (After)
+      forwardPrivateFrameLoads(F, A);
+    llvm::raw_string_ostream Out(Source);
+    CEmitterOptions Options;
+    Options.TheArch = A;
+    ASSERT_TRUE(HighCEmitter().emit({F}, Out, Options));
+  }
+  Source += R"(
+static uint32_t effects, consumes, last_input;
+int effect(void) { ++effects; return 0; }
+int consume(uint32_t x, uint64_t address, uint32_t mask) {
+  ++consumes;
+  last_input = x;
+  *(uint32_t *)(uintptr_t)address = x ^ mask;
+  return 0;
+}
+int main(void) {
+  uint32_t x = 0;
+  for (unsigned i = 0; i < 4096; ++i) {
+    x = i < 4 ? (uint32_t[]){0,1,UINT32_MAX,UINT32_C(0x80000000)}[i]
+              : x * UINT32_C(1664525) + UINT32_C(1013904223);
+    for (uint32_t n = 0; n < 5; ++n) {
+      uint32_t mask = (x & 1) ? UINT32_C(0xa5a5a5a5) : UINT32_C(0x5a5a5a5a);
+      uint32_t expected = n ? x ^ mask : x;
+      effects = consumes = last_input = 0;
+      if (before_alias_loop(x,n) != expected || consumes != n ||
+          effects != ((x & 1) ? n : 0) || (n && last_input != x)) return 1;
+      effects = consumes = last_input = 0;
+      if (after_alias_loop(x,n) != expected || consumes != n ||
+          effects != ((x & 1) ? n : 0) || (n && last_input != x)) return 2;
+    }
+  }
+  return 0;
+}
+)";
+  compileAndRun(Source);
+}
+
 TEST(HighFrameStoreForwarding, FollowsDominatingFrameAliases) {
   for (Arch Architecture : Architectures) {
     SCOPED_TRACE(static_cast<int>(Architecture));
