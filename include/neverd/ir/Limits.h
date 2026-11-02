@@ -351,12 +351,12 @@ inline constexpr unsigned kMedImmutableTableScansMaxFoldRounds = 4;
 inline constexpr unsigned kMedSSASEHFuncletRegisterChainLimit = 32;
 
 // lib/ir/med/pass/MedMutableSource.cpp
-// Large, narrow CFGs need not increase the bounded block/value matrix or
-// propagation work below. The independent ceilings still govern those costs.
-inline constexpr size_t kMedMutableSourceMaxBlocks = 16384;
+// Block count, storage matrix size and propagation work have independent
+// ceilings. The matrix bounds the three packed liveness sets per block.
+inline constexpr size_t kMedMutableSourceMaxBlocks = 65536;
 inline constexpr size_t kMedMutableSourceMaxValues = 4096;
 inline constexpr size_t kMedMutableSourceMaxOperations = 8 * 1024 * 1024;
-inline constexpr size_t kMedMutableSourceMaxBlockValues = 4 * 1024 * 1024;
+inline constexpr size_t kMedMutableSourceMaxBlockValues = 16 * 1024 * 1024;
 inline constexpr size_t kMedMutableSourceMaxPropagationWords = 16 * 1024 * 1024;
 
 // lib/ir/med/pass/MedStackAlignment.cpp

@@ -18232,6 +18232,8 @@ source but do not qualify privileged execution.
 
 `MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` checks a 2048-stage conditional chain with two shared rejection exits in forward and reversed block layouts. Both C routes run at O0/O2 with UBSan, comparing return values and committed guest-memory prefixes at early, middle and final failures and on success.
 
+`MedMutableSource.SharedExitsScaleToTheBlockCeilingWithExactEdges` validates shared rejection exits at the 65536-block ceiling, reversed predecessor order, missing, duplicate and unrelated edges. `PredecessorMetadataHasAnAggregateEdgeBound` rejects excess adjacency metadata before graph traversal. Existing exact/one-over block and storage-matrix checks scale with their owning limits, while `LargeNarrowGraphsKeepExactRuntimeValues` executes both C routes at half the block ceiling. Run `NeverDMedMutableSourceTests` and `NeverDInterpreterMachineStateTests` for mutable-source and architectural-choice coverage.
+
 `X86ArithmeticUndefinedAudit` in `NeverDX86UndefinedEffectsTests` checks exact legacy register PADDB/W/D/Q and PSUBB/W/D/Q encodings, independent lane wraparound, unchanged flags and complete 512-bit register banks. Canonical x64 immediate IMUL forms bind sign-extended imm8/imm32 values and four independent undefined flags. Memory, MMX/VEX and inconsistent byte/detail forms retain their separate admission requirements. `ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` executes both C routes at O0/O2 with ASan/UBSan, checking whole-instruction exhaustion and mismatches before destination or cursor commit.
 
 `X86PackedSelectionAudit` checks canonical register PSHUFD, PCMPEQD, PAND, PACKSSDW/PACKSSWB, PUNPCKLQDQ and MOVMSKPD: all 256 shuffle controls, signed saturation boundaries, partial equality, register aliases, complete vector banks and preserved flags. Legacy memory PAND keeps the [Intel-defined alignment requirement](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf) before reading memory or changing the destination; `X86LegacyAlignedMove.PackedAnd*` checks address wrapping, explicit FS/GS bases, missing memory and unchanged state on failure. The choice-source fixture executes both C routes at O0/O2 with ASan/UBSan and retains the dynamic alignment guard. These checks do not certify opaque processor state.
@@ -18263,6 +18265,13 @@ and rejection of segmented read hints and unrelated cache instructions under
 KernelNoFaultV1. Run `NeverDX64ContinuationSourceTests`,
 `NeverDX86NativeStateAuditTests` and `NeverDInterpreterMachineStateTests`.
 Cache placement and timing are outside these comparisons.
+
+`X64ContinuationSourceTest.Popfq*` and
+`X64ContinuationExportTest.Popfq*` execute HighC and LLVMC at O0/O2 with
+ASan/UBSan. Independent full-state and memory oracles cover unaligned stack
+loads, status/system flag combinations, ignored bits, profile rejection before
+state commit, V1/V2 versus SMAP AC, unchanged word-POPF/RTM boundaries, and
+public dispatch/resumption budgets. These tests do not execute host POPFQ.
 
 StreamingStore regressions check instruction bytes, operand metadata, alignment, complete writable extents, malformed contracts and modified receipts. Independent expectations compare complete state and memory, including a store that overwrites the physical return word. Both C routes execute at O0/O2 with sanitizers under user and kernel state profiles. These checks do not certify native kernel, concurrent or faulting execution.
 

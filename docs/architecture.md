@@ -9801,6 +9801,14 @@ returned manifest bind the runtime code snapshot; this is not a PE loader
 proof. The shared binary provider retains its strict default PE/fixup proofs
 for all existing users, and this explicit snapshot mode never folds data reads.
 
+POPFQ continuation steps reuse `X64MachineFlags` for packed system flags and
+the original lifter's status-bit scatter. The real eight-byte stack load runs
+once; its profile guard precedes every architectural write. A rejected popped
+TF/IOPL value, or AC in V1/V2, leaves state and RAM unchanged. Admitted values
+advance the physical stack and retain the instruction's ordinary fallthrough.
+The SMAP profiles also restore AC. Word POPF remains an explicit native boundary,
+and POPFQ remains outside the continuation's RTM body contract.
+
 `KernelControlsNoFaultV2` uses a distinct 2,304-byte layout and generated symbol
 prefix, preserving the 2,272-byte V1 layout. Its extra contract requires an x64
 host, legacy GS switching with CR4.FRED clear, no APIC/TPR memory aliases and
@@ -10087,7 +10095,7 @@ Recovery also exposes `--vm-chain-transfers=N` (default 0) and `--vm-no-control-
 
 Large recovered functions that exceed the SSA construction limit can use `--llvm` through a bounded scalar mutable-storage contract. Entry inputs, loop-carried values and earlier reads retain their meaning. Unsupported implicit state, vector-register parameters, image relocation, ambiguous storage and malformed control fail explicitly; HighC lowers this subset to explicit assignments and CFG edges, capturing arguments once before the entry label. Adjacent plain copies may coalesce only when the later copy cannot read the overwritten value. Source output still uses the existing machine-state contract and adds no equivalence certificate.
 
-`analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage. Admission allows up to 16384 blocks while retaining the independent storage-matrix and propagation-work budgets.
+`analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage. Admission allows up to 65536 blocks and a matrix of up to 16,777,216 block/value pairs for each packed liveness set. Variable, operation and propagation-work ceilings remain independent. CFG validation bounds total predecessor metadata by the two-successor branch contract, counts incoming edges once, and checks each unique predecessor against its source's bounded successor list. Shared rejection exits therefore need no repeated full predecessor scan.
 
 SSA graphs exceeding the existing HighC structuring bounds retain blockwise control flow through final goto cleanup. The fallback does not splice large continuation regions again; required exception processing and entry anchors remain. Mutable-storage lowering keeps its separate validated path.
 

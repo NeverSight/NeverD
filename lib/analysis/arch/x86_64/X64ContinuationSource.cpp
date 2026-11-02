@@ -252,8 +252,8 @@ bool flagIntrinsic(const LowOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC || !Op.NumInputs || !Op.Inputs[0].isConst())
     return false;
   const auto I = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-  return I == Intrinsic::Pushf || I == Intrinsic::Cli || I == Intrinsic::Sti ||
-         I == Intrinsic::Clac || I == Intrinsic::Stac;
+  return I == Intrinsic::Pushf || I == Intrinsic::Popf || I == Intrinsic::Cli ||
+         I == Intrinsic::Sti || I == Intrinsic::Clac || I == Intrinsic::Stac;
 }
 
 bool alignmentIntrinsic(LowOp Op) {
@@ -1015,6 +1015,8 @@ struct Writer {
           flagsProfile(Options));
       // Admission checked this exact shape before any output was published.
       append(Transition->Ops);
+      if (Transition->Rejected)
+        rejectIf(*Transition->Rejected);
       const NdVar Split = temporary(), Packed = temporary();
       emit(NdOp::INT_AND, Split,
            {load(offsetof(State, RFlags)), constant(Flags::SplitMask)});
@@ -1365,6 +1367,22 @@ buildInstruction(SpecializationInstruction Instruction,
           ? x64::runtimeTimestampRegisters(Instruction,
                                            NdVar::tmp(ScratchBase - 16, 16))
           : std::nullopt;
+  // The binary provider supplies the original POPFQ sequence: load once,
+  // advance RSP, scatter status flags, then update system flags. Its profile
+  // guard must run immediately after the load, before any architectural write.
+  const bool PoppedFlags =
+      Instruction.Ops.size() > 1 &&
+      Instruction.UndefinedEffects.Effects.empty() &&
+      eventIntrinsic(Instruction.Ops.back(), Intrinsic::Popf, 2) &&
+      Instruction.Ops.front().Opcode == NdOp::LOAD &&
+      Instruction.Ops.front().NumInputs == 1 &&
+      Instruction.Ops.front().Output.isTemp() &&
+      Instruction.Ops.front().Output.Size == 8 &&
+      Instruction.Ops.front().Inputs[0] == NdVar::reg(x86reg::RSP, 8) &&
+      Instruction.Ops.front().MemoryAddressSpace ==
+          NdMemoryAddressSpace::Default &&
+      Instruction.Ops.front().MemoryOrdering == NdMemoryOrdering::None &&
+      Instruction.Ops.back().Inputs[1] == Instruction.Ops.front().Output;
   bool EarlierEffect = false;
   for (size_t I = 0; I < Instruction.Ops.size(); ++I) {
     const LowOp &Op = Instruction.Ops[I];
@@ -1397,7 +1415,7 @@ buildInstruction(SpecializationInstruction Instruction,
           Op, NdVar::tmp(ScratchBase, 8),
           [](uint16_t N) { return NdVar::tmp(ScratchBase + 16, N); },
           flagsProfile(Options));
-      if (!Transition || Transition->Rejected)
+      if (!Transition || (Transition->Rejected && !PoppedFlags))
         RequireNative("instruction requires a different flags domain");
     }
   }
@@ -1739,6 +1757,8 @@ buildInstruction(SpecializationInstruction Instruction,
         W.write(NdVar::reg(Register, 8), NdVar::reg(Register, 8));
     }
     for (size_t I = 0; !Timestamp && I < Instruction.Ops.size(); ++I) {
+      if (PoppedFlags && I + 1 == Instruction.Ops.size())
+        continue;
       const LowOp &Op = Instruction.Ops[I];
       if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::INDIR_BR) {
         NextPC = W.read(Op.Inputs[0]);
@@ -1750,6 +1770,8 @@ buildInstruction(SpecializationInstruction Instruction,
       } else {
         W.operation(Op);
       }
+      if (PoppedFlags && I == 0)
+        W.operation(Instruction.Ops.back());
       Effects(I + 1);
     }
     if (MpxBranch)
