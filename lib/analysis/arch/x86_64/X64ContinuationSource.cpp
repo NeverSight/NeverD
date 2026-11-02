@@ -1068,12 +1068,24 @@ struct Writer {
       append(Transition->Ops);
       rejectIf(*Transition->Rejected);
     } else if (flagIntrinsic(Op)) {
+      std::optional<NdVar> InterruptMask;
+      if (Options.PagedMemory)
+        if (auto Set =
+                detail::x64InterruptFlagValue(Op, flagsProfile(Options))) {
+          // The paged CPU owns CPL/IOPL/PVI/VIP admission. The existing flag
+          // lowering retains the actual IF/VIF update and all other bits.
+          pagedAccess(constant(*Set), 0, X64PagedAccess::InterruptFlagMask,
+                      false);
+          InterruptMask = temporary();
+          emit(NdOp::LOAD, *InterruptMask,
+               {NdVar::tmp(PagedContextPointer, 8)});
+        }
       const NdVar System = temporary();
       emit(NdOp::INT_AND, System,
            {load(offsetof(State, RFlags)), constant(~Flags::SplitMask)});
       auto Transition = detail::lowerX64MachineFlags(
           Op, System, [&](uint16_t Bytes) { return temporary(Bytes); },
-          flagsProfile(Options));
+          flagsProfile(Options), InterruptMask);
       // Admission checked this exact shape before any output was published.
       append(Transition->Ops);
       if (Transition->Rejected)
@@ -1516,7 +1528,8 @@ buildInstruction(SpecializationInstruction Instruction,
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
-          !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt)
+          !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
+          !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
       const auto RegisterAllowed = [](NdVar V) {
@@ -1528,6 +1541,13 @@ buildInstruction(SpecializationInstruction Instruction,
         if (!RegisterAllowed(Op.Inputs[I]))
           RequireNative("paged scalar execution requires GPR or flags inputs");
     }
+    if (!Options.ScheduledEvents &&
+        std::any_of(Instruction.Ops.begin(), Instruction.Ops.end(),
+                    [&](const LowOp &Op) {
+                      return detail::x64InterruptFlagValue(
+                                 Op, flagsProfile(Options)) == true;
+                    }))
+      RequireNative("paged STI requires persistent interrupt scheduling");
   }
   // Admission belongs to the original semantic operations, before state
   // rewriting hides a system-register update behind ordinary RAM stores.
@@ -1592,8 +1612,9 @@ buildInstruction(SpecializationInstruction Instruction,
              {Guard.load(offsetof(State, PC)), constant(Result.Address)});
   const NdVar Packed = Guard.load(offsetof(State, RFlags));
   const uint64_t EntryFlags =
-      Options.PagedMemory ? Flags::EntryMask | Flags::AlignmentCheckMask |
-                                Flags::ResumeMask | Flags::IOPLMask
+      Options.PagedMemory
+          ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
+                Flags::IOPLMask | Flags::VirtualInterruptMask
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
       : (Interrupt || FredReturn || UndefinedInstruction ||
          UserInterrupt == detail::X64UserInterrupt::Return)
@@ -1920,17 +1941,16 @@ buildX64ContinuationSource(const BinaryImage &Image,
   const bool Controls = hasControlState(Options);
   if (Options.PagedMemory &&
       (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
-       Options.EventDelivery || Options.ScheduledEvents ||
-       Options.NativeTimestampReads || Options.NativeWritePrefetch ||
-       Options.NativeSpeculationControlMsrs ||
+       Options.EventDelivery || Options.NativeTimestampReads ||
+       Options.NativeWritePrefetch || Options.NativeSpeculationControlMsrs ||
        Options.NativeDescriptorQueries || Options.NativePageTableAccess ||
        Options.NativeDebugRegisterAccess || Options.NativePageGlobalAccess ||
        Options.NativeKvmHypercalls || Options.NativeHyperVHypercallEntry ||
        Options.NativeSnpInstructions || Options.NativeHleSteps ||
        Options.NativeSevGuestExit || Options.SegmentBaseMSRAddressBits))
     return invalid("paged V6 requires its owned memory and fault environment");
-  if (Options.ScheduledEvents && !Options.EventDelivery)
-    return invalid("scheduled events require event delivery");
+  if (Options.ScheduledEvents && !Options.EventDelivery && !Options.PagedMemory)
+    return invalid("scheduled events require event delivery or paged memory");
   if (Options.EventDelivery &&
       Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
     return invalid("event delivery requires kernel-events-v6");

@@ -3479,4 +3479,22 @@ Failed software entry restarts INT itself; successful entry saves fallthrough
 without a vector-inferred error code. Active CPL3 scalar alignment checks now
 require an explicit CPU priority binding, with canonicality checked first;
 the local CPU qualifies alignment before paging. These changes retain the
-separate partial-instruction and external-event boundaries above.
+separate partial-instruction and external-device boundaries above.
+
+## Paged IRQ/NMI and virtual-interrupt flags
+
+The paged continuation now reuses the existing instruction-boundary scheduler
+with its faultable IDT owner. Event acceptance survives secondary faults and
+shutdown; producer acknowledgment is distinct from APIC EOI. Architectural
+attempts remain charged if exception entry subsequently encounters missing
+physical backing, while operand backing failures preserve restart budgets and
+inhibition. Eligible interrupts are selected before instruction fetch.
+
+CLI/STI now cover CPL/IOPL permissions, PVI-directed VIF changes and VIP faults
+in this code64 binding. The shared runtime also generates the pre-instruction
+#GP for CPL3/PVI with VIF and VIP both set, before any fetch or operand effect.
+The generated scheduler starts STI inhibition only when IF actually changes.
+The [paged contract](x86-paged-execution.md#paged-irqnmi-scheduling) describes
+ownership, runtime linkage and the remaining partial-instruction, device,
+legacy-mode, SMI and enclave boundaries. This is not global x86 completion or
+an LLVM release/pin claim.

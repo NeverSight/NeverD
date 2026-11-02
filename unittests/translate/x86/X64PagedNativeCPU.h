@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 
 #include <algorithm>
@@ -98,18 +99,21 @@ public:
     return R;
   }
 
-  void execute(const std::vector<uint8_t> &Input,
-               const neverd::analysis::X64ContinuationStateV6 &State,
-               uint64_t CR0, unsigned InstructionBytes,
-               neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault,
-               bool SoftwareInterrupt = false) {
+  void
+  execute(const std::vector<uint8_t> &Input,
+          const neverd::analysis::X64ContinuationStateV6 &State, uint64_t CR0,
+          unsigned InstructionBytes,
+          neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault,
+          bool SoftwareInterrupt = false,
+          const neverd::analysis::X64ContinuationEventV1 *Pending = nullptr,
+          uint64_t CR4 = 0x20) {
     ASSERT_EQ(Input.size(), Size);
     std::copy(Input.begin(), Input.end(), RAM);
     const auto &Core = State.Core.Core.Core.Core;
     auto S = Initial;
     S.cr0 = CR0;
     S.cr3 = 0x10000;
-    S.cr4 = 0x20;
+    S.cr4 = CR4;
     S.efer = 0xd00;
     S.cr2 = 0;
     S.cs = segment(State.Core.CS);
@@ -130,6 +134,11 @@ public:
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &S), 0);
     kvm_vcpu_events Events{};
     Events.flags = KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW;
+    Events.nmi.masked = State.NMIBlocked;
+    if (Pending)
+      Events.interrupt.shadow =
+          (Pending->STIBlocked ? KVM_X86_SHADOW_INT_STI : 0) |
+          (Pending->SSBlocked ? KVM_X86_SHADOW_INT_MOV_SS : 0);
     ASSERT_EQ(ioctl(CPU, KVM_SET_VCPU_EVENTS, &Events), 0);
     kvm_regs R{};
     std::array<decltype(R.rax) *, 16> Registers{
@@ -148,14 +157,34 @@ public:
     Debug.arch.debugreg[2] = 0;
     Debug.arch.debugreg[7] = 0x415;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
+    Run->request_interrupt_window = 0;
+    if (Pending) {
+      if (Pending->Kind == neverd::analysis::X64ContinuationEventKind::NMI) {
+        ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
+      } else {
+        // KVM_INTERRUPT is an immediate injection request, not an APIC
+        // pending bit. KVM itself selects the eligible instruction boundary.
+        Run->request_interrupt_window = 1;
+      }
+    }
     ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    if (Run->exit_reason == KVM_EXIT_IRQ_WINDOW_OPEN) {
+      ASSERT_NE(Pending, nullptr);
+      ASSERT_TRUE(Run->ready_for_interrupt_injection);
+      Run->request_interrupt_window = 0;
+      kvm_interrupt Interrupt{Pending->Vector};
+      ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &Interrupt), 0);
+      ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    }
     ASSERT_TRUE(Run->exit_reason == KVM_EXIT_DEBUG ||
                 Run->exit_reason == KVM_EXIT_HLT)
         << "KVM exit " << Run->exit_reason;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);
     Fault = Run->exit_reason == KVM_EXIT_HLT;
+    ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &Events), 0);
     Output = State;
+    Output.NMIBlocked = Events.nmi.masked;
     auto &Out = Output.Core.Core.Core.Core;
     for (unsigned I = 0; I != 16; ++I)
       Out.GPR[I] = *Registers[I];

@@ -72,6 +72,19 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & 7);
+  if (Kind == X64PagedAccess::InterruptFlagMask) {
+    const auto &Controls = T.Memory.controls();
+    const auto IOPL = (Controls.RFlags >> 12) & 3;
+    const bool Virtual = T.CPL > IOPL && T.CPL == 3 && (Controls.CR4 & 2);
+    if ((T.CPL > IOPL && !Virtual) ||
+        (Virtual && Address && (Controls.RFlags & 0x100000))) {
+      T.Access.Status = X86PageWalkStatus::Exception;
+      T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
+      return 1;
+    }
+    Exchange.Value = Virtual ? 0x80000 : 0x200;
+    return 0;
+  }
   if (Kind == X64PagedAccess::SoftwareInterrupt) {
     T.Event.emplace();
     T.Event->SavedPC = Size;
@@ -130,28 +143,83 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   return 0;
 }
 
-llvm::Expected<X64PagedExecutionResult>
-X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
-                           llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body,
-                           X64PagedBody Validate, uint32_t MXCSRMask,
-                           unsigned PagingAddressBits) {
+llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
+                                                 uint64_t Address,
+                                                 X64PagedBody Validate,
+                                                 unsigned PagingAddressBits) {
   Last = {};
   Error.clear();
-  if (!Body || !Validate || Bytes.empty() || Bytes.size() > 15 ||
-      (PagingAddressBits != 48 && PagingAddressBits != 57))
-    return invalid("invalid paged instruction binding");
+  if (!Validate || (PagingAddressBits != 48 && PagingAddressBits != 57))
+    return invalid("invalid paged entry binding");
   auto Controls = Memory.controls();
   if (!(Controls.EFER & 0x400) || (Controls.CR4 & (uint64_t(1) << 32)) ||
       PagingAddressBits != (Controls.CR4 & 0x1000 ? 57u : 48u))
     return invalid("paged instruction binding disagrees with IA-32e controls");
   auto &Original = State.Core.Core.Core.Core;
   if (Original.PC != Address)
-    return Last;
+    return false;
   const auto CPL = uint8_t(State.Core.CS.Selector & 3);
   if (CPL == 3 && (Controls.CR0 & 0x40000) && (Original.RFlags & 0x40000) &&
       !Options.AlignmentPriority)
     return invalid(
         "active scalar alignment checks require bound fault priority");
+  return Validate(&State, nullptr) == 0;
+}
+
+llvm::Error X64PagedExecution::deliverEvent(X64ContinuationStateV6 &State,
+                                            const X64ContinuationEventV1 &Event,
+                                            uint32_t MXCSRMask) {
+  auto Delivered = deliverX64PagedEvent(State, Memory, Event, MXCSRMask);
+  if (!Delivered)
+    return Delivered.takeError();
+  Last.Delivery = *Delivered;
+  Last.BackingFault = Delivered->BackingFault;
+  switch (Delivered->Status) {
+  case X64PagedEventStatus::Delivered:
+    Last.Exit = uint64_t(X64ContinuationExitV1::Exception);
+    break;
+  case X64PagedEventStatus::Deferred:
+    Last.Exit = uint64_t(X64ContinuationExitV1::EventDeferred);
+    break;
+  case X64PagedEventStatus::InvalidState:
+    break;
+  case X64PagedEventStatus::BackingFault:
+    Last.Exit = uint64_t(X64PagedExit::BackingFault);
+    break;
+  case X64PagedEventStatus::Shutdown:
+    Last.Exit = uint64_t(X64PagedExit::Shutdown);
+    break;
+  }
+  return llvm::Error::success();
+}
+
+llvm::Expected<X64PagedExecutionResult>
+X64PagedExecution::deliver(X64ContinuationStateV6 &State,
+                           const X64ContinuationEventV1 &Event,
+                           uint32_t MXCSRMask) {
+  Last = {};
+  Error.clear();
+  if (auto Failure = deliverEvent(State, Event, MXCSRMask))
+    return std::move(Failure);
+  Last.Exception = Last.Delivery->LastException;
+  return Last;
+}
+
+llvm::Expected<X64PagedExecutionResult>
+X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
+                           llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body,
+                           X64PagedBody Validate, uint32_t MXCSRMask,
+                           unsigned PagingAddressBits) {
+  auto Valid = validate(State, Address, Validate, PagingAddressBits);
+  if (!Valid)
+    return Valid.takeError();
+  if (!Body || Bytes.empty() || Bytes.size() > 15)
+    return invalid("invalid paged instruction binding");
+  if (!*Valid)
+    return Last;
+  auto Controls = Memory.controls();
+  const auto &Original = State.Core.Core.Core.Core;
+  const auto CPL = uint8_t(State.Core.CS.Selector & 3);
   auto Next = State;
   Transaction T{Memory, CPL,
                 Options.AlignmentPriority.value_or(
@@ -159,15 +227,23 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   X64PagedExchange Exchange{0, &T};
   auto *NextBytes = reinterpret_cast<uint8_t *>(&Next);
   auto *ExchangeBytes = reinterpret_cast<uint8_t *>(&Exchange);
-  if (Validate(NextBytes, ExchangeBytes) != 0)
-    return Last;
   Controls.RFlags = Original.RFlags;
   if (auto Failure = Memory.bindControls(Controls))
     return std::move(Failure);
   // Stop at the first changed byte before fetching a later old instruction
   // byte. The environment must relift changed code; it is never executed as
   // the stale source instruction or skipped as a NOP.
-  for (unsigned I = 0; I != Bytes.size(); ++I) {
+  // Protected-mode virtual interrupts raise #GP at instruction entry when
+  // VIF and VIP are both set, independent of IOPL and of the opcode. External
+  // event selection has already happened at the scheduler boundary.
+  if (CPL == 3 && (Controls.CR4 & 2) &&
+      (Controls.RFlags & 0x180000) == 0x180000) {
+    T.Access.Status = X86PageWalkStatus::Exception;
+    T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
+  }
+  for (unsigned I = 0;
+       T.Access.Status == X86PageWalkStatus::Completed && I != Bytes.size();
+       ++I) {
     uint8_t Byte;
     if (!T.accept(Memory.load({Address + I, MemoryAccessKind::Execute, T.CPL},
                               llvm::MutableArrayRef(&Byte, 1))))
@@ -197,29 +273,14 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       Event.ErrorCode = T.Access.Exception->ErrorCode;
       Event.FaultAddress = T.Access.Exception->CR2.value_or(0);
     }
-    auto Delivered = deliverX64PagedEvent(State, Memory, Event, MXCSRMask);
-    if (!Delivered)
-      return Delivered.takeError();
-    Last.Delivery = *Delivered;
-    Last.BackingFault = Delivered->BackingFault;
-    if (T.Event)
-      Last.Exception = Delivered->LastException;
-    switch (Delivered->Status) {
-    case X64PagedEventStatus::Delivered:
-      Last.Exit = uint64_t(X64ContinuationExitV1::Exception);
-      Last.InstructionCompleted = T.Event && !Delivered->LastException;
-      break;
-    case X64PagedEventStatus::Deferred:
-      Last.Exit = uint64_t(X64ContinuationExitV1::EventDeferred);
-      break;
-    case X64PagedEventStatus::InvalidState:
-      break;
-    case X64PagedEventStatus::BackingFault:
-      Last.Exit = uint64_t(X64PagedExit::BackingFault);
-      break;
-    case X64PagedEventStatus::Shutdown:
-      Last.Exit = uint64_t(X64PagedExit::Shutdown);
-      break;
+    Last.InstructionAttempted = true;
+    if (auto Failure = deliverEvent(State, Event, MXCSRMask))
+      return std::move(Failure);
+    if (T.Event) {
+      Last.Exception = Last.Delivery->LastException;
+      Last.InstructionCompleted =
+          Last.Delivery->Status == X64PagedEventStatus::Delivered &&
+          !Last.Exception;
     }
     return Last;
   }
@@ -237,6 +298,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   Controls.RFlags = State.Core.Core.Core.Core.RFlags;
   if (auto Failure = Memory.bindControls(Controls))
     return std::move(Failure);
+  Last.InstructionAttempted = true;
   Last.InstructionCompleted = true;
   Last.Exit = Exit;
   return Last;
@@ -260,6 +322,45 @@ neverd_x64_paged_step_v1(uint8_t *Context, uint8_t *State, uint64_t Address,
     return uint64_t(X64ContinuationExitV1::InvalidState);
   }
   return Result->Exit;
+}
+
+extern "C" uint64_t neverd_x64_paged_validate_v1(uint8_t *Context,
+                                                 uint8_t *State,
+                                                 uint64_t Address,
+                                                 X64PagedBody Validate,
+                                                 uint64_t PagingAddressBits) {
+  auto &Execution = *reinterpret_cast<X64PagedExecution *>(Context);
+  auto Result =
+      Execution.validate(*reinterpret_cast<X64ContinuationStateV6 *>(State),
+                         Address, Validate, PagingAddressBits);
+  if (!Result) {
+    Execution.recordError(Result.takeError());
+    return uint64_t(X64ContinuationExitV1::InvalidState);
+  }
+  return uint64_t(*Result ? X64ContinuationExitV1::Continue
+                          : X64ContinuationExitV1::InvalidState);
+}
+
+extern "C" uint64_t neverd_x64_paged_event_v1(uint8_t *Context, uint8_t *State,
+                                              const uint8_t *Event,
+                                              uint64_t MXCSRMask) {
+  auto &Execution = *reinterpret_cast<X64PagedExecution *>(Context);
+  auto Result = Execution.deliver(
+      *reinterpret_cast<X64ContinuationStateV6 *>(State),
+      *reinterpret_cast<const X64ContinuationEventV1 *>(Event), MXCSRMask);
+  if (!Result) {
+    Execution.recordError(Result.takeError());
+    return uint64_t(X64ContinuationExitV1::InvalidState);
+  }
+  return Result->Exit;
+}
+
+extern "C" uint64_t neverd_x64_paged_progress_v1(uint8_t *Context) {
+  const auto &Last =
+      reinterpret_cast<X64PagedExecution *>(Context)->lastResult();
+  return (Last.InstructionAttempted ? kX64PagedInstructionAttempted : 0) |
+         (Last.Delivery && Last.Delivery->InputAccepted ? kX64PagedEventAccepted
+                                                        : 0);
 }
 
 } // namespace neverd::analysis

@@ -18,12 +18,14 @@ class raw_ostream;
 namespace neverd {
 namespace analysis {
 struct X64ContinuationInstructionSource;
-}
+struct X64ContinuationSourceOptions;
+} // namespace analysis
 
 void emitX64ContinuationSchedule(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls);
+    bool FollowInternalCalls,
+    const analysis::X64ContinuationSourceOptions &Options);
 
 } // namespace neverd
 

@@ -684,12 +684,17 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   // declarations need not precede byte-pointer steps; inserting their headers
   // first would freeze libc feature selection before the emitter's macros.
   auto Fields = stateDeclaration(OS, Version, Units->front().StateBytes);
-  if (Request->Options.EventDelivery) {
+  if (Request->Options.EventDelivery || Request->Options.ScheduledEvents) {
     OS << R"C(
 /* The producer selects the event and supplies architectural restart state.
  * Delivery stops at handler entry: 7=delivered, 15=blocked, 5=invalid.
- * No host exceptions are caught; all delivery RAM must be accessible. */
-enum neverd_x64_event_kind_v1 {
+)C";
+    OS << (Request->Options.PagedMemory
+               ? " * Paged entry retains faults, partial frames and event "
+                 "acceptance. */\n"
+               : " * No host exceptions are caught; all delivery RAM must be "
+                 "accessible. */\n");
+    OS << R"C(enum neverd_x64_event_kind_v1 {
     NEVERD_X64_EVENT_FAULT=0, NEVERD_X64_EVENT_TRAP=1,
     NEVERD_X64_EVENT_INTERRUPT=2, NEVERD_X64_EVENT_NMI=3,
     NEVERD_X64_EVENT_SOFTWARE=4, NEVERD_X64_EVENT_INSTRUCTION_BREAKPOINT=5,
@@ -700,7 +705,9 @@ typedef struct neverd_x64_event_v1 {
     uint8_t Vector, Kind, STIBlocked, SSBlocked, NMIBlockedBySTI,
             RepeatedString, Reserved[2];
 } neverd_x64_event_v1;
-uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
+)C";
+    if (!Request->Options.PagedMemory)
+      OS << R"C(uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
                                     const neverd_x64_event_v1 *event) {
     return neverd_x64_deliver_event_body_v6((void *)state, (void *)event);
 }
@@ -734,7 +741,8 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
     emitX64ContinuationEnvironment(OS, Version);
   }
   if (Request->Options.ScheduledEvents)
-    emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls);
+    emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
+                                Request->Options);
   llvm::json::Array RtmAborts;
   if (Request->NativeRtmAbortRegions)
     RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
@@ -764,16 +772,25 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
       {"event_delivery", Request->Options.EventDelivery},
       {"paged_memory", Request->Options.PagedMemory},
       {"scheduled_events", Request->Options.ScheduledEvents},
-      {"scheduled_event_driver", Request->Options.ScheduledEvents
-                                     ? "neverd_x64_continue_events_v6"
-                                     : "disabled"},
-      {"scheduled_event_domain", Request->Options.ScheduledEvents
-                                     ? "instruction-boundary IRQ/NMI; bounded "
-                                       "producer polls; acknowledge only after "
-                                       "delivery; persistent STI/MOV-SS "
-                                       "shadows; controller selection and "
-                                       "priority remain producer-owned"
-                                     : "disabled"},
+      {"scheduled_event_driver",
+       Request->Options.ScheduledEvents
+           ? (Request->Options.PagedMemory
+                  ? "neverd_x64_continue_paged_events_v6"
+                  : "neverd_x64_continue_events_v6")
+           : "disabled"},
+      {"scheduled_event_domain",
+       Request->Options.ScheduledEvents
+           ? (Request->Options.PagedMemory
+                  ? "instruction-boundary IRQ/NMI over paged RAM; "
+                    "acknowledge after acceptance even on secondary "
+                    "faults; persistent inhibition; bounded polls; "
+                    "producer-owned arrival and controller priority"
+                  : "instruction-boundary IRQ/NMI; bounded "
+                    "producer polls; acknowledge only after "
+                    "delivery; persistent STI/MOV-SS "
+                    "shadows; controller selection and "
+                    "priority remain producer-owned")
+           : "disabled"},
       {"event_delivery_domain",
        Request->Options.EventDelivery
            ? "separate IA-32e event entry: CPL0..3, 64-bit or compatibility "
@@ -945,13 +962,22 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
         "original-byte fetch verification, failure-atomic instruction state "
         "and operand data, retained paging effects and recursive IDT faults; "
         "no TF, native providers, REP/gather/XSAVE partial completion, LOCK, "
-        "asynchronous events, MMIO, CET/FRED, SMM or enclave execution; "
+        "intra-instruction asynchronous events, MMIO, CET/FRED, SMM or enclave "
+        "execution; "
         "state, context and budgets are disjoint from guest RAM";
     Report["event_delivery_domain"] =
         "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD and software "
         "interrupts; shared paged IA-32e IDT entry, recursive faults, #DF and "
         "shutdown; software entry faults restart INT/INT3; stop at handler "
         "entry";
+    Report["interrupt_flags"] =
+        "CLI/STI CPL/IOPL checks; CPL3 PVI targets VIF and virtual STI checks "
+        "VIP; pre-instruction CPL3/PVI/VIF/VIP #GP precedes fetch; only an "
+        "actual IF 0-to-1 transition starts scheduled STI inhibition";
+    Report["event_acceptance"] =
+        "original acceptance recorded before IDT RAM; secondary faults do "
+        "not restore a consumed event; architectural instruction attempts "
+        "remain charged if subsequent exception entry hits backing failure";
     Report["alignment_fault_priority"] =
         "explicit runtime CPU binding when CPL3 AC and CR0.AM are set; "
         "canonical checks first; no host-policy inference";

@@ -35,6 +35,7 @@ struct X64PagedExecutionOptions {
 
 struct X64PagedExecutionResult {
   uint64_t Exit = uint64_t(X64ContinuationExitV1::InvalidState);
+  bool InstructionAttempted = false;
   /// Includes successful software interrupt entry; a delivery fault is false.
   bool InstructionCompleted = false;
   std::optional<translate::X86MemoryException> Exception;
@@ -53,6 +54,16 @@ public:
                              const X64PagedExecutionOptions &Options = {})
       : Memory(Memory), Options(Options) {}
 
+  /// Shared admission before producer polling or instruction fetch. Neither
+  /// the generated validator nor this check touches guest RAM.
+  llvm::Expected<bool> validate(X64ContinuationStateV6 &State, uint64_t Address,
+                                X64PagedBody Validate,
+                                unsigned PagingAddressBits);
+
+  llvm::Expected<X64PagedExecutionResult>
+  deliver(X64ContinuationStateV6 &State, const X64ContinuationEventV1 &Event,
+          uint32_t MXCSRMask);
+
   llvm::Expected<X64PagedExecutionResult>
   execute(X64ContinuationStateV6 &State, uint64_t Address,
           llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body,
@@ -65,6 +76,9 @@ public:
   void recordError(llvm::Error Failure);
 
 private:
+  llvm::Error deliverEvent(X64ContinuationStateV6 &State,
+                           const X64ContinuationEventV1 &Event,
+                           uint32_t MXCSRMask);
   translate::X86PagedMemory &Memory;
   X64PagedExecutionOptions Options;
   X64PagedExecutionResult Last;
@@ -79,6 +93,13 @@ neverd_x64_paged_step_v1(uint8_t *Context, uint8_t *State, uint64_t Address,
                          const uint8_t *Bytes, uint64_t Size, X64PagedBody Body,
                          X64PagedBody Validate, uint64_t MXCSRMask,
                          uint64_t PagingAddressBits);
+extern "C" uint64_t
+neverd_x64_paged_validate_v1(uint8_t *Context, uint8_t *State, uint64_t Address,
+                             X64PagedBody Validate, uint64_t PagingAddressBits);
+extern "C" uint64_t neverd_x64_paged_event_v1(uint8_t *Context, uint8_t *State,
+                                              const uint8_t *Event,
+                                              uint64_t MXCSRMask);
+extern "C" uint64_t neverd_x64_paged_progress_v1(uint8_t *Context);
 
 } // namespace neverd::analysis
 #endif // NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H

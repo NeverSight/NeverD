@@ -501,11 +501,12 @@ struct X64ContinuationSourceOptions {
   bool EventDelivery = false;
   /// V6 scalar source uses an explicit second pointer and the paged executor.
   /// Memory, #DE/#UD/#GP/#SS/#PF/#AC, fetch authentication and restart state
-  /// belong to that executor. Native environment bindings and the no-fault
-  /// event/scheduler interface cannot be combined with this memory binding.
+  /// belong to that executor. ScheduledEvents selects its faultable scheduler;
+  /// native bindings and the no-fault EventDelivery interface remain separate.
   bool PagedMemory = false;
   /// Export instruction-entry validation and interrupt-shadow attribution for
-  /// the optional bounded IRQ/NMI scheduler. Requires the V6 event interface.
+  /// the optional bounded IRQ/NMI scheduler. Requires V6 EventDelivery or
+  /// PagedMemory, which selects the corresponding memory and event owner.
   /// External producers still own interrupt-controller selection and priority.
   bool ScheduledEvents = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
@@ -530,7 +531,8 @@ struct X64ContinuationInstructionSource {
   /// count, callee preservation, private frame or return-slot proof is assumed.
   LowFunc Function;
   /// Generated from the same entry guard, before any instruction effects.
-  /// Only present for ScheduledEvents. Returns Continue or InvalidState.
+  /// Present for ScheduledEvents or PagedMemory. Returns Continue or
+  /// InvalidState.
   std::optional<LowFunc> EntryValidation;
   /// A successfully completed canonical STI starts a one-instruction shadow
   /// only if its original IF was zero. A rejected/native step starts none.

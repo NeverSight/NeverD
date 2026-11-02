@@ -6,6 +6,13 @@ scalar instruction completion and faults with independent original KVM CPU
 execution. Preserve C/manifests with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`.
 It also checks code changes, restart, backing failures and admission. Its
 execution fixture requires Linux x64; missing KVM is an explicit oracle skip.
+Its paged scheduling matrix injects every IRQ vector and NMI through KVM's
+actual interrupt window, and compares inhibition, full state, RAM, fault frames
+and producer accounting. CLI/STI cover every CPL/IOPL combination, IF/VIF/VIP
+and PVI; independent cases compare pre-fetch virtual-interrupt faults with
+external-event priority. Multi-instruction STI/CLI/JMP/CALL cases qualify shadow
+lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
+`KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
 `NeverDX86PagingTests` checks the owned x86 paging and paged V6 event interfaces.

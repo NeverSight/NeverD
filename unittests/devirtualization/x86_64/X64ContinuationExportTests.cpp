@@ -1492,4 +1492,28 @@ TEST_F(X64ContinuationExportTest,
   }
 }
 
+TEST_F(X64ContinuationExportTest, PagedSchedulingUsesTheFaultableEventOwner) {
+  load({0xfb, 0x90});
+  const auto Request = request("\"instructions\":[4096,4097],\"paged_memory\":"
+                               "true,\"scheduled_events\":true");
+  for (bool LLVM : {false, true}) {
+    const char *Report = nullptr;
+    const auto Source = take(neverd_x64_continuation_source_v1(
+        Session, Request.data(), Request.size(), LLVM, &Report));
+    ASSERT_FALSE(Source.empty()) << take(neverd_last_error(Session));
+    auto Manifest = llvm::json::parse(take(Report));
+    ASSERT_TRUE(bool(Manifest)) << llvm::toString(Manifest.takeError());
+    const auto *Object = Manifest->getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getBoolean("paged_memory"), true);
+    EXPECT_EQ(Object->getBoolean("scheduled_events"), true);
+    EXPECT_EQ(Object->getString("scheduled_event_driver"),
+              "neverd_x64_continue_paged_events_v6");
+    EXPECT_EQ(Object->getInteger("native_requests"), 0);
+    EXPECT_NE(Source.find("neverd_x64_paged_event_v1"), std::string::npos);
+    EXPECT_EQ(Source.find("neverd_x64_deliver_event_body_v6"),
+              std::string::npos);
+  }
+}
+
 } // namespace

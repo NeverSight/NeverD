@@ -90,8 +90,55 @@ Existing status identities 0..16 remain unchanged. Internal status 17 is
 consumed by the executor. Status 18 reports physical backing failure, 19 reports
 shutdown, and 20 reports changed code requiring relift. A completed instruction
 or an architectural fault attempt consumes one instruction-budget unit;
-native/invalid/backing/changed-code stops do not. Full fault and backing details
+native/invalid/changed-code stops and operand backing failures do not. A fault
+whose IDT entry subsequently hits a backing failure still consumes its attempt.
+`InstructionAttempted` and `Delivery.InputAccepted` retain these distinctions
+independently of the final status. Full fault and backing details
 are available through the context's `lastResult()` and `lastError()`.
+
+## Paged IRQ/NMI scheduling
+
+Add `scheduled_events: true` to the paged binding to export:
+
+```c
+uint64_t neverd_x64_continue_paged_events_v6(
+    neverd_x64_state_v6 *state, uint8_t *memory_context,
+    uint64_t *instruction_budget, neverd_x64_interruptibility_v1 *shadows,
+    uint64_t *poll_budget, neverd_x64_peek_interrupt_v1 peek,
+    neverd_x64_accept_interrupt_v1 accepted, void *producer_context);
+```
+
+The [shared scheduler](x86-event-scheduling.md) owns polling, budgets and
+persistent STI/MOV-SS inhibition for both memory bindings. The paged variant
+uses the runtime's instruction validator before invoking a producer and the
+same faultable event owner as synchronous exceptions. It does not emit or call
+the successful-host-RAM event body. `memory_context` is the paged executor;
+`producer_context` belongs to the external event producer. State, both contexts,
+shadows and budgets must be disjoint from each other and guest RAM.
+
+An eligible IRQ/NMI precedes the next instruction's fetch, including an absent
+code page. An inhibited candidate remains pending while that instruction may
+execute or fault. The paged event result records acceptance before the first
+IDT access. The scheduler calls `accepted` exactly once when that event was
+accepted, even if entry produces a secondary exception, shutdown or a physical
+backing failure. These events consume no instruction budget. The callback
+acknowledges producer storage; it does not signal APIC EOI. Invalid or inhibited
+events are not acknowledged. Partial frame writes, CR2 and NMI blocking remain
+owned by the common event algorithm.
+
+Completed instructions and architectural fault attempts expire supplied
+inhibition; an architectural fault whose delivery fails is still an attempt.
+Code changes and operand backing failures preserve inhibition and instruction
+budget. Polls are charged independently. Call/return following retains the
+export's explicit policy and can poll at the selected callee's entry.
+
+CLI/STI check CPL against IOPL. At CPL3 with CR4.PVI and IOPL below 3, they
+update VIF instead of IF; virtual STI faults when VIP is set. Only an actual
+IF transition from zero to one starts STI inhibition. The runtime also owns
+the instruction-entry #GP when CPL3/PVI find both VIF and VIP set, regardless of
+IOPL or opcode. It occurs before fetch, after eligible external event selection.
+The shared flags lowering performs the authorized IF/VIF update. Paged STI
+requires the scheduling binding so its inhibition can persist across calls.
 
 ## Verification and limits
 
@@ -133,12 +180,14 @@ software entry at the last canonical instruction byte.
 
 This is the scalar instruction commit domain. REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
-native system providers, TF, IRQ/NMI scheduling, SMI/AEX, legacy i386 dispatch,
+native system providers, TF, SMI/AEX, legacy i386 dispatch,
 CET/FRED, MMIO, TLB and concurrent writers remain outside this binding.
-Combining it with the old host-RAM event scheduler, direct dispatch or RTM
-regions is explicitly rejected. The [older no-fault scheduler](x86-event-scheduling.md)
-retains its separate contract. LLVM release/pin completion is not implied.
+Intra-instruction events, device arrival and interrupt-controller selection
+remain separate. Combining paged memory with `event_delivery`, direct dispatch
+or RTM regions is explicitly rejected. The [no-fault scheduler](x86-event-scheduling.md)
+retains its separate successful-RAM contract. LLVM release/pin completion is not implied.
 
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
-volume 2 CALL/DIV/IDIV/CMOV and volume 3A paging and exception priority;
+volume 2 CALL/DIV/IDIV/CMOV/CLI/STI, volume 3A paging, exception priority
+and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

@@ -10,6 +10,7 @@
 #include "X64ContinuationSchedule.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -21,14 +22,20 @@ namespace neverd {
 void emitX64ContinuationSchedule(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls) {
+    bool FollowInternalCalls,
+    const analysis::X64ContinuationSourceOptions &Options) {
+  const bool Paged = Options.PagedMemory;
   OS << R"C(
 /* Instruction-boundary IRQ/NMI producer. peek returns 0=no event, 1=pending;
  * every peek consumes one poll-budget unit. It must not acknowledge the event
  * or mutate state, shadows, budgets, selected code or guest RAM. The producer
  * owns priority/APIC/PIC eligibility (including CR8), coalescing and arrival.
- * accepted is called exactly once after successful delivery; it cannot fail.
- * Its only effect is acknowledging that event in the producer's context.
+)C";
+  OS << (Paged ? " * accepted consumes the event once after admission, "
+                 "including failed IDT entry.\n"
+               : " * accepted is called exactly once after successful "
+                 "delivery; it cannot fail.\n");
+  OS << R"C( * Its only effect is acknowledging that event in the producer's context.
  * State, shadows, budgets and context are mutually disjoint and accessible.
  * No callback runs when entry validation, selection or a budget stops execution.
  * 16=poll budget exhausted. Other statuses retain the continuation contract.
@@ -58,8 +65,10 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
     }
 }
 
-uint64_t neverd_x64_continue_events_v6(
-    neverd_x64_state_v6 *state, uint64_t *budget,
+)C";
+  OS << "uint64_t neverd_x64_continue_" << (Paged ? "paged_" : "")
+     << "events_v6(\n    neverd_x64_state_v6 *state, "
+     << (Paged ? "uint8_t *memory_context, " : "") << R"C(uint64_t *budget,
     neverd_x64_interruptibility_v1 *shadows, uint64_t *poll_budget,
     neverd_x64_peek_interrupt_v1 peek,
     neverd_x64_accept_interrupt_v1 accepted, void *context) {
@@ -75,10 +84,18 @@ uint64_t neverd_x64_continue_events_v6(
         int sti;
         switch (state->PC) {
 )C";
-  for (const auto &Unit : Units)
+  for (const auto &Unit : Units) {
     OS << "        case 0x" << llvm::utohexstr(Unit.Address)
-       << "ULL: status = " << Unit.EntryValidation->Name
-       << "((uint8_t *)state); sti = " << unsigned(Unit.IsSti) << "; break;\n";
+       << "ULL: status = ";
+    if (Paged)
+      OS << "neverd_x64_paged_validate_v1(memory_context, (uint8_t *)state, 0x"
+         << llvm::utohexstr(Unit.Address) << "ULL, "
+         << Unit.EntryValidation->Name << "_paged_adapter, "
+         << *Options.PagingAddressBits << ")";
+    else
+      OS << Unit.EntryValidation->Name << "((uint8_t *)state)";
+    OS << "; sti = " << unsigned(Unit.IsSti) << "; break;\n";
+  }
   OS << R"C(        default: return last == 2 ? 2 : 8;
         }
         if (status) return status;
@@ -101,9 +118,17 @@ uint64_t neverd_x64_continue_events_v6(
             event.STIBlocked = shadows->STIBlocked;
             event.SSBlocked = shadows->SSBlocked;
             event.NMIBlockedBySTI = shadows->NMIBlockedBySTI;
-            status = neverd_x64_deliver_event_v6(state, &event);
-            if (status == 7) {
-                shadows->STIBlocked = shadows->SSBlocked = 0;
+)C";
+  if (Paged)
+    OS << "            status = neverd_x64_paged_event_v1(memory_context, "
+          "(uint8_t *)state, (const uint8_t *)&event, "
+       << *Options.MXCSRMask << ");\n"
+       << "            if (neverd_x64_paged_progress_v1(memory_context) & "
+       << analysis::kX64PagedEventAccepted << ") {\n";
+  else
+    OS << "            status = neverd_x64_deliver_event_v6(state, &event);\n"
+          "            if (status == 7) {\n";
+  OS << R"C(                shadows->STIBlocked = shadows->SSBlocked = 0;
                 accepted(&pending, context);
                 return status;
             }
@@ -115,13 +140,22 @@ uint64_t neverd_x64_continue_events_v6(
   for (const auto &Unit : Units)
     OS << "        case 0x" << llvm::utohexstr(Unit.Address)
        << "ULL: status = " << Unit.Function.Name
-       << "((uint8_t *)state); break;\n";
+       << (Paged ? "_paged_step(state, memory_context); break;\n"
+                 : "((uint8_t *)state); break;\n");
   OS << R"C(        default: return 5;
         }
-        if (status == 4 || status == 5) return status;
-        --*budget;
-        shadows->STIBlocked = (status == 0 && sti && !(old_flags & 512));
-        shadows->SSBlocked = 0;
+)C";
+  if (Paged)
+    OS << "        if (!(neverd_x64_paged_progress_v1(memory_context) & "
+       << analysis::kX64PagedInstructionAttempted << ")) return status;\n";
+  else
+    OS << "        if (status == 4 || status == 5) return status;\n";
+  OS << R"C(        --*budget;
+)C";
+  OS << "        shadows->STIBlocked = (status == 0 && sti && !(old_flags & "
+        "512)"
+     << (Paged ? " && (state->RFlags & 512)" : "") << ");\n";
+  OS << R"C(        shadows->SSBlocked = 0;
 )C";
   if (FollowInternalCalls)
     OS << R"C(        if (status == 1 || status == 3) {

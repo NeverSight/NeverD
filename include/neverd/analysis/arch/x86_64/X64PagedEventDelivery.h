@@ -32,6 +32,10 @@ enum class X64PagedEventStatus : uint8_t {
 
 struct X64PagedEventResult {
   X64PagedEventStatus Status = X64PagedEventStatus::InvalidState;
+  /// The original event passed admission and inhibition before its first IDT
+  /// access. A secondary fault does not put that external event back in a
+  /// queue.
+  bool InputAccepted = false;
   uint8_t DeliveredVector = 0;
   unsigned DeliveryAttempts = 0;
   std::optional<translate::X86MemoryException> LastException;

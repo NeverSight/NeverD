@@ -62,7 +62,39 @@ protected:
   using Run = uint64_t (*)(X64ContinuationStateV6 *, uint8_t *, uint64_t *);
   using Access = decltype(&neverd_x64_paged_access_v1);
   using Step = decltype(&neverd_x64_paged_step_v1);
-  using Bind = void (*)(Access, Step);
+  using Validate = decltype(&neverd_x64_paged_validate_v1);
+  using Event = decltype(&neverd_x64_paged_event_v1);
+  using Progress = decltype(&neverd_x64_paged_progress_v1);
+  using Bind = void (*)(Access, Step, Validate, Event, Progress);
+  struct Shadows {
+    uint8_t STIBlocked = 0, SSBlocked = 0, NMIBlockedBySTI = 0, Reserved[5]{};
+  };
+  struct Pending {
+    uint8_t Vector = 65, Kind = 2;
+  };
+  struct Producer {
+    Pending Candidate;
+    int Ready = 1;
+    unsigned Polls = 0, Acks = 0;
+    static int peek(const X64ContinuationStateV6 *, const Shadows *, Pending *P,
+                    void *Context) {
+      auto &Self = *static_cast<Producer *>(Context);
+      ++Self.Polls;
+      *P = Self.Candidate;
+      return Self.Ready;
+    }
+    static void accepted(const Pending *P, void *Context) {
+      auto &Self = *static_cast<Producer *>(Context);
+      EXPECT_EQ(P->Vector, Self.Candidate.Vector);
+      EXPECT_EQ(P->Kind, Self.Candidate.Kind);
+      ++Self.Acks;
+    }
+  };
+  using Schedule = uint64_t (*)(X64ContinuationStateV6 *, uint8_t *, uint64_t *,
+                                Shadows *, uint64_t *,
+                                decltype(&Producer::peek),
+                                decltype(&Producer::accepted), void *);
+  unsigned ScheduledCompilation = 0;
 
   void reset(const std::vector<uint8_t> &Code) {
     State = {};
@@ -130,18 +162,21 @@ protected:
                const std::string &Optimization, Run &Driver,
                const std::vector<uint64_t> &Addresses = {0x1000},
                const std::string &Compiler = NEVERD_TEST_CLANG,
-               uint64_t Base = 0x1000) {
+               uint64_t Base = 0x1000, Schedule *Scheduled = nullptr) {
     llvm::json::Array PCs;
     for (auto PC : Addresses)
       PCs.push_back(PC);
     std::string Request;
     llvm::raw_string_ostream OS(Request);
-    OS << llvm::formatv("{0}", llvm::json::Value(llvm::json::Object{
-                                   {"profile", "kernel-events-v6"},
-                                   {"mxcsr_mask", "0xffff"},
-                                   {"paging_address_bits", 48},
-                                   {"paged_memory", true},
-                                   {"instructions", std::move(PCs)}}));
+    OS << llvm::formatv("{0}",
+                        llvm::json::Value(llvm::json::Object{
+                            {"profile", "kernel-events-v6"},
+                            {"mxcsr_mask", "0xffff"},
+                            {"paging_address_bits", 48},
+                            {"paged_memory", true},
+                            {"scheduled_events", Scheduled != nullptr},
+                            {"follow_internal_calls", Scheduled != nullptr},
+                            {"instructions", std::move(PCs)}}));
     auto Export = exportX64Continuation(image(Code, Base), Request, LLVM);
     ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
     ASSERT_EQ(Export->Source.find("unknown value"), std::string::npos);
@@ -149,6 +184,12 @@ protected:
     ASSERT_EQ(Parsed.getAsObject()->getInteger("native_requests"), 0);
     auto Name = (LLVM ? "llvm" : "high") + Optimization +
                 (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc");
+    if (Scheduled)
+      Name +=
+          "-" +
+          std::string(
+              testing::UnitTest::GetInstance()->current_test_info()->name()) +
+          "-" + std::to_string(ScheduledCompilation++);
     if (Base != 0x1000)
       Name += "-at-" + std::to_string(Addresses.front());
     const auto Source = tmpFile(Name + ".c"), Library = tmpFile(Name + ".so");
@@ -157,10 +198,19 @@ protected:
 static uint64_t (*access_bridge)(void *, uint64_t, uint64_t, uint64_t);
 static uint64_t (*step_bridge)(uint8_t *, uint8_t *, uint64_t, const uint8_t *,
     uint64_t, neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t);
+static uint64_t (*validate_bridge)(uint8_t *, uint8_t *, uint64_t,
+    neverd_x64_paged_body_v1, uint64_t);
+static uint64_t (*event_bridge)(uint8_t *, uint8_t *, const uint8_t *, uint64_t);
+static uint64_t (*progress_bridge)(uint8_t *);
 void bind_paged(uint64_t (*access)(void *, uint64_t, uint64_t, uint64_t),
     uint64_t (*step)(uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,
-        neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t)) {
+        neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t),
+    uint64_t (*validate)(uint8_t *, uint8_t *, uint64_t,
+        neverd_x64_paged_body_v1, uint64_t),
+    uint64_t (*event)(uint8_t *, uint8_t *, const uint8_t *, uint64_t),
+    uint64_t (*progress)(uint8_t *)) {
     access_bridge = access; step_bridge = step;
+    validate_bridge = validate; event_bridge = event; progress_bridge = progress;
 }
 uint64_t neverd_x64_paged_access_v1(void *exchange, uint64_t address,
                                    uint64_t bytes, uint64_t flags) {
@@ -171,6 +221,17 @@ uint64_t neverd_x64_paged_step_v1(uint8_t *context, uint8_t *state,
     neverd_x64_paged_body_v1 body, neverd_x64_paged_body_v1 validate,
     uint64_t mask, uint64_t bits) {
     return step_bridge(context, state, address, bytes, size, body, validate, mask, bits);
+}
+uint64_t neverd_x64_paged_validate_v1(uint8_t *context, uint8_t *state,
+    uint64_t address, neverd_x64_paged_body_v1 validate, uint64_t bits) {
+    return validate_bridge(context, state, address, validate, bits);
+}
+uint64_t neverd_x64_paged_event_v1(uint8_t *context, uint8_t *state,
+    const uint8_t *event, uint64_t mask) {
+    return event_bridge(context, state, event, mask);
+}
+uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
+    return progress_bridge(context);
 }
 )C";
     File.close();
@@ -194,7 +255,14 @@ uint64_t neverd_x64_paged_step_v1(uint8_t *context, uint8_t *state,
     const auto Binder =
         reinterpret_cast<Bind>(DL.getAddressOfSymbol("bind_paged"));
     ASSERT_NE(Binder, nullptr);
-    Binder(&neverd_x64_paged_access_v1, &neverd_x64_paged_step_v1);
+    Binder(&neverd_x64_paged_access_v1, &neverd_x64_paged_step_v1,
+           &neverd_x64_paged_validate_v1, &neverd_x64_paged_event_v1,
+           &neverd_x64_paged_progress_v1);
+    if (Scheduled) {
+      *Scheduled = reinterpret_cast<Schedule>(
+          DL.getAddressOfSymbol("neverd_x64_continue_paged_events_v6"));
+      ASSERT_NE(*Scheduled, nullptr);
+    }
     Driver =
         reinterpret_cast<Run>(DL.getAddressOfSymbol("neverd_x64_run_paged_v6"));
     ASSERT_NE(Driver, nullptr);
@@ -352,7 +420,8 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
            {0xf0, 0x48, 0x01,
             0x07},             // Native LOCK is not a host-pointer operation.
            {0x0f, 0x20, 0xd8}, // Native CR3 needs its architectural transition.
-           {0xfb}}) {
+           {0xfb},
+           {0x66, 0xfb}}) {
     auto Units = buildX64ContinuationSource(image(Code), {0x1000}, O);
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
     EXPECT_TRUE(Units->front().RequiresNativeExecution);
@@ -738,4 +807,6 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
   RecordProperty("software_completion_cpu_comparisons", SoftwareCompletions);
 }
 #endif
+#include "X64PagedScheduleTests.inc"
+
 } // namespace

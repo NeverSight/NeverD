@@ -6,6 +6,9 @@ producer before each selected original instruction, delivers eligible IRQs or
 NMIs through the existing LowIR event owner, and stops at handler entry. Both
 HighC and LLVM-to-C use the same instruction bodies, entry guards and scheduler.
 The original instruction-only drivers remain available.
+`paged_memory: true` instead of `event_delivery: true` selects the
+[faultable paged scheduler](x86-paged-execution.md#paged-irqnmi-scheduling),
+which reuses this scheduling owner with explicit paged runtime bridges.
 
 ```json
 {
@@ -77,8 +80,9 @@ cannot be split into these source boundaries. Selected steps retain their
 existing mode/privilege/flags domains. The event function's compatibility-entry
 domain does not create an i386 dispatcher. MOV/POP SS remain native boundaries;
 tracking supplied inhibition does not implement their descriptor-load execution.
-APIC/devices, restartable page faults, nested faults/#DF, SGX AEX, SMI entry and
-CET/FRED routing remain separate, unfinished boundaries.
+This successful-RAM interface does not own restartable page faults or nested
+delivery faults; the paged binding now owns those interactions with scheduling.
+APIC/devices, SGX AEX, SMI entry and CET/FRED routing remain unfinished boundaries.
 
 `ScheduledEvents*` checks persistent shadows, budgets, invalid entry, producer
 failure, acknowledgment, calls and synchronous exceptions. Its independent KVM

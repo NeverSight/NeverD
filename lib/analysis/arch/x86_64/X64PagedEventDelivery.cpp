@@ -208,6 +208,7 @@ public:
   void beginEvent(NdVar NMI) {
     if (Stopped)
       return;
+    Result.InputAccepted = true;
     if (value(NMI))
       State.NMIBlocked = 1;
     if (Event.Kind == X64ContinuationEventKind::Fault && Event.Vector == 14)
@@ -317,6 +318,8 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     detail::X64ContinuationDelivery<EventWriter>(W, Controls.CR4 & 0x1000 ? 57
                                                                           : 48)
         .execute(NdVar::scalar(0, 8));
+    if (Result.DeliveryAttempts == 0)
+      Result.InputAccepted = W.Result.InputAccepted;
     ++Result.DeliveryAttempts;
     if (W.Error)
       return std::move(*W.Error);

@@ -113,8 +113,15 @@ architectural write; all six arbitrary status bits follow successful division.
 delivery at original instruction boundaries. Its optional entry validators
 copy the actual instruction guard and use distinct synthetic function identities;
 original-PC comparisons stay unchanged. The scheduler owns STI/shadow lifetime,
-poll accounting and post-delivery acknowledgment. Producers own arrival and
-controller priority. Neither C route invents a second descriptor/frame model.
+poll accounting and acknowledgment. Its paged route reuses the runtime entry
+validator, instruction transaction and faultable IDT owner. The latter records
+original-event acceptance before RAM access, so secondary faults cannot cause
+repeated external-event acknowledgment. The runtime distinguishes architectural
+attempts from pre-execution backing stops for budget and shadow accounting.
+CPL/IOPL/PVI/VIP select the authorized IF/VIF mask; the shared machine-flags
+lowering writes that mask. PVI/VIF/VIP entry faults belong to the runtime before
+fetch, after external event selection. Producers own arrival and controller
+priority. Neither C route invents a second descriptor/frame model.
 
 `X86SystemRegisterAsm.h` owns CR/DR register selection, native width and native
 LLVM/C API names. LLVM emission and both C projections share that contract.

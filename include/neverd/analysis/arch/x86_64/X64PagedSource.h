@@ -25,6 +25,12 @@ enum class X64PagedExit : uint64_t {
   CodeChanged = 20,
 };
 
+/// Progress of the last runtime operation, independent of its final status.
+/// A faulting instruction is charged even if subsequent entry hits a backing
+/// failure. An accepted external event is consumed even on secondary faults.
+inline constexpr uint64_t kX64PagedInstructionAttempted = 1;
+inline constexpr uint64_t kX64PagedEventAccepted = 2;
+
 // Synthetic source-only identity. Original instruction addresses cannot occupy
 // the reserved final addresses used by continuation helpers.
 inline constexpr uint64_t kX64PagedAccessAddress = UINT64_MAX - 1;
@@ -37,6 +43,8 @@ enum class X64PagedAccess : uint64_t {
   Fault,
   /// Address is the vector; the size argument transports the original next PC.
   SoftwareInterrupt,
+  /// Address selects CLI (0) or STI (1); result is the authorized IF/VIF mask.
+  InterruptFlagMask,
 };
 
 struct X64PagedExchange {

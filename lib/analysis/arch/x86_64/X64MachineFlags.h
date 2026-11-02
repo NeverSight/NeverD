@@ -39,6 +39,7 @@ struct X64MachineFlags {
       UserRejectedWriteMask | IOPLMask;
   static constexpr uint64_t ResumeMask = uint64_t{1} << 16;
   static constexpr uint64_t AlignmentCheckMask = uint64_t{1} << 18;
+  static constexpr uint64_t VirtualInterruptMask = uint64_t{3} << 19;
   static constexpr uint64_t SnapshotClearMask =
       ResumeMask | (uint64_t{1} << 17);
   static constexpr uint64_t EntryMask =
@@ -127,13 +128,16 @@ struct X64MachineFlagsTransition {
 
 /// A pure lowering shared by source generation and native proof. It owns only
 /// the system portion; original lifter ops still pack/scatter scalar flags and
-/// perform the actual stack accesses. Temporary allocation must be disjoint
+/// perform the actual stack accesses. An optional InterruptMask is already
+/// authorized by the CPU owner and selects IF or VIF; default profiles use IF.
+/// Temporary allocation must be disjoint
 /// from all supplied values. No host flags or path assumption enters this code.
 inline std::optional<X64MachineFlagsTransition>
 lowerX64MachineFlags(const LowOp &IntrinsicOp, NdVar System,
                      llvm::function_ref<NdVar(uint16_t)> Temporary,
                      InterpreterMachineStateProfile Profile =
-                         InterpreterMachineStateProfile::UserX64NoFaultV1) {
+                         InterpreterMachineStateProfile::UserX64NoFaultV1,
+                     std::optional<NdVar> InterruptMask = std::nullopt) {
   if (!X64MachineFlags::supportsProfile(Profile) ||
       IntrinsicOp.Opcode != NdOp::INTRINSIC ||
       IntrinsicOp.MemoryOrdering != NdMemoryOrdering::None ||
@@ -167,8 +171,16 @@ lowerX64MachineFlags(const LowOp &IntrinsicOp, NdVar System,
   const auto Constant = [](uint64_t Value) { return NdVar::scalar(Value, 8); };
   if (Interrupt) {
     constexpr uint64_t IF = uint64_t{1} << 9;
-    Emit(*Interrupt ? NdOp::INT_OR : NdOp::INT_AND, System,
-         {System, Constant(*Interrupt ? IF : ~IF)});
+    NdVar Mask = InterruptMask.value_or(Constant(IF));
+    if (!*Interrupt) {
+      if (InterruptMask) {
+        Mask = Temporary(8);
+        Emit(NdOp::INT_XOR, Mask, {*InterruptMask, Constant(UINT64_MAX)});
+      } else {
+        Mask = Constant(~IF);
+      }
+    }
+    Emit(*Interrupt ? NdOp::INT_OR : NdOp::INT_AND, System, {System, Mask});
   } else if (AccessCheck) {
     const uint64_t AC = X64MachineFlags::AlignmentCheckMask;
     Emit(*AccessCheck ? NdOp::INT_OR : NdOp::INT_AND, System,
