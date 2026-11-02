@@ -153,11 +153,11 @@
           "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
         },
         "clang": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "ld.lld": {
-          "path": "/home/ad/.local/bin/ld.lld",
+          "path": "ld.lld",
           "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
         },
         "objcopy": {
@@ -298,11 +298,11 @@
           "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
         },
         "clang": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "ld.lld": {
-          "path": "/home/ad/.local/bin/ld.lld",
+          "path": "ld.lld",
           "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
         },
         "objcopy": {

@@ -62,7 +62,9 @@ std::optional<SourceInlineHighView> projectSpecializedHighSourceCalls(
 
 /// A request-local original-image C view only. The initial module is never
 /// changed. Complete source bodies are recovered together, verified, and
-/// inlined only where an unavailable argument has no use in that body.
+/// prepared from leaves to callers within the same support/work bounds. An
+/// unavailable argument may disappear only when the admitted body has no use
+/// for it, including its nested observations.
 /// Failure or an exhausted bound leaves the original view authoritative.
 SourceInlineResult specializeUnavailableSourceCalls(
     const BinaryImage &Image, const PipelineResult &Original,

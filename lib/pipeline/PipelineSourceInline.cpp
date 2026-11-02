@@ -23,6 +23,7 @@
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -135,6 +136,49 @@ std::set<unsigned> absentStackFormals(const MedFunc &Function) {
   return Candidates;
 }
 
+/// Only an already admitted source query asks for descendants. Signature
+/// recovery has retained these bodies and original blocks; this does not lift
+/// another image region or add an interprocedural scan to the cheap gate.
+void addSourceInlineDependencies(const PipelineResult &Original,
+                                 const std::set<va_t> &Roots,
+                                 std::set<va_t> &Supports) {
+  if (Supports.size() == limits::pipeline::kSourceInlineCallees)
+    return;
+  llvm::DenseMap<va_t, const MedFunc *> Bodies;
+  Bodies.reserve(Original.OmittedCallees->Bodies.size());
+  for (const auto &Body : Original.OmittedCallees->Bodies)
+    Bodies.try_emplace(Body->Entry, Body.get());
+  std::vector<va_t> Pending(Supports.begin(), Supports.end());
+  std::set<va_t> Inspected = Supports;
+  size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
+  for (size_t I = 0; I < Pending.size(); ++I) {
+    const auto At = Bodies.find(Pending[I]);
+    if (At == Bodies.end())
+      continue;
+    for (const auto &Block : At->second->Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (!Remaining)
+          return;
+        --Remaining;
+        if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
+            !Op.Inputs[0].isConst() || Op.SourceCallHint)
+          continue;
+        const va_t Target = Op.Inputs[0].ConstVal;
+        if (Roots.count(Target) || !Inspected.insert(Target).second ||
+            Original.CallPrototypeArguments.count(Target) ||
+            !Original.OmittedCallees->SourceOriginalBlocks.count(Target))
+          continue;
+        const auto Body = Bodies.find(Target);
+        if (Body == Bodies.end() || absentStackFormals(*Body->second).empty())
+          continue;
+        Supports.insert(Target);
+        Pending.push_back(Target);
+        if (Supports.size() == limits::pipeline::kSourceInlineCallees)
+          return;
+      }
+  }
+}
+
 } // namespace
 
 bool supportsSourceCallSpecialization(const BinaryImage &Image,
@@ -205,9 +249,10 @@ SourceInlineResult specializeUnavailableSourceCalls(
       Roots.size() > limits::pipeline::kSourceInlineRoots)
     return {};
 
-  const auto Supports = sourceInlineSupports(Original, Requests, Roots);
+  auto Supports = sourceInlineSupports(Original, Requests, Roots);
   if (Supports.empty())
     return {};
+  addSourceInlineDependencies(Original, Roots, Supports);
 
   // Reuse the normal source admission path. A signature-reader body alone
   // does not authorize emission: frame, return, exception and ABI validation
@@ -263,20 +308,20 @@ SourceInlineResult specializeUnavailableSourceCalls(
       size_t Size = 0;
       for (const auto &Block : Function)
         Size += Block.size();
-      // An unused outer argument must not be traded for missing machine
-      // inputs inside the body. Retain the original call in that case.
       if (!Function.isDeclaration() &&
-          Size <= limits::pipeline::kSourceInlineBodyOperations &&
-          !source_inline::hasUnavailableObservations(Function))
+          Size <= limits::pipeline::kSourceInlineBodyOperations)
         Sizes.emplace(&Function, Size);
     }
   }
   unsigned Expanded = 0;
   std::map<va_t, SourceInlineBody> ExpandedBodies;
-  for (auto &Function : *Result.Module) {
-    const auto Entry = address(Function);
-    if (!Entry || !Roots.count(*Entry))
-      continue;
+  std::map<llvm::Function *, bool> Prepared;
+  std::set<llvm::Function *> Active;
+  const auto Expand = [&](auto &&Self, llvm::Function &Function) -> bool {
+    if (const auto At = Prepared.find(&Function); At != Prepared.end())
+      return At->second;
+    if (!Active.insert(&Function).second)
+      return false;
     llvm::SmallVector<llvm::CallInst *, 16> Calls;
     for (auto &Instruction : llvm::instructions(Function)) {
       auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
@@ -285,15 +330,27 @@ SourceInlineResult specializeUnavailableSourceCalls(
           Call->isMustTailCall() || !Sizes.count(Callee) ||
           Callee->arg_size() != Call->arg_size())
         continue;
+      Calls.push_back(Call);
+    }
+    bool DependenciesReady = true;
+    for (auto *Call : Calls) {
+      auto *Callee = Call->getCalledFunction();
+      // A missing argument can be discarded only after every nested input
+      // observation has been checked. Visiting each bounded support body once
+      // also keeps shared descendants from being expanded per caller.
+      if (!Self(Self, *Callee)) {
+        DependenciesReady = false;
+        continue;
+      }
+      bool Unused = false;
       for (unsigned P = 0; P < Call->arg_size(); ++P)
         if (Callee->getArg(P)->use_empty() &&
             unavailable(Call->getArgOperand(P))) {
-          Calls.push_back(Call);
+          Unused = true;
           break;
         }
-    }
-    for (auto *Call : Calls) {
-      const auto *Callee = Call->getCalledFunction();
+      if (!Unused)
+        continue;
       const size_t Size = Sizes.at(Callee);
       if (Size > limits::pipeline::kSourceInlineBodyOperations ||
           Size > Remaining)
@@ -308,7 +365,8 @@ SourceInlineResult specializeUnavailableSourceCalls(
       const auto Target = address(*Callee);
       llvm::InlineFunctionInfo Info;
       if (llvm::InlineFunction(*Call, Info).isSuccess()) {
-        ++Expanded;
+        if (const auto Entry = address(Function); Entry && Roots.count(*Entry))
+          ++Expanded;
         if (Target) {
           auto &Saved = ExpandedBodies[*Target];
           Saved.Parameters = Body.Parameters;
@@ -316,7 +374,25 @@ SourceInlineResult specializeUnavailableSourceCalls(
         }
       }
     }
-  }
+    Active.erase(&Function);
+    // Only support bodies need this admission proof. A root's remaining
+    // unknown inputs stay in its source; no caller consumes its Ready flag.
+    if (!Sizes.count(&Function))
+      return true;
+    size_t Size = 0;
+    for (const auto &Block : Function)
+      Size += Block.size();
+    const bool Ready = DependenciesReady &&
+                       Size <= limits::pipeline::kSourceInlineBodyOperations &&
+                       !source_inline::hasUnavailableObservations(Function);
+    if (Ready && Sizes.count(&Function))
+      Sizes[&Function] = Size;
+    Prepared.emplace(&Function, Ready);
+    return Ready;
+  };
+  for (auto &Function : *Result.Module)
+    if (const auto Entry = address(Function); Entry && Roots.count(*Entry))
+      Expand(Expand, Function);
   if (!Expanded)
     return {};
   for (auto &Function : *Result.Module)

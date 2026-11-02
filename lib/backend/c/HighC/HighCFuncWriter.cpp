@@ -76,12 +76,6 @@ uint64_t checkedStackAlign(uint64_t Size) {
   return checkedStackAdd(Size, Mask) & ~Mask;
 }
 
-std::optional<FunctionSym> debugFunction(DebugContext *Dbg, va_t Entry) {
-  if (!Dbg)
-    return std::nullopt;
-  return Dbg->resolveFunction(Entry);
-}
-
 bool isWindowsLanguagePersonality(ExceptionPersonality Personality) {
   switch (Personality) {
   case ExceptionPersonality::CSpecificHandler:
@@ -301,6 +295,12 @@ unsigned countedBits(const HighExpr &Operand) {
   }
 }
 
+std::optional<FunctionSym>
+HighCWriter::debugFunction(const HighFunc &Function) const {
+  const auto *Debug = functionDebugContext(Function);
+  return Debug ? Debug->resolveFunction(Function.Entry) : std::nullopt;
+}
+
 TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
   if (PortableInterface)
     return NdType::makeInt(4, false);
@@ -309,7 +309,7 @@ TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
   // body and return-value conversion.
   if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
     return Func.SourceTypeHint->ReturnType;
-  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  const auto DebugFn = debugFunction(Func);
   if (!DebugFn || !DebugFn->ReturnType) {
     // An MSVC destructor's decoration has no return type, and its callers
     // declare it void: what its tail call leaves in RAX is not a result.
@@ -932,10 +932,11 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     DeclaredNames.insert(Name);
     emitIndent(1);
     TypeRef Ty = Local.Type;
-    if (Dbg && CurrentFunc) {
+    if (auto *Debug =
+            CurrentFunc ? functionDebugContext(*CurrentFunc) : nullptr) {
       // A debug type C cannot spell leaves the local its recovered type, as
       // debugTypeForDisplacement does.
-      if (auto Var = Dbg->resolveVariable(CurrentFunc->Entry, Local.StackOff);
+      if (auto Var = Debug->resolveVariable(CurrentFunc->Entry, Local.StackOff);
           Var && Var->Type && hasCValueLayout(cDisplayType(Var->Type)))
         Ty = cDisplayType(Var->Type);
     }
@@ -1306,12 +1307,12 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     const uint64_t Mag = static_cast<uint64_t>(*Disp < 0 ? -*Disp : *Disp);
     const std::string Synthetic =
         (*Disp < 0 ? "var_m" : "var_") + llvm::utohexstr(Mag);
-    const std::string DebugName = debugNameForDisplacement(Func.Entry, *Disp);
+    const std::string DebugName = debugNameForDisplacement(Func, *Disp);
     if (!DebugName.empty() && !isReservedParamDisplayName(DebugName))
       Slot.Name = DebugName;
     else if (Slot.Name.empty() || isReservedParamDisplayName(Slot.Name))
       Slot.Name = Synthetic;
-    if (const TypeRef DebugTy = debugTypeForDisplacement(Func.Entry, *Disp))
+    if (const TypeRef DebugTy = debugTypeForDisplacement(Func, *Disp))
       Slot.Type = DebugTy;
     else if (Ty &&
              (!Slot.Type || Ty->Size > Slot.Type->Size ||
@@ -1447,9 +1448,9 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
       continue;
     std::optional<int64_t> SPMatch;
     bool AmbiguousSPMatch = false;
-    if (Dbg && Func.FrameSize > 0)
+    if (auto *Debug = functionDebugContext(Func); Debug && Func.FrameSize > 0)
       for (int64_t Disp : Disps) {
-        const auto Var = Dbg->resolveStackPointerVariable(
+        const auto Var = Debug->resolveStackPointerVariable(
             Func.Entry, Disp + static_cast<int64_t>(Func.FrameSize));
         if (!Var || Var->IsParam || Var->Name != Name)
           continue;
@@ -3758,8 +3759,8 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
       const int64_t Off = Stmt->Dst->Var.StackOff;
       // A named source local is part of the useful C projection. Keep its
       // assignment and declaration instead of folding it into the return.
-      if (Dbg) {
-        if (auto Var = Dbg->resolveVariable(Func.Entry, Off);
+      if (const auto *Debug = functionDebugContext(Func)) {
+        if (auto Var = Debug->resolveVariable(Func.Entry, Off);
             Var && !Var->Name.empty())
           continue;
       }
@@ -4927,7 +4928,7 @@ void HighCWriter::bindParams(const HighFunc &Func) const {
   // A bound source ABI spells its own parameters (sourceParameterType).  A
   // function of a language with conventions of its own, such as Go, has no
   // rules that say where its parameters arrive.
-  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  const auto DebugFn = debugFunction(Func);
   if (DebugFn)
     for (const auto &Param : DebugFn->Params)
       HasRecordParamTypes |= MayBeRecord(Param.second);
@@ -5088,7 +5089,7 @@ size_t HighCWriter::emittedParamCount(const HighFunc &Func) const {
 
 std::vector<size_t>
 HighCWriter::unreadDeclaredParams(const HighFunc &Func) const {
-  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  const auto DebugFn = debugFunction(Func);
   if (!DebugFn || Func.SourceTypeHint || DebugFn->Params.empty() ||
       ParamIndicesInProgress.count(&Func))
     return {};
@@ -5122,7 +5123,7 @@ HighCWriter::unreadDeclaredParams(const HighFunc &Func) const {
 
 TypeRef HighCWriter::unreadDeclaredParamType(const HighFunc &Func,
                                              size_t Index) const {
-  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  const auto DebugFn = debugFunction(Func);
   if (!DebugFn || Index >= DebugFn->Params.size())
     return nullptr;
   const TypeRef &Declared = DebugFn->Params[Index].second;
@@ -5139,7 +5140,7 @@ std::vector<size_t>
 HighCWriter::emittedParamIndices(const HighFunc &Func) const {
   const auto Key = std::make_pair(&Func, Func.Entry);
   std::vector<size_t> All;
-  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  const auto DebugFn = debugFunction(Func);
   const size_t N = Func.Params.size();
   if (PortableInterface) {
     All.resize(N);
@@ -5906,7 +5907,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   // names before any body analysis so the declaration, uses and local-variable
   // exclusion all observe the same identifier. Debug declarations retain
   // their separate parameter mapping (including hidden result parameters).
-  if (Func.SourceTypeHint && !debugFunction(Dbg, Func.Entry)) {
+  if (Func.SourceTypeHint && !debugFunction(Func)) {
     CProjectionIdentifierAllocator Identifiers;
     for (const auto &Param : Func.Params)
       if (!Param.Name.empty())
@@ -5955,7 +5956,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   walkStmts(Func.Body,
             [&](const HighStmt &Stmt) { forEachExpr(Stmt, ReserveNames); });
   IndirectReturnName.clear();
-  if (const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  if (const auto DebugFn = debugFunction(Func);
       !Func.SourceTypeHint && DebugFn &&
       isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format))
     IndirectReturnName = "result";
@@ -6265,7 +6266,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     });
   }
 
-  const auto DebugFn = debugFunction(Dbg, Func.Entry);
+  const auto DebugFn = debugFunction(Func);
   TypeRef ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
   TypeRef IndirectReturnPtr;
   if (!Func.SourceTypeHint && DebugFn &&
