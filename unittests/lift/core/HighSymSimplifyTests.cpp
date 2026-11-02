@@ -17,13 +17,16 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <string>
 #include <thread>
@@ -1473,22 +1476,31 @@ TEST(HighSymSimplify, AddressTakenLocalsNeverBecomeSymbolicDefinitions) {
 }
 
 TEST(HighSymSimplify, EffectBoundariesInvalidateAvailableDefinitions) {
-  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
-  const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
-  const auto T = HighExpr::makeVar(tempOfSize(3, 4));
-  auto Call = std::make_shared<HighExpr>();
-  Call->Kind = ExprKind::Call;
-  Call->Type = NdType::makeInt(4);
-  Call->CallTarget = "update_state";
-  HighStmt Effect;
-  Effect.Kind = StmtKind::ExprStmt;
-  Effect.CallExpr = Call;
-  std::vector<HighStmt> Body{
-      assignValue(T, HighExpr::makeBinop(NdOp::INT_AND, X, Y)), Effect,
-      returnValue(sharedMaskUse(X, Y, T))};
-  simplifyExprSemantics(Body);
-  EXPECT_EQ(Body[1].CallExpr.get(), Call.get());
-  EXPECT_NE(Body.back().RetVal->str().find('|'), std::string::npos);
+  for (bool Mutable : {false, true}) {
+    SCOPED_TRACE(Mutable);
+    auto Input = tempOfSize(1, 4);
+    if (Mutable)
+      Input.Kind = MedVar::Reg;
+    const auto X = HighExpr::makeVar(Input);
+    const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+    const auto T = HighExpr::makeVar(tempOfSize(3, 4));
+    auto Call = std::make_shared<HighExpr>();
+    Call->Kind = ExprKind::Call;
+    Call->Type = NdType::makeInt(4);
+    Call->CallTarget = "update_state";
+    HighStmt Effect;
+    Effect.Kind = StmtKind::ExprStmt;
+    Effect.CallExpr = Call;
+    std::vector<HighStmt> Body{
+        assignValue(T, HighExpr::makeBinop(NdOp::INT_AND, X, Y)), Effect,
+        returnValue(sharedMaskUse(X, Y, T))};
+    simplifyExprSemantics(Body);
+    EXPECT_EQ(Body[1].CallExpr.get(), Call.get());
+    // An unescaped C temporary survives the call; an uncaptured register
+    // read and every definition depending on it must be invalidated.
+    EXPECT_EQ(Body.back().RetVal->str().find('|') != std::string::npos,
+              Mutable);
+  }
 }
 
 TEST(HighSymSimplify, ReusesLiveAffineWordInNonzeroResidueLookups) {
@@ -1923,10 +1935,13 @@ TEST(HighSymSimplify,
 TEST(HighSymSimplify,
      ParallelSegmentsPreserveDefinitionKillsAndOrdinaryStores) {
   ScopedSemanticThreads Threads;
-  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
   const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
   std::vector<HighStmt> Serial;
   for (unsigned I = 0; I < 512; ++I) {
+    auto Input = tempOfSize(1, 4);
+    if (I & 8)
+      Input.Kind = MedVar::Reg;
+    const auto X = HighExpr::makeVar(Input);
     const auto T = HighExpr::makeVar(tempOfSize(3 + I, 4));
     auto Definition = assignValue(T, HighExpr::makeBinop(NdOp::INT_AND, X, Y));
     auto Return = returnValue(sharedMaskUse(X, Y, T));
@@ -1992,9 +2007,176 @@ TEST(HighSymSimplify,
   EXPECT_EQ(statementExpressions(Parallel), statementExpressions(Serial));
   for (size_t I = 0; I < Parallel.size(); ++I) {
     const auto Text = Parallel[I].Body.back().RetVal->str();
-    const bool Kill = I % 8 != 0 && I % 8 != 7;
+    const bool Kill = I % 8 != 0 && I % 8 != 7 && (I % 8 != 1 || (I & 8));
     EXPECT_EQ(Text.find('|') != std::string::npos, Kill) << I << ": " << Text;
   }
+}
+
+TEST(HighSymSimplify, SharedBitwiseSumIsSimplifiedInIndirectCallTargets) {
+  for (bool Register : {false, true}) {
+    SCOPED_TRACE(Register);
+    auto Input = tempOfSize(1, 8);
+    if (Register)
+      Input.Kind = MedVar::Reg;
+    auto X = HighExpr::makeVar(Input, NdType::makeInt(8, false));
+    auto A = HighExpr::makeVar(tempOfSize(3, 8), X->Type);
+    auto B = HighExpr::makeVar(tempOfSize(4, 8), X->Type);
+    auto Mask = HighExpr::makeConst(0x1357, 8);
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall("indirect", 0, {});
+    Call.CallExpr->IsIndirectCall = true;
+    Call.CallExpr->Type = NdType::makeVoid();
+    Call.CallExpr->IndirectTarget = HighExpr::makeBinop(NdOp::INT_ADD, A, B);
+    std::vector<HighStmt> Body{
+        assignValue(A, HighExpr::makeBinop(NdOp::INT_OR, Mask, X)),
+        assignValue(B, HighExpr::makeBinop(NdOp::INT_AND, Mask, X)), Call};
+    simplifyExprSemantics(Body);
+    const auto &Target = Body.back().CallExpr->IndirectTarget;
+    const auto Text = Target->str();
+    EXPECT_FALSE(containsNode(Target, A)) << Text;
+    EXPECT_FALSE(containsNode(Target, B)) << Text;
+    EXPECT_EQ(Text.find('|'), std::string::npos) << Text;
+    EXPECT_EQ(Text.find('&'), std::string::npos) << Text;
+    for (uint64_t Value :
+         {0ULL, 1ULL, 0x1357ULL, 0x8000000000000000ULL, 0xffffffffffffffffULL})
+      EXPECT_EQ(integerValue(Target, Value).getZExtValue(), Value + 0x1357);
+    EXPECT_EQ(Body.back().Kind, StmtKind::Call);
+    EXPECT_EQ(Body.back().CallExpr->Kind, ExprKind::Call);
+  }
+}
+
+TEST(HighSymSimplify, CallInputFactsRetireBeforeNestedEffectsAndLaterCalls) {
+  for (bool Nested : {false, true}) {
+    SCOPED_TRACE(Nested);
+    auto Input = tempOfSize(1, 8);
+    Input.Kind = MedVar::Reg;
+    auto X = HighExpr::makeVar(Input, NdType::makeInt(8, false));
+    auto A = HighExpr::makeVar(tempOfSize(3, 8), X->Type);
+    auto B = HighExpr::makeVar(tempOfSize(4, 8), X->Type);
+    auto Mask = HighExpr::makeConst(0x1357, 8);
+    HighStmt Effect;
+    Effect.Kind = StmtKind::Call;
+    Effect.CallExpr = HighExpr::makeCall("mutate", 0x401000, {});
+    Effect.CallExpr->Type = X->Type;
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall("indirect", 0, {});
+    Call.CallExpr->IsIndirectCall = true;
+    Call.CallExpr->Type = NdType::makeVoid();
+    Call.CallExpr->IndirectTarget = HighExpr::makeBinop(NdOp::INT_ADD, A, B);
+    std::vector<HighStmt> Body{
+        assignValue(A, HighExpr::makeBinop(NdOp::INT_OR, Mask, X)),
+        assignValue(B, HighExpr::makeBinop(NdOp::INT_AND, Mask, X))};
+    if (Nested)
+      Call.CallExpr->Operands = {Effect.CallExpr};
+    else
+      Body.push_back(Effect);
+    Body.push_back(Call);
+    simplifyExprSemantics(Body);
+    EXPECT_TRUE(containsNode(Body.back().CallExpr->IndirectTarget, A));
+    EXPECT_TRUE(containsNode(Body.back().CallExpr->IndirectTarget, B));
+    if (Nested)
+      EXPECT_EQ(Body.back().CallExpr->Operands.front(), Effect.CallExpr);
+    else
+      EXPECT_EQ(Body[2].CallExpr, Effect.CallExpr);
+  }
+}
+
+TEST(HighSymSimplify, CapturedCallResultsKeepTheirValueAcrossLaterCalls) {
+  for (unsigned Variant = 0; Variant != 4; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto Input = tempOfSize(1, 8);
+    Input.Kind = MedVar::Reg;
+    auto X = HighExpr::makeVar(Input, NdType::makeInt(8, false));
+    auto A = HighExpr::makeVar(tempOfSize(3, 8), X->Type);
+    auto B = HighExpr::makeVar(tempOfSize(4, 8), X->Type);
+    auto Read = HighExpr::makeCall("read_word", 0x401000, {});
+    Read->Type = X->Type;
+    auto Mask = HighExpr::makeConst(0x1357, 8);
+    HighStmt Effect;
+    Effect.Kind = StmtKind::Call;
+    Effect.CallExpr = HighExpr::makeCall("mutate", 0x402000, {});
+    Effect.CallExpr->Type = NdType::makeVoid();
+    if (Variant == 1)
+      Effect.CallExpr->IntrinsicOutputs = {X->Var};
+    if (Variant == 3) {
+      auto Address = std::make_shared<HighExpr>();
+      Address->Kind = ExprKind::Addr;
+      Address->Type = NdType::makePtr(X->Type);
+      Address->Operands = {X};
+      Effect.CallExpr->Operands = {Address};
+    }
+    std::vector<HighStmt> Body{
+        assignValue(X, Read),
+        assignValue(A, HighExpr::makeBinop(NdOp::INT_OR, Mask, X)),
+        assignValue(B, HighExpr::makeBinop(NdOp::INT_AND, Mask, X)), Effect};
+    if (Variant == 2)
+      Body.push_back(assignValue(X, HighExpr::makeConst(17, 8)));
+    Body.push_back(returnValue(HighExpr::makeBinop(NdOp::INT_ADD, A, B)));
+    simplifyExprSemantics(Body);
+    const auto &Result = Body.back().RetVal;
+    if (Variant) {
+      EXPECT_TRUE(containsNode(Result, A));
+      EXPECT_TRUE(containsNode(Result, B));
+    } else {
+      EXPECT_FALSE(containsNode(Result, A)) << Result->str();
+      EXPECT_FALSE(containsNode(Result, B)) << Result->str();
+      for (uint64_t Value : {0ULL, 1ULL, 0x1357ULL, 0x8000000000000000ULL,
+                             0xffffffffffffffffULL})
+        EXPECT_EQ(integerValue(Result, Value).getZExtValue(), Value + 0x1357);
+    }
+    EXPECT_EQ(Body.front().Val, Read);
+    EXPECT_EQ(Body[3].CallExpr, Effect.CallExpr);
+  }
+}
+
+TEST(HighSymSimplify, CapturedCallTargetExecutesAfterAnInterveningCall) {
+  auto Value = tempOfSize(1, 8);
+  Value.Kind = MedVar::Reg;
+  auto X = HighExpr::makeVar(Value, NdType::makeInt(8, true));
+  auto A = HighExpr::makeVar(tempOfSize(3, 8), X->Type);
+  auto B = HighExpr::makeVar(tempOfSize(4, 8), X->Type);
+  auto Read = HighExpr::makeCall("read_base", 0x401000, {});
+  Read->Type = X->Type;
+  auto Mask = HighExpr::makeConst(0x1357, 8);
+  HighStmt Effect;
+  Effect.Kind = StmtKind::Call;
+  Effect.CallExpr = HighExpr::makeCall("mutate_registers", 0x402000, {});
+  Effect.CallExpr->Type = NdType::makeInt(4, true);
+  auto Call = HighExpr::makeCall("indirect", 0, {});
+  Call->IsIndirectCall = true;
+  Call->Type = X->Type;
+  Call->IndirectTarget = HighExpr::makeBinop(NdOp::INT_ADD, A, B);
+  HighFunc Function;
+  Function.Entry = kEntry;
+  Function.Name = "captured_target";
+  Function.ReturnType = X->Type;
+  Function.Body = {assignValue(X, Read),
+                   assignValue(A, HighExpr::makeBinop(NdOp::INT_OR, Mask, X)),
+                   assignValue(B, HighExpr::makeBinop(NdOp::INT_AND, Mask, X)),
+                   Effect, returnValue(Call)};
+  simplifyExprSemantics(Function.Body);
+  const auto &Target = Function.Body.back().RetVal->IndirectTarget;
+  EXPECT_FALSE(containsNode(Target, A)) << Target->str();
+  EXPECT_FALSE(containsNode(Target, B)) << Target->str();
+  std::string C;
+  llvm::raw_string_ostream Out(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
+  Out.flush();
+  const std::string Program = C + R"C(
+static unsigned calls;
+static int64_t target(void) { ++calls; return 0x1234; }
+int64_t read_base(void) { ++calls; return (int64_t)((uintptr_t)&target - 0x1357); }
+int mutate_registers(void) { ++calls; return 0x6789; }
+int main(void) {
+  return captured_target() != 0x1234 || calls != 3;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
 
 } // namespace
