@@ -106,7 +106,7 @@ public:
           neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault,
           bool DisableDebugStop = false,
           const neverd::analysis::X64ContinuationEventV1 *Pending = nullptr,
-          uint64_t CR4 = 0x20) {
+          uint64_t CR4 = 0x20, bool CaptureReturn = false) {
     ASSERT_EQ(Input.size(), Size);
     std::copy(Input.begin(), Input.end(), RAM);
     const auto &Core = State.Core.Core.Core.Core;
@@ -122,12 +122,28 @@ public:
     S.fs = S.gs = S.ss;
     S.fs.base = Core.FSBase;
     S.gs.base = Core.GSBase;
+    if (CaptureReturn) {
+      S.ds = segment(State.DS);
+      S.es = segment(State.ES);
+      S.fs = segment({Core.FSBase, State.FS.Limit, State.FS.Selector,
+                      State.FS.Attributes});
+      S.gs = segment({Core.GSBase, State.GS.Limit, State.GS.Selector,
+                      State.GS.Attributes});
+      S.ds.unusable = bool(State.Unusable & 4);
+      S.es.unusable = bool(State.Unusable & 8);
+      S.fs.unusable = bool(State.Unusable & 16);
+      S.gs.unusable = bool(State.Unusable & 32);
+    }
     S.gdt.base = State.GDTR.Base;
     S.gdt.limit = State.GDTR.Limit;
     S.idt.base = State.IDTR.Base;
     S.idt.limit = State.IDTR.Limit;
     S.tr = segment(State.TR);
     S.ldt.unusable = 1;
+    if (CaptureReturn) {
+      S.ldt = segment(State.LDTR);
+      S.ldt.unusable = bool(State.Unusable & 64);
+    }
     auto Flush = S;
     Flush.cr3 = 0x3f000;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0);
@@ -156,6 +172,10 @@ public:
     Debug.arch.debugreg[1] = 0x1800;
     Debug.arch.debugreg[2] = 0;
     Debug.arch.debugreg[7] = 0x415;
+    if (CaptureReturn) {
+      Debug.arch.debugreg[3] = 0x1801;
+      Debug.arch.debugreg[7] |= 0x40;
+    }
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
     Run->request_interrupt_window = 0;
     if (Pending) {
@@ -181,6 +201,13 @@ public:
         << "KVM exit " << Run->exit_reason;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);
+    if (CaptureReturn && R.rip == 0x1801) {
+      // Restored RF suppresses the first execution breakpoint. The original
+      // target NOP advances RIP and clears RF, with no other architectural
+      // effect. The second breakpoint recovers that measured return state.
+      R.rip = 0x1800;
+      R.rflags |= 0x10000;
+    }
     Fault = Run->exit_reason == KVM_EXIT_HLT;
     ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &Events), 0);
     Output = State;
@@ -193,6 +220,26 @@ public:
     Output.Core.Core.CR2 = S.cr2;
     Output.Core.CS.Selector = S.cs.selector;
     Output.Core.SS.Selector = S.ss.selector;
+    if (CaptureReturn) {
+      const auto Segment = [](const kvm_segment &S) {
+        return neverd::analysis::X64ContinuationSegment{
+            S.base, S.limit, S.selector,
+            uint16_t(S.type | (S.s << 4) | (S.dpl << 5) | (S.present << 7) |
+                     (S.avl << 12) | (S.l << 13) | (S.db << 14) | (S.g << 15))};
+      };
+      Output.Core.CS = Segment(S.cs);
+      Output.Core.SS = Segment(S.ss);
+      Output.DS = Segment(S.ds);
+      Output.ES = Segment(S.es);
+      Output.FS = {S.fs.limit, S.fs.selector, Segment(S.fs).Attributes};
+      Output.GS = {S.gs.limit, S.gs.selector, Segment(S.gs).Attributes};
+      Output.Unusable = (State.Unusable & 0xc0) | S.cs.unusable |
+                        (S.ss.unusable << 1) | (S.ds.unusable << 2) |
+                        (S.es.unusable << 3) | (S.fs.unusable << 4) |
+                        (S.gs.unusable << 5);
+      Out.FSBase = S.fs.base;
+      Out.GSBase = S.gs.base;
+    }
   }
 };
 } // namespace

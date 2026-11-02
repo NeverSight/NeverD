@@ -41,6 +41,7 @@ struct Transaction {
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
   std::optional<X64ContinuationEventV1> Event;
+  std::optional<uint16_t> InterruptReturn;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
 
@@ -72,6 +73,10 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & 7);
+  if (Kind == X64PagedAccess::InterruptReturn) {
+    T.InterruptReturn = uint16_t(Address);
+    return 1;
+  }
   if (Kind == X64PagedAccess::InterruptFlagMask) {
     const auto &Controls = T.Memory.controls();
     const auto IOPL = (Controls.RFlags >> 12) & 3;
@@ -258,6 +263,30 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     Exit = Body(NextBytes, ExchangeBytes);
   if (T.Error)
     return std::move(*T.Error);
+  if (T.InterruptReturn) {
+    if (!Options.IretAccessOrder)
+      return invalid("paged IRET requires bound frame-access order");
+    auto Returned =
+        returnX64PagedInterrupt(State, Memory, *T.InterruptReturn,
+                                T.AlignmentPriority, *Options.IretAccessOrder);
+    if (!Returned)
+      return Returned.takeError();
+    Last.InstructionAttempted = true;
+    if (Returned->Completed) {
+      Last.InstructionCompleted = true;
+      Last.Exit = uint64_t(X64ContinuationExitV1::PrivilegeReturn);
+      return Last;
+    }
+    if (Returned->BackingFault) {
+      Last.Exit = uint64_t(X64PagedExit::BackingFault);
+      Last.BackingFault = Returned->BackingFault;
+      return Last;
+    }
+    if (!Returned->Exception)
+      return invalid("paged IRET stopped without an architectural outcome");
+    T.Access.Status = X86PageWalkStatus::Exception;
+    T.Access.Exception = Returned->Exception;
+  }
   if (T.Access.Status == X86PageWalkStatus::BackingFault) {
     Last.Exit = uint64_t(X64PagedExit::BackingFault);
     Last.BackingFault = T.Access.BackingFault;

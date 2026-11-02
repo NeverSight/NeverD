@@ -91,17 +91,72 @@ The [shared paged event owner](x86-paged-memory.md) performs IDT entry, includin
 nested faults, #DF, CR2 updates, partial handler-frame writes and shutdown.
 Execution stops at handler entry. Correcting a mapping and restoring the
 interrupted state permits a retry without repeating a committed operand write.
-RF clears only on successful instruction completion.
+RF clears on successful scalar instruction completion. Wider IRET forms instead
+restore RF from the return frame.
 
 Existing status identities 0..16 remain unchanged. Internal status 17 is
 consumed by the executor. Status 18 reports physical backing failure, 19 reports
 shutdown, and 20 reports changed code requiring relift. A completed instruction
 or an architectural fault attempt consumes one instruction-budget unit;
-native/invalid/changed-code stops and operand backing failures do not. A fault
+native/invalid/changed-code stops and scalar operand backing failures do not.
+Once IRET begins, its NMI and descriptor effects prevent that rollback rule;
+even a return-frame backing failure consumes its attempt. A fault
 whose IDT entry subsequently hits a backing failure still consumes its attempt.
 `InstructionAttempted` and `Delivery.InputAccepted` retain these distinctions
 independently of the final status. Full fault and backing details
 are available through the context's `lastResult()` and `lastError()`.
+
+## Faultable IRET, IRETD and IRETQ
+
+Canonical `66 cf`, `cf` and `48 cf` use the same descriptor, return-frame,
+flag and compatibility-state owner as the successful-RAM source path. The
+faultable evaluator supplies architectural #GP/#NP/#SS/#PF/#AC outcomes and
+preserves their original IRET restart PC. Both C routes call this owner through
+the existing paged bridge; no host pointer or inline assembly executes the
+return. Source admission authenticates the original bytes and LowIR shape.
+
+Bind `X64PagedExecutionOptions::IretAccessOrder` to the target processor's
+qualified order. The currently qualified `FlagsFirst` profile reads FLAGS,
+CS and IP, updates CS's accessed bit, then reads SS and SP, validates SS and
+updates its accessed bit, and finally validates the target IP. Accessed writes
+use descriptor qwords. This order determines CR2 and the writes preceding a
+later fault; it is an explicit CPU binding, not a universal inference from
+Intel's pseudocode. Missing binding stops after byte authentication but before
+return-frame access or NMI unblocking. Active user alignment checks additionally
+require the normal `AlignmentPriority` binding.
+
+IRET unblocks NMI after successful fetch, including when NT, a frame access,
+a descriptor or the returned PC subsequently faults. The old registers and
+segment caches remain restartable on failure, while completed descriptor and
+page-table writes remain visible. Each stack field receives its own canonical
+and paging checks: preflighting the whole frame would incorrectly suppress a
+CS accessed write before a later noncanonical SS field. A null SS performs no
+speculative descriptor read. Same-CPL returns preserve data-segment caches;
+only an outer return invalidates inaccessible DS/ES/FS/GS selectors. IF, IOPL,
+VIF and VIP restoration respects the original CPL/IOPL, and 16-bit IRET retains
+the defined upper flag bits. Compatibility returns retain explicit upper-half
+GPR witnesses; these bits are not treated as a native equality requirement.
+
+Success returns the existing `PrivilegeReturn` status 6. The caller can resume
+selected code with a new driver call. Event entry still returns status 7 at the
+handler boundary. Tests compose these calls through IRQ/NMI entry, generated
+IRET and resumed code, and execute a generated #PF handler that repairs the
+page table, removes the error code, returns to the faulting IRET and retries it.
+Returning to compatibility mode produces the correct state and explicit exit;
+it does not add a legacy-mode instruction dispatcher. Restored TF likewise
+remains an explicit boundary before later instructions without a debug owner.
+
+The IRET CPU matrix compares CS/SS caches, data selectors, unusable bits,
+NMI blocking, flags, GPRs, restart frames and ordinary RAM. It covers all operand
+sizes, privilege and IOPL combinations, LDT/conforming descriptors, null stacks,
+misaligned descriptor tables, descriptor/frame aliases, split stack fields and
+the canonical-address boundary. KVM normalizes unusable SS attributes, so those
+inactive attribute bits are not used as a hardware cache witness. Linux VMX also
+intercepts #AC and `vmx_recover_nmi_blocking` restores NMI inhibition before
+reinjection. That observed VMM discrepancy is counted separately; the model
+retains Intel's architectural IRET unblocking rule rather than copying it.
+See the [Linux VMX source](https://github.com/torvalds/linux/blob/master/arch/x86/kvm/vmx/vmx.c)
+and Intel SDM volume 2, IRET/IRETD/IRETQ.
 
 ## Paged IRQ/NMI scheduling
 
@@ -193,7 +248,8 @@ All 422 captured exports match across SDKs, and 186 prior no-fault C/header
 outputs remain unchanged. Retained failing runs demonstrate the missing
 pre-instruction PVI fault and rejection of valid saved event-frame PCs.
 
-This is the scalar instruction commit domain. REP, gather/scatter, XSAVE and
+This binding owns scalar commits and faultable long-mode interrupt returns.
+REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, SMI/AEX, legacy i386 dispatch,
 CET/FRED, MMIO, TLB and concurrent writers remain outside this binding.
@@ -203,6 +259,6 @@ or RTM regions is explicitly rejected. The [no-fault scheduler](x86-event-schedu
 retains its separate successful-RAM contract. LLVM release/pin completion is not implied.
 
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
-volume 2 CALL/DIV/IDIV/CMOV/CLI/STI, volume 3A paging, exception priority
+volume 2 CALL/DIV/IDIV/CMOV/CLI/STI/IRET, volume 3A paging, exception priority
 and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

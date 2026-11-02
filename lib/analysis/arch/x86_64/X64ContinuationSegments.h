@@ -65,6 +65,7 @@ protected:
   unsigned AddressBits;
   std::optional<NdVar> AccessedAddress;
   std::optional<NdVar> DeliveryExternal;
+  bool Returning = false;
 
   static NdVar k(uint64_t V) { return NdVar::scalar(V, 8); }
 
@@ -145,7 +146,8 @@ protected:
     NdVar Value;
   };
 
-  Descriptor descriptor(NdVar Selector) {
+  Descriptor descriptor(NdVar Selector,
+                        std::optional<NdVar> ReadIf = std::nullopt) {
     const auto Error =
         DeliveryExternal
             ? op(NdOp::INT_OR, {masked(Selector, 0xfffc), *DeliveryExternal})
@@ -156,7 +158,10 @@ protected:
         ne(masked(load(offsetof(V6, LDTR) + offsetof(Segment, Attributes), 2),
                   0x9f),
            k(0x82)));
-    faultIf(both(Local, BadLdt), 13, Error);
+    const auto Enabled = [&](NdVar Bad) {
+      return ReadIf ? both(*ReadIf, Bad) : Bad;
+    };
+    faultIf(Enabled(both(Local, BadLdt)), 13, Error);
     const auto Base =
         choose(Local, load(offsetof(V6, LDTR)), load(offsetof(V6, GDTR)));
     const auto Limit =
@@ -164,15 +169,42 @@ protected:
                load(offsetof(V6, GDTR) + offsetof(Table, Limit), 2));
     const auto Index = masked(Selector, 0xfff8);
     const auto Last = op(NdOp::INT_ADD, {Index, k(7)});
-    faultIf(less(Limit, Last), 13, Error);
+    faultIf(Enabled(less(Limit, Last)), 13, Error);
     if constexpr (!Writer::FaultableMemory)
       W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), Base));
     const auto Address = op(NdOp::INT_ADD, {Base, Index});
+    if constexpr (Writer::FaultableMemory) {
+      if (Returning) {
+        // System descriptors are implicit supervisor accesses. A null return
+        // SS must not read the CS descriptor again or acquire an accessed
+        // write.
+        const auto Shift = k(64 - AddressBits);
+        const auto Noncanonical = [&](NdVar A) {
+          return ne(
+              A, op(NdOp::INT_ASHR, {op(NdOp::INT_LEFT, {A, Shift}), Shift}));
+        };
+        faultIf(
+            Enabled(either(Noncanonical(Address),
+                           Noncanonical(op(NdOp::INT_ADD, {Address, k(7)})))),
+            13, Error);
+        if (ReadIf)
+          return {Address,
+                  W.loadMemoryIf(*ReadIf, Address, k(uint64_t{1} << 40))};
+        return {Address, readMemory(Address)};
+      }
+    }
     range(Address, 7);
     return {Address, readMemory(Address)};
   }
 
   void accessed(Descriptor D) {
+    if constexpr (Writer::FaultableMemory) {
+      if (Returning) {
+        W.storeIf(eq(masked(D.Value, uint64_t{1} << 40), k(0)), D.Address,
+                  op(NdOp::INT_OR, {D.Value, k(uint64_t{1} << 40)}));
+        return;
+      }
+    }
     const auto Address = op(NdOp::INT_ADD, {D.Address, k(5)});
     const auto Byte = narrow(op(NdOp::INT_OR, {shifted(D.Value, 40), k(1)}), 1);
     // A descriptor with A=1 may live in read-only RAM. Do not introduce a
@@ -236,19 +268,44 @@ protected:
   }
 
   Descriptor returnCode(NdVar CS, NdVar CPL) {
-    W.rejectIf(eq(masked(CS, 0xfffc), k(0)));
+    faultIf(eq(masked(CS, 0xfffc), k(0)), 13, k(0));
     const auto Code = descriptor(CS);
     const auto Access = shifted(Code.Value, 40);
     const auto DPL = masked(shifted(Access, 5), 3);
-    W.rejectIf(ne(masked(Access, 0x98), k(0x98)));
-    W.rejectIf(eq(masked(Access, 0x6000), k(0x6000)));
-    W.rejectIf(
-        choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
-    AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
+    if constexpr (Writer::FaultableMemory) {
+      const auto Error = masked(CS, 0xfffc);
+      faultIf(ne(masked(Access, 0x18), k(0x18)), 13, Error);
+      faultIf(eq(masked(Access, 0x6000), k(0x6000)), 13, Error);
+      faultIf(choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)),
+              13, Error);
+      faultIf(eq(masked(Access, 0x80), k(0)), 11, Error);
+    } else {
+      W.rejectIf(ne(masked(Access, 0x98), k(0x98)));
+      W.rejectIf(eq(masked(Access, 0x6000), k(0x6000)));
+      W.rejectIf(
+          choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
+      AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
+    }
     return Code;
   }
 
   Descriptor returnStack(NdVar CS, NdVar CPL, NdVar SS, NdVar NullSS) {
+    if constexpr (Writer::FaultableMemory) {
+      faultIf(both(NullSS, either(eq(CPL, k(3)), ne(masked(SS, 3), CPL))), 13,
+              k(0));
+      const auto Error = masked(SS, 0xfffc);
+      faultIf(both(eq(NullSS, NdVar::scalar(0, 1)), ne(masked(SS, 3), CPL)), 13,
+              Error);
+      const auto Stack = descriptor(SS, eq(NullSS, NdVar::scalar(0, 1)));
+      const auto Access = shifted(Stack.Value, 40);
+      const auto Invalid = either(ne(masked(Access, 0x1a), k(0x12)),
+                                  ne(masked(shifted(Access, 5), 3), CPL));
+      faultIf(both(eq(NullSS, NdVar::scalar(0, 1)), Invalid), 13, Error);
+      faultIf(
+          both(eq(NullSS, NdVar::scalar(0, 1)), eq(masked(Access, 0x80), k(0))),
+          12, Error);
+      return Stack;
+    }
     W.rejectIf(ne(masked(SS, 3), CPL));
     W.rejectIf(both(NullSS, eq(CPL, k(3))));
     // A null SS requires no table access. The already validated CS provides

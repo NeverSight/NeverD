@@ -1522,14 +1522,14 @@ buildInstruction(SpecializationInstruction Instruction,
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
     PagedRoles = detail::x64PagedMemoryRoles(Instruction);
-    if (!PagedRoles.Supported || Sysret || Sysenter || Sysexit || Iret ||
+    if ((!PagedRoles.Supported && !Iret) || Sysret || Sysenter || Sysexit ||
         FarReturn || FarPointer)
       RequireNative(
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
-          !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
+          !Iret && !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
       const auto RegisterAllowed = [](NdVar V) {
@@ -1614,7 +1614,8 @@ buildInstruction(SpecializationInstruction Instruction,
   const uint64_t EntryFlags =
       Options.PagedMemory
           ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
-                Flags::IOPLMask | Flags::VirtualInterruptMask
+                Flags::IOPLMask | Flags::VirtualInterruptMask |
+                (Iret ? 0x4000 : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
       : (Interrupt || FredReturn || UndefinedInstruction ||
          UserInterrupt == detail::X64UserInterrupt::Return)
@@ -1854,6 +1855,11 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (UserInterrupt) {
     detail::X64ContinuationUserInterrupts<Writer>(W, Options)
         .execute(*UserInterrupt, Instruction.Fallthrough.Address);
+  } else if (Options.PagedMemory && Iret) {
+    W.pagedAccess(constant(Return->Bytes), 0, X64PagedAccess::InterruptReturn,
+                  false);
+    Result.CompatibilityChoices = detail::x64CompatibilityChoices(false);
+    W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (Options.PagedMemory && Interrupt) {
     W.pagedAccess(constant(*Interrupt), Instruction.Fallthrough.Address,
                   X64PagedAccess::SoftwareInterrupt, false);

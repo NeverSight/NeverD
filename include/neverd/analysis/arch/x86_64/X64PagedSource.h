@@ -45,6 +45,8 @@ enum class X64PagedAccess : uint64_t {
   SoftwareInterrupt,
   /// Address selects CLI (0) or STI (1); result is the authorized IF/VIF mask.
   InterruptFlagMask,
+  /// Address is the authenticated IRET frame-field width; size is zero.
+  InterruptReturn,
 };
 
 struct X64PagedExchange {

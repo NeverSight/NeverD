@@ -74,17 +74,19 @@ void nativeStore(uint8_t *Bytes, unsigned Size, uint64_t Value) {
   }
 }
 
-class EventWriter {
+class TransitionWriter {
 public:
   static constexpr bool FaultableMemory = true;
   X64ContinuationSourceOptions Options;
   X64PagedEventResult Result;
   std::optional<X86MemoryException> Fault;
   std::optional<llvm::Error> Error;
+  std::optional<X64ContinuationExitV1> Exit;
+  std::optional<X64PagedAlignmentPriority> AlignmentPriority;
   bool Stopped = false;
 
-  EventWriter(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
-              const X64ContinuationEventV1 &Event, uint32_t MXCSRMask)
+  TransitionWriter(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                   const X64ContinuationEventV1 &Event, uint32_t MXCSRMask)
       : State(State), Memory(Memory), Event(Event) {
     Options.MXCSRMask = MXCSRMask;
   }
@@ -222,12 +224,37 @@ public:
     }
   }
 
+  void beginReturn() {
+    if (!Stopped)
+      State.NMIBlocked = 0;
+  }
+
+  void returnStackAccess(bool Enable) {
+    Frame = Enable;
+    FrameCPL = State.Core.CS.Selector & 3;
+  }
+
+  void invalidateMonitor() {} // The V6 state has no monitor bank.
+
+  void compatibilityChoices(
+      llvm::ArrayRef<X64ContinuationCompatibilityChoice> Choices) {
+    if (Stopped)
+      return;
+    auto &Core = State.Core.Core.Core.Core;
+    for (const auto &Choice : Choices) {
+      auto &Register = Core.GPR[Choice.Output.Offset / 8];
+      Register = (Register & UINT32_MAX) |
+                 (Core.Undefined[Choice.Slot] & ~uint64_t(UINT32_MAX));
+    }
+  }
+
   void leave(X64ContinuationExitV1 Exit,
              std::optional<NdVar> PC = std::nullopt) {
     if (Stopped)
       return;
     if (PC)
       State.Core.Core.Core.Core.PC = value(*PC);
+    this->Exit = Exit;
     Result.Status = Exit == X64ContinuationExitV1::Exception
                         ? X64PagedEventStatus::Delivered
                     : Exit == X64ContinuationExitV1::EventDeferred
@@ -246,6 +273,21 @@ private:
         value(*Inputs.begin()),
         Write ? MemoryAccessKind::Write : MemoryAccessKind::Read,
         Frame ? FrameCPL : uint8_t(0), !Frame, Frame};
+    const bool AlignmentFault = AlignmentPriority && Frame && FrameCPL == 3 &&
+                                (Memory.controls().CR0 & 0x40000) &&
+                                (Memory.controls().RFlags & 0x40000) &&
+                                (Access.Address & (Size - 1));
+    if (AlignmentFault &&
+        *AlignmentPriority == X64PagedAlignmentPriority::BeforePaging) {
+      auto Checked =
+          translate::checkX86LinearAccess(Memory.controls(), Access, Size);
+      if (!Checked)
+        Error = Checked.takeError();
+      else
+        Fault = Checked->value_or(X86MemoryException{17, 0, std::nullopt});
+      Stopped = true;
+      return;
+    }
     if (Write) {
       const auto Value = value(Inputs.begin()[1]);
       for (unsigned I = 0; I != Size; ++I)
@@ -266,6 +308,9 @@ private:
     } else if (R->Status == X86PageWalkStatus::BackingFault) {
       Result.Status = X64PagedEventStatus::BackingFault;
       Result.BackingFault = R->BackingFault;
+      Stopped = true;
+    } else if (AlignmentFault) {
+      Fault = X86MemoryException{17, 0, std::nullopt};
       Stopped = true;
     } else if (!Write) {
       uint64_t Value = 0;
@@ -314,9 +359,9 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                                ? State.Core.Core.Core.Core.PC
                                : Input.SavedPC;
   for (;;) {
-    EventWriter W(State, Memory, Event, MXCSRMask);
-    detail::X64ContinuationDelivery<EventWriter>(W, Controls.CR4 & 0x1000 ? 57
-                                                                          : 48)
+    TransitionWriter W(State, Memory, Event, MXCSRMask);
+    detail::X64ContinuationDelivery<TransitionWriter>(
+        W, Controls.CR4 & 0x1000 ? 57 : 48)
         .execute(NdVar::scalar(0, 8));
     if (Result.DeliveryAttempts == 0)
       Result.InputAccepted = W.Result.InputAccepted;
@@ -355,6 +400,40 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     Event.ErrorCode = Double ? 0 : W.Fault->ErrorCode;
     Event.FaultAddress = Double ? 0 : W.Fault->CR2.value_or(0);
   }
+}
+
+llvm::Expected<X64PagedInterruptReturnResult>
+returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                        uint16_t FieldBytes,
+                        X64PagedAlignmentPriority AlignmentPriority,
+                        X64PagedIretAccessOrder AccessOrder) {
+  assert((FieldBytes == 2 || FieldBytes == 4 || FieldBytes == 8) &&
+         "authenticated IRET operand size");
+  assert(AccessOrder == X64PagedIretAccessOrder::FlagsFirst);
+  auto Next = State;
+  const X64ContinuationEventV1 Event{};
+  TransitionWriter W(Next, Memory, Event, 0);
+  W.AlignmentPriority = AlignmentPriority;
+  detail::X64ContinuationEvents<TransitionWriter>(
+      W, Memory.controls().CR4 & 0x1000 ? 57 : 48)
+      .iret(FieldBytes);
+  // IRET unblocks NMI even on fault. Other register and segment-cache changes
+  // are staged; the writer has already committed ordered RAM side effects.
+  State.NMIBlocked = Next.NMIBlocked;
+  if (W.Error)
+    return std::move(*W.Error);
+  X64PagedInterruptReturnResult Result;
+  Result.Exception = W.Fault;
+  Result.BackingFault = W.Result.BackingFault;
+  Result.Completed = W.Exit == X64ContinuationExitV1::PrivilegeReturn;
+  if (Result.Completed) {
+    State = Next;
+    auto Controls = Memory.controls();
+    Controls.RFlags = State.Core.Core.Core.Core.RFlags;
+    if (auto Error = Memory.bindControls(Controls))
+      return std::move(Error);
+  }
+  return Result;
 }
 
 } // namespace neverd::analysis

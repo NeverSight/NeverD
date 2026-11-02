@@ -3506,3 +3506,21 @@ The [November 2 qualification](evidence/x86-paged-scheduling-2026-11-02.json)
 records 558 passing tests, two LA57 oracle skips and 118,510 original-CPU
 comparisons across the native-intrinsic and pinned r6 SDKs. All 422 exported
 artifacts match between SDKs; 186 prior no-fault C/header outputs are unchanged.
+
+
+## Faultable interrupt returns
+
+The paged V6 source binding now admits canonical IRET, IRETD and IRETQ. It
+shares return semantics with the successful-RAM source path and uses a bound
+CPU frame-access order for precise CR2 and descriptor-write effects. NMI
+unblocking survives return faults; same-CPL data caches are preserved, while
+outer returns revalidate selectors. Actual generated handlers can repair a
+mapping and retry a faulting IRET, or return from scheduled IRQ/NMI delivery.
+Compatibility returns publish their state and undefined upper-half witnesses
+at the existing privilege-return boundary. See the
+[contract and qualification limits](x86-paged-execution.md#faultable-iret-iretd-and-iretq).
+
+This closes the paged event-entry/handler/IRET/retry path. It does not close
+legacy i386 dispatch/task gates, SMI/software SMM, SGX enclave/AEX/EPCM,
+REP/gather/XSAVE partial completion, or the external-device, TLB, CET/FRED and
+concurrent-memory domains. No final LLVM release or pin update is claimed.

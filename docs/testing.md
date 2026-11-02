@@ -3258,6 +3258,18 @@ INVLPGB/TLBSYNC and covers ELF/COFF/Mach-O, both optimization settings and
 FS/GS/address-size LKGS forms. The pinned MC corpus reports unsupported far
 returns separately; RETF/IRET must not lower to ordinary ABI returns.
 
+
+Faultable IRET is covered by `X64PagedExecutionTest.PagedInterruptReturnsMatchOriginalCPU`,
+`PagedIretComposesWithScheduledIRQAndNMI`,
+`PagedIretFaultHandlerRepairsMappingAndRetries` and
+`PagedIretDistinguishesAdmissionBackingAndShutdown` in
+`unittests/translate/x86/X64PagedReturnTests.inc`. Run them with the paged
+execution, paging, continuation source and continuation export targets. Set
+`NEVERD_TEST_NEVERC` to include both C compilers. The IRET matrix records native
+comparison counts and the separate #AC VMX/NMI discrepancy count; neither
+undefined compatibility upper halves nor unusable SS attributes are silently
+counted as native equality. See [the runtime contract](x86-paged-execution.md#faultable-iret-iretd-and-iretq).
+
 ## Allocator validation
 
 Use `python scripts/build.py BUILD_DIR` after CMake configuration to refresh

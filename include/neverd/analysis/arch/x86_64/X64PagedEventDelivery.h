@@ -22,6 +22,15 @@
 
 namespace neverd::analysis {
 
+/// Canonical-address checks precede either order. Concurrent data-fault
+/// priority is processor-specific, not specified by the boundary-event table.
+enum class X64PagedAlignmentPriority : uint8_t { BeforePaging, AfterPaging };
+
+/// Bound processor observation for competing IRET stack faults. The qualified
+/// order reads FLAGS, CS, IP, then SS and SP, and updates accessed descriptors
+/// as qwords. This is not inferred from the host or the ISA pseudocode.
+enum class X64PagedIretAccessOrder : uint8_t { FlagsFirst };
+
 enum class X64PagedEventStatus : uint8_t {
   Delivered,
   Deferred,
@@ -64,6 +73,23 @@ llvm::Expected<X64PagedEventResult>
 deliverX64PagedEvent(X64ContinuationStateV6 &State,
                      translate::X86PagedMemory &Memory,
                      const X64ContinuationEventV1 &Event, uint32_t MXCSRMask);
+
+struct X64PagedInterruptReturnResult {
+  bool Completed = false;
+  std::optional<translate::X86MemoryException> Exception;
+  std::optional<translate::GuestMemoryFault> BackingFault;
+};
+
+/// Execute an authenticated 64-bit-mode IRET/IRETD/IRETQ after instruction
+/// fetch. Descriptor/page-table writes and NMI unblocking survive a later
+/// fault; the returned register/segment state commits only on success. Fault
+/// delivery belongs to the instruction executor. Compatibility upper halves
+/// use the same explicit witnesses as the generated no-fault return.
+llvm::Expected<X64PagedInterruptReturnResult>
+returnX64PagedInterrupt(X64ContinuationStateV6 &State,
+                        translate::X86PagedMemory &Memory, uint16_t FieldBytes,
+                        X64PagedAlignmentPriority AlignmentPriority,
+                        X64PagedIretAccessOrder AccessOrder);
 
 } // namespace neverd::analysis
 

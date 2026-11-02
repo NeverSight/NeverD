@@ -27,7 +27,9 @@ inline void emitX64PagedDriver(
  * commits scalar state/data on success, or delivers its fault before returning.
  * 18=backing failure, 19=shutdown, 20=changed code requiring relift.
  * Architectural faults consume one attempt, including failed fault entry.
- * Refused steps, changed code and operand backing stops consume none. */
+ * Refused steps, changed code and scalar operand backing stops consume none.
+ * An authenticated IRET that begins frame access consumes an attempt even if
+ * backing fails: NMI unblocking and earlier descriptor writes are retained. */
 typedef uint64_t (*neverd_x64_paged_body_v1)(void *, void *);
 extern uint64_t neverd_x64_paged_step_v1(
     uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,

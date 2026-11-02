@@ -4,7 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Execute a generated scalar step with an explicit paged-RAM transaction.
+/// Execute generated scalar steps and interrupt returns over explicit paged
+/// RAM.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
 #define NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
@@ -23,14 +24,13 @@ namespace neverd::analysis {
 
 using X64PagedBody = uint64_t (*)(void *State, void *Exchange);
 
-/// Canonical-address checks precede either order. Concurrent data-fault
-/// priority is processor-specific, not specified by the boundary-event table.
-enum class X64PagedAlignmentPriority : uint8_t { BeforePaging, AfterPaging };
-
 struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
   std::optional<X64PagedAlignmentPriority> AlignmentPriority;
+  /// Required before executing IRET's return-frame accesses. Authentication
+  /// and fetch still precede this instruction-specific runtime binding.
+  std::optional<X64PagedIretAccessOrder> IretAccessOrder;
 };
 
 struct X64PagedExecutionResult {
@@ -45,9 +45,11 @@ struct X64PagedExecutionResult {
 
 /// One confined CPU and owned ordinary RAM, without external writes while a
 /// step executes. Prepared stores are committed only after the complete scalar
-/// instruction succeeds. This is not a REP/gather/XSAVE partial-commit model.
-/// Generated bodies/validators and original bytes belong to the same source
-/// export; passing unrelated or arbitrary function pointers violates this ABI.
+/// instruction succeeds. IRET separately retains its ordered descriptor writes
+/// and NMI unblocking on failure. This is not a REP/gather/XSAVE progress
+/// model. Generated bodies/validators and original bytes belong to the same
+/// source export; passing unrelated or arbitrary function pointers violates
+/// this ABI.
 class X64PagedExecution final {
 public:
   explicit X64PagedExecution(translate::X86PagedMemory &Memory,
