@@ -1541,7 +1541,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           }
         }
       }
-      if (CompleteSetup ||
+      // An empty list may have rejected the whole clobbered register run.
+      const bool EmptyClobberPrefix = HeuristicRegisterTail && Recovered == 0 &&
+                                      Required == 0 && !ParamRegs.empty() &&
+                                      FoundSource[0] &&
+                                      LeftByCall(*FoundSource[0], ParamRegs[0]);
+      if (CompleteSetup || EmptyClobberPrefix ||
           (SetupConvention
                ? Recovered || TargetLimit < static_cast<size_t>(MaxArgs)
                : !CI->Args.empty())) {
@@ -1588,6 +1593,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                Found[End] && Found[End]->Kind != ExprKind::Undef &&
                !HoldsTarget(End))
           ++End;
+        // COPY transport found by this scan is no fresh argument setup.
+        if (HeuristicRegisterTail && End <= ParamRegs.size())
+          while (End > std::max(FromABI.size(), Required) &&
+                 FoundSource[End - 1] &&
+                 LeftByCall(*FoundSource[End - 1], ParamRegs[End - 1]))
+            --End;
         for (size_t I = FromABI.size(); I < End; ++I)
           FromABI.push_back(Found[I]);
         // The scan numbers registers in the convention's order, which does

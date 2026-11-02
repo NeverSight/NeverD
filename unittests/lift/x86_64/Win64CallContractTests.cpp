@@ -6898,3 +6898,91 @@ int main(void) {
           Source, {Optimization, "-fsanitize=undefined"});
   }
 }
+
+TEST(SummarizedCallArguments, IndirectSetupCannotRegrowAClobberedTail) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  const std::array<unsigned, 5> ExpectedArgs{1, 0, 3, 2, 2};
+  for (unsigned Variant = 0; Variant < ExpectedArgs.size(); ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "trimmed_indirect";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    const auto Result = Register(10, 1, x86reg::RAX);
+    auto &First = Add(NdOp::CALL, Result, {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    First.CalleeVectorArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RDX);
+    Function.CallClobbers.push_back({Clobber, 1});
+    auto Temp = Register(100, 1, 0);
+    Temp.Kind = MedVar::Temp;
+    Add(NdOp::COPY, Temp, {Clobber});
+    // Retain a captured temporary with more than one use. Its source can be
+    // unavailable even when the expression builder keeps the local itself.
+    Add(NdOp::STORE, {}, {MedVar::makeConst(0x5000, 8), Temp});
+    const auto RCXClobber = Register(30, 1, x86reg::RCX);
+    Function.CallClobbers.push_back({RCXClobber, 1});
+    Add(NdOp::COPY, Register(30, 2, x86reg::RCX),
+        {Variant == 1 || Variant == 3 ? RCXClobber : MedVar::makeConst(17, 8)});
+    Add(NdOp::COPY, Register(20, 2, x86reg::RDX),
+        {Variant == 3 ? MedVar::makeConst(29, 8) : Temp});
+    if (Variant == 2)
+      Add(NdOp::COPY, Register(40, 1, x86reg::R8), {MedVar::makeConst(29, 8)});
+    const auto Returned = Register(10, 2, x86reg::RAX);
+    auto &Call =
+        Add(NdOp::INDIR_CALL, Returned, {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    if (Variant == 4)
+      Call.CalleeRegisterArgs = 2;
+    Add(NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 2u);
+    ASSERT_EQ(Function.CallInfos.back().Args.size(), ExpectedArgs[Variant]);
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(Function, Arch::X64);
+    unsigned ConsumerCalls = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        if (Expression && Expression->Kind == ExprKind::Call &&
+            Expression->IsIndirectCall) {
+          ++ConsumerCalls;
+          EXPECT_EQ(Expression->Operands.size(), ExpectedArgs[Variant]);
+        }
+      });
+    });
+    EXPECT_EQ(ConsumerCalls, 1u);
+  }
+}
