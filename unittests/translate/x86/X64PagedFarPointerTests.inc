@@ -117,7 +117,7 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
                                         Compiler, 0x1000, &Scheduled,
                                         X64NullSegmentBasePolicy::Clear));
         for (const auto &F : Forms)
-          for (unsigned Case = 0; Case != 148; ++Case) {
+          for (unsigned Case = 0; Case != 181; ++Case) {
             if (Case == 123 && !CPU.SMAP)
               continue;
             SCOPED_TRACE(llvm::formatv("{0} llvm={1} {2} width={3} "
@@ -137,8 +137,13 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
               RPL = Case & 3;
             }
             if (Case == 122 || Case == 126 || Case == 127 || Case == 130 ||
-                Case == 131 || Case == 132 || Case == 133 || Case == 141)
+                Case == 131 || Case == 132 || Case == 133 || Case == 141 ||
+                Case == 148)
               CPL = DPL = RPL = 3;
+            if (Case >= 149) {
+              CPL = RPL = (Case - 149) & 3;
+              DPL = ((Case - 149) >> 2) & 3;
+            }
             State.Core.CS = {0, UINT32_MAX, uint16_t(24 | CPL),
                              uint16_t(0xa09b | (CPL << 5))};
             State.Core.SS = {0, UINT32_MAX, uint16_t(32 | CPL),
@@ -159,6 +164,8 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
                            (uint64_t(Case & 15) << 40);
             if (Case >= 80 && Case < 96)
               Descriptor &= ~(uint64_t(1) << 47);
+            if (Case >= 149)
+              Descriptor |= uint64_t(Case < 165 ? 8 : 12) << 40;
             uint16_t Selector = 40 | RPL;
             if (Case >= 96 && Case < 112)
               Selector = RPL;
@@ -244,6 +251,15 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
                                                    : Case == 137 ? 0x9005
                                                                  : 0);
             }
+            if (Case == 148) {
+              // An implicit descriptor read/write does not acquire user #AC.
+              Selector = 15;
+              State.LDTR = {0x9001, 0x1f, 56, 0x82};
+              State.Unusable &= ~64;
+              put(0x9009, Descriptor);
+              Controls.CR0 |= 0x40000;
+              Core.RFlags |= 0x40000;
+            }
             if (Case == 139 || Case == 140) {
               Selector = 12;
               State.LDTR = {0x1fff8, 0x1f, 56, 0x82};
@@ -306,7 +322,7 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
             EXPECT_EQ(Budget, 0u);
             EXPECT_EQ(Context.lastResult().InstructionCompleted, !Handler);
             expectFarPointerCPU(State, Native, *Memory, CPU,
-                                Case >= 146 ? 0x17000 : 0x14000);
+                                Case == 146 || Case == 147 ? 0x17000 : 0x14000);
             ++Comparisons;
             Faults += Handler;
             if (HasFailure())

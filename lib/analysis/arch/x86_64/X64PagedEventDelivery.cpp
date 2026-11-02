@@ -12,6 +12,7 @@
 
 #include "X64ContinuationDelivery.h"
 #include "X64ContinuationEvents.h"
+#include "X64FarPointerEncoding.h"
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowScalarConstant.h"

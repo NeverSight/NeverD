@@ -234,16 +234,19 @@ retain their refusal.
 Null-selector FS/GS base changes differ across processors. V6 now accepts an
 explicit `null_segment_base_policy` of `clear` or `preserve`; neither is inferred
 from a vendor name. Null loads without that binding still reject before
-descriptor access or state/RAM writes. LSS owns writable CPL0 data descriptors
-and null SS selector 0, with coupled partial/full GPR writes. Null SS 1..3 and
-invalid descriptors reject atomically. Null loads read no descriptor.
+descriptor access or state/RAM writes. The successful-RAM binding owns writable
+CPL0 data descriptors and null SS selector 0, with coupled partial/full GPR
+writes. It refuses null SS 1..3 and invalid descriptors before state/RAM
+publication. The paged binding separately owns all CPLs and architectural faults
+as described below. Null loads read no descriptor.
 [Intel SDM section 7.8.3](https://cdrdv2-public.intel.com/835754/253668-sdm-vol-3a.pdf)
 explicitly distinguishes LSS from MOV/POP SS: it does not inhibit the next
 instruction's events. This corrects the earlier shadow-state blocker; the
 historical evidence records retain that earlier limitation wording.
-i386/compatibility forms, AMD REX.W qualification and fault delivery remain
-open. The LLVM/NeverC native interfaces above are
-unchanged; this completion does not publish an SDK release or change pins.
+i386/compatibility forms and AMD REX.W qualification remain open. The
+[paged binding](x86-paged-execution.md#faultable-lss-lfs-and-lgs) now owns fault
+delivery and retry for long-mode forms. The LLVM/NeverC native interfaces above
+are unchanged; this completion does not publish an SDK release or change pins.
 
 The [qualification record](evidence/x86-lfs-lgs-continuation-2026-10-29.json)
 binds the source snapshot and Release toolchain to 132,544 native state/RAM
@@ -273,7 +276,7 @@ contract. The distinction applies to the memory/fault gaps listed below.
 | Instructions or family | Missing contract |
 | --- | --- |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
-| LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns LSS/LFS/LGS GPR, selector, descriptor/cache and fallthrough state under Intel operand rules, including null SS at CPL0 and declared clear/preserve FS/GS base policies. i386/compatibility forms, other processor qualification and fault delivery remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
+| LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. i386/compatibility forms and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
 | Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
 | VMRUN outside explicit native SVM | LLVM/NeverC provide the returning fourteen-GPR/user-xstate context. The `amd-svm-v10` source profile connects canonical raw addr64/addr32 VMRUN to that API through both C routes, with explicit GPR/SIMD/MXCSR/CR2 publication and a VMEXIT stop. Ordinary function-ABI lifting and arbitrary guest supervisor/memory environments remain outside that declared domain. See [the contract and IDA counterexample](x86-vmrun-context.md). |

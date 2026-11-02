@@ -3368,6 +3368,26 @@ FS/GS/address-size LKGS forms. The pinned MC corpus reports unsupported far
 returns separately; RETF/IRET must not lower to ordinary ABI returns.
 
 
+`X64PagedFarPointerTests.inc` owns the faultable LSS/LFS/LGS comparisons in
+`NeverDX64PagedExecutionTests`. Run `*PagedFarPointer*:*PagedLss*` on pinned
+performance and efficient cores. `PagedFarPointerLoadsMatchOriginalCPU` covers
+all widths, CPL/RPL/DPL combinations, descriptor kinds, null selectors,
+SP/R12 address roles, ignored segment overrides and competing memory faults.
+Its SMAP case runs only when KVM advertises SMAP and records that availability.
+The wrap/alias fixture covers FS/GS and address32/EIP-relative fields; the
+admission fixture checks explicit profile/null-policy refusal, backing stops,
+failed delivery and budget/shadow preservation. The other two fixtures execute
+pending IRQ/NMI after LSS and a complete page-repair/IRET/retry sequence for
+each segment load. `NEVERD_TEST_NEVERC` adds NeverC to the O0/O2 HighC/LLVMC
+matrices. XML records actual CPU-comparison counts; inactive segment caches and
+fault-time page-table A/D publication are excluded from equality.
+
+Run the full paging, paged execution, continuation source and continuation
+export suites after changing the shared transition writer. The no-fault
+far-pointer encoding test also checks permutations of all six segment prefixes
+and refuses duplicate groups. Qualify both the full fork SDK and pinned r6
+library SDK, and compare their captured source/header/manifest artifacts.
+
 Faultable IRET is covered by `X64PagedExecutionTest.PagedInterruptReturnsMatchOriginalCPU`,
 `PagedIretComposesWithScheduledIRQAndNMI`,
 `PagedReturnFaultHandlerRepairsMappingAndRetries` and
