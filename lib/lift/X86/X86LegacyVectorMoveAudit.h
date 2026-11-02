@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Undefined-output admission for legacy vector moves and register XOR.
+/// Undefined-output admission for legacy vector moves and register logic.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LIFT_X86_X86LEGACYVECTORMOVEAUDIT_H
@@ -245,6 +245,15 @@ inline bool form(const cs_insn *Insn, Arch Target) {
       llvm_unreachable("audited packed integer operation");
     }
     StoreOpcode = LoadOpcode;
+    break;
+  case X86_INS_ANDPS:
+  case X86_INS_ANDPD:
+    // Intel SDM: all 128 bits participate, with no floating-point exceptions
+    // or flag changes. Memory forms require their own alignment audit.
+    if (X.operands[1].type != X86_OP_REG || X.eflags)
+      return false;
+    RequiredPrefix = Insn->id == X86_INS_ANDPS ? 0 : 0x66;
+    LoadOpcode = StoreOpcode = 0x54;
     break;
   case X86_INS_XORPS:
   case X86_INS_XORPD:

@@ -153,6 +153,46 @@ int main(void) {
   run(Instructions, Harness);
 }
 
+TEST_F(X64ContinuationIntegerTest, LegacyVectorAndMatchesNativeMasks) {
+  const std::vector<Bytes> Instructions{{0x66, 0x0f, 0xdb, 0xc1},
+                                        {0x66, 0x0f, 0xdb, 0xc0},
+                                        {0x66, 0x0f, 0xdb, 0x01},
+                                        {0x0f, 0x54, 0xc1},
+                                        {0x66, 0x0f, 0x54, 0xc1}};
+  std::string Harness, Calls;
+  for (unsigned I = 0; I != Instructions.size(); ++I) {
+    Harness +=
+        original(I, Instructions[I], "(const uint8_t*,uint64_t,uint8_t*)",
+                 "movdqu (%rdi),%xmm1\\nmovdqu 16(%rdi),%xmm0\\n"
+                 "mov %rdi,%rcx\\nmov %rsi,%rax\\n",
+                 "movdqu %xmm1,(%rdx)\\nmovdqu %xmm0,16(%rdx)\\n");
+    Calls += "original_" + std::to_string(I) + ',';
+  }
+  Harness += "static uint64_t (*native[])(const uint8_t*,uint64_t,uint8_t*)={" +
+             Calls + "};\n";
+  Harness += R"C(
+int main(void) {
+  for(unsigned n=0;n<sizeof(native)/sizeof(*native);++n)for(unsigned v=0;v<256;++v) {
+    _Alignas(16) uint8_t input[32],before_input[32],output[32];
+    for(unsigned b=0;b<sizeof(input);++b)input[b]=(uint8_t)(b*71+v*13);
+    memcpy(before_input,input,sizeof(input));
+    neverd_x64_state_v6 state=seed(0x1000+n*32);
+    memcpy(state.ZMM[1],input,16);memcpy(state.ZMM[0],input+16,16);
+    state.GPR[1]=(uintptr_t)input;
+    neverd_x64_state_v6 expected=state;
+    expected.GPR[0]=native[n](input,state.GPR[0],output);
+    memcpy(expected.ZMM[1],output,16);memcpy(expected.ZMM[0],output+16,16);
+    expected.PC+=instruction_size[n];uint64_t budget=1;
+    CHECK(neverd_x64_continue_v6(&state,&budget)==9 && !budget);
+    CHECK(!memcmp(&state,&expected,sizeof(state)));
+    CHECK(!memcmp(input,before_input,sizeof(input)));
+  }
+  return 0;
+}
+)C";
+  run(Instructions, Harness);
+}
+
 TEST_F(X64ContinuationIntegerTest, WideProductsAndArbitraryFlags) {
   const std::vector<Bytes> Instructions{
       {0x48, 0xf7, 0xe1}, {0x48, 0xf7, 0xe9}, {0x48, 0x0f, 0xaf, 0xc1}};

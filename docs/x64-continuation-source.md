@@ -127,6 +127,20 @@ qualification.
 
 ## Invocation
 
+Legacy 128-bit integer AND operations use the existing bit-vector lowering
+for both C backends. PAND register and memory forms, and ANDPS/ANDPD register
+forms, compute all 128 result bits while preserving upper vector lanes,
+source memory and flags within the declared nonfaulting memory domain.
+ANDPS/ANDPD memory forms retain their separate alignment audit requirement.
+The source adapter admits only equal 128-bit operands here; scalar
+mixed-width mask admission is unchanged.
+`WholeVectorAndPreservesLanesMemoryAndFlags` checks an independent byte oracle,
+and `LegacyVectorAndMatchesNativeMasks` compares original x64 instructions
+through the public continuation exporter. Both execute HighC and LLVMC at
+O0/O2 with ASan/UBSan, covering register, memory and self-register forms.
+`X86PackedSelectionAudit` checks x86/x64 register aliases and refuses
+inconsistent bytes, decoder details and unaudited memory forms.
+
 Flat 64-bit-address REP MOVS/STOS use the existing complete-state intrinsic
 for 1-, 2-, 4- and 8-byte elements. Their count and direction remain runtime
 inputs; overlapping copies retain ordered element semantics and zero count

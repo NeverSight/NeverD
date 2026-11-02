@@ -2193,6 +2193,36 @@ int main(void) {
 })C");
 }
 
+TEST_F(X64ContinuationSourceTest, WholeVectorAndPreservesLanesMemoryAndFlags) {
+  // PAND xmm0,xmm1; PAND xmm0,[rdi]; PAND xmm0,xmm0.
+  run({0x66, 0x0f, 0xdb, 0xc1, 0x66, 0x0f, 0xdb, 0x07, 0x66, 0x0f, 0xdb, 0xc0},
+      {0x1000, 0x1004, 0x1008}, R"C(
+int main(void) {
+  for(unsigned pattern=0;pattern<256;++pattern)for(unsigned mode=0;mode<3;++mode) {
+    _Alignas(16) unsigned char memory[32], old_memory[32];
+    for(unsigned i=0;i<sizeof(memory);++i)memory[i]=(unsigned char)(pattern^i*73);
+    memcpy(old_memory,memory,sizeof(memory));
+    state_t s=seed(0x1000+4*mode);
+    for(unsigned i=0;i<16;++i) {
+      s.zmm[0][i]=(unsigned char)(pattern+i*11);
+      s.zmm[1][i]=(unsigned char)(~pattern+i*19);
+    }
+    s.flags=0x202|((uint64_t)pattern&0xd5);
+    const unsigned char *source=mode==0 ? s.zmm[1] :
+        mode==1 ? memory : s.zmm[0];
+    s.gpr[7]=(uintptr_t)memory;
+    state_t expected=s;
+    for(unsigned i=0;i<16;++i)expected.zmm[0][i]&=source[i];
+    expected.pc+=4;
+    CHECK((mode==0 ? neverd_step_1000(ARG(&s)) :
+           mode==1 ? neverd_step_1004(ARG(&s)) : neverd_step_1008(ARG(&s)))==0);
+    CHECK(!memcmp(&s,&expected,sizeof(s)));
+    CHECK(!memcmp(memory,old_memory,sizeof(memory)));
+  }
+  return 0;
+})C");
+}
+
 TEST_F(X64ContinuationSourceTest,
        MemoryBitStringsRetainSegmentsAndArbitraryFlags) {
   run({0x66, 0x65, 0x0f, 0xba, 0x34, 0x25, 0x60, 8,    0,    0,
