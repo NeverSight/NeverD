@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineAnalysis.h"
 #include "PipelineCallAbiDetail.h"
 #include "PipelineLowIRDetail.h"
 #include "PipelineSEHRuntimeMemory.h"
@@ -27,6 +28,7 @@
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -44,6 +46,7 @@
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/FunctionNames.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -394,6 +397,8 @@ std::vector<const LowOp *> instructionLoads(const LowFunc &Func,
 bool isAuthenticatedTableLoad(const LowFunc &Func, va_t Addr, int Seq,
                               const ModuleJumpTableOwner &Owner) {
   for (const JumpTable &JT : Func.JumpTables) {
+    if (JT.AnalysisOnly)
+      continue;
     const bool SameStorage = std::any_of(
         JT.StorageRanges.begin(), JT.StorageRanges.end(),
         [&](const JumpTableStorageRange &Range) {
@@ -2661,7 +2666,7 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
   std::set<va_t> Requested;
   for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex)
     for (const JumpTable &JT : Funcs[FuncIndex].JumpTables) {
-      if (JT.StorageRanges.empty())
+      if (JT.AnalysisOnly || JT.StorageRanges.empty())
         continue;
       ModuleJumpTableOwner Owner;
       Owner.FuncIndex = FuncIndex;
@@ -4318,6 +4323,7 @@ void computeCallRegisterEffects(
       parallelForEachWeighted(
           Weights,
           [&](auto Claim, size_t N) {
+            ReadOnlyBytesScope ReadScope(Img);
             // A worker opens a decoder only for a body it builds: a warmed
             // run knows most callees from their facts or kept bodies.
             std::optional<Decoder> ExtraDec;
@@ -4838,6 +4844,7 @@ void warmCalleeFacts(
   parallelForEachWeighted(
       Weights,
       [&](auto Claim, size_t N) {
+        ReadOnlyBytesScope ReadScope(Img);
         Decoder Dec;
         if (!Dec.init(Img))
           return;
@@ -4974,6 +4981,8 @@ void Pipeline::buildLowIR(
     const PipelineOptions &Opts, DebugContext *Dbg, PipelineResult &Result) {
   const size_t Total = Candidates.size();
   std::vector<LowFunc> AllLow(Total);
+  const auto AnalysisCallbacks =
+      pipeline_detail::analysisCallbackEntries(Img, Opts);
   // Detected candidates plus every confirmed function-symbol start. Selecting
   // bodies must not change their boundaries: one unwind range can cover
   // independently callable entries, including address-taken ones. CFGBuilder
@@ -5067,12 +5076,16 @@ void Pipeline::buildLowIR(
   // many callers. The image does not change during these builds, so their
   // recorded answers, replayed with their work, are the fresh ones.
   RegistrationStackPopMemo StackPops(Img);
+  RegistrationLeafPrefixMemo LeafPrefixes(Img);
   parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
+    ReadOnlyBytesScope ReadScope(Img);
     RegistrationStackPopMemoScope StackPopScope(StackPops);
+    RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
     Decoder LocalDec;
     if (!LocalDec.init(Img))
       return;
     CFGBuilder LocalCFG;
+    LocalCFG.setAnalysisRecoveryEnabled(Opts.allowsAnalysisRecovery());
     LocalCFG.setKnownFuncEntries(&FuncEntries);
     LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
     LocalCFG.setNoReturnCalleeProver(&NoReturnCallees);
@@ -5091,6 +5104,8 @@ void Pipeline::buildLowIR(
       AllLow[I] = Cached ? std::move(*Cached)
                          : LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                           Candidates[I].second);
+      pipeline_detail::prepareAnalysisBody(Img, Opts, AnalysisCallbacks,
+                                           AllLow[I]);
       trimFuncStorage(AllLow[I]);
     }
   });
@@ -5148,11 +5163,14 @@ void Pipeline::buildLowIR(
   auto rebuildFunctions = [&](const std::vector<bool> &Rebuild) {
     CachedArbitration.reset();
     parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
+      ReadOnlyBytesScope ReadScope(Img);
       RegistrationStackPopMemoScope StackPopScope(StackPops);
+      RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
       Decoder LocalDec;
       if (!LocalDec.init(Img))
         return;
       CFGBuilder LocalCFG;
+      LocalCFG.setAnalysisRecoveryEnabled(Opts.allowsAnalysisRecovery());
       LocalCFG.setKnownFuncEntries(&FuncEntries);
       LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
       LocalCFG.setNoReturnCalleeProver(&NoReturnCallees);
@@ -5176,6 +5194,8 @@ void Pipeline::buildLowIR(
             &EverPublishedJumpTableBranchHistory[I]);
         AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                    Candidates[I].second);
+        pipeline_detail::prepareAnalysisBody(Img, Opts, AnalysisCallbacks,
+                                             AllLow[I]);
         EverPublishedJumpTableBranchHistory[I].insert(
             AllLow[I].EverPublishedJumpTableBranchAddresses.begin(),
             AllLow[I].EverPublishedJumpTableBranchAddresses.end());
@@ -5446,8 +5466,9 @@ void Pipeline::buildLowIR(
   // provisional producer or withdrawn continuation from becoming stale
   // image-global evidence.
   for (const LowFunc &Function : AllLow)
-    for (va_t Ref : Function.CodeRefTargets)
-      Img.CodeRefTargets.insert(Ref);
+    if (!Function.AnalysisOnly)
+      for (va_t Ref : Function.CodeRefTargets)
+        Img.CodeRefTargets.insert(Ref);
   // CodeRefTargets affects later address propagation and x87 tag entry seeds,
   // but not the raw machine graphs retained by X87Graphs: their builders skip
   // floating-stack normalization. Keep those facts for extra-callee analysis.
@@ -5496,11 +5517,13 @@ void Pipeline::buildLowIR(
                 : PipelineFunctionDisposition::RejectedIncomplete;
       continue;
     }
-    // Only an incomplete *lift* disqualifies a function.  A path that left the
-    // mapped image is recorded in the audit but is not a defect in what was
-    // recovered, and rejecting it would drop a function whose every
-    // instruction lifted cleanly.
-    if (!Low.hasCompleteInstructionLift()) {
+    // Native proof failures do not hide decoded analysis operations; their
+    // refusal addresses and analysis-only marker remain visible. Missing
+    // instruction semantics still reject the body in every mode. A path that
+    // left the mapped image is recorded separately in the audit.
+    if (!Low.hasCompleteInstructionLift() &&
+        !(Opts.allowsAnalysisRecovery() && Low.AnalysisOnly &&
+          pipeline_detail::hasAnalysisInstructionBody(Low))) {
       if (AuditIt != Result.FunctionAudits.end())
         AuditIt->Disposition = PipelineFunctionDisposition::RejectedIncomplete;
       continue;

@@ -17,6 +17,7 @@
 #include "../X86/RegistrationPhysicalFrame.h"
 #include "../X86/RegistrationPrologue.h"
 #include "../X86/RegistrationRoots.h"
+#include "../X86/RegistrationSEH4PhysicalFrame.h"
 #include "ComputedBranchScalars.h"
 
 #include "neverd/Limits.h"
@@ -41,6 +42,7 @@
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
+#include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
@@ -749,6 +751,12 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
       Physical ? x86_registration::analyzePhysicalCxxFrame(*Image, SourceLow,
                                                            *Physical)
                : nullptr;
+  auto SEHPhysical =
+      !Physical && Image && TheArch == Arch::X86 && Fmt == BinaryFormat::COFF
+          ? x86_registration::projectSEH4PhysicalFrame(*Image, SourceLow)
+          : std::nullopt;
+  if (SEHPhysical)
+    Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
@@ -979,6 +987,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
       x86ZeroExtendedAddressOutputs(Low, TheArch);
 
   MedFunc Func;
+  Func.AnalysisOnly = SourceLow.AnalysisOnly || Low.AnalysisOnly ||
+                      std::any_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                                  [](const auto &T) { return T.AnalysisOnly; });
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
@@ -989,6 +1000,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
   Func.RegistrationStates = Low.RegistrationStates;
   Func.RegistrationPhysicalFrame = PhysicalFrame;
+  if (SEHPhysical)
+    Func.RegistrationSEH4PhysicalFrame = std::move(SEHPhysical->Frame);
   Func.CalleePopBytes = Low.CalleePopBytes;
   Func.ConsumesX87Argument = Low.ConsumesX87Argument;
   bool HasReturn = false, AllX87Returns = true;
@@ -1008,6 +1021,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         KnownRegistrationFrameFacts->CallerCleanupABIComplete;
     Func.RegistrationCxxEntryPopBytes =
         KnownRegistrationFrameFacts->CxxEntryPopBytes;
+    Func.RegistrationSEHEntryPopBytes =
+        KnownRegistrationFrameFacts->SEHEntryPopBytes;
   } else {
     if (Low.RegistrationStates && Image)
       Func.RegistrationCallerCleanupABIComplete =
@@ -1015,6 +1030,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
     if (Low.ExceptionMetadata && Low.ExceptionMetadata->Cxx && Image)
       Func.RegistrationCxxEntryPopBytes =
           getCheckedX86RegistrationCxxParentABI(SourceLow, *Image);
+    else if (Low.RegistrationStates && Low.CalleePopBytes && Image)
+      Func.RegistrationSEHEntryPopBytes =
+          getCheckedX86RegistrationSEHParentABI(SourceLow, *Image);
   }
   if (SourceCallHintsEnabled && Image && Fmt == BinaryFormat::MachO &&
       TheArch == Arch::AArch64 && Image->Arch == TheArch) {
@@ -1403,12 +1421,20 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         for (unsigned K = 0; K <= LOp.X87ScratchSlots; ++K)
           MOp.X87ClobberedSlots |= uint8_t(1u << ((Slot + 8 - K) & 7));
       }
-      if (TheArch == Arch::X86 && Low.RegistrationStates &&
+      const bool CookieCall =
+          TheArch == Arch::X86 && Fmt == BinaryFormat::COFF &&
+          LOp.Opcode == NdOp::CALL && LOp.NumInputs == 1 &&
+          LOp.Inputs[0].isConst() && LOp.Inputs[0].Size == 4 &&
+          Low.RegistrationStates &&
           Low.RegistrationStates->SecurityCookiesComplete &&
-          Low.RegistrationStates->cookieCheck(LOp.Addr, LOp.Seq)) {
+          LOp.Inputs[0].Offset == Low.RegistrationStates->CookieCheckVA &&
+          Low.RegistrationStates->cookieCheck(LOp.Addr, LOp.Seq);
+      if (CookieCall) {
         MOp.Output = MedVar{};
         MOp.Output.Id = -1;
-        MOp.CallPreservedGPRs = 0xff;
+        // The family-mask summary is x64-only. The checked leaf preserves
+        // every non-arithmetic register, including vectors and x87 state.
+        MOp.PreservesCallerSaved = true;
       }
       if (TrackDispatchArgs)
         DispatchDefined = StepDefined(DispatchDefined, LOp);
@@ -1463,6 +1489,16 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
             {Reload->second.BlockId, Reload->second.OperationIndex}));
       }
       MB.Ops.push_back(MOp);
+      if (CookieCall)
+        for (const auto &[Flag, Bit] : kX86EqualComparisonFlags) {
+          MedOp Write;
+          Write.Opcode = NdOp::COPY;
+          Write.Addr = LOp.Addr;
+          Write.Output = ndVarToMedVar(NdVar::reg(Flag, 1));
+          Write.addInput(
+              MedVar::makeConst(Bit, 1, ConstantAddressProvenance::Scalar));
+          MB.Ops.push_back(std::move(Write));
+        }
       if (CallExitConstants && LOp.Opcode == NdOp::CALL &&
           MOp.Opcode == NdOp::CALL && !MOp.DoesNotReturn && LOp.NumInputs &&
           LOp.Inputs[0].isConst())

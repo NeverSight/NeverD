@@ -313,6 +313,64 @@ TEST(LowScalarConstant, BitwisePartialMasksAndMalformedWidthsStayUnknown) {
         EXPECT_FALSE(lowScalarConstantResult(Op, constant));
       }
 }
+
+TEST(LowScalarConstant, BitwiseNotMatchesConcreteFixedWidthExecution) {
+  for (uint16_t Width = 1; Width <= 8; ++Width)
+    for (uint64_t Byte = 0; Byte != 256; ++Byte) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Byte);
+      LowOp Op;
+      Op.Opcode = NdOp::INT_NOT;
+      Op.Output = NdVar::reg(0, Width);
+      // High carrier bits must not affect the declared result width.
+      Op.addInput(NdVar::cst(Byte * UINT64_C(0x0101010101010101), Width));
+      NdOpEmulator Emulator(BinaryImage{});
+      ASSERT_TRUE(Emulator.step(Op));
+      const auto Expected = Emulator.getRegister(0);
+      ASSERT_TRUE(Expected);
+      const uint64_t Mask = UINT64_MAX >> ((8 - Width) * 8);
+      EXPECT_EQ(lowScalarConstantResult(Op, constant), *Expected & Mask);
+    }
+}
+
+TEST(LowScalarConstant, BitwiseNotRejectsUnknownAndMalformedWidths) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    LowOp Op;
+    Op.Opcode = NdOp::INT_NOT;
+    Op.Output = NdVar::reg(0, 4);
+    Op.addInput(NdVar::cst(1, 4));
+    switch (Mutation) {
+    case 0:
+      Op.Inputs[0] = NdVar::reg(8, 4);
+      break;
+    case 1:
+      Op.Inputs[0].Size = 0;
+      break;
+    case 2:
+      Op.Inputs[0].Size = 2;
+      break;
+    case 3:
+      Op.Inputs[0].Size = 8;
+      break;
+    case 4:
+      Op.Output.Size = 0;
+      break;
+    case 5:
+      Op.Output.Size = 16;
+      break;
+    case 6:
+      Op.NumInputs = 0;
+      break;
+    case 7:
+      Op.addInput(NdVar::cst(1, 4));
+      break;
+    case 8:
+      Op.Output = NdVar::cst(0, 4);
+      break;
+    }
+    EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  }
+}
 LowFunc registerCall(std::vector<LowOp> Setup, NdVar Target) {
   LowFunc Function;
   Function.Blocks.emplace_back();

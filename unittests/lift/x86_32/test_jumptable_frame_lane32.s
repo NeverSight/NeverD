@@ -34,7 +34,7 @@ jt_i386_private_frame_spill_branch:
 .Lprivate_spill_case0:
   pushl %ecx
   call jt_i386_private_frame_scalar
-  addl $4, %esp
+  leal -8(%ebp), %esp           // No implicit CALL stack-epoch assumption.
   movl $1, %ecx
   jmp .Lprivate_spill_dispatch
 .Lprivate_spill_case1:

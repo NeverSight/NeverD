@@ -19,6 +19,7 @@
 #include "COFFRegistrationSEHParentExit.h"
 #include "COFFRegistrationSEHRegisters.h"
 #include "COFFRegistrationSEHState.h"
+#include "COFFRegistrationSEHThread.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -27,12 +28,15 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHScope.h"
+#include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #include "llvm/IR/CFG.h"
@@ -154,8 +158,15 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
   LowFunc Replay = Builder.build(Image, Decoder, Source.CodeRange.Begin,
                                  Function.getName().str());
   std::vector<ExceptionAddressRange> SourceCallerPCWrites;
-  if (Function.getCallingConv() != llvm::CallingConv::C ||
-      !hasCallerCleanupRegistrationABI(Replay, Image, &SourceCallerPCWrites))
+  const bool Stdcall =
+      Function.getCallingConv() == llvm::CallingConv::X86_StdCall;
+  const auto ParentPop = Stdcall ? getCheckedX86RegistrationSEHParentABI(
+                                       Replay, Image, &SourceCallerPCWrites)
+                                 : std::nullopt;
+  if (Stdcall ? !ParentPop || !*ParentPop
+              : Function.getCallingConv() != llvm::CallingConv::C ||
+                    !hasCallerCleanupRegistrationABI(Replay, Image,
+                                                     &SourceCallerPCWrites))
     return rejectIR(
         "source or preserved callee has an unproved x86 stack cleanup ABI");
   if (!Replay.RegistrationStates || !Replay.RegistrationStates->Complete ||
@@ -198,6 +209,13 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   MedFunc ReplayMed = Converter.convert(Replay, Arch::X86, BinaryFormat::COFF);
+  if (Stdcall && !hasX86RegistrationEntryABI(ReplayMed, Function))
+    return rejectIR("SEH parent changed its physical stdcall entry ABI");
+  const auto *PhysicalStates = getX86RegistrationSEHPhysicalStates(ReplayMed);
+  if (!PhysicalStates ||
+      !hasCheckedX86RegistrationSEHPhysicalFrame(Image, ReplayMed))
+    return rejectIR(
+        "shared SEH4 source has no independently replayed physical frame");
   std::map<CallbackKey, std::set<uint8_t>> ExpectedRoots;
   for (const auto &Scope : Source.Registration->Scopes) {
     const CallbackKey Key{Scope.IsFinally ? Scope.HandlerVA : Scope.FilterVA,
@@ -239,6 +257,10 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
       ReplayMed, *Frame, *CallbackMap, ExceptionBridges, NativeFunctions);
   if (!ExceptionFields)
     return ExceptionFields.takeError();
+  auto ThreadReads = coff_registration::bindSEHThreadReads(ReplayMed, Function,
+                                                           NativeFunctions);
+  if (!ThreadReads)
+    return ThreadReads.takeError();
   std::set<const llvm::Instruction *> IncomingAccesses, IncomingSetup;
   if (llvm::Error Error =
           validateIncomingCallerFrame(Function, ReplayMed, NativeFunctions,
@@ -255,12 +277,13 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
           !Jumps->Calls.count(Call))
         return rejectIR(
             "generated call changes the checked x86 stack cleanup ABI");
-  const auto &States = *Replay.RegistrationStates;
+  const auto &States = *PhysicalStates;
   const auto &Scopes = Source.Registration->Scopes;
   struct Dispatch {
     const llvm::BasicBlock *Unwind = nullptr;
     const llvm::CatchSwitchInst *Switch = nullptr;
     const llvm::CleanupReturnInst *Cleanup = nullptr;
+    const llvm::CatchReturnInst *Return = nullptr;
     const llvm::BasicBlock *Handler = nullptr;
   };
   std::map<uint32_t, Dispatch> Dispatches;
@@ -290,6 +313,9 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
         if (Operand->getType()->isPointerTy() &&
             Operand->getType()->getPointerAddressSpace() == 257) {
           const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+          if (ThreadReads->count(Load) &&
+              Load->getPointerOperand() == Operand.get())
+            continue;
           if (!Load || Load->getPointerOperand() != Operand.get() ||
               !llvm::isa<llvm::ConstantPointerNull>(Operand) ||
               !Load->getType()->isIntegerTy(32) || Load->isAtomic() ||
@@ -501,6 +527,7 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
               "scope catchswitch has extra handlers or a parent pad");
         D.Unwind = D.Switch->getParent();
         D.Handler = Return->getSuccessor();
+        D.Return = Return;
       }
       if (!Dispatches.emplace(P->Region, D).second)
         return rejectIR("source scope dispatch is duplicated");
@@ -521,10 +548,20 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
       ReplayMed, *Frame, NativeFunctions, ScopeWrites);
   if (!ScopeState)
     return ScopeState.takeError();
+  for (const auto &[Region, Dispatch] : Dispatches)
+    if (Dispatch.Return &&
+        !ScopeState->CatchReturns
+             .emplace(Dispatch.Return->getCatchPad(), Dispatch.Return)
+             .second)
+      return rejectIR("SEH return belongs to multiple dispatches");
   auto SourceSegments = validateSourceSegments(
       Function, ReplayMed, *CallbackMap, NativeFunctions, false, &*ParentExits);
   if (!SourceSegments)
     return SourceSegments.takeError();
+  if (!hasCheckedX86RegistrationSEHComputedStores(ReplayMed, Function,
+                                                  *Frame->Slot, Frame->EntrySP))
+    return rejectIR(
+        "computed SEH state store changed its source result or frame");
   if (auto Error = coff_registration::validateSEHRegisterStorage(
           Function, ReplayMed, *CallbackMap))
     return Error;
@@ -539,7 +576,7 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
           IncomingAccesses, SourceCallerPCWrites, ChainProtocolReads,
           States.SecurityCookieVA, ImmutableImageRanges, nullptr,
           &*ExceptionFields, &*Jumps, &*ScopeState, &*ParentExits,
-          &*LocalUnwinds))
+          &*LocalUnwinds, *ThreadReads))
     return Error;
   auto NormalFinallyIR = coff_registration::bindSEHFinallyCalls(
       ReplayMed, Function, *CallbackMap, *SourceSegments, NativeFunctions);
@@ -891,7 +928,8 @@ llvm::Error validateCOFFRegistrationIR(const llvm::Function &Function,
             Function, CallbackFunctions, Frame->Slot, ExceptionBridges,
             IncomingAccesses, GeneratedCallerPCWrites, ChainProtocolReads,
             States.SecurityCookieVA, ImmutableImageRanges, nullptr,
-            &*ExceptionFields, &*Jumps, &*ScopeState, &*ParentExits))
+            &*ExceptionFields, &*Jumps, &*ScopeState, &*ParentExits,
+            &*LocalUnwinds, *ThreadReads))
       return Error;
   return llvm::Error::success();
 #endif

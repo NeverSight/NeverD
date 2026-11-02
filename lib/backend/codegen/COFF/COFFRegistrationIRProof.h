@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_COFFREGISTRATIONIRPROOF_H
 #define NEVERD_COFFREGISTRATIONIRPROOF_H
+#include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -131,6 +132,7 @@ struct SourceSegment {
   const llvm::Instruction *Exit = nullptr;
 };
 struct RegistrationSEHParentExitContract;
+enum class SourceCookieCalls { ElidedSEH, RetainedCxx };
 bool matchesSourceOperation(const llvm::Instruction &I, va_t Owner,
                             va_t Address, uint8_t Kind);
 llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
@@ -138,6 +140,8 @@ llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
     const std::map<CallbackKey, const llvm::Function *> &Callbacks,
     llvm::ArrayRef<const llvm::Function *> Functions,
     bool ReachedCxxSource = false,
-    const RegistrationSEHParentExitContract *ParentExits = nullptr);
+    const RegistrationSEHParentExitContract *ParentExits = nullptr,
+    SourceCookieCalls Cookies = SourceCookieCalls::ElidedSEH,
+    std::vector<registration_frame::CxxSourceCallBinding> *CxxCalls = nullptr);
 } // namespace neverd::coff_registration
 #endif

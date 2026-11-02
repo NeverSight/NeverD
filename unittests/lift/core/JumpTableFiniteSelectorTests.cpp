@@ -39,6 +39,61 @@ protected:
     return Object;
   }
 
+  fs::path compileReloadFixture(bool I386) {
+    const std::string Stem = I386 ? "i386" : "x64";
+    const auto Source = tmpFile(Stem + ".s");
+    const auto Object = tmpFile(Stem + ".o");
+    std::ofstream Out(Source);
+    Out << ".text\n.globl finite_reload\n"
+           ".type finite_reload,@function\nfinite_reload:\n"
+           "  test %esi,%esi\n  jne .Lbounded\n";
+    if (I386)
+      Out << "  mov 4(%esp),%edx\n";
+    const char *Address = I386 ? "(%edx)" : "(%rdi)";
+    Out << "  cmpl $6," << Address << "\n  jne .Ldefault\n";
+    Out << "  mov " << Address << ",%eax\n";
+    auto Dispatch = [&] {
+      if (I386)
+        Out << "  jmp *finite_reload_table(,%eax,4)\n";
+      else
+        Out << "  lea finite_reload_table(%rip),%r8\n"
+               "  jmp *(%r8,%rax,8)\n";
+    };
+    Dispatch();
+    Out << ".Lbounded:\n";
+    if (I386)
+      Out << "  mov 4(%esp),%edx\n";
+    Out << "  mov " << Address << ",%eax\n"
+        << "  cmp $6,%eax\n  ja .Ldefault\n";
+    Dispatch();
+    for (unsigned I = 0; I < 7; ++I) {
+      Out << ".Lcase" << I << ":\n";
+      if (I == 6)
+        Out << "  call finite_reload_callee\n";
+      Out << "  mov $" << I + 10 << ",%eax\n  ret\n";
+    }
+    Out << ".Ldefault:\n  mov $99,%eax\n  ret\n"
+           ".size finite_reload,.-finite_reload\n"
+           ".section .rodata\n.p2align 3\n"
+           ".type finite_reload_table,@object\n"
+           "finite_reload_table:\n";
+    for (unsigned I = 0; I < 7; ++I)
+      Out << (I386 ? "  .long " : "  .quad ") << ".Lcase" << I << '\n';
+    Out << ".size finite_reload_table,.-finite_reload_table\n"
+           ".text\n.globl finite_reload_callee\n"
+           ".type finite_reload_callee,@function\n"
+           "finite_reload_callee:\n  ret\n"
+           ".size finite_reload_callee,.-finite_reload_callee\n"
+           ".section .note.GNU-stack,\"\",@progbits\n";
+    Out.close();
+    const auto Built =
+        exec(NEVERD_TEST_CLANG,
+             {"-target", I386 ? "i386-linux-gnu" : "x86_64-linux-gnu", "-c",
+              Source.string(), "-o", Object.string()});
+    EXPECT_TRUE(Built.ok()) << Built.err;
+    return Object;
+  }
+
   static neverd::LowFunc build(const neverd::BinaryImage &Image,
                                const std::string &Name,
                                std::optional<size_t> Budget = std::nullopt) {
@@ -62,6 +117,34 @@ protected:
     return false;
   }
 };
+
+TEST_F(JumpTableFiniteSelector, ExactSingletonReplayPreservesAProvedSibling) {
+  for (bool I386 : {false, true}) {
+    SCOPED_TRACE(I386);
+    auto Image = neverd::loadBinary(compileReloadFixture(I386));
+    ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+    for (bool Exhausted : {false, true}) {
+      SCOPED_TRACE(Exhausted);
+      const auto Low =
+          build(*Image, "finite_reload",
+                Exhausted ? std::optional<size_t>{1} : std::nullopt);
+      EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+      if (Exhausted) {
+        EXPECT_TRUE(Low.JumpTables.empty());
+        EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
+        continue;
+      }
+      // Discarding the singleton's exact replay can poison the shared graph
+      // and lose its independently bounded sibling. The unmodelled call in
+      // case 6 still prevents publication of the singleton itself.
+      ASSERT_EQ(Low.JumpTables.size(), 1u);
+      EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+                (std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6}));
+      EXPECT_EQ(Low.JumpTables.front().Targets.size(), 7u);
+      EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
+    }
+  }
+}
 
 TEST_F(JumpTableFiniteSelector, SparseSelectionPublishesOnlyFeasibleSlots) {
   for (const std::string Arch : {"aarch64", "x86_64"})

@@ -48,6 +48,7 @@
 namespace neverd {
 
 struct BinaryImage;
+class MedEntryStackOffsets;
 
 /// Whether an operation prevents recovering an earlier ABI value: where it
 /// ends a later call's argument setup (endsCallArgumentSetup), as call
@@ -279,11 +280,13 @@ private:
 /// Offset of \p V relative to the function-entry stack pointer, following the
 /// SP definition chain through constant add/sub decrements and width casts.
 /// nullopt when \p V does not derive from the SP. \p Defs, when given, must
-/// index \p Func.
+/// index \p Func. \p EntryOffsets, when given, must index the same unchanged
+/// function, target and format for the complete loop-proof fallback.
 std::optional<int64_t>
 stackPtrDelta(const MedFunc &Func, const TargetRegInfo &TRI, const MedVar &V,
               int Depth = 0, MedDefSiteIndex *Defs = nullptr,
-              BinaryFormat Format = BinaryFormat::Unknown);
+              BinaryFormat Format = BinaryFormat::Unknown,
+              MedEntryStackOffsets *EntryOffsets = nullptr);
 
 /// Whether \p V is, or derives from (through copies, width casts and a constant
 /// add/sub), a frame register -- the stack OR frame pointer.

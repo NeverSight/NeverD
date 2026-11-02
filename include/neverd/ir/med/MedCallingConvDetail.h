@@ -107,6 +107,15 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff);
 /// reads the return register whatever the function returns.
 bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff);
 
+/// Additional i386 integer inputs read through EBX, ESI or EDI. A saved
+/// register alone supplies no evidence: its incoming bits must reach a value
+/// use, rather than only storage, restoration or discarded scratch lanes.
+std::vector<uint64_t> additionalI386ParameterRegisters(const MedFunc &Func);
+
+/// The candidate carriers shared by i386 parameter detection and retention of
+/// call setup before the callee's recovered signature is available.
+llvm::ArrayRef<uint64_t> i386NonstandardArgumentRegisters();
+
 } // namespace neverd::med_calling_conv_detail
 
 #endif // NEVERD_IR_MED_MEDCALLINGCONVDETAIL_H

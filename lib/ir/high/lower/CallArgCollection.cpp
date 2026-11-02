@@ -121,10 +121,11 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
         (Scan.IsPcRootedStore && Scan.IsPcRootedStore(Prev)))
       return;
     MedVar Stored = Prev.Inputs[1];
-    // Incoming callee-save spills (SSA 0) are prologue saves. A computed
-    // length parked in ESI/RDI is a real outgoing stack argument
-    // (for example, a value stored at [rsp+0x20]).
-    if (preserved(Stored) && Stored.SSAVer == 0)
+    // An unbound incoming callee-save spill (SSA 0) is a prologue save.
+    // A recovered parameter or a computed length parked in ESI/RDI can be
+    // a real outgoing stack argument (for example, at [rsp+0x20]).
+    if (preserved(Stored) && Stored.SSAVer == 0 &&
+        !isIncomingRegisterParameter(Scan.Function, Stored))
       return;
     if (!Scan.ResolveWindow && Stored.Kind == MedVar::Reg) {
       for (int K = J - 1; K >= 0; --K) {
@@ -155,7 +156,7 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
       return;
     // Nor does an indirect call take a prologue's save of a register's
     // incoming value (`push {r4, r6, r7, lr}` above the outgoing area).
-    if (Scan.Indirect && isIncomingRegisterSave(TRI, Stored))
+    if (Scan.Indirect && isIncomingRegisterSave(TRI, Stored, Scan.Function))
       return;
 
     const MedVar &AddrVar = Prev.Inputs[0];
@@ -612,10 +613,6 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     return regToArgIdx(RegOff);
   };
   const uint64_t SpRegOff = TRI.StackPointer;
-
-  auto IsCalleeSave = [&TRI](const MedVar &V) -> bool {
-    return V.Kind == MedVar::Reg && TRI.isCalleeSaveReg(V.RegOff);
-  };
 
   bool ReachedBlockStart = true;
   for (int J = static_cast<int>(CallIdx) - 1; J >= 0; --J) {
@@ -1163,6 +1160,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     }
 
   call_args_detail::CallArgScan Scan;
+  Scan.Function = CurMed;
   Scan.Ops = &Ops;
   Scan.CallIdx = CallIdx;
   Scan.SpRegOff = SpRegOff;
@@ -1200,7 +1198,6 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   Scan.ExtraWindows = ExtraWindows;
   auto ToExpr = [this](const MedVar &V) { return medvarToExpr(V); };
   Scan.ToExpr = ToExpr;
-  Scan.IsCalleeSave = IsCalleeSave;
   auto ReachingRegArg = [&](int Index) -> ExprPtr {
     if (Index < 0 || Index >= static_cast<int>(ParamRegs.size()))
       return nullptr;
@@ -1485,7 +1482,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       // value left in x0), though the call's block writes no register.  The
       // scan below adds what the block writes past them.  Where only direct
       // calls take register arguments (regparm), the scan alone gives an
-      // indirect call its stack arguments.
+      // unknown indirect call its stack arguments. A fixed external
+      // declaration already bounded the recovered list; an indirect call
+      // through its slot keeps that same list.
       const bool SetupConvention =
           Convention && Convention->ArgumentsFromCallSetup;
       // A direct call's final recovered list also owns Win64 stack slots.
@@ -1493,8 +1492,10 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       // by the shared callee bound, or turn a required unknown into a stale
       // value from the emitter's independent setup scan.
       const bool CompleteSetup =
-          !CI->IsIndirect &&
-          (SetupConvention || (Convention && Convention->StackArgumentSummary));
+          CI->ArgumentsFromPrototype ||
+          (!CI->IsIndirect &&
+           (SetupConvention ||
+            (Convention && Convention->StackArgumentSummary)));
       // A loader-bound import retains its fixed contract through a captured
       // runtime pointer: an independent setup scan must not append adjacent
       // frame locals to its recovered list. Like any indirect call's, a value
@@ -1515,14 +1516,14 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           Recovered <= ParamRegs.size();
       const auto Required =
           static_cast<size_t>(std::max<int>(Call.CalleeRegisterArgs, 0));
-      if (HeuristicRegisterTail) {
+      if (HeuristicRegisterTail && !CI->ArgumentsFromPrototype) {
         while (Recovered > Required &&
                LeftByCall(CI->Args[Recovered - 1], ParamRegs[Recovered - 1]))
           --Recovered;
         if (Recovered < CI->Args.size())
           SetupLimit = std::min(SetupLimit, Recovered);
       }
-      if (SetupConvention && CI->IsIndirect && !KnownImport) {
+      if (SetupConvention && CI->IsIndirect && !KnownImport && !CompleteSetup) {
         // The scan gives such a call its stack arguments, though not the
         // incoming ones a tail jump passes on untouched, which recovery
         // promotes to stack parameters.
@@ -1606,9 +1607,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
         for (size_t I = 0; I < FromABI.size(); ++I)
           if (!CompleteSetup &&
               (!FromABI[I] || FromABI[I]->Kind == ExprKind::Undef) &&
+              !CI->ArgumentsFromPrototype &&
               !CI->ArgumentsInCalleeRegisterOrder && Found[I] &&
               Found[I]->Kind != ExprKind::Undef)
             FromABI[I] = Found[I];
+        if (CI->ArgumentsFromPrototype)
+          return FromABI;
         return BoundKnownCalleeArity(std::move(FromABI));
       }
     }

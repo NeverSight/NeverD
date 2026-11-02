@@ -17,6 +17,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -248,12 +249,12 @@ classifyI32ModuleFlag(const llvm::Module &Module, llvm::StringRef Name,
 
 /// True when \p Name is unused or already denotes the declaration that
 /// getOrInsertFunction would otherwise create.  An alias, definition, local
-/// symbol, or differently typed function cannot stand in for an external ABI
-/// entry point.
-inline bool
-canMaterializeExternalFunctionDeclaration(const llvm::Module &Module,
-                                          llvm::StringRef Name,
-                                          const llvm::FunctionType *Type) {
+/// symbol, or function with another type or calling convention cannot stand
+/// in for an external ABI entry point.
+inline bool canMaterializeExternalFunctionDeclaration(
+    const llvm::Module &Module, llvm::StringRef Name,
+    const llvm::FunctionType *Type,
+    llvm::CallingConv::ID Convention = llvm::CallingConv::C) {
   const llvm::GlobalValue *Named = Module.getNamedValue(Name);
   if (!Named)
     return true;
@@ -261,7 +262,7 @@ canMaterializeExternalFunctionDeclaration(const llvm::Module &Module,
   return Function && Function->isDeclaration() &&
          Function->getLinkage() == llvm::GlobalValue::ExternalLinkage &&
          Function->getVisibility() == llvm::GlobalValue::DefaultVisibility &&
-         Function->getCallingConv() == llvm::CallingConv::C &&
+         Function->getCallingConv() == Convention &&
          Function->getAddressSpace() == 0 &&
          Function->getFunctionType() == Type;
 }

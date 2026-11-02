@@ -6,6 +6,7 @@ add_neverd_component_library(NeverDPipeline
   StateSourceBank.cpp
   evidence/ConstantStores.cpp
   Pipeline.cpp
+  PipelineAnalysis.cpp
   X86/X64ContinuationEnvironment.cpp
   X86/X64ContinuationExport.cpp
   X86/X64ContinuationSchedule.cpp

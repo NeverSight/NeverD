@@ -12,6 +12,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/loader/COFF/COFFLoader.h"
+#include "neverd/loader/COFF/PEHeaderMapping.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/object/PELayout.h"
 
@@ -53,6 +54,8 @@ TEST(PEHeaderMapping, OriginalHeadersAreReadableInFullAndRestrictedImages) {
           auto Image = load(Bytes, Restricted);
           ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
           EXPECT_EQ(Image->Raw.empty(), Restricted);
+          EXPECT_TRUE(coff_loader::hasCheckedPEHeaderMapping(
+              *Image, Image->Sections.size() - 1));
           EXPECT_EQ(COFFLoader::hasExpectedPEMappingInventory(
                         *Image, Headers.NumSections),
                     !Restricted);
@@ -95,6 +98,91 @@ TEST(PEHeaderMapping, OriginalHeadersAreReadableInFullAndRestrictedImages) {
               {Base + 0x3c, IMAGE_REL_BASED_HIGHLOW});
           EXPECT_FALSE(readImmutableImageBytes(*Image, Base + 0x3c, 4));
         }
+}
+
+TEST(PEHeaderMapping, HeaderIdentityRequiresBothRegionsAndNativeCount) {
+  for (bool Restricted : {false, true})
+    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Restricted << ':' << Mutation);
+      auto Image =
+          load(test::peHeaderImage(true, IMAGE_FILE_MACHINE_AMD64), Restricted);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const size_t Count = Image->Sections.size() - 1;
+      ASSERT_TRUE(coff_loader::hasCheckedPEHeaderMapping(*Image, Count));
+      auto &Section = Image->Sections.back();
+      auto &Segment = Image->Segments.back();
+      switch (Mutation) {
+      case 0:
+        Section.Name += "changed";
+        break;
+      case 1:
+        Segment.Name += "changed";
+        break;
+      case 2:
+        ++Section.VA;
+        break;
+      case 3:
+        ++Segment.VA;
+        break;
+      case 4:
+        ++Section.FileOff;
+        break;
+      case 5:
+        ++Segment.FileSz;
+        break;
+      case 6:
+        Section.Flags = Section.Flags | SegmentFlags::Writable;
+        break;
+      case 7:
+        Segment.Flags = Segment.Flags | SegmentFlags::Writable;
+        break;
+      case 8:
+        Section.Type = IMAGE_SCN_CNT_INITIALIZED_DATA;
+        break;
+      case 9:
+        ++Section.Alignment;
+        break;
+      case 10:
+        Segment.Data[0x3c] ^= 1;
+        break;
+      case 11:
+        Section.Data.assign(1, 0);
+        break;
+      case 12:
+        if (Image->Raw.empty())
+          Segment.Data[0] = 0;
+        else
+          Image->Raw[0] = 0;
+        break;
+      case 13:
+        Image->LoadOnlyFunctionEntries.clear();
+        Section.Data.clear();
+        break;
+      case 14:
+        Image->Segments.pop_back();
+        break;
+      case 15:
+        Image->Segments.push_back(Segment);
+        Image->Sections.push_back(Section);
+        break;
+      case 16:
+        Image->Format = BinaryFormat::ELF;
+        break;
+      case 17:
+        ++Image->Base;
+        break;
+      case 18:
+        if (Image->Raw.empty())
+          Segment.Data[0x86] = 2;
+        else
+          Image->Raw[0x86] = 2;
+        break;
+      case 19:
+        Segment.ReadOnlyAfterRelocations = true;
+        break;
+      }
+      EXPECT_FALSE(coff_loader::hasCheckedPEHeaderMapping(*Image, Count));
+    }
 }
 
 TEST(PEHeaderMapping, InventoryRejectsMissingDuplicateOrChangedHeaderIdentity) {

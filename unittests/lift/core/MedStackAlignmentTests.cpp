@@ -1002,6 +1002,92 @@ TEST(MedStackAlignment, WiderSeedsAndTruncatedPointersAreNotNativeAddresses) {
   EXPECT_FALSE(entryStackOffset(Func, Wide, Arch::X64, BinaryFormat::ELF));
 }
 
+TEST(MedStackAlignment, NativeAddressRoundTripsRetainExactStackCoordinates) {
+  for (Arch Architecture : {Arch::X86, Arch::ARM})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        auto Func = frameWithEntrySP(Architecture);
+        auto &Ops = Func.Blocks[0].Ops;
+        auto Wide = temp(3, Architecture);
+        Wide.Size = 8;
+        const auto Result = temp(4, Architecture);
+        Ops.push_back(op(NdOp::INT_SUB, temp(2, Architecture),
+                         reg(0, Architecture), MedVar::makeConst(32, 4)));
+        Ops.push_back(op(NdOp::INT_ZEXT, Wide, temp(2, Architecture)));
+        Ops.push_back(
+            op(NdOp::SUBBYTES, Result, Wide, MedVar::makeConst(0, 4)));
+        if (Mutation == 1)
+          Ops.back().Inputs[1].ConstVal = 1;
+        else if (Mutation == 2)
+          Ops[2].Opcode = NdOp::INT_SEXT;
+        else if (Mutation == 3)
+          Ops[2].Inputs[0].Size = 8;
+        else if (Mutation == 4)
+          Ops[2].Dead = true;
+        else if (Mutation == 5)
+          Ops[2].Output.RenameTag++;
+        else if (Mutation == 6)
+          Ops.push_back(Ops[2]);
+        const auto Expected =
+            Mutation ? std::optional<int64_t>() : std::optional<int64_t>(-32);
+        EXPECT_EQ(entryStackOffset(Func, Result, Architecture, Format),
+                  Expected);
+      }
+}
+
+TEST(MedStackAlignment, NativeAddressBoundSurvivesUnequalLoopEntries) {
+  auto Func = frameWithEntrySP(Arch::X86);
+  auto &Ops = Func.Blocks[0].Ops;
+  auto Wide = temp(3, Arch::X86);
+  Wide.Size = 8;
+  const auto Address = temp(2, Arch::X86);
+  const auto Narrow = temp(4, Arch::X86);
+  const auto Deeper = temp(5, Arch::X86);
+  const auto Joined = temp(6, Arch::X86);
+  const auto Push = temp(7, Arch::X86);
+  const auto Pop = temp(8, Arch::X86);
+  auto LoopWide = temp(9, Arch::X86);
+  LoopWide.Size = 8;
+  const auto Back = temp(10, Arch::X86);
+  Ops.push_back(
+      op(NdOp::INT_SUB, Address, reg(0, Arch::X86), MedVar::makeConst(32, 4)));
+  Ops.push_back(op(NdOp::INT_ZEXT, Wide, Address));
+  Ops.push_back(op(NdOp::SUBBYTES, Narrow, Wide, MedVar::makeConst(0, 4)));
+  Ops.push_back(op(NdOp::INT_SUB, Deeper, Narrow, MedVar::makeConst(16, 4)));
+  Func.Blocks.resize(3);
+  Func.Blocks[0].Succs = {1, 2};
+  Func.Blocks[2].Id = 2;
+  Func.Blocks[2].Preds = {0};
+  Func.Blocks[2].Succs = {1};
+  auto &Loop = Func.Blocks[1];
+  Loop.Id = 1;
+  Loop.Preds = {0, 2, 1};
+  Loop.Succs = {1};
+  PhiNode Phi;
+  Phi.Output = Joined;
+  Phi.Args = {{0, Narrow}, {2, Deeper}, {1, Back}};
+  Loop.Phis.push_back(Phi);
+  Loop.Ops = {op(NdOp::INT_SUB, Push, Joined, MedVar::makeConst(4, 4)),
+              op(NdOp::INT_ADD, Pop, Push, MedVar::makeConst(4, 4)),
+              op(NdOp::INT_ZEXT, LoopWide, Pop),
+              op(NdOp::SUBBYTES, Back, LoopWide, MedVar::makeConst(0, 4))};
+  EXPECT_FALSE(entryStackOffset(Func, Joined, Arch::X86, BinaryFormat::COFF));
+  EXPECT_EQ(entryStackOffsetUpperBounds(Func, {Joined}, Arch::X86,
+                                        BinaryFormat::COFF)[0],
+            -32);
+  Loop.Phis.front().Args[1].second = Narrow;
+  EXPECT_EQ(entryStackOffset(Func, Joined, Arch::X86, BinaryFormat::COFF), -32);
+  Loop.Ops[2].Opcode = NdOp::INT_SEXT;
+  EXPECT_FALSE(entryStackOffsetUpperBounds(Func, {Joined}, Arch::X86,
+                                           BinaryFormat::COFF)[0]);
+  Loop.Ops[2].Opcode = NdOp::INT_ZEXT;
+  Func.Blocks[0].Ops[2].Opcode = NdOp::INT_SEXT;
+  EXPECT_FALSE(entryStackOffsetUpperBounds(Func, {Joined}, Arch::X86,
+                                           BinaryFormat::COFF)[0]);
+}
+
 TEST(MedStackAlignment, PreservesExactAndRoundedARMFrameOffsets) {
   MedFunc Func = frameWithEntrySP();
   auto &Ops = Func.Blocks[0].Ops;
@@ -1487,6 +1573,42 @@ TEST(MedStackAlignment, EntryLiveInQueriesKeepExactRegisterOccurrences) {
   }
 }
 
+TEST(MedStackAlignment, VersionZeroPhiCyclesDoNotInventAnEntryOrigin) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(testing::Message() << static_cast<int>(Architecture) << ":"
+                                      << static_cast<int>(Format));
+      auto Func = frameWithEntrySP(Architecture);
+      auto &Block = Func.Blocks.front();
+      Block.Ops.clear();
+      PhiNode First;
+      First.Output = reg(0, Architecture);
+      First.Args = {{0, reg(1, Architecture)}};
+      PhiNode Second;
+      Second.Output = reg(1, Architecture);
+      Second.Args = {{0, reg(0, Architecture)}};
+      Block.Phis = {First, Second};
+      const std::vector<MedVar> Values{First.Output, Second.Output};
+      const std::vector<std::optional<int64_t>> Missing(Values.size());
+      EXPECT_EQ(entryStackOffsets(Func, Values, Architecture, Format), Missing);
+      EXPECT_EQ(entryStackOffsetUpperBounds(Func, Values, Architecture, Format),
+                Missing);
+      for (const auto &Range :
+           entryStackOffsetRanges(Func, Values, Architecture, Format))
+        EXPECT_FALSE(Range);
+      for (const auto &Residue :
+           entryStackOffsetResidues(Func, Values, Architecture, Format, 16))
+        EXPECT_FALSE(Residue);
+
+      // Removing the definitions leaves a genuine unversioned SSA live-in.
+      Block.Phis.clear();
+      EXPECT_EQ(entryStackOffsets(Func, Values, Architecture, Format),
+                (std::vector<std::optional<int64_t>>{0, std::nullopt}));
+    }
+  }
+}
+
 TEST(MedStackAlignment, EntryStackQueriesRejectUnauthenticatedMarkers) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
     SCOPED_TRACE(static_cast<int>(Architecture));
@@ -1544,7 +1666,8 @@ TEST(MedStackAlignment, EntryStackQueriesRejectUnauthenticatedMarkers) {
   }
 }
 
-TEST(MedStackAlignment, EntryStackQueriesPreserveUndefinedIncomingSP) {
+TEST(MedStackAlignment,
+     EntryStackQueriesDistinguishUndefinedSPFromPhiDefinitions) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
     SCOPED_TRACE(static_cast<int>(Architecture));
     for (BinaryFormat Format :
@@ -1561,9 +1684,29 @@ TEST(MedStackAlignment, EntryStackQueriesPreserveUndefinedIncomingSP) {
           Join.Args = {{0, temp(20, Architecture)}};
           Func.Blocks[0].Phis.push_back(std::move(Join));
         }
-        EXPECT_EQ(entryStackOffset(Func, Entry, Architecture, Format), 0);
+        // A PHI is a first definition, even at SSA version zero. Its unknown
+        // input cannot establish the entry stack pointer.
+        const std::optional<int64_t> Expected =
+            WithJoin ? std::nullopt : std::optional<int64_t>{0};
+        EXPECT_EQ(entryStackOffset(Func, Entry, Architecture, Format),
+                  Expected);
         EXPECT_EQ(entryStackOffsets(Func, {Entry, Entry}, Architecture, Format),
-                  (std::vector<std::optional<int64_t>>{0, 0}));
+                  (std::vector<std::optional<int64_t>>{Expected, Expected}));
+        EXPECT_EQ(
+            entryStackOffsetUpperBounds(Func, {Entry}, Architecture, Format),
+            (std::vector<std::optional<int64_t>>{Expected}));
+        const auto Ranges =
+            entryStackOffsetRanges(Func, {Entry}, Architecture, Format);
+        ASSERT_EQ(Ranges.size(), 1u);
+        EXPECT_EQ(bool(Ranges.front()), !WithJoin);
+        if (Ranges.front()) {
+          EXPECT_EQ(Ranges.front()->Min, 0);
+          EXPECT_EQ(Ranges.front()->Max, 0);
+        }
+        EXPECT_EQ(
+            entryStackOffsetResidues(Func, {Entry}, Architecture, Format, 16),
+            (std::vector<std::optional<uint64_t>>{
+                WithJoin ? std::nullopt : std::optional<uint64_t>{0}}));
       }
     }
   }

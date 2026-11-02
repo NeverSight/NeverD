@@ -37,6 +37,7 @@
 namespace neverd {
 
 struct X86RegistrationCxxPhysicalFrame;
+class X86RegistrationSEH4PhysicalFrame;
 
 /// Sentinel RegOff for a stack-passed parameter (Kind==Param with no backing
 /// register).  The emitter must not enter such a param into its register->arg
@@ -475,6 +476,11 @@ struct MedCallInfo {
   /// Args passes the register arguments in the callee's own register order
   /// (MedFunc::IntegerArgumentRegisters), not the convention's.
   bool ArgumentsInCalleeRegisterOrder = false;
+  /// A fixed external declaration bounded Args during ABI recovery. Source
+  /// lowering must retain that list, including an empty one, rather than
+  /// append scratch registers or rescan it as an unknown indirect call.
+  /// This describes argument recovery, not the callee's memory effects.
+  bool ArgumentsFromPrototype = false;
   /// The bytes the callee reads of each argument, by position, where it reads
   /// only the scalar in the low lane of a floating-point argument register
   /// (MedFunc::FPParamScalarBytes); 0, or no entry, for a whole argument.
@@ -552,6 +558,7 @@ struct MedFunc {
   /// Display observations of the original machine bytes; never rewrite facts.
   std::vector<SourceFrameBytes> FrameBytes;
   bool AnalystStackFrame = false;
+  bool AnalysisOnly = false;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
   std::string Name;
@@ -580,6 +587,9 @@ struct MedFunc {
   /// Checked C++ parent return cleanup and preserved call/frame closure.
   /// Runtime catch returns are excluded from this physical entry contract.
   std::optional<uint16_t> RegistrationCxxEntryPopBytes;
+  /// Checked SEH parent return cleanup, separate from filter/finally returns.
+  /// A nonzero count additionally requires an exact stdcall entry projection.
+  std::optional<uint16_t> RegistrationSEHEntryPopBytes;
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;
   int64_t FrameHeadroom = 0;
@@ -785,6 +795,8 @@ struct MedFunc {
   /// retain their original call occurrences and prologue receipt.
   std::shared_ptr<const X86RegistrationCxxPhysicalFrame>
       RegistrationPhysicalFrame;
+  std::shared_ptr<const X86RegistrationSEH4PhysicalFrame>
+      RegistrationSEH4PhysicalFrame;
 
   bool hasTypeInfo() const { return ReturnType != nullptr; }
 

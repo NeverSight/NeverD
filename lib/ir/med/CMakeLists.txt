@@ -32,10 +32,13 @@ add_neverd_component_library(NeverDIRMed
   X86/RegistrationSEHBoundCall.cpp
   X86/RegistrationSEHLocalUnwind.cpp
   X86/RegistrationSEHStateStore.cpp
+  X86/RegistrationSEHThread.cpp
   X86/RegistrationEntry.cpp
   X86/RegistrationRoots.cpp
   X86/RegistrationPrologue.cpp
   X86/RegistrationEpilogue.cpp
+  X86/RegistrationHelperExpansion.cpp
+  X86/RegistrationSEH4PhysicalFrame.cpp
   X86/RegistrationPhysicalFrame.cpp
   X86/RegistrationReachability.cpp
   X86/SEHFrame.cpp
@@ -46,6 +49,7 @@ add_neverd_component_library(NeverDIRMed
   abi/X86/MedABIPassI386.cpp
   abi/MedABIPassSupport.cpp
   abi/X86/MedABIPassWin64.cpp
+  abi/MedStackDeltaCache.cpp
   abi/MedCallConvention.cpp
   abi/ARM/MedCallConventionAAPCS32.cpp
   abi/AArch64/MedCallConventionAAPCS64.cpp

@@ -44,7 +44,7 @@ void RegistrationStateSolver::preserveCxxFrameCells(Domain &Root,
       if (!charge(Writes.size() + 1))
         return;
       if (Value.EntryOffset && Untouched(Offset))
-        Root.Frame.Cells[Offset] = Value;
+        Root.Frame.Cells.set(Offset, Value);
     }
   // Handler cookies survive catch entry only when every cleanup leaves the
   // complete encoded word intact. Catch-object construction below still has
@@ -56,7 +56,7 @@ void RegistrationStateSolver::preserveCxxFrameCells(Domain &Root,
       const auto Value = Source.Frame.Cells.find(Condition.FrameOffset);
       if (Value != Source.Frame.Cells.end() && Value->second.SecurityCookie &&
           Untouched(Condition.FrameOffset))
-        Root.Frame.Cells[Condition.FrameOffset] = Value->second;
+        Root.Frame.Cells.set(Condition.FrameOffset, Value->second);
     }
   // A retained outer exception remains alive during a nested catch. Its
   // aliases survive only when every authenticated cleanup leaves all four
@@ -67,7 +67,7 @@ void RegistrationStateSolver::preserveCxxFrameCells(Domain &Root,
     if (Value.ExceptionObject &&
         runtimeObjectIsLive(Source, *Value.ExceptionObject) &&
         runtimeObjectIsLive(Root, *Value.ExceptionObject) && Untouched(Offset))
-      Root.RuntimeObject.Cells[Offset] = Value;
+      Root.RuntimeObject.Cells.set(Offset, Value);
   }
 }
 

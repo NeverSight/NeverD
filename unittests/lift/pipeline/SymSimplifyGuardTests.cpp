@@ -2591,6 +2591,7 @@ TEST(SymSimplifyGuard, VerifierRejectionIsTransactional) {
   OptimizationResult Result = Pipeline::optimizeModule(M, Options);
 
   EXPECT_EQ(Result.Stop, OptimizationStopReason::VerificationFailed);
+  EXPECT_EQ(Result.Diagnostic, "post-transform verification failed");
   EXPECT_FALSE(Result.Changed);
   EXPECT_EQ(HookCalls, 1u);
   EXPECT_EQ(printModule(M), Before);
@@ -2615,6 +2616,10 @@ TEST(SymSimplifyGuard, InvalidInputIsTransactional) {
   OptimizationResult Result = Pipeline::optimizeModule(M, Options);
 
   EXPECT_EQ(Result.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(Result.Diagnostic.find("invalid"), std::string::npos);
+  EXPECT_NE(Result.Diagnostic.find("terminator"), std::string::npos);
+  EXPECT_EQ(optimizationStopMessage(Result),
+            "input-invalid: " + Result.Diagnostic);
   EXPECT_FALSE(Result.Changed);
   EXPECT_FALSE(HookCalled);
   EXPECT_EQ(printModule(M), Before);
@@ -2641,6 +2646,7 @@ TEST(SymSimplifyGuard, InvalidOptimizationStrengthIsTransactional) {
   OptimizationResult Result = Pipeline::optimizeModule(M, Options);
 
   EXPECT_EQ(Result.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_EQ(Result.Diagnostic, "invalid optimization strength");
   EXPECT_FALSE(Result.Changed);
   EXPECT_FALSE(HookCalled);
   EXPECT_EQ(printModule(M), Before);
@@ -2664,6 +2670,8 @@ TEST(SymSimplifyGuard,
   OptimizationResult Result = Pipeline::optimizeModule(M, Options);
 
   EXPECT_EQ(Result.Stop, OptimizationStopReason::Stable);
+  EXPECT_TRUE(Result.Diagnostic.empty());
+  EXPECT_EQ(optimizationStopMessage(Result), "stable");
   EXPECT_FALSE(Result.Changed);
   EXPECT_EQ(M.getFunction("identity"), F);
   EXPECT_EQ(&F->getEntryBlock(), Entry);
@@ -2707,6 +2715,15 @@ TEST(SymSimplifyGuard, InvalidExceptionRewriteContractIsTransactional) {
     SCOPED_TRACE(static_cast<unsigned>(Case.Source));
     SCOPED_TRACE(static_cast<unsigned>(Case.Lowering));
     EXPECT_EQ(Result.Stop, OptimizationStopReason::InputInvalid);
+    EXPECT_NE(
+        Result.Diagnostic.find("exception rewrite contract for 'contract'"),
+        std::string::npos);
+    const char *Reason = Case.Source == SourceState::Partial
+                             ? "source exception metadata is partial"
+                         : Case.Source == SourceState::Malformed
+                             ? "source exception metadata is malformed"
+                             : "native exception lowering is incomplete";
+    EXPECT_NE(Result.Diagnostic.find(Reason), std::string::npos);
     EXPECT_FALSE(Result.Changed);
     EXPECT_FALSE(HookCalled);
     EXPECT_EQ(printModule(M), Before);
@@ -2732,6 +2749,9 @@ TEST(SymSimplifyGuard, InvalidExceptionRewriteContractIsTransactional) {
   OptimizationResult Result = Pipeline::optimizeModule(M, Options);
 
   EXPECT_EQ(Result.Stop, OptimizationStopReason::InputInvalid);
+  EXPECT_NE(Result.Diagnostic.find("missing_contract"), std::string::npos);
+  EXPECT_NE(Result.Diagnostic.find("missing per-function contract"),
+            std::string::npos);
   EXPECT_FALSE(Result.Changed);
   EXPECT_FALSE(HookCalled);
   EXPECT_EQ(printModule(M), Before);

@@ -6,7 +6,9 @@
 
 #include "../../../lib/backend/codegen/COFF/COFFSourceCallSymbols.h"
 #include "RegistrationCxxContinuationTestUtils.h"
+#include "RegistrationEntryRelocationTestUtils.h"
 #include "RegistrationNativeEmitterTestPeer.h"
+#include "RegistrationSEH4NativeTestUtils.h"
 #include "RegistrationSEHCopyIRMutations.h"
 #include "RegistrationSEHDynamicScopeTestUtils.h"
 #include "RegistrationSEHExceptionNativeTestUtils.h"
@@ -33,9 +35,11 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/object/PELayout.h"
 
@@ -1828,6 +1832,7 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+  recoverCallAbi(Med, Arch::X86, {}, &Image);
   llvm::LLVMContext Context;
   MedLLVMEmitter Emitter;
   auto Module = Emitter.emit({Med}, Context, "input-registration", Arch::X86,
@@ -1850,7 +1855,11 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   if (Error)
     Module->print(llvm::errs(), nullptr);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  if (Low.RegistrationStates->SEH4Prologue)
+    registration_test::checkSharedSEH4SavedStackEdits(*Parent, EH, Image);
   registration_test::checkSEHStateDispatchEdits(*Parent, Med, EH, Image);
+  registration_test::checkSEHComputedStateEdits(*Parent, EH, Image,
+                                                *Low.RegistrationStates);
   if (!Low.RegistrationStates->SEHExceptionAccesses.empty())
     registration_test::checkSEHExceptionEdits(*Parent, EH, Image,
                                               *Low.RegistrationStates);
@@ -1863,10 +1872,29 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   } else if (!Low.RegistrationStates->SEHJumpCaptures.empty())
     registration_test::checkSEHJumpEdits(*Parent, EH, Image);
   if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
-        return Call.CalleeKind !=
-               RegistrationSEHBoundCall::Kind::PreservedHelper;
+        return Call.CalleeKind ==
+                   RegistrationSEHBoundCall::Kind::RaiseException ||
+               Call.CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP;
       }))
     registration_test::checkSEHRuntimeEdits(*Parent, EH, Image);
+  if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
+        return Call.CalleeKind ==
+               RegistrationSEHBoundCall::Kind::GetStartupInfoW;
+      }))
+    registration_test::checkSEHStartupInfoEdits(*Parent, EH, Image);
+  if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
+        return Call.CalleeKind ==
+               RegistrationSEHBoundCall::Kind::HeapTermination;
+      }))
+    registration_test::checkSEHHeapPolicyEdits(*Parent, EH, Image);
+  if (llvm::any_of(Low.RegistrationStates->SEHBoundCalls, [](const auto &Call) {
+        return Call.CalleeKind ==
+               RegistrationSEHBoundCall::Kind::InterlockedCompareExchange;
+      }))
+    registration_test::checkSEHSynchronizationEdits(*Parent, EH, Image);
+  if (!Low.RegistrationStates->SEHThreadAccesses.empty())
+    registration_test::checkSEHThreadEdits(*Parent, EH, Image,
+                                           *Low.RegistrationStates);
   registration_test::checkSEHCopyEdits(*Parent, EH, Image);
   registration_test::checkSEHFinallyEdits(*Parent, EH, Image);
   registration_test::checkSEHParentExitEdits(*Parent, EH, Image);
@@ -2076,7 +2104,9 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   RejectMutation(
       "changed parent stack cleanup",
       [](llvm::Function &F) {
-        F.setCallingConv(llvm::CallingConv::X86_StdCall);
+        F.setCallingConv(F.getCallingConv() == llvm::CallingConv::X86_StdCall
+                             ? llvm::CallingConv::C
+                             : llvm::CallingConv::X86_StdCall);
         return true;
       },
       "stack cleanup ABI");
@@ -2221,7 +2251,9 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
             if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
               if (auto *Callee = Call->getCalledFunction();
                   Callee && Callee->isDeclaration() && !Callee->isIntrinsic() &&
-                  !Callee->hasDLLImportStorageClass()) {
+                  !Callee->hasDLLImportStorageClass() &&
+                  // Bound runtimes have their own convention mutation checks.
+                  Callee->getName() != "_controlfp_s") {
                 Callee->setCallingConv(llvm::CallingConv::X86_StdCall);
                 return true;
               }
@@ -2732,6 +2764,19 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
   ASSERT_TRUE(bool(GuardUpdate)) << llvm::toString(GuardUpdate.takeError());
   ASSERT_TRUE(GuardUpdate->ApplyCF);
   ASSERT_GT(GuardUpdate->CFFunctionCount, 0u);
+  if (const auto Entry = coff_loader::getCheckedX86SEH4PrologueCall(Image, EH);
+      Entry && Entry->CallVA == Mapping.first + 7)
+    registration_test::checkRetiredEntryRelocationEdits(
+        Binary, Mapping.first + 3 - Image.Base,
+        [&](const std::vector<uint8_t> &Changed) {
+          auto CompiledCopy = Compiled;
+          auto Rejected = prepareCOFFRegistrationPatch(
+              Changed, Image, CompiledCopy, {Mapping}, CodeVA, *Module,
+              &*GuardUpdate);
+          EXPECT_FALSE(bool(Rejected));
+          if (!Rejected)
+            llvm::consumeError(Rejected.takeError());
+        });
   auto Update = prepareCOFFRegistrationPatch(Binary, Image, Compiled, {Mapping},
                                              CodeVA, *Module, &*GuardUpdate);
   ASSERT_TRUE(bool(Update)) << llvm::toString(Update.takeError());
@@ -3068,6 +3113,79 @@ struct RegistrationNativeFixture {
   }
 };
 
+TEST(WindowsRegistrationNative, PreservesSEHImageIdentityBeforeMaskedBodies) {
+  RegistrationNativeFixture Fixture;
+  auto Source = Fixture.Source;
+  Source.Name = "masked_seh_parent";
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  Segment Data;
+  Data.VA = 0x4000;
+  Data.Size = Data.FileSz = 16;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(Data.Size, 0x42);
+  Section Section;
+  Section.VA = Data.VA;
+  Section.Size = Section.FileSz = Data.Size;
+  Section.Flags = Data.Flags;
+  Image.Sections.push_back(Section);
+  Image.Segments.push_back(Data);
+
+  MedFunc Helper;
+  Helper.Entry = 0x5000;
+  Helper.Name = "image_reader";
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Helper.Entry;
+  Block.EndAddr = Helper.Entry + 8;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output.Kind = MedVar::Temp;
+  Load.Output.Id = Load.Output.SSAVer = 1;
+  Load.Output.Size = 4;
+  Load.Addr = Helper.Entry;
+  Load.OriginSeq = 0;
+  Load.addInput(
+      MedVar::makeConst(Data.VA, 4, ConstantAddressProvenance::DataAddress));
+  Block.Ops.push_back(Load);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Helper.Entry + 7;
+  Return.addInput(Load.Output);
+  Block.Ops.push_back(Return);
+  Helper.Blocks.push_back(Block);
+
+  for (bool Reversed : {false, true})
+    for (bool CompleteABI : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Reversed << CompleteABI);
+      Source.RegistrationCallerCleanupABIComplete = CompleteABI;
+      const std::vector<MedFunc> Functions =
+          Reversed ? std::vector<MedFunc>{Source, Helper}
+                   : std::vector<MedFunc>{Helper, Source};
+      const std::vector<char> Mask =
+          Reversed ? std::vector<char>{0, 1} : std::vector<char>{1, 0};
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(Functions, Context, "seh-image-shard",
+                                          Arch::X86, {}, &Image,
+                                          BinaryFormat::COFF, true, &Mask);
+      ASSERT_TRUE(Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      ASSERT_TRUE(Module->getFunction(Source.Name));
+      EXPECT_TRUE(Module->getFunction(Source.Name)->isDeclaration());
+      const llvm::GlobalVariable *Storage = nullptr;
+      for (const auto &Global : Module->globals())
+        if (parseNdDataSymbol(Global.getName()) == Data.VA) {
+          ASSERT_EQ(Storage, nullptr);
+          Storage = &Global;
+        }
+      ASSERT_NE(Storage, nullptr);
+      EXPECT_EQ(Storage->isDeclaration(), CompleteABI);
+      EXPECT_EQ(Storage->hasExternalLinkage(), CompleteABI);
+    }
+}
+
 TEST(WindowsRegistrationNative, ResolvesOnlyTheAuthenticatedEH4RuntimeSymbols) {
   BinaryImage Image;
   Image.Arch = Arch::X86;
@@ -3399,7 +3517,15 @@ TEST(WindowsRegistrationNative, ReplaysPreservedCalleeReturnCleanup) {
     Text.Data[0] = CalleePop ? 0xc2 : 0xc3;
     Text.Data[1] = 4;
     Text.Data[2] = 0;
+    Text.FileSz = Text.Data.size();
     Image.Segments.push_back(Text);
+    Section Code;
+    Code.Name = Text.Name;
+    Code.VA = Text.VA;
+    Code.Size = Text.Size;
+    Code.FileSz = Text.FileSz;
+    Code.Flags = Text.Flags;
+    Image.Sections.push_back(Code);
     LowFunc Source;
     Source.Entry = 0x402000;
     LowBlock Block;
@@ -3494,7 +3620,15 @@ TEST(WindowsRegistrationNative, ProvesSeparateLeafStackAndECXObjectDomains) {
     Text.Data = Cases[Index].Code;
     Text.Size = Text.Data.size();
     Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.FileSz = Text.Data.size();
     Image.Segments.push_back(Text);
+    Section Code;
+    Code.Name = Text.Name;
+    Code.VA = Text.VA;
+    Code.Size = Text.Size;
+    Code.FileSz = Text.FileSz;
+    Code.Flags = Text.Flags;
+    Image.Sections.push_back(Code);
     Segment Data;
     Data.Name = ".data";
     Data.VA = 0x403000;
@@ -3597,7 +3731,15 @@ TEST(WindowsRegistrationNative, RejectsPreservedCallerFrameAndFSObservers) {
     Text.Data = Programs[Index];
     Text.Size = Text.Data.size();
     Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.FileSz = Text.Data.size();
     Image.Segments.push_back(Text);
+    Section Code;
+    Code.Name = Text.Name;
+    Code.VA = Text.VA;
+    Code.Size = Text.Size;
+    Code.FileSz = Text.FileSz;
+    Code.Flags = Text.Flags;
+    Image.Sections.push_back(Code);
     Segment Data;
     Data.Name = ".data";
     Data.VA = 0x403000;

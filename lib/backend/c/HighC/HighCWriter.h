@@ -277,6 +277,8 @@ public:
   /// the stack protector's canary at FS:0x28 is
   /// (exceptionEncodingIsOutsideWindows).
   static bool hidesRegistrationMemory(const HighFunc &Func);
+  /// Use the same segmented-read spelling for declarations and expressions.
+  bool useMsvcSegmentedRead() const;
   bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
   bool isEmbeddedWindowsCallback(const HighStmt &Stmt, size_t I) const;
   void writeEmbeddedNativeCallbacks(const HighStmt &Stmt, int Indent);
@@ -673,6 +675,8 @@ public:
   /// leaves out the operand of the instruction it stands for; empty when its
   /// C spells the instruction itself.
   std::string intrinsicInstructionComment(const HighExpr &E) const;
+  /// Original instruction and unresolved-target note for an analysis exit.
+  std::string analysisDispatchComment(const HighExpr &Call) const;
   /// \p Call as a statement, with the instruction it stands for beside it.
   std::string callStatementText(const HighExpr &Call);
   /// Whether every byte of \p E from \p Bytes up is zero, as far as its

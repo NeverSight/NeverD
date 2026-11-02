@@ -13,6 +13,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHControl.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
 
@@ -33,7 +34,14 @@ llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
     const llvm::Function &Parent, const MedFunc &Source,
     const std::map<CallbackKey, const llvm::Function *> &Callbacks,
     llvm::ArrayRef<const llvm::Function *> Functions, bool ReachedCxxSource,
-    const RegistrationSEHParentExitContract *ParentExits) {
+    const RegistrationSEHParentExitContract *ParentExits,
+    SourceCookieCalls Cookies,
+    std::vector<registration_frame::CxxSourceCallBinding> *CxxCalls) {
+  const bool RetainedCookies = Cookies == SourceCookieCalls::RetainedCxx;
+  if ((RetainedCookies || CxxCalls) &&
+      (!ReachedCxxSource || !Source.RegistrationStates))
+    return rejectIR("retained cookie bindings require reached C++ source");
+  std::vector<registration_frame::CxxSourceCallBinding> CallBindings;
   using Key = std::pair<va_t, int>;
   struct Event {
     Key Identity;
@@ -93,7 +101,9 @@ llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
       if (!Charge())
         return rejectIR("source execution replay exceeds its work budget");
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default ||
+           (!ReachedCxxSource && Source.RegistrationStates &&
+            isX86RegistrationThreadSelfLoad(Op, *Source.RegistrationStates))))
         Expected[Id].push_back(
             {{Op.Addr, Op.OriginSeq}, uint8_t(Op.Opcode == NdOp::STORE)});
       else if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
@@ -271,13 +281,33 @@ llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
               Store->getAlign() != llvm::Align(1))) ||
             (*Kind == 2 && (!Call || Call->isInlineAsm())) ||
             (*Kind == 3 &&
-             (!CookieCheck ||
-              CookieCheck->getIntrinsicID() != llvm::Intrinsic::sideeffect ||
-              CookieCheck->arg_size() ||
-              CookieCheck->getNumOperandBundles())) ||
+             (RetainedCookies
+                  ? !Call ||
+                        !registration_frame::hasExactCookieCallABI(
+                            *Call, Source.RegistrationStates->CookieCheckVA)
+                  : !CookieCheck ||
+                        CookieCheck->getIntrinsicID() !=
+                            llvm::Intrinsic::sideeffect ||
+                        CookieCheck->arg_size() ||
+                        CookieCheck->getNumOperandBundles())) ||
             !SeenEvents.insert(I).second)
           return rejectIR("source memory or call changed its execution segment "
                           "or occurrence order");
+        if (CxxCalls && (*Kind == 2 || *Kind == 3)) {
+          const auto *Check =
+              Source.RegistrationStates->cookieCheck(*Address, int(*Seq));
+          const auto *Effect =
+              Source.RegistrationStates->callFrameEffect(*Address, int(*Seq));
+          if ((*Kind == 3 && (!RetainedCookies || !Check || Effect)) ||
+              (*Kind == 2 && (!Effect || Check)))
+            return rejectIR(
+                "C++ call has no exclusive source occurrence receipt");
+          CallBindings.push_back(
+              {Call, Source.Entry, Id, *Address,
+               Check ? Check->EndAddress : Effect->EndAddress, int(*Seq),
+               static_cast<registration_frame::CxxSourceCallBinding::Kind>(
+                   *Kind)});
+        }
         ++EventIndex;
         const auto Dynamic = DynamicStores.find(Key{*Address, int(*Seq)});
         if (Store && Dynamic != DynamicStores.end()) {
@@ -364,6 +394,8 @@ llvm::Expected<std::map<int, SourceSegment>> validateSourceSegments(
       return rejectIR(
           "callback runtime entry bypasses its source execution entry");
   }
+  if (CxxCalls)
+    *CxxCalls = std::move(CallBindings);
   return Segments;
 }
 } // namespace neverd::coff_registration

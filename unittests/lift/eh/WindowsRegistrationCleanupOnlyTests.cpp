@@ -4,7 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/codegen/COFF/COFFRegistrationCxxIRProof.h"
 #include "../../../lib/backend/codegen/COFF/COFFRegistrationCxxStateProof.h"
+#include "RegistrationEntryRelocationTestUtils.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -19,6 +21,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86/X86RegistrationPhysicalFrame.h"
@@ -30,16 +33,58 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Verifier.h"
+#ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
+#include "llvm/IR/WinEHFrame.h"
+#endif
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 using namespace neverd;
 
 namespace {
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+void checkSynchronousCleanupMode(const llvm::Module &Module,
+                                 const MedFunc &Source,
+                                 const BinaryImage &Image) {
+  ASSERT_TRUE(Source.ExceptionMetadata);
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Mixed = llvm::CloneModule(Module);
+    Mixed->addModuleFlag(llvm::Module::Warning, "eh-asynch", 1);
+    auto *Parent = Mixed->getFunction(Source.Name);
+    ASSERT_TRUE(Parent);
+    ASSERT_TRUE(
+        Parent->hasFnAttribute(llvm::RewriteWinX86SynchronousCxxAttribute));
+    if (Mutation == 1)
+      Parent->removeFnAttr(llvm::RewriteWinX86SynchronousCxxAttribute);
+    if (Mutation == 2)
+      Parent->addFnAttr(llvm::RewriteWinX86SynchronousCxxAttribute, "async");
+    if (Mutation == 3)
+      Parent->removeFnAttr(llvm::Attribute::NoInline);
+    if (Mutation == 4)
+      Parent->removeFnAttr(llvm::RewriteWinX86CxxFrameAttribute);
+    auto Checked = validateCOFFRegistrationCxxIR(
+        *Parent, *Source.ExceptionMetadata, Image);
+    if (Mutation) {
+      EXPECT_TRUE(bool(Checked));
+      llvm::consumeError(std::move(Checked));
+    } else {
+      ASSERT_FALSE(bool(Checked)) << llvm::toString(std::move(Checked));
+      ASSERT_FALSE(llvm::verifyModule(*Mixed, &llvm::errs()));
+      auto Compiled = Codegen().compile(*Mixed, Arch::X86, BinaryFormat::COFF);
+      EXPECT_TRUE(Compiled.Success);
+    }
+  }
+}
+#endif
+
 #ifdef LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS
 TEST(WindowsRegistrationCxxStateMap, LargeGeneratedStateMapsKeepExactEdges) {
   for (bool Sparse : {false, true}) {
@@ -94,6 +139,41 @@ TEST(WindowsRegistrationCxxStateMap, LargeGeneratedStateMapsKeepExactEdges) {
   }
 }
 
+void checkSharedCleanupDeclarations(const BinaryImage &Image,
+                                    const MedFunc &Outer, va_t InnerEntry) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  auto Low = CFGBuilder().build(Image, Decode, InnerEntry, "cleanup_inner");
+  ASSERT_TRUE(Low.RegistrationStates && Low.RegistrationStates->Complete);
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&Image);
+  auto Inner = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+  inferMedTypes(Inner, Arch::X86);
+  recoverCallAbi(Inner, Arch::X86, {}, &Image);
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    std::vector<MedFunc> Functions{Outer, Inner};
+    if (Reverse)
+      std::reverse(Functions.begin(), Functions.end());
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    auto Module = Emitter.emit(Functions, Context, "shared-cleanup", Arch::X86,
+                               {}, &Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    for (const auto &Source : Functions) {
+      const auto *Parent = Module->getFunction(Source.Name);
+      ASSERT_TRUE(Parent);
+      ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment))
+          << Source.Name;
+      ASSERT_TRUE(Source.ExceptionMetadata);
+      auto Error = validateCOFFRegistrationCxxIR(
+          *Parent, *Source.ExceptionMetadata, Image);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+  }
+}
+
 void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   auto Image = COFFLoader().load(Path);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -102,6 +182,10 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   });
   ASSERT_NE(Export, Image->Exports.end());
   const va_t ParentEntry = Export->Addr;
+  const auto Nested = llvm::find_if(Image->Exports, [](const auto &Entry) {
+    return Entry.Name == "cleanup_only_inner";
+  });
+  const va_t NestedTarget = Nested == Image->Exports.end() ? 0 : Nested->Addr;
   const auto *Source = Image->ExceptionMetadata.findFunction(ParentEntry);
   ASSERT_TRUE(Source && Source->Cxx && Source->Registration);
   if (RegisterStateWrite) {
@@ -111,23 +195,38 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
     });
     ASSERT_NE(Store, Chain.TryLevelStores.end());
     const va_t Address = Store->StoreVA;
-    const auto *Bytes = Image->readVA(Address, 12);
+    const bool StackBased =
+        Chain.RealignedFrame && Chain.RealignedFrame->BaseRegister == 4;
+    const unsigned StoreSize = StackBased ? 8 : 7;
+    const unsigned Displacement = StackBased ? 3 : 2;
+    const auto *Bytes = Image->readVA(Address, StoreSize + 5);
     ASSERT_TRUE(Bytes);
-    ASSERT_EQ(Store->EndVA - Address, 7u);
+    ASSERT_EQ(Store->EndVA - Address, StoreSize);
     ASSERT_EQ(Bytes[0], 0xc7);
-    ASSERT_EQ(Bytes[1], 0x45);
-    ASSERT_EQ(int8_t(Bytes[2]), Chain.TryLevelOffset);
-    ASSERT_EQ(readLE<uint32_t>(Bytes + 3), uint32_t(Store->Level));
-    // EAX is scratch immediately before the fixture's no-argument throw.
-    ASSERT_EQ(Bytes[7], 0xe8);
+    ASSERT_EQ(Bytes[1], StackBased ? 0x44 : 0x45);
+    if (StackBased)
+      ASSERT_EQ(Bytes[2], 0x24);
+    ASSERT_EQ((StackBased ? Chain.RealignedFrame->BaseOffset : 0) +
+                  int8_t(Bytes[Displacement]),
+              Chain.TryLevelOffset);
+    ASSERT_EQ(readLE<uint32_t>(Bytes + Displacement + 1),
+              uint32_t(Store->Level));
+    // EAX is scratch immediately before either authored no-argument callee.
+    ASSERT_EQ(Bytes[StoreSize], 0xe8);
     const auto Throw = llvm::find_if(Image->Exports, [](const auto &Entry) {
       return Entry.Name == "cleanup_only_throw";
     });
     ASSERT_NE(Throw, Image->Exports.end());
-    ASSERT_EQ(Address + 12 + int32_t(readLE<uint32_t>(Bytes + 8)), Throw->Addr);
-    const std::vector<uint8_t> Replacement = {
-        0x31,     0xc0, uint8_t(Store->Level ? 0x40 : 0x90), 0x89, 0x45,
-        Bytes[2], 0x90};
+    ASSERT_EQ(Address + StoreSize + 5 +
+                  int32_t(readLE<uint32_t>(Bytes + StoreSize + 1)),
+              NestedTarget ? NestedTarget : Throw->Addr);
+    std::vector<uint8_t> Replacement = {
+        0x31, 0xc0, uint8_t(Store->Level ? 0x40 : 0x90), 0x89,
+        uint8_t(StackBased ? 0x44 : 0x45)};
+    if (StackBased)
+      Replacement.push_back(0x24);
+    Replacement.push_back(Bytes[Displacement]);
+    Replacement.push_back(0x90);
     auto Input = llvm::MemoryBuffer::getFile(Path);
     ASSERT_TRUE(bool(Input));
     const auto Buffer = (*Input)->getBuffer();
@@ -205,6 +304,20 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
               Low.RegistrationStates->CxxPrologue);
   }
   inferMedTypes(Med, Arch::X86);
+  recoverCallAbi(Med, Arch::X86, {}, &*Image);
+  if (NestedTarget)
+    for (const auto &Block : Med.Blocks)
+      for (size_t I = 0; I != Block.Ops.size(); ++I) {
+        const auto &Op = Block.Ops[I];
+        if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
+            !Op.Inputs[0].isConst() || Op.Inputs[0].ConstVal != NestedTarget)
+          continue;
+        const auto *Call = Med.findCall(Block.Id, I);
+        ASSERT_TRUE(Call);
+        EXPECT_TRUE(Call->Args.empty());
+        EXPECT_EQ(Call->IntegerRegisterArgCount, 0);
+        EXPECT_EQ(Call->FloatingRegisterArgCount, 0);
+      }
   const auto Owners = registrationCatchBlocks(Med);
   const auto Parents = registrationCleanupParents(Med);
   ASSERT_TRUE(Owners && Parents);
@@ -240,6 +353,12 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   auto *Parent = Module->getFunction(Med.Name);
   ASSERT_TRUE(Parent);
   ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  ASSERT_NO_FATAL_FAILURE(checkSynchronousCleanupMode(*Module, Med, *Image));
+#endif
+  if (NestedTarget)
+    ASSERT_NO_FATAL_FAILURE(
+        checkSharedCleanupDeclarations(*Image, Med, NestedTarget));
   if (Med.RegistrationPhysicalFrame)
     for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
       SCOPED_TRACE(Mutation);
@@ -373,7 +492,8 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
               Store
                   ? llvm::dyn_cast<llvm::ConstantInt>(Store->getValueOperand())
                   : nullptr;
-          if (!Initialization && Value && Value->equalsInt(1) &&
+          if (!Initialization && Value &&
+              Value->equalsInt(NestedTarget ? 3 : 1) &&
               Store->getMetadata(
                   windows_eh_md::RegistrationOperationAttachment))
             Initialization = Store;
@@ -392,6 +512,48 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
     auto Error = validateCOFFRegistrationCxxIR(*Function, *Source, *Image);
     EXPECT_TRUE(bool(Error));
     llvm::consumeError(std::move(Error));
+  }
+  for (unsigned Lifetime = 0; Lifetime != 3; ++Lifetime) {
+    SCOPED_TRACE(Lifetime);
+    auto Changed = llvm::CloneModule(*Module);
+    auto *Function = Changed->getFunction(Parent->getName());
+    auto Proof = coff_registration::getCheckedCxxControlIRProof(
+        *Function, *Source, *Image);
+    ASSERT_TRUE(bool(Proof)) << llvm::toString(Proof.takeError());
+    auto *Allocation = const_cast<llvm::AllocaInst *>(Proof->Frame.Slot);
+    ASSERT_TRUE(Allocation && Allocation->getNextNode());
+    llvm::IRBuilder<> B(Allocation->getNextNode());
+    B.CreateLifetimeStart(Allocation);
+    llvm::InvokeInst *Invoke = nullptr;
+    for (auto &Block : *Function)
+      if (auto *Call =
+              llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator())) {
+        Invoke = Call;
+        break;
+      }
+    ASSERT_TRUE(Invoke);
+    ASSERT_TRUE(Invoke->getPrevNode());
+    B.SetInsertPoint(Invoke->getPrevNode());
+    if (Lifetime == 1)
+      B.CreateLifetimeEnd(Allocation);
+    if (Lifetime == 2)
+      B.CreateLifetimeStart(Allocation);
+    ASSERT_FALSE(llvm::verifyModule(*Changed, &llvm::errs()));
+    auto Control =
+        validateCOFFRegistrationCxxControlIR(*Function, *Source, *Image);
+    ASSERT_FALSE(bool(Control)) << llvm::toString(std::move(Control));
+    auto Error = validateCOFFRegistrationCxxIR(*Function, *Source, *Image);
+    // A start permits access, but every start also discards initialized bytes.
+    EXPECT_EQ(bool(Error), Lifetime != 0);
+    const auto Message = llvm::toString(std::move(Error));
+    if (Lifetime == 1)
+      EXPECT_NE(Message.find("outside its allocation lifetime"),
+                std::string::npos)
+          << Message;
+    if (Lifetime == 2)
+      EXPECT_NE(Message.find("not initialized on every path"),
+                std::string::npos)
+          << Message;
   }
   // Keep the object compile independent: code generation may mutate its IR.
   auto ObjectModule = llvm::CloneModule(*Module);
@@ -452,6 +614,21 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
   auto Tables = getCheckedCOFFRegistrationCxxTableReceipt(*Parent, *Source,
                                                           *Image, Native);
   ASSERT_TRUE(bool(Tables)) << llvm::toString(Tables.takeError());
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  {
+    auto Mixed = llvm::CloneModule(*Module);
+    Mixed->addModuleFlag(llvm::Module::Warning, "eh-asynch", 1);
+    auto MixedNative = compileImageForPatch(
+        *Mixed, Arch::X86, BinaryFormat::COFF, CodeVA, Resolve, Image->Base);
+    ASSERT_TRUE(MixedNative.Success);
+    ASSERT_TRUE(MixedNative.Unresolved.empty());
+    const auto *MixedParent = Mixed->getFunction(Med.Name);
+    ASSERT_TRUE(MixedParent);
+    auto MixedTables = getCheckedCOFFRegistrationCxxTableReceipt(
+        *MixedParent, *Source, *Image, MixedNative);
+    ASSERT_TRUE(bool(MixedTables)) << llvm::toString(MixedTables.takeError());
+  }
+#endif
   EXPECT_EQ(Tables->Tables[2], (std::pair<va_t, va_t>{0, 0}));
   EXPECT_EQ(Tables->SourceToGeneratedStates.size(),
             Source->Cxx->UnwindMap.size() + 1);
@@ -555,58 +732,16 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
     // The exact narrow entry retires the complete MOV handler operand even
     // though only two of its bytes lie under the five-byte jump. Adjacent
     // relocation fields and different operand bytes have no such proof.
-    auto PE = locatePEHeaders(Binary.data(), Binary.size());
-    const auto *Directory =
-        getPEDataDirectory(PE, llvm::COFF::BASE_RELOCATION_TABLE);
-    ASSERT_TRUE(Directory && Directory->Size);
-    auto Raw = [&](uint32_t RVA) -> std::optional<size_t> {
-      std::optional<size_t> Result;
-      forEachPESection(PE, [&](const PESectionFields &S, uint16_t) {
-        if (RVA >= S.VirtualAddress && RVA - S.VirtualAddress < S.SizeOfRawData)
-          Result = S.PointerToRawData + RVA - S.VirtualAddress;
-      });
-      return Result;
-    };
-    const auto Begin = Raw(Directory->RelativeVirtualAddress);
-    ASSERT_TRUE(Begin);
-    ASSERT_TRUE(rangeInBounds(*Begin, Directory->Size, Binary.size()));
-    const uint32_t FieldRVA = Mapping.first + 3 - Image->Base;
-    std::optional<size_t> Relocation;
-    for (size_t Offset = *Begin; Offset < *Begin + Directory->Size;) {
-      ASSERT_TRUE(rangeInBounds(Offset, 8, Binary.size()));
-      const auto Page = readLE<uint32_t>(Binary.data() + Offset);
-      const auto Size = readLE<uint32_t>(Binary.data() + Offset + 4);
-      ASSERT_GE(Size, 8u);
-      ASSERT_TRUE(rangeInBounds(Offset, Size, Binary.size()));
-      for (size_t Entry = Offset + 8; Entry + 2 <= Offset + Size; Entry += 2) {
-        const auto Word = readLE<uint16_t>(Binary.data() + Entry);
-        if ((Word >> 12) == llvm::COFF::IMAGE_REL_BASED_HIGHLOW &&
-            Page + (Word & 0xfff) == FieldRVA) {
-          ASSERT_FALSE(Relocation);
-          Relocation = Entry;
-        }
-      }
-      Offset += Size;
-    }
-    ASSERT_TRUE(Relocation);
-    const auto Field = Raw(FieldRVA);
-    ASSERT_TRUE(Field);
-    for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
-      SCOPED_TRACE(Mutation);
-      auto Changed = Binary;
-      if (Mutation < 2) {
-        const auto Word = readLE<uint16_t>(Changed.data() + *Relocation);
-        writeLE<uint16_t>(Changed.data() + *Relocation,
-                          Mutation ? Word + 1 : Word - 1);
-      } else
-        Changed[*Field] ^= 1;
-      auto CompiledCopy = Native;
-      auto Rejected = prepareCOFFRegistrationPatch(
-          Changed, *Image, CompiledCopy, {Mapping}, CodeVA, *Module);
-      EXPECT_FALSE(bool(Rejected));
-      if (!Rejected)
-        llvm::consumeError(Rejected.takeError());
-    }
+    registration_test::checkRetiredEntryRelocationEdits(
+        Binary, Mapping.first + 3 - Image->Base,
+        [&](const std::vector<uint8_t> &Changed) {
+          auto CompiledCopy = Native;
+          auto Rejected = prepareCOFFRegistrationPatch(
+              Changed, *Image, CompiledCopy, {Mapping}, CodeVA, *Module);
+          EXPECT_FALSE(bool(Rejected));
+          if (!Rejected)
+            llvm::consumeError(Rejected.takeError());
+        });
   }
   auto Update = prepareCOFFRegistrationPatch(Binary, *Image, Native, {Mapping},
                                              CodeVA, *Module);

@@ -11,12 +11,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineAnalysis.h"
 #include "PipelineLowIRDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -169,6 +171,14 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
       const ExceptionFunction *EH = Img.ExceptionMetadata.findFunction(Work[I]);
       if (!EH)
         continue;
+      // A PE32 FuncInfo owns callbacks in the installing frame. Reuse the
+      // loader's current-byte pointer roles before adding an ordinary root;
+      // this selected source needs no image-wide function scan.
+      std::set<va_t> RegistrationCallbacks;
+      if (const auto Sources =
+              coff_loader::getCheckedX86CxxCallbackPointerSources(Img, *EH))
+        for (const auto &[Slot, Target] : *Sources)
+          RegistrationCallbacks.insert(Target);
       // Interior VAs inherit a containing pdata.  A huge or merged owner
       // must not enqueue every catch/unwind thunk in that range; keep only
       // nearby out-of-line funclets so `--func` can still attach a local
@@ -177,6 +187,9 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
           EH->CodeRange.size() > limits::kMaxOnlyFunctionEHOwnerSize;
       auto addOutOfLine = [&](va_t Addr) {
         if (!Addr || EH->CodeRange.contains(Addr))
+          return;
+        if (RegistrationCallbacks.count(Addr) &&
+            !Img.hasAuthenticatedFunctionEntryAt(Addr))
           return;
         // An interior VA of a foreign pdata owner would CFG-decode that
         // whole body.  MSVC template unwind actions often land inside a
@@ -237,6 +250,23 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
     FuncEntries = Detector.detect(Img, Dec);
     LLVM_DEBUG(llvm::dbgs() << "pipeline: detected " << FuncEntries.size()
                             << " functions\n");
+  }
+
+  // Registration callbacks are not ordinary ABI entries. Analysis may show
+  // their checked code independently without proving a replacement frame.
+  const auto AnalysisCallbacks =
+      pipeline_detail::analysisCallbackEntries(Img, Opts);
+  if (!AnalysisCallbacks.empty()) {
+    std::set<va_t> Present;
+    for (const auto &Entry : FuncEntries)
+      Present.insert(Entry.first);
+    for (va_t Entry : AnalysisCallbacks)
+      if (Present.insert(Entry).second)
+        FuncEntries.emplace_back(
+            Entry, (kAutoFuncPrefix + llvm::utohexstr(Entry)).str());
+    llvm::stable_sort(FuncEntries, [](const auto &Left, const auto &Right) {
+      return Left.first < Right.first;
+    });
   }
 
   // mergeDebugSymbols also *adds* every PDB function that is not already a

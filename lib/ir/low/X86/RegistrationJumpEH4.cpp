@@ -22,9 +22,9 @@ std::optional<va_t> checkedEH4JumpCookie(const BinaryImage &Image,
   const va_t Cookie = Image.Base + Image.DynInfo.SecurityCookieRVA;
   const auto Table = Frame.load(-8, 4);
   if (Cookie > UINT32_MAX - 3 ||
-      Frame.load(SP + 16, 4) != FrameValue::constant(uint32_t(Cookie)) ||
+      Frame.load(SP + 16, 4).preferredAddress() != Cookie ||
       !Table.SecurityCookie || Table.CookieFrameOffset ||
-      Table.CookieXOR != Chain.ScopeTableVA)
+      Table.cookieAddress() != Chain.ScopeTableVA)
     return std::nullopt;
   return Cookie;
 }

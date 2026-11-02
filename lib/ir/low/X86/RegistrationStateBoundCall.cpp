@@ -15,7 +15,8 @@ namespace neverd::registration_state {
 bool RegistrationStateSolver::transferBoundSEHCallee(
     size_t I, const Domain &Before, Domain &After, const LowOp &Op,
     BlockFacts &Facts, std::optional<FrameValue> &CallSP,
-    std::optional<Domain> &CallException) {
+    std::optional<Domain> &CallException,
+    std::optional<FrameValue> &CallResult) {
   const auto &Block = Function.Blocks[I];
   if (!CallSP && BoundCallees && !KnownCxx && !After.Unknown &&
       !Facts.Invalid && After.Parent && !After.Callback &&
@@ -68,12 +69,23 @@ bool RegistrationStateSolver::transferBoundSEHCallee(
           if (Effect->NativeCall) {
             const auto [It, New] = BoundCalls.emplace(
                 std::make_pair(Op.Addr, Op.Seq), *Effect->NativeCall);
-            if (!New && It->second != *Effect->NativeCall)
-              Result.SEHBoundCallsComplete = false;
+            if (!New) {
+              // The same physical call can have several source invocations.
+              // Different ordinary values lose the constant-return fact, not
+              // an otherwise identical private argument/frame contract.
+              if (It->second.ConstantReturn !=
+                  Effect->NativeCall->ConstantReturn)
+                It->second.ConstantReturn.reset();
+              Effect->NativeCall->ConstantReturn = It->second.ConstantReturn;
+              if (It->second != *Effect->NativeCall)
+                Result.SEHBoundCallsComplete = false;
+            }
           } else
             Result.SEHBoundCallsComplete = false;
           CallSP =
               FrameValue::frame(int32_t(int64_t(*SP) + Effect->StackPopBytes));
+          if (Effect->HasOrdinaryReturn && hasX86ScalarCallOutput(Op))
+            CallResult = Effect->ReturnValue;
           if (!Effect->Writes.empty()) {
             if (!charge(Before.Frame.cellCount() + 1))
               return false;

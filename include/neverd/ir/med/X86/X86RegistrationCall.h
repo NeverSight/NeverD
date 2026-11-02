@@ -10,9 +10,23 @@
 #include "neverd/ir/med/MedIR.h"
 
 namespace neverd {
+struct BinaryImage;
 struct LowFunc;
 struct LowBlock;
 struct LowOp;
+
+struct RegistrationCookieCallABI {
+  MedVar Argument;
+  va_t CheckVA = 0;
+  va_t SecurityCookieVA = 0;
+};
+
+/// Rebind a source cookie receipt to the current ECX SSA value and immutable
+/// CALL/checker bytes. The retained leaf takes one register word and returns
+/// void. This supplies no generated-frame proof or check-elision authority.
+std::optional<RegistrationCookieCallABI>
+registrationCookieCallABI(const BinaryImage &Image, const MedFunc &Func,
+                          const MedBlock &Block, size_t CallIndex);
 
 /// Consume a checked source call's cleanup before forming stack SSA: the one
 /// a complete registration proof binds to this call, or else a direct

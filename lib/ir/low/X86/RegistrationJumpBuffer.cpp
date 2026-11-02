@@ -16,11 +16,11 @@ std::array<FrameValue, 10> captureCells(const SEHJumpCapture &Capture) {
           Capture.Nonvolatile[2],
           Capture.Nonvolatile[3],
           FrameValue::frame(Capture.StackOffset - 4),
-          FrameValue::constant(uint32_t(Capture.ReturnPC)),
+          FrameValue::imageAddress(uint32_t(Capture.ReturnPC)),
           FrameValue::frame(-16),
           FrameValue::constant(uint32_t(Capture.Level)),
           FrameValue::constant(0x56433230),
-          FrameValue::constant(uint32_t(Capture.UnwindTarget))};
+          FrameValue::imageAddress(uint32_t(Capture.UnwindTarget))};
 }
 } // namespace
 
@@ -30,7 +30,7 @@ void storeSEHJumpCapture(FrameState &Frame, const SEHJumpCapture &Capture) {
     Frame.store(Capture.BufferOffset + 4 * I, 4, Cells[I]);
   if (Capture.Protocol == RegistrationSEHJumpCapture::Kind::EH4)
     Frame.store(Capture.BufferOffset + 40, 4,
-                FrameValue::constant(uint32_t(Capture.SecurityCookieVA)));
+                FrameValue::imageAddress(uint32_t(Capture.SecurityCookieVA)));
 }
 
 bool hasSEHJumpCapture(const FrameState &Frame, const SEHJumpCapture &Capture) {
@@ -40,7 +40,7 @@ bool hasSEHJumpCapture(const FrameState &Frame, const SEHJumpCapture &Capture) {
       return false;
   return Capture.Protocol != RegistrationSEHJumpCapture::Kind::EH4 ||
          Frame.load(Capture.BufferOffset + 40, 4) ==
-             FrameValue::constant(uint32_t(Capture.SecurityCookieVA));
+             FrameValue::imageAddress(uint32_t(Capture.SecurityCookieVA));
 }
 
 } // namespace neverd::registration_state

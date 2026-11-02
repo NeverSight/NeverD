@@ -9,6 +9,7 @@
 #include "MedLLVMRegistrationSEHProof.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 
 namespace neverd::x86_registration {
 
@@ -17,6 +18,9 @@ std::optional<SEHFrameOffsets> getSEHFrameOffsets(const MedFunc &Source) {
       !Source.RegistrationStates->CallbackStatesComplete ||
       !Source.RegistrationStates->RegistrationLifetimeComplete ||
       Source.SkippedSSA)
+    return std::nullopt;
+  const auto *States = getX86RegistrationSEHPhysicalStates(Source);
+  if (!States)
     return std::nullopt;
   using Identity = std::pair<va_t, int>;
   using ValueKey = std::tuple<MedVar::VarKind, int, int>;
@@ -29,7 +33,7 @@ std::optional<SEHFrameOffsets> getSEHFrameOffsets(const MedFunc &Source) {
   };
   size_t Work = 0;
   std::map<Identity, std::optional<int32_t>> Offsets;
-  for (const auto &Value : Source.RegistrationStates->FrameValues) {
+  for (const auto &Value : States->FrameValues) {
     if (++Work > limits::kMaxRegistrationEHStateWork || Value.OpSeq < 0 ||
         !Offsets
              .emplace(Identity{Value.Address, Value.OpSeq},

@@ -7,10 +7,11 @@
 /// Checked original PE header mapping and snapshot identity.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_LOADER_COFF_PEHEADERMAPPING_H
-#define NEVERD_LOADER_COFF_PEHEADERMAPPING_H
+#ifndef NEVERD_LIB_LOADER_COFF_PEHEADERMAPPING_H
+#define NEVERD_LIB_LOADER_COFF_PEHEADERMAPPING_H
 
 #include "neverd/Common.h"
+#include "neverd/loader/COFF/PEHeaderMapping.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -52,4 +53,4 @@ bool matchesPEHeaderMapping(const BinaryImage &Image, size_t Index,
 } // namespace coff_loader
 } // namespace neverd
 
-#endif
+#endif // NEVERD_LIB_LOADER_COFF_PEHEADERMAPPING_H

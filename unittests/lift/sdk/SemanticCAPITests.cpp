@@ -528,6 +528,35 @@ TEST(NeverDSemanticCAPI, LLVMConservativeModeRejectsSynthesis) {
   neverd_free_string(JSON);
 }
 
+TEST(NeverDSemanticCAPI, LLVMContractFailureRetainsFunctionAndReason) {
+  constexpr const char *IR = R"(
+    define void @missing_native_contract() { ret void }
+    !neverd.exception.rewrite.schema = !{!0}
+    !0 = !{i32 1}
+  )";
+  neverd_optimize_llvm_ir_result Result{};
+  Result.struct_size = sizeof(Result);
+  ASSERT_EQ(neverd_optimize_llvm_ir(IR, nullptr, &Result), 0);
+  EXPECT_EQ(Result.ok, 0);
+  EXPECT_EQ(Result.stop, NEVERD_OPTIMIZATION_INPUT_INVALID);
+  EXPECT_EQ(Result.changed, 0);
+  ASSERT_NE(Result.error, nullptr);
+  const std::string Error = Result.error;
+  EXPECT_NE(Error.find("missing_native_contract"), std::string::npos);
+  EXPECT_NE(Error.find("missing per-function contract"), std::string::npos);
+  ASSERT_NE(Result.output_ir, nullptr);
+  EXPECT_NE(std::string(Result.output_ir).find("ret void"), std::string::npos);
+  neverd_optimize_llvm_ir_result_dispose(&Result);
+
+  const char *JSON = neverd_optimize_llvm_ir_json_v1(IR, nullptr);
+  const auto Object = parseObject(JSON);
+  EXPECT_EQ(Object.getBoolean("ok"), false);
+  EXPECT_EQ(Object.getString("stop"), "input-invalid");
+  EXPECT_EQ(Object.getString("error"), Error);
+  EXPECT_TRUE(Object.getString("outputIR").has_value());
+  neverd_free_string(JSON);
+}
+
 TEST(NeverDSemanticCAPI, LLVMSynthesisOptionsRequireSynthesis) {
   constexpr const char *IR = "define void @f() { ret void }";
   neverd_optimize_llvm_ir_options Options{};

@@ -159,9 +159,12 @@ add_neverd_unittest(NeverDSEHRuntimeMemoryTests
   eh/RegistrationSEHControlTests.cpp
   eh/RegistrationSEHEpilogueTests.cpp
   eh/RegistrationConditionalFrameTests.cpp
+  eh/RegistrationConditionalSEHTests.cpp
+  eh/RegistrationOriginalImageCallerTests.cpp
   eh/RegistrationJumpRuntimeTests.cpp
   eh/RegistrationJumpCaptureTests.cpp
   eh/RegistrationCallbackImageTests.cpp
+  eh/RegistrationOriginalImageTests.cpp
   LINK_COMPONENTS Pipeline)
 target_include_directories(NeverDSEHRuntimeMemoryTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/pipeline)
@@ -170,9 +173,19 @@ if(NEVERD_ENABLE_BINARY_CORPUS_TESTS)
     NEVERD_BINARY_CORPUS_ROOT="${NEVERD_BINARY_CORPUS_ROOT}")
 endif()
 
+add_neverd_unittest(NeverDMedStackDeltaTests
+  core/MedStackDeltaTests.cpp
+  LINK_COMPONENTS IRMed)
+
 add_neverd_unittest(NeverDRegistrationCalleeStackTests
+  eh/RegistrationCRTBindingsTests.cpp
+  eh/RegistrationCRTDataStackTests.cpp
   eh/RegistrationCallTests.cpp
+  eh/RegistrationControlFPStackTests.cpp
+  eh/RegistrationImportABITests.cpp
+  eh/RegistrationLeafBranchTests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
+  eh/RegistrationOpaqueStackTests.cpp
   LINK_COMPONENTS Pipeline)
 
 add_neverd_unittest(NeverDHighCParamUsageTests
@@ -182,11 +195,6 @@ add_neverd_unittest(NeverDHighCParamUsageTests
 add_neverd_unittest(NeverDHighCSupervisorCallTests
   core/HighCSupervisorCallTests.cpp
   LINK_COMPONENTS BackendC)
-
-add_neverd_unittest(NeverDMedStackDeltaTests
-  core/MedStackDeltaTests.cpp
-  LINK_COMPONENTS IRMed
-)
 
 add_neverd_unittest(NeverDMedDceTests
   core/MedDceImplicitSpTests.cpp
@@ -559,6 +567,7 @@ add_neverd_unittest(NeverDLiftTests
   format/ELFWithoutSectionsTests.cpp
   format/ELFARM32ModeTests.cpp
   format/COFFFunctionListingTests.cpp
+  format/RegistrationFunctionSelectionTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
   format/COFFImportStorageBoundaryTests.cpp
   format/COFFOrdinalImportTests.cpp
@@ -1595,6 +1604,7 @@ add_neverd_unittest(NeverDJumpTableTests
   core/JumpTableCOFFBaseTests.cpp
   core/GuardExpressionTests.cpp
   core/AffineFrameStateTests.cpp
+  core/ResolverBlockMemoTests.cpp
   core/ResolverGraphCacheTests.cpp
   core/ResolverDefinitionCacheTests.cpp
   core/ResolverMemoryDefinitionCacheTests.cpp
@@ -1960,7 +1970,11 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationOrdinaryFinallyTests.cpp
   eh/RegistrationSEHInvocationTests.cpp
   eh/RegistrationSEHExceptionTests.cpp
+  eh/RegistrationSEHThreadTests.cpp
   eh/RegistrationJumpStateTests.cpp
+  eh/RegistrationStartupInfoStateTests.cpp
+  eh/RegistrationHeapStateTests.cpp
+  eh/RegistrationSynchronizationStateTests.cpp
   eh/RegistrationMultiStateJumpTests.cpp
   eh/RegistrationReplacementJumpTests.cpp
   eh/RegistrationPrivateCallStateTests.cpp
@@ -1987,6 +2001,7 @@ add_neverd_unittest(NeverDRegistrationStateTests
   eh/RegistrationRealignedTestUtils.cpp
   eh/RegistrationCallbackStateTests.cpp
   eh/RegistrationFrameMemoryTests.cpp
+  eh/RegistrationFrameSnapshotTests.cpp
   eh/RegistrationFrameScalarTests.cpp
   eh/RegistrationIncomingAliasTests.cpp
 
@@ -2001,6 +2016,7 @@ add_neverd_unittest(NeverDExceptionEdgeTests
 )
 
 add_neverd_unittest(NeverDRegistrationEHTests
+  eh/RegistrationConditionalCxxTests.cpp
   eh/RegistrationEH4WrapperTests.cpp
   eh/RegistrationPrologueSavesTests.cpp
   eh/RegistrationTryLevelTests.cpp
@@ -2011,6 +2027,11 @@ add_neverd_unittest(NeverDRegistrationEHTests
   IRMed
   IRHigh
   Pipeline
+)
+
+add_neverd_unittest(NeverDRegistrationSEH4EntryTests
+  eh/RegistrationSEH4SharedTests.cpp
+  LINK_COMPONENTS IRLow
 )
 
 add_neverd_unittest(NeverDWindowsRegistrationFrameTests
@@ -2074,15 +2095,18 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationSEHCallbackTests.cpp
   eh/RegistrationSEHStateStoreTests.cpp
   eh/RegistrationSEHExceptionNativeTests.cpp
+  eh/RegistrationSEHThreadNativeTests.cpp
   eh/RegistrationSEHJumpNativeTests.cpp
   eh/RegistrationSEHJumpStateNativeTests.cpp
   eh/RegistrationSEHJumpCaptureNativeTests.cpp
   eh/RegistrationSEHJumpABITests.cpp
   eh/RegistrationCookieABITests.cpp
+  eh/RegistrationSEH4PhysicalTests.cpp
   eh/RegistrationCopyEdgeTests.cpp
   eh/RegistrationRecoveredCopyTests.cpp
   eh/RegistrationSEHBoundNativeTests.cpp
   eh/RegistrationSEHRuntimeNativeTests.cpp
+  eh/RegistrationSEHSynchronizationNativeTests.cpp
   eh/RegistrationSEHBoundSourceTests.cpp
   eh/RegistrationSEHBoundCookieTests.cpp
   eh/RegistrationSEHDynamicScopeTests.cpp
@@ -2098,7 +2122,9 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationSEHNullAccessTests.cpp
   eh/RegistrationCxxContinuationTestUtils.cpp
   eh/RegistrationCallTests.cpp
+  eh/RegistrationImportABITests.cpp
   eh/RegistrationCalleeRecursionTests.cpp
+  eh/RegistrationOpaqueStackTests.cpp
   eh/RegistrationCleanupABITests.cpp
   eh/RegistrationRealignedCleanupABITests.cpp
   eh/RegistrationEntryABITests.cpp
@@ -2111,6 +2137,16 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
   eh/RegistrationInitializerFrameTests.cpp
   eh/RegistrationRuntimeMemberFrameTests.cpp
   eh/RegistrationFrameStoresTests.cpp
+  eh/RegistrationFrameLifetimeTests.cpp
+  eh/RegistrationSEHRuntimeFrameTests.cpp
+  eh/RegistrationImageProofTests.cpp
+  eh/RegistrationImagePrefixTests.cpp
+  eh/RegistrationCookieProofTests.cpp
+  eh/RegistrationCookieFrameTests.cpp
+  eh/RegistrationCxxCookieBindingsTests.cpp
+  eh/RegistrationCxxCallEffectsTests.cpp
+  eh/RegistrationCxxGuardedFrameTests.cpp
+  eh/RegistrationFrameXorTests.cpp
   eh/RegistrationFrameBitsTests.cpp
   eh/RegistrationPHICopyTests.cpp
   eh/RegistrationSEHPHICopyTests.cpp
@@ -2129,6 +2165,14 @@ add_neverd_unittest(NeverDWindowsRegistrationNativeTests
 target_include_directories(NeverDWindowsEHMetadataEncoderTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
+)
+
+add_neverd_unittest(NeverDWindowsMixedRegistrationTests
+  eh/WindowsMixedRegistrationTests.cpp
+  LINK_COMPONENTS
+  Pipeline
+  BackendLLVM
+  CodeGen
 )
 
 if(TARGET neverd)
@@ -2232,6 +2276,7 @@ add_neverd_unittest(NeverDRegistrationCallResultTests
   eh/RegistrationCallResultTests.cpp
   eh/RegistrationSEHLocalUnwindTests.cpp
   eh/RegistrationSEHRuntimeReturnTests.cpp
+  eh/RegistrationSynchronizationABITests.cpp
   eh/RegistrationLLVMCallResultTests.cpp
   LINK_COMPONENTS IRMed BackendLLVM
 )

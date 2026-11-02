@@ -247,15 +247,6 @@ void validateMemoryAddressSpaceForC(NdMemoryAddressSpace AddressSpace,
         "FS/GS memory address spaces require an x86 C target");
 }
 
-bool useMsvcSegmentedRead(const CEmitterOptions &Opts, const HighFunc *Func) {
-  // A function Windows' unwind or exception tables describe is Windows code;
-  // an ELF function's DWARF FDE describes another platform's.
-  return (Func && Func->ExceptionMetadata &&
-          !exceptionEncodingIsOutsideWindows(
-              Func->ExceptionMetadata->Encoding)) ||
-         (Opts.Image && Opts.Image->abiFormat() == BinaryFormat::COFF);
-}
-
 std::string memoryHelperName(llvm::StringRef Operation, llvm::StringRef Type,
                              NdMemoryOrdering Ordering,
                              NdMemoryAddressSpace AddressSpace) {
@@ -353,6 +344,17 @@ bool hasMainSignature(const HighFunc &Func,
          (Int(Params[0]) && llvm::all_of(llvm::drop_begin(Params), Strings));
 }
 } // namespace
+
+bool HighCWriter::useMsvcSegmentedRead() const {
+  // Realigned registration frames keep their explicit FS memory helpers.
+  // Collection must choose those helpers whenever expression rendering does.
+  if (CurrentFunc && preservesRegistrationMemory(*CurrentFunc))
+    return false;
+  return (CurrentFunc && CurrentFunc->ExceptionMetadata &&
+          !exceptionEncodingIsOutsideWindows(
+              CurrentFunc->ExceptionMetadata->Encoding)) ||
+         (Opts.Image && Opts.Image->abiFormat() == BinaryFormat::COFF);
+}
 
 bool HighCWriter::takesMainSignature(const HighFunc &Func) const {
   return hasMainSignature(Func, Dbg && Func.Entry ? debugFunction(Func)
@@ -722,7 +724,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
         E.MemoryOrdering == NdMemoryOrdering::None &&
         E.MemoryAddressSpace != NdMemoryAddressSpace::Default &&
         (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
-        E.Kind == ExprKind::Load && useMsvcSegmentedRead(Opts, CurrentFunc);
+        E.Kind == ExprKind::Load && useMsvcSegmentedRead();
     if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
       validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
       // These renderers pass raw offsets to native instructions. They do not
@@ -799,6 +801,8 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
 
   for (const HighFunc &Func : Funcs) {
     CurrentFunc = &Func;
+    // Shared expressions can have different memory spellings in each body.
+    Seen.clear();
     collectNamedFrameSlots(Func);
     CollectWideType(Func.ReturnType);
     for (const HighParam &Param : Func.Params)
@@ -1022,8 +1026,7 @@ std::string HighCWriter::memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
   // MSVC's FS/GS read intrinsics are a useful source-level spelling for
   // Windows targets. Other formats keep the target address-space-qualified
   // helper, so the segment remains explicit in the C memory type.
-  if (useMsvcSegmentedRead(Opts, CurrentFunc) &&
-      !(CurrentFunc && preservesRegistrationMemory(*CurrentFunc))) {
+  if (useMsvcSegmentedRead()) {
     if (std::string Seg = renderX86MsvcSegmentedLoad(
             Opts.TheArch, Ty ? Ty->Size : 0, Addr, Ordering, AddressSpace);
         !Seg.empty())

@@ -458,8 +458,9 @@ void MedLLVMEmitter::defineCallClobbers(const MedOp &Op,
   if (!CurMedFunc || Op.CallSiteId == 0 || Op.PreservesCallerSaved)
     return;
 
-  for (const MedCallClobber &Clobber : CurMedFunc->CallClobbers) {
-    if (Clobber.CallSiteId != Op.CallSiteId || Clobber.Value.Size == 0)
+  for (const MedCallClobber *Record : clobbersAtCall(Op.CallSiteId)) {
+    const MedCallClobber &Clobber = *Record;
+    if (Clobber.Value.Size == 0)
       continue;
     auto *ClobberTy =
         llvm::cast<llvm::IntegerType>(sizeToType(Clobber.Value.Size));
@@ -556,6 +557,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (CI)
     for (const MedVar &Arg : CI->Args)
       rejectEscapingAddressFragment(Arg, "a call argument");
+
+  std::vector<llvm::Value *> CookieArguments;
+  auto *CookieCheck = prepareX86RegistrationCookieCall(
+      Op, BlockId, OpIdx, Builder, CookieArguments);
+  if (FatalCodePointerResolution)
+    return;
 
   llvm::Value *Target = nullptr;
   const MedOp *Authentication = AArch64AuthenticatedCalls.lookup(&Op);
@@ -1536,6 +1543,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     KnownTarget = Runtime;
     Target = nullptr;
   }
+  if (CookieCheck) {
+    Callee = CookieCheck;
+    KnownTarget = CookieCheck;
+    Target = nullptr;
+    Args = std::move(CookieArguments);
+  }
   if (Op.X87ImportArguments) {
     if (!Callee) {
       syncError() << "med_llvm_emitter: CRT x87 call has no import identity\n";
@@ -1819,6 +1832,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
         CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    if (CookieCheck)
+      Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;
   } else {
     if (!Target) {

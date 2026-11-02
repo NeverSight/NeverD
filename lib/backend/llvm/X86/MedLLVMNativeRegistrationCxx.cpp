@@ -17,6 +17,8 @@
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
+#include "neverd/backend/llvm/RegistrationCxxGuardedFrame.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
@@ -24,6 +26,7 @@
 #include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/X86/X86RegistrationCallResult.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
 #include "neverd/ir/med/X86/X86RegistrationFrame.h"
@@ -47,7 +50,8 @@ namespace neverd {
 bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     const MedFunc &Func, llvm::Function &Parent,
     const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
-    const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges) {
+    const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges,
+    std::function<llvm::Error()> &FinalFrameProof) {
 #ifndef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS
   return false;
 #else
@@ -63,10 +67,27 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   if (!Source.canLowerNativeIR() ||
       Source.Model != WindowsEHNativeSourceModel::X86RegistrationCxx)
     return false;
-  const auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(*Img, EH);
-  if (!Runtime || Mod->getModuleFlag("eh-asynch"))
-    return false;
   const auto &States = *Func.RegistrationStates;
+  auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(*Img, EH);
+  bool Guarded = false;
+  if (!Runtime) {
+    const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(*Img, EH);
+    if (!Handler || Handler->CookieGuards.empty() ||
+        !EH.Cxx->TryBlocks.empty() || !States.IncomingFrameAccesses.empty() ||
+        !States.RuntimeObjectAccesses.empty() ||
+        !States.SecurityCookiesComplete ||
+        llvm::any_of(States.CalleeContracts,
+                     [](const auto &C) { return C.isRuntimeThrow(); }))
+      return false;
+    // This dispatch is conditional. FinalFrameProof must close the actual
+    // generated frame before the module can leave the emitter.
+    Runtime = Handler->Dispatch;
+    Guarded = true;
+  }
+#ifndef LLVM_NEVERD_X86_CXX_EH_MODE
+  if (Mod->getModuleFlag("eh-asynch"))
+    return false;
+#endif
   if (!States.Complete || !States.CallbackStatesComplete ||
       !States.RegistrationLifetimeComplete || !States.ChainOperationsComplete ||
       !States.IncomingFrameAccessesComplete ||
@@ -106,7 +127,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       Catches[{Region, Index}].Object = *Object;
     }
 
-  const auto EntryABI = getX86RegistrationCxxEntryABI(Func, Parent);
+  const auto EntryABI = getX86RegistrationEntryABI(Func, Parent);
   if (!EntryABI)
     return false;
 
@@ -165,7 +186,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     llvm::CallInst *Call;
     const RegistrationCallFrameEffect *Effect;
     const RegistrationBlockState *State;
-    bool Throw;
+    bool DoesNotReturn;
     med_llvm_eh::RegistrationCxxCallABI ABI;
     X86RegistrationCatchIdentity CatchIdentity;
     std::string Name;
@@ -181,6 +202,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   std::map<uint32_t, CleanupPlan> Cleanups;
   std::map<llvm::ReturnInst *, const RegistrationCxxContinuation *> Resumes;
   std::set<llvm::Instruction *> ChainInstructions;
+  std::set<const llvm::Instruction *> ProjectedChainReads;
+  std::vector<registration_frame::CxxSourceCallBinding> GuardedCalls;
+  std::vector<registration_frame::CxxCleanupCallBinding> GuardedCleanups;
+  size_t CookieCalls = 0;
   size_t Work = 0;
   auto *I8 = llvm::Type::getInt8Ty(*Ctx);
   auto *I32 = llvm::Type::getInt32Ty(*Ctx);
@@ -263,6 +288,18 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
             return false;
           Call = const_cast<llvm::CallInst *>(Candidate);
         }
+      if (Guarded)
+        if (States.cookieCheck(Op.Addr, Op.OriginSeq)) {
+          if (Effect || !Call || Call->getParent() != IR || Op.NumInputs != 1 ||
+              !Op.Inputs[0].isConst() ||
+              Op.Inputs[0].ConstVal != States.CookieCheckVA ||
+              !registration_frame::hasExactCookieCallABI(*Call,
+                                                         States.CookieCheckVA))
+            return false;
+          Operations.push_back({Call, &Op, State->BlockId, 3});
+          ++CookieCalls;
+          continue;
+        }
       if (!Effect || Effect->CalleeIndex >= States.CalleeContracts.size() ||
           !Call || Call->getParent() != IR || Call->isMustTailCall() ||
           Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
@@ -285,7 +322,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       }
       const bool Throw = Contract.isThrow();
       const bool ResultUnused =
-          !Throw && !Contract.isInitializer() &&
+          !Effect->DoesNotReturn && !Contract.isInitializer() &&
           hasUnusedX86RegistrationCallResult(Func, *Effect, Work);
       const auto ABI = med_llvm_eh::getCheckedRegistrationCxxCallABI(
           *Img, Contract, *Effect, *Call, Work, ResultUnused);
@@ -311,11 +348,11 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
                               ? (ABI->BorrowsECX ? "ecx_void" : "leaf_void")
                           : ABI->BorrowsECX ? "ecx"
                                             : "leaf");
-      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
-                                                                  ABI->Type))
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+              *Mod, Name, ABI->Type, ABI->Convention))
         return false;
       Calls.push_back(
-          {Call, Effect, State, Throw, *ABI,
+          {Call, Effect, State, Effect->DoesNotReturn, *ABI,
            State->CallbackOnly
                ? CatchOwners->at(Block.Id)
                : X86RegistrationCatchIdentity{UINT32_MAX, UINT32_MAX},
@@ -330,7 +367,8 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
   }
   if ((!Catches.empty() && Resumes.empty()) ||
       Resumes.size() != States.CxxContinuations.size() ||
-      Calls.size() != States.CallFrameEffects.size())
+      Calls.size() != States.CallFrameEffects.size() ||
+      (Guarded && CookieCalls != States.CookieChecks.size()))
     return false;
   const auto CopyOwners = registrationCxxPHICopyOwners(
       *CatchOwners, OriginalBlockMap, PHICopyEdges);
@@ -374,12 +412,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       const auto &Fresh = Relay->Calls[I];
       if (Call.ObjectFrameOffset != Fresh.ObjectFrameOffset ||
           !EH.Registration->cxxSourceFrameOffset(Call.ObjectFrameOffset) ||
-          Call.Leaf.Target != Fresh.Leaf.Target ||
+          !hasSameX86RegistrationLeafEffects(Call.Leaf, Fresh.Leaf, Work) ||
           !Fresh.Leaf.CallerPCWrites.empty())
         return false;
       auto Name = CalleeName(Fresh.Leaf.Target, "cleanup.ecx");
-      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(*Mod, Name,
-                                                                  CleanupType))
+      if (!med_llvm_eh::canMaterializeExternalFunctionDeclaration(
+              *Mod, Name, CleanupType, llvm::CallingConv::X86_ThisCall))
         return false;
       Names.push_back(std::move(Name));
     }
@@ -511,6 +549,9 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     Parent.addParamAttr(1, llvm::Attribute::InReg);
   }
   Parent.addFnAttr(llvm::RewriteWinX86CxxFrameAttribute);
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  Parent.addFnAttr(llvm::RewriteWinX86SynchronousCxxAttribute);
+#endif
   Parent.addFnAttr("frame-pointer", "all");
   Parent.addFnAttr(llvm::Attribute::NoInline);
   Parent.addFnAttr(llvm::Attribute::OptimizeNone);
@@ -602,6 +643,9 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
                                 {llvm::OperandBundleDef("funclet", Cleanup)});
       Call->setCallingConv(llvm::CallingConv::X86_ThisCall);
       Call->setDoesNotThrow();
+      if (Guarded)
+        GuardedCleanups.push_back({Call, Cleanup, Func.Entry, uint32_t(State),
+                                   Plan.Contract->RelayTarget, uint32_t(I)});
     }
     B.CreateCleanupRet(Cleanup, Outer);
     Unwinds.emplace(State, Block);
@@ -624,7 +668,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
         Mod->getOrInsertFunction(Plan.Name, Plan.ABI.Type).getCallee());
     Callee->setCallingConv(Plan.ABI.Convention);
     rewrite_source::setOriginalVA(*Callee, Plan.Effect->Target);
-    if (Plan.Throw)
+    if (Plan.DoesNotReturn)
       Callee->addFnAttr(llvm::Attribute::NoReturn);
     llvm::SmallVector<llvm::Value *, 2> Args;
     if (Plan.ABI.RuntimeThrow) {
@@ -674,15 +718,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       med_llvm_eh::emitWindowsEHProvenanceAnchor(
           B, Model, Role::ProtectedInvoke, EH.CodeRange.Begin,
           Plan.Effect->Address, uint32_t(Level), Plan.Effect->OpSeq, nullptr,
-          Plan.Effect->Target, Plan.Throw);
+          Plan.Effect->Target, Plan.DoesNotReturn);
     } else {
       Call = B.CreateCall(Callee, Args, Bundles);
     }
     Call->setCallingConv(Callee->getCallingConv());
-    if (Plan.Throw)
+    if (Plan.DoesNotReturn)
       Call->setDoesNotReturn();
     Call->copyMetadata(*Old);
-    if (Plan.Throw) {
+    if (Plan.DoesNotReturn) {
       // A noreturn normal edge cannot execute an anchor after the invoke.
       // Bind the terminal source boundary to the call occurrence itself.
       auto *Exit = SourceExits.at(Plan.State->BlockId);
@@ -694,7 +738,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
     for (auto &Operation : Operations)
       if (Operation.IR == Old)
         Operation.IR = Call;
-    if (!Plan.Throw && !Plan.ABI.DiscardResult) {
+    if (!Plan.DoesNotReturn && !Plan.ABI.DiscardResult) {
       llvm::Value *Result = Call;
       if (Plan.ABI.Initializer || Old->getType() != Call->getType()) {
         if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Call))
@@ -744,6 +788,10 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
         auto *Head = B.CreateLoad(I32, Load->getPointerOperand());
         Value = B.CreateLoad(I32, B.CreateIntToPtr(Head, Ptr));
         llvm::cast<llvm::LoadInst>(Value)->setAlignment(llvm::Align(1));
+        if (Guarded) {
+          ProjectedChainReads.insert(Head);
+          ProjectedChainReads.insert(llvm::cast<llvm::Instruction>(Value));
+        }
       } else {
         Value = B.CreatePtrToInt(
             B.CreateInBoundsGEP(
@@ -769,12 +817,34 @@ bool MedLLVMEmitter::emitNativeX86RegistrationCxx(
       Load->setVolatile(true);
     if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Event.IR))
       Store->setVolatile(true);
+    if (Guarded && Event.Kind >= 2) {
+      const auto *Check =
+          States.cookieCheck(Event.Source->Addr, Event.Source->OriginSeq);
+      const auto *Effect =
+          States.callFrameEffect(Event.Source->Addr, Event.Source->OriginSeq);
+      GuardedCalls.push_back(
+          {llvm::cast<llvm::CallBase>(Event.IR), Func.Entry, Event.SourceBlock,
+           Event.Source->Addr, Check ? Check->EndAddress : Effect->EndAddress,
+           Event.Source->OriginSeq,
+           Check ? registration_frame::CxxSourceCallBinding::Kind::Cookie
+                 : registration_frame::CxxSourceCallBinding::Kind::Ordinary});
+    }
   }
   RegistrationChainIR.clear();
   RegistrationIncomingIR.clear();
   RegistrationMemoryIR.clear();
   CallSiteAddrs.clear();
   llvm::removeUnreachableBlocks(Parent);
+  if (Guarded)
+    FinalFrameProof = [Image = Img, Source = &Func, Parent = &Parent,
+                       Frame = FrameAlloca, Layout = *Layout,
+                       Calls = std::move(GuardedCalls),
+                       Cleanups = std::move(GuardedCleanups),
+                       ChainReads = std::move(ProjectedChainReads)] {
+      return registration_frame::validateCxxGuardedFrame(
+          *Image, *Source, *Parent, *Frame, Layout, Calls, Cleanups,
+          ChainReads);
+    };
   Parent.setMetadata(
       windows_eh_md::NativeAttachment,
       llvm::MDNode::get(

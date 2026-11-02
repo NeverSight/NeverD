@@ -20,6 +20,7 @@
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
@@ -987,8 +988,12 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                       "segmentptr");
     }
     auto *LI = Builder.CreateLoad(ValTy, Ptr, "ld");
+    const bool ThreadSelf =
+        CurMedFunc && CurMedFunc->RegistrationStates &&
+        isX86RegistrationThreadSelfLoad(Op, *CurMedFunc->RegistrationStates);
     if (CurMedFunc && CurMedFunc->RegistrationStates && Op.OriginSeq >= 0 &&
-        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default ||
+         ThreadSelf)) {
       auto [It, Inserted] = RegistrationMemoryIR.emplace(
           std::make_pair(Op.Addr, Op.OriginSeq), LI);
       if (!Inserted)
@@ -1002,7 +1007,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (!Inserted)
         It->second = nullptr;
     }
-    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS && !ThreadSelf &&
         Op.OriginSeq >= 0) {
       auto [It, Inserted] = RegistrationChainIR.emplace(
           std::make_pair(Op.Addr, Op.OriginSeq), LI);
@@ -1107,8 +1112,16 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // a pointer-width value and only the conservative writable-data resolver
     // are considered (an ordinary integer store is never an address; a code
     // pointer is already symbolized at source).
-    const bool IsLocalValueTransport =
+    // The local-spill exemption matters only for a fragment or a value the
+    // code-identity resolver might relocate. Ordinary scalar stores must not
+    // audit every frame reload merely to skip an inapplicable code resolver.
+    const bool NeedsLocalValueTransport =
         Op.NumInputs >= 2 &&
+        (occurrenceHasAddressFragmentTaint(Op.Inputs[1]) ||
+         codeIdentityOccurrenceMayRelocate(Op.Inputs[1],
+                                           /*IncludeLayoutCodeOwners=*/true));
+    const bool IsLocalValueTransport =
+        NeedsLocalValueTransport &&
         addressFragmentCanStayInLocalFrameSlot(Op.Inputs[0], Op.Inputs[1].Size);
     if (Op.NumInputs >= 2 && !IsLocalValueTransport)
       if (llvm::Value *Code = tryResolveCodeAddressValue(

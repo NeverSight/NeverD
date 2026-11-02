@@ -31,6 +31,7 @@
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -1243,6 +1244,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 
 LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                               va_t EntryAddr, const std::string &FuncName) {
+  AnalysisRecoveryUsed = false;
+  AnalysisStackWork = 0;
+  AnalysisCallPops.clear();
+  AnalysisTables.clear();
   RelativeRelocationRootSourceCachePrepared = false;
   RelativeRelocationRootSourceCacheImage = nullptr;
   RelativeRelocationRootSourceCacheArch = Arch::Unknown;
@@ -1310,6 +1315,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   DurableCFGRoots.clear();
   CurrentExceptionalEntries.clear();
   RelocationCFGRootSources.clear();
+  LocalAbsoluteRelocationRoots.reset();
   ActiveJumpTableProofRoots.reset();
   ActiveJumpTableCandidateAddr = InvalidVA;
   ActiveJumpTableCandidateProofRank = 0;
@@ -1468,6 +1474,9 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
       if (const auto Prologue =
               coff_loader::getCheckedX86CxxPrologueCall(Img, *Exception))
         AddBoundary(Prologue->Caller.End);
+      if (const auto Prologue =
+              coff_loader::getCheckedX86SEH4PrologueCall(Img, *Exception))
+        AddBoundary(Prologue->Caller.End);
       for (const RegistrationScopeRecord &Scope :
            Exception->Registration->Scopes) {
         AddExceptionalRoot(Scope.FilterVA);
@@ -1589,6 +1598,9 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
     recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork,
                                   ImageScalars);
   }
+
+  if (usesAnalysisRecovery())
+    recoverAnalysisTables(Img, Dec, Func);
 
   // PAGEOFF output provenance is consumed only after lifting, so authenticate
   // it on the final resolver CFG rather than during linear instruction
@@ -2284,6 +2296,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
                           << llvm::utohexstr(Func.Entry) << "\n");
+  Func.AnalysisOnly |= AnalysisRecoveryUsed;
+  if (AnalysisRecoveryUsed)
+    for (auto &Table : Func.JumpTables) {
+      Table.AnalysisOnly = true;
+      Table.SuppressibleRelocationSlots.clear();
+      Table.AuthenticatedTableLoads.clear();
+    }
   canonicalizePrologueStackAllocation(Img, Func);
   return Func;
 }

@@ -42,7 +42,15 @@ std::optional<uint32_t> checkedCallStackPop(const LowFunc &Func,
       if (Bound.Address == Call.Addr && Bound.OpSeq == Call.Seq) {
         if (Runtime || Bound.TargetVA != Call.Inputs[0].Offset ||
             !Bound.HasOrdinaryReturn ||
-            Bound.CalleeKind != RegistrationSEHBoundCall::Kind::RaiseException)
+            (Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::RaiseException &&
+             Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::GetStartupInfoW &&
+             Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::HeapTermination &&
+             Bound.CalleeKind !=
+                 RegistrationSEHBoundCall::Kind::InterlockedCompareExchange &&
+             Bound.CalleeKind != RegistrationSEHBoundCall::Kind::Sleep))
           return std::nullopt;
         Runtime = &Bound;
       }
@@ -64,7 +72,18 @@ std::optional<uint32_t> checkedCallStackPop(const LowFunc &Func,
       return std::nullopt;
     // The source runtime contract owns the stdcall pop. Reflect it before
     // SSA so subsequent callback pushes use the same coordinate as analysis.
-    return 16;
+    const uint32_t Words =
+        Runtime->CalleeKind ==
+                    RegistrationSEHBoundCall::Kind::GetStartupInfoW ||
+                Runtime->CalleeKind == RegistrationSEHBoundCall::Kind::Sleep
+            ? 1
+        : Runtime->CalleeKind ==
+                RegistrationSEHBoundCall::Kind::InterlockedCompareExchange
+            ? 3
+            : 4;
+    return Runtime->Arguments.size() == Words
+               ? std::optional<uint32_t>{Words * 4}
+               : std::nullopt;
   }
   if (!States.CallFrameEffectsComplete)
     return std::nullopt;
@@ -77,7 +96,7 @@ std::optional<uint32_t> checkedCallStackPop(const LowFunc &Func,
     return std::nullopt;
   const auto &Callee = States.CalleeContracts[Effect->CalleeIndex];
   if ((Callee.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf &&
-       !Callee.isInitializer()) ||
+       !Callee.isInitializer() && !Callee.isCxxParent()) ||
       Callee.Target != Effect->Target ||
       Callee.StackPopBytes != Effect->StackPopBytes ||
       Callee.StackPopBytes > UINT16_MAX || Callee.StackPopBytes % 4)
@@ -155,11 +174,13 @@ std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,
        Callee.CalleeKind != RegistrationCalleeFrameContract::Kind::Leaf) ||
       Borrow != (Effect->ECXFrameOffset.has_value() ||
                  Effect->ECXRuntimeObject.has_value()) ||
-      (Callee.isThrow() ? !Callee.DoesNotReturn || Borrow
-                        : (Callee.CalleeKind !=
-                               RegistrationCalleeFrameContract::Kind::Leaf &&
-                           !Callee.isInitializer()) ||
-                              Callee.DoesNotReturn))
+      (Callee.isThrow()
+           ? !Callee.DoesNotReturn || Borrow
+           : (Callee.CalleeKind !=
+                  RegistrationCalleeFrameContract::Kind::Leaf &&
+              !Callee.isInitializer() && !Callee.isCxxParent()) ||
+                 (Callee.DoesNotReturn && (!Callee.isCxxParent() || Borrow ||
+                                           Callee.HasIndependentScalarReturn))))
     return std::nullopt;
 
   size_t Work = 0;

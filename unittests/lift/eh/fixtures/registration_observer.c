@@ -1,3 +1,8 @@
+//===- registration_observer.c - Independent native SEH observations ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
 // Executes the same source entry repeatedly and observes its actual caller PC.
 __declspec(dllimport) void __stdcall RaiseException(unsigned long,
                                                     unsigned long,
@@ -9,7 +14,14 @@ void *_ReturnAddress(void);
 unsigned long __readfsdword(unsigned long);
 #pragma intrinsic(_ReturnAddress)
 #pragma intrinsic(__readfsdword)
-#if REGISTRATION_CASE == 5 || REGISTRATION_CASE == 6 || REGISTRATION_CASE == 12
+#if REGISTRATION_PARENT_POP == 4
+extern int __stdcall registration_entry(int);
+#elif REGISTRATION_PARENT_POP == 16
+extern int __stdcall registration_entry(int, int, int, int);
+#elif REGISTRATION_PARENT_POP == 20
+extern int __stdcall registration_entry(int, int, int, int, int);
+#elif REGISTRATION_CASE == 5 || REGISTRATION_CASE == 6 ||                      \
+    REGISTRATION_CASE == 12
 extern int registration_entry(int);
 #else
 extern int registration_entry(void);
@@ -20,6 +32,51 @@ unsigned registration_parameter_after;
 #endif
 static unsigned observed_caller;
 unsigned registration_trace;
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+__declspec(dllimport) int __cdecl _controlfp_s(unsigned *, unsigned, unsigned);
+static unsigned observed_control_fp;
+#if REGISTRATION_CONTROL_FP_MODE == 2
+#define EXPECTED_CONTROL_FP_PRECISION 0x20000
+#elif REGISTRATION_CONTROL_FP_MODE == 3
+#define EXPECTED_CONTROL_FP_PRECISION 0x10000
+#else
+#define EXPECTED_CONTROL_FP_PRECISION 0
+#endif
+#endif
+#if REGISTRATION_SYNCHRONIZATION
+unsigned registration_atomic_word;
+unsigned registration_atomic_exchange;
+unsigned registration_atomic_results[2];
+#endif
+#if REGISTRATION_THREAD_STACK_BASE
+unsigned registration_thread_stack_base;
+static unsigned expected_thread_stack_base;
+#endif
+#if REGISTRATION_STARTUP_INFO
+__declspec(dllimport) void __stdcall GetStartupInfoW(void *);
+unsigned registration_startup_snapshot[17];
+static unsigned expected_startup[17];
+
+static void prepare_startup_observation(void) {
+  for (unsigned i = 0; i != 17; ++i) {
+    // Standard handles may remain untouched without STARTF_USESTDHANDLES.
+    expected_startup[i] = 0xa5a5a5a5;
+    registration_startup_snapshot[i] = 0;
+  }
+  GetStartupInfoW(expected_startup);
+}
+
+static int startup_observation_matches(void) {
+  int matches = 1;
+  for (unsigned i = 0; i != 17; ++i)
+    if (registration_startup_snapshot[i] != expected_startup[i]) {
+      printf("startup word %u: expected=%08x observed=%08x\n", i,
+             expected_startup[i], registration_startup_snapshot[i]);
+      matches = 0;
+    }
+  return matches;
+}
+#endif
 #if (REGISTRATION_CASE >= 36 && REGISTRATION_CASE <= 49) ||                    \
     (REGISTRATION_CASE == 52 || REGISTRATION_CASE == 57 ||                     \
      REGISTRATION_CASE == 64 || REGISTRATION_CASE == 65 ||                     \
@@ -112,6 +169,35 @@ void mainCRTStartup(void) {
   int value = 0, chain_ok = 1;
   for (; iterations != 4; ++iterations) {
     registration_trace = 0;
+#if REGISTRATION_SYNCHRONIZATION
+    registration_atomic_word = 17;
+    registration_atomic_exchange = 23 + iterations;
+    registration_atomic_results[0] = registration_atomic_results[1] = 0;
+#endif
+#if REGISTRATION_THREAD_STACK_BASE
+    registration_thread_stack_base = 0;
+    // Observe the field directly, independently of the source's Self load.
+    expected_thread_stack_base = __readfsdword(4);
+#if REGISTRATION_SYNCHRONIZATION
+    registration_atomic_exchange = expected_thread_stack_base;
+#endif
+#endif
+#if REGISTRATION_PARENT_POP
+    unsigned stack_before, stack_after;
+    volatile unsigned stack_guard[2] = {0x12345678, 0xa5c39e71};
+    __asm { mov stack_before, esp }
+#endif
+#if REGISTRATION_STARTUP_INFO
+    prepare_startup_observation();
+#endif
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE >= 2
+    // Set a different precision before every call so a dropped or moved
+    // source request cannot pass merely by inheriting the old control word.
+    if (_controlfp_s(
+            0, EXPECTED_CONTROL_FP_PRECISION == 0x20000 ? 0x10000 : 0x20000,
+            0x30000))
+      break;
+#endif
 #if (REGISTRATION_CASE >= 36 && REGISTRATION_CASE <= 49) ||                    \
     (REGISTRATION_CASE == 52 || REGISTRATION_CASE == 57 ||                     \
      REGISTRATION_CASE == 64 || REGISTRATION_CASE == 65 ||                     \
@@ -123,7 +209,13 @@ void mainCRTStartup(void) {
 #if REGISTRATION_CASE >= 48 && REGISTRATION_CASE <= 51
     registration_helper_visits = 0;
 #endif
-#if REGISTRATION_CASE == 6
+#if REGISTRATION_PARENT_POP == 4
+    value = registration_entry(7);
+#elif REGISTRATION_PARENT_POP == 16
+    value = registration_entry(7, 31, 47, 63);
+#elif REGISTRATION_PARENT_POP == 20
+    value = registration_entry(7, 31, 47, 63, 79);
+#elif REGISTRATION_CASE == 6
     registration_parameter_after = 0;
     value = registration_call_entry();
     registration_trace += registration_parameter_after * 10;
@@ -133,12 +225,55 @@ void mainCRTStartup(void) {
     value = registration_entry();
 #endif
     chain_ok &= __readfsdword(0) == chain;
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+    if (_controlfp_s(&observed_control_fp, 0, 0))
+      break;
+#if REGISTRATION_CONTROL_FP_MODE >= 2
+    if ((observed_control_fp & 0x30000) != EXPECTED_CONTROL_FP_PRECISION)
+      break;
+#endif
+#endif
+#if REGISTRATION_PARENT_POP
+    __asm { mov stack_after, esp }
+    chain_ok &= stack_before == stack_after && stack_guard[0] == 0x12345678 &&
+                stack_guard[1] == 0xa5c39e71;
+#endif
+#if REGISTRATION_STARTUP_INFO
+    if (!startup_observation_matches())
+      break;
+#endif
+#if REGISTRATION_SYNCHRONIZATION
+    if (registration_atomic_results[0] != 17 ||
+        registration_atomic_results[1] != registration_atomic_exchange ||
+        registration_atomic_word != registration_atomic_exchange) {
+      printf("atomic observation: first=%u second=%u word=%u expected=%u\n",
+             registration_atomic_results[0], registration_atomic_results[1],
+             registration_atomic_word, registration_atomic_exchange);
+      break;
+    }
+#endif
+#if REGISTRATION_THREAD_STACK_BASE
+    if (registration_thread_stack_base != expected_thread_stack_base) {
+      printf("thread StackBase observation: got=%08x expected=%08x\n",
+             registration_thread_stack_base, expected_thread_stack_base);
+      break;
+    }
+#endif
     if (value != 7 || !chain_ok || registration_trace != EXPECTED_TRACE)
       break;
   }
   printf("neverd-registration-rewrite: value=%d caller=%08x entry=%08x "
-         "chain=%d iterations=%u trace=%u\n",
+         "chain=%d iterations=%u trace=%u"
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+         " fp=%08x"
+#endif
+         "\n",
          value, observed_caller, (unsigned)&registration_entry, chain_ok,
-         iterations, registration_trace);
+         iterations, registration_trace
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_MODE
+         ,
+         observed_control_fp
+#endif
+  );
   ExitProcess(value == 7 && chain_ok && iterations == 4 ? 0 : 1);
 }

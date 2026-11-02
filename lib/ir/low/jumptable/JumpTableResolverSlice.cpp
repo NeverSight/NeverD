@@ -19,6 +19,7 @@
 
 #include "AffineFrameState.h"
 #include "JumpTableResolverDetail.h"
+#include "ResolverBlockMemo.h"
 #include "ResolverDefinitionCache.h"
 #include "ResolverFiniteState.h"
 #include "ResolverLaneView.h"
@@ -34,6 +35,8 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
+#include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/solver/BitVectorSolver.h"
@@ -122,72 +125,7 @@ auto ascendingLowerBound(
   return Values.lower_bound(K);
 }
 
-// Resolver keys begin with a dense block ID. Split their ordered indexes by
-// that already known coordinate rather than searching every block's states in
-// one tree. Full keys remain in each shard, so collisions only cost another
-// ordered lookup. Nodes/iterators stay stable across recursive insertions, and
-// size() retains the global count used by the unchanged evidence charges.
-template <typename Key, typename Value> class ResolverBlockMemo {
-  using Map = std::map<Key, Value>;
-  static constexpr size_t Shards = 64;
-  std::array<Map, Shards> Maps;
-  std::array<bool, Shards> Used{};
-  std::vector<size_t> Active;
-  size_t Count = 0;
-
-  static size_t shard(const Key &K) {
-    return static_cast<unsigned>(std::get<0>(K)) % Shards;
-  }
-
-public:
-  struct Iterator {
-    Map *Owner = nullptr;
-    typename Map::iterator Position;
-    auto *operator->() const { return &*Position; }
-    bool operator==(const Iterator &Other) const {
-      return Owner == Other.Owner && (!Owner || Position == Other.Position);
-    }
-  };
-
-  size_t size() const { return Count; }
-  Iterator end() const { return {}; }
-  Iterator find(const Key &K) {
-    Map &M = Maps[shard(K)];
-    const auto I = M.find(K);
-    return I == M.end() ? end() : Iterator{&M, I};
-  }
-  template <typename... Args>
-  std::pair<Iterator, bool> try_emplace(const Key &K, Args &&...Values) {
-    const size_t S = shard(K);
-    Map &M = Maps[S];
-    const auto [I, Inserted] = M.try_emplace(K, std::forward<Args>(Values)...);
-    if (Inserted) {
-      if (!Used[S]) {
-        Active.push_back(S);
-        Used[S] = true;
-      }
-      ++Count;
-    }
-    return {{&M, I}, Inserted};
-  }
-  void erase(Iterator I) {
-    I.Owner->erase(I.Position);
-    --Count;
-  }
-  size_t erase(const Key &K) {
-    const size_t Removed = Maps[shard(K)].erase(K);
-    Count -= Removed;
-    return Removed;
-  }
-  void clear() {
-    for (size_t S : Active) {
-      Maps[S].clear();
-      Used[S] = false;
-    }
-    Active.clear();
-    Count = 0;
-  }
-};
+using detail::ResolverBlockMemo;
 
 bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC || lowAArch64AddressLoadShapeIsValid(Op))
@@ -1176,7 +1114,9 @@ static ResolverValue resolverConstant(
     uint64_t Value, uint16_t Size, ConstantAddressProvenance Provenance,
     uint64_t AddressOwnerVA = InvalidVA,
     std::optional<ResolverScalarModelOrigin> ScalarModelOrigin = std::nullopt) {
-  if (Size == 0 || Size > sizeof(uint64_t))
+  // NdVar constants store an unsigned 64-bit payload, including the literal
+  // shift counts in x64's 128-bit dividend construction.
+  if (Size == 0 || Size > 2 * sizeof(uint64_t))
     return {};
   auto E = std::make_shared<ResolverValueExpr>();
   E->K = ResolverValueExpr::Kind::Constant;
@@ -1406,8 +1346,10 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     Memo.emplace(Source.get(), Result);
     return Result;
   };
-  std::function<ResolverValue(const ResolverValue &, unsigned)> Extend =
-      [&](const ResolverValue &Node, unsigned Depth) -> ResolverValue {
+  // This recursive walk never escapes. Keep its closure on the stack instead
+  // of allocating a type-erased self-reference for every width query.
+  auto Extend = [&](auto &&Self, const ResolverValue &Node,
+                    unsigned Depth) -> ResolverValue {
     if (Depth > limits::kMaxJumpTableGuardExpressionDepth)
       return incomplete();
     if (!consume())
@@ -1423,7 +1365,8 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     if (Node->K == ResolverValueExpr::Kind::Zero) {
       return remember(Node, budgetedResolverZero(Size, consume));
     }
-    if (Node->K == ResolverValueExpr::Kind::Constant) {
+    if (Node->K == ResolverValueExpr::Kind::Constant &&
+        (!Signed || Size <= sizeof(uint64_t))) {
       uint64_t Value = Node->Constant & resolverWidthMask(Node->Size);
       if (Signed && Node->Size < sizeof(uint64_t)) {
         const unsigned Bits = Node->Size * 8;
@@ -1437,7 +1380,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
                                                Node->ScalarModelOrigin));
     }
     if (Node->K == ResolverValueExpr::Kind::Constraint && Node->Input) {
-      ResolverValue Extended = Extend(Node->Input, Depth + 1);
+      ResolverValue Extended = Self(Self, Node->Input, Depth + 1);
       if (!Extended)
         return {};
       // Equality and inequality survive either injective extension. Unsigned
@@ -1465,7 +1408,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
       std::vector<ResolverValue> Inputs;
       Inputs.reserve(Node->Inputs.size());
       for (const ResolverValue &Arm : Node->Inputs) {
-        ResolverValue Extended = Extend(Arm, Depth + 1);
+        ResolverValue Extended = Self(Self, Arm, Depth + 1);
         if (!Extended || !consume())
           return {};
         Inputs.push_back(std::move(Extended));
@@ -1482,7 +1425,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     if (Node->Input &&
         ((!Signed && Node->K == ResolverValueExpr::Kind::ZeroExtend) ||
          (Signed && Node->K == ResolverValueExpr::Kind::SignExtend))) {
-      ResolverValue Result = Extend(Node->Input, Depth + 1);
+      ResolverValue Result = Self(Self, Node->Input, Depth + 1);
       return Result ? remember(Node, std::move(Result)) : ResolverValue{};
     }
     if (!consume(4))
@@ -1495,7 +1438,7 @@ resolverExtend(const ResolverValue &Input, uint16_t Size, bool Signed,
     E->Input = Node;
     return remember(Node, std::move(E));
   };
-  return Extend(Input, 0);
+  return Extend(Extend, Input, 0);
 }
 
 static bool isRoleNeutralNumericOccurrence(const ResolverValue &Value) {
@@ -1748,15 +1691,29 @@ static bool provesDirectUnsignedModuloRecipe(
       return false;
     Remainder = Narrow;
   }
+  // A low-lane extraction retains an unsigned remainder when the complete
+  // range fits the selected lane. This includes x86's double-width DIV result.
+  if (Ctx.op(Remainder) == SymOp::Extract && Ctx.numOperands(Remainder) == 1 &&
+      Ctx.node(Remainder).Aux == 0 && Ctx.width(Remainder) <= 64 &&
+      (Ctx.width(Remainder) == 64 ||
+       Divisor <= (uint64_t{1} << Ctx.width(Remainder)))) {
+    const auto Wide = Ctx.operand(Remainder, 0);
+    if (Ctx.op(Wide) == SymOp::URem && Ctx.width(Wide) <= 128)
+      Remainder = Wide;
+  }
   const uint32_t Width = Ctx.width(Remainder);
-  if (Width < 2 || Width > 64)
+  if (Width < 2 || Width > 128)
     return false;
   if (Width < 64 && Divisor >= (uint64_t{1} << Width))
     return false;
-  if (NormalizedRemainder)
-    *NormalizedRemainder = Remainder;
-  if (NormalizedWidth)
-    *NormalizedWidth = Width;
+  // Wider words are admitted only by the direct remainder theorem. Keep
+  // reciprocal matching and its ring arithmetic on the original word domain.
+  if (Width <= 64) {
+    if (NormalizedRemainder)
+      *NormalizedRemainder = Remainder;
+    if (NormalizedWidth)
+      *NormalizedWidth = Width;
+  }
 
   if (Ctx.op(Remainder) != SymOp::URem || Ctx.numOperands(Remainder) != 2)
     return false;
@@ -5407,7 +5364,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // Pointer-named opaque values and merges have allocation-dependent lengths,
   // hence allocation-dependent evidence charges. Do not cache those batches.
   bool UsedPointerSymbol = false;
-  bool UsedImageContents = false;
+  bool UsedCurrentImageEvidence = false;
   // Graph construction is only the first half of one evidence query.  Keep
   // charging the same candidate-local account while reconstructing frame,
   // memory and value state, and while matching/symbolizing the resulting DAG.
@@ -5682,11 +5639,278 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
            A.Container == B.Container;
   };
 
+  auto importedCopyHasCallerCleanup = [&](const LowOp &Call) {
+    // An ELF object's undefined C memcpy/memmove has no hidden result or
+    // callee-popped arguments. The loader's callable extern identity and
+    // this exact native CALL must agree: a local spelling, a data import,
+    // an import-plus-addend or a mutable IAT slot supplies no such receipt.
+    if (CurrentImg->Arch != Arch::X86 ||
+        CurrentImg->Format != BinaryFormat::ELF || !CurrentImg->IsRelocatable ||
+        CurrentImg->getPointerSize() != 4 || Call.Opcode != NdOp::CALL ||
+        Call.NumInputs != 1 || !Call.Inputs[0].isConst() ||
+        Call.Inputs[0].Size != 4 || Call.Addr > UINT32_MAX - 5 ||
+        Call.Inputs[0].Offset > UINT32_MAX)
+      return false;
+    if (!consumeEvidence(orderedSetLookupWork(
+            CurrentImg->ObjectExternFunctionEntries.size())) ||
+        !CurrentImg->ObjectExternFunctionEntries.count(Call.Inputs[0].Offset))
+      return false;
+    if (!consumeEvidenceSum({orderedSetLookupWork(Insns.size()),
+                             CurrentImg->Imports.size(),
+                             CurrentImg->Segments.size(), 12}))
+      return false;
+    const auto It = Insns.find(Call.Addr);
+    if (It == Insns.end())
+      return false;
+    const auto &Record = It->second;
+    if (Record.Size != 5 || !Record.IsCall || Record.IsInstructionGuard ||
+        Record.IsBranch || Record.IsRet || Record.IsOpaqueTerminator ||
+        Record.IsResumableTerminator || Record.Ops.size() != 1 ||
+        Record.Ops.front().Seq != Call.Seq)
+      return false;
+    const Import *Match = nullptr;
+    for (const Import &Imp : CurrentImg->Imports)
+      if (Imp.IATAddr == Call.Inputs[0].Offset) {
+        if (Match)
+          return false;
+        Match = &Imp;
+      }
+    if (!Match || Match->IsDelayImport ||
+        (Match->Name != "memcpy" && Match->Name != "memmove"))
+      return false;
+    const uint8_t *Bytes = CurrentImg->readVA(Call.Addr, 5);
+    return Bytes && Bytes[0] == 0xe8 &&
+           uint32_t(Call.Addr + 5 + readLE<uint32_t>(Bytes + 1)) ==
+               Call.Inputs[0].Offset;
+  };
+  bool CheckedPhysicalEntry = false;
+  std::optional<coff_loader::X86CxxPrologueCall> PhysicalEntry;
+  auto physicalEntryAt =
+      [&](const LowOp &Call) -> const coff_loader::X86CxxPrologueCall * {
+    if (CurrentImg->Arch != Arch::X86 || !CurrentImg->isCOFF())
+      return nullptr;
+    if (!CheckedPhysicalEntry) {
+      CheckedPhysicalEntry = true;
+      const auto Check =
+          [&]() -> std::optional<coff_loader::X86CxxPrologueCall> {
+        if (!consumeEvidenceSum(
+                {orderedSetLookupWork(Insns.size()),
+                 orderedSetLookupWork(Graph.InsnToBlock.size())}))
+          return std::nullopt;
+        const auto EntryLocation = Graph.InsnToBlock.find(CurrentFuncEntry);
+        if (EntryLocation == Graph.InsnToBlock.end())
+          return std::nullopt;
+        const auto &Entry = Graph.Blocks[EntryLocation->second];
+        if (Entry.Start != CurrentFuncEntry || !Entry.Preds.empty())
+          return std::nullopt;
+        LowBlock Prefix;
+        Prefix.StartAddr = Prefix.EndAddr = CurrentFuncEntry;
+        auto Insn = Insns.find(CurrentFuncEntry);
+        for (unsigned I = 0; I != 3; ++I, ++Insn) {
+          if (Insn == Insns.end() || Insn->first != Prefix.EndAddr)
+            return std::nullopt;
+          const auto &Record = Insn->second;
+          if (!Record.Size || Record.Size > InvalidVA - Record.Addr ||
+              Record.Ops.size() > limits::ir::kMaxRegistrationSharedPrefixOps -
+                                      Prefix.Ops.size() ||
+              Prefix.Ops.size() > Entry.Ops.size() ||
+              Record.Ops.size() > Entry.Ops.size() - Prefix.Ops.size() ||
+              !consumeEvidenceProduct(Record.Ops.size() + 1, 3) ||
+              !std::equal(Record.Ops.begin(), Record.Ops.end(),
+                          Entry.Ops.begin() + Prefix.Ops.size()))
+            return std::nullopt;
+          Prefix.InstructionBoundaries.push_back(
+              makeInstructionBoundary(Record, Prefix.Ops.size()));
+          Prefix.Ops.insert(Prefix.Ops.end(), Record.Ops.begin(),
+                            Record.Ops.end());
+          Prefix.EndAddr = Record.Addr + Record.Size;
+        }
+        if (Prefix.Ops.empty() || Prefix.Ops.back().Opcode != NdOp::CALL)
+          return std::nullopt;
+        // The graph cache contains structural inputs, not mutable image
+        // bytes. Even a failed physical check must be replayed next time.
+        UsedCurrentImageEvidence = true;
+        if (!consumeEvidence(Graph.RootBlocks.size()))
+          return std::nullopt;
+        for (int Root : Graph.RootBlocks)
+          if (Graph.Blocks[Root].Start > Prefix.StartAddr &&
+              Graph.Blocks[Root].Start < Prefix.EndAddr)
+            return std::nullopt;
+        size_t Work = 0;
+        const size_t Limit = GraphWorkBudget
+                                 ? *GraphWorkBudget
+                                 : std::numeric_limits<size_t>::max();
+        auto Result = getCheckedX86CxxPhysicalProloguePrefix(
+            *CurrentImg, CurrentFuncEntry, Prefix, ProofRoots, Work, Limit);
+        if (!consumeEvidence(Work))
+          return std::nullopt;
+        if (!Result && Work == Limit) {
+          EvidenceBudgetExhausted = true;
+          Complete = false;
+        }
+        return Result;
+      };
+      PhysicalEntry = Check();
+    }
+    return PhysicalEntry && PhysicalEntry->CallVA == Call.Addr ? &*PhysicalEntry
+                                                               : nullptr;
+  };
+  std::map<std::pair<va_t, int>, std::optional<int64_t>> IndependentCallPops;
+  auto independentCallPop = [&](const LowOp &Call) -> std::optional<int64_t> {
+    if (CurrentImg->Arch != Arch::X86 || !CurrentImg->isCOFF() ||
+        CurrentImg->getPointerSize() != sizeof(uint32_t) ||
+        Call.Opcode != NdOp::CALL || Call.NumInputs != 1 ||
+        !Call.Inputs[0].isConst() || Call.Inputs[0].Size != sizeof(uint32_t) ||
+        Call.Output != NdVar::reg(TRI.IntReturnReg, sizeof(uint32_t)) ||
+        Call.Seq != 0 || Call.ConsumesX87Argument || Call.X87ScratchSlots ||
+        Call.X87ImportArguments ||
+        Call.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        Call.MemoryOrdering != NdMemoryOrdering::None ||
+        (PhysicalEntry &&
+         PhysicalEntry->Helper.contains(Call.Inputs[0].Offset)))
+      return std::nullopt;
+    if (usesAnalysisRecovery()) {
+      UsedCurrentImageEvidence = true;
+      return analysisCallStackDelta(Call);
+    }
+    // Both negative and positive answers depend on current caller/callee
+    // bytes. The structural graph may be reused; no value batch may retain
+    // this image-dependent result beyond the current query transaction.
+    UsedCurrentImageEvidence = true;
+    // Raw integer/callee graph builds have their own cumulative proof owner.
+    // They cannot recursively start this optional returning-stack analysis
+    // with a fresh value-query allowance. Normal queries after the scoped
+    // build returns can use it, with no saved negative batch from that mode.
+    if (SkipX87StackFixup)
+      return std::nullopt;
+    constexpr size_t KeyWork = 2;
+    if (!consumeMemoLookup(KeyWork, IndependentCallPops.size()))
+      return std::nullopt;
+    const auto Key = std::make_pair(Call.Addr, Call.Seq);
+    if (const auto It = IndependentCallPops.find(Key);
+        It != IndependentCallPops.end())
+      return It->second;
+    if (!consumeMemoInsert(KeyWork, IndependentCallPops.size()))
+      return std::nullopt;
+    auto &Result = IndependentCallPops.emplace(Key, std::nullopt).first->second;
+    if (!consumeEvidenceSum({orderedSetLookupWork(Insns.size()), 16}))
+      return std::nullopt;
+    const auto It = Insns.find(Call.Addr);
+    if (It == Insns.end())
+      return std::nullopt;
+    const auto &Record = It->second;
+    if (Record.Size != 5 || !Record.IsCall || Record.IsCond ||
+        Record.IsIndirect || Record.IsBranch || Record.IsRet ||
+        Record.IsOpaqueTerminator || Record.IsResumableTerminator ||
+        Record.IsInstructionGuard || Record.IsNoReturnCall ||
+        Record.Mode != InstructionMode::Default ||
+        Record.TargetMode != LowInstructionTargetMode::Preserve ||
+        Record.Immediate != Call.Inputs[0].Offset || Record.Ops.size() != 1 ||
+        Record.Ops.front() != Call)
+      return std::nullopt;
+    size_t Work = 0;
+    size_t Limit =
+        GraphWorkBudget ? *GraphWorkBudget : std::numeric_limits<size_t>::max();
+    if (hasCheckedX86RegistrationDirectCallBytes(
+            *CurrentImg, Call.Addr, Call.Inputs[0].Offset, Work, Limit)) {
+      Result = getCheckedX86IndependentCalleeStackPop(
+          *CurrentImg, Call.Inputs[0].Offset, Work, Limit,
+          AbsoluteRelocationRoots);
+      if (!Result && Work < Limit) {
+        if (!consumeEvidence(Work))
+          return std::nullopt;
+        Work = 0;
+        // A scalar input fixed within this one physical caller block can
+        // select an immutable tail-dispatch entry. The callee remains
+        // unbounded in every other invocation; no synthetic CFG root is made.
+        if (!consumeEvidenceSum({orderedSetLookupWork(Graph.InsnToBlock.size()),
+                                 orderedSetLookupWork(Insns.size())}))
+          return std::nullopt;
+        const auto Location = Graph.InsnToBlock.find(Call.Addr);
+        if (Location != Graph.InsnToBlock.end()) {
+          const auto &Block = Graph.Blocks[Location->second];
+          LowBlock Prefix;
+          Prefix.StartAddr = Prefix.EndAddr = Block.Start;
+          auto Source = Insns.find(Block.Start);
+          size_t Count = 0;
+          bool Valid = true;
+          for (; Source != Insns.end() && Source->first <= Call.Addr;
+               ++Source) {
+            const auto &Insn = Source->second;
+            if (Source->first != Prefix.EndAddr || !Insn.Size ||
+                Insn.Size > InvalidVA - Insn.Addr || Count > Block.Ops.size() ||
+                Insn.Ops.size() > Block.Ops.size() - Count ||
+                !consumeEvidenceProduct(Insn.Ops.size() + 1, 3) ||
+                !std::equal(Insn.Ops.begin(), Insn.Ops.end(),
+                            Block.Ops.begin() + Count)) {
+              Valid = false;
+              break;
+            }
+            Prefix.InstructionBoundaries.push_back(
+                makeInstructionBoundary(Insn, Prefix.Ops.size()));
+            Prefix.Ops.insert(Prefix.Ops.end(), Insn.Ops.begin(),
+                              Insn.Ops.end());
+            Prefix.EndAddr = Insn.Addr + Insn.Size;
+            Count += Insn.Ops.size();
+          }
+          if (!consumeEvidence(Graph.RootBlocks.size()))
+            return std::nullopt;
+          for (int Root : Graph.RootBlocks)
+            if (Graph.Blocks[Root].Start > Prefix.StartAddr &&
+                Graph.Blocks[Root].Start < Prefix.EndAddr)
+              Valid = false;
+          Limit = GraphWorkBudget ? *GraphWorkBudget
+                                  : std::numeric_limits<size_t>::max();
+          if (Valid && Prefix.EndAddr == Call.Addr + Record.Size)
+            Result = getCheckedX86IndependentIndexedCallStackPop(
+                *CurrentImg, Prefix, ProofRoots, Work, Limit);
+        }
+      }
+    }
+    if (!consumeEvidence(Work))
+      return std::nullopt;
+    if (!Result && Work == Limit) {
+      EvidenceBudgetExhausted = true;
+      Complete = false;
+    }
+    return Result;
+  };
+  auto callPreservesLane = [&](const LowOp &Call, const LaneView &Query) {
+    if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
+      return false;
+    const uint64_t Begin = Query.Container + Query.Begin;
+    if (Query.Size > InvalidVA - Begin)
+      return false;
+    const uint64_t End = Begin + Query.Size;
+    const auto *Entry = physicalEntryAt(Call);
+    // This helper is not an ordinary ABI callee at a later occurrence either.
+    // Only the checked entry can project coordinates; other calls into the
+    // known helper must forget its frame/result registers until a local
+    // definition reestablishes them.
+    const bool CallsPhysicalHelper =
+        PhysicalEntry && Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
+        Call.Inputs[0].isConst() &&
+        PhysicalEntry->Helper.contains(Call.Inputs[0].Offset);
+    if ((Entry || CallsPhysicalHelper) && Query.Space == VnodeSpace::REG)
+      for (uint64_t Register :
+           {TRI.StackPointer, TRI.FramePointer, TRI.IntReturnReg})
+        if (Begin < Register + TRI.PointerSize && Register < End)
+          return false;
+    if (callPreservesBytes(Call, Begin, Query.Size))
+      return true;
+    return Query.Space == VnodeSpace::REG && Begin >= TRI.StackPointer &&
+           End <= TRI.StackPointer + TRI.PointerSize &&
+           (importedCopyHasCallerCleanup(Call) ||
+            independentCallPop(Call) == 0);
+  };
+
   using LaneKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t>;
   constexpr size_t LaneKeyWork = 5;
-  using ValueKey = std::tuple<int, int, uint8_t, uint64_t, uint16_t, bool>;
-  constexpr size_t ValueKeyWork = 6;
-  using MemoryKey = std::tuple<int, int, uint64_t, int64_t, uint16_t, bool>;
+  using ValueKey =
+      std::tuple<int, int, uint8_t, uint64_t, uint16_t, bool, bool>;
+  constexpr size_t ValueKeyWork = 7;
+  using MemoryKey =
+      std::tuple<int, int, uint64_t, int64_t, uint16_t, bool, bool>;
 
   using ResolverWalks = detail::ResolverPendingWalks;
   using ResolverPendingRange = ResolverWalks::Pending;
@@ -5727,13 +5951,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   bool ResolvingPredicate = false;
 
   std::function<ResolverResult(int, int, const NdVar &, unsigned)> resolveValue;
-  std::function<ResolverResult(int, int, uint64_t, int64_t, uint16_t, unsigned)>
+  std::function<ResolverResult(int, int, uint64_t, int64_t, uint16_t, bool,
+                               unsigned)>
       resolveMemory;
   const JumpTableValueQuery *ActiveFrameMemoryQuery = nullptr;
   const JumpTableValueQuery *ActiveValueQuery = nullptr;
   std::optional<bool> MemoOccurrenceRootMode;
   std::optional<bool> MemoPrivateFrameCallMode;
   std::optional<bool> MemoScalarConstantFoldMode;
+  std::optional<bool> MemoFrameReadMode;
+  bool AllowFrameReadObservations = false;
   std::optional<ResolverPredicateMode> MemoEdgeConstraintMode;
   auto predicateMode = [](const JumpTableValueQuery *Query) {
     if (Query &&
@@ -5796,6 +6023,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return false;
     if (A == B)
       return true;
+    // A constraint narrows the paths on which its input is feasible, without
+    // changing that input's bits. Match the lane beneath existing constraints
+    // when applying another edge predicate, while retaining the constrained
+    // graph as the value to refine.
+    if (A && A->K == ResolverValueExpr::Kind::Constraint && A->Input &&
+        A->Input->Size == A->Size)
+      return sameResolverValueForEdge(A->Input, B, Depth + 1);
+    if (B && B->K == ResolverValueExpr::Kind::Constraint && B->Input &&
+        B->Input->Size == B->Size)
+      return sameResolverValueForEdge(A, B->Input, Depth + 1);
     // A named predecessor merge is the same block-entry lane throughout one
     // immutable graph snapshot even when two recursive reconstructions have
     // accumulated a different prefix of its back-edge arms.  The symbolic
@@ -5880,6 +6117,52 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       }
     }
     return false;
+  };
+
+  // A merged wide register can contain only zero-extended narrow values even
+  // though extension distributes over merges and constraints. Check every
+  // arm before relating a narrow comparison to that complete wide value.
+  auto hasZeroUpperBytes = [&](const ResolverValue &Value, uint16_t LowSize) {
+    std::map<const ResolverValueExpr *, bool> Memo;
+    std::function<bool(const ResolverValue &, unsigned)> Visit =
+        [&](const ResolverValue &Node, unsigned Depth) -> bool {
+      if (Depth > MaxResolverDepth) {
+        markResolverDepthIncomplete();
+        return false;
+      }
+      if (!consumeEvidence(8) || !Node || Node->Size == 0 ||
+          Node->Size > sizeof(uint64_t))
+        return false;
+      if (Node->Size <= LowSize)
+        return true;
+      if (!consumeEvidence(orderedSetLookupWork(Memo.size())))
+        return false;
+      if (const auto It = Memo.find(Node.get()); It != Memo.end())
+        return It->second;
+      bool Result = false;
+      if (Node->K == ResolverValueExpr::Kind::Zero)
+        Result = true;
+      else if (Node->K == ResolverValueExpr::Kind::Constant)
+        Result = (Node->Constant & ~resolverWidthMask(LowSize)) == 0;
+      else if ((Node->K == ResolverValueExpr::Kind::Constraint ||
+                Node->K == ResolverValueExpr::Kind::ZeroExtend) &&
+               Node->Input && Node->Input->Size <= Node->Size)
+        Result = Visit(Node->Input, Depth + 1);
+      else if (Node->K == ResolverValueExpr::Kind::Merge &&
+               !Node->Inputs.empty()) {
+        Result = true;
+        for (const ResolverValue &Arm : Node->Inputs)
+          if (!Arm || Arm->Size != Node->Size || !Visit(Arm, Depth + 1)) {
+            Result = false;
+            break;
+          }
+      }
+      if (!consumeEvidence(orderedSetLookupWork(Memo.size()) + 5))
+        return false;
+      Memo.emplace(Node.get(), Result);
+      return Result;
+    };
+    return Visit(Value, 0);
   };
 
   // Exact equality and unsigned-order predicates filter the lane they compare.
@@ -5989,9 +6272,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Compared->Inputs[1]->Constant == 0)
       Compared = Compared->Inputs[0];
     // At the same width, (x - c) == 0 is exactly x == c, including
-    // modular wraparound. This is the ZF half of an inclusive guard;
-    // unlike an ordering comparison, it needs no no-wrap assumption.
-    if (JoinedGuard && Compared && Constant &&
+    // modular wraparound. This includes a CMP zero flag in every predicate
+    // query mode; unlike ordering, the identity needs no no-wrap assumption.
+    if (Compared && Constant &&
         (Predicate->Opcode == NdOp::INT_EQUAL ||
          Predicate->Opcode == NdOp::INT_NOTEQUAL) &&
         Constant->K == ResolverValueExpr::Kind::Constant &&
@@ -6031,6 +6314,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       // extension. Constrain that exact lane, then re-extend it for the use.
       MatchedValue = Value.Value->Input;
       Reextend = true;
+    } else if (JoinedGuard && Compared->Size < Value.Value->Size &&
+               Constant->Size == Compared->Size) {
+      if (!hasZeroUpperBytes(Value.Value, Compared->Size))
+        return Value;
+      const ResolverValue Low =
+          resolverSlice(Value.Value, 0, Compared->Size, consumeEvidence,
+                        &QueryResolverAnalysisIncomplete);
+      if (!Low)
+        return resolverInvalid();
+      if (!sameResolverValueForEdge(Compared, Low, 0))
+        return Value;
+      // The low lane identifies the compared value, and every incoming arm
+      // has zero high bytes. Apply the unsigned constraint to the original
+      // wide graph so none of its existing path predicates are discarded.
     } else {
       return Value;
     }
@@ -6073,6 +6370,36 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   auto constrainOnCondition = [&](ResolverResult Value,
                                   ResolverResult Condition, bool Taken) {
     return constrainPredicate(std::move(Value), std::move(Condition), Taken, 0);
+  };
+
+  // Register transport, reaching frame stores and equivalent reloads share
+  // the condition under which each predecessor's value reaches the use.
+  auto constrainOnEdge = [&](ResolverResult Value, int Pred, int Successor,
+                             unsigned Depth) -> ResolverResult {
+    const ResolverFlowBlock &PredBlock = Graph.Blocks[Pred];
+    if (ResolvingPredicate || Value.Kind != ResolverResultKind::Value ||
+        !Value.Value || !PredBlock.LastInsn)
+      return Value;
+    if (!consumeEvidence(PredBlock.LastInsn->Ops.size()))
+      return resolverInvalid();
+    const auto Edges = resolverConditionEdges(*PredBlock.LastInsn);
+    if (!Edges)
+      return Value;
+    const bool IsTaken = Graph.Blocks[Successor].Start == Edges->TrueTarget;
+    const bool IsFalse = Graph.Blocks[Successor].Start == Edges->FalseTarget;
+    if (IsTaken == IsFalse)
+      return Value;
+    if (!consumeProofPointLookup())
+      return resolverInvalid();
+    const LowOp &Branch = *Edges->Condition;
+    const auto Point = Graph.findPoint({Branch.Addr, Branch.Seq});
+    if (!Point || Point->first != Pred ||
+        predicateCannotFilter(Pred, Point->second, Branch.Inputs[1]))
+      return Value;
+    ResolverResult Condition =
+        resolvePredicate(Pred, Point->second, Branch.Inputs[1], Depth + 1);
+    return constrainOnCondition(std::move(Value), std::move(Condition),
+                                IsTaken);
   };
 
   auto supportsRelocatedLiteral = [&](uint16_t Size) {
@@ -6341,16 +6668,31 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       const LowOp &Def = B.Ops[I];
       if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) {
-        const bool QueryPreserved = [&] {
-          if (TRI.isStackPointer(BaseReg))
-            return true;
-          if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
-            return false;
-          const uint64_t Begin = Query.Container + Query.Begin;
-          if (Query.Size > InvalidVA - Begin)
-            return false;
-          return callPreservesBytes(Def, Begin, Query.Size);
-        }();
+        if (const auto *Entry = physicalEntryAt(Def);
+            Entry &&
+            (BaseReg == TRI.FramePointer || BaseReg == TRI.StackPointer ||
+             BaseReg == TRI.IntReturnReg)) {
+          // The checked physical protocol establishes EBP from pre-call ESP;
+          // its ESP and EAX are exact offsets from that same frame origin.
+          const int64_t Offset =
+              BaseReg == TRI.StackPointer   ? Entry->PostCallStackOffset
+              : BaseReg == TRI.IntReturnReg ? Entry->RegistrationOffset
+                                            : 0;
+          Found = true;
+          Result = FrameStates.adjust(
+              resolveFrameBase(Block, I, TRI.StackPointer, Depth + 1), Offset,
+              false);
+          break;
+        }
+        if (BaseReg == TRI.StackPointer)
+          if (const auto Pop = independentCallPop(Def)) {
+            Found = true;
+            Result = FrameStates.adjust(
+                resolveFrameBase(Block, I, TRI.StackPointer, Depth + 1), *Pop,
+                false);
+            break;
+          }
+        const bool QueryPreserved = callPreservesLane(Def, Query);
         if (!QueryPreserved) {
           Found = true;
           Result = frameInvalid();
@@ -6871,12 +7213,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       const LowOp &Def = B.Ops[I];
       if ((Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL) &&
           Value.isReg()) {
-        bool Preserved = false;
-        if (Query.Valid && Query.Begin <= InvalidVA - Query.Container) {
-          const uint64_t Begin = Query.Container + Query.Begin;
-          if (Query.Size <= InvalidVA - Begin) {
-            Preserved = callPreservesBytes(Def, Begin, Query.Size);
-          }
+        const bool Preserved = callPreservesLane(Def, Query);
+        if (EvidenceBudgetExhausted) {
+          FrameAddressTaintMemo.erase(MemoIt);
+          return std::nullopt;
         }
         if (!Preserved) {
           MemoIt->second = false;
@@ -7168,14 +7508,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
 
   resolveMemory = [&](int Block, int Before, uint64_t SlotBase,
-                      int64_t SlotOffset, uint16_t Size,
+                      int64_t SlotOffset, uint16_t Size, bool ObserveReads,
                       unsigned Depth) -> ResolverResult {
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || Size == 0)
       return resolverInvalid();
-    constexpr size_t MemoryKeyWork = 6;
-    MemoryKey Key{Block,      Before, SlotBase,
-                  SlotOffset, Size,   ResolvingPredicate};
+    // Store-only reconstruction must also keep its nested value walks free
+    // of read observations. Otherwise a loop-carried STORE can recurse back
+    // through a later LOAD while its original value proof is still active.
+    llvm::SaveAndRestore<bool> ReadMode(
+        AllowFrameReadObservations, AllowFrameReadObservations && ObserveReads);
+    constexpr size_t MemoryKeyWork = 7;
+    MemoryKey Key{Block,       Before, SlotBase,
+                  SlotOffset,  Size,   ResolvingPredicate,
+                  ObserveReads};
     if (!consumeMemoLookup(MemoryKeyWork, MemoryMemo.size()))
       return resolverInvalid();
     auto MemoIt = MemoryMemo.find(Key);
@@ -7249,6 +7595,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               return Writer.Addr == Op.Addr && Writer.Seq == Op.Seq;
             });
       }
+      const auto Kind = detail::resolverMemoryCandidate(Op);
+      using MemoryCandidate = detail::ResolverMemoryCandidate;
+      if (Kind == MemoryCandidate::OrderedAccess) {
+        // Synchronization may change escaped frame memory even when this
+        // access names a disjoint cell. Retain the ordinary reload barrier.
+        Found = true;
+        Result = resolverInvalid();
+        break;
+      }
       if (AuthenticatedMemcpy) {
         if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) {
           Found = true;
@@ -7279,8 +7634,38 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             budgetedResolverRoot(Size, Root.view(), consumeEvidence));
         break;
       }
-      const auto Kind = detail::resolverMemoryCandidate(Op.Opcode);
-      using MemoryCandidate = detail::ResolverMemoryCandidate;
+      if (Kind == MemoryCandidate::Read) {
+        // A completed ordinary read observes the cell's value even when an
+        // older call prevents proving who initialized it. Only the fallback
+        // value walk uses this fact; writer authentication stays store-only.
+        const auto Memory = lowMemoryOperands(Op);
+        if (!ObserveReads || !Memory.Complete || Memory.AccessSize != Size ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+            (!Op.Output.isReg() && !Op.Output.isTemp()))
+          continue;
+        const auto Guarded = instructionIsGuarded(Op.Addr);
+        if (!Guarded) {
+          Found = true;
+          break;
+        }
+        if (*Guarded)
+          continue;
+        uint64_t ReadBase = InvalidVA;
+        int64_t ReadOffset = 0;
+        if (!canonicalFrameSlotKey(Block, I - 1, *Memory.Address, ReadBase,
+                                   ReadOffset) ||
+            ReadBase != SlotBase || ReadOffset != SlotOffset)
+          continue;
+        Found = true;
+        const auto Observed = resolveValue(Block, I + 1, Op.Output, Depth + 1);
+        // A recurrence through a read is not a transparent CFG backedge.
+        // Reuse only the actual resolved output, never a pending cycle.
+        Result = Observed.Kind == ResolverResultKind::Value && Observed.Value &&
+                         Observed.Value->Size == Size
+                     ? Observed
+                     : resolverInvalid();
+        break;
+      }
       const bool IsCall = Kind == MemoryCandidate::Call;
       const bool IsStore = Kind == MemoryCandidate::Store && Op.NumInputs >= 2;
       const bool IsAtomic =
@@ -7361,7 +7746,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       }
       if (PrivateFrameCall)
         continue;
-      if (IsCall || ClobberingIntrinsic) {
+      if (IsCall || ClobberingIntrinsic ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Found = true;
         Result = resolverInvalid();
         break;
@@ -7496,8 +7882,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       }
       if (*Guarded) {
-        ResolverResult Old =
-            resolveMemory(Block, I, SlotBase, SlotOffset, Size, Depth + 1);
+        ResolverResult Old = resolveMemory(Block, I, SlotBase, SlotOffset, Size,
+                                           ObserveReads, Depth + 1);
         if (!consumeEvidence(4)) {
           Result = resolverInvalid();
           break;
@@ -7529,9 +7915,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Incoming.clear();
           break;
         }
-        Incoming.push_back(
+        ResolverResult IncomingValue =
             resolveMemory(Pred, static_cast<int>(Graph.Blocks[Pred].Ops.size()),
-                          SlotBase, SlotOffset, Size, Depth + 1));
+                          SlotBase, SlotOffset, Size, ObserveReads, Depth + 1);
+        IncomingValue =
+            constrainOnEdge(std::move(IncomingValue), Pred, Block, Depth);
+        if (EvidenceBudgetExhausted) {
+          Incoming.clear();
+          break;
+        }
+        Incoming.push_back(std::move(IncomingValue));
       }
       if (Incoming.empty()) {
         Result = resolverInvalid();
@@ -7564,8 +7957,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Block < 0 || Block >= static_cast<int>(Graph.Blocks.size()) ||
         Before < 0 || V.Size == 0 || (!V.isReg() && !V.isTemp()))
       return resolverInvalid();
-    ValueKey Key{Block,    Before, static_cast<uint8_t>(V.Space),
-                 V.Offset, V.Size, ResolvingPredicate};
+    ValueKey Key{Block,
+                 Before,
+                 static_cast<uint8_t>(V.Space),
+                 V.Offset,
+                 V.Size,
+                 ResolvingPredicate,
+                 AllowFrameReadObservations};
     if (!consumeMemoLookup(ValueKeyWork, ValueMemo.size()))
       return resolverInvalid();
     auto MemoIt = ValueMemo.find(Key);
@@ -7636,14 +8034,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                  (ZeroWrite && OBegin == 0 && QBegin == 0 &&
                   QEnd == Output.ContainerSize);
         }();
-        const bool QueryPreserved = [&] {
-          if (!Query.Valid || Query.Begin > InvalidVA - Query.Container)
-            return false;
-          const uint64_t Begin = Query.Container + Query.Begin;
-          if (Query.Size > InvalidVA - Begin)
-            return false;
-          return callPreservesBytes(Def, Begin, Query.Size);
-        }();
+        const bool QueryPreserved = callPreservesLane(Def, Query);
         // CALL LowIR only names explicit results.  Every other caller-saved
         // byte lane is an implicit definition and therefore a hard reaching-
         // value barrier.  This also keeps a predicated call fail closed: the
@@ -8194,7 +8585,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         // also reconstructs unrelated loop predicates and can exhaust the
         // candidate's evidence budget before reaching its dominating spill.
         const bool HasFrameSlot =
-            !Full &&
+            !Full && Def.MemoryOrdering == NdMemoryOrdering::None &&
+            Def.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
             canonicalFrameSlotKey(Block, I - 1, Address, SlotBase, SlotOffset);
         // Only literal recovery or an earlier compatible load needs the
         // generic address value. A barrier or the end of the search can rule
@@ -8219,8 +8611,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                          Def.Output.Size);
         }
         if (HasFrameSlot) {
-          ResolverResult Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
-                                                Def.Output.Size, Depth + 1);
+          ResolverResult Loaded =
+              resolveMemory(Block, I, SlotBase, SlotOffset, Def.Output.Size,
+                            false, Depth + 1);
+          // Preserve existing store/loop proofs before trying observations:
+          // a later read must not replace a proved reaching writer with a
+          // recursive dependency on itself.
+          if (Loaded.Kind != ResolverResultKind::Value &&
+              AllowFrameReadObservations)
+            Loaded = resolveMemory(Block, I, SlotBase, SlotOffset,
+                                   Def.Output.Size, true, Depth + 1);
           if (Loaded.Kind == ResolverResultKind::Value)
             Full = Loaded.Value;
         }
@@ -8252,10 +8652,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           };
           if ((!AddressResolved ||
                AddressValue.Kind == ResolverResultKind::Value) &&
-              Def.MemoryOrdering == NdMemoryOrdering::None) {
+              Def.MemoryOrdering == NdMemoryOrdering::None &&
+              consumeEvidence(2)) {
             int SearchBlock = Block;
             int SearchEnd = I;
             std::set<int> Searched{Block};
+            std::vector<std::pair<int, int>> CrossedEdges;
             bool Stop = false;
             for (uint32_t Hop = 0;
                  !Stop && Hop < limits::kMaxJumpTableReloadSearchBlocks;
@@ -8295,8 +8697,17 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                               .Kind != ResolverResultKind::Value)
                     continue;
                 }
-                const ResolverResult Earlier =
+                ResolverResult Earlier =
                     resolveValue(SearchBlock, J + 1, Op.Output, Depth + 1);
+                for (auto Edge = CrossedEdges.rbegin();
+                     Edge != CrossedEdges.rend(); ++Edge) {
+                  if (!consumeEvidence(2)) {
+                    Earlier = resolverInvalid();
+                    break;
+                  }
+                  Earlier = constrainOnEdge(std::move(Earlier), Edge->first,
+                                            Edge->second, Depth);
+                }
                 if (Earlier.Kind == ResolverResultKind::Value &&
                     Earlier.Value && Earlier.Value->Size == Def.Output.Size)
                   Full = Earlier.Value;
@@ -8306,7 +8717,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               if (Stop || Searching.Preds.size() != 1 ||
                   IsRootBlock[static_cast<size_t>(SearchBlock)])
                 break;
-              SearchBlock = Searching.Preds.front();
+              const int Previous = Searching.Preds.front();
+              if (!ResolvingPredicate) {
+                if (!consumeEvidence(6))
+                  break;
+                CrossedEdges.emplace_back(Previous, SearchBlock);
+              }
+              SearchBlock = Previous;
               if (SearchBlock < 0 ||
                   SearchBlock >= static_cast<int>(Graph.Blocks.size()) ||
                   !Searched.insert(SearchBlock).second)
@@ -8547,47 +8964,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         ResolverResult IncomingValue = resolveValue(
             Pred, static_cast<int>(PredBlock.Ops.size()), V, Depth + 1);
 
-        // Preserve an exact branch-edge predicate with the incoming value it
-        // filters.  A common state-machine lowering is
-        //
-        //   if (state == 0) exit;
-        //   dispatch(state - 1);
-        //
-        // The predecessor merge alone includes the zero sentinel even though
-        // that arm cannot reach the dispatch block. Record equality and
-        // unsigned-order predicates only against the same resolved lane; the
-        // finite-domain solver applies them arm-locally. Unsupported conditions
-        // remain an over-approximation and therefore fail closed.
-        if (!ResolvingPredicate &&
-            IncomingValue.Kind == ResolverResultKind::Value &&
-            IncomingValue.Value && PredBlock.LastInsn) {
-          if (!consumeEvidence(PredBlock.LastInsn->Ops.size())) {
-            Incoming.clear();
-            break;
-          }
-          const auto Edges = resolverConditionEdges(*PredBlock.LastInsn);
-          if (Edges) {
-            const bool IsTaken = B.Start == Edges->TrueTarget;
-            const bool IsFalse = B.Start == Edges->FalseTarget;
-            if (IsTaken != IsFalse) {
-              if (!consumeProofPointLookup()) {
-                Incoming.clear();
-                break;
-              }
-              const LowOp &Branch = *Edges->Condition;
-              const auto Point = Graph.findPoint({Branch.Addr, Branch.Seq});
-              if (Point && Point->first == Pred) {
-                if (!predicateCannotFilter(Pred, Point->second,
-                                           Branch.Inputs[1])) {
-                  ResolverResult Condition = resolvePredicate(
-                      Pred, Point->second, Branch.Inputs[1], Depth + 1);
-                  IncomingValue = constrainOnCondition(
-                      std::move(IncomingValue), std::move(Condition), IsTaken);
-                }
-              }
-            }
-          }
-        }
+        IncomingValue =
+            constrainOnEdge(std::move(IncomingValue), Pred, Block, Depth);
         if (EvidenceBudgetExhausted) {
           Incoming.clear();
           break;
@@ -8835,8 +9213,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                       bool RetainGuards = false) {
     ProofComplete = false;
     const bool RetainPathPredicates = FeasibleMask || RetainGuards;
-    if (!Value || Value->Size == 0 || Value->Size > sizeof(uint64_t) ||
-        Bound == 0 || (FeasibleMask && Bound > 64))
+    const uint16_t MaximumSize =
+        ExactModuloRecipeOnly ? 2 * sizeof(uint64_t) : sizeof(uint64_t);
+    if (!Value || Value->Size == 0 || Value->Size > MaximumSize || Bound == 0 ||
+        (FeasibleMask && Bound > 64))
       return false;
 
     const uint32_t Width = uint32_t(Value->Size) * 8u;
@@ -8991,7 +9371,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         SymbolBudgetExhausted = true;
         return {};
       }
-      if (Node->Size > sizeof(uint64_t)) {
+      if (Node->Size > MaximumSize) {
         // Finite-set symbolization may encounter an unsupported wide value
         // below a later narrow slice/mask.  Returning no child lets that
         // enclosing narrow expression fall back to a fresh unconstrained
@@ -9409,7 +9789,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             break;
           std::optional<symbolic::SymRef> Operation =
               symbolizeJumpTableIntegerOperation(Ctx, Node->Opcode, Node->Size,
-                                                 Inputs);
+                                                 Inputs, ExactModuloRecipeOnly);
           if (Operation)
             Result = *Operation;
         }
@@ -9890,10 +10270,19 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ++ResolverMemoGeneration;
     }
     MemoScalarConstantFoldMode = Query.FoldScalarConstantOps;
+    AllowFrameReadObservations =
+        Query.Relation != JumpTableValueRelation::AuthenticatedFrameMemory &&
+        Query.Relation != JumpTableValueRelation::FrameMemoryMatches;
+    if (MemoFrameReadMode && *MemoFrameReadMode != AllowFrameReadObservations) {
+      ValueMemo.clear();
+      MemoryMemo.clear();
+      ++ResolverMemoGeneration;
+    }
+    MemoFrameReadMode = AllowFrameReadObservations;
     if (Query.Relation == JumpTableValueRelation::ReadonlyUnsignedEnvelope) {
       // These facts also depend on immutable image contents. The ordinary
       // batch cache authenticates graph facts only, so retain no such result.
-      UsedImageContents = true;
+      UsedCurrentImageEvidence = true;
       if (!consumeProofPointLookup()) {
         markIncomplete(QueryIndex);
         continue;
@@ -10031,6 +10420,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               : nullptr;
       CandidateValue = resolveMemory(CandidateBlock, CandidateOp, SlotBase,
                                      *AdjustedOffset, Query.FrameMemorySize,
+                                     /*ObserveReads=*/false,
                                      /*Depth=*/0);
       ActiveFrameMemoryQuery = nullptr;
       MemoryMemo.clear();
@@ -10072,7 +10462,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                      static_cast<uint8_t>(Query.Candidate.Space),
                      Query.Candidate.Offset,
                      Query.Candidate.Size,
-                     ResolvingPredicate};
+                     ResolvingPredicate,
+                     AllowFrameReadObservations};
       }
       if (Query.Relation == JumpTableValueRelation::ExactUnsignedModuloRecipe) {
         // This relation is defined only for an exact output occurrence.  The
@@ -10539,8 +10930,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   const bool RepeatableRefusal =
       HasRepeatableRefusal && !NonRepeatableAnalysisIncomplete;
   if ((Complete || RepeatableRefusal) && !EvidenceBudgetExhausted &&
-      !SymbolBudgetExhausted && !UsedPointerSymbol && !UsedImageContents &&
-      ReusedGraph)
+      !SymbolBudgetExhausted && !UsedPointerSymbol &&
+      !UsedCurrentImageEvidence && ReusedGraph)
     ReusedGraph->rememberValueBatch(
         *this, Queries, MaxResolverDepth, InitialMatchBudget, Complete, Results,
         QueryAnalysisComplete, QueryUnsignedFeasibleMasks,

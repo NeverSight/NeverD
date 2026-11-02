@@ -1412,6 +1412,21 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       IntegerRegs = Func.IntegerArgumentRegisters;
     }
   }
+  if (TheArch == Arch::X86) {
+    const auto Additional =
+        med_calling_conv_detail::additionalI386ParameterRegisters(Func);
+    if (!Additional.empty()) {
+      const auto Reads = findLiveInParamRegs(Func.Blocks.front(), IntegerRegs);
+      std::vector<uint64_t> Registers;
+      for (uint64_t Register : IntegerRegs)
+        if (Reads.count(Register) &&
+            !med_calling_conv_detail::liveInOnlyFeedsScratch(Func, Register))
+          Registers.push_back(Register);
+      Registers.insert(Registers.end(), Additional.begin(), Additional.end());
+      Func.IntegerArgumentRegisters = std::move(Registers);
+      IntegerRegs = Func.IntegerArgumentRegisters;
+    }
+  }
   if (Convention && Convention->PositionalArgumentSlots) {
     // The FP argument registers take the same positions as the integer ones.
     ParamRegs.assign(IntegerRegs.begin(), IntegerRegs.end());

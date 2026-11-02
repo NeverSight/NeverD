@@ -14,7 +14,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "AnalysisCall.h"
+
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/MedABIPass.h"
@@ -317,6 +320,12 @@ MedToHighConverter::CallIndTarget MedToHighConverter::resolveCallIndTarget(
 
 void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
                                       const MedOp &CurOp) {
+  if (high_detail::appendAnalysisX87Call(Func, CurOp, [&](const MedVar &Value) {
+        return medvarToExpr(Value);
+      })) {
+    CallOutputs.insert({CurOp.Output.Id, CurOp.Output.SSAVer});
+    return;
+  }
   HighStmt S;
   S.Kind = StmtKind::Call;
   S.Addr = CurOp.Addr;

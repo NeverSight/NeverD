@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/X86/X86RegistrationCallResult.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
@@ -24,6 +25,7 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/TargetParser/Triple.h"
@@ -46,8 +48,15 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   const auto Classification =
       classifyWindowsEHNativeSource(Source, Arch::X86, BinaryFormat::COFF,
                                     WindowsEHNativeCapability::IRLowering);
-  const auto Runtime =
-      coff_loader::getCheckedX86CxxPersonalityABI(Image, Source);
+  auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, Source);
+  bool Guarded = false;
+  if (!Runtime) {
+    const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, Source);
+    if (Handler && !Handler->CookieGuards.empty()) {
+      Runtime = Handler->Dispatch;
+      Guarded = true;
+    }
+  }
   if (Image.Arch != Arch::X86 || Image.Format != BinaryFormat::COFF ||
       Classification.Model != WindowsEHNativeSourceModel::X86RegistrationCxx ||
       !Classification.canLowerNativeIR() || !Runtime ||
@@ -59,6 +68,12 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   if (!UnwindGraph)
     return rejectIR("C++ source unwind destinations are incomplete");
   const auto *Module = Function.getParent();
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+  if (Module &&
+      Function.hasFnAttribute(llvm::RewriteWinX86SynchronousCxxAttribute))
+    if (auto Error = llvm::validateRewriteWinX86SynchronousCxx(Function))
+      return rejectIR(llvm::toString(std::move(Error)));
+#endif
   const auto *Marker = Function.getMetadata(windows_eh_md::NativeAttachment);
   const auto *Kind =
       Marker && Marker->getNumOperands() == 2
@@ -76,7 +91,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       !Personality->getReturnType()->isIntegerTy(32) ||
       !Personality->isVarArg() || Personality->arg_size() ||
       Personality->getCallingConv() != llvm::CallingConv::C ||
+#ifdef LLVM_NEVERD_X86_CXX_EH_MODE
+      llvm::usesAsynchronousEHMode(Function) ||
+#else
       Module->getModuleFlag("eh-asynch") ||
+#endif
       Module->getTargetTriple().getArch() != llvm::Triple::x86 ||
       !Module->getTargetTriple().isWindowsMSVCEnvironment() ||
       Module->getDataLayout().getPointerSize() != 4 ||
@@ -134,14 +153,17 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     return rejectIR("C++ source frame lost its physical coordinate projection");
   Frame->Establisher = Layout->Establisher;
   Result.Frame = *Frame;
-  if (!hasX86RegistrationCxxEntryABI(Med, Function))
+  if (!hasX86RegistrationEntryABI(Med, Function))
     return rejectIR("C++ parent changed its physical entry ABI");
   const std::array<const llvm::Function *, 1> Functions = {&Function};
   std::set<const llvm::Instruction *> IncomingSetup;
   if (auto Error = validateIncomingCallerFrame(
           Function, Med, Functions, Result.IncomingAccesses, IncomingSetup))
     return std::move(Error);
-  auto Segments = validateSourceSegments(Function, Med, {}, Functions, true);
+  std::vector<registration_frame::CxxSourceCallBinding> SourceCalls;
+  auto Segments =
+      validateSourceSegments(Function, Med, {}, Functions, true, nullptr,
+                             SourceCookieCalls::RetainedCxx, &SourceCalls);
   if (!Segments)
     return Segments.takeError();
   Result.Segments = std::move(*Segments);
@@ -279,6 +301,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
   if (CleanupAnchors.size() != Result.Cleanups.size() ||
       Result.Cleanups.size() != States.CleanupContracts.size())
     return rejectIR("C++ source cleanup set is incomplete");
+  std::vector<registration_frame::CxxCleanupCallBinding> CleanupCalls;
   for (const auto &Contract : States.CleanupContracts) {
     auto Found = Result.Cleanups.find(Contract.ActionState);
     if (Found == Result.Cleanups.end())
@@ -319,30 +342,41 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       if (!Offset || !BundleIs(*Borrows[I], Pad))
         return rejectIR("C++ cleanup object has no checked source coordinate");
       Result.Calls.emplace(Borrows[I], CxxIRCall{Call.Leaf, *Offset, true});
+      if (Guarded)
+        CleanupCalls.push_back({Borrows[I], Pad, Source.CodeRange.Begin,
+                                Contract.ActionState, Contract.RelayTarget,
+                                uint32_t(I)});
     }
   }
-  std::map<std::pair<va_t, uint32_t>, const llvm::CallBase *> CallsAt;
+  std::map<std::pair<va_t, int>,
+           const registration_frame::CxxSourceCallBinding *>
+      CallsAt;
   std::map<const llvm::CallBase *, const RegistrationCallFrameEffect *>
       SourceCallEffects;
-  for (const auto *Call : ActualCalls)
-    if (const auto *MD =
-            Call->getMetadata(windows_eh_md::RegistrationOperationAttachment)) {
-      auto Address = metadataInteger(*MD, 1, 64);
-      auto Seq = metadataInteger(*MD, 2, 32);
-      if (!Address || !Seq ||
-          !CallsAt.emplace(std::make_pair(*Address, uint32_t(*Seq)), Call)
-               .second)
-        return rejectIR("C++ source call occurrence was duplicated");
+  std::set<const llvm::CallBase *> CookieCalls;
+  for (const auto &Binding : SourceCalls) {
+    if (Binding.CallKind !=
+        registration_frame::CxxSourceCallBinding::Kind::Ordinary) {
+      if (!Guarded || !ActualCalls.count(Binding.Call) ||
+          !CookieCalls.insert(Binding.Call).second)
+        return rejectIR("C++ cookie call has no unique guarded occurrence");
+      continue;
     }
+    if (!ActualCalls.count(Binding.Call) ||
+        !CallsAt
+             .emplace(std::make_pair(Binding.Address, Binding.OpSeq), &Binding)
+             .second)
+      return rejectIR("C++ source call occurrence was duplicated");
+  }
   size_t Protected = 0;
   for (const auto &Effect : States.CallFrameEffects) {
-    const auto Found = CallsAt.find({Effect.Address, uint32_t(Effect.OpSeq)});
-    const auto *Call = Found == CallsAt.end() ? nullptr : Found->second;
-    if (!Call || Effect.CalleeIndex >= States.CalleeContracts.size())
+    const auto Found = CallsAt.find({Effect.Address, Effect.OpSeq});
+    const auto *Binding = Found == CallsAt.end() ? nullptr : Found->second;
+    const auto *Call = Binding ? Binding->Call : nullptr;
+    if (!Call || Binding->EndAddress != Effect.EndAddress ||
+        Effect.CalleeIndex >= States.CalleeContracts.size())
       return rejectIR("C++ source call occurrence was omitted");
-    const auto *MD =
-        Call->getMetadata(windows_eh_md::RegistrationOperationAttachment);
-    const int BlockId = int(*metadataInteger(*MD, 3, 32));
+    const int BlockId = Binding->BlockId;
     if (!StateByBlock.count(BlockId))
       return rejectIR("C++ call moved outside a reached source block");
     const auto &State = *StateByBlock.at(BlockId);
@@ -380,12 +414,13 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       return rejectIR("C++ call changed its runtime funclet context");
     SourceCallEffects.emplace(Call, &Effect);
   }
-  if (ActualCalls.size() != Result.Calls.size())
+  if (ActualCalls.size() != Result.Calls.size() + CookieCalls.size())
     return rejectIR("C++ IR gained an unproved external call");
   size_t CallResultWork = 0;
   for (const auto &[Call, Receipt] : Result.Calls) {
     const auto *Callee = Call->getCalledFunction();
     const bool Throw = Receipt.Contract.isThrow();
+    const bool DoesNotReturn = Receipt.Contract.DoesNotReturn;
     if (Receipt.ObjectFrameOffset && Receipt.RuntimeObject)
       return rejectIR("C++ member call has conflicting object coordinates");
     const bool Borrow = Receipt.ObjectFrameOffset.has_value() ||
@@ -394,14 +429,24 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
     const bool Initializer = Receipt.Contract.isInitializer();
     bool DiscardResult = false;
     if (!Throw && !Receipt.Cleanup && !Initializer) {
-      const auto Fresh = getCheckedX86RegistrationMemberCalleeABI(
-          Image, Receipt.Contract.Target, &CallResultWork,
-          RegistrationLeafResult::Discarded);
-      if (!Fresh || Fresh->StackPopBytes != Receipt.Contract.StackPopBytes ||
-          Fresh->HasIndependentScalarReturn !=
-              Receipt.Contract.HasIndependentScalarReturn)
-        return rejectIR("C++ returning call lost its current object contract");
-      DiscardResult = !Fresh->HasIndependentScalarReturn;
+      if (Receipt.Contract.isCxxParent()) {
+        const auto Fresh = getCheckedX86RegistrationCxxCalleeABI(
+            Image, Receipt.Contract.Target, &CallResultWork);
+        if (!Fresh || !hasSameX86RegistrationCxxEffects(Receipt.Contract,
+                                                        *Fresh, CallResultWork))
+          return rejectIR("C++ parent lost its current frame contract");
+        DiscardResult = !DoesNotReturn && !Fresh->HasIndependentScalarReturn;
+      } else {
+        const auto Fresh = getCheckedX86RegistrationMemberCalleeABI(
+            Image, Receipt.Contract.Target, &CallResultWork,
+            RegistrationLeafResult::Discarded);
+        if (!Fresh || Fresh->StackPopBytes != Receipt.Contract.StackPopBytes ||
+            Fresh->HasIndependentScalarReturn !=
+                Receipt.Contract.HasIndependentScalarReturn)
+          return rejectIR(
+              "C++ returning call lost its current object contract");
+        DiscardResult = !Fresh->HasIndependentScalarReturn;
+      }
       const auto SourceCall = SourceCallEffects.find(Call);
       if (DiscardResult && (SourceCall == SourceCallEffects.end() ||
                             !hasUnusedX86RegistrationCallResult(
@@ -422,10 +467,11 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
         Call->getCallingConv() != Callee->getCallingConv() ||
         Call->getFunctionType() != Callee->getFunctionType() ||
         (Borrow && !Call->getArgOperand(0)->getType()->isPointerTy()) ||
-        (Throw || Receipt.Cleanup || Initializer || DiscardResult
+        (DoesNotReturn || Receipt.Cleanup || Initializer || DiscardResult
              ? !Call->getType()->isVoidTy()
              : !Call->getType()->isIntegerTy(32)) ||
-        Call->doesNotReturn() != Throw || Callee->doesNotReturn() != Throw ||
+        Call->doesNotReturn() != DoesNotReturn ||
+        Callee->doesNotReturn() != DoesNotReturn ||
         (Receipt.Cleanup && !Call->doesNotThrow()) ||
         (!Receipt.Cleanup && Call->doesNotThrow()))
       return rejectIR("C++ preserved callee changed its physical call ABI");
@@ -460,7 +506,6 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       return rejectIR(
           "C++ preserved callee changed its original entry identity");
   }
-  std::set<const llvm::CatchReturnInst *> Returns;
   for (const auto &[Anchor, P] : Anchors[Role::HandlerTarget]) {
     const RegistrationCxxContinuation *Resume = nullptr;
     for (const auto &Candidate : States.CxxContinuations)
@@ -492,13 +537,13 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
             Result.Segments.at(BlockAt.at(Resume->TargetVA))
                 .Enter->getParent() ||
         !BundleIs(*Anchor, Result.Catches.at(Identity).Pad) ||
-        !Returns.insert(Return).second)
+        !Result.CatchReturns.insert(Return).second)
       return rejectIR("C++ catch changed its checked runtime continuation");
     Result.SavedStackRestores.insert(
         llvm::cast<llvm::StoreInst>(Return->getPrevNode()));
     ExpectedAnchors.insert(Anchor);
   }
-  if (Returns.size() != States.CxxContinuations.size())
+  if (Result.CatchReturns.size() != States.CxxContinuations.size())
     return rejectIR("C++ catch omitted a checked runtime continuation");
   std::set<std::pair<va_t, int>> Chain;
   for (const auto &[Anchor, P] : Anchors[Role::RegistrationChainAccess]) {
@@ -573,7 +618,7 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       CompilerBlocks.insert(Normal);
     } else if (const auto *Return =
                    llvm::dyn_cast<llvm::CatchReturnInst>(Term)) {
-      if (!Returns.count(Return))
+      if (!Result.CatchReturns.count(Return))
         return rejectIR("C++ IR gained an unbound catch return");
     } else {
       if (!SourceBlocks.count(Id))
@@ -621,6 +666,19 @@ getCheckedCxxControlIRProof(const llvm::Function &Function,
       metadataInteger(*Contract, exception_rewrite::SkippedLandingPads, 64) !=
           0)
     return rejectIR("C++ native contract counters changed");
+  if (Guarded) {
+    std::map<X86RegistrationCatchIdentity, const llvm::CatchPadInst *> Catches;
+    for (const auto &[Identity, Catch] : Result.Catches)
+      Catches.emplace(Identity, Catch.Pad);
+    auto Coverage = registration_frame::bindCxxCookieCoverage(
+        Image, Med, Function, *Frame->Slot, *Layout, SourceCalls, CleanupCalls,
+        Catches, CallResultWork);
+    if (!Coverage)
+      return Coverage.takeError();
+    Result.Guarded.emplace(CxxIRGuardedFrame{std::move(Med), *Layout,
+                                             std::move(SourceCalls),
+                                             std::move(CleanupCalls)});
+  }
   return Result;
 #endif
 }

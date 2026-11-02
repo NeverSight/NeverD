@@ -16,6 +16,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -140,6 +141,51 @@ TEST(PipelineSourceStackAccesses, MachineRequestsKeepCallerStateOperations) {
       }
 }
 
+TEST(PipelineSourceStackAccesses, TentativeBodiesKeepUnprovedCallSlotReads) {
+  for (bool AnalysisOnly : {false, true}) {
+    SCOPED_TRACE(AnalysisOnly);
+    auto Func = savedCallerRegister(Arch::X64, true);
+    Func.AnalysisOnly = AnalysisOnly;
+    auto UnknownSP = Func.Blocks[0].Ops[2].Output;
+    ++UnknownSP.SSAVer;
+    MedOp Move, Call;
+    Move.Opcode = NdOp::COPY;
+    Move.Output = UnknownSP;
+    Move.addInput(MedVar::makeUnspecified(8, Arch::X64));
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = 0x1008;
+    Call.addInput(MedVar::makeConst(0x2000, 8));
+    auto &Ops = Func.Blocks[0].Ops;
+    Ops.insert(Ops.begin() + 4, {Move, Call});
+    Ops[6].Addr = 0x100d;
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::ELF;
+    LowFunc Source;
+    Source.Entry = Func.Entry;
+    Source.AnalysisOnly = AnalysisOnly;
+    const auto Prepare = [&] {
+      prepareMedStackAccesses(Func, Source, Image, MedStackProjection::Source,
+                              nullptr, /*WaitForCalleeFacts=*/true);
+    };
+    if (!AnalysisOnly) {
+      EXPECT_THROW(Prepare(), LowToMedConversionError);
+      continue;
+    }
+    EXPECT_NO_THROW(Prepare());
+    EXPECT_TRUE(Func.CallReturnReads.empty());
+    ASSERT_EQ(Ops.size(), 9u);
+    EXPECT_EQ(Ops[3].Opcode, NdOp::STORE);
+    EXPECT_EQ(Ops[5].Opcode, NdOp::CALL);
+    EXPECT_EQ(Ops[6].Opcode, NdOp::LOAD);
+    for (const auto &Op : Ops) {
+      EXPECT_FALSE(Op.PrologueSave);
+      EXPECT_FALSE(Op.ReturnAddressRead);
+      EXPECT_FALSE(Op.SourceReturnSlotOffset);
+    }
+  }
+}
+
 TEST(PipelineSourceStackAccesses, ReturnRangesDoNotDependOnFunctionScheduling) {
   const unsigned Previous = workerThreadOverride().load();
   const auto Reset = llvm::scope_exit([&] { setWorkerThreadCount(Previous); });
@@ -186,6 +232,15 @@ TEST(PipelineSourceStackAccesses, ReturnRangesDoNotDependOnFunctionScheduling) {
         EXPECT_EQ(Found->second.Min, I * 3);
         EXPECT_EQ(Found->second.Max, I * 3);
       }
+      for (bool LowMarker : {false, true}) {
+        Result.LowFuncs.front().AnalysisOnly = LowMarker;
+        Result.MedFuncs.front().AnalysisOnly = !LowMarker;
+        const auto DisplayRanges = sourceCallReturnRanges(Image, Result);
+        EXPECT_EQ(DisplayRanges.size(), 63u);
+        EXPECT_FALSE(DisplayRanges.count(Result.LowFuncs.front().Entry));
+      }
+      Result.LowFuncs.front().AnalysisOnly = false;
+      Result.MedFuncs.front().AnalysisOnly = false;
       auto &Changed = Result.LowFuncs.front();
       Changed.Blocks.front().Ops.front().Inputs[0] =
           NdVar::reg(TRI.StackPointer, TRI.PointerSize);

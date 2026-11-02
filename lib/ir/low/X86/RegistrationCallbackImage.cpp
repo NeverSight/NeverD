@@ -11,7 +11,87 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 
+#include <utility>
+
 namespace neverd::registration_abi {
+
+std::optional<std::vector<uint8_t>>
+readImmutableRegistrationImageBytes(const BinaryImage &Image, va_t Address,
+                                    uint16_t Width, size_t &Work) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable || !Width ||
+      Address > UINT32_MAX - (Width - 1))
+    return std::nullopt;
+  if (!chargeCalleeWork(Work, Width))
+    return std::nullopt;
+  for (const size_t Count : {Image.Sections.size(),
+                             Image.Segments.size(),
+                             Image.CodePtrRelocSlots.size(),
+                             Image.DataPtrRelocSlots.size(),
+                             Image.DataPtrRelocTargetOwners.size(),
+                             Image.RelCodeRelocSlots.size(),
+                             Image.RelDataPtrRelocSlots.size(),
+                             Image.MachOResolvedChainedPointerSlots.size(),
+                             Image.ConflictingImportStorageSlots.size(),
+                             Image.ImportPtrSlots.size(),
+                             Image.ImportStorageSlots.size(),
+                             Image.DyldBindSlots.size(),
+                             Image.ObjCSourceReferences.size(),
+                             Image.DataAddressRelocOperands.size(),
+                             Image.CodeAddressRelocOperands.size(),
+                             Image.Relocations.size(),
+                             Image.BaseRelocations.size(),
+                             Image.RuntimeCallablePointerSlots.size(),
+                             Image.RelocDataAddrs.size(),
+                             Image.WritableRelocDataAddrs.size(),
+                             Image.RodataAnchorSeg.size(),
+                             Image.CodeRefTargets.size()})
+    if (!chargeCalleeWork(Work, Count + 1))
+      return std::nullopt;
+  // Account for the mapping owner's nested section and segment lookups.
+  for (unsigned I = 0; I != 8; ++I)
+    if (!chargeCalleeWork(Work, Image.Sections.size()) ||
+        !chargeCalleeWork(Work, Image.Segments.size()))
+      return std::nullopt;
+  return readImmutableImageBytes(Image, Address, Width);
+}
+
+std::optional<ImmutableRegistrationScalar>
+readImmutableRegistrationScalar(const BinaryImage &Image, va_t Address,
+                                uint16_t Width, size_t &Work) {
+  if (Width > sizeof(uint32_t) || !chargeCalleeWork(Work, 1))
+    return std::nullopt;
+  // A runtime cookie remains opaque even in read-only source storage. Share
+  // this exclusion with ordinary bound helpers as well as layout-scoped
+  // proofs; neither narrow reads nor an initial zero may freeze its value.
+  const auto RVA = Image.DynInfo.SecurityCookieRVA;
+  constexpr va_t CookieBytes = sizeof(uint32_t);
+  if (RVA && Image.Base <= UINT32_MAX - (CookieBytes - 1) &&
+      RVA <= UINT32_MAX - (CookieBytes - 1) - Image.Base) {
+    const va_t Cookie = Image.Base + RVA;
+    if (Width && (Address <= Cookie ? Cookie - Address < Width
+                                    : Address - Cookie < CookieBytes))
+      return std::nullopt;
+  }
+  auto Bytes = readImmutableRegistrationImageBytes(Image, Address, Width, Work);
+  if (!Bytes)
+    return std::nullopt;
+  // Potential one-past addresses inspect each segment's two extents and
+  // their data owners, including nested segment/section lookup.
+  for (size_t I = 0; I != Image.Segments.size(); ++I)
+    for (unsigned Extent = 0; Extent != 2; ++Extent)
+      if (!chargeCalleeWork(Work, Image.Sections.size()) ||
+          !chargeCalleeWork(Work, Image.Segments.size()) ||
+          !chargeCalleeWork(Work, Image.Segments.size()))
+        return std::nullopt;
+  uint32_t Value = 0;
+  for (unsigned I = 0; I != Width; ++I)
+    Value |= uint32_t((*Bytes)[I]) << (I * 8);
+  ImmutableRegistrationScalar Read{std::move(*Bytes), std::nullopt};
+  if (Width != 4 || !Image.isPotentiallyRelocatableAddress(Value))
+    Read.Value = Value;
+  return Read;
+}
 
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,
                                uint16_t Width, bool Write, size_t &Work) {

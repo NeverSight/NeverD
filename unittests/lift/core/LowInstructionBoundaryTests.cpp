@@ -425,6 +425,57 @@ TEST(LowInstructionBoundary,
 }
 
 TEST(LowInstructionBoundary,
+     RelocationBoundaryFilteringRetainsInteriorAndExactEndOwnership) {
+  constexpr va_t Base = 0x4000;
+  constexpr va_t FieldVA = 0x1010;
+  BinaryImage Image;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Data.resize(Text.Size);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.Segments.push_back(std::move(Text));
+  Image.CodePtrRelocSlots = {Base, Base + 8, Base + 16, Base + 24};
+  auto &Field = Image.DataAddressRelocOperands[FieldVA];
+  Field = {Base + 16, Base + 16, 8, Base};
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 2u);
+  EXPECT_TRUE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 2, {}));
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+
+  // A misaligned interior anchor is evidence of conflicting table ownership,
+  // so the cheap numeric filter must retain it for the authoritative refusal.
+  Field.TargetVA = Base + 17;
+  Image.CodePtrRelocSlots.insert(Field.TargetVA);
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 0u);
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 2, {}));
+
+  Field.TargetVA = Base + 32;
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 4u);
+  EXPECT_TRUE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  Field.PCRelativeFromInstructionEnd = true;
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  Field.PCRelativeFromInstructionEnd = false;
+  Image.Segments.front().Flags = SegmentFlags::Readable;
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  Image.Segments.front().Flags =
+      SegmentFlags::Readable | SegmentFlags::Executable;
+  for (va_t Target : {Base - 8, Base, Base + 33, va_t{0x20000000}}) {
+    SCOPED_TRACE(Target);
+    Field.TargetVA = Target;
+    Image.CodePtrRelocSlots.insert(Target);
+    EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 4u);
+    EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  }
+
+  // A near-VA-limit span must not wrap and discard a real interior anchor.
+  constexpr va_t HighBase = InvalidVA - 31;
+  Field.TargetVA = HighBase + 8;
+  Image.CodePtrRelocSlots.insert(Field.TargetVA);
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, HighBase, 8, 8, {}), 1u);
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, HighBase, 8, 8, {}));
+}
+
+TEST(LowInstructionBoundary,
      StackTableSourceCannotSuppressAnAdjustedAdjacentAnchor) {
   constexpr va_t TableA = 0x4000;
   constexpr va_t TableB = TableA + 16;

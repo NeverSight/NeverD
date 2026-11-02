@@ -15,13 +15,26 @@ namespace neverd::registration_state {
 std::optional<FrameValue>
 FrameTransfer::evaluateRelativeScalar(const LowOp &Op) const {
   const bool Difference = Op.Opcode == NdOp::INT_SUB;
+  const bool Ordered =
+      Op.Opcode == NdOp::INT_LESS || Op.Opcode == NdOp::INT_LESSEQUAL ||
+      Op.Opcode == NdOp::INT_SLESS || Op.Opcode == NdOp::INT_SLESSEQUAL;
   if ((!Difference && Op.Opcode != NdOp::INT_EQUAL &&
-       Op.Opcode != NdOp::INT_NOTEQUAL) ||
+       Op.Opcode != NdOp::INT_NOTEQUAL && !Ordered) ||
       Op.NumInputs != 2 || Op.Inputs[0].Size != 4 || Op.Inputs[1].Size != 4 ||
       Op.Output.Size != (Difference ? 4 : 1))
     return std::nullopt;
   const auto Left = read(Op.Inputs[0]);
   const auto Right = read(Op.Inputs[1]);
+  // Copies of one complete image identity remain equal after rebasing or
+  // moving that object. This grants only its zero difference/self-relation,
+  // never a numeric image address or an ordering of different addresses.
+  if (Left.ImageAddress && Left == Right &&
+      Left == FrameValue::imageAddress(*Left.ImageAddress))
+    return FrameValue::constant(Op.Opcode == NdOp::INT_EQUAL ||
+                                Op.Opcode == NdOp::INT_LESSEQUAL ||
+                                Op.Opcode == NdOp::INT_SLESSEQUAL);
+  if (Ordered)
+    return std::nullopt;
   std::optional<std::pair<int32_t, int32_t>> Offsets;
   if (Left.Offset && Right.Offset && Left == FrameValue::frame(*Left.Offset) &&
       Right == FrameValue::frame(*Right.Offset))

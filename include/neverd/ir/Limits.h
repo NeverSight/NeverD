@@ -56,6 +56,16 @@ inline constexpr unsigned kMedToHighSemanticThreadLimit = 1;
 inline constexpr size_t kCFGBuilderMaxRounds = 8;
 inline constexpr size_t kCFGBuilderMaxDependencies = 4096;
 
+/// Optional PE32 display recovery. No allowance is borrowed from proofs.
+inline constexpr size_t kAnalysisStackInstructionsPerCallee = 4096;
+inline constexpr size_t kAnalysisStackInstructionsPerFunction = 65536;
+inline constexpr size_t kAnalysisTableSlots = 256;
+inline constexpr size_t kAnalysisTableTargetsPerFunction = 4096;
+inline constexpr unsigned kAnalysisTableRounds = 8;
+
+/// Maximum lifted operations in an authenticated shared entry prefix.
+inline constexpr size_t kMaxRegistrationSharedPrefixOps = 64;
+
 // include/neverd/ir/med/MedLibraryRecognition.h
 inline constexpr size_t
     kMedLibraryRecognitionRecognizeMedLibraryOperationsMaxWork = 250000;
@@ -271,6 +281,10 @@ inline constexpr size_t kRegistrationABIPrivateMaxObjectCallbackNodes = 256;
 // lib/ir/low/X86/RegistrationConditionalCallee.cpp
 inline constexpr unsigned kRegistrationConditionalCalleeMaxBoundCallCheckDepth =
     4;
+
+// lib/ir/low/X86/RegistrationCxxState.cpp
+inline constexpr unsigned kRegistrationCxxMaxBoundCallDepth = 4;
+inline constexpr unsigned kRegistrationCxxMaxCalleeDepth = 4;
 
 // lib/ir/low/jumptable/JumpTableResolverBounds.cpp
 // Keep attacker-controlled work in independent accounts so an intentionally
@@ -648,6 +662,9 @@ inline constexpr int
     kSourceFrameAnalysisSourceFrameCompleteOutputBytesFunctionBlocksSizeLimit =
         128;
 
+// lib/ir/low/X86/RegistrationCalleeABI.cpp
+inline constexpr size_t kMaxRegistrationLeafPrefixRefusals = 4096;
+
 // lib/ir/low/X86/RegistrationCalleeIndex.cpp
 inline constexpr int
     kRegistrationCalleeIndexRegistrationCallCalleeIndexContractsTargetsSizeLimit =
@@ -660,6 +677,11 @@ inline constexpr int
         256;
 
 // lib/ir/low/X86/RegistrationCalleeStack.cpp
+/// Retained plain integer CFGs per unchanged-image stack-proof operation.
+inline constexpr size_t kMaxRegistrationStackGraphBytes = 64u * 1024u * 1024u;
+/// Conservative node and allocator overhead in retained graph accounting.
+inline constexpr size_t kRegistrationStackGraphAllocationOverhead =
+    8 * sizeof(void *);
 inline constexpr int kRegistrationCalleeStackProveCacheSizeLimit = 256;
 inline constexpr int
     kRegistrationCalleeStackRegistrationCallCalleeIndexStackContractsTargetsSizeLimit =

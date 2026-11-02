@@ -11,6 +11,8 @@
 
 #include "COFFRegistrationIRProof.h"
 
+#include "neverd/backend/llvm/RegistrationFrameRuntime.h"
+
 #include "llvm/Support/Error.h"
 
 namespace llvm {
@@ -18,12 +20,6 @@ class Function;
 }
 
 namespace neverd::coff_registration {
-
-struct RegistrationSEHLocalUnwindContract {
-  std::set<const llvm::CallBase *> Calls;
-  std::set<const llvm::LoadInst *> ChainLoads;
-  std::set<const llvm::StoreInst *> StateRestores;
-};
 
 /// Authenticate the physical protocol without claiming an immutable source
 /// target. Callback/frame validation can run before source replay is bound.

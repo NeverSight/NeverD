@@ -18,6 +18,8 @@
 #include "../MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd {
@@ -104,6 +106,31 @@ bool recoverI386RegistrationCookieCall(const MedFunc &Func,
   Info.ArgumentsInCalleeRegisterOrder = true;
   Info.StackArgumentSlotBytes = 4;
   return true;
+}
+
+std::optional<RegistrationCookieCallABI>
+registrationCookieCallABI(const BinaryImage &Image, const MedFunc &Func,
+                          const MedBlock &Block, size_t CallIndex) {
+  MedCallInfo Info;
+  if (Image.Arch != Arch::X86 || Image.Format != BinaryFormat::COFF ||
+      Image.Bits != Bitness::Bits32 ||
+      Func.Blocks.size() > limits::kMaxRegistrationEHRecords ||
+      !recoverI386RegistrationCookieCall(Func, Block, CallIndex,
+                                         getTargetRegInfo(Arch::X86), Info))
+    return std::nullopt;
+  const auto &Call = Block.Ops[CallIndex];
+  const auto &States = *Func.RegistrationStates;
+  const auto *Check = States.cookieCheck(Call.Addr, Call.OriginSeq);
+  const auto Success = coff_loader::getCheckedX86CookieCheckSuccessPath(
+      Image, States.CookieCheckVA);
+  if (!Check || Call.Addr > UINT32_MAX - 5 ||
+      Check->EndAddress != Call.Addr + 5 || !Success ||
+      Success->SecurityCookieVA != States.SecurityCookieVA ||
+      !hasCheckedX86RegistrationDirectCallBytes(Image, Call.Addr,
+                                                States.CookieCheckVA))
+    return std::nullopt;
+  return RegistrationCookieCallABI{Info.Args.front(), States.CookieCheckVA,
+                                   Success->SecurityCookieVA};
 }
 
 extern const AbiCallPolicy I386AbiCallPolicy;

@@ -19,12 +19,12 @@ import subprocess
 if __package__:
     from .check_windows_registration_cookie import require_cookie_outcome
     from .check_windows_registration_eh import run_image
-    from .check_windows_registration_rewrite import CASES, PE32, observe
+    from .check_windows_registration_rewrite import CASES, CONTROL_FP_MODES, PE32, observe
     from .windows_registration_runtime import validate_runtime
 else:
     from check_windows_registration_cookie import require_cookie_outcome
     from check_windows_registration_eh import run_image
-    from check_windows_registration_rewrite import CASES, PE32, observe
+    from check_windows_registration_rewrite import CASES, CONTROL_FP_MODES, PE32, observe
     from windows_registration_runtime import validate_runtime
 
 
@@ -39,6 +39,14 @@ def source_cases(profile: str) -> dict[str, tuple[int, int]]:
 
 
 def source_records(source: dict, case: str, trace: int) -> list[dict]:
+    control_fp_mode = source.get("control_fp_mode", "output-word")
+    if control_fp_mode not in CONTROL_FP_MODES or \
+            (control_fp_mode != "output-word" and case != "longjmp-control-fp"):
+        raise ValueError("source floating-point control mode is invalid")
+    control_fp_veneer = source.get("control_fp_veneer", False)
+    if not isinstance(control_fp_veneer, bool) or \
+            (control_fp_veneer and case != "longjmp-control-fp"):
+        raise ValueError("source floating-point call form is invalid")
     labels = ["original", "patched", "product-patched", "collision-patched"]
     if source.get("schema") == 2:
         labels.extend(f"cli-{mode}-{kind}" for mode in ("section", "inplace")
@@ -106,11 +114,15 @@ def main(argv: list[str] | None = None) -> int:
                 validate_runtime(parent, runtime)
                 case_environment["WINEDLLOVERRIDES"] = "vcruntime140=n"
             observations = []
-            report["source_cases"].append({"case": case, "observations": observations})
+            control_fp_mode = source.get("control_fp_mode", "output-word")
+            report["source_cases"].append({"case": case, "observations": observations,
+                                           "control_fp_mode": control_fp_mode,
+                                           "control_fp_veneer": source.get("control_fp_veneer", False)})
             for record in records:
                 try:
                     observation = observe(checked_image(parent, record), record["generated"],
-                                          launcher, case_environment, args.timeout, trace)
+                                          launcher, case_environment, args.timeout, trace,
+                                          control_fp_mode)
                     if observation["runtime_base"] != record["runtime_base"]:
                         raise ValueError("native loader changed the forced image base")
                     observations.append(observation)

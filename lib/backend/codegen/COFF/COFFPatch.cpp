@@ -579,6 +579,14 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
           return false;
         }
 
+        // Registration relocation retirement authenticates the original
+        // operand bytes. Keep that source snapshot before writing entry
+        // jumps; final installation validates those jumps independently.
+        const bool HasRegistration =
+            TargetArch == Arch::X86 &&
+            !EHPlanOrErr->ExceptionFunctionEntries.empty();
+        const std::vector<uint8_t> RegistrationSource =
+            HasRegistration ? Binary : std::vector<uint8_t>{};
         size_t TrampCount = 0;
         if (HasExactSourcePlan) {
           auto Regions = collectCOFFSourceTrampolineRegions(
@@ -647,11 +655,10 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
         }
 
         COFFRegistrationPatchUpdate RegistrationUpdate;
-        if (TargetArch == Arch::X86 &&
-            !EHPlanOrErr->ExceptionFunctionEntries.empty()) {
+        if (HasRegistration) {
           auto Prepared = prepareCOFFRegistrationPatch(
-              Binary, *CachedImage, Img, PatchedEntryMappings, CodeVA,
-              *CompileMod, &*GuardUpdateOrErr);
+              RegistrationSource, *CachedImage, Img, PatchedEntryMappings,
+              CodeVA, *CompileMod, &*GuardUpdateOrErr);
           if (!Prepared) {
             llvm::WithColor::error()
                 << llvm::toString(Prepared.takeError()) << "\n";

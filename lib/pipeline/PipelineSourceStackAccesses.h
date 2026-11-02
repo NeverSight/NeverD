@@ -39,6 +39,8 @@ MedStackProjection medStackProjection(const PipelineOptions &Options);
 
 /// Recompute entry kind, alignment and source stack annotations on this fresh
 /// conversion. Never copy annotation flags from another operation sequence.
+/// AnalysisOnly bodies retain their physical operations without native source
+/// frame projection; their marker still forbids native output.
 /// With \p WaitForCalleeFacts and no \p CallReturns, a CALL return-slot load
 /// deferred only because a CALL's stack position had no local range refuses
 /// this attempt instead, before any annotation: the caller retries it once

@@ -48,17 +48,39 @@ _registration_entry:
   mov dword ptr [ebp-112],0
 #endif
 #if REGISTRATION_CASE == 24
+#if REGISTRATION_CONTROL_FP_MODE >= 2
+  push 0x30000
+#if REGISTRATION_CONTROL_FP_MODE == 2
+  push 0x20000
+#elif REGISTRATION_CONTROL_FP_MODE == 3
+  push 0x10000
+#else
+  push 0
+#endif
+  push 0
+#elif REGISTRATION_CONTROL_FP_MODE == 1
+  push 0
+  push 0
+  push 0
+#else
   mov dword ptr [ebp-112],0xdeadbeef
   push 0
   push 0
   lea eax,[ebp-112]
   push eax
+#endif
+#if REGISTRATION_CONTROL_FP_VENEER
+  call .Lcontrol_fp_veneer
+#else
   call dword ptr [__imp___controlfp_s]
+#endif
   add esp,12
   test eax,eax
   jne .Lbad
+#if !REGISTRATION_CONTROL_FP_MODE
   cmp dword ptr [ebp-112],0xdeadbeef
   je .Lbad
+#endif
 #endif
 #if RETIRED_JUMP
   mov dword ptr [ebp-108],0
@@ -144,7 +166,13 @@ _registration_entry:
   add esp,168
 #endif
 #if REGISTRATION_CASE == 21
+#if REGISTRATION_OBSERVE_CALLEE_RESULT
+  // Observe the actual helper EAX through the subsequent longjmp value.
+  add eax,5
+  push eax
+#else
   push 42
+#endif
   lea eax,[ebp-96]
   push eax
   call __longjmpex
@@ -365,6 +393,10 @@ _registration_entry:
   mov esp,ebp
   pop ebp
   ret
+#if REGISTRATION_CASE == 24 && REGISTRATION_CONTROL_FP_VENEER
+.Lcontrol_fp_veneer:
+  jmp dword ptr [__imp___controlfp_s]
+#endif
 #if REGISTRATION_EH4_JUMP
 #include "registration_eh4_personality.inc"
 #endif

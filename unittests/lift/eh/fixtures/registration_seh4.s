@@ -12,7 +12,11 @@ _registration_entry:
   .long __except_handler4
   mov eax,fs:[0]
   push eax
+#if REGISTRATION_STARTUP_INFO
+  sub esp,96
+#else
   sub esp,16
+#endif
   mov eax,[___security_cookie]
   xor dword ptr [ebp-8],eax
   xor eax,ebp

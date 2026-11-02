@@ -96,19 +96,16 @@ bool RegistrationStateSolver::transferCxxPrologue(size_t I, Domain &State,
       State.Installed || !State.Uninstalled || State.Frame.CallbackEntry ||
       Block.StartAddr != Call.Caller.Begin || Op.Addr != Call.CallVA ||
       Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset != 0 ||
-      Registers[x86reg::RAX / x86reg::GeneralRegStride].Constant !=
+      Registers[x86reg::RAX / x86reg::GeneralRegStride].preferredAddress() !=
           Call.HandlerVA ||
       State.Frame.load(0, 4).Constant != Call.AllocationBytes ||
       !State.Frame.load(4, 4).ReturnPC)
     return false;
-  // No incoming GPR has a guessed scalar value. The exact entry prefix changes
-  // only EAX and ESP; preserve the remaining opaque identities, including EBP.
-  for (unsigned Index : {1, 2, 3, 5, 6, 7}) {
-    auto Incoming = FrameValue::taint(true);
-    Incoming.SavedRegister = uint8_t(Index + 1);
-    if (Registers[Index] != Incoming)
+  // The exact entry prefix changes only EAX and ESP. The seed owns any bound
+  // volatile inputs and the remaining opaque identities, including EBP.
+  for (unsigned Index : {1, 2, 3, 5, 6, 7})
+    if (Registers[Index] != ParentEntryRegisters[Index])
       return false;
-  }
   if (!charge(Call.Writes.size() * 12 + State.Frame.cellCount() +
               State.Frame.OtherRegisterBytes.size() +
               State.RuntimeObject.cellCount() +
@@ -146,7 +143,7 @@ bool RegistrationStateSolver::transferCxxPrologue(size_t I, Domain &State,
       Saved(7);
       break;
     case Source::Handler:
-      Value = FrameValue::constant(uint32_t(Call.HandlerVA));
+      Value = FrameValue::imageAddress(uint32_t(Call.HandlerVA));
       break;
     case Source::PreviousChain:
       Value = FrameValue::previousChain();
@@ -188,12 +185,12 @@ bool RegistrationStateSolver::transferCxxPrologue(size_t I, Domain &State,
   }
   const auto Cookie = State.Frame.load(Call.PostCallStackOffset, 4);
   if (!State.Frame.load(Call.RegistrationOffset, 4).PreviousChain ||
-      State.Frame.load(Call.RegistrationOffset + 4, 4).Constant !=
+      State.Frame.load(Call.RegistrationOffset + 4, 4).preferredAddress() !=
           Call.HandlerVA ||
       State.Frame.load(Call.TryLevelOffset, 4).Constant != UINT32_MAX ||
       State.Frame.load(0, 4) != Incoming[5] || !Cookie.SecurityCookie ||
       Cookie.CookieFrameOffset != 0 || Cookie.CookieXOR ||
-      !registrationInstallationReady(State.Frame))
+      Cookie.CookieImageXOR || !registrationInstallationReady(State.Frame))
     return false;
   State.Levels = {-1};
   State.Uninstalled = false;

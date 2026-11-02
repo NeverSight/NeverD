@@ -37,6 +37,10 @@ getX86RegistrationSEHBoundConvention(const RegistrationSEHBoundCall &Call);
 llvm::StringRef
 getX86RegistrationSEHBoundImport(const RegistrationSEHBoundCall &Call);
 
+/// A validated IAT invocation uses dllimport transport. A direct runtime
+/// veneer retains its original code target and ordinary CALL relocation.
+bool usesX86RegistrationSEHImportSlot(const X86RegistrationSEHBoundCall &Call);
+
 } // namespace neverd
 
 #endif

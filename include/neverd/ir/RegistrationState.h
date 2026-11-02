@@ -1,8 +1,12 @@
-//===- RegistrationState.h - Checked x86 EH state flow -----------*- C++
-//-*-===//
+//===- RegistrationState.h - Checked x86 EH state flow ----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Describe checked source registration states and separate native receipts.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_REGISTRATIONSTATE_H
@@ -12,6 +16,7 @@
 #include "neverd/loader/ExceptionCommon.h"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <memory>
@@ -24,7 +29,7 @@ namespace neverd {
 namespace coff_loader {
 struct X86CxxHandlerABI;
 struct X86CxxPrologueCall;
-}
+} // namespace coff_loader
 
 struct LowFunc;
 
@@ -196,6 +201,24 @@ struct RegistrationSEHExceptionAccess {
   bool operator==(const RegistrationSEHExceptionAccess &) const = default;
 };
 
+/// One read of the current PE32 NT_TIB. Self retains its exact source LOAD;
+/// StackBase is an opaque runtime value, never a regenerated frame coordinate.
+struct RegistrationSEHThreadAccess {
+  static constexpr uint32_t WordBytes = 4;
+  static constexpr uint32_t SelfOffset = 0x18;
+  static constexpr uint32_t StackBaseOffset = 4;
+  /// The lifter zero-extends PE32 effective addresses into its VA carrier.
+  static constexpr bool isAddressWidth(uint16_t Bytes) {
+    return Bytes == WordBytes || Bytes == sizeof(va_t);
+  }
+  enum class Kind : uint8_t { Self, StackBase } Field = Kind::Self;
+  va_t Address = InvalidVA;
+  int OpSeq = -1;
+  va_t RootAddress = InvalidVA;
+  int RootOpSeq = -1;
+  bool operator==(const RegistrationSEHThreadAccess &) const = default;
+};
+
 /// A physical SEH finally invocation ends either by consuming its own near
 /// return PC or by restoring the checked parent SavedESP and branching to an
 /// exact parent instruction. CallVA is zero for a runtime invocation. These
@@ -306,10 +329,23 @@ struct RegistrationSEHJumpResume {
 /// Scalar slots and borrowed objects use the caller's established EBP;
 /// opaque buffers name a capture whose native allocation replaces the source.
 struct RegistrationSEHBoundArgument {
-  enum class Kind : uint8_t { Unused, Scalar, Object, JumpBuffer, NullPointer };
+  enum class Kind : uint8_t {
+    Unused,
+    Scalar,
+    Object,
+    JumpBuffer,
+    NullPointer,
+    ConstantScalar,
+    ImagePointer
+  };
   Kind ArgumentKind = Kind::Unused;
   int32_t Offset = 0;
   va_t Capture = 0;
+  /// An invocation requirement emitted and checked as an actual i32 value.
+  /// A frame-slot location alone cannot establish this constant.
+  uint32_t ScalarValue = 0;
+  /// Original mapped storage, distinct from a scalar with equal address bits.
+  va_t ImageVA = 0;
   bool operator==(const RegistrationSEHBoundArgument &) const = default;
 };
 
@@ -317,7 +353,20 @@ struct RegistrationSEHBoundArgument {
 /// frame-observation proof; imported runtimes require an authenticated import
 /// and a complete invocation-specific memory and callback contract.
 struct RegistrationSEHBoundCall {
-  enum class Kind : uint8_t { PreservedHelper, RaiseException, ControlFP };
+  enum class Kind : uint8_t {
+    PreservedHelper,
+    RaiseException,
+    ControlFP,
+    GetStartupInfoW,
+    HeapTermination,
+    InterlockedCompareExchange,
+    Sleep
+  };
+  /// SDK PE32 STARTUPINFOW extent, including the conditional standard handles.
+  static constexpr uint32_t StartupInfoBytes = 68;
+  /// HeapSetInformation(NULL, HeapEnableTerminationOnCorruption, NULL, 0).
+  static constexpr std::array<uint32_t, 4> HeapTerminationArguments = {0, 1, 0,
+                                                                       0};
   Kind CalleeKind = Kind::PreservedHelper;
   va_t Address = InvalidVA;
   int OpSeq = -1;
@@ -326,7 +375,15 @@ struct RegistrationSEHBoundCall {
   /// Zero for the parent frame; otherwise the private callback stack owner.
   va_t EntryVA = 0;
   bool HasOrdinaryReturn = true;
+  /// One layout-independent scalar on every ordinary helper return. This
+  /// permits an exact EAX observation; it never replaces the native call.
+  std::optional<uint32_t> ConstantReturn;
   std::vector<RegistrationSEHBoundArgument> Arguments;
+  /// Native argument storage minimum. Preserved helpers additionally require
+  /// their independently checked access extents.
+  uint32_t borrowedObjectBytes() const {
+    return CalleeKind == Kind::GetStartupInfoW ? StartupInfoBytes : 4;
+  }
   bool operator==(const RegistrationSEHBoundCall &) const = default;
 };
 
@@ -356,6 +413,17 @@ struct RegistrationCxxPrologueEffect {
   bool operator==(const RegistrationCxxPrologueEffect &) const = default;
 };
 
+/// The corresponding shared SEH4 source call. Its encoded scope table and
+/// moved PC require a separate physical projection before native emission.
+struct RegistrationSEH4PrologueEffect {
+  va_t Address = InvalidVA;
+  va_t EndAddress = InvalidVA;
+  va_t HelperVA = InvalidVA;
+  int OpSeq = -1;
+  int32_t StackOffset = 0;
+  bool operator==(const RegistrationSEH4PrologueEffect &) const = default;
+};
+
 struct RegistrationStateAnalysis {
   std::vector<RegistrationBlockState> Blocks;
   bool Complete = false;
@@ -374,6 +442,8 @@ struct RegistrationStateAnalysis {
   std::vector<RegistrationSEHStateStore> SEHStateStores;
   bool SEHExceptionAccessesComplete = true;
   std::vector<RegistrationSEHExceptionAccess> SEHExceptionAccesses;
+  bool SEHThreadAccessesComplete = true;
+  std::vector<RegistrationSEHThreadAccess> SEHThreadAccesses;
   /// Invocation-specialized original helpers require a separate native plan.
   bool HasBoundSEHCallees = false;
   bool SEHBoundCallsComplete = true;
@@ -394,6 +464,7 @@ struct RegistrationStateAnalysis {
   bool ChainOperationsComplete = false;
   std::vector<RegistrationChainAccess> ChainAccesses;
   std::optional<RegistrationCxxPrologueEffect> CxxPrologue;
+  std::optional<RegistrationSEH4PrologueEffect> SEH4Prologue;
   std::vector<RegistrationFrameValue> FrameValues;
   /// The proven return cleanup of the callees this function calls. A
   /// callee's stack adjustment does not depend on the reaching registration
@@ -401,8 +472,11 @@ struct RegistrationStateAnalysis {
   std::vector<RegistrationCalleeStackContract> CalleeStacks;
   bool IncomingFrameAccessesComplete = true;
   std::vector<RegistrationIncomingFrameAccess> IncomingFrameAccesses;
-  /// Per-occurrence stack and initialized-object projections, rechecked from
-  /// callee evidence across every reaching ordinary and runtime path.
+  /// Every reaching call has checked source effects, possibly under an
+  /// invocation-specific binding that grants no native call ABI.
+  bool SourceCallFrameEffectsComplete = false;
+  /// Per-occurrence stack and initialized-object projections with complete
+  /// native call receipts. Source-only invocations cannot set this flag.
   bool CallFrameEffectsComplete = false;
   std::vector<RegistrationCalleeFrameContract> CalleeContracts;
   std::vector<RegistrationCallFrameEffect> CallFrameEffects;

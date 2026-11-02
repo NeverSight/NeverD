@@ -20,6 +20,7 @@
 
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/ErrorHandling.h"
@@ -100,11 +101,15 @@ void CFGBuilder::splitBlocks() {
                  Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
         }))
       BlockStarts.insert(Addr + Rec.Size);
-    if (Registration && EH->Cxx &&
+    if (Registration &&
         registration_state::stateStoreCandidate(*EH->Registration, Rec.Ops))
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration && EH->Cxx && Rec.IsCall && !Rec.IsIndirect &&
         coff_loader::getCheckedX86CxxEpilogueCall(*CurrentImg, *EH, Addr))
+      BlockStarts.insert(Addr + Rec.Size);
+    if (Registration && !EH->Cxx && Rec.IsCall && !Rec.IsIndirect &&
+        !Rec.IsCond && !Rec.IsRet && !Rec.IsInstructionGuard &&
+        coff_loader::getCheckedX86SEH4EpilogueCall(*CurrentImg, *EH, Addr))
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration && !EH->Cxx &&
         (EH->Encoding == ExceptionEncoding::X86ScopeTableEH3 ||
@@ -437,14 +442,9 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   // qualify suppression; they must not seed otherwise unreachable table arms.
   if (CurrentImg && CurrentFuncRange) {
     std::map<va_t, std::set<va_t>> AbsoluteSources;
-    if (!AbsoluteRelocationRoots ||
-        !AbsoluteRelocationRoots->collectSources(
-            *CurrentImg, CurrentFuncRange->first, CurrentFuncRange->second,
-            AbsoluteSources)) {
-      const detail::AbsoluteRelocationRootIndex LocalIndex(*CurrentImg);
-      LocalIndex.collectSources(*CurrentImg, CurrentFuncRange->first,
-                                CurrentFuncRange->second, AbsoluteSources);
-    }
+    absoluteRelocationRootIndex(*CurrentImg)
+        .collectSources(*CurrentImg, CurrentFuncRange->first,
+                        CurrentFuncRange->second, AbsoluteSources);
     for (const auto &[Target, Sources] : AbsoluteSources) {
       if (!Insns.count(Target))
         continue;

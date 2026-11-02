@@ -1063,7 +1063,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       if (V.isConst()) {
         if (!isGuardLiteral(V))
           return {};
-        if (V.Offset < 64)
+        if (V.Offset < std::numeric_limits<uint64_t>::digits)
           ProposedJoinedBound = std::max(ProposedJoinedBound, V.Offset + 1);
         if (!consumeGuardBuildWork())
           return {};
@@ -1558,28 +1558,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   }
 
   if (IndexGuards.empty()) {
-    // Separate predecessor arms can each guard the same selector without a
-    // single condition dominating the LOAD. Their literals only propose an
-    // envelope; the joined query below must still prove it on every path.
-    if (!GuardedGroupProofContext && !Info.IndexValueDefinedAtUse) {
-      for (const auto &[Addr, Insn] : Insns) {
-        if (!consumeCandidateEvidence())
-          return failIncomplete();
-        for (const LowOp &Op : Insn.Ops) {
-          if (!consumeCandidateEvidence())
-            return failIncomplete();
-          if (Op.Opcode != NdOp::INT_SUB && Op.Opcode != NdOp::INT_LESS &&
-              Op.Opcode != NdOp::INT_LESSEQUAL &&
-              Op.Opcode != NdOp::INT_SLESS && Op.Opcode != NdOp::INT_SLESSEQUAL)
-            continue;
-          for (unsigned I = 0; I < Op.NumInputs; ++I)
-            if (isGuardLiteral(Op.Inputs[I]) && Op.Inputs[I].Offset < 64)
-              ProposedJoinedBound =
-                  std::max(ProposedJoinedBound, Op.Inputs[I].Offset + 1);
-        }
-      }
-    }
-    // A loop may check its initial and recurrent index separately. No one
+    // Separate incoming paths may check the index independently. No one
     // dominating comparison then names the complete merged value. Reuse the
     // shared finite-domain proof over that exact use, including every current
     // predecessor and root. The normal candidate replay still authenticates
@@ -1587,6 +1566,36 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     // from table capacity or omit an unguarded incoming path.
     // Provisional group graphs keep their separate universal guard proof;
     // their hypothesized edges cannot seed an existential finite domain.
+    if (!GuardedGroupProofContext && !Info.IndexValueDefinedAtUse) {
+      // Non-dominating comparisons can propose the finite query envelope.
+      // Even an unrelated literal is only a proposal: the shared proof below
+      // must establish the complete domain at the exact index use.
+      for (const auto &[Address, Instruction] : Insns) {
+        if (!consumeCandidateEvidence())
+          return failIncomplete();
+        for (const LowOp &Op : Instruction.Ops) {
+          if (!consumeCandidateEvidence())
+            return failIncomplete();
+          if (Op.Opcode != NdOp::INT_SUB && Op.Opcode != NdOp::INT_EQUAL &&
+              Op.Opcode != NdOp::INT_NOTEQUAL && Op.Opcode != NdOp::INT_LESS &&
+              Op.Opcode != NdOp::INT_LESSEQUAL &&
+              Op.Opcode != NdOp::INT_SLESS && Op.Opcode != NdOp::INT_SLESSEQUAL)
+            continue;
+          if (Op.NumInputs != 2)
+            return failIncomplete();
+          for (unsigned I = 0; I < Op.NumInputs; ++I) {
+            if (!consumeCandidateEvidence())
+              return failIncomplete();
+            const NdVar &Value = Op.Inputs[I];
+            if (isGuardLiteral(Value) && Value.Size != 0 &&
+                Value.Size <= sizeof(uint64_t) &&
+                Value.Offset < std::numeric_limits<uint64_t>::digits)
+              ProposedJoinedBound =
+                  std::max(ProposedJoinedBound, Value.Offset + 1);
+          }
+        }
+      }
+    }
     if (!GuardedGroupProofContext && !Info.IndexValueDefinedAtUse &&
         ProposedJoinedBound >= limits::kMinJumpTableEntries) {
       if (!consumeGuardBuildWork(12))
@@ -1618,7 +1627,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         }
       }
       if (Complete.size() != 1 || !Complete[0])
-        SawIncompleteProofQuery = true;
+        return failIncomplete();
     }
     // A bounded lookup loop can read its selector from immutable records
     // without comparing the selector itself. Explore exact scalar states on
@@ -1666,7 +1675,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   }
 
   // All dominating table-reaching guards constrain the same runtime path.
-  // Prove their conjunction, not each comparison in isolation: a signed
+  // First prove their conjunction: a signed
   // upper bound is sound only when a separate dominating guard excludes the
   // negative half-domain, while either comparison alone is not a dense
   // zero-based table domain.
@@ -1785,6 +1794,7 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   size_t Interval = 0;
   uint32_t FirstRejected = 0;
   bool SawRejected = false;
+  bool IsDensePrefix = true;
   // A sparse domain (a two-level index table, whose unreached index bytes are
   // simply unused) is bounded by its last reaching value.
   std::optional<uint64_t> LastReaching;
@@ -1803,9 +1813,55 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
       FirstRejected = static_cast<uint32_t>(Value);
       SawRejected = true;
     } else if (SawRejected && Reaches && !AllowSparseDomain) {
-      return failSemantic();
+      IsDensePrefix = false;
     }
     Value = Next;
+  }
+  // A stricter dominating predicate can cut holes in an otherwise dense
+  // bound. Such holes do not invalidate a different dominating predicate's
+  // independently proved prefix. Select one complete predicate and replay its
+  // exact equivalence below; dropping the others only enlarges the domain.
+  if (!AllowSparseDomain && !IsDensePrefix) {
+    if (!consumeCandidateProduct(ConcreteWorkPerValue,
+                                 static_cast<size_t>(LastSample) + 1) ||
+        !consumeGuardBuildWork(IndexGuards.size()))
+      return failIncomplete();
+    std::optional<size_t> SelectedGuard;
+    uint32_t SelectedBound = 0;
+    for (size_t I = 0; I < IndexGuards.size(); ++I) {
+      const auto &[Expr, TableCondition] = IndexGuards[I];
+      size_t GuardInterval = 0;
+      uint32_t Bound = 0;
+      bool Rejected = false;
+      bool Prefix = true;
+      for (uint64_t Value = 0; Value <= LastSample;) {
+        const uint64_t Next =
+            Partitioned ? ChangePoints[++GuardInterval] : Value + 1;
+        const std::optional<uint64_t> Condition =
+            evaluateGuardExpr(Expr, Value);
+        if (!Condition)
+          return failSemantic();
+        const bool Reaches = (*Condition != 0) == TableCondition;
+        if (!Rejected && !Reaches) {
+          Bound = static_cast<uint32_t>(Value);
+          Rejected = true;
+        } else if (Rejected && Reaches) {
+          Prefix = false;
+          break;
+        }
+        Value = Next;
+      }
+      if (Prefix && Rejected && Bound >= limits::kMinJumpTableEntries &&
+          Bound <= limits::kMaxJumpTableEntries &&
+          (!SelectedGuard || Bound < SelectedBound)) {
+        SelectedGuard = I;
+        SelectedBound = Bound;
+      }
+    }
+    if (!SelectedGuard)
+      return failSemantic();
+    ReachesTable = SymbolicConstraints[*SelectedGuard];
+    FirstRejected = SelectedBound;
   }
   const bool SparseDomain = AllowSparseDomain && SawRejected && LastReaching &&
                             *LastReaching >= FirstRejected &&

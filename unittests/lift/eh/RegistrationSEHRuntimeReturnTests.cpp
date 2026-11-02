@@ -9,8 +9,10 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/X86/X86RegistrationCallResult.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
 
 #include <algorithm>
 
@@ -209,6 +211,70 @@ TEST_F(RegistrationSEHRuntimeReturn, KeepsParentReturnsAndOtherUsesObservable) {
   Observe.addInput(result(1));
   Function.Blocks[1].Ops.insert(Function.Blocks[1].Ops.begin() + 1, Observe);
   EXPECT_FALSE(unused());
+}
+
+TEST(RegistrationControlFPVeneer, NativeRecipeKeepsItsPhysicalCallIdentity) {
+  for (bool Indirect : {false, true})
+    for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Indirect << ':' << Mutation);
+      MedFunc F;
+      F.Entry = 0x401000;
+      F.ExceptionMetadata.emplace().Registration.emplace();
+      auto &States = F.RegistrationStates.emplace();
+      States.Complete = States.CallbackStatesComplete = true;
+      States.RegistrationLifetimeComplete = States.HasBoundSEHCallees = true;
+      using Kind = RegistrationSEHBoundArgument::Kind;
+      auto &Receipt = States.SEHBoundCalls.emplace_back();
+      Receipt.CalleeKind = RegistrationSEHBoundCall::Kind::ControlFP;
+      Receipt.Address = F.Entry;
+      Receipt.OpSeq = 7;
+      Receipt.TargetVA = Indirect ? 0x403000 : 0x401080;
+      Receipt.StackOffset = -64;
+      Receipt.Arguments = {{Kind::NullPointer},
+                           {Kind::ConstantScalar, 0, 0, 0x10000},
+                           {Kind::ConstantScalar, 0, 0, 0x30000}};
+      auto &Block = F.Blocks.emplace_back();
+      Block.Id = 10;
+      Block.StartAddr = F.Entry;
+      Block.EndAddr = F.Entry + (Indirect ? 6 : 5);
+      auto &Call = Block.Ops.emplace_back();
+      Call.Opcode = Indirect ? NdOp::INDIR_CALL : NdOp::CALL;
+      Call.Addr = F.Entry;
+      Call.OriginSeq = Receipt.OpSeq;
+      Call.addInput(MedVar::makeConst(Receipt.TargetVA, 4));
+      Call.Output = result(1);
+      if (Mutation == 1)
+        Call.Opcode = NdOp::BRANCH;
+      if (Mutation == 2)
+        ++Call.OriginSeq;
+      if (Mutation == 3)
+        ++Receipt.TargetVA;
+      if (Mutation == 4)
+        Receipt.Arguments[0] = {Kind::Object, -32};
+      if (Mutation == 5)
+        Receipt.Arguments[1] = {Kind::Scalar, -60};
+      if (Mutation == 6)
+        Receipt.Arguments[1].ScalarValue = 0x30000;
+      if (Mutation == 7)
+        Receipt.Arguments[2].ScalarValue = 0x10000;
+      if (Mutation == 8)
+        States.SEHBoundCallsComplete = false;
+      if (Mutation == 9)
+        Call.Output.Size = 2;
+      if (Mutation == 10)
+        Receipt.ConstantReturn = 0;
+      if (Mutation == 11)
+        Call.MemoryOrdering = NdMemoryOrdering::Acquire;
+      const auto Calls = getX86RegistrationSEHBoundCalls(F);
+      EXPECT_EQ(bool(Calls), Mutation == 0);
+      if (Calls) {
+        ASSERT_EQ(Calls->size(), 1u);
+        EXPECT_EQ(Calls->begin()->second.Operation, &Call);
+        EXPECT_TRUE(Calls->begin()->second.ObservesScalarReturn);
+        EXPECT_EQ(usesX86RegistrationSEHImportSlot(Calls->begin()->second),
+                  Indirect);
+      }
+    }
 }
 
 } // namespace

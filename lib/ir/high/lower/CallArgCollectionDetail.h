@@ -56,6 +56,7 @@ inline bool isCallPreservedReg(const TargetRegInfo &TRI, BinaryFormat Format,
 }
 
 struct CallArgScan {
+  const MedFunc *Function = nullptr;
   const std::vector<MedOp> *Ops = nullptr;
   size_t CallIdx = 0;
   uint64_t SpRegOff = 0;
@@ -99,7 +100,6 @@ struct CallArgScan {
   };
   std::vector<OpWindow> ExtraWindows;
   llvm::function_ref<ExprPtr(const MedVar &)> ToExpr;
-  llvm::function_ref<bool(const MedVar &)> IsCalleeSave;
   /// The value register argument \p Index holds at the call, for filling a
   /// register slot the call did not visibly write (nullptr when unknown).
   llvm::function_ref<ExprPtr(int)> ReachingRegArg;

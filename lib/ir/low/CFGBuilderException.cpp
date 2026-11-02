@@ -10,12 +10,15 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86/RegistrationOrdinaryGraph.h"
+
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationCxxState.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <bit>
@@ -29,6 +32,29 @@
 
 namespace neverd {
 
+namespace {
+struct OrdinaryCxxGraphRequest {
+  const CFGBuilder *Builder;
+  const BinaryImage *Image;
+  va_t Entry;
+};
+thread_local const OrdinaryCxxGraphRequest *CurrentOrdinaryCxxGraph = nullptr;
+} // namespace
+
+LowFunc registration_abi::buildOrdinaryCxxFrameGraph(
+    const BinaryImage &Image, Decoder &Decode, va_t Entry,
+    RegistrationCallCalleeIndex &Callees) {
+  if (!Callees.ownsImage(Image))
+    return {};
+  CFGBuilder Builder;
+  Builder.setRegistrationCalleeIndex(&Callees);
+  const OrdinaryCxxGraphRequest Request{&Builder, &Image, Entry};
+  llvm::SaveAndRestore<const OrdinaryCxxGraphRequest *> Scope(
+      CurrentOrdinaryCxxGraph, &Request);
+  return Builder.buildIntegerFrameProof(Image, Decode, Entry,
+                                        "ordinary-cxx-frame");
+}
+
 void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
   for (LowBlock &Block : Func.Blocks) {
     Block.ExceptionalSuccs.clear();
@@ -38,6 +64,25 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
     return;
   const ExceptionFunction &Metadata = *Func.ExceptionMetadata;
   Func.RegistrationStates.reset();
+  if (usesAnalysisRecovery() && Metadata.Registration) {
+    // Decoding retains the handler roots and original metadata. Native frame
+    // closure is a separate request, not a prerequisite for displaying code.
+    Func.AnalysisOnly = true;
+    Func.RegistrationStates.emplace();
+    Func.RegistrationStates->CallbackStatesComplete = false;
+    Func.RegistrationStates->CxxContinuationsComplete = false;
+    Func.RegistrationStates->Diagnostics.push_back(
+        "analysis view: native registration-frame proof deferred");
+    return;
+  }
+  if (CurrentOrdinaryCxxGraph && CurrentOrdinaryCxxGraph->Builder == this &&
+      CurrentOrdinaryCxxGraph->Image == CurrentImg &&
+      CurrentOrdinaryCxxGraph->Entry == Func.Entry && Metadata.Registration &&
+      Metadata.Cxx && Metadata.ParseStatus == ExceptionParseStatus::Complete &&
+      Metadata.CodeRange.Begin == Func.Entry &&
+      !Metadata.Registration->RealignedFrame &&
+      Metadata.Registration->Scopes.empty() && Metadata.Cxx->TryBlocks.empty())
+    return;
   if (Metadata.Registration) {
     std::optional<std::vector<RegistrationCalleeFrameContract>> Callees;
     std::optional<std::vector<RegistrationCleanupFrameContract>> Cleanups;
@@ -52,8 +97,8 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
         CalleeIndex = BorrowedRegistrationCallees;
       else {
         if (!RegistrationCallees)
-          RegistrationCallees =
-              std::make_shared<RegistrationCallCalleeIndex>(*CurrentImg);
+          RegistrationCallees = std::make_shared<RegistrationCallCalleeIndex>(
+              *CurrentImg, nullptr, &absoluteRelocationRootIndex(*CurrentImg));
         CalleeIndex = RegistrationCallees.get();
       }
       Stacks = CalleeIndex->stackContracts(Func);
@@ -76,7 +121,7 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
           *CurrentImg, Func, Callees ? &*Callees : nullptr,
           Cleanups ? &*Cleanups : nullptr, Stacks ? &*Stacks : nullptr,
           LocalUnwinds ? &*LocalUnwinds : nullptr,
-          SEHControls ? &*SEHControls : nullptr);
+          SEHControls ? &*SEHControls : nullptr, CalleeIndex);
     else
       Func.RegistrationStates = analyzeRegistrationStates(
           Func,

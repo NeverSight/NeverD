@@ -99,8 +99,10 @@ void MedLLVMEmitter::declareX86RegistrationJumpRuntimes(const MedFunc &Func) {
                     : Import.str(),
                 getX86RegistrationSEHBoundType(*Call.Source, *Ctx),
                 getX86RegistrationSEHBoundConvention(*Call.Source));
-    if (Callee && !Import.empty())
-      Callee->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+    if (Callee)
+      Callee->setDLLStorageClass(usesX86RegistrationSEHImportSlot(Call)
+                                     ? llvm::GlobalValue::DLLImportStorageClass
+                                     : llvm::GlobalValue::DefaultStorageClass);
   }
   for (const auto &[Address, Call] : *Calls) {
     if (Call.Resume)
@@ -133,8 +135,7 @@ prepareSEHJumps(const MedFunc &Source, llvm::Function &Parent,
   for (const auto &[Call, Address] : Calls) {
     if (const auto Found = Bound->find(Address); Found != Bound->end()) {
       if (!prepareSEHBoundCall(*Call, *Found->second.Source, Frame, EntrySP) ||
-          (Found->second.Source->CalleeKind !=
-               RegistrationSEHBoundCall::Kind::ControlFP &&
+          (!Found->second.ObservesScalarReturn &&
            !collectDiscardedRegistrationResult(
                *const_cast<llvm::CallInst *>(Call), Result.DiscardedResults)))
         return std::nullopt;

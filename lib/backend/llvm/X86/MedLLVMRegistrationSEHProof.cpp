@@ -13,6 +13,7 @@
 #include "neverd/backend/llvm/X86/X86RegistrationSEHControl.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHException.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
 
 #include "llvm/IR/Instructions.h"
@@ -68,16 +69,22 @@ std::optional<SEHFrameValues> getPrivateSEHFrameValues(
       }
     }
   }
-  // LowIR conservatively retains possible address bits in exception DWORDs.
-  // Their values come from the current runtime record, not from a relocated
+  // LowIR conservatively retains possible address bits in runtime DWORDs.
+  // Their values come from current runtime storage, not from a relocated
   // source frame. Discharge that taint only for a pure scalar use closure;
   // combining it with any actual frame address keeps the existing restriction.
   const auto ExceptionAccesses = getX86RegistrationSEHExceptionAccesses(Func);
-  if (!ExceptionAccesses)
+  const auto Bound = getX86RegistrationSEHBoundCalls(Func);
+  const auto ThreadAccesses = getX86RegistrationSEHThreadAccesses(Func);
+  if (!ExceptionAccesses || !Bound || !ThreadAccesses)
     return std::nullopt;
   std::set<ValueKey> RuntimeScalars;
   for (const MedBlock &Block : Func.Blocks)
     for (const MedOp &Op : Block.Ops) {
+      const auto Thread = ThreadAccesses->find({Op.Addr, Op.OriginSeq});
+      if (Thread != ThreadAccesses->end() &&
+          Thread->second.Field == RegistrationSEHThreadAccess::Kind::StackBase)
+        RuntimeScalars.insert(Key(Op.Output));
       const auto Access = ExceptionAccesses->find({Op.Addr, Op.OriginSeq});
       if (Access != ExceptionAccesses->end() &&
           (Access->second.Field ==
@@ -86,6 +93,15 @@ std::optional<SEHFrameValues> getPrivateSEHFrameValues(
                RegistrationSEHExceptionAccess::Kind::ExceptionFlags))
         RuntimeScalars.insert(Key(Op.Output));
     }
+  for (const auto &[Address, Call] : *Bound) {
+    if (++Work > limits::kMaxRegistrationEHStateWork)
+      return std::nullopt;
+    // The original atomic word is a runtime scalar. Keep its real CALL and
+    // reuse the scalar use/spill closure; no frame coordinate follows.
+    if (Call.Source->CalleeKind ==
+        RegistrationSEHBoundCall::Kind::InterlockedCompareExchange)
+      RuntimeScalars.insert(Key(Call.Operation->Output));
+  }
   auto IsScalar = [&](const MedVar &V) {
     return !V.isConst() && RuntimeScalars.count(Key(V));
   };
@@ -131,7 +147,6 @@ std::optional<SEHFrameValues> getPrivateSEHFrameValues(
   for (const auto &Value : RuntimeScalars)
     FrameValues.erase(Value);
   const auto Jumps = getX86RegistrationSEHJumpCalls(Func);
-  const auto Bound = getX86RegistrationSEHBoundCalls(Func);
   const auto LocalUnwinds = getX86RegistrationSEHLocalUnwinds(Func);
   if (!Jumps || !Bound || !LocalUnwinds)
     return std::nullopt;
@@ -226,7 +241,8 @@ std::optional<std::set<const llvm::StoreInst *>> getCheckedSEHCallbackStores(
 std::optional<std::set<llvm::Instruction *>> getCheckedSEHChainInstructions(
     llvm::Function &Parent, const RegistrationStateAnalysis &States,
     const std::map<std::pair<va_t, int>, llvm::Instruction *>
-        &RegistrationChainIR) {
+        &RegistrationChainIR,
+    const std::set<const llvm::LoadInst *> &ThreadReads) {
   // Authenticate every emitted FS memory instruction, not just entries that
   // happen to survive in an occurrence map. Duplicate emission is unknown.
   std::set<llvm::Instruction *> ChainInstructions;
@@ -267,12 +283,14 @@ std::optional<std::set<llvm::Instruction *>> getCheckedSEHChainInstructions(
       if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
         Pointer = Store->getPointerOperand();
       if (Pointer && Pointer->getType()->getPointerAddressSpace() == 257 &&
-          !ChainInstructions.count(&Instruction))
+          !ChainInstructions.count(&Instruction) &&
+          !ThreadReads.count(llvm::dyn_cast<llvm::LoadInst>(&Instruction)))
         return std::nullopt;
       for (const llvm::Use &Operand : Instruction.operands())
         if (Operand->getType()->isPointerTy() &&
             Operand->getType()->getPointerAddressSpace() == 257 &&
-            !ChainInstructions.count(&Instruction))
+            !ChainInstructions.count(&Instruction) &&
+            !ThreadReads.count(llvm::dyn_cast<llvm::LoadInst>(&Instruction)))
           return std::nullopt;
     }
 
@@ -321,7 +339,8 @@ std::optional<SEHSourceOperations> getCheckedSEHSourceOperations(
       llvm::Instruction *Instruction = nullptr;
       uint8_t Kind;
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+          (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default ||
+           isX86RegistrationThreadSelfLoad(Op, States))) {
         const auto It = RegistrationMemoryIR.find({Op.Addr, Op.OriginSeq});
         if (It == RegistrationMemoryIR.end() || !It->second)
           return std::nullopt;

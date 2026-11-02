@@ -581,17 +581,21 @@ Pipeline::optimizeModule(llvm::Module &Mod,
       Options.Strength != OptStrength::Deep &&
       Options.Strength != OptStrength::Source) {
     Result.Stop = OptimizationStopReason::InputInvalid;
+    Result.Diagnostic = "invalid optimization strength";
     return Result;
   }
 
-  if (llvm::verifyModule(Mod)) {
-    Result.Stop = OptimizationStopReason::InputInvalid;
-    return Result;
+  {
+    llvm::raw_string_ostream Diagnostics(Result.Diagnostic);
+    if (llvm::verifyModule(Mod, &Diagnostics)) {
+      Result.Stop = OptimizationStopReason::InputInvalid;
+      return Result;
+    }
   }
 
   auto Contracts = exception_rewrite::validateExceptionRewriteContracts(Mod);
   if (!Contracts) {
-    llvm::consumeError(Contracts.takeError());
+    Result.Diagnostic = llvm::toString(Contracts.takeError());
     Result.Stop = OptimizationStopReason::InputInvalid;
     return Result;
   }
@@ -609,16 +613,19 @@ Pipeline::optimizeModule(llvm::Module &Mod,
   auto CandidateOptions = Options;
   CandidateOptions.SourceMap = CandidateSources ? &*CandidateSources : nullptr;
   Result = runOptimizationPipeline(*Candidate, CandidateOptions);
-  if (llvm::verifyModule(*Candidate)) {
-    Result.Changed = false;
-    Result.Stop = OptimizationStopReason::VerificationFailed;
-    return Result;
+  {
+    llvm::raw_string_ostream Diagnostics(Result.Diagnostic);
+    if (llvm::verifyModule(*Candidate, &Diagnostics)) {
+      Result.Changed = false;
+      Result.Stop = OptimizationStopReason::VerificationFailed;
+      return Result;
+    }
   }
 
   auto CandidateContracts =
       exception_rewrite::validateExceptionRewriteContracts(*Candidate);
   if (!CandidateContracts) {
-    llvm::consumeError(CandidateContracts.takeError());
+    Result.Diagnostic = llvm::toString(CandidateContracts.takeError());
     Result.Changed = false;
     Result.Stop = OptimizationStopReason::VerificationFailed;
     return Result;
@@ -628,6 +635,7 @@ Pipeline::optimizeModule(llvm::Module &Mod,
       !Options.PostTransformVerifier(*Candidate)) {
     Result.Changed = false;
     Result.Stop = OptimizationStopReason::VerificationFailed;
+    Result.Diagnostic = "post-transform verification failed";
     return Result;
   }
 
@@ -699,9 +707,14 @@ Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
   promoteScaffoldingAllocas(*Candidate);
   if (CandidateSources)
     CandidateSources->refreshExpressionOrigins();
-  if (llvm::verifyModule(*Candidate)) {
-    Result.Stop = OptimizationStopReason::VerificationFailed;
-    return Result;
+  {
+    std::string Diagnostic;
+    llvm::raw_string_ostream Diagnostics(Diagnostic);
+    if (llvm::verifyModule(*Candidate, &Diagnostics)) {
+      Result.Diagnostic = std::move(Diagnostic);
+      Result.Stop = OptimizationStopReason::VerificationFailed;
+      return Result;
+    }
   }
   if (llvm::StructuralHash(*Candidate, /*DetailedHash=*/true) == InputHash &&
       snapshotModule(*Candidate) == snapshotModule(Mod))

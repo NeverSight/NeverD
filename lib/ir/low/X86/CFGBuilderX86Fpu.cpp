@@ -1973,6 +1973,7 @@ bool CFGBuilder::hasLocalFpuStackUse() const {
 
 bool CFGBuilder::buildNoReturnProof(const BinaryImage &Img, Decoder &Dec,
                                     va_t Entry, const std::string &Name) {
+  llvm::SaveAndRestore<bool> StrictAnalysis(AnalysisRecoveryEnabled, false);
   // The callee's tail calls are judged as its calls are, at this build's
   // proof depth.
   const auto TailCalleeNeverReturns = [&](va_t Target) {
@@ -2001,6 +2002,7 @@ bool CFGBuilder::buildNoReturnProof(const BinaryImage &Img, Decoder &Dec,
 LowFunc CFGBuilder::buildIntegerFrameProof(const BinaryImage &Img, Decoder &Dec,
                                            va_t Entry,
                                            const std::string &Name) {
+  llvm::SaveAndRestore<bool> StrictAnalysis(AnalysisRecoveryEnabled, false);
   // Frame, stack-cleanup and integer-result proofs read no x87 state, and a
   // call clobbers the same integer registers whichever register carries its
   // result. The caller's registration analysis also runs before its own x87

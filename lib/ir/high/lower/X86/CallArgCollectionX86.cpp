@@ -99,7 +99,7 @@ void collectCallArgsX86(const CallArgScan &Scan, std::vector<ExprPtr> &Found,
         if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
             Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
           continue;
-        if (Scan.IsCalleeSave(Prev.Inputs[1]) && Prev.Inputs[1].SSAVer == 0)
+        if (isIncomingRegisterSave(*Scan.TRI, Prev.Inputs[1], Scan.Function))
           continue;
         if (Scan.IsPcRootedStore && Scan.IsPcRootedStore(Prev))
           continue;
@@ -313,7 +313,7 @@ void collectCallArgsX86(const CallArgScan &Scan, std::vector<ExprPtr> &Found,
       if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
           Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         continue;
-      if (Scan.IsCalleeSave(Prev.Inputs[1]) && Prev.Inputs[1].SSAVer == 0)
+      if (isIncomingRegisterSave(*Scan.TRI, Prev.Inputs[1], Scan.Function))
         continue;
       if (Scan.IsPcRootedStore && Scan.IsPcRootedStore(Prev))
         continue;

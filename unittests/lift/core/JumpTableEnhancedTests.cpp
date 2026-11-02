@@ -698,14 +698,26 @@ TEST_F(JTE_X86_32, RealignedFrameKeepsItsSpilledGOTBase) {
   // `and $-16, %esp` (`$-4` in the leaf) anchors the frame: the GOT spill and
   // its reload are the same cell of the aligned frame, which no escape or
   // store reaches.
-  for (const char *Name :
-       {"jt_i386_realigned_loop", "jt_i386_realigned_lexer"}) {
-    SCOPED_TRACE(Name);
-    const neverd::LowFunc Low =
-        buildI386Function("test_jumptable_realigned_frame_i386.o", Name);
-    ASSERT_EQ(Low.JumpTables.size(), 1u);
-    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
-  }
+  const neverd::LowFunc Low = buildI386Function(
+      "test_jumptable_realigned_frame_i386.o", "jt_i386_realigned_loop");
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, UnknownCalleeCleanupCannotPreserveAnAlignedSpill) {
+  // The C source has declarations, but this object supplies no corresponding
+  // ABI receipt to the resolver. Its unknown external calls can change ESP;
+  // the earlier alignment cannot prove a later ESP-relative reload.
+  const neverd::LowFunc Low = buildI386Function(
+      "test_jumptable_realigned_frame_i386.o", "jt_i386_realigned_lexer");
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(
+      std::any_of(Low.Blocks.begin(), Low.Blocks.end(), [](const auto &B) {
+        return std::any_of(B.Ops.begin(), B.Ops.end(), [](const auto &Op) {
+          return Op.Opcode == neverd::NdOp::INDIR_BR ||
+                 Op.Opcode == neverd::NdOp::INDIR_CALL;
+        });
+      }));
 }
 
 TEST_F(JTE_X86_32, StoreAboveTheAlignedFrameLeavesItsSpill) {
@@ -7619,6 +7631,62 @@ TEST_F(JTE_X86_64, ModuloBoundAcceptsExactSixtyFourBitUnsignedDivision) {
   ASSERT_EQ(Low.JumpTables.size(), 1u);
   EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, WideDivisionModuloKeepsHighDividendAndSignedness) {
+  for (const bool ExplicitQuotient : {false, true})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(ExplicitQuotient);
+      SCOPED_TRACE(Mutation);
+      auto Loaded = neverd::loadBinary(moduloDomainObj());
+      ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+      auto &Image = *Loaded;
+      const auto *Function =
+          Image.findSymbol(ExplicitQuotient ? "jt_modulo_u64_explicit_udiv"
+                                            : "jt_modulo_u64_direct_remainder");
+      ASSERT_NE(Function, nullptr);
+      auto Segment = std::find_if(
+          Image.Segments.begin(), Image.Segments.end(),
+          [&](const auto &S) { return S.contains(Function->Addr); });
+      ASSERT_NE(Segment, Image.Segments.end());
+      const auto Begin = Segment->Data.begin() + Function->Addr - Segment->VA;
+      const auto End = Begin + Function->Size;
+      const std::array<uint8_t, 3> HighZero{0x48, 0x31, 0xd2};
+      const std::array<uint8_t, 3> Divide{0x48, 0xf7, 0xf1};
+      const std::array<uint8_t, 7> Divisor{0x48, 0xc7, 0xc1, 5, 0, 0, 0};
+      const auto High =
+          std::search(Begin, End, HighZero.begin(), HighZero.end());
+      const auto Div = std::search(Begin, End, Divide.begin(), Divide.end());
+      const auto N = std::search(Begin, End, Divisor.begin(), Divisor.end());
+      ASSERT_NE(High, End);
+      ASSERT_NE(Div, End);
+      ASSERT_NE(N, End);
+      if (Mutation == 1) {
+        // mov rdx,rsi: the dividend's high half is unconstrained. URem still
+        // fits its divisor on a successful divide, but x-(quotient*N) no
+        // longer shares that complete dividend and must not borrow its proof.
+        High[1] = 0x89;
+        High[2] = 0xf2;
+      }
+      if (Mutation == 2)
+        Div[2] = 0xf9; // IDIV cannot borrow the unsigned remainder theorem.
+      if (Mutation == 3)
+        N[3] = 0;
+      if (Mutation == 4)
+        N[3] = 6; // The five-slot storage cannot supply the larger domain.
+      neverd::Decoder Decoder;
+      ASSERT_TRUE(Decoder.init(Image));
+      neverd::CFGBuilder Builder;
+      const auto Low =
+          Builder.build(Image, Decoder, Function->Addr, Function->Name);
+      const bool Expected =
+          Mutation == 0 || (Mutation == 1 && !ExplicitQuotient);
+      EXPECT_EQ(Low.JumpTables.size(), Expected ? 1u : 0u);
+      if (Expected) {
+        EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+        EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+      }
+    }
 }
 
 TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {

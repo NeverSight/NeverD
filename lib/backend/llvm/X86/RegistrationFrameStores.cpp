@@ -1,4 +1,4 @@
-//===- COFFRegistrationFrameStores.cpp - Private PE32 spill definitions --===//
+//===- RegistrationFrameStores.cpp - Private PE32 spill definitions --===//
 //
 // NeverD Decompiler
 //
@@ -9,12 +9,13 @@
 /// reaching-store walk in the frame proof.
 //===----------------------------------------------------------------------===//
 
-#include "COFFRegistrationFrameStores.h"
+#include "neverd/backend/llvm/RegistrationFrameStores.h"
 
 #include "neverd/Limits.h"
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 
 #include <algorithm>
 #include <bit>
@@ -35,7 +36,9 @@ bool RegistrationFrameStores::build(
   Stores.clear();
   DirectStores.clear();
   AllStores.clear();
+  Effects.clear();
   Positions.clear();
+  Lifetimes.clear();
   for (const auto *Function : Functions)
     for (const auto &Block : *Function) {
       unsigned Position = 0;
@@ -43,8 +46,28 @@ bool RegistrationFrameStores::build(
         if (!charge(Work))
           return false;
         Positions.try_emplace(&I, Position++);
+        if (const auto *Marker = llvm::dyn_cast<llvm::LifetimeIntrinsic>(&I)) {
+          const auto *Argument = Marker->getArgOperand(0);
+          if (!llvm::isa<llvm::PoisonValue>(Argument)) {
+            const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Argument);
+            if (!Root || !Root->isStaticAlloca() ||
+                Root->getFunction() != Function)
+              return false;
+            auto &Lifetime = Lifetimes[Root];
+            Lifetime.StartsDead |=
+                Marker->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
+            Lifetime.Markers[&Block].push_back(Marker);
+          }
+        }
         if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
           AllStores[&Block].push_back(Store);
+        // LLVM's mayWriteToMemory also classifies volatile LOADs as effects
+        // for optimization ordering. They do not define a different frame
+        // word. Actual non-STORE writes and lifetime events remain barriers.
+        else if (!llvm::isa<llvm::LoadInst>(I) &&
+                 (llvm::isa<llvm::CallBase, llvm::CatchPadInst>(I) ||
+                  I.mayWriteToMemory()))
+          Effects[&Block].push_back(&I);
         const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(&I);
         if (!Slot || !Slot->isStaticAlloca())
           continue;
@@ -120,5 +143,67 @@ RegistrationFrameStores::directDefinitions(const llvm::Value *Root,
   if (Found == DirectStores.end())
     return std::nullopt;
   return llvm::ArrayRef(Found->second);
+}
+
+std::optional<llvm::ArrayRef<const llvm::Instruction *>>
+RegistrationFrameStores::interveningEffects(const llvm::Value *Root,
+                                            const llvm::BasicBlock *Block,
+                                            const llvm::Instruction *After,
+                                            const llvm::Instruction *Through,
+                                            size_t &Work) const {
+  if (!charge(Work))
+    return std::nullopt;
+  const auto Found = Effects.find(Block);
+  if (!Through || Stores.count(Root) || Found == Effects.end())
+    return llvm::ArrayRef<const llvm::Instruction *>{};
+  const auto &Candidates = Found->second;
+  if (!charge(Work, 2 * (std::bit_width(Candidates.size()) + 1)))
+    return std::nullopt;
+  auto BeforePosition = [&](unsigned Position, const auto *I) {
+    return Position < Positions.at(I);
+  };
+  const auto Begin =
+      After ? llvm::upper_bound(Candidates, Positions.at(After), BeforePosition)
+            : Candidates.begin();
+  const auto End =
+      llvm::upper_bound(Candidates, Positions.at(Through), BeforePosition);
+  if (Begin > End)
+    return std::nullopt;
+  return llvm::ArrayRef(Candidates)
+      .slice(Begin - Candidates.begin(), End - Begin);
+}
+
+std::optional<RegistrationFrameStores::LifetimeInfo>
+RegistrationFrameStores::lifetimeInfo(const llvm::AllocaInst &Root,
+                                      size_t &Work) const {
+  if (!charge(Work) || !Positions.count(&Root))
+    return std::nullopt;
+  const auto Found = Lifetimes.find(&Root);
+  return Found == Lifetimes.end()
+             ? LifetimeInfo{}
+             : LifetimeInfo{true, Found->second.StartsDead};
+}
+
+std::optional<const llvm::IntrinsicInst *>
+RegistrationFrameStores::latestLifetime(const llvm::AllocaInst &Root,
+                                        const llvm::BasicBlock &Block,
+                                        const llvm::Instruction *Through,
+                                        size_t &Work) const {
+  if (!charge(Work))
+    return std::nullopt;
+  const auto Found = Lifetimes.find(&Root);
+  if (!Through || Found == Lifetimes.end())
+    return nullptr;
+  const auto Markers = Found->second.Markers.find(&Block);
+  if (Markers == Found->second.Markers.end())
+    return nullptr;
+  const auto &Events = Markers->second;
+  if (!charge(Work, std::bit_width(Events.size()) + 1))
+    return std::nullopt;
+  const auto End = llvm::upper_bound(Events, Positions.at(Through),
+                                     [&](unsigned Position, const auto *I) {
+                                       return Position < Positions.at(I);
+                                     });
+  return End == Events.begin() ? nullptr : *(End - 1);
 }
 } // namespace neverd::coff_registration

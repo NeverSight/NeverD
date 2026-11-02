@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Check scalar member arguments, result policies and bounded graph reuse.
+//===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
 
@@ -47,6 +50,54 @@ TEST(RegistrationMemberCallee, BindsScalarWordsWithoutChangingCRTPolicy) {
   EXPECT_EQ(ABI->ECXReads, (std::vector<RegistrationObjectExtent>{{0, 4}}));
   EXPECT_TRUE(ABI->ECXWrites.empty());
   EXPECT_TRUE(ABI->CallerPCWrites.empty());
+}
+
+TEST(RegistrationMemberCallee, ScalarMembersNeedOnlyOneObjectGraphProof) {
+  const auto Image = memberImage({0x8b, 0x01, 0x03, 0x44, 0x24, 4, 0xc2, 4, 0});
+  // The object API proves the graph before rejecting its scalar stack argument.
+  // The member API must use that same complete graph within the same allowance.
+  size_t Cost = 0;
+  EXPECT_FALSE(
+      getCheckedX86RegistrationObjectCalleeABI(Image, Image.Entry, &Cost));
+  ASSERT_GT(Cost, 0u);
+  ASSERT_LT(Cost, limits::kMaxRegistrationEHStateWork);
+  size_t Work = limits::kMaxRegistrationEHStateWork - Cost;
+  const auto ABI =
+      getCheckedX86RegistrationMemberCalleeABI(Image, Image.Entry, &Work);
+  ASSERT_TRUE(ABI);
+  EXPECT_EQ(ABI->StackPopBytes, 4u);
+  EXPECT_TRUE(ABI->HasIndependentScalarReturn);
+  EXPECT_EQ(ABI->ECXReads, (std::vector<RegistrationObjectExtent>{{0, 4}}));
+  EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+  Work = limits::kMaxRegistrationEHStateWork - Cost + 1;
+  EXPECT_FALSE(
+      getCheckedX86RegistrationMemberCalleeABI(Image, Image.Entry, &Work));
+  EXPECT_EQ(Work, limits::kMaxRegistrationEHStateWork);
+}
+
+TEST(RegistrationMemberCallee, KeepsZeroArgumentGraphAndReturnPolicies) {
+  auto Image =
+      memberImage({0xe8, 0x0b, 0, 0, 0, 0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+                   0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x8b, 0x01, 0xc3});
+  Image.Symbols.push_back(Symbol::makeFunc(Image.Entry + 16));
+  const auto Object =
+      getCheckedX86RegistrationObjectCalleeABI(Image, Image.Entry);
+  const auto Member =
+      getCheckedX86RegistrationMemberCalleeABI(Image, Image.Entry);
+  ASSERT_TRUE(Object);
+  ASSERT_TRUE(Member);
+  EXPECT_EQ(Member->StackPopBytes, 0u);
+  EXPECT_EQ(Member->ECXReads, Object->ECXReads);
+  EXPECT_TRUE(Member->HasIndependentScalarReturn);
+  // Returning the borrowed pointer cannot acquire an observed scalar contract.
+  Image.Segments.front().Data[16] = 0x89;
+  Image.Segments.front().Data[17] = 0xc8;
+  EXPECT_FALSE(getCheckedX86RegistrationMemberCalleeABI(Image, Image.Entry));
+  const auto Discarded = getCheckedX86RegistrationMemberCalleeABI(
+      Image, Image.Entry, nullptr, RegistrationLeafResult::Discarded);
+  ASSERT_TRUE(Discarded);
+  EXPECT_EQ(Discarded->StackPopBytes, 0u);
+  EXPECT_FALSE(Discarded->HasIndependentScalarReturn);
 }
 
 TEST(RegistrationMemberCallee, RefusesUncheckedWordsAndCallingConventions) {
