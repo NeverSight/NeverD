@@ -40,6 +40,9 @@ Faults report the vector, error code and optional new CR2. Missing physical
 backing is an embedding failure and never fabricated as a guest page fault.
 Canonicality is checked for the whole operand before the first walk: a
 noncanonical tail reports #GP/#SS even if its canonical first page is absent.
+IA-32e operands wrap modulo 2^64 across the last and first linear pages.
+Descriptor base/index addition, wrapped descriptor cells and interrupt frames
+use the same modular linear-address domain.
 
 Loads and instruction fetches preserve the entire output on failure. Stores
 translate and validate every physical fragment before publishing operand data.
@@ -76,12 +79,13 @@ checks software contracts and executes independent original MOV/fetch
 instructions in KVM. It compares operand results, complete affected data pages,
 page-fault error codes, CR2, successful A/D updates and ordinary exception frames.
 Nested cases exercise absent/invalid #PF gates, faults reading the #PF/#DF gates,
-partially written frames, IST recovery and KVM shutdown. Undefined #DF saved
+partially written frames, IST recovery, wrapped table/stack addresses, initial
+#UD/NMI fault chains and KVM shutdown. Undefined #DF saved
 program state and implementation-dependent fault-time A updates are not equated.
 Unavailable KVM or LA57 is an explicit skip.
 
 The [November 1 evidence](evidence/x86-paged-memory-2026-11-01.json) records both
-SDK builds, 820 independent CPU comparisons per SDK (including 240 event
+SDK builds, 900 independent CPU comparisons per SDK (including 292 event
 comparisons within that total), and the existing 440 continuation regressions.
 The only hardware-mode skip is LA57 on the local CPU. The same 282 generated
 C/header/manifest artifacts are byte-identical across the SDKs.
@@ -94,8 +98,11 @@ the failure-atomic operand primitive alone is not their instruction model.
 
 Other remaining domains include legacy i386 segment/task-gate execution,
 SMI entry, SGX AEX/enclave execution, APIC/device arrival, MMIO, EPT/NPT/HLAT,
-LAM/LASS and CET/FRED entry. Some extreme descriptor-address overflow guards
-still refuse their invocation. The CPU binding rejects active unsupported
+LAM/LASS, bus-lock/split-lock fault routing and CET/FRED entry. The wrapped GDT
+CPU case binds A=1: with A=0 the host raises #AC on its split locked descriptor
+update, and KVM exits with `KVM_INTERNAL_ERROR_SIMUL_EX` during #PF entry.
+That failed oracle is retained, not counted as a passing A-bit update.
+The CPU binding rejects active unsupported
 controls rather than treating them as disabled. Physical RAM is confined to one
 CPU with A20 enabled; there is no TLB or translated-code cache in this component.
 LLVM release/pin completion remains separate from this qualification.

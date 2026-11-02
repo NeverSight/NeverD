@@ -3454,12 +3454,14 @@ semantics over this RAM. Nested delivery faults retain their selector/IDT error
 codes, CR2 updates, NMI blocking and completed descriptor/frame writes. The
 exception classes select #DF or shutdown, with no synthesized reset. Same-level
 entry avoids an eager extra descriptor read after an accessed-bit write.
+Operands, table cells and handler frames support 64-bit linear wrap. Native
+#UD/NMI fault chains preserve NMI blocking across recursive entry.
 
 The [contract](x86-paged-memory.md) and
 [qualification record](evidence/x86-paged-memory-2026-11-01.json) distinguish this
 C++ binding from generated source. Both SDKs pass the 440 existing continuation
-regressions plus the paged-memory/event checks. Each SDK executes 820 original
-CPU comparisons, including 240 fault/event comparisons within that total;
+regressions plus the paged-memory/event checks. Each SDK executes 900 original
+CPU comparisons, including 292 fault/event comparisons within that total;
 five-level native execution is explicitly skipped on the non-LA57 host.
 Generated-C memory-context/commit integration, complete legacy i386 dispatch,
 SMI/SGX AEX and the documented external-device domains remain open. LLVM release

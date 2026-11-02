@@ -115,8 +115,9 @@ protected:
   }
 
   void range(NdVar Address, NdVar LastByte, uint8_t Vector = 13) {
-    faultIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), Address), Vector,
-            DeliveryExternal.value_or(k(0)));
+    if constexpr (!Writer::FaultableMemory)
+      faultIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), Address),
+              Vector, DeliveryExternal.value_or(k(0)));
     canonical(Address, Vector);
     canonical(op(NdOp::INT_ADD, {Address, LastByte}), Vector);
   }
@@ -164,7 +165,8 @@ protected:
     const auto Index = masked(Selector, 0xfff8);
     const auto Last = op(NdOp::INT_ADD, {Index, k(7)});
     faultIf(less(Limit, Last), 13, Error);
-    W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), Base));
+    if constexpr (!Writer::FaultableMemory)
+      W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), Base));
     const auto Address = op(NdOp::INT_ADD, {Base, Index});
     range(Address, 7);
     return {Address, readMemory(Address)};

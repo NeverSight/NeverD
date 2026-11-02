@@ -169,6 +169,58 @@ TEST_F(X86PagingTest, NoncanonicalOperandTailPrecedesFirstPageFault) {
   }
 }
 
+TEST_F(X86PagingTest, WholeOperandWrapsAcrossLastAndFirstLinearPages) {
+  for (bool Five : {false, true}) {
+    S.CR4 = 0x20 | (Five ? 0x1000 : 0);
+    const unsigned Levels = Five ? 5 : 4;
+    for (bool Present : {false, true}) {
+      for (unsigned I = 0; I != Levels; ++I) {
+        const uint64_t Table = (I + 1) * 0x1000;
+        const bool Leaf = I + 1 == Levels;
+        put(Table, Leaf ? (Present ? 0x9007 : 0) : (I + 2) * 0x1000 + 7);
+        put(Table + 511 * 8, Leaf ? 0xa007 : (I + 2) * 0x1000 + 7);
+      }
+      put(0xaffc, 0x44332211, true);
+      put(0x9000, 0x88776655, true);
+      A.Address = UINT64_MAX - 3;
+      for (auto Kind : {MemoryAccessKind::Read, MemoryAccessKind::Write}) {
+        A.Kind = Kind;
+        auto P = paged();
+        std::array<uint8_t, 8> Bytes;
+        Bytes.fill(0xa5);
+        auto R =
+            llvm::cantFail(Kind == MemoryAccessKind::Write ? P->store(A, Bytes)
+                                                           : P->load(A, Bytes));
+        if (!Present) {
+          ASSERT_EQ(R.Status, X86PageWalkStatus::Exception);
+          ASSERT_TRUE(R.Exception);
+          EXPECT_EQ(R.Exception->Vector, 14);
+          EXPECT_EQ(R.Exception->CR2, 0u);
+          EXPECT_EQ(R.Exception->ErrorCode,
+                    Kind == MemoryAccessKind::Write ? 2u : 0u);
+          EXPECT_EQ(P->physicalMemory()
+                        .loadScalar(0xaffc, GuestScalarWidth::I32)
+                        .Value,
+                    0x44332211u);
+          EXPECT_TRUE(std::all_of(Bytes.begin(), Bytes.end(),
+                                  [](uint8_t V) { return V == 0xa5; }));
+        } else {
+          ASSERT_EQ(R.Status, X86PageWalkStatus::Completed);
+          if (Kind == MemoryAccessKind::Read)
+            EXPECT_EQ(Bytes, (std::array<uint8_t, 8>{0x11, 0x22, 0x33, 0x44,
+                                                     0x55, 0x66, 0x77, 0x88}));
+          else
+            for (uint64_t Address : {0xaffcu, 0x9000u})
+              EXPECT_EQ(P->physicalMemory()
+                            .loadScalar(Address, GuestScalarWidth::I32)
+                            .Value,
+                        0xa5a5a5a5u);
+        }
+      }
+    }
+  }
+}
+
 TEST_F(X86PagingTest, EveryLevelContributesPermissionsAndNX) {
   for (unsigned Level = 0; Level != 4; ++Level) {
     for (MemoryAccessKind Kind :

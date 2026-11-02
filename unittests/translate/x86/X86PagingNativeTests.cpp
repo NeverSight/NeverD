@@ -43,6 +43,7 @@ protected:
   static constexpr uint64_t MemorySize = 0x200000;
   static constexpr uint64_t DataPage = 0x180000;
   static constexpr uint64_t SecondDataPage = 0x1a0000;
+  static constexpr uint64_t WrappedPage = 0x1b0000;
   static constexpr uint64_t Code = 0x1000;
   static constexpr uint64_t Handler = 0x2000;
   static constexpr uint64_t Stack = 0x1e0000;
@@ -126,15 +127,28 @@ protected:
         close(FD);
   }
 
+  static uint64_t physicalByte(uint64_t Address) {
+    return Address >= UINT64_MAX - 4095 ? WrappedPage + (Address & 4095)
+                                        : Address;
+  }
+
   void put(uint64_t Address, uint64_t Value, unsigned Bytes = 8) {
-    ASSERT_LE(Address + Bytes, MemorySize);
-    std::memcpy(RAM + Address, &Value, Bytes);
+    for (unsigned I = 0; I != Bytes; ++I) {
+      const auto Physical = physicalByte(Address + I);
+      ASSERT_LT(Physical, MemorySize);
+      RAM[Physical] = Value >> (I * 8);
+    }
   }
 
   uint64_t get(uint64_t Address, unsigned Bytes = 8) {
-    EXPECT_LE(Address + Bytes, MemorySize);
     uint64_t Value = 0;
-    std::memcpy(&Value, RAM + Address, Bytes);
+    for (unsigned I = 0; I != Bytes; ++I) {
+      const auto Physical = physicalByte(Address + I);
+      EXPECT_LT(Physical, MemorySize);
+      if (Physical >= MemorySize)
+        return 0;
+      Value |= uint64_t(RAM[Physical]) << (I * 8);
+    }
     return Value;
   }
 
@@ -157,19 +171,34 @@ protected:
                MemoryAccessKind Kind, unsigned CPL, bool WriteProtect,
                unsigned Protection, bool AC, unsigned FirstPageBytes = 0,
                bool SecondPagePresent = true, unsigned DeliveryFailure = 0,
-               bool NoncanonicalEnd = false, bool StackReference = false) {
+               unsigned AddressBoundary = 0, bool StackReference = false,
+               unsigned InitialEvent = 0, unsigned WrappingTable = 0) {
     const bool Wide = GetParam() >= 4;
     const bool Legacy = GetParam() == 2;
     const unsigned Width = Legacy ? 4 : 8;
     const unsigned Levels = Wide ? GetParam() : 2;
     const uint64_t Page =
-        NoncanonicalEnd ? (uint64_t(1) << (GetParam() == 5 ? 56 : 47)) - 4096
+        AddressBoundary == 2 ? UINT64_MAX - 4095
+        : AddressBoundary == 1
+            ? (uint64_t(1) << (GetParam() == 5 ? 56 : 47)) - 4096
         : Wide ? (GetParam() == 5 ? uint64_t(1) << 48 : uint64_t(1) << 39)
                : 0x40000000;
     const uint64_t Offset = FirstPageBytes ? 4096 - FirstPageBytes : 0;
     const uint64_t Address = Page + Offset;
-    const uint64_t IDTBase = DeliveryFailure >= 5 ? 0x6f30 : 0x6000;
-    const uint64_t KernelSP = DeliveryFailure == 7 ? Stack + 16 : Stack;
+    const uint64_t IDTBase = WrappingTable == 1     ? UINT64_MAX - 127
+                             : WrappingTable == 6   ? UINT64_MAX - 14 * 16 - 7
+                             : DeliveryFailure >= 5 ? 0x6f30
+                                                    : 0x6000;
+    const uint64_t GDTBase = WrappingTable == 2   ? UINT64_MAX - 7
+                             : WrappingTable == 7 ? UINT64_MAX - 11
+                                                  : 0x5000;
+    const uint64_t TSSBase = WrappingTable == 3   ? UINT64_MAX - 3
+                             : WrappingTable == 8 ? UINT64_MAX - 7
+                                                  : 0x5800;
+    const uint64_t KernelSP = WrappingTable == 4     ? 0
+                              : WrappingTable == 5   ? 16
+                              : DeliveryFailure == 7 ? Stack + 16
+                                                     : Stack;
     SCOPED_TRACE(testing::Message()
                  << "mode=" << GetParam() << " level=" << ChangeLevel
                  << " clear=" << Clear << " set=" << Set
@@ -177,8 +206,9 @@ protected:
                  << " wp=" << WriteProtect << " protection=" << Protection
                  << " ac=" << AC << " prefix=" << FirstPageBytes << " second="
                  << SecondPagePresent << " delivery=" << DeliveryFailure
-                 << " noncanonical=" << NoncanonicalEnd
-                 << " stack=" << StackReference);
+                 << " address_boundary=" << AddressBoundary
+                 << " stack=" << StackReference << " event=" << InitialEvent
+                 << " wrapped_table=" << WrappingTable);
     std::memset(RAM, 0, MemorySize);
     // Separate kernel and tested hierarchies let faults at every level retain
     // an independent, mapped exception entry and supervisor stack.
@@ -202,6 +232,14 @@ protected:
       const bool User = (Page == Code && CPL == 3) || Page == UserStack - 4096;
       put(KernelPT + I * Width, Page | (User ? 7 : 3), Width);
     }
+    if (AddressBoundary == 2)
+      put(KernelPT, SecondDataPage | 7, Width);
+    if (WrappingTable >= 4)
+      for (unsigned I = 0; I != Levels; ++I) {
+        const uint64_t Table = I ? 0x60000 + (I - 1) * 0x1000 : 0x10000;
+        put(Table + 511 * 8,
+            (I + 1 == Levels ? WrappedPage : 0x60000 + I * 0x1000) | 3);
+      }
     std::vector<uint64_t> Entries;
     if (Wide) {
       for (unsigned I = 0; I != Levels; ++I) {
@@ -224,19 +262,26 @@ protected:
       const uint64_t Entry = Entries[ChangeLevel];
       put(Entry, (get(Entry, Width) & ~Clear) | Set, Width);
     }
+    // A split descriptor must already have A=1: the host enables split-lock
+    // detection, and its implicit locked A update raises #AC during #PF entry.
+    // KVM reports that pair as KVM_INTERNAL_ERROR_SIMUL_EX. This case qualifies
+    // the wrapped descriptor read; it does not qualify bus-lock fault routing.
     const uint64_t CodeDescriptor =
-        Wide ? 0x00af9a000000ffffULL : 0x00cf9a000000ffffULL;
-    put(0x5008, CodeDescriptor);
-    put(0x5010, 0x00cf93000000ffffULL);
-    put(0x5018, CodeDescriptor | 0x600000000000ULL);
-    put(0x5020, 0x00cff3000000ffffULL);
-    put(0x5804, KernelSP, Wide ? 8 : 4);
+        (Wide ? 0x00af9a000000ffffULL : 0x00cf9a000000ffffULL) |
+        (WrappingTable == 7 ? uint64_t(1) << 40 : 0);
+    put(GDTBase + 8, CodeDescriptor);
+    put(GDTBase + 16, 0x00cf93000000ffffULL);
+    put(GDTBase + 24, CodeDescriptor | 0x600000000000ULL);
+    put(GDTBase + 32, 0x00cff3000000ffffULL);
+    put(TSSBase + 4, KernelSP, Wide ? 8 : 4);
     if (!Wide)
-      put(0x5808, 16, 2);
-    for (unsigned Vector : {8u, 12u, 13u, 14u}) {
+      put(TSSBase + 8, 16, 2);
+    for (unsigned Vector : {2u, 6u, 8u, 12u, 13u, 14u}) {
       const uint64_t Target = Handler + Vector * 16;
       const uint64_t Gate = IDTBase + Vector * (Wide ? 16 : 8);
-      put(Gate, Target | (uint64_t(8) << 16) | (uint64_t(0x8e) << 40));
+      if (Gate < MemorySize ||
+          (WrappingTable >= 4 && Gate >= UINT64_MAX - 4095))
+        put(Gate, Target | (uint64_t(8) << 16) | (uint64_t(0x8e) << 40));
     }
     if (DeliveryFailure == 1 || DeliveryFailure == 2)
       put(IDTBase + 14 * 16, get(IDTBase + 14 * 16) & ~(uint64_t(1) << 47));
@@ -251,15 +296,25 @@ protected:
     if (DeliveryFailure == 7) {
       put(KernelPT + (Stack / 4096 - 1) * Width, 0, Width);
       put(IDTBase + 8 * 16, get(IDTBase + 8 * 16) | (uint64_t(1) << 32));
-      put(0x5800 + 36, 0x1c0000);
+      put(TSSBase + 36, 0x1c0000);
     }
     // The oracle executes actual machine bytes, never candidate helper code.
     const std::array<uint8_t, 4> Bytes{
         uint8_t(Wide ? 0x48 : (Kind == MemoryAccessKind::Write ? 0x89 : 0x8b)),
         uint8_t(Wide ? (Kind == MemoryAccessKind::Write ? 0x89 : 0x8b) : 0x07),
         uint8_t(StackReference ? 0x45 : 0x07), 0};
-    const unsigned CodeBytes = StackReference ? 4 : Wide ? 3 : 2;
+    const unsigned CodeBytes = InitialEvent == 6   ? 2
+                               : InitialEvent == 2 ? 1
+                               : StackReference    ? 4
+                               : Wide              ? 3
+                                                   : 2;
     std::memcpy(RAM + Code, Bytes.data(), CodeBytes);
+    if (InitialEvent == 6) {
+      RAM[Code] = 0x0f;
+      RAM[Code + 1] = 0x0b; // Independent original UD2, no operand access.
+    } else if (InitialEvent == 2) {
+      RAM[Code] = 0x90; // NMI is injected before this instruction executes.
+    }
     const uint64_t Original = 0x9876543210fedc90ULL;
     for (unsigned I = 0; I != 8; ++I) {
       const uint64_t Destination = Offset + I < 4096
@@ -292,15 +347,21 @@ protected:
     const std::array<uint8_t, 8> Input{0x44, 0x33, 0x22, 0x11};
     const X86LinearAccess Access{Address, Kind, uint8_t(CPL), false,
                                  StackReference};
-    auto Expected =
-        Kind == MemoryAccessKind::Write
-            ? Memory->store(Access,
-                            llvm::ArrayRef(Input).take_front(OperandBytes))
-            : Memory->load(Access, llvm::MutableArrayRef(Value).take_front(
-                                       OperandBytes));
-    ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
-    ASSERT_NE(Expected->Status, X86PageWalkStatus::BackingFault);
-
+    auto Expected = [&]() -> llvm::Expected<X86MemoryAccessResult> {
+      if (InitialEvent) {
+        X86MemoryAccessResult R;
+        R.Status = X86PageWalkStatus::Exception;
+        R.Exception =
+            X86MemoryException{uint8_t(InitialEvent), 0, std::nullopt};
+        return R;
+      }
+      return Kind == MemoryAccessKind::Write
+                 ? Memory->store(Access,
+                                 llvm::ArrayRef(Input).take_front(OperandBytes))
+                 : Memory->load(Access, llvm::MutableArrayRef(Value).take_front(
+                                            OperandBytes));
+    }();
+    const bool HasExpected = bool(Expected);
     kvm_sregs Special = Initial;
     Special.cr0 = State.CR0;
     Special.cr3 = State.CR3;
@@ -309,13 +370,13 @@ protected:
     Special.cs = segment(CPL ? 27 : 8, true, Wide, CPL);
     Special.ds = Special.es = Special.ss =
         segment(CPL ? 35 : 16, false, Wide, CPL);
-    Special.gdt.base = 0x5000;
+    Special.gdt.base = GDTBase;
     Special.gdt.limit = 0x3f;
     Special.idt.base = IDTBase;
     Special.idt.limit = 4095;
     Special.ldt.unusable = 1;
     Special.tr = {};
-    Special.tr.base = 0x5800;
+    Special.tr.base = TSSBase;
     Special.tr.limit = 0x67;
     Special.tr.selector = 40;
     Special.tr.type = 11;
@@ -341,23 +402,30 @@ protected:
     Debug.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
     Debug.arch.debugreg[0] =
         Kind == MemoryAccessKind::Execute ? Address + 1 : Code + CodeBytes;
-    Debug.arch.debugreg[1] = Handler + 14 * 16;
+    Debug.arch.debugreg[1] = Handler + (InitialEvent ? InitialEvent : 14) * 16;
     Debug.arch.debugreg[2] = Handler + (DeliveryFailure ? 8 : 13) * 16;
     Debug.arch.debugreg[3] = Handler + 12 * 16;
     Debug.arch.debugreg[7] = 0x455;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
+    if (InitialEvent == 2)
+      ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
     ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
     const bool Shutdown = DeliveryFailure == 2 || DeliveryFailure == 6;
     ASSERT_EQ(Run->exit_reason,
               unsigned(Shutdown ? KVM_EXIT_SHUTDOWN : KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
+    ASSERT_TRUE(bool(Expected))
+        << llvm::toString(Expected.takeError())
+        << " native rip=" << Registers.rip << " cr2=" << Special.cr2
+        << " rax=" << Registers.rax << " stack=" << get(Registers.rsp);
+    ASSERT_NE(Expected->Status, X86PageWalkStatus::BackingFault);
     if (Expected->Status == X86PageWalkStatus::Exception) {
       ASSERT_TRUE(Expected->Exception);
       if (!DeliveryFailure) {
         EXPECT_EQ(Registers.rip, Handler + Expected->Exception->Vector * 16);
         EXPECT_EQ(get(Registers.rsp, Wide ? 8 : 4),
-                  Expected->Exception->ErrorCode);
+                  InitialEvent ? Code : Expected->Exception->ErrorCode);
         if (Expected->Exception->CR2)
           EXPECT_EQ(Special.cr2, *Expected->Exception->CR2);
       }
@@ -388,6 +456,8 @@ protected:
         Explicit.Unusable = 64;
         X64ContinuationEventV1 Event;
         Event.SavedPC = BeforeRegisters.rip;
+        Event.Kind = InitialEvent == 2 ? X64ContinuationEventKind::NMI
+                                       : X64ContinuationEventKind::Fault;
         Event.Vector = Expected->Exception->Vector;
         Event.ErrorCode = Expected->Exception->ErrorCode;
         Event.FaultAddress = Expected->Exception->CR2.value_or(0);
@@ -396,6 +466,9 @@ protected:
         ASSERT_EQ(Delivery->Status, Shutdown ? X64PagedEventStatus::Shutdown
                                              : X64PagedEventStatus::Delivered);
         EXPECT_EQ(Explicit.Core.Core.CR2, Special.cr2);
+        kvm_vcpu_events AfterEvents{};
+        ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &AfterEvents), 0);
+        EXPECT_EQ(Explicit.NMIBlocked, AfterEvents.nmi.masked);
         if (!Shutdown) {
           EXPECT_EQ(Delivery->DeliveredVector,
                     DeliveryFailure ? 8 : Expected->Exception->Vector);
@@ -427,12 +500,14 @@ protected:
         }
         ++EventComparisons;
         std::array<uint8_t, 4096> Descriptors;
-        ASSERT_EQ(
-            Memory->physicalMemory().loadBytes(0x5000, Descriptors).Status,
-            GuestMemoryAccessStatus::Completed);
-        EXPECT_EQ(
-            std::memcmp(Descriptors.data(), RAM + 0x5000, Descriptors.size()),
-            0);
+        const uint64_t DescriptorPage = WrappingTable == 2 ? 0 : 0x5000;
+        ASSERT_EQ(Memory->physicalMemory()
+                      .loadBytes(DescriptorPage, Descriptors)
+                      .Status,
+                  GuestMemoryAccessStatus::Completed);
+        EXPECT_EQ(std::memcmp(Descriptors.data(), RAM + DescriptorPage,
+                              Descriptors.size()),
+                  0);
       }
     } else {
       EXPECT_EQ(Registers.rip, Kind == MemoryAccessKind::Execute
@@ -451,7 +526,8 @@ protected:
         EXPECT_EQ(get(Entry, Width), Software.Value);
       }
     }
-    for (uint64_t PhysicalPage : {DataPage, SecondDataPage}) {
+    for (uint64_t PhysicalPage :
+         {DataPage, SecondDataPage, WrappedPage, uint64_t(0)}) {
       std::array<uint8_t, 4096> Bytes;
       ASSERT_EQ(Memory->physicalMemory().loadBytes(PhysicalPage, Bytes).Status,
                 GuestMemoryAccessStatus::Completed);
@@ -525,16 +601,34 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
           ++Comparisons;
         }
   if (GetParam() >= 4)
-    for (unsigned Prefix = 1; Prefix != 8; ++Prefix)
-      for (bool StackReference : {false, true})
-        for (bool Present : {false, true})
-          for (MemoryAccessKind Kind :
-               {MemoryAccessKind::Read, MemoryAccessKind::Write}) {
-            ASSERT_NO_FATAL_FAILURE(compare(Levels - 1, Present ? 0 : 1, 0,
-                                            Kind, 0, true, 0, false, Prefix,
-                                            true, 0, true, StackReference));
-            ++Comparisons;
-          }
+    for (unsigned Boundary : {1u, 2u})
+      for (unsigned Prefix = 1; Prefix != 8; ++Prefix)
+        for (bool StackReference : {false, true})
+          for (bool Present : {true, false})
+            for (MemoryAccessKind Kind :
+                 {MemoryAccessKind::Read, MemoryAccessKind::Write}) {
+              ASSERT_NO_FATAL_FAILURE(
+                  compare(Levels - 1, Present ? 0 : 1, 0, Kind, 0, true, 0,
+                          false, Prefix, true, 0, Boundary, StackReference));
+              ++Comparisons;
+            }
+  if (GetParam() >= 4)
+    for (unsigned InitialEvent : {2u, 6u})
+      for (unsigned Failure : {0u, 7u})
+        for (unsigned CPL : {0u, 3u}) {
+          ASSERT_NO_FATAL_FAILURE(compare(Levels, 0, 0, MemoryAccessKind::Read,
+                                          CPL, true, 0, false, 0, true, Failure,
+                                          false, false, InitialEvent));
+          ++Comparisons;
+        }
+  if (GetParam() >= 4)
+    for (unsigned Table : {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u})
+      for (unsigned CPL : {0u, 3u}) {
+        ASSERT_NO_FATAL_FAILURE(
+            compare(Levels - 1, 1, 0, MemoryAccessKind::Read, CPL, true, 0,
+                    false, 0, true, 0, false, false, 0, Table));
+        ++Comparisons;
+      }
   RecordProperty("cpu_comparisons", Comparisons);
   RecordProperty("event_cpu_comparisons", EventComparisons);
 }

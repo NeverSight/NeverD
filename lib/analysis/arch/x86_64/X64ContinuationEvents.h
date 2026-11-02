@@ -321,7 +321,8 @@ public:
     faultIf(
         less(load(offsetof(V6, IDTR) + offsetof(Table, Limit), 2), LastByte),
         13, GateError);
-    W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), IDT));
+    if constexpr (!Writer::FaultableMemory)
+      W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), LastByte}), IDT));
     const auto GateAddress = op(NdOp::INT_ADD, {IDT, GateOffset});
     range(GateAddress, 15);
     const auto Low = readMemory(GateAddress);
@@ -378,8 +379,9 @@ public:
         both(Switch,
              less(load(offsetof(V6, TR) + offsetof(Segment, Limit), 4), Last)),
         10, TssError);
-    W.rejectIf(
-        both(Switch, less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), TR)));
+    if constexpr (!Writer::FaultableMemory)
+      W.rejectIf(
+          both(Switch, less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), TR)));
     const auto Address =
         choose(Switch, op(NdOp::INT_ADD, {TR, TssOffset}), Code.Address);
     range(Address, 7);
@@ -392,7 +394,8 @@ public:
     canonical(Stack, 12);
     const auto Top = masked(Stack, ~uint64_t{15});
     const auto FrameBytes = choose(ne(HasError, k(0)), k(48), k(40));
-    faultIf(less(Top, FrameBytes), 12, External);
+    if constexpr (!Writer::FaultableMemory)
+      faultIf(less(Top, FrameBytes), 12, External);
     const auto SP = op(NdOp::INT_SUB, {Top, FrameBytes});
     range(SP, op(NdOp::INT_SUB, {FrameBytes, k(1)}), 12);
     canonical(PC);

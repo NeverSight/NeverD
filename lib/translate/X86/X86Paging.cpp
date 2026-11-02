@@ -262,8 +262,6 @@ checkX86LinearAccess(const X86PagingState &S, const X86LinearAccess &A,
   if (!Bytes || Bytes > kMemoryFaultMaxAccessBytes)
     return invalid(
         "x86 paged operand requires a nonempty representable extent");
-  if (Bytes - 1 > UINT64_MAX - A.Address)
-    return invalid("x86 paged operand overflows its linear address domain");
   if (!(S.EFER & LMA)) {
     if (A.Address > UINT32_MAX || Bytes - 1 > UINT32_MAX - A.Address)
       return invalid(

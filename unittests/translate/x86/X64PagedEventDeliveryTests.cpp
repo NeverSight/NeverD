@@ -111,6 +111,26 @@ TEST_F(X64PagedEventTest, PageFaultPublishesCR2AndRestartFrame) {
   EXPECT_EQ(get(SP + 24), 0x10202u);
 }
 
+TEST_F(X64PagedEventTest, StackFrameWrapsAcrossTheLinearAddressBoundary) {
+  for (uint64_t OldSP : {0u, 16u}) {
+    SetUp();
+    for (unsigned Level = 0; Level != 4; ++Level)
+      put((Level + 1) * 0x1000 + 511 * 8,
+          Level == 3 ? 0x1f003 : (Level + 2) * 0x1000 + 3);
+    State.Core.Core.Core.Core.GPR[4] = OldSP;
+    const auto R = deliver(14, X64ContinuationEventKind::Fault, 7, 0xabcdef);
+    ASSERT_EQ(R.Status, X64PagedEventStatus::Delivered);
+    EXPECT_EQ(R.DeliveryAttempts, 1u);
+    const uint64_t SP = OldSP - 48;
+    EXPECT_EQ(State.Core.Core.Core.Core.GPR[4], SP);
+    EXPECT_EQ(get(0x1f000 + (SP & 4095)), 7u);
+    EXPECT_EQ(get(0x1f000 + ((SP + 8) & 4095)), 0x9000u);
+    const uint64_t SavedSP = OldSP - 16;
+    EXPECT_EQ(get(SavedSP < 4096 ? SavedSP : 0x1f000 + (SavedSP & 4095)),
+              OldSP);
+  }
+}
+
 TEST_F(X64PagedEventTest, SamePrivilegeEntryDoesNotRereadItsCodeDescriptor) {
   // The descriptor aliases its own PTE. Setting descriptor.A changes that
   // mapping's physical address; the already consumed descriptor must not be

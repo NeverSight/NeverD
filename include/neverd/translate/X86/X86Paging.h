@@ -101,7 +101,8 @@ llvm::Error validateX86PagingState(const X86PagingFeatures &Features,
 /// Check an operand's entire linear extent before any page-table access.
 /// Controls have already passed validateX86PagingState. Noncanonical operands
 /// report #GP/#SS before any #PF, even when the first byte has no translation.
-/// The caller splits legacy linear wrap and unrepresentable 64-bit extents.
+/// IA-32e operands wrap modulo 2^64; both ends must remain canonical.
+/// The caller splits legacy linear wrap after applying segment checks.
 llvm::Expected<std::optional<X86MemoryException>>
 checkX86LinearAccess(const X86PagingState &State, const X86LinearAccess &Access,
                      uint64_t Bytes);
