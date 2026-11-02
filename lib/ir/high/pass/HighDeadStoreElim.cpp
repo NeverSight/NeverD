@@ -1092,6 +1092,8 @@ entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
   // definitions dominate their uses across branches or exceptional paths.
   VarKeyMap<ExprPtr> Aliases;
   for (const auto &S : Func.Body) {
+    if (high_detail::isEmptyBlockAnchor(S))
+      continue;
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !S.Dst->Type ||
         S.Dst->Type->Size != TRI.PointerSize ||

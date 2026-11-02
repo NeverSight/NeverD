@@ -7,6 +7,20 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/Support/MathExtras.h"
 namespace neverd::high_detail {
+/// Dead-store cleanup retains empty blocks as address/label anchors. They do
+/// not end an entry address prefix, but must remain in the statement stream.
+inline bool isEmptyBlockAnchor(const HighStmt &S) {
+  if (S.Kind != StmtKind::Block || !S.Body.empty() || !S.ElseBody.empty() ||
+      !S.Cases.empty() || !S.DefaultBody.empty() || !S.EHClauseBodies.empty() ||
+      !S.EHClauses.empty() || S.IsPhiCopy ||
+      S.MemoryOrdering != NdMemoryOrdering::None ||
+      S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  bool Empty = true;
+  forEachExpr(S, [&](const ExprPtr &) { Empty = false; });
+  return Empty;
+}
+
 /// A bounded arithmetic offset from the synthetic entry stack pointer.
 /// The caller must separately check the access width and private frame bounds,
 /// and prove that each supplied alias is defined and evaluates to the same

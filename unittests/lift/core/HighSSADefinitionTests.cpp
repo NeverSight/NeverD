@@ -539,8 +539,7 @@ TEST(HighSourceScalarLocals,
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     auto Make = [&] {
       auto F = sourceConcatLocal(Architecture, 4, 8);
-      for (auto *Definition : {&F.Body[0].Body[0],
-                               &F.Body[0].ElseBody[0]}) {
+      for (auto *Definition : {&F.Body[0].Body[0], &F.Body[0].ElseBody[0]}) {
         auto Low = Definition->Val->Operands[1];
         auto Upper = std::make_shared<HighExpr>();
         Upper->Kind = ExprKind::Undef;
@@ -567,16 +566,16 @@ TEST(HighSourceScalarLocals,
     EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 4U);
 
     auto Nested = sourceConcatLocal(Architecture, 4, 16);
-    for (auto *Definition : {&Nested.Body[0].Body[0],
-                             &Nested.Body[0].ElseBody[0]}) {
+    for (auto *Definition :
+         {&Nested.Body[0].Body[0], &Nested.Body[0].ElseBody[0]}) {
       auto Low = Definition->Val->Operands[1];
       auto Upper = std::make_shared<HighExpr>();
       Upper->Kind = ExprKind::Undef;
       Upper->Type = NdType::makeInt(12, false);
       auto Wide = HighExpr::makeBinop(NdOp::CONCAT, Upper, Low);
       Wide->Type = NdType::makeInt(16, false);
-      auto Prefix = HighExpr::makeBinop(NdOp::SUBBYTES, Wide,
-                                        HighExpr::makeConst(0, 4));
+      auto Prefix =
+          HighExpr::makeBinop(NdOp::SUBBYTES, Wide, HighExpr::makeConst(0, 4));
       Prefix->Type = NdType::makeInt(8, false);
       auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Prefix);
       Extended->Type = NdType::makeInt(16, false);
@@ -655,8 +654,7 @@ TEST(HighSourceScalarLocals, NarrowsFullWidthCopyAlternativeDefinition) {
   EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
 }
 
-TEST(HighSourceScalarLocals,
-     NarrowsExtendedAndCopiedDefinitionsWithoutConcat) {
+TEST(HighSourceScalarLocals, NarrowsExtendedAndCopiedDefinitionsWithoutConcat) {
   auto F = sourceConcatLocal(Arch::AArch64, 8);
   auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, variable(6, 8));
   Extended->Type = NdType::makeInt(16, false);
@@ -1136,4 +1134,35 @@ TEST(HighSourceScalarLocals, AnExplicitPrefixDoesNotDependOnItsConsumerWidth) {
   EXPECT_EQ(F.Body[1].Dst->Var.Size, 8U);
   EXPECT_EQ(F.Body[1].Val->Operands[0]->Var.Size, 8U);
 }
+TEST(HighPrivateFrameStores, EmptyAnchorsRetainTheEntryAliasPrefix) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Effectful : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Architecture));
+      SCOPED_TRACE(Effectful);
+      auto F = privateFrameStore(Architecture);
+      auto Alias = variable(9, getTargetRegInfo(Architecture).PointerSize);
+      Alias->Var.TheArch = Architecture;
+      const auto Definition = assign(Alias, F.Body[0].StoreAddr);
+      F.Body[0].StoreAddr = Alias;
+      F.Body[0].StoreVal = paddedInteger();
+      F.Body[1].RetVal = HighExpr::makeLoad(Alias, NdType::makeInt(4));
+      HighStmt Anchor;
+      Anchor.Kind = StmtKind::Block;
+      Anchor.Addr = 0x1000;
+      if (Effectful)
+        Anchor.Val = HighExpr::makeCall("observe", 0x2000, {});
+      F.Body.insert(F.Body.begin(), Definition);
+      F.Body.insert(F.Body.begin(), Anchor);
+      F.Body.insert(F.Body.begin() + 2, Anchor);
+      elimUnreadPrivateFrameStores(F, Architecture);
+      EXPECT_EQ(F.Body[3].StoreVal->Type->Size, Effectful ? 8u : 4u);
+      EXPECT_EQ(F.Body[0].Addr, 0x1000u);
+      EXPECT_EQ(F.Body[2].Addr, 0x1000u);
+      if (Effectful) {
+        ASSERT_TRUE(F.Body[0].Val);
+        ASSERT_TRUE(F.Body[2].Val);
+      }
+    }
+}
+
 } // namespace
