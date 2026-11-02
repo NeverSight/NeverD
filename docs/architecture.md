@@ -16783,11 +16783,12 @@ not become frozen numeric lengths. This narrow result proof grants no pointer
 noncapture, caller-frame or other dynamic call-return fact.
 
 The shared entry-stack offset proof follows the lifter's exact zero-extension
-of a native 32-bit address into its 64-bit memory-address container. It does
-also recognize extraction of that container's original low 32 bits, as emitted
+of a native 32-bit address into its 64-bit memory-address container. It also
+recognizes extraction of that container's original low 32 bits, as emitted
 by a native LEA; this requires the same unique, pure zero-extension definition.
-It does
-not authenticate a wider incoming SP, a signed extension, a truncated 64-bit
+Exact and one-sided loop proofs share this relation across joins and backedges,
+including paths with different incoming stack depths. It does not authenticate a
+wider incoming SP, a signed extension, a truncated 64-bit
 pointer or an ambiguous definition. Alignment rewrites keep their existing
 native-width rules. Source call-slot observation therefore sees the same frame
 bytes for direct pointer-width addresses and canonical widened addresses.

@@ -365,6 +365,10 @@ public:
         Follow(Op->Inputs[0], 0);
         continue;
       }
+      if (const MedVar *Native = nativeAddressRoundTrip(*Op)) {
+        Follow(*Native, 0);
+        continue;
+      }
       // Clearing low bits only lowers the address.
       if (const auto Mask = alignmentMask(*Op, TRI.PointerSize)) {
         Follow(Op->Inputs[Mask->BaseIndex], 0);
@@ -469,6 +473,28 @@ private:
         !Op->IntrinsicOutputs.empty())
       return std::nullopt;
     return Op;
+  }
+
+  const MedVar *nativeAddressRoundTrip(const MedOp &Op) {
+    if (!FollowJoins || TRI.PointerSize != 4 || Op.Dead ||
+        Op.Opcode != NdOp::SUBBYTES || Op.NumInputs != 2 ||
+        Op.Output.Size != TRI.PointerSize ||
+        Op.Inputs[0].Size != sizeof(uint64_t) ||
+        !stableScalarConstant(Op.Inputs[1]) || Op.Inputs[1].ConstVal != 0 ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op.IntrinsicOutputs.empty())
+      return nullptr;
+    const auto Carrier = scalarDefinition(Op.Inputs[0]);
+    if (!Carrier || !*Carrier || (*Carrier)->Opcode != NdOp::INT_ZEXT ||
+        (*Carrier)->NumInputs != 1 ||
+        (*Carrier)->Inputs[0].Size != TRI.PointerSize ||
+        ++Steps > kMaxProofSteps)
+      return nullptr;
+    // LEA returns the low native pointer from a zero-extended address
+    // container. Charge the skipped extension and use this same relation in
+    // exact, component and one-sided proofs, including loop backedges.
+    return &(*Carrier)->Inputs[0];
   }
 
   llvm::ConstantRange scalarSlice(const MedVar &Value, unsigned Offset,
@@ -945,7 +971,11 @@ private:
           Op->MemoryOrdering == NdMemoryOrdering::None &&
           Op->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           Op->IntrinsicOutputs.empty();
-      if (!Definition || (!Definition->Join && !Copy) || Assumed.count(K) ||
+      const MedVar *RoundTrip = Op && sameOccurrence(Op->Output, Value)
+                                    ? nativeAddressRoundTrip(*Op)
+                                    : nullptr;
+      const MedVar *Forward = Copy ? &Op->Inputs[0] : RoundTrip;
+      if (!Definition || (!Definition->Join && !Forward) || Assumed.count(K) ||
           Definition->ProvenOffset || Definition->ProvenRange || EntryOrigin ||
           (RangeQuery && K != RootKey && Definition->Join &&
            sameOccurrence(Definition->Join->Output, Value) &&
@@ -976,7 +1006,7 @@ private:
             return false;
         }
       } else {
-        if (!Self(Self, Op->Inputs[0], AtDepth + 1, K))
+        if (!Self(Self, *Forward, AtDepth + (RoundTrip ? 2 : 1), K))
           return false;
       }
       Active.erase(K);
@@ -1184,17 +1214,8 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
-          } else if (FollowJoins && TRI.PointerSize == 4 &&
-                     Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
-                     Op.Inputs[0].Size == sizeof(uint64_t) &&
-                     stableScalarConstant(Op.Inputs[1]) &&
-                     Op.Inputs[1].ConstVal == 0) {
-            // LEA can return a native pointer through the memory-address
-            // container. The wide query admits only an exact zero extension
-            // of that pointer; arbitrary truncations still have no offset.
-            const auto Carrier = scalarDefinition(Op.Inputs[0]);
-            if (Carrier && *Carrier)
-              Result = resolve(Op.Inputs[0], Depth + 1);
+          } else if (const MedVar *Native = nativeAddressRoundTrip(Op)) {
+            Result = resolve(*Native, Depth + 2);
           } else if ((Op.Opcode == NdOp::INT_ADD ||
                       Op.Opcode == NdOp::INT_SUB) &&
                      Op.NumInputs == 2) {

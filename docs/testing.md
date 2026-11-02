@@ -18734,7 +18734,9 @@ Signed extensions, mixed-width copies and duplicate definitions are rejected;
 and native pointer-width boundaries.
 `NativeAddressRoundTripsRetainExactStackCoordinates` checks the inverse
 low-word extraction with signed, shifted, dead, ambiguous and changed-occurrence
-negative controls. `AnalysisRecovery.OrdinaryStackLeaKeepsTheProvenFrame`
+negative controls. `NativeAddressBoundSurvivesUnequalLoopEntries` retains the
+one-sided bound through a balanced loop with different incoming stack depths.
+`AnalysisRecovery.OrdinaryStackLeaKeepsTheProvenFrame`
 decodes an independent PE32 byte fixture containing `lea esp,[esp+0]` and a
 local read after CALL; LowIR and HighIR retain the ordinary proved frame.
 

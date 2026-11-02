@@ -1037,6 +1037,57 @@ TEST(MedStackAlignment, NativeAddressRoundTripsRetainExactStackCoordinates) {
       }
 }
 
+TEST(MedStackAlignment, NativeAddressBoundSurvivesUnequalLoopEntries) {
+  auto Func = frameWithEntrySP(Arch::X86);
+  auto &Ops = Func.Blocks[0].Ops;
+  auto Wide = temp(3, Arch::X86);
+  Wide.Size = 8;
+  const auto Address = temp(2, Arch::X86);
+  const auto Narrow = temp(4, Arch::X86);
+  const auto Deeper = temp(5, Arch::X86);
+  const auto Joined = temp(6, Arch::X86);
+  const auto Push = temp(7, Arch::X86);
+  const auto Pop = temp(8, Arch::X86);
+  auto LoopWide = temp(9, Arch::X86);
+  LoopWide.Size = 8;
+  const auto Back = temp(10, Arch::X86);
+  Ops.push_back(
+      op(NdOp::INT_SUB, Address, reg(0, Arch::X86), MedVar::makeConst(32, 4)));
+  Ops.push_back(op(NdOp::INT_ZEXT, Wide, Address));
+  Ops.push_back(op(NdOp::SUBBYTES, Narrow, Wide, MedVar::makeConst(0, 4)));
+  Ops.push_back(op(NdOp::INT_SUB, Deeper, Narrow, MedVar::makeConst(16, 4)));
+  Func.Blocks.resize(3);
+  Func.Blocks[0].Succs = {1, 2};
+  Func.Blocks[2].Id = 2;
+  Func.Blocks[2].Preds = {0};
+  Func.Blocks[2].Succs = {1};
+  auto &Loop = Func.Blocks[1];
+  Loop.Id = 1;
+  Loop.Preds = {0, 2, 1};
+  Loop.Succs = {1};
+  PhiNode Phi;
+  Phi.Output = Joined;
+  Phi.Args = {{0, Narrow}, {2, Deeper}, {1, Back}};
+  Loop.Phis.push_back(Phi);
+  Loop.Ops = {op(NdOp::INT_SUB, Push, Joined, MedVar::makeConst(4, 4)),
+              op(NdOp::INT_ADD, Pop, Push, MedVar::makeConst(4, 4)),
+              op(NdOp::INT_ZEXT, LoopWide, Pop),
+              op(NdOp::SUBBYTES, Back, LoopWide, MedVar::makeConst(0, 4))};
+  EXPECT_FALSE(entryStackOffset(Func, Joined, Arch::X86, BinaryFormat::COFF));
+  EXPECT_EQ(entryStackOffsetUpperBounds(Func, {Joined}, Arch::X86,
+                                        BinaryFormat::COFF)[0],
+            -32);
+  Loop.Phis.front().Args[1].second = Narrow;
+  EXPECT_EQ(entryStackOffset(Func, Joined, Arch::X86, BinaryFormat::COFF), -32);
+  Loop.Ops[2].Opcode = NdOp::INT_SEXT;
+  EXPECT_FALSE(entryStackOffsetUpperBounds(Func, {Joined}, Arch::X86,
+                                           BinaryFormat::COFF)[0]);
+  Loop.Ops[2].Opcode = NdOp::INT_ZEXT;
+  Func.Blocks[0].Ops[2].Opcode = NdOp::INT_SEXT;
+  EXPECT_FALSE(entryStackOffsetUpperBounds(Func, {Joined}, Arch::X86,
+                                           BinaryFormat::COFF)[0]);
+}
+
 TEST(MedStackAlignment, PreservesExactAndRoundedARMFrameOffsets) {
   MedFunc Func = frameWithEntrySP();
   auto &Ops = Func.Blocks[0].Ops;
