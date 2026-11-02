@@ -518,15 +518,15 @@
         "-c",
         "0",
         "python3",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/scripts/isa/x86/verify_event_delivery.py",
+        "scripts/isa/x86/verify_event_delivery.py",
         "--family",
         "schedule",
         "--sources",
         "/mnt/data/neverd-lss-shadow-20261102/final/qualified/native",
         "--compiler",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "--llvm-bin",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
         "--keep",
         "/mnt/data/neverd-lss-shadow-20261102/final/backends/native-performance"
       ],
@@ -547,11 +547,11 @@
           "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
         },
         "clang": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "ld.lld": {
-          "path": "/home/ad/.local/bin/ld.lld",
+          "path": "ld.lld",
           "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
         },
         "objcopy": {
@@ -569,15 +569,15 @@
         "-c",
         "12",
         "python3",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/scripts/isa/x86/verify_event_delivery.py",
+        "scripts/isa/x86/verify_event_delivery.py",
         "--family",
         "schedule",
         "--sources",
         "/mnt/data/neverd-lss-shadow-20261102/final/efficient/native",
         "--compiler",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "--llvm-bin",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-llvm/build-intrinsics/bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
         "--keep",
         "/mnt/data/neverd-lss-shadow-20261102/final/backends/native-efficient"
       ],
@@ -598,11 +598,11 @@
           "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
         },
         "clang": {
-          "path": "/home/ad/.local/bin/clang",
+          "path": "clang",
           "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
         },
         "ld.lld": {
-          "path": "/home/ad/.local/bin/ld.lld",
+          "path": "ld.lld",
           "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
         },
         "objcopy": {

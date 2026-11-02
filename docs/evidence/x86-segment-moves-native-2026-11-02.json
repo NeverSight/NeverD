@@ -38,74 +38,74 @@
         {
           "name": "NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
           "value_param": "X86ELF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1326",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:40.298",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
         },
         {
           "name": "NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
           "value_param": "X86MachO",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1326",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:40.298",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
         },
         {
           "name": "DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
           "value_param": "X86ELF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1459",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:53:09.007",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
         },
         {
           "name": "DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
           "value_param": "X86MachO",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1459",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:53:09.007",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
         },
         {
           "name": "ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
           "value_param": "X86ELF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1812",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:54:08.964",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
         },
         {
           "name": "ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
           "value_param": "X86MachO",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1812",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:54:08.964",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
         }
       ]
     },
@@ -124,50 +124,50 @@
       "skipped": [
         {
           "name": "NativeTileRowsAndFaultContinuationMatchOriginalBytes",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "5635",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:53.470",
           "classname": "X86AmxSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5642\nHost does not provide AMX-TILE; native restart unqualified\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5642\nHost does not provide AMX-TILE; native restart unqualified\n"
         },
         {
           "name": "NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
           "value_param": "X86COFF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1326",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:53:51.250",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
         },
         {
           "name": "DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
           "value_param": "X86COFF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1459",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:54:42.046",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
         },
         {
           "name": "ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
           "value_param": "X86COFF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1812",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:55:58.314",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
         }
       ]
     },
@@ -186,130 +186,130 @@
       "skipped": [
         {
           "name": "NativeCallsRequireExactControlsTypesAndEffects",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1682",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:50.389",
           "classname": "X86DescriptorStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1684\nrequires the explicit descriptor-state address SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1684\nrequires the explicit descriptor-state address SDK\n"
         },
         {
           "name": "NativeCallsRequireExactTypesAndEffects",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1864",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:50.389",
           "classname": "X86ScalarSystemSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1868\nrequires the scalar MSR/port intrinsic SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1868\nrequires the scalar MSR/port intrinsic SDK\n"
         },
         {
           "name": "SmapPreservesMemoryAccessOrderAcrossBothControls",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "2453",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:50:08.698",
           "classname": "X86SystemStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2455\nrequires the qualified native system SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2455\nrequires the qualified native system SDK\n"
         },
         {
           "name": "NativeCallsCannotLoseModeResultsOrEffects",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "2985",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:50:28.828",
           "classname": "X86SystemStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2987\nrequires the qualified native system SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2987\nrequires the qualified native system SDK\n"
         },
         {
           "name": "NativeContractsRejectLostEffectsAndMode",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "4830",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:51:17.102",
           "classname": "X86SgxSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4832\nnative SGX completion requires the qualified fork\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4832\nnative SGX completion requires the qualified fork\n"
         },
         {
           "name": "NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
           "value_param": "X86ELF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1326",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:50.416",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
         },
         {
           "name": "NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
           "value_param": "X86MachO",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1326",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:50.416",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
         },
         {
           "name": "DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
           "value_param": "X86ELF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1459",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:53:25.012",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
         },
         {
           "name": "DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
           "value_param": "X86MachO",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1459",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:53:25.012",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
         },
         {
           "name": "ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
           "value_param": "X86ELF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1812",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:54:28.311",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
         },
         {
           "name": "ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
           "value_param": "X86MachO",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1812",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:54:28.311",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
         }
       ]
     },
@@ -328,127 +328,127 @@
       "skipped": [
         {
           "name": "QualifiedSdkUsesNativeVirtualizationCalls",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1213",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:22.368",
           "classname": "X86VirtualizationSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1215\nrequires the qualified native virtualization SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1215\nrequires the qualified native virtualization SDK\n"
         },
         {
           "name": "NativeCallsRequireExactRegisterModeAndEffects",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1973",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:51.267",
           "classname": "X86SystemRegisterSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1975\nrequires the native control/debug register SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1975\nrequires the native control/debug register SDK\n"
         },
         {
           "name": "NativeAddressControlsCompileAcrossFormats",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "3270",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:53.027",
           "classname": "X86DescriptorStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3122\nrequires the explicit descriptor-address SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3122\nrequires the explicit descriptor-address SDK\n"
         },
         {
           "name": "QualifiedSdkUsesNativeSystemCalls",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "2422",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:53.357",
           "classname": "X86SystemStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2424\nrequires the qualified native system SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2424\nrequires the qualified native system SDK\n"
         },
         {
           "name": "TransactionCommitRetainsSurroundingMemory",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "2558",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:49:53.357",
           "classname": "X86SystemStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2560\nrequires the qualified native system SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2560\nrequires the qualified native system SDK\n"
         },
         {
           "name": "NativeDescriptorAddressControlsCompileAcrossFormats",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "3266",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:51:20.285",
           "classname": "X86SystemStateSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3122\nrequires the explicit descriptor-address SDK\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3122\nrequires the explicit descriptor-address SDK\n"
         },
         {
           "name": "NativeContractsRejectLostEffectsAndControls",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "5321",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:52.849",
           "classname": "X86AmxSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5323\nlinked SDK predates explicit AMX controls\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5323\nlinked SDK predates explicit AMX controls\n"
         },
         {
           "name": "NativeTileRowsAndFaultContinuationMatchOriginalBytes",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "5635",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:52:52.854",
           "classname": "X86AmxSource",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5642\nHost does not provide AMX-TILE; native restart unqualified\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5642\nHost does not provide AMX-TILE; native restart unqualified\n"
         },
         {
           "name": "NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
           "value_param": "X86COFF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1326",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:53:56.782",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nNeverC targets x64\n"
         },
         {
           "name": "DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
           "value_param": "X86COFF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1459",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:54:54.782",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nNeverC targets x64\n"
         },
         {
           "name": "ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
           "value_param": "X86COFF",
-          "file": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
+          "file": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp",
           "line": "1812",
           "status": "run",
           "result": "skipped",
           "time": "0.",
           "timestamp": "2026-11-02T07:56:17.204",
           "classname": "NativeFormats/X86SystemRegisterAccess",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
+          "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1814\nNeverC targets x64\n"
         }
       ]
     }
