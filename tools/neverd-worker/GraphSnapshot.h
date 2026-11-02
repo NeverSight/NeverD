@@ -10,6 +10,8 @@ namespace neverd::worker {
 struct GraphMetrics {
   double charWidth = 0, lineHeight = 0, padding = 0, titleHeight = 0;
   bool valid() const { return charWidth > 0 && lineHeight > 0; }
+  static GraphMetrics fromRequest(const Json &request);
+  std::string key() const;
 };
 /// Formatted rows of the instructions in [start, end), as a JSON array of
 /// {address, kind, text, spans}.
@@ -27,6 +29,8 @@ public:
   GraphSnapshot &operator=(const GraphSnapshot &) = delete;
   Json summary() const;
   Json viewport(const Json &request) const;
+  /// Geometry of a block by its stable start address, or null if absent.
+  Json locate(const std::string &address) const;
   const std::string &address() const;
 
 private:

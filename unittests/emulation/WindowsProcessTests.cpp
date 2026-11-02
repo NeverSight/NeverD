@@ -431,6 +431,34 @@ protected:
       llvm::consumeError(R.takeError());
   }
 };
+TEST_F(WindowsProcessImage, KeepsOneOriginalHeaderRegionBesideRealSections) {
+  for (const auto *File : {X64File, AArch64File}) {
+    SCOPED_TRACE(File);
+    Path = Path.parent_path() / File;
+    const auto Bytes = bytes();
+    auto Object = llvm::object::COFFObjectFile::create(
+        llvm::MemoryBufferRef(Bytes, File));
+    ASSERT_TRUE(bool(Object)) << llvm::toString(Object.takeError());
+    const auto *Header = (*Object)->getPE32PlusHeader();
+    ASSERT_NE(Header, nullptr);
+    auto Image = win::loadImage(Path, process_defaults::Memory);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_EQ(Image->Regions.size(),
+              size_t((*Object)->getCOFFHeader()->NumberOfSections) + 1);
+    const auto &Region = Image->Regions.front();
+    EXPECT_EQ(Region.Address, Header->ImageBase);
+    EXPECT_EQ(Region.Permissions, Read | UserAccessible);
+    ASSERT_GE(Region.Bytes.size(), Header->SizeOfHeaders);
+    EXPECT_EQ(
+        std::memcmp(Region.Bytes.data(), Bytes.data(), Header->SizeOfHeaders),
+        0);
+    EXPECT_EQ(std::count_if(Image->Regions.begin(), Image->Regions.end(),
+                            [&](const auto &Item) {
+                              return Item.Address == Region.Address;
+                            }),
+              1);
+  }
+}
 TEST_F(WindowsProcessImage,
        RejectsMalformedHeadersAndUnsupportedLoaderRequirements) {
   auto Bytes = bytes();

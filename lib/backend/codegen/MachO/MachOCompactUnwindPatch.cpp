@@ -861,17 +861,9 @@ llvm::Error validateEncoding(Arch TargetArch, uint32_t Encoding,
     }
     break;
   case Arch::AArch64: {
-    constexpr uint32_t RegisterPairs =
-        kARM64FrameX19X20Pair | kARM64FrameX21X22Pair | kARM64FrameX23X24Pair |
-        kARM64FrameX25X26Pair | kARM64FrameX27X28Pair | kARM64FrameD8D9Pair |
-        kARM64FrameD10D11Pair | kARM64FrameD12D13Pair | kARM64FrameD14D15Pair;
-    if (Mode == kARM64ModeFrameless) {
-      PayloadMask = kARM64FramelessStackSizeMask | RegisterPairs;
-      SupportedMode = true;
-    } else if (Mode == kARM64ModeFrame) {
-      PayloadMask = RegisterPairs;
-      SupportedMode = true;
-    } else if (Mode == kARM64ModeDwarf) {
+    const auto AllowedPayload = getARM64EncodingPayloadMask(Encoding);
+    if (AllowedPayload) {
+      PayloadMask = Mode == kARM64ModeDwarf ? 0 : *AllowedPayload;
       SupportedMode = true;
     }
     break;
@@ -979,6 +971,11 @@ llvm::Error validateGeneratedMachOCompactUnwindRecordEncoding(
   if (llvm::Error Error = validateEncoding(TargetArch, Record.Encoding,
                                            Record.SourceRecordIndex))
     return Error;
+  if (!isValidEncodingRange(TargetArch, Record.Encoding,
+                            {Record.FunctionVA, Record.FunctionEndVA}))
+    return parseError(ParseFailure::UnsupportedEncoding,
+                      Record.SourceRecordIndex,
+                      kARM64PAuthLRInvalidSigningRange);
   const bool HasPersonality = !Record.PersonalitySymbol.empty();
   if (HasPersonality != Record.PersonalitySlotRVA.has_value())
     return parseError(ParseFailure::EncodingFieldMismatch,
@@ -1135,6 +1132,11 @@ llvm::Expected<MachOCompactUnwindRecords> parseGeneratedMachOCompactUnwind(
     if (llvm::Error Error =
             validateEncoding(SourceImage.Arch, Parsed.Encoding, RecordIndex))
       return std::move(Error);
+    if (!macho_unwind::isValidEncodingRange(
+            SourceImage.Arch, Parsed.Encoding,
+            {Parsed.FunctionVA, Parsed.FunctionEndVA}))
+      return parseError(ParseFailure::UnsupportedEncoding, RecordIndex,
+                        macho_unwind::kARM64PAuthLRInvalidSigningRange);
 
     unsigned ContainingCodeSections = 0;
     for (const CompiledSection &Section : Compiled.Sections) {
@@ -1443,18 +1445,9 @@ llvm::Error validateRawEncoding(Arch TargetArch, uint32_t Encoding,
     }
     break;
   case Arch::AArch64: {
-    constexpr uint32_t RegisterPairs =
-        kARM64FrameX19X20Pair | kARM64FrameX21X22Pair | kARM64FrameX23X24Pair |
-        kARM64FrameX25X26Pair | kARM64FrameX27X28Pair | kARM64FrameD8D9Pair |
-        kARM64FrameD10D11Pair | kARM64FrameD12D13Pair | kARM64FrameD14D15Pair;
-    if (Mode == kARM64ModeFrameless) {
-      PayloadMask = kARM64FramelessStackSizeMask | RegisterPairs;
-      SupportedMode = true;
-    } else if (Mode == kARM64ModeFrame) {
-      PayloadMask = RegisterPairs;
-      SupportedMode = true;
-    } else if (Mode == kARM64ModeDwarf) {
-      PayloadMask = kDwarfSectionOffsetMask;
+    const auto AllowedPayload = getARM64EncodingPayloadMask(Encoding);
+    if (AllowedPayload) {
+      PayloadMask = *AllowedPayload;
       SupportedMode = true;
     }
     break;
@@ -1507,7 +1500,7 @@ struct NormalizedOriginalTable {
 };
 
 llvm::Expected<NormalizedOriginalTable>
-normalizeOriginalTable(Arch TargetArch,
+normalizeOriginalTable(Arch TargetArch, uint64_t MachHeaderVA,
                        const macho_unwind::CompactUnwindRawSection &Original) {
   using namespace macho_unwind;
 
@@ -1577,6 +1570,15 @@ normalizeOriginalTable(Arch TargetArch,
             TargetArch, Encoding, MergeInputKind::OriginalRecord, I,
             /*AllowDwarfLinearSearch=*/true))
       return std::move(Error);
+    if (FunctionEndRVA > std::numeric_limits<uint64_t>::max() - MachHeaderVA)
+      return mergeError(MergeFailure::InvalidOriginalTable,
+                        MergeInputKind::OriginalRecord, I);
+    if (!isValidEncodingRange(
+            TargetArch, Encoding,
+            {MachHeaderVA + FunctionRVA, MachHeaderVA + FunctionEndRVA}))
+      return mergeError(MergeFailure::UnsupportedEncoding,
+                        MergeInputKind::OriginalRecord, I,
+                        kARM64PAuthLRInvalidSigningRange);
 
     const uint32_t PersonalityIndex =
         (Encoding & kPersonalityMask) >> kPersonalityShift;
@@ -1649,6 +1651,11 @@ normalizeGeneratedRecords(Arch TargetArch, uint64_t MachHeaderVA,
             TargetArch, Input.Encoding, MergeInputKind::GeneratedRecord, I,
             /*AllowDwarfLinearSearch=*/false))
       return std::move(Error);
+    if (!isValidEncodingRange(TargetArch, Input.Encoding,
+                              {Input.FunctionVA, Input.FunctionEndVA}))
+      return mergeError(MergeFailure::UnsupportedEncoding,
+                        MergeInputKind::GeneratedRecord, I,
+                        kARM64PAuthLRInvalidSigningRange);
 
     if (((Input.Encoding & kHasLSDA) != 0) != Input.LSDAVA.has_value())
       return mergeError(MergeFailure::LSDAEncodingMismatch,
@@ -1735,7 +1742,8 @@ buildMachOCompactUnwindRangeMappings(
       ParseOptions);
   if (!Original)
     return Original.takeError();
-  auto OriginalTable = normalizeOriginalTable(TargetArch, *Original);
+  auto OriginalTable =
+      normalizeOriginalTable(TargetArch, Region.MachHeaderVA, *Original);
   if (!OriginalTable)
     return OriginalTable.takeError();
 
@@ -1881,7 +1889,8 @@ llvm::Expected<MachOCompactUnwindMergeResult> mergeMachOCompactUnwind(
 
   if (!isMergeArchitecture(TargetArch))
     return mergeError(MergeFailure::UnsupportedArchitecture);
-  auto OriginalTable = normalizeOriginalTable(TargetArch, Original);
+  auto OriginalTable =
+      normalizeOriginalTable(TargetArch, MachHeaderVA, Original);
   if (!OriginalTable)
     return OriginalTable.takeError();
   auto GeneratedRecords =
@@ -2264,6 +2273,11 @@ validateRegularEncodeInput(const MachOCompactUnwindMergeResult &Input,
       return encodeError(EncodeFailure::UnsupportedEncoding,
                          EncodeInputKind::Record, I);
     }
+    if (!isValidEncodingRange(Input.TargetArch, Record.Encoding,
+                              {Record.FunctionRVA, Record.FunctionEndRVA}))
+      return encodeError(EncodeFailure::InvalidRecordRange,
+                         EncodeInputKind::Record, I,
+                         kARM64PAuthLRInvalidSigningRange);
 
     const uint32_t PersonalityIndex =
         (Record.Encoding & kPersonalityMask) >> kPersonalityShift;
@@ -2838,7 +2852,7 @@ llvm::Error installNativeMachOCompactUnwind(
                                               Region.SectionSize));
     if (!Raw)
       return Raw.takeError();
-    auto Old = normalizeOriginalTable(Architecture, *Raw);
+    auto Old = normalizeOriginalTable(Architecture, *HeaderVA, *Raw);
     if (!Old)
       return Old.takeError();
     Merged.PersonalitySlotRVAs = Raw->PersonalitySlotOffsets;
@@ -2852,6 +2866,8 @@ llvm::Error installNativeMachOCompactUnwind(
     }
   for (const auto &Range : Ranges) {
     if (Range.BeginVA < *HeaderVA || Range.EndVA <= Range.BeginVA ||
+        !macho_unwind::isValidEncodingRange(Architecture, Range.Encoding,
+                                            {Range.BeginVA, Range.EndVA}) ||
         Range.EndVA - *HeaderVA > UINT32_MAX ||
         (Range.Encoding &
          (macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA)))

@@ -4,6 +4,7 @@
 #include "ObjCNativeDependencies.h"
 #include "ObjCNativeSwiftReceiverSources.h"
 
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/sdk/Limits.h"
 
 namespace neverd::sdk {
@@ -182,7 +183,12 @@ replayCurrentFunction(const BinaryImage &Image, const PipelineResult &Result,
   for (const auto &F : Result.MedFuncs)
     Names.emplace(F.Entry, F.Name);
   Converter.setFuncNames(&Names);
-  const auto MedReplay = Converter.convert(*Current->Med, Image.Arch);
+  // Revalidate source-only stack annotations before projecting the saved
+  // body. A changed prologue store must remain visible to machine replay.
+  MedFunc CurrentMed = *Current->Med;
+  markSourceStackAccesses(CurrentMed, Image.Arch, Image.abiFormat(),
+                          CurrentMed.EntryKind, &Image);
+  const auto MedReplay = Converter.convert(CurrentMed, Image.Arch);
   if (!objc_value_copy_detail::sameBody(*Rebuilt->High, *Current->High) ||
       !objc_value_copy_detail::sameBody(*Rebuilt->High, MedReplay))
     return std::nullopt;

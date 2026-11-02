@@ -15,6 +15,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Raw/RawLoader.h"
+#include "neverd/support/LoadProgress.h"
 
 #include "llvm/Support/Error.h"
 
@@ -31,6 +32,9 @@ struct LoaderChoice {
   /// as a binary file of a processor at an address, as Raw places it.
   BinaryFormat Format = BinaryFormat::Unknown;
   RawLoadOptions Raw;
+  /// Exact install name from an arm64e dyld shared cache's image catalogue.
+  /// Empty selects an ordinary file. Requires a path with its subcache files.
+  std::string MachOSharedCacheImage;
 };
 
 /// Load-time work-set for a single-function CLI/C-API request.  Empty keeps
@@ -45,6 +49,9 @@ struct BinaryLoadOptions {
   /// Declining it for an object file, whose relocations name its symbols,
   /// fails the load.
   bool ReadStaticSymbols = true;
+  /// Borrowed only during loadBinary/loadBinaryBuffer. No callback is retained
+  /// by the returned image. Cancellation returns operation_canceled.
+  LoadProgress Progress;
 };
 
 /// Normalize every externally sourced text field in an already loaded image so

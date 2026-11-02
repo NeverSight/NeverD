@@ -15,6 +15,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QFileDialog>
+#include <QFontInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -62,11 +63,13 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
     : QDialog(Parent), Session(WorkerPath, this), Model(this) {
   setObjectName(QStringLiteral("offlinePackageReview"));
   setWindowTitle(tr("Offline package review"));
+  setWindowFlags((windowFlags() | Qt::WindowMinMaxButtonsHint) &
+                 ~Qt::WindowContextHelpButtonHint);
   setAttribute(Qt::WA_DeleteOnClose);
   resize(1100, 780);
   setMinimumSize(640, 480);
   auto Font = font();
-  Font.setPointSizeF(qMax(12.0, Font.pointSizeF()));
+  Font.setPointSizeF(qMax(12.0, QFontInfo(Font).pointSizeF()));
   setFont(Font);
   auto *Layout = new QVBoxLayout(this);
   Coverage =

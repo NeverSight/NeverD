@@ -12,7 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
-#include "neverd/ir/med/X86RegistrationCall.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <set>
+#include <utility>
 
 namespace {
 using namespace neverd;
@@ -304,6 +305,11 @@ TEST(RegistrationInitializer, InputPE32BindsSourceConstruction) {
         EXPECT_FALSE(State->CxxCatchStacks.front().empty());
       }
       EXPECT_EQ(registrationCallStackPop(Low, Block, Op), Callee.StackPopBytes);
+      EXPECT_TRUE(llvm::any_of(
+          Low.RegistrationStates->CalleeStacks, [&](const auto &Stack) {
+            return !Stack.Indirect && Stack.Target == Op.Inputs[0].Offset &&
+                   Stack.StackPopBytes == Callee.StackPopBytes;
+          }));
       auto Retargeted = Op;
       ++Retargeted.Inputs[0].Offset;
       EXPECT_FALSE(registrationCallStackPop(Low, Block, Retargeted));
@@ -313,6 +319,37 @@ TEST(RegistrationInitializer, InputPE32BindsSourceConstruction) {
     }
   EXPECT_EQ(DirectCalls, DirectThrow ? (FreshThrows == 4 ? 3u : 2u) : 0u);
   EXPECT_EQ(CallbackCalls, FreshThrows == 4 ? 1u : 0u);
+}
+
+TEST(RegistrationCallStackPop, ProvenCalleeCleanupOutlivesAnIncompleteProof) {
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.ExceptionMetadata.emplace();
+  Low.RegistrationStates.emplace();
+  Low.RegistrationStates->CalleeStacks = {
+      {0x2000, 16, false}, {0x2100, 0, false}, {0x3000, 8, true}};
+  LowBlock Block;
+  Block.StartAddr = Low.Entry;
+  for (const auto &[Opcode, Target] :
+       {std::pair{NdOp::CALL, 0x2000}, std::pair{NdOp::CALL, 0x2100},
+        std::pair{NdOp::CALL, 0x2200}, std::pair{NdOp::INDIR_CALL, 0x3000}}) {
+    LowOp Call;
+    Call.Opcode = Opcode;
+    Call.Addr = Low.Entry + 5 * Block.Ops.size();
+    Call.Seq = 0;
+    Call.addInput(NdVar::cst(Target, 4));
+    Block.Ops.push_back(Call);
+  }
+  // The state proof around these calls is incomplete, yet a direct callee
+  // with a proven return cleanup still pops its bytes at each call to it.
+  EXPECT_EQ(registrationCallStackPop(Low, Block, Block.Ops[0]), 16u);
+  EXPECT_FALSE(registrationCallStackPop(Low, Block, Block.Ops[1]));
+  EXPECT_FALSE(registrationCallStackPop(Low, Block, Block.Ops[2]));
+  EXPECT_FALSE(registrationCallStackPop(Low, Block, Block.Ops[3]));
+  const LowOp Elsewhere = Block.Ops[0];
+  EXPECT_FALSE(registrationCallStackPop(Low, Block, Elsewhere));
+  Low.RegistrationStates.reset();
+  EXPECT_FALSE(registrationCallStackPop(Low, Block, Block.Ops[0]));
 }
 
 } // namespace

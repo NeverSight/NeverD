@@ -45,7 +45,58 @@ void addCall(HighFunc &F, const HighFunc &Callee, bool ReadParameters) {
   Call.CallExpr = HighExpr::makeCall(Callee.Name, Callee.Entry, Arguments);
   F.Body.insert(F.Body.begin(), std::move(Call));
 }
+
+class RecordParametersDebug : public DebugContext {
+public:
+  FunctionSym Function;
+  std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+    return Address == Function.Addr ? std::optional(Function) : std::nullopt;
+  }
+  std::optional<VariableSym> resolveVariable(va_t, int64_t) const override {
+    return std::nullopt;
+  }
+  std::optional<TypeSym> resolveType(uint64_t) const override {
+    return std::nullopt;
+  }
+  std::optional<SourceLoc> sourceLocation(va_t) const override {
+    return std::nullopt;
+  }
+  std::vector<FunctionSym> allFunctions() const override { return {Function}; }
+  bool hasInfo() const override { return true; }
+};
 } // namespace
+
+TEST(HighCParamUsage, RecordDeclarationsSurviveScalarFunctionSwitches) {
+  HighFunc Scalar = makeFunction(0);
+  HighFunc Records = makeFunction(1);
+  HighFunc DebugOnly = makeFunction(2);
+  const TypeRef Record = NdType::makeNamedRecord("Payload", 8);
+  Scalar.Params[0].Name = "t40";
+  Records.Params[0] = {"t40", NdType::makePtr(Record)};
+  RecordParametersDebug Debug;
+  Debug.Function.Addr = DebugOnly.Entry;
+  Debug.Function.Params = {{"t40", NdType::makePtr(Record)}};
+  Debug.Function.PlatformConvention = false;
+  MedVar Value;
+  Value.Kind = MedVar::Temp;
+  Value.Id = 40;
+  Value.Size = 8;
+  const auto Base = HighExpr::makeVar(Value, NdType::makeInt(8));
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  HighCWriter Writer(OS, Options, &Debug);
+  // Each function has the same parameter count; both the current function's
+  // declarations and a debug-only declaration retain their own authority.
+  for (const HighFunc *Function :
+       {&Scalar, &Records, &Scalar, &DebugOnly, &Scalar, &Records}) {
+    Writer.CurrentFunc = Function;
+    EXPECT_EQ(Writer.declaredRecordPointee(*Base),
+              Function == &Scalar ? nullptr : Record)
+        << Function->Name;
+  }
+}
 
 TEST(HighCParamUsage, SharedExpressionVisitsRetainTheActuallyReadParameter) {
   auto F = makeFunction(0);

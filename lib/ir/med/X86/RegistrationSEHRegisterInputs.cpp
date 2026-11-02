@@ -8,10 +8,10 @@
 /// incoming register must not add an argument to the parent's physical ABI.
 
 #include "neverd/Limits.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
-#include "neverd/ir/med/X86RegistrationSEHLocalUnwind.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
 #include "llvm/ADT/STLExtras.h"
 

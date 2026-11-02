@@ -15,7 +15,7 @@
 
 #include "AArch64LiftDetail.h"
 
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
 
 namespace neverd {
 
@@ -194,17 +194,13 @@ bool liftSVEArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     S.emit(NdOp::INT_EQUAL, Dst, {Src, NdVar::cst(0, Src.Size)});
     break;
   }
-  case AARCH64_INS_SUBPT:
   case AARCH64_INS_SUBR: {
     if (ARM64.op_count < 3)
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
-    if (Insn->id == AARCH64_INS_SUBR)
-      S.emit(NdOp::INT_SUB, Dst, {B, A});
-    else
-      S.emit(NdOp::INT_SUB, Dst, {A, B});
+    S.emit(NdOp::INT_SUB, Dst, {B, A});
     break;
   }
   case AARCH64_INS_SDIVR:
@@ -233,10 +229,7 @@ bool liftSVEArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       S.emit(NdOp::FLOAT_SUB, Dst, {B, A});
     break;
   }
-  case AARCH64_INS_MAD:
-  case AARCH64_INS_MADPT:
-  case AARCH64_INS_MADDPT:
-  case AARCH64_INS_MLAPT: {
+  case AARCH64_INS_MAD: {
     if (ARM64.op_count < 3)
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
@@ -252,8 +245,7 @@ bool liftSVEArith(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     }
     break;
   }
-  case AARCH64_INS_MSB:
-  case AARCH64_INS_MSUBPT: {
+  case AARCH64_INS_MSB: {
     if (ARM64.op_count < 3)
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);

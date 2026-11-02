@@ -1,11 +1,15 @@
 #pragma once
 
 #include "OperandFormat.h"
+#include "OperandFormatDetail.h"
+#include "ProjectHistory.h"
 #include "Protocol.h"
 
 #include "neverd/sdk/NeverDCAPITypes.h"
 
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,6 +42,13 @@ public:
 
   /// Names, comments or function boundaries changed.
   void invalidate();
+  void configureCache(std::filesystem::path folder,
+                      std::function<Json()> identity, bool writable,
+                      AtomicWriter writer);
+  bool cachePending() const;
+  void flushCacheOne();
+  void flushCache();
+  Json cacheStats() const;
   void setStackFrames(const Json &rows, const std::string &imageHash);
   /// The neverd_strings_ex_json options strings are found with, as JSON
   /// text; empty for the engine's defaults.
@@ -65,8 +76,8 @@ public:
   /// Resolve a name the listing shows, a function's, a data item's or an
   /// automatic one, to its address.
   std::optional<std::uint64_t> resolveName(const std::string &name);
-  /// The entry of the function whose chunk, a part apart from its body,
-  /// holds \p address.
+  /// The entry owning an address, including recovered noncontiguous code.
+  /// An unowned address searches a bounded set of nearby function CFGs.
   std::optional<std::uint64_t> chunkOwner(std::uint64_t address);
   /// Whether \p address is an import's slot or the entry of its thunk.
   bool isImport(std::uint64_t address);
@@ -78,8 +89,19 @@ public:
   /// Names or the user's data items changed: the next query reads them again
   /// without scanning strings or reading imports and exports again.
   void namesChanged();
+  /// Comments changed. Rendering reads them live, but they are part of the
+  /// browse cache identity, so cached documents start a new namespace.
+  void commentsChanged();
   /// Whether instruction lines show the user's operand formats.
   bool showsNumberFormats();
+  /// How the listing writes the operands a structure offset changes:
+  /// "arm" (`[x0, #8]`), "sbf" (`[r1 + 8]`), "evm" (PUSH data), or empty for
+  /// x86 listings' spelling.
+  std::string_view operandSyntax();
+  /// The access the SBF memory operand \p operand of the instruction at
+  /// \p address makes by itself; none for another operand or dialect.
+  std::optional<operand_format_detail::SbfAccess>
+  ownAccess(std::uint64_t address, std::size_t operand);
   /// Which operands of the instruction that starts at \p address a number
   /// format changes, by index; none when no instruction starts there.
   std::optional<std::vector<bool>> numberOperands(std::uint64_t address);
@@ -105,6 +127,9 @@ public:
   /// Formatted instruction lines (no prefixes) of [start, end), for graph
   /// nodes.  Each element is {address, text, spans}.
   Json blockLines(std::uint64_t start, std::uint64_t end);
+  /// Explicit frame-name displacements used by the listing at this PC.
+  /// Ambiguous names are omitted, so assembly cannot guess their offset.
+  Json assemblySymbols(std::uint64_t address);
   /// Functions in address order under their display names:
   /// [{"name","engine_name","address","size","library","thunk","exported"}].
   const Json &functionRows();
@@ -132,6 +157,9 @@ public:
   std::uint64_t generation() const;
 
 private:
+  Json uncachedPage(const Json &payload);
+  Json uncachedOverview(const Json &payload);
+  const Json &uncachedFunctionRows();
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

@@ -50,6 +50,14 @@ inline constexpr size_t kLLVMCFuncWriterMaxEHAnnotationChars = 256 * 1024;
 inline constexpr size_t kLLVMCFuncWriterMaxEHAnnotationStringChars = 4096;
 inline constexpr unsigned kLLVMCFuncWriterLLVMCWriterUsersAreDeadCopiesWork =
     64;
+/// Optional field/default naming must not rescan an unbounded mutable home.
+/// Exhaustion retains its explicit assignments and loads.
+inline constexpr unsigned kLLVMCFieldDefaultShapeWork = 256;
+inline constexpr unsigned kLLVMCFieldDefaultQueryWork = 4096;
+/// Optional storage forwarding retains explicit loads/stores on exhaustion.
+inline constexpr unsigned kLLVMCStorageUseQueryWork = 512;
+/// Optional branch-chain recognition retains the original CFG on exhaustion.
+inline constexpr unsigned kLLVMCBranchFeedQueryWork = 4096;
 
 // lib/backend/c/LLVMC/LLVMCMemoryUpdates.cpp
 inline constexpr unsigned kLLVMCMemoryUpdateAddressWork = 128;
@@ -76,6 +84,9 @@ inline constexpr unsigned kCSyntaxParserMaxNesting = 1024;
 
 // lib/backend/c/pass/LLVMC/LLVMCBitTests.cpp
 inline constexpr unsigned kLLVMCBitTestsQueryWork = 512;
+/// Project no more than a 64-bit consumer per slice, independently of the
+/// enclosing integer's width. Wider consumers retain the existing writer.
+inline constexpr unsigned kLLVMCIntegerSliceMaxBits = 64;
 
 // lib/backend/c/pass/LLVMC/LLVMCBitTests.h
 inline constexpr unsigned kLLVMCBitTestsWorkLimit = 262144;
@@ -99,11 +110,11 @@ inline constexpr unsigned kLLVMCStoreForwardingAnalyzeStoreForwardingBudget =
     1024;
 
 // lib/backend/c/render/CTypeFormat.cpp
-inline constexpr unsigned kCTypeFormatMaxLit = 64;
 // Characters shown before the text is cut; UTF-8 continuation bytes
 // belong to the character before them.
 inline constexpr unsigned kCTypeFormatMaxCharacters = 64;
-/// A string that does not end within this many bytes is not read.
+/// A string that does not end within this many bytes is not read. Literal
+/// replacement keeps the complete string; only comments use the display cap.
 inline constexpr size_t kCTypeFormatStringWindow = 4096;
 
 // lib/backend/codegen/COFF/COFFExceptionPatch.cpp
@@ -360,7 +371,7 @@ inline constexpr int
 // lib/backend/c/render/CTypeFormat.cpp
 inline constexpr unsigned kCTypeFormatDeclarationToCRemaining = 4096;
 
-// lib/backend/c/render/LLVMC/LLVMCIntrinsicRenderX86.cpp
+// lib/backend/c/render/X86/LLVMCIntrinsicRenderX86.cpp
 inline constexpr int kLLVMCIntrinsicRenderX86SegmentedLoadDepthLimit = 4;
 
 // lib/backend/codegen/COFF/COFFRegistrationCxx.cpp
@@ -421,6 +432,9 @@ inline constexpr int kMachOExportLayoutWriteMachOExportLayoutNodesSizeLimit =
     1000000;
 
 // lib/backend/codegen/MachO/MachOLayoutGrowth.cpp
+#define NEVERD_MACHO_FRAME_LIMIT(Type, Name, Value)                            \
+  inline constexpr Type Name = Value;
+#include "neverd/backend/codegen/MachO/MachOFrameRelocation.def"
 inline constexpr int kMachOLayoutGrowthMoveTextSectionCapacityLimit =
     64 * 1024 * 1024;
 inline constexpr int kMachOLayoutGrowthDeclareMachOTextMetadataSizeLimit =

@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -42,8 +42,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar EA = (ARM.operands[1].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[1])
-                     : L.operandRead(S, ARM.operands[1]);
+                   ? L.operandEffAddr(S, ARM.operands[1])
+                   : L.operandRead(S, ARM.operands[1]);
     // Byte/halfword forms access 1/2 bytes and zero-extend into the register;
     // the old code loaded the full register width (4 bytes).
     uint16_t LoadSz = 4;
@@ -69,8 +69,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     NdVar Dst1 = L.operandWrite(ARM.operands[0]);
     NdVar Dst2 = L.operandWrite(ARM.operands[1]);
     NdVar EA = (ARM.operands[2].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[2])
-                     : L.operandRead(S, ARM.operands[2]);
+                   ? L.operandEffAddr(S, ARM.operands[2])
+                   : L.operandRead(S, ARM.operands[2]);
     NdVar EA2 = S.makeTemp(4);
     S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(4, 4)});
     NdVar V1 = S.makeTemp(4);
@@ -102,8 +102,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       Src = Trunc;
     }
     NdVar EA = (ARM.operands[2].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[2])
-                     : L.operandRead(S, ARM.operands[2]);
+                   ? L.operandEffAddr(S, ARM.operands[2])
+                   : L.operandRead(S, ARM.operands[2]);
     S.emit(NdOp::STORE, {}, {EA, Src});
     S.emit(NdOp::COPY, Status, {NdVar::cst(0, 4)});
     break;
@@ -116,8 +116,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     NdVar Src1 = L.operandRead(S, ARM.operands[1]);
     NdVar Src2 = L.operandRead(S, ARM.operands[2]);
     NdVar EA = (ARM.operands[3].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[3])
-                     : L.operandRead(S, ARM.operands[3]);
+                   ? L.operandEffAddr(S, ARM.operands[3])
+                   : L.operandRead(S, ARM.operands[3]);
     S.emit(NdOp::STORE, {}, {EA, Src1});
     NdVar EA2 = S.makeTemp(4);
     S.emit(NdOp::INT_ADD, EA2, {EA, NdVar::cst(4, 4)});
@@ -142,8 +142,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       Src = Trunc;
     }
     NdVar EA = (ARM.operands[1].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[1])
-                     : L.operandRead(S, ARM.operands[1]);
+                   ? L.operandEffAddr(S, ARM.operands[1])
+                   : L.operandRead(S, ARM.operands[1]);
     S.emit(NdOp::STORE, {}, {EA, Src});
     break;
   }
@@ -154,8 +154,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar Src = L.operandRead(S, ARM.operands[1]);
     NdVar EA = (ARM.operands[2].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[2])
-                     : L.operandRead(S, ARM.operands[2]);
+                   ? L.operandEffAddr(S, ARM.operands[2])
+                   : L.operandRead(S, ARM.operands[2]);
     S.emit(NdOp::LOAD, Dst, {EA});
     S.emit(NdOp::STORE, {}, {EA, Src});
     break;
@@ -171,8 +171,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar EA = (ARM.operands[1].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[1])
-                     : L.operandRead(S, ARM.operands[1]);
+                   ? L.operandEffAddr(S, ARM.operands[1])
+                   : L.operandRead(S, ARM.operands[1]);
     // Byte/halfword forms access 1/2 bytes; sign- or zero-extend into the
     // register.  The old code loaded the full register width (4 bytes).
     uint16_t LoadSz = 4;
@@ -207,8 +207,8 @@ bool liftMemAtomic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       Src = Trunc;
     }
     NdVar EA = (ARM.operands[1].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[1])
-                     : L.operandRead(S, ARM.operands[1]);
+                   ? L.operandEffAddr(S, ARM.operands[1])
+                   : L.operandRead(S, ARM.operands[1]);
     S.emit(NdOp::STORE, {}, {EA, Src});
     break;
   }

@@ -13,10 +13,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "AArch64SVEPredicate.h"
+
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/MedLLVMInstructionText.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-aarch64-sideeffect"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -150,6 +153,12 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
 
 bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
                                            llvm::IRBuilder<> &Builder) {
+  if (isAArch64AddressStoreIntrinsic(IC)) {
+    // Original memory shares one validated machine contract. A void store
+    // must reach it before the generic dispatcher refuses unknown effects.
+    (void)emitAArch64IntrinsicValue(Op, IC, Builder);
+    return true;
+  }
   // An MSR, or a SYS operation (DC, IC, AT, TLBI), the lift kept the field
   // of runs as itself, with its register operand; it writes no register.
   if (Op.Output.Size == 0 && (Op.NumInputs == 2 || Op.NumInputs == 3) &&
@@ -176,16 +185,10 @@ bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
     }
   }
   if (IC == Intrinsic::A64_SveSt1 || IC == Intrinsic::A64_SveStnt1) {
-    if (Op.NumInputs < 6 || !Op.Inputs[4].isConst() || !Op.Inputs[5].isConst())
-      return true;
-    const unsigned LaneBytes = static_cast<unsigned>(Op.Inputs[4].ConstVal);
-    const unsigned StoreBytes = static_cast<unsigned>(Op.Inputs[5].ConstVal);
-    if ((LaneBytes != 1 && LaneBytes != 2 && LaneBytes != 4 &&
-         LaneBytes != 8) ||
-        (StoreBytes != 1 && StoreBytes != 2 && StoreBytes != 4 &&
-         StoreBytes != 8) ||
-        StoreBytes > LaneBytes)
-      return true;
+    if (!aarch64VectorMedShapeIsValid(Op))
+      llvm::report_fatal_error(aarch64_sve::kMalformedVector);
+    const unsigned LaneBytes = Op.Inputs[4].ConstVal;
+    const unsigned StoreBytes = Op.Inputs[5].ConstVal;
 
     const unsigned MinLanes = 16 / LaneBytes;
     auto *PredTy =
@@ -205,7 +208,9 @@ bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
       return Builder.CreateLoad(ScalableTy, Slot, Name);
     };
 
-    llvm::Value *Pred = stateToScalable(Op.Inputs[1], PredTy, "sve.store.pred");
+    llvm::Value *Pred = stateToScalable(
+        Op.Inputs[1], aarch64_sve::svboolType(*Ctx), "sve.store.pred");
+    Pred = aarch64_sve::fromSVBool(Builder, Pred, PredTy);
     llvm::Value *Value =
         stateToScalable(Op.Inputs[2], SourceTy, "sve.store.value");
     if (SourceTy != StoreTy)

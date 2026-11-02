@@ -1,12 +1,12 @@
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/ProloguePatterns.h"
 
@@ -355,7 +355,8 @@ TEST(InternalNoReturn, NoReturnInstructionStillFollowsExceptionalPaths) {
 TEST(InternalNoReturn, CallThroughALoaderBoundNoReturnSlotEndsItsBlock) {
   // `_start: call *__libc_start_main@GOT(%rip); hlt`. The import the loader
   // binds to the slot is the callee; nothing after the call runs.
-  for (const char *Bound : {"__libc_start_main", "puts"}) {
+  for (const char *Bound :
+       {"__libc_start_main", "__libc_init", "__libc_init_common", "puts"}) {
     SCOPED_TRACE(Bound);
     std::vector<uint8_t> Code(0x40, 0xcc);
     // call qword ptr [rip + 0x1ffa] (the slot at 0x3000); hlt
@@ -371,7 +372,36 @@ TEST(InternalNoReturn, CallThroughALoaderBoundNoReturnSlotEndsItsBlock) {
     ASSERT_TRUE(Image.recordImportStorageSlot(
         0x3000, Bound, 0, ImportStorageEvidence::LoaderBind));
     EXPECT_EQ(callAtBaseEndsItsBlock(Image),
-              std::string_view(Bound) == "__libc_start_main");
+              std::string_view(Bound) == "__libc_start_main" ||
+                  std::string_view(Bound) == "__libc_init");
+  }
+}
+
+TEST(InternalNoReturn, UniversalCRTTerminateNeverReturns) {
+  // corecrt_terminate.h declares the Universal CRT's terminate
+  // __declspec(noreturn).  The name alone decides nothing: a program may
+  // export a terminate of its own that returns.
+  for (const char *Module :
+       {"api-ms-win-crt-runtime-l1-1-0.dll", "UCRTBASE.DLL", "engine.dll"}) {
+    SCOPED_TRACE(Module);
+    std::vector<uint8_t> Code(0x40, 0xcc);
+    // call qword ptr [rip + 0x1ffa] (the IAT slot at 0x3000); ret
+    const uint8_t Call[] = {0xff, 0x15, 0xfa, 0x1f, 0x00, 0x00, 0xc3};
+    std::copy(std::begin(Call), std::end(Call), Code.begin());
+    auto Image = imageWith(Code, {{Base, "caller"}});
+    Image.Format = BinaryFormat::COFF;
+    Segment Iat;
+    Iat.VA = 0x3000;
+    Iat.Size = Iat.FileSz = 8;
+    Iat.Data.resize(8);
+    Iat.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Iat));
+    Image.Imports.push_back({Module, "terminate", 0, 0x3000});
+    const bool Runtime = std::string_view(Module) != "engine.dll";
+    EXPECT_EQ(libc::isNoReturnTarget(Image, 0x3000), Runtime);
+    EXPECT_EQ(libc::NoReturnTargetIndex(Image).contains(Image, 0x3000),
+              Runtime);
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), Runtime);
   }
 }
 
@@ -557,9 +587,9 @@ TEST(InternalNoReturn, ScreenWantsEveryReturnAfterACallThatCannotComeBack) {
 }
 
 TEST(InternalNoReturn, ScreenTreatsAnUnliftableByteAsUnknown) {
-  // b: call c; getsec; ret, with c stated never to return.  GETSEC has no
-  // lift, so the screen cannot know b's branches: it sends b to no proof
-  // instead of throwing out of the CFG build that asked.
+  // b: call c; getsec; ret, with c stated never to return. GETSEC remains
+  // pending without a register proof, so the screen cannot know b's
+  // branches. It declines the proof instead of assuming local completion.
   std::vector<uint8_t> Code(0x30, 0xcc);
   putCall(Code, Base, Base + 0x20);
   Code[5] = 0x0f;
@@ -710,6 +740,59 @@ TEST(InternalNoReturn, CallFollowedByCodeIsNotProved) {
   EXPECT_FALSE(callAtBaseEndsItsBlock(Image));
 }
 
+TEST(InternalNoReturn,
+     LeafWithoutAnUnwindEntryIsScreenedByItsStraightLineFlow) {
+  // caller: call b; ret -- code follows the call and nothing gives b a code
+  // range.  In an x64 PE image every function but a leaf has an unwind
+  // entry, so straight-line flow from b's entry that reaches `int 0x29`
+  // sends b to the proof, as a __fastfail stub without one is sent.  A b
+  // that branches first may reach a return the screen does not read, and an
+  // x86 image, whose functions have no such entries, keeps the fall-through.
+  struct Case {
+    Arch Architecture;
+    std::vector<uint8_t> Body;
+    bool Proved;
+  };
+  for (const Case &C : {Case{Arch::X64, {0xcd, 0x29}, true},
+                        Case{Arch::X64, {0x89, 0xc8, 0xcd, 0x29}, true},
+                        Case{Arch::X64, {0x74, 0x02, 0xcd, 0x29, 0xc3}, false},
+                        Case{Arch::X86, {0xcd, 0x29}, false}}) {
+    SCOPED_TRACE(testing::PrintToString(C.Body) +
+                 (C.Architecture == Arch::X86 ? " on x86" : " on x64"));
+    std::vector<uint8_t> Code(0x10, 0xcc);
+    putCall(Code, Base, Base + 0x10);
+    Code[5] = 0xc3;
+    Code.insert(Code.end(), C.Body.begin(), C.Body.end());
+    Code.resize(0x20, 0xcc);
+    auto Image = imageWith(Code, {{Base, "caller"}, {0x1010, "b"}});
+    Image.Arch = C.Architecture;
+    Image.Bits =
+        C.Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    Image.Format = BinaryFormat::COFF;
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), C.Proved);
+  }
+}
+
+TEST(InternalNoReturn, AArch64FastFailStubWithoutUnwindDataEndsItsBlock) {
+  // caller: bl stub; mov w0, #7; ret.  A Windows ARM64 leaf needs no .pdata,
+  // so nothing gives the stub a code range.  `brk #0xf003` is __fastfail and
+  // never resumes; `brk #0xf000` is __debugbreak, which does.
+  for (const auto &[Stub, Proved] :
+       std::initializer_list<std::pair<uint32_t, bool>>{{0xd43e0060, true},
+                                                        {0xd43e0000, false}}) {
+    SCOPED_TRACE(Stub);
+    std::vector<uint8_t> Code;
+    for (const uint32_t Word : {0x94000004u, 0x528000e0u, 0xd65f03c0u,
+                                0xd503201fu, Stub, 0xd65f03c0u})
+      for (unsigned I = 0; I < 4; ++I)
+        Code.push_back(static_cast<uint8_t>(Word >> (8 * I)));
+    auto Image = imageWith(Code, {{Base, "caller"}, {Base + 0x10, "stub"}});
+    Image.Arch = Arch::AArch64;
+    Image.Format = BinaryFormat::COFF;
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), Proved);
+  }
+}
+
 TEST(InternalNoReturn, RecognizesX86AlignmentNoOps) {
   struct Case {
     std::vector<uint8_t> Bytes;
@@ -817,18 +900,25 @@ TEST(InternalNoReturn, CallerWithAnUnresolvedBranchStillListsItsCallees) {
 
 TEST(InternalNoReturn, CallToACalleeWithNothingThatReturnsIsProved) {
   // caller: call b; ret -- code follows the call, but b's sized symbol
-  // covers only `int 0x29`, which does not return, so b is proved.  A b that
-  // also holds a `ret`, even one no path reaches, is not worth the proof.
-  for (bool HoldsReturn : {false, true}) {
-    SCOPED_TRACE(HoldsReturn);
+  // covers only `int 0x29`, which does not return, so b is proved.  A `ret`
+  // that only the `int 0x29` precedes is reached by no path, and b is still
+  // proved. A `ret` a branch reaches is worth no proof.
+  struct Case {
+    std::vector<uint8_t> Body;
+    bool Proved;
+  };
+  for (const Case &C :
+       {Case{{0xcd, 0x29}, true}, Case{{0xcd, 0x29, 0xc3}, true},
+        Case{{0x74, 0x02, 0xcd, 0x29, 0xc3}, false}}) {
+    SCOPED_TRACE(testing::PrintToString(C.Body));
     std::vector<uint8_t> Code(0x10, 0xcc);
     putCall(Code, Base, Base + 0x10);
     Code[5] = 0xc3;
-    Code.insert(Code.end(), {0xcd, 0x29, 0xc3});
+    Code.insert(Code.end(), C.Body.begin(), C.Body.end());
     Code.resize(0x20, 0xcc);
     auto Image = imageWith(Code, {{Base, "caller"}, {0x1010, "b"}});
-    Image.Symbols.back().Size = HoldsReturn ? 3 : 2;
-    EXPECT_EQ(callAtBaseEndsItsBlock(Image), !HoldsReturn);
+    Image.Symbols.back().Size = C.Body.size();
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), C.Proved);
   }
 }
 

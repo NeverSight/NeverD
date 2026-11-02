@@ -18,8 +18,6 @@
 
 namespace neverd::x86_seh {
 
-namespace {
-
 // CFG simplification renumbers MedIR and can remove control-only LowIR blocks.
 // Native operation addresses, rather than a block's old vector position, own
 // the relation. This also covers a source block split into several Med blocks.
@@ -100,8 +98,6 @@ void projectProtectedSources(const LowFunc &Low, const MedFunc &Med,
     *Calls = std::move(ProjectedCalls);
 }
 
-} // namespace
-
 std::optional<uint64_t>
 proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
                          const TargetRegInfo &TRI, bool OrdinaryEntry,
@@ -109,17 +105,25 @@ proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
                          bool CxxContinuation,
                          std::vector<int> *ProtectedSources,
                          std::map<int, std::set<va_t>> *ProtectedCalls,
-                         bool SourceProjection, bool *IndependentEntries) {
+                         bool SourceProjection, bool *UnresolvedEntries) {
   auto Fail = [](const std::string &Why) -> void {
     throw LowToMedConversionError(
         std::string("Windows SEH establisher frame: ") + Why);
   };
   size_t WorkRemaining = limits::kMaxSEHEstablisherFrameWork;
+  // The local unwinds converted MedIR turned into jumps enter their targets
+  // from their calls.
+  std::vector<LowSEHLocalUnwindExitSource> Exits;
+  for (const MedSEHLocalUnwindExit &Exit : Med.SEHLocalUnwindExits)
+    if (Exit.OwnsTarget)
+      Exits.push_back(
+          {Exit.CallAddr, Exit.CallSeq, Exit.Target, Exit.TargetFrame});
   auto Proof = proveLowSEHEstablisherFrame(
       Low, Handler, TRI, OrdinaryEntry, WorkRemaining, LocalUnwindDigest,
       CxxContinuation,
       SourceProjection ? LowSEHFrameUse::SourceProjection
-                       : LowSEHFrameUse::InvocationIdentity);
+                       : LowSEHFrameUse::InvocationIdentity,
+      Exits);
   if (!Proof)
     Fail(llvm::toString(Proof.takeError()));
   auto Charge = [&](size_t Amount = 1) {
@@ -153,7 +157,8 @@ proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
             Op.Addr < Low.Blocks[B].StartAddr ||
             Op.Addr >= Low.Blocks[B].EndAddr)
           continue;
-        if (HasFrameRegister && !ProtectedBlock[B] &&
+        if (HasFrameRegister &&
+            (!ProtectedBlock[B] || Proof->HasVaryingEntrySP) &&
             (B != 0 || Op.Addr >= PrologueEnd)) {
           DynamicSP = true;
           continue;
@@ -173,13 +178,15 @@ proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
     Fail("converted prologue disagrees with decoded SP effects");
   if (DynamicSP && Proof->HasRelevantLocalUnwind)
     Fail("local-unwind call does not carry the protected frame");
-  if (DynamicSP && OrdinaryEntry && !Proof->HasIndependentEntries)
+  if (DynamicSP && OrdinaryEntry && !Proof->HasIndependentEntries &&
+      !Proof->HasVaryingEntrySP)
     Fail("SP moves before a handler that ordinary flow also enters");
   if (ProtectedSources || ProtectedCalls)
     projectProtectedSources(Low, Med, *Proof, WorkRemaining, ProtectedSources,
                             ProtectedCalls);
-  if (IndependentEntries)
-    *IndependentEntries = Proof->HasIndependentEntries;
+  if (UnresolvedEntries)
+    *UnresolvedEntries =
+        Proof->HasIndependentEntries || Proof->HasVaryingEntrySP;
   if (DynamicSP)
     return std::nullopt;
   return Proof->FrameBytes;

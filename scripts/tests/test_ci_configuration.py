@@ -303,6 +303,16 @@ find() { return 0; }
         # Exercise the actual declarative inventory and its identity checks.
         # Stop before the first filesystem mutation or CTest invocation.
         inventory = textwrap.dedent(script.split('          evidence = Path(', 1)[0])
+        body = ast.parse(textwrap.dedent(script.split('\n          PY\n', 1)[0]))
+        owner_start = next(index for index, node in enumerate(body.body)
+                           if isinstance(node, ast.Assign) and any(
+                               isinstance(target, ast.Name) and target.id == "owners"
+                               for target in node.targets))
+        owner_end = next(index for index, node in enumerate(body.body)
+                         if isinstance(node, ast.Assign) and any(
+                             isinstance(target, ast.Name) and target.id == "common"
+                             for target in node.targets))
+        owners = body.body[owner_start:owner_end]
         for runner, profile in (("Linux", "linux-semantic"),
                                 ("macOS", "macos-patch"),
                                 ("Windows", "windows-focused")):
@@ -311,6 +321,59 @@ find() { return 0; }
                 scope = {}
                 exec(compile(inventory, str(WORKFLOW), "exec"), scope)
                 self.assertEqual(len(scope["expected"]), scope["expected_count"])
+                exec(compile(ast.Module(body=owners, type_ignores=[]),
+                             str(WORKFLOW), "exec"), scope)
+                for item in scope["expected"]:
+                    self.assertTrue(item.labels.intersection(scope["owners"]),
+                                    f"selector omits {runner}: {item.name}")
+                code_owners = [item for item in scope["expected"]
+                               if item.name.startswith("ExecutableCodeOwnerIndex.")]
+                self.assertEqual(len(code_owners), 6)
+                for item in code_owners:
+                    self.assertEqual(item.labels,
+                                     frozenset({"NeverDExecutableCodeOwnerTests"}))
+
+                # One GTest name can be registered by the aggregate and by
+                # focused binaries. Exercise CTest itself so coverage labels
+                # cannot accidentally select the other executable copies.
+                cases = {
+                    "SourceABI.PartialFPRegisterPreservationDoesNotInventArguments": (
+                        "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                        "NeverDSourceEntryBindingTests"),
+                    "LowInstructionBoundary.AArch64BarePageBaseCompletesOnlyForExactDereference": (
+                        "NeverDLiftTests", "NeverDLowInstructionBoundaryTests"),
+                    "ExecutableCodeOwnerIndex.PreservesMetadataBoundariesAndRawThumbSpelling": (
+                        "NeverDExecutableCodeOwnerTests",),
+                }
+                required = {scope["TestRecord"](name, frozenset(labels))
+                            for name, labels in cases.items()}
+                self.assertTrue(required <= set(scope["expected"]))
+                with tempfile.TemporaryDirectory(prefix="neverd-focused-owners-") as directory:
+                    root = Path(directory)
+                    subdirectories = []
+                    for name, labels in cases.items():
+                        for index, label in enumerate(labels):
+                            subdir = root / f"owner{len(subdirectories)}"
+                            subdir.mkdir()
+                            subdirectories.append(subdir.name)
+                            actual_labels = labels if index == 0 else (label,)
+                            (subdir / "CTestTestfile.cmake").write_text(
+                                f'add_test("{name}" "${{CMAKE_COMMAND}}" "-E" "true")\n'
+                                f'set_tests_properties("{name}" PROPERTIES LABELS '
+                                f'"{";".join(actual_labels)}")\n')
+                    (root / "CTestTestfile.cmake").write_text(
+                        "".join(f'subdirs("{name}")\n' for name in subdirectories))
+                    names = root / "tests.txt"
+                    names.write_text("".join(name + "\n" for name in cases))
+                    result = subprocess.run(
+                        ["ctest", "--test-dir", str(root), "--label-regex",
+                         scope["owner_regex"], "--tests-from-file", str(names),
+                         "--show-only=json-v1"], capture_output=True, text=True,
+                        timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    selected = scope["parse_inventory"](json.loads(result.stdout))
+                    self.assertEqual(len(selected), len(required))
+                    self.assertEqual(set(selected), required)
 
     def test_med_ir_exports_source_abi_and_objc_dependencies(self):
         with tempfile.TemporaryDirectory(prefix="neverd-med-ir-link-") as directory:

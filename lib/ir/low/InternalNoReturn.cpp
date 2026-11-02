@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/libc/LibCNames.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -30,6 +31,15 @@ namespace {
 bool statesNoReturn(const BinaryImage &Img) {
   return llvm::any_of(Img.UserNoReturn,
                       [](const auto &Stated) { return Stated.second; });
+}
+
+/// Whether a call to \p Callee never comes back by what the user states of
+/// it or by its name.
+bool callNeverReturns(const BinaryImage &Img, va_t Callee,
+                      const libc::NoReturnTargetIndex *Names) {
+  if (const auto Stated = Img.userNoReturnAt(Callee))
+    return *Stated;
+  return libc::isNoReturnTarget(Img, Callee, Names);
 }
 } // namespace
 
@@ -145,15 +155,102 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
     if (auto It = Screens.find(Target); It != Screens.end())
       return It->second;
   }
+  // An x64, ARM or ARM64 image unwinds through a table entry for each
+  // function but a leaf, so no metadata may give a leaf routine its range;
+  // its straight-line flow can still end where nothing resumes it. An x86
+  // image has no such table, and no entry there marks a leaf.
+  if (screenedEnd(Target) == InvalidVA && Img.Format == BinaryFormat::COFF &&
+      Img.Arch != Arch::X86) {
+    const bool Ends = entryFlowNeverResumes(Target);
+    std::lock_guard<std::mutex> Lock(Mutex);
+    return Screens.emplace(Target, Ends).first->second;
+  }
   bool Returns = false;
+  // Straight-line flow ends at a terminator other than a resumable trap, and
+  // at a call to a routine stated or known by name never to return; padding
+  // after either does not resume it. A return there is reached only by a
+  // branch: unless one in the range targets it, nothing reaches it.
+  const auto CallNeverReturns = [&](va_t Callee) {
+    return callNeverReturns(Img, Callee, NoReturnTargets);
+  };
+  // Each such return, with the padding before it: a branch to either reaches
+  // the return.
+  std::vector<va_t> Unreached, Padding;
+  bool FlowEnded = false;
   const bool Decoded =
       decodeScreenedRange(Target, [&](Decoder &Dec, const DecodedInsn &Insn) {
         const std::optional<bool> InsnReturns = Dec.returnsToCaller(Insn);
+        const bool Ended = FlowEnded && Insn.Addr != Target;
+        if (InsnReturns && *InsnReturns && Ended) {
+          Unreached.insert(Unreached.end(), Padding.begin(), Padding.end());
+          Unreached.push_back(Insn.Addr);
+          Padding.clear();
+          return true;
+        }
         Returns = !InsnReturns || *InsnReturns;
-        return !Returns;
+        if (Returns)
+          return false;
+        const va_t Callee = Dec.directCallTarget(Insn);
+        const bool Pads = Ended && Dec.isAlignmentNop(Insn);
+        if (Pads)
+          Padding.push_back(Insn.Addr);
+        else
+          Padding.clear();
+        FlowEnded =
+            (Dec.isFunctionTerminator(Insn) && !Dec.isResumableTrap(Insn)) ||
+            (Callee != InvalidVA && CallNeverReturns(Callee)) || Pads;
+        return true;
       });
+  if (Decoded && !Returns && !Unreached.empty()) {
+    const ScreenedTransfers &Branches = screenedTransfers(Target);
+    Returns = !Branches.Known || llvm::any_of(Unreached, [&](va_t At) {
+      return Branches.Inside.count(At);
+    });
+  }
   std::lock_guard<std::mutex> Lock(Mutex);
   return Screens.emplace(Target, Decoded && !Returns).first->second;
+}
+
+bool InternalNoReturnIndex::entryFlowNeverResumes(va_t Target) const {
+  const Segment *Seg = Img.getSegmentFor(Target);
+  Decoder Dec;
+  if (!Seg || Target < Seg->VA || Target - Seg->VA >= Seg->Data.size() ||
+      !Dec.init(Img))
+    return false;
+  const va_t Limit =
+      Target + std::min<uint64_t>(limits::kMaxNoReturnScreenBytes,
+                                  Seg->VA + Seg->Data.size() - Target);
+  for (va_t At = Target; At < Limit;) {
+    DecodedInsn Insn;
+    const int Size =
+        Dec.selectMode(Img, At)
+            ? Dec.decodeOne(Seg->Data.data() + (At - Seg->VA),
+                            static_cast<size_t>(Limit - At), At, Insn)
+            : 0;
+    if (Size <= 0)
+      return false;
+    const va_t Callee = Dec.directCallTarget(Insn);
+    if (Callee != InvalidVA && callNeverReturns(Img, Callee, NoReturnTargets))
+      return true;
+    std::vector<LowOp> Ops;
+    try {
+      Dec.liftToLow(Insn, Ops);
+    } catch (const UnliftedInstruction &) {
+      return false;
+    }
+    for (const LowOp &Op : Ops) {
+      if (isArchitecturalNoReturn(Op))
+        return true;
+      if (Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
+          Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR)
+        return false;
+    }
+    // A resumable trap, or a terminator no lifted branch names.
+    if (Dec.isFunctionTerminator(Insn))
+      return false;
+    At += static_cast<va_t>(Size);
+  }
+  return false;
 }
 
 const std::vector<InternalNoReturnIndex::ScreenedInstruction> &
@@ -197,7 +294,14 @@ InternalNoReturnIndex::screenedTransfers(va_t Target) const {
           return false;
         }
         for (const LowOp &Op : Ops) {
-          if (Op.Opcode == NdOp::INDIR_BR) {
+          if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+              Op.Inputs[0].isConst() &&
+              isX86BoundedLeafPending(
+                  static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+            // The screen has no incoming-register proof. A pending ENCLU or
+            // GETSEC may still be a nonlocal machine transition.
+            Unknown = true;
+          } else if (Op.Opcode == NdOp::INDIR_BR) {
             Unknown = true;
           } else if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
             if (Op.NumInputs == 0 || !Op.Inputs[0].isConst()) {

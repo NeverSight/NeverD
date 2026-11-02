@@ -10,10 +10,86 @@
 #include "neverd/symbolic/SymParse.h"
 
 #include <array>
+#include <random>
 
 using namespace neverd::symbolic;
 
 namespace {
+
+TEST(SymMBAComplementArithmetic, KeepsRepeatedComplementCoordinatesCompact) {
+  for (unsigned Width : {3u, 8u, 64u, 65u, 257u}) {
+    SymContext C;
+    SymRef X = C.mkVar("x", Width), Y = C.mkVar("y", Width),
+           Z = C.mkVar("z", Width);
+    llvm::SmallVector<SymRef, 32> Factors(24, C.mkNot(X));
+    SymRef Power = C.mkMul(Factors);
+    SymRef Input = C.mkAdd(C.mkMul(Power, Y), C.mkMul(Power, Z));
+    MBAOptions Options;
+    Options.MaxWork = 4096;
+    Options.VerifySamples = 0;
+    detail::WorkBudget Budget(Options.MaxWork);
+    detail::SolveReport Report;
+    SymRef Result = detail::solveArithmetic(C, Input, Options, Budget, Report);
+    EXPECT_EQ(Result, C.mkMul(Power, C.mkAdd(Y, Z)));
+    EXPECT_EQ(Report.Evidence, MBAEvidence::Derivation);
+    EXPECT_FALSE(Budget.exhausted());
+    for (uint64_t Seed = 0; Seed != 128; ++Seed) {
+      llvm::APInt A(Width, Seed), B(Width, Seed * 37), D(Width, Seed * 53);
+      if (Seed & 1)
+        A.flipAllBits();
+      if (Seed & 2)
+        B.flipAllBits();
+      llvm::APInt Expected(Width, 1);
+      for (unsigned I = 0; I != 24; ++I)
+        Expected *= ~A;
+      Expected *= B + D;
+      EXPECT_EQ(C.eval(Result, {A, B, D}), Expected);
+    }
+  }
+}
+
+TEST(SymMBAComplementArithmetic, ReexpandsNewUsesInTheChosenCoordinate) {
+  for (unsigned Width : {3u, 8u, 64u, 65u, 257u}) {
+    SymContext C;
+    SymRef X = C.mkVar("x", Width);
+    llvm::SmallVector<SymRef, 8> Factors(8, C.mkNot(X));
+    SymRef Before = C.mkMul(Factors);
+    // Independently written coefficients of (1+x)^8 = (~x)^8.
+    const unsigned Coefficients[] = {1, 8, 28, 56, 70, 56, 28, 8, 1};
+    llvm::SmallVector<SymRef, 9> Terms;
+    for (unsigned I = 0; I != 9; ++I) {
+      llvm::SmallVector<SymRef, 9> Term(I, X);
+      Term.push_back(C.mkConst(Width, Coefficients[I]));
+      Terms.push_back(C.mkMul(Term));
+    }
+    SymRef After = C.mkAdd(Terms);
+    detail::WorkBudget Full(65536);
+    ASSERT_TRUE(detail::proveArithmeticIdentity(C, Before, After, Full,
+                                                size_t(1) << 24));
+    const size_t Required = Full.used();
+    ASSERT_GT(Required, 0u);
+    detail::WorkBudget Exact(Required), Short(Required - 1), Wrong(65536),
+        NoStorage(65536);
+    EXPECT_TRUE(detail::proveArithmeticIdentity(C, Before, After, Exact,
+                                                size_t(1) << 24));
+    EXPECT_FALSE(detail::proveArithmeticIdentity(C, Before, After, Short,
+                                                 size_t(1) << 24));
+    EXPECT_FALSE(detail::proveArithmeticIdentity(
+        C, Before, C.mkAdd(After, C.mkOne(Width)), Wrong, size_t(1) << 24));
+    EXPECT_FALSE(
+        detail::proveArithmeticIdentity(C, Before, After, NoStorage, 0));
+    for (unsigned I = 0; I != 128; ++I) {
+      llvm::APInt Value(Width, I);
+      if (I & 1)
+        Value.flipAllBits();
+      llvm::APInt Expected(Width, 1);
+      for (unsigned J = 0; J != 8; ++J)
+        Expected *= ~Value;
+      EXPECT_EQ(C.eval(Before, {Value}), Expected);
+      EXPECT_EQ(C.eval(After, {Value}), Expected);
+    }
+  }
+}
 
 TEST(SymMBAComplementArithmetic, CancelsAcrossSumsAndProducts) {
   const std::pair<const char *, const char *> Cases[] = {
@@ -194,6 +270,81 @@ TEST(SymMBAComplementArithmetic, KeepsLayeredLinearComplementWorkBounded) {
           {uint64_t(1) << 63, 1, uint64_t(1) << 62, 7}})
       EXPECT_EQ(C.evalU64(Result.Expr, Values), C.evalU64(Input, Values));
   }
+}
+
+TEST(SymMBAComplementArithmetic, ReusesOnlyCompatibleCompletedBases) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width),
+         Z = C.mkVar("z", Width);
+    llvm::SmallVector<SymRef, 16> Powers(12, C.mkNot(X));
+    const auto Power = C.mkMul(Powers);
+    const auto Input = C.mkAdd(C.mkMul({C.mkConst(Width, 6), Power, Y}),
+                               C.mkMul({C.mkConst(Width, 10), Power, Z}));
+    MBAOptions Options;
+    Options.VerifySamples = 0;
+    detail::WorkBudget Budget(65536);
+    Budget.MemoOwner = &C;
+    Budget.MemoCapacity = 1024;
+    for (bool Expand : {false, true}) {
+      detail::SolveReport Report;
+      const auto R =
+          detail::solveArithmetic(C, Input, Options, Budget, Report, Expand);
+      EXPECT_LT(C.readabilityCost(R), C.readabilityCost(Input));
+      EXPECT_FALSE(Report.BudgetExhausted);
+      EXPECT_EQ(Report.Evidence, MBAEvidence::Derivation);
+      std::mt19937_64 Random(0x434F4D50);
+      for (unsigned I = 0; I != 128; ++I) {
+        llvm::SmallVector<llvm::APInt, 3> Values;
+        for (unsigned J = 0; J != 3; ++J) {
+          llvm::APInt V(Width, 0);
+          for (unsigned Bit = 0; Bit < Width; Bit += 64)
+            V |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+          Values.push_back(V);
+        }
+        auto P = llvm::APInt(Width, 1);
+        for (unsigned K = 0; K != 12; ++K)
+          P *= ~Values[0];
+        const auto Want = P * (6 * Values[1] + 10 * Values[2]);
+        EXPECT_EQ(C.eval(R, Values), Want);
+      }
+    }
+    // Introducing the uncomplemented word changes coordinate selection.
+    // A warmed opaque basis must not hide the full-width complement identity.
+    const auto Near = C.mkAdd(Input, C.mkMul(Power, X));
+    detail::SolveReport Report;
+    const auto R = detail::solveArithmetic(C, Near, Options, Budget, Report);
+    for (uint64_t V : std::array<uint64_t, 5>{0, 1, 2, 7, UINT64_MAX}) {
+      llvm::SmallVector<llvm::APInt, 3> Values{
+          llvm::APInt(Width, V), llvm::APInt(Width, 3), llvm::APInt(Width, 5)};
+      EXPECT_EQ(C.eval(R, Values), C.eval(Near, Values));
+    }
+  }
+}
+
+TEST(SymMBAComplementArithmetic, StorageRefusalDoesNotPoisonCompletedMemo) {
+  SymContext C;
+  const auto Parsed = parseSymExpr(C, "x*x*x*y+x*x*x*z", 257);
+  ASSERT_TRUE(Parsed.ok());
+  detail::WorkBudget Budget(65536);
+  Budget.MemoOwner = &C;
+  Budget.MemoCapacity = 1;
+  MBAOptions Options;
+  Options.VerifySamples = 0;
+  Options.MaxTableBytes = 128;
+  detail::SolveReport Refused;
+  const size_t Nodes = C.numNodes();
+  EXPECT_EQ(detail::solveArithmetic(C, Parsed.Root, Options, Budget, Refused),
+            Parsed.Root);
+  EXPECT_TRUE(Refused.BudgetExhausted);
+  EXPECT_EQ(C.numNodes(), Nodes);
+  Options.MaxTableBytes = MBAOptions{}.MaxTableBytes;
+  detail::SolveReport Complete;
+  const auto R =
+      detail::solveArithmetic(C, Parsed.Root, Options, Budget, Complete);
+  EXPECT_LT(C.readabilityCost(R), C.readabilityCost(Parsed.Root));
+  EXPECT_FALSE(Complete.BudgetExhausted);
+  EXPECT_EQ(Complete.Evidence, MBAEvidence::Derivation);
 }
 
 } // namespace

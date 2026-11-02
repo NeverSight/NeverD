@@ -11,7 +11,7 @@
 #define NEVERD_BACKEND_LLVM_REGISTRATIONCXXCOOKIEBINDINGS_H
 
 #include "neverd/backend/llvm/RegistrationCookieProof.h"
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
 
 #include "llvm/Support/Error.h"
 

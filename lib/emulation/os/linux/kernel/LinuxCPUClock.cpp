@@ -8,6 +8,13 @@
 #include <cassert>
 
 namespace neverd::emulation::linux_model {
+namespace {
+bool hasProcessCPUClockContract(const ProcessOptions &Options) {
+  return Options.LinuxKernel &&
+         (Options.LinuxKernel->GKI || Options.LinuxKernel->Tasks);
+}
+} // namespace
+
 std::optional<ProcessCPUClock> processCPUClock(int32_t ID) {
   const uint32_t Bits = static_cast<uint32_t>(ID);
   if (ID >= 0 || (Bits & CPUClockThread) ||
@@ -38,7 +45,7 @@ llvm::Error validateCPUClockInputs(const ProcessOptions &Options) {
     const auto CPU = processCPUClock(ID);
     if (!CPU)
       continue;
-    if (!Options.LinuxKernel || !Options.LinuxKernel->GKI)
+    if (!hasProcessCPUClockContract(Options))
       return failure(TimeCPUObservation);
     if (!CPU->PID || CPU->PID == ProcessID)
       continue;
@@ -60,7 +67,7 @@ std::optional<uint64_t> selectProcessCPUClock(int32_t ID, uint64_t CurrentTask,
     Result.Diagnostic = Reason;
     return std::nullopt;
   };
-  if (!Options.LinuxKernel || !Options.LinuxKernel->GKI)
+  if (!hasProcessCPUClockContract(Options))
     return Unsupported(TimeDynamicClock);
   const uint32_t Bits = static_cast<uint32_t>(ID);
   if ((Bits & CPUClockFDMask) == CPUClockFD)

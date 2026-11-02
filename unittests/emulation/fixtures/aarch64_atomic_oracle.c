@@ -5,14 +5,14 @@
 //===----------------------------------------------------------------------===//
 typedef unsigned long long AtomicWord;
 #define NEVERD_ATOMIC_VALUE(Name, Value) static const AtomicWord Name = Value;
-#include "../AArch64AtomicCases.def"
+#include "../aarch64/AArch64AtomicCases.def"
 #undef NEVERD_ATOMIC_VALUE
 #define NEVERD_ATOMIC_ORACLE_VALUE(Name, Value) enum { Name = Value };
 #include "AArch64AtomicOracle.def"
 #undef NEVERD_ATOMIC_ORACLE_VALUE
 enum {
 #define NEVERD_ATOMIC_FAMILY(Name) Name,
-#include "../AArch64AtomicCases.def"
+#include "../aarch64/AArch64AtomicCases.def"
 #undef NEVERD_ATOMIC_FAMILY
 };
 enum {
@@ -87,7 +87,7 @@ static const struct {
 } Cases[] = {
 #define NEVERD_ATOMIC_CASE(Name, Kind, Width, Count, Word, Expected)           \
   {Kind, Width, Count, atomic##Name},
-#include "../AArch64AtomicCases.def"
+#include "../aarch64/AArch64AtomicCases.def"
 #undef NEVERD_ATOMIC_CASE
 };
 static const struct {

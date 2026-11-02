@@ -14,11 +14,21 @@
 #error "Define NEVERD_SIGS_REFERENCE_LIMIT before including this file"
 #endif
 
-// What a round of reference checking settles is what the next round checks
-// the callers against; each round names routines the one before could not,
-// and the chains of calls it follows are short, so this many rounds are
-// enough.
+// Bound propagation of reference evidence, including its withdrawal. If work
+// remains, its addresses and dependent callers are left unnamed. Increasing
+// this budget can resolve longer chains; it cannot establish cyclic claims.
 NEVERD_SIGS_REFERENCE_LIMIT(MaxReferenceRounds, 16)
+
+// A rooted incoming chain can extend through complete, anchored bodies. Each
+// round uses only the previous frontier and validates against the original
+// outgoing result. Stop extending at this depth; already supported prefixes
+// remain valid without depending on unresolved descendants.
+NEVERD_SIGS_REFERENCE_LIMIT(MaxIncomingRounds, 16)
+
+// A prefix-looking preceding operand can require a decoded path from the
+// function entry. Bound the entire prefix, including the address instruction;
+// unsupported, unreachable or overlapping streams remain unresolved.
+NEVERD_SIGS_REFERENCE_LIMIT(MaxReferenceBoundaryBytes, 4096)
 
 // A round checks its matches in parallel from this many, in blocks of this
 // many matches.

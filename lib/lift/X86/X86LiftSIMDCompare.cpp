@@ -18,8 +18,8 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X86StringCompare.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/intrinsics/X86/X86StringCompare.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 
@@ -227,8 +227,7 @@ bool liftEvexFPCompare(X86Lifter &L, X86Lifter::LiftState &S,
       !isVectorRegisterOfSize(FirstSourceOperand, VectorSize) ||
       ((Encoding.ModRM >> 3) & 7) !=
           static_cast<unsigned>(DestinationOperand.reg - X86_REG_K0) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          vectorRegisterIndex(FirstSourceOperand))
+      Encoding.vvvvIndex() != vectorRegisterIndex(FirstSourceOperand))
     return false;
 
   if (MemoryForm) {
@@ -237,8 +236,7 @@ bool liftEvexFPCompare(X86Lifter &L, X86Lifter::LiftState &S,
             Insn, X86, Encoding, SecondSourceOperand, MemoryTupleSize, 1))
       return false;
   } else if (!isVectorRegisterOfSize(SecondSourceOperand, VectorSize) ||
-             decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                 vectorRegisterIndex(SecondSourceOperand) ||
+             Encoding.rmIndex() != vectorRegisterIndex(SecondSourceOperand) ||
              !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1)) {
     return false;
   }
@@ -441,7 +439,7 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     } StatusFlags[] = {
 #define X86_STRING_COMPARE_FLAG(SELECTOR, FLAG, SUFFIX)                        \
   {SELECTOR, x86reg::FLAG},
-#include "neverd/ir/intrinsics/X86StringCompareFlags.def"
+#include "neverd/ir/intrinsics/X86/X86StringCompareFlags.def"
     };
     uint64_t ImmVal = X86.operands[2].imm & 0xFF;
     for (const auto &F : StatusFlags) {
@@ -613,8 +611,7 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         !isVectorRegisterOfSize(AOp, VectorSize) ||
         ((Encoding.ModRM >> 3) & 7) !=
             static_cast<unsigned>(DstOp.reg - X86_REG_K0) ||
-        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-            vectorRegisterIndex(AOp))
+        Encoding.vvvvIndex() != vectorRegisterIndex(AOp))
       return false;
 
     if (MemoryForm) {
@@ -626,8 +623,7 @@ bool liftSIMDCompare(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
               Broadcast ? Spec.ElementSize : VectorSize, 1))
         return false;
     } else if (!isVectorRegisterOfSize(BOp, VectorSize) || Broadcast ||
-               decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                   vectorRegisterIndex(BOp) ||
+               Encoding.rmIndex() != vectorRegisterIndex(BOp) ||
                !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1)) {
       return false;
     }

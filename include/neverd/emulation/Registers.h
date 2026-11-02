@@ -7,6 +7,8 @@
 #define NEVERD_EMULATION_REGISTERS_H
 #include "neverd/emulation/ExecutionBackend.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <array>
 #include <cstdint>
 namespace neverd::emulation {
@@ -44,6 +46,16 @@ enum class AArch64Register {
 #undef NEVERD_REGISTER_X64
 #undef NEVERD_SCALAR_REGISTER
 };
+struct RegisterSnapshot {
+  CPURegister Register;
+  RegisterValue Value;
+  bool operator==(const RegisterSnapshot &) const = default;
+};
+/// The complete modeled register inventory in stable declaration order.
+llvm::ArrayRef<CPURegister>
+architectureRegisters(GuestArchitecture Architecture);
+/// Architecture-local spelling from Registers.def; nullptr for invalid IDs.
+const char *registerName(CPURegister Register);
 CPURegister cpuRegister(X64Register Register);
 CPURegister cpuRegister(AArch64Register Register);
 CPURegister vectorRegister(GuestArchitecture Architecture, unsigned Index);

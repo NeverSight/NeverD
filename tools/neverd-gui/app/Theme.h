@@ -41,6 +41,7 @@ public:
 
   QFont codeFont() const { return codeFont_; }
   void setCodeFont(const QFont &font);
+  /// Bundled code face at the platform's default interface reading size.
   static QFont defaultCodeFont();
   /// Grow or shrink the code font by whole points, within sane bounds.
   void zoomCodeFont(int steps);

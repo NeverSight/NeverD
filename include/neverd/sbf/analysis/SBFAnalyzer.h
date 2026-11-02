@@ -9,6 +9,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/sbf/SBFIR.h"
+#include "neverd/sbf/analysis/SBFAnalysisReport.h"
 #include "neverd/sbf/analysis/SBFVerifier.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -42,6 +43,12 @@ struct AnalyzeOptions {
   /// An Anchor IDL supplied by the operator. Its names take precedence over the
   /// built-in dictionary when recovering instruction dispatch.
   const AnchorIdl *Idl = nullptr;
+  /// Explicit inspection boundary. The returned program contains only stages
+  /// completed up to this boundary; default callers still receive all stages.
+  AnalysisStage StopAfter = AnalysisStage::Solana;
+  /// Notifications borrow immutable stage state for this call only. Persist
+  /// completed snapshots outside the analysis process to survive fatal faults.
+  AnalysisObserver Observer;
 };
 
 llvm::Expected<SBFProgram> analyze(const BinaryImage &Image,
@@ -53,6 +60,23 @@ const Function *findFunction(const SBFProgram &Program,
                              llvm::StringRef Identifier = {});
 
 std::string formatInstruction(const LowInstruction &Instruction);
+/// The operands formatInstruction writes after the mnemonic; empty for an
+/// instruction without operands or a slot that decodes to none.
+std::string formatOperands(const LowInstruction &Instruction);
+
+/// An immediate among formatOperands' comma-separated operands, as the
+/// instruction uses it.
+struct OperandImmediate {
+  uint64_t Value = 0;
+  unsigned Bits = 0;
+};
+/// The ALU, store or branch immediate, or the lddw constant, that operand
+/// \p Index spells: the 32-bit field extends into the opcode's width, or
+/// keeps its own 32 bits where a narrower store cannot hold the encoded
+/// number. None for a register, memory, branch-target, call or endian-width
+/// operand.
+std::optional<OperandImmediate>
+operandImmediate(const LowInstruction &Instruction, unsigned Index);
 std::string dumpLowIR(const LowIR &IR);
 std::string dumpMedIR(const MedIR &IR);
 std::string dumpHighIR(const HighIR &IR);

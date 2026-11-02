@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
@@ -103,11 +103,10 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
                                  bool StoreForm) {
     NdMemoryOrdering Ordering = lseOrdering();
     NdVar OldVal = S.makeTemp(Asz);
-    S.emitIntrinsic(
-        Id, OldVal,
-        {Operand, EA, NdVar::cst(Asz, 2),
-         NdVar::cst(builtinAtomicOrdering(Ordering), 1)},
-        Ordering);
+    S.emitIntrinsic(Id, OldVal,
+                    {Operand, EA, NdVar::cst(Asz, 2),
+                     NdVar::cst(builtinAtomicOrdering(Ordering), 1)},
+                    Ordering);
     writeLoadOpResult(OldVal, StoreForm);
   };
 
@@ -330,11 +329,10 @@ bool AArch64Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     bool IsSigned = (std::strstr(Mn, "smax") != nullptr ||
                      std::strstr(Mn, "smin") != nullptr);
     bool IsMax = (std::strstr(Mn, "max") != nullptr);
-    Intrinsic Id = IsSigned
-                       ? (IsMax ? Intrinsic::A64_AtomicSmax
-                                : Intrinsic::A64_AtomicSmin)
-                       : (IsMax ? Intrinsic::A64_AtomicUmax
-                                : Intrinsic::A64_AtomicUmin);
+    Intrinsic Id =
+        IsSigned
+            ? (IsMax ? Intrinsic::A64_AtomicSmax : Intrinsic::A64_AtomicSmin)
+            : (IsMax ? Intrinsic::A64_AtomicUmax : Intrinsic::A64_AtomicUmin);
     emitScalarAtomicRMW(Id, EA, SrcN, Asz, StoreForm);
     break;
   }

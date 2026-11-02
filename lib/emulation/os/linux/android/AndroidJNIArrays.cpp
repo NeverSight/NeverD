@@ -26,8 +26,6 @@ BionicResult Bionic::jniArrays(unsigned Slot, const NativeCallEvent &Call) {
       return failure("JNI abort: negative array creation length");
     std::string ClassName;
     std::shared_ptr<JNIObject> Initial;
-    const unsigned Width =
-        Slot == 172 ? sizeof(std::weak_ptr<JNIObject>) : Widths[Slot - 175];
     if (Slot == 172) {
       auto Class = jniObject(A[2]);
       if (!Class)
@@ -49,18 +47,12 @@ BionicResult Bionic::jniArrays(unsigned Slot, const NativeCallEvent &Call) {
     } else {
       ClassName = std::string("[") + Kinds[Slot - 175];
     }
-    auto Object = jniNewObject(Slot == 172 ? JNIObject::ObjectArray
-                                           : JNIObject::PrimitiveArray,
-                               ClassName, uint64_t(Length) * Width);
+    auto Object = JNI.Heap->allocateArray(ClassName, Length);
     if (!Object)
-      return Object.takeError();
-    (*Object)->Length = Length;
-    (*Object)->ElementSize = Width;
-    if (Slot == 172) {
-      std::vector<uint8_t>().swap((*Object)->Bytes);
-      (*Object)->Elements.assign(Length, Initial);
-    }
-    auto Handle = jniReference(*Object);
+      return failure("JNI object storage budget exhausted");
+    if (Slot == 172)
+      Object->Elements.assign(Length, Initial);
+    auto Handle = jniReference(Object);
     if (!Handle)
       return Handle.takeError();
     return value(*Handle);

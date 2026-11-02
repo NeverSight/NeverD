@@ -10,7 +10,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"

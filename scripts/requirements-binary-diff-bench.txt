@@ -1,0 +1,2 @@
+# Optional ELF/DWARF source-truth extraction and Linux corpus regression tests.
+pyelftools==0.32 --hash=sha256:013df952a006db5e138b1edf6d8a68ecc50630adbd0d83a2d41e7f846163d738

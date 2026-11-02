@@ -94,6 +94,7 @@ validateRuntimeControlBlockAfterInvocationV1(const RuntimeControlBlockV1 &Block,
 enum class RuntimeABIHelperClassV1 : uint8_t {
   Load = 1,
   Store = 2,
+  X87Step = 3,
 };
 
 using RuntimeABILoadHelperV1 = uint32_t (*)(
@@ -101,6 +102,12 @@ using RuntimeABILoadHelperV1 = uint32_t (*)(
 using RuntimeABIStoreHelperV1 =
     uint32_t (*)(void *Runtime, uint64_t Address, uint64_t Value,
                  uint32_t RequiredAlignment) noexcept;
+
+using RuntimeABIX87StepHelperV1 = uint32_t (*)(void *Runtime, void *State,
+                                               uint32_t Selector,
+                                               uint64_t GuestIP,
+                                               uint64_t NextPC,
+                                               uint64_t GuestDP) noexcept;
 
 /// One exact native binding.  Exactly one function pointer is non-null and
 /// Class selects it.  Consumers must derive LLVM declarations and native
@@ -110,11 +117,17 @@ struct RuntimeABIHelperBindingV1 {
   RuntimeABIHelperClassV1 Class = RuntimeABIHelperClassV1::Load;
   RuntimeABILoadHelperV1 Load = nullptr;
   RuntimeABIStoreHelperV1 Store = nullptr;
+  RuntimeABIX87StepHelperV1 X87Step = nullptr;
 };
 
 llvm::ArrayRef<RuntimeABIHelperBindingV1> runtimeABIHelperBindingsV1();
+llvm::ArrayRef<RuntimeABIHelperBindingV1>
+runtimeABIHelperBindingsV1(TranslationRuntimeProfileV1 Profile);
 const RuntimeABIHelperBindingV1 *
 findRuntimeABIHelperBindingV1(llvm::StringRef Name);
+const RuntimeABIHelperBindingV1 *
+findRuntimeABIHelperBindingV1(llvm::StringRef Name,
+                              TranslationRuntimeProfileV1 Profile);
 
 /// Verify the control protocol layered on top of verifyTranslationIR(). Every
 /// native load/store status must branch immediately: the non-zero edge returns
@@ -122,6 +135,9 @@ findRuntimeABIHelperBindingV1(llvm::StringRef Name);
 /// is confined to its zero-status edge. Direct or stale result-slot reads are
 /// rejected.
 llvm::Error verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module);
+llvm::Error
+verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module,
+                                 TranslationRuntimeProfileV1 Profile);
 
 /// Verify a complete v1 runtime module through the generic host-IR boundary
 /// and the helper status protocol as one indivisible operation.  StateSlots
@@ -131,6 +147,14 @@ llvm::Error verifyRuntimeTranslationIRV1(
     const llvm::Module &Module, const llvm::Triple &ExpectedHostTriple,
     const llvm::DataLayout &ExpectedHostDataLayout, uint64_t StateSize,
     llvm::ArrayRef<TranslationIRMemorySlot> StateSlots = {});
+
+/// Explicit profile overload. The x87 profile permits direct access only to
+/// the unchanged integer slots; portable image and diagnostics stay sealed.
+llvm::Error verifyRuntimeTranslationIRV1(
+    const llvm::Module &Module, const llvm::Triple &ExpectedHostTriple,
+    const llvm::DataLayout &ExpectedHostDataLayout, uint64_t StateSize,
+    llvm::ArrayRef<TranslationIRMemorySlot> StateSlots,
+    TranslationRuntimeProfileV1 Profile);
 
 } // namespace neverd::translate
 

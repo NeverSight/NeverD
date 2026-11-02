@@ -11,7 +11,7 @@
 #include "COFFRegistrationCopySlots.h"
 
 #include "neverd/Limits.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
 namespace neverd::coff_registration {
 namespace {

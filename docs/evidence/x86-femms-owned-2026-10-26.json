@@ -1,0 +1,669 @@
+{
+  "scope": "Owned x64 FEMMS payload provenance and native 3DNow packed value APIs",
+  "goal_complete": false,
+  "sources": {
+    "neverd_femms": "e75c3cda0935f75145b7a35676cfabe490e6dab2",
+    "neverd_provenance_test": "eac3cc4c34e224c16453696992115ff121121a72",
+    "neverd_base": "6145ff90abfae3b6ae4ce60ceb8f60b90d751660",
+    "llvm": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc_builtin_qualification": "b6739629fd373018a59d6b859b5ee919eabaeb15",
+    "neverc": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+    "prior_native_sdk": "f963558944a686f2c6d2dfb8311011fb6749c530",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "capstone_gitlink": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+    "release_and_pins_changed": false,
+    "neverd_integrated": "dabb241baa6cc18b0fd9988f541922a3c64d446e"
+  },
+  "semantic_reference": {
+    "title": "AMD 3DNow! Technology Manual, FEMMS",
+    "page": 18,
+    "url": "https://www.amd.com/content/dam/amd/en/documents/archived-tech-docs/programmer-references/21928.pdf",
+    "contract": "All tags become empty; retained MMX/x87 payloads become undefined. Pending exceptions do not authorize a completed reset."
+  },
+  "neverd_validation": {
+    "pinned_initial": {
+      "file": "pinned-tests.xml",
+      "sha256": "527c50878f4c2f7356dcd8b0d16736f85ecc47f565d3733dde0ba1079150068a",
+      "tests": 107,
+      "failed": 0,
+      "skipped": 0
+    },
+    "native_prior_sdk_initial": {
+      "file": "native-tests.xml",
+      "sha256": "8aaf64901ce426c4096f813bce4f0656140bdc4251003d9daacc94841c29e410",
+      "tests": 107,
+      "failed": 0,
+      "skipped": 0
+    },
+    "pinned_provenance_extension": {
+      "file": "pinned-provenance-tests.xml",
+      "sha256": "8b819ec2790010c2ad0003712ed609764c790eab45fa8de3c1ac5c0591d9d56d",
+      "tests": 5,
+      "failed": 0,
+      "skipped": 0
+    },
+    "initial_source": "e75c3cda0935f75145b7a35676cfabe490e6dab2",
+    "extension_source": "eac3cc4c34e224c16453696992115ff121121a72",
+    "pinned_distinct_tests": 108,
+    "reset_states": 96,
+    "fresh_x87_load_sequences": 16,
+    "legacy_negative_routes": 324,
+    "legacy_positive_routes": 6,
+    "physical_femms_executed": false,
+    "native_host_feature_test": "Clean refusal without state/result mutation; host lacks CPUID 3DNow.",
+    "native_new_sdk": {
+      "file": "native-3dnow-sdk-tests.xml",
+      "sha256": "2d0c0f6a9217f7c35bf0754e9b0bae8d3e1f54814f1ece35311c938fefbdf1da",
+      "tests": 108,
+      "failed": 0,
+      "skipped": 0
+    },
+    "integrated_native": {
+      "file": "integrated-native-tests.xml",
+      "sha256": "8b6239f76587087f62299c637d17e7ba53c4eab9257e03bcdf273dc837a9f5a9",
+      "tests": 134,
+      "failed": 0,
+      "skipped": 0
+    },
+    "integrated_pinned": {
+      "file": "integrated-pinned-tests.xml",
+      "sha256": "428f531c97e39fe80bb8dd1068480f5e5da4ff2310ceb0953b541cc5f16239db",
+      "tests": 134,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "compiler_validation": {
+    "llvm_lit": {
+      "file": "llvm-3dnow-mmx-lit.xml",
+      "sha256": "025acf25cb5245a6edafb6f20f941b9cefee79d533f477ae9741fe6845e3de57",
+      "tests": 27,
+      "failed": 0,
+      "skipped": 0
+    },
+    "new_llvm_functions": 48,
+    "new_llvm_runs": 10,
+    "llvm_codegen_modes": [
+      "i386",
+      "x64"
+    ],
+    "x64_formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "neverc_initial": {
+      "file": "neverc-3dnow-tests.xml",
+      "sha256": "b3b33912206c0731325570db5648bfe2011d7e5447b74b903d48ada8eccf6dca",
+      "tests": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    "neverc_headers": {
+      "file": "neverc-3dnow-header-guards-tests.xml",
+      "sha256": "77b75258bb436cadf55ee946a292dddc352c9871b2b989085e3e07da6e9db844",
+      "tests": 5,
+      "failed": 0,
+      "skipped": 0
+    },
+    "builtin_and_header_frontend_compilations": 54,
+    "missing_target_feature_diagnostics": 12,
+    "standard_header_value_interfaces": 25,
+    "standard_header_reset_interfaces": 1,
+    "installed_x86_headers": {
+      "component": "x86-resource-headers",
+      "source_commit": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+      "installed_header": "/mnt/data/neverd-x86-femms-owned/header-install/lib/neverc/3389/include/mm3dnow.h",
+      "header_sha256": "f5c61e71dead207a3c005ba187e6401ba580e5b6798e4289c24d8b4ff560d1bd",
+      "compile_profile": "x64 ELF O2, all 50 register/memory wrappers, installed x86 headers first",
+      "assembly_sha256": "c04f991982b3ba1e0b2686a0a9964ea58548a43a5eee7e5461d8c7526670b5ad"
+    },
+    "header_import": {
+      "upstream_revision": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
+      "upstream_tag": "llvmorg-18.1.8",
+      "path": "clang/lib/Headers/mm3dnow.h",
+      "original_sha256": "78298363b72430c100430018ca0f04309325960ed9921cb720bc8bec01dfe8b7",
+      "license": "Apache-2.0 WITH LLVM-exception"
+    },
+    "builtin_spellings": 25,
+    "native_operations": 24,
+    "legalization_counterexample": {
+      "before": "llvm-3dnow-before-casts.log",
+      "before_sha256": "cae010e841015aade44097d3cc445ce0189a7a82846c450b0863059e71cf9d33",
+      "failure": "SelectionDAG type legalization aborts without INTR_TYPE_CAST_MMX registration.",
+      "after": "llvm-3dnow-mmx-lit.xml"
+    }
+  },
+  "qemu_value_oracle": {
+    "model": "qemu-system-x86_64 -machine pc,accel=tcg -cpu max",
+    "wrappers_per_object": 50,
+    "input_pairs": 8,
+    "rounding_controls": 4,
+    "comparisons": 25600,
+    "observation": "Packed result bits, x87 CW/SW/abridged tags, empty tags after final FEMMS and input canaries.",
+    "routes": [
+      {
+        "route": "NeverC x64",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 9904,
+          "sha256": "0b307694444e6edecc189ecf61008653eca09d01ab14d2876b5d5c9247383f02",
+          "entries": [
+            {
+              "file": "qemu-neverc-final/O0.o",
+              "bytes": 6416,
+              "sha256": "7c3aa7614523c15173feed239809b0d57817bca373c4eb543be59913b992d578"
+            },
+            {
+              "file": "qemu-neverc-final/O2.o",
+              "bytes": 3488,
+              "sha256": "14c19240b854721519be23b71ff8f7cc286aa05ec7f00523eb9e2e64cbed7a3c"
+            }
+          ]
+        }
+      },
+      {
+        "route": "LLVM x64",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 9304,
+          "sha256": "9a69f1bd05939c638d56c6cc2207f5fa7fddf293eaf3f3000f4ebec7e22ee36d",
+          "entries": [
+            {
+              "file": "qemu-llvm-x64/O0.o",
+              "bytes": 5984,
+              "sha256": "3409d0e0b73a5c467871e2de6b0c26f6783338e991da075148227e48fa128ece"
+            },
+            {
+              "file": "qemu-llvm-x64/O2.o",
+              "bytes": 3320,
+              "sha256": "b3f7f3aee40b606709f8139cdd0508d20a5b1d912b1295124618927e895a9a42"
+            }
+          ]
+        }
+      },
+      {
+        "route": "LLVM i386",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 32,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 32,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "5a1b28bd2d902adac41285b5cc3cfcc914acd6c5fd42430f62fcf4fcaab2097f",
+        "objects": {
+          "files": 2,
+          "bytes": 11184,
+          "sha256": "0caeebb3f7db463c0fdad0b03de04dfb3100872375386c62d8e51684d7cad151",
+          "entries": [
+            {
+              "file": "qemu-llvm-i386/O0.o",
+              "bytes": 6664,
+              "sha256": "ac741c3fdf4d1e7c86e27328ff380bdceb45717e729afc928352f0a4cf7beef6"
+            },
+            {
+              "file": "qemu-llvm-i386/O2.o",
+              "bytes": 4520,
+              "sha256": "67803c952e0e046efc9c3da4ef9c918464e78f4f62798fd0e17bb437fed04160"
+            }
+          ]
+        }
+      },
+      {
+        "route": "NeverC text IR to LLVM x64",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 9760,
+          "sha256": "58b3f5c7556ee099c644705d6d5fab0f2b4ab2030bd4e3960682229c80644f45",
+          "entries": [
+            {
+              "file": "qemu-bridge-text/O0.o",
+              "bytes": 6344,
+              "sha256": "3ce25f8b355f825d83eeaec458dbdf0a67362bf00c06bc0b07891ded0531e6a8"
+            },
+            {
+              "file": "qemu-bridge-text/O2.o",
+              "bytes": 3416,
+              "sha256": "6c98a6d82b2c20c3322e7db67256e38f848bb8c661892f4b44f7eaee945cc00b"
+            }
+          ]
+        }
+      },
+      {
+        "route": "NeverC bitcode to LLVM x64",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 9760,
+          "sha256": "551d76dec658d47e3644d9ad521d2796e8cf970daaa96601124eeb0450c99c2b",
+          "entries": [
+            {
+              "file": "qemu-bridge-bitcode/O0.o",
+              "bytes": 6344,
+              "sha256": "3ce25f8b355f825d83eeaec458dbdf0a67362bf00c06bc0b07891ded0531e6a8"
+            },
+            {
+              "file": "qemu-bridge-bitcode/O2.o",
+              "bytes": 3416,
+              "sha256": "6c98a6d82b2c20c3322e7db67256e38f848bb8c661892f4b44f7eaee945cc00b"
+            }
+          ]
+        }
+      },
+      {
+        "route": "NeverC x64 standard headers",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 12984,
+          "sha256": "b101327deb5ab2ece78cc0b6ba91201403938b26bb07946f4d5af50ccbe316c1",
+          "entries": [
+            {
+              "file": "qemu-headers-neverc/O0.o",
+              "bytes": 9496,
+              "sha256": "c5c481053c1fb96768d1782f6ed6c4e1e38b0ed99e244e4129a7553ab4ac5768"
+            },
+            {
+              "file": "qemu-headers-neverc/O2.o",
+              "bytes": 3488,
+              "sha256": "14c19240b854721519be23b71ff8f7cc286aa05ec7f00523eb9e2e64cbed7a3c"
+            }
+          ]
+        }
+      },
+      {
+        "route": "NeverC headers text IR to LLVM x64",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 12840,
+          "sha256": "68c7ee1fa9cc115414884cf4b07492e2313c586996ed21ae37d6208c81053c5a",
+          "entries": [
+            {
+              "file": "qemu-headers-text/O0.o",
+              "bytes": 9424,
+              "sha256": "b6808ac878fe4c28245c0fdbe68f242fb1a69147c55cefe79ed57825dd78679c"
+            },
+            {
+              "file": "qemu-headers-text/O2.o",
+              "bytes": 3416,
+              "sha256": "6c98a6d82b2c20c3322e7db67256e38f848bb8c661892f4b44f7eaee945cc00b"
+            }
+          ]
+        }
+      },
+      {
+        "route": "NeverC headers bitcode to LLVM x64",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 0
+          }
+        ],
+        "report_sha256": "e3d92557b33248af455bfc5d2e1111779d126e4fa3d99c59713491327c01085f",
+        "objects": {
+          "files": 2,
+          "bytes": 12840,
+          "sha256": "98f2ef6212151167a2c8bfc2c13dc6a387d40d4c23b047008cb568b77f8a2d59",
+          "entries": [
+            {
+              "file": "qemu-headers-bitcode/O0.o",
+              "bytes": 9424,
+              "sha256": "b6808ac878fe4c28245c0fdbe68f242fb1a69147c55cefe79ed57825dd78679c"
+            },
+            {
+              "file": "qemu-headers-bitcode/O2.o",
+              "bytes": 3416,
+              "sha256": "6c98a6d82b2c20c3322e7db67256e38f848bb8c661892f4b44f7eaee945cc00b"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "qemu_owned_femms": {
+    "object_count": 20,
+    "distinct_object_rounding_pairs": 80,
+    "executions": 160,
+    "observation": "MOVQ/FEMMS/FLD1/FSTP stores binary64 one at argument + 8, preserves input/canaries, and returns empty tags.",
+    "routes": [
+      {
+        "sdk": "pinned",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          }
+        ],
+        "objects": {
+          "files": 10,
+          "bytes": 26704,
+          "sha256": "40f3aa3747ee806707e0a0f012d2f19db4409322b910deba2746d98cbefa6d14",
+          "entries": [
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-default-O0.o",
+              "bytes": 3056,
+              "sha256": "5af97522a74f52d20828f0280e0c7d094663b60a6e6284b41f73347ebda87f91"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-default-O2.o",
+              "bytes": 2456,
+              "sha256": "6f42d0462538020cd76d4eb938e3d07d2e008ac703c4887d4f4aa21e088f6861"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-noopt-O0.o",
+              "bytes": 3048,
+              "sha256": "abbe418d144c1edde675e8f67da927eacabba52f8d1001cd496e2ecedada7fc5"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-noopt-O2.o",
+              "bytes": 2448,
+              "sha256": "50afb907e4b391529bd5aec1f1106854277489536eb689cecf5b06b285f7a0ff"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-default-O0.o",
+              "bytes": 3184,
+              "sha256": "8a05fb75c4a7c0cd3fab9275d812e9d30cb85a9e5a3a98c882e6e75a63ceaf5e"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-default-O2.o",
+              "bytes": 2552,
+              "sha256": "0b55bb8a7a6299528df8c26c112700aa640ef51fd3f016c84633be47732121df"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-noopt-O0.o",
+              "bytes": 3112,
+              "sha256": "127a15d44207ee56ce30ffd0779142bff94dcfec333d688ee09d0ec09bff851c"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-noopt-O2.o",
+              "bytes": 2552,
+              "sha256": "440870d720e45ac99d1034949b582f7d997cd80fc421b70e3ddb2e1c2c8510ab"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-default.o",
+              "bytes": 2008,
+              "sha256": "72b18e093c2af1254fd98e3563c16b6cdf3b2ad1853a8fc9db30b5983e3bb8b7"
+            },
+            {
+              "file": "pinned-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-noopt.o",
+              "bytes": 2288,
+              "sha256": "88314c78a03219e7c29c8b87f1f23908751059f1aafb3c03569fba9e9d86f3be"
+            }
+          ]
+        }
+      },
+      {
+        "sdk": "native",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          }
+        ],
+        "objects": {
+          "files": 10,
+          "bytes": 26704,
+          "sha256": "cd5e4ebab71c3775c7897ec428f1d5284f933ddb68e21b72ab2147b97d297c45",
+          "entries": [
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-default-O0.o",
+              "bytes": 3056,
+              "sha256": "5af97522a74f52d20828f0280e0c7d094663b60a6e6284b41f73347ebda87f91"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-default-O2.o",
+              "bytes": 2456,
+              "sha256": "6f42d0462538020cd76d4eb938e3d07d2e008ac703c4887d4f4aa21e088f6861"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-noopt-O0.o",
+              "bytes": 3048,
+              "sha256": "abbe418d144c1edde675e8f67da927eacabba52f8d1001cd496e2ecedada7fc5"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/high-noopt-O2.o",
+              "bytes": 2448,
+              "sha256": "50afb907e4b391529bd5aec1f1106854277489536eb689cecf5b06b285f7a0ff"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-default-O0.o",
+              "bytes": 3184,
+              "sha256": "8a05fb75c4a7c0cd3fab9275d812e9d30cb85a9e5a3a98c882e6e75a63ceaf5e"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-default-O2.o",
+              "bytes": 2552,
+              "sha256": "0b55bb8a7a6299528df8c26c112700aa640ef51fd3f016c84633be47732121df"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-noopt-O0.o",
+              "bytes": 3112,
+              "sha256": "127a15d44207ee56ce30ffd0779142bff94dcfec333d688ee09d0ec09bff851c"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-c-noopt-O2.o",
+              "bytes": 2552,
+              "sha256": "440870d720e45ac99d1034949b582f7d997cd80fc421b70e3ddb2e1c2c8510ab"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-default.o",
+              "bytes": 2008,
+              "sha256": "72b18e093c2af1254fd98e3563c16b6cdf3b2ad1853a8fc9db30b5983e3bb8b7"
+            },
+            {
+              "file": "native-artifacts/FemmsSurvivesLLVMHighCAndLLVMCOptimization/0/llvm-noopt.o",
+              "bytes": 2288,
+              "sha256": "88314c78a03219e7c29c8b87f1f23908751059f1aafb3c03569fba9e9d86f3be"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "artifact_root": "/mnt/data/neverd-x86-femms-owned",
+  "limitations": [
+    "24 NeverD 3DNow stateful instructions remain explicit refusals; native compiler value APIs do not supply an ambient machine-state ABI.",
+    "NeverD owned FEMMS admission is x64 only; unowned/typed and i386 paths remain refused.",
+    "The explicit portable x87 profile still refuses MMX resets.",
+    "QEMU results compare native instructions within one processor model. They do not qualify physical 3DNow hardware, all input/CPU behaviors, or complete fault continuations.",
+    "No final LLVM release, SDK pin or LLVM/Capstone submodule update is included."
+  ],
+  "publication_qualification": {
+    "source": "d516633d27c6d8d3729c36aa7dc8790cf6b8fa29",
+    "native": {
+      "file": "published-native-tests.xml",
+      "sha256": "88e8fd93447e5b0744f072a7d369484a1cfd6abbfd32fbfd20179498482295e3",
+      "tests": 340,
+      "failed": 0,
+      "skipped": 0
+    },
+    "pinned": {
+      "file": "published-pinned-tests.xml",
+      "sha256": "cdde710ef093546a95013e8efb5fdd3c1e97a03628f341953a9469711dcd8b34",
+      "tests": 340,
+      "failed": 0,
+      "skipped": 0
+    },
+    "qemu_owned_contexts": [
+      {
+        "sdk": "native",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          }
+        ],
+        "report_sha256": "f69d3d0969b074e3d6ac88fdaed1596a04dec936f13739dce41ebc1c693e8e75",
+        "objects": {
+          "files": 10,
+          "bytes": 26704,
+          "sha256": "62201f10b1243e97f449767a70d4dcf21943fe813d49e8ff0a15b63aae4f1197"
+        }
+      },
+      {
+        "sdk": "pinned",
+        "qualification": [
+          {
+            "optimization": "-O0",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          },
+          {
+            "optimization": "-O2",
+            "mode": 64,
+            "value_comparisons": 1600,
+            "owned_context_comparisons": 40
+          }
+        ],
+        "report_sha256": "f69d3d0969b074e3d6ac88fdaed1596a04dec936f13739dce41ebc1c693e8e75",
+        "objects": {
+          "files": 10,
+          "bytes": 26704,
+          "sha256": "fad044387b7a3084d43e7a73f175377e418f1e02535b3f3171e682f56e005401"
+        }
+      }
+    ]
+  },
+  "build_interruptions": [
+    {
+      "phase": "first pinned integration",
+      "exit_code": 143,
+      "reason": "External SIGTERM with no compiler diagnostic; no remaining build process; incremental restart passed 134 tests."
+    },
+    {
+      "phase": "a5d7ca05 attempted publication",
+      "reason": "Normal push rejected because dev advanced by a GUI documentation commit. Newly started builds intentionally interrupted; documentation-only merge d516633d27 pushed and fixed for qualification."
+    }
+  ]
+}

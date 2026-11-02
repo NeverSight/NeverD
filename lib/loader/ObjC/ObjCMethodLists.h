@@ -1,7 +1,16 @@
+//===- ObjCMethodLists.h - Shared method list records ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Bounded method declarations, retaining preoptimized image conditions.
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_LOADER_OBJC_OBJCMETHODLISTS_H
 #define NEVERD_LOADER_OBJC_OBJCMETHODLISTS_H
 
-#include "neverd/Common.h"
+#include "neverd/loader/ObjC/ObjCMethods.h"
 
 #include <optional>
 #include <string>
@@ -15,6 +24,7 @@ struct MethodRecord {
   std::optional<va_t> Implementation;
   std::string Selector;
   std::string TypeEncoding;
+  std::optional<ObjCCacheListOrigin> CacheOrigin;
 };
 
 /// Shared record layout for class implementations and protocol declarations.
@@ -24,4 +34,4 @@ readMethodList(const BinaryImage &Image, va_t Address, size_t &Remaining,
                std::string &Diagnostic);
 } // namespace objc
 } // namespace neverd
-#endif
+#endif // NEVERD_LOADER_OBJC_OBJCMETHODLISTS_H

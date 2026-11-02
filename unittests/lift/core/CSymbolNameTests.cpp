@@ -8,8 +8,10 @@
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/loader/BinaryImage.h"
@@ -385,6 +387,25 @@ TEST(CSymbolNames, ANumberedDefinitionNamesItsSymbolAndItsCallsReachIt) {
   EXPECT_EQ(Source.find("helper_1200"), NotFound) << Source;
 }
 
+TEST(CSymbolNames, ACallToTheFirstOfSameNamedDefinitionsTakesItsPrototype) {
+  // The first static helper takes one argument, though its call collected
+  // three operands; the second helper holds the name's other definition.
+  HighFunc First = function("helper", 0x1100, {});
+  First.Params.push_back({"a0", NdType::makeInt(8, false)});
+  std::vector<ExprPtr> Operands;
+  for (uint64_t Value : {1, 2, 3})
+    Operands.push_back(HighExpr::makeConst(Value, 8));
+  const std::string Source = emitHighC(
+      {First, function("helper", 0x1200, {}),
+       function("main", 0x1300,
+                {callStatement("helper", 0x1100, std::move(Operands))})},
+      BinaryFormat::ELF, Arch::X64);
+  EXPECT_NE(lineAfter(Source, "/* helper */").find(" helper_2("), NotFound)
+      << Source;
+  EXPECT_NE(Source.find("helper(1);"), NotFound) << Source;
+  EXPECT_EQ(Source.find("helper(1, 2"), NotFound) << Source;
+}
+
 TEST(CSymbolNames, LLVMCDeclaresCxxImportsByMangledName) {
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Diagnostic;
@@ -548,16 +569,22 @@ TEST(CSymbolNames, StartupPassesMainThroughItsPrototype) {
                 {callStatement("__libc_start_main", 0x2000, Args)})},
       Img);
   // The routine no header declares has its C library prototype, and the
-  // address of main reads as main, converted to the parameter's type.
+  // address of main reads as main's linker symbol, converted to the
+  // parameter's type: the address alone gives main no C signature.
   EXPECT_NE(Source.find("extern int32_t __libc_start_main(int32_t (*)(int32_t, "
                         "char **, char **), int32_t, char **, void (*)(void), "
                         "void "
                         "(*)(void), void (*)(void), void *)"),
             NotFound)
       << Source;
-  EXPECT_NE(Source.find("extern int main();"), NotFound) << Source;
+  EXPECT_NE(
+      Source.find("extern unsigned char neverd_code_main[] __asm__(\"main\");"),
+      NotFound)
+      << Source;
+  EXPECT_EQ(Source.find("extern int main"), NotFound) << Source;
   EXPECT_NE(Source.find("__libc_start_main((int32_t (*)(int32_t, char **, "
-                        "char **))main, 1, (char **)0x7000, 0, 0, 0, 0);"),
+                        "char **))neverd_code_main, 1, (char **)0x7000, 0, 0, "
+                        "0, 0);"),
             NotFound)
       << Source;
   EXPECT_EQ(Source.find("0x1150"), NotFound) << Source;
@@ -568,8 +595,9 @@ TEST(CSymbolNames, StartupPassesMainThroughItsPrototype) {
 
 TEST(CSymbolNames, FunctionAddressesReadAsTheirFunctions) {
   const BinaryImage Img = startupImage();
-  // An unprototyped callee takes the function's pointer as it is; a number
-  // equal to its address stays a number.
+  // An unprototyped callee takes the function's address as its linker
+  // symbol, which the address alone gives no C signature; a number equal to
+  // its address stays a number.
   std::vector<HighFunc> Funcs{function(
       "install", 0x1000,
       {callStatement("register_hook", 0x2000, {address(0x1180)}),
@@ -577,8 +605,13 @@ TEST(CSymbolNames, FunctionAddressesReadAsTheirFunctions) {
                      {HighExpr::makeConst(
                          0x1180, 8, ConstantAddressProvenance::Scalar)})})};
   const std::string Source = emitWithImage(Funcs, Img);
-  EXPECT_NE(Source.find("extern int on_exit_hook();"), NotFound) << Source;
-  EXPECT_NE(Source.find("register_hook(on_exit_hook);"), NotFound) << Source;
+  EXPECT_NE(Source.find("extern unsigned char neverd_code_on_exit_hook[] "
+                        "__asm__(\"on_exit_hook\");"),
+            NotFound)
+      << Source;
+  EXPECT_EQ(Source.find("extern int on_exit_hook"), NotFound) << Source;
+  EXPECT_NE(Source.find("register_hook(neverd_code_on_exit_hook);"), NotFound)
+      << Source;
   EXPECT_NE(Source.find("register_hook(0x1180);"), NotFound) << Source;
 }
 
@@ -650,7 +683,8 @@ std::string emitFor(const std::vector<HighFunc> &Funcs, BinaryFormat Format,
 TEST(CSymbolNames, CxxRuntimeRoutinesTakeTheirPrototypes) {
   const BinaryImage Img = startupImage();
   // A static object's destructor registers through __cxa_atexit, which no
-  // header declares: the destructor passes as the function it is.
+  // header declares: the destructor's address passes as its linker symbol,
+  // converted to the parameter's type.
   const std::string Source = emitWithImage(
       {function("install", 0x1000,
                 {callStatement("__cxa_atexit", 0x2000,
@@ -664,7 +698,8 @@ TEST(CSymbolNames, CxxRuntimeRoutinesTakeTheirPrototypes) {
       << Source;
   EXPECT_NE(Source.find("extern void __cxa_end_catch(void);"), NotFound)
       << Source;
-  EXPECT_NE(Source.find("__cxa_atexit((void (*)(void *))on_exit_hook, 0, 0);"),
+  EXPECT_NE(Source.find("__cxa_atexit((void (*)(void *))neverd_code_on_exit_"
+                        "hook, 0, 0);"),
             NotFound)
       << Source;
   source_call_execution_test::compileAndRun(
@@ -1420,4 +1455,82 @@ TEST(CSymbolNames, CopiesOfHeaderRoutinesStepAsideFromTheirNames) {
   EXPECT_NE(Source.find("    strlen("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("strlen_1000(0"), std::string::npos) << Source;
   EXPECT_NE(Source.find("    sigaddset_1100("), std::string::npos) << Source;
+}
+
+TEST(CSymbolNames, OmittedImageHeaderRoutinesKeepTheirRecoveredDeclarations) {
+  // A selected caller still references the image's own routine. Omitting the
+  // callee's body must not replace its recovered interface with a host header
+  // declaration, or redeclare that header's ordinary identifier incompatibly.
+  class ImageDebug : public NullDebugContext {
+  public:
+    std::string Name;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != 0x1180)
+        return std::nullopt;
+      FunctionSym F;
+      F.Name = Name;
+      F.Addr = Address;
+      F.ReturnType = NdType::makeInt(8, false);
+      F.Params = {{"first", F.ReturnType},
+                  {"second", F.ReturnType},
+                  {"third", F.ReturnType}};
+      return F;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  for (const char *Name :
+       {"strlen", "qsort", "wcschr", "_strupr", "wcscpy_s"}) {
+    SCOPED_TRACE(Name);
+    Debug.Name = Name;
+    BinaryImage Image = startupImage();
+    Image.Format = BinaryFormat::COFF;
+    Image.Symbols.back().Name = Name;
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    Options.Image = &Image;
+    const auto Caller =
+        returnsCall("caller", 0x1000,
+                    HighExpr::makeCall(Name, 0x1180,
+                                       {HighExpr::makeConst(1, 8),
+                                        HighExpr::makeConst(2, 8),
+                                        HighExpr::makeConst(3, 8)}));
+    std::string High;
+    llvm::raw_string_ostream HighOS(High);
+    ASSERT_TRUE(HighCEmitter().emit({Caller}, HighOS, Options, &Debug));
+
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Diagnostic;
+    auto Module = llvm::parseAssemblyString(R"(
+declare i64 @sub_1180(i64, i64, i64)
+define i64 @caller() {
+  %result = call i64 @sub_1180(i64 1, i64 2, i64 3)
+  ret i64 %result
+}
+)",
+                                            Diagnostic, Context);
+    ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+    std::string LLVM;
+    llvm::raw_string_ostream LLVMOS(LLVM);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, LLVMOS, Options, &Debug, &Image));
+    auto *Callee = Module->getFunction("sub_1180");
+    ASSERT_NE(Callee, nullptr);
+    Callee->setName(Name);
+    rewrite_source::setOriginalVA(*Callee, 0x1180);
+    std::string NamedLLVM;
+    llvm::raw_string_ostream NamedOS(NamedLLVM);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, NamedOS, Options, &Debug, &Image));
+    for (const auto &Source : {High, LLVM, NamedLLVM}) {
+      EXPECT_NE(Source.find(std::string(Name) + "_1180("), NotFound) << Source;
+      EXPECT_NE(Source.find("__asm__(\"" + std::string(Name) + "\")"), NotFound)
+          << Source;
+      EXPECT_NE(Source.find("_1180(1, 2, 3)"), NotFound) << Source;
+      for (const char *Optimization : {"-O0", "-O2"})
+        source_call_execution_test::checkSyntax(
+            "#include <stdlib.h>\n#include <string.h>\n#include <wchar.h>\n" +
+                Source,
+            {Optimization, "-Werror=int-conversion",
+             "-Werror=incompatible-pointer-types"});
+    }
+  }
 }

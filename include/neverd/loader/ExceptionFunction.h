@@ -16,13 +16,13 @@
 #ifndef NEVERD_LOADER_EXCEPTIONFUNCTION_H
 #define NEVERD_LOADER_EXCEPTIONFUNCTION_H
 
+#include "neverd/loader/ARM/LanguageEHARM.h"
 #include "neverd/loader/ExceptionCommon.h"
 #include "neverd/loader/ExceptionEncoding.h"
 #include "neverd/loader/ExceptionModel.h"
 #include "neverd/loader/ExceptionPersonality.h"
 #include "neverd/loader/ExceptionUnwindOp.h"
 #include "neverd/loader/ExceptionWindowsEH.h"
-#include "neverd/loader/LanguageEHARM.h"
 #include "neverd/loader/LanguageEHCompact.h"
 #include "neverd/loader/LanguageEHDelphi.h"
 #include "neverd/loader/LanguageEHDwarf.h"

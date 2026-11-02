@@ -29,8 +29,10 @@
 #include "neverd/evm/emit/EVMCEmitter.h"
 #include "neverd/evm/emit/EVMSolidityEmitter.h"
 #include "neverd/ir/NdOps.h"
+#include "neverd/ir/high/HighIRPrint.h"
 #include "neverd/ir/high/HighVariableEdits.h"
-#include "neverd/loader/ARMModeCLIStrings.h"
+#include "neverd/ir/high/SEHFinallyBodies.h"
+#include "neverd/loader/ARM/ARMModeCLIStrings.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
@@ -41,6 +43,7 @@
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <limits>
 #include <set>
@@ -136,6 +139,43 @@ void emitLowView(const LowFunc &F, const IRRowSink &Sink,
            OS << "]\n";
          });
   }
+}
+
+void emitHighView(const HighFunc &F, const LowFunc *Low,
+                  const HighSourceMap &Sources, const IRRowSink &Sink) {
+  const auto Canonical =
+      Low ? instructionOrigins(*Low) : std::set<std::pair<va_t, int>>();
+  std::optional<HighStatementSourceIndex> Index;
+  if (Low)
+    Index.emplace(Sources);
+  const std::string Prefix = "high:" + vaHex(F.Entry);
+  Sink("; HighIR: " + F.Name + " @ " + vaHex(F.Entry) + "\n",
+       {Prefix + ":header", "header"});
+  Sink("; Params: " + std::to_string(F.Params.size()) +
+           ", Locals: " + std::to_string(F.Locals.size()) + "\n",
+       {Prefix + ":frame", "header"});
+  if (F.ReturnProtection)
+    Sink(std::string("; Return protection: PAC, key=") +
+             (F.ReturnProtection->BKey ? "IB" : "IA") +
+             ", modifier=entry SP, " +
+             (F.ReturnProtection->Leaf ? "leaf" : "non-leaf") + "\n",
+         {Prefix + ":return-protection", "header"});
+  Sink("\n", {Prefix + ":blank"});
+  size_t Row = 0;
+  for (const auto &S : F.Body)
+    printHighStatementRows(
+        S, 0, [&](llvm::StringRef Text, const HighStmt *Statement) {
+          IRRowOrigin Origin{Prefix + ":row:" + std::to_string(Row++),
+                             Statement ? "operation" : "decoration"};
+          if (Statement && Index)
+            if (const auto O = Index->lookup(F.Entry, *Statement);
+                O && Canonical.contains({O->Address, O->Sequence})) {
+              Origin.Status = "instruction_anchor";
+              Origin.Address = O->Address;
+              Origin.Sequence = O->Sequence;
+            }
+          Sink(Text, Origin);
+        });
 }
 
 void emitMedView(const MedFunc &F, const LowFunc *Low, const IRRowSink &Sink) {
@@ -237,6 +277,20 @@ std::string missingHighFunctionReason(const PipelineResult &Result,
 /// A note for each function the pipeline refused, with why, which a whole
 /// unit begins with: a refused function is otherwise missing from it with
 /// no word, where asking for it alone names the reason.
+std::string notDecompiledNote(llvm::StringRef Name, va_t Entry,
+                              llvm::StringRef Reason) {
+  // Neither a name nor a reason, which may quote one, can end the comment
+  // it stands in.
+  auto Commented = [](std::string Text) {
+    for (size_t At = Text.find("*/"); At != std::string::npos;
+         At = Text.find("*/", At))
+      Text.replace(At, 2, "* /");
+    return Text;
+  };
+  return "/* neverd.not-decompiled: " + Commented(Name.str()) + " at 0x" +
+         llvm::utohexstr(Entry) + ": " + Commented(Reason.str()) + " */\n";
+}
+
 std::string refusedFunctionNotes(const PipelineResult &Result) {
   std::vector<const PipelineFunctionAudit *> Refused;
   for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
@@ -257,14 +311,40 @@ std::string refusedFunctionNotes(const PipelineResult &Result) {
     std::string Name = Audit->Name.empty()
                            ? "sub_" + llvm::utohexstr(Audit->Entry)
                            : Audit->Name;
-    // A name cannot end the comment it stands in.
-    for (size_t At = Name.find("*/"); At != std::string::npos;
-         At = Name.find("*/", At))
-      Name.replace(At, 2, "* /");
-    Notes += "/* neverd.not-decompiled: " + Name + " at 0x" +
-             llvm::utohexstr(Audit->Entry) + ": " +
-             functionAuditReason(*Audit) + " */\n";
+    Notes += notDecompiledNote(Name, Audit->Entry, functionAuditReason(*Audit));
   }
+  return Notes.empty() ? Notes : Notes + "\n";
+}
+
+/// A note for each function the unit's LLVM module declares only, which
+/// follows the pipeline's: its body refused a stale address, for the reason
+/// the emitter gives.
+std::string leftOutDefinitionNotes(const PipelineResult &Result) {
+  std::vector<const PipelineFunctionAudit *> LeftOut;
+  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
+    if (!Audit.LLVMDiagnostic.empty())
+      LeftOut.push_back(&Audit);
+  llvm::sort(LeftOut,
+             [](const auto *A, const auto *B) { return A->Entry < B->Entry; });
+  std::string Notes;
+  for (const PipelineFunctionAudit *Audit : LeftOut)
+    Notes += notDecompiledNote(
+        Audit->Name.empty() ? "sub_" + llvm::utohexstr(Audit->Entry)
+                            : Audit->Name,
+        Audit->Entry, "llvm-emission-failed; " + Audit->LLVMDiagnostic);
+  return Notes.empty() ? Notes : Notes + "\n";
+}
+
+/// A note for each definition the unit's C left out, which follows the
+/// pipeline's: its C could not be written, for the reason the writer gives.
+std::string refusedDefinitionNotes(
+    const std::vector<CEmitterOptions::RefusedDefinition> &Refused) {
+  std::string Notes;
+  for (const auto &Definition : Refused)
+    Notes += notDecompiledNote(
+        Definition.Name.empty() ? "sub_" + llvm::utohexstr(Definition.Entry)
+                                : Definition.Name,
+        Definition.Entry, "c-emission-failed; " + Definition.Reason);
   return Notes.empty() ? Notes : Notes + "\n";
 }
 } // namespace
@@ -308,7 +388,7 @@ static std::string emissionFailure(const std::exception &Error) {
 }
 
 static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
-                           bool NeedHighIR) {
+                           Session::PipelineDepth Depth) {
   auto *S = toSession(Sess);
   if (!S)
     return 0;
@@ -346,13 +426,20 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
              !S->OnlyFunctionEntries.count(FuncEntry)) {
       S->selectFunction(FuncEntry);
     }
-    return S->ensurePipeline(NeedHighIR) ? 1 : 0;
+    return S->ensurePipeline(Depth) ? 1 : 0;
   } catch (const std::exception &Error) {
     S->setError(std::string("function analysis failed: ") + Error.what());
   } catch (...) {
     S->setError("unexpected function analysis failure");
   }
   return 0;
+}
+
+static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
+                           bool NeedHighIR) {
+  return prepareFunction(Sess, FuncEntry,
+                         NeedHighIR ? Session::PipelineDepth::HighIR
+                                    : Session::PipelineDepth::Analysis);
 }
 
 const char *neverd_warm_functions_json(neverd_session_t Sess,
@@ -384,6 +471,8 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
       // The function list as the first selection reads it, built here, where
       // nothing waits, rather than in that selection.
       S->refreshFunctionList();
+      // So is the index its C view's names are resolved in.
+      (void)S->functionIndexNamed({});
       // The C view of the first function opened reads the widths of the
       // image's data accesses, which scanning every function finds.  Scan
       // them here, where nothing waits, as that view would; the session
@@ -439,14 +528,20 @@ int neverd_prepare_function_view(neverd_session_t Sess, neverd_va_t FuncEntry,
   if (!S)
     return 0;
   const llvm::StringRef Stage = Representation ? Representation : "";
-  if (Stage != "low" && Stage != "med" && Stage != "high" && Stage != "llvm" &&
-      Stage != "llvmc" && Stage != "source" && !sourceDialectFromKey(Stage)) {
+  if (Stage != "cfg" && Stage != "low" && Stage != "med" && Stage != "high" &&
+      Stage != "llvm" && Stage != "llvmc" && Stage != "source" &&
+      !sourceDialectFromKey(Stage)) {
     S->setError("invalid function view");
     return 0;
   }
+  // The control-flow graph reads LowIR alone; the other IR views share the
+  // analysis the source views take before HighIR.
   return prepareFunction(Sess, FuncEntry,
-                         /*NeedHighIR=*/Stage != "low" && Stage != "med" &&
-                             Stage != "llvm" && Stage != "llvmc");
+                         Stage == "cfg" ? Session::PipelineDepth::LowIR
+                         : Stage == "low" || Stage == "med" ||
+                                 Stage == "llvm" || Stage == "llvmc"
+                             ? Session::PipelineDepth::Analysis
+                             : Session::PipelineDepth::HighIR);
 }
 
 static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
@@ -492,8 +587,24 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
     ByEntry[Func.Entry] = &Func;
   std::set<va_t> Included = {HF->Entry};
   std::vector<const HighFunc *> Needed = {HF};
+  // Termination handlers are out-of-line funclets gathered only so their
+  // bodies can fill a `__finally`; unlike C++ catch funclets they are not
+  // themselves printed in this view, so keep them out of the requested set.
+  std::set<va_t> SEHFuncletSources;
   for (size_t I = 0; I < Needed.size(); ++I)
     walkStmts(Needed[I]->Body, [&](const HighStmt &Stmt) {
+      if (Stmt.Kind == StmtKind::SEHTry) {
+        for (const auto &Clause : Stmt.EHClauses)
+          if (Clause.Kind == HighEHClauseKind::SEHFinally &&
+              Clause.FilterOrActionVA != FuncEntry)
+            if (auto It = ByEntry.find(Clause.FilterOrActionVA);
+                It != ByEntry.end() &&
+                Included.insert(Clause.FilterOrActionVA).second) {
+              Needed.push_back(It->second);
+              SEHFuncletSources.insert(Clause.FilterOrActionVA);
+            }
+        return;
+      }
       if (Stmt.Kind != StmtKind::CxxTry)
         return;
       for (const auto &Clause : Stmt.EHClauses) {
@@ -509,6 +620,7 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Related.reserve(Needed.size());
   for (const HighFunc *Func : Needed)
     Related.push_back(*Func);
+  attachSEHFinallyBodies(Related, S->Img.Arch);
   if (!PlainC)
     attachCxxFuncletBodies(Related);
   const HighFunc *Attached = nullptr;
@@ -521,8 +633,14 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
     Attached = HF;
 
   std::vector<HighFunc> Single = {*Attached};
-  if (PlainC)
-    Single = std::move(Related);
+  if (PlainC) {
+    // The plain-C view keeps every related function (e.g. C++ catch funclets)
+    // except termination handlers gathered only to fill a `__finally`.
+    Single.clear();
+    for (HighFunc &Func : Related)
+      if (!SEHFuncletSources.count(Func.Entry))
+        Single.push_back(std::move(Func));
+  }
   std::string Out;
   llvm::raw_string_ostream OS(Out);
 
@@ -535,6 +653,32 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
                 S->SourceOptions)
           : std::string();
   HighSourceMap EditedSources = S->PipeResult.HighSources;
+  std::map<std::string, va_t> SourceBodyOrigins;
+  if (!S->UsingAnalystCallContracts &&
+      supportsSourceCallSpecialization(S->Img, S->PipeResult,
+                                       S->SourceOptions) &&
+      hasUnavailableSourceStackCall(Single, &S->PipeResult)) {
+    // Optional source recovery must not replace the HighC view's error state
+    // if the LLVM proof cannot admit this particular body.
+    llvm::SaveAndRestore<std::string> ErrorScope(S->LastError);
+    if (const auto *Prepared =
+            S->ensureFunctionLlvmModule(FuncEntry, false, true);
+        Prepared && Prepared->PreparedHigh) {
+      PipelineOptions AnalysisOptions;
+      S->applyAnalysisOptions(AnalysisOptions);
+      AnalysisOptions.AnalysisCache = &S->AnalysisCache;
+      SourceInlineHighView Original{Single, EditedSources, {}};
+      auto Specialized = projectSpecializedHighSourceCalls(
+          S->Img, *Prepared->PreparedHigh, AnalysisOptions, S->decompileDebug(),
+          Original);
+      if (Specialized) {
+        Single = std::move(Specialized->Functions);
+        EditedSources = std::move(Specialized->Sources);
+        SourceBodyOrigins = std::move(Specialized->BodyOrigins);
+      }
+    }
+  }
+  Opts.SourceBodyOrigins = &SourceBodyOrigins;
   bool EditFailed = false;
   for (const auto &Edit : S->SourceOptions.VariableEdits) {
     SourceVariableEditResult Status;
@@ -606,7 +750,8 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
       CRecordDefinitions Definitions = Local->definitions(Records);
       if (SourceMap && !Definitions.Text.empty())
         SourceMap->LocalTypes = CSourceLocalTypes{
-            Definitions.Text, Definitions.Types, Definitions.DeclaredTypes};
+            Definitions.Text, Definitions.Types, Definitions.DeclaredTypes,
+            Definitions.HeaderTypes};
       return Definitions;
     };
   try {
@@ -657,7 +802,8 @@ static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
   if (const char *Cached = cachedSource(*S, FuncEntry, Route, SourceMap))
     return Cached;
 
-  const auto *Native = S->ensureFunctionLlvmModule(FuncEntry, NoOpt != 0);
+  const auto *Native = S->ensureFunctionLlvmModule(
+      FuncEntry, NoOpt != 0, /*OriginalImageStorage=*/true);
   if (!Native)
     return dupStr(std::string());
   llvm::Function *LF = S->findNativeLlvmFunction(*Native->Module, FuncEntry);
@@ -725,7 +871,8 @@ static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
       CRecordDefinitions Definitions = Local->definitions(Records);
       if (SourceMap && !Definitions.Text.empty())
         SourceMap->LocalTypes = CSourceLocalTypes{
-            Definitions.Text, Definitions.Types, Definitions.DeclaredTypes};
+            Definitions.Text, Definitions.Types, Definitions.DeclaredTypes,
+            Definitions.HeaderTypes};
       return Definitions;
     };
   try {
@@ -873,6 +1020,10 @@ const Session::FunctionSource &dialectSource(neverd_session_t Sess, va_t Entry,
   Options.TheArch = S.Img.Arch;
   Options.Format = S.Img.abiFormat();
   Options.Names = Map.Names;
+  if (S.LocalTypesDbg)
+    Options.Types = &S.LocalTypesDbg->library();
+  if (Map.LocalTypes)
+    Options.HeaderTypes = Map.LocalTypes->HeaderTypes;
   const llvm::StringRef Original(Raw);
   if (Dialect == SourceDialect::Rust || Dialect == SourceDialect::Go)
     Options.LocalTypes = dialectLocalTypes(S.LocalTypesDbg.get(), Original,
@@ -1500,7 +1651,8 @@ struct ScopedSourceView {
         if (!High && S.CallVariant->TargetSignatures.empty()) {
           // Preserve the ordinary callee declarations. A call-site contract
           // changes only its own CallBase type, never its siblings' prototype.
-          if (const auto *Base = S.ensureFunctionLlvmModule(Entry, false))
+          if (const auto *Base = S.ensureFunctionLlvmModule(
+                  Entry, false, /*OriginalImageStorage=*/true))
             for (const auto &Function : *Base->Module)
               S.CallVariant->TargetSignatures.emplace(
                   Function.getName().str(),
@@ -1710,11 +1862,11 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       auto Page = llvmViewPage(*View, FuncEntry, Offset, Limit);
       return dupStr(jsonToString(llvm::json::Value(std::move(Page))));
     }
-    if (Stage != "low" && Stage != "med") {
+    if (Stage != "low" && Stage != "med" && Stage != "high") {
       Result["mapping_status"] = "unsupported_representation";
       return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
     }
-    if (!S->ensurePipeline(/*NeedHighIR=*/false))
+    if (!S->ensurePipeline(/*NeedHighIR=*/Stage == "high"))
       return nullptr;
     if (S->PipeResult.EVM || S->PipeResult.SBF) {
       Result["mapping_status"] = "unsupported_architecture";
@@ -1728,7 +1880,10 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
           Med = &F;
           break;
         }
-    if ((Stage == "low" && !Low) || (Stage == "med" && !Med)) {
+    const HighFunc *High =
+        Stage == "high" ? S->findHighFunc(FuncEntry) : nullptr;
+    if ((Stage == "low" && !Low) || (Stage == "med" && !Med) ||
+        (Stage == "high" && !High)) {
       S->setError("function not found in requested IR stage");
       return nullptr;
     }
@@ -1772,8 +1927,10 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
     };
     if (Stage == "low")
       emitLowView(*Low, Sink, true);
-    else
+    else if (Stage == "med")
       emitMedView(*Med, Low, Sink);
+    else
+      emitHighView(*High, Low, S->PipeResult.HighSources, Sink);
     if (!llvm::json::isUTF8(Text)) {
       S->setError("IR view page text is not valid UTF-8");
       return nullptr;
@@ -1802,6 +1959,8 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
 
 const char *neverd_ir_high(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
   S->clearError();
 
   if (!S->ensurePipeline())
@@ -1820,11 +1979,14 @@ const char *neverd_ir_high(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
   std::string Out;
   llvm::raw_string_ostream OS(Out);
-  OS << "; HighIR: " << HF->Name << " @ " << vaHex(HF->Entry) << "\n";
-  OS << "; Params: " << HF->Params.size() << ", Locals: " << HF->Locals.size()
-     << "\n\n";
-  for (const auto &Stmt : HF->Body)
-    OS << Stmt.str(0) << "\n";
+  try {
+    emitHighView(
+        *HF, nullptr, S->PipeResult.HighSources,
+        [&](llvm::StringRef Text, const IRRowOrigin &) { OS << Text; });
+  } catch (const std::exception &Error) {
+    S->setError(Error.what());
+    return nullptr;
+  }
 
   return dupStr(Out);
 }
@@ -1860,7 +2022,7 @@ const char *neverd_lift_module(neverd_session_t Sess, const char *InputPath,
   auto *S = static_cast<Session *>(Sess);
   PipelineRunner R;
   std::string Err;
-  if (!R.load(InputPath, Err, S)) {
+  if (!R.loadAnalysis(InputPath, Err, S)) {
     if (S)
       S->setError(Err);
     return nullptr;
@@ -1896,7 +2058,7 @@ const char *neverd_lift_dump(neverd_session_t Sess, const char *InputPath,
   auto *S = static_cast<Session *>(Sess);
   PipelineRunner R;
   std::string Err;
-  if (!R.load(InputPath, Err, S)) {
+  if (!R.loadAnalysis(InputPath, Err, S)) {
     if (S)
       S->setError(Err);
     return nullptr;
@@ -2010,7 +2172,7 @@ static const char *decompileAllImpl(neverd_session_t Sess,
   auto *S = static_cast<Session *>(Sess);
   PipelineRunner R;
   std::string Err;
-  if (!R.load(InputPath, Err, S)) {
+  if (!R.loadAnalysis(InputPath, Err, S)) {
     if (S)
       S->setError(Err);
     return nullptr;
@@ -2028,7 +2190,8 @@ static const char *decompileAllImpl(neverd_session_t Sess,
         CRecordDefinitions Definitions = LocalTypes->definitions(Records);
         if (!Definitions.Text.empty())
           Held = CSourceLocalTypes{Definitions.Text, Definitions.Types,
-                                   Definitions.DeclaredTypes};
+                                   Definitions.DeclaredTypes,
+                                   Definitions.HeaderTypes};
         return Definitions;
       };
   };
@@ -2039,10 +2202,17 @@ static const char *decompileAllImpl(neverd_session_t Sess,
   if (S) {
     S->applyAnalysisOptions(Opts);
   }
-  if (Only)
+  // A unit of selected functions is written as the whole program is: one
+  // the pipeline refuses is named at its head and left out.
+  if (Only) {
     Opts.OnlyFunctionEntries = *Only;
-  if (UseLlvmRoute)
+    Opts.OmitRefusedFunctions = true;
+  }
+  if (UseLlvmRoute) {
     Opts.LiftMode = true;
+    // The unit names a body the LLVM emitter refuses and leaves it out.
+    Opts.OmitRefusedLLVMBodies = true;
+  }
   Opts.SourceProjection = true;
   // Symbolic source simplification is the caller's explicit choice for the
   // whole program, never a default.
@@ -2196,14 +2366,22 @@ static const char *decompileAllImpl(neverd_session_t Sess,
     COpts.UserNames = S ? &S->Renames : nullptr;
     COpts.AccessWidths = AccessWidths ? &*AccessWidths : nullptr;
     recordDefinitions(COpts);
+    // As in HighC's unit, a definition whose C cannot be written is left out
+    // and named.
+    std::vector<CEmitterOptions::RefusedDefinition> RefusedDefinitions;
+    COpts.RefusedDefinitions = &RefusedDefinitions;
+    std::string Unit;
     try {
+      llvm::raw_string_ostream UnitOS(Unit);
       LLVMCEmitter Emitter;
-      Emitter.emit(*R.Result.LlvmModule, OS, COpts, Debug, &R.Img);
+      Emitter.emit(*R.Result.LlvmModule, UnitOS, COpts, Debug, &R.Img);
     } catch (const std::exception &Error) {
       if (S)
         S->setError(emissionFailure(Error));
       return nullptr;
     }
+    OS << leftOutDefinitionNotes(R.Result)
+       << refusedDefinitionNotes(RefusedDefinitions) << Unit;
   } else {
     CEmitterOptions COpts;
     COpts.TheArch = R.Img.Arch;
@@ -2217,20 +2395,31 @@ static const char *decompileAllImpl(neverd_session_t Sess,
       COpts.SourceNames = &Names;
     recordDefinitions(COpts);
     COpts.WholeProgram = true;
+    // A definition whose C cannot be written is left out and named, as a
+    // function the pipeline refused is.
+    std::vector<CEmitterOptions::RefusedDefinition> RefusedDefinitions;
+    COpts.RefusedDefinitions = &RefusedDefinitions;
+    std::string Unit;
     try {
+      llvm::raw_string_ostream UnitOS(Unit);
       HighCEmitter Emitter;
-      Emitter.emit(R.Result.HighFuncs, OS, COpts, Debug);
+      Emitter.emit(R.Result.HighFuncs, UnitOS, COpts, Debug);
     } catch (const std::exception &Error) {
       if (S)
         S->setError(emissionFailure(Error));
       return nullptr;
     }
+    OS << refusedDefinitionNotes(RefusedDefinitions) << Unit;
     if (Dialect) {
       SourceDialectOptions Options;
       Options.Dialect = *Dialect;
       Options.TheArch = R.Img.Arch;
       Options.Format = R.Img.abiFormat();
       Options.Names = Names;
+      if (LocalTypes)
+        Options.Types = &LocalTypes->library();
+      if (Held)
+        Options.HeaderTypes = Held->HeaderTypes;
       if (*Dialect == SourceDialect::Rust || *Dialect == SourceDialect::Go)
         Options.LocalTypes =
             dialectLocalTypes(LocalTypes.get(), Buf, Held, *Dialect);
@@ -2283,8 +2472,7 @@ const char *neverd_decompile_functions(neverd_session_t Sess,
   // The selection is checked against the image it is lifted from.
   if (S && S->Loaded && S->Img.Arch != Arch::EVM && S->Img.Arch != Arch::SBF)
     for (const va_t Entry : Only) {
-      const Segment *Seg = S->Img.getSegmentFor(Entry);
-      if (!Seg || !Seg->isExecutable()) {
+      if (!S->Img.hasExecutableCodeOwnerAt(Entry)) {
         S->setError("no native code at " + vaHex(Entry));
         return nullptr;
       }

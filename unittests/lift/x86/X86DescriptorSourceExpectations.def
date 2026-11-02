@@ -1,0 +1,24 @@
+//===- X86DescriptorSourceExpectations.def - Descriptor C checks -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent spellings for descriptor instruction operands and effects.
+/// Define NEVERD_DESCRIPTOR_SOURCE_TEXT(Name, Value) to consume this table.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_DESCRIPTOR_SOURCE_TEXT
+#define NEVERD_DESCRIPTOR_SOURCE_TEXT(Name, Value)
+#endif
+
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kVerwAddress, "verw (%1)")
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kVerwGSAddress, "verw %%gs:(%1)")
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kVerwZeroFlag, "setz %0")
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kDescriptorEffects, "\"cc\", \"memory\"")
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kLldtRegister, "__asm__ volatile(\"lldt %0\"")
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kSelectorWidth, "\"r\"((uint16_t)(")
+NEVERD_DESCRIPTOR_SOURCE_TEXT(kDescriptorMemory, "\"memory\"")
+
+#undef NEVERD_DESCRIPTOR_SOURCE_TEXT

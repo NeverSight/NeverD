@@ -18,8 +18,22 @@
 
 namespace neverd::limits::emulation {
 
-/// Offline stream and datagram connections admitted together.
-inline constexpr int kMaxNetworkConnections = 256;
+/// Future regular-file objects, including generations whose names retire.
+inline constexpr uint32_t kMaxLinuxFileCreations = 64;
+/// Explicit parent grants and successful operations for each namespace policy.
+inline constexpr uint32_t kMaxLinuxFileRenameParents = 64;
+inline constexpr uint32_t kMaxLinuxFileRenames = 64;
+inline constexpr uint32_t kMaxLinuxFileUnlinkParents = 64;
+inline constexpr uint32_t kMaxLinuxFileUnlinks = 64;
+
+/// Ordered mincore queries, bytes per query and aggregate observation bytes.
+inline constexpr size_t kMaxLinuxResidencyObservations = 1024;
+inline constexpr size_t kMaxLinuxResidencyPages = 65536;
+inline constexpr size_t kMaxLinuxResidencyObservationBytes = 1024 * 1024;
+
+/// Stored offline stream and datagram entries admitted together. Counted
+/// failures retain only a cursor and do not consume this inventory.
+inline constexpr int kMaxNetworkConnections = 4096;
 /// Receive and expected-send event entries admitted per connection.
 inline constexpr int kMaxNetworkEvents = 4096;
 /// Maximum configured send or receive chunk.
@@ -104,6 +118,11 @@ inline constexpr int kDarwinImageInitializerRecordsLimit = 65536;
 inline constexpr int
     kAndroidAuxvValidateAuxiliaryVectorOptionsAuxiliaryVectorSizeLimit = 128;
 
+// Bionic error text placement is model policy, not a library virtual address.
+inline constexpr uint64_t kAndroidErrorStringsBase = 0x7040000000;
+// Per-thread storage beyond dlerror and ABI TLS slots.
+inline constexpr uint64_t kAndroidErrorBufferOffset = 0x800;
+
 // lib/emulation/os/linux/android/AndroidCalendar.cpp
 inline constexpr int kAndroidCalendarValidateCalendarZNameSizeLimit = 32;
 
@@ -111,6 +130,9 @@ inline constexpr int kAndroidCalendarValidateCalendarZNameSizeLimit = 32;
 inline constexpr int kAndroidDexBionicInitializeDexNameSizeLimit = 1024;
 
 // lib/emulation/os/linux/android/AndroidDlfcn.cpp
+inline constexpr unsigned kAndroidDladdrObservationCount = 256;
+inline constexpr unsigned kAndroidDladdrStringBytes = 4096;
+inline constexpr unsigned kAndroidDladdrSnapshotBytes = 1024 * 1024;
 inline constexpr int kAndroidDlfcnBionicLinkerErrorMessageSizeLimit = 1024;
 inline constexpr int kAndroidDlfcnBionicOpenLibrarySizeLimit = 1024;
 inline constexpr int kAndroidDlfcnBionicLookupSymbolSizeLimit = 1024;
@@ -122,6 +144,7 @@ inline constexpr uint64_t kAndroidJNIMethodsBionicJniMethodsRemaining = 4096;
 inline constexpr int kAndroidJavaLibraryValidJavaLibraryNameNameSizeLimit = 255;
 
 // lib/emulation/os/linux/android/AndroidNative.cpp
+inline constexpr unsigned kAndroidFailureMemoryDiagnosticBytes = 256;
 inline constexpr int kAndroidNativeRunNativeLibrariesSizeLimit = 256;
 inline constexpr int kAndroidNativeRunNativeLibrarySizeLimit = 1024;
 inline constexpr int kAndroidNativeRunNativeSymbolCountLimit = 4096;

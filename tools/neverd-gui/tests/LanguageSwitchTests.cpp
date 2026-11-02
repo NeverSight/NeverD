@@ -50,10 +50,17 @@ private slots:
       for (const auto &[context, source] :
            {std::pair{"Menus", "&File"}, std::pair{"Actions", "&Open..."},
             std::pair{WindowContext, "Functions"},
-            std::pair{"McpConnectionManager", "Disconnected"}})
-        QVERIFY2(!translator.translate(context, source).isEmpty(),
+            std::pair{"McpConnectionManager", "Disconnected"},
+            std::pair{"Actions", "Version comparison &graph…"},
+            std::pair{"neverd::gui::LineageDialog", "Version comparison graph"},
+            std::pair{"neverd::gui::LineagePageView", "Rows per page"},
+            std::pair{"neverd::gui::LineageSession",
+                      "Version graph loaded."}}) {
+        const auto text = translator.translate(context, source);
+        QVERIFY2(!text.isEmpty(),
                  qPrintable(language.code + QStringLiteral(": ") +
                             QLatin1String(source)));
+      }
     }
   }
 

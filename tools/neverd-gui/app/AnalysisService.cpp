@@ -47,13 +47,22 @@ void AnalysisService::stopWorker() {
   restore_.clear();
   ready_ = false;
   startingReplica_ = false;
+  refreshingNames_ = false;
   snapshot_ = {};
   client_.stop();
 }
 
 void AnalysisService::reset() {
+  const bool retain = ready_ && active_.isEmpty() && updatesNames_ &&
+                      owner_.localNamesOnly() &&
+                      queries_.projectId() == owner_.projectId();
   active_.clear();
-  stopWorker();
+  if (retain) {
+    ++serial_;
+    ready_ = false;
+    refreshingNames_ = true;
+  } else
+    stopWorker();
   queries_.resetReadContext(owner_.projectId(), owner_.revision());
 }
 
@@ -111,26 +120,33 @@ void AnalysisService::requestSnapshot() {
   startingReplica_ = true;
   const auto serial = serial_;
   const auto id = active_;
-  snapshotRequest_ =
-      owner_.subscribe({QStringLiteral("analysis_snapshot"), {}}, this,
-                       [this, serial, id](const QJsonObject &response) {
-                         if (serial != serial_ || active_ != id)
-                           return;
-                         snapshotRequest_ = 0;
-                         if (response.value("status") != QLatin1String("ok")) {
-                           startingReplica_ = false;
-                           finish(response);
-                           return;
-                         }
-                         snapshot_ = response.value("payload").toObject();
-                         client_.start(workerPath_);
-                       });
+  snapshotRequest_ = owner_.subscribe(
+      {QStringLiteral("analysis_snapshot"), {}}, this,
+      [this, serial, id](const QJsonObject &response) {
+        if (serial != serial_ || active_ != id)
+          return;
+        snapshotRequest_ = 0;
+        if (response.value("status") != QLatin1String("ok")) {
+          startingReplica_ = false;
+          finish(response);
+          return;
+        }
+        snapshot_ = response.value("payload").toObject();
+        if (refreshingNames_)
+          restore_ = client_.request(QStringLiteral("analysis_update_names"),
+                                     snapshot_, workerRevision_);
+        else
+          client_.start(workerPath_);
+      });
 }
 
 void AnalysisService::receive(const QJsonObject &message) {
   if (active_.isEmpty())
     return;
   if (message.value("type") == QLatin1String("hello")) {
+    updatesNames_ = message.value("capabilities")
+                        .toArray()
+                        .contains(QStringLiteral("analysis_update_names"));
     if (!message.value("capabilities")
              .toArray()
              .contains(QStringLiteral("analysis_restore"))) {
@@ -149,11 +165,20 @@ void AnalysisService::receive(const QJsonObject &message) {
     restore_.clear();
     startingReplica_ = false;
     if (message.value("status") != QLatin1String("ok")) {
+      if (refreshingNames_) {
+        // A semantic or external change raced the display-name commit. Keep
+        // the existing full-restore contract and its input/sidecar checks.
+        refreshingNames_ = false;
+        startingReplica_ = true;
+        client_.start(workerPath_);
+        return;
+      }
       finish(message);
       client_.stop();
       return;
     }
     snapshot_ = {};
+    refreshingNames_ = false;
     workerRevision_ = message.value("revision").toString();
     ready_ = true;
     dispatch();
@@ -206,9 +231,11 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
     connect(lane.service.get(), &AnalysisService::diagnostic, this,
             &AnalysisPool::diagnostic);
   }
-  connect(&owner, &QueryService::contextChanged, this, [this] {
+  connect(&owner, &QueryService::contextChanged, this, [this, &owner] {
     ++preparationSerial_;
     preparing_ = false;
+    if (owner.localNamesOnly())
+      return;
     for (auto &lane : lanes_)
       lane.function.reset();
     for (const auto &binding : std::as_const(bindings_))

@@ -1,0 +1,58 @@
+//===- MachONativeInplaceFixtures.def - In-place ABI inputs ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent thin Mach-O words and output sentinels for the public native
+/// in-place boundary. Subtypes deliberately include raw capability bits.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_INPLACE_ABI_CASE
+#define NEVERD_INPLACE_ABI_CASE(Name, Subtype)
+#endif
+#ifndef NEVERD_INPLACE_ABI_VALUE
+#define NEVERD_INPLACE_ABI_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_INPLACE_ABI_TEXT
+#define NEVERD_INPLACE_ABI_TEXT(Name, Value)
+#endif
+
+NEVERD_INPLACE_ABI_CASE(Arm64e, 0x00000002)
+NEVERD_INPLACE_ABI_CASE(Arm64eCapability, 0x80000002)
+NEVERD_INPLACE_ABI_CASE(Arm64eV2, 0x82000002)
+NEVERD_INPLACE_ABI_CASE(Arm64eX1, 0x0000000c)
+NEVERD_INPLACE_ABI_CASE(Arm64eX1Capability, 0x8000000c)
+NEVERD_INPLACE_ABI_CASE(Arm64eX1V2, 0x8200000c)
+
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kOrdinarySubtype, 0)
+NEVERD_INPLACE_ABI_VALUE(uint64_t, kBase, 0x100000000ULL)
+NEVERD_INPLACE_ABI_VALUE(uint64_t, kVMSize, 0x1000)
+NEVERD_INPLACE_ABI_VALUE(size_t, kFileSize, 0x400)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kTextOffset, 0x200)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kTextSize, 0x40)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kSymbolOffset, 0x300)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kStringOffset, 0x310)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kFunctionNameIndex, 1)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kCommandCount, 2)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kSectionCount, 1)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kSymbolCount, 1)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kInstructionAlignment, 2)
+NEVERD_INPLACE_ABI_VALUE(uint8_t, kTextSectionIndex, 1)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kInstructionBytes, 4)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kNOP, 0xd503201f)
+NEVERD_INPLACE_ABI_VALUE(uint32_t, kRET, 0xd65f03c0)
+NEVERD_INPLACE_ABI_VALUE(uint64_t, kReturnValue, 42)
+NEVERD_INPLACE_ABI_VALUE(unsigned, kPathBytes, 128)
+NEVERD_INPLACE_ABI_TEXT(kSymbolStrings, "\0_native_abi_leaf")
+NEVERD_INPLACE_ABI_TEXT(kFunction, "native_abi_leaf")
+NEVERD_INPLACE_ABI_TEXT(kModule, "macho-native-inplace")
+NEVERD_INPLACE_ABI_TEXT(kEntry, "entry")
+NEVERD_INPLACE_ABI_TEXT(kInputPrefix, "neverd-macho-inplace-abi-input")
+NEVERD_INPLACE_ABI_TEXT(kOutputPrefix, "neverd-macho-inplace-abi-output")
+NEVERD_INPLACE_ABI_TEXT(kExtension, "macho")
+NEVERD_INPLACE_ABI_TEXT(kOutputSentinel, "existing native output")
+
+#undef NEVERD_INPLACE_ABI_CASE
+#undef NEVERD_INPLACE_ABI_VALUE
+#undef NEVERD_INPLACE_ABI_TEXT

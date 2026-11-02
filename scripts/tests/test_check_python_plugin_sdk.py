@@ -98,6 +98,10 @@ class PythonPluginSDKAuditTests(unittest.TestCase):
         # still use the explicit file lists below so caches cannot be shipped.
         directory_sources = re.findall(r'\bcopy_directory\s+("[^"]*"|\S+)', source)
         for directory in directory_sources:
+            # Generated Windows types carry original dependency notices in
+            # this exact subtree; their source/cache roots remain excluded.
+            if directory == '"${NEVERD_WINDOWS_TYPES_DIRECTORY}/licenses"':
+                continue
             self.assertRegex(directory, r'^"\$\{CMAKE_SOURCE_DIR\}/LICENSES/[^"\r\n]+"$')
         self.assertIn("$<TARGET_FILE_DIR:neverd_shared>/sdk", source)
         self.assertNotIn("${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sdk", source)

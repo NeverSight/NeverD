@@ -6,6 +6,8 @@
 
 NeverD는 기본적으로 내장 비트벡터 solver를 사용합니다. 정확한 MBA 유도는 일반 solver와 독립적입니다. 표현식 합성은 동등성 증명 후에만 후보를 채택하며 반례나 미확정 질의는 원래 표현식을 유지합니다.
 
+내장 곱셈 회로는 두 인자에서 0으로 알려진 하위 비트를 제거한 뒤 나머지 곱을 구성하고 전체 출력 워드를 복원합니다. 선택적 Z3 어댑터도 짝수 상수 계수가 실제로 관측하는 너비로 곱을 인코딩합니다. 두 방식 모두 전체 너비 동등성 질의, 독립적인 입력 모델, 기존 자원 제한을 유지합니다. CLI와 GUI의 소스 최적화는 추가 스위치 없이 내장 회로를 공유합니다.
+
 <!-- i18n-section: builtin-comparisons -->
 
 ## 내장 비교 회로
@@ -37,8 +39,8 @@ Z3를 활성화하면 CMake `FetchContent`가 고정된 4.13.3 소스 revision�
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DNEVERD_ENABLE_Z3=ON -DNEVERD_BUILD_SOLVER_BENCH=ON
-cmake --build build-release --target neverd NeverDSolverTests \
-  NeverDSymbolicTests neverd-solver-bench --parallel 4
+python scripts/build.py build-release --parallel 4 --target neverd \
+  NeverDSolverTests NeverDSymbolicTests neverd-solver-bench
 ```
 
 기본 provider는 `NEVERD_Z3_PROVIDER=FETCH`입니다. 첫 configure에서 소스를 받고 이후에는 build 디렉터리의 `_deps`를 재사용합니다. Z3 CLI, 테스트, 예제, 문서, 언어 바인딩은 빌드하지 않습니다. Z3 Python generator는 기존 NeverD Python interpreter를 사용합니다. 설치된 라이브러리를 쓰려면 `-DNEVERD_Z3_PROVIDER=SYSTEM`, 필요하면 `-DZ3_ROOT=/path/to/prefix`를 지정하세요. 개발 파일이 없으면 실패하며 provider를 조용히 바꾸지 않습니다. 오프라인 빌드는 `-DFETCHCONTENT_SOURCE_DIR_NEVERD_Z3=/path/to/z3`로 로컬 checkout을 제공할 수 있습니다.
@@ -72,6 +74,8 @@ result = synthesize_expression(
 
 Z3 활성화 시 `NeverDSolverTests`는 독립 표현식 평가와 backend 교차 검사를 포함합니다. 기준 표현식을 직접 구성하므로 NeverD 표현식 builder의 버그가 양쪽 테스트를 함께 단순화하지 못합니다. 비활성 빌드에서는 oracle 사례를 명시적으로 건너뛰지만 backend 비가용 계약은 계속 검사합니다.
 
+스케일된 곱 테스트는 독립적인 긴 곱셈 회로와 정수 연산으로 최대 257비트까지 내장 회로를 검증합니다. Z3 테스트는 독립적인 전체 너비 인코딩과의 일치를 증명하고, 높은 입력 비트와 의도적으로 틀리게 만든 최상위 출력 비트도 확인합니다.
+
 ```sh
 build-release/bin/NeverDSolverTests --gtest_brief=1
 build-release/bin/neverd-solver-bench \
@@ -82,6 +86,8 @@ build-release/bin/neverd-solver-bench \
 
 주석이 아닌 각 행은 `original ; candidate`입니다. 세미콜론이 없으면 MBA simplifier 결과를 후보로 씁니다. 도구는 verdict, model replay, 시간을 보고합니다(세션 생성·변환·해결 포함, 파싱·MBA 단순화·내보내기·정리 제외). 반복마다 새 solver를 사용합니다. SAT model은 표현식 evaluator에서 차이를 재현해야 합니다. 서로 반대인 확정 verdict나 잘못된 질의/model은 실행 실패이고, `unknown`은 기록되지만 동등성 증명이 아닙니다.
 
-내보낸 SMT-LIB에는 원래 DAG, 영구 assertion, 마지막 query 가정이 들어 있으며 `z3 query-N.smt2`로 재생할 수 있습니다. 자원 제한과 solver 버전을 기록하세요. 두 backend의 예산 단위가 다르므로 동일 작업 비교가 아닌 제한된 workload 비교입니다. 비트벡터 증명은 표현식 언어의 total fixed-width 의미론을 사용합니다. 기계 예외, 메모리 효과, LLVM poison은 lifting/translation 경계의 책임이며 표현식 증명으로 인증되지 않습니다.
+내보낸 SMT-LIB에는 동등하게 인코딩된 DAG, 영구 assertion, 마지막 query 가정이 들어 있으며 `z3 query-N.smt2`로 재생할 수 있습니다. 자원 제한과 solver 버전을 기록하세요. 두 backend의 예산 단위가 다르므로 동일 작업 비교가 아닌 제한된 workload 비교입니다. 비트벡터 증명은 표현식 언어의 total fixed-width 의미론을 사용합니다. 기계 예외, 메모리 효과, LLVM poison은 lifting/translation 경계의 책임이며 표현식 증명으로 인증되지 않습니다.
 
 검색 전 인코딩 복사본은 자체 결정 큐에서 루트 수준의 할당된 변수를 제거하고 활동도와 번호에 따른 엄격한 힙 순서를 재구성합니다. 할당과 절은 유지되며 루트 사실은 모든 역추적에서 보존됩니다. 원본 소유권, 실제 결정, 전체 모델과 모든 검색 예산은 그대로입니다.
+
+SMT-LIB의 DAG는 의미적으로 동등한 인코딩이며 위의 정확한 축소 너비 몫을 포함할 수 있습니다. 원본 DAG와 구조가 같다는 보장은 없습니다.

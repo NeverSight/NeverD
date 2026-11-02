@@ -1,0 +1,36 @@
+//===- PatchKinds.def - The kinds of interactive byte patches ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// NEVERD_PATCH_KIND(Id, Spelling): a kind of byte patch, as the C API takes
+// it in a request and the project's patches.json, the worker and the
+// workbench spell it.  The kind records why bytes changed; the overlay keeps
+// the bytes themselves.  Append new kinds at the end.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PATCH_KIND
+#define NEVERD_PATCH_KIND(Id, Spelling)
+#endif
+
+// Bytes the user typed, in a hex view or the Change bytes dialog.
+NEVERD_PATCH_KIND(Bytes, "bytes")
+// One instruction replaced by the architecture's NOPs of the same length.
+NEVERD_PATCH_KIND(Nop, "nop")
+// Whole instructions of a selection replaced by NOPs.
+NEVERD_PATCH_KIND(FillNops, "fill_nops")
+// An instruction the user assembled.
+NEVERD_PATCH_KIND(Assemble, "assemble")
+// A conditional branch made to always, never or invertedly branch.
+NEVERD_PATCH_KIND(BranchAlways, "branch_always")
+NEVERD_PATCH_KIND(BranchNever, "branch_never")
+NEVERD_PATCH_KIND(BranchInvert, "branch_invert")
+// A call replaced by NOPs, or by a move of a value to the return register.
+NEVERD_PATCH_KIND(SkipCall, "skip_call")
+NEVERD_PATCH_KIND(SkipCallValue, "skip_call_value")
+// An instruction's immediate operand given another value.
+NEVERD_PATCH_KIND(Constant, "constant")
+
+#undef NEVERD_PATCH_KIND

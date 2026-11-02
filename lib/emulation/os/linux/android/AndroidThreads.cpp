@@ -87,8 +87,13 @@ llvm::Error GuestThreads::validateTLS() {
 llvm::Error GuestThreads::retire(size_t Index) {
   auto &T = Threads[Index];
   if (T.MappingSize) {
-    if (auto E = CPU.addressSpace()->unmap(T.MappingBase, T.MappingSize))
-      return E;
+    auto Removed =
+        Kernel.handle(linux_model::ServiceKind::Munmap,
+                      {0, 0, {T.MappingBase, T.MappingSize}, {}}, &T.Kernel);
+    if (!Removed)
+      return Removed.takeError();
+    if (!*Removed || **Removed != 0)
+      return failure("guest thread mappings could not be retired");
     T.MappingSize = 0;
   }
   T.Context.reset();
@@ -206,6 +211,25 @@ std::vector<linux_model::ProcTask> GuestThreads::procTasks() const {
                                                 : 'R'});
   }
   return Tasks;
+}
+std::vector<NativeThreadCPUState> GuestThreads::observeCPUStates() const {
+  std::vector<NativeThreadCPUState> States;
+  for (size_t I = 0; I < Threads.size(); ++I) {
+    const auto &Thread = Threads[I];
+    if (Thread.Report.Finished)
+      continue;
+    auto &Snapshot = States.emplace_back();
+    Snapshot.Current = I == Current;
+    auto &State = Snapshot.State;
+    State.ThreadID = Thread.Kernel.ID;
+    auto Registers = Snapshot.Current ? CPU.readRegisters()
+                                      : CPU.readRegisters(*Thread.Context);
+    if (Registers)
+      State.Registers = std::move(*Registers);
+    else
+      State.Diagnostic = llvm::toString(Registers.takeError());
+  }
+  return States;
 }
 void GuestThreads::report() {
   if (!enabled())

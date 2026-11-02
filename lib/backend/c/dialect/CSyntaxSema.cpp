@@ -102,6 +102,24 @@ public:
 
   void run() {
     Scopes.emplace_back();
+    for (const TopLevel &Item : T.HeaderDeclarations)
+      for (Decl *D : Item.Decls)
+        if (D->Kind == DeclKind::Enumeration) {
+          for (Decl *Enumerator : D->Fields)
+            declare(Enumerator);
+          if (!enumerators(D)) {
+            TopLevel Unread;
+            Unread.TheKind = TopLevel::Kind::Unread;
+            Unread.End = T.Source.size();
+            Unread.Text = T.Source;
+            Unread.Reason = "target header declaration: " + Error;
+            T.Items = {std::move(Unread)};
+            return;
+          }
+        }
+    // The emitted unit's declarations shadow the external header names.
+    Scopes.emplace_back();
+    const size_t FileScopes = Scopes.size();
     // File-scope names first, so that a use before its declaration still
     // finds it.
     for (TopLevel &Item : T.Items)
@@ -127,7 +145,7 @@ public:
         Item.Text = T.Source.slice(Item.Begin, Item.End);
         Item.Reason = Error;
       }
-      Scopes.resize(1);
+      Scopes.resize(FileScopes);
     }
   }
 
@@ -312,6 +330,17 @@ private:
       return setType(E, Last);
     }
     case ExprKind::Cast: {
+      if (E->TypeQuery) {
+        const CType *Queried = expr(E->TypeQuery);
+        if (!Queried)
+          return false;
+        const Expr *Query = E->TypeQuery;
+        while (Query->Kind == ExprKind::Paren)
+          Query = Query->Ops.front();
+        if (Queried->isUnknown() || (Query->Field && Query->Field->BitWidth))
+          return fail("typeof needs a known non-bit-field type", E);
+        E->Written = Queried;
+      }
       const CType *From = value(E->Ops.front());
       if (!From)
         return false;
@@ -811,6 +840,22 @@ private:
 
   //===--- Declarations and statements ---===//
 
+  bool declarationInitializer(Decl *D) {
+    if (D->Inferred) {
+      if (D->Kind != DeclKind::Variable || !D->Init || !D->Ty->isUnknown())
+        return fail("__auto_type needs an initialized variable");
+      const CType *Type = value(D->Init);
+      if (!Type)
+        return false;
+      if (Type->isUnknown())
+        return fail("__auto_type needs a known initializer type", D->Init);
+      D->Ty = Types.qualified(Type, D->Ty->Const, D->Ty->Volatile,
+                              D->Ty->AddressSpace);
+      return true;
+    }
+    return !D->Init || initializer(D->Init, D->Ty);
+  }
+
   bool topLevelDecl(Decl *D) {
     if (D->Kind == DeclKind::Function && D->Body) {
       Scopes.emplace_back();
@@ -823,9 +868,7 @@ private:
     }
     if (D->Kind == DeclKind::Enumeration)
       return enumerators(D);
-    if (D->Init)
-      return initializer(D->Init, D->Ty);
-    return true;
+    return declarationInitializer(D);
   }
 
   /// Each enumerator's value: its constant, or the one before it plus one;
@@ -874,7 +917,7 @@ private:
       for (Decl *D : S->Decls) {
         if (D->Kind == DeclKind::Typedef || D->Kind == DeclKind::Record)
           return fail("a type declared inside a function");
-        if (D->Init && !initializer(D->Init, D->Ty))
+        if (!declarationInitializer(D))
           return false;
         declare(D);
       }

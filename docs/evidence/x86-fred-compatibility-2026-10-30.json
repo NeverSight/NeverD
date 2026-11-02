@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Explicit V9 FRED compatibility returns",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-fred-compat-20261030",
+  "neverd_base": "f89324c8d2d6cfd7ae62d4dea3af5a442e00dea2",
+  "capstone_head": "e9d920fb32b39411186e46230b1f1b10ffbe3283",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "reference": {
+    "url": "https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "document": "Intel SDM 325462-090, ERETU; Vol. 1 section 3.4.1.1; Vol. 3A section 8.4.2",
+    "artifact": "/mnt/data/neverd-uiret-20261030/intel-sdm-090.pdf",
+    "sha256": "3686e42931e893b5016c70fb131403795ef173237d073afcfec52755fcd3ea50"
+  },
+  "implementation": {
+    "entry": "The V9 entry remains 64-bit CPL0 with FRED enabled, CET and RTM disabled, outside VMX non-root execution, ordinary successful frame/descriptor RAM and no asynchronous delivery.",
+    "standard_return": "STAR-based compatibility selectors install flat CS/SS caches without descriptor reads, including selector wraparound.",
+    "descriptor_return": "GDT/LDT CS.L=0 returns permit either CS.D value; the truncated RIP must fit the effective segment limit. L=1/D=1 and nonstandard null CS/SS selectors reject before any state or RAM write. Existing ordered accessed-bit handling is reused.",
+    "defined_state": "ERETU clears RIP/RSP bits 63:32 even for CS.D=0. It explicitly loads all 64 RSP bits; slot 4 is therefore unused. All earlier FRED flags, caches, GS exchange, monitor and event behavior remains in the shared owner.",
+    "choices": "Successful compatibility transitions consume slots 0,1,2,3,5,6,7 for the high halves of RAX,RCX,RDX,RBX,RBP,RSI,RDI. Low halves and R8-R15 remain unchanged. These profile-owned choices neither invent native LowIR certificates nor an original after_operation index.",
+    "completion": "Status 12 stops before the target or event delivery. Compatibility PC is an offset in the returned CS cache. A subsequent V9 invocation refuses compatibility entry.",
+    "compiler": "Existing native LLVM/NeverC ERETU interfaces require no change for this explicit-state extension. No compiler API by itself certifies original machine-state continuation."
+  },
+  "portable_matrix": {
+    "routes": [
+      "high-c",
+      "llvm-c"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "paging_widths": [
+      48,
+      57
+    ],
+    "standard_state_and_ram_cases": 3584,
+    "descriptor_state_and_ram_cases": 6144,
+    "total_new_state_and_ram_cases": 9728,
+    "physical_fred_cases": 0
+  },
+  "checks": [
+    {
+      "name": "Focused FRED and export checks",
+      "tests": 7,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-focused.xml"
+    },
+    {
+      "name": "Integrated continuation, original state, refinement and system-state checks",
+      "tests": 1554,
+      "failed": 0,
+      "skipped": 0,
+      "labels": 10,
+      "junit": "neverd-integrated.xml"
+    },
+    {
+      "name": "Changed-range clang-format 22.1.2",
+      "files": 8,
+      "passed": true
+    },
+    {
+      "name": "Localized documentation",
+      "markdown_files": 309,
+      "locales": 10,
+      "passed": true
+    }
+  ],
+  "environment": {
+    "build_configuration": "Release",
+    "build_entry_point": "python3 scripts/build.py",
+    "tmp_quota": "The integrated run binds task-local temporary storage over /tmp only in a private user/mount namespace because GoogleTest CapturedStream ignores TMPDIR on Linux. Host mounts and test expectations are unchanged.",
+    "intentional_child_faults": "The task-local PR_SET_DUMPABLE helper suppresses Apport handling of intentional test child faults. It is loaded after namespace creation.",
+    "physical_fred": "Host CPUID.7.1:EAX[17] is zero; no physical FRED execution is qualified."
+  },
+  "remaining_limits": [
+    "Ordinary source with a complete original machine-state continuation",
+    "CET, fault delivery, partial-fault ordering, virtual-NMI controls, RTM and enclave domains",
+    "Physical FRED execution and subsequent event delivery",
+    "Other x86 gaps in docs/x86-instruction-support.md"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false
+  },
+  "artifacts": [
+    {
+      "path": "docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "path": "format-and-results.log",
+      "sha256": "ffb8953d506ff588389690484c8de809b3d1da6409b82eea97fee3af4aee6275",
+      "bytes": 110
+    },
+    {
+      "path": "neverd-build-fixed.log",
+      "sha256": "335bc3f3389f77803752a2af14d96b259196cc67361cbd84406a368196d32d55",
+      "bytes": 39953
+    },
+    {
+      "path": "neverd-build-receipt.json",
+      "sha256": "a1a13524a8efc16f50be6cf57ab66965d31717e2dbd5355057e0de8c23a5b821",
+      "bytes": 3852
+    },
+    {
+      "path": "neverd-build.log",
+      "sha256": "2b3ebefb941dc62f3bfe1a8031bfa384c5a09ff9f16d2571a6fb56e6118a7b31",
+      "bytes": 42907
+    },
+    {
+      "path": "neverd-focused.log",
+      "sha256": "1720c30f44b66724fb73c034cf09026f3720be4d00859ee1f70dff5a1909d127",
+      "bytes": 1676
+    },
+    {
+      "path": "neverd-focused.xml",
+      "sha256": "6d8de64789e577fd4ec5125083c6408913dd8248a217256eea6a7505e0b672e2",
+      "bytes": 7458
+    },
+    {
+      "path": "neverd-integrated.log",
+      "sha256": "c969a9a0ed12c3fa756cf5dbc8a9d700c47a41f8ea11b28ff2b89b32b3e24888",
+      "bytes": 484696
+    },
+    {
+      "path": "neverd-integrated.xml",
+      "sha256": "3ad3cba0030bdde7a251e4be17ec3a5500d6a91147afbde05bbffe517794eb8e",
+      "bytes": 1627272
+    },
+    {
+      "path": "neverd-merged-build-receipt.json",
+      "sha256": "31ba0230549bc80b7134a1461ad80b6e1dcbfb389c3cf23fbf5225a1eb739bc4",
+      "bytes": 3603
+    },
+    {
+      "path": "neverd-merged-build.log",
+      "sha256": "bf62dc71fb789087a3ff90d70b39c79752c0eb2e349cab88c9394c4235055c61",
+      "bytes": 45960
+    },
+    {
+      "path": "neverd-merged-tests.log",
+      "sha256": "2666836af7a06db4ce027ed06f9a5a8819ec577b0361044e200343b8f08e352a",
+      "bytes": 37867
+    },
+    {
+      "path": "neverd-merged-tests.xml",
+      "sha256": "1031085445908a7ca0733e35a7f44be541177a11d7b83b2831115204b02574e4",
+      "bytes": 177375
+    },
+    {
+      "path": "private-tmp-runner.py",
+      "sha256": "efdf71e359e533c15e185769de3ccc5f04631beefa5fc1e33fc6fbf05186acef",
+      "bytes": 325
+    }
+  ],
+  "sources": [
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "eae8944c678ee7c83b7724db0c0b23eaea8bf6962ea16eba8bd5867fc9e79e9e"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationFredReturns.h",
+      "sha256": "b48027e46823923850c100749c219b4df27a504b507ff1583536edd924f36b6e"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSegments.h",
+      "sha256": "ca26dabdf0ea5246434def4b1cce23eca58fe0435c7f0d960f68c25b6f813410"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "600fa87c680aed593390d8395ef5443e287cbfd9856ce0e0d652beaab54d5e82"
+    },
+    {
+      "path": "lib/pipeline/X64ContinuationExport.cpp",
+      "sha256": "4895d36e2d613fc0d5f45dc112889884be4ff15d89f225e360e33d45ea5c925b"
+    },
+    {
+      "path": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+      "sha256": "d7c33881f64d08590024cc95dcc5de17c6707612b295365923d49f6a4cf893db"
+    },
+    {
+      "path": "unittests/devirtualization/X64ContinuationSourceTests.cpp",
+      "sha256": "a5c1f12299d081c24ba5d8c953d8e2171043aad869ace7fe2ef7b0f2dff7c84f"
+    },
+    {
+      "path": "unittests/devirtualization/X64FredContinuationTests.inc",
+      "sha256": "5d6baaf412debf765b7d224a00e063cdc931c0bfaa3f19a39d161369c2f710d3"
+    }
+  ],
+  "merged_validation": {
+    "neverd_head": "6df0cd000256f302e20bf1aa3588cf046631be9a",
+    "dev_base": "ebaf7bc9b5e23b68de03bd8637e6e4facef7a447",
+    "tests": 169,
+    "failed": 0,
+    "skipped": 0,
+    "labels": 4
+  }
+}

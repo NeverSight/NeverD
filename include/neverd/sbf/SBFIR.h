@@ -288,6 +288,30 @@ struct MedInstruction {
   uint8_t CallRegister = 0;
   uint32_t SyscallHash = 0;
   const SyscallInfo *Syscall = nullptr;
+
+  /// A normalized integer predicate comparing one register with itself has a
+  /// fixed truth value. Keep that proof shared by every emitter; JSET is not a
+  /// reflexive comparison because it still depends on the register's bits.
+  std::optional<bool> reflexiveComparisonResult() const {
+    if (Semantics.Source != OperandSourceKind::SourceRegister || Dst != Src)
+      return std::nullopt;
+    switch (Op) {
+    case Operation::Eq:
+    case Operation::UGe:
+    case Operation::ULe:
+    case Operation::SGe:
+    case Operation::SLe:
+      return true;
+    case Operation::Ne:
+    case Operation::UGt:
+    case Operation::ULt:
+    case Operation::SGt:
+    case Operation::SLt:
+      return false;
+    default:
+      return std::nullopt;
+    }
+  }
 };
 
 struct RegisterValue {
@@ -302,6 +326,12 @@ struct RegisterValue {
     /// constant to invent for it would be wrong, and a wrong one would let a
     /// load through it be reported as a named account field.
     InstructionDataAddress,
+    /// Inclusive unsigned bounds: Value is the lower bound and Offset holds
+    /// the bit representation of the upper bound. Neither is an exact value.
+    UnsignedRange,
+    /// An opaque captured value plus an affine displacement. Value indexes
+    /// the analysis-local address space; it is never a numeric VM address.
+    SymbolicAddress,
   };
   Kind ValueKind = Kind::Unknown;
   uint64_t Value = 0;

@@ -56,7 +56,7 @@ def run(executable):
                 decoded = client.call("disasm", {"address": hex(entry), "limit": 2})
                 assert decoded["status"] == "ok", decoded
                 instruction_addresses = {row["address"] for row in decoded["payload"]["items"]}
-                for stage in ("low", "med"):
+                for stage in ("low", "med", "high"):
                     full = client.call("decompile", {"address": hex(entry), "representation": stage, "limit": 2048})
                     assert full["status"] == "ok", full
                     assert full["analysis_state"] == "not_analyzed", full
@@ -132,14 +132,14 @@ def run(executable):
                         assert text == result["text"] and rows == result["rows"]
                     else:
                         assert all(row["addresses"] == [] for row in result["rows"])
-                for stage in ("high", "llvm"):
+                for stage in ("llvm",):
                     reply = client.call("decompile", {"address": hex(entry), "representation": stage, "limit": 2})
                     assert reply["status"] == "ok", reply
                     assert reply["payload"]["mapping_status"] == "unsupported_representation"
                     assert reply["payload"]["rows"] == []
             finally:
                 client.close()
-        print("real native x86/AArch64: recovered function navigation, high-VA Low/Med instruction anchors, stable paged rows and explicit C/High/LLVM mapping status passed")
+        print("real native x86/AArch64: recovered function navigation, high-VA Low/Med/High instruction anchors, stable paged rows and explicit C/High/LLVM mapping status passed")
         return 0
 
 

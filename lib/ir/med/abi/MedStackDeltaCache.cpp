@@ -15,7 +15,7 @@ std::optional<int64_t> MedStackDeltaCache::query(const MedVar &Value,
                                                  int Depth) {
   ++Stats.Queries;
   if (Depth != 0 || Value.isConst())
-    return stackPtrDelta(Func, TRI, Value, Depth, &Definitions);
+    return stackPtrDelta(Func, TRI, Value, Depth, &Definitions, Format);
   const auto Key = std::make_tuple(static_cast<int>(Value.Kind), Value.Id,
                                    Value.SSAVer, Value.RegOff);
   if (const auto It = Answers.find(Key); It != Answers.end()) {
@@ -23,7 +23,8 @@ std::optional<int64_t> MedStackDeltaCache::query(const MedVar &Value,
     return It->second;
   }
   const auto Site = Definitions.find(Value);
-  const auto Result = stackPtrDelta(Func, TRI, Value, Depth, &Definitions);
+  const auto Result =
+      stackPtrDelta(Func, TRI, Value, Depth, &Definitions, Format);
   // Missing and ambiguous definitions are already cheap indexed answers.
   // Keeping only actual definitions bounds retention by the source graph,
   // even when a caller asks about arbitrary absent value identities.

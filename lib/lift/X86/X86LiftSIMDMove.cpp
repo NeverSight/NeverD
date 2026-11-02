@@ -17,7 +17,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 #include <optional>
@@ -77,36 +77,6 @@ bool isValidMaskedMoveMemoryOperand(const cs_x86_op &Operand,
     return false;
   return Operand.mem.scale == 1 || Operand.mem.scale == 2 ||
          Operand.mem.scale == 4 || Operand.mem.scale == 8;
-}
-
-std::optional<NdVar> emitAMXStride(X86Lifter::LiftState &S,
-                                   const cs_x86_op &Memory) {
-  if (Memory.type != X86_OP_MEM)
-    return std::nullopt;
-  if (Memory.mem.index == X86_REG_INVALID)
-    return NdVar::scalar(0, 8);
-  if (Memory.mem.scale != 1 && Memory.mem.scale != 2 && Memory.mem.scale != 4 &&
-      Memory.mem.scale != 8)
-    return std::nullopt;
-
-  const RegInfo Index = mapCapstoneReg(static_cast<x86_reg>(Memory.mem.index));
-  if (!x86reg::isGeneralRegOffset(Index.Offset) ||
-      (Index.Size != 4 && Index.Size != 8) || Index.Size != S.AddressSize)
-    return std::nullopt;
-
-  NdVar Value = NdVar::reg(Index.Offset, Index.Size);
-  if (Value.Size == 4) {
-    NdVar Extended = S.makeTemp(8);
-    S.emit(NdOp::INT_ZEXT, Extended, {Value});
-    Value = Extended;
-  }
-  if (Memory.mem.scale != 1) {
-    unsigned Shift = Memory.mem.scale == 2 ? 1 : Memory.mem.scale == 4 ? 2 : 3;
-    NdVar Scaled = S.makeTemp(8);
-    S.emit(NdOp::INT_LEFT, Scaled, {Value, NdVar::scalar(Shift, 8)});
-    Value = Scaled;
-  }
-  return Value;
 }
 
 Intrinsic maskedStoreIntrinsic(uint16_t ElementSize) {
@@ -209,8 +179,7 @@ bool liftEvexFullVectorMove(X86Lifter &L, X86Lifter::LiftState &S,
   const cs_x86_op &RawRegOperand = IsStoreEncoding ? Source : Destination;
   const cs_x86_op &RawRMOperand = IsStoreEncoding ? Destination : Source;
   const auto RawRegIndex = vectorRegisterIndex(RawRegOperand);
-  if (!RawRegIndex ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) != *RawRegIndex)
+  if (!RawRegIndex || Encoding.regIndex() != *RawRegIndex)
     return false;
 
   const uint16_t VectorSize = RawRegOperand.size;
@@ -228,7 +197,7 @@ bool liftEvexFullVectorMove(X86Lifter &L, X86Lifter::LiftState &S,
   } else {
     const auto RawRMIndex = vectorRegisterIndex(RawRMOperand);
     if (!RawRMIndex || RawRMOperand.size != VectorSize ||
-        decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) != *RawRMIndex ||
+        Encoding.rmIndex() != *RawRMIndex ||
         !validateCanonicalEvexRegisterTail(Insn, X86, Encoding))
       return false;
   }
@@ -418,7 +387,7 @@ bool liftEvexScalarBroadcast(X86Lifter &L, X86Lifter::LiftState &S,
       (!Spec->Supports128 && Destination.size == 16) ||
       !isVectorRegisterOfSize(Destination, Destination.size) ||
       Destination.size % Spec->ElementSize != 0 ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+      Encoding.regIndex() !=
           static_cast<unsigned>(Destination.reg -
                                 (Destination.size == 16   ? X86_REG_XMM0
                                  : Destination.size == 32 ? X86_REG_YMM0
@@ -463,8 +432,7 @@ bool liftEvexScalarBroadcast(X86Lifter &L, X86Lifter::LiftState &S,
   } else if (!GprForm && Source.type == X86_OP_REG && Source.size == 16 &&
              Source.reg >= X86_REG_XMM0 && Source.reg <= X86_REG_XMM31) {
     if (!validateCanonicalEvexRegisterTail(Insn, X86, Encoding) ||
-        decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-            static_cast<unsigned>(Source.reg - X86_REG_XMM0))
+        Encoding.rmIndex() != static_cast<unsigned>(Source.reg - X86_REG_XMM0))
       return false;
     Raw = repeatLowElement(S, L.operandRead(S, Source), Spec->ElementSize,
                            Destination.size);
@@ -640,110 +608,6 @@ bool liftSIMDMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
       S.emit(NdOp::COPY, Dst, {Src});
     }
-    break;
-  }
-
-  case X86_INS_LDTILECFG: {
-    if (L.targetArch() != Arch::X64 || X86.op_count != 1 ||
-        X86.operands[0].type != X86_OP_MEM)
-      return false;
-    const NdVar Config = NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize);
-    if (!S.emitMemoryIntrinsic(Intrinsic::AMXLoadConfig, X86.operands[0],
-                               {NdVar::scalar(S.AddressSize, 1)}, Config))
-      return false;
-    // A successful LDTILECFG enters either INIT or palette 1 and clears the
-    // entire physical tile-data component.  These copies are deliberately
-    // sequenced after validation/load so a fault leaves old state untouched.
-    for (unsigned Tile = 0; Tile < x86reg::TileRegCount; ++Tile)
-      S.emit(NdOp::COPY,
-             NdVar::reg(x86reg::tileReg(Tile), x86reg::TileRegStride),
-             {NdVar::cst(0, x86reg::TileRegStride)});
-    break;
-  }
-
-  case X86_INS_STTILECFG: {
-    if (L.targetArch() != Arch::X64 || X86.op_count != 1 ||
-        X86.operands[0].type != X86_OP_MEM)
-      return false;
-    const NdVar Config = NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize);
-    if (!S.emitMemoryIntrinsic(Intrinsic::AMXStoreConfig, X86.operands[0],
-                               {Config, NdVar::scalar(S.AddressSize, 1)}))
-      return false;
-    break;
-  }
-
-  case X86_INS_TILERELEASE: {
-    if (L.targetArch() != Arch::X64 || X86.op_count != 0)
-      return false;
-    S.emit(NdOp::COPY, NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize),
-           {NdVar::cst(0, x86reg::TileConfigSize)});
-    for (unsigned Tile = 0; Tile < x86reg::TileRegCount; ++Tile)
-      S.emit(NdOp::COPY,
-             NdVar::reg(x86reg::tileReg(Tile), x86reg::TileRegStride),
-             {NdVar::cst(0, x86reg::TileRegStride)});
-    break;
-  }
-
-  case X86_INS_TILELOADD:
-  case X86_INS_TILELOADDT1:
-  case X86_INS_TILELOADDRS:
-  case X86_INS_TILELOADDRST1: {
-    if (L.targetArch() != Arch::X64 || X86.op_count != 2 ||
-        X86.operands[0].type != X86_OP_REG ||
-        X86.operands[1].type != X86_OP_MEM ||
-        (S.AddressSize != 4 && S.AddressSize != 8))
-      return false;
-    NdVar Destination = L.operandWrite(X86.operands[0]);
-    if (Destination.Size != x86reg::TileRegStride)
-      return false;
-    const auto Stride = emitAMXStride(S, X86.operands[1]);
-    if (!Stride)
-      return false;
-    cs_x86_op RowBase = X86.operands[1];
-    RowBase.mem.index = X86_REG_INVALID;
-    RowBase.mem.scale = 1;
-    const NdVar Config = NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize);
-    if (!S.emitMemoryIntrinsic(
-            Intrinsic::AMXTileLoad, RowBase,
-            {*Stride, Config, Destination, NdVar::scalar(S.AddressSize, 1)},
-            Destination))
-      return false;
-    S.emitIntrinsic(Intrinsic::AMXClearStartRow, Config, {Config});
-    break;
-  }
-
-  case X86_INS_TILESTORED: {
-    if (L.targetArch() != Arch::X64 || X86.op_count != 2 ||
-        X86.operands[0].type != X86_OP_MEM ||
-        X86.operands[1].type != X86_OP_REG ||
-        (S.AddressSize != 4 && S.AddressSize != 8))
-      return false;
-    NdVar Source = L.operandRead(S, X86.operands[1]);
-    if (Source.Size != x86reg::TileRegStride)
-      return false;
-    const auto Stride = emitAMXStride(S, X86.operands[0]);
-    if (!Stride)
-      return false;
-    cs_x86_op RowBase = X86.operands[0];
-    RowBase.mem.index = X86_REG_INVALID;
-    RowBase.mem.scale = 1;
-    const NdVar Config = NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize);
-    if (!S.emitMemoryIntrinsic(
-            Intrinsic::AMXTileStore, RowBase,
-            {*Stride, Config, Source, NdVar::scalar(S.AddressSize, 1)}, Config))
-      return false;
-    break;
-  }
-
-  case X86_INS_TILEZERO: {
-    if (X86.op_count != 1 || X86.operands[0].type != X86_OP_REG)
-      return false;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    if (Dst.Size != x86reg::TileRegStride)
-      return false;
-    const NdVar Config = NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize);
-    S.emitIntrinsic(Intrinsic::AMXTileZero, Dst, {Config});
-    S.emitIntrinsic(Intrinsic::AMXClearStartRow, Config, {Config});
     break;
   }
 
@@ -1130,20 +994,16 @@ bool liftSIMDMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // MMX aliases the x87 bank; exiting it must publish the empty tags.
   case X86_INS_EMMS:
+  case X86_INS_FEMMS:
     if (L.ownsX87Context()) {
-      S.emitVoidIntrinsic(Intrinsic::X87ContextStep,
-                          {NdVar::reg(x86reg::X87ContextHandle, 8),
-                           NdVar::cst(0x770f, 4), NdVar::cst(0, 8),
-                           NdVar::cst(0, 8), NdVar::cst(S.Addr, 8)});
+      S.emitVoidIntrinsic(
+          Intrinsic::X87ContextStep,
+          {NdVar::reg(x86reg::X87ContextHandle, 8),
+           NdVar::cst(Insn->id == X86_INS_EMMS ? 0x770f : 0x0e0f, 4),
+           NdVar::cst(0, 8), NdVar::cst(0, 8), NdVar::cst(S.Addr, 8)});
       break;
     }
-    S.emit(NdOp::NOP, {}, {});
-    break;
-  case X86_INS_FEMMS:
-    if (L.ownsX87Context())
-      throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
-    S.emit(NdOp::NOP, {}, {});
-    break;
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
   default:
     return false;

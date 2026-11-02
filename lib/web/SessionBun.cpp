@@ -35,6 +35,12 @@ llvm::json::Object summary(const BunExtraction &E, uint64_t Revision) {
       {"entry_point_index", E.EntryPoint},
       {"startup_count", E.StartupCount},
       {"flags", E.Flags},
+      {"prelinked_module_count", E.PrelinkedModuleFiles.size()},
+      {"runtime_options_present", E.RuntimeOptions.has_value()},
+      {"compile_exec_argv_region_id",
+       E.CompileArguments == NoBunIndex
+           ? llvm::json::Value(nullptr)
+           : llvm::json::Value(E.Regions[E.CompileArguments].ID)},
       {"executes_input", false},
       {"source_map_decoding",
        bunSourceMapAvailable() ? "available_on_request" : "zstd_unavailable"},
@@ -118,8 +124,9 @@ std::string Session::bunRecords(std::string_view ExpectedRevision,
           {"name_redacted", true}});
     } else {
       const auto &R = E.Regions[I];
-      const bool PrivateName =
-          R.Kind == "module_name" || R.Kind == "bytecode_origin";
+      const bool PrivateName = R.Kind == "module_name" ||
+                               R.Kind == "bytecode_origin" ||
+                               R.Kind == "compile_exec_argv";
       Items.emplace_back(llvm::json::Object{
           {"region_id", R.ID},
           {"parent_artifact_id", E.ArtifactID},

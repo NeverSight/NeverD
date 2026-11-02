@@ -1,0 +1,36 @@
+//===- AArch64PAuthPipelineFixtures.def - PAuth call fixtures ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independently assembled call sequences retain X0 across an X8 load.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PAUTH_PIPELINE_TEXT
+#define NEVERD_PAUTH_PIPELINE_TEXT(Name, Text)
+#endif
+
+NEVERD_PAUTH_PIPELINE_TEXT(kMissingCompiler,
+                           "Clang is required for PAuth fixtures")
+NEVERD_PAUTH_PIPELINE_TEXT(kTargetOption, "-target")
+NEVERD_PAUTH_PIPELINE_TEXT(kTarget, "aarch64-none-elf")
+NEVERD_PAUTH_PIPELINE_TEXT(kMarch, "-march=armv8.3-a+pauth")
+NEVERD_PAUTH_PIPELINE_TEXT(kCompileOption, "-c")
+NEVERD_PAUTH_PIPELINE_TEXT(kOutputOption, "-o")
+NEVERD_PAUTH_PIPELINE_TEXT(kSource, "load-call.s")
+NEVERD_PAUTH_PIPELINE_TEXT(kObject, "load-call.o")
+NEVERD_PAUTH_PIPELINE_TEXT(kLoadA, "ldraa x8, [x9]")
+NEVERD_PAUTH_PIPELINE_TEXT(kLoadB, "ldrab x8, [x9]")
+NEVERD_PAUTH_PIPELINE_TEXT(kLoadWritebackA, "ldraa x8, [x9, #8]!")
+NEVERD_PAUTH_PIPELINE_TEXT(kLoadWritebackB, "ldrab x8, [x9, #-8]!")
+NEVERD_PAUTH_PIPELINE_TEXT(
+    kCallAssembly,
+    ".text\n.globl test_load_call\n.type test_load_call,%function\n"
+    "test_load_call:\nmov x0,#7\nmov x9,#8192\n{0}\nbl puts\nret\n"
+    ".size test_load_call,.-test_load_call\n")
+NEVERD_PAUTH_PIPELINE_TEXT(kPreparedCall, "@puts(i64 7)")
+NEVERD_PAUTH_PIPELINE_TEXT(kUnknownValue, "freeze i64 poison")
+NEVERD_PAUTH_PIPELINE_TEXT(kCombinedLoad, "asm sideeffect \".inst ${3:c}\"")
+
+#undef NEVERD_PAUTH_PIPELINE_TEXT

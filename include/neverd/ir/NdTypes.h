@@ -14,6 +14,7 @@
 #define NEVERD_IR_NDTYPES_H
 
 #include "neverd/Common.h"
+#include "neverd/types/CallingConvention.h"
 
 #include <memory>
 #include <optional>
@@ -93,6 +94,12 @@ struct NdType {
   /// For Func
   std::shared_ptr<NdType> RetType;
   std::vector<std::shared_ptr<NdType>> ParamTypes;
+  /// The callback's declared source convention. Unspecified is the platform
+  /// C default; null means a source convention that cannot be represented.
+  /// This does not authorize an ordinary-C ABI projection for other
+  /// conventions.
+  std::optional<types::CallingConvention> FunctionConvention =
+      types::CallingConvention::Unspecified;
 
   /// Display-only C++/C spelling from a validated type graph
   /// (`char`, `ProbeError`, `Ns::Outer::Inner`).  A SourceName-only
@@ -111,6 +118,9 @@ struct NdType {
   /// Display-only TPI member types, used to name nested slots such as
   /// `TPtr<T>::p` at `outer+8`.  Not an ABI layout.
   std::vector<std::shared_ptr<NdType>> FieldDisplayTypes;
+  /// Alignment of the current validated C display definition. Like its
+  /// display members, this does not authorize an ABI or native memory extent.
+  uint16_t FieldDisplayAlignment = 0;
   /// LF_ENUM records share the named-record encoding; they return in RAX.
   bool IsEnum = false;
   /// A record of the registers a multi-register return fills, one scalar
@@ -522,15 +532,18 @@ struct NdType {
     T->Size = Size;
     return T;
   }
-  /// A fixed ordinary C function type. Calling-convention-specific source
-  /// declarations require separate ABI evidence and must not use this type.
+  /// A fixed function type with its source declaration convention. An ABI
+  /// projection must separately validate that it supports this convention.
   static std::shared_ptr<NdType>
   makeFunc(std::shared_ptr<NdType> Return,
-           std::vector<std::shared_ptr<NdType>> Parameters = {}) {
+           std::vector<std::shared_ptr<NdType>> Parameters = {},
+           std::optional<types::CallingConvention> Convention =
+               types::CallingConvention::Unspecified) {
     auto T = std::make_shared<NdType>();
     T->Kind = NdTypeKind::Func;
     T->RetType = std::move(Return);
     T->ParamTypes = std::move(Parameters);
+    T->FunctionConvention = Convention;
     return T;
   }
 

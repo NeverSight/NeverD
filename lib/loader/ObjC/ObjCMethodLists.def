@@ -1,0 +1,39 @@
+//===- ObjCMethodLists.def - Objective-C method list layout -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Serialized method_list_t fields from Apple's objc-runtime-new.h. VALUE
+/// names ABI fields; TEXT supplies diagnostics shared by the bounded reader.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_OBJC_METHOD_VALUE
+#define NEVERD_OBJC_METHOD_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_OBJC_METHOD_TEXT
+#define NEVERD_OBJC_METHOD_TEXT(Name, Text)
+#endif
+
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kSmall, 0x80000000U)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kDirectSelectors, 0x40000000U)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kUnknownFlags, 0x3fff0000U)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kEntrySizeMask, 0xfffcU)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kFixupFlags, 3U)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kHeaderBytes, 8)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kCountOffset, 4)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kSmallEntryBytes, 12)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kBigEntryBytes, 24)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kRelativeTypesOffset, 4)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kRelativeIMPOffset, 8)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kAbsoluteTypesOffset, 8)
+NEVERD_OBJC_METHOD_VALUE(uint32_t, kAbsoluteIMPOffset, 16)
+NEVERD_OBJC_METHOD_TEXT(kTruncatedList, "Truncated Objective-C method list")
+NEVERD_OBJC_METHOD_TEXT(kInvalidList,
+                        "Invalid or excessive Objective-C method list")
+NEVERD_OBJC_METHOD_TEXT(
+    kMissingSelectorBase,
+    "Cached Objective-C relative selector base is unavailable")
+
+#undef NEVERD_OBJC_METHOD_VALUE
+#undef NEVERD_OBJC_METHOD_TEXT

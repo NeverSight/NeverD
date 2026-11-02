@@ -1,0 +1,136 @@
+// AArch64 assembly mnemonics — included by intrinsics.cpp.
+// Only for intrinsics with NO standard C/ACLE builtin.
+// The names are aligned in a column, which clang-format would undo.
+// clang-format off
+
+A(Intrinsic::Svc,          "svc");
+A(Intrinsic::Hvc,          "hvc");
+A(Intrinsic::Smc,          "smc");
+A(Intrinsic::Brk,          "brk");
+A(Intrinsic::Hlt_A64,      "hlt");
+A(Intrinsic::Udf_A64,      "udf");
+A(Intrinsic::Mrs,          "mrs");
+A(Intrinsic::Msr,          "msr");
+A(Intrinsic::Dc,           "dc");
+A(Intrinsic::Ic,           "ic");
+A(Intrinsic::Tlbi,         "tlbi");
+A(Intrinsic::At,           "at");
+A(Intrinsic::Eret,         "eret");
+A(Intrinsic::Pacda,        "pacda");
+A(Intrinsic::Pacdb,        "pacdb");
+A(Intrinsic::Autda,        "autda");
+A(Intrinsic::Autdb,        "autdb");
+A(Intrinsic::Xpaci,        "xpaci");
+A(Intrinsic::Xpacd,        "xpacd");
+A(Intrinsic::Irg,          "irg");
+A(Intrinsic::Gmi,          "gmi");
+A(Intrinsic::Addg,         "addg");
+A(Intrinsic::Subg,         "subg");
+A(Intrinsic::Stg,          "stg");
+A(Intrinsic::Stzg,         "stzg");
+A(Intrinsic::St2g,         "st2g");
+A(Intrinsic::Stz2g,        "stz2g");
+A(Intrinsic::Ldg,          "ldg");
+A(Intrinsic::CntRead,      "mrs");
+
+// Advanced system
+A(Intrinsic::A64_Brb,      "brb");
+A(Intrinsic::A64_Gcssttr,  "gcssttr");
+A(Intrinsic::A64_Gcsstr,   "gcsstr");
+A(Intrinsic::A64_Genter,   "genter");
+A(Intrinsic::A64_Gexit,    "gexit");
+A(Intrinsic::A64_Tstart,   "tstart");
+A(Intrinsic::A64_Tcommit,  "tcommit");
+A(Intrinsic::A64_Tcancel,  "tcancel");
+A(Intrinsic::A64_Ttest,    "ttest");
+A(Intrinsic::A64_Wkdmc,    "wkdmc");
+A(Intrinsic::A64_Wkdmd,    "wkdmd");
+A(Intrinsic::A64_Wrffr,    "wrffr");
+A(Intrinsic::A64_Setffr,   "setffr");
+A(Intrinsic::A64_Xaflag,   "xaflag");
+A(Intrinsic::A64_Axflag,   "axflag");
+A(Intrinsic::A64_Rmif,     "rmif");
+A(Intrinsic::A64_Clrex,    "clrex");
+A(Intrinsic::A64_Wfet,     "wfet");
+A(Intrinsic::A64_Wfit,     "wfit");
+
+// FEAT_MOPS memory-set prologues (multi-output; rendered specially).
+A(Intrinsic::A64_MopsSetP,   "setp");
+A(Intrinsic::A64_MopsSetPN,  "setpn");
+A(Intrinsic::A64_MopsSetPT,  "setpt");
+A(Intrinsic::A64_MopsSetPTN, "setptn");
+A(Intrinsic::A64_MopsCpyFP,  "cpyfp");
+
+// FEAT_THE + FEAT_D128 read-check-write pair compare-and-swap.
+A(Intrinsic::A64_Rcwcasp,    "rcwcasp");
+A(Intrinsic::A64_Rcwcaspa,   "rcwcaspa");
+A(Intrinsic::A64_Rcwcaspal,  "rcwcaspal");
+A(Intrinsic::A64_Rcwcaspl,   "rcwcaspl");
+A(Intrinsic::A64_Rcwscasp,   "rcwscasp");
+A(Intrinsic::A64_Rcwscaspa,  "rcwscaspa");
+A(Intrinsic::A64_Rcwscaspal, "rcwscaspal");
+A(Intrinsic::A64_Rcwscaspl,  "rcwscaspl");
+
+// FEAT_LSE128 pair bit-clear (rendered as standard atomics in High-C).
+A(Intrinsic::A64_Ldclrp,      "ldclrp");
+A(Intrinsic::A64_Ldclrpa,     "ldclrpa");
+A(Intrinsic::A64_Ldclrpal,    "ldclrpal");
+A(Intrinsic::A64_Ldclrpl,     "ldclrpl");
+
+// Exclusive monitor operations (rendered as compiler builtins in High-C).
+A(Intrinsic::A64_Ldxr,         "ldxr");
+A(Intrinsic::A64_Ldaxr,        "ldaxr");
+A(Intrinsic::A64_Stxr,         "stxr");
+A(Intrinsic::A64_Stlxr,        "stlxr");
+A(Intrinsic::A64_Ldxp,         "ldxp");
+A(Intrinsic::A64_Ldaxp,        "ldaxp");
+A(Intrinsic::A64_Stxp,         "stxp");
+A(Intrinsic::A64_Stlxp,        "stlxp");
+A(Intrinsic::A64_Pacga,        "pacga");
+#define NEVERD_A64_CPA(Id, Insn, Mnemonic, ...) A(Intrinsic::Id, Mnemonic);
+#include "neverd/ir/intrinsics/AArch64/AArch64CPA.def"
+A(Intrinsic::A64_SveCntb,      "cntb");
+A(Intrinsic::A64_SveCnth,      "cnth");
+A(Intrinsic::A64_SveCntw,      "cntw");
+A(Intrinsic::A64_SveCntd,      "cntd");
+A(Intrinsic::A64_SvePtrue,     "ptrue");
+A(Intrinsic::A64_SveDup,       "dup");
+A(Intrinsic::A64_SveLastb,     "lastb");
+A(Intrinsic::A64_SveSt1,       "st1");
+A(Intrinsic::A64_SveStnt1,     "stnt1");
+A(Intrinsic::A64_WspWrite,     "mov");
+A(Intrinsic::A64_WspZeroExtend, "mov");
+A(Intrinsic::A64_Ldsetp,       "ldsetp");
+A(Intrinsic::A64_Ldsetpa,      "ldsetpa");
+A(Intrinsic::A64_Ldsetpal,     "ldsetpal");
+A(Intrinsic::A64_Ldsetpl,      "ldsetpl");
+A(Intrinsic::A64_SveIndex,     "index");
+A(Intrinsic::A64LinuxSyscall,  "svc");
+A(Intrinsic::A64_ScvtfFixed,   "scvtf");
+A(Intrinsic::A64_UcvtfFixed,   "ucvtf");
+A(Intrinsic::A64_FcvtzsFixed,  "fcvtzs");
+A(Intrinsic::A64_FcvtzuFixed,  "fcvtzu");
+
+#define NEVERD_A64_PAUTH_LR_OPERATION(Id, Mnemonic, ...) A(Intrinsic::Id, Mnemonic);
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def"
+
+#define NEVERD_A64_PAUTH_M_OPERATION(Id, Mnemonic, ...) A(Intrinsic::Id, Mnemonic);
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+#define NEVERD_A64_PAUTH_M_MARKER(Id, Name) A(Intrinsic::Id, Name);
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+
+#define NEVERD_A64_PAUTH_LOAD_OPERATION(Id, Mnemonic, ...) A(Intrinsic::Id, Mnemonic);
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthLoad.def"
+
+#define NEVERD_A64_ADDRESS_MEMORY_OPERATION(Id, Mnemonic, ...) A(Intrinsic::Id, Mnemonic);
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemoryOperations.def"
+
+#define NEVERD_A64_SVE_CPA_OPERATION(Id, Insn, Name, ...) A(Intrinsic::Id, Name);
+#include "neverd/ir/intrinsics/AArch64/AArch64SVECPA.def"
+
+#define NEVERD_A64_SVE_PREFIX_OPERATION(Id, Name, ...) \
+  A(Intrinsic::Id, Name);
+#include "neverd/ir/intrinsics/AArch64/AArch64SVEPrefix.def"
+
+#define NEVERD_A64_WRITEBACK_OPERATION(Id, Mnemonic) A(Intrinsic::Id, Mnemonic);
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.def"

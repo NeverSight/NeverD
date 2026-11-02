@@ -5,6 +5,8 @@
 
 #include "neverd/sdk/Limits.h"
 
+#include <iterator>
+
 namespace neverd::sdk {
 namespace objc_forwarded_initializer_detail {
 using namespace objc_super_getter_detail;
@@ -77,7 +79,7 @@ inline const LowFunc *completeCallerLow(const PipelineResult &Result,
       return nullptr;
   for (const auto &Op : Entry->Ops)
     if (Op.Addr < Root || Op.Addr - Root >= 12 || (Op.Addr - Root) % 4 ||
-        Op.NumInputs > 6)
+        Op.NumInputs > std::size(Op.Inputs))
       return nullptr;
   return Low;
 }

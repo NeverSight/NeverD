@@ -23,4 +23,9 @@ SBF_SOURCE_LIMIT(MaximumCStructuredNestingDepth, 128)
 // Stay below Rust's default recursion-limit class of frontend processing.
 SBF_SOURCE_LIMIT(MaximumRustStructuredNestingDepth, 64)
 
+// Keep dispatcher functions small enough for native C/Rust compiler CFG and
+// borrow/liveness work. All raw slots are retained in explicit source regions;
+// crossing this boundary is a layout change, never a protocol rejection.
+SBF_SOURCE_LIMIT(MaximumDispatcherRegionSlots, 128)
+
 #undef SBF_SOURCE_LIMIT

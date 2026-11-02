@@ -206,12 +206,21 @@ def run(executable):
         # the Windows headers' do).
         compare = next(line for line in lines if line["text"].lstrip().startswith("cmp"))
         number = ok(owner, "local_types_fit", {"function": use, "address": compare["address"],
-                                               "limit": 500})
+                                               "limit": 3})
         assert number["operand"] == 1 and "target" not in number, number
         assert number["accesses"] == [{"offset": 1, "size": 0, "use": "address"}], number
-        own = [c for c in number["candidates"] if c["origin"] == "pdb"]
-        assert own and all(c["exact"] == 0 for c in own), number
-        assert own[0]["fits"][0]["fit"] == "inside", own[0]
+        assert len(number["candidates"]) == 3 and number["total"] > 3, number
+        # Exact header matches can fill even the largest result page before
+        # the program's partial matches. Search its known record explicitly;
+        # do not depend on the number of declarations in the bundled headers.
+        own = ok(owner, "local_types_fit", {"function": use, "address": compare["address"],
+                                            "text": "_THREAD_LIKE", "limit": 3})
+        assert own["operand"] == number["operand"] and "target" not in own, own
+        assert own["accesses"] == number["accesses"], own
+        record = next(c for c in own["candidates"] if c["name"] == "_THREAD_LIKE")
+        assert record["origin"] == "pdb" and record["exact"] == 0, record
+        assert record["fits"][0]["fit"] == "inside", record
+        assert record["fits"][0]["path"] == "Header", record
         # Every access through a pointer at once, one step of the history.
         header = next(line for line in lines if "[r8+5]" in line["text"])
         flags = next(line for line in lines if "[rdx+8]" in line["text"])

@@ -5,8 +5,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/ir/low/X86/RegistrationABIPrivate.h"
+#include "../../../lib/ir/low/X86/RegistrationCRTFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationConditionalFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationStackOwner.h"
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -16,9 +18,10 @@
 #include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -26,7 +29,9 @@
 #include "llvm/BinaryFormat/COFF.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <vector>
 
 using namespace neverd;
@@ -113,6 +118,21 @@ struct ThrowImage {
       Section.Flags = Segment.Flags;
       Image.Sections.push_back(Section);
     }
+  }
+
+  bool mapImportStorage(const char *Name, const char *Module) {
+    auto &Data = Image.Segments[2];
+    Data.FileSz = Data.Size;
+    Section Storage;
+    Storage.Name = ".data";
+    Storage.VA = Data.VA;
+    Storage.Size = Storage.FileSz = Data.Size;
+    Storage.Flags = Data.Flags;
+    Image.Sections = {Storage};
+    Image.Imports[0].Name = Name;
+    Image.Imports[0].Module = Module;
+    return Image.recordImportStorageSlot(
+        IATVA, Name, 0, ImportStorageEvidence::ImportDirectory);
   }
 
   void tableWord(size_t Offset, uint32_t Value) {
@@ -350,6 +370,165 @@ TEST(RegistrationCallABI, CleanupDispatchNeedsClosedObjectAndImageEffects) {
     if (Mutation == 7)
       EXPECT_EQ(Leaf->ECXWrites,
                 (std::vector<RegistrationObjectExtent>{{4, 8}}));
+  }
+}
+
+TEST(RegistrationCallABI, CRTImportQueriesKeepTheirStorageProofs) {
+  struct Case {
+    const char *Name;
+    const char *Module;
+    bool ControlFP;
+    std::optional<uint32_t> StackPop;
+  };
+  const Case Cases[] = {
+      {"_controlfp_s", "api-ms-win-crt-math-l1-1-0.dll", true, std::nullopt},
+      {"_controlfp_s", "api-ms-win-crt-runtime-l1-1-0.dll", true, std::nullopt},
+      {"_controlfp_s", "ucrtbase.dll", true, std::nullopt},
+      {"_controlfp_s", "ucrtbased.dll", true, std::nullopt},
+      {"_controlfp_s", "MSVCRT.dll", true, std::nullopt},
+      {"log", "api-ms-win-crt-math-l1-1-0.dll", false, 0},
+      {"log", "ucrtbase.dll", false, 0},
+      {"log", "ucrtbased.dll", false, 0},
+      {"log", "msvcrt.dll", false, 0},
+      {"exp", "api-ms-win-crt-math-l1-1-0.dll", false, 0},
+      {"exp", "ucrtbase.dll", false, 0},
+      {"exp", "ucrtbased.dll", false, 0},
+      {"exp", "MSVCRT.dll", false, 0},
+      {"malloc", "msvcrt.dll", false, 0},
+      {"malloc", "MSVCR100.dll", false, 0},
+      {"malloc", "ucrtbase.dll", false, std::nullopt},
+      {"log", "msvcr100.dll", false, std::nullopt},
+      {"_controlfp_s", "kernel32.dll", false, std::nullopt},
+      {"_controlfp", "ucrtbase.dll", false, std::nullopt}};
+  enum class Change {
+    None,
+    Name,
+    Module,
+    Delay,
+    MissingSlot,
+    Addend,
+    Truncated,
+    Conflict,
+    Duplicate,
+    Fixup,
+    Mapping,
+    Evidence,
+    Architecture,
+    Format,
+    Bitness
+  };
+  const Change Changes[] = {
+      Change::None,         Change::Name,   Change::Module,    Change::Delay,
+      Change::MissingSlot,  Change::Addend, Change::Truncated, Change::Conflict,
+      Change::Duplicate,    Change::Fixup,  Change::Mapping,   Change::Evidence,
+      Change::Architecture, Change::Format, Change::Bitness};
+  for (const auto &C : Cases)
+    for (const auto Mutation : Changes) {
+      SCOPED_TRACE(::testing::Message()
+                   << C.Name << ' ' << C.Module << ' ' << int(Mutation));
+      ThrowImage F;
+      ASSERT_TRUE(F.mapImportStorage(C.Name, C.Module));
+      ASSERT_TRUE(isFileBackedPEImportSlot(F.Image, ThrowImage::IATVA));
+      EXPECT_EQ(registration_state::isCheckedControlFPSlot(F.Image,
+                                                           ThrowImage::IATVA),
+                C.ControlFP);
+      EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(
+                    F.Image, ThrowImage::IATVA),
+                C.StackPop);
+      switch (Mutation) {
+      case Change::None:
+        break;
+      case Change::Name:
+        F.Image.Imports[0].Name += "_unchecked";
+        F.Image.ImportStorageSlots.at(ThrowImage::IATVA).Name =
+            F.Image.Imports[0].Name;
+        break;
+      case Change::Module:
+        F.Image.Imports[0].Module = "application.dll";
+        break;
+      case Change::Delay:
+        F.Image.Imports[0].IsDelayImport = true;
+        break;
+      case Change::MissingSlot:
+        F.Image.ImportStorageSlots.clear();
+        break;
+      case Change::Addend:
+        F.Image.ImportStorageSlots.at(ThrowImage::IATVA).Addend = 4;
+        break;
+      case Change::Truncated:
+        F.Image.Segments[2].FileSz = ThrowImage::IATVA - ThrowImage::DataVA + 3;
+        break;
+      case Change::Conflict:
+        F.Image.ConflictingImportStorageSlots.insert(ThrowImage::IATVA);
+        break;
+      case Change::Duplicate:
+        F.Image.Imports.push_back(F.Image.Imports[0]);
+        F.Image.Imports.back().Module = "application.dll";
+        break;
+      case Change::Fixup:
+        F.Image.BaseRelocations.push_back(
+            {ThrowImage::IATVA + 3, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+        break;
+      case Change::Mapping:
+        F.Image.Sections[0].FileOff += 1;
+        break;
+      case Change::Evidence:
+        F.Image.ImportStorageSlots.at(ThrowImage::IATVA).Evidence =
+            ImportStorageEvidence::PointerTable;
+        break;
+      case Change::Architecture:
+        F.Image.Arch = Arch::X64;
+        break;
+      case Change::Format:
+        F.Image.Format = BinaryFormat::ELF;
+        break;
+      case Change::Bitness:
+        F.Image.Bits = Bitness::Bits64;
+        break;
+      }
+      // Requery the same image so current identity and storage remain binding.
+      EXPECT_EQ(registration_state::isCheckedControlFPSlot(F.Image,
+                                                           ThrowImage::IATVA),
+                Mutation == Change::None && C.ControlFP);
+      EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(
+                    F.Image, ThrowImage::IATVA),
+                Mutation == Change::None ? C.StackPop : std::nullopt);
+    }
+}
+
+TEST(RegistrationCallABI, RuntimeProviderSetsKeepDistinctContracts) {
+  using namespace neverd::coff_loader;
+  EXPECT_TRUE(isX86ControlFPProvider("MSVCRT.dll"));
+  EXPECT_FALSE(isX64ControlFPProvider("MSVCRT.dll"));
+  EXPECT_TRUE(isX64ControlFPProvider("ucrtbased.dll"));
+  EXPECT_FALSE(isX86SEHHandlerProvider("ucrtbased.dll"));
+  EXPECT_TRUE(isX86SEHHandlerProvider("ucrtbase.dll"));
+  EXPECT_FALSE(isX86RegistrationRuntimeProvider("ucrtbase.dll"));
+  EXPECT_TRUE(isX86ContinuationRuntimeProvider("msvcrtd.dll"));
+  EXPECT_FALSE(isX86RegistrationRuntimeProvider("msvcrtd.dll"));
+  EXPECT_TRUE(isX86CxxExceptionProvider("MSVCR100.dll"));
+  EXPECT_FALSE(isX86CxxExceptionProvider("msvcrt.dll"));
+  EXPECT_TRUE(isX86LegacyCRTProvider("MSVCR100.dll"));
+  EXPECT_FALSE(isX86MathCleanupProvider("MSVCR100.dll"));
+  EXPECT_TRUE(isX86MathCleanupProvider("api-ms-win-crt-math-l1-1-0.dll"));
+  EXPECT_FALSE(isX64CRTStdioProvider("api-ms-win-crt-math-l1-1-0.dll"));
+  EXPECT_TRUE(isX64CRTStdioProvider("api-ms-win-crt-stdio-l1-1-0.dll"));
+  EXPECT_FALSE(isX86ControlFPProvider("api-ms-win-crt-stdio-l1-1-0.dll"));
+  EXPECT_TRUE(isX86RegistrationRuntimeProvider("VCRUNTIME140D.DLL"));
+  EXPECT_FALSE(isX86LegacyCRTProvider("VCRUNTIME140D.DLL"));
+  EXPECT_TRUE(isRaiseExceptionProvider("KERNELBASE.DLL"));
+  EXPECT_FALSE(isRaiseExceptionProvider("ntdll.dll"));
+  for (const auto Query :
+       {isX86ControlFPProvider, isX64ControlFPProvider, isX86SEHHandlerProvider,
+        isX86RegistrationRuntimeProvider, isX86ContinuationRuntimeProvider,
+        isX86CxxExceptionProvider, isX86LegacyCRTProvider,
+        isX86MathCleanupProvider, isX64CRTStdioProvider,
+        isRaiseExceptionProvider}) {
+    EXPECT_FALSE(Query(""));
+    EXPECT_FALSE(Query("application.dll"));
+    EXPECT_FALSE(Query("msvcrt.dll.extra"));
+    EXPECT_FALSE(Query("C:\\Windows\\System32\\msvcrt.dll"));
+    EXPECT_FALSE(Query(llvm::StringRef("msvcrt.dll\0extra", 16)));
   }
 }
 
@@ -3267,8 +3446,8 @@ TEST(RegistrationCallABI, CxxPersonalityRejectsStorageAndRuntimeConflicts) {
           Image.Segments[0].Flags | SegmentFlags::Writable;
       break;
     case 7:
-      Image.Sections[0].Flags =
-          Image.Sections[0].Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Image.Sections[0],
+                            Image.Sections[0].Flags | SegmentFlags::Writable);
       break;
     case 8:
       Image.Segments.push_back(Image.Segments[0]);

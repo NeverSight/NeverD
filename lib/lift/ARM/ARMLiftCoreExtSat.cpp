@@ -1,4 +1,5 @@
-//===- ARMLiftCoreExtSat.cpp - ARM32 saturating and parallel arithmetic lifter ---===//
+//===- ARMLiftCoreExtSat.cpp - ARM32 saturating and parallel arithmetic lifter
+//---===//
 //
 // NeverD Decompiler
 //
@@ -13,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -164,8 +165,7 @@ bool liftCoreExtSat(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     // Compute one lane: extend, add/sub in 32 bits, then
     // halve/saturate/truncate. When GEBase >= 0 also set the lane's GE flag(s)
     // from the ARM ARM rule.
-    auto laneCompute = [&](NdVar LA, NdVar LB, bool Sub,
-                           int GEBase) -> NdVar {
+    auto laneCompute = [&](NdVar LA, NdVar LB, bool Sub, int GEBase) -> NdVar {
       NdVar EA = S.makeTemp(4);
       NdVar EB = S.makeTemp(4);
       NdOp Ext = IsUnsigned ? NdOp::INT_ZEXT : NdOp::INT_SEXT;

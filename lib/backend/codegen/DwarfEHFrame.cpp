@@ -6,6 +6,7 @@
 
 #include "neverd/backend/codegen/DwarfEHFrame.h"
 
+#include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 
@@ -152,6 +153,7 @@ bool readCIEEncoding(llvm::ArrayRef<uint8_t> Record, size_t Cursor,
       break;
     case 'S':
     case 'B':
+    case dwarf_eh::aarch64::kNonHintAugmentation:
     case 'G':
       break;
     default:

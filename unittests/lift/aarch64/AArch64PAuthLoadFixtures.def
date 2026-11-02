@@ -1,0 +1,81 @@
+//===- AArch64PAuthLoadFixtures.def - Combined load oracles -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independently assembled with LLVM 22.1.6 llvm-mc, arm64e +pauth. Scratch
+/// words independently name x17/x16; no production encoder supplies the oracle.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PAUTH_LOAD_CASE
+#define NEVERD_PAUTH_LOAD_CASE(Word, Id, Dst, Base, Offset, WB, Scratch,       \
+                               Compile)
+#endif
+#ifndef NEVERD_PAUTH_LOAD_VALUE
+#define NEVERD_PAUTH_LOAD_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_PAUTH_LOAD_TEXT
+#define NEVERD_PAUTH_LOAD_TEXT(Name, Text)
+#endif
+
+NEVERD_PAUTH_LOAD_CASE(0xf87fec20, A64_Ldraa, 0, 1, -16, true, 0xf87fee11, true)
+NEVERD_PAUTH_LOAD_CASE(0xf8a03c62, A64_Ldrab, 2, 3, 24, true, 0xf8a03e11, true)
+NEVERD_PAUTH_LOAD_CASE(0xf86004a4, A64_Ldraa, 4, 5, -4096, false, 0xf8600611,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf8bff4e6, A64_Ldrab, 6, 7, 4088, false, 0xf8bff611,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf8200508, A64_Ldraa, 8, 8, 0, false, 0xf8200611, false)
+NEVERD_PAUTH_LOAD_CASE(0xf8a0053f, A64_Ldrab, 31, 9, 0, false, 0xf8a00611,
+                       false)
+NEVERD_PAUTH_LOAD_CASE(0xf87ffd5f, A64_Ldraa, 31, 10, -8, true, 0xf87ffe11,
+                       false)
+NEVERD_PAUTH_LOAD_CASE(0xf82007eb, A64_Ldraa, 11, 31, 0, false, 0xf82007f1,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf8a02fec, A64_Ldrab, 12, 31, 16, true, 0xf8a02ff1,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf8201fff, A64_Ldraa, 31, 31, 8, true, 0xf8201ff1, true)
+NEVERD_PAUTH_LOAD_CASE(0xf86007ea, A64_Ldraa, 10, 31, -4096, false, 0xf86007f1,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf8bff7ea, A64_Ldrab, 10, 31, 4088, false, 0xf8bff7f1,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf87fefea, A64_Ldraa, 10, 31, -16, true, 0xf87feff1,
+                       true)
+NEVERD_PAUTH_LOAD_CASE(0xf8a007ea, A64_Ldrab, 10, 31, 0, false, 0xf8a007f1,
+                       true)
+NEVERD_PAUTH_LOAD_VALUE(unsigned, kZeroRegister, 31)
+NEVERD_PAUTH_LOAD_VALUE(unsigned, kScalarBytes, 8)
+NEVERD_PAUTH_LOAD_VALUE(unsigned, kPairBytes, 16)
+NEVERD_PAUTH_LOAD_VALUE(unsigned, kWordBytes, 4)
+NEVERD_PAUTH_LOAD_VALUE(unsigned, kIdentifierBytes, 2)
+NEVERD_PAUTH_LOAD_VALUE(va_t, kEntry, 0x1000)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kOverlap, 0xf8200c21)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kInvalidOpcode, 0xf8200020)
+NEVERD_PAUTH_LOAD_VALUE(uint64_t, kOversizedWord, 0x1f8200420ULL)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kDifferentKey, 0xf8a00420)
+NEVERD_PAUTH_LOAD_VALUE(uint64_t, kWrappedIdIncrement, 65536)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kFirst, 0xf87fec20)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kStackBase, 0xf82007eb)
+NEVERD_PAUTH_LOAD_VALUE(unsigned, kBooleanBytes, 1)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kDeadA, 0xf82005cd)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kDeadB, 0xf8a005cd)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kDeadScratchA, 0xf8200611)
+NEVERD_PAUTH_LOAD_VALUE(uint32_t, kDeadScratchB, 0xf8a00611)
+NEVERD_PAUTH_LOAD_TEXT(kName, "combined_load")
+NEVERD_PAUTH_LOAD_TEXT(kObject, "combined-load.o")
+NEVERD_PAUTH_LOAD_TEXT(kUnknown, "unknown_intrinsic")
+NEVERD_PAUTH_LOAD_TEXT(kAsmPrefix, ".inst")
+NEVERD_PAUTH_LOAD_TEXT(kMemoryClobber, "~{memory}")
+NEVERD_PAUTH_LOAD_TEXT(kSPScratchClobber, ",~{x14}")
+NEVERD_PAUTH_LOAD_TEXT(kSPCapture, "mov x16, sp")
+NEVERD_PAUTH_LOAD_TEXT(kSPRestore, "mov sp, x14")
+NEVERD_PAUTH_LOAD_TEXT(kBaseExpression, "__base + __loaded + __load_pair")
+NEVERD_PAUTH_LOAD_TEXT(kResultName, "result")
+NEVERD_PAUTH_LOAD_TEXT(kCapturedSource,
+                       "#include <stdint.h>\nunsigned __int128 capture("
+                       "uint64_t __base, uint64_t __loaded, "
+                       "uint64_t __load_pair) {{ return {0}; }\n")
+
+#undef NEVERD_PAUTH_LOAD_CASE
+#undef NEVERD_PAUTH_LOAD_VALUE
+#undef NEVERD_PAUTH_LOAD_TEXT

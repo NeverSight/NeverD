@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/sbf/analysis/SBFDataflow.h"
+#include "neverd/sbf/runtime/SBFVMConfig.h"
 
 #include <algorithm>
 #include <deque>
@@ -25,13 +26,21 @@ namespace neverd::sbf {
 // ScratchFlow
 //===----------------------------------------------------------------------===//
 ScratchFlow::ScratchFlow(const SBFProgram &Program,
-                         const MedInstructionIndex &Index) {
+                         const MedInstructionIndex &Index,
+                         ScratchLoadPolicy Loads) {
+  ScratchState Boundary;
+  Boundary.Values.setFrameTranslationLimit(
+      frameTranslationLimit(Program.Low.TheVersion, Program.Config));
+  Empty = std::make_shared<const ScratchState>(std::move(Boundary));
   const size_t Count =
       std::min(Program.Med.Blocks.size(), Program.Low.Blocks.size());
   Stats.IndexedBlockCount = Count;
   Entry.resize(Count);
   if (Count == 0)
     return;
+  if (Loads == ScratchLoadPolicy::ProvenValues)
+    RegisterEntries.resize(Count);
+  std::vector<RegisterState> RegisterExits(RegisterEntries.size());
 
   // A vector<SmallVector> pays an inline two-edge allocation at every block,
   // even though a deployable program may contain 1.31 million blocks. Build a
@@ -63,25 +72,25 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
 
   const auto Replay = [&](size_t ID, const ScratchState &In) {
     MachineState State;
-    State.Registers = Program.Med.Blocks[ID].Inputs;
+    State.Registers = RegisterEntries.empty() ? Program.Med.Blocks[ID].Inputs
+                                              : RegisterEntries[ID];
     State.Scratch = In;
     const MedBlock &Block = Program.Med.Blocks[ID];
     for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot)
       if (const MedInstruction *Instruction = Index.find(Slot))
-        applyTransfer(*Instruction, State, Program.ExecutableImage);
-    return std::move(State.Scratch);
+        applyTransfer(*Instruction, State, Program.ExecutableImage, Loads);
+    return State;
   };
 
   std::vector<std::shared_ptr<const ScratchState>> Exit(Count);
   const auto Charge = [](const std::shared_ptr<const ScratchState> &State) {
-    if (!State || State->Memory.empty())
+    if (!State || State->empty())
       return uint64_t{0};
     // Account for the shared object and its control block in addition to the
     // MemoryModel-owned buffers and tree nodes. Logical references are charged
     // independently even when their shared_ptr happens to alias.
     constexpr uint64_t SharedControlBlockWords = 2;
-    return State->Memory.retainedByteEstimate() +
-           (sizeof(ScratchState) - sizeof(MemoryModel)) +
+    return State->retainedByteEstimate() +
            SharedControlBlockWords * sizeof(void *);
   };
   const auto CanRetain = [&](const std::shared_ptr<const ScratchState> &Old,
@@ -108,6 +117,10 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
     std::fill(Entry.begin(), Entry.end(), Empty);
     Exit.clear();
     Exit.shrink_to_fit();
+    RegisterEntries.clear();
+    RegisterEntries.shrink_to_fit();
+    RegisterExits.clear();
+    RegisterExits.shrink_to_fit();
   };
   std::vector<char> Queued(Count, 0);
   for (size_t ID = 0; ID < Count; ++ID)
@@ -131,6 +144,8 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
   for (size_t ID = 0; ID < Count; ++ID)
     if (IsRoot[ID]) {
       Entry[ID] = Empty;
+      if (!RegisterEntries.empty())
+        RegisterEntries[ID] = Program.Med.Blocks[ID].Inputs;
       Worklist.push_back(ID);
       Queued[ID] = 1;
     }
@@ -147,8 +162,11 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
 
     if (!Entry[ID])
       continue;
-    ScratchState NewExit = Replay(ID, *Entry[ID]);
-    if (Exit[ID] && NewExit == *Exit[ID])
+    MachineState Result = Replay(ID, *Entry[ID]);
+    ScratchState &NewExit = Result.Scratch;
+    const bool RegistersChanged =
+        !RegisterExits.empty() && RegisterExits[ID] != Result.Registers;
+    if (Exit[ID] && NewExit == *Exit[ID] && !RegistersChanged)
       continue;
     std::shared_ptr<const ScratchState> NextExit;
     if (NewExit == *Entry[ID])
@@ -160,6 +178,8 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
       return;
     }
     Exit[ID] = std::move(NextExit);
+    if (!RegisterExits.empty())
+      RegisterExits[ID] = std::move(Result.Registers);
 
     for (size_t EdgeIndex = SuccessorOffsets[ID];
          EdgeIndex < SuccessorOffsets[ID + 1]; ++EdgeIndex) {
@@ -171,6 +191,8 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
           return;
         }
         Entry[Successor] = Exit[ID];
+        if (!RegisterEntries.empty())
+          RegisterEntries[Successor] = RegisterExits[ID];
         EntryChanged = true;
       } else if (Entry[Successor] != Exit[ID]) {
         ScratchState Merged = *Entry[Successor];
@@ -189,6 +211,14 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
           EntryChanged = true;
         }
       }
+      if (!RegisterEntries.empty())
+        for (size_t Register = 0; Register < kRegisterCount; ++Register)
+          if (RegisterEntries[Successor][Register] !=
+                  RegisterExits[ID][Register] &&
+              RegisterEntries[Successor][Register] != RegisterValue{}) {
+            RegisterEntries[Successor][Register] = {};
+            EntryChanged = true;
+          }
       if (!EntryChanged || Queued[Successor])
         continue;
       Worklist.push_back(Successor);
@@ -199,6 +229,12 @@ ScratchFlow::ScratchFlow(const SBFProgram &Program,
 
 const ScratchState &ScratchFlow::entryState(size_t BlockID) const {
   return BlockID < Entry.size() && Entry[BlockID] ? *Entry[BlockID] : Unreached;
+}
+
+const RegisterState *ScratchFlow::entryRegisters(size_t BlockID) const {
+  return BlockID < RegisterEntries.size() && Entry[BlockID]
+             ? &RegisterEntries[BlockID]
+             : nullptr;
 }
 
 void replayBlock(

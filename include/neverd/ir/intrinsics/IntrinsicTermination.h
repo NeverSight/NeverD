@@ -9,7 +9,7 @@
 #define NEVERD_IR_INTRINSICS_INTRINSICTERMINATION_H
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X86Interrupts.h"
+#include "neverd/ir/intrinsics/X86/X86Interrupts.h"
 
 #include <optional>
 
@@ -30,9 +30,22 @@ inline bool intrinsicNeverReturns(Intrinsic Id,
     return !isAArch64DebugBreakCode(Operand);
   case Intrinsic::Hlt_A64:
   case Intrinsic::Udf_A64:
+  case Intrinsic::X86Skinit:
+  case Intrinsic::X86Sysenter:
+  case Intrinsic::X86SmmReturnContext:
+  case Intrinsic::X86SgxTransferAtContext:
     return true;
   case Intrinsic::IntN:
     return Operand && isX86NoReturnInterrupt(*Operand);
+  // x86 architectural returns (far, interrupt and syscall returns) transfer
+  // control to a named frame or register and never resume in the lifted
+  // function.  This grants no source ABI or memory contract; it only records
+  // that control leaves here.
+  case Intrinsic::Retf:
+  case Intrinsic::Iret:
+  case Intrinsic::Sysretq:
+  case Intrinsic::Sysexitq:
+    return true;
   default:
     return false;
   }

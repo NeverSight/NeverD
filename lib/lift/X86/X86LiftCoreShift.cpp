@@ -16,7 +16,7 @@
 #include "X86ShiftUndefined.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 

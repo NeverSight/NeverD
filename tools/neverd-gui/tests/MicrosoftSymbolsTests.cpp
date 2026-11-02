@@ -11,6 +11,7 @@
 
 #include "MicrosoftSymbols.h"
 #include "PdbPromptDialog.h"
+#include "ProjectDatabase.h"
 #include "Session.h"
 #include "SymbolDownload.h"
 
@@ -283,20 +284,67 @@ private slots:
     QVERIFY(network.requests.isEmpty());
   }
 
+  void declineDoesNotContactServer_data() {
+    QTest::addColumn<QString>("answer");
+    QTest::newRow("no") << QStringLiteral("no");
+    QTest::newRow("escape") << QStringLiteral("escape");
+    QTest::newRow("close") << QStringLiteral("close");
+  }
+
   void declineDoesNotContactServer() {
+    QFETCH(QString, answer);
     QTemporaryDir directory;
-    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    const auto input = fixture(directory, "symbols-missing.bin");
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      QWidget window;
+      Network network;
+      MicrosoftSymbols symbols(session, &window, &network);
+      session.open(input);
+      QTRY_VERIFY(prompt(window));
+      QVERIFY(network.requests.isEmpty());
+      if (answer == QLatin1String("no"))
+        button(*prompt(window), "no")->click();
+      else if (answer == QLatin1String("escape"))
+        QTest::keyClick(prompt(window), Qt::Key_Escape);
+      else
+        prompt(window)->close();
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      QVERIFY(network.requests.isEmpty());
+      QVERIFY(session.loaded());
+      QCOMPARE(session.metadata().value("pdb").toObject(),
+               (QJsonObject{{"mode", "none"}}));
+      const auto saved = ProjectDatabase::readProjectFile(
+          input, ProjectDatabase::DebugFilesSuffix);
+      QVERIFY(saved);
+      QCOMPARE(saved->object().value("pdb").toObject(),
+               (QJsonObject{{"mode", "none"}}));
+      session.reload();
+      QTRY_VERIFY(session.loaded());
+      QTest::qWait(200);
+      QVERIFY(!prompt(window));
+      QCOMPARE(session.metadata().value("pdb").toObject(),
+               (QJsonObject{{"mode", "none"}}));
+      QVERIFY(network.requests.isEmpty());
+    }
+    // A new session/process restores the answer, while a manual load can
+    // still replace it with an explicitly selected PDB.
+    Session reopened(QString::fromLocal8Bit(TEST_WORKER));
     QWidget window;
     Network network;
-    MicrosoftSymbols symbols(session, &window, &network);
-    session.open(fixture(directory, "symbols-missing.bin"));
-    QTRY_VERIFY(prompt(window));
+    MicrosoftSymbols symbols(reopened, &window, &network);
+    reopened.open(input);
+    QTRY_VERIFY(reopened.loaded());
+    QTest::qWait(200);
+    QVERIFY(!prompt(window));
+    QCOMPARE(reopened.metadata().value("pdb").toObject(),
+             (QJsonObject{{"mode", "none"}}));
+    const auto pdb = fixture(directory, "manual.pdb", MatchingPdb);
+    reopened.loadPdb({{"path", pdb}, {"mode", "verified"}});
+    QTRY_COMPARE(
+        reopened.metadata().value("pdb").toObject().value("mode").toString(),
+        QStringLiteral("verified"));
     QVERIFY(network.requests.isEmpty());
-    button(*prompt(window), "no")->click();
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-    QVERIFY(network.requests.isEmpty());
-    QVERIFY(session.loaded());
-    QVERIFY(!session.metadata().value("pdb").isObject());
   }
 
   void consentDownloadsVerifiesAndStoresForTheNextLoad() {

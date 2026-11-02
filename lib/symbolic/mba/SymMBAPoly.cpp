@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -283,20 +284,29 @@ extractPolynomialCofactor(llvm::SmallVectorImpl<PolyTerm> &Terms,
   // capacity growth. Coefficients stay in place and need no wide-word copies.
   const size_t Edges = Degree * Terms.size();
   const size_t SortWork = Degree * (std::bit_width(Degree) + 1);
-  const size_t Work = Terms.size() * (2 * SortWork + 4 * Degree);
-  if (Edges > MaxBytes / (8 * sizeof(SymRef)) || !Budget.canConsume(Work) ||
+  if (Edges > MaxBytes / (8 * sizeof(SymRef)) ||
       llvm::any_of(Terms, [&](const PolyTerm &Term) {
         return Term.Factors.size() != Degree;
       }))
     return Common;
-  Budget.consume(SortWork);
+  if (!Budget.consume(Degree))
+    return Common;
   Common.assign(Terms.front().Factors.begin(), Terms.front().Factors.end());
-  llvm::sort(Common);
+  if (!llvm::is_sorted(Common)) {
+    if (!Budget.consume(SortWork))
+      return {};
+    llvm::sort(Common);
+  }
   llvm::SmallVector<SymRef, 8> Factors, Next;
   for (const PolyTerm &Term : llvm::drop_begin(Terms)) {
-    Budget.consume(SortWork + Common.size() + Term.Factors.size());
+    if (!Budget.consume(Degree + Common.size() + Term.Factors.size()))
+      return {};
     Factors.assign(Term.Factors.begin(), Term.Factors.end());
-    llvm::sort(Factors);
+    if (!llvm::is_sorted(Factors)) {
+      if (!Budget.consume(SortWork))
+        return {};
+      llvm::sort(Factors);
+    }
     Next.clear();
     std::set_intersection(Common.begin(), Common.end(), Factors.begin(),
                           Factors.end(), std::back_inserter(Next));
@@ -304,10 +314,16 @@ extractPolynomialCofactor(llvm::SmallVectorImpl<PolyTerm> &Terms,
     if (Common.empty())
       return Common;
   }
+  // Admission for the mutating phase is all-or-nothing. Canonical input
+  // products are already sorted; scan once instead of re-sorting every copy.
+  size_t MutationWork = 3 * Edges;
+  for (const auto &Term : Terms)
+    if (!llvm::is_sorted(Term.Factors))
+      MutationWork += SortWork;
+  if (!Budget.consume(MutationWork))
+    return {};
   for (PolyTerm &Term : Terms) {
-    Budget.consume(2 * Term.Factors.size());
     if (!llvm::is_sorted(Term.Factors)) {
-      Budget.consume(SortWork);
       llvm::sort(Term.Factors);
     }
     Next.clear();
@@ -339,8 +355,9 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
   const size_t Words = (size_t(Width) - 1) / 64 + 1;
   // Four coefficient rows, selected-index capacities, factor tables, and
   // container/APInt scratch. Reserve before constructing any wide table.
+  static_assert(2 * limits::kMaxQuadraticRowTerms <= 32);
   const size_t PerCorner =
-      4 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t)) +
+      80 + 4 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t)) +
       8 * Terms.size() * sizeof(MintermIndex);
   const size_t Overhead = 1024 + 512 * Terms.size();
   if (MaxBytes < Overhead || Corners > (MaxBytes - Overhead) / PerCorner)
@@ -348,6 +365,7 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
   struct Factor {
     TruthTable Table;
     llvm::SmallVector<MintermIndex, 8> Selected;
+    uint32_t Mask = 0;
   };
   llvm::DenseMap<uint32_t, Factor> Factors;
   const size_t Scratch = Overhead + Corners * PerCorner;
@@ -382,14 +400,43 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
                             {Factors.at(Term.Factors[0].index()).Table,
                              Factors.at(Term.Factors[1].index()).Table}};
   }
+  // Equal source-factor memberships give identical coefficient rows. Work
+  // over those classes rather than every Boolean minterm. A class represents
+  // the sum of its minterms; within-class off-diagonals are twice its diagonal,
+  // so checking one diagonal also checks every pair of distinct members.
+  if (!Budget.consume(Corners * (Factors.size() + 1)))
+    return std::nullopt;
+  std::map<uint32_t, unsigned> ClassIndex;
+  llvm::SmallVector<uint32_t, 16> Signatures;
+  std::vector<unsigned> ClassOf(Corners);
+  unsigned NextBit = 0;
+  for (auto &Entry : Factors) {
+    Entry.second.Mask = uint32_t(1) << NextBit++;
+    Entry.second.Selected.clear();
+  }
+  for (size_t M = 0; M != Corners; ++M) {
+    uint32_t Signature = 0;
+    for (const auto &Entry : Factors)
+      if (Entry.second.Table.at(M))
+        Signature |= Entry.second.Mask;
+    auto [It, New] = ClassIndex.try_emplace(Signature, Signatures.size());
+    ClassOf[M] = It->second;
+    if (New) {
+      Signatures.push_back(Signature);
+      for (auto &Entry : Factors)
+        if (Signature & Entry.second.Mask)
+          Entry.second.Selected.push_back(It->second);
+    }
+  }
+  const size_t Rows = Signatures.size();
   auto Zero = llvm::APInt(Width, 0);
-  std::vector<llvm::APInt> Diagonal(Corners, Zero), RowA(Corners, Zero),
-      RowB(Corners, Zero), Row(Corners, Zero);
+  std::vector<llvm::APInt> Diagonal(Rows, Zero), RowA(Rows, Zero),
+      RowB(Rows, Zero), Row(Rows, Zero);
   auto ReadRow = [&](size_t A, std::vector<llvm::APInt> &Out,
                      size_t Lower = 0) {
-    if (!Budget.consume((Corners - Lower) * Words + 2 * Terms.size()))
+    if (!Budget.consume((Rows - Lower) * Words + 2 * Terms.size()))
       return false;
-    for (size_t B = Lower; B != Corners; ++B)
+    for (size_t B = Lower; B != Rows; ++B)
       Out[B].clearAllBits();
     for (const auto &Term : Terms) {
       const auto &Left = Factors.at(Term.Factors[0].index());
@@ -404,8 +451,8 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
         }
         return true;
       };
-      if ((Left.Table.at(A) && !Accumulate(Right, false)) ||
-          (Right.Table.at(A) && !Accumulate(Left, true)))
+      if (((Signatures[A] & Left.Mask) && !Accumulate(Right, false)) ||
+          ((Signatures[A] & Right.Mask) && !Accumulate(Left, true)))
         return false;
     }
     return true;
@@ -416,7 +463,7 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
     if (!Budget.consume(Left.Selected.size() * (1 + Words)))
       return std::nullopt;
     for (auto M : Left.Selected)
-      if (Right.Table.at(M))
+      if ((Signatures[M] & Right.Mask))
         Diagonal[M] += Term.Coeff;
   }
   QuadraticProduct Result{
@@ -429,9 +476,9 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
     Determined = true;
     return std::nullopt;
   };
-  if (!Budget.consume(Corners * Words))
+  if (!Budget.consume(Rows * Words))
     return std::nullopt;
-  for (size_t M = 0; M != Corners; ++M) {
+  for (size_t M = 0; M != Rows; ++M) {
     if (Diagonal[M].isZero())
       continue;
     if (!Shared) {
@@ -443,9 +490,9 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
     Right.set(M);
   }
   if (Shared) {
-    if (!ReadRow(*Shared, RowA) || !Budget.consume(Corners * Words))
+    if (!ReadRow(*Shared, RowA) || !Budget.consume(Rows * Words))
       return std::nullopt;
-    for (size_t M = 0; M != Corners; ++M) {
+    for (size_t M = 0; M != Rows; ++M) {
       if (!Diagonal[M].isZero())
         continue;
       if (RowA[M].isZero())
@@ -461,11 +508,10 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
     // A nonzero off-diagonal with zero diagonals fixes two disjoint factors.
     // Canceled minterms need not belong to either factor: classify from both
     // anchor rows instead of using the union of the source factor supports.
-    for (size_t A = 0; A != Corners && !Anchor; ++A) {
-      if (!ReadRow(A, RowA, A + 1) ||
-          !Budget.consume((Corners - A - 1) * Words))
+    for (size_t A = 0; A != Rows && !Anchor; ++A) {
+      if (!ReadRow(A, RowA, A + 1) || !Budget.consume((Rows - A - 1) * Words))
         return std::nullopt;
-      for (size_t B = A + 1; B != Corners; ++B)
+      for (size_t B = A + 1; B != Rows; ++B)
         if (!RowA[B].isZero()) {
           Anchor = A;
           Opposite = B;
@@ -481,9 +527,9 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
       return std::nullopt;
   }
   if (Anchor) {
-    if (!Budget.consume(2 * Corners * Words))
+    if (!Budget.consume(2 * Rows * Words))
       return std::nullopt;
-    for (size_t M = 0; M != Corners; ++M) {
+    for (size_t M = 0; M != Rows; ++M) {
       if (Shared && !Diagonal[M].isZero())
         continue;
       if ((!RowA[M].isZero() && RowA[M] != Result.Coefficient) ||
@@ -505,10 +551,10 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
   // The slices propose only a candidate. Check the full coefficient matrix,
   // including missing edges, disappearing minterms, and modular zeros. Read
   // rows lazily so a counterexample avoids expanding every remaining term.
-  for (size_t A = 0; A != Corners; ++A) {
-    if (!ReadRow(A, Row, A) || !Budget.consume((Corners - A) * Words))
+  for (size_t A = 0; A != Rows; ++A) {
+    if (!ReadRow(A, Row, A) || !Budget.consume((Rows - A) * Words))
       return std::nullopt;
-    for (size_t B = A; B != Corners; ++B) {
+    for (size_t B = A; B != Rows; ++B) {
       unsigned Count = unsigned(Left.at(A) && Right.at(B));
       if (A != B)
         Count += unsigned(Left.at(B) && Right.at(A));
@@ -518,6 +564,13 @@ recoverQuadraticTerms(const SymContext &Ctx, llvm::ArrayRef<PolyTerm> Terms,
       if (Row[B] != Expected)
         return Impossible();
     }
+  }
+  if (!Budget.consume(2 * Corners))
+    return std::nullopt;
+  auto ClassLeft = Left, ClassRight = Right;
+  for (size_t M = 0; M != Corners; ++M) {
+    Left.setValue(M, ClassLeft.at(ClassOf[M]));
+    Right.setValue(M, ClassRight.at(ClassOf[M]));
   }
   Determined = true;
   return Result;
@@ -548,7 +601,6 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
     return std::nullopt;
   const size_t Corners = *CornerCount;
   PolyForm Form;
-  Form.Linear.assign(Corners, llvm::APInt(Width, 0));
   // Products often revisit the same sorted monomial through different factor
   // choices. Keep the coefficients in a hash table through the search, since
   // neither accumulation nor product matching depends on iteration order.
@@ -583,6 +635,13 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       });
   llvm::SmallVector<MintermIndex, 8> First, Last;
   llvm::APInt FirstScale(Width, 0), LastScale(Width, 0);
+  std::vector<llvm::APInt> Diagonal;
+  const size_t Words = (size_t(Width) - 1) / 64 + 1;
+  if (CheckExtremes) {
+    if (!Budget.consume(Corners * Words))
+      return std::nullopt;
+    Diagonal.assign(Corners, llvm::APInt(Width, 0));
+  }
   if (!Budget.unlimited() || CheckExtremes) {
     size_t Pending = 0;
     for (const PolyTerm &Term : Terms) {
@@ -591,6 +650,7 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       size_t ProductSize = 1;
       bool ZeroProduct = false;
       llvm::SmallVector<MintermIndex, 8> Low, High;
+      uint64_t DiagonalBits = ~uint64_t(0);
       for (SymRef Factor : Term.Factors) {
         std::optional<TruthTable> Table = tableOf(Factor);
         if (!Table) {
@@ -608,6 +668,9 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
           if (!Budget.consume(2))
             return std::nullopt;
           const uint64_t Bits = Table->packed();
+          if (!Budget.consume())
+            return std::nullopt;
+          DiagonalBits &= Bits;
           Low.push_back(std::countr_zero(Bits));
           High.push_back(63u - std::countl_zero(Bits));
         }
@@ -619,6 +682,13 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       if (Term.Factors.size() < 2 || ZeroProduct)
         continue;
       if (CheckExtremes) {
+        while (DiagonalBits) {
+          const unsigned M = std::countr_zero(DiagonalBits);
+          DiagonalBits &= DiagonalBits - 1;
+          if (!Budget.consume(Words))
+            return std::nullopt;
+          Diagonal[M] += Term.Coeff;
+        }
         if (!Budget.consume(2 * Low.size() * (std::bit_width(Low.size()) + 2) +
                             2 * ((size_t(Width) + 63) / 64)))
           return std::nullopt;
@@ -646,6 +716,23 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       Pending += ProductSize;
     }
   }
+  // Every diagonal minterm power in a single product occurs once, so all
+  // nonzero diagonal coefficients must equal its scale. Read just those
+  // coefficients before paying for the full Cartesian expansion. This is an
+  // exact rejection, including even modular coefficients; it proves no rewrite.
+  if (CheckExtremes) {
+    const llvm::APInt *Scale = nullptr;
+    for (const auto &Value : Diagonal) {
+      if (!Budget.consume(Words))
+        return std::nullopt;
+      if (Value.isZero())
+        continue;
+      if (!Scale)
+        Scale = &Value;
+      else if (Value != *Scale)
+        return std::nullopt;
+    }
+  }
   // In a single product, the lexicographically first and last monomials each
   // occur exactly once, so both coefficients are its scale. Sum equal extrema
   // across terms; cancellation makes this check inconclusive. This optional
@@ -654,15 +741,18 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       FirstScale != LastScale)
     return std::nullopt;
 
+  // Allocate only after admission. The minterms sum to the all-ones word,
+  // so fold all constant terms into the initial negative coefficient once.
+  llvm::APInt Constant(Width, 0);
+  for (const auto &Term : Terms)
+    if (Term.Factors.empty())
+      Constant -= Term.Coeff;
+  Form.Linear.assign(Corners, Constant);
+
   llvm::SmallVector<llvm::SmallVector<MintermIndex, 8>, 4> Selected;
   for (const PolyTerm &Term : Terms) {
-    if (Term.Factors.empty()) {
-      // The minterms sum to the all-ones word, so the constant c is the linear
-      // form with every weight at -c.
-      for (llvm::APInt &Weight : Form.Linear)
-        Weight -= Term.Coeff;
+    if (Term.Factors.empty())
       continue;
-    }
 
     Selected.clear();
     for (SymRef Factor : Term.Factors) {
@@ -673,8 +763,18 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
     }
 
     if (Term.Factors.size() == 1) {
-      for (MintermIndex M : Selected[0])
-        Form.Linear[M] += Term.Coeff;
+      if (Width <= std::numeric_limits<uint64_t>::digits) {
+        // Unsigned addition wraps at 64 bits; construction projects the sum
+        // to the requested width, exactly matching modular APInt addition.
+        const auto Coefficient = Term.Coeff.getZExtValue();
+        for (MintermIndex M : Selected[0])
+          Form.Linear[M] =
+              llvm::APInt(Width, Form.Linear[M].getZExtValue() + Coefficient,
+                          /*isSigned=*/false, /*implicitTrunc=*/true);
+      } else {
+        for (MintermIndex M : Selected[0])
+          Form.Linear[M] += Term.Coeff;
+      }
       continue;
     }
 
@@ -776,7 +876,8 @@ bool provePolynomialIdentity(SymContext &Ctx, SymRef Before, SymRef After,
   // expanded over minterms. Unchanged higher-degree residuals therefore do
   // not make an otherwise small difference proof exponential.
   bool HasHigher = llvm::any_of(
-      *Terms, [](const PolyTerm &Term) { return Term.Factors.size() > 3; });
+      *Terms, [](const PolyTerm &Term) { return Term.Factors.size() >= 3; });
+  bool Cancelled = false;
   if (HasHigher) {
     const size_t Words = (size_t(Ctx.width(Abstract->Body)) - 1) / 64 + 1;
     size_t Storage = MaxBytes;
@@ -796,6 +897,7 @@ bool provePolynomialIdentity(SymContext &Ctx, SymRef Before, SymRef After,
       if (!New)
         It->second += Term.Coeff;
     }
+    const auto OriginalCount = Terms->size();
     Terms->clear();
     for (const auto &[Key, Coeff] : Coefficients) {
       if (Coeff.isZero())
@@ -805,6 +907,7 @@ bool provePolynomialIdentity(SymContext &Ctx, SymRef Before, SymRef After,
         Term.Factors.push_back(SymRef(Id));
       Terms->push_back(std::move(Term));
     }
+    Cancelled = Terms->size() < OriginalCount;
   }
   if (!Budget.consume(Terms->size()))
     return false;
@@ -815,7 +918,7 @@ bool provePolynomialIdentity(SymContext &Ctx, SymRef Before, SymRef After,
     // is used to accept equality.
     auto Common = extractPolynomialCofactor(DegreeTerms, Budget, MaxBytes);
     llvm::SmallVector<uint32_t, 16> Inputs;
-    if (Common.empty())
+    if (Common.empty() && !Cancelled)
       Inputs.append(AtomIds);
     else
       for (const auto &Term : DegreeTerms)

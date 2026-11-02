@@ -8,7 +8,7 @@
 
 #include "neverd/analysis/BinaryInterpreterSpecialization.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/symbolic/SymExec.h"
 
 using namespace neverd;

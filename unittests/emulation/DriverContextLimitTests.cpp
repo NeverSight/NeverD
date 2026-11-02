@@ -14,6 +14,7 @@
 #include "neverd/emulation/DriverSession.h"
 
 #include <algorithm>
+#include <ostream>
 
 namespace neverd::emulation {
 namespace {
@@ -66,6 +67,8 @@ struct FailureCase {
   const char *Diagnostic;
   const char *API;
 };
+
+void PrintTo(const FailureCase &Case, std::ostream *OS) { *OS << Case.Code; }
 
 constexpr FailureCase FailureCases[] = {
 #define NEVERD_CONTEXT_LIMIT_FAILURE(Name, Code, Diagnostic, API)              \

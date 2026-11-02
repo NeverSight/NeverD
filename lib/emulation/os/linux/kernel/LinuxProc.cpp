@@ -125,8 +125,7 @@ LinuxFiles::procEntries(const std::string &Path) const {
       if (Path.consume_front("/proc/"))
         Others.insert(Path.split('/').first.str());
     };
-    for (const auto &[Path, Bytes] : Options->Files)
-      Child(Path);
+    forEachFilePath([&](const std::string &Path) { Child(Path); });
     for (const auto &[Path, Bytes] : Options->SymbolicLinks)
       Child(Path);
     for (const auto &[Path, Device] : Options->Devices)

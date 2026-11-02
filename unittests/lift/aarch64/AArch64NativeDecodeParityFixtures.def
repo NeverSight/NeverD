@@ -1,0 +1,29 @@
+//===- AArch64NativeDecodeParityFixtures.def - Lift outcome checks -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Fixed words, addresses and diagnostics for decode/lift refusal parity.
+//===----------------------------------------------------------------------===//
+
+#ifndef PARITY_VALUE
+#define PARITY_VALUE(Type, Name, Value)
+#endif
+#ifndef PARITY_TEXT
+#define PARITY_TEXT(Name, Text)
+#endif
+
+// strh w13, [x13, #45]! has constrained-unpredictable writeback overlap.
+PARITY_VALUE(uint32_t, kParityRefusedWriteback, 0x7802ddadU)
+// add x0, x1, x2.
+PARITY_VALUE(uint32_t, kParityAcceptedAdd, 0x8b020020U)
+PARITY_VALUE(va_t, kParityOutcomeAddress, 0x4002dfb0ULL)
+PARITY_VALUE(unsigned, kParityOutcomeDiagnosticBytes, 128)
+PARITY_TEXT(kParityOutcomeMismatch,
+            "LIFT REFUSAL MISMATCH w=0x%08X va=0x%llx capstone=%u native=%u")
+PARITY_TEXT(kParityUnexpectedError, "unexpected lift failure")
+
+#undef PARITY_VALUE
+#undef PARITY_TEXT

@@ -3,6 +3,70 @@
 The [cross-container corpus](cross/README.md) extends this Linux x64 baseline
 with complete Linux ARM64, macOS x64/ARM64 and Windows x64/ARM64 inputs.
 
+## Local source recovery driver
+
+The optional development target `neverd-web-source-recovery` exposes the
+existing embedded recovery parser and readable-source owner for a single
+local JavaScript file. Build it explicitly in a JavaScript-enabled test tree:
+
+```console
+cmake --build build-web-dev --target neverd-web-source-recovery
+build-web-dev/bin/neverd-web-source-recovery readable module /absolute/input.js /absolute/new-output
+build-web-dev/bin/neverd-web-source-recovery check module /absolute/edited.js /absolute/new-check
+```
+
+`script` and `commonjs` are also explicit source-type choices. Each operation
+captures a bounded immutable input, preserves its bytes, and writes a receipt
+in a fresh directory. The readable operation inserts whitespace and compares
+the full parser tree; check only establishes syntax admission. Neither compiles
+nor runs input, restores erased names or types, or proves behavioral
+equivalence. Errors and failed source checks return a nonzero status. This
+manual tool has no production dependency and uses no external parser.
+
+`neverd-web-source-model` is a separate explicit local disclosure tool for
+development comparisons. It uses the shared Large parser and lexical binding
+owner, never a recovery tree, and records complete syntax/attribute/child
+arrays plus scopes, declarations and reference-resolution states. UTF-16
+values remain code-unit arrays and numeric attributes retain binary64 bits.
+Output has a separate 256 MiB reservation ceiling and a fresh destination.
+
+```console
+cmake --build build-web-dev --target neverd-web-source-model
+build-web-dev/bin/neverd-web-source-model module /absolute/input.js /absolute/new-model
+```
+
+The model includes private original names and values. A partial lexical result
+remains partial; this tool neither renames bindings nor claims dependency,
+runtime-call, type or behavior equivalence. It is not exposed through the
+ordinary session metadata or worker/MCP APIs.
+
+`neverd-web-source-map-model` similarly exports basic or embedded-section
+source maps through the shared offline decoder. Its fresh output contains the
+original map, complete decoded anchors and private names/contents, and hashes.
+It shares the decoder's input/segment limits and has a separate 256 MiB output
+reservation ceiling. Names and roots are untrusted metadata; this tool never
+opens source paths, fetches URLs or asserts original-source provenance.
+
+```console
+cmake --build build-web-dev --target neverd-web-source-map-model
+build-web-dev/bin/neverd-web-source-map-model /absolute/input.js.map /absolute/new-map-model
+```
+
+For independent graph readback without source rewriting, explicitly build
+`neverd-web-bun-inventory`, then run:
+
+```console
+build-web-dev/bin/neverd-web-bun-inventory /absolute/rebuilt-client /absolute/new-inventory
+```
+
+This captures the file and uses the shared Bun extractor and text decoder to
+record module identities, storage and decoded-source hashes, loader metadata,
+cache ranges and startup metadata. It does not compile or execute the input,
+or claim producer identity or behavioral equivalence. Names have a cumulative
+16 MiB export budget, and the destination must be fresh.
+
+## Captured corpus
+
 These inert inputs were authored for NeverD. The `*.graph.bin` files are exact
 graph ranges from real compiler outputs, captured on 2026-10-10. They contain
 source/asset/map/cache data and possible Bun-generated JavaScript scaffolding,

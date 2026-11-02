@@ -1,7 +1,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Swift/SwiftABI.h"
 #include "neverd/loader/Swift/SwiftMetadata.h"
@@ -595,7 +595,8 @@ TEST(SwiftMetadata, EmptyStructRequiresAnAvailableExactValueWitnessPointer) {
     Types = recoverSwiftTypes(Chained.Image);
     ASSERT_EQ(Types.size(), 1u);
     EXPECT_EQ(Types[0].Status, "unrecovered");
-    EXPECT_NE(Types[0].Reason.find("ambiguous fixups"), std::string::npos);
+    EXPECT_NE(Types[0].Reason.find("ambiguous fixups"), std::string::npos)
+        << Types[0].Reason;
     Chained.Image.MachOChainedFixupsAmbiguous = false;
     EXPECT_EQ(recoverSwiftTypes(Chained.Image)[0].Status, "recovered");
   }
@@ -730,8 +731,8 @@ TEST(SwiftMetadata, EmptyStructUsesAnExactStrongStandardRuntimeBinding) {
       const auto Ambiguous = recoverSwiftTypes(F.Image);
       ASSERT_EQ(Ambiguous.size(), 1u);
       EXPECT_EQ(Ambiguous[0].Status, "unrecovered");
-      EXPECT_NE(Ambiguous[0].Reason.find("ambiguous fixups"),
-                std::string::npos);
+      EXPECT_NE(Ambiguous[0].Reason.find("ambiguous fixups"), std::string::npos)
+          << Ambiguous[0].Reason;
     }
   }
 }

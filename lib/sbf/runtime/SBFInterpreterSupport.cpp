@@ -65,27 +65,6 @@ namespace interpreter_detail {
 int64_t signed64(uint64_t Value) { return std::bit_cast<int64_t>(Value); }
 int32_t signed32(uint32_t Value) { return std::bit_cast<int32_t>(Value); }
 
-uint32_t arithmeticShiftRight32(uint32_t Value, uint32_t Shift) {
-  Shift &= kWordBitWidth - 1;
-  if (Shift == 0)
-    return Value;
-  uint32_t Result = Value >> Shift;
-  if ((Value & (uint32_t{1} << (kWordBitWidth - 1))) != 0)
-    Result |= std::numeric_limits<uint32_t>::max() << (kWordBitWidth - Shift);
-  return Result;
-}
-
-uint64_t arithmeticShiftRight64(uint64_t Value, uint64_t Shift) {
-  Shift &= kDoubleWordBitWidth - 1;
-  if (Shift == 0)
-    return Value;
-  uint64_t Result = Value >> Shift;
-  if ((Value & (uint64_t{1} << (kDoubleWordBitWidth - 1))) != 0)
-    Result |= std::numeric_limits<uint64_t>::max()
-              << (kDoubleWordBitWidth - Shift);
-  return Result;
-}
-
 uint64_t unsignedHighMultiply64(uint64_t Left, uint64_t Right) {
   const uint64_t LeftLow = static_cast<uint32_t>(Left);
   const uint64_t LeftHigh = Left >> kWordBitWidth;

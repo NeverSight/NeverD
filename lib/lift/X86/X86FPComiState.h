@@ -8,11 +8,11 @@
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_LIB_LIFT_X86_X86FPCOMISTATE_H
 #define NEVERD_LIB_LIFT_X86_X86FPCOMISTATE_H
-#include "X86LiftDetail.h"
+#include "X86FPEncoding.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/lift/X86/X86Lifter.h"
 namespace neverd {
 inline bool liftFPComiState(X86Lifter &L, X86Lifter::LiftState &S,
                             const cs_insn *Insn, const cs_x86 &X86, bool Double,
@@ -28,78 +28,19 @@ inline bool liftFPComiState(X86Lifter &L, X86Lifter::LiftState &S,
       X86.encoding.imm_offset || X86.encoding.imm_size || X86.avx_sae ||
       X86.avx_rm != X86_AVX_RM_INVALID)
     return Refuse();
-  const bool Mode64 = L.targetArch() == Arch::X64;
-  unsigned Offset = 0;
-  uint8_t Rex = 0, Segment = 0;
-  bool Address = false, Operand = false;
-  while (Offset < Insn->size) {
-    const auto Byte = Insn->bytes[Offset];
-    if (Byte == 0x26 || Byte == 0x2e || Byte == 0x36 || Byte == 0x3e ||
-        Byte == 0x64 || Byte == 0x65) {
-      if (Segment || Rex)
-        return Refuse();
-      Segment = Byte;
-    } else if (Byte == 0x67) {
-      if (Address || Rex)
-        return Refuse();
-      Address = true;
-    } else if (!Vex && Byte == 0x66) {
-      if (Operand || Rex)
-        return Refuse();
-      Operand = true;
-    } else if (!Vex && Mode64 && (Byte & 0xf0) == 0x40) {
-      if (Rex)
-        return Refuse();
-      Rex = Byte;
-    } else
-      break;
-    ++Offset;
-  }
-  bool R = Rex & 4, B = Rex & 1, X = Rex & 2;
-  if (Vex) {
-    if (Offset + 3 >= Insn->size)
-      return Refuse();
-    uint8_t P1;
-    if (Insn->bytes[Offset] == 0xc5) {
-      P1 = Insn->bytes[Offset + 1];
-      R = !(P1 & 0x80);
-      Offset += 2;
-    } else if (Insn->bytes[Offset] == 0xc4) {
-      if (Offset + 4 >= Insn->size || (Insn->bytes[Offset + 1] & 31) != 1)
-        return Refuse();
-      const auto P0 = Insn->bytes[Offset + 1];
-      P1 = Insn->bytes[Offset + 2];
-      R = !(P0 & 0x80);
-      B = !(P0 & 0x20);
-      X = !(P0 & 0x40);
-      Offset += 3;
-    } else
-      return Refuse();
-    if ((P1 & 0x7f) != (Double ? 0x79 : 0x78) || (!Mode64 && (R || B || X)))
-      return Refuse();
-  } else if (Operand != Double || Offset + 2 >= Insn->size ||
-             Insn->bytes[Offset++] != 0x0f)
-    return Refuse();
-  if (Offset + 1 >= Insn->size ||
-      Insn->bytes[Offset] != (Quiet ? 0x2e : 0x2f) ||
-      X86.encoding.modrm_offset != Offset + 1 ||
-      X86.modrm != Insn->bytes[Offset + 1])
-    return Refuse();
-  const unsigned LeftReg = ((X86.modrm >> 3) & 7) | (R ? 8 : 0);
-  if (X86.operands[0].reg != X86_REG_XMM0 + LeftReg)
+  FPEncodingInfo E;
+  if (!parseFPEncoding(Insn, X86, L.targetArch(), Vex, 1, Double ? 1 : 0, E) ||
+      E.Opcode != (Quiet ? 0x2e : 0x2f) || E.L || !E.unusedVvvv() ||
+      X86.operands[0].reg != X86_REG_XMM0 + E.vectorRegIndex())
     return Refuse();
   const unsigned Bytes = Double ? 8 : 4;
   const auto &RightOp = X86.operands[1];
-  const bool Memory = (X86.modrm >> 6) != 3;
-  if (Memory
-          ? RightOp.type != X86_OP_MEM || RightOp.size != Bytes
-          : RightOp.type != X86_OP_REG || RightOp.size != 16 ||
-                RightOp.reg != X86_REG_XMM0 + ((X86.modrm & 7) | (B ? 8 : 0)))
+  const bool Memory = (E.ModRM >> 6) != 3;
+  if (Memory ? RightOp.type != X86_OP_MEM || RightOp.size != Bytes
+             : RightOp.type != X86_OP_REG || RightOp.size != 16 ||
+                   RightOp.reg != X86_REG_XMM0 + E.vectorRMIndex())
     return Refuse();
-  if (!validateCanonicalScalarConversionTail(
-          Insn, X86, Offset + 2, Segment, Mode64,
-          Mode64 ? (Address ? 4 : 8) : (Address ? 2 : 4), B ? 8 : 0, X ? 8 : 0,
-          RightOp))
+  if (!validateFPEncodingTail(Insn, X86, E, RightOp))
     return Refuse();
   const auto Scalar = [&](const cs_x86_op &Op) {
     const auto Value = L.operandRead(S, Op), Narrow = S.makeTemp(Bytes);

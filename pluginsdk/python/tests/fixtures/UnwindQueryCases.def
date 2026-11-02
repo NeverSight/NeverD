@@ -1,0 +1,57 @@
+//===- UnwindQueryCases.def - Python query transport oracles ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent JSON responses for the Python adapter. These are transport
+/// witnesses; the loader and public C API tests own signing semantics.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PY_UNWIND_TEXT
+#define NEVERD_PY_UNWIND_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_PY_UNWIND_CASE
+#define NEVERD_PY_UNWIND_CASE(Address, JSON)
+#endif
+#ifndef NEVERD_PY_UNWIND_INVALID
+#define NEVERD_PY_UNWIND_INVALID(JSON)
+#endif
+
+NEVERD_PY_UNWIND_TEXT(MALFORMED_JSON, "{")
+NEVERD_PY_UNWIND_TEXT(JSON_NULL, "null")
+
+NEVERD_PY_UNWIND_CASE(0, R"json(null)json")
+NEVERD_PY_UNWIND_CASE(
+    18446744073709551615,
+    R"json({"begin":"0xfffffffffffffff0","end":"0xffffffffffffffff","encoding":"dwarf","language_data":false})json")
+NEVERD_PY_UNWIND_CASE(
+    18446603336526594052,
+    R"json({"return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0xffff800012340008"}}})json")
+NEVERD_PY_UNWIND_CASE(
+    4,
+    R"json({"return_address":{"query_pc":"0x4","dwarf_state_at_pc":{"status":"unknown","diagnostic":"register 34"},"compact_recipe":null}})json")
+NEVERD_PY_UNWIND_CASE(
+    8,
+    R"json({"return_address":{"query_pc":"0x8","dwarf_state_at_pc":{"status":"unsupported","diagnostic":"reserved state"},"compact_recipe":null}})json")
+NEVERD_PY_UNWIND_CASE(
+    12,
+    R"json({"return_address":{"query_pc":"0xc","dwarf_state_at_pc":{"status":"malformed","diagnostic":"restore underflow"},"compact_recipe":null}})json")
+NEVERD_PY_UNWIND_CASE(
+    16,
+    R"json({"return_address":{"query_pc":"0x10","dwarf_state_at_pc":{"status":"out_of_range"},"compact_recipe":null}})json")
+NEVERD_PY_UNWIND_CASE(
+    20,
+    R"json({"return_address":{"query_pc":"0x14","dwarf_state_at_pc":{"status":"resource_limit","diagnostic":"bounded stack"},"compact_recipe":null}})json")
+NEVERD_PY_UNWIND_INVALID(-1)
+NEVERD_PY_UNWIND_INVALID(18446744073709551616)
+NEVERD_PY_UNWIND_INVALID(true)
+NEVERD_PY_UNWIND_INVALID(false)
+NEVERD_PY_UNWIND_INVALID(null)
+NEVERD_PY_UNWIND_INVALID(1.5)
+NEVERD_PY_UNWIND_INVALID("0x4")
+
+#undef NEVERD_PY_UNWIND_CASE
+#undef NEVERD_PY_UNWIND_INVALID
+
+#undef NEVERD_PY_UNWIND_TEXT

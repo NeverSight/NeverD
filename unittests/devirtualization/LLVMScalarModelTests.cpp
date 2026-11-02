@@ -9,6 +9,79 @@
 #include "llvm/IR/Instructions.h"
 
 namespace neverd::analysis::scalar_test {
+TEST(LLVMScalarModel, DefinedInputDomainIsExplicitAndLeavesIRUnchanged) {
+  Source A("define i32 @f(i32 %x) { %r = add i32 %x, 3\nret i32 %r }");
+  Source B("define i32 @f(i32 %x) { %a = add i32 %x, 1\n"
+           "%r = add i32 %a, 2\nret i32 %r }");
+  const auto BeforeA = A.text(), BeforeB = B.text();
+  EXPECT_EQ(checkLLVMScalarEquivalence(A.function(), B.function()).Status,
+            Status::Unsupported);
+  LLVMScalarModelOptions Options;
+  Options.InputDomain = LLVMScalarInputDomain::DefinedBitvectors;
+  const auto Proof =
+      checkLLVMScalarEquivalence(A.function(), B.function(), {}, Options);
+  EXPECT_EQ(Proof.Status, Status::Proved) << Proof.Diagnostic;
+  EXPECT_EQ(Proof.InputDomain, LLVMScalarInputDomain::DefinedBitvectors);
+  for (const char *IR :
+       {"define i32 @f(i32 %x) { %r = add nsw i32 %x, 3\nret i32 %r }",
+        "define i32 @f(i32 %x) { ret i32 poison }",
+        "declare void @llvm.assume(i1)\n"
+        "define i32 @f(i32 %x) { %c = icmp eq i32 %x, 0\n"
+        "call void @llvm.assume(i1 %c)\nret i32 %x }",
+        "define i32 @f(i32 range(i32 0, 10) %x) { ret i32 %x }"}) {
+    Source Bad(IR);
+    EXPECT_NE(
+        checkLLVMScalarEquivalence(Bad.function(), Bad.function(), {}, Options)
+            .Status,
+        Status::Proved);
+  }
+  EXPECT_EQ(A.text(), BeforeA);
+  EXPECT_EQ(B.text(), BeforeB);
+  EXPECT_EQ(checkLLVMScalarEquivalence(A.function(), B.function()).Status,
+            Status::Unsupported);
+}
+
+TEST(LLVMScalarModel, CooperativeStopsDuringConstructionAndProof) {
+  Source A("define i32 @f(i32 noundef %x) { ret i32 %x }");
+  LLVMScalarModelOptions Options;
+  Options.StopRequested = [] { return true; };
+  auto Stopped =
+      checkLLVMScalarEquivalence(A.function(), A.function(), {}, Options);
+  EXPECT_EQ(Stopped.Status, Status::Cancelled);
+  EXPECT_EQ(Stopped.Work, 0U);
+
+  std::string LargeIR = "define i32 @f(i32 noundef %x) {\n";
+  for (unsigned I = 0; I < 3000; ++I)
+    LargeIR += "%v" + std::to_string(I) + " = add i32 " +
+               (I ? "%v" + std::to_string(I - 1) : "%x") + ", 1\n";
+  LargeIR += "ret i32 %v2999 }";
+  Source Large(LargeIR);
+  unsigned ConstructionPolls = 0;
+  Options.StopRequested = [&] { return ++ConstructionPolls == 5; };
+  auto Model = modelLLVMScalarFunction(Large.function(), {}, Options);
+  ASSERT_FALSE(static_cast<bool>(Model));
+  EXPECT_NE(llvm::toString(Model.takeError()).find("cancelled"),
+            std::string::npos);
+  EXPECT_EQ(ConstructionPolls, 5U);
+
+  Source Loop("define i32 @f(i32 noundef %x) { entry: br label %loop\n"
+              "loop: %i = phi i32 [0, %entry], [%next, %loop]\n"
+              "%next = add i32 %i, 1\n"
+              "%more = icmp ult i32 %next, 2000\n"
+              "br i1 %more, label %loop, label %exit\n"
+              "exit: ret i32 %x }");
+  unsigned Polls = 0;
+  Options.StopRequested = [&] { return ++Polls == 10; };
+  Stopped =
+      checkLLVMScalarEquivalence(Loop.function(), Loop.function(), {}, Options);
+  EXPECT_EQ(Stopped.Status, Status::Cancelled) << Stopped.Diagnostic;
+  EXPECT_GT(Stopped.Work, 0U);
+  EXPECT_FALSE(Stopped.WorkLimitExceeded);
+  EXPECT_EQ(Polls, 10U);
+  EXPECT_EQ(checkLLVMScalarEquivalence(A.function(), A.function()).Status,
+            Status::Proved);
+}
+
 TEST(LLVMScalarModel, IntegerProofDoesNotDependOnNativeArchitecture) {
   Source Sum("define i32 @f(i32 noundef %x, i32 noundef %y) {"
              " %r = add i32 %x, %y\nret i32 %r }");

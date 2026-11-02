@@ -16,8 +16,8 @@
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/lift/ARMLifter.h"
-#include "neverd/lift/ARMRegs.h"
+#include "neverd/lift/ARM/ARMLifter.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 

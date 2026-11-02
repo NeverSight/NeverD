@@ -8,7 +8,9 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/high/MedToHigh.h"
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -16,6 +18,8 @@
 #include "llvm/Support/Program.h"
 
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 using namespace neverd;
@@ -167,6 +171,99 @@ static const uint64_t xs[] = {0, 1, 0x7F, 0x80, 0xFF, 0x7FFFFFFF, 0x80000000,
                               0xFFFFFFFFFFFFFFFFull};
 )";
 
+TEST(HighCIntegerConversion, FloatingCallKeepsAConstantBitCast) {
+  for (const auto Architecture :
+       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    for (uint16_t Bytes : {4, 8}) {
+      SCOPED_TRACE(Bytes);
+      const TypeRef Float = NdType::makeFloat(Bytes);
+      auto Parameter = typed(input(), Float);
+      Parameter->Var.Size = Bytes;
+      Parameter->Var.TheArch = Architecture;
+      HighFunc Callee = function("identity", Float, {result(Parameter)});
+      Callee.Entry = 0x2000;
+      Callee.Params = {{"arg0", Float}};
+      auto Value = cast(
+          constant(Bytes == 4 ? 0x3F800000ull : 0x3FF0000000000000ull, Bytes),
+          Float);
+      Value->Kind = ExprKind::BitCast;
+      auto Call = typed(HighExpr::makeCall("identity", 0x2000, {Value}), Float);
+      HighFunc Caller = function("call_constant", Float, {result(Call)});
+      Caller.Params.clear();
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(HighCEmitter().emit({Caller, Callee}, Out, Options));
+      compileAndRun(Source +
+                    "\nint main(void) { return call_constant() != 1.0; }\n");
+    }
+  }
+}
+
+TEST(HighCIntegerConversion, NarrowCopyKeepsLowBytesThroughSourceProjection) {
+  for (const auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    std::vector<HighFunc> Functions;
+    std::string Checks;
+    for (uint16_t Bytes : {1, 2, 4}) {
+      const auto &Registers = getTargetRegInfo(Architecture);
+      MedFunc F;
+      F.Name = "copy_low_" + std::to_string(Bytes);
+      F.Entry = 0x1000;
+      F.ReturnType = integer(Registers.PointerSize, false);
+      MedVar Input;
+      Input.Kind = MedVar::Param;
+      Input.Id = 0;
+      Input.Size = Registers.PointerSize;
+      Input.TheArch = Architecture;
+      Input.RegOff =
+          Registers.IntParamRegs.empty() ? 0 : Registers.IntParamRegs[0];
+      F.Params = {Input};
+      MedVar Narrow;
+      Narrow.Id = 1;
+      Narrow.Size = Bytes;
+      Narrow.TheArch = Architecture;
+      MedVar Wide = Narrow;
+      Wide.Kind = MedVar::Reg;
+      Wide.Id = 2;
+      Wide.SSAVer = 1;
+      Wide.RegOff = Registers.IntReturnReg;
+      Wide.Size = Registers.PointerSize;
+      MedOp Copy;
+      Copy.Opcode = NdOp::COPY;
+      Copy.Output = Narrow;
+      Copy.addInput(Input);
+      MedOp Extend;
+      Extend.Opcode = NdOp::INT_ZEXT;
+      Extend.Output = Wide;
+      Extend.addInput(Narrow);
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.addInput(Wide);
+      MedBlock B;
+      B.Id = 0;
+      B.StartAddr = F.Entry;
+      B.EndAddr = F.Entry + 1;
+      B.Ops = {Copy, Extend, Return};
+      F.Blocks = {B};
+      Functions.push_back(MedToHighConverter().convert(F, Architecture));
+      Checks += "if (" + F.Name + "(xs[i]) != (uint" +
+                std::to_string(Bytes * 8) + "_t)xs[i]) return 1;\n";
+    }
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+    compileAndRun(Source + Inputs +
+                  "\nint main(void) {\n"
+                  "for (unsigned i=0; i<sizeof xs/sizeof xs[0]; ++i) {\n" +
+                  Checks + "} return 0; }\n");
+  }
+}
+
 TEST(HighCIntegerConversion, ASignedCompareOfShiftsComparesSigned) {
   // AArch64 `cmp w14, w13, lsl #24; cset lt` compares two bytes as signed
   // chars by their shifted words.  Each shift happens in an unsigned
@@ -175,11 +272,12 @@ TEST(HighCIntegerConversion, ASignedCompareOfShiftsComparesSigned) {
   const TypeRef U32 = integer(4, false), I32 = integer(4, true);
   auto Low = lowPart(input(), U32);
   auto Second = op(NdOp::INT_RIGHT, lowPart(input(), U32), constant(8, 4), U32);
-  auto Less = op(NdOp::INT_SLESS, op(NdOp::INT_LEFT, Low, constant(24, 4), I32),
-                 op(NdOp::INT_LEFT, Second, constant(24, 4), I32),
-                 integer(1, false));
-  HighFunc F = function("signed_byte_less", integer(8, false),
-                        {result(extend(NdOp::INT_ZEXT, Less, integer(8, false)))});
+  auto Less =
+      op(NdOp::INT_SLESS, op(NdOp::INT_LEFT, Low, constant(24, 4), I32),
+         op(NdOp::INT_LEFT, Second, constant(24, 4), I32), integer(1, false));
+  HighFunc F =
+      function("signed_byte_less", integer(8, false),
+               {result(extend(NdOp::INT_ZEXT, Less, integer(8, false)))});
   const std::string Source = emit(F);
   compileAndRun(Source + R"(
 int main(void) {
@@ -304,6 +402,52 @@ int main(void) {
 )");
 }
 
+TEST(HighCIntegerConversion, UnprototypedImmediatesKeepTheirCompleteWord) {
+  const TypeRef U64 = integer(8, false), I64 = integer(8, true);
+  const TypeRef U32 = integer(4, false), I32 = integer(4, true);
+  std::vector<std::pair<ExprPtr, uint64_t>> Cases;
+  for (uint64_t Value :
+       {UINT64_C(0), UINT64_C(1), UINT64_C(0x7fffffff), UINT64_C(0xffffffff),
+        UINT64_C(0x100000000), UINT64_C(0xffffffffffffffff)})
+    Cases.emplace_back(typed(constant(Value), U64), Value);
+  Cases.emplace_back(typed(constant(UINT64_MAX), I64), UINT64_MAX);
+  Cases.emplace_back(
+      extend(NdOp::INT_ZEXT, typed(constant(UINT32_MAX, 4), U32), U64),
+      UINT32_MAX);
+  Cases.emplace_back(
+      extend(NdOp::INT_SEXT, typed(constant(UINT32_MAX, 4), I32), I64),
+      UINT64_MAX);
+  Cases.emplace_back(cast(typed(constant(UINT32_MAX, 4), U32), U64),
+                     UINT32_MAX);
+  // An extension can change the high half of a literal printed positive or
+  // negative; a negative 64-bit word other than -1 needs its carrier too.
+  Cases.emplace_back(extend(NdOp::INT_SEXT,
+                            typed(constant(UINT32_C(0x80000000), 4), I32), I64),
+                     UINT64_C(0xffffffff80000000));
+  Cases.emplace_back(extend(NdOp::INT_ZEXT,
+                            typed(constant(UINT32_C(0x80000000), 4), I32), U64),
+                     UINT64_C(0x80000000));
+  Cases.emplace_back(typed(constant(UINT64_MAX - 1), I64), UINT64_MAX - 1);
+  std::string Source, Checks;
+  for (unsigned I = 0; I < Cases.size(); ++I) {
+    const std::string Name = "untyped_word_" + std::to_string(I);
+    auto Call = HighExpr::makeCall("indirect", 0x2000, {Cases[I].first});
+    Call->Type = U64;
+    Call->IsIndirectCall = true;
+    Call->IndirectTarget = input();
+    Source += emit(function(Name, U64, {result(Call)}));
+    Checks += "if (" + Name + "(address) != UINT64_C(" +
+              std::to_string(Cases[I].second) + ")) return 1;\n";
+  }
+  Source += R"(
+static uint64_t actual(uint64_t value) { return value; }
+int main(void) {
+  uint64_t address=(uint64_t)(uintptr_t)&actual;
+)" + Checks +
+            "return 0;\n}\n";
+  compileAndRun(Source);
+}
+
 TEST(HighCIntegerConversion, AWideningArgumentKeepsItsExtension) {
   // widen(uint64_t) receives the zero extension of an int32_t local: the
   // argument must not become the local itself, which C would sign-extend.
@@ -404,6 +548,35 @@ int64_t wide(void) { return INT64_C(0x7FFF800012345678); }
 int narrow(void) { return 5; }
 int main(void) { return probe(0) == 0x7FFF80001234567Dull ? 0 : 1; }
 )");
+}
+
+TEST(HighCIntegerConversion, UndeclaredPairCallsKeepTheirCompleteReturnType) {
+  const TypeRef U64 = integer(8, false), U128 = integer(16, false);
+  auto Pair = typed(HighExpr::makeCall("pair", 0x2000, {input()}), U128);
+  auto Scalar = typed(HighExpr::makeCall("scalar", 0x2010, {input()}), U64);
+  const HighFunc F =
+      function("probe", U64,
+               {assign(local(1, U128), Pair), assign(local(2, U128), Scalar),
+                result(op(NdOp::INT_XOR,
+                          op(NdOp::SUBBYTES, local(1, U128), constant(8), U64),
+                          lowPart(local(2, U128), U64), U64))});
+  const std::string Source = emit(F);
+  EXPECT_NE(Source.find("extern unsigned __int128 pair();"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("extern int64_t scalar();"), std::string::npos)
+      << Source;
+  compileAndRun(Source + R"C(
+unsigned __int128 pair(uint64_t x) {
+  return (unsigned __int128)(x + 17) << 64 | (x ^ 0x1234);
+}
+int64_t scalar(uint64_t x) { return x ^ 7; }
+int main(void) {
+  uint64_t xs[] = {0, 1, 0x123456789ABCDEF0, UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(xs) / sizeof(xs[0]); ++i)
+    if (probe(xs[i]) != ((xs[i] + 17) ^ (xs[i] ^ 7))) return 1;
+  return 0;
+}
+)C");
 }
 
 TEST(HighCIntegerConversion, BitCountsCountInTheOperandsWidth) {

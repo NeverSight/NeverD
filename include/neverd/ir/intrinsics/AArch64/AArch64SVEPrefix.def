@@ -1,0 +1,47 @@
+//===- AArch64SVEPrefix.def - MOVPRFX/CPA pair contracts ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// FORM owns the raw prefixes admitted before checked-pointer consumers.
+/// OPERATION owns predicated copy semantics after raw pair validation: P/N
+/// for zeroing, P/N/old-D for merging, followed by element-width metadata.
+/// Only the .D predicated forms can precede the supported CPA instructions.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_PREFIX_FORM
+#define NEVERD_A64_SVE_PREFIX_FORM(Name, Mask, Encoding, RawCount)
+#endif
+#ifndef NEVERD_A64_SVE_PREFIX_OPERATION
+#define NEVERD_A64_SVE_PREFIX_OPERATION(Id, Name, Form, Count, Vectors,        \
+                                        Predicates)
+#endif
+#ifndef NEVERD_A64_SVE_PREFIX_VALUE
+#define NEVERD_A64_SVE_PREFIX_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_SVE_PREFIX_TEXT
+#define NEVERD_A64_SVE_PREFIX_TEXT(Name, Value)
+#endif
+
+NEVERD_A64_SVE_PREFIX_FORM(Unpredicated, 0xfffffc00, 0x0420bc00, 2)
+NEVERD_A64_SVE_PREFIX_FORM(Zeroing, 0xffffe000, 0x04d02000, 3)
+NEVERD_A64_SVE_PREFIX_FORM(Merging, 0xffffe000, 0x04d12000, 3)
+NEVERD_A64_SVE_PREFIX_OPERATION(A64_SveMovprfxZero, "movprfx", Zeroing, 2, 0x2,
+                                0x1)
+NEVERD_A64_SVE_PREFIX_OPERATION(A64_SveMovprfxMerge, "movprfx", Merging, 3, 0x6,
+                                0x1)
+
+NEVERD_A64_SVE_PREFIX_VALUE(unsigned, kPrefixInstructionBytes, 4)
+NEVERD_A64_SVE_PREFIX_VALUE(unsigned, kPrefixPairBytes,
+                            2 * kPrefixInstructionBytes)
+NEVERD_A64_SVE_PREFIX_VALUE(unsigned, kPrefixPredicateInput, 0)
+NEVERD_A64_SVE_PREFIX_VALUE(unsigned, kPrefixSourceInput, 1)
+NEVERD_A64_SVE_PREFIX_VALUE(unsigned, kPrefixMergeInput, 2)
+NEVERD_A64_SVE_PREFIX_TEXT(kPrefixInputName, "sve.prefix.input")
+NEVERD_A64_SVE_PREFIX_TEXT(kPrefixResultName, "sve.prefix.result")
+
+#undef NEVERD_A64_SVE_PREFIX_FORM
+#undef NEVERD_A64_SVE_PREFIX_OPERATION
+#undef NEVERD_A64_SVE_PREFIX_VALUE
+#undef NEVERD_A64_SVE_PREFIX_TEXT

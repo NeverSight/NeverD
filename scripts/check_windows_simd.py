@@ -18,7 +18,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "unittests/emulation/fixtures"
 DEFINITION = FIXTURES / "WindowsSIMDCases.def"
-CASES = FIXTURES.parent / "X64SIMDExceptionCases.def"
+CASES = FIXTURES.parent / "x86_64" / "X64SIMDExceptionCases.def"
 
 
 def definitions() -> tuple[dict, dict, list, list]:

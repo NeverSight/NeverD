@@ -28,12 +28,12 @@ using namespace neverd::emulation;
 namespace {
 namespace secondary {
 #define NEVERD_SEH_SECONDARY_VALUE(Name, Value) constexpr uint64_t Name = Value;
-#include "X64SEHSecondaryCases.def"
+#include "x86_64/X64SEHSecondaryCases.def"
 #undef NEVERD_SEH_SECONDARY_VALUE
 } // namespace secondary
 namespace image_case {
 #define NEVERD_SEH_IMAGE_VALUE(Name, Value) constexpr uint64_t Name = Value;
-#include "X64SEHImageCases.def"
+#include "x86_64/X64SEHImageCases.def"
 #undef NEVERD_SEH_IMAGE_VALUE
 } // namespace image_case
 namespace continuation {

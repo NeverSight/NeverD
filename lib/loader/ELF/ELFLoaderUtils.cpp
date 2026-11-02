@@ -6,6 +6,8 @@
 
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 
+#include "ELFLoaderDetail.h"
+
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/object/ELFLayout.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -286,15 +288,8 @@ void parseDynamic(const llvm::object::ELFFile<ELFT> &ELF,
       !rangeInBounds(DynamicSH.sh_offset, DynamicSH.sh_size, Size))
     return;
 
-  llvm::StringRef DynStrTab;
-  if (DynamicSH.sh_link != 0 && DynamicSH.sh_link < Sections.size()) {
-    const typename ELFT::Shdr *StrSH = &Sections[DynamicSH.sh_link];
-    auto TabOr = ELF.getStringTable(*StrSH);
-    if (TabOr)
-      DynStrTab = *TabOr;
-    else
-      llvm::consumeError(TabOr.takeError());
-  }
+  const auto DynStrTab =
+      detail::getLinkedStringTable<ELFT>(ELF, Sections, DynamicSH);
 
   struct DynEntry {
     int64_t Tag;
@@ -420,13 +415,8 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
     }
   }
 
-  if (DynSymSH) {
-    auto TabOr = ELF.getStringTableForSymtab(*DynSymSH, Sections);
-    if (TabOr)
-      DynStr = *TabOr;
-    else
-      llvm::consumeError(TabOr.takeError());
-  }
+  if (DynSymSH)
+    DynStr = detail::getLinkedStringTable<ELFT>(ELF, Sections, *DynSymSH);
 
   if (!DynSymSH || DynStr.empty() || !RelPltSH || RelPltSH->sh_entsize == 0)
     return;
@@ -588,6 +578,18 @@ void parseNotes(const llvm::object::ELFFile<ELFT> &ELF, const uint8_t *Data,
           BuildId += llvm::utohexstr(Desc[I], /*LowerCase=*/true, 2);
         Img.DynInfo.PDBPath = (kBuildIdPrefix + BuildId).str();
         LLVM_DEBUG(llvm::dbgs() << "elf: build-id = " << BuildId << "\n");
+      }
+      if (NoteNameRef == elf_notes::GnuOwner && NH.Type == NT_GNU_ABI_TAG &&
+          NH.DescSz == 4 * sizeof(uint32_t) && Img.ELFMetadata) {
+        const uint8_t *Desc =
+            P + sizeof(ELFNoteHeader) + static_cast<size_t>(NameAlign);
+        const uint32_t System = uint32_t(Desc[0]) | uint32_t(Desc[1]) << 8 |
+                                uint32_t(Desc[2]) << 16 |
+                                uint32_t(Desc[3]) << 24;
+        auto &Metadata = *Img.ELFMetadata;
+        Metadata.ConflictingGNUABISystems |=
+            Metadata.GNUABISystem && *Metadata.GNUABISystem != System;
+        Metadata.GNUABISystem = System;
       }
       // The NDK's identification note leads with the API level.
       if (NoteNameRef == elf_notes::AndroidOwner &&

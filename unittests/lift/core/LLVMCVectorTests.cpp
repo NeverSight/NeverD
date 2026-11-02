@@ -59,7 +59,8 @@ void compileAndRun(const std::string &Source,
   for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
     const llvm::SmallVector<llvm::StringRef, 12> Arguments{
         Compiler, "-std=c11", Optimization, "-Werror=uninitialized",
-        "-Werror=return-type", "-fsanitize=undefined",
+        "-Werror=return-type", "-Werror=unused-but-set-variable",
+        "-fsanitize=undefined",
         // Decompiled C is built as its prelude says: for a target with
         // unaligned access, without strict aliasing.
         "-fno-sanitize=alignment", "-fno-strict-aliasing", SanitizerTrap,
@@ -560,6 +561,38 @@ int main(void) {
   for (unsigned i = 0; i < sizeof(output); ++i)
     if ((i < 1 || i >= 9) && output[i] != 0x5a) return 2;
   return mismatch;
+}
+)");
+}
+
+TEST(LLVMCValues, MultiUsePointerCastKeepsOneMaterializedValue) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("shared-memory-pointer", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Word = B.getInt64Ty();
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), {Word, Word, Word}, false),
+      llvm::GlobalValue::ExternalLinkage, "store_words", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *Address = B.CreateIntToPtr(Function->getArg(0), B.getPtrTy());
+  B.CreateAlignedStore(Function->getArg(1), Address, llvm::Align(8));
+  B.CreateAlignedStore(Function->getArg(2),
+                       B.CreateGEP(Word, Address, B.getInt64(1)),
+                       llvm::Align(8));
+  B.CreateRetVoid();
+  ASSERT_FALSE(llvm::verifyModule(Module));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  compileAndRun(Source + R"(
+int main(void) {
+  uint64_t output[] = {UINT64_C(0xa5), 0, 0, UINT64_C(0x5a)};
+  store_words((uintptr_t)(output + 1), UINT64_MAX,
+              UINT64_C(0x123456789abcdef0));
+  return output[0] != UINT64_C(0xa5) || output[1] != UINT64_MAX ||
+         output[2] != UINT64_C(0x123456789abcdef0) ||
+         output[3] != UINT64_C(0x5a);
 }
 )");
 }

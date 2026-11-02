@@ -21,6 +21,8 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 
+#include <cstdint>
+
 using namespace neverd::symbolic;
 
 namespace {
@@ -203,5 +205,39 @@ TEST(SymMBA, PolynomialExpansionChargesCumulativeProductsBeforeDiscarding) {
       detail::expandOverMinterms(Ctx, Terms, Atoms, Width, InvalidBudget));
   EXPECT_EQ(InvalidBudget.used(), 4u);
   EXPECT_FALSE(InvalidBudget.exhausted());
+}
+
+TEST(SymMBA, PolynomialCoefficientsWrapAcrossNativeAndWideBoundaries) {
+  for (unsigned Width :
+       {1u, 7u, 8u, 16u, 31u, 32u, 63u, 64u, 65u, 127u, 128u, 129u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const llvm::SmallVector<uint32_t, 2> Atoms{X.index(), Y.index()};
+    const auto Ones = llvm::APInt::getAllOnes(Width);
+    const auto Top = llvm::APInt::getSignMask(Width);
+    auto Value = [Width](uint64_t V) {
+      return llvm::APInt(Width, V, /*isSigned=*/false, /*implicitTrunc=*/true);
+    };
+    const llvm::SmallVector<detail::PolyTerm, 8> Terms{
+        {Ones, {}}, {Top, {X}},      {Ones, {Y}},     {Value(3), {}},
+        {Top, {X}}, {Value(7), {X}}, {Value(3), {Y}}, {Value(1), {X, Y}}};
+    detail::WorkBudget Budget(4);
+    const auto Form =
+        detail::expandOverMinterms(Ctx, Terms, Atoms, Width, Budget);
+    ASSERT_TRUE(Form);
+    // The two top-bit coefficients cancel. The expression is 2+7*x+2*y+x*y,
+    // whose linear minterm weights are -2, 5, 0 and 7 at every tested width.
+    const llvm::SmallVector<llvm::APInt, 4> Expected{-Value(2), Value(5),
+                                                     Value(0), Value(7)};
+    ASSERT_EQ(Form->Linear.size(), Expected.size());
+    for (size_t I = 0; I < Expected.size(); ++I)
+      EXPECT_EQ(Form->Linear[I], Expected[I]);
+    ASSERT_EQ(Form->Higher.size(), 4u);
+    for (const auto &[Key, Coefficient] : Form->Higher)
+      EXPECT_EQ(Coefficient, llvm::APInt(Width, 1));
+    EXPECT_EQ(Budget.used(), 4u);
+    EXPECT_FALSE(Budget.exhausted());
+  }
 }
 } // namespace

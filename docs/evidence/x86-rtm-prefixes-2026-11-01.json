@@ -1,0 +1,1155 @@
+{
+  "schema_version": 1,
+  "scope": "Shared transaction prefix grammar, valid native x64 region/pair prefixes and forbidden NP XEND/XTEST refusal",
+  "artifact_directory": "neverd-rtm-prefixes-20261101",
+  "path_normalization": "Private checkout and executable paths are represented by repository-relative names and artifact/tool placeholders. Original digests are retained.",
+  "revisions": {
+    "neverd_qualified": "3d4a5fbedc7bd55e8b889aa28eb61444e8fffbce",
+    "llvm_main": "83fb72868148019fb4cf0ebe9e4bf3008d3d0b61",
+    "llvm_backend_binary_source": "fdf9a1d8df5c22f284db89abc33d8d4f404a71f5",
+    "neverc_dev": "edb7105e1db598fdc0bee3206f4c04a06ecff1d8",
+    "production_llvm_gitlink_unchanged": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "production_sdk_unchanged": "neverd-llvm-v23.0.0-r6"
+  },
+  "neverd_source_sha256": {
+    "include/neverd/decode/X86/X86TransactionEncoding.h": "6c24e0dc7528c00fd479d2bf7525a9567ad41fdc1fb8574f4e85a6cf54f503a8",
+    "lib/lift/X86/X86LiftTransactions.cpp": "f881c59bc0028e935a875e0edb898ebf29c83039fbbc52778c99946a455ef3cd",
+    "lib/pipeline/X86/X64RtmAbortRegions.cpp": "55f09c2e9230a672214ba81025994a75693bf8a71886cc798f972c45bd1f67ab",
+    "lib/pipeline/X86/X64RtmAbortRegions.h": "ffebf665c7117d902e9491a07fe210cfb3bcedb85d4844e4260382321d8120aa",
+    "lib/pipeline/X86/X64RtmRegions.cpp": "6ef30109769ee3424e59d5640be5b0defc8af5045827321d39416b1a52ceb70b",
+    "lib/pipeline/X86/X64SpecialRegions.cpp": "adf987ac03cf0b6c75d3e045a2c359a47c605f74997023d3ffada6f1c6b6f645",
+    "scripts/isa/x86/verify_rtm_regions.py": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+    "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp": "401c6a9c29b5c56baf3f3ac26888087124884918fcf27f50889e1af528e81fb8",
+    "unittests/devirtualization/x86_64/X64RtmPrefixExportTests.inc": "de6050339b251f1de42bb06e5b126569ed467bf56fe0719d6dbd8152fb27ade4",
+    "unittests/devirtualization/x86_64/X64RtmRegionExportTests.inc": "fc7eb87cb4e7bd6360c990beb4115619d4739a680bc08a06dc8a2c8c3dd89293",
+    "unittests/lift/x86/X86TransactionBeginTests.cpp": "ed5e68eaed7cbb15bff32f95c724bd1635ebbf1b8fa0569bec13ab035c7edd21",
+    "unittests/lift/x86/X86TransactionTestCases.h": "b15391f23a729e57b94764b0e457e6bf193dff15cb8ae3c33625a524f0f2beec",
+    "unittests/lift/x86_64/X86SystemStateTests.cpp": "dd8f06445ba8e0b7d5ba07d438cf28431850aac1b3ea424527d4077c9c4e7917"
+  },
+  "matrix_totals": {
+    "execution_profiles": 96,
+    "harness_rounds": 340992,
+    "independent_original_code_comparisons": 170496,
+    "cpuid_disabled_refusals": 170496,
+    "original_prefix_patterns_per_suite": 37,
+    "accepted_standalone_xtest_xabort_checks": 227328,
+    "standalone_xend_refusals_in_full_rtm_mode": 113664,
+    "physical_rtm_qualified": false
+  },
+  "decoder_and_source_regressions": {
+    "x86_x64_decoder_routes": 3,
+    "lifting_modes": [
+      "strict",
+      "permissive"
+    ],
+    "admitted_control_checks": 84900,
+    "forbidden_np_control_refusals": 240,
+    "control_count_derivation": "55 prefix/mode pairs times 258 controls times three decode routes times two lifting modes, with 240 NP refusals",
+    "forbidden_np_public_source_exports": 48,
+    "rel16_signed_target_checks": 1572864,
+    "prefixed_target_width_checks": 1656,
+    "all_256_original_xabort_collision_check": "includes alternating canonical and prefixed forms; exporter refuses when no private immediate remains"
+  },
+  "tests": {
+    "native-regressions": {
+      "file": "<artifacts>/native-regressions.xml",
+      "sha256": "36740ed19a597f5f2eb4c14332ba1ac0dfbb2a52998c04f185c1daa9f047d2c3",
+      "tests": 99,
+      "passed": 99,
+      "skipped": []
+    },
+    "r6-regressions": {
+      "file": "<artifacts>/r6-regressions.xml",
+      "sha256": "6e0d9145135142a12eac8b449023dba8a019fdf2dc1fa0a4a73b4814388ab5fc",
+      "tests": 99,
+      "passed": 99,
+      "skipped": []
+    },
+    "native-native-source": {
+      "file": "<artifacts>/native-native-source.xml",
+      "sha256": "2d9a808a550b5c86c2f97d24c6e65f63334f068c1234c1a0e7027a7a1dbe6c5c",
+      "tests": 5,
+      "passed": 5,
+      "skipped": []
+    },
+    "r6-native-source": {
+      "file": "<artifacts>/r6-native-source.xml",
+      "sha256": "17ab9d1a76eaa559b1dc0941ef2fc0d59635a8de7df902067e333ef81d67f94a",
+      "tests": 5,
+      "passed": 4,
+      "skipped": [
+        "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory"
+      ]
+    }
+  },
+  "expected_r6_skip": "TransactionCommitRetainsSurroundingMemory requires the qualified native system SDK; its existing invlpgb.addr32 capability guard skips r6. The native SDK runs and passes it.",
+  "export_identity": {
+    "prefix_files_identical_across_sdks": 24,
+    "canonical_source_manifest_files_identical_to_previous_record": 96,
+    "previous_record": "x86-rtm-regions-2026-11-01.json"
+  },
+  "sources": {
+    "rtm-prefix-high-direct": {
+      "source_sha256": "658c7a28d90380a853914ec688482c20b0a83c0bad6a99e6314b1584d057740c",
+      "manifest_sha256": "3b67acab19dbaf72e7c224101b9f826dbaf3fb98461e9000092ef046b27bf9ba",
+      "test_sha256": "f2b6e7ff0225285f1d9e82e42225fceb278e472de969547071997d6c4cce81bd",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-high-switch": {
+      "source_sha256": "ad28c316fcd6550c3e6878c966d43bc23abc192a3c28f2106dd514bec0c4b702",
+      "manifest_sha256": "a33ce335b9fc060e74383a4f3031085e8c793912b5bb195680a52fc7e86ee9c3",
+      "test_sha256": "5b340fae798dff0dbb6f05f6911a392553f43ca113000c849c8aadc206c9ec05",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-llvm-direct": {
+      "source_sha256": "2f589d9619f52fe9c0052061a7b2cd0d9eb6489d9f2cc6bc2cead0ad0c8286ca",
+      "manifest_sha256": "c802930de234327578aa4401caa780a29800bea8c693829986af7ab62ee9bc3e",
+      "test_sha256": "4c89b2fbb291bef3e8ff84cd56f3ff26c9581cddf5f1772da44b1787e76fc3c9",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-llvm-switch": {
+      "source_sha256": "69f95898c5618862f1b98efa15ce586bab2ad202063e18c0d947ff8b44b1af1a",
+      "manifest_sha256": "23f900e35e18ba5255cc90df320270d742dfdcbbf62498bf951b072829c22c9e",
+      "test_sha256": "cc9aaf2c4e413b75ca057149e1f78491af19d707c5716c49a788cbaf4df3ab58",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-pair-high-direct": {
+      "source_sha256": "46e229249d08c0a952c76e15eb0ff505ebdff189b272c3a4d7a2692e3897f9ec",
+      "manifest_sha256": "3b23f1a28666e87fd4577528a9497acf2a6fe38298a564c8cb05d5e54b9f99dc",
+      "test_sha256": "73b97ab570466021297d95ab2eae2679f7c57038d8ac50e2f42fe5b71fd48c04",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-pair-high-switch": {
+      "source_sha256": "67c29f0e86214961998ea76a7f035f4b2f388c8ec35171bd3da8c7efa46daf27",
+      "manifest_sha256": "3973916dda4f6f1dd322f902ca955b6b9b38fb2e8722196845cd19e3c4f76542",
+      "test_sha256": "3d6f599ceae87eba48e8932370d37e9aca8aef1cdb199f7c6720cc84274aeca6",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-pair-llvm-direct": {
+      "source_sha256": "08a784c9b08582121b61e6a735fdffaaf469fb593f7d311cdd5f3465e791cca6",
+      "manifest_sha256": "ad30358fddcbc2c683bc28277cf9889790849022df2d30e69872290b9cf0de49",
+      "test_sha256": "17a00003a40ef441a7867aa65a1b58aa6a7dc550fefa4c9908b48022de608e13",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-prefix-pair-llvm-switch": {
+      "source_sha256": "07195780314cde29e414fbeec542ee7e3264393a33122402d03b8eb901bd269d",
+      "manifest_sha256": "5e55a430786a2aa0ab55f031312cbc9ee723370cc80aa6782c9ecc9ba6ee6903",
+      "test_sha256": "7b34d69a782ed2ec26967326d1b67f8330a3953682321b2f6fd16b3302755e55",
+      "source_and_harness_preserved_verbatim": true
+    }
+  },
+  "matrices": {
+    "neverc-prefixes-qualified": {
+      "record": {
+        "file": "<artifacts>/neverc-prefixes-qualified/qualification.json",
+        "sha256": "0081f5bbcf601176779829aee55de19826808b844a01a7edc5cb4e2de9afbdeb"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "suite": "prefixes",
+      "commands_sha256": "98725644485f6e69d169f10188aa5f28fc642dc207280963e5c819bcfe5a66d4",
+      "script_sha256": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+      "profiles": [
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "da6e2e0aedf12c9551b40510093ae16dc1dcf46599db7342a6cac03dda8f87f3"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "da6e2e0aedf12c9551b40510093ae16dc1dcf46599db7342a6cac03dda8f87f3"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "617fa14cdbc77eb05d33b31caaf6bb27f349b210953535addd6b0fb668b14427"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "617fa14cdbc77eb05d33b31caaf6bb27f349b210953535addd6b0fb668b14427"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "93a29e3f1bf8573d7ad860ee45019fec4a11c0e3c7520c30e108afa98bf48466"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "93a29e3f1bf8573d7ad860ee45019fec4a11c0e3c7520c30e108afa98bf48466"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "446a4f9e7e1d537fdb57a3fa0477b5fc0f24f6ed227e7fd9563afe3c37e8b840"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "446a4f9e7e1d537fdb57a3fa0477b5fc0f24f6ed227e7fd9563afe3c37e8b840"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "2bb29b37d85e444e410ccae59ad5eae29870d9e9bbb19f2689c26a4d3615d536"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "2bb29b37d85e444e410ccae59ad5eae29870d9e9bbb19f2689c26a4d3615d536"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "5a431ec654780a1a8b0c48eda34c75b732dd81d257029701ea845887fbb75869"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "5a431ec654780a1a8b0c48eda34c75b732dd81d257029701ea845887fbb75869"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "0e2dfc855d545fa4b77f1d40210a5a3cc0ca8d8e3d14d33b38aca2ab824b3d9c"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "0e2dfc855d545fa4b77f1d40210a5a3cc0ca8d8e3d14d33b38aca2ab824b3d9c"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "bbe36c9e8087e647f480f96a712943a140278caf8ad6148fd7286210fa3b1c5b"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "bbe36c9e8087e647f480f96a712943a140278caf8ad6148fd7286210fa3b1c5b"
+        }
+      ]
+    },
+    "neverc-prefix-pairs": {
+      "record": {
+        "file": "<artifacts>/neverc-prefix-pairs/qualification.json",
+        "sha256": "9f1d8c67838e0b08c70db13abe0015f86ebf4e0b5d43a1246d6a05322590d9fc"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "suite": "prefix-pairs",
+      "commands_sha256": "525315fa98e4c2d297a8335adeee49bdb65fd6c02b1d3fdce0c06340b7f2126e",
+      "script_sha256": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+      "profiles": [
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "65f29a76b339fd8220e9ab3a3f7d10a49b6e7a34d73bb4a42686bee7a0a0d081"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "65f29a76b339fd8220e9ab3a3f7d10a49b6e7a34d73bb4a42686bee7a0a0d081"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "5ea75adb8b09fc93d43bc44319e3ee5790d744a72be0790bea8ec85f7565fb0e"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "5ea75adb8b09fc93d43bc44319e3ee5790d744a72be0790bea8ec85f7565fb0e"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "792549611e09021e9950a3605db7357e7ba39a83282dce7dadd86b03d1152737"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "792549611e09021e9950a3605db7357e7ba39a83282dce7dadd86b03d1152737"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "68f616dc3dc8d54eed5d42c40311cac7f69f6b1931a7e61566366bef82da21fa"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "68f616dc3dc8d54eed5d42c40311cac7f69f6b1931a7e61566366bef82da21fa"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "52d656e3cf6f8ebe3bafed23c23002d96e9881869f6ab8459c9510c3be6b743d"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "52d656e3cf6f8ebe3bafed23c23002d96e9881869f6ab8459c9510c3be6b743d"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "5881c6fd34b012b253e8f79061fb6dea484f9d42e8c80ad6cbee5fdc5bf8168b"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "5881c6fd34b012b253e8f79061fb6dea484f9d42e8c80ad6cbee5fdc5bf8168b"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "f97d345975a7625642c5c17a25be38b2285f53cc44784644e5f3ad00fb6e9418"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "f97d345975a7625642c5c17a25be38b2285f53cc44784644e5f3ad00fb6e9418"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "b22a596fa8dd6cd006ce4bfd21358019ab5fc4490bcf0f0f982041acf271e087"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "b22a596fa8dd6cd006ce4bfd21358019ab5fc4490bcf0f0f982041acf271e087"
+        }
+      ]
+    },
+    "llvm-legacy-prefixes": {
+      "record": {
+        "file": "<artifacts>/llvm-legacy-prefixes/qualification.json",
+        "sha256": "f582167010e2385c3723408e77e6d0058e2615c6164b3f1cfd81e68d382aa149"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "file": "<qualified-tools>/llc",
+          "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "suite": "prefixes",
+      "commands_sha256": "b7b200445225f81b9cddcc6024b85d9519fa4f0b43620ba80324ad579ec6e284",
+      "script_sha256": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+      "profiles": [
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "94dc97ecaab3f94c51a9c75454e892fe4ec219187fbcfd7aacd091f52c55ffe8"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "94dc97ecaab3f94c51a9c75454e892fe4ec219187fbcfd7aacd091f52c55ffe8"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "a9cc97f53c9cfe6fadff18e435746e41f7ad071aad371684fa5062cb6359f300"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "a9cc97f53c9cfe6fadff18e435746e41f7ad071aad371684fa5062cb6359f300"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "da345f58ba1b9d1d05579524811e4d893573aa1b9ac39537be79395d5e18b17f"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "da345f58ba1b9d1d05579524811e4d893573aa1b9ac39537be79395d5e18b17f"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "1f094d5aafb773e6df61b848f77e0d0ca3aa37fdbf5234ccc156d3c18a1551e0"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "1f094d5aafb773e6df61b848f77e0d0ca3aa37fdbf5234ccc156d3c18a1551e0"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "90057f9d1172d43987f85be97fc227302069e151813001c8b56994f235dad819"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "90057f9d1172d43987f85be97fc227302069e151813001c8b56994f235dad819"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "bad9db0140dca6ea41581515e39cd2beb88b8d825069622ecdc544f30f9feea1"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "bad9db0140dca6ea41581515e39cd2beb88b8d825069622ecdc544f30f9feea1"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "45f2d929896d33d668004f1c6d6f4104873afd8a785686a0702726014448487a"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "45f2d929896d33d668004f1c6d6f4104873afd8a785686a0702726014448487a"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "ccf02070ff4946c13dcb051879eaaa022011faaae70b683b5891cb1219fee46b"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "ccf02070ff4946c13dcb051879eaaa022011faaae70b683b5891cb1219fee46b"
+        }
+      ]
+    },
+    "llvm-legacy-prefix-pairs": {
+      "record": {
+        "file": "<artifacts>/llvm-legacy-prefix-pairs/qualification.json",
+        "sha256": "e028e247eab06533d9db63afebf7256896c880cb739b68feae277c99065c9607"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "file": "<qualified-tools>/llc",
+          "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "suite": "prefix-pairs",
+      "commands_sha256": "842412c76695906cc02a84e25434533be9dea9d39cb3cc382a7231cb640bf3af",
+      "script_sha256": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+      "profiles": [
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "770293bb48786a3ec1cc25b15f32f6e4d171cf394083ee233b11e53b4e6f4456"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "770293bb48786a3ec1cc25b15f32f6e4d171cf394083ee233b11e53b4e6f4456"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "b438cb774e123b785cb04d317a5af2750ae82bac06bc5f6e63db838798cec90a"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "b438cb774e123b785cb04d317a5af2750ae82bac06bc5f6e63db838798cec90a"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "dd3bdba9a2804c6fb29c7d6bd63ef60ac3e44f04f4a23f13015a03f5079e1183"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "dd3bdba9a2804c6fb29c7d6bd63ef60ac3e44f04f4a23f13015a03f5079e1183"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "daf84f14cc9e844f23ff4aef4c76f86ba10e8d423a78eb178af7afaf47c4d561"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "daf84f14cc9e844f23ff4aef4c76f86ba10e8d423a78eb178af7afaf47c4d561"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "c732cedc75da6f99fcd04e806d63241eb93d256a91e27560a839a1e7cb110571"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "c732cedc75da6f99fcd04e806d63241eb93d256a91e27560a839a1e7cb110571"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "355e7f284845c987f977b9918e7b0ff2f0b4ffbb960f40ec58378e3d08715331"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "355e7f284845c987f977b9918e7b0ff2f0b4ffbb960f40ec58378e3d08715331"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "3ccb222c5ff922af79a20247f171c4d984137c74812927711fadf9d49d1c3e3c"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "3ccb222c5ff922af79a20247f171c4d984137c74812927711fadf9d49d1c3e3c"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "d1378673942995280914c90e665c84d77d53c394b0b5ce497bf7794f1f92897e"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "d1378673942995280914c90e665c84d77d53c394b0b5ce497bf7794f1f92897e"
+        }
+      ]
+    },
+    "llvm-new-prefixes": {
+      "record": {
+        "file": "<artifacts>/llvm-new-prefixes/qualification.json",
+        "sha256": "62046d8e85629fdbadf743f40149cc66843d7875c279f383d4107565bf4321cc"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "file": "<qualified-tools>/llc",
+          "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "suite": "prefixes",
+      "commands_sha256": "c20e984f65c3cd9df2264129d1fd541849c62fcfe5df1e18d8876bc65a78b105",
+      "script_sha256": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+      "profiles": [
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "94dc97ecaab3f94c51a9c75454e892fe4ec219187fbcfd7aacd091f52c55ffe8"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "94dc97ecaab3f94c51a9c75454e892fe4ec219187fbcfd7aacd091f52c55ffe8"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "0697b4d6aa3f9974462ef64e681906e339c10211189ca490249d4a9faf7a3716"
+        },
+        {
+          "source": "rtm-prefix-high-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "0697b4d6aa3f9974462ef64e681906e339c10211189ca490249d4a9faf7a3716"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "da345f58ba1b9d1d05579524811e4d893573aa1b9ac39537be79395d5e18b17f"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "da345f58ba1b9d1d05579524811e4d893573aa1b9ac39537be79395d5e18b17f"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "daa483fe73ed1ed8b068489b9d2e39f1ecc002876c4da3e3646f1e4f6b88442b"
+        },
+        {
+          "source": "rtm-prefix-high-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "daa483fe73ed1ed8b068489b9d2e39f1ecc002876c4da3e3646f1e4f6b88442b"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "90057f9d1172d43987f85be97fc227302069e151813001c8b56994f235dad819"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "90057f9d1172d43987f85be97fc227302069e151813001c8b56994f235dad819"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "43fdc842ff207c0ca5a100b8252340aa4930280c104d07aaab26a646f37cebc3"
+        },
+        {
+          "source": "rtm-prefix-llvm-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "43fdc842ff207c0ca5a100b8252340aa4930280c104d07aaab26a646f37cebc3"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "45f2d929896d33d668004f1c6d6f4104873afd8a785686a0702726014448487a"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "45f2d929896d33d668004f1c6d6f4104873afd8a785686a0702726014448487a"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 4736,
+          "executable_sha256": "a1b036a339821180c9f4aa41c64ef95e9c6b644822b9c60b067858d4d27379d2"
+        },
+        {
+          "source": "rtm-prefix-llvm-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 4736,
+          "executable_sha256": "a1b036a339821180c9f4aa41c64ef95e9c6b644822b9c60b067858d4d27379d2"
+        }
+      ]
+    },
+    "llvm-new-prefix-pairs": {
+      "record": {
+        "file": "<artifacts>/llvm-new-prefix-pairs/qualification.json",
+        "sha256": "f537e7333c6bd5f8e4d533e0f4244875ac65fd5c88ac6be86b5dc338808e9831"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "file": "<qualified-tools>/llc",
+          "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "suite": "prefix-pairs",
+      "commands_sha256": "9fc313609e977ff628084f154266abb34b6aa270cc2c9bd6689c777ab9d9676e",
+      "script_sha256": "e9de4a7c64c180ef6764f37d181b98488fe2b3f2adeb822b50ec405f0541d008",
+      "profiles": [
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "770293bb48786a3ec1cc25b15f32f6e4d171cf394083ee233b11e53b4e6f4456"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "770293bb48786a3ec1cc25b15f32f6e4d171cf394083ee233b11e53b4e6f4456"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "f5d401dc423bfd6fc71fb06b6610b4c1360b46ec53716e94685ef69e8eea2913"
+        },
+        {
+          "source": "rtm-prefix-pair-high-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "f5d401dc423bfd6fc71fb06b6610b4c1360b46ec53716e94685ef69e8eea2913"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "dd3bdba9a2804c6fb29c7d6bd63ef60ac3e44f04f4a23f13015a03f5079e1183"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "dd3bdba9a2804c6fb29c7d6bd63ef60ac3e44f04f4a23f13015a03f5079e1183"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "cae7f3039a055071384828370499aad127204d0253ee5d83baa2c4e221c8b0a5"
+        },
+        {
+          "source": "rtm-prefix-pair-high-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "cae7f3039a055071384828370499aad127204d0253ee5d83baa2c4e221c8b0a5"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "c732cedc75da6f99fcd04e806d63241eb93d256a91e27560a839a1e7cb110571"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "c732cedc75da6f99fcd04e806d63241eb93d256a91e27560a839a1e7cb110571"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "34061ba55f9ba4b3fb5d7fe4151eb4808b75ec6af906380be94c0474dbe2bb02"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-direct",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "34061ba55f9ba4b3fb5d7fe4151eb4808b75ec6af906380be94c0474dbe2bb02"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O0",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "3ccb222c5ff922af79a20247f171c4d984137c74812927711fadf9d49d1c3e3c"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O0",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "3ccb222c5ff922af79a20247f171c4d984137c74812927711fadf9d49d1c3e3c"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O2",
+          "mode": "full",
+          "checks": 2368,
+          "executable_sha256": "10af59638e55530474d97a43671dd7c5f9d8093bdd5ca639dade1981a2dc2d9b"
+        },
+        {
+          "source": "rtm-prefix-pair-llvm-switch",
+          "optimization": "O2",
+          "mode": "cpuid-disabled",
+          "checks": 2368,
+          "executable_sha256": "10af59638e55530474d97a43671dd7c5f9d8093bdd5ca639dade1981a2dc2d9b"
+        }
+      ]
+    }
+  },
+  "independent_np_counterexample": {
+    "source": {
+      "file": "<artifacts>/np-original.c",
+      "sha256": "f2d4661ee5089ae837d7ecd96362e6f16ccca0d3f9637499ed2d026e71c3db1e"
+    },
+    "source_text": "#include <sys/mman.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\nstatic const struct {const char *hex;unsigned char bytes[24];} cases[]={\n{\"0f01d5\",{199,248,7,0,0,0,198,7,90,15,1,213,195,195}},\n{\"660f01d5\",{199,248,8,0,0,0,198,7,90,102,15,1,213,195,195}},\n{\"f20f01d5\",{199,248,8,0,0,0,198,7,90,242,15,1,213,195,195}},\n{\"f30f01d5\",{199,248,8,0,0,0,198,7,90,243,15,1,213,195,195}},\n{\"670f01d5\",{199,248,8,0,0,0,198,7,90,103,15,1,213,195,195}},\n{\"640f01d5\",{199,248,8,0,0,0,198,7,90,100,15,1,213,195,195}},\n{\"4f0f01d5\",{199,248,8,0,0,0,198,7,90,79,15,1,213,195,195}},\n{\"48660f01d5\",{199,248,9,0,0,0,198,7,90,72,102,15,1,213,195,195}},\n{\"66480f01d5\",{199,248,9,0,0,0,198,7,90,102,72,15,1,213,195,195}},\n{\"f2400f01d5\",{199,248,9,0,0,0,198,7,90,242,64,15,1,213,195,195}},\n{\"40f30f01d5\",{199,248,9,0,0,0,198,7,90,64,243,15,1,213,195,195}},\n{\"66f2f30f01d5\",{199,248,10,0,0,0,198,7,90,102,242,243,15,1,213,195,195}},\n{\"0f01d6\",{199,248,10,0,0,0,198,7,90,15,1,214,15,1,213,195,195}},\n{\"660f01d6\",{199,248,11,0,0,0,198,7,90,102,15,1,214,15,1,213,195,195}},\n{\"f20f01d6\",{199,248,11,0,0,0,198,7,90,242,15,1,214,15,1,213,195,195}},\n{\"f30f01d6\",{199,248,11,0,0,0,198,7,90,243,15,1,214,15,1,213,195,195}},\n{\"670f01d6\",{199,248,11,0,0,0,198,7,90,103,15,1,214,15,1,213,195,195}},\n{\"640f01d6\",{199,248,11,0,0,0,198,7,90,100,15,1,214,15,1,213,195,195}},\n{\"4f0f01d6\",{199,248,11,0,0,0,198,7,90,79,15,1,214,15,1,213,195,195}},\n{\"48660f01d6\",{199,248,12,0,0,0,198,7,90,72,102,15,1,214,15,1,213,195,195}},\n{\"66480f01d6\",{199,248,12,0,0,0,198,7,90,102,72,15,1,214,15,1,213,195,195}},\n{\"f2400f01d6\",{199,248,12,0,0,0,198,7,90,242,64,15,1,214,15,1,213,195,195}},\n{\"40f30f01d6\",{199,248,12,0,0,0,198,7,90,64,243,15,1,214,15,1,213,195,195}},\n{\"66f2f30f01d6\",{199,248,13,0,0,0,198,7,90,102,242,243,15,1,214,15,1,213,195,195}}};\nint main(void){\n void *code=mmap(0,4096,7,0x22,-1,0);if(code==(void*)-1)return 1;\n puts(\"[\");\n for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i){\n   memcpy(code,cases[i].bytes,sizeof(cases[i].bytes));unsigned char ram=0;\n   uint64_t a=0x123456780000beefULL;\n   __asm__ volatile(\"lea -128(%%rsp),%%rsp;call *%[code];lea 128(%%rsp),%%rsp\"\n     : \"+a\"(a) : [code]\"r\"(code),\"D\"(&ram) : \"memory\",\"cc\");\n   printf(\"%s{\\\"bytes\\\":\\\"%s\\\",\\\"rax\\\":%llu,\\\"memory\\\":%u}\",i?\",\\n\":\"\",cases[i].hex,(unsigned long long)a,ram);\n }\n puts(\"\\n]\");return munmap(code,4096)!=0;\n}\n",
+    "executable": {
+      "file": "<artifacts>/np-original",
+      "sha256": "ae6ebfff1538378bdf4c067089fdcffd6479503c88771528771c8e970a5a1923"
+    },
+    "results": {
+      "file": "<artifacts>/np-original.json",
+      "sha256": "6023d971170c0b240bbfc2269170bf3643ed350e1a99ab07ce0ecd055b56dd61"
+    },
+    "compiler": {
+      "command": "clang -O2 <artifacts>/np-original.c -o <artifacts>/np-original",
+      "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+    },
+    "execution": "sde64 -hsw -tsx -rtm_mode full -- <artifacts>/np-original",
+    "observations": [
+      {
+        "bytes": "0f01d5",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "660f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "f20f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "f30f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "670f01d5",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "640f01d5",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "4f0f01d5",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "48660f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "66480f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "f2400f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "40f30f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "66f2f30f01d5",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "0f01d6",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "660f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "f20f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "f30f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "670f01d6",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "640f01d6",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "4f0f01d6",
+        "rax": 1311768464867770095,
+        "memory": 90
+      },
+      {
+        "bytes": "48660f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "66480f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "f2400f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "40f30f01d6",
+        "rax": 0,
+        "memory": 0
+      },
+      {
+        "bytes": "66f2f30f01d6",
+        "rax": 0,
+        "memory": 0
+      }
+    ],
+    "interpretation": "Canonical and admitted ignored-prefix controls commit the preceding RAM store. Forbidden 66/F2/F3 forms, including REX-order variants, abort with status zero and roll it back in SDE. The lifter previously accepted these NP forms; replacing them with canonical native intrinsics changes that behavior.",
+    "reference": "https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf"
+  },
+  "limitations": [
+    "SDE 10.13.1 processor-model execution, not physical RTM qualification",
+    "SDE forced-abort mode clears CPUID RTM, so that mode verifies refusal rather than early XBEGIN abort publication",
+    "Fault/event delivery, arbitrary system-state transactions and i386 state providers remain outside this binding",
+    "No new LLVM release or production SDK/gitlink update is claimed"
+  ]
+}

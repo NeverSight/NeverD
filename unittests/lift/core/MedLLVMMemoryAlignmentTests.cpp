@@ -8,7 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"

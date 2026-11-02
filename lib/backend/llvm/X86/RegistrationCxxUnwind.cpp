@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationCxxUnwind.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCxxUnwind.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include <algorithm>

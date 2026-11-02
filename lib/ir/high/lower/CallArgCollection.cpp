@@ -41,6 +41,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 
 namespace {
 
@@ -219,14 +220,17 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
       const int64_t SlotOff = StackOff - Layout.CallStackBase;
       if (SlotOff % SlotBytes != 0)
         return;
-      // A slot the function reads back is a local stored before the call.
-      // A tail jump's slots are this function's own incoming arguments,
-      // which it may well have read before passing them on.
-      if (!Scan.TailJump && Scan.LoadedEntrySlots &&
-          Scan.LoadedEntrySlots->count(StackOff - Scan.FrameSize))
-        return;
       ArgPos = static_cast<int>(Layout.Registers.size()) +
                static_cast<int>(SlotOff / SlotBytes);
+      // A local can reuse the outgoing area between calls. A callee's
+      // stack-argument summary still requires its latest stored value,
+      // even when this function read or took the slot's address earlier.
+      // Without that summary, a read-back slot remains a local. A tail
+      // jump may pass its own incoming arguments after reading them.
+      if (ArgPos >= Scan.CalleeStackArgs && !Scan.TailJump &&
+          Scan.LoadedEntrySlots &&
+          Scan.LoadedEntrySlots->count(StackOff - Scan.FrameSize))
+        return;
     } else {
       if (StackOff >= Scan.MaxArgs * SlotBytes || StackOff % SlotBytes != 0)
         return;
@@ -470,6 +474,55 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     return ParameterRegister(Arg);
   };
 
+  if (CallIdx < Ops.size() && Ops[CallIdx].IntegerCallSignature) {
+    const auto &Call = Ops[CallIdx];
+    if (!hasBoundIntegerCallArguments(Call))
+      throw std::runtime_error("An integer header call lost its operands");
+    std::vector<ExprPtr> Arguments;
+    for (unsigned I = 1; I < Call.NumInputs; ++I) {
+      ExprPtr Value = medvarToExpr(Call.Inputs[I]);
+      const auto Bytes = Call.IntegerCallSignature->Parameters[I - 1].Bytes;
+      if (!Value || !Value->Type || Value->Type->Size < Bytes)
+        throw std::runtime_error("An integer header argument is incomplete");
+      if (Value->Type->Size > Bytes) {
+        Value = HighExpr::makeBinop(NdOp::SUBBYTES, Value,
+                                    HighExpr::makeConst(0, 4));
+        Value->Type = NdType::makeInt(Bytes, false);
+      }
+      Arguments.push_back(std::move(Value));
+    }
+    return Arguments;
+  }
+
+  if (CallIdx < Ops.size() && Ops[CallIdx].ScalarCallSignature) {
+    const auto &Call = Ops[CallIdx];
+    const auto &Signature = *Call.ScalarCallSignature;
+    if (!boundFloatingCallArguments(Call, TargetArch,
+                                    Image ? Image->abiFormat()
+                                          : BinaryFormat::Unknown))
+      throw std::runtime_error(
+          "A mixed header call lost its complete operands");
+    std::vector<ExprPtr> Arguments;
+    for (unsigned I = 1; I < Call.NumInputs; ++I) {
+      const auto &Parameter = Signature.Scalars[I - 1];
+      ExprPtr Value = medvarToExpr(Call.Inputs[I]);
+      if (!Value || !Value->Type || Value->Type->Size < Parameter.Bytes)
+        throw std::runtime_error("A mixed header argument is incomplete");
+      if (Value->Type->Size > Parameter.Bytes) {
+        Value = HighExpr::makeBinop(NdOp::SUBBYTES, Value,
+                                    HighExpr::makeConst(0, 4));
+        Value->Type = NdType::makeInt(Parameter.Bytes, false);
+      }
+      if (Parameter.Floating != (Value->Type->Kind == NdTypeKind::Float))
+        Value = HighExpr::makeBitCast(
+            Value, Parameter.Floating
+                       ? NdType::makeFloat(Parameter.Bytes)
+                       : NdType::makeInt(Parameter.Bytes, false));
+      Arguments.push_back(std::move(Value));
+    }
+    return Arguments;
+  }
+
   // A call whose inputs are every argument it passes (a formatted call)
   // passes exactly those: a floating one as its bits' value, an integer one
   // that carries an address as that address.
@@ -515,10 +568,17 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           Hinted.push_back(medvarToExpr(Call.Inputs[++Index]));
         } else {
           std::vector<ExprPtr> Leaves;
-          for (const auto &Member : sourceAggregateMembers(P.Type))
+          for (const auto &Member : sourceABIValueMembers(P.Type))
             Leaves.push_back(
                 sourceScalarValue(Call.Inputs[++Index], Member.Type));
-          Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
+          if (P.Type->Kind == NdTypeKind::Int) {
+            auto Value = HighExpr::makeBinop(NdOp::CONCAT, Leaves.back(),
+                                             Leaves.front());
+            Value->Type = NdType::makeInt(P.Type->Size, false);
+            Hinted.push_back(std::move(Value));
+          } else {
+            Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
+          }
         }
       }
     }
@@ -526,7 +586,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     // A register scan can see the whole register or unrelated setup past
     // that declared list; neither may replace these bound operands.
     // A zero-argument binding is also complete, without a heuristic scan.
-    if (Hinted.empty() ||
+    if (Hinted.empty() || Signature.HasExplicitABI ||
         Call.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst)
       return Hinted;
   }
@@ -557,7 +617,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   bool ReachedBlockStart = true;
   for (int J = static_cast<int>(CallIdx) - 1; J >= 0; --J) {
     const MedOp &Prev = Ops[J];
-    if (call_args_detail::endsCallSetup(Prev)) {
+    if (endsCallArgumentSetup(Prev, /*RegistersOnly=*/true)) {
       ReachedBlockStart = false;
       break;
     }
@@ -1113,6 +1173,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     const MedOp &Call = Ops[CallIdx];
     Scan.CalleeRegisterArgs = Call.CalleeRegisterArgs;
     Scan.CalleeStackArgs = Call.CalleeStackArgs;
+    Scan.HeaderVariadic = Call.CalleeVariadicFrom >= 0;
     Scan.CalleeInImage =
         Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
         Call.Inputs[0].isConst() &&
@@ -1424,10 +1485,26 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       // through its slot keeps that same list.
       const bool SetupConvention =
           Convention && Convention->ArgumentsFromCallSetup;
+      // A direct call's final recovered list also owns Win64 stack slots.
+      // Appending this block's adjacent locals can revive parameters removed
+      // by the shared callee bound, or turn a required unknown into a stale
+      // value from the emitter's independent setup scan.
       const bool CompleteSetup =
-          CI->ArgumentsFromPrototype || (SetupConvention && !CI->IsIndirect);
+          CI->ArgumentsFromPrototype ||
+          (!CI->IsIndirect &&
+           (SetupConvention ||
+            (Convention && Convention->StackArgumentSummary)));
+      // A loader-bound import retains its fixed contract through a captured
+      // runtime pointer: an independent setup scan must not append adjacent
+      // frame locals to its recovered list. Like any indirect call's, a value
+      // recovery left unknown within that list still comes from the scan.
+      // Where only internal calls take register arguments, the scan alone
+      // gives an indirect call its stack arguments, an import's included.
+      const bool KnownImport =
+          Image && Convention && !Convention->RegparmOnlyForInternalCalls &&
+          !importCalleeName(*Image, CI->TargetAddr).empty();
       size_t Recovered = CI->Args.size();
-      if (SetupConvention && CI->IsIndirect && !CompleteSetup) {
+      if (SetupConvention && CI->IsIndirect && !KnownImport && !CompleteSetup) {
         // The scan gives such a call its stack arguments, though not the
         // incoming ones a tail jump passes on untouched, which recovery
         // promotes to stack parameters.
@@ -1455,13 +1532,24 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
         for (size_t K = 0; K < Recovered; ++K) {
           ExprPtr Arg = medvarToExpr(CI->Args[K]);
           // The callee reads only the low lane's scalar.
-          if (const uint16_t Read =
-                  K < CI->ArgReadBytes.size() ? CI->ArgReadBytes[K] : 0;
-              Read && Arg && Arg->Type && Read < Arg->Type->Size) {
+          const uint16_t Read =
+              K < CI->ArgReadBytes.size() ? CI->ArgReadBytes[K] : 0;
+          if (Read && Arg && Arg->Type && Read < Arg->Type->Size) {
             Arg = HighExpr::makeBinop(NdOp::SUBBYTES, Arg,
                                       HighExpr::makeConst(0, 4));
             Arg->Type = NdType::makeInt(Read, false);
           }
+          const bool FloatingLane =
+              CI->IntegerRegisterArgCount >= 0 &&
+              K >= static_cast<size_t>(CI->IntegerRegisterArgCount) &&
+              K - CI->IntegerRegisterArgCount <
+                  static_cast<size_t>(
+                      std::max(0, CI->FloatingRegisterArgCount));
+          if (Read && FloatingLane && Ops[CallIdx].CalleeFloatReturnBytes &&
+              Arg && Arg->Type && Arg->Type->Kind == NdTypeKind::Int &&
+              Arg->Type->Size == Read)
+            Arg =
+                HighExpr::makeBitCast(std::move(Arg), NdType::makeFloat(Read));
           if (Ops[CallIdx].X87ArgumentInput && K + 1 == CI->Args.size() &&
               Arg && Arg->Type && Arg->Type->Size == 10 &&
               Arg->Type->Kind != NdTypeKind::Float)
@@ -1478,15 +1566,17 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                  Source->SSAVer == Target.SSAVer;
         };
         size_t End = FromABI.size();
-        while (!CompleteSetup && End < TargetLimit && Found[End] &&
-               Found[End]->Kind != ExprKind::Undef && !HoldsTarget(End))
+        while (!CompleteSetup && !KnownImport && End < TargetLimit &&
+               Found[End] && Found[End]->Kind != ExprKind::Undef &&
+               !HoldsTarget(End))
           ++End;
         for (size_t I = FromABI.size(); I < End; ++I)
           FromABI.push_back(Found[I]);
         // The scan numbers registers in the convention's order, which does
         // not index arguments passed in the callee's own.
         for (size_t I = 0; I < FromABI.size(); ++I)
-          if ((!FromABI[I] || FromABI[I]->Kind == ExprKind::Undef) &&
+          if (!CompleteSetup &&
+              (!FromABI[I] || FromABI[I]->Kind == ExprKind::Undef) &&
               !CI->ArgumentsFromPrototype &&
               !CI->ArgumentsInCalleeRegisterOrder && Found[I] &&
               Found[I]->Kind != ExprKind::Undef)
@@ -1543,8 +1633,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     std::vector<ExprPtr> Stack;
     if (CurMed) {
       indexMedDefinitions();
-      for (const detail::StackSlotValue &Slot : detail::storedStackArguments(
-               *CurMed, CurBlock, CallIdx, TargetArch, *EntryStackOffsets)) {
+      for (const detail::StackSlotValue &Slot :
+           detail::storedStackArguments(*CurMed, CurBlock, CallIdx, TargetArch,
+                                        Format, *EntryStackOffsets)) {
         ExprPtr Value = medvarToExpr(Slot.Value);
         if (Slot.Value.Size > TRI.PointerSize) {
           Value = HighExpr::makeBinop(NdOp::SUBBYTES, Value,
@@ -1615,16 +1706,24 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
         continue;
       }
       std::optional<MedVar> Reaching;
+      bool AfterCall = false;
       for (size_t J = CallIdx; J-- > 0 && !Reaching;) {
         const MedOp &Prev = Ops[J];
-        if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL)
+        if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL) {
+          AfterCall = true;
           break;
+        }
         if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
             Prev.Output.RegOff == Vector)
           Reaching = Prev.Output;
       }
+      // A parameter this function only passes on, which its entry holds no
+      // copy of, enters as that parameter (detectSummaryVectorParams).
       MedVar LiveIn;
-      if (!Reaching && reachingRegAtBlockEntry(CurBlock, Vector, LiveIn))
+      if (!Reaching && CurMed &&
+          detail::reachingRegisterAtBlockEntry(
+              *CurMed, CurBlock, Vector, getTargetRegInfo(TargetArch), LiveIn,
+              /*ParameterAtEntry=*/!AfterCall))
         Reaching = LiveIn;
       ExprPtr Value = Reaching ? medvarToExpr(*Reaching)
                                : HighExpr::makeUndef(sizeof(double));

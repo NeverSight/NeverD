@@ -8,7 +8,7 @@
 
 #include "neverd/analysis/InterpreterSpecialization.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/symbolic/SymExec.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -51,7 +51,7 @@ class StackProvider : public SpecializationProvider {
 public:
   std::map<va_t, SpecializationInstruction> Code;
 
-  void add(va_t Address, std::initializer_list<LowOp> Ops,
+  void add(va_t Address, const std::vector<LowOp> &Ops,
            SpecializationNativeStackControl Native =
                SpecializationNativeStackControl::None) {
     SpecializationInstruction Insn;
@@ -2255,25 +2255,45 @@ LowOp repeatedBytes(NdVar Source, NdVar Destination, NdVar Count, NdVar DF) {
 }
 
 TEST(NativeStackSpecialization, RepeatedCopyRetainsOverlapAndInstructionOrder) {
-  StackProvider P;
-  P.add(0x100, {operation(NdOp::INT_SUB, r(40), {r(32), c(40)}),
-                operation(NdOp::STORE, {}, {r(40), c(0x8877665544332211)}),
-                operation(NdOp::INT_ADD, r(48), {r(40), c(1)}),
-                operation(NdOp::COPY, r(56), {c(7)}),
-                repeatedBytes(r(40), r(48), r(56), c(0, 1)),
-                operation(NdOp::LOAD, r(0), {r(40)}), ret()});
-  auto Result = specializeInterpreter(P, {0x100}, stackOptions());
-  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
-  auto Run = execute(Result.Residual);
-  ASSERT_TRUE(Run);
-  EXPECT_EQ(Run->Value, 0x1111111111111111u);
-  auto Exact = stackOptions();
-  Exact.MaxOperations = Result.EvaluatedOperations;
-  EXPECT_TRUE(specializeInterpreter(P, {0x100}, Exact).complete());
-  --Exact.MaxOperations;
-  const auto Short = specializeInterpreter(P, {0x100}, Exact);
-  EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded);
-  EXPECT_TRUE(Short.Residual.Blocks.empty());
+  for (bool Complete : {false, true}) {
+    SCOPED_TRACE(Complete);
+    StackProvider P;
+    std::vector<LowOp> Ops = {
+        operation(NdOp::INT_SUB, r(40), {r(32), c(40)}),
+        operation(NdOp::STORE, {}, {r(40), c(0x8877665544332211)}),
+        operation(NdOp::INT_ADD, r(48), {r(40), c(1)}),
+        operation(NdOp::COPY, r(56), {c(7)}),
+        repeatedBytes(r(40), r(48), r(56), c(0, 1))};
+    if (Complete) {
+      auto &Transfer = Ops.back();
+      Transfer.Inputs[0] =
+          c(static_cast<uint16_t>(Intrinsic::X86RepMovsState), 2);
+      // Arithmetic flags are nonzero while DF is clear. Only the owned DF
+      // bit may select backward transfer.
+      Transfer.Inputs[4] = c(X86RepFlagsMask, X86RepStatusBytes);
+      Transfer.addInput(c(*x86RepDescriptor(Intrinsic::X86RepMovsState,
+                                            Arch::X64, 1, 8, 0, false),
+                          4));
+      for (unsigned I = 1; I <= 2; ++I)
+        Ops.push_back(operation(NdOp::COPY, NdVar::tmp(0x10100 + I * 16, 8),
+                                {NdVar::tmp(0x10108 + I * 16, 8)}));
+    }
+    Ops.push_back(operation(NdOp::LOAD, r(0), {r(40)}));
+    Ops.push_back(ret());
+    P.add(0x100, Ops);
+    auto Result = specializeInterpreter(P, {0x100}, stackOptions());
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    auto Run = execute(Result.Residual);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, 0x1111111111111111u);
+    auto Exact = stackOptions();
+    Exact.MaxOperations = Result.EvaluatedOperations;
+    EXPECT_TRUE(specializeInterpreter(P, {0x100}, Exact).complete());
+    --Exact.MaxOperations;
+    const auto Short = specializeInterpreter(P, {0x100}, Exact);
+    EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded);
+    EXPECT_TRUE(Short.Residual.Blocks.empty());
+  }
 }
 
 TEST(NativeStackSpecialization, ZeroCountKeepsUnknownPointersAndDirection) {

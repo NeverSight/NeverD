@@ -39,6 +39,59 @@ __asm__(".type __memcpy_chk, %function\n"
         ".type __memmove_chk, %function\n"
         ".type __memset_chk, %function\n");
 
+// Different call surfaces consume the same failure count. Mode 1 makes
+// one more fresh-socket attempt; mode 2 retries the failed description.
+u64 network_connect_failures(u64 *out, u64 mode) {
+  unsigned char peer4[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
+  unsigned char peer6[28] = {10, 0, 0x23, 0x29, 0, 0, 0, 0};
+  peer6[23] = 1;
+  int fd = socket(2, 1, 6);
+  out[0] = connect(fd, peer4, 16);
+  if (out[0] || close(fd))
+    return 1;
+  void *handle = dlopen("libc.so", 2);
+  int (*dynamic_connect)(int, const void *, u32) = dlsym(handle, "connect");
+  if (!dynamic_connect)
+    return 2;
+  for (unsigned i = 0; i != 4; ++i) {
+    int ipv6 = i & 1;
+    void *peer = ipv6 ? peer6 : peer4;
+    u32 size = ipv6 ? 28 : 16;
+    ++((unsigned char *)peer)[3];
+    fd = socket(ipv6 ? 10 : 2, 1, 6);
+    *__errno() = 73;
+    if (i == 0)
+      out[1 + 2 * i] = connect(fd, peer, size);
+    else if (i == 1)
+      out[1 + 2 * i] = dynamic_connect(fd, peer, size);
+    else if (i == 2)
+      out[1 + 2 * i] = syscall(203, fd, peer, size);
+    else {
+      register long x0 __asm__("x0") = fd;
+      register void *x1 __asm__("x1") = peer;
+      register long x2 __asm__("x2") = size;
+      register long x8 __asm__("x8") = 203;
+      __asm__ volatile("svc #0"
+                       : "+r"(x0)
+                       : "r"(x1), "r"(x2), "r"(x8)
+                       : "memory", "cc");
+      out[1 + 2 * i] = x0;
+    }
+    out[2 + 2 * i] = *__errno();
+    if (mode == 2 && i == 0)
+      out[10] = connect(fd, peer, size);
+    if (close(fd))
+      return 3;
+  }
+  if (mode == 1) {
+    fd = socket(2, 1, 6);
+    *__errno() = 73;
+    out[10] = connect(fd, peer4, 16);
+    return 4;
+  }
+  return 0;
+}
+
 u64 network_checked_memory(u64 *out, u64 mode) {
   unsigned char *dst = (void *)(out + 32);
   const unsigned char src[] = {0, 0xff, 0x42};
@@ -234,6 +287,33 @@ u64 network_stream(u64 *out, u64 raw) {
   out[9] = connect(alias, (void *)1, 16);
   out[10] = *__errno();
   return 0;
+}
+
+u64 network_stream_identity(u64 *out, u64 mode) {
+  unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
+  int failed = socket(2, 1, 6);
+  if (failed < 0 || connect(failed, peer, sizeof(peer)) != -1 ||
+      *__errno() != 111 || close(failed))
+    return 1;
+  int first = socket(2, 1, 6);
+  if (first < 0 || connect(first, peer, sizeof(peer)))
+    return 2;
+  int alias = dup(first);
+  if (alias < 0 || close(first))
+    return 3;
+  int reused = socket(2, 1, 6);
+  if (reused < 0 || connect(reused, peer, sizeof(peer)))
+    return 4;
+  out[0] = first == failed;
+  out[1] = reused == first;
+  const unsigned char bytes[] = {0, 0xff};
+  int selected = mode < 2 ? alias : reused;
+  // Both routes must identify the retained description's input contract.
+  if (mode & 1)
+    syscall(64, selected, bytes, sizeof(bytes));
+  else
+    send(selected, bytes, sizeof(bytes), 0);
+  return 5;
 }
 
 u64 network_dynamic(u64 *out) {

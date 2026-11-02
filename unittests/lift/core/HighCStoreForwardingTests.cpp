@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/c/HighC/HighCWriter.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -23,6 +24,96 @@
 namespace {
 
 using namespace neverd;
+
+TEST(HighCStoreForwarding, IncompleteFrameRecordsKeepTheirInteriorFields) {
+  class LazyFrameTypes : public NullDebugContext {
+  public:
+    void completeType(const TypeRef &Type) const override {
+      if (!Type || Type->Kind != NdTypeKind::Struct || Type->IsEnum ||
+          Type->SourceName != "Pair" || !Type->FieldDisplayNames.empty())
+        return;
+      Type->FieldDisplayNames = {"first", "second"};
+      Type->FieldDisplayOffsets = {0, 4};
+      Type->FieldDisplayTypes = {NdType::makeInt(4), NdType::makeInt(4)};
+    }
+  } Debug;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  CEmitterOptions Options;
+  HighCWriter Writer(OS, Options, &Debug);
+  for (const bool KnownExtent : {false, true})
+    for (const bool CallOverlay : {false, true}) {
+      SCOPED_TRACE(KnownExtent);
+      SCOPED_TRACE(CallOverlay);
+      Writer.FrameSlots.clear();
+      const TypeRef Record =
+          NdType::makeNamedRecord("Pair", KnownExtent ? 8 : 0);
+      HighCWriter::NamedFrameSlot Slot;
+      Slot.Name = "pair";
+      Slot.Type = CallOverlay ? NdType::makeInt(8) : Record;
+      Slot.CallType = CallOverlay ? Record : nullptr;
+      Writer.FrameSlots[-16] = Slot;
+      Writer.FrameSlots[-24].Name = "integer";
+      Writer.FrameSlots[-24].Type = NdType::makeInt(8);
+      EXPECT_EQ(Writer.frameTypedMemberAccess(-12, 4),
+                std::optional<std::string>("pair.second"));
+      const TypeRef Member = Writer.frameTypedMemberType(-12, 4);
+      ASSERT_TRUE(Member);
+      EXPECT_EQ(Member->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Member->Size, 4);
+      EXPECT_FALSE(Writer.frameTypedMemberAccess(-16, 4));
+      EXPECT_FALSE(Writer.frameTypedMemberType(-16, 4));
+      EXPECT_FALSE(Writer.frameTypedMemberAccess(-12, 8));
+      EXPECT_FALSE(Writer.frameTypedMemberType(-12, 8));
+
+      // Two records covering the same bytes cannot choose one member's name.
+      const TypeRef Overlap = NdType::makeNamedRecord("Overlap", 12);
+      Overlap->FieldDisplayNames = {"value"};
+      Overlap->FieldDisplayOffsets = {8};
+      Overlap->FieldDisplayTypes = {NdType::makeInt(4)};
+      Writer.FrameSlots[-20].Name = "overlap";
+      Writer.FrameSlots[-20].Type = Overlap;
+      EXPECT_FALSE(Writer.frameTypedMemberAccess(-12, 4));
+      EXPECT_FALSE(Writer.frameTypedMemberType(-12, 4));
+    }
+}
+
+TEST(HighCStoreForwarding, FrameMemberQueriesFollowNewSlotsAfterProjection) {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  HighCWriter Writer(OS, Options, nullptr);
+  HighFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "scalar_frame";
+  Func.ReturnType = NdType::makeInt(4);
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeConst(7, 4);
+  Func.Body = {Return};
+
+  for (const bool CallOverlay : {false, true}) {
+    SCOPED_TRACE(CallOverlay);
+    // A completed projection cannot constrain subsequent queries about new
+    // frame records or call overlays installed on the same writer.
+    Writer.writeFunctionProjection(Func);
+    const TypeRef Record = NdType::makeNamedRecord("Pair", 8);
+    Record->FieldDisplayNames = {"first", "second"};
+    Record->FieldDisplayOffsets = {0, 4};
+    Record->FieldDisplayTypes = {NdType::makeInt(4), NdType::makeInt(4)};
+    auto &Slot = Writer.FrameSlots[-16];
+    Slot.Name = "next_pair";
+    Slot.Type = CallOverlay ? NdType::makeInt(8) : Record;
+    Slot.CallType = CallOverlay ? Record : nullptr;
+    EXPECT_EQ(Writer.frameTypedMemberAccess(-12, 4),
+              std::optional<std::string>("next_pair.second"));
+    const TypeRef Member = Writer.frameTypedMemberType(-12, 4);
+    ASSERT_TRUE(Member);
+    EXPECT_EQ(Member->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Member->Size, 4);
+  }
+}
 
 ExprPtr makeParam(unsigned Id, uint16_t Size, TypeRef Type,
                   Arch Architecture = Arch::X64) {
@@ -480,6 +571,59 @@ TEST(HighCStoreForwarding, CallResultsFollowRenderedLoadsAndCallArity) {
     const bool ResultIsRendered = Mode == 0 || Mode == 1 || Mode == 3;
     EXPECT_EQ(State.OmittedCallResults.count(&Function.Body[0]),
               ResultIsRendered ? 0u : 1u);
+  }
+}
+
+TEST(HighCStoreForwarding, CopyCyclesNeedAnObservableReader) {
+  for (unsigned Mode = 0; Mode != 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    const TypeRef Integer = NdType::makeInt(8, false);
+    auto Local = [&](int Id) {
+      MedVar Variable;
+      Variable.Kind = MedVar::Temp;
+      Variable.Id = Id;
+      Variable.Size = 8;
+      return HighExpr::makeVar(Variable, Integer);
+    };
+    auto Assign = [&](int Id, ExprPtr Value) {
+      HighStmt Statement;
+      Statement.Kind = StmtKind::Assign;
+      Statement.Dst = Local(Id);
+      Statement.Val = std::move(Value);
+      return Statement;
+    };
+    HighFunc Function;
+    Function.Name = "copy_cycle";
+    Function.ReturnType = Integer;
+    Function.Body = {Assign(1, HighExpr::makeUndef(8)), Assign(2, Local(1)),
+                     Assign(1, Local(2)),
+                     Assign(2, HighExpr::makeCall("produce", 0x2000, {})),
+                     ret(Local(1))};
+    if (Mode >= 2) {
+      HighStmt Read;
+      Read.Kind = StmtKind::Call;
+      Read.CallExpr = HighExpr::makeCall("consume", 0x3000, {Local(1)});
+      if (Mode == 3) {
+        Read.CallExpr->IsIndirectCall = true;
+        Read.CallExpr->IndirectTarget = Local(1);
+      }
+      Function.Body.insert(Function.Body.end() - 1, std::move(Read));
+    }
+    HighCAnalysisState State;
+    State.VoidReturns = Mode != 1;
+    const auto VarFn = [](const MedVar &Variable) {
+      return "t" + std::to_string(Variable.Id);
+    };
+    const auto ArgLimit = [Mode](const HighExpr &Call) {
+      return Mode == 3 ? size_t(0) : Call.Operands.size();
+    };
+    analyzeUnusedAssigns(State, Function, VarFn, ArgLimit);
+    analyzeUnusedCallResults(State, Function, VarFn, ArgLimit);
+    for (size_t I = 0; I != 3; ++I)
+      EXPECT_EQ(State.DeadStmts.count(&Function.Body[I]), Mode == 0 ? 1u : 0u);
+    EXPECT_FALSE(State.DeadStmts.count(&Function.Body[3]));
+    EXPECT_EQ(State.OmittedCallResults.count(&Function.Body[3]),
+              Mode == 0 ? 1u : 0u);
   }
 }
 

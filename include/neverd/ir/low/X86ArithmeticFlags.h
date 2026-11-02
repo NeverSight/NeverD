@@ -10,7 +10,7 @@
 #ifndef NEVERD_IR_LOW_X86ARITHMETICFLAGS_H
 #define NEVERD_IR_LOW_X86ARITHMETICFLAGS_H
 
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <array>
 #include <utility>

@@ -15,7 +15,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -136,10 +136,8 @@ bool validateEvexWrappingArithMemory(
       !isVectorRegisterOfSize(Destination, VectorSize) ||
       !isVectorRegisterOfSize(Left, VectorSize) || Memory.type != X86_OP_MEM ||
       Memory.size != (Broadcast ? Spec.ElementSize : VectorSize) ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          vectorRegisterIndex(Left))
+      Encoding.regIndex() != vectorRegisterIndex(Destination) ||
+      Encoding.vvvvIndex() != vectorRegisterIndex(Left))
     return false;
 
   const unsigned LaneCount = VectorSize / Spec.ElementSize;

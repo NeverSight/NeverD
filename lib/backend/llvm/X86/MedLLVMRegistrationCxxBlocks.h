@@ -8,7 +8,7 @@
 #ifndef NEVERD_MEDLLVMREGISTRATIONCXXBLOCKS_H
 #define NEVERD_MEDLLVMREGISTRATIONCXXBLOCKS_H
 
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
 
 namespace llvm {
 class BasicBlock;

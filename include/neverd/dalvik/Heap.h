@@ -9,6 +9,8 @@
 #include "neverd/dalvik/Model.h"
 
 #include <memory>
+#include <optional>
+#include <span>
 
 namespace neverd::mobile::dalvik {
 // Identities are workload-local tokens, never host or guest addresses. The
@@ -27,6 +29,13 @@ struct Object {
   bool Initialized = true;
   uint32_t Message =
       0; // Throwable detailMessage identity (no host stack trace).
+  struct MapEntry {
+    uint32_t Key, Value;
+  };
+  // Known HashMap contents. Raw AllocObject and an existing process map with
+  // unsupplied contents remain unknown. Entries retain workload identities,
+  // permitting null values and cycles.
+  std::optional<std::vector<MapEntry>> MapEntries;
 };
 class Heap {
 public:
@@ -37,8 +46,14 @@ public:
   // Java VM's allocation failure or collection policy. extra accounts for maps.
   std::shared_ptr<Object> allocate(Object::Kind kind, std::string_view name,
                                    uint64_t bytes, uint64_t extra = 0);
+  // Callers validate the canonical array descriptor and nonnegative Java
+  // length. Allocates zero primitive bytes or null reference elements.
+  std::shared_ptr<Object> allocateArray(std::string_view type, uint32_t length);
   std::shared_ptr<Object> get(uint64_t identity) const;
+  // Resize retained storage only after admitting its growth to the heap budget.
+  bool resizeBytes(Object &object, uint64_t size);
   bool replaceBytes(Object &object, std::vector<uint8_t> bytes);
+  bool replaceMapEntries(Object &object, std::vector<Object::MapEntry> entries);
   std::shared_ptr<Object> classObject(std::string_view name);
   uint32_t classObjectIdentity(std::string_view name) const;
   std::shared_ptr<Object> stringConstant(std::string_view key,
@@ -61,5 +76,9 @@ bool platformClass(std::string_view name);
 std::string_view javaParent(std::string_view name);
 // Canonical UTF-8/WTF-8 from the shared DEX reader -> exact UTF-16LE units.
 std::vector<uint8_t> javaStringBytes(std::string_view text);
+// ART JNI UTF-8: NUL is C0 80, paired surrogates use four bytes, isolated
+// surrogates retain three bytes. Input is the heap's validated UTF-16LE
+// storage.
+std::vector<uint8_t> artStringUTF8(std::span<const uint8_t> utf16);
 bool referenceAssignable(std::string_view source, std::string_view destination);
 } // namespace neverd::mobile::dalvik

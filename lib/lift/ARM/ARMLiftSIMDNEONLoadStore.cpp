@@ -1,4 +1,5 @@
-//===- ARMLiftSIMDNEONLoadStore.cpp - ARM32 NEON structure load/store lifter ---===//
+//===- ARMLiftSIMDNEONLoadStore.cpp - ARM32 NEON structure load/store lifter
+//---===//
 //
 // NeverD Decompiler
 //
@@ -13,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -24,8 +25,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONLoadStore(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                           const cs_arm &ARM) {
+bool liftSIMDNEONLoadStore(ARMLifter &L, ARMLifter::LiftState &S,
+                           const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // ========================================================================
   // NEON (Advanced SIMD) — large batch
@@ -270,13 +271,12 @@ bool liftSIMDNEONLoadStore(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn 
         if (PostReg != ARM_REG_INVALID) {
           auto PI = mapCapstoneReg(PostReg);
           if (PI.Size != 0)
-            S.emit(NdOp::INT_ADD, BaseReg,
-                   {BaseReg, NdVar::reg(PI.Offset, 4)});
+            S.emit(NdOp::INT_ADD, BaseReg, {BaseReg, NdVar::reg(PI.Offset, 4)});
         } else if (ARM.post_index && MemBR.disp != 0) {
           S.emit(NdOp::INT_ADD, BaseReg,
                  {BaseReg, NdVar::cst(static_cast<uint64_t>(
-                                            static_cast<uint32_t>(MemBR.disp)),
-                                        4)});
+                                          static_cast<uint32_t>(MemBR.disp)),
+                                      4)});
         } else if (Insn->detail->writeback && Offset > 0) {
           S.emit(NdOp::INT_ADD, BaseReg, {BaseReg, NdVar::cst(Offset, 4)});
         }

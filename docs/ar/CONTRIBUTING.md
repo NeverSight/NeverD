@@ -1,6 +1,6 @@
 **اللغات**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](CONTRIBUTING.md)
 
-<!-- i18n-source: 0e93112bfc87bdf7cfa9e280f8b7a9155214ae36187f32d8dd473c6f17fd92d3 -->
+<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
 
 # المساهمة في NeverD
 
@@ -144,8 +144,16 @@ simdjson وجدولة المسار عبر oneTBB، مع الاحتفاظ بمخ�
 oneTBB بالعمال بين الدفعات وتفحص مكدسات 8 MiB، ولا تبني أو تحمّل `tbbmalloc` أو وكيله.
 يعيد المستدعون ذوو المكدس الكبير استخدام المساحة المتاحة، ويحصل الصغار على منسّق أصلي.
 يجب أن تستخدم المضيفات التي تنفذ fork بعد أول استخدام أو تفرغ SDK ديناميكيًا خط الخيوط
-الأصلية `NEVERD_ENABLE_TBB=OFF`؛ لا تدعم المجدولة المحتفظ بها دورات الحياة هذه، ولا تنهي
-مجدولة TBB المشتركة للمضيف. وزّع DLL أو المكتبة المشتركة للتشغيل مع الأبنية المفعّلة.
+الأصلية `NEVERD_ENABLE_TBB=OFF`؛ لا تدعم المجدولة المحتفظ بها دورات الحياة هذه. تُربط
+oneTBB ربطًا ساكنًا داخل النواة المشتركة، وتبقى رموزها خاصة بتلك النواة. تستخدم استدعاءات
+مكوّنات CLI وطلبات عامل GUI المجدولة نفسها؛ ولا تُوزّع أي DLL أو مكتبة مشتركة لـ TBB.
+تختار الأهداف المرتبطة بـ `neverd_shared` المجدولة المشتركة تلقائيًا. أما العملاء الذين
+يصلون إلى SDK عبر هدف آخر ويربطون أيضًا أرشيفات المكوّنات، فيجب أن يستخدموا
+`neverd_use_shared_task_scheduler` على هدفهم النهائي. تحتفظ أدوات المكوّنات المستقلة
+ببيئة التشغيل الخاصة بها.
+يمنع هذا التكامل المقيّد تعدد مجدولات NeverD داخل عملية واحدة؛ وما زال المشروع الأصلي يصف
+[أبنية oneTBB الساكنة](https://uxlfoundation.github.io/oneTBB/main/intro/static_linking.html)
+بأنها غير مدعومة وينصح بعدم استخدامها للأغراض العامة.
 
 راجع [التحقق من التسريع](../testing.md#acceleration-libraries) للاختبارات الأصلية والمقارنات وحدود التوافق.
 
@@ -168,6 +176,11 @@ python scripts/build.py build-release --parallel
 LLVM المحلي الافتراضي. توثّق الخيارات المتقدمة مثل
 `NEVERD_LLVM_PREBUILT_TAG`، وعنوان المرآة، ودليل الذاكرة المؤقتة، والمجموع
 الصريح في `cmake/NeverDLLVMPrebuilt.cmake`.
+
+تُنشر إصلاحات LLVM في [فرع LLVM الخاص بـ NeverSight](https://github.com/NeverSight/llvm-project).
+سجل الإصلاحات وادمجها هناك، ثم حدّث مراجعة الوحدة الفرعية LLVM في NeverD.
+يترجم البناء المتكامل هذا المصدر مباشرة؛ لا تضف ملفات رقع LLVM أو نسخ مصدر معدلة في دليل بناء NeverD.
+يجب إعادة بناء الحزم المسبقة من الفرع المصحح للتحقق من السلوك نفسه.
 
 <!-- i18n-section: workflow -->
 ## سير الفروع وطلبات السحب

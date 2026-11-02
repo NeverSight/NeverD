@@ -64,10 +64,16 @@ output = bytes.fromhex(report["stdout_hex"])
 
 ## Options and results
 
-Options are a JSON object with at most 64 KiB of request text, excluding two
-hexadecimal characters per validated `android.dex_images` byte. That explicit
-DEX allowance raises the total wire ceiling to 2112 KiB; it does not enlarge
-other field budgets. JSON escape overhead still counts as request text.
+Options are a JSON object with at most 64 KiB of metadata, excluding two
+hexadecimal characters per validated `android.dex_images` byte and per
+validated `linux_files.files[].bytes_hex` byte. The total wire ceiling is
+34880 KiB: up to 1 MiB of decoded DEX, up to 16 MiB of decoded Linux
+regular-file bytes, and the metadata allowance. The existing aggregate
+Linux file budget still charges paths, directories, links, devices and
+write reservations, so regular-file content cannot consume that entire
+16 MiB by itself. Paths, other binary fields, whitespace and JSON escape
+overhead remain metadata. These transport allowances do not enlarge any
+decoded field budget or grant access to host files.
 Unknown fields, null field values,
 invalid types, embedded NULs in strings and nonpositive limits are rejected.
 
@@ -337,16 +343,39 @@ network services participate. ABI references:
 [Bionic masks](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/bionic/sigprocmask.cpp)
 and [Bionic signal helpers](https://android.googlesource.com/platform/bionic/+/android-9.0.0_r1/libc/bionic/signal.cpp).
 
-`mincore` supports ordered validation, zero-length queries and a first queried
-page that is unmapped. Alignment errors return EINVAL before address-range
-checks; an invalid query range returns ENOMEM before vector-range validation.
-The vector consumes one byte per rounded-up page. Numerical vector-range
-errors return EFAULT, but an unmapped vector does not precede ENOMEM for an
-unmapped first query page. These paths do not write the vector. A mapped first
-page, including PROT_NONE, stops explicitly because mapping ownership alone
-does not establish Linux residency. The model does not skip a mapped prefix to
-report a later hole, fabricate resident bits or query the host. This bounded
-ordering follows the [Linux implementation](https://android.googlesource.com/kernel/common/+/16a2d602244f/mm/mincore.c).
+`mincore` validates alignment, query range and numerical vector range in that
+order (EINVAL, ENOMEM, EFAULT). The vector has one byte per rounded-up page.
+Zero-length queries succeed; an unmapped first query page returns ENOMEM before
+checking output mappings. These paths leave the vector and observations alone.
+
+An optional `linux_kernel.residency_observations` array supplies ordered
+`{ "address": "4294967296", "pages": [0, 1, 0] }` records. Addresses use the
+shared unsigned decimal integer wire contract. Records describe query-time page
+states, not initial RAM contents: the start and entire rounded query length must
+match exactly. The bounded LP64 contract uses 4 KiB pages and admits 1,024
+records, 65,536 pages per record and 1,048,576 observation bytes in total. Shared
+JSON metadata limits still apply. Missing, exhausted or mismatched input stops
+explicitly; neither host residency nor allocated NeverD RAM supplies a default.
+
+Only live anonymous allocations made by the shared Linux `mmap`/`brk` owner
+qualify, including PROT_NONE pages. Names alone never establish backing
+provenance. Unmapping retires provenance, so an unrelated mapping at a reused
+address cannot inherit it. Query output advances by complete live VMA chunks,
+limited to one page of vector bytes. A later hole returns ENOMEM with completed
+prefixes intact. An inaccessible first output byte returns EFAULT; an incomplete
+chunk with a writable prefix remains unsupported because exact partial-copy
+progress is architecture-specific. Device query backing and device output are
+unsupported. Unrelated device mappings are not accessed. Observations are
+consumed once a query reaches known backing, before output validation, including
+EFAULT. Unknown first backing does not consume a record.
+
+Raw Linux syscalls, Bionic `mincore`, Bionic `syscall` and dynamic imports use the
+same state; Bionic alone translates kernel errors to errno. Temporary kernel
+allocation failure (EAGAIN), host paging and unknown backing types are outside
+this model. The ordering and chunking contract follows Android common kernel
+4.4.115 `aa856bd83c43969dc3e8f8c0e97e6105e91aef76`,
+[`mm/mincore.c`](https://android.googlesource.com/kernel/common/+/aa856bd83c43969dc3e8f8c0e97e6105e91aef76/mm/mincore.c).
+This selects a bounded semantic contract, not a device kernel image.
 
 Static ELF TLS templates (`PT_TLS`) are validated as loader-owned facts, with
 one template, bounded file/memory extents, alignment congruence and readable
@@ -409,9 +438,41 @@ overflow return `EINVAL`; an aligned empty range succeeds. Holes return
 `ENOMEM` while still applying advice to mapped portions on either side. The
 behavior argument uses its low 32 bits, matching the Linux `int` ABI. These
 rules follow Linux's [advice dispatch](https://github.com/torvalds/linux/blob/v6.8/mm/madvise.c)
-and [KSM policy](https://github.com/torvalds/linux/blob/v6.8/mm/ksm.c). Other
-advice, including `MADV_DONTNEED` and `MADV_FREE`, stops as an unsupported
-service before changing state; discarding content is not modeled as a hint.
+and [KSM policy](https://github.com/torvalds/linux/blob/v6.8/mm/ksm.c).
+`MADV_DONTNEED` additionally admits owned private anonymous mappings, with the
+page-discard contract below. Other advice, including `MADV_FREE`, remains
+unsupported; discarding content is not modeled as a content-preserving hint.
+
+**Private anonymous page discard.**
+
+`madvise(MADV_DONTNEED)` shares the LinuxMemory implementation across raw LP64
+syscalls and Android Bionic direct, syscall and dynamic-import routes. It admits
+only private anonymous mmap and brk ranges allocated by that owner. Ownership
+is recorded when pages are mapped, independently of optional VMA-name and
+residency observations. Initial image/input RAM, file mappings, devices, locked
+or huge pages and unmodeled advice values are not inferred from generic RAM.
+
+The low 32 bits select the advice. Alignment, rounded length and unsigned end
+overflow are checked before mapping lookup; a valid zero length returns zero.
+Every covered page receives fresh zero backing with its previous permissions.
+Virtual addresses, VMA names, program break and KSM eligibility are retained.
+Previously pinned views and other physical aliases retain the original bytes;
+this operation does not memset shared backing. AddressSpace remains the mapping
+and generation authority, so CPU projections refresh before execution resumes.
+
+Mapped pages on both sides of a hole are discarded before ENOMEM is returned.
+Unknown backing stops explicitly at that range, preserving earlier completed
+page effects. A temporary replacement allocation is prepared before removing
+each old mapping. Exhausting the model's backing budget stops without claiming
+a kernel allocation result or removing the current page; previous page effects
+remain. Unexpected mapping failures are terminal. OS mutation ownership must
+remain exclusive throughout the stopped operation.
+
+This is the byte-visible contract for the restricted anonymous domain, based on
+Android common 4.4.115 `mm/madvise.c` at
+`aa856bd83c43969dc3e8f8c0e97e6105e91aef76`. It does not model lazy page faults,
+RSS, swap or host reclamation. Mincore still requires its separate explicit
+query-time observations; no residency bit is inferred from this host storage.
 
 Explicit `linux_files.devices[].read_only_mappings` additionally admit
 read-only shared device RAM snapshots, with shared backing across opens,
@@ -427,6 +488,37 @@ guest errors and allow execution to continue. No memory service forwards a
 guest pointer or mapping request to the host OS.
 
 <a id="windows-pe64-profile"></a>
+
+**Private anonymous page discard.**
+
+`madvise(MADV_DONTNEED)` shares the LinuxMemory implementation across raw LP64
+syscalls and Android Bionic direct, syscall and dynamic-import routes. It admits
+only private anonymous mmap and brk ranges allocated by that owner. Ownership
+is recorded when pages are mapped, independently of optional VMA-name and
+residency observations. Initial image/input RAM, file mappings, devices, locked
+or huge pages and unmodeled advice values are not inferred from generic RAM.
+
+The low 32 bits select the advice. Alignment, rounded length and unsigned end
+overflow are checked before mapping lookup; a valid zero length returns zero.
+Every covered page receives fresh zero backing with its previous permissions.
+Virtual addresses, VMA names, program break and KSM eligibility are retained.
+Previously pinned views and other physical aliases retain the original bytes;
+this operation does not memset shared backing. AddressSpace remains the mapping
+and generation authority, so CPU projections refresh before execution resumes.
+
+Mapped pages on both sides of a hole are discarded before ENOMEM is returned.
+Unknown backing stops explicitly at that range, preserving earlier completed
+page effects. A temporary replacement allocation is prepared before removing
+each old mapping. Exhausting the model's backing budget stops without claiming
+a kernel allocation result or removing the current page; previous page effects
+remain. Unexpected mapping failures are terminal. OS mutation ownership must
+remain exclusive throughout the stopped operation.
+
+This is the byte-visible contract for the restricted anonymous domain, based on
+Android common 4.4.115 `mm/madvise.c` at
+`aa856bd83c43969dc3e8f8c0e97e6105e91aef76`. It does not model lazy page faults,
+RSS, swap or host reclamation. Mincore still requires its separate explicit
+query-time observations; no residency bit is inferred from this host storage.
 
 <!-- i18n-section: linux-clocks -->
 
@@ -446,8 +538,9 @@ default epoch. Instruction time is frozen unless explicitly configured. For exam
 Clock IDs include Linux's static IDs 0–9 and 11: realtime, monotonic, process CPU,
 thread CPU, monotonic raw, realtime coarse, monotonic coarse, boottime,
 realtime alarm, boottime alarm and TAI. Each is independent; absent clocks are
-unknown, including coarse variants. Selected released GKI contracts also admit
-negative encoded process CPU clock IDs with explicit live group observations;
+unknown, including coarse variants. A selected released GKI contract or an
+explicit `linux_kernel.tasks` catalogue also admits negative encoded process
+CPU clock IDs with explicit live group observations;
 see [released GKI clocks](android-gki-kernels.md#implemented-process-cpu-clock-subset).
 PROF, VIRT and SCHED retain independent observations; aliases of the current
 process share one observation. Duplicate identities,
@@ -461,7 +554,8 @@ profiles reject this option.
 
 `"advance_on_idle": true` explicitly enables relative `nanosleep` on x64 and
 ARM64, including Android's named and variadic wrappers and scalar `usleep`.
-Clock IDs 0, 1 and 7 advance from their initial values by elapsed virtual time.
+Clock IDs 0, 1, 4 and 7 advance from their independent initial values by elapsed
+virtual time. Monotonic raw (4) never borrows the epoch of monotonic (1).
 Process CPU clock
 observations may coexist with this policy and stay fixed during idle advancement.
 Other clock inputs remain excluded from this policy.
@@ -475,8 +569,8 @@ pending until the workload budget expires.
 wall-time rate to admitted guest instructions. Zero (the default) disables it.
 The unsigned 64-bit rate may also be a decimal string. A workload-wide cumulative
 instruction count is accounted exactly once at successful service and quantum
-boundaries, across all Android threads. Realtime, monotonic and boottime share
-that elapsed time with idle advancement; supplied process CPU samples stay fixed.
+boundaries, across all Android threads. Realtime, monotonic, monotonic raw and
+boottime share that elapsed time with idle advancement; supplied process CPU samples stay fixed.
 Unsupported clock kinds are rejected just as for idle advancement. Multiplication,
 elapsed-time and epoch overflow stop before changing any clock.
 
@@ -502,7 +596,7 @@ Android's error conversion follows the API 28
 [AArch64 Bionic wrapper](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/arch-arm64/syscalls/nanosleep.S).
 
 `clock_gettime` consumes the low signed 32 bits of its clock ID, returns
-`EINVAL` for invalid positive IDs before accessing the destination. Selected GKI
+`EINVAL` for invalid positive IDs before accessing the destination. Admitted
 process CPU clocks validate their target before the destination; other encoded
 and dynamic clocks stop explicitly. A known clock without input stops as
 `unsupported_service`. `gettimeofday` writes seconds and truncated microseconds
@@ -581,17 +675,19 @@ pathname and descriptor-exhaustion failures before reaching an opened file;
 the catalogue does not infer its backing filesystem's direct-I/O support.
 ARM64's directory/direct bits are `0x4000`/`0x10000`, while x64 uses
 `0x10000`/`0x4000`. These stable source-pinned rules do not require GKI selection.
-Unlisted flags, cwd-relative paths, internal repeated separators, `..`
-components, creation, symlink traversal and descriptor-control operations
-remain unsupported. `openat` additionally resolves canonical relative names
-and `.` against a live directory FD. Exec is unmodeled, so close-on-exec flags have
+Unlisted flags, cwd-relative paths, symlink traversal and unsupported
+descriptor-control operations stop explicitly. Repeated separators and
+interior `.` components use the live namespace. `openat` also walks `.` and
+`..` and resolves relative names from a live directory FD; file creation needs
+the separate policy below. Exec is unmodeled, so close-on-exec flags have
 no observable transition in this subset.
 
 Guest queries accept canonical absolute names followed by one or more `/`
 characters. Trailing separators require the final object to be a directory:
 queries of a regular file with a trailing slash return `ENOTDIR`, and missing
 names still return `ENOENT`. Paths consisting only of slashes name the root.
-Directory opens are modeled; directory stat metadata remains unknown. This parsing does
+Directory opens are modeled; directory stat metadata needs the explicit
+directory provider. This parsing does
 not relax the canonical keys required by the catalogue configuration. The
 directory requirement follows Linux
 [pathname lookup](https://www.kernel.org/doc/html/latest/filesystems/path-lookup.html).
@@ -654,7 +750,7 @@ status fields and fdinfo, including process/thread-self aliases.
 An entry's `write_limit` grants mutable content with that maximum extent.
 The full reservation counts against the 16 MiB file budget. The grant does
 not assert real DAC/SELinux permissions or disk capacity. `O_WRONLY`, `O_RDWR`,
-`O_TRUNC` and `O_APPEND` use one mutable object per catalogue path, shared by
+`O_TRUNC` and `O_APPEND` use one mutable object per file identity, shared by
 all opens; cursor and flags remain per open description. `dup` shares both.
 `write` overwrites, zero-fills holes, preserves readable-page prefixes on a
 partial input fault, and chooses the current object end for append. Kernel
@@ -663,21 +759,62 @@ EOF, following the [VFS write contract](https://github.com/torvalds/linux/blob/v
 Reads and newly opened descriptors observe the resulting bytes. Missing write
 grants and exhausted reservations stop explicitly; they are not fabricated
 EACCES/ENOSPC results. `O_CREAT` can open an existing entry; `O_EXCL` returns
-EEXIST before truncation. Creating absent objects remains unmodeled. `O_CREAT | O_DIRECTORY` also stops
+EEXIST before truncation. Creating absent objects requires the separate grant
+below. `O_CREAT | O_DIRECTORY` also stops
 explicitly because its behavior depends on the Linux release.
 
 Without an explicit `track_write_metadata` provider, any write or truncation
 invalidates captured stat observations. A later stat
 stops rather than returning stale size, block counts or timestamps. The known
 filesystem block size remains usable for stdio buffer selection. Vectored
-mutable-file writes, regular file mappings, truncate syscalls, unlink/rename,
-new objects and general permission changes remain unmodeled. An explicit
+mutable-file writes, regular file mappings, truncate syscalls and general
+permission changes remain unmodeled. An explicit
 [metadata provider](linux-live-proc.md#metadata-after-regular-file-writes) can
 maintain complete size, sparse allocation and virtual timestamps after writes.
 Captured stdout/stderr keep their existing bounded output semantics.
 
-Directory creation supports only failures already determined by pathname
-lookup. Raw x64 `mkdir` (83), x64/ARM64 `mkdirat` (258/34), and Android
+**Explicit file lifecycle**
+
+Three independent `linux_files` grants enable bounded namespace changes:
+
+| Field | Input and admitted operation |
+| --- | --- |
+| `file_creations` | Array of `{ "path": "/work/data", "write_limit": 8192, "count": 2 }`. `count` defaults to one; all counts together admit at most 64 future regular-file objects. |
+| `file_renames` | `{ "parents": ["/work"], "limit": 2 }`. Up to 64 parents and 64 successful same-directory moves from a single-link tracked file to an absent name. |
+| `file_unlinks` | `{ "parents": ["/work"], "limit": 2 }`. Up to 64 parents and 64 successful removals of closed, single-link tracked regular files. |
+
+Each parent needs the [explicit noatime tmpfs directory provider](android-directory-creation.md)
+and a realtime clock. Creation and unlink also require a persistent entry in
+`directories`. Creation applies the provider's umask and parent setgid group;
+it reserves every future object's name and maximum bytes against the common
+file budget. A failed operation consumes no grant. A successful creation does
+not regain its reservation after unlink or rename, and the original file's
+write grant never becomes a grant for a replacement.
+
+Names bind to stable objects. Rename retains open descriptions, bytes, cursors,
+write limits and inode identity. Recreating a retired name assigns a fresh
+object and inode. Status, directory enumeration, proc FD links and fdinfo use
+the same live namespace. Successful operations update the file and parent
+metadata using the supplied clock. An open parent-directory description,
+captured mapping identity, replacement destination, cross-directory rename,
+hard-link removal or exhausted grant stops explicitly before mutation.
+
+Raw x64/AArch64 calls, Bionic `rename`/`renameat` and `unlink`/`unlinkat`, and
+variadic `syscall` share this owner. Bionic alone translates negative Linux
+results into `-1` and thread errno. Absolute unlink with zero flags also models
+known missing/non-directory paths and shared pathname-import errors without a
+mutation grant. Relative rename/unlink, symlink traversal and other unlink
+flags remain unsupported.
+
+Interior `.` components preserve the same live pathname. Open also resolves
+`.` and `..` one visited directory at a time, including relative paths from an
+open directory FD. Missing, non-directory and known search-denied components
+cannot disappear through lexical normalization. A directory FD starts the
+walk at that object; relative `AT_FDCWD` paths and general link traversal
+remain unsupported. Final-dot handling outside open keeps its prior boundary.
+
+Without its explicit provider, directory creation supports failures already
+determined by pathname lookup. Raw x64 `mkdir` (83), x64/ARM64 `mkdirat` (258/34), and Android
 `mkdir`/`mkdirat` share the catalogue: a missing parent returns `ENOENT`, a file
 ancestor returns `ENOTDIR`, and an existing file or directory returns `EEXIST`.
 The final name's `EEXIST` result also applies to a regular file followed by

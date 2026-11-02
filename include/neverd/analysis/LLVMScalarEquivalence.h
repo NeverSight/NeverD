@@ -8,6 +8,7 @@
 #define NEVERD_ANALYSIS_LLVMSCALAREQUIVALENCE_H
 
 #include "neverd/analysis/LLVMScalarFunctionModel.h"
+#include "neverd/analysis/Limits.h"
 
 namespace neverd::analysis {
 
@@ -16,6 +17,7 @@ enum class LLVMScalarEquivalenceStatus {
   Unsupported,
   Unproved,
   BudgetExceeded,
+  Cancelled,
 };
 
 struct LLVMScalarControlBit {
@@ -33,11 +35,12 @@ struct LLVMScalarEquivalenceLimits {
   uint64_t MaxSymbolicNodes = 1048576;
   /// Shared by both executions, partition restarts, decision DAG normalization
   /// and dependency queries. Local symbolic-query ceilings remain separate.
-  uint64_t MaxWork = 16777216;
+  uint64_t MaxWork = limits::analysis::kLLVMScalarEquivalenceDefaultWork;
 };
 
 struct LLVMScalarEquivalenceResult {
   LLVMScalarEquivalenceStatus Status = LLVMScalarEquivalenceStatus::Unproved;
+  LLVMScalarInputDomain InputDomain = LLVMScalarInputDomain::RequireNoUndef;
   std::string Diagnostic;
   std::vector<LLVMScalarControlBit> ControlBits;
   uint64_t CompletedPartitions = 0;
@@ -71,7 +74,8 @@ struct LLVMScalarEquivalenceResult {
 LLVMScalarEquivalenceResult
 checkLLVMScalarEquivalence(const llvm::Function &Original,
                            const llvm::Function &Candidate,
-                           const LLVMScalarEquivalenceLimits &Limits = {});
+                           const LLVMScalarEquivalenceLimits &Limits = {},
+                           const LLVMScalarModelOptions &Options = {});
 
 } // namespace neverd::analysis
 

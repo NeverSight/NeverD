@@ -13,7 +13,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/COFF.h"

@@ -15,16 +15,20 @@
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
+#include "neverd/backend/codegen/SourcePatchPreparation.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/ELFLayout.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/PELayout.h"
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/Program.h"
@@ -40,6 +44,10 @@
 
 namespace {
 using namespace neverd;
+#define NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(Type, Name, Value)                  \
+  constexpr Type Name = Value;
+#include "SourcePatchPAuthLRFixtures.def"
+
 struct Profile {
   Arch Architecture;
   BinaryFormat Format;
@@ -740,6 +748,73 @@ INSTANTIATE_TEST_SUITE_P(CallbackTargets, SourcePatchOriginalCallbackMatrix,
                          [](const testing::TestParamInfo<Profile> &Info) {
                            return Info.param.Name;
                          });
+
+class SourcePatchPAuthLRCallbackMatrix
+    : public SourcePatchOriginalCallbackMatrix {
+protected:
+  void rejectSigningPCDependentCallback(uint32_t EntryDelta) {
+    // Ordinary arm64 images can carry PAuth_LR metadata too. Admission depends
+    // on the decoded recipe rather than the Mach-O CPU subtype.
+    ASSERT_FALSE(Image.isArm64e());
+    auto *Function = Image.ExceptionMetadata.findFunction(Image.Entry);
+    ASSERT_NE(Function, nullptr);
+    ASSERT_EQ(Function->CodeRange.Begin, Image.Entry);
+    ASSERT_GT(Function->CodeRange.size(), kCallbackPAuthLRInteriorEntry);
+    Function->Compact.emplace();
+    auto &Compact = *Function->Compact;
+    Compact.CodeRange = Function->CodeRange;
+    Compact.NativeEncoding = kCallbackPAuthLREncoding;
+    ASSERT_TRUE(macho_unwind::decodeEncoding(Image.Arch, Compact.NativeEncoding,
+                                             Compact));
+    ASSERT_TRUE(macho_unwind::isValidEncodingRange(
+        Image.Arch, Compact.NativeEncoding, Compact.CodeRange));
+    ASSERT_EQ(Compact.ReturnAddressSigningOffset,
+              kCallbackPAuthLRSigningOffset);
+    Function->Dwarf.reset();
+    Function->ParseStatus = ExceptionParseStatus::Complete;
+    const uint64_t EntryVA = Image.Entry + EntryDelta;
+    if (EntryDelta != kCallbackPAuthLRExactEntry) {
+      Image.Symbols.push_back(Symbol::makeFunc(EntryVA));
+      ASSERT_LT(Compact.CodeRange.Begin + *Compact.ReturnAddressSigningOffset,
+                EntryVA);
+    }
+    ASSERT_TRUE(Image.hasAuthenticatedFunctionEntryAt(EntryVA));
+    const SourcePatchMapping Replacement{Mapping.symbol, EntryVA};
+    const SourcePatchBinding OriginalBinding{
+        Callback.symbol, SourcePatchBindingKind::OriginalFunction, EntryVA};
+    const auto Before = Image.Raw;
+    auto Prepared =
+        prepareSourcePatchCallbacks(Image, {Replacement}, {OriginalBinding});
+    ASSERT_FALSE(bool(Prepared));
+    EXPECT_NE(llvm::toString(Prepared.takeError())
+                  .find(kCallbackPAuthLRExpectedDiagnostic.str()),
+              std::string::npos);
+    EXPECT_EQ(Image.Raw, Before);
+    EXPECT_EQ(read(Original), OriginalBytes);
+    EXPECT_FALSE(std::filesystem::exists(Output));
+  }
+};
+
+TEST_P(SourcePatchPAuthLRCallbackMatrix,
+       RejectsPAuthLRExactEntryBeforeCallbackProjection) {
+  rejectSigningPCDependentCallback(kCallbackPAuthLRExactEntry);
+}
+
+TEST_P(SourcePatchPAuthLRCallbackMatrix,
+       RejectsPAuthLRInteriorTypedEntryAfterSigningPC) {
+  rejectSigningPCDependentCallback(kCallbackPAuthLRInteriorEntry);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AppleSignedCallbacks, SourcePatchPAuthLRCallbackMatrix,
+    testing::Values(*llvm::find_if(Profiles,
+                                   [](const Profile &P) {
+                                     return P.Architecture == Arch::AArch64 &&
+                                            P.Format == BinaryFormat::MachO;
+                                   })),
+    [](const testing::TestParamInfo<Profile> &Info) {
+      return Info.param.Name;
+    });
 
 class SourcePatchTightMachOMatrix : public SourcePatchOriginalCallbackMatrix {
 protected:

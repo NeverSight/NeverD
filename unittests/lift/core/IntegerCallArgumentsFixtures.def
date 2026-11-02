@@ -1,0 +1,13 @@
+//===- IntegerCallArgumentsFixtures.def - Darwin packed slots ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef INTEGER_CALL_TARGET
+#error "Define INTEGER_CALL_TARGET before including this file"
+#endif
+
+INTEGER_CALL_TARGET(Arch::AArch64, BinaryFormat::MachO, 8, 0, 2, 8)
+
+#undef INTEGER_CALL_TARGET

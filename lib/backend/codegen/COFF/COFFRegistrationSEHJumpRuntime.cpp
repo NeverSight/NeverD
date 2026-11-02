@@ -7,7 +7,7 @@
 #include "COFFRegistrationSEHJump.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/IR/IntrinsicInst.h"
 

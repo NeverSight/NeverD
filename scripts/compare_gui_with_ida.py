@@ -69,8 +69,11 @@ def read_table():
     planned = [dict(ida=m[1], key=m[2], group=m[3]) for m in PLANNED.finditer(text)]
     actions = {}
     for match in ACTION.finditer((APP / "Actions.def").read_text(encoding="utf-8")):
+        # QKeySequence's list format separates alternative bindings with "; ".
+        spelling = "".join(STRING.findall(match[3]))
+        keys = spelling.split("; ") if spelling else []
         actions[match[1]] = dict(text="".join(STRING.findall(match[2])).replace("&", ""),
-                                 key="".join(STRING.findall(match[3])))
+                                 key=keys[0] if keys else "", keys=keys)
     return shared, planned, actions
 
 
@@ -184,18 +187,18 @@ def report(shared, planned, actions, shortcuts, menus, window_menus):
         lines += missing + [""]
         clashes = []
         for name in own:
-            key = actions[name]["key"]
-            owners = sorted(command for command, keys in shortcuts.items() if key and key in keys)
-            if owners:
-                clashes.append(f"- `{key}` runs {actions[name]['text']} ({name}); IDA gives it to "
-                               + ", ".join(f"`{owner}`" for owner in owners))
+            for key in actions[name]["keys"]:
+                owners = sorted(command for command, keys in shortcuts.items() if key in keys)
+                if owners:
+                    clashes.append(f"- `{key}` runs {actions[name]['text']} ({name}); IDA gives it to "
+                                   + ", ".join(f"`{owner}`" for owner in owners))
         lines += ["## Keys of the workbench's own commands that IDA gives another command", "",
                   "IDA scopes some keys to one kind of window, such as a list's quick filter.", ""]
         lines += clashes or ["None."]
         lines.append("")
     lines += ["## The workbench's own commands", "",
               "| Command | Key |", "|---|---|"]
-    lines += [f"| {actions[name]['text']} | {actions[name]['key'] or '-'} |" for name in own]
+    lines += [f"| {actions[name]['text']} | {', '.join(actions[name]['keys']) or '-'} |" for name in own]
     return "\n".join(lines) + "\n"
 
 

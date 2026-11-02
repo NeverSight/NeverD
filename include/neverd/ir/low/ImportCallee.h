@@ -14,7 +14,9 @@
 #define NEVERD_IR_LOW_IMPORTCALLEE_H
 
 #include "neverd/Limits.h"
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCResult.h"
 #include "neverd/loader/BinaryImage.h"
@@ -23,6 +25,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -37,6 +40,8 @@ namespace neverd {
 /// names no import, as for a slot holding `import + addend` or one that two
 /// imports claim.
 inline std::string importCalleeName(const BinaryImage &Img, va_t Addr) {
+  if (Img.functionHasBytePatch(Addr))
+    return {};
   const ImportStorageSlotCollection Storage =
       Img.collectImportStorageSlot(Addr);
   if (Storage.Conflicts.count(Addr))
@@ -58,6 +63,8 @@ inline std::string importCalleeName(const BinaryImage &Img, va_t Addr) {
 /// The C name of the import a call to \p Addr reaches, through its stub or
 /// its slot, or empty.
 inline std::string importCalleeCName(const BinaryImage &Img, va_t Addr) {
+  if (Img.functionHasBytePatch(Addr))
+    return {};
   std::string Name = importCalleeName(Img, Addr);
   if (Name.empty())
     if (const Import *Imp = Img.findImportStubAt(Addr))
@@ -101,9 +108,19 @@ inline std::set<va_t> importCallAddresses(const BinaryImage &Img) {
 /// was loaded from: its last write before there, in the block or the chain
 /// of single predecessors above it among \p Blocks, is a load from an address
 /// that folds to a constant (`mov rax, [rip+slot]`).
-inline std::optional<va_t> loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks,
-                                          const LowBlock &Block, size_t Index,
-                                          NdVar Var) {
+struct LoadedCallSlotProof {
+  std::function<std::optional<SourceFrameDefinition>(int, size_t)> Reload;
+  std::function<bool(const LowOp &, const NdVar &)> Preserves;
+  size_t *WorkRemaining = nullptr;
+  /// An observational query may retain and cross exact alignment checks.
+  /// Ordinary callable/relocation proofs keep their existing refusal.
+  bool AllowAlignmentChecks = false;
+};
+
+inline std::optional<va_t>
+loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks, const LowBlock &Block,
+               size_t Index, NdVar Var,
+               const LoadedCallSlotProof *Proof = nullptr) {
   auto Same = [](const NdVar &A, const NdVar &B) {
     return A.Space == B.Space && A.Offset == B.Offset && A.Size == B.Size;
   };
@@ -125,14 +142,25 @@ inline std::optional<va_t> loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks,
       return std::nullopt;
     const LowOp *Def = nullptr;
     for (size_t J = End; J-- > 0;) {
+      if (Proof && Proof->WorkRemaining) {
+        if (!*Proof->WorkRemaining)
+          return std::nullopt;
+        --*Proof->WorkRemaining;
+      }
       const LowOp &Candidate = Cur->Ops[J];
-      // LowIR temporaries belong to one instruction. Calls and intrinsics
-      // cannot supply preservation facts for a pointer carried in a register.
+      // LowIR temporaries belong to one instruction. Intrinsics require a
+      // separate observational opt-in; calls require preservation evidence.
       if ((Var.isTemp() && Candidate.Addr != Instruction) ||
-          Candidate.Opcode == NdOp::CALL ||
-          Candidate.Opcode == NdOp::INDIR_CALL ||
-          Candidate.Opcode == NdOp::INTRINSIC)
+          (Candidate.Opcode == NdOp::INTRINSIC &&
+           (!Proof || !Proof->AllowAlignmentChecks ||
+            !isSourceFrameObservationGuard(Candidate))))
         return std::nullopt;
+      if (Candidate.Opcode == NdOp::CALL ||
+          Candidate.Opcode == NdOp::INDIR_CALL) {
+        if (!Proof || !Proof->Preserves || !Proof->Preserves(Candidate, Var))
+          return std::nullopt;
+        continue;
+      }
       const NdVar &Written = Candidate.Output;
       if (!Written.Size || Written.Space != Var.Space)
         continue;
@@ -166,6 +194,26 @@ inline std::optional<va_t> loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks,
     if (Def->NumInputs < 1)
       return std::nullopt;
     if (!Loaded && Def->Opcode == NdOp::LOAD) {
+      if (Proof && Proof->Reload && !Def->Inputs[0].isConst())
+        if (const auto Source = Proof->Reload(Cur->Id, End)) {
+          const auto Producer = std::find_if(
+              Blocks.begin(), Blocks.end(),
+              [&](const LowBlock &B) { return B.Id == Source->BlockId; });
+          if (Producer == Blocks.end() ||
+              Source->OperationIndex >= Producer->Ops.size())
+            return std::nullopt;
+          const auto &Original = Producer->Ops[Source->OperationIndex];
+          if (Original.Addr != Source->Instruction ||
+              Original.Seq != Source->Sequence ||
+              Original.Output != Source->Output ||
+              Original.Output.Size != Var.Size)
+            return std::nullopt;
+          Cur = &*Producer;
+          End = Source->OperationIndex + 1;
+          Instruction = Original.Addr;
+          Var = Original.Output;
+          continue;
+        }
       Loaded = true;
       Var = Def->Inputs[0];
       continue;
@@ -198,11 +246,27 @@ inline std::optional<va_t> loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks,
   return std::nullopt;
 }
 
-inline std::optional<va_t> loadedCallSlot(const LowFunc &F,
-                                          const LowBlock &Block, size_t Index,
-                                          NdVar Var) {
-  return loadedCallSlot(llvm::ArrayRef<LowBlock>(F.Blocks), Block, Index, Var);
+inline std::optional<va_t>
+loadedCallSlot(const LowFunc &F, const LowBlock &Block, size_t Index, NdVar Var,
+               const LoadedCallSlotProof *Proof = nullptr) {
+  return loadedCallSlot(llvm::ArrayRef<LowBlock>(F.Blocks), Block, Index, Var,
+                        Proof);
 }
+
+struct ImportedCallSlotFacts {
+  using Operation = std::pair<int, size_t>;
+  std::map<Operation, va_t> Calls;
+  std::map<Operation, SourceFrameDefinition> Reloads;
+};
+
+/// Extend ordinary import-slot lookup through preserved registers and exact
+/// private spills. Complete independently authenticated declarations own call
+/// effects; shared SourceFrameAnalysis owns reaching bytes and escape checks.
+/// These facts do not replace a cached runtime pointer with a fresh IAT load.
+ImportedCallSlotFacts
+importedCallSlotFacts(const LowFunc &Function, const BinaryImage &Image,
+                      const std::map<va_t, FloatingCallArguments> &Signatures,
+                      const std::map<va_t, va_t> *ArgumentSources = nullptr);
 
 /// The routine whose arguments the indirect call \p Op passes, as
 /// \p ArgumentSources keys it by the address of the function-pointer variable

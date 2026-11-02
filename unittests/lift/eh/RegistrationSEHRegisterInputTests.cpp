@@ -8,8 +8,8 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
 #include <algorithm>
 

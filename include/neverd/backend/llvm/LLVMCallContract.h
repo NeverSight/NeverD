@@ -1,17 +1,25 @@
-//===- LLVMCallContract.h - resolved call signature validation ---*- C++
-//-*-===//
+//===- LLVMCallContract.h - Call argument contracts ------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Preserve physical argument locations and validate resolved LLVM calls.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_BACKEND_LLVM_LLVMCALLCONTRACT_H
 #define NEVERD_BACKEND_LLVM_LLVMCALLCONTRACT_H
 
+#include "neverd/ir/IntegerCallArguments.h"
+
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace llvm {
@@ -23,7 +31,19 @@ class Value;
 } // namespace llvm
 
 namespace neverd {
+inline constexpr llvm::StringLiteral
+    LLVMArgumentBanksAttribute("neverd.argument-banks");
 class LLVMSourceMap;
+std::optional<std::pair<unsigned, unsigned>>
+getLLVMArgumentBanks(const llvm::Function &Function);
+std::optional<std::pair<unsigned, unsigned>>
+getLLVMArgumentBanks(const llvm::CallBase &Call);
+/// Stack byte locations following the recorded register banks.
+struct LLVMArgumentStackLayout {
+  std::vector<int64_t> Offsets;
+  unsigned SlotBytes = 0;
+};
+LLVMArgumentStackLayout getLLVMArgumentStackLayout(const llvm::CallBase &Call);
 /// Record independent register banks before argument values lose their
 /// physical register identities to propagation or LLVM optimization.
 void setLLVMArgumentBanks(llvm::Function &Function, unsigned Integers,
@@ -35,6 +55,14 @@ void setLLVMArgumentBanks(llvm::CallBase &Call, unsigned Integers,
                           unsigned Floating,
                           llvm::ArrayRef<int64_t> StackOffsets = {},
                           unsigned SlotBytes = 0);
+/// Map physical integer/stack positions to this call's actual LLVM operands.
+/// Recorded banks may omit unused registers before stack arguments. Each
+/// record piece must still name a complete carrier at its original byte offset.
+/// Calls without bank metadata retain the canonical physical operand layout.
+std::optional<IntegerCallArguments>
+bindLLVMIntegerCallArguments(const llvm::CallBase &Call,
+                             const IntegerCallArguments &Layout, Arch A,
+                             BinaryFormat F);
 /// Bind each recovered callee parameter to its register bank or stack slot.
 /// A missing bank value fails; surplus values never shift another bank.
 struct LLVMArgumentBinding {
@@ -63,4 +91,4 @@ bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
                                         bool AnalystSourceProjection = false);
 } // namespace neverd
 
-#endif
+#endif // NEVERD_BACKEND_LLVM_LLVMCALLCONTRACT_H

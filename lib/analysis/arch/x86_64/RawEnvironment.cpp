@@ -25,12 +25,20 @@ std::string optionsDigest(const SpecializationOptions &O) {
   H.number(O.ExplicitMachineState);
   H.number(O.NormalNonfaultingExecution);
   H.number(O.X64CetDisabled);
+  if (O.UndefinedModel != SpecializationUndefinedModel::SelectedLowIR) {
+    H.text("architectural-scalar-choices-v1");
+    H.number(static_cast<unsigned>(O.UndefinedModel));
+  }
   H.number(O.X64SegmentedReads);
   if (O.X64SegmentedWrites) {
     H.text("x64-segmented-writes-v1");
     H.number(O.X64SegmentedWrites);
   }
   H.number(O.X64CR8State);
+  if (O.X64CR4PGEState) {
+    H.text("x64-cr4-pge-state-v1");
+    H.number(O.X64CR4PGEState);
+  }
   if (O.X64LegacyGSState) {
     H.text("x64-legacy-gs-state-v1");
     H.number(O.X64LegacyGSState);

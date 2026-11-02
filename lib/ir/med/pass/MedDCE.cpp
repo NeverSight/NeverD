@@ -13,10 +13,11 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -25,8 +26,10 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -229,8 +232,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
                              bool DirectCall) {
     for (int J = Before; J >= 0; --J) {
       const MedOp &Prev = Ops[static_cast<size_t>(J)];
-      if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
-          Prev.Opcode == NdOp::INTRINSIC)
+      if (endsCallArgumentSetup(Prev, /*RegistersOnly=*/true))
         break;
       if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
           (TRI.isParamReg(Prev.Output.RegOff) ||
@@ -242,27 +244,56 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         MarkLive(Prev.Output);
     }
   };
+  // Widen block IDs so every int value stays distinct from the hash sentinels.
+  llvm::SmallDenseMap<int64_t, const MedBlock *> Blocks;
+  bool UniqueBlockIds = true;
+  for (const auto &Block : Func.Blocks)
+    if (!Blocks.try_emplace(Block.Id, &Block).second)
+      UniqueBlockIds = false;
   auto blockById = [&](int Id) -> const MedBlock * {
-    for (const auto &Cand : Func.Blocks)
-      if (Cand.Id == Id)
-        return &Cand;
-    return nullptr;
+    const auto It = Blocks.find(Id);
+    return It == Blocks.end() ? nullptr : It->second;
   };
+  // Queries only add live definitions, and the graph stays unchanged until
+  // every query finishes. Share completed walks across calls and returns.
+  // Duplicate block IDs retain the original query-local visitation: a root
+  // may differ from the first block that a predecessor ID names.
+  // Each call/return prefix is queried once per register. Only predecessor
+  // block ends recur, so the shared set needs no record for each call site.
+  llvm::DenseSet<std::pair<const MedBlock *, uint64_t>> ReachedEnds;
+  llvm::DenseSet<std::pair<const MedBlock *, uint64_t>> ReachedArgumentEnds;
+  llvm::SmallVector<std::pair<const MedBlock *, int>> ReachingWorklist;
   // Keep the definition of register \p RegOff that reaches the point after
   // op \p Before of \p Start on every incoming path: the newest write there,
   // else the register's PHI, else what reaches the end of each predecessor.
-  auto seedReachingDef = [&](const MedBlock &Start, int Before,
-                             uint64_t RegOff) {
-    std::vector<std::pair<const MedBlock *, int>> Pending{{&Start, Before}};
+  auto seedReachingDef = [&](const MedBlock &Start, int Before, uint64_t RegOff,
+                             bool Argument = false) {
+    auto &Completed = Argument ? ReachedArgumentEnds : ReachedEnds;
+    ReachingWorklist.push_back({&Start, Before});
     std::set<std::pair<int, int>> Visited;
-    while (!Pending.empty()) {
-      const auto [Block, Last] = Pending.back();
-      Pending.pop_back();
-      if (!Visited.insert({Block->Id, Last}).second)
+    while (!ReachingWorklist.empty()) {
+      const auto [Block, Last] = ReachingWorklist.back();
+      ReachingWorklist.pop_back();
+      if (UniqueBlockIds) {
+        if (Last == static_cast<int>(Block->Ops.size()) - 1 &&
+            !Completed.insert({Block, RegOff}).second)
+          continue;
+      } else if (!Visited.insert({Block->Id, Last}).second) {
         continue;
+      }
       bool Found = false;
       for (int J = Last; J >= 0; --J) {
-        const MedVar &Output = Block->Ops[static_cast<size_t>(J)].Output;
+        const MedOp &Op = Block->Ops[static_cast<size_t>(J)];
+        const MedVar &Output = Op.Output;
+        if (Argument && endsCallArgumentSetup(Op, /*RegistersOnly=*/true)) {
+          // The preceding call's explicit result can be passed on, but
+          // setup before a call or opaque intrinsic is no later argument.
+          if (Output.Kind == MedVar::Reg && Output.Size &&
+              Output.RegOff == RegOff)
+            MarkLive(Output);
+          Found = true;
+          break;
+        }
         if (Output.Kind != MedVar::Reg || Output.Size == 0 ||
             Output.RegOff != RegOff)
           continue;
@@ -282,7 +313,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         continue;
       for (int PredId : Block->Preds)
         if (const MedBlock *Pred = blockById(PredId))
-          Pending.push_back({Pred, static_cast<int>(Pred->Ops.size()) - 1});
+          ReachingWorklist.push_back(
+              {Pred, static_cast<int>(Pred->Ops.size()) - 1});
     }
   };
   // A call reads SP to locate outgoing stack arguments, but its implicit input
@@ -294,6 +326,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   };
   bool KeepUnresolvedRegisterSetup = false;
   for (auto &Blk : Func.Blocks) {
+    bool HasCall = false;
     for (size_t I = 0; I < Blk.Ops.size(); ++I) {
       bool IsCall = (Blk.Ops[I].Opcode == NdOp::CALL ||
                      Blk.Ops[I].Opcode == NdOp::INDIR_CALL ||
@@ -303,6 +336,13 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         continue;
       seedReachingStackPointer(Blk, static_cast<int>(I) - 1);
       const MedOp &Call = Blk.Ops[I];
+      // A dedicated result-buffer register is an implicit call input too.
+      // ABI recovery runs later: deleting AArch64's X8 setup here severs
+      // aggregate results whenever constant folding triggers register DCE.
+      if (TRI.indirectResultReg() &&
+          (Call.Opcode == NdOp::CALL || Call.Opcode == NdOp::INDIR_CALL ||
+           IsTail))
+        seedReachingDef(Blk, static_cast<int>(I) - 1, TRI.indirectResultReg());
       const bool DirectCall =
           Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
           Call.Inputs[0].isConst() &&
@@ -323,19 +363,28 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         }
       }
       seedParamWrites(Blk.Ops, static_cast<int>(I) - 1, DirectCall);
+      // Setup can dominate several branches before the call. Keeping only
+      // its immediate predecessor silently deletes these implicit inputs
+      // before ABI recovery has bound them. Reuse the per-register walk,
+      // stopping at each earlier call; its shared block-end cache bounds
+      // repeated queries to one visit per register and block.
+      if (Call.Opcode == NdOp::CALL || Call.Opcode == NdOp::INDIR_CALL ||
+          IsTail)
+        for (const auto &[Register, Ids] : RegOffVars)
+          if (TRI.isParamReg(Register) || TRI.isVectorReg(Register) ||
+              (DirectCall &&
+               llvm::is_contained(AlternateArgumentRegisters, Register)))
+            seedReachingDef(Blk, static_cast<int>(I) - 1, Register,
+                            /*Argument=*/true);
       // IP-map / EH splits often isolate the CALL. `lea r8; mov edx; lea rcx`
       // then sit in the predecessor and must stay live as call setup.  A
       // conditional choice between two calls does the same: each arm may add
       // `mov edx, eax` before its call while the shared `lea ecx` stays in
       // the dominating block.  Unless another call precedes this one in its
       // block, the predecessors' trailing parameter writes are its setup.
-      if (std::any_of(Blk.Ops.begin(), Blk.Ops.begin() + I,
-                      [](const MedOp &Prev) {
-                        return Prev.Opcode == NdOp::CALL ||
-                               Prev.Opcode == NdOp::INDIR_CALL ||
-                               Prev.Opcode == NdOp::INTRINSIC;
-                      }))
+      if (HasCall)
         continue;
+      HasCall = IsCall;
       for (int PredId : Blk.Preds)
         if (const MedBlock *Pred = blockById(PredId))
           seedParamWrites(Pred->Ops, static_cast<int>(Pred->Ops.size()) - 1,
@@ -516,6 +565,20 @@ void LowToMedConverter::runDce(MedFunc &Func) {
            Op.MemoryOrdering != NdMemoryOrdering::None ||
            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   };
+  // These bounded leaves never use arithmetic flags to select memory or
+  // control effects. Their explicit old flags affect only the returned flags
+  // on normal completion. Keeping that dependency conditional prevents a dead
+  // flags result from creating an undefined entry flag or source parameter.
+  const auto FlagResult = [](const MedOp &Op) -> const MedVar * {
+    if (Op.Opcode != NdOp::INTRINSIC || !Op.NumInputs ||
+        !Op.Inputs[0].isConst())
+      return nullptr;
+    const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+    if (!isX86BoundedLeafIntrinsic(Id) ||
+        !x86BoundedLeafShapeIsValid(Id, x86BoundedLeafMedShape(Op)))
+      return nullptr;
+    return &Op.IntrinsicOutputs.back();
+  };
   llvm::DenseMap<std::pair<int, int>, llvm::SmallVector<MedOp *, 1>,
                  DCEValueKeyInfo>
       OpDefs;
@@ -526,18 +589,26 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     for (auto &Phi : Blk.Phis)
       if (Phi.Output.Id >= 0)
         PhiDefs[{Phi.Output.Id, Phi.Output.SSAVer}].push_back(&Phi);
-    for (auto &Op : Blk.Ops)
+    for (auto &Op : Blk.Ops) {
       if (Op.Output.Id >= 0)
         OpDefs[{Op.Output.Id, Op.Output.SSAVer}].push_back(&Op);
+      if (const auto *Flags = FlagResult(Op))
+        OpDefs[{Flags->Id, Flags->SSAVer}].push_back(&Op);
+    }
   }
   std::vector<std::pair<int, int>> Worklist(LiveDefs.begin(), LiveDefs.end());
   auto markInputs = [&](const MedOp &Op) {
-    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+    for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+      if (I == X86BoundedLeafFlagOperand)
+        if (const auto *Flags = FlagResult(Op);
+            Flags && !LiveDefs.count({Flags->Id, Flags->SSAVer}))
+          continue;
       if (Op.Inputs[I].Id >= 0) {
         auto Key = std::make_pair(Op.Inputs[I].Id, Op.Inputs[I].SSAVer);
         if (LiveDefs.insert(Key).second)
           Worklist.push_back(Key);
       }
+    }
   };
   for (auto &Blk : Func.Blocks)
     for (auto &Op : Blk.Ops)
@@ -558,15 +629,34 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       for (MedOp *Op : It->second)
         markInputs(*Op);
   }
-  for (auto &Blk : Func.Blocks)
+  for (auto &Blk : Func.Blocks) {
+    bool EntryCopies = &Blk == &Func.Blocks.front();
     for (auto &Op : Blk.Ops) {
+      EntryCopies &= Op.Opcode == NdOp::COPY;
+      if (const auto *Flags = FlagResult(Op);
+          Flags && !LiveDefs.count({Flags->Id, Flags->SSAVer}))
+        Op.Inputs[X86BoundedLeafFlagOperand] = MedVar::makeConst(
+            0, X86ArithmeticFlagsBytes, ConstantAddressProvenance::Scalar);
       const bool OutputLive =
           Op.Output.Id >= 0 && LiveDefs.count({Op.Output.Id, Op.Output.SSAVer});
-      if (isEssential(Op) || OutputLive)
+      // Multi-root SSA can number an entry copy after version zero. Copy
+      // propagation then leaves readers of its incoming operand while the
+      // copy's result is unused. Retain the live-in declaration: stack and
+      // callee-save proofs still need its entry provenance.
+      const bool IncomingLive =
+          EntryCopies && Op.NumInputs == 1 && Op.Output.Kind == MedVar::Reg &&
+          Op.Output.Size && Op.Inputs[0].Kind == MedVar::Reg &&
+          Op.Inputs[0].SSAVer == 0 && Op.Output.Id == Op.Inputs[0].Id &&
+          Op.Output.RegOff == Op.Inputs[0].RegOff &&
+          Op.Output.Size == Op.Inputs[0].Size &&
+          Op.Output.TheArch == Op.Inputs[0].TheArch &&
+          LiveDefs.count({Op.Inputs[0].Id, Op.Inputs[0].SSAVer});
+      if (isEssential(Op) || OutputLive || IncomingLive)
         Op.Dead = false;
       else if (Op.Output.Id >= 0)
         Op.Dead = true;
     }
+  }
 
   for (auto &Blk : Func.Blocks) {
     Blk.Ops.erase(std::remove_if(Blk.Ops.begin(), Blk.Ops.end(),

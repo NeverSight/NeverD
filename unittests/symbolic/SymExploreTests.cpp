@@ -1229,6 +1229,196 @@ TEST(SymExplore, ContradictoryConcreteIndirectTargetIsInfeasible) {
   EXPECT_TRUE(Path.BranchDecisions.back().Concrete);
 }
 
+TEST(SymExplore, ExplicitCallRegisterResultResolvesTheSuccessor) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::INDIR_BR, NdVar{}, {NdVar::reg(kRax, 8)})},
+          {1});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  ExploreOptions Opts;
+  Opts.CallEffects = [](SymContext &CallCtx, SymState &, const LowOp &,
+                        const SymCallOccurrence &) {
+    SymCallEffect Effect;
+    Effect.Memory = SymCallMemoryEffect::Preserve;
+    Effect.Registers = {{kRax, CallCtx.mkConst(64, kBase + kBlockSize)}};
+    return std::optional<SymCallEffect>(std::move(Effect));
+  };
+  const auto Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  EXPECT_EQ(Exploration.Paths.front().Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Exploration.Paths.front().Blocks, (std::vector<int>{0, 1}));
+  EXPECT_TRUE(Exploration.Complete);
+}
+
+TEST(SymExplore, CallContractsReceivePriorEffectsAndEachBranchDomain) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::CALL, {}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::INT_EQUAL, NdVar::tmp(0, 1),
+              {NdVar::reg(kRbx, 8), NdVar::cst(0, 8)}),
+           op(NdOp::COND_BR, {},
+              {FunctionBuilder::addressOf(2), NdVar::tmp(0, 1)})},
+          {1, 2});
+  for (unsigned I = 0; I != 2; ++I)
+    B.block({op(NdOp::CALL, {}, {NdVar::cst(0x401600, 8)}),
+             op(NdOp::RETURN, {}, {})},
+            {});
+  const SymRef Prior = Ctx.mkFreshVar(1, "prior_call_condition");
+  SymRef Zero;
+  std::vector<std::vector<SymRef>> Domains;
+  ExploreOptions Opts;
+  Opts.CallPreservedRegisters.push_back({kRbx, 8});
+  Opts.CallEffects =
+      [&](SymContext &CallCtx, SymState &State, const LowOp &Op,
+          const SymCallOccurrence &Occurrence) -> std::optional<SymCallEffect> {
+    SymCallEffect Effect;
+    Effect.Memory = SymCallMemoryEffect::Preserve;
+    if (Op.Inputs[0].Offset == 0x401500) {
+      EXPECT_TRUE(Occurrence.PathConstraints.empty());
+      Zero = CallCtx.mkEq(State.read(SymSpace::Register, kRbx, 8),
+                          CallCtx.mkConst(64, 0));
+      Effect.Constraints.push_back(Prior);
+      return Effect;
+    }
+    // Retain owned references, not the callback's borrowed vector view.
+    Domains.emplace_back(Occurrence.PathConstraints.begin(),
+                         Occurrence.PathConstraints.end());
+    EXPECT_EQ(Domains.back().size(), 2u);
+    if (Domains.back().size() != 2)
+      return std::nullopt;
+    EXPECT_EQ(Domains.back().front(), Prior);
+    const SymRef Branch = Domains.back().back();
+    EXPECT_TRUE(Branch == Zero || Branch == CallCtx.mkNot(Zero));
+    Effect.Registers.push_back(
+        {kRax, CallCtx.mkConst(64, Branch == Zero ? 17 : 29)});
+    return Effect;
+  };
+  const auto Paths = explorePathsDetailed(Ctx, B.function(), Opts).Paths;
+  ASSERT_EQ(Paths.size(), 2u);
+  ASSERT_EQ(Domains.size(), 2u);
+  EXPECT_EQ(Domains[0].back(), Ctx.mkNot(Domains[1].back()));
+  for (const auto &Path : Paths) {
+    EXPECT_EQ(Path.Outcome, PathOutcome::Returned);
+    ASSERT_EQ(Path.Constraints.size(), 2u);
+    auto State = Path.State;
+    EXPECT_EQ(State.read(SymSpace::Register, kRax, 8),
+              Ctx.mkConst(64, Path.Constraints.back() == Zero ? 17 : 29));
+  }
+}
+
+TEST(SymExplore, MergedCallDomainIncludesBothIncomingPaths) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::INT_EQUAL, NdVar::tmp(0, 1),
+              {NdVar::reg(kRbx, 8), NdVar::cst(0, 8)}),
+           op(NdOp::COND_BR, {},
+              {FunctionBuilder::addressOf(2), NdVar::tmp(0, 1)})},
+          {1, 2});
+  for (unsigned I = 0; I != 2; ++I)
+    B.block({op(NdOp::BRANCH, {}, {FunctionBuilder::addressOf(3)})}, {3});
+  B.block(
+      {op(NdOp::CALL, {}, {NdVar::cst(0x401500, 8)}), op(NdOp::RETURN, {}, {})},
+      {});
+  ExploreOptions Opts;
+  Opts.MergeEquivalentPaths = true;
+  unsigned Calls = 0;
+  Opts.CallEffects =
+      [&](SymContext &CallCtx, SymState &, const LowOp &,
+          const SymCallOccurrence &Occurrence) -> std::optional<SymCallEffect> {
+    ++Calls;
+    const SymRef Predicate = Occurrence.PathConstraints.empty()
+                                 ? CallCtx.mkTrue()
+                                 : CallCtx.mkAnd(Occurrence.PathConstraints);
+    EXPECT_EQ(Predicate, CallCtx.mkTrue());
+    return std::nullopt;
+  };
+  const auto Paths = explorePathsDetailed(Ctx, B.function(), Opts).Paths;
+  ASSERT_EQ(Paths.size(), 1u);
+  EXPECT_EQ(Paths.front().Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Calls, 1u);
+}
+
+TEST(SymExplore, RepeatedCallReceivesPreviousInvocationConditions) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::CALL, {}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::BRANCH, {}, {FunctionBuilder::addressOf(0)})},
+          {0});
+  ExploreOptions Opts;
+  Opts.MaxBlockVisits = 3;
+  Opts.MaxLoopIterations = 3;
+  std::vector<SymRef> Conditions;
+  Opts.CallEffects =
+      [&](SymContext &CallCtx, SymState &, const LowOp &,
+          const SymCallOccurrence &Occurrence) -> std::optional<SymCallEffect> {
+    EXPECT_EQ(Occurrence.Invocation, Conditions.size());
+    EXPECT_TRUE(std::equal(Occurrence.PathConstraints.begin(),
+                           Occurrence.PathConstraints.end(), Conditions.begin(),
+                           Conditions.end()));
+    SymCallEffect Effect;
+    Effect.Constraints.push_back(CallCtx.mkFreshVar(1, "invocation_condition"));
+    Conditions.push_back(Effect.Constraints.front());
+    return Effect;
+  };
+  const auto Paths = explorePathsDetailed(Ctx, B.function(), Opts).Paths;
+  ASSERT_EQ(Paths.size(), 1u);
+  EXPECT_EQ(Paths.front().Outcome, PathOutcome::LoopBudget);
+  EXPECT_EQ(Conditions.size(), 3u);
+}
+
+TEST(SymExplore, ContradictoryCallContractStopsBeforeTheNextOperation) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::CALL, {}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(19, 8)}),
+           op(NdOp::CALL, {}, {NdVar::cst(0x401600, 8)}),
+           op(NdOp::RETURN, {}, {})},
+          {});
+  ExploreOptions Opts;
+  unsigned Calls = 0;
+  Opts.CallEffects =
+      [&](SymContext &CallCtx, SymState &, const LowOp &,
+          const SymCallOccurrence &Occurrence) -> std::optional<SymCallEffect> {
+    ++Calls;
+    EXPECT_TRUE(Occurrence.PathConstraints.empty());
+    SymCallEffect Effect;
+    Effect.Constraints.push_back(CallCtx.mkFalse());
+    return Effect;
+  };
+  auto Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  auto &Path = Exploration.Paths.front();
+  EXPECT_EQ(Path.Outcome, PathOutcome::Infeasible);
+  EXPECT_EQ(Calls, 1u);
+  EXPECT_EQ(Path.ExecutedOps.size(), 1u);
+  EXPECT_FALSE(Ctx.isConst(Path.State.read(SymSpace::Register, kRbx, 8)));
+}
+
+TEST(SymExplore, ExplicitCallMemoryPostconditionResolvesTheSuccessor) {
+  SymContext Ctx;
+  FunctionBuilder B;
+  B.block({op(NdOp::COPY, NdVar::ram(0x7000, 8),
+              {NdVar::cst(kBase + kBlockSize, 8)}),
+           op(NdOp::CALL, NdVar{}, {NdVar::cst(0x401500, 8)}),
+           op(NdOp::COPY, NdVar::reg(kRax, 8), {NdVar::ram(0x7000, 8)}),
+           op(NdOp::INDIR_BR, NdVar{}, {NdVar::reg(kRax, 8)})},
+          {1});
+  B.block({op(NdOp::RETURN, NdVar{}, {})}, {});
+  ExploreOptions Opts;
+  Opts.CallEffects = [](SymContext &, SymState &State, const LowOp &,
+                        const SymCallOccurrence &) {
+    SymCallEffect Effect;
+    Effect.MemoryAfter = State.memoryKnowledge();
+    return std::optional<SymCallEffect>(std::move(Effect));
+  };
+  const auto Exploration = explorePathsDetailed(Ctx, B.function(), Opts);
+  ASSERT_EQ(Exploration.Paths.size(), 1u);
+  EXPECT_EQ(Exploration.Paths.front().Outcome, PathOutcome::Returned);
+  EXPECT_EQ(Exploration.Paths.front().Blocks, (std::vector<int>{0, 1}));
+  EXPECT_TRUE(Exploration.Complete);
+}
+
 TEST(SymExplore, OddInterworkingTargetFindsItsCanonicalThumbBlock) {
   SymContext Ctx;
   FunctionBuilder B;

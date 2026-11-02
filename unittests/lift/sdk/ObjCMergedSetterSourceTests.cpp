@@ -1,9 +1,10 @@
 #include "../../../lib/sdk/capi/ObjCMergedSetterSources.h"
+#include "../core/MappedSectionFlags.h"
 #include "../core/SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
@@ -820,8 +821,8 @@ TEST(ObjCMergedSetterSources, CGRectRechecksCurrentLayoutABIAndFrameEvidence) {
           NdType::makeInt(8);
       break;
     case 27:
-      F.section(F.LayoutImport).Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.section(F.LayoutImport),
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 28:
       F.Image.DataPtrRelocTargetOwners.erase(F.LayoutSelector);

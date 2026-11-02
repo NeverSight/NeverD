@@ -12,6 +12,7 @@
 #ifndef NEVERD_LIB_PIPELINE_PIPELINELOWIRDETAIL_H
 #define NEVERD_LIB_PIPELINE_PIPELINELOWIRDETAIL_H
 
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/FormattedCall.h"
 #include "neverd/ir/low/LowIR.h"
@@ -97,6 +98,11 @@ struct ImageImportCounts {
   const Export *ExportData = nullptr;
   size_t ExportCount = 0;
   std::map<va_t, int> Counts;
+  std::map<va_t, int> StackArgs;
+  std::set<va_t> StackSlots;
+  std::map<va_t, FloatingCallArguments> FloatingArguments;
+  std::map<va_t, FixedIntegerCallArguments> IntegerArguments;
+  std::map<va_t, std::vector<uint16_t>> VariadicArguments;
   /// Whether these were read from \p Img as it is, with \p Dbg.
   bool readFrom(const BinaryImage &Img, const DebugContext *Dbg) const {
     return Image == &Img && Debug == Dbg && ImportData == Img.Imports.data() &&
@@ -109,14 +115,14 @@ struct ImageImportCounts {
 };
 
 /// The analysis cache a run of \p Img under \p Opts shares with other runs:
-/// a restricted x64, AArch64 or ARM run's.  Other runs keep what they read
-/// to themselves.
+/// a restricted x64, i386, AArch64 or ARM run's.  Other runs keep what they
+/// read to themselves.
 inline PipelineAnalysisCache *sharedAnalysisCache(const BinaryImage &Img,
                                                   const PipelineOptions &Opts) {
   const bool Restricted =
       !Opts.OnlyFunctionEntries.empty() || Opts.MaxFunctions != 0;
-  return Restricted && (Img.Arch == Arch::X64 || Img.Arch == Arch::AArch64 ||
-                        Img.Arch == Arch::ARM)
+  return Restricted && (Img.Arch == Arch::X64 || Img.Arch == Arch::X86 ||
+                        Img.Arch == Arch::AArch64 || Img.Arch == Arch::ARM)
              ? Opts.AnalysisCache
              : nullptr;
 }

@@ -3,6 +3,7 @@
 #include "../Config.h"
 
 #include <QFontMetricsF>
+#include <QHash>
 #include <QTextCharFormat>
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,17 @@ bool isTokenCharacter(QChar c) {
          c == QLatin1Char('$') || c == QLatin1Char('@') ||
          c == QLatin1Char('?') || c == QLatin1Char('.');
 }
+
+namespace {
+/// Whether the character at \p at continues a word of \p text.
+bool continuesToken(const QString &text, qsizetype at, TokenDots dots) {
+  const QChar c = text.at(at);
+  if (c != QLatin1Char('.') || dots == TokenDots::Join)
+    return isTokenCharacter(c);
+  return at > 0 && at + 1 < text.size() && text.at(at - 1).isDigit() &&
+         text.at(at + 1).isDigit();
+}
+} // namespace
 
 void StyledLine::setFromWorker(const QString &line,
                                const QJsonArray &workerSpans) {
@@ -82,14 +94,10 @@ const StyledSpan *StyledLine::spanAt(int position) const {
   return nullptr;
 }
 
-QString StyledLine::tokenAt(int position) const {
+QString StyledLine::tokenAt(int position, TokenDots dots) const {
   if (position < 0 || position > text.size())
     return {};
-  int begin = position, end = position;
-  while (begin > 0 && isTokenCharacter(text.at(begin - 1)))
-    --begin;
-  while (end < text.size() && isTokenCharacter(text.at(end)))
-    ++end;
+  const auto [begin, end] = tokenRange(text, position, dots);
   return text.mid(begin, end - begin);
 }
 
@@ -170,16 +178,93 @@ QTextLayout &StyledLine::layout(const QFont &font, quint64 stamp,
   return *layout_;
 }
 
-QVector<int> tokenOccurrences(const QString &text, const QString &token) {
+std::pair<int, int> tokenRange(const QString &text, int position,
+                               TokenDots dots) {
+  if (position < 0 || position > text.size())
+    return {0, 0};
+  int begin = position, end = position;
+  while (begin > 0 && continuesToken(text, begin - 1, dots))
+    --begin;
+  while (end < text.size() && continuesToken(text, end, dots))
+    ++end;
+  return {begin, end};
+}
+
+QStringList registerFamily(const QString &word) {
+  static const QHash<QString, QStringList> families = [] {
+    QHash<QString, QStringList> byName;
+    // A name two architectures share (`sp`) joins both families; a listing
+    // spells only its own architecture's registers.
+    const auto add = [&byName](QStringList family) {
+      for (const auto &name : QStringList(family))
+        for (const auto &other : byName.value(name))
+          if (!family.contains(other))
+            family.append(other);
+      for (const auto &name : family)
+        byName.insert(name, family);
+    };
+    // x86: a 64-bit register with its 32-, 16- and 8-bit parts.
+    for (const char *letter : {"a", "b", "c", "d"})
+      add({QStringLiteral("r%1x").arg(QLatin1String(letter)),
+           QStringLiteral("e%1x").arg(QLatin1String(letter)),
+           QStringLiteral("%1x").arg(QLatin1String(letter)),
+           QStringLiteral("%1l").arg(QLatin1String(letter)),
+           QStringLiteral("%1h").arg(QLatin1String(letter))});
+    for (const char *base : {"si", "di", "bp", "sp"})
+      add({QStringLiteral("r%1").arg(QLatin1String(base)),
+           QStringLiteral("e%1").arg(QLatin1String(base)), QLatin1String(base),
+           QStringLiteral("%1l").arg(QLatin1String(base))});
+    add({QStringLiteral("rip"), QStringLiteral("eip"), QStringLiteral("ip")});
+    for (int n = 8; n <= 15; ++n)
+      add({QStringLiteral("r%1").arg(n), QStringLiteral("r%1d").arg(n),
+           QStringLiteral("r%1w").arg(n), QStringLiteral("r%1b").arg(n)});
+    // AArch64: a general register's X and W views, and a vector register's.
+    for (int n = 0; n <= 30; ++n)
+      add({QStringLiteral("x%1").arg(n), QStringLiteral("w%1").arg(n)});
+    add({QStringLiteral("x29"), QStringLiteral("fp")});
+    add({QStringLiteral("x30"), QStringLiteral("lr")});
+    add({QStringLiteral("sp"), QStringLiteral("wsp")});
+    add({QStringLiteral("xzr"), QStringLiteral("wzr")});
+    for (int n = 0; n <= 31; ++n)
+      add({QStringLiteral("v%1").arg(n), QStringLiteral("q%1").arg(n),
+           QStringLiteral("d%1").arg(n), QStringLiteral("s%1").arg(n),
+           QStringLiteral("h%1").arg(n), QStringLiteral("b%1").arg(n)});
+    return byName;
+  }();
+  return families.value(word);
+}
+
+QVector<std::pair<int, int>> highlightRanges(const StyledLine &line,
+                                             const QString &word,
+                                             std::optional<int> registerRole,
+                                             TokenDots dots) {
+  QVector<std::pair<int, int>> ranges;
+  for (const int at : tokenOccurrences(line.text, word, dots))
+    ranges.append({at, at + int(word.size())});
+  const QStringList family =
+      registerRole ? registerFamily(word) : QStringList();
+  if (family.size() < 2)
+    return ranges;
+  for (const auto &span : line.spans)
+    if (span.role == *registerRole) {
+      const QString name = line.text.mid(span.start, span.length);
+      if (name != word && family.contains(name))
+        ranges.append({span.start, span.start + span.length});
+    }
+  return ranges;
+}
+
+QVector<int> tokenOccurrences(const QString &text, const QString &token,
+                              TokenDots dots) {
   QVector<int> result;
   if (token.isEmpty())
     return result;
   for (qsizetype at = text.indexOf(token); at >= 0;
        at = text.indexOf(token, at + 1)) {
-    const bool startOk = at == 0 || !isTokenCharacter(text.at(at - 1));
+    const bool startOk = at == 0 || !continuesToken(text, at - 1, dots);
     const qsizetype after = at + token.size();
     const bool endOk =
-        after >= text.size() || !isTokenCharacter(text.at(after));
+        after >= text.size() || !continuesToken(text, after, dots);
     if (startOk && endOk)
       result.append(int(at));
   }

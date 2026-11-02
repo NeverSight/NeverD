@@ -18,6 +18,8 @@
 
 #include "neverd/ir/med/MedIR.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <optional>
 #include <set>
 #include <tuple>
@@ -54,6 +56,12 @@ std::optional<MedVar> valueLeftByCall(const MedFunc &Func, const MedOp &Call,
 class ValuesLeftByCalls {
 public:
   explicit ValuesLeftByCalls(const MedFunc &Func);
+
+  /// Result fields whose scalar call-return recovery has not necessarily run
+  /// yet are excluded too. Block order cannot turn a possible result into
+  /// evidence that an argument was never supplied.
+  ValuesLeftByCalls(const MedFunc &Func,
+                    llvm::ArrayRef<MedVar> PossibleResults);
 
   /// Whether \p V holds only what earlier calls left in its register.
   bool contains(const MedVar &V) const;

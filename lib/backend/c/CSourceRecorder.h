@@ -97,8 +97,7 @@ private:
   std::map<std::pair<va_t, const HighExpr *>, std::set<sigs::LibraryOccurrence>>
       HighCallAnchors;
   std::map<std::pair<va_t, va_t>, Event> HighStores;
-  std::map<std::tuple<va_t, va_t, StmtKind>, std::set<sigs::LibraryOccurrence>>
-      HighAnchors;
+  std::optional<HighStatementSourceIndex> HighStatements;
   std::map<const llvm::Function *, va_t> LLVMFunctions;
   std::map<const llvm::Value *, Event> LLVMRegions;
   std::map<const llvm::Instruction *,

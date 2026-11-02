@@ -10,6 +10,7 @@
 #include "llvm/Support/Errc.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -202,7 +203,7 @@ GuestMemoryAccessResult GuestMemoryRuntime::fault(
   GuestMemoryAccessResult Result;
   Result.Status = GuestMemoryAccessStatus::Fault;
   uint32_t AccessWidthBits = 0;
-  if (AccessSize <= std::numeric_limits<uint32_t>::max() / 8)
+  if (AccessSize <= kMemoryFaultMaxAccessBytes)
     AccessWidthBits = static_cast<uint32_t>(AccessSize * 8);
   Result.Fault = GuestMemoryFault{
       Kind,
@@ -226,65 +227,110 @@ GuestMemoryRuntime::fetchFault(RuntimeMemoryFaultKindV1 Kind, uint64_t Address,
 GuestMemoryAccessResult
 GuestMemoryRuntime::loadScalar(uint64_t Address, GuestScalarWidth Width,
                                uint32_t RequiredAlignment) {
-  const std::optional<uint64_t> Bytes = scalarBytes(Width);
-  if (!Bytes)
+  const auto Size = scalarBytes(Width);
+  if (!Size)
     return fault(RuntimeMemoryFaultKindV1::InvalidAccessWidth, Address, 0,
                  MemoryAccessKind::Read, RequiredAlignment);
-  if (RequiredAlignment != 0 && !isPowerOfTwo(RequiredAlignment))
-    return fault(RuntimeMemoryFaultKindV1::InvalidAlignment, Address, *Bytes,
-                 MemoryAccessKind::Read, RequiredAlignment);
-  if (RequiredAlignment != 0 && Address % RequiredAlignment != 0)
-    return fault(RuntimeMemoryFaultKindV1::Misaligned, Address, *Bytes,
-                 MemoryAccessKind::Read, RequiredAlignment);
-
-  const uint64_t MaxAddress = maximumAddress(AddressWidth);
-  if (Address > MaxAddress || *Bytes - 1 > MaxAddress - Address)
-    return fault(RuntimeMemoryFaultKindV1::AddressOverflow, Address, *Bytes,
-                 MemoryAccessKind::Read, RequiredAlignment);
-
-  const AccessPlan Plan = planAccess(Address, *Bytes, MemoryPermission::Read,
-                                     RuntimeMemoryFaultKindV1::CrossRegion);
-  if (Plan.Fault != RuntimeMemoryFaultKindV1::None)
-    return fault(Plan.Fault, Address, *Bytes, MemoryAccessKind::Read,
-                 RequiredAlignment);
-
-  uint64_t Value = 0;
-  uint64_t ByteIndex = 0;
-  for (const RegionSpan &Span : Plan.Spans) {
-    const Region &Current = Regions[Span.RegionIndex];
-    for (uint64_t Index = 0; Index != Span.Size; ++Index, ++ByteIndex)
-      Value |= uint64_t{Current.Bytes[Span.Offset + Index]} << (ByteIndex * 8);
+  std::array<uint8_t, sizeof(uint64_t)> Bytes{};
+  auto Result =
+      loadBytes(Address, llvm::MutableArrayRef(Bytes).take_front(*Size),
+                RequiredAlignment);
+  if (Result.Status == GuestMemoryAccessStatus::Completed) {
+    for (uint64_t I = 0; I != *Size; ++I)
+      Result.Value |= uint64_t(Bytes[I]) << (I * 8);
+    recordResult(Result);
   }
-
-  GuestMemoryAccessResult Result;
-  Result.Value = Value;
-  recordResult(Result);
   return Result;
 }
 
 GuestMemoryAccessResult
 GuestMemoryRuntime::storeScalar(uint64_t Address, GuestScalarWidth Width,
                                 uint64_t Value, uint32_t RequiredAlignment) {
-  const std::optional<uint64_t> Bytes = scalarBytes(Width);
-  if (!Bytes)
+  const auto Size = scalarBytes(Width);
+  if (!Size)
+    return fault(RuntimeMemoryFaultKindV1::InvalidAccessWidth, Address, 0,
+                 MemoryAccessKind::Write, RequiredAlignment);
+  std::array<uint8_t, sizeof(uint64_t)> Bytes{};
+  for (uint64_t I = 0; I != *Size; ++I)
+    Bytes[I] = static_cast<uint8_t>(Value >> (I * 8));
+  return storeBytes(Address, llvm::ArrayRef(Bytes).take_front(*Size),
+                    RequiredAlignment);
+}
+
+GuestMemoryAccessResult
+GuestMemoryRuntime::loadBytes(uint64_t Address,
+                              llvm::MutableArrayRef<uint8_t> Output,
+                              uint32_t RequiredAlignment) {
+  const uint64_t Size = Output.size();
+  if (Size == 0 || Size > kMemoryFaultMaxAccessBytes)
+    return fault(RuntimeMemoryFaultKindV1::InvalidAccessWidth, Address, 0,
+                 MemoryAccessKind::Read, RequiredAlignment);
+  if (RequiredAlignment != 0 && !isPowerOfTwo(RequiredAlignment))
+    return fault(RuntimeMemoryFaultKindV1::InvalidAlignment, Address, Size,
+                 MemoryAccessKind::Read, RequiredAlignment);
+  if (RequiredAlignment != 0 && Address % RequiredAlignment != 0)
+    return fault(RuntimeMemoryFaultKindV1::Misaligned, Address, Size,
+                 MemoryAccessKind::Read, RequiredAlignment);
+
+  const uint64_t MaxAddress = maximumAddress(AddressWidth);
+  if (Address > MaxAddress || Size - 1 > MaxAddress - Address)
+    return fault(RuntimeMemoryFaultKindV1::AddressOverflow, Address, Size,
+                 MemoryAccessKind::Read, RequiredAlignment);
+
+  const AccessPlan Plan = planAccess(Address, Size, MemoryPermission::Read,
+                                     RuntimeMemoryFaultKindV1::CrossRegion);
+  if (Plan.Fault != RuntimeMemoryFaultKindV1::None)
+    return fault(Plan.Fault, Address, Size, MemoryAccessKind::Read,
+                 RequiredAlignment);
+
+  uint64_t ByteIndex = 0;
+  for (const RegionSpan &Span : Plan.Spans) {
+    const Region &Current = Regions[Span.RegionIndex];
+    for (uint64_t Index = 0; Index != Span.Size; ++Index, ++ByteIndex)
+      Output[ByteIndex] = Current.Bytes[Span.Offset + Index];
+  }
+
+  GuestMemoryAccessResult Result;
+  recordResult(Result);
+  return Result;
+}
+
+GuestMemoryAccessResult
+GuestMemoryRuntime::storeBytes(uint64_t Address, llvm::ArrayRef<uint8_t> Input,
+                               uint32_t RequiredAlignment) {
+  return accessStoreBytes(Address, Input.size(), Input.data(),
+                          RequiredAlignment, StorePhase::Commit);
+}
+
+GuestMemoryAccessResult
+GuestMemoryRuntime::validateStoreBytes(uint64_t Address, uint64_t Size,
+                                       uint32_t RequiredAlignment) {
+  return accessStoreBytes(Address, Size, nullptr, RequiredAlignment,
+                          StorePhase::Validate);
+}
+
+GuestMemoryAccessResult GuestMemoryRuntime::accessStoreBytes(
+    uint64_t Address, uint64_t Size, const uint8_t *Input,
+    uint32_t RequiredAlignment, StorePhase Phase) {
+  if (Size == 0 || Size > kMemoryFaultMaxAccessBytes)
     return fault(RuntimeMemoryFaultKindV1::InvalidAccessWidth, Address, 0,
                  MemoryAccessKind::Write, RequiredAlignment);
   if (RequiredAlignment != 0 && !isPowerOfTwo(RequiredAlignment))
-    return fault(RuntimeMemoryFaultKindV1::InvalidAlignment, Address, *Bytes,
+    return fault(RuntimeMemoryFaultKindV1::InvalidAlignment, Address, Size,
                  MemoryAccessKind::Write, RequiredAlignment);
   if (RequiredAlignment != 0 && Address % RequiredAlignment != 0)
-    return fault(RuntimeMemoryFaultKindV1::Misaligned, Address, *Bytes,
+    return fault(RuntimeMemoryFaultKindV1::Misaligned, Address, Size,
                  MemoryAccessKind::Write, RequiredAlignment);
 
   const uint64_t MaxAddress = maximumAddress(AddressWidth);
-  if (Address > MaxAddress || *Bytes - 1 > MaxAddress - Address)
-    return fault(RuntimeMemoryFaultKindV1::AddressOverflow, Address, *Bytes,
+  if (Address > MaxAddress || Size - 1 > MaxAddress - Address)
+    return fault(RuntimeMemoryFaultKindV1::AddressOverflow, Address, Size,
                  MemoryAccessKind::Write, RequiredAlignment);
 
-  const AccessPlan Plan = planAccess(Address, *Bytes, MemoryPermission::Write,
+  const AccessPlan Plan = planAccess(Address, Size, MemoryPermission::Write,
                                      RuntimeMemoryFaultKindV1::CrossRegion);
   if (Plan.Fault != RuntimeMemoryFaultKindV1::None)
-    return fault(Plan.Fault, Address, *Bytes, MemoryAccessKind::Write,
+    return fault(Plan.Fault, Address, Size, MemoryAccessKind::Write,
                  RequiredAlignment);
 
   std::optional<std::size_t> ExecutableRegionIndex;
@@ -293,7 +339,7 @@ GuestMemoryRuntime::storeScalar(uint64_t Address, GuestScalarWidth Width,
                        MemoryPermission::Execute))
       continue;
     if (ExecutableRegionIndex)
-      return fault(RuntimeMemoryFaultKindV1::CrossRegion, Address, *Bytes,
+      return fault(RuntimeMemoryFaultKindV1::CrossRegion, Address, Size,
                    MemoryAccessKind::Write, RequiredAlignment);
     ExecutableRegionIndex = Span.RegionIndex;
   }
@@ -305,25 +351,30 @@ GuestMemoryRuntime::storeScalar(uint64_t Address, GuestScalarWidth Width,
   if (IsExecutable) {
     if (CodeInvalidation == CodeInvalidationPolicy::RejectExecutableWrites)
       return fault(RuntimeMemoryFaultKindV1::ExecutableWriteRejected, Address,
-                   *Bytes, MemoryAccessKind::Write, RequiredAlignment);
+                   Size, MemoryAccessKind::Write, RequiredAlignment);
     if (CodeInvalidation !=
             CodeInvalidationPolicy::InvalidateOnExecutableWrite &&
         CodeInvalidation != CodeInvalidationPolicy::ValidateBeforeDispatch)
-      return fault(RuntimeMemoryFaultKindV1::PolicyViolation, Address, *Bytes,
+      return fault(RuntimeMemoryFaultKindV1::PolicyViolation, Address, Size,
                    MemoryAccessKind::Write, RequiredAlignment);
     if (OldGeneration == std::numeric_limits<uint64_t>::max())
       return fault(RuntimeMemoryFaultKindV1::ExecutableGenerationOverflow,
-                   Address, *Bytes, MemoryAccessKind::Write, RequiredAlignment,
-                   0, OldGeneration);
+                   Address, Size, MemoryAccessKind::Write, RequiredAlignment, 0,
+                   OldGeneration);
     NewGeneration = OldGeneration + 1;
+  }
+
+  if (Phase == StorePhase::Validate) {
+    GuestMemoryAccessResult Result;
+    recordResult(Result);
+    return Result;
   }
 
   uint64_t ByteIndex = 0;
   for (const RegionSpan &Span : Plan.Spans) {
     Region &Current = Regions[Span.RegionIndex];
     for (uint64_t Index = 0; Index != Span.Size; ++Index, ++ByteIndex)
-      Current.Bytes[Span.Offset + Index] =
-          static_cast<uint8_t>(Value >> (ByteIndex * 8));
+      Current.Bytes[Span.Offset + Index] = Input[ByteIndex];
   }
   if (IsExecutable)
     Regions[*ExecutableRegionIndex].Generation = NewGeneration;
@@ -333,7 +384,7 @@ GuestMemoryRuntime::storeScalar(uint64_t Address, GuestScalarWidth Width,
       CodeInvalidation == CodeInvalidationPolicy::InvalidateOnExecutableWrite) {
     Result.Status = GuestMemoryAccessStatus::SelfModification;
     Result.SelfModification =
-        SelfModificationExit{Address, *Bytes, OldGeneration, NewGeneration};
+        SelfModificationExit{Address, Size, OldGeneration, NewGeneration};
   } else if (IsExecutable) {
     Result.Value = NewGeneration;
   }

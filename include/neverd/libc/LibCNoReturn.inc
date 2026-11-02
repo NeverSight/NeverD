@@ -11,6 +11,8 @@ LIBC_NO_RETURN_SYMBOL("exit")
 // glibc and musl call exit() with main's result; `_start` follows the call
 // with a `hlt` that only marks unreachable code.
 LIBC_NO_RETURN_SYMBOL("libc_start_main")
+// Android bionic's startup entry also exits with the application's result.
+LIBC_NO_RETURN_SYMBOL("libc_init")
 LIBC_NO_RETURN_SYMBOL("Exit")
 LIBC_NO_RETURN_SYMBOL("quick_exit")
 LIBC_NO_RETURN_SYMBOL("longjmp")

@@ -268,4 +268,42 @@ TEST(COFFFH4Encoding, RejectsReservedHandlerHeadersAndOverlappingTables) {
   }
 }
 
+TEST(COFFFH4Encoding, StopsAtEveryUnreadableFieldWithoutLosingItsError) {
+  for (bool Separated : {false, true}) {
+    SCOPED_TRACE(Separated);
+    TestImage Image = makeMinimalCatchAllImage();
+    if (Separated) {
+      Image.Bytes[0x100] |= 2;
+      Image.write32(0x109, 0x600);
+      Image.place(0x600, {0x02});
+      Image.write32(0x601, 0x2000);
+      Image.write32(0x605, 0x500);
+    }
+    size_t Reads = 0;
+    auto Complete =
+        parseFuncInfoLayout(0x100, [&](uint32_t RVA, uint32_t Size) {
+          ++Reads;
+          return Image.read(RVA, Size);
+        });
+    ASSERT_TRUE(static_cast<bool>(Complete))
+        << llvm::toString(Complete.takeError());
+    for (size_t Failure = 0; Failure < Reads; ++Failure) {
+      SCOPED_TRACE(Failure);
+      size_t Attempted = 0;
+      auto Truncated = parseFuncInfoLayout(
+          0x100,
+          [&](uint32_t RVA,
+              uint32_t Size) -> llvm::Expected<llvm::ArrayRef<uint8_t>> {
+            if (Attempted++ >= Failure)
+              return llvm::createStringError(llvm::errc::bad_address,
+                                             "unreadable test field");
+            return Image.read(RVA, Size);
+          });
+      EXPECT_NE(takeExpectedError(Truncated).find("unreadable test field"),
+                std::string::npos);
+      EXPECT_EQ(Attempted, Failure + 1);
+    }
+  }
+}
+
 } // namespace

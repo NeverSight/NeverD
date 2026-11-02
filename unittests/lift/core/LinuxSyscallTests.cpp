@@ -12,7 +12,7 @@
 
 #include "NeverDLiftFixture.h"
 
-#include "neverd/ir/intrinsics/X64Syscall.h"
+#include "neverd/ir/intrinsics/X86/X64Syscall.h"
 
 #include <fstream>
 #include <sstream>
@@ -67,15 +67,15 @@ TEST(LinuxSyscallArguments, CountTheKernelHandlersRegisters) {
 TEST(LinuxSyscallArguments, Linux72IncrementalMetadata) {
   using neverd::Arch;
   using neverd::linuxSyscallArgumentCount;
-  constexpr unsigned Counts[] = {
-      4, 4, 3, 4, 6, 4, 4, 4, 4, 4, 3, 3, 6, 6, 5, 4, 5, 5, 5, 4, 0};
+  constexpr unsigned Counts[] = {4, 4, 3, 4, 6, 4, 4, 4, 4, 4, 3,
+                                 3, 6, 6, 5, 4, 5, 5, 5, 4, 0};
   for (const Arch Target : {Arch::X64, Arch::AArch64, Arch::ARM}) {
     SCOPED_TRACE(static_cast<unsigned>(Target));
     for (unsigned I = 0; I < sizeof(Counts) / sizeof(Counts[0]); ++I) {
       SCOPED_TRACE(451 + I);
       EXPECT_EQ(linuxSyscallArgumentCount(Target, 451 + I), Counts[I]);
     }
-    EXPECT_EQ(linuxSyscallArgumentCount(Target, 472), std::nullopt);
+    EXPECT_EQ(linuxSyscallArgumentCount(Target, 473), std::nullopt);
     EXPECT_EQ(linuxSyscallArgumentCount(Target, 100000), std::nullopt);
   }
   // The syscall is SYSCALL_DEFINE5(bpf), not the three-argument internal
@@ -89,13 +89,23 @@ TEST(LinuxSyscallArguments, Linux72IncrementalMetadata) {
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::X64, 512), std::nullopt);
 }
 
+// fchroot(int fd, unsigned int flags) has two word-sized arguments on all
+// three ABIs. Linux cbbddb6b08cc9900a87cccaa9b22bbe06aa4f50a assigns 472.
+TEST(LinuxSyscallArguments, FchrootMetadata) {
+  for (const neverd::Arch Target :
+       {neverd::Arch::X64, neverd::Arch::AArch64, neverd::Arch::ARM}) {
+    EXPECT_EQ(neverd::linuxSyscallArgumentCount(Target, 472), 2u);
+    EXPECT_EQ(neverd::linuxSyscallArgumentCount(Target, 473), std::nullopt);
+  }
+}
+
 TEST(LinuxSyscallArguments, AArch64NativeNotCompat) {
   using neverd::Arch;
   using neverd::linuxSyscallArgumentCount;
-  constexpr unsigned Numbers[] = {
-      43, 44, 45, 46, 84, 86, 87, 99, 100, 115, 122, 123, 127, 137, 138, 183, 240};
-  constexpr unsigned Counts[] = {
-      2, 2, 2, 2, 4, 4, 2, 2, 3, 4, 3, 3, 2, 4, 3, 5, 4};
+  constexpr unsigned Numbers[] = {43,  44,  45,  46,  84,  86,  87,  99, 100,
+                                  115, 122, 123, 127, 137, 138, 183, 240};
+  constexpr unsigned Counts[] = {2, 2, 2, 2, 4, 4, 2, 2, 3,
+                                 4, 3, 3, 2, 4, 3, 5, 4};
   for (unsigned I = 0; I < sizeof(Numbers) / sizeof(Numbers[0]); ++I) {
     SCOPED_TRACE(Numbers[I]);
     EXPECT_EQ(linuxSyscallArgumentCount(Arch::AArch64, Numbers[I]), Counts[I]);

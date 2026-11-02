@@ -3,9 +3,11 @@
 #include "neverd/translate/TranslationObjectRequest.h"
 
 #include "TranslationCacheIdentity.h"
+#include "X86/X87TranslationBoundary.h"
 
 #include "neverd/translate/RuntimeABI.h"
 #include "neverd/translate/RuntimeGuestState.h"
+#include "neverd/translate/X86/RuntimeX87GuestState.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -272,6 +274,13 @@ createWrapperCacheIdentity(const TranslationBlockDescriptorV1 &Descriptor,
   Hash.addU32(kRuntimeGuestStateX86_64MagicV1);
   Hash.addU16(kRuntimeGuestStateX86_64VersionV1);
   Hash.addU16(kRuntimeGuestStateX86_64SizeV1);
+  if (Options.RuntimeProfile == TranslationRuntimeProfileV1::PortableX87) {
+    Hash.addU16(kRuntimeGuestStateX86_64X87SizeV1);
+    Hash.addU16(kPortableX87StateVersionV1);
+    Hash.addByte(static_cast<uint8_t>(RuntimeControlProtocolV1::ExactSpan));
+    Hash.addU16(detail::kX87TranslationBoundarySchemaV1);
+    Hash.addU16(kRuntimeX87HelperProtocolVersionV1);
+  }
   detail::hashMemorySlots(Hash, runtimeGuestStateX86_64MemorySlotsV1());
   Hash.addU32(kRuntimeABIMagicV1);
   Hash.addU16(kRuntimeABIVersionV1);
@@ -309,6 +318,15 @@ compileTranslationObjectRequestV1(const TranslationObjectRequestV1 &Request) {
     return failure(TranslationObjectRequestErrorCode::GuestStateRejected,
                    llvm::toString(std::move(Error)));
 
+  if (Request.options().RuntimeProfile ==
+      TranslationRuntimeProfileV1::PortableX87) {
+    auto RuntimeState =
+        createRuntimeGuestStateX86_64X87V1(Request.guestState());
+    if (!RuntimeState)
+      return failure(TranslationObjectRequestErrorCode::GuestStateRejected,
+                     llvm::toString(RuntimeState.takeError()));
+  }
+
   llvm::Expected<TranslationTargetMachineV1> TargetOrErr =
       createTranslationTargetMachineV1(Request.options());
   if (!TargetOrErr)
@@ -318,6 +336,12 @@ compileTranslationObjectRequestV1(const TranslationObjectRequestV1 &Request) {
     return failure(TranslationObjectRequestErrorCode::InvalidRequest,
                    "v1 requires an AArch64 code-generation target");
   const llvm::Triple HostTriple(Target.hostTarget().triple());
+  if (Request.options().RuntimeProfile ==
+          TranslationRuntimeProfileV1::PortableX87 &&
+      (!HostTriple.isOSLinux() || !HostTriple.isOSBinFormatELF()))
+    return failure(TranslationObjectRequestErrorCode::InvalidRequest,
+                   "portable x87 translation currently qualifies only native "
+                   "Linux AArch64 ELF");
   if (!HostTriple.isOSBinFormatELF() && !HostTriple.isOSBinFormatMachO())
     return failure(TranslationObjectRequestErrorCode::InvalidRequest,
                    "v1 emits only AArch64 ELF or Mach-O objects");
@@ -333,7 +357,7 @@ compileTranslationObjectRequestV1(const TranslationObjectRequestV1 &Request) {
                    llvm::toString(RuntimeOrErr.takeError()));
 
   llvm::Expected<std::unique_ptr<X86TranslationBlockBuilder>> BuilderOrErr =
-      X86TranslationBlockBuilder::create();
+      X86TranslationBlockBuilder::create(Request.options().RuntimeProfile);
   if (!BuilderOrErr)
     return builderFailure(BuilderOrErr.takeError(), /*DuringCreation=*/true);
   llvm::Expected<TranslationBlockDescriptorV1> DescriptorOrErr =
@@ -355,7 +379,10 @@ compileTranslationObjectRequestV1(const TranslationObjectRequestV1 &Request) {
   const llvm::StringRef BlockSymbol = LoweredOrErr->blockSymbol();
   const llvm::StringRef RequiredBlocks[] = {BlockSymbol};
   TranslationObjectPolicyV1 Policy;
-  Policy.StateSize = kRuntimeGuestStateX86_64SizeV1;
+  Policy.StateSize = Request.options().RuntimeProfile ==
+                             TranslationRuntimeProfileV1::PortableX87
+                         ? kRuntimeGuestStateX86_64X87SizeV1
+                         : kRuntimeGuestStateX86_64SizeV1;
   Policy.StateSlots = runtimeGuestStateX86_64MemorySlotsV1();
   Policy.RequiredBlockSymbols = RequiredBlocks;
   Policy.Semantic = Request.semanticPolicy();

@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -88,6 +89,13 @@ llvm::StringRef immediateDecodeStatusName(ImmediateDecodeStatus Status);
 /// zeroes. Invalid EIP-8024 candidates are formatted even though they are not
 /// part of Encoding. Returns an empty string when no immediate was examined.
 std::string formatImmediate(const LowInstruction &Instruction);
+
+/// The PUSH data formatImmediate spells as operand \p Index, at its declared
+/// width. None for any other operand, an instruction without PUSH data, or a
+/// truncated or invalid immediate; an EIP-8024 immediate is a stack
+/// position, not a constant.
+std::optional<llvm::APInt> operandImmediate(const LowInstruction &Instruction,
+                                            unsigned Index);
 
 /// Formats one opcode byte with the protocol's fixed two hexadecimal digits.
 std::string formatOpcodeByte(uint8_t Byte);

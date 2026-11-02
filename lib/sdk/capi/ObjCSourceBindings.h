@@ -7793,7 +7793,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         }
       }
     }
-    if (Original->Kind == ExprKind::Load && !AddressContext && !MemoryAddress) {
+    if (!AddressContext && !MemoryAddress) {
       if (const auto Found = ScalarLoads.find(Original.get());
           Found != ScalarLoads.end()) {
         const auto &Plan = Found->second;
@@ -7804,9 +7804,16 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           Base->Type = NdType::makeInt(8, false);
           Base->SourceCallHint =
               std::make_shared<SourceCallTypeHint>(std::move(*Hint));
-          Expression->Operands = {HighExpr::makeBinop(
-              NdOp::INT_ADD, Base,
-              Copy(Plan.Offset, Depth + 1, false, false, false))};
+          auto Offset = Copy(Plan.Offset, Depth + 1, false, false, false);
+          if (Plan.OriginalMemory) {
+            // Relocate only the proved table base. The original read retains
+            // its raw index, instruction word, access width and effects.
+            Expression->Operands[kAddressMemoryBaseOperand] = Base;
+            Expression->Operands[kAddressMemoryIndexOperand] = Offset;
+          } else {
+            Expression->Operands = {
+                HighExpr::makeBinop(NdOp::INT_ADD, Base, Offset)};
+          }
           Result.BorrowedBytes.insert({Plan.Base, Plan.Extent});
           return Expression;
         }

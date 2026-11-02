@@ -4,9 +4,14 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <array>
 #include <cstdint>
@@ -63,9 +68,9 @@ MedFunc makeProbe(const AMXShape &Shape) {
 }
 
 const std::array<AMXShape, 8> &architecturalShapes() {
-  // Sizes exclude the intrinsic-id input.  These are the exact LowIR/MedIR
-  // state shapes a future runtime ABI must preserve; none may be narrowed to a
-  // host vector or replaced with a scalar status value.
+  // Legacy value-form state cannot be silently reinterpreted as the native
+  // architectural bank. Its explicit tile/configuration values still require
+  // a transport ABI; the versioned X86AMXState operation has a different owner.
   static const std::array<AMXShape, 8> Shapes = {{
       {Intrinsic::AMXLoadConfig, 64, {8, 1}},
       {Intrinsic::AMXStoreConfig, 0, {8, 64, 1}},
@@ -82,6 +87,7 @@ const std::array<AMXShape, 8> &architecturalShapes() {
 } // namespace
 
 TEST(X86AMXLLVMGuard, ClassifiesTheCompleteArchitecturalStateSurface) {
+  EXPECT_TRUE(isAMXIntrinsic(Intrinsic::X86AMXState));
   for (const AMXShape &Shape : architecturalShapes())
     EXPECT_TRUE(isAMXIntrinsic(Shape.Id));
 
@@ -90,7 +96,7 @@ TEST(X86AMXLLVMGuard, ClassifiesTheCompleteArchitecturalStateSurface) {
   EXPECT_FALSE(isAMXIntrinsic(Intrinsic::ApxRaoAdd));
 }
 
-TEST(X86AMXLLVMGuard, ExactStateShapesFailBeforeLLVMEmission) {
+TEST(X86AMXLLVMGuard, LegacyValueShapesFailBeforeLLVMEmission) {
   for (const AMXShape &Shape : architecturalShapes()) {
     SCOPED_TRACE(static_cast<unsigned>(Shape.Id));
     EXPECT_DEATH(
@@ -102,5 +108,67 @@ TEST(X86AMXLLVMGuard, ExactStateShapesFailBeforeLLVMEmission) {
         },
         "versioned tile-state, restartable-memory, and fault-continuation "
         "runtime ABI");
+  }
+}
+
+TEST(X86AMXLLVMGuard, NativeBankShapesAreCheckedBeforeEmission) {
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = makeProbe({Intrinsic::X86AMXState, 0, {8, 4}});
+    Function.ReturnsNoValue = true;
+    auto &Op = Function.Blocks[0].Ops[0];
+    Op.Inputs[1] = MedVar::makeConst(0, 8);
+    Op.Inputs[2] =
+        MedVar::makeConst(X86AmxStateVersion | unsigned(X86AmxOp::Release), 4);
+    switch (Mutation) {
+    case 1:
+      Op.Inputs[2].ConstVal = unsigned(X86AmxOp::Release);
+      break;
+    case 2:
+      Op.Inputs[2].ConstVal |= 1u << 26;
+      break;
+    case 3:
+      Op.Inputs[2].ConstVal |= X86AmxEvexMemory;
+      break;
+    case 4:
+      Op.Inputs[2].ConstVal |= X86AmxExtendedRow;
+      break;
+    case 5:
+      Op.Inputs[1].ConstVal = 1;
+      break;
+    case 6:
+      Op.Inputs[2].Size = 8;
+      break;
+    case 7:
+      Op.Output = temporary(1, 64);
+      break;
+    case 8:
+      Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 9:
+      Op.NumInputs = 2;
+      break;
+    case 10:
+      Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+      break;
+    default:
+      break;
+    }
+    EXPECT_EQ(x86AmxShapeIsValid(x86AmxMedShape(Op, Arch::X64)), !Mutation);
+    EXPECT_EQ(verifyMedFunc(Function, "AMX bank admission"), !Mutation);
+    if (!Mutation) {
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({Function}, Context, "amx-bank", Arch::X64);
+      ASSERT_TRUE(Module);
+      EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    } else
+      EXPECT_DEATH(
+          {
+            llvm::LLVMContext Context;
+            (void)MedLLVMEmitter().emit({Function}, Context, "amx-bank",
+                                        Arch::X64);
+          },
+          "invalid AMX architectural bank contract");
   }
 }

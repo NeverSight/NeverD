@@ -7,8 +7,8 @@
 /// Keeps callback ownership independent of whether an invocation returns.
 
 #include "neverd/Limits.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 
 #include <set>
 

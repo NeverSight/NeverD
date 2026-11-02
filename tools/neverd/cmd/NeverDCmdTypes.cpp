@@ -16,6 +16,7 @@
 
 #include "../NeverDCLI.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -397,6 +398,18 @@ bool declare(neverd_session_t Sess) {
 /// The checks of options both ways of running share; false with an error
 /// printed.
 bool optionsValid() {
+  if (!TypesImportPrototypes.empty() &&
+      (!TypesMergePrototypes || TypesDeclare.size() != 2)) {
+    WithColor::error() << "--import-prototype requires --merge-prototypes and "
+                          "exactly two --declare files\n";
+    return false;
+  }
+  if (TypesMergePrototypes &&
+      (!TypesInput.empty() || TypesDeclare.size() < 2)) {
+    WithColor::error() << "--merge-prototypes needs at least two --declare "
+                          "files and no binary\n";
+    return false;
+  }
   if ((TypesSave || TypesSaveDeclarations) &&
       (TypesInput.empty() || TypesDeclare.empty())) {
     WithColor::error()
@@ -577,9 +590,24 @@ int runTypesConvert() {
       return 1;
     }
     // A JSON string from a StringRef refers to the buffer, which goes.
-    Declarations.push_back(
-        json::Object{{"language", Language->str()},
-                     {"source", (*Buffer)->getBuffer().str()}});
+    json::Object Declaration{{"language", Language->str()},
+                             {"source", (*Buffer)->getBuffer().str()}};
+    if (TypesMergePrototypes && !Declarations.empty()) {
+      std::string Prefix = sys::path::stem(Path).str();
+      for (char &C : Prefix)
+        if (!isAlnum(C) && C != '_')
+          C = '_';
+      if (Prefix.empty() || isDigit(Prefix.front()))
+        Prefix.insert(Prefix.begin(), '_');
+      Declaration["importPrefix"] = std::move(Prefix);
+      if (!TypesImportPrototypes.empty()) {
+        json::Array Names;
+        for (const auto &Name : TypesImportPrototypes)
+          Names.push_back(Name);
+        Declaration["importPrototypes"] = std::move(Names);
+      }
+    }
+    Declarations.push_back(std::move(Declaration));
   }
   json::Object Request{{"dataModel", TypesDataModel.getValue()},
                        {"declarations", std::move(Declarations)},

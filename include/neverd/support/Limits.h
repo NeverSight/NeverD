@@ -34,6 +34,23 @@ inline constexpr unsigned MaxMinLength = 1024;
 
 namespace neverd::limits::support {
 
+// Hashing and copying loaded bytes. This is a checkpoint granularity, not a
+// maximum input size or a wall-clock deadline. Keep it a SHA-256 block
+// multiple.
+inline constexpr size_t kLoadByteCheckpointBytes = 1024 * 1024;
+
+// NDDB storage and streaming. Metadata limits are aggregate admission budgets,
+// adjustable through project_database::ReadLimits; input bytes stream without
+// a total-size policy ceiling. Exhaustion is an explicit load error.
+inline constexpr size_t kProjectDatabaseChunkBytes = 8 * 1024 * 1024;
+inline constexpr int kProjectDatabaseCompressionLevel = 6;
+inline constexpr size_t kProjectStreamBytes = 64 * 1024;
+inline constexpr uint64_t kProjectMetadataBytes = 1024 * 1024;
+inline constexpr uint64_t kProjectSidecarBytes = 256 * 1024 * 1024;
+inline constexpr uint64_t kProjectStateBytes = 32 * 1024 * 1024;
+inline constexpr uint64_t kProjectMetadataRows = 65536;
+inline constexpr int kProjectSqlCheckpointOps = 1000;
+
 // lib/support/TextEvidence.cpp
 inline constexpr size_t kTextEvidenceMinTableAscentIdeographs = 3;
 inline constexpr unsigned kTextEvidenceMinWordLetters = 3;
@@ -47,6 +64,25 @@ inline constexpr size_t kTextEvidenceMinTextBeyondASCII = 3;
 
 // lib/support/ByteScan.cpp
 inline constexpr int kByteScanLongTextASCIIPrefixSizeLimit = 32;
+
+// lib/support/SortedSearch.cpp
+// Keep short searches inline; compare a bounded 128-byte tail in-place.
+#if defined(__clang__)
+inline constexpr size_t kSortedSearchMinimumSIMDEntries = 64;
+#else
+// Keep medium ordered inputs on predictable scalar bisection.
+inline constexpr size_t kSortedSearchMinimumSIMDEntries = 4096;
+#endif
+inline constexpr size_t kSortedSearchSIMDTailEntries = 16;
+#if defined(__GNUC__) && !defined(__clang__)
+// Direct membership changes GCC's small scalar caller loops unfavorably.
+// Retain rank-based membership until caller measurements justify switching.
+inline constexpr bool kSortedSearchUseDirectMembership = false;
+#else
+inline constexpr bool kSortedSearchUseDirectMembership = true;
+#endif
+// Narrow x86 targets lose to scalar binary search on medium/ordered inputs.
+inline constexpr size_t kSortedSearchMinimumX86SIMDLanes = 4;
 
 // lib/support/TextEncoding.cpp
 inline constexpr int kTextEncodingEscapeInvalidUTF8TextSizeLimit = 64;

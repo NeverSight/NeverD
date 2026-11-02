@@ -14,6 +14,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
+#include "neverd/object/ELFLayout.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -115,23 +116,37 @@ ReadOnlyBytesScope::~ReadOnlyBytesScope() { ActiveVectorFixups = Previous; }
 
 bool BinaryImage::readOnlyAfterRelocations(va_t Addr, uint64_t Width) const {
   const Segment *Seg = getSegmentFor(Addr);
-  if (!Seg || !Width || Width > Seg->Size - (Addr - Seg->VA))
+  if (!Seg || !Width || Seg->Size > InvalidVA - Seg->VA ||
+      Width > Seg->Size - (Addr - Seg->VA))
     return false;
-  if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations ||
-      section_names::isReadOnlyAfterRelocSectionName(Seg->Name))
+  if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations)
     return true;
-  if (const Section *Sec = getSectionFor(Addr);
-      Sec && Width <= Sec->Size - (Addr - Sec->VA) &&
-      (section_names::isReadOnlyAfterRelocSectionName(Sec->Name) ||
-       section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName)))
-    return true;
-  if (ELFMetadata)
-    for (const ELFProgramHeader &Header : ELFMetadata->ProgramHeaders)
-      if (Header.Type == llvm::ELF::PT_GNU_RELRO &&
-          Addr >= Header.VirtualAddress &&
-          Addr - Header.VirtualAddress <= Header.MemorySize &&
-          Width <= Header.MemorySize - (Addr - Header.VirtualAddress))
-        return true;
+  // Names describe linker conventions, not runtime protection. In particular,
+  // -z norelro leaves .data.rel.ro writable and a Mach-O __DATA_CONST mapping
+  // without the loader's SG_READ_ONLY guarantee need not become immutable.
+  if (Format != BinaryFormat::ELF || IsRelocatable || !ELFMetadata)
+    return false;
+  // GNU_RELRO is a dynamic-loader action, not a kernel PT_LOAD permission.
+  // An executable without an interpreter may never protect it; a DSO has no
+  // independent process entry. Explicit loader guarantees above remain valid.
+  const bool DynamicImage =
+      (ELFMetadata->Type == llvm::ELF::ET_DYN && !Entry) ||
+      ((ELFMetadata->Type == llvm::ELF::ET_DYN ||
+        ELFMetadata->Type == llvm::ELF::ET_EXEC) &&
+       !ELFMetadata->Interpreter.empty());
+  const uint64_t Page = maximumELFProtectionPageSize(Arch);
+  if (!DynamicImage || !Page)
+    return false;
+  for (const ELFProgramHeader &Header : ELFMetadata->ProgramHeaders) {
+    if (Header.Type != llvm::ELF::PT_GNU_RELRO ||
+        Header.MemorySize > InvalidVA - Header.VirtualAddress)
+      continue;
+    // Relocation protection excludes an incomplete final page. Use the
+    // target's largest possible granule, never this analysis host's page.
+    const va_t End = (Header.VirtualAddress + Header.MemorySize) & ~(Page - 1);
+    if (Addr >= Header.VirtualAddress && Addr < End && Width <= End - Addr)
+      return true;
+  }
   return false;
 }
 
@@ -261,8 +276,7 @@ const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
       (RequireReadable && (!Section->isReadable() || !Segment->isReadable())) ||
       Image.isCodeAddress(Address) != Code ||
       (Code && (!Section->isExecutable() || !Segment->isExecutable())) ||
-      (Immutable && !Segment->ReadOnlyAfterRelocations &&
-       (Section->isWritable() || Segment->isWritable())) ||
+      (Immutable && !Image.readOnlyAfterRelocations(Address, Extent)) ||
       Section->Size > InvalidVA - Section->VA ||
       Segment->Size > InvalidVA - Segment->VA || Section->VA < Segment->VA ||
       !rangeInBounds(Address - Section->VA, Extent, Section->Size) ||
@@ -307,7 +321,24 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
   };
   auto Set = [](va_t Slot) { return Slot; };
   auto Map = [](const auto &Slot) { return Slot.first; };
+  auto TouchesOperands = [&](const auto &Operands) {
+    // Operand widths are uint8_t, not necessarily the target's pointer width.
+    // In particular, malformed wide metadata cannot hide an overlapping tail
+    // before the lower_bound. Preserve the existing pointer-width exclusion
+    // for narrow/incomplete records while covering every wider field.
+    constexpr uint64_t MaximumWidth = UINT8_MAX;
+    auto It = Operands.lower_bound(
+        Address >= MaximumWidth - 1 ? Address - (MaximumWidth - 1) : 0);
+    for (; It != Operands.end() &&
+           (It->first < Address || It->first - Address < Extent);
+         ++It)
+      if (overlaps(Address, Extent, It->first,
+                   std::max<uint64_t>(PointerWidth, It->second.Width)))
+        return true;
+    return false;
+  };
   if (Touches(Image.CodePtrRelocSlots, Set, CodePointer) ||
+      Touches(Image.MachOAuthenticatedPointers, Map) ||
       Touches(Image.DataPtrRelocSlots, Set, Pointer) ||
       Touches(Image.DataPtrRelocTargetOwners, Map, Pointer) ||
       Touches(Image.RelCodeRelocSlots, Set) ||
@@ -319,8 +350,8 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       Touches(Image.ImportStorageSlots, Map, Import) ||
       Touches(Image.DyldBindSlots, Map, Import) ||
       Touches(Image.ObjCSourceReferences, Map, ObjCReference) ||
-      Touches(Image.DataAddressRelocOperands, Map) ||
-      Touches(Image.CodeAddressRelocOperands, Map))
+      TouchesOperands(Image.DataAddressRelocOperands) ||
+      TouchesOperands(Image.CodeAddressRelocOperands))
     return true;
   return !visitVectorFixups(
       Image,
@@ -393,6 +424,74 @@ readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   if (!Bytes || hasConflictingFixups(Image, Address, Size, false))
     return std::nullopt;
   return std::vector<uint8_t>(Bytes, Bytes + Size);
+}
+
+std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
+                                                 va_t Address, uint32_t Size,
+                                                 size_t *RemainingWork) {
+  if (!Size || Size > sizeof(uint64_t) || !supportsImmutableImageReads(Image))
+    return std::nullopt;
+  if (RemainingWork) {
+    size_t Available = *RemainingWork;
+    // Charge inventories even when a mapping/fixup check could return early.
+    // This bounds cold queries independently of which record happens to match
+    // and includes the ordered indices used by the pointer-candidate check.
+    for (size_t Work :
+         {size_t{1} + Size,
+          Image.Sections.size(),
+          Image.Segments.size(),
+          Image.ELFMetadata ? Image.ELFMetadata->ProgramHeaders.size()
+                            : size_t{0},
+          Image.ARMCodeRegions.size(),
+          Image.Relocations.size(),
+          Image.BaseRelocations.size(),
+          Image.RuntimeCallablePointerSlots.size(),
+          Image.CodePtrRelocSlots.size(),
+          Image.MachOAuthenticatedPointers.size(),
+          Image.DataPtrRelocSlots.size(),
+          Image.DataPtrRelocTargetOwners.size(),
+          Image.RelCodeRelocSlots.size(),
+          Image.RelDataPtrRelocSlots.size(),
+          Image.MachOResolvedChainedPointerSlots.size(),
+          Image.ConflictingImportStorageSlots.size(),
+          Image.ImportPtrSlots.size(),
+          Image.ImportStorageSlots.size(),
+          Image.DyldBindSlots.size(),
+          Image.ObjCSourceReferences.size(),
+          Image.DataAddressRelocOperands.size(),
+          Image.CodeAddressRelocOperands.size(),
+          Image.RelocDataAddrs.size(),
+          Image.WritableRelocDataAddrs.size(),
+          Image.RodataAnchorSeg.size(),
+          Image.CodeRefTargets.size()}) {
+      if (Work > Available)
+        return std::nullopt;
+      Available -= Work;
+    }
+    // Pointer-candidate checks can query section/segment ownership for each
+    // segment end. Reserve those nested inventories without overflowing.
+    if (Size == Image.getPointerSize())
+      for (size_t Inventory : {Image.Sections.size(), Image.Segments.size()}) {
+        if (Inventory && Image.Segments.size() > Available / Inventory)
+          return std::nullopt;
+        Available -= Inventory * Image.Segments.size();
+      }
+    *RemainingWork = Available;
+  }
+  auto Bytes = readImmutableImageBytes(Image, Address, Size);
+  // A real LOAD may read scalar constants placed among instructions. Keep
+  // the code reader's exact permissions, mapping and no-fixup requirements.
+  if (!Bytes)
+    Bytes = readImmutableCodeBytes(Image, Address, Size);
+  if (!Bytes)
+    return std::nullopt;
+  uint64_t Bits = 0;
+  for (unsigned I = 0; I < Size; ++I)
+    Bits |= uint64_t{(*Bytes)[I]} << (I * 8);
+  if (Size == Image.getPointerSize() &&
+      Image.isPotentiallyRelocatableAddress(Bits))
+    return std::nullopt;
+  return Bits;
 }
 
 bool isFileBackedCodeImageRange(const BinaryImage &Image, va_t Address,

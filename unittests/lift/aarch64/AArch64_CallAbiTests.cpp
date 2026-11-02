@@ -1,12 +1,76 @@
+//===- AArch64_CallAbiTests.cpp - AAPCS64 call contracts ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Floating register transport, native scalar interfaces and outgoing calls.
+//===----------------------------------------------------------------------===//
+
 #include "NeverDLiftFixture.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/SourceMgr.h"
 
 #include <fstream>
 #include <iterator>
 #include <regex>
 
 class AArch64_CallAbi : public NeverDLiftTest {};
+
+namespace {
+#define CALL_ABI_VALUE(Type, Name, Value) inline constexpr Type Name = Value;
+#define CALL_ABI_TEXT(Name, Text) inline constexpr char Name[] = Text;
+#include "AArch64CallAbiFixtures.def"
+
+// Follow only transformations that preserve the low double-width bits.
+// This accepts both vector extraction and integer carrier legalization while
+// refusing arithmetic, another lane, or an unrelated incoming value.
+llvm::Value *callABILowDoubleOrigin(llvm::Value *Value) {
+  while (auto *Instruction = llvm::dyn_cast<llvm::Instruction>(Value)) {
+    if (auto *Cast = llvm::dyn_cast<llvm::CastInst>(Instruction)) {
+      const auto SourceBits =
+          Cast->getOperand(0)->getType()->getPrimitiveSizeInBits();
+      const auto ResultBits = Cast->getType()->getPrimitiveSizeInBits();
+      if ((!llvm::isa<llvm::BitCastInst, llvm::TruncInst, llvm::ZExtInst>(
+              Cast)) ||
+          SourceBits.isScalable() || ResultBits.isScalable() ||
+          SourceBits.getFixedValue() < kCallABIDoubleBits ||
+          ResultBits.getFixedValue() < kCallABIDoubleBits)
+        break;
+      Value = Cast->getOperand(0);
+      continue;
+    }
+    if (auto *Extract = llvm::dyn_cast<llvm::ExtractElementInst>(Instruction)) {
+      const auto *Index =
+          llvm::dyn_cast<llvm::ConstantInt>(Extract->getIndexOperand());
+      if (!Index || !Index->isZero() ||
+          Extract->getType()->getPrimitiveSizeInBits() < kCallABIDoubleBits)
+        break;
+      Value = Extract->getVectorOperand();
+      continue;
+    }
+    if (auto *Insert = llvm::dyn_cast<llvm::InsertElementInst>(Instruction)) {
+      const auto *Index =
+          llvm::dyn_cast<llvm::ConstantInt>(Insert->getOperand(2));
+      if (!Index || !Index->isZero() ||
+          Insert->getOperand(1)->getType()->getPrimitiveSizeInBits() <
+              kCallABIDoubleBits)
+        break;
+      Value = Insert->getOperand(1);
+      continue;
+    }
+    break;
+  }
+  return Value;
+}
+} // namespace
 
 static fs::path callAbiObj() {
   return fs::path(TEST_OBJ_DIR) / "test_call_abi_a64_macho";
@@ -50,20 +114,48 @@ TEST_F(AArch64_CallAbi, IndirectFPCallUsesV0ForArgumentAndReturn) {
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string F = callAbiFunctionText(R.out, "indirect_double_call");
+  std::string F = callAbiFunctionText(R.out, kCallABIIndirectDouble);
   ASSERT_FALSE(F.empty()) << R.out;
-  size_t Call = F.find("call <2 x i64> %");
+  size_t Call = F.find(kCallABIVectorCall);
   ASSERT_NE(Call, std::string::npos) << F;
   size_t CallEnd = F.find('\n', Call);
   std::string CallLine = F.substr(Call, CallEnd - Call);
-  EXPECT_NE(CallLine.find("(<2 x i64>"), std::string::npos) << CallLine;
-  EXPECT_EQ(CallLine.find("i64 %arg0"), std::string::npos) << CallLine;
-  EXPECT_NE(F.find("ret <2 x i64>"), std::string::npos) << F;
+  EXPECT_NE(CallLine.find(kCallABIVectorArgument), std::string::npos)
+      << CallLine;
+  EXPECT_EQ(CallLine.find(kCallABIPointerArgument), std::string::npos)
+      << CallLine;
+  EXPECT_NE(F.find(kCallABIScalarReturn), std::string::npos) << F;
 
   auto Opt = liftToLLVMIR(callAbiObj());
   ASSERT_EQ(Opt.exitCode, 0) << Opt.err;
-  std::string OptF = callAbiFunctionText(Opt.out, "indirect_double_call");
-  EXPECT_NE(OptF.find("ret <2 x i64> %call"), std::string::npos) << OptF;
+  const llvm::StringRef Output(Opt.out);
+  const size_t ModuleBegin = Output.find(kCallABIModuleStart);
+  ASSERT_NE(ModuleBegin, llvm::StringRef::npos) << Opt.out;
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  const auto Module = llvm::parseAssemblyString(Output.drop_front(ModuleBegin),
+                                                Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  const auto *Function = Module->getFunction(kCallABIIndirectDouble);
+  ASSERT_NE(Function, nullptr);
+  EXPECT_TRUE(Function->getReturnType()->isDoubleTy());
+  ASSERT_EQ(Function->arg_size(), kCallABIParameters);
+  EXPECT_TRUE(Function->getArg(kCallABIFPParameter)->getType()->isDoubleTy());
+  unsigned Returns = 0;
+  for (const auto &Block : *Function)
+    for (const auto &Instruction : Block)
+      if (const auto *Return = llvm::dyn_cast<llvm::ReturnInst>(&Instruction)) {
+        ++Returns;
+        const auto *Producer = llvm::dyn_cast<llvm::CallBase>(
+            callABILowDoubleOrigin(Return->getReturnValue()));
+        ASSERT_NE(Producer, nullptr);
+        EXPECT_TRUE(Producer->isIndirectCall());
+        ASSERT_EQ(Producer->arg_size(), kCallABICallbackParameters);
+        EXPECT_EQ(callABILowDoubleOrigin(Producer->getArgOperand(0)),
+                  Function->getArg(kCallABIFPParameter));
+      }
+  EXPECT_NE(Returns, 0U);
 }
 
 TEST_F(AArch64_CallAbi, ExternalPairCallPreservesX0AndX1) {

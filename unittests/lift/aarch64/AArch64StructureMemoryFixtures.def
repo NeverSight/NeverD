@@ -1,0 +1,2372 @@
+//===- AArch64StructureMemoryFixtures.def - NEON golden words --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independently assembled with LLVM MC 22.1.6, original V29..V0/X9/X10,
+/// scratch V20..V23/X16/X15. Every legal arrangement, lane and indexing mode
+/// of LD1..LD4, ST1..ST4 and LD1R..LD4R is represented. CASE records original,
+/// scratch, members, repeats, element bytes/count, lane, replicate, single,
+/// load, post-index mode, vector bytes and register count.
+//===----------------------------------------------------------------------===//
+
+#ifdef STRUCTURE_MEMORY_CASE
+STRUCTURE_MEMORY_CASE(0x0c40713dU, 0x0c407214U, 1, 1, 1, 8, 0, false, false,
+                      true, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cdf713dU, 0x0cdf7214U, 1, 1, 1, 8, 0, false, false,
+                      true, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cca713dU, 0x0ccf7214U, 1, 1, 1, 8, 0, false, false,
+                      true, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c00713dU, 0x0c007214U, 1, 1, 1, 8, 0, false, false,
+                      false, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c9f713dU, 0x0c9f7214U, 1, 1, 1, 8, 0, false, false,
+                      false, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c8a713dU, 0x0c8f7214U, 1, 1, 1, 8, 0, false, false,
+                      false, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4c40713dU, 0x4c407214U, 1, 1, 1, 16, 0, false, false,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cdf713dU, 0x4cdf7214U, 1, 1, 1, 16, 0, false, false,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cca713dU, 0x4ccf7214U, 1, 1, 1, 16, 0, false, false,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c00713dU, 0x4c007214U, 1, 1, 1, 16, 0, false, false,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c9f713dU, 0x4c9f7214U, 1, 1, 1, 16, 0, false, false,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c8a713dU, 0x4c8f7214U, 1, 1, 1, 16, 0, false, false,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0c40753dU, 0x0c407614U, 1, 1, 2, 4, 0, false, false,
+                      true, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cdf753dU, 0x0cdf7614U, 1, 1, 2, 4, 0, false, false,
+                      true, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cca753dU, 0x0ccf7614U, 1, 1, 2, 4, 0, false, false,
+                      true, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c00753dU, 0x0c007614U, 1, 1, 2, 4, 0, false, false,
+                      false, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c9f753dU, 0x0c9f7614U, 1, 1, 2, 4, 0, false, false,
+                      false, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c8a753dU, 0x0c8f7614U, 1, 1, 2, 4, 0, false, false,
+                      false, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4c40753dU, 0x4c407614U, 1, 1, 2, 8, 0, false, false,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cdf753dU, 0x4cdf7614U, 1, 1, 2, 8, 0, false, false,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cca753dU, 0x4ccf7614U, 1, 1, 2, 8, 0, false, false,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c00753dU, 0x4c007614U, 1, 1, 2, 8, 0, false, false,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c9f753dU, 0x4c9f7614U, 1, 1, 2, 8, 0, false, false,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c8a753dU, 0x4c8f7614U, 1, 1, 2, 8, 0, false, false,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0c40793dU, 0x0c407a14U, 1, 1, 4, 2, 0, false, false,
+                      true, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cdf793dU, 0x0cdf7a14U, 1, 1, 4, 2, 0, false, false,
+                      true, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cca793dU, 0x0ccf7a14U, 1, 1, 4, 2, 0, false, false,
+                      true, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c00793dU, 0x0c007a14U, 1, 1, 4, 2, 0, false, false,
+                      false, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c9f793dU, 0x0c9f7a14U, 1, 1, 4, 2, 0, false, false,
+                      false, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c8a793dU, 0x0c8f7a14U, 1, 1, 4, 2, 0, false, false,
+                      false, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4c40793dU, 0x4c407a14U, 1, 1, 4, 4, 0, false, false,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cdf793dU, 0x4cdf7a14U, 1, 1, 4, 4, 0, false, false,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cca793dU, 0x4ccf7a14U, 1, 1, 4, 4, 0, false, false,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c00793dU, 0x4c007a14U, 1, 1, 4, 4, 0, false, false,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c9f793dU, 0x4c9f7a14U, 1, 1, 4, 4, 0, false, false,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c8a793dU, 0x4c8f7a14U, 1, 1, 4, 4, 0, false, false,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0c407d3dU, 0x0c407e14U, 1, 1, 8, 1, 0, false, false,
+                      true, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cdf7d3dU, 0x0cdf7e14U, 1, 1, 8, 1, 0, false, false,
+                      true, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0cca7d3dU, 0x0ccf7e14U, 1, 1, 8, 1, 0, false, false,
+                      true, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c007d3dU, 0x0c007e14U, 1, 1, 8, 1, 0, false, false,
+                      false, 0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c9f7d3dU, 0x0c9f7e14U, 1, 1, 8, 1, 0, false, false,
+                      false, 1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0c8a7d3dU, 0x0c8f7e14U, 1, 1, 8, 1, 0, false, false,
+                      false, 2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4c407d3dU, 0x4c407e14U, 1, 1, 8, 2, 0, false, false,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cdf7d3dU, 0x4cdf7e14U, 1, 1, 8, 2, 0, false, false,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4cca7d3dU, 0x4ccf7e14U, 1, 1, 8, 2, 0, false, false,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c007d3dU, 0x4c007e14U, 1, 1, 8, 2, 0, false, false,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c9f7d3dU, 0x4c9f7e14U, 1, 1, 8, 2, 0, false, false,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4c8a7d3dU, 0x4c8f7e14U, 1, 1, 8, 2, 0, false, false,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0c40a13dU, 0x0c40a214U, 1, 2, 1, 8, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdfa13dU, 0x0cdfa214U, 1, 2, 1, 8, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0ccaa13dU, 0x0ccfa214U, 1, 2, 1, 8, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00a13dU, 0x0c00a214U, 1, 2, 1, 8, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9fa13dU, 0x0c9fa214U, 1, 2, 1, 8, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8aa13dU, 0x0c8fa214U, 1, 2, 1, 8, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40a13dU, 0x4c40a214U, 1, 2, 1, 16, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdfa13dU, 0x4cdfa214U, 1, 2, 1, 16, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4ccaa13dU, 0x4ccfa214U, 1, 2, 1, 16, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00a13dU, 0x4c00a214U, 1, 2, 1, 16, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9fa13dU, 0x4c9fa214U, 1, 2, 1, 16, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8aa13dU, 0x4c8fa214U, 1, 2, 1, 16, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40a53dU, 0x0c40a614U, 1, 2, 2, 4, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdfa53dU, 0x0cdfa614U, 1, 2, 2, 4, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0ccaa53dU, 0x0ccfa614U, 1, 2, 2, 4, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00a53dU, 0x0c00a614U, 1, 2, 2, 4, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9fa53dU, 0x0c9fa614U, 1, 2, 2, 4, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8aa53dU, 0x0c8fa614U, 1, 2, 2, 4, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40a53dU, 0x4c40a614U, 1, 2, 2, 8, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdfa53dU, 0x4cdfa614U, 1, 2, 2, 8, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4ccaa53dU, 0x4ccfa614U, 1, 2, 2, 8, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00a53dU, 0x4c00a614U, 1, 2, 2, 8, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9fa53dU, 0x4c9fa614U, 1, 2, 2, 8, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8aa53dU, 0x4c8fa614U, 1, 2, 2, 8, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40a93dU, 0x0c40aa14U, 1, 2, 4, 2, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdfa93dU, 0x0cdfaa14U, 1, 2, 4, 2, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0ccaa93dU, 0x0ccfaa14U, 1, 2, 4, 2, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00a93dU, 0x0c00aa14U, 1, 2, 4, 2, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9fa93dU, 0x0c9faa14U, 1, 2, 4, 2, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8aa93dU, 0x0c8faa14U, 1, 2, 4, 2, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40a93dU, 0x4c40aa14U, 1, 2, 4, 4, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdfa93dU, 0x4cdfaa14U, 1, 2, 4, 4, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4ccaa93dU, 0x4ccfaa14U, 1, 2, 4, 4, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00a93dU, 0x4c00aa14U, 1, 2, 4, 4, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9fa93dU, 0x4c9faa14U, 1, 2, 4, 4, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8aa93dU, 0x4c8faa14U, 1, 2, 4, 4, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40ad3dU, 0x0c40ae14U, 1, 2, 8, 1, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdfad3dU, 0x0cdfae14U, 1, 2, 8, 1, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0ccaad3dU, 0x0ccfae14U, 1, 2, 8, 1, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00ad3dU, 0x0c00ae14U, 1, 2, 8, 1, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9fad3dU, 0x0c9fae14U, 1, 2, 8, 1, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8aad3dU, 0x0c8fae14U, 1, 2, 8, 1, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40ad3dU, 0x4c40ae14U, 1, 2, 8, 2, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdfad3dU, 0x4cdfae14U, 1, 2, 8, 2, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4ccaad3dU, 0x4ccfae14U, 1, 2, 8, 2, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00ad3dU, 0x4c00ae14U, 1, 2, 8, 2, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9fad3dU, 0x4c9fae14U, 1, 2, 8, 2, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8aad3dU, 0x4c8fae14U, 1, 2, 8, 2, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40613dU, 0x0c406214U, 1, 3, 1, 8, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf613dU, 0x0cdf6214U, 1, 3, 1, 8, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca613dU, 0x0ccf6214U, 1, 3, 1, 8, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c00613dU, 0x0c006214U, 1, 3, 1, 8, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f613dU, 0x0c9f6214U, 1, 3, 1, 8, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a613dU, 0x0c8f6214U, 1, 3, 1, 8, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c40613dU, 0x4c406214U, 1, 3, 1, 16, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf613dU, 0x4cdf6214U, 1, 3, 1, 16, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca613dU, 0x4ccf6214U, 1, 3, 1, 16, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c00613dU, 0x4c006214U, 1, 3, 1, 16, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f613dU, 0x4c9f6214U, 1, 3, 1, 16, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a613dU, 0x4c8f6214U, 1, 3, 1, 16, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c40653dU, 0x0c406614U, 1, 3, 2, 4, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf653dU, 0x0cdf6614U, 1, 3, 2, 4, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca653dU, 0x0ccf6614U, 1, 3, 2, 4, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c00653dU, 0x0c006614U, 1, 3, 2, 4, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f653dU, 0x0c9f6614U, 1, 3, 2, 4, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a653dU, 0x0c8f6614U, 1, 3, 2, 4, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c40653dU, 0x4c406614U, 1, 3, 2, 8, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf653dU, 0x4cdf6614U, 1, 3, 2, 8, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca653dU, 0x4ccf6614U, 1, 3, 2, 8, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c00653dU, 0x4c006614U, 1, 3, 2, 8, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f653dU, 0x4c9f6614U, 1, 3, 2, 8, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a653dU, 0x4c8f6614U, 1, 3, 2, 8, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c40693dU, 0x0c406a14U, 1, 3, 4, 2, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf693dU, 0x0cdf6a14U, 1, 3, 4, 2, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca693dU, 0x0ccf6a14U, 1, 3, 4, 2, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c00693dU, 0x0c006a14U, 1, 3, 4, 2, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f693dU, 0x0c9f6a14U, 1, 3, 4, 2, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a693dU, 0x0c8f6a14U, 1, 3, 4, 2, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c40693dU, 0x4c406a14U, 1, 3, 4, 4, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf693dU, 0x4cdf6a14U, 1, 3, 4, 4, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca693dU, 0x4ccf6a14U, 1, 3, 4, 4, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c00693dU, 0x4c006a14U, 1, 3, 4, 4, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f693dU, 0x4c9f6a14U, 1, 3, 4, 4, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a693dU, 0x4c8f6a14U, 1, 3, 4, 4, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c406d3dU, 0x0c406e14U, 1, 3, 8, 1, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf6d3dU, 0x0cdf6e14U, 1, 3, 8, 1, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca6d3dU, 0x0ccf6e14U, 1, 3, 8, 1, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c006d3dU, 0x0c006e14U, 1, 3, 8, 1, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f6d3dU, 0x0c9f6e14U, 1, 3, 8, 1, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a6d3dU, 0x0c8f6e14U, 1, 3, 8, 1, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c406d3dU, 0x4c406e14U, 1, 3, 8, 2, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf6d3dU, 0x4cdf6e14U, 1, 3, 8, 2, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca6d3dU, 0x4ccf6e14U, 1, 3, 8, 2, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c006d3dU, 0x4c006e14U, 1, 3, 8, 2, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f6d3dU, 0x4c9f6e14U, 1, 3, 8, 2, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a6d3dU, 0x4c8f6e14U, 1, 3, 8, 2, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c40213dU, 0x0c402214U, 1, 4, 1, 8, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf213dU, 0x0cdf2214U, 1, 4, 1, 8, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca213dU, 0x0ccf2214U, 1, 4, 1, 8, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c00213dU, 0x0c002214U, 1, 4, 1, 8, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f213dU, 0x0c9f2214U, 1, 4, 1, 8, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a213dU, 0x0c8f2214U, 1, 4, 1, 8, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c40213dU, 0x4c402214U, 1, 4, 1, 16, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf213dU, 0x4cdf2214U, 1, 4, 1, 16, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca213dU, 0x4ccf2214U, 1, 4, 1, 16, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c00213dU, 0x4c002214U, 1, 4, 1, 16, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f213dU, 0x4c9f2214U, 1, 4, 1, 16, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a213dU, 0x4c8f2214U, 1, 4, 1, 16, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0c40253dU, 0x0c402614U, 1, 4, 2, 4, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf253dU, 0x0cdf2614U, 1, 4, 2, 4, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca253dU, 0x0ccf2614U, 1, 4, 2, 4, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c00253dU, 0x0c002614U, 1, 4, 2, 4, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f253dU, 0x0c9f2614U, 1, 4, 2, 4, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a253dU, 0x0c8f2614U, 1, 4, 2, 4, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c40253dU, 0x4c402614U, 1, 4, 2, 8, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf253dU, 0x4cdf2614U, 1, 4, 2, 8, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca253dU, 0x4ccf2614U, 1, 4, 2, 8, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c00253dU, 0x4c002614U, 1, 4, 2, 8, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f253dU, 0x4c9f2614U, 1, 4, 2, 8, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a253dU, 0x4c8f2614U, 1, 4, 2, 8, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0c40293dU, 0x0c402a14U, 1, 4, 4, 2, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf293dU, 0x0cdf2a14U, 1, 4, 4, 2, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca293dU, 0x0ccf2a14U, 1, 4, 4, 2, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c00293dU, 0x0c002a14U, 1, 4, 4, 2, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f293dU, 0x0c9f2a14U, 1, 4, 4, 2, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a293dU, 0x0c8f2a14U, 1, 4, 4, 2, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c40293dU, 0x4c402a14U, 1, 4, 4, 4, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf293dU, 0x4cdf2a14U, 1, 4, 4, 4, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca293dU, 0x4ccf2a14U, 1, 4, 4, 4, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c00293dU, 0x4c002a14U, 1, 4, 4, 4, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f293dU, 0x4c9f2a14U, 1, 4, 4, 4, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a293dU, 0x4c8f2a14U, 1, 4, 4, 4, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0c402d3dU, 0x0c402e14U, 1, 4, 8, 1, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf2d3dU, 0x0cdf2e14U, 1, 4, 8, 1, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca2d3dU, 0x0ccf2e14U, 1, 4, 8, 1, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c002d3dU, 0x0c002e14U, 1, 4, 8, 1, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f2d3dU, 0x0c9f2e14U, 1, 4, 8, 1, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a2d3dU, 0x0c8f2e14U, 1, 4, 8, 1, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c402d3dU, 0x4c402e14U, 1, 4, 8, 2, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf2d3dU, 0x4cdf2e14U, 1, 4, 8, 2, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca2d3dU, 0x4ccf2e14U, 1, 4, 8, 2, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c002d3dU, 0x4c002e14U, 1, 4, 8, 2, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f2d3dU, 0x4c9f2e14U, 1, 4, 8, 2, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a2d3dU, 0x4c8f2e14U, 1, 4, 8, 2, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0c40813dU, 0x0c408214U, 2, 1, 1, 8, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdf813dU, 0x0cdf8214U, 2, 1, 1, 8, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cca813dU, 0x0ccf8214U, 2, 1, 1, 8, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00813dU, 0x0c008214U, 2, 1, 1, 8, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9f813dU, 0x0c9f8214U, 2, 1, 1, 8, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8a813dU, 0x0c8f8214U, 2, 1, 1, 8, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40813dU, 0x4c408214U, 2, 1, 1, 16, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdf813dU, 0x4cdf8214U, 2, 1, 1, 16, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cca813dU, 0x4ccf8214U, 2, 1, 1, 16, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00813dU, 0x4c008214U, 2, 1, 1, 16, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9f813dU, 0x4c9f8214U, 2, 1, 1, 16, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8a813dU, 0x4c8f8214U, 2, 1, 1, 16, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40853dU, 0x0c408614U, 2, 1, 2, 4, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdf853dU, 0x0cdf8614U, 2, 1, 2, 4, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cca853dU, 0x0ccf8614U, 2, 1, 2, 4, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00853dU, 0x0c008614U, 2, 1, 2, 4, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9f853dU, 0x0c9f8614U, 2, 1, 2, 4, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8a853dU, 0x0c8f8614U, 2, 1, 2, 4, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40853dU, 0x4c408614U, 2, 1, 2, 8, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdf853dU, 0x4cdf8614U, 2, 1, 2, 8, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cca853dU, 0x4ccf8614U, 2, 1, 2, 8, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00853dU, 0x4c008614U, 2, 1, 2, 8, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9f853dU, 0x4c9f8614U, 2, 1, 2, 8, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8a853dU, 0x4c8f8614U, 2, 1, 2, 8, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40893dU, 0x0c408a14U, 2, 1, 4, 2, 0, false, false,
+                      true, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cdf893dU, 0x0cdf8a14U, 2, 1, 4, 2, 0, false, false,
+                      true, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0cca893dU, 0x0ccf8a14U, 2, 1, 4, 2, 0, false, false,
+                      true, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c00893dU, 0x0c008a14U, 2, 1, 4, 2, 0, false, false,
+                      false, 0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c9f893dU, 0x0c9f8a14U, 2, 1, 4, 2, 0, false, false,
+                      false, 1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0c8a893dU, 0x0c8f8a14U, 2, 1, 4, 2, 0, false, false,
+                      false, 2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4c40893dU, 0x4c408a14U, 2, 1, 4, 4, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdf893dU, 0x4cdf8a14U, 2, 1, 4, 4, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cca893dU, 0x4ccf8a14U, 2, 1, 4, 4, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c00893dU, 0x4c008a14U, 2, 1, 4, 4, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9f893dU, 0x4c9f8a14U, 2, 1, 4, 4, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8a893dU, 0x4c8f8a14U, 2, 1, 4, 4, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c408d3dU, 0x4c408e14U, 2, 1, 8, 2, 0, false, false,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cdf8d3dU, 0x4cdf8e14U, 2, 1, 8, 2, 0, false, false,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4cca8d3dU, 0x4ccf8e14U, 2, 1, 8, 2, 0, false, false,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c008d3dU, 0x4c008e14U, 2, 1, 8, 2, 0, false, false,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c9f8d3dU, 0x4c9f8e14U, 2, 1, 8, 2, 0, false, false,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4c8a8d3dU, 0x4c8f8e14U, 2, 1, 8, 2, 0, false, false,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0c40413dU, 0x0c404214U, 3, 1, 1, 8, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf413dU, 0x0cdf4214U, 3, 1, 1, 8, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca413dU, 0x0ccf4214U, 3, 1, 1, 8, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c00413dU, 0x0c004214U, 3, 1, 1, 8, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f413dU, 0x0c9f4214U, 3, 1, 1, 8, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a413dU, 0x0c8f4214U, 3, 1, 1, 8, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c40413dU, 0x4c404214U, 3, 1, 1, 16, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf413dU, 0x4cdf4214U, 3, 1, 1, 16, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca413dU, 0x4ccf4214U, 3, 1, 1, 16, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c00413dU, 0x4c004214U, 3, 1, 1, 16, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f413dU, 0x4c9f4214U, 3, 1, 1, 16, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a413dU, 0x4c8f4214U, 3, 1, 1, 16, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c40453dU, 0x0c404614U, 3, 1, 2, 4, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf453dU, 0x0cdf4614U, 3, 1, 2, 4, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca453dU, 0x0ccf4614U, 3, 1, 2, 4, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c00453dU, 0x0c004614U, 3, 1, 2, 4, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f453dU, 0x0c9f4614U, 3, 1, 2, 4, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a453dU, 0x0c8f4614U, 3, 1, 2, 4, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c40453dU, 0x4c404614U, 3, 1, 2, 8, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf453dU, 0x4cdf4614U, 3, 1, 2, 8, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca453dU, 0x4ccf4614U, 3, 1, 2, 8, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c00453dU, 0x4c004614U, 3, 1, 2, 8, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f453dU, 0x4c9f4614U, 3, 1, 2, 8, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a453dU, 0x4c8f4614U, 3, 1, 2, 8, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c40493dU, 0x0c404a14U, 3, 1, 4, 2, 0, false, false,
+                      true, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cdf493dU, 0x0cdf4a14U, 3, 1, 4, 2, 0, false, false,
+                      true, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0cca493dU, 0x0ccf4a14U, 3, 1, 4, 2, 0, false, false,
+                      true, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c00493dU, 0x0c004a14U, 3, 1, 4, 2, 0, false, false,
+                      false, 0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c9f493dU, 0x0c9f4a14U, 3, 1, 4, 2, 0, false, false,
+                      false, 1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0c8a493dU, 0x0c8f4a14U, 3, 1, 4, 2, 0, false, false,
+                      false, 2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4c40493dU, 0x4c404a14U, 3, 1, 4, 4, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf493dU, 0x4cdf4a14U, 3, 1, 4, 4, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca493dU, 0x4ccf4a14U, 3, 1, 4, 4, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c00493dU, 0x4c004a14U, 3, 1, 4, 4, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f493dU, 0x4c9f4a14U, 3, 1, 4, 4, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a493dU, 0x4c8f4a14U, 3, 1, 4, 4, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c404d3dU, 0x4c404e14U, 3, 1, 8, 2, 0, false, false,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cdf4d3dU, 0x4cdf4e14U, 3, 1, 8, 2, 0, false, false,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4cca4d3dU, 0x4ccf4e14U, 3, 1, 8, 2, 0, false, false,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c004d3dU, 0x4c004e14U, 3, 1, 8, 2, 0, false, false,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c9f4d3dU, 0x4c9f4e14U, 3, 1, 8, 2, 0, false, false,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4c8a4d3dU, 0x4c8f4e14U, 3, 1, 8, 2, 0, false, false,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0c40013dU, 0x0c400214U, 4, 1, 1, 8, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf013dU, 0x0cdf0214U, 4, 1, 1, 8, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca013dU, 0x0ccf0214U, 4, 1, 1, 8, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c00013dU, 0x0c000214U, 4, 1, 1, 8, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f013dU, 0x0c9f0214U, 4, 1, 1, 8, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a013dU, 0x0c8f0214U, 4, 1, 1, 8, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c40013dU, 0x4c400214U, 4, 1, 1, 16, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf013dU, 0x4cdf0214U, 4, 1, 1, 16, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca013dU, 0x4ccf0214U, 4, 1, 1, 16, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c00013dU, 0x4c000214U, 4, 1, 1, 16, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f013dU, 0x4c9f0214U, 4, 1, 1, 16, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a013dU, 0x4c8f0214U, 4, 1, 1, 16, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0c40053dU, 0x0c400614U, 4, 1, 2, 4, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf053dU, 0x0cdf0614U, 4, 1, 2, 4, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca053dU, 0x0ccf0614U, 4, 1, 2, 4, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c00053dU, 0x0c000614U, 4, 1, 2, 4, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f053dU, 0x0c9f0614U, 4, 1, 2, 4, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a053dU, 0x0c8f0614U, 4, 1, 2, 4, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c40053dU, 0x4c400614U, 4, 1, 2, 8, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf053dU, 0x4cdf0614U, 4, 1, 2, 8, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca053dU, 0x4ccf0614U, 4, 1, 2, 8, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c00053dU, 0x4c000614U, 4, 1, 2, 8, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f053dU, 0x4c9f0614U, 4, 1, 2, 8, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a053dU, 0x4c8f0614U, 4, 1, 2, 8, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0c40093dU, 0x0c400a14U, 4, 1, 4, 2, 0, false, false,
+                      true, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cdf093dU, 0x0cdf0a14U, 4, 1, 4, 2, 0, false, false,
+                      true, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0cca093dU, 0x0ccf0a14U, 4, 1, 4, 2, 0, false, false,
+                      true, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c00093dU, 0x0c000a14U, 4, 1, 4, 2, 0, false, false,
+                      false, 0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c9f093dU, 0x0c9f0a14U, 4, 1, 4, 2, 0, false, false,
+                      false, 1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0c8a093dU, 0x0c8f0a14U, 4, 1, 4, 2, 0, false, false,
+                      false, 2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4c40093dU, 0x4c400a14U, 4, 1, 4, 4, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf093dU, 0x4cdf0a14U, 4, 1, 4, 4, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca093dU, 0x4ccf0a14U, 4, 1, 4, 4, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c00093dU, 0x4c000a14U, 4, 1, 4, 4, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f093dU, 0x4c9f0a14U, 4, 1, 4, 4, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a093dU, 0x4c8f0a14U, 4, 1, 4, 4, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c400d3dU, 0x4c400e14U, 4, 1, 8, 2, 0, false, false,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cdf0d3dU, 0x4cdf0e14U, 4, 1, 8, 2, 0, false, false,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4cca0d3dU, 0x4ccf0e14U, 4, 1, 8, 2, 0, false, false,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c000d3dU, 0x4c000e14U, 4, 1, 8, 2, 0, false, false,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c9f0d3dU, 0x4c9f0e14U, 4, 1, 8, 2, 0, false, false,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4c8a0d3dU, 0x4c8f0e14U, 4, 1, 8, 2, 0, false, false,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d40013dU, 0x0d400214U, 1, 1, 1, 1, 0, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf013dU, 0x0ddf0214U, 1, 1, 1, 1, 0, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca013dU, 0x0dcf0214U, 1, 1, 1, 1, 0, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00013dU, 0x0d000214U, 1, 1, 1, 1, 0, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f013dU, 0x0d9f0214U, 1, 1, 1, 1, 0, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a013dU, 0x0d8f0214U, 1, 1, 1, 1, 0, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40053dU, 0x0d400614U, 1, 1, 1, 1, 1, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf053dU, 0x0ddf0614U, 1, 1, 1, 1, 1, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca053dU, 0x0dcf0614U, 1, 1, 1, 1, 1, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00053dU, 0x0d000614U, 1, 1, 1, 1, 1, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f053dU, 0x0d9f0614U, 1, 1, 1, 1, 1, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a053dU, 0x0d8f0614U, 1, 1, 1, 1, 1, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40093dU, 0x0d400a14U, 1, 1, 1, 1, 2, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf093dU, 0x0ddf0a14U, 1, 1, 1, 1, 2, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca093dU, 0x0dcf0a14U, 1, 1, 1, 1, 2, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00093dU, 0x0d000a14U, 1, 1, 1, 1, 2, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f093dU, 0x0d9f0a14U, 1, 1, 1, 1, 2, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a093dU, 0x0d8f0a14U, 1, 1, 1, 1, 2, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d400d3dU, 0x0d400e14U, 1, 1, 1, 1, 3, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf0d3dU, 0x0ddf0e14U, 1, 1, 1, 1, 3, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca0d3dU, 0x0dcf0e14U, 1, 1, 1, 1, 3, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d000d3dU, 0x0d000e14U, 1, 1, 1, 1, 3, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f0d3dU, 0x0d9f0e14U, 1, 1, 1, 1, 3, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a0d3dU, 0x0d8f0e14U, 1, 1, 1, 1, 3, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40113dU, 0x0d401214U, 1, 1, 1, 1, 4, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf113dU, 0x0ddf1214U, 1, 1, 1, 1, 4, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca113dU, 0x0dcf1214U, 1, 1, 1, 1, 4, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00113dU, 0x0d001214U, 1, 1, 1, 1, 4, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f113dU, 0x0d9f1214U, 1, 1, 1, 1, 4, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a113dU, 0x0d8f1214U, 1, 1, 1, 1, 4, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40153dU, 0x0d401614U, 1, 1, 1, 1, 5, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf153dU, 0x0ddf1614U, 1, 1, 1, 1, 5, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca153dU, 0x0dcf1614U, 1, 1, 1, 1, 5, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00153dU, 0x0d001614U, 1, 1, 1, 1, 5, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f153dU, 0x0d9f1614U, 1, 1, 1, 1, 5, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a153dU, 0x0d8f1614U, 1, 1, 1, 1, 5, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40193dU, 0x0d401a14U, 1, 1, 1, 1, 6, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf193dU, 0x0ddf1a14U, 1, 1, 1, 1, 6, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca193dU, 0x0dcf1a14U, 1, 1, 1, 1, 6, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00193dU, 0x0d001a14U, 1, 1, 1, 1, 6, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f193dU, 0x0d9f1a14U, 1, 1, 1, 1, 6, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a193dU, 0x0d8f1a14U, 1, 1, 1, 1, 6, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d401d3dU, 0x0d401e14U, 1, 1, 1, 1, 7, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf1d3dU, 0x0ddf1e14U, 1, 1, 1, 1, 7, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca1d3dU, 0x0dcf1e14U, 1, 1, 1, 1, 7, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d001d3dU, 0x0d001e14U, 1, 1, 1, 1, 7, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f1d3dU, 0x0d9f1e14U, 1, 1, 1, 1, 7, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a1d3dU, 0x0d8f1e14U, 1, 1, 1, 1, 7, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40013dU, 0x4d400214U, 1, 1, 1, 1, 8, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf013dU, 0x4ddf0214U, 1, 1, 1, 1, 8, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca013dU, 0x4dcf0214U, 1, 1, 1, 1, 8, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00013dU, 0x4d000214U, 1, 1, 1, 1, 8, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f013dU, 0x4d9f0214U, 1, 1, 1, 1, 8, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a013dU, 0x4d8f0214U, 1, 1, 1, 1, 8, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40053dU, 0x4d400614U, 1, 1, 1, 1, 9, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf053dU, 0x4ddf0614U, 1, 1, 1, 1, 9, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca053dU, 0x4dcf0614U, 1, 1, 1, 1, 9, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00053dU, 0x4d000614U, 1, 1, 1, 1, 9, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f053dU, 0x4d9f0614U, 1, 1, 1, 1, 9, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a053dU, 0x4d8f0614U, 1, 1, 1, 1, 9, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40093dU, 0x4d400a14U, 1, 1, 1, 1, 10, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf093dU, 0x4ddf0a14U, 1, 1, 1, 1, 10, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca093dU, 0x4dcf0a14U, 1, 1, 1, 1, 10, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00093dU, 0x4d000a14U, 1, 1, 1, 1, 10, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f093dU, 0x4d9f0a14U, 1, 1, 1, 1, 10, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a093dU, 0x4d8f0a14U, 1, 1, 1, 1, 10, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d400d3dU, 0x4d400e14U, 1, 1, 1, 1, 11, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf0d3dU, 0x4ddf0e14U, 1, 1, 1, 1, 11, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca0d3dU, 0x4dcf0e14U, 1, 1, 1, 1, 11, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d000d3dU, 0x4d000e14U, 1, 1, 1, 1, 11, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f0d3dU, 0x4d9f0e14U, 1, 1, 1, 1, 11, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a0d3dU, 0x4d8f0e14U, 1, 1, 1, 1, 11, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40113dU, 0x4d401214U, 1, 1, 1, 1, 12, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf113dU, 0x4ddf1214U, 1, 1, 1, 1, 12, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca113dU, 0x4dcf1214U, 1, 1, 1, 1, 12, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00113dU, 0x4d001214U, 1, 1, 1, 1, 12, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f113dU, 0x4d9f1214U, 1, 1, 1, 1, 12, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a113dU, 0x4d8f1214U, 1, 1, 1, 1, 12, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40153dU, 0x4d401614U, 1, 1, 1, 1, 13, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf153dU, 0x4ddf1614U, 1, 1, 1, 1, 13, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca153dU, 0x4dcf1614U, 1, 1, 1, 1, 13, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00153dU, 0x4d001614U, 1, 1, 1, 1, 13, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f153dU, 0x4d9f1614U, 1, 1, 1, 1, 13, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a153dU, 0x4d8f1614U, 1, 1, 1, 1, 13, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40193dU, 0x4d401a14U, 1, 1, 1, 1, 14, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf193dU, 0x4ddf1a14U, 1, 1, 1, 1, 14, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca193dU, 0x4dcf1a14U, 1, 1, 1, 1, 14, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00193dU, 0x4d001a14U, 1, 1, 1, 1, 14, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f193dU, 0x4d9f1a14U, 1, 1, 1, 1, 14, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a193dU, 0x4d8f1a14U, 1, 1, 1, 1, 14, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d401d3dU, 0x4d401e14U, 1, 1, 1, 1, 15, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf1d3dU, 0x4ddf1e14U, 1, 1, 1, 1, 15, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca1d3dU, 0x4dcf1e14U, 1, 1, 1, 1, 15, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d001d3dU, 0x4d001e14U, 1, 1, 1, 1, 15, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f1d3dU, 0x4d9f1e14U, 1, 1, 1, 1, 15, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a1d3dU, 0x4d8f1e14U, 1, 1, 1, 1, 15, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40c13dU, 0x0d40c214U, 1, 1, 1, 1, 0, true, true, true,
+                      0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0ddfc13dU, 0x0ddfc214U, 1, 1, 1, 1, 0, true, true, true,
+                      1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0dcac13dU, 0x0dcfc214U, 1, 1, 1, 1, 0, true, true, true,
+                      2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4d40c13dU, 0x4d40c214U, 1, 1, 1, 1, 0, true, true, true,
+                      0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddfc13dU, 0x4ddfc214U, 1, 1, 1, 1, 0, true, true, true,
+                      1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dcac13dU, 0x4dcfc214U, 1, 1, 1, 1, 0, true, true, true,
+                      2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40413dU, 0x0d404214U, 1, 1, 2, 1, 0, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf413dU, 0x0ddf4214U, 1, 1, 2, 1, 0, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca413dU, 0x0dcf4214U, 1, 1, 2, 1, 0, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00413dU, 0x0d004214U, 1, 1, 2, 1, 0, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f413dU, 0x0d9f4214U, 1, 1, 2, 1, 0, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a413dU, 0x0d8f4214U, 1, 1, 2, 1, 0, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40493dU, 0x0d404a14U, 1, 1, 2, 1, 1, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf493dU, 0x0ddf4a14U, 1, 1, 2, 1, 1, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca493dU, 0x0dcf4a14U, 1, 1, 2, 1, 1, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00493dU, 0x0d004a14U, 1, 1, 2, 1, 1, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f493dU, 0x0d9f4a14U, 1, 1, 2, 1, 1, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a493dU, 0x0d8f4a14U, 1, 1, 2, 1, 1, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40513dU, 0x0d405214U, 1, 1, 2, 1, 2, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf513dU, 0x0ddf5214U, 1, 1, 2, 1, 2, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca513dU, 0x0dcf5214U, 1, 1, 2, 1, 2, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00513dU, 0x0d005214U, 1, 1, 2, 1, 2, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f513dU, 0x0d9f5214U, 1, 1, 2, 1, 2, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a513dU, 0x0d8f5214U, 1, 1, 2, 1, 2, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40593dU, 0x0d405a14U, 1, 1, 2, 1, 3, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf593dU, 0x0ddf5a14U, 1, 1, 2, 1, 3, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca593dU, 0x0dcf5a14U, 1, 1, 2, 1, 3, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00593dU, 0x0d005a14U, 1, 1, 2, 1, 3, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f593dU, 0x0d9f5a14U, 1, 1, 2, 1, 3, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a593dU, 0x0d8f5a14U, 1, 1, 2, 1, 3, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40413dU, 0x4d404214U, 1, 1, 2, 1, 4, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf413dU, 0x4ddf4214U, 1, 1, 2, 1, 4, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca413dU, 0x4dcf4214U, 1, 1, 2, 1, 4, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00413dU, 0x4d004214U, 1, 1, 2, 1, 4, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f413dU, 0x4d9f4214U, 1, 1, 2, 1, 4, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a413dU, 0x4d8f4214U, 1, 1, 2, 1, 4, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40493dU, 0x4d404a14U, 1, 1, 2, 1, 5, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf493dU, 0x4ddf4a14U, 1, 1, 2, 1, 5, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca493dU, 0x4dcf4a14U, 1, 1, 2, 1, 5, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00493dU, 0x4d004a14U, 1, 1, 2, 1, 5, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f493dU, 0x4d9f4a14U, 1, 1, 2, 1, 5, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a493dU, 0x4d8f4a14U, 1, 1, 2, 1, 5, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40513dU, 0x4d405214U, 1, 1, 2, 1, 6, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf513dU, 0x4ddf5214U, 1, 1, 2, 1, 6, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca513dU, 0x4dcf5214U, 1, 1, 2, 1, 6, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00513dU, 0x4d005214U, 1, 1, 2, 1, 6, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f513dU, 0x4d9f5214U, 1, 1, 2, 1, 6, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a513dU, 0x4d8f5214U, 1, 1, 2, 1, 6, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40593dU, 0x4d405a14U, 1, 1, 2, 1, 7, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf593dU, 0x4ddf5a14U, 1, 1, 2, 1, 7, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca593dU, 0x4dcf5a14U, 1, 1, 2, 1, 7, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00593dU, 0x4d005a14U, 1, 1, 2, 1, 7, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f593dU, 0x4d9f5a14U, 1, 1, 2, 1, 7, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a593dU, 0x4d8f5a14U, 1, 1, 2, 1, 7, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40c53dU, 0x0d40c614U, 1, 1, 2, 1, 0, true, true, true,
+                      0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0ddfc53dU, 0x0ddfc614U, 1, 1, 2, 1, 0, true, true, true,
+                      1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0dcac53dU, 0x0dcfc614U, 1, 1, 2, 1, 0, true, true, true,
+                      2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4d40c53dU, 0x4d40c614U, 1, 1, 2, 1, 0, true, true, true,
+                      0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddfc53dU, 0x4ddfc614U, 1, 1, 2, 1, 0, true, true, true,
+                      1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dcac53dU, 0x4dcfc614U, 1, 1, 2, 1, 0, true, true, true,
+                      2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40813dU, 0x0d408214U, 1, 1, 4, 1, 0, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf813dU, 0x0ddf8214U, 1, 1, 4, 1, 0, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca813dU, 0x0dcf8214U, 1, 1, 4, 1, 0, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00813dU, 0x0d008214U, 1, 1, 4, 1, 0, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f813dU, 0x0d9f8214U, 1, 1, 4, 1, 0, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a813dU, 0x0d8f8214U, 1, 1, 4, 1, 0, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40913dU, 0x0d409214U, 1, 1, 4, 1, 1, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf913dU, 0x0ddf9214U, 1, 1, 4, 1, 1, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca913dU, 0x0dcf9214U, 1, 1, 4, 1, 1, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00913dU, 0x0d009214U, 1, 1, 4, 1, 1, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f913dU, 0x0d9f9214U, 1, 1, 4, 1, 1, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a913dU, 0x0d8f9214U, 1, 1, 4, 1, 1, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40813dU, 0x4d408214U, 1, 1, 4, 1, 2, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf813dU, 0x4ddf8214U, 1, 1, 4, 1, 2, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca813dU, 0x4dcf8214U, 1, 1, 4, 1, 2, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00813dU, 0x4d008214U, 1, 1, 4, 1, 2, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f813dU, 0x4d9f8214U, 1, 1, 4, 1, 2, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a813dU, 0x4d8f8214U, 1, 1, 4, 1, 2, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40913dU, 0x4d409214U, 1, 1, 4, 1, 3, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf913dU, 0x4ddf9214U, 1, 1, 4, 1, 3, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca913dU, 0x4dcf9214U, 1, 1, 4, 1, 3, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00913dU, 0x4d009214U, 1, 1, 4, 1, 3, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f913dU, 0x4d9f9214U, 1, 1, 4, 1, 3, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a913dU, 0x4d8f9214U, 1, 1, 4, 1, 3, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40c93dU, 0x0d40ca14U, 1, 1, 4, 1, 0, true, true, true,
+                      0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0ddfc93dU, 0x0ddfca14U, 1, 1, 4, 1, 0, true, true, true,
+                      1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0dcac93dU, 0x0dcfca14U, 1, 1, 4, 1, 0, true, true, true,
+                      2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4d40c93dU, 0x4d40ca14U, 1, 1, 4, 1, 0, true, true, true,
+                      0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddfc93dU, 0x4ddfca14U, 1, 1, 4, 1, 0, true, true, true,
+                      1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dcac93dU, 0x4dcfca14U, 1, 1, 4, 1, 0, true, true, true,
+                      2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40853dU, 0x0d408614U, 1, 1, 8, 1, 0, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0ddf853dU, 0x0ddf8614U, 1, 1, 8, 1, 0, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0dca853dU, 0x0dcf8614U, 1, 1, 8, 1, 0, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d00853dU, 0x0d008614U, 1, 1, 8, 1, 0, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d9f853dU, 0x0d9f8614U, 1, 1, 8, 1, 0, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d8a853dU, 0x0d8f8614U, 1, 1, 8, 1, 0, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d40853dU, 0x4d408614U, 1, 1, 8, 1, 1, false, true,
+                      true, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddf853dU, 0x4ddf8614U, 1, 1, 8, 1, 1, false, true,
+                      true, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dca853dU, 0x4dcf8614U, 1, 1, 8, 1, 1, false, true,
+                      true, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d00853dU, 0x4d008614U, 1, 1, 8, 1, 1, false, true,
+                      false, 0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d9f853dU, 0x4d9f8614U, 1, 1, 8, 1, 1, false, true,
+                      false, 1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4d8a853dU, 0x4d8f8614U, 1, 1, 8, 1, 1, false, true,
+                      false, 2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d40cd3dU, 0x0d40ce14U, 1, 1, 8, 1, 0, true, true, true,
+                      0, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0ddfcd3dU, 0x0ddfce14U, 1, 1, 8, 1, 0, true, true, true,
+                      1, 8, 1)
+STRUCTURE_MEMORY_CASE(0x0dcacd3dU, 0x0dcfce14U, 1, 1, 8, 1, 0, true, true, true,
+                      2, 8, 1)
+STRUCTURE_MEMORY_CASE(0x4d40cd3dU, 0x4d40ce14U, 1, 1, 8, 1, 0, true, true, true,
+                      0, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4ddfcd3dU, 0x4ddfce14U, 1, 1, 8, 1, 0, true, true, true,
+                      1, 16, 1)
+STRUCTURE_MEMORY_CASE(0x4dcacd3dU, 0x4dcfce14U, 1, 1, 8, 1, 0, true, true, true,
+                      2, 16, 1)
+STRUCTURE_MEMORY_CASE(0x0d60013dU, 0x0d600214U, 2, 1, 1, 1, 0, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff013dU, 0x0dff0214U, 2, 1, 1, 1, 0, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea013dU, 0x0def0214U, 2, 1, 1, 1, 0, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20013dU, 0x0d200214U, 2, 1, 1, 1, 0, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf013dU, 0x0dbf0214U, 2, 1, 1, 1, 0, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa013dU, 0x0daf0214U, 2, 1, 1, 1, 0, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60053dU, 0x0d600614U, 2, 1, 1, 1, 1, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff053dU, 0x0dff0614U, 2, 1, 1, 1, 1, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea053dU, 0x0def0614U, 2, 1, 1, 1, 1, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20053dU, 0x0d200614U, 2, 1, 1, 1, 1, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf053dU, 0x0dbf0614U, 2, 1, 1, 1, 1, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa053dU, 0x0daf0614U, 2, 1, 1, 1, 1, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60093dU, 0x0d600a14U, 2, 1, 1, 1, 2, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff093dU, 0x0dff0a14U, 2, 1, 1, 1, 2, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea093dU, 0x0def0a14U, 2, 1, 1, 1, 2, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20093dU, 0x0d200a14U, 2, 1, 1, 1, 2, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf093dU, 0x0dbf0a14U, 2, 1, 1, 1, 2, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa093dU, 0x0daf0a14U, 2, 1, 1, 1, 2, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d600d3dU, 0x0d600e14U, 2, 1, 1, 1, 3, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff0d3dU, 0x0dff0e14U, 2, 1, 1, 1, 3, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea0d3dU, 0x0def0e14U, 2, 1, 1, 1, 3, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d200d3dU, 0x0d200e14U, 2, 1, 1, 1, 3, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf0d3dU, 0x0dbf0e14U, 2, 1, 1, 1, 3, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa0d3dU, 0x0daf0e14U, 2, 1, 1, 1, 3, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60113dU, 0x0d601214U, 2, 1, 1, 1, 4, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff113dU, 0x0dff1214U, 2, 1, 1, 1, 4, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea113dU, 0x0def1214U, 2, 1, 1, 1, 4, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20113dU, 0x0d201214U, 2, 1, 1, 1, 4, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf113dU, 0x0dbf1214U, 2, 1, 1, 1, 4, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa113dU, 0x0daf1214U, 2, 1, 1, 1, 4, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60153dU, 0x0d601614U, 2, 1, 1, 1, 5, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff153dU, 0x0dff1614U, 2, 1, 1, 1, 5, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea153dU, 0x0def1614U, 2, 1, 1, 1, 5, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20153dU, 0x0d201614U, 2, 1, 1, 1, 5, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf153dU, 0x0dbf1614U, 2, 1, 1, 1, 5, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa153dU, 0x0daf1614U, 2, 1, 1, 1, 5, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60193dU, 0x0d601a14U, 2, 1, 1, 1, 6, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff193dU, 0x0dff1a14U, 2, 1, 1, 1, 6, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea193dU, 0x0def1a14U, 2, 1, 1, 1, 6, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20193dU, 0x0d201a14U, 2, 1, 1, 1, 6, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf193dU, 0x0dbf1a14U, 2, 1, 1, 1, 6, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa193dU, 0x0daf1a14U, 2, 1, 1, 1, 6, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d601d3dU, 0x0d601e14U, 2, 1, 1, 1, 7, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff1d3dU, 0x0dff1e14U, 2, 1, 1, 1, 7, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea1d3dU, 0x0def1e14U, 2, 1, 1, 1, 7, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d201d3dU, 0x0d201e14U, 2, 1, 1, 1, 7, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf1d3dU, 0x0dbf1e14U, 2, 1, 1, 1, 7, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa1d3dU, 0x0daf1e14U, 2, 1, 1, 1, 7, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60013dU, 0x4d600214U, 2, 1, 1, 1, 8, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff013dU, 0x4dff0214U, 2, 1, 1, 1, 8, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea013dU, 0x4def0214U, 2, 1, 1, 1, 8, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20013dU, 0x4d200214U, 2, 1, 1, 1, 8, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf013dU, 0x4dbf0214U, 2, 1, 1, 1, 8, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa013dU, 0x4daf0214U, 2, 1, 1, 1, 8, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60053dU, 0x4d600614U, 2, 1, 1, 1, 9, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff053dU, 0x4dff0614U, 2, 1, 1, 1, 9, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea053dU, 0x4def0614U, 2, 1, 1, 1, 9, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20053dU, 0x4d200614U, 2, 1, 1, 1, 9, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf053dU, 0x4dbf0614U, 2, 1, 1, 1, 9, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa053dU, 0x4daf0614U, 2, 1, 1, 1, 9, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60093dU, 0x4d600a14U, 2, 1, 1, 1, 10, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff093dU, 0x4dff0a14U, 2, 1, 1, 1, 10, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea093dU, 0x4def0a14U, 2, 1, 1, 1, 10, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20093dU, 0x4d200a14U, 2, 1, 1, 1, 10, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf093dU, 0x4dbf0a14U, 2, 1, 1, 1, 10, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa093dU, 0x4daf0a14U, 2, 1, 1, 1, 10, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d600d3dU, 0x4d600e14U, 2, 1, 1, 1, 11, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff0d3dU, 0x4dff0e14U, 2, 1, 1, 1, 11, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea0d3dU, 0x4def0e14U, 2, 1, 1, 1, 11, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d200d3dU, 0x4d200e14U, 2, 1, 1, 1, 11, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf0d3dU, 0x4dbf0e14U, 2, 1, 1, 1, 11, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa0d3dU, 0x4daf0e14U, 2, 1, 1, 1, 11, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60113dU, 0x4d601214U, 2, 1, 1, 1, 12, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff113dU, 0x4dff1214U, 2, 1, 1, 1, 12, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea113dU, 0x4def1214U, 2, 1, 1, 1, 12, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20113dU, 0x4d201214U, 2, 1, 1, 1, 12, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf113dU, 0x4dbf1214U, 2, 1, 1, 1, 12, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa113dU, 0x4daf1214U, 2, 1, 1, 1, 12, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60153dU, 0x4d601614U, 2, 1, 1, 1, 13, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff153dU, 0x4dff1614U, 2, 1, 1, 1, 13, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea153dU, 0x4def1614U, 2, 1, 1, 1, 13, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20153dU, 0x4d201614U, 2, 1, 1, 1, 13, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf153dU, 0x4dbf1614U, 2, 1, 1, 1, 13, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa153dU, 0x4daf1614U, 2, 1, 1, 1, 13, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60193dU, 0x4d601a14U, 2, 1, 1, 1, 14, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff193dU, 0x4dff1a14U, 2, 1, 1, 1, 14, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea193dU, 0x4def1a14U, 2, 1, 1, 1, 14, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20193dU, 0x4d201a14U, 2, 1, 1, 1, 14, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf193dU, 0x4dbf1a14U, 2, 1, 1, 1, 14, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa193dU, 0x4daf1a14U, 2, 1, 1, 1, 14, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d601d3dU, 0x4d601e14U, 2, 1, 1, 1, 15, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff1d3dU, 0x4dff1e14U, 2, 1, 1, 1, 15, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea1d3dU, 0x4def1e14U, 2, 1, 1, 1, 15, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d201d3dU, 0x4d201e14U, 2, 1, 1, 1, 15, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf1d3dU, 0x4dbf1e14U, 2, 1, 1, 1, 15, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa1d3dU, 0x4daf1e14U, 2, 1, 1, 1, 15, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60c13dU, 0x0d60c214U, 2, 1, 1, 1, 0, true, true, true,
+                      0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0dffc13dU, 0x0dffc214U, 2, 1, 1, 1, 0, true, true, true,
+                      1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0deac13dU, 0x0defc214U, 2, 1, 1, 1, 0, true, true, true,
+                      2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4d60c13dU, 0x4d60c214U, 2, 1, 1, 1, 0, true, true, true,
+                      0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dffc13dU, 0x4dffc214U, 2, 1, 1, 1, 0, true, true, true,
+                      1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4deac13dU, 0x4defc214U, 2, 1, 1, 1, 0, true, true, true,
+                      2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60413dU, 0x0d604214U, 2, 1, 2, 1, 0, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff413dU, 0x0dff4214U, 2, 1, 2, 1, 0, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea413dU, 0x0def4214U, 2, 1, 2, 1, 0, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20413dU, 0x0d204214U, 2, 1, 2, 1, 0, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf413dU, 0x0dbf4214U, 2, 1, 2, 1, 0, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa413dU, 0x0daf4214U, 2, 1, 2, 1, 0, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60493dU, 0x0d604a14U, 2, 1, 2, 1, 1, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff493dU, 0x0dff4a14U, 2, 1, 2, 1, 1, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea493dU, 0x0def4a14U, 2, 1, 2, 1, 1, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20493dU, 0x0d204a14U, 2, 1, 2, 1, 1, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf493dU, 0x0dbf4a14U, 2, 1, 2, 1, 1, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa493dU, 0x0daf4a14U, 2, 1, 2, 1, 1, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60513dU, 0x0d605214U, 2, 1, 2, 1, 2, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff513dU, 0x0dff5214U, 2, 1, 2, 1, 2, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea513dU, 0x0def5214U, 2, 1, 2, 1, 2, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20513dU, 0x0d205214U, 2, 1, 2, 1, 2, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf513dU, 0x0dbf5214U, 2, 1, 2, 1, 2, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa513dU, 0x0daf5214U, 2, 1, 2, 1, 2, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60593dU, 0x0d605a14U, 2, 1, 2, 1, 3, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff593dU, 0x0dff5a14U, 2, 1, 2, 1, 3, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea593dU, 0x0def5a14U, 2, 1, 2, 1, 3, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20593dU, 0x0d205a14U, 2, 1, 2, 1, 3, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf593dU, 0x0dbf5a14U, 2, 1, 2, 1, 3, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa593dU, 0x0daf5a14U, 2, 1, 2, 1, 3, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60413dU, 0x4d604214U, 2, 1, 2, 1, 4, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff413dU, 0x4dff4214U, 2, 1, 2, 1, 4, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea413dU, 0x4def4214U, 2, 1, 2, 1, 4, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20413dU, 0x4d204214U, 2, 1, 2, 1, 4, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf413dU, 0x4dbf4214U, 2, 1, 2, 1, 4, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa413dU, 0x4daf4214U, 2, 1, 2, 1, 4, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60493dU, 0x4d604a14U, 2, 1, 2, 1, 5, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff493dU, 0x4dff4a14U, 2, 1, 2, 1, 5, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea493dU, 0x4def4a14U, 2, 1, 2, 1, 5, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20493dU, 0x4d204a14U, 2, 1, 2, 1, 5, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf493dU, 0x4dbf4a14U, 2, 1, 2, 1, 5, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa493dU, 0x4daf4a14U, 2, 1, 2, 1, 5, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60513dU, 0x4d605214U, 2, 1, 2, 1, 6, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff513dU, 0x4dff5214U, 2, 1, 2, 1, 6, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea513dU, 0x4def5214U, 2, 1, 2, 1, 6, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20513dU, 0x4d205214U, 2, 1, 2, 1, 6, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf513dU, 0x4dbf5214U, 2, 1, 2, 1, 6, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa513dU, 0x4daf5214U, 2, 1, 2, 1, 6, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60593dU, 0x4d605a14U, 2, 1, 2, 1, 7, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff593dU, 0x4dff5a14U, 2, 1, 2, 1, 7, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea593dU, 0x4def5a14U, 2, 1, 2, 1, 7, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20593dU, 0x4d205a14U, 2, 1, 2, 1, 7, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf593dU, 0x4dbf5a14U, 2, 1, 2, 1, 7, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa593dU, 0x4daf5a14U, 2, 1, 2, 1, 7, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60c53dU, 0x0d60c614U, 2, 1, 2, 1, 0, true, true, true,
+                      0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0dffc53dU, 0x0dffc614U, 2, 1, 2, 1, 0, true, true, true,
+                      1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0deac53dU, 0x0defc614U, 2, 1, 2, 1, 0, true, true, true,
+                      2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4d60c53dU, 0x4d60c614U, 2, 1, 2, 1, 0, true, true, true,
+                      0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dffc53dU, 0x4dffc614U, 2, 1, 2, 1, 0, true, true, true,
+                      1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4deac53dU, 0x4defc614U, 2, 1, 2, 1, 0, true, true, true,
+                      2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60813dU, 0x0d608214U, 2, 1, 4, 1, 0, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff813dU, 0x0dff8214U, 2, 1, 4, 1, 0, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea813dU, 0x0def8214U, 2, 1, 4, 1, 0, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20813dU, 0x0d208214U, 2, 1, 4, 1, 0, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf813dU, 0x0dbf8214U, 2, 1, 4, 1, 0, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa813dU, 0x0daf8214U, 2, 1, 4, 1, 0, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60913dU, 0x0d609214U, 2, 1, 4, 1, 1, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff913dU, 0x0dff9214U, 2, 1, 4, 1, 1, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea913dU, 0x0def9214U, 2, 1, 4, 1, 1, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20913dU, 0x0d209214U, 2, 1, 4, 1, 1, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf913dU, 0x0dbf9214U, 2, 1, 4, 1, 1, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa913dU, 0x0daf9214U, 2, 1, 4, 1, 1, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60813dU, 0x4d608214U, 2, 1, 4, 1, 2, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff813dU, 0x4dff8214U, 2, 1, 4, 1, 2, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea813dU, 0x4def8214U, 2, 1, 4, 1, 2, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20813dU, 0x4d208214U, 2, 1, 4, 1, 2, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf813dU, 0x4dbf8214U, 2, 1, 4, 1, 2, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa813dU, 0x4daf8214U, 2, 1, 4, 1, 2, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60913dU, 0x4d609214U, 2, 1, 4, 1, 3, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff913dU, 0x4dff9214U, 2, 1, 4, 1, 3, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea913dU, 0x4def9214U, 2, 1, 4, 1, 3, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20913dU, 0x4d209214U, 2, 1, 4, 1, 3, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf913dU, 0x4dbf9214U, 2, 1, 4, 1, 3, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa913dU, 0x4daf9214U, 2, 1, 4, 1, 3, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60c93dU, 0x0d60ca14U, 2, 1, 4, 1, 0, true, true, true,
+                      0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0dffc93dU, 0x0dffca14U, 2, 1, 4, 1, 0, true, true, true,
+                      1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0deac93dU, 0x0defca14U, 2, 1, 4, 1, 0, true, true, true,
+                      2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4d60c93dU, 0x4d60ca14U, 2, 1, 4, 1, 0, true, true, true,
+                      0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dffc93dU, 0x4dffca14U, 2, 1, 4, 1, 0, true, true, true,
+                      1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4deac93dU, 0x4defca14U, 2, 1, 4, 1, 0, true, true, true,
+                      2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60853dU, 0x0d608614U, 2, 1, 8, 1, 0, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dff853dU, 0x0dff8614U, 2, 1, 8, 1, 0, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dea853dU, 0x0def8614U, 2, 1, 8, 1, 0, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d20853dU, 0x0d208614U, 2, 1, 8, 1, 0, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0dbf853dU, 0x0dbf8614U, 2, 1, 8, 1, 0, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0daa853dU, 0x0daf8614U, 2, 1, 8, 1, 0, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d60853dU, 0x4d608614U, 2, 1, 8, 1, 1, false, true,
+                      true, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dff853dU, 0x4dff8614U, 2, 1, 8, 1, 1, false, true,
+                      true, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dea853dU, 0x4def8614U, 2, 1, 8, 1, 1, false, true,
+                      true, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4d20853dU, 0x4d208614U, 2, 1, 8, 1, 1, false, true,
+                      false, 0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dbf853dU, 0x4dbf8614U, 2, 1, 8, 1, 1, false, true,
+                      false, 1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4daa853dU, 0x4daf8614U, 2, 1, 8, 1, 1, false, true,
+                      false, 2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d60cd3dU, 0x0d60ce14U, 2, 1, 8, 1, 0, true, true, true,
+                      0, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0dffcd3dU, 0x0dffce14U, 2, 1, 8, 1, 0, true, true, true,
+                      1, 8, 2)
+STRUCTURE_MEMORY_CASE(0x0deacd3dU, 0x0defce14U, 2, 1, 8, 1, 0, true, true, true,
+                      2, 8, 2)
+STRUCTURE_MEMORY_CASE(0x4d60cd3dU, 0x4d60ce14U, 2, 1, 8, 1, 0, true, true, true,
+                      0, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4dffcd3dU, 0x4dffce14U, 2, 1, 8, 1, 0, true, true, true,
+                      1, 16, 2)
+STRUCTURE_MEMORY_CASE(0x4deacd3dU, 0x4defce14U, 2, 1, 8, 1, 0, true, true, true,
+                      2, 16, 2)
+STRUCTURE_MEMORY_CASE(0x0d40213dU, 0x0d402214U, 3, 1, 1, 1, 0, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf213dU, 0x0ddf2214U, 3, 1, 1, 1, 0, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca213dU, 0x0dcf2214U, 3, 1, 1, 1, 0, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00213dU, 0x0d002214U, 3, 1, 1, 1, 0, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f213dU, 0x0d9f2214U, 3, 1, 1, 1, 0, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a213dU, 0x0d8f2214U, 3, 1, 1, 1, 0, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40253dU, 0x0d402614U, 3, 1, 1, 1, 1, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf253dU, 0x0ddf2614U, 3, 1, 1, 1, 1, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca253dU, 0x0dcf2614U, 3, 1, 1, 1, 1, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00253dU, 0x0d002614U, 3, 1, 1, 1, 1, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f253dU, 0x0d9f2614U, 3, 1, 1, 1, 1, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a253dU, 0x0d8f2614U, 3, 1, 1, 1, 1, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40293dU, 0x0d402a14U, 3, 1, 1, 1, 2, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf293dU, 0x0ddf2a14U, 3, 1, 1, 1, 2, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca293dU, 0x0dcf2a14U, 3, 1, 1, 1, 2, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00293dU, 0x0d002a14U, 3, 1, 1, 1, 2, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f293dU, 0x0d9f2a14U, 3, 1, 1, 1, 2, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a293dU, 0x0d8f2a14U, 3, 1, 1, 1, 2, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d402d3dU, 0x0d402e14U, 3, 1, 1, 1, 3, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf2d3dU, 0x0ddf2e14U, 3, 1, 1, 1, 3, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca2d3dU, 0x0dcf2e14U, 3, 1, 1, 1, 3, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d002d3dU, 0x0d002e14U, 3, 1, 1, 1, 3, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f2d3dU, 0x0d9f2e14U, 3, 1, 1, 1, 3, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a2d3dU, 0x0d8f2e14U, 3, 1, 1, 1, 3, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40313dU, 0x0d403214U, 3, 1, 1, 1, 4, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf313dU, 0x0ddf3214U, 3, 1, 1, 1, 4, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca313dU, 0x0dcf3214U, 3, 1, 1, 1, 4, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00313dU, 0x0d003214U, 3, 1, 1, 1, 4, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f313dU, 0x0d9f3214U, 3, 1, 1, 1, 4, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a313dU, 0x0d8f3214U, 3, 1, 1, 1, 4, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40353dU, 0x0d403614U, 3, 1, 1, 1, 5, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf353dU, 0x0ddf3614U, 3, 1, 1, 1, 5, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca353dU, 0x0dcf3614U, 3, 1, 1, 1, 5, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00353dU, 0x0d003614U, 3, 1, 1, 1, 5, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f353dU, 0x0d9f3614U, 3, 1, 1, 1, 5, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a353dU, 0x0d8f3614U, 3, 1, 1, 1, 5, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40393dU, 0x0d403a14U, 3, 1, 1, 1, 6, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf393dU, 0x0ddf3a14U, 3, 1, 1, 1, 6, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca393dU, 0x0dcf3a14U, 3, 1, 1, 1, 6, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00393dU, 0x0d003a14U, 3, 1, 1, 1, 6, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f393dU, 0x0d9f3a14U, 3, 1, 1, 1, 6, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a393dU, 0x0d8f3a14U, 3, 1, 1, 1, 6, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d403d3dU, 0x0d403e14U, 3, 1, 1, 1, 7, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf3d3dU, 0x0ddf3e14U, 3, 1, 1, 1, 7, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca3d3dU, 0x0dcf3e14U, 3, 1, 1, 1, 7, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d003d3dU, 0x0d003e14U, 3, 1, 1, 1, 7, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f3d3dU, 0x0d9f3e14U, 3, 1, 1, 1, 7, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a3d3dU, 0x0d8f3e14U, 3, 1, 1, 1, 7, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40213dU, 0x4d402214U, 3, 1, 1, 1, 8, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf213dU, 0x4ddf2214U, 3, 1, 1, 1, 8, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca213dU, 0x4dcf2214U, 3, 1, 1, 1, 8, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00213dU, 0x4d002214U, 3, 1, 1, 1, 8, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f213dU, 0x4d9f2214U, 3, 1, 1, 1, 8, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a213dU, 0x4d8f2214U, 3, 1, 1, 1, 8, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40253dU, 0x4d402614U, 3, 1, 1, 1, 9, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf253dU, 0x4ddf2614U, 3, 1, 1, 1, 9, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca253dU, 0x4dcf2614U, 3, 1, 1, 1, 9, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00253dU, 0x4d002614U, 3, 1, 1, 1, 9, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f253dU, 0x4d9f2614U, 3, 1, 1, 1, 9, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a253dU, 0x4d8f2614U, 3, 1, 1, 1, 9, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40293dU, 0x4d402a14U, 3, 1, 1, 1, 10, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf293dU, 0x4ddf2a14U, 3, 1, 1, 1, 10, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca293dU, 0x4dcf2a14U, 3, 1, 1, 1, 10, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00293dU, 0x4d002a14U, 3, 1, 1, 1, 10, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f293dU, 0x4d9f2a14U, 3, 1, 1, 1, 10, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a293dU, 0x4d8f2a14U, 3, 1, 1, 1, 10, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d402d3dU, 0x4d402e14U, 3, 1, 1, 1, 11, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf2d3dU, 0x4ddf2e14U, 3, 1, 1, 1, 11, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca2d3dU, 0x4dcf2e14U, 3, 1, 1, 1, 11, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d002d3dU, 0x4d002e14U, 3, 1, 1, 1, 11, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f2d3dU, 0x4d9f2e14U, 3, 1, 1, 1, 11, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a2d3dU, 0x4d8f2e14U, 3, 1, 1, 1, 11, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40313dU, 0x4d403214U, 3, 1, 1, 1, 12, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf313dU, 0x4ddf3214U, 3, 1, 1, 1, 12, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca313dU, 0x4dcf3214U, 3, 1, 1, 1, 12, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00313dU, 0x4d003214U, 3, 1, 1, 1, 12, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f313dU, 0x4d9f3214U, 3, 1, 1, 1, 12, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a313dU, 0x4d8f3214U, 3, 1, 1, 1, 12, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40353dU, 0x4d403614U, 3, 1, 1, 1, 13, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf353dU, 0x4ddf3614U, 3, 1, 1, 1, 13, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca353dU, 0x4dcf3614U, 3, 1, 1, 1, 13, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00353dU, 0x4d003614U, 3, 1, 1, 1, 13, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f353dU, 0x4d9f3614U, 3, 1, 1, 1, 13, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a353dU, 0x4d8f3614U, 3, 1, 1, 1, 13, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40393dU, 0x4d403a14U, 3, 1, 1, 1, 14, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf393dU, 0x4ddf3a14U, 3, 1, 1, 1, 14, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca393dU, 0x4dcf3a14U, 3, 1, 1, 1, 14, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00393dU, 0x4d003a14U, 3, 1, 1, 1, 14, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f393dU, 0x4d9f3a14U, 3, 1, 1, 1, 14, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a393dU, 0x4d8f3a14U, 3, 1, 1, 1, 14, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d403d3dU, 0x4d403e14U, 3, 1, 1, 1, 15, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf3d3dU, 0x4ddf3e14U, 3, 1, 1, 1, 15, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca3d3dU, 0x4dcf3e14U, 3, 1, 1, 1, 15, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d003d3dU, 0x4d003e14U, 3, 1, 1, 1, 15, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f3d3dU, 0x4d9f3e14U, 3, 1, 1, 1, 15, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a3d3dU, 0x4d8f3e14U, 3, 1, 1, 1, 15, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40e13dU, 0x0d40e214U, 3, 1, 1, 1, 0, true, true, true,
+                      0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfe13dU, 0x0ddfe214U, 3, 1, 1, 1, 0, true, true, true,
+                      1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0dcae13dU, 0x0dcfe214U, 3, 1, 1, 1, 0, true, true, true,
+                      2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4d40e13dU, 0x4d40e214U, 3, 1, 1, 1, 0, true, true, true,
+                      0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfe13dU, 0x4ddfe214U, 3, 1, 1, 1, 0, true, true, true,
+                      1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcae13dU, 0x4dcfe214U, 3, 1, 1, 1, 0, true, true, true,
+                      2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40613dU, 0x0d406214U, 3, 1, 2, 1, 0, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf613dU, 0x0ddf6214U, 3, 1, 2, 1, 0, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca613dU, 0x0dcf6214U, 3, 1, 2, 1, 0, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00613dU, 0x0d006214U, 3, 1, 2, 1, 0, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f613dU, 0x0d9f6214U, 3, 1, 2, 1, 0, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a613dU, 0x0d8f6214U, 3, 1, 2, 1, 0, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40693dU, 0x0d406a14U, 3, 1, 2, 1, 1, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf693dU, 0x0ddf6a14U, 3, 1, 2, 1, 1, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca693dU, 0x0dcf6a14U, 3, 1, 2, 1, 1, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00693dU, 0x0d006a14U, 3, 1, 2, 1, 1, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f693dU, 0x0d9f6a14U, 3, 1, 2, 1, 1, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a693dU, 0x0d8f6a14U, 3, 1, 2, 1, 1, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40713dU, 0x0d407214U, 3, 1, 2, 1, 2, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf713dU, 0x0ddf7214U, 3, 1, 2, 1, 2, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca713dU, 0x0dcf7214U, 3, 1, 2, 1, 2, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00713dU, 0x0d007214U, 3, 1, 2, 1, 2, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f713dU, 0x0d9f7214U, 3, 1, 2, 1, 2, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a713dU, 0x0d8f7214U, 3, 1, 2, 1, 2, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40793dU, 0x0d407a14U, 3, 1, 2, 1, 3, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddf793dU, 0x0ddf7a14U, 3, 1, 2, 1, 3, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dca793dU, 0x0dcf7a14U, 3, 1, 2, 1, 3, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00793dU, 0x0d007a14U, 3, 1, 2, 1, 3, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9f793dU, 0x0d9f7a14U, 3, 1, 2, 1, 3, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8a793dU, 0x0d8f7a14U, 3, 1, 2, 1, 3, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40613dU, 0x4d406214U, 3, 1, 2, 1, 4, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf613dU, 0x4ddf6214U, 3, 1, 2, 1, 4, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca613dU, 0x4dcf6214U, 3, 1, 2, 1, 4, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00613dU, 0x4d006214U, 3, 1, 2, 1, 4, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f613dU, 0x4d9f6214U, 3, 1, 2, 1, 4, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a613dU, 0x4d8f6214U, 3, 1, 2, 1, 4, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40693dU, 0x4d406a14U, 3, 1, 2, 1, 5, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf693dU, 0x4ddf6a14U, 3, 1, 2, 1, 5, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca693dU, 0x4dcf6a14U, 3, 1, 2, 1, 5, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00693dU, 0x4d006a14U, 3, 1, 2, 1, 5, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f693dU, 0x4d9f6a14U, 3, 1, 2, 1, 5, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a693dU, 0x4d8f6a14U, 3, 1, 2, 1, 5, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40713dU, 0x4d407214U, 3, 1, 2, 1, 6, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf713dU, 0x4ddf7214U, 3, 1, 2, 1, 6, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca713dU, 0x4dcf7214U, 3, 1, 2, 1, 6, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00713dU, 0x4d007214U, 3, 1, 2, 1, 6, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f713dU, 0x4d9f7214U, 3, 1, 2, 1, 6, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a713dU, 0x4d8f7214U, 3, 1, 2, 1, 6, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40793dU, 0x4d407a14U, 3, 1, 2, 1, 7, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddf793dU, 0x4ddf7a14U, 3, 1, 2, 1, 7, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dca793dU, 0x4dcf7a14U, 3, 1, 2, 1, 7, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00793dU, 0x4d007a14U, 3, 1, 2, 1, 7, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9f793dU, 0x4d9f7a14U, 3, 1, 2, 1, 7, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8a793dU, 0x4d8f7a14U, 3, 1, 2, 1, 7, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40e53dU, 0x0d40e614U, 3, 1, 2, 1, 0, true, true, true,
+                      0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfe53dU, 0x0ddfe614U, 3, 1, 2, 1, 0, true, true, true,
+                      1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0dcae53dU, 0x0dcfe614U, 3, 1, 2, 1, 0, true, true, true,
+                      2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4d40e53dU, 0x4d40e614U, 3, 1, 2, 1, 0, true, true, true,
+                      0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfe53dU, 0x4ddfe614U, 3, 1, 2, 1, 0, true, true, true,
+                      1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcae53dU, 0x4dcfe614U, 3, 1, 2, 1, 0, true, true, true,
+                      2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40a13dU, 0x0d40a214U, 3, 1, 4, 1, 0, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfa13dU, 0x0ddfa214U, 3, 1, 4, 1, 0, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dcaa13dU, 0x0dcfa214U, 3, 1, 4, 1, 0, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00a13dU, 0x0d00a214U, 3, 1, 4, 1, 0, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9fa13dU, 0x0d9fa214U, 3, 1, 4, 1, 0, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8aa13dU, 0x0d8fa214U, 3, 1, 4, 1, 0, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40b13dU, 0x0d40b214U, 3, 1, 4, 1, 1, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfb13dU, 0x0ddfb214U, 3, 1, 4, 1, 1, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dcab13dU, 0x0dcfb214U, 3, 1, 4, 1, 1, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00b13dU, 0x0d00b214U, 3, 1, 4, 1, 1, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9fb13dU, 0x0d9fb214U, 3, 1, 4, 1, 1, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8ab13dU, 0x0d8fb214U, 3, 1, 4, 1, 1, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40a13dU, 0x4d40a214U, 3, 1, 4, 1, 2, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfa13dU, 0x4ddfa214U, 3, 1, 4, 1, 2, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcaa13dU, 0x4dcfa214U, 3, 1, 4, 1, 2, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00a13dU, 0x4d00a214U, 3, 1, 4, 1, 2, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9fa13dU, 0x4d9fa214U, 3, 1, 4, 1, 2, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8aa13dU, 0x4d8fa214U, 3, 1, 4, 1, 2, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40b13dU, 0x4d40b214U, 3, 1, 4, 1, 3, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfb13dU, 0x4ddfb214U, 3, 1, 4, 1, 3, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcab13dU, 0x4dcfb214U, 3, 1, 4, 1, 3, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00b13dU, 0x4d00b214U, 3, 1, 4, 1, 3, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9fb13dU, 0x4d9fb214U, 3, 1, 4, 1, 3, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8ab13dU, 0x4d8fb214U, 3, 1, 4, 1, 3, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40e93dU, 0x0d40ea14U, 3, 1, 4, 1, 0, true, true, true,
+                      0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfe93dU, 0x0ddfea14U, 3, 1, 4, 1, 0, true, true, true,
+                      1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0dcae93dU, 0x0dcfea14U, 3, 1, 4, 1, 0, true, true, true,
+                      2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4d40e93dU, 0x4d40ea14U, 3, 1, 4, 1, 0, true, true, true,
+                      0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfe93dU, 0x4ddfea14U, 3, 1, 4, 1, 0, true, true, true,
+                      1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcae93dU, 0x4dcfea14U, 3, 1, 4, 1, 0, true, true, true,
+                      2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40a53dU, 0x0d40a614U, 3, 1, 8, 1, 0, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfa53dU, 0x0ddfa614U, 3, 1, 8, 1, 0, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0dcaa53dU, 0x0dcfa614U, 3, 1, 8, 1, 0, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d00a53dU, 0x0d00a614U, 3, 1, 8, 1, 0, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d9fa53dU, 0x0d9fa614U, 3, 1, 8, 1, 0, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d8aa53dU, 0x0d8fa614U, 3, 1, 8, 1, 0, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d40a53dU, 0x4d40a614U, 3, 1, 8, 1, 1, false, true,
+                      true, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfa53dU, 0x4ddfa614U, 3, 1, 8, 1, 1, false, true,
+                      true, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcaa53dU, 0x4dcfa614U, 3, 1, 8, 1, 1, false, true,
+                      true, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d00a53dU, 0x4d00a614U, 3, 1, 8, 1, 1, false, true,
+                      false, 0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d9fa53dU, 0x4d9fa614U, 3, 1, 8, 1, 1, false, true,
+                      false, 1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4d8aa53dU, 0x4d8fa614U, 3, 1, 8, 1, 1, false, true,
+                      false, 2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d40ed3dU, 0x0d40ee14U, 3, 1, 8, 1, 0, true, true, true,
+                      0, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0ddfed3dU, 0x0ddfee14U, 3, 1, 8, 1, 0, true, true, true,
+                      1, 8, 3)
+STRUCTURE_MEMORY_CASE(0x0dcaed3dU, 0x0dcfee14U, 3, 1, 8, 1, 0, true, true, true,
+                      2, 8, 3)
+STRUCTURE_MEMORY_CASE(0x4d40ed3dU, 0x4d40ee14U, 3, 1, 8, 1, 0, true, true, true,
+                      0, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4ddfed3dU, 0x4ddfee14U, 3, 1, 8, 1, 0, true, true, true,
+                      1, 16, 3)
+STRUCTURE_MEMORY_CASE(0x4dcaed3dU, 0x4dcfee14U, 3, 1, 8, 1, 0, true, true, true,
+                      2, 16, 3)
+STRUCTURE_MEMORY_CASE(0x0d60213dU, 0x0d602214U, 4, 1, 1, 1, 0, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff213dU, 0x0dff2214U, 4, 1, 1, 1, 0, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea213dU, 0x0def2214U, 4, 1, 1, 1, 0, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20213dU, 0x0d202214U, 4, 1, 1, 1, 0, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf213dU, 0x0dbf2214U, 4, 1, 1, 1, 0, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa213dU, 0x0daf2214U, 4, 1, 1, 1, 0, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60253dU, 0x0d602614U, 4, 1, 1, 1, 1, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff253dU, 0x0dff2614U, 4, 1, 1, 1, 1, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea253dU, 0x0def2614U, 4, 1, 1, 1, 1, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20253dU, 0x0d202614U, 4, 1, 1, 1, 1, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf253dU, 0x0dbf2614U, 4, 1, 1, 1, 1, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa253dU, 0x0daf2614U, 4, 1, 1, 1, 1, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60293dU, 0x0d602a14U, 4, 1, 1, 1, 2, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff293dU, 0x0dff2a14U, 4, 1, 1, 1, 2, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea293dU, 0x0def2a14U, 4, 1, 1, 1, 2, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20293dU, 0x0d202a14U, 4, 1, 1, 1, 2, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf293dU, 0x0dbf2a14U, 4, 1, 1, 1, 2, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa293dU, 0x0daf2a14U, 4, 1, 1, 1, 2, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d602d3dU, 0x0d602e14U, 4, 1, 1, 1, 3, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff2d3dU, 0x0dff2e14U, 4, 1, 1, 1, 3, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea2d3dU, 0x0def2e14U, 4, 1, 1, 1, 3, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d202d3dU, 0x0d202e14U, 4, 1, 1, 1, 3, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf2d3dU, 0x0dbf2e14U, 4, 1, 1, 1, 3, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa2d3dU, 0x0daf2e14U, 4, 1, 1, 1, 3, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60313dU, 0x0d603214U, 4, 1, 1, 1, 4, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff313dU, 0x0dff3214U, 4, 1, 1, 1, 4, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea313dU, 0x0def3214U, 4, 1, 1, 1, 4, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20313dU, 0x0d203214U, 4, 1, 1, 1, 4, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf313dU, 0x0dbf3214U, 4, 1, 1, 1, 4, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa313dU, 0x0daf3214U, 4, 1, 1, 1, 4, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60353dU, 0x0d603614U, 4, 1, 1, 1, 5, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff353dU, 0x0dff3614U, 4, 1, 1, 1, 5, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea353dU, 0x0def3614U, 4, 1, 1, 1, 5, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20353dU, 0x0d203614U, 4, 1, 1, 1, 5, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf353dU, 0x0dbf3614U, 4, 1, 1, 1, 5, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa353dU, 0x0daf3614U, 4, 1, 1, 1, 5, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60393dU, 0x0d603a14U, 4, 1, 1, 1, 6, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff393dU, 0x0dff3a14U, 4, 1, 1, 1, 6, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea393dU, 0x0def3a14U, 4, 1, 1, 1, 6, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20393dU, 0x0d203a14U, 4, 1, 1, 1, 6, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf393dU, 0x0dbf3a14U, 4, 1, 1, 1, 6, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa393dU, 0x0daf3a14U, 4, 1, 1, 1, 6, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d603d3dU, 0x0d603e14U, 4, 1, 1, 1, 7, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff3d3dU, 0x0dff3e14U, 4, 1, 1, 1, 7, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea3d3dU, 0x0def3e14U, 4, 1, 1, 1, 7, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d203d3dU, 0x0d203e14U, 4, 1, 1, 1, 7, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf3d3dU, 0x0dbf3e14U, 4, 1, 1, 1, 7, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa3d3dU, 0x0daf3e14U, 4, 1, 1, 1, 7, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60213dU, 0x4d602214U, 4, 1, 1, 1, 8, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff213dU, 0x4dff2214U, 4, 1, 1, 1, 8, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea213dU, 0x4def2214U, 4, 1, 1, 1, 8, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20213dU, 0x4d202214U, 4, 1, 1, 1, 8, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf213dU, 0x4dbf2214U, 4, 1, 1, 1, 8, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa213dU, 0x4daf2214U, 4, 1, 1, 1, 8, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60253dU, 0x4d602614U, 4, 1, 1, 1, 9, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff253dU, 0x4dff2614U, 4, 1, 1, 1, 9, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea253dU, 0x4def2614U, 4, 1, 1, 1, 9, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20253dU, 0x4d202614U, 4, 1, 1, 1, 9, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf253dU, 0x4dbf2614U, 4, 1, 1, 1, 9, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa253dU, 0x4daf2614U, 4, 1, 1, 1, 9, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60293dU, 0x4d602a14U, 4, 1, 1, 1, 10, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff293dU, 0x4dff2a14U, 4, 1, 1, 1, 10, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea293dU, 0x4def2a14U, 4, 1, 1, 1, 10, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20293dU, 0x4d202a14U, 4, 1, 1, 1, 10, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf293dU, 0x4dbf2a14U, 4, 1, 1, 1, 10, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa293dU, 0x4daf2a14U, 4, 1, 1, 1, 10, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d602d3dU, 0x4d602e14U, 4, 1, 1, 1, 11, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff2d3dU, 0x4dff2e14U, 4, 1, 1, 1, 11, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea2d3dU, 0x4def2e14U, 4, 1, 1, 1, 11, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d202d3dU, 0x4d202e14U, 4, 1, 1, 1, 11, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf2d3dU, 0x4dbf2e14U, 4, 1, 1, 1, 11, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa2d3dU, 0x4daf2e14U, 4, 1, 1, 1, 11, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60313dU, 0x4d603214U, 4, 1, 1, 1, 12, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff313dU, 0x4dff3214U, 4, 1, 1, 1, 12, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea313dU, 0x4def3214U, 4, 1, 1, 1, 12, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20313dU, 0x4d203214U, 4, 1, 1, 1, 12, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf313dU, 0x4dbf3214U, 4, 1, 1, 1, 12, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa313dU, 0x4daf3214U, 4, 1, 1, 1, 12, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60353dU, 0x4d603614U, 4, 1, 1, 1, 13, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff353dU, 0x4dff3614U, 4, 1, 1, 1, 13, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea353dU, 0x4def3614U, 4, 1, 1, 1, 13, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20353dU, 0x4d203614U, 4, 1, 1, 1, 13, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf353dU, 0x4dbf3614U, 4, 1, 1, 1, 13, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa353dU, 0x4daf3614U, 4, 1, 1, 1, 13, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60393dU, 0x4d603a14U, 4, 1, 1, 1, 14, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff393dU, 0x4dff3a14U, 4, 1, 1, 1, 14, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea393dU, 0x4def3a14U, 4, 1, 1, 1, 14, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20393dU, 0x4d203a14U, 4, 1, 1, 1, 14, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf393dU, 0x4dbf3a14U, 4, 1, 1, 1, 14, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa393dU, 0x4daf3a14U, 4, 1, 1, 1, 14, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d603d3dU, 0x4d603e14U, 4, 1, 1, 1, 15, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff3d3dU, 0x4dff3e14U, 4, 1, 1, 1, 15, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea3d3dU, 0x4def3e14U, 4, 1, 1, 1, 15, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d203d3dU, 0x4d203e14U, 4, 1, 1, 1, 15, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf3d3dU, 0x4dbf3e14U, 4, 1, 1, 1, 15, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa3d3dU, 0x4daf3e14U, 4, 1, 1, 1, 15, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60e13dU, 0x0d60e214U, 4, 1, 1, 1, 0, true, true, true,
+                      0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0dffe13dU, 0x0dffe214U, 4, 1, 1, 1, 0, true, true, true,
+                      1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0deae13dU, 0x0defe214U, 4, 1, 1, 1, 0, true, true, true,
+                      2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4d60e13dU, 0x4d60e214U, 4, 1, 1, 1, 0, true, true, true,
+                      0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffe13dU, 0x4dffe214U, 4, 1, 1, 1, 0, true, true, true,
+                      1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deae13dU, 0x4defe214U, 4, 1, 1, 1, 0, true, true, true,
+                      2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60613dU, 0x0d606214U, 4, 1, 2, 1, 0, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff613dU, 0x0dff6214U, 4, 1, 2, 1, 0, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea613dU, 0x0def6214U, 4, 1, 2, 1, 0, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20613dU, 0x0d206214U, 4, 1, 2, 1, 0, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf613dU, 0x0dbf6214U, 4, 1, 2, 1, 0, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa613dU, 0x0daf6214U, 4, 1, 2, 1, 0, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60693dU, 0x0d606a14U, 4, 1, 2, 1, 1, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff693dU, 0x0dff6a14U, 4, 1, 2, 1, 1, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea693dU, 0x0def6a14U, 4, 1, 2, 1, 1, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20693dU, 0x0d206a14U, 4, 1, 2, 1, 1, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf693dU, 0x0dbf6a14U, 4, 1, 2, 1, 1, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa693dU, 0x0daf6a14U, 4, 1, 2, 1, 1, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60713dU, 0x0d607214U, 4, 1, 2, 1, 2, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff713dU, 0x0dff7214U, 4, 1, 2, 1, 2, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea713dU, 0x0def7214U, 4, 1, 2, 1, 2, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20713dU, 0x0d207214U, 4, 1, 2, 1, 2, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf713dU, 0x0dbf7214U, 4, 1, 2, 1, 2, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa713dU, 0x0daf7214U, 4, 1, 2, 1, 2, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60793dU, 0x0d607a14U, 4, 1, 2, 1, 3, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dff793dU, 0x0dff7a14U, 4, 1, 2, 1, 3, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dea793dU, 0x0def7a14U, 4, 1, 2, 1, 3, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20793dU, 0x0d207a14U, 4, 1, 2, 1, 3, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbf793dU, 0x0dbf7a14U, 4, 1, 2, 1, 3, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daa793dU, 0x0daf7a14U, 4, 1, 2, 1, 3, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60613dU, 0x4d606214U, 4, 1, 2, 1, 4, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff613dU, 0x4dff6214U, 4, 1, 2, 1, 4, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea613dU, 0x4def6214U, 4, 1, 2, 1, 4, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20613dU, 0x4d206214U, 4, 1, 2, 1, 4, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf613dU, 0x4dbf6214U, 4, 1, 2, 1, 4, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa613dU, 0x4daf6214U, 4, 1, 2, 1, 4, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60693dU, 0x4d606a14U, 4, 1, 2, 1, 5, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff693dU, 0x4dff6a14U, 4, 1, 2, 1, 5, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea693dU, 0x4def6a14U, 4, 1, 2, 1, 5, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20693dU, 0x4d206a14U, 4, 1, 2, 1, 5, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf693dU, 0x4dbf6a14U, 4, 1, 2, 1, 5, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa693dU, 0x4daf6a14U, 4, 1, 2, 1, 5, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60713dU, 0x4d607214U, 4, 1, 2, 1, 6, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff713dU, 0x4dff7214U, 4, 1, 2, 1, 6, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea713dU, 0x4def7214U, 4, 1, 2, 1, 6, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20713dU, 0x4d207214U, 4, 1, 2, 1, 6, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf713dU, 0x4dbf7214U, 4, 1, 2, 1, 6, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa713dU, 0x4daf7214U, 4, 1, 2, 1, 6, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60793dU, 0x4d607a14U, 4, 1, 2, 1, 7, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dff793dU, 0x4dff7a14U, 4, 1, 2, 1, 7, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dea793dU, 0x4def7a14U, 4, 1, 2, 1, 7, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20793dU, 0x4d207a14U, 4, 1, 2, 1, 7, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbf793dU, 0x4dbf7a14U, 4, 1, 2, 1, 7, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daa793dU, 0x4daf7a14U, 4, 1, 2, 1, 7, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60e53dU, 0x0d60e614U, 4, 1, 2, 1, 0, true, true, true,
+                      0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0dffe53dU, 0x0dffe614U, 4, 1, 2, 1, 0, true, true, true,
+                      1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0deae53dU, 0x0defe614U, 4, 1, 2, 1, 0, true, true, true,
+                      2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4d60e53dU, 0x4d60e614U, 4, 1, 2, 1, 0, true, true, true,
+                      0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffe53dU, 0x4dffe614U, 4, 1, 2, 1, 0, true, true, true,
+                      1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deae53dU, 0x4defe614U, 4, 1, 2, 1, 0, true, true, true,
+                      2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60a13dU, 0x0d60a214U, 4, 1, 4, 1, 0, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dffa13dU, 0x0dffa214U, 4, 1, 4, 1, 0, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0deaa13dU, 0x0defa214U, 4, 1, 4, 1, 0, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20a13dU, 0x0d20a214U, 4, 1, 4, 1, 0, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbfa13dU, 0x0dbfa214U, 4, 1, 4, 1, 0, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daaa13dU, 0x0dafa214U, 4, 1, 4, 1, 0, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60b13dU, 0x0d60b214U, 4, 1, 4, 1, 1, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dffb13dU, 0x0dffb214U, 4, 1, 4, 1, 1, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0deab13dU, 0x0defb214U, 4, 1, 4, 1, 1, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20b13dU, 0x0d20b214U, 4, 1, 4, 1, 1, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbfb13dU, 0x0dbfb214U, 4, 1, 4, 1, 1, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daab13dU, 0x0dafb214U, 4, 1, 4, 1, 1, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60a13dU, 0x4d60a214U, 4, 1, 4, 1, 2, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffa13dU, 0x4dffa214U, 4, 1, 4, 1, 2, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deaa13dU, 0x4defa214U, 4, 1, 4, 1, 2, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20a13dU, 0x4d20a214U, 4, 1, 4, 1, 2, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbfa13dU, 0x4dbfa214U, 4, 1, 4, 1, 2, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daaa13dU, 0x4dafa214U, 4, 1, 4, 1, 2, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60b13dU, 0x4d60b214U, 4, 1, 4, 1, 3, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffb13dU, 0x4dffb214U, 4, 1, 4, 1, 3, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deab13dU, 0x4defb214U, 4, 1, 4, 1, 3, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20b13dU, 0x4d20b214U, 4, 1, 4, 1, 3, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbfb13dU, 0x4dbfb214U, 4, 1, 4, 1, 3, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daab13dU, 0x4dafb214U, 4, 1, 4, 1, 3, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60e93dU, 0x0d60ea14U, 4, 1, 4, 1, 0, true, true, true,
+                      0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0dffe93dU, 0x0dffea14U, 4, 1, 4, 1, 0, true, true, true,
+                      1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0deae93dU, 0x0defea14U, 4, 1, 4, 1, 0, true, true, true,
+                      2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4d60e93dU, 0x4d60ea14U, 4, 1, 4, 1, 0, true, true, true,
+                      0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffe93dU, 0x4dffea14U, 4, 1, 4, 1, 0, true, true, true,
+                      1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deae93dU, 0x4defea14U, 4, 1, 4, 1, 0, true, true, true,
+                      2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60a53dU, 0x0d60a614U, 4, 1, 8, 1, 0, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dffa53dU, 0x0dffa614U, 4, 1, 8, 1, 0, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0deaa53dU, 0x0defa614U, 4, 1, 8, 1, 0, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d20a53dU, 0x0d20a614U, 4, 1, 8, 1, 0, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0dbfa53dU, 0x0dbfa614U, 4, 1, 8, 1, 0, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0daaa53dU, 0x0dafa614U, 4, 1, 8, 1, 0, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d60a53dU, 0x4d60a614U, 4, 1, 8, 1, 1, false, true,
+                      true, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffa53dU, 0x4dffa614U, 4, 1, 8, 1, 1, false, true,
+                      true, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deaa53dU, 0x4defa614U, 4, 1, 8, 1, 1, false, true,
+                      true, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4d20a53dU, 0x4d20a614U, 4, 1, 8, 1, 1, false, true,
+                      false, 0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dbfa53dU, 0x4dbfa614U, 4, 1, 8, 1, 1, false, true,
+                      false, 1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4daaa53dU, 0x4dafa614U, 4, 1, 8, 1, 1, false, true,
+                      false, 2, 16, 4)
+STRUCTURE_MEMORY_CASE(0x0d60ed3dU, 0x0d60ee14U, 4, 1, 8, 1, 0, true, true, true,
+                      0, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0dffed3dU, 0x0dffee14U, 4, 1, 8, 1, 0, true, true, true,
+                      1, 8, 4)
+STRUCTURE_MEMORY_CASE(0x0deaed3dU, 0x0defee14U, 4, 1, 8, 1, 0, true, true, true,
+                      2, 8, 4)
+STRUCTURE_MEMORY_CASE(0x4d60ed3dU, 0x4d60ee14U, 4, 1, 8, 1, 0, true, true, true,
+                      0, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4dffed3dU, 0x4dffee14U, 4, 1, 8, 1, 0, true, true, true,
+                      1, 16, 4)
+STRUCTURE_MEMORY_CASE(0x4deaed3dU, 0x4defee14U, 4, 1, 8, 1, 0, true, true, true,
+                      2, 16, 4)
+#undef STRUCTURE_MEMORY_CASE
+#endif
+#ifdef STRUCTURE_MEMORY_VALUE
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestCallMutations, 6)
+STRUCTURE_MEMORY_VALUE(size_t, kStructureTestCases, 1134)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestBaseRegister, 9)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestIndexRegister, 10)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestFirstVector, 29)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestBasePosition, 80)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestStorageBytes, 256)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestRegisterBytes, 64)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestBatchCases, 48)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestRegisterDelta, 17)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestSeedMultiplier, 37)
+STRUCTURE_MEMORY_VALUE(unsigned, kStructureTestSeedBias, 19)
+#undef STRUCTURE_MEMORY_VALUE
+#endif
+#ifdef STRUCTURE_MEMORY_TEXT
+STRUCTURE_MEMORY_TEXT(kStructureTestBatchName, "Batch{0}")
+STRUCTURE_MEMORY_TEXT(kStructureTestName, "structure_memory_{0}")
+STRUCTURE_MEMORY_TEXT(kStructureTestNativeName, "native_structure_{0}")
+STRUCTURE_MEMORY_TEXT(kStructureTestArtifactEnvironment,
+                      "NEVERD_ARM64E_STRUCTURE_MEMORY_ARTIFACT_DIR")
+STRUCTURE_MEMORY_TEXT(kStructureTestArtifactProperty,
+                      "structure_memory_artifact_dir")
+STRUCTURE_MEMORY_TEXT(kStructureTestImageArtifactProperty,
+                      "structure_memory_image_artifact_dir")
+STRUCTURE_MEMORY_TEXT(kStructureTestBatchDirectory, "/batch-{0}")
+STRUCTURE_MEMORY_TEXT(kStructureTestImageDirectory, "/image")
+STRUCTURE_MEMORY_TEXT(kStructureTestNativeClobbers, "memory")
+STRUCTURE_MEMORY_TEXT(
+    kStructureTestPrefix,
+    "#include <stdint.h>\n#include <string.h>\n"
+    "static int structure_compare(const unsigned char *a, const unsigned char "
+    "*b, unsigned count) { for (unsigned i = 0; i < count; ++i) if (a[i] != "
+    "b[i]) return 1; return 0; }\n")
+STRUCTURE_MEMORY_TEXT(kStructureTestNativeCall,
+                      "native_structure_{0}((uint64_t)(b + 80 + (t & 1)), "
+                      "(uint64_t)input, (uint64_t)expected, delta)")
+STRUCTURE_MEMORY_TEXT(kStructureTestCall, "structure_memory_{0}({1})")
+STRUCTURE_MEMORY_TEXT(kStructureTestBaseArgument,
+                      "(uint64_t)(a + 80 + (t & 1))")
+STRUCTURE_MEMORY_TEXT(kStructureTestIndexArgument, ", delta")
+STRUCTURE_MEMORY_TEXT(kStructureTestDataArgument, ", (uint64_t)input")
+STRUCTURE_MEMORY_TEXT(kStructureTestOutputArgument, ", (uint64_t)actual")
+STRUCTURE_MEMORY_TEXT(kStructureTestDeclaration, "uint64_t {0}(uint64_t{1});\n")
+STRUCTURE_MEMORY_TEXT(kStructureTestParameterType, ", uint64_t")
+STRUCTURE_MEMORY_TEXT(kStructureTestEntry, "run_{0},\n")
+STRUCTURE_MEMORY_TEXT(
+    kStructureTestMain,
+    "static int (*structure_cases[])(void) = {{{0}}; int main(void) {{ for "
+    "(unsigned i = 0; i < sizeof(structure_cases) / "
+    "sizeof(structure_cases[0]); ++i) if (structure_cases[i]()) return i + 1; "
+    "return 0; }\n")
+STRUCTURE_MEMORY_TEXT(
+    kStructureTestReplay,
+    "static int run_{0}(void) {{ unsigned char input[64]; "
+    "for (unsigned i = 0; i < 64; ++i) input[i] = (unsigned char)(i * 37 + "
+    "19); "
+    "for (unsigned t = 0; t < 3; ++t) {{ "
+    "_Alignas(16) unsigned char a[256], b[256], actual[64], expected[64]; "
+    "for (unsigned i = 0; i < 256; ++i) a[i] = b[i] = (unsigned char)(i * 19 + "
+    "37); "
+    "memset(actual, 0xa5, 64); memset(expected, 0xa5, 64); "
+    "uint64_t delta = t == 0 ? 17 : t == 1 ? (uint64_t)-17 : 0; "
+    "uint64_t wanted = {1}; uint64_t got = {2}; "
+    "if (got - (uint64_t)a != wanted - (uint64_t)b || "
+    "structure_compare(a, b, 256) || structure_compare(actual, expected, 64)) "
+    "return 1; "
+    "} return 0; }\n")
+STRUCTURE_MEMORY_TEXT(
+    kStructureTestNativeFunction,
+    "static uint64_t native_structure_{0}(uint64_t base, uint64_t input, "
+    "uint64_t output, uint64_t delta) {{ "
+    "typedef int64_t Vec __attribute__((vector_size(16))); "
+    "Vec values[4]; memcpy(values, (const void *)input, 64); "
+    "register Vec a __asm__(\"v29\") = values[0]; "
+    "register Vec b __asm__(\"v30\") = values[1]; "
+    "register Vec c __asm__(\"v31\") = values[2]; "
+    "register Vec d __asm__(\"v0\") = values[3]; "
+    "register uint64_t x __asm__(\"x9\") = base; "
+    "register uint64_t y __asm__(\"x10\") = delta; "
+    "__asm__ volatile(\"{3}.inst %c6{4}\" : \"+w\"(a), \"+w\"(b), \"+w\"(c), "
+    "\"+w\"(d), \"+r\"(x) : \"r\"(y), \"i\"({1}) : {5}\"memory\"); "
+    "values[0] = a; values[1] = b; values[2] = c; values[3] = d; "
+    "{2} return x; }\n")
+STRUCTURE_MEMORY_TEXT(kStructureTestCopyOutputs,
+                      "memcpy((void *)output, values, {0});")
+#undef STRUCTURE_MEMORY_TEXT
+#endif

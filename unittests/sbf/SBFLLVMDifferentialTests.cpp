@@ -683,6 +683,62 @@ TEST(SBFLLVMDifferential, MatchesCallXFaultOrderingAndContinuationTargets) {
 }
 
 TEST(SBFLLVMDifferential,
+     SharedCallXDispatchPreservesNestedFramesAndDistinctReturns) {
+  for (Version TheVersion :
+       {Version::V0, Version::V1, Version::V2, Version::V3, Version::V4}) {
+    SCOPED_TRACE(versionName(TheVersion).str());
+    const auto LoadTarget = [&](size_t Slot) {
+      const uint64_t Address = kBytecodeStart + Slot * kInstructionSize;
+      if (TheVersion != Version::V2)
+        return encodeLDDW(2, Address);
+      return std::array<EncodedInstruction, kLDDWSlotCount>{
+          encode(Opcode::MOV64_IMM, 2, 0, 0, static_cast<int32_t>(Address)),
+          encode(Opcode::HOR64_IMM, 2, 0, 0, 1)};
+    };
+    const auto First = LoadTarget(13);
+    const auto Second = LoadTarget(18);
+    const auto Call = TheVersion == Version::V0 || TheVersion == Version::V1
+                          ? encode(Opcode::CALL_REG, 0, 0, 0, 2)
+                      : TheVersion == Version::V2
+                          ? encode(Opcode::CALL_REG, 0, 2)
+                          : encode(Opcode::CALL_REG, 2);
+    SBFProgram Program =
+        checkedProgram(TheVersion, {encode(Opcode::MOV64_IMM, 6, 0, 0, 17),
+                                    encode(Opcode::MOV64_REG, 7, 10),
+                                    First[0],
+                                    First[1],
+                                    Call,
+                                    encode(Opcode::ADD64_REG, 0, 6),
+                                    encode(Opcode::MOV64_REG, 8, 10),
+                                    encode(Opcode::SUB64_REG, 8, 7),
+                                    encode(Opcode::ADD64_REG, 0, 8),
+                                    Second[0],
+                                    Second[1],
+                                    Call,
+                                    encode(Opcode::EXIT),
+                                    encode(Opcode::MOV64_IMM, 6, 0, 0, 31),
+                                    Second[0],
+                                    Second[1],
+                                    Call,
+                                    encode(Opcode::EXIT),
+                                    encode(Opcode::MOV64_IMM, 6, 0, 0, 99),
+                                    encode(Opcode::ADD64_IMM, 0, 0, 0, 5),
+                                    encode(Opcode::EXIT)});
+    // Two different callees, three return PCs, and a nested frame all traverse
+    // the shared table. The caller observes restored r6-r9 and frame pointer.
+    auto Oracle = executeRaw(Program);
+    ASSERT_TRUE(static_cast<bool>(Oracle))
+        << llvm::toString(Oracle.takeError());
+    ASSERT_EQ(Oracle->Status, ExecutionStatus::Returned);
+    EXPECT_EQ(Oracle->ReturnValue, 27);
+    expectDifferential(Program);
+
+    Program.Config.MaxCallDepth = 2;
+    expectDifferential(Program);
+  }
+}
+
+TEST(SBFLLVMDifferential,
      MatchesStaticCallDispatchAndContinuationFaultOrdering) {
   const auto Load = encodeLDDW(0, 0);
   SBFProgram Continuation =

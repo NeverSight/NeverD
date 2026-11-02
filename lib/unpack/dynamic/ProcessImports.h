@@ -7,7 +7,7 @@
 #ifndef NEVERD_UNPACK_DYNAMIC_PROCESSIMPORTS_H
 #define NEVERD_UNPACK_DYNAMIC_PROCESSIMPORTS_H
 
-#include "../arch/X64Imports.h"
+#include "../arch/x86_64/X64Imports.h"
 #include "../core/Capture.h"
 
 #include "neverd/emulation/ProcessObserver.h"

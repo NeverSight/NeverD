@@ -18,10 +18,13 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
+#include "neverd/ir/med/X86/X87ControlWord.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -100,6 +103,11 @@ void MedLLVMEmitter::ensureDefPhiIndex() const {
         if (!Inserted)
           It->second = nullptr;
       }
+      // A bounded REP's second address is an actual SSA definition too. Only
+      // index the address result this owner can prove, not its count/flags.
+      for (const MedVar &Output : Op.IntrinsicOutputs)
+        if (x86RepConstantAddressOutput(Op, Output, TargetArch))
+          DefIndex.try_emplace(medVarDefKey(Output), &Op);
     }
     for (const PhiNode &P : Blk.Phis) {
       PhiBlocks.try_emplace(&P, &Blk);
@@ -607,7 +615,11 @@ bool MedLLVMEmitter::addressFragmentCanStayInLocalFrameSlot(
         continue;
       }
       uint16_t AccessSize = Op.Output.Size;
-      if (*AddressInput == 3)
+      if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 2 &&
+          Op.Inputs[0].isConst() &&
+          isX86AtomicIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
+        AccessSize = Op.Inputs[2].Size;
+      else if (*AddressInput == 3)
         AccessSize = 16;
       else if (*AddressInput == 2 && Op.NumInputs > 3 && Op.Inputs[3].isConst())
         AccessSize = static_cast<uint16_t>(Op.Inputs[3].ConstVal);
@@ -691,6 +703,11 @@ MedLLVMEmitter::getPhiIncomingConstant(const MedVar &V, uint16_t OutputSize,
 llvm::Value *MedLLVMEmitter::getPhiIncomingValue(const MedVar &V,
                                                  uint16_t OutputSize,
                                                  llvm::IRBuilder<> &Builder) {
+  // Every incoming image address uses the same runtime coordinate model as
+  // ordinary operands. The mirror mode's raw-VA PHI convention is not valid
+  // for a single external original-image span.
+  if (usesOriginalImageStorage())
+    return getVar(V, Builder);
   // A PHI feeding another PHI is already a relocation-aware runtime value:
   // its predecessor copies materialized every exact code/data arm before
   // storing the selected value in the source PHI's alloca.  Re-proving the
@@ -914,10 +931,12 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   // occurrence values; whole-function variable roles are not SSA evidence.
   if (CurMedFunc && CurMedFunc->SkippedSSA && V.isConst())
     return rawIntegerConstant(*Ctx, sizeToType(V.Size), V.ConstVal);
-  // Any fixed value is as good as another, but every read of one agrees.
-  if (V.Kind == MedVar::Unspecified)
-    return Builder.CreateFreeze(llvm::PoisonValue::get(
-        llvm::Type::getIntNTy(*Ctx, std::max<unsigned>(V.Size, 1) * 8)));
+  if (V.Kind == MedVar::Unspecified) {
+    auto *Type = llvm::Type::getIntNTy(*Ctx, std::max<unsigned>(V.Size, 1) * 8);
+    if (PreserveUnknownSourceValues)
+      return llvm_source_unknown::create(Builder, Type);
+    return Builder.CreateFreeze(llvm::PoisonValue::get(Type));
+  }
   if (V.Kind == MedVar::SEHExceptionCode) {
     // The native SEH lowering stores the handler's catch pad code here.
     // Without it no edge reaches the handler, so this read is unreachable.
@@ -1059,7 +1078,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       }
 
       if (V.Provenance == ConstantAddressProvenance::Address && Img &&
-          Img->isCodeAddress(V.ConstVal)) {
+          !usesOriginalImageStorage() && Img->isCodeAddress(V.ConstVal)) {
         // A role-neutral architectural PC is also used as the numeric base of
         // ARM switch/literal expressions.  Eagerly turning every such COPY
         // into blockaddress changes arithmetic semantics and can leave an
@@ -1075,7 +1094,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       // tail object in an adjacent .rodata segment; eagerly materializing only
       // that tail would mix it with the raw RELRO head nodes in a PHI/SELECT.
       if (V.Provenance == ConstantAddressProvenance::Address &&
-          addrInCodePtrMirrorRun(V.ConstVal))
+          !usesOriginalImageStorage() && addrInCodePtrMirrorRun(V.ConstVal))
         return rawConstant();
 
       uint64_t Address = 0;
@@ -1452,7 +1471,19 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
   auto *Ty = sizeToType(V.Size);
   auto *Alloca = AllocBuilder.CreateAlloca(Ty, nullptr, V.display());
-  AllocBuilder.CreateStore(llvm::ConstantInt::get(Ty, 0), Alloca);
+  // The x87 control word the function entered with is still the unit's until
+  // the function writes one: source output reads it back, as HighC does,
+  // rather than leaving it unavailable.  Native output keeps its own entry
+  // contract.
+  llvm::Value *Initial = nullptr;
+  if (!PreserveUnknownSourceValues)
+    Initial = llvm::ConstantInt::get(Ty, 0);
+  else if (isX87ControlWord(TargetArch, V))
+    Initial = emitX87ControlRead(AllocBuilder);
+  else
+    Initial = llvm_source_unknown::createEntrySeed(
+        AllocBuilder, llvm::cast<llvm::IntegerType>(Ty));
+  AllocBuilder.CreateStore(Initial, Alloca);
   VarAllocs[Key] = Alloca;
   return Builder.CreateLoad(Ty, Alloca, V.display() + "_v");
 }

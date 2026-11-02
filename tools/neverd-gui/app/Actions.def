@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Every workbench command: identifier, menu text, default shortcut, icon and
+/// Every workbench command: identifier, menu text, default shortcuts, icon and
 /// status tip.  Shortcuts are IDA's defaults, so existing muscle memory
 /// carries over: IdaActions.def pairs each command with IDA's.  Menus.def and
 /// Toolbars.def place the commands; MainWindow implements them.
@@ -17,6 +17,7 @@
 // NEVERD_VIEW_ACTION(Id, Text, Shortcut, Icon, Tip): shortcut active only while
 // an analysis view has the keyboard focus, so single keys such as N or G keep
 // typing into text fields.
+// Multiple shortcuts use QKeySequence's list format, separated by "; ".
 #ifndef NEVERD_ACTION
 #error "Define NEVERD_ACTION before including Actions.def"
 #endif
@@ -24,6 +25,69 @@
 #define NEVERD_VIEW_ACTION(Id, Text, Shortcut, Icon, Tip)                      \
   NEVERD_ACTION(Id, Text, Shortcut, Icon, Tip)
 #endif
+
+// Interactive patch commands. Second keys belong only to PatchMenu.def.
+NEVERD_VIEW_ACTION(EditPatchMenu, QT_TRANSLATE_NOOP("Actions", "Patch"), "J",
+                   "patch", QT_TRANSLATE_NOOP("Actions", "Open the patch menu"))
+NEVERD_ACTION(EditPatchNop, QT_TRANSLATE_NOOP("Actions", "NOP instruction"), "",
+              "patch_nop",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Replace the current instruction with NOPs"))
+NEVERD_ACTION(EditPatchAssemble, QT_TRANSLATE_NOOP("Actions", "Assemble…"), "",
+              "patch_assemble",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Edit an instruction with a live byte preview"))
+NEVERD_ACTION(EditPatchBytes, QT_TRANSLATE_NOOP("Actions", "Change bytes…"), "",
+              "patch",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Edit the bytes at the current address"))
+NEVERD_ACTION(EditPatchFillNops,
+              QT_TRANSLATE_NOOP("Actions", "Fill selection with NOPs"), "",
+              "patch_nop",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Fill a whole instruction range with NOPs"))
+NEVERD_ACTION(EditPatchAlwaysBranch,
+              QT_TRANSLATE_NOOP("Actions", "Always branch"), "", "patch",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Take the conditional branch unconditionally"))
+NEVERD_ACTION(EditPatchNeverBranch,
+              QT_TRANSLATE_NOOP("Actions", "Never branch"), "", "patch_nop",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Replace the conditional branch with NOPs"))
+NEVERD_ACTION(EditPatchInvertBranch,
+              QT_TRANSLATE_NOOP("Actions", "Invert condition"), "", "patch",
+              QT_TRANSLATE_NOOP("Actions", "Reverse the conditional branch"))
+NEVERD_ACTION(EditPatchSkipCall, QT_TRANSLATE_NOOP("Actions", "Skip call"), "",
+              "patch_nop",
+              QT_TRANSLATE_NOOP("Actions", "Replace the call with NOPs"))
+NEVERD_ACTION(
+    EditPatchSkipCallValue,
+    QT_TRANSLATE_NOOP("Actions", "Skip call and return value…"), "", "patch",
+    QT_TRANSLATE_NOOP("Actions",
+                      "Replace the call with a return-register assignment"))
+NEVERD_ACTION(EditPatchConstant,
+              QT_TRANSLATE_NOOP("Actions", "Change immediate…"), "", "patch",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Change a uniquely encoded immediate operand"))
+NEVERD_ACTION(
+    EditPatchRewriteFunction,
+    QT_TRANSLATE_NOOP("Actions", "Rewrite function in C…"), "",
+    "patch_assemble",
+    QT_TRANSLATE_NOOP("Actions",
+                      "Compile a replacement function into a new binary"))
+NEVERD_ACTION(EditPatchRevert,
+              QT_TRANSLATE_NOOP("Actions", "Restore original bytes"), "",
+              "patch_revert",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Restore the input bytes for this patch"))
+NEVERD_ACTION(EditPatchedBytes, QT_TRANSLATE_NOOP("Actions", "Patched bytes"),
+              "Ctrl+Alt+P", "patched_bytes",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Inspect and selectively revert byte patches"))
+NEVERD_ACTION(FileProducePatchedBinary,
+              QT_TRANSLATE_NOOP("Actions", "Patched binary…"), "", "patch",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Replay all byte patches into a new binary"))
 
 // File.
 NEVERD_ACTION(FileOpen, QT_TRANSLATE_NOOP("Actions", "&Open..."), "", "open",
@@ -33,6 +97,13 @@ NEVERD_ACTION(
     QT_TRANSLATE_NOOP("Actions", "Offline package &review..."), "", "open",
     QT_TRANSLATE_NOOP("Actions",
                       "Inspect local package evidence and analyst reviews"))
+NEVERD_ACTION(FileCompare, QT_TRANSLATE_NOOP("Actions", "Compare &binaries…"),
+              "", "compare",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Compare two binaries, inspect changes and "
+                                "review function correspondence"))
+NEVERD_ACTION(FileLineage, QT_TRANSLATE_NOOP("Actions", "Version comparison &graph…"),
+              "", "compare", QT_TRANSLATE_NOOP("Actions", "Trace functions and inspect conflicting evidence across saved comparisons"))
 NEVERD_ACTION(FileReload,
               QT_TRANSLATE_NOOP("Actions", "&Reload the input file"), "",
               "refresh",
@@ -102,7 +173,8 @@ NEVERD_ACTION(EditRedo, QT_TRANSLATE_NOOP("Actions", "&Redo"), "Ctrl+Shift+Z",
 NEVERD_VIEW_ACTION(EditCopy, QT_TRANSLATE_NOOP("Actions", "&Copy"), "Ctrl+C",
                    "copy",
                    QT_TRANSLATE_NOOP("Actions",
-                                     "Copy the selection or current line"))
+                                     "Copy the selection or the highlighted "
+                                     "word"))
 NEVERD_VIEW_ACTION(EditCopyAddress,
                    QT_TRANSLATE_NOOP("Actions", "Copy &address"), "", "copy",
                    QT_TRANSLATE_NOOP("Actions", "Copy the current address"))
@@ -235,18 +307,25 @@ NEVERD_VIEW_ACTION(
     EditUndefine, QT_TRANSLATE_NOOP("Actions", "Undef&ine"), "U", "undefine",
     QT_TRANSLATE_NOOP("Actions",
                       "Turn the current item back into undefined bytes"))
-NEVERD_VIEW_ACTION(EditComment,
-                   QT_TRANSLATE_NOOP("Actions", "Enter &comment..."), ":",
-                   "comment",
-                   QT_TRANSLATE_NOOP("Actions", "Comment the current address"))
+// A semicolon key followed by the list separator, then the slash key.
 NEVERD_VIEW_ACTION(EditRepeatableComment,
-                   QT_TRANSLATE_NOOP("Actions", "Enter re&peatable comment..."),
-                   ";", "comment_repeatable",
+                   QT_TRANSLATE_NOOP("Actions", "Enter &comment..."),
+                   ";; /", "comment_repeatable",
                    QT_TRANSLATE_NOOP("Actions", "Comment the current address"))
 NEVERD_VIEW_ACTION(EditBookmark,
                    QT_TRANSLATE_NOOP("Actions", "Mar&k position..."), "Alt+M",
                    "bookmark",
                    QT_TRANSLATE_NOOP("Actions", "Bookmark the current address"))
+
+NEVERD_ACTION(EditAddAnalysisSection,
+              QT_TRANSLATE_NOOP("Actions", "Add analysis section..."), "",
+              "jump_segment",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Map new code or data into this analysis"))
+
+NEVERD_VIEW_ACTION(
+    EditExportData, QT_TRANSLATE_NOOP("Actions", "Export data..."), "Shift+E",
+    "save", QT_TRANSLATE_NOOP("Actions", "Copy or save the selected bytes"))
 
 // Jump.
 NEVERD_VIEW_ACTION(
@@ -379,12 +458,71 @@ NEVERD_VIEW_ACTION(
     QT_TRANSLATE_NOOP(
         "Actions", "Move to the next occurrence of the highlighted identifier"))
 NEVERD_VIEW_ACTION(
+    SearchLockHighlight, QT_TRANSLATE_NOOP("Actions", "Lock or &unlock"),
+    "Ctrl+Alt+0", "lock",
+    QT_TRANSLATE_NOOP("Actions", "Keep the highlighted word highlighted in "
+                                 "the first free color, or unlock it"))
+NEVERD_VIEW_ACTION(SearchLockHighlight1,
+                   QT_TRANSLATE_NOOP("Actions", "Color &1"), "Ctrl+Alt+1",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight2,
+                   QT_TRANSLATE_NOOP("Actions", "Color &2"), "Ctrl+Alt+2",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight3,
+                   QT_TRANSLATE_NOOP("Actions", "Color &3"), "Ctrl+Alt+3",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight4,
+                   QT_TRANSLATE_NOOP("Actions", "Color &4"), "Ctrl+Alt+4",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight5,
+                   QT_TRANSLATE_NOOP("Actions", "Color &5"), "Ctrl+Alt+5",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight6,
+                   QT_TRANSLATE_NOOP("Actions", "Color &6"), "Ctrl+Alt+6",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight7,
+                   QT_TRANSLATE_NOOP("Actions", "Color &7"), "Ctrl+Alt+7",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight8,
+                   QT_TRANSLATE_NOOP("Actions", "Color &8"), "Ctrl+Alt+8",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(
     SearchInView, QT_TRANSLATE_NOOP("Actions", "&Find in view..."), "Ctrl+F",
     "search_text",
     QT_TRANSLATE_NOOP("Actions",
                       "Find text among the loaded lines of the current view"))
 
 // View.
+NEVERD_VIEW_ACTION(
+    ViewFocusMode, QT_TRANSLATE_NOOP("Actions", "&Focus mode"), "F, F, F",
+    "window_list",
+    QT_TRANSLATE_NOOP(
+        "Actions",
+        "Toggle a floating workspace with disassembly, pseudocode and output"))
 NEVERD_ACTION(ViewQuickView, QT_TRANSLATE_NOOP("Actions", "&Quick view..."),
               "Ctrl+1", "window_list",
               QT_TRANSLATE_NOOP("Actions", "Choose a view to open"))
@@ -449,6 +587,11 @@ NEVERD_ACTION(ViewTypeLibraries,
 NEVERD_ACTION(ViewSegments, QT_TRANSLATE_NOOP("Actions", "S&egments"),
               "Shift+F7", "segments",
               QT_TRANSLATE_NOOP("Actions", "Show the segments window"))
+NEVERD_ACTION(
+    ViewUnwindInfo, QT_TRANSLATE_NOOP("Actions", "Unwind information…"), "",
+    "view_details",
+    QT_TRANSLATE_NOOP("Actions",
+                      "Inspect unwind metadata at the selected instruction"))
 NEVERD_ACTION(ViewCrossReferences,
               QT_TRANSLATE_NOOP("Actions", "&Cross references"), "", "xrefs",
               QT_TRANSLATE_NOOP("Actions",
@@ -482,9 +625,10 @@ NEVERD_ACTION(ViewConnections, QT_TRANSLATE_NOOP("Actions", "MCP c&onnections"),
               "", "mcp",
               QT_TRANSLATE_NOOP("Actions",
                                 "Manage MCP connections and session sharing"))
-NEVERD_ACTION(ViewExtensions, QT_TRANSLATE_NOOP("Actions", "Ex&tensions"), "",
-              "extensions",
-              QT_TRANSLATE_NOOP("Actions", "Manage declarative extensions"))
+NEVERD_ACTION(ViewExtensions, QT_TRANSLATE_NOOP("Actions", "Analysis queries"),
+              "", "search_text",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Run built-in or imported analysis queries"))
 NEVERD_ACTION(ViewUndoHistory, QT_TRANSLATE_NOOP("Actions", "&Undo history"),
               "", "undo",
               QT_TRANSLATE_NOOP("Actions",
@@ -605,6 +749,10 @@ NEVERD_ACTION(WindowsFocusCommand,
                                 "Move the keyboard focus to the command line"))
 
 // Help.
+NEVERD_ACTION(HelpX87Capabilities,
+              QT_TRANSLATE_NOOP("Actions", "x87 &support…"), "", "help",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Inspect x87 support and requirements"))
 NEVERD_ACTION(HelpContents, QT_TRANSLATE_NOOP("Actions", "&Help"), "F1", "help",
               QT_TRANSLATE_NOOP("Actions", "Open the NeverD documentation"))
 NEVERD_ACTION(HelpAbout, QT_TRANSLATE_NOOP("Actions", "&About NeverD"), "",

@@ -16,7 +16,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "unittests/emulation/fixtures"
 DEFINITION = FIXTURES / "AArch64AtomicOracle.def"
-CASES = FIXTURES.parent / "AArch64AtomicCases.def"
+CASES = FIXTURES.parent / "aarch64" / "AArch64AtomicCases.def"
 
 
 def contract():

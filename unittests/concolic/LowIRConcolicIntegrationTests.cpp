@@ -17,8 +17,8 @@
 #include "neverd/concolic/LowIRConcolic.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryLoading.h"
 #include "neverd/symbolic/SymConcrete.h"
 

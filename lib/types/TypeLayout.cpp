@@ -37,6 +37,7 @@ llvm::Expected<RecordDef> layOutRecord(const TypeLibrary &Library,
   uint64_t End = 0;    // In bits: where the next member may begin.
   uint64_t Widest = 0; // In bits: a union's widest alternative.
   uint32_t Alignment = 1;
+  bool RequiredAlignment = Draft.Alignment != 0;
   // Microsoft's run of bitfields in one storage unit.
   struct Run {
     bool Active = false;
@@ -68,10 +69,15 @@ llvm::Expected<RecordDef> layOutRecord(const TypeLibrary &Library,
                      " is aligned, which local types do not lay out");
     // A type's declared alignment survives the pack too, as Microsoft's
     // compiler lays it out.
-    const uint32_t Aligned = std::max(
-        {packed(Natural), Field.Alignment,
-         Rules == LayoutRules::MSVC ? Library.requiredAlignOf(*Field.Type)
-                                    : 0u});
+    const uint32_t Required =
+        Rules == LayoutRules::MSVC ? Library.requiredAlignOf(*Field.Type) : 0u;
+    const uint32_t Aligned =
+        std::max({packed(Natural), Field.Alignment, Required});
+    // Microsoft propagates required alignment through containing records,
+    // even when their natural alignment already equals it. A later packed
+    // parent must not lower that inherited requirement.
+    if (Rules == LayoutRules::MSVC && (Field.Alignment || Required))
+      RequiredAlignment = true;
 
     if (Field.Bitfield) {
       const uint64_t Unit = *Size * 8;
@@ -159,9 +165,9 @@ llvm::Expected<RecordDef> layOutRecord(const TypeLibrary &Library,
     const uint32_t Least = Draft.Cpp ? 1 : 4;
     Record.Size = Draft.Alignment >= Least ? Alignment : Least;
   }
-  // The record keeps an alignment its members' types do not give it, from
-  // its declaration or a member's, as the library's alignOf would not find.
-  if (Alignment > Library.alignOf(Record))
+  // Keep a required alignment even when the members already imply it: a
+  // containing record's pack must distinguish it from natural alignment.
+  if (RequiredAlignment || Alignment > Library.alignOf(Record))
     Record.Alignment = Alignment;
   return Record;
 }

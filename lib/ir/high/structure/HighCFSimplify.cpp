@@ -1159,15 +1159,23 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
   // A tail that cannot raise an exception runs the same in any protection
   // made only of __except clauses: no handler can catch it, and none runs
   // on the way out of the try the way a __finally would.
-  std::set<TryContext::value_type> ExceptOnly;
+  // Nested SEH tries may share a range, and so a context entry: it is
+  // except-only when every try with that range is.
+  std::set<TryContext::value_type> ExceptOnly, WithFinally;
   walkStmts(Body, [&](const HighStmt &S) {
-    if (S.Kind == StmtKind::SEHTry && !S.EHClauses.empty() &&
+    if (S.Kind != StmtKind::SEHTry)
+      return;
+    if (!S.EHClauses.empty() &&
         std::all_of(S.EHClauses.begin(), S.EHClauses.end(),
                     [](const HighEHClause &Clause) {
                       return Clause.Kind == HighEHClauseKind::SEHExcept;
                     }))
       ExceptOnly.emplace(S.Kind, S.EHRange.Begin, S.EHRange.End);
+    else
+      WithFinally.emplace(S.Kind, S.EHRange.Begin, S.EHRange.End);
   });
+  for (const auto &Key : WithFinally)
+    ExceptOnly.erase(Key);
   auto SameProtection = [&](const TryContext &A, const TryContext &B,
                             const std::vector<HighStmt> &Tail) {
     if (A == B)
@@ -4788,10 +4796,19 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
     size_t Index = 0;
     /// The innermost try body or handler holding the site.
     const void *Try = nullptr;
-    // Position in a pre-order walk of the tree: program order.
-    size_t Order = 0;
-    // Every (list, index) enclosing the site, outermost first.
-    std::vector<std::pair<const std::vector<HighStmt> *, size_t>> Chain;
+    // Index of the innermost enclosing statement in this round's parents.
+    std::optional<size_t> Parent;
+  };
+  struct ParentSite {
+    const std::vector<HighStmt> *List;
+    size_t Index;
+    std::optional<size_t> Parent;
+  };
+  struct ParentScope {
+    const std::vector<HighStmt> *List;
+    size_t Index;
+    ParentScope *Parent;
+    std::optional<size_t> Retained;
   };
   // A no-op that a jump still enters falls through like any statement.
   auto prevNonNop = [&](const std::vector<HighStmt> &L,
@@ -4852,44 +4869,66 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
        ++Applied) {
     std::unordered_map<va_t, Site> Labels;
     std::vector<std::pair<Site, va_t>> Gotos;
-    std::vector<std::pair<const std::vector<HighStmt> *, size_t>> Chain;
+    // Retain ancestors only when a label or goto needs them. Sites share
+    // these paths through indices, which survive table growth. Rebuild the
+    // table after every splice, before reusing any site.
+    std::vector<ParentSite> Parents;
+    auto RetainParent = [&](auto &&Self,
+                            ParentScope *Scope) -> std::optional<size_t> {
+      if (!Scope)
+        return std::nullopt;
+      if (!Scope->Retained) {
+        const auto Parent = Self(Self, Scope->Parent);
+        Scope->Retained = Parents.size();
+        Parents.push_back({Scope->List, Scope->Index, Parent});
+      }
+      return Scope->Retained;
+    };
     // Statements starting each address group: a jump can name an address
     // only when exactly one statement starts it.
     std::unordered_map<va_t, unsigned> Starts;
-    size_t Order = 0;
-    std::function<void(std::vector<HighStmt> &, const void *)> Collect =
-        [&](std::vector<HighStmt> &L, const void *Try) {
+    std::function<void(std::vector<HighStmt> &, const void *, ParentScope *)>
+        Collect = [&](std::vector<HighStmt> &L, const void *Try,
+                      ParentScope *Parent) {
           for (size_t I = 0; I < L.size(); ++I) {
             HighStmt &S = L[I];
-            ++Order;
             if (S.Addr != 0 && S.Addr != InvalidVA &&
                 (I == 0 || L[I - 1].Addr != S.Addr))
               ++Starts[S.Addr];
             if (labelStart(L, I) && S.Kind != StmtKind::Nop)
-              Labels.emplace(S.Addr, Site{&L, I, Try, Order, Chain});
+              Labels.emplace(
+                  S.Addr, Site{&L, I, Try, RetainParent(RetainParent, Parent)});
             if (S.Kind == StmtKind::Goto && usesOf(S.GotoTarget) == 1)
-              Gotos.push_back({Site{&L, I, Try, Order, Chain}, S.GotoTarget});
-            Chain.push_back({&L, I});
+              Gotos.push_back(
+                  {Site{&L, I, Try, RetainParent(RetainParent, Parent)},
+                   S.GotoTarget});
+            ParentScope Scope{&L, I, Parent, std::nullopt};
+            auto CollectChild = [&](std::vector<HighStmt> &Child,
+                                    const void *ChildTry) {
+              if (!Child.empty())
+                Collect(Child, ChildTry, &Scope);
+            };
             const bool IsTry = S.Kind == StmtKind::SEHTry ||
                                S.Kind == StmtKind::CxxTry ||
                                S.Kind == StmtKind::ItaniumTry;
-            Collect(S.Body, IsTry ? static_cast<const void *>(&S) : Try);
-            Collect(S.ElseBody, Try);
+            CollectChild(S.Body, IsTry ? static_cast<const void *>(&S) : Try);
+            CollectChild(S.ElseBody, Try);
             for (auto &C : S.Cases)
-              Collect(C.Body, Try);
-            Collect(S.DefaultBody, Try);
+              CollectChild(C.Body, Try);
+            CollectChild(S.DefaultBody, Try);
             for (auto &ClauseBody : S.EHClauseBodies)
-              Collect(ClauseBody, &ClauseBody);
-            Chain.pop_back();
+              CollectChild(ClauseBody, &ClauseBody);
           }
         };
-    Collect(Body, nullptr);
+    Collect(Body, nullptr, nullptr);
     // What runs after the list holding \p At falls off its end: the next
     // statement after the if/else, block or switch around it, when exactly
     // one statement starts that address.
     auto FollowOf = [&](const Site &At) -> va_t {
-      for (size_t D = At.Chain.size(); D-- > 0;) {
-        const auto &[ParentList, ParentIndex] = At.Chain[D];
+      for (auto P = At.Parent; P; P = Parents[*P].Parent) {
+        const auto &Ancestor = Parents[*P];
+        const auto *ParentList = Ancestor.List;
+        const size_t ParentIndex = Ancestor.Index;
         const HighStmt &Parent = (*ParentList)[ParentIndex];
         if (Parent.Kind != StmtKind::If && Parent.Kind != StmtKind::IfElse &&
             Parent.Kind != StmtKind::Block && Parent.Kind != StmtKind::Switch)
@@ -4957,9 +4996,11 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
         Bad = false;
       }
       // The goto must not sit inside the block it would receive.
-      for (const auto &[List, Index] : GotoSite.Chain)
-        if (List == &LL && Index >= K && Index <= M)
+      for (auto P = GotoSite.Parent; P; P = Parents[*P].Parent) {
+        const auto &Ancestor = Parents[*P];
+        if (Ancestor.List == &LL && Ancestor.Index >= K && Ancestor.Index <= M)
           Bad = true;
+      }
       if (GotoSite.List == &LL && GotoSite.Index >= K && GotoSite.Index <= M)
         Bad = true;
       std::vector<HighStmt> Moved(LL.begin() + K, LL.begin() + M + 1);

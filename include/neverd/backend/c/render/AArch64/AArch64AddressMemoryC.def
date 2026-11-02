@@ -1,0 +1,87 @@
+//===- AArch64AddressMemoryC.def - Original memory C syntax -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Shared GNU C syntax retains one faulting memory instruction. Inputs are
+/// evaluated before the output; memory cannot move across the operation.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_ADDRESS_MEMORY_C_TEXT
+#error "Define NEVERD_A64_ADDRESS_MEMORY_C_TEXT before including this file"
+#endif
+
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCValue, "__memory_value")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCBase, "__memory_base")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCIndex, "__memory_index")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCBaseInput, "__memory_base_input")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCIndexInput,
+                                 "__memory_index_input")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCDataCast, "((uint{0}_t)({1}))")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressLoadCPointerCast,
+                                 "({0})(uintptr_t)({1})")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressMemoryLoadCAsm, ".inst %c3")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressMemoryStoreCAsm, ".inst %c2")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressMemorySPLoadCAsm,
+    "mov x14, sp\\n\\tmov sp, x16\\n\\t.inst %c3\\n\\tmov sp, x14")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressMemorySPStoreCAsm,
+    "mov x14, sp\\n\\tmov sp, x16\\n\\t.inst %c2\\n\\tmov sp, x14")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressMemoryCClobbers, "\"memory\"")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressMemorySPCClobbers,
+                                 "\"x14\", \"memory\"")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressLoadCExpression,
+    "({{ const uint64_t {6} = (uint64_t)({3}); "
+    "const uint64_t {7} = (uint64_t)({4}); "
+    "register uint64_t {0} __asm__(\"x17\"); "
+    "register uint64_t {1} __asm__(\"x16\") = {6}; "
+    "register uint64_t {2} __asm__(\"x15\") = {7}; "
+    "__asm__ volatile(\"{8}\" : \"=&r\"({0}) "
+    ": \"r\"({1}), \"r\"({2}), \"i\"({5}) : {9}); {0}; })")
+
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(kAddressStoreCDataInput, "__memory_data_input")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressStoreCExpression, "({{ const uint64_t {6} = (uint64_t)({3}); "
+                              "const uint64_t {7} = (uint64_t)({4}); "
+                              "const uint64_t {8} = (uint64_t)({9}); "
+                              "register uint64_t {0} __asm__(\"x17\") = {8}; "
+                              "register uint64_t {1} __asm__(\"x16\") = {6}; "
+                              "register uint64_t {2} __asm__(\"x15\") = {7}; "
+                              "__asm__ volatile(\"{10}\" : "
+                              ": \"r\"({1}), \"r\"({2}), \"i\"({5}), "
+                              "\"r\"({0}) : {11}); (void)0; })")
+
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressVectorToBitsC,
+    "((union {{ unsigned __int128 Bits; int64_t Vector "
+    "__attribute__((vector_size(16))); }){{ .Vector = ({0}) }).Bits")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressVectorFromBitsC,
+    "((union {{ unsigned __int128 Bits; int64_t Vector "
+    "__attribute__((vector_size(16))); }){{ .Bits = ({0}) }).Vector")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressVectorLoadCExpression,
+    "({{ const uint64_t {6} = (uint64_t)({3}); "
+    "const uint64_t {7} = (uint64_t)({4}); "
+    "register int64_t __attribute__((vector_size(16))) {0} __asm__(\"v17\"); "
+    "register uint64_t {1} __asm__(\"x16\") = {6}; "
+    "register uint64_t {2} __asm__(\"x15\") = {7}; "
+    "__asm__ volatile(\"{8}\" : \"=&w\"({0}) "
+    ": \"r\"({1}), \"r\"({2}), \"i\"({5}) : {9}); {10}; })")
+NEVERD_A64_ADDRESS_MEMORY_C_TEXT(
+    kAddressVectorStoreCExpression,
+    "({{ const uint64_t {6} = (uint64_t)({3}); "
+    "const uint64_t {7} = (uint64_t)({4}); "
+    "const unsigned __int128 {8} = (unsigned __int128)({9}); "
+    "register int64_t __attribute__((vector_size(16))) {0} __asm__(\"v17\") = "
+    "{10}; "
+    "register uint64_t {1} __asm__(\"x16\") = {6}; "
+    "register uint64_t {2} __asm__(\"x15\") = {7}; "
+    "__asm__ volatile(\"{11}\" : "
+    ": \"r\"({1}), \"r\"({2}), \"i\"({5}), \"w\"({0}) : {12}); (void)0; "
+    "})")
+
+#undef NEVERD_A64_ADDRESS_MEMORY_C_TEXT

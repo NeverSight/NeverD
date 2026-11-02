@@ -318,7 +318,8 @@ bool authenticatedSourceAnchorExemptionMatches(
       Occurrence.DereferenceInstructionAddr == InvalidVA ||
       Occurrence.DereferenceOpSeq < 0 ||
       (Occurrence.DereferenceOpcode != NdOp::LOAD &&
-       Occurrence.DereferenceOpcode != NdOp::STORE) ||
+       Occurrence.DereferenceOpcode != NdOp::STORE &&
+       Occurrence.DereferenceOpcode != NdOp::INTRINSIC) ||
       Occurrence.DereferenceAccessSize == 0)
     return false;
   const RelocatedInstructionAddressArithmeticStep &Final =

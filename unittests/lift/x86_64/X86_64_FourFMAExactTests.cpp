@@ -4,7 +4,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
@@ -86,6 +86,88 @@ void expectMalformedRejected(const std::vector<uint8_t> &Bytes) {
   std::vector<LowOp> Ops;
   EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
   EXPECT_TRUE(Ops.empty());
+}
+
+TEST(X86FourFMAExact, ScalarSourcesObserveOnlyTheirLowDwords) {
+  const auto Ops = lift({0x62, 0xf2, 0x5f, 0x0a, 0x9b, 0x08});
+  auto Image = image(floats({2, 3, 4, 5}, 4));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0x4000);
+  E.setRegister(mapCapstoneReg(X86_REG_K2).Offset, 1);
+  auto Old = floats({7, 11, 13, 17}, 4);
+  E.setRegisterBytes(mapCapstoneReg(X86_REG_XMM1).Offset, Old);
+  for (unsigned I = 0; I < 4; ++I)
+    E.setRegisterBytes(
+        mapCapstoneReg(static_cast<x86_reg>(X86_REG_XMM4 + I)).Offset,
+        floats({float(I + 1)}, 1));
+  ASSERT_EQ(E.run(Ops), Ops.size());
+  auto Result = E.getRegisterBytes(mapCapstoneReg(X86_REG_XMM1).Offset);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(getf(*Result, 0), 47.0f);
+  EXPECT_TRUE(std::equal(Old.begin() + 4, Old.end(), Result->begin() + 4));
+}
+
+TEST(X86FourFMAExact, MissingPackedSourceCannotBecomeZeroWhilePacking) {
+  const auto Ops = lift({0x62, 0xf2, 0x5f, 0x4a, 0x9a, 0x08});
+  auto Image = image(floats({2, 3, 4, 5}, 4));
+  for (unsigned Missing = 0; Missing < 4; ++Missing) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0x4000);
+    E.setRegister(mapCapstoneReg(X86_REG_K2).Offset, 1);
+    auto Old = floats({7}, 16);
+    E.setRegisterBytes(mapCapstoneReg(X86_REG_ZMM1).Offset, Old);
+    for (unsigned I = 0; I < 4; ++I)
+      if (I != Missing)
+        E.setRegisterBytes(
+            mapCapstoneReg(static_cast<x86_reg>(X86_REG_ZMM4 + I)).Offset,
+            floats({float(I + 1)}, 16));
+    EXPECT_LT(E.run(Ops), Ops.size());
+    EXPECT_EQ(E.getRegisterBytes(mapCapstoneReg(X86_REG_ZMM1).Offset), Old);
+  }
+}
+
+TEST(X86FourFMAExact, EveryOverlappingDestinationReadsTheOriginalSourceBlock) {
+  for (bool Scalar : {false, true})
+    for (bool Negative : {false, true})
+      for (unsigned Alias = 0; Alias < 4; ++Alias) {
+        // Encoding source 7 still selects the aligned register block 4..7.
+        const auto Ops =
+            lift({0x62, 0xf2, 0x47, uint8_t(Scalar ? 0x08 : 0x48),
+                  uint8_t((Negative ? 0xaa : 0x9a) + unsigned(Scalar)),
+                  uint8_t((4 + Alias) << 3)});
+        auto Image = image(floats({2, 3, 4, 5}, 4));
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mapCapstoneReg(X86_REG_RAX).Offset, 0x4000);
+        std::array<std::vector<uint8_t>, 4> Before;
+        for (unsigned I = 0; I < 4; ++I) {
+          Before[I].resize(64);
+          for (unsigned Lane = 0; Lane < 16; ++Lane) {
+            const float Value = float(I + 1) + float(Lane) / 32;
+            std::memcpy(Before[I].data() + Lane * 4, &Value, 4);
+          }
+          E.setRegisterBytes(
+              mapCapstoneReg(static_cast<x86_reg>(X86_REG_ZMM4 + I)).Offset,
+              Before[I]);
+        }
+        auto Expected = Before[Alias];
+        for (unsigned Lane = 0; Lane < (Scalar ? 1u : 16u); ++Lane) {
+          float Value = getf(Before[Alias], Lane);
+          for (unsigned I = 0; I < 4; ++I)
+            Value = std::fma((Negative ? -1 : 1) * getf(Before[I], Lane),
+                             float(I + 2), Value);
+          std::memcpy(Expected.data() + Lane * 4, &Value, 4);
+        }
+        if (Scalar)
+          std::fill(Expected.begin() + 16, Expected.end(), 0);
+        ASSERT_EQ(E.run(Ops), Ops.size());
+        EXPECT_EQ(E.getRegisterBytes(
+                      mapCapstoneReg(static_cast<x86_reg>(X86_REG_ZMM4 + Alias))
+                          .Offset),
+                  Expected);
+      }
 }
 
 TEST(X86FourFMAExact, PackedPositiveAndHighGroupNegativeAreSequentiallyFused) {

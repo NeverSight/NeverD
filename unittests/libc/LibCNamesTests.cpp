@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "neverd/libc/LibCComplex.h"
 #include "neverd/libc/LibCExceptionRuntime.h"
 #include "neverd/libc/LibCFortify.h"
 #include "neverd/libc/LibCNames.h"
@@ -47,6 +48,70 @@ TEST(VarArgFixedCount, PrintfFamily3Fixed) {
   EXPECT_EQ(varArgFixedCount("snwprintf", LibCVariant::GNU), 3u);
   // C99 swprintf(buf, size, fmt, ...) has same shape as snprintf
   EXPECT_EQ(varArgFixedCount("swprintf", LibCVariant::GNU), 3u);
+}
+
+TEST(VarArgFixedCount, UCRTCommonConsumersKeepTheirVaListArgument) {
+  for (const auto *Routine :
+       {"__stdio_common_vfprintf", "__stdio_common_vfscanf",
+        "__stdio_common_vswscanf", "__stdio_common_vfprintf_p",
+        "__stdio_common_vsnprintf_s", "__conio_common_vcprintf",
+        "__conio_common_vcwprintf", "__conio_common_vcprintf_s",
+        "__conio_common_vcprintf_p", "__conio_common_vcscanf_s"}) {
+    for (const auto *Prefix : {"", "_o_"}) {
+      const std::string Name = std::string(Prefix) + Routine;
+      EXPECT_EQ(varArgFixedCount(Name, LibCVariant::Windows), 0u) << Name;
+      EXPECT_TRUE(isVaListConsumer(Name)) << Name;
+    }
+  }
+  EXPECT_EQ(varArgFixedCount("printf", LibCVariant::Windows), 1u);
+}
+
+TEST(VarArgFixedCount, MicrosoftPrefixesKeepCapacityAndCountOnlyContracts) {
+  for (const auto Name : {"_snprintf", "_snwprintf", "_snscanf", "_snwscanf"}) {
+    EXPECT_EQ(varArgFixedCount(Name, LibCVariant::Windows), 3u) << Name;
+    EXPECT_EQ(varArgFixedParamKind(Name, 0, LibCVariant::Windows),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 1, LibCVariant::Windows),
+              VarArgFixedParamKind::Integer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 2, LibCVariant::Windows),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 3, LibCVariant::Windows),
+              VarArgFixedParamKind::Unknown);
+  }
+  for (const auto Name : {"_scprintf", "_scwprintf"}) {
+    EXPECT_EQ(varArgFixedCount(Name, LibCVariant::Windows), 1u) << Name;
+    EXPECT_EQ(varArgFixedParamKind(Name, 0, LibCVariant::Windows),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind(Name, 1, LibCVariant::Windows),
+              VarArgFixedParamKind::Unknown);
+  }
+}
+
+TEST(VarArgFixedCount, WindowsWideFormattersNeedTheirDeclarationContext) {
+  // The WDK has (buffer, format, ...), the ISO CRT (buffer, count, format,
+  // ...). PE alone cannot select either or forward to a guessed vswprintf.
+  EXPECT_EQ(varArgFixedCount("swprintf", LibCVariant::Windows), 0u);
+  EXPECT_EQ(varArgFixedParamKind("swprintf", 1, LibCVariant::Windows),
+            VarArgFixedParamKind::Unknown);
+  EXPECT_FALSE(vaListParameter("vswprintf", LibCVariant::Windows));
+  const LibCVariadicForward *Forward = libcVariadicForward("swprintf");
+  ASSERT_NE(Forward, nullptr);
+  EXPECT_FALSE(variadicIn(*Forward, LibCVariant::Windows));
+  EXPECT_TRUE(variadicIn(*Forward, LibCVariant::GNU));
+  EXPECT_EQ(varArgFixedCount("swprintf", LibCVariant::GNU), 3u);
+  EXPECT_EQ(vaListParameter("vswprintf", LibCVariant::GNU), 3u);
+}
+
+TEST(LibCArity, WindowsComplexRecordsNeedTheirFullABIType) {
+  for (const auto &Entry : kComplexArity) {
+    EXPECT_FALSE(libcArity(Entry.Name, LibCVariant::Windows)) << Entry.Name;
+    ASSERT_TRUE(libcArity(Entry.Name, LibCVariant::GNU)) << Entry.Name;
+    EXPECT_EQ(libcArity(Entry.Name, LibCVariant::GNU)->FpArgs,
+              Entry.Arity.FpArgs)
+        << Entry.Name;
+  }
+  ASSERT_TRUE(libcArity("hypot", LibCVariant::Windows));
+  EXPECT_EQ(libcArity("hypot", LibCVariant::Windows)->FpArgs, 2u);
 }
 
 // Fortified _FORTIFY_SOURCE variants: __<name>_chk prepend guard arguments
@@ -193,15 +258,15 @@ TEST(VarArgFixedCount, AllVaListVariantsReturnZero) {
 }
 
 TEST(VaListParameter, FollowsTheVariadicRoutinesFixedParameters) {
-  EXPECT_EQ(vaListParameter("vfprintf"), 2u);
-  EXPECT_EQ(vaListParameter("vwarn"), 1u);
-  EXPECT_EQ(vaListParameter("__vsnprintf_chk"), 5u);
-  EXPECT_EQ(vaListParameter("__isoc23_vfscanf"), 2u);
+  EXPECT_EQ(vaListParameter("vfprintf", LibCVariant::GNU), 2u);
+  EXPECT_EQ(vaListParameter("vwarn", LibCVariant::GNU), 1u);
+  EXPECT_EQ(vaListParameter("__vsnprintf_chk", LibCVariant::GNU), 5u);
+  EXPECT_EQ(vaListParameter("__isoc23_vfscanf", LibCVariant::GNU), 2u);
   // strerror_r's buffer, and a variadic routine's own parameters, are no
   // va_list.
-  EXPECT_FALSE(vaListParameter("strerror_r").has_value());
-  EXPECT_FALSE(vaListParameter("fprintf").has_value());
-  EXPECT_FALSE(vaListParameter("").has_value());
+  EXPECT_FALSE(vaListParameter("strerror_r", LibCVariant::GNU).has_value());
+  EXPECT_FALSE(vaListParameter("fprintf", LibCVariant::GNU).has_value());
+  EXPECT_FALSE(vaListParameter("", LibCVariant::GNU).has_value());
 }
 
 TEST(VarArgFixedCount, EmptyAndGarbage) {
@@ -675,6 +740,23 @@ TEST(LibCPrototype, WindowsRuntimeNamesStayInPE) {
   EXPECT_FALSE(libcArityForSymbol("terminate", LibCVariant::GNU).has_value());
 }
 
+TEST(LibCPrototype, WindowsDriverCRTUsesExactFixedParameters) {
+  for (const auto &[Name, Count] : {std::pair{"wcscat_s", 3u},
+                                    {"wcscpy_s", 3u},
+                                    {"wcsncat_s", 4u},
+                                    {"wcsncpy_s", 4u},
+                                    {"__C_specific_handler", 4u}}) {
+    const auto *Prototype = libcPrototype(Name, BinaryFormat::COFF);
+    ASSERT_NE(Prototype, nullptr) << Name;
+    EXPECT_EQ(Prototype->ParamCount, Count) << Name;
+    EXPECT_EQ(Prototype->Return, "int") << Name;
+    EXPECT_FALSE(Prototype->Variadic) << Name;
+    EXPECT_FALSE(Prototype->Winapi) << Name;
+  }
+  const auto *Wide = libcPrototype("wcscat_s", BinaryFormat::COFF);
+  EXPECT_EQ(Wide->Params[1], "size_t");
+}
+
 TEST(LibCPrototype, PointerTypes) {
   EXPECT_TRUE(isPointerType("void *"));
   EXPECT_TRUE(isPointerType("const unsigned short **"));
@@ -882,6 +964,13 @@ TEST(IsNoReturnFunction, ItaniumCxxTerminators) {
   EXPECT_TRUE(isNoReturnFunction("__clang_call_terminate"));
 }
 
+TEST(IsNoReturnFunction, BionicStartupDoesNotMakeEveryInitializerTerminal) {
+  EXPECT_TRUE(isNoReturnFunction("__libc_init"));
+  EXPECT_FALSE(isNoReturnFunction("__libc_init_common"));
+  EXPECT_FALSE(isNoReturnFunction("__libc_init_globals"));
+  EXPECT_FALSE(isNoReturnFunction("__libc_init_scudo"));
+}
+
 TEST(IsNoReturnFunction, RustRoutinesDeclaredToReturnNever) {
   // v0 names in ELF and Mach-O spelling, a legacy name, a generic instance,
   // the panic_const family, and the panic handler std exports under its own
@@ -931,6 +1020,12 @@ TEST(IsNoReturnFunction, MicrosoftRuntimeTerminators) {
   EXPECT_TRUE(isNoReturnFunction("__std_terminate"));
   // A program's own function may take the name terminate.
   EXPECT_FALSE(isNoReturnFunction("terminate"));
+  EXPECT_FALSE(isNoReturnFunction("unexpected"));
+  for (const auto *Name : {"_o__exit", "_o__invalid_parameter_noinfo_noreturn",
+                           "_o_abort", "_o_exit", "_o_terminate"})
+    EXPECT_TRUE(isNoReturnFunction(Name)) << Name;
+  EXPECT_FALSE(isNoReturnFunction("_o_TerminateProcess"));
+  EXPECT_FALSE(isNoReturnFunction("_o_unreviewed_abort"));
 }
 
 TEST(IsNoReturnFunction, SometimesReturningExcluded) {

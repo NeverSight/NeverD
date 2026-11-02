@@ -16,7 +16,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 
@@ -249,10 +249,8 @@ static bool validateCanonicalEvexFma3(
     return false;
   }
 
-  if (decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          vectorRegisterIndex(FirstSource))
+  if (Encoding.regIndex() != vectorRegisterIndex(Destination) ||
+      Encoding.vvvvIndex() != vectorRegisterIndex(FirstSource))
     return false;
 
   const uint16_t MemoryTupleSize =
@@ -262,8 +260,7 @@ static bool validateCanonicalEvexFma3(
         !validateCanonicalEvexMemoryTail(Insn, X86, Encoding, SecondSource,
                                          MemoryTupleSize))
       return false;
-  } else if (decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                 vectorRegisterIndex(SecondSource) ||
+  } else if (Encoding.rmIndex() != vectorRegisterIndex(SecondSource) ||
              !validateCanonicalEvexRegisterTail(Insn, X86, Encoding)) {
     return false;
   }
@@ -310,12 +307,9 @@ static bool validateCanonicalVexFma4(const cs_insn *Insn, const cs_x86 &X86,
     return false;
 
   const unsigned RegisterLimit = TargetArch == Arch::X64 ? 16 : 8;
-  const unsigned DestinationIndex =
-      ((Encoding.P0 & 0x80) == 0 ? 8 : 0) | ((Encoding.ModRM >> 3) & 7);
-  const unsigned FirstSourceIndex =
-      (static_cast<uint8_t>(~Encoding.P1) >> 3) & 0x0f;
-  const unsigned RmRegisterIndex =
-      ((Encoding.P0 & 0x20) == 0 ? 8 : 0) | (Encoding.ModRM & 7);
+  const unsigned DestinationIndex = Encoding.regIndex();
+  const unsigned FirstSourceIndex = Encoding.vvvvIndex();
+  const unsigned RmRegisterIndex = Encoding.rmIndex();
   const uint8_t Is4 = Insn->bytes[X86.encoding.imm_offset];
   const unsigned Is4RegisterIndex = Is4 >> 4;
   if (DestinationIndex >= RegisterLimit || FirstSourceIndex >= RegisterLimit ||

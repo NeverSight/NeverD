@@ -20,8 +20,8 @@
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/lift/ARMRegs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -142,12 +142,12 @@ struct ModelledBit {
 
 constexpr ModelledBit X86EFlagsBits[] = {
 #define NEVERD_X86_EFLAGS_BIT(Flag, Bit) {x86reg::Flag, Bit},
-#include "neverd/lift/X86EFlags.def"
+#include "neverd/lift/X86/X86EFlags.def"
 };
 
 constexpr ModelledBit ARMApsrBits[] = {
 #define NEVERD_ARM_APSR_BIT(Flag, Bit) {armreg::Flag, Bit},
-#include "neverd/lift/ARMApsrFlags.def"
+#include "neverd/lift/ARM/ARMApsrFlags.def"
 };
 
 /// A status word an intrinsic reads from the machine, into which the lifter

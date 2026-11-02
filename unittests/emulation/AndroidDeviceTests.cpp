@@ -11,8 +11,10 @@
 #include "os/linux/kernel/LinuxServices.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
+#include "neverd/emulation/ProcessReport.h"
 
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/JSON.h"
 
 #include <algorithm>
 #include <tuple>
@@ -141,6 +143,42 @@ TEST_P(AndroidDevices, GPUCommandsWritePinnedRAMAndRetireOwnedTimestamps) {
     EXPECT_EQ(R.ReturnValue, 0u);
   }
 }
+TEST_P(AndroidDevices, SustainedGPUCommandsPreserveTimeAndContextOwnership) {
+  // 1024 submissions and sleeps exercise many hardware-backend exits at O0.
+  Options.Limits.TimeoutMicroseconds = 30000000;
+  auto D = contextDeviceTestInput();
+  D.ReadOnlyMappings[0].Updates.clear();
+  D.KGSL->SynchronousA3xx = true;
+  Options.LinuxFiles->Devices.at("/fixture/control") = D;
+  Options.LinuxTime.emplace().AdvanceOnIdle = true;
+  Options.LinuxTime->Clocks[1] = {20, 999500000};
+  Options.Limits.Instructions = 2000000;
+  auto &Trace = Options.LinuxFiles->IoctlTrace.emplace();
+  Trace.IncludeUnlisted = false;
+  Trace.EventLimit = 4;
+  Trace.ByteLimit = 96;
+  Trace.Requests[0xc00c0916] = {{0, 12, {}}};
+  for (uint64_t Route = 0; Route != 4; ++Route) {
+    SCOPED_TRACE(Route);
+    auto R = run("devices_gpu_stream", {Route});
+    ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+    EXPECT_EQ(R.ReturnValue, 0u);
+    EXPECT_FALSE(R.IoctlTraceTruncated);
+    ASSERT_EQ(R.IoctlTrace.size(), 4u);
+    for (unsigned I = 0; I != 4; ++I) {
+      const auto &E = R.IoctlTrace[I];
+      EXPECT_EQ(E.Request, 0xc00c0916u);
+      EXPECT_EQ(E.Result, I ? 0u : uint64_t(-22));
+      ASSERT_EQ(E.Memory.size(), 1u);
+      EXPECT_EQ(E.Memory[0].BeforeStatus, "complete");
+      EXPECT_EQ(E.Memory[0].AfterStatus, "complete");
+      ASSERT_EQ(E.Memory[0].After.size(), 12u);
+      EXPECT_EQ(llvm::support::endian::read32le(E.Memory[0].After.data() + 8),
+                I ? 1024u : 0xdeadbeefu);
+    }
+  }
+}
+
 TEST_P(AndroidDevices, GPUObjectsShareMemoryAndRetireOnlyTheirFinalOwner) {
   // O0 checks every word of the retained pages. Match the raw Linux case's
   // wall budget without changing guest instruction or event limits.
@@ -471,6 +509,34 @@ TEST_P(AndroidDevices, IoctlTracePreservesCallsAndCapturesTransientPayloads) {
     EXPECT_EQ(Bad.Memory[2].BeforeStatus, "address_overflow");
     EXPECT_EQ(R.IoctlTrace[3].Result, uint64_t(-9));
     EXPECT_TRUE(R.IoctlTrace[3].Memory.empty());
+  }
+}
+
+TEST_P(AndroidDevices, IoctlTraceSelectionPreservesWholeReports) {
+  for (uint64_t Route = 0; Route != 4; ++Route) {
+    SCOPED_TRACE(Route);
+    Options.LinuxFiles->IoctlTrace.reset();
+    const auto Before = run("devices_sequence", {Route});
+    auto &T = Options.LinuxFiles->IoctlTrace.emplace();
+    T.IncludeUnlisted = false;
+    T.EventLimit = 3;
+    T.ByteLimit = 216;
+    T.Requests[0xa1000001] = {{0, 24, {}}, {0, 8, 8}};
+    const auto R = run("devices_sequence", {Route});
+    ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+    ASSERT_EQ(R.IoctlTrace.size(), 3u);
+    EXPECT_FALSE(R.IoctlTraceTruncated);
+    for (const auto &E : R.IoctlTrace) {
+      EXPECT_EQ(E.Request, 0xa1000001u);
+      EXPECT_EQ(E.Result, 37u);
+      ASSERT_EQ(E.Memory.size(), 2u);
+      EXPECT_EQ(E.Memory[1].AfterStatus, "complete");
+    }
+    auto Observed = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+    Observed.getAsObject()->erase("ioctl_trace");
+    Observed.getAsObject()->erase("ioctl_trace_truncated");
+    EXPECT_EQ(Observed,
+              llvm::cantFail(llvm::json::parse(processResultJSON(Before))));
   }
 }
 

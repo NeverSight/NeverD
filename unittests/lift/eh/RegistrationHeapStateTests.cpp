@@ -12,7 +12,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <cstddef>
 #include <cstdint>

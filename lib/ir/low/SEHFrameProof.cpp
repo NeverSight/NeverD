@@ -98,7 +98,9 @@ bool completeLowSEHFrameCFG(const LowFunc &F,
             Insn.Control == LowInstructionControl::Branch ||
             Insn.Control == LowInstructionControl::Return ||
             Insn.Control == LowInstructionControl::TailCall ||
-            Insn.Control == LowInstructionControl::Terminator)))
+            (Insn.Control == LowInstructionControl::Terminator &&
+             !hasLowInstructionControlFlag(
+                 Insn.ControlFlags, LowInstructionControlFlag::Resumable)))))
         return false;
     }
     for (int Id : B.Preds)

@@ -17,9 +17,11 @@
 
 #include "neverd/symbolic/SymExpr.h"
 
+#include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/STLExtras.h"
+
 #include <algorithm>
 #include <cassert>
-#include <map>
 
 namespace neverd::symbolic {
 
@@ -50,12 +52,13 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
   uint32_t W = width(Ops[0]);
 
   llvm::APInt ConstTerm(W, 0);
-  // Ordered by base node index so the rebuilt operand list is canonical.
+  // Small sums need no separately allocated tree nodes. Sort the completed
+  // entries by base index before rebuilding, preserving canonical order.
   struct Addend {
     llvm::APInt Coefficient;
     SymRef Original;
   };
-  std::map<uint32_t, Addend> Terms;
+  llvm::SmallMapVector<uint32_t, Addend, 8> Terms;
 
   llvm::SmallVector<SymRef, 8> Work(Ops.begin(), Ops.end());
   llvm::SmallVector<SymRef, 8> Masked;
@@ -92,7 +95,7 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
 
       auto It = Terms.find(Base.index());
       if (It == Terms.end()) {
-        Terms.emplace(Base.index(), Addend{Coeff, R});
+        Terms.try_emplace(Base.index(), Addend{Coeff, R});
       } else {
         It->second.Coefficient += Coeff;
         It->second.Original = {};
@@ -110,7 +113,9 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
   bool Recollect = false;
   if (!ConstTerm.isZero())
     Final.push_back(mkConst(ConstTerm));
-  for (const auto &[BaseIdx, Entry] : Terms) {
+  auto OrderedTerms = Terms.takeVector();
+  llvm::sort(OrderedTerms, llvm::less_first());
+  for (const auto &[BaseIdx, Entry] : OrderedTerms) {
     const auto &Coeff = Entry.Coefficient;
     if (Coeff.isZero())
       continue;
@@ -129,7 +134,7 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
     // a constant or a base already present in the sum. Collect those once.
     // A recovered nonconstant slice retains its mask, so the new base cannot
     // be a bare LShr and this collection cannot expose another such slice.
-    Terms.clear();
+    OrderedTerms.clear();
     ConstTerm = llvm::APInt(W, 0);
     for (SymRef R : Final) {
       if (isConst(R)) {
@@ -153,7 +158,9 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
     Final.clear();
     if (!ConstTerm.isZero())
       Final.push_back(mkConst(ConstTerm));
-    for (const auto &[BaseIdx, Entry] : Terms) {
+    OrderedTerms = Terms.takeVector();
+    llvm::sort(OrderedTerms, llvm::less_first());
+    for (const auto &[BaseIdx, Entry] : OrderedTerms) {
       const auto &Coeff = Entry.Coefficient;
       if (!Coeff.isZero()) {
         SymRef Base(BaseIdx);
@@ -366,6 +373,14 @@ SymRef SymContext::mkURem(SymRef A, SymRef B) {
   }
   if (isConst(B) && constValue(B).isOne())
     return mkZero(W);
+  if (op(A) == SymOp::ZExt && op(B) == SymOp::ZExt) {
+    const auto X = operand(A, 0), Y = operand(B, 0);
+    const auto Narrow = std::max(width(X), width(Y));
+    // Both unsigned inputs fit this width. The remainder does too, including
+    // the total bitvector case x % 0 == x. Division by zero instead produces
+    // all ones at its original width and cannot use this extension rule.
+    return mkZExt(mkURem(mkZExt(X, Narrow), mkZExt(Y, Narrow)), W);
+  }
   return intern(SymOp::URem, W, {A, B}, 0);
 }
 

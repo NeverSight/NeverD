@@ -14,6 +14,8 @@
 #define NEVERD_LIB_PIPELINE_PIPELINECALLABIDETAIL_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/MedIR.h"
@@ -28,14 +30,22 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace neverd {
+class DebugContext;
 
 struct BinaryImage;
 struct AnalysisCacheWarmup;
 struct PipelineResult;
+struct CallArgumentConvention;
 struct Symbol;
+
+/// Register summaries do not necessarily bound the stack arguments. Read
+/// callee signatures for either source of call arguments, identically in
+/// selected-function recovery and cache warmup.
+bool needsCallSignatureRecovery(const CallArgumentConvention *Convention);
 namespace detail {
 class AbsoluteRelocationRootIndex;
 } // namespace detail
@@ -51,10 +61,15 @@ struct OmittedCalleeMemo {
   struct SummaryRead {
     va_t Key = 0;
     std::optional<uint32_t> MayWrite;
+    std::optional<GPRExitConstants> ExitConstants;
     std::optional<GPRReadWidths> EntryReads;
+    std::optional<GPRFamilyMask> Unread;
     std::optional<int> StackArgs;
     bool StackSlot = false;
     std::optional<int> ArgumentCount;
+    std::optional<FloatingCallArguments> FloatingArguments;
+    std::optional<FixedIntegerCallArguments> IntegerArguments;
+    std::optional<std::vector<uint16_t>> VariadicArguments;
     bool operator==(const SummaryRead &) const = default;
   };
   static SummaryRead readAt(const PipelineResult &Result, va_t Key);
@@ -69,6 +84,7 @@ struct OmittedCalleeMemo {
     std::optional<int> FPArity;
     std::optional<uint16_t> FPReturnSize;
     std::optional<std::vector<uint64_t>> FPRegs;
+    std::optional<std::map<uint64_t, uint16_t>> FPScalarBytes;
     std::optional<bool> HasSret;
     std::optional<bool> IsVariadic;
     std::optional<bool> ConsumesVaList;
@@ -84,8 +100,10 @@ struct OmittedCalleeMemo {
     int RegisterArity = 0;
     int MaxArgumentIndex = -1;
     int RecoveryTotalArity = 0;
+    uint16_t FPReturnSize = 0;
     bool IsVariadic = false;
     std::vector<uint64_t> FPRegs;
+    std::map<uint64_t, uint16_t> FPScalarBytes;
     std::vector<uint64_t> IntegerArgumentRegisters;
     std::optional<int> EntryRegArity;
     std::optional<int> EntryTotalArity;
@@ -98,6 +116,49 @@ struct OmittedCalleeMemo {
     std::vector<ProbeRead> Reads;
     ProbeSignature Gives;
     /// What the probe counts against the memo's bound.
+    size_t Bytes = 0;
+  };
+  /// The second regparm pass of a run's recovery (recoverModuleCallAbi) over
+  /// the body a Recovery's first pass gave: what it read under each key it
+  /// read, the body's entry first, the summaries it left at the entry, and
+  /// what bounds the run's calls to the body.  A pass that would read the
+  /// same gives the same.
+  struct SecondPass {
+    std::vector<ProbeRead> Reads;
+    std::optional<int> EntryRegArity;
+    std::optional<int> EntryTotalArity;
+    std::optional<bool> EntryIsVariadic;
+    size_t Parameters = 0;
+    bool IsVariadic = false;
+    bool SourceParametersBound = false;
+    /// What the pass counts against the memo's bound.
+    size_t Bytes = 0;
+  };
+  /// A run's recovery (recoverModuleCallAbi) of a conversion's body as an
+  /// omitted callee: what it read under each key it read, the body's entry
+  /// first, the summaries it left at the entry, what bounds the run's calls
+  /// to the body where no second pass follows, and on i386 the arities and
+  /// register order the second regparm pass reads of the body and the
+  /// second passes over the body it gave.  A recovery that would read the
+  /// same gives the same.
+  struct Recovery {
+    std::vector<ProbeRead> Reads;
+    std::optional<int> EntryRegArity;
+    std::optional<int> EntryTotalArity;
+    std::optional<bool> EntryIsVariadic;
+    size_t Parameters = 0;
+    bool IsVariadic = false;
+    bool SourceParametersBound = false;
+    /// Recovery retained every carrier and type of the conversion's signature.
+    /// A warm selection must not publish a declaration a cold one rejected.
+    bool PreservesDeclaration = false;
+    int RegisterArity = 0;
+    int TotalArity = 0;
+    std::vector<uint64_t> IntegerArgumentRegisters;
+    /// The second passes under different summaries, the one used last
+    /// first; at most MaxProbes.
+    std::vector<SecondPass> Seconds;
+    /// What the passes count against the memo's bound.
     size_t Bytes = 0;
   };
   /// What a body's own parameters say of the calls to it before recovery
@@ -113,6 +174,7 @@ struct OmittedCalleeMemo {
     bool ConsumesVaList = false;
     int FPArity = 0;
     std::vector<uint64_t> FPRegs;
+    std::map<uint64_t, uint16_t> FPScalarBytes;
     uint16_t FPReturnSize = 0;
   };
   /// A conversion of a callee's lift.
@@ -123,17 +185,28 @@ struct OmittedCalleeMemo {
     /// The call summaries the conversion read, under each key it read them
     /// under and the callee's own entry.
     std::vector<SummaryRead> Reads;
-    /// What Body and Probes count against the memo's bound.
+    /// What Body, Probes and Recoveries count against the memo's bound.
     size_t Bytes = 0;
     /// The forwarder probes of Body under different summaries, the one used
     /// last first; at most MaxProbes.
     std::vector<Probe> Probes;
+    /// The recoveries of Body under different summaries, the one used last
+    /// first; at most MaxProbes.
+    std::vector<Recovery> Recoveries;
     /// What Body says of the calls to it, and the callees it calls: their
     /// entries in the order a run reads them, and the targets of its direct
     /// calls, one for each call.  Read where the memo keeps the body.
     std::optional<CalleeSummary> Summary;
     std::vector<va_t> CalleesRead;
     std::vector<va_t> DirectCallTargets;
+    /// Complete read-only leaf inputs proved from this conversion's original
+    /// LowIR, as entry-SP offset and observed byte width. These inputs do not
+    /// alter Body's machine calling convention.
+    std::vector<std::pair<int64_t, uint16_t>> SourceStackInputs;
+    /// Original blocks of a complete Win64 spill or stack-parameter
+    /// candidate, retained under the same image and conversion identity as
+    /// Body.
+    std::shared_ptr<const std::vector<LowBlock>> SourceOriginalBlocks;
     /// Whether \p Result's summaries read as they did for the conversion.
     bool readsHold(const PipelineResult &Result) const;
   };
@@ -147,6 +220,8 @@ struct OmittedCalleeMemo {
   static constexpr size_t MaxConversions =
       ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxConversions;
   struct Callee {
+    /// Bounded instruction preflight, valid for the memo's immutable image.
+    std::optional<bool> IncomingStackCandidate;
     /// Whether the callee was lifted: BlockOps is then known.
     bool Lifted = false;
     /// The operations of each block of the lift, when the lift is complete
@@ -161,8 +236,8 @@ struct OmittedCalleeMemo {
     /// null where none does.
     const Conversion *conversionFor(const PipelineResult &Result);
   };
-  /// The bodies the memo holds at most, counted by their blocks and
-  /// operations (keep): bodies of a large image's every callee would hold
+  /// The bodies the memo holds at most, counted by their blocks, operations
+  /// and external operands (keep): bodies of a large image's every callee hold
   /// most of its MedIR.  A mid-sized image's signature bodies, an Android
   /// server's 6000, fit in three quarters of it.
   static constexpr size_t MaxBytes =
@@ -175,6 +250,13 @@ struct OmittedCalleeMemo {
   /// Keeps \p Kept as \p Holder's probe used last, where its probe used
   /// longest ago makes room past MaxProbes.
   void keepProbe(Conversion &Holder, Probe Kept);
+  /// Keeps \p Kept as \p Holder's recovery used last, where its recovery
+  /// used longest ago makes room past MaxProbes.
+  Recovery &keepRecovery(Conversion &Holder, Recovery Kept);
+  /// Keeps \p Kept as the second pass \p Into, one of \p Holder's
+  /// recoveries, used last, where its pass used longest ago makes room past
+  /// MaxProbes.
+  void keepSecondPass(Conversion &Holder, Recovery &Into, SecondPass Kept);
   /// The reading of the callee at \p Entry, now the one used last.
   Callee *find(va_t Entry);
   /// Keeps \p Converted as \p Holder's conversion used last, where its
@@ -227,6 +309,18 @@ private:
   uint64_t Clock = 0;
 };
 
+/// Carry the complete input facts read by call-signature recovery into a new
+/// projection. Derived bodies and memo ownership remain the caller's choice.
+void copyCallSignatureFacts(const PipelineResult &Source,
+                            PipelineResult &Destination);
+
+/// Refine source-only integer carriers whose complete uses forward pointers
+/// to admitted imported declarations. Shared by HighC and LLVM-to-C; native
+/// lifting and patching retain their independent machine type contracts.
+void refineSourcePointerParameters(const BinaryImage &Image,
+                                   PipelineResult &Result,
+                                   const DebugContext *Debug);
+
 /// Recover every call's arguments in \p Result, and the parameters each
 /// forwarder passes straight through, from the setup its caller writes
 /// before the call (recoverCallAbi).  Each callee's recovered signature
@@ -237,7 +331,19 @@ private:
 /// fixed point first, so the order of the functions does not matter.  Reads
 /// the types the functions have already been given (inferMedTypes).
 void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
-                          const std::map<va_t, std::string> &AllFuncNames);
+                          const std::map<va_t, std::string> &AllFuncNames,
+                          bool SourceDeclarations = false,
+                          bool SourceParameterReads = false);
+
+/// Confirm caller-observed return shapes in omitted local callees. Uses the
+/// signature reader's complete lifts, conversion memo and work bounds; support
+/// bodies never become output functions. Candidates with no proof are removed.
+/// A target outside \p FirstWordObserved had only second-word readers, so an
+/// argument register its body never writes supplies no field.
+void confirmOmittedStructReturns(
+    const BinaryImage &Image, const PipelineResult &Result,
+    std::map<va_t, std::vector<MedReturnReg>> &Candidates,
+    const std::set<va_t> &FirstWordObserved);
 
 /// Read the signature bodies of \p Functions into
 /// \p Summaries.CalleeSignatureMemo as a restricted run under \p Summaries'

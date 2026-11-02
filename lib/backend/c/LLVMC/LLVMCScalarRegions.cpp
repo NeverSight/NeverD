@@ -231,7 +231,18 @@ class ScalarRegionPlan {
         LoopExits[Loop] = Exit;
         const bool HeaderExit = Branch && (Branch->getSuccessor(0) == Exit ||
                                            Branch->getSuccessor(1) == Exit);
-        if (!HeaderExit) {
+        // A direct while/for publishes the header's exit copies after the
+        // loop. A body exit reaching the same continuation would execute
+        // those copies too, overwriting its own values. Give every normal
+        // exit its own guard and edge copies when the body can leave. Pure
+        // return sinks terminate locally and never reach the continuation.
+        const bool BodyExit = llvm::any_of(Loop->blocks(), [&](auto *Block) {
+          return Block != BB &&
+                 llvm::any_of(llvm::successors(Block), [&](auto *Successor) {
+                   return !Loop->contains(Successor) && !returnOnly(Successor);
+                 });
+        });
+        if (!HeaderExit || BodyExit) {
           ScalarRegion Region{
               ScalarRegion::Kind::Repeat, BB, Exit, false, {}, {}};
           Region.Scope = Loop;

@@ -16,7 +16,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -31,45 +31,6 @@ bool hasRepPrefix(const cs_x86 &X86) {
     if (X86.prefix[I] == X86_PREFIX_REP)
       return true;
   return false;
-}
-
-Intrinsic stosIntrinsic(unsigned Sz) {
-  switch (Sz) {
-  case 2:
-    return Intrinsic::Stosw;
-  case 4:
-    return Intrinsic::Stosd;
-  case 8:
-    return Intrinsic::Stosq;
-  default:
-    return Intrinsic::Stosb;
-  }
-}
-
-Intrinsic movsIntrinsic(unsigned Sz) {
-  switch (Sz) {
-  case 2:
-    return Intrinsic::Movsw;
-  case 4:
-    return Intrinsic::Movsd;
-  case 8:
-    return Intrinsic::Movsq;
-  default:
-    return Intrinsic::Movsb;
-  }
-}
-
-Intrinsic lodsIntrinsic(unsigned Sz) {
-  switch (Sz) {
-  case 2:
-    return Intrinsic::Lodsw;
-  case 4:
-    return Intrinsic::Lodsd;
-  case 8:
-    return Intrinsic::Lodsq;
-  default:
-    return Intrinsic::Lodsb;
-  }
 }
 
 } // namespace
@@ -138,53 +99,15 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       }
       break;
     }
-    // REP MOVS/STOS perform the actual memory copy/fill; the emitter lowers the
-    // intrinsic to a real `rep movs/stos` with RSI/RDI/RCX/AL wired through
-    // register constraints.  The register side effects (pointers advanced,
-    // count zeroed) are modelled directly in MedIR so they survive DCE
-    // independently of the inline-asm result.  The direction flag is threaded
-    // through as a final intrinsic input so the emitter runs the hardware `rep`
-    // in the matching direction, and the pointer model advances by
-    // +/-(RCX*ElemSz) per DF.  DF folds to a constant after a preceding
-    // CLD/STD, so the common forward case keeps its plain +RCX*ElemSz lowering.
     bool IsStos = (InsnId == X86_INS_STOSB || InsnId == X86_INS_STOSW ||
                    InsnId == X86_INS_STOSD || InsnId == X86_INS_STOSQ);
     unsigned ElemSz = stringElemSize(InsnId);
     const uint16_t AddrSz = S.AddressSize;
     if (hasRepPrefix(X86)) {
-      NdVar Df = NdVar::reg(x86reg::DF, 1);
-      NdMemoryAddressSpace SourceAddressSpace =
-          IsStos ? NdMemoryAddressSpace::Default
-                 : stringSourceAddressSpace(X86);
-      if (IsStos)
-        S.emitIntrinsic(stosIntrinsic(ElemSz), S.makeTemp(AddrSz),
-                        {NdVar::reg(x86reg::RDI, AddrSz),
-                         NdVar::reg(x86reg::RCX, AddrSz),
-                         NdVar::reg(x86reg::RAX, ElemSz), Df});
-      else
-        S.emitIntrinsic(movsIntrinsic(ElemSz), S.makeTemp(AddrSz),
-                        {NdVar::reg(x86reg::RSI, AddrSz),
-                         NdVar::reg(x86reg::RDI, AddrSz),
-                         NdVar::reg(x86reg::RCX, AddrSz), Df},
-                        NdMemoryOrdering::None, SourceAddressSpace);
-      // Signed pointer delta = DF ? -(RCX*ElemSz) : +(RCX*ElemSz); RCX -> 0.
-      NdVar Bytes = S.makeTemp(AddrSz);
-      S.emit(NdOp::INT_MULT, Bytes,
-             {NdVar::reg(x86reg::RCX, AddrSz), NdVar::scalar(ElemSz, AddrSz)});
-      NdVar NegBytes = S.makeTemp(AddrSz);
-      S.emit(NdOp::INT_SUB, NegBytes, {NdVar::scalar(0, AddrSz), Bytes});
-      NdVar Delta = S.makeTemp(AddrSz);
-      S.emit(NdOp::SELECT, Delta, {Df, NegBytes, Bytes});
-      if (!IsStos) {
-        NdVar NewSi = S.makeTemp(AddrSz);
-        S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, AddrSz), Delta});
-        S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, AddrSz), {NewSi});
-      }
-      NdVar NewDi = S.makeTemp(AddrSz);
-      S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, AddrSz), Delta});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, AddrSz), {NewDi});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, AddrSz),
-             {NdVar::scalar(0, AddrSz)});
+      liftRepState(L, S, X86,
+                   IsStos ? Intrinsic::X86RepStosState
+                          : Intrinsic::X86RepMovsState,
+                   ElemSz);
     } else {
       // Single element (no REP): one store/copy; pointer(s) step per DF.
       NdVar Step = L.dirStep(S, ElemSz);
@@ -221,24 +144,7 @@ bool liftStringMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const uint16_t AddrSz = S.AddressSize;
     NdVar Rsi = NdVar::reg(x86reg::RSI, AddrSz);
     if (hasRepPrefix(X86)) {
-      NdVar Rcx = NdVar::reg(x86reg::RCX, AddrSz);
-      NdVar Df = NdVar::reg(x86reg::DF, 1);
-      const uint16_t AccumulatorSize = L.targetArch() == Arch::X86 ? 4 : 8;
-      S.emitIntrinsic(lodsIntrinsic(ElemSz),
-                      NdVar::reg(x86reg::RAX, AccumulatorSize),
-                      {Rsi, Rcx,
-                       NdVar::reg(x86reg::RAX, AccumulatorSize), Df},
-                      NdMemoryOrdering::None, stringSourceAddressSpace(X86));
-      NdVar Bytes = S.makeTemp(AddrSz);
-      S.emit(NdOp::INT_MULT, Bytes, {Rcx, NdVar::scalar(ElemSz, AddrSz)});
-      NdVar NegBytes = S.makeTemp(AddrSz);
-      S.emit(NdOp::INT_SUB, NegBytes, {NdVar::scalar(0, AddrSz), Bytes});
-      NdVar Delta = S.makeTemp(AddrSz);
-      S.emit(NdOp::SELECT, Delta, {Df, NegBytes, Bytes});
-      NdVar NewSi = S.makeTemp(AddrSz);
-      S.emit(NdOp::INT_ADD, NewSi, {Rsi, Delta});
-      S.emit(NdOp::COPY, Rsi, {NewSi});
-      S.emit(NdOp::COPY, Rcx, {NdVar::scalar(0, AddrSz)});
+      liftRepState(L, S, X86, Intrinsic::X86RepLodsState, ElemSz);
     } else {
       S.emit(NdOp::LOAD, NdVar::reg(x86reg::RAX, ElemSz), {Rsi},
              NdMemoryOrdering::None, stringSourceAddressSpace(X86));

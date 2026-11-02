@@ -195,8 +195,39 @@ public:
       const std::string Name = "v" + std::to_string(Id);
       return ZCtx.bv_const(Name.c_str(), N.Width);
     }
+    case SymOp::Mul: {
+      unsigned Zeros = 0;
+      if (Ctx.isConst(Ctx.operand(R, 0))) {
+        const auto Trailing = Ctx.constValue(Ctx.operand(R, 0)).countr_zero();
+        if (Trailing < N.Width)
+          Zeros = Trailing;
+      }
+      // In Z/(2^W), a coefficient divisible by 2^K observes only W-K bits
+      // of each other factor. Restore the complete word after the product.
+      const unsigned Observed = N.Width - Zeros;
+      std::optional<z3::expr> Value;
+      if (Zeros)
+        Value = arg(0).extract(N.Width - 1, Zeros);
+      for (unsigned I = Zeros ? 1 : 0; I < N.NumOperands;) {
+        unsigned End = I + 1;
+        while (End < N.NumOperands && Ctx.operand(R, End) == Ctx.operand(R, I))
+          ++End;
+        // Equal handles denote the same complete word. Share squared powers
+        // instead of constructing a linear chain of repeated multiplications.
+        z3::expr Factor = Zeros ? arg(I).extract(Observed - 1, 0) : arg(I);
+        z3::expr Power = Factor;
+        for (unsigned Remaining = End - I - 1; Remaining; Remaining >>= 1) {
+          if (Remaining & 1)
+            Factor = Factor * Power;
+          if (Remaining > 1)
+            Power = Power * Power;
+        }
+        Value = Value ? *Value * Factor : Factor;
+        I = End;
+      }
+      return Zeros ? z3::concat(*Value, ZCtx.bv_val(0, Zeros)) : *Value;
+    }
     case SymOp::Add:
-    case SymOp::Mul:
     case SymOp::And:
     case SymOp::Or:
     case SymOp::Xor:
@@ -206,9 +237,6 @@ public:
         switch (N.Op) {
         case SymOp::Add:
           Value = Value + arg(I);
-          break;
-        case SymOp::Mul:
-          Value = Value * arg(I);
           break;
         case SymOp::And:
           Value = Value & arg(I);

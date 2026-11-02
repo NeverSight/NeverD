@@ -22,7 +22,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 
 #include "llvm/IR/IRBuilder.h"

@@ -1,7 +1,7 @@
 #include "../../../lib/pipeline/NativeSourceFloatingReturn.h"
 #include "gtest/gtest.h"
 
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 #include <algorithm>
 #include <array>

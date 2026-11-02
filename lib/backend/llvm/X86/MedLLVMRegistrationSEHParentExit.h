@@ -10,7 +10,7 @@
 #ifndef NEVERD_MEDLLVMREGISTRATIONSEHPARENTEXIT_H
 #define NEVERD_MEDLLVMREGISTRATIONSEHPARENTEXIT_H
 
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 
 #include <map>
 #include <optional>

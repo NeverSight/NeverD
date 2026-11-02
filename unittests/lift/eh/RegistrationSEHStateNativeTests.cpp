@@ -16,9 +16,9 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 #include "neverd/ir/RegistrationState.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Verifier.h"

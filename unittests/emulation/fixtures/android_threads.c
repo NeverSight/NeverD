@@ -338,6 +338,34 @@ u64 threads_exit(u64 *out, u64 mode) {
   out[4] = 1;
   return 74;
 }
+// A thread's terminal return has no guest caller frame to resume. Deliberately
+// retain a frame to distinguish that boundary from an ordinary callback.
+__attribute__((naked)) void *threads_return_with_stack_residue(void *value) {
+  __asm__ volatile("sub sp, sp, #16\nret");
+}
+__attribute__((naked)) static void *exit_with_stack_residue(void *value) {
+  __asm__ volatile("sub sp, sp, #16\nb pthread_exit");
+}
+u64 threads_terminal_return(u64 *out, u64 mode) {
+  Attr attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, (mode & 2) != 0);
+  out[0] = pthread_create(out + 1, &attr,
+                          mode & 1 ? exit_with_stack_residue
+                                   : threads_return_with_stack_residue,
+                          (void *)0xfedcba9876543210UL);
+  if (!out[0] && !(mode & 2))
+    out[2] = pthread_join(out[1], (void **)(out + 3));
+  return 80;
+}
+__attribute__((naked)) static void callback_with_stack_residue(void) {
+  __asm__ volatile("sub sp, sp, #16\nret");
+}
+u64 threads_callback_stack(void) {
+  int control = 0;
+  pthread_once(&control, callback_with_stack_residue);
+  return 81;
+}
 u64 threads_limits(u64 *out, u64 mode) {
   Attr attr;
   pthread_attr_init(&attr);

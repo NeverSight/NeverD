@@ -16,7 +16,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 #include <optional>
@@ -229,10 +229,8 @@ bool validateEvexPackedUnpack(const cs_insn *Insn, const cs_x86 &X86,
   if (EncodedLength == 0x60 || EncodedLength != ExpectedLength ||
       !isVectorRegisterOfSize(DestinationOperand, VectorSize) ||
       !isVectorRegisterOfSize(LeftOperand, VectorSize) ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorRegisterIndex(DestinationOperand) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          vectorRegisterIndex(LeftOperand))
+      Encoding.regIndex() != vectorRegisterIndex(DestinationOperand) ||
+      Encoding.vvvvIndex() != vectorRegisterIndex(LeftOperand))
     return false;
 
   Broadcast = (Encoding.P2 & 0x10) != 0;
@@ -244,8 +242,7 @@ bool validateEvexPackedUnpack(const cs_insn *Insn, const cs_x86 &X86,
                                          Broadcast ? ElementSize : VectorSize))
       return false;
   } else if (!isVectorRegisterOfSize(RightOperand, VectorSize) || Broadcast ||
-             decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                 vectorRegisterIndex(RightOperand) ||
+             Encoding.rmIndex() != vectorRegisterIndex(RightOperand) ||
              !validateCanonicalEvexRegisterTail(Insn, X86, Encoding)) {
     return false;
   }

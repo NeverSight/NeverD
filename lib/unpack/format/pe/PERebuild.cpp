@@ -3,7 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
-#include "../../arch/X64Imports.h"
+#include "../../arch/x86_64/X64Imports.h"
 #include "PEDriverRelocations.h"
 #include "PEImage.h"
 

@@ -1,0 +1,258 @@
+//===- AArch64VectorAddressMemoryFixtures.def - Vector oracles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent LLVM MC 22.1.6 words and native byte oracles. VALUE defines
+/// fixture constants; TEXT defines harness text; FAMILY defines original and
+/// scratch words, direction, access/index bytes, shift and index signedness.
+//===----------------------------------------------------------------------===//
+
+#ifndef VECTOR_MEMORY_VALUE
+#define VECTOR_MEMORY_VALUE(Type, Name, Value)
+#endif
+#ifndef VECTOR_MEMORY_TEXT
+#define VECTOR_MEMORY_TEXT(Name, Text)
+#endif
+#ifndef VECTOR_MEMORY_FAMILY
+#define VECTOR_MEMORY_FAMILY(Word, Scratch, Load, Access, IndexBytes, Shift,   \
+                             Signed)
+#endif
+
+VECTOR_MEMORY_FAMILY(0x3c616800U, 0x3c6f6a11U, true, 1, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c617800U, 0x3c6f7a11U, true, 1, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c614800U, 0x3c6f4a11U, true, 1, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c615800U, 0x3c6f5a11U, true, 1, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c61c800U, 0x3c6fca11U, true, 1, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x3c61d800U, 0x3c6fda11U, true, 1, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x3c61e800U, 0x3c6fea11U, true, 1, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x3c61f800U, 0x3c6ffa11U, true, 1, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x7c616800U, 0x7c6f6a11U, true, 2, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x7c617800U, 0x7c6f7a11U, true, 2, 8, 1, false)
+VECTOR_MEMORY_FAMILY(0x7c614800U, 0x7c6f4a11U, true, 2, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x7c615800U, 0x7c6f5a11U, true, 2, 4, 1, false)
+VECTOR_MEMORY_FAMILY(0x7c61c800U, 0x7c6fca11U, true, 2, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x7c61d800U, 0x7c6fda11U, true, 2, 4, 1, true)
+VECTOR_MEMORY_FAMILY(0x7c61e800U, 0x7c6fea11U, true, 2, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x7c61f800U, 0x7c6ffa11U, true, 2, 8, 1, true)
+VECTOR_MEMORY_FAMILY(0xbc616800U, 0xbc6f6a11U, true, 4, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0xbc617800U, 0xbc6f7a11U, true, 4, 8, 2, false)
+VECTOR_MEMORY_FAMILY(0xbc614800U, 0xbc6f4a11U, true, 4, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0xbc615800U, 0xbc6f5a11U, true, 4, 4, 2, false)
+VECTOR_MEMORY_FAMILY(0xbc61c800U, 0xbc6fca11U, true, 4, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0xbc61d800U, 0xbc6fda11U, true, 4, 4, 2, true)
+VECTOR_MEMORY_FAMILY(0xbc61e800U, 0xbc6fea11U, true, 4, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0xbc61f800U, 0xbc6ffa11U, true, 4, 8, 2, true)
+VECTOR_MEMORY_FAMILY(0xfc616800U, 0xfc6f6a11U, true, 8, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0xfc617800U, 0xfc6f7a11U, true, 8, 8, 3, false)
+VECTOR_MEMORY_FAMILY(0xfc614800U, 0xfc6f4a11U, true, 8, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0xfc615800U, 0xfc6f5a11U, true, 8, 4, 3, false)
+VECTOR_MEMORY_FAMILY(0xfc61c800U, 0xfc6fca11U, true, 8, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0xfc61d800U, 0xfc6fda11U, true, 8, 4, 3, true)
+VECTOR_MEMORY_FAMILY(0xfc61e800U, 0xfc6fea11U, true, 8, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0xfc61f800U, 0xfc6ffa11U, true, 8, 8, 3, true)
+VECTOR_MEMORY_FAMILY(0x3ce16800U, 0x3cef6a11U, true, 16, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x3ce17800U, 0x3cef7a11U, true, 16, 8, 4, false)
+VECTOR_MEMORY_FAMILY(0x3ce14800U, 0x3cef4a11U, true, 16, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x3ce15800U, 0x3cef5a11U, true, 16, 4, 4, false)
+VECTOR_MEMORY_FAMILY(0x3ce1c800U, 0x3cefca11U, true, 16, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x3ce1d800U, 0x3cefda11U, true, 16, 4, 4, true)
+VECTOR_MEMORY_FAMILY(0x3ce1e800U, 0x3cefea11U, true, 16, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x3ce1f800U, 0x3ceffa11U, true, 16, 8, 4, true)
+VECTOR_MEMORY_FAMILY(0x3c216800U, 0x3c2f6a11U, false, 1, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c217800U, 0x3c2f7a11U, false, 1, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c214800U, 0x3c2f4a11U, false, 1, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c215800U, 0x3c2f5a11U, false, 1, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x3c21c800U, 0x3c2fca11U, false, 1, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x3c21d800U, 0x3c2fda11U, false, 1, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x3c21e800U, 0x3c2fea11U, false, 1, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x3c21f800U, 0x3c2ffa11U, false, 1, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x7c216800U, 0x7c2f6a11U, false, 2, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x7c217800U, 0x7c2f7a11U, false, 2, 8, 1, false)
+VECTOR_MEMORY_FAMILY(0x7c214800U, 0x7c2f4a11U, false, 2, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x7c215800U, 0x7c2f5a11U, false, 2, 4, 1, false)
+VECTOR_MEMORY_FAMILY(0x7c21c800U, 0x7c2fca11U, false, 2, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x7c21d800U, 0x7c2fda11U, false, 2, 4, 1, true)
+VECTOR_MEMORY_FAMILY(0x7c21e800U, 0x7c2fea11U, false, 2, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x7c21f800U, 0x7c2ffa11U, false, 2, 8, 1, true)
+VECTOR_MEMORY_FAMILY(0xbc216800U, 0xbc2f6a11U, false, 4, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0xbc217800U, 0xbc2f7a11U, false, 4, 8, 2, false)
+VECTOR_MEMORY_FAMILY(0xbc214800U, 0xbc2f4a11U, false, 4, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0xbc215800U, 0xbc2f5a11U, false, 4, 4, 2, false)
+VECTOR_MEMORY_FAMILY(0xbc21c800U, 0xbc2fca11U, false, 4, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0xbc21d800U, 0xbc2fda11U, false, 4, 4, 2, true)
+VECTOR_MEMORY_FAMILY(0xbc21e800U, 0xbc2fea11U, false, 4, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0xbc21f800U, 0xbc2ffa11U, false, 4, 8, 2, true)
+VECTOR_MEMORY_FAMILY(0xfc216800U, 0xfc2f6a11U, false, 8, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0xfc217800U, 0xfc2f7a11U, false, 8, 8, 3, false)
+VECTOR_MEMORY_FAMILY(0xfc214800U, 0xfc2f4a11U, false, 8, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0xfc215800U, 0xfc2f5a11U, false, 8, 4, 3, false)
+VECTOR_MEMORY_FAMILY(0xfc21c800U, 0xfc2fca11U, false, 8, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0xfc21d800U, 0xfc2fda11U, false, 8, 4, 3, true)
+VECTOR_MEMORY_FAMILY(0xfc21e800U, 0xfc2fea11U, false, 8, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0xfc21f800U, 0xfc2ffa11U, false, 8, 8, 3, true)
+VECTOR_MEMORY_FAMILY(0x3ca16800U, 0x3caf6a11U, false, 16, 8, 0, false)
+VECTOR_MEMORY_FAMILY(0x3ca17800U, 0x3caf7a11U, false, 16, 8, 4, false)
+VECTOR_MEMORY_FAMILY(0x3ca14800U, 0x3caf4a11U, false, 16, 4, 0, false)
+VECTOR_MEMORY_FAMILY(0x3ca15800U, 0x3caf5a11U, false, 16, 4, 4, false)
+VECTOR_MEMORY_FAMILY(0x3ca1c800U, 0x3cafca11U, false, 16, 4, 0, true)
+VECTOR_MEMORY_FAMILY(0x3ca1d800U, 0x3cafda11U, false, 16, 4, 4, true)
+VECTOR_MEMORY_FAMILY(0x3ca1e800U, 0x3cafea11U, false, 16, 8, 0, true)
+VECTOR_MEMORY_FAMILY(0x3ca1f800U, 0x3caffa11U, false, 16, 8, 4, true)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorSeedZero, 0x4f00e400U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorInsertLow, 0x4e081c40U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorInsertHigh, 0x4e181c60U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorReadLow, 0x4e083c00U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorReadHigh, 0x4e183c02U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorDigest, 0xca020000U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorReturnZero, 0xd2800000U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorReturnWord, 0xd65f03c0U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorSeedSingle, 0x1e270040U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorSeedDouble, 0x9e670040U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorReadSingle, 0x1e260000U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorReadDouble, 0x9e660000U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorBranchNext, 0x14000001U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorSVEPtrue, 0x2598e3e0U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorSVEIndex, 0x04a14020U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorSVELast, 0x05a1a000U)
+VECTOR_MEMORY_VALUE(uint32_t, kVectorAliasSeed, 0x4f05e4a0U)
+VECTOR_MEMORY_VALUE(unsigned, kVectorSeparateRegister, 1)
+VECTOR_MEMORY_VALUE(unsigned, kVectorAliasParameters, 3)
+VECTOR_MEMORY_VALUE(unsigned, kVectorBytes, 16)
+VECTOR_MEMORY_VALUE(unsigned, kVectorHalfBytes, 8)
+VECTOR_MEMORY_VALUE(unsigned, kVectorLowWordBytes, 4)
+VECTOR_MEMORY_VALUE(unsigned, kVectorTempFirst, 4)
+VECTOR_MEMORY_VALUE(va_t, kVectorFunctionStride, 32)
+VECTOR_MEMORY_VALUE(unsigned, kVectorCaseCount, 80)
+VECTOR_MEMORY_VALUE(unsigned, kVectorReadbackParts, 2)
+VECTOR_MEMORY_VALUE(unsigned, kVectorPathStorage, 128)
+VECTOR_MEMORY_VALUE(unsigned, kVectorLoadParameters, 2)
+VECTOR_MEMORY_VALUE(unsigned, kVectorStoreParameters, 4)
+VECTOR_MEMORY_VALUE(unsigned, kVectorDataPosition, 128)
+VECTOR_MEMORY_VALUE(unsigned, kVectorMemorySize, 256)
+VECTOR_MEMORY_VALUE(uint64_t, kVectorLoadedLow, 0xfedcba9876543210ULL)
+VECTOR_MEMORY_VALUE(uint64_t, kVectorLoadedHigh, 0x9182736455463728ULL)
+VECTOR_MEMORY_VALUE(uint64_t, kVectorStoreLow, 0x1021324354657687ULL)
+VECTOR_MEMORY_VALUE(uint64_t, kVectorStoreHigh, 0x8899aabbccddeeffULL)
+VECTOR_MEMORY_VALUE(uint64_t, kVectorIndexHighGarbage, 0xdeadbeef00000000ULL)
+VECTOR_MEMORY_VALUE(uint64_t, kVectorRangeRegionEnd, 0x0040000000000000ULL)
+VECTOR_MEMORY_TEXT(kVectorNamePrefix, "original_vector_memory_")
+VECTOR_MEMORY_TEXT(kVectorSVETriple, "aarch64-unknown-linux-gnu")
+VECTOR_MEMORY_TEXT(kVectorNativeIncludes, "#include <stdint.h>\n")
+VECTOR_MEMORY_TEXT(kVectorFPTypeSingle, "float")
+VECTOR_MEMORY_TEXT(kVectorFPTypeDouble, "double")
+VECTOR_MEMORY_TEXT(kVectorFPIntegerType, "uint{0}_t")
+VECTOR_MEMORY_TEXT(kVectorFPDecl, "{0} {1}(uint64_t, {2}{3});\n")
+VECTOR_MEMORY_TEXT(kVectorFPParameter, ", {0}")
+VECTOR_MEMORY_TEXT(kVectorFPLoadBody,
+                   "return __builtin_bit_cast({0}, {1}(base, index));")
+VECTOR_MEMORY_TEXT(
+    kVectorFPStoreBody,
+    "(void){0}(base, index, __builtin_bit_cast({1}, ({2})data)); "
+    "return 0;")
+VECTOR_MEMORY_TEXT(kVectorFPWrapper,
+                   "static uint64_t fp_case_{0}(uint64_t base, uint64_t index, "
+                   "uint64_t data) {{ {1} }\n")
+VECTOR_MEMORY_TEXT(kVectorFPCase,
+                   "{{ fp_case_{0}, {1}, {2}, {3}, {4}, {5} },\n")
+VECTOR_MEMORY_TEXT(
+    kVectorFPHarness,
+    "struct fp_case {{ uint64_t (*call)(uint64_t, uint64_t, uint64_t); "
+    "unsigned width, step, signed_index, narrow_index, load; };\n"
+    "{0}\n"
+    "static const struct fp_case fp_cases[] = {{ {1} };\n"
+    "int main(void) {{\n"
+    "  static const uint64_t singles[] = {{0x7fc01234U, 0x80000000U, "
+    "0x7f800001U, 0xffffffffU, 0x3f800000U};\n"
+    "  static const uint64_t doubles[] = {{0x7ff8000000001234ULL, "
+    "0x8000000000000000ULL, 0x7ff0000000000001ULL, 0xffffffffffffffffULL, "
+    "0x3ff0000000000000ULL};\n"
+    "  const int indices[] = {{0, 1, 3, -1, -3};\n"
+    "  unsigned char memory[256], expected[256];\n"
+    "  for (unsigned c = 0; c < sizeof(fp_cases)/sizeof(fp_cases[0]); ++c)\n"
+    "    for (unsigned p = 0; p < sizeof(singles)/sizeof(singles[0]); ++p)\n"
+    "      for (unsigned s = 0; s < sizeof(indices)/sizeof(indices[0]); ++s) "
+    "{{\n"
+    "        const struct fp_case *test = &fp_cases[c];\n"
+    "        int n = indices[s];\n"
+    "        if (n < 0 && !test->signed_index) continue;\n"
+    "        uint64_t data = test->width == 4 ? singles[p] : doubles[p];\n"
+    "        for (unsigned b = 0; b < sizeof(memory); ++b)\n"
+    "          memory[b] = expected[b] = 0x5a;\n"
+    "        unsigned pos = (unsigned)(128 + n * (int)test->step);\n"
+    "        for (unsigned b = 0; b < test->width; ++b) {{\n"
+    "          expected[pos + b] = (unsigned char)(data >> (b * 8));\n"
+    "          if (test->load) memory[pos + b] = expected[pos + b];\n"
+    "        }\n"
+    "        uint64_t index = test->narrow_index\n"
+    "            ? 0xdeadbeef00000000ULL | (uint32_t)n : "
+    "(uint64_t)(int64_t)n;\n"
+    "        uint64_t result = test->call((uintptr_t)(memory + 128), index, "
+    "data);\n"
+    "        if (test->load && result != data) return 1;\n"
+    "        for (unsigned b = 0; b < sizeof(memory); ++b)\n"
+    "          if (memory[b] != expected[b]) return 2;\n"
+    "      }\n"
+    "  return 0;\n"
+    "}\n")
+VECTOR_MEMORY_TEXT(kVectorIndexCType, "uint{0}_t")
+VECTOR_MEMORY_TEXT(kVectorNativeDecl, "uint64_t {0}(uint64_t, {2}{1});\n")
+VECTOR_MEMORY_TEXT(kVectorNativeStoreParameters, ", uint64_t, uint64_t")
+VECTOR_MEMORY_TEXT(kVectorNativeAliasParameter, ", uint64_t")
+VECTOR_MEMORY_TEXT(kVectorNativeAliasArgument, ", (uint64_t)data")
+VECTOR_MEMORY_TEXT(kVectorNativeAliasCall, "{0}(base, index{1})")
+VECTOR_MEMORY_TEXT(kVectorNativeLoadCall, "{0}(base, index)")
+VECTOR_MEMORY_TEXT(kVectorNativeStoreCall,
+                   "{0}(base, index, (uint64_t)data, (uint64_t)(data >> 64))")
+VECTOR_MEMORY_TEXT(kVectorNativeWrapper,
+                   "static uint64_t vector_case_{0}(uint64_t base, uint64_t "
+                   "index, unsigned __int128 data) {{ return {1}; }\n")
+VECTOR_MEMORY_TEXT(kVectorNativeCase,
+                   "{{ vector_case_{0}, {1}, {2}, {3}, {4} },\n")
+VECTOR_MEMORY_TEXT(
+    kVectorNativeHarness,
+    "typedef unsigned __int128 vector_bits;\n"
+    "struct vector_case {{ uint64_t (*call)(uint64_t, uint64_t, vector_bits); "
+    "unsigned width, step, signed_index, narrow_index; };\n"
+    "{0}\n"
+    "static const struct vector_case vector_cases[] = {{ {1} };\n"
+    "static unsigned char vector_memory[256], vector_expected[256];\n"
+    "int main(void) {{\n"
+    "  const vector_bits data = ((vector_bits)0x8899aabbccddeeffULL << 64) | "
+    "0x1021324354657687ULL;\n"
+    "  const int indices[] = {{0, 1, 3, -1, -3};\n"
+    "  for (unsigned c = 0; c < sizeof(vector_cases)/sizeof(vector_cases[0]); "
+    "++c)\n"
+    "    for (unsigned sample = 0; sample < "
+    "sizeof(indices)/sizeof(indices[0]); ++sample) {{\n"
+    "      const struct vector_case *test = &vector_cases[c];\n"
+    "      int n = indices[sample];\n"
+    "      if (n < 0 && !test->signed_index) continue;\n"
+    "      for (unsigned b = 0; b < sizeof(vector_memory); ++b)\n"
+    "        vector_memory[b] = vector_expected[b] = (unsigned char)(b * 37 + "
+    "c * 11 + 13);\n"
+    "      unsigned pos = (unsigned)(128 + n * (int)test->step);\n"
+    "      vector_bits expected = 0;\n"
+    "      if ({2}) {{\n"
+    "        for (unsigned b = 0; b < test->width; ++b)\n"
+    "          expected |= (vector_bits)vector_expected[pos + b] << (b * 8);\n"
+    "      } else\n"
+    "        for (unsigned b = 0; b < test->width; ++b)\n"
+    "          vector_expected[pos + b] = (unsigned char)(data >> (b * 8));\n"
+    "      uint64_t index = test->narrow_index\n"
+    "                           ? 0xdeadbeef00000000ULL | (uint32_t)n\n"
+    "                           : (uint64_t)(int64_t)n;\n"
+    "      uint64_t value = test->call((uintptr_t)(vector_memory + 128), "
+    "index, data);\n"
+    "      uint64_t digest = (uint64_t)expected ^ (uint64_t)(expected >> 64);\n"
+    "      if (value != digest) return 1;\n"
+    "      for (unsigned b = 0; b < sizeof(vector_memory); ++b)\n"
+    "        if (vector_memory[b] != vector_expected[b]) return 2;\n"
+    "    }\n"
+    "  return 0;\n"
+    "}\n")
+
+#undef VECTOR_MEMORY_FAMILY
+#undef VECTOR_MEMORY_TEXT
+#undef VECTOR_MEMORY_VALUE

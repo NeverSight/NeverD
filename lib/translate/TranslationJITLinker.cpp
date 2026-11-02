@@ -8,6 +8,7 @@
 
 #include "TranslationJITLinkerInternal.h"
 #include "TranslationLinkGraphVerifierInternal.h"
+#include "X86/X87TranslationBoundary.h"
 
 #include "neverd/support/BranchEncoding.h"
 #include "neverd/translate/TranslationArtifactVerifier.h"
@@ -120,6 +121,24 @@ void TranslationJITLinkerError::log(llvm::raw_ostream &OS) const {
 
 std::error_code TranslationJITLinkerError::convertToErrorCode() const {
   return std::make_error_code(std::errc::invalid_argument);
+}
+
+llvm::Error
+detail::markAuditedTranslationBlocksLiveV1(llvm::jitlink::LinkGraph &Graph) {
+  // LLVM's pruning roots are symbols, not blocks. Audited ELF metadata may
+  // have no symbols, so markAllSymbolsLive alone would remove it and invalidate
+  // the sealed graph. Give only those blocks a private, zero-width root before
+  // capture; this adds no content, callable entry, external, or relocation.
+  std::set<llvm::jitlink::Block *> SymbolBlocks;
+  for (llvm::jitlink::Symbol *Symbol : Graph.defined_symbols()) {
+    Symbol->setLive(true);
+    SymbolBlocks.insert(&Symbol->getBlock());
+  }
+  for (llvm::jitlink::Block *Block : Graph.blocks())
+    if (!SymbolBlocks.contains(Block))
+      Graph.addAnonymousSymbol(*Block, 0, 0, /*IsCallable=*/false,
+                               /*IsLive=*/true);
+  return llvm::Error::success();
 }
 
 bool detail::isSealedAArch64Branch26FixupV1(uint32_t OriginalInstruction,
@@ -1009,16 +1028,18 @@ public:
               Graph, State->ObjectBytes, State->Artifact->hostTarget(),
               State->Artifact->blockSymbols(),
               State->Artifact->runtimeSymbols(),
-              State->Artifact->runtimeRegistryIdentity());
+              State->Artifact->runtimeRegistryIdentity(),
+              State->Artifact->runtimeProfile());
       if (!Audit)
         return failure(TranslationJITLinkerErrorCode::PrePruneAuditFailed,
                        llvm::toString(Audit.takeError()));
+      if (llvm::Error Error = detail::markAuditedTranslationBlocksLiveV1(Graph))
+        return Error;
       if (llvm::Error Error = capturePrePruneGraph(Graph, *State))
         return Error;
       completeStage(State->Receipt, TranslationJITLinkAuditStageV1::PrePrune);
       return llvm::Error::success();
     });
-    Config.PrePrunePasses.push_back(llvm::jitlink::markAllSymbolsLive);
     Config.PostPrunePasses.push_back([State = State](LinkGraph &Graph) {
       return buildAArch64Tables(Graph, *State);
     });
@@ -1046,7 +1067,7 @@ llvm::Error
 verifyProductionRegistry(const TranslationObjectArtifactV1 &Artifact,
                          const RuntimeSymbolRegistryV1 &Registry) {
   llvm::Expected<RuntimeSymbolRegistryV1> ProductionOrErr =
-      RuntimeSymbolRegistryV1::create();
+      RuntimeSymbolRegistryV1::create(Artifact.runtimeProfile());
   if (!ProductionOrErr)
     return failure(TranslationJITLinkerErrorCode::RuntimeRegistryMismatch,
                    llvm::toString(ProductionOrErr.takeError()));
@@ -1138,9 +1159,11 @@ llvm::Error verifyRawArtifact(const TranslationObjectArtifactV1 &Artifact) {
 struct LinkedTranslationBlockV1::Impl {
   Impl(std::unique_ptr<llvm::jitlink::InProcessMemoryManager> MemoryManager,
        JITLinkMemoryManager::FinalizedAlloc Allocation,
-       llvm::orc::ExecutorAddr EntryAddress)
+       llvm::orc::ExecutorAddr EntryAddress,
+       TranslationRuntimeProfileV1 Profile, CodeInvalidationPolicy MemoryPolicy)
       : MemoryManager(std::move(MemoryManager)),
-        Allocation(std::move(Allocation)), EntryAddress(EntryAddress) {}
+        Allocation(std::move(Allocation)), EntryAddress(EntryAddress),
+        Profile(Profile), MemoryPolicy(MemoryPolicy) {}
 
   ~Impl() { llvm::consumeError(unload()); }
 
@@ -1198,6 +1221,9 @@ struct LinkedTranslationBlockV1::Impl {
   uint64_t ActiveInvocations = 0;
   bool Unloading = false;
   std::optional<RuntimeCodeCredentialV1> InvocationCredential;
+  TranslationRuntimeProfileV1 Profile;
+  CodeInvalidationPolicy MemoryPolicy;
+  std::optional<RuntimeX87StepContractV1> X87Step;
 };
 
 LinkedTranslationBlockV1::LinkedTranslationBlockV1(
@@ -1219,6 +1245,9 @@ bool LinkedTranslationBlockV1::isLoaded() const noexcept {
 llvm::Expected<uint32_t>
 LinkedTranslationBlockV1::invoke(RuntimeGuestStateX86_64V1 &GuestState,
                                  RuntimeCallFrameV1 &Runtime) const {
+  if (State && State->Profile != TranslationRuntimeProfileV1::ScalarInteger)
+    return failure(TranslationJITLinkerErrorCode::InvocationRejected,
+                   "integer invocation cannot enter a portable x87 artifact");
   if (!State)
     return failure(TranslationJITLinkerErrorCode::InvocationRejected,
                    "linked block is unloaded");
@@ -1265,6 +1294,55 @@ LinkedTranslationBlockV1::invoke(RuntimeGuestStateX86_64V1 &GuestState,
     return failure(TranslationJITLinkerErrorCode::InvocationRejected,
                    "runtime helper produced invalid control state: " +
                        llvm::toString(std::move(Error)));
+  return Result;
+}
+
+llvm::Expected<uint32_t> LinkedTranslationBlockV1::invokePortableX87(
+    RuntimeGuestStateX86_64X87V1 &GuestState,
+    RuntimeCallFrameV1 &Runtime) const {
+  const auto Reject = [](llvm::StringRef Message) {
+    return failure(TranslationJITLinkerErrorCode::InvocationRejected,
+                   Message.str());
+  };
+  if (!State || State->Profile != TranslationRuntimeProfileV1::PortableX87)
+    return Reject("portable x87 invocation requires its explicitly bound "
+                  "artifact profile");
+  const auto EntryAddress = State->beginInvocation();
+  if (!EntryAddress)
+    return Reject("linked block is unloaded");
+  llvm::scope_exit InvocationLease(
+      [State = State.get()] { State->endInvocation(); });
+  if (llvm::Error Error = validateRuntimeGuestStateX86_64X87V1(GuestState))
+    return Reject(llvm::toString(std::move(Error)));
+  if (!Runtime.Memory ||
+      Runtime.Memory->codeInvalidationPolicy() != State->MemoryPolicy ||
+      Runtime.Control.CodeInvalidation !=
+          static_cast<uint32_t>(State->MemoryPolicy) ||
+      State->MemoryPolicy == CodeInvalidationPolicy::ValidateBeforeDispatch)
+    return Reject(
+        "portable x87 runtime memory policy does not match the artifact");
+  if (!State->InvocationCredential ||
+      Runtime.Published != *State->InvocationCredential ||
+      Runtime.Validated != *State->InvocationCredential ||
+      GuestState.Integer.RIP != State->InvocationCredential->EntryPC)
+    return Reject("portable x87 credential or entry PC is not bound to this "
+                  "linked block");
+  if (llvm::Error Error =
+          validateRuntimeCodeCredentialV1(Runtime.Published, Runtime.Validated))
+    return Reject(llvm::toString(std::move(Error)));
+  if (llvm::Error Error =
+          validateRuntimeControlBlockExactSpanV1(Runtime.Control))
+    return Reject(llvm::toString(std::move(Error)));
+  if (Runtime.Control.Exit.Kind != RuntimeABIExitKindV1::None)
+    return Reject("portable x87 entry control already has a runtime exit");
+  GuestState.LastStep = {};
+  using EntryFunction =
+      uint32_t(RuntimeGuestStateX86_64X87V1 *, RuntimeCallFrameV1 *);
+  const uint32_t Result =
+      EntryAddress->toPtr<EntryFunction>()(&GuestState, &Runtime);
+  if (llvm::Error Error = validateRuntimeX87AfterInvocationV1(
+          GuestState, Runtime, Result, State->X87Step))
+    return Reject(llvm::toString(std::move(Error)));
   return Result;
 }
 
@@ -1340,7 +1418,8 @@ linkTranslationObjectV1(const TranslationObjectArtifactV1 &Artifact,
 
   auto Implementation = std::make_unique<LinkedTranslationBlockV1::Impl>(
       std::move(*MemoryManager), std::move(Completion->Allocation),
-      Completion->EntryAddress);
+      Completion->EntryAddress, Artifact.runtimeProfile(),
+      Artifact.memoryPolicy());
   return LinkedTranslationBlockV1(std::move(Implementation),
                                   std::move(Completion->Receipt));
 }
@@ -1367,6 +1446,17 @@ linkTranslationObjectV1(const TranslationObjectResultV1 &Object,
       linkTranslationObjectV1(Object.artifact(), Registry);
   if (!Linked)
     return Linked.takeError();
+  if (Object.descriptor().RuntimeProfile != Object.artifact().runtimeProfile())
+    return failure(TranslationJITLinkerErrorCode::InvocationRejected,
+                   "object descriptor and artifact runtime profiles disagree");
+  if (Object.descriptor().Header.Terminator ==
+      TranslationBlockTerminatorKindV1::X87Runtime) {
+    auto Instruction = detail::x87TranslationInstructionV1(Object.descriptor());
+    if (!Instruction)
+      return failure(TranslationJITLinkerErrorCode::InvocationRejected,
+                     llvm::toString(Instruction.takeError()));
+    Linked->State->X87Step = Instruction->Contract;
+  }
   Linked->State->InvocationCredential = Credential;
   Linked->Receipt.InvocationCredentialBound = true;
   return std::move(*Linked);

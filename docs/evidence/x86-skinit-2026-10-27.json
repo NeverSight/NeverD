@@ -1,0 +1,1413 @@
+{
+  "scope": "Native nonreturning SKINIT on x86/x64; physical EAX bits across MedIR/HighIR and both C outputs",
+  "goal_complete": false,
+  "artifact_root": "/mnt/data/neverd-x86-skinit",
+  "sources": {
+    "neverd_implementation": "3bb8221fe148ba377fbf0849adebfcf8cdc449d9",
+    "neverd_initial_integrated_source": "d7adee9176299c1ca0f93a561ec047825f64f3fd",
+    "neverd_final_qualified_source": "16bf4af850e435f34053a96e7135f1e95d6275b9",
+    "neverd_final_qualified_tree": "cd0b5f6c1e1c8cd5e5e634bbe296d104857e4d8e",
+    "reviewed_upstream_integration": "cc90852707054bdf7f580b879bb134080546a658",
+    "llvm": "6804d12d13a854af18984b063edb61fd728d9ba8",
+    "neverc": "84074eba2c7d0a1bd4291234545121a8f7ae5fd6",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "llvm_release_and_pins_changed": false,
+    "snapshot": {
+      "path": "post-integration/source-snapshot.json",
+      "sha256": "80bd323938c99f66cf1855b04abc538521010286256b95038b1ffec05345f30c"
+    },
+    "implementation_file_hashes": {
+      "path": "qualified-code-files.json",
+      "sha256": "510829e760990b738635eb7c75623f4366beb60a95ce45c43c2949194288de84"
+    }
+  },
+  "compiler_binaries": {
+    "path": "compiler-identities.json",
+    "sha256": "c01173f96816ec0c63fb36e9d5a62cba36db694a30b055867fb0e6b30ff3cfce"
+  },
+  "reference": {
+    "title": "AMD64 APM Volume 3",
+    "revision": "3.38",
+    "date": "July 2026",
+    "url": "https://docs.amd.com/v/u/en-US/24594_3.38_APM_Vol3_PUB",
+    "pdf_sha256": "e18bd39ad0ca19d2eb9b9ea25c2635144c5ab368e5d6fbdc7a08345515ea1aee",
+    "printed_pages": [
+      472,
+      473
+    ],
+    "scope": "SKINIT EAX input, processor reset and SLB entry transfer; native instruction owns launch/faults. No host execution."
+  },
+  "validation": {
+    "initial_broad_regression": {
+      "pinned": {
+        "source": "d7adee9176299c1ca0f93a561ec047825f64f3fd",
+        "reports": [
+          {
+            "path": "integrated/pinned-NeverDX86SkinitTests.xml",
+            "sha256": "803f501b3b0faa1d6ea339f900165e93cbbb02350a8c8fe29aa2a669236699c8",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decode_lift_termination_checks": "240",
+              "malformed_metadata_refusals": "112",
+              "invalid_C_memory_and_termination_contracts": "24",
+              "native_objects": "180",
+              "raw_parameter_ubsan_executions": "8",
+              "sanitized_caller_argument_observations": "8"
+            }
+          },
+          {
+            "path": "integrated/pinned-NeverDX86SystemStateTests.xml",
+            "sha256": "ddcd917a05e9c7c9b65731674851a2f231d221dad31dcedd8f028d0e88006c3e",
+            "tests": 29,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 29,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-NeverDX86SystemSideeffectTests.xml",
+            "sha256": "f7eb26c91e94c7674946b5aea89bf2718043e17dd7bd4d18ea88575625b2a9df",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-NeverDX86VirtualizationSourceTests.xml",
+            "sha256": "c056985d5a2892f0bcc159a233293cb5eff977c0e0e4b2b56afc2a2fc4075ea8",
+            "tests": 367,
+            "failures": 1,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 43,
+            "passed": 323,
+            "skips": [
+              {
+                "test": "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1212\nrequires the qualified native virtualization SDK\n"
+              },
+              {
+                "test": "X86VirtualizationSource.NeverCCompilesBothRoutesToNativeIntrinsics",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1970\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1890\nrequires the native control/debug register SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1650\nrequires the explicit descriptor-state address SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3037\nrequires the explicit descriptor-address SDK\n"
+              },
+              {
+                "test": "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1834\nrequires the scalar MSR/port intrinsic SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2339\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2370\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2475\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.NeverCCompilesBothRoutesToNativeSystemCalls",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2865\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2902\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3037\nrequires the explicit descriptor-address SDK\n"
+              },
+              {
+                "test": "X86ImplicitMsrSource.NeverCRetainsNativeCompletionAndRestart",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3393\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SgxSource.NeverCCompletionMatchesOriginalRegistersAndFlags",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4724\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4747\nnative SGX completion requires the qualified fork\n"
+              },
+              {
+                "test": "X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4791\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5238\nlinked SDK predates explicit AMX controls\n"
+              },
+              {
+                "test": "X86AmxSource.NeverCCompilesBothRoutesWithoutAssembly",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5310\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5557\nHost does not provide AMX-TILE; native restart unqualified\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1780\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1780\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1780\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1783\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1783\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1783\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR16",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR32",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR64",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL16",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL32",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL64",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              }
+            ],
+            "failed_tests": [
+              "X86DescriptorStateSource.LegacyVerifyCallsKeepDeadResultsAndSegments"
+            ],
+            "properties": {
+              "transaction_abort_fixtures": "48",
+              "transaction_abort_neverc_fixtures": "0",
+              "stock_system_native_c_compilations": "48",
+              "source_fixtures": "39",
+              "descriptor_state_source_fixtures": "70",
+              "scalar_system_source_fixtures": "21"
+            }
+          },
+          {
+            "path": "integrated/pinned-NeverDNoReturnTests.xml",
+            "sha256": "8647ed721cd4c8be8d3f90e1d2484394b248d0ed91d305d671d7372525927df3",
+            "tests": 39,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 39,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "ed1f39a8cf480b43f46187022a160b12892f61ecae3d9a5e1c670f9f25854af2",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 24,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "native_gs_loads": "40",
+              "native_executables": "2"
+            }
+          },
+          {
+            "path": "integrated/pinned-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "a8b8afb58c923aa754640f3c247e0a0411d625164e2a2da8ec0eeceaf1ecb4c2",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "1008",
+              "malformed_contract_refusals": "120",
+              "wrapped_offsets": "24",
+              "native_objects": "360"
+            }
+          },
+          {
+            "path": "integrated/pinned-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "0678d72faf670ce55ac7d3feeb4e43c87d34580e18b357394e4ce7a7d62734e5",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 30,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "f5d6a0aa3ec06ae4fb2791aebc45a465b6f4a177183ee40e004e79483f7c35f6",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 7,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "ecac52f411ff590f2b3672084b7a772dc689997b5cf5ed2a0eeec9933b499ef7",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 9,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-NeverDX86CompactSegmentTests.xml",
+            "sha256": "3e186ea76abd2ab32689dd9058e90aea91cc694e789e2f2065034092d924857f",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "13608",
+              "native_objects": "270",
+              "sanitized_operand_comparisons": "252"
+            }
+          },
+          {
+            "path": "integrated/pinned-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "de6f515fd29e7e2c35644f1d46fe52afda6c21f0916a448da4ebb6ae539a42b2",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 4,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "3024",
+              "native_objects": "540"
+            }
+          },
+          {
+            "path": "integrated/pinned-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "de25b72e9103fa4b1798a9df7dfde8d644f5bb42602635f730e92eb1f85abbc6",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 11,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/pinned-shared-arm64.xml",
+            "sha256": "5964d8e29594fcbbaecd80a043d922a8f24b0826c67c7310b56d40eda95c7819",
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 8,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          }
+        ],
+        "totals": {
+          "tests": 550,
+          "passed": 506,
+          "failures": 1,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 43
+        },
+        "build": {
+          "path": "integrated/pinned-build.log",
+          "sha256": "0dd7afe8dcd1e3a512861f0895f1d6af7d465d685b62682324b84b4f74ddb6af"
+        },
+        "commands": {
+          "path": "integrated/pinned-commands.json",
+          "sha256": "09cab54820fe013861229f30036dc27cc404423db42cf3c3a8728b43294969f6"
+        }
+      },
+      "native": {
+        "source": "d7adee9176299c1ca0f93a561ec047825f64f3fd",
+        "reports": [
+          {
+            "path": "integrated/native-NeverDX86SkinitTests.xml",
+            "sha256": "56c3641c41d3adb5bb15cf7654f9657eda154109e63949f7eec7f71d8e12a8e8",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decode_lift_termination_checks": "240",
+              "malformed_metadata_refusals": "112",
+              "invalid_C_memory_and_termination_contracts": "48",
+              "native_objects": "180",
+              "raw_parameter_ubsan_executions": "8",
+              "sanitized_caller_argument_observations": "8"
+            }
+          },
+          {
+            "path": "integrated/native-NeverDX86SystemStateTests.xml",
+            "sha256": "ff7e0228e91502843128a70142e82ad05c0293dc8d9562fc2d659cda1a0fece6",
+            "tests": 29,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 29,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/native-NeverDX86SystemSideeffectTests.xml",
+            "sha256": "4acc02d22064409188b82e3a5c147e878c08765e4821f9cfef8d2816ddff6bb1",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/native-NeverDX86VirtualizationSourceTests.xml",
+            "sha256": "621876eb66579fc5a9c5d99a81eca638d068a521b0e976567abfdbbf86a7b4e8",
+            "tests": 367,
+            "failures": 1,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 31,
+            "passed": 335,
+            "skips": [
+              {
+                "test": "X86VirtualizationSource.NeverCCompilesBothRoutesToNativeIntrinsics",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1970\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SystemStateSource.NeverCCompilesBothRoutesToNativeSystemCalls",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2865\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86ImplicitMsrSource.NeverCRetainsNativeCompletionAndRestart",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3393\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SgxSource.NeverCCompletionMatchesOriginalRegistersAndFlags",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4724\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4791\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86AmxSource.NeverCCompilesBothRoutesWithoutAssembly",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5310\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5557\nHost does not provide AMX-TILE; native restart unqualified\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1325\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X64MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1328\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1458\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X64MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1461\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1780\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1780\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1780\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64ELF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1783\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64COFF",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1783\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X64MachO",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1783\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR16",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR32",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LAR64",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL16",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL32",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              },
+              {
+                "test": "DescriptorWidths/X86DescriptorQueryCompletion.NeverCResultsAndFlagsMatchOriginalInstructions/LSL64",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4077\nset NEVERD_TEST_NEVERC to the qualified NeverC compiler\n"
+              }
+            ],
+            "failed_tests": [
+              "X86DescriptorStateSource.LegacyVerifyCallsKeepDeadResultsAndSegments"
+            ],
+            "properties": {
+              "native_modules": "426",
+              "descriptor_address_native_functions": "462",
+              "descriptor_address_c_compilations": "12",
+              "descriptor_address_neverc_compilations": "0",
+              "native_system_modules": "312",
+              "transaction_abort_fixtures": "48",
+              "transaction_abort_neverc_fixtures": "0",
+              "stock_system_native_c_compilations": "48",
+              "source_fixtures": "39",
+              "descriptor_state_source_fixtures": "70",
+              "scalar_system_source_fixtures": "21"
+            }
+          },
+          {
+            "path": "integrated/native-NeverDNoReturnTests.xml",
+            "sha256": "5d562cee4e4b7e7ad7017693871e792d7fee2440e7a3d6ec697b9cfc83fe7d24",
+            "tests": 39,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 39,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/native-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "4a0cc284db26cedae1f4afbab0013ed7fc826a4d926d2d6796bae3f865ebe537",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 24,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "native_gs_loads": "40",
+              "native_executables": "2"
+            }
+          },
+          {
+            "path": "integrated/native-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "8a3a958f1da175436a8526ebeb2ac003a71939daf2e8c605a4584aa2b67aa456",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "1008",
+              "malformed_contract_refusals": "120",
+              "wrapped_offsets": "24",
+              "native_objects": "360"
+            }
+          },
+          {
+            "path": "integrated/native-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "787b1b06a8df09b246ab46069603136a325c583185241a651eb94bbff3b4df90",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 30,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/native-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "8840b16742f20e104570e06f9a3ced0254b3cf2a401df9e9553f33f15837ffa8",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 7,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/native-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "f2fe15b768d44b3f57a7d301c241491e82dcd040b91a1aa889027df4c2eb0167",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 9,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "integrated/native-NeverDX86CompactSegmentTests.xml",
+            "sha256": "c89719b4ea146dadce4c77ae9d09944d3785fec389555b9747571376087425e3",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "13608",
+              "native_objects": "270",
+              "sanitized_operand_comparisons": "252"
+            }
+          },
+          {
+            "path": "integrated/native-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "a63c8d82aaad744954314eea2bcd735831c1f492d3fe7d2365b66daaffca7ab5",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 4,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "3024",
+              "native_objects": "540"
+            }
+          },
+          {
+            "path": "integrated/native-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "94f8c22cb68acd9e375d06547443e287acfb1d48800bb4eea47d72b63a944060",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 11,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          }
+        ],
+        "totals": {
+          "tests": 542,
+          "passed": 510,
+          "failures": 1,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 31
+        },
+        "build": {
+          "path": "integrated/native-build.log",
+          "sha256": "a8b3da1687c7d6b7f8fef59fca0138a3dd0809597afc4e9d8fba2646f622e68a"
+        },
+        "commands": {
+          "path": "integrated/native-commands.json",
+          "sha256": "d4c50a9d1ad4a2ef73a3f031c6422a5856d3bae7f9c26dc87c415d68f1b973ce"
+        }
+      }
+    },
+    "initial_failure": "The legacy descriptor fixture tried to replace literal {bx} in a current {ax} constraint and threw before calling the renderer. Original failing reports are retained. The repaired fixture independently constructs generic and fixed-BX historical contracts and checks 24 mode/segment/result combinations.",
+    "post_integration": {
+      "pinned": {
+        "source": "16bf4af850e435f34053a96e7135f1e95d6275b9",
+        "reports": [
+          {
+            "path": "post-integration/pinned-NeverDX86SkinitTests.xml",
+            "sha256": "65869f721ece8a6d2397be20742db30fe27dcb868969288deec0c3f870c91a4f",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decode_lift_termination_checks": "240",
+              "malformed_metadata_refusals": "112",
+              "invalid_C_memory_and_termination_contracts": "24",
+              "native_objects": "180",
+              "raw_parameter_ubsan_executions": "8",
+              "sanitized_caller_argument_observations": "8"
+            }
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86SystemStateTests.xml",
+            "sha256": "95d298d3d33a0a96c7333df48280b539d93eefa9d6b829d184baaa6ae3a45d15",
+            "tests": 29,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 29,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86SystemSideeffectTests.xml",
+            "sha256": "219676d04a7a1f1f91b8a39bbdc30de839cb37a7fb0dd65eb2ead34ab77023de",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86VirtualizationSourceTests.xml",
+            "sha256": "2e270c9cd4a6906ff2a2a33af5964a53d453201d47c79b5ae6bc89ea944f4d54",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 2,
+            "passed": 4,
+            "skips": [
+              {
+                "test": "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1681\nrequires the explicit descriptor-state address SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+                "message": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3068\nrequires the explicit descriptor-address SDK\n"
+              }
+            ],
+            "failed_tests": [],
+            "properties": {
+              "legacy_generic_and_fixed_bx_contracts": "24"
+            }
+          },
+          {
+            "path": "post-integration/pinned-NeverDNoReturnTests.xml",
+            "sha256": "3306ab41bf77106d74ebe8382c3d89ef6c05fd8395a0c8295f430c3a4dc704b3",
+            "tests": 39,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 39,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "197d93661df6b5200d1c6cdb56c34fb9b3275d19cb68190b15fdb46fb03bfed3",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 24,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "native_gs_loads": "40",
+              "native_executables": "2"
+            }
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "0305d1e3251477e0aed814ef641325cc094f76987e3c5c353ceddb1c252a75db",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "1008",
+              "malformed_contract_refusals": "120",
+              "wrapped_offsets": "24",
+              "native_objects": "360"
+            }
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "181755935c4cd2a1ec58e4216db8ad00658df772dfd240de2b37c37f51ebc2ab",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 30,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "6a86b2f932c3c8373ef83a92a5581d64dea40aacd74d9e1a802a57ff83995610",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 7,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "778874315f5d6416b2e43e5548758302a4464a22fe5e3613e4efccf6b838779e",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 9,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86CompactSegmentTests.xml",
+            "sha256": "764b53f31b2fcc8e5a1ea46179bf1c917a8faf6ec3e599c022642cf2c4eeb52d",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "13608",
+              "native_objects": "270",
+              "sanitized_operand_comparisons": "252"
+            }
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "454ec4acea11f5aa8233fd64918dc5d27a573fd894fed4787023f90c6075b0f6",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 4,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "3024",
+              "native_objects": "540"
+            }
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "ab148023df424425313173eb501a11e48f8bd3348f0fba1bacd6dce3cfca066f",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 11,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDX86LegacyAtomicSemanticTests.xml",
+            "sha256": "c9a369a35d94453b1e5a7706c4fbd79be9a13a5a461cf91731cc2b1939537543",
+            "tests": 22,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 22,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-NeverDHighControlFlowTests.xml",
+            "sha256": "4281461293ed474ca985042a623a4355e46d5a3304acb93a366434b3adcbd951",
+            "tests": 513,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 513,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/pinned-shared-arm64.xml",
+            "sha256": "242f0a8def9fb0b8cd00c4568d4534cf02d93464b145d66370564dde0e6bb70c",
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 8,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          }
+        ],
+        "totals": {
+          "tests": 724,
+          "passed": 722,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 2
+        },
+        "build": {
+          "path": "post-integration/pinned-build.log",
+          "sha256": "a43811f50fd706a940a2b3edcccadef64ec146f72b9483fdb8ad2d4b752434a6"
+        },
+        "commands": {
+          "path": "post-integration/pinned-commands.json",
+          "sha256": "104e368dc803061bd97bd7820e99c3de607057ea033f36153f2b1b3377ea5d1d"
+        },
+        "skinit_objects": {
+          "count": 180,
+          "inventory": {
+            "path": "pinned-skinit-objects.json",
+            "sha256": "42dbcc8da22bcf7705af150363c77b8f489fc472dd4ae06d250c6fc11b74d306"
+          },
+          "valid_profile_json_files": 36
+        }
+      },
+      "native": {
+        "source": "16bf4af850e435f34053a96e7135f1e95d6275b9",
+        "reports": [
+          {
+            "path": "post-integration/native-NeverDX86SkinitTests.xml",
+            "sha256": "893ac38230a0da6aa639daa871bbd8b4266ab3412b64f86b300e6e4a907049d8",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decode_lift_termination_checks": "240",
+              "malformed_metadata_refusals": "112",
+              "invalid_C_memory_and_termination_contracts": "48",
+              "native_objects": "180",
+              "raw_parameter_ubsan_executions": "8",
+              "sanitized_caller_argument_observations": "8"
+            }
+          },
+          {
+            "path": "post-integration/native-NeverDX86SystemStateTests.xml",
+            "sha256": "20ec32387c7a51655aaeff0f3fa627c916ea8cc7786ee38ddf617a856556b035",
+            "tests": 29,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 29,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDX86SystemSideeffectTests.xml",
+            "sha256": "77a3ffc701f43148dc8b70d63d7e9bc8e5789aa59fbe96e4e786be55f0dd92ae",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDX86VirtualizationSourceTests.xml",
+            "sha256": "a18f5b643b8fc8404ff8a7d02d36442a601157aa7dae107dcc0f13777ab93090",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 6,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "legacy_generic_and_fixed_bx_contracts": "24",
+              "descriptor_address_native_functions": "1260",
+              "descriptor_address_c_compilations": "12",
+              "descriptor_address_neverc_compilations": "0"
+            }
+          },
+          {
+            "path": "post-integration/native-NeverDNoReturnTests.xml",
+            "sha256": "c964eb4158078826fabde5d60fbdb910f56545e2c6499591c4453ca26bec0643",
+            "tests": 39,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 39,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "1a2e8e62e5886899437ee0ed5261f7566e0e45cb461a9721ab93e0b45d33bfab",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 24,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "native_gs_loads": "40",
+              "native_executables": "2"
+            }
+          },
+          {
+            "path": "post-integration/native-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "85e24238d2fc04321b235ef1ded16123a41f3fd69d1c1a55d9b8f0bbf7e59218",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "1008",
+              "malformed_contract_refusals": "120",
+              "wrapped_offsets": "24",
+              "native_objects": "360"
+            }
+          },
+          {
+            "path": "post-integration/native-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "58a4090318aee7d53bbd884f83243eb5585464749ebdd5ce2e092be16c1ac798",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 30,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "23306ea56aed3777af0d6ec68adda132c2a6578c26c6814af6ebfbaa47a11c40",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 7,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "aafe48700dcb41410494d262ee2534af109f904962e8243d174725e442805651",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 9,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDX86CompactSegmentTests.xml",
+            "sha256": "fff775becf25fce0ad52e67c6a4daa040c1659a42e1c83880a24928ea06bb20f",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 5,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "13608",
+              "native_objects": "270",
+              "sanitized_operand_comparisons": "252"
+            }
+          },
+          {
+            "path": "post-integration/native-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "0deb91d99549279daa8936b6287ef39a96c6f0563bc13b9583b75ffd32fd568b",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 4,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {
+              "decoder_lift_checks": "3024",
+              "native_objects": "540"
+            }
+          },
+          {
+            "path": "post-integration/native-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "0e132fdf4f4a40c0249e5a8b644418d7c12bd54388a326bcdf6e8258923744e2",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 11,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDX86LegacyAtomicSemanticTests.xml",
+            "sha256": "c116d3abd65ab812bed979fa7f88c0964c0cb26b60d6c6a6cad14d73f425f39e",
+            "tests": 22,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 22,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          },
+          {
+            "path": "post-integration/native-NeverDHighControlFlowTests.xml",
+            "sha256": "149e197baaf98c883f6e3face8cf1d0659843f437c8fceefd00e05a1c2360fae",
+            "tests": 513,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0,
+            "passed": 513,
+            "skips": [],
+            "failed_tests": [],
+            "properties": {}
+          }
+        ],
+        "totals": {
+          "tests": 716,
+          "passed": 716,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        "build": {
+          "path": "post-integration/native-build.log",
+          "sha256": "70968753e237060e35f86b464f8634a206cd3d4d555f78c682f5a52f823c8ec7"
+        },
+        "commands": {
+          "path": "post-integration/native-commands.json",
+          "sha256": "fbf6cb35885e49fa693d9cd3700b462c9640bc1ead4d0649760f815fec1bfba6"
+        },
+        "skinit_objects": {
+          "count": 180,
+          "inventory": {
+            "path": "native-skinit-objects.json",
+            "sha256": "32815b42dde775d4619a57c67f95a0fd76e76621ce32464e06d34a2725cea2a7"
+          },
+          "valid_profile_json_files": 36
+        }
+      }
+    },
+    "post_integration_scope": "All listed targets run fully except NeverDX86VirtualizationSourceTests, filtered to X86DescriptorStateSource.* and EveryOwnedInstructionSurvivesBothSourceRoutes. The original 367-case reports remain tied to their earlier frozen source; they are not claimed as a fully passing final-source run.",
+    "llvm_lit": {
+      "tests": 4,
+      "report": {
+        "path": "llvm-lit.json",
+        "sha256": "44a2d9158eda907c1e8cf37c69158caedd451ee07d264acbb9a7d6c2bba539fd"
+      },
+      "cases": [
+        "LLVM :: CodeGen/X86/skinit-intrinsics.ll",
+        "LLVM :: CodeGen/X86/bounded-system-intrinsics.ll",
+        "LLVM :: CodeGen/X86/bounded-virtualization-intrinsics.ll",
+        "LLVM :: CodeGen/X86/svm-address-intrinsics.ll"
+      ]
+    },
+    "neverc_frontend": {
+      "path": "neverc-tests.xml",
+      "sha256": "780a32a49efc954a3b79f5022bb4c4bad5bc78fc2650137aca4f014bf3991769",
+      "tests": 94,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "passed": 94,
+      "skips": [],
+      "failed_tests": [],
+      "properties": {}
+    },
+    "neverc_generators": {
+      "tests": 13,
+      "log": {
+        "path": "neverc-generator-tests.log",
+        "sha256": "511b80b9bc07823fcb1f9e859288c504b1822d68d6c0835519adc4f2ef845b9a"
+      }
+    },
+    "independent_instruction_boundaries": {
+      "llvm": {
+        "report": {
+          "path": "llvm-boundaries/qualification.json",
+          "sha256": "7cc7ae1f4ea88e6172281b1efce34ca4ecb81d24344b7ecbff100c2fef9c33d5"
+        },
+        "objects": 12,
+        "eax_observations": 1080,
+        "actual_skinit_execution": false,
+        "successful_launch_qualified": false
+      },
+      "neverc": {
+        "report": {
+          "path": "neverc-boundaries/qualification.json",
+          "sha256": "48bf9503bc2b41eb1ebe3313336e7933e6eb0255b39ad1b003996da7ae7cac53"
+        },
+        "objects": 6,
+        "eax_observations": 1080,
+        "actual_skinit_execution": false,
+        "successful_launch_qualified": false
+      }
+    },
+    "neverc_actual_neverd_c": {
+      "report": {
+        "path": "neverc-routes/qualification.json",
+        "sha256": "be6578f90823493a0e635933d278784666fb7b4da9eafb73a9fd90f4904e3ccf"
+      },
+      "script": {
+        "path": "verify-neverc-routes.py",
+        "sha256": "41bb4e548618df55ad62ee2afa35fcb5bb7cea57fda3cf438bfacf96d1c70fcb"
+      },
+      "native_objects_per_sdk": 72,
+      "native_ir_per_sdk": 72,
+      "recorder_executions_per_sdk": 16,
+      "sanitizers": false,
+      "final_source_equivalence": {
+        "path": "neverc-c-source-equivalence.json",
+        "sha256": "38d963effcf82ac7983994b7c0781596b812c9e26434cb26380d9dddec246913"
+      },
+      "identical_sources_per_sdk": 44,
+      "actual_skinit_execution": false
+    },
+    "red_diagnostics": "Retained role-red and source-bits-red reports show the original pointer-parameter promotion and actual UBSan high-bit process-address failure. The final tests retain an explicit integer-width invariant and execute an ordinary DS load beside the physical input."
+  },
+  "limitations": [
+    "No SKINIT instruction is executed or emulated. Native boundary oracles stop before the independently decoded 0f 01 de; source executions replace launch with a recorder.",
+    "CPU reset, TPM attestation, successful launch, physical SLB accesses, native privilege/feature/fault ordering and launch-time atomicity are unqualified.",
+    "The compatibility SDK has no native llvm.x86.skinit API and uses the owned real-instruction fallback. The native SDK checks the new intrinsic as well.",
+    "NeverC frontend supports x64 targets; i386 qualification uses LLVM and the existing C compiler.",
+    "Skipped tests are included with their exact reasons. Optional NeverC tests in the original broad suite were not configured; AMX hardware is unavailable on this host.",
+    "VMRUN, full machine-state continuations, AMX stack-row addressing, unowned/i386 x87-MMX-3DNow, MPX and the other documented global gaps remain open. No final LLVM release, SDK pin or gitlink update is claimed."
+  ]
+}

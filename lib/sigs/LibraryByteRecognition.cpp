@@ -119,7 +119,9 @@ std::vector<LibraryRecognition> neverd::sigs::recognizeLibraryFeatureBytes(
       Sources.emplace(Source, I);
     }
     ByteDB.apply(Image, Addresses);
-    const auto Settled = ByteDB.buildNameMap();
+    // Identity was independently admitted above; byte settlement selects among
+    // those eligible rules without granting identities to ordinary byte hits.
+    const auto Settled = ByteDB.buildCandidateNameMap();
     std::map<va_t, std::set<size_t>> Winners;
     for (const auto &M : ByteDB.matches()) {
       const auto At = Settled.find(M.Address);

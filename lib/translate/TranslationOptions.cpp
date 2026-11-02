@@ -160,6 +160,17 @@ getInitialTranslationCapability(TranslationCapability Capability) {
 }
 
 llvm::Error validateTranslationOptions(const TranslationOptions &Options) {
+  if (Options.RuntimeProfile != TranslationRuntimeProfileV1::ScalarInteger &&
+      Options.RuntimeProfile != TranslationRuntimeProfileV1::PortableX87)
+    return invalid("unknown translation runtime profile");
+  if (Options.RuntimeProfile == TranslationRuntimeProfileV1::PortableX87) {
+    if (Options.Guest != GuestArchitecture::X86_64)
+      return invalid("portable x87 translation requires a source-x64 guest");
+    if (Options.CodeInvalidation ==
+        CodeInvalidationPolicy::ValidateBeforeDispatch)
+      return invalid(
+          "portable x87 translation does not admit validate-before-dispatch");
+  }
   if (!getArchitectureDescription(Options.Guest))
     return invalid("unknown guest architecture");
   if (!isKnown(Options.Mode))
@@ -197,6 +208,9 @@ llvm::Error validateTranslationOptions(const TranslationOptions &Options) {
        {TranslationCapability::FloatingPoint, TranslationCapability::SIMD,
         TranslationCapability::X87, TranslationCapability::Atomics,
         TranslationCapability::SystemInstructions}) {
+    if (Capability == TranslationCapability::X87 &&
+        Options.RuntimeProfile == TranslationRuntimeProfileV1::PortableX87)
+      continue;
     if (hasCapability(Options.RequiredCapabilities, Capability))
       return invalid("requested translation capability is unsupported by the "
                      "v1 contract");

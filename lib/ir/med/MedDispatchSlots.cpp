@@ -18,6 +18,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/loader/BinaryImageModel.h"
 
 #include <algorithm>
@@ -129,6 +130,53 @@ std::optional<MedVar> findTableSwitchIndex(const MedDispatchContext &C,
     if (It == Defs.end())
       continue;
     const MedOp *Op = It->second;
+    if (Op->Opcode == NdOp::INTRINSIC && Op->NumInputs &&
+        Op->Inputs[0].isConst() &&
+        isAArch64AddressMemoryIntrinsic(
+            static_cast<Intrinsic>(Op->Inputs[0].ConstVal))) {
+      if (!C.Func || !C.Img || C.Img->Arch != Arch::AArch64 ||
+          !aarch64AddressLoadMedShapeIsValid(*Op))
+        return std::nullopt;
+      const auto Instruction = aarch64AddressMemoryInstruction(
+          Op->Inputs[kAddressMemoryWordOperand + 1].ConstVal);
+      if (Instruction->stackBase() || Instruction->isVector() ||
+          (uint64_t(1) << Instruction->indexShift()) !=
+              Instruction->accessBytes())
+        return std::nullopt;
+      // The raw index is already the physical slot coordinate. Reuse it only
+      // for a resolver-certified read, retaining the original load.
+      // Never trace into its base as though that were a complete address.
+      size_t Tables = 0;
+      for (const JumpTable &JT : C.Func->JumpTables) {
+        if (!Blk.Ops.empty() && Blk.Ops.back().Opcode == NdOp::INDIR_BR &&
+            JT.InsnAddr != Blk.Ops.back().Addr)
+          continue;
+        if (JT.MutatedUnsafe || JT.PreScaledIndex || JT.TwoLevelIndex ||
+            JT.TwoTableSelect || !JT.HasDispatchSlotMap ||
+            JT.EntrySize != Instruction->accessBytes() ||
+            (JT.EntryStride && JT.EntryStride != Instruction->accessBytes()))
+          continue;
+        const auto Matches =
+            std::count_if(JT.AuthenticatedTableLoads.begin(),
+                          JT.AuthenticatedTableLoads.end(),
+                          [&](const JumpTableOpOccurrence &Occurrence) {
+                            return Occurrence.Addr == Op->Addr &&
+                                   Occurrence.Seq == Op->OriginSeq &&
+                                   Occurrence.Size == Op->Output.Size;
+                          });
+        Tables += Matches == 1;
+      }
+      size_t Occurrences = 0;
+      for (const auto &Block : C.Func->Blocks)
+        for (const auto &Candidate : Block.Ops)
+          if (Candidate.Addr == Op->Addr &&
+              Candidate.OriginSeq == Op->OriginSeq &&
+              aarch64AddressLoadMedShapeIsValid(Candidate))
+            ++Occurrences;
+      if (Tables != 1 || Occurrences != 1)
+        return std::nullopt;
+      return Op->Inputs[kAddressMemoryIndexOperand + 1];
+    }
     if (Op->Opcode == NdOp::INT_MULT || Op->Opcode == NdOp::INT_LEFT) {
       for (int I = 0; I < Op->NumInputs; ++I)
         if (!Op->Inputs[I].isConst())

@@ -19,10 +19,11 @@
 #include "neverd/loader/InputDigest.h"
 #include "neverd/loader/LoadCandidate.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/LoadProgress.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SHA256.h"
 
 #include <filesystem>
 #include <map>
@@ -30,6 +31,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 
@@ -45,6 +47,16 @@ public:
   /// Borrow immutable bytes for this call only. The resulting image owns its
   /// data. Formats without a buffer reader reject this explicitly.
   virtual llvm::Expected<BinaryImage> loadBuffer(llvm::MemoryBufferRef Buffer);
+
+  /// Synchronous controlled entry points. Callbacks are borrowed for this
+  /// call only and cleared before return, including failure/cancellation.
+  /// An observed stop returns operation_canceled, never a partial image.
+  llvm::Expected<BinaryImage>
+  loadWithProgress(const std::filesystem::path &Path,
+                   const LoadProgress &Progress);
+  llvm::Expected<BinaryImage>
+  loadBufferWithProgress(llvm::MemoryBufferRef Buffer,
+                         const LoadProgress &Progress);
 
   /// Limit PE unwind/language materialization to these entries on the next
   /// load.  Empty means decode every runtime-function record.  Exclusive-end
@@ -77,40 +89,28 @@ protected:
   std::set<va_t> RestrictFunctionEntries;
   std::map<va_t, InstructionMode> ARMFunctionModes;
   bool ReadsStaticSymbols = true;
+  LoadProgress Progress;
 
-  /// File and buffer entry points share the same format parser.
+  /// File and buffer entry points share the same format parser. The optional
+  /// control preserves the existing protected helpers for external subclasses.
   static llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
-  readFileBuffer(const std::filesystem::path &Path, BinaryFormat Fmt) {
-    auto BufOrErr = llvm::MemoryBuffer::getFile(pathToUTF8(Path));
-    if (!BufOrErr)
-      return llvm::make_error<llvm::StringError>(
-          std::string(getFormatTag(Fmt)) + ": cannot open " + pathToUTF8(Path),
-          llvm::inconvertibleErrorCode());
-    return std::move(*BufOrErr);
-  }
+  readFileBuffer(const std::filesystem::path &Path, BinaryFormat Fmt,
+                 const LoadProgress &Progress = {});
 
   /// Restricted PE loads already retain section data and may omit Img.Raw.
   static void initializeImage(llvm::MemoryBufferRef Buffer, BinaryImage &Img,
-                              BinaryFormat Fmt, bool CopyRaw = true) {
-    Img.Format = Fmt;
-    Img.InputFileSHA256 = sha256(llvm::ArrayRef<uint8_t>(
-        reinterpret_cast<const uint8_t *>(Buffer.getBufferStart()),
-        Buffer.getBufferSize()));
-    if (CopyRaw)
-      Img.Raw.assign(reinterpret_cast<const uint8_t *>(Buffer.getBufferStart()),
-                     reinterpret_cast<const uint8_t *>(Buffer.getBufferEnd()));
-  }
+                              BinaryFormat Fmt, bool CopyRaw = true,
+                              const LoadProgress &Progress = {});
 
-  /// Retain the existing protected helper for out-of-tree loader subclasses.
+  /// Copy a byte span with checkpoints, without a second full-size temporary.
+  static void copyImageBytes(llvm::ArrayRef<uint8_t> Bytes,
+                             std::vector<uint8_t> &Destination,
+                             const LoadProgress &Progress = {});
+
   static llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
   readFileInto(const std::filesystem::path &Path, BinaryImage &Img,
-               BinaryFormat Fmt, bool CopyRaw = true) {
-    auto Buffer = readFileBuffer(Path, Fmt);
-    if (!Buffer)
-      return Buffer.takeError();
-    initializeImage((*Buffer)->getMemBufferRef(), Img, Fmt, CopyRaw);
-    return std::move(*Buffer);
-  }
+               BinaryFormat Fmt, bool CopyRaw = true,
+               const LoadProgress &Progress = {});
 
 private:
   static const char *getFormatTag(BinaryFormat Fmt) {

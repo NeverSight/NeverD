@@ -1,0 +1,38 @@
+//===- AArch64SVECPAC.def - Scalable checked pointer C syntax -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// TEXT(Name, Value) owns HighC assembly templates. Inputs are evaluated
+/// before the clobbered scratch registers are filled. Canonical Z carriers
+/// preserve all active lanes; predicated arithmetic retains old inactive D.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_CPA_C_TEXT
+#define NEVERD_A64_SVE_CPA_C_TEXT(Name, Value)
+#endif
+
+NEVERD_A64_SVE_CPA_C_TEXT(kCPATemporary, "__sve_checked_pointer")
+NEVERD_A64_SVE_CPA_C_TEXT(
+    kCPABinary,
+    "({{ svuint64_t {0}; __asm__ volatile(\"mov z0.d, %1.d\\n\\t"
+    "mov z1.d, %2.d\\n\\t{1}\\n\\tmov %0.d, z0.d\" : \"=w\"({0}) : "
+    "\"w\"(svreinterpret_u64_u8({2})), \"w\"(svreinterpret_u64_u8({3})) : "
+    "\"z0\", \"z1\"); svreinterpret_u8_u64({0}); })")
+NEVERD_A64_SVE_CPA_C_TEXT(
+    kCPAMerging,
+    "({{ svuint64_t {0}; __asm__ volatile(\"mov p0.b, %1.b\\n\\t"
+    "mov z0.d, %2.d\\n\\tmov z1.d, %3.d\\n\\t{1}\\n\\tmov %0.d, z0.d\" : "
+    "\"=w\"({0}) : \"Upl\"({2}), \"w\"(svreinterpret_u64_u8({3})), "
+    "\"w\"(svreinterpret_u64_u8({4})) : \"p0\", \"z0\", \"z1\"); "
+    "svreinterpret_u8_u64({0}); })")
+NEVERD_A64_SVE_CPA_C_TEXT(
+    kCPAMultiply,
+    "({{ svuint64_t {0}; __asm__ volatile(\"mov z0.d, %1.d\\n\\t"
+    "mov z1.d, %2.d\\n\\tmov z2.d, %3.d\\n\\t{1}\\n\\tmov %0.d, z0.d\" : "
+    "\"=w\"({0}) : \"w\"(svreinterpret_u64_u8({2})), "
+    "\"w\"(svreinterpret_u64_u8({3})), \"w\"(svreinterpret_u64_u8({4})) : "
+    "\"z0\", \"z1\", \"z2\"); svreinterpret_u8_u64({0}); })")
+
+#undef NEVERD_A64_SVE_CPA_C_TEXT

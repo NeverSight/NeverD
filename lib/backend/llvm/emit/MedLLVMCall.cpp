@@ -11,20 +11,28 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Common.h"
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
+#include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SafetyCallsiteMetadata.h"
-#include "neverd/backend/llvm/X86X87ImportCall.h"
-#include "neverd/ir/low/X87ImportCall.h"
+#include "neverd/backend/llvm/X86/X86X87ImportCall.h"
+#include "neverd/debug/DebugContext.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/low/X86/X87ImportCall.h"
+#include "neverd/ir/med/MedABIPass.h"
+#include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/libc/LibCVariadicArguments.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/safety/CountedWriteSemantics.h"
@@ -52,65 +60,31 @@
 namespace neverd {
 
 namespace {
-constexpr llvm::StringLiteral ArgumentBanks = "neverd.argument-banks";
-
-std::optional<std::pair<unsigned, unsigned>>
-argumentBanks(const llvm::Function &Function) {
-  const auto Attribute = Function.getFnAttribute(ArgumentBanks);
-  if (!Attribute.isStringAttribute())
-    return std::nullopt;
-  auto Parts = Attribute.getValueAsString().split(',');
-  unsigned Integers, Floating;
-  if (Parts.first.getAsInteger(10, Integers) ||
-      Parts.second.getAsInteger(10, Floating) ||
-      Integers > Function.arg_size() ||
-      Floating > Function.arg_size() - Integers)
-    return std::nullopt;
-  return std::pair{Integers, Floating};
-}
-
-std::optional<std::pair<unsigned, unsigned>>
-argumentBanks(const llvm::CallBase &Call) {
-  const auto *Node = Call.getMetadata(ArgumentBanks);
-  if (!Node || Node->getNumOperands() < 2)
-    return std::nullopt;
-  const auto *Integers =
-      llvm::mdconst::dyn_extract<llvm::ConstantInt>(Node->getOperand(0));
-  const auto *Floating =
-      llvm::mdconst::dyn_extract<llvm::ConstantInt>(Node->getOperand(1));
-  if (!Integers || !Floating || Integers->getBitWidth() != 32 ||
-      Floating->getBitWidth() != 32 ||
-      Integers->getZExtValue() > Call.arg_size() ||
-      Floating->getZExtValue() > Call.arg_size() - Integers->getZExtValue())
-    return std::nullopt;
-  return std::pair{static_cast<unsigned>(Integers->getZExtValue()),
-                   static_cast<unsigned>(Floating->getZExtValue())};
-}
-
-/// The slot size and stack value offsets a call records after its banks.
-struct ArgumentStackLayout {
-  std::vector<int64_t> Offsets;
-  unsigned SlotBytes = 0;
-};
-
-ArgumentStackLayout argumentStackLayout(const llvm::CallBase &Call) {
-  const auto *Node = Call.getMetadata(ArgumentBanks);
-  if (!Node || Node->getNumOperands() < 3)
-    return {};
-  const auto *Slot =
-      llvm::mdconst::dyn_extract<llvm::ConstantInt>(Node->getOperand(2));
-  if (!Slot || Slot->getBitWidth() != 32)
-    return {};
-  ArgumentStackLayout Result;
-  for (unsigned I = 3; I < Node->getNumOperands(); ++I) {
-    const auto *Offset =
-        llvm::mdconst::dyn_extract<llvm::ConstantInt>(Node->getOperand(I));
-    if (!Offset || Offset->getBitWidth() != 64)
-      return {};
-    Result.Offsets.push_back(Offset->getSExtValue());
+/// A fixed header signature whose floating operands already have complete
+/// register summaries. SourceParameterPlacement owns the positions; this only
+/// verifies that ABI recovery retained those exact operands and scalar lanes.
+bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
+                        BinaryFormat Format, const MedOp &Op,
+                        const MedCallInfo &Call) {
+  const auto Signature =
+      libc::floatingCallArguments(Function, Architecture, Format);
+  const auto &Registers = getTargetRegInfo(Architecture);
+  if (Signature && (Architecture == Arch::X86 || !Signature->Scalars.empty() ||
+                    Signature->ReturnElements)) {
+    const auto Recovered =
+        recoveredFloatingCallArguments(Op, Call, Architecture, Format);
+    return Recovered && *Recovered == *Signature;
   }
-  Result.SlotBytes = static_cast<unsigned>(Slot->getZExtValue());
-  return Result;
+  if (!Signature || Signature->ParameterBytes.size() != Call.Args.size() ||
+      Op.NumInputs != Call.Args.size() + 1 || Op.Output.Kind != MedVar::Reg ||
+      Op.Output.RegOff != Registers.FPReturnReg ||
+      Op.Output.Size < Signature->ReturnBytes)
+    return false;
+  for (size_t I = 0; I < Signature->ParameterBytes.size(); ++I)
+    if (Op.vectorArgumentWidth(I + 1) != Signature->ParameterBytes[I] ||
+        !(Call.Args[I] == Op.Inputs[I + 1]))
+      return false;
+  return true;
 }
 
 llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
@@ -165,36 +139,11 @@ llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
 }
 } // namespace
 
-void setLLVMArgumentBanks(llvm::Function &Function, unsigned Integers,
-                          unsigned Floating) {
-  Function.addFnAttr(ArgumentBanks,
-                     std::to_string(Integers) + "," + std::to_string(Floating));
-}
-
-void setLLVMArgumentBanks(llvm::CallBase &Call, unsigned Integers,
-                          unsigned Floating,
-                          llvm::ArrayRef<int64_t> StackOffsets,
-                          unsigned SlotBytes) {
-  llvm::IRBuilder<> Builder(Call.getContext());
-  llvm::SmallVector<llvm::Metadata *> Operands = {
-      llvm::ConstantAsMetadata::get(Builder.getInt32(Integers)),
-      llvm::ConstantAsMetadata::get(Builder.getInt32(Floating))};
-  if (!StackOffsets.empty() && SlotBytes > 0) {
-    Operands.push_back(
-        llvm::ConstantAsMetadata::get(Builder.getInt32(SlotBytes)));
-    for (int64_t Offset : StackOffsets)
-      Operands.push_back(
-          llvm::ConstantAsMetadata::get(Builder.getInt64(Offset)));
-  }
-  Call.setMetadata(ArgumentBanks,
-                   llvm::MDNode::get(Call.getContext(), Operands));
-}
-
 std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
     const llvm::Function &Target, llvm::ArrayRef<llvm::Value *> Values,
     unsigned Integers, unsigned Floating, llvm::IRBuilderBase &Builder,
     llvm::ArrayRef<int64_t> StackOffsets, unsigned SlotBytes) {
-  const auto Banks = argumentBanks(Target);
+  const auto Banks = getLLVMArgumentBanks(Target);
   const unsigned Count = Values.size();
   const unsigned Fixed = Target.arg_size();
   if (!Banks || Target.isVarArg() || Integers > Count ||
@@ -394,10 +343,10 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
       Indices.push_back(I);
       Values.push_back(Call->getArgOperand(I));
     }
-    const auto CallerBanks = argumentBanks(*Call);
-    const auto TargetBanks = argumentBanks(*Target);
+    const auto CallerBanks = getLLVMArgumentBanks(*Call);
+    const auto TargetBanks = getLLVMArgumentBanks(*Target);
     if (CallerBanks && TargetBanks && !Target->isVarArg()) {
-      const ArgumentStackLayout Stack = argumentStackLayout(*Call);
+      const LLVMArgumentStackLayout Stack = getLLVMArgumentStackLayout(*Call);
       auto Bound = bindResolvedLLVMArguments(
           *Target, Values, CallerBanks->first, CallerBanks->second, Builder,
           Stack.Offsets, Stack.SlotBytes);
@@ -516,8 +465,11 @@ void MedLLVMEmitter::defineCallClobbers(const MedOp &Op,
     auto *ClobberTy =
         llvm::cast<llvm::IntegerType>(sizeToType(Clobber.Value.Size));
     auto *Unknown = llvm::UndefValue::get(ClobberTy);
-    llvm::Value *Frozen = Builder.CreateFreeze(
-        Unknown, Clobber.Value.display() + "_call_clobber_unknown");
+    llvm::Value *Frozen =
+        PreserveUnknownSourceValues && Clobber.PreservedPrefixSize == 0
+            ? llvm_source_unknown::create(Builder, ClobberTy)
+            : Builder.CreateFreeze(Unknown, Clobber.Value.display() +
+                                                "_call_clobber_unknown");
     if (Clobber.PreservedPrefixSize > 0) {
       llvm::Value *Preserved = getVar(Clobber.PreservedInput, Builder);
       if (Preserved->getType()->isPointerTy())
@@ -567,6 +519,35 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   const MedCallInfo *CI =
       CurMedFunc ? CurMedFunc->findCall(BlockId, OpIdx) : nullptr;
+  if (Op.IntegerCallSignature &&
+      (!hasBoundIntegerCallArguments(Op) || !CI ||
+       CI->Args.size() + 1 != Op.NumInputs ||
+       !std::equal(CI->Args.begin(), CI->Args.end(), Op.Inputs.begin() + 1))) {
+    syncError() << "med_llvm_emitter: integer header call lost its bound "
+                   "operands\n";
+    FatalCodePointerResolution = true;
+    return;
+  }
+  if (Op.ScalarCallSignature &&
+      (!CI ||
+       !recoveredFloatingCallArguments(Op, *CI, TargetArch, TargetFormat))) {
+    syncError() << "med_llvm_emitter: header call lost its checked scalar "
+                   "or HFA carriers\n";
+    FatalCodePointerResolution = true;
+    return;
+  }
+  if (Op.ScalarCallSignature && Dbg && Img) {
+    const std::string Name = importCalleeName(*Img, CI->TargetAddr);
+    if (!Name.empty())
+      if (const auto Header = Dbg->resolvePrototype(Name);
+          Header &&
+          !floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI)) {
+        syncError() << "med_llvm_emitter: selected header disagrees with the "
+                       "bound call carriers\n";
+        FatalCodePointerResolution = true;
+        return;
+      }
+  }
   // Address fragments are legal only while an address-forming expression is
   // being completed. Audit every call escape before ABI classification: an
   // indirect target, integer-class argument, FP/vector argument, or variadic
@@ -584,8 +565,22 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return;
 
   llvm::Value *Target = nullptr;
-  if (Op.Opcode == NdOp::INDIR_CALL &&
-      !getX86RegistrationSEHRuntimeTarget(Op)) {
+  const MedOp *Authentication = AArch64AuthenticatedCalls.lookup(&Op);
+  llvm::SmallVector<llvm::OperandBundleDef, 1> AuthenticationBundles;
+  if (Authentication) {
+    const auto Integer = [&](const MedVar &Value) {
+      auto *Result = getVar(Value, Builder);
+      return Result->getType()->isPointerTy()
+                 ? Builder.CreatePtrToInt(Result, Builder.getInt64Ty())
+                 : Result;
+    };
+    Target = Integer(Authentication->Inputs[1]);
+    llvm::SmallVector<llvm::Value *, 2> Operands{
+        Builder.getInt32(Authentication->Inputs[2].ConstVal),
+        Integer(Authentication->Inputs[3])};
+    AuthenticationBundles.emplace_back(kAArch64PAuthCallBundle, Operands);
+  } else if (Op.Opcode == NdOp::INDIR_CALL &&
+             !getX86RegistrationSEHRuntimeTarget(Op)) {
     if (Op.NumInputs > 0)
       Target = tryResolveIndirectCallTarget(Op.Inputs[0], Builder);
     if (!Target)
@@ -744,11 +739,46 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     DefaultRetTy = llvm::Type::getIntNTy(*Ctx, Op.Output.Size * 8);
 
   llvm::GlobalValue *KnownTarget =
-      Target
+      Target && !Authentication
           ? constantCallIdentity(Target, Mod->getDataLayout(),
                                  getTargetRegInfo(TargetArch).PointerSize * 8)
           : nullptr;
   std::string IndirectImportName;
+  bool PreserveHeaderTarget = Authentication != nullptr;
+  std::optional<FunctionSym> VariadicHeader;
+  if (Op.CalleeVariadicFrom >= 0 && Img && CI && Dbg) {
+    const std::string Name = importCalleeName(*Img, CI->TargetAddr);
+    if (!Name.empty())
+      if (auto Header = Dbg->resolvePrototype(Name);
+          Header &&
+          libc::variadicCallArguments(*Header, TargetArch, TargetFormat) &&
+          Header->Params.size() == static_cast<size_t>(Op.CalleeVariadicFrom) &&
+          CI->VarArgFixedCount == Op.CalleeVariadicFrom &&
+          Args.size() >= Header->Params.size()) {
+        VariadicHeader = std::move(*Header);
+        IndirectImportName = Name;
+        PreserveHeaderTarget = Target && !KnownTarget;
+      }
+    if (!VariadicHeader) {
+      syncError() << "med_llvm_emitter: variadic header call lost its checked "
+                     "fixed prefix\n";
+      FatalCodePointerResolution = true;
+      return;
+    }
+  }
+  if ((Op.CalleeFloatReturnBytes || Op.ScalarCallSignature) && Target && Img &&
+      CI && Dbg) {
+    const std::string Name = importCalleeName(*Img, CI->TargetAddr);
+    if (!Name.empty())
+      if (const auto Header = Dbg->resolvePrototype(Name);
+          Header &&
+          floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI)) {
+        IndirectImportName = Name;
+        // A declaration proves the ABI of this import slot. It does not
+        // replace a writable slot's current contents with the initial symbol.
+        PreserveHeaderTarget = !KnownTarget;
+      }
+  }
   if (Op.X87ImportArguments) {
     if (!Img || !CI ||
         x87CRTImportArguments(*Img, CI->TargetAddr) != Op.X87ImportArguments) {
@@ -765,8 +795,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (KnownTarget && !llvm::isa<llvm::Function>(KnownTarget)) {
     const auto It =
         ImportedSymbolPlaceholders.find(KnownTarget->getName().str());
+    const auto Header = Dbg && CI
+                            ? Dbg->resolvePrototype(KnownTarget->getName())
+                            : std::nullopt;
     if (It != ImportedSymbolPlaceholders.end() && It->second == KnownTarget &&
         (libc::libcArityForSymbol(It->first, TargetLibC) ||
+         (Header &&
+          floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI)) ||
          (Op.X87ImportArguments && isX87CRTImportName(It->first)) ||
          libc::varArgFixedCount(stripLeadingUnderscores(It->first),
                                 TargetLibC)))
@@ -783,7 +818,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (CI && !CI->TargetName.empty() &&
         !CI->TargetName.starts_with(kAutoFuncPrefix))
       return canonicalizeObjectCallee(CI->TargetName);
-    if (CallAddr != 0) {
+    if (CallAddr != 0 ||
+        (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())) {
       auto FnIt = FuncNames.find(CallAddr);
       if (FnIt != FuncNames.end())
         return canonicalizeObjectCallee(FnIt->second);
@@ -823,6 +859,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (CI && CI->SourceCallHint &&
       CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst) {
     const auto &Hint = *CI->SourceCallHint;
+#define LLVM_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define LLVM_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MedLLVMSourceCall.def"
     std::string Diagnostic;
     auto Refuse = [&](llvm::StringRef Reason) {
       syncError() << "source call contract: " << Reason << "\n";
@@ -833,14 +872,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Hint.AnalystSite->Sequence != Op.OriginSeq ||
         Hint.Signature.Architecture != TargetArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
-        Args.size() != Hint.Signature.Parameters.size()) {
+        Args.size() != sourceABIParameters(Hint.Signature).size()) {
       Refuse("invalid or non-source-only occurrence binding");
       return;
     }
     std::vector<llvm::Type *> Types;
     std::vector<llvm::Value *> Values;
+    const auto Bindings = sourceABIParameters(Hint.Signature);
+    std::vector<llvm::Value *> Carriers;
     for (unsigned I = 0; I < Args.size(); ++I) {
-      auto *Type = mapNdtype(Hint.Signature.Parameters[I].Type);
+      auto *Type = mapNdtype(Bindings[I].Type);
       auto *Value = Args[I];
       const auto Bits = [](llvm::Type *T) -> unsigned {
         return T->isPointerTy() ? 64
@@ -848,7 +889,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       };
       if (!Type || Bits(Type) != Bits(Value->getType()) ||
           llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value)) {
-        Refuse("a complete argument carrier is unavailable");
+        Refuse(kSourceCallCarrierMissing);
         return;
       }
       if (Type != Value->getType()) {
@@ -859,7 +900,63 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         else
           Value = Builder.CreateBitCast(Value, Type);
       }
-      Types.push_back(Type);
+      Carriers.push_back(Value);
+    }
+    const auto IntegerBits = [&](llvm::Value *Value) -> llvm::Value * {
+      if (Value->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(Value, I64Ty);
+      if (Value->getType()->isIntegerTy())
+        return Value;
+      return Builder.CreateBitCast(
+          Value, llvm::Type::getIntNTy(
+                     *Ctx, Value->getType()->getPrimitiveSizeInBits()));
+    };
+    const auto Pack = [&](llvm::ArrayRef<llvm::Value *> Parts,
+                          llvm::ArrayRef<SourceAggregateMember> Members,
+                          unsigned Bytes) {
+      auto *Integer = llvm::Type::getIntNTy(*Ctx, Bytes * kSourceCallByteBits);
+      llvm::Value *Value = llvm::ConstantInt::get(Integer, 0);
+      for (unsigned I = 0; I < Parts.size(); ++I) {
+        auto *Part = Builder.CreateZExtOrTrunc(IntegerBits(Parts[I]), Integer);
+        if (Members[I].ByteOffset)
+          Part = Builder.CreateShl(Part,
+                                   Members[I].ByteOffset * kSourceCallByteBits);
+        Value = Builder.CreateOr(Value, Part);
+      }
+      return Value;
+    };
+    size_t At = 0;
+    for (const auto &Parameter : Hint.Signature.Parameters) {
+      if (Parameter.Components.empty()) {
+        Types.push_back(Carriers[At]->getType());
+        Values.push_back(Carriers[At++]);
+        continue;
+      }
+      const auto Members = sourceABIValueMembers(Parameter.Type);
+      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
+                                                Members.size());
+      At += Members.size();
+      auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
+      if (Parameter.Type->Kind == NdTypeKind::Int) {
+        Types.push_back(Packed->getType());
+        Values.push_back(Packed);
+        continue;
+      }
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      auto *Array = llvm::cast<llvm::ArrayType>(
+          llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
+      const unsigned Count = Array->getNumElements();
+      llvm::Value *Value = llvm::PoisonValue::get(Array);
+      for (unsigned I = 0; I < Count; ++I) {
+        auto *Part =
+            Floating ? Parts[I]
+                     : Builder.CreateZExtOrTrunc(
+                           Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
+                                                          kSourceCallByteBits),
+                           I64Ty);
+        Value = Builder.CreateInsertValue(Value, Part, {I});
+      }
+      Types.push_back(Array);
       Values.push_back(Value);
     }
     const unsigned Fixed =
@@ -869,8 +966,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return;
     }
     std::vector<llvm::Type *> Prefix(Types.begin(), Types.begin() + Fixed);
-    auto *FT = llvm::FunctionType::get(mapNdtype(Hint.Signature.ReturnType),
-                                       Prefix, Hint.AnalystFixedCount >= 0);
+    auto *ReturnType = llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
+                                               /*Parameter=*/false);
+    const auto ReturnMembers =
+        sourceAggregateMembers(Hint.Signature.ReturnType);
+    auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
+                                       Hint.AnalystFixedCount >= 0);
     llvm::Value *Callable = Target;
     if (!Callable) {
       auto Name = resolveCalleeName();
@@ -900,15 +1001,26 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     if (Callable->getType()->isIntegerTy())
       Callable = Builder.CreateIntToPtr(Callable, PtrTy);
-    auto *Call = Builder.CreateCall(FT, Callable, Values);
+    auto *Call =
+        Builder.CreateCall(FT, Callable, Values, AuthenticationBundles);
     if (Hint.Signature.ReturnType->Kind == NdTypeKind::Int &&
         Hint.Signature.ReturnType->IsSigned)
       Call->addFnAttr(llvm::Attribute::get(*Ctx, LLVMSourceSignedResult));
-    for (unsigned I = 0; I < Hint.Signature.Parameters.size(); ++I)
-      if (const auto &Type = Hint.Signature.Parameters[I].Type;
-          Type->Kind == NdTypeKind::Int && Type->IsSigned)
+    if (Hint.Signature.ReturnLocation.ExtendTo32Bits)
+      Call->addRetAttr(Hint.Signature.ReturnType->IsSigned
+                           ? llvm::Attribute::SExt
+                           : llvm::Attribute::ZExt);
+    for (unsigned I = 0; I < Hint.Signature.Parameters.size(); ++I) {
+      const auto &Parameter = Hint.Signature.Parameters[I];
+      if (Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->IsSigned)
         Call->addParamAttr(
             I, llvm::Attribute::get(*Ctx, LLVMSourceSignedParameter));
+      // The checked ABI establishes these bits in the physical register;
+      // source signedness alone would not authorize an extension attribute.
+      if (Parameter.Location.ExtendTo32Bits)
+        Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
+                                                       : llvm::Attribute::ZExt);
+    }
     Call->setMetadata(
         "neverd.source.analyst-call",
         llvm::MDNode::get(*Ctx,
@@ -930,8 +1042,27 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Builder.CreateUnreachable();
       return;
     }
-    if (Op.Output.Size && !Call->getType()->isVoidTy())
-      setVar(Op.Output, Call, Builder);
+    if (Op.Output.Size && !Call->getType()->isVoidTy()) {
+      llvm::Value *Value = Call;
+      if (!ReturnMembers.empty()) {
+        std::vector<llvm::Value *> Parts;
+        std::vector<SourceAggregateMember> Members;
+        const bool Floating =
+            ReturnMembers.front().Type->Kind == NdTypeKind::Float;
+        const unsigned Count =
+            llvm::cast<llvm::StructType>(ReturnType)->getNumElements();
+        for (unsigned I = 0; I < Count; ++I) {
+          Parts.push_back(Builder.CreateExtractValue(Call, {I}));
+          Members.push_back(
+              Floating ? ReturnMembers[I]
+                       : SourceAggregateMember{
+                             NdType::makeInt(kSourceCallWordBytes, false),
+                             uint16_t(I * kSourceCallWordBytes)});
+        }
+        Value = Pack(Parts, Members, Hint.Signature.ReturnType->Size);
+      }
+      setVar(Op.Output, Value, Builder);
+    }
     defineCallClobbers(Op, Builder);
     return;
   }
@@ -988,7 +1119,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     if (!CalleeName.empty() && CallAddr == 0)
       CallAddr = 1; // force direct-call resolution below
-    if (CallAddr != 0) {
+    if (CallAddr != 0 ||
+        (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())) {
       // A pointer-table bind can prove a symbol's external identity before a
       // call proves its ABI.  The mirror represents that unresolved identity
       // as an external i8 global.  Temporarily free the canonical name so the
@@ -1005,12 +1137,101 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         }
       }
 
+      if (VariadicHeader) {
+        std::vector<llvm::Type *> Parameters;
+        for (const auto &[Name, Type] : VariadicHeader->Params)
+          Parameters.push_back(mapNdtype(Type));
+        auto *FT = llvm::FunctionType::get(
+            mapNdtype(VariadicHeader->ReturnType), Parameters, true);
+        Callee = Mod->getFunction(CalleeName);
+        if (Callee && Callee->getFunctionType() != FT) {
+          syncError() << "med_llvm_emitter: conflicting variadic import ABI\n";
+          FatalCodePointerResolution = true;
+          return;
+        }
+        if (!Callee)
+          Callee = llvm::Function::Create(
+              FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+        Callee->setCallingConv(TargetArch == Arch::X64
+                                   ? llvm::CallingConv::Win64
+                                   : llvm::CallingConv::C);
+      }
       if (Op.X87ImportArguments) {
         Callee = Mod->getFunction(CalleeName);
         if (!Callee && !CalleeName.empty())
           Callee = llvm::Function::Create(
               llvm::FunctionType::get(llvm::Type::getX86_FP80Ty(*Ctx), false),
               llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+      }
+
+      // A source-bound stack call already has a complete scalar signature.
+      // Omitting its body from a selected export does not make its declaration
+      // an unknown variadic external. Other native carriers keep their own
+      // machine ABI adapters; this projection transports exact stack scalars.
+      if (PreserveUnknownSourceValues && CI && CI->SourceCallHint &&
+          Op.SourceCallHint == CI->SourceCallHint && !CI->IsIndirect &&
+          Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          !CalleeName.empty()) {
+        const auto &Hint = *CI->SourceCallHint;
+        const auto &Signature = Hint.Signature;
+        const auto &Registers = getTargetRegInfo(TargetArch);
+        const bool StackScalars =
+            Signature.HasExplicitABI && Signature.ReturnType &&
+            Signature.ReturnType->Kind == NdTypeKind::Int &&
+            Signature.ReturnType->Size == Registers.PointerSize &&
+            Signature.ReturnLocation.Kind ==
+                SourceABICarrierKind::IntegerRegister &&
+            Signature.ReturnLocation.RegisterOffset == Registers.IntReturnReg &&
+            !Signature.Parameters.empty() &&
+            llvm::all_of(Signature.Parameters, [&](const auto &Parameter) {
+              return Parameter.Location.Kind == SourceABICarrierKind::Stack &&
+                     Parameter.Type &&
+                     Parameter.Location.ValueBytes == Parameter.Type->Size &&
+                     (Parameter.Location.ValueBytes == Registers.PointerSize ||
+                      (Parameter.Type->Kind == NdTypeKind::Int &&
+                       Parameter.Location.ValueBytes <
+                           Registers.PointerSize)) &&
+                     Parameter.Components.empty() &&
+                     !Parameter.IndirectByValue &&
+                     Parameter.TheRole ==
+                         SourceParameterTypeHint::Role::Ordinary;
+            });
+        const bool NativeSource =
+            StackScalars && Hint.CallKind == SourceCallTypeHint::Kind::Native &&
+            Hint.TargetAddress == Op.Inputs[0].ConstVal &&
+            (Signature.Origin ==
+                 SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+             Signature.Origin ==
+                 SourceFunctionTypeHint::OriginKind::ExplicitSource);
+        if (NativeSource) {
+          std::string Diagnostic;
+          if (Signature.Architecture != TargetArch ||
+              !validateSourceABI(Signature, Diagnostic) ||
+              Signature.Convention !=
+                  SourceFunctionTypeHint::ConventionKind::C ||
+              Args.size() != Signature.Parameters.size() ||
+              CI->VarArgFixedCount >= 0) {
+            syncError() << "med_llvm_emitter: invalid native source call "
+                           "declaration\n";
+            FatalCodePointerResolution = true;
+            return;
+          }
+          std::vector<llvm::Type *> Parameters;
+          for (const auto &Parameter : Signature.Parameters)
+            Parameters.push_back(mapNdtype(Parameter.Type));
+          auto *FT = llvm::FunctionType::get(mapNdtype(Signature.ReturnType),
+                                             Parameters, false);
+          Callee = Mod->getFunction(CalleeName);
+          if (Callee && Callee->getFunctionType() != FT) {
+            syncError() << "med_llvm_emitter: conflicting native source call "
+                           "declaration\n";
+            FatalCodePointerResolution = true;
+            return;
+          }
+          if (!Callee)
+            Callee = llvm::Function::Create(
+                FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+        }
       }
 
       // On AArch64, variadic and non-variadic functions use different
@@ -1091,6 +1312,49 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
       if (!Callee && !CalleeName.empty())
         Callee = Mod->getFunction(CalleeName);
+
+      // A selected header can describe imports absent from the curated libc
+      // tables. Keep their scalar FP ABI instead of declaring their vector
+      // bit carriers as integer arguments and an integer result.
+      if (!Callee && Dbg && CI && Img && !CalleeName.empty() &&
+          (!IndirectImportName.empty() || Img->findImportAt(CI->TargetAddr) ||
+           Img->findImportStubAt(CI->TargetAddr)))
+        if (const auto Function = Dbg->resolvePrototype(CalleeName);
+            Function &&
+            floatingHeaderCall(*Function, TargetArch, TargetFormat, Op, *CI)) {
+          const auto Signature =
+              libc::floatingCallArguments(*Function, TargetArch, TargetFormat);
+          auto *FT = floatingCallType(*Ctx, *Signature);
+          Callee = llvm::Function::Create(
+              FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
+          Callee->setCallingConv(TargetArch == Arch::X64 &&
+                                         TargetFormat == BinaryFormat::COFF
+                                     ? llvm::CallingConv::Win64
+                                     : llvm::CallingConv::C);
+        }
+
+      // A selected caller can omit the body that established this complete
+      // scalar FP signature. Its declaration must keep that recovered ABI;
+      // machine vector operands do not make the callee return an integer.
+      if (!Callee && CI && !CI->IsIndirect) {
+        if (const auto Signature = recoveredFloatingCallArguments(
+                Op, *CI, TargetArch, TargetFormat)) {
+          const std::string Name =
+              CalleeName.empty()
+                  ? (kAutoFuncPrefix + llvm::utohexstr(CallAddr)).str()
+                  : CalleeName;
+          Callee = Mod->getFunction(Name);
+          if (!Callee) {
+            Callee = llvm::Function::Create(floatingCallType(*Ctx, *Signature),
+                                            llvm::GlobalValue::ExternalLinkage,
+                                            Name, Mod);
+            Callee->setCallingConv(TargetArch == Arch::X64 &&
+                                           TargetFormat == BinaryFormat::COFF
+                                       ? llvm::CallingConv::Win64
+                                       : llvm::CallingConv::C);
+          }
+        }
+      }
 
       // A known non-variadic libc function with floating-point arguments (the
       // math.h family sqrt/pow/sin/...) must be declared with FP
@@ -1255,7 +1519,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           ImportedPlaceholder->replaceAllUsesWith(Callee);
           ImportedPlaceholder->eraseFromParent();
           ImportedSymbolPlaceholders.erase(CalleeName);
-          if (!IndirectImportName.empty())
+          if (!IndirectImportName.empty() && !PreserveHeaderTarget)
             KnownTarget = Callee;
         } else {
           // Defensive only: every direct-call path above creates a callee, but
@@ -1326,7 +1590,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     ArgumentIndices.push_back(I);
   bool BoundArgumentBanks = false;
   if (Target && Callee && CI && CI->IntegerRegisterArgCount >= 0 &&
-      CI->FloatingRegisterArgCount >= 0 && argumentBanks(*Callee) &&
+      CI->FloatingRegisterArgCount >= 0 && getLLVMArgumentBanks(*Callee) &&
       !Callee->isVarArg()) {
     // Recovery ends the register arguments at the register that holds the
     // call's own target (MedCallInfo::TargetRegisterArgIdx): no argument is
@@ -1339,7 +1603,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     std::optional<unsigned> HeldTarget;
     if (CI->TargetRegisterArgIdx >= 0 &&
         static_cast<unsigned>(CI->TargetRegisterArgIdx) == Integers &&
-        argumentBanks(*Callee)->first > Integers && Integers <= Values.size()) {
+        getLLVMArgumentBanks(*Callee)->first > Integers &&
+        Integers <= Values.size()) {
       HeldTarget = Integers;
       Values.insert(Values.begin() + Integers, GetInput(0));
       ++Integers;
@@ -1367,6 +1632,52 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     Args = std::move(Bound->Values);
     BoundArgumentBanks = true;
   }
+  if (Op.ScalarCallSignature &&
+      !Op.ScalarCallSignature->ParameterElements.empty()) {
+    const auto &Signature = *Op.ScalarCallSignature;
+    if (!Callee ||
+        Callee->getFunctionType() != floatingCallType(*Ctx, Signature) ||
+        Args.size() != Signature.Scalars.size()) {
+      syncError()
+          << "med_llvm_emitter: HFA call lost its complete source groups\n";
+      FatalCodePointerResolution = true;
+      return;
+    }
+    std::vector<llvm::Value *> Grouped;
+    std::vector<int> Indices;
+    size_t At = 0;
+    for (unsigned Count : Signature.ParameterElements) {
+      if (!Count) {
+        Grouped.push_back(Args[At]);
+        Indices.push_back(ArgumentIndices[At++]);
+        continue;
+      }
+      auto *Element =
+          floatingCallElementType(*Ctx, Signature.Scalars[At].Bytes);
+      auto *Array = llvm::ArrayType::get(Element, Count);
+      llvm::Value *Value = llvm::PoisonValue::get(Array);
+      for (unsigned I = 0; I < Count; ++I, ++At) {
+        llvm::Value *Lane = Args[At];
+        const unsigned Bits = Lane->getType()->getPrimitiveSizeInBits();
+        if (!Bits || Lane->getType()->isPointerTy()) {
+          syncError()
+              << "med_llvm_emitter: HFA member has no scalar bit carrier\n";
+          FatalCodePointerResolution = true;
+          return;
+        }
+        if (!Lane->getType()->isIntegerTy())
+          Lane = Builder.CreateBitCast(Lane, llvm::Type::getIntNTy(*Ctx, Bits));
+        Lane = Builder.CreateZExtOrTrunc(
+            Lane, llvm::Type::getIntNTy(*Ctx, Signature.Scalars[At].Bytes * 8));
+        Lane = Builder.CreateBitCast(Lane, Element);
+        Value = Builder.CreateInsertValue(Value, Lane, {I});
+      }
+      Grouped.push_back(Value);
+      Indices.push_back(-1);
+    }
+    Args = std::move(Grouped);
+    ArgumentIndices = std::move(Indices);
+  }
   if (Target && Callee && Args.size() < Callee->arg_size()) {
     syncError() << "med_llvm_emitter: resolved indirect call to "
                 << Callee->getName() << " lacks recovered arguments\n";
@@ -1383,6 +1694,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   if (Callee) {
     auto *CalleeTy = Callee->getFunctionType();
+    // A formatted call's recovered arguments are the inputs its format
+    // names, in the source's order (MedOp::ExactArguments).
+    const auto ExactFloatingInput = [&](int Index) {
+      return Op.ExactArguments && CI && Index >= 0 && Index < 64 &&
+             static_cast<size_t>(Index) < CI->Args.size() &&
+             static_cast<unsigned>(Index) + 1 < Op.NumInputs &&
+             ((Op.ExactFloatInputs >> Index) & 1) &&
+             CI->Args[Index] == Op.Inputs[Index + 1];
+    };
     std::vector<llvm::Value *> CoercedArgs;
     for (size_t AI = 0; AI < Args.size(); ++AI) {
       llvm::Value *AV = Args[AI];
@@ -1416,6 +1736,25 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (llvm::Value *Sym = tryResolvePointerArg(
                   CI->Args[SourceIndex], /*FailClosed=*/false, Builder))
             AV = Builder.CreatePtrToInt(Sym, Want);
+        // The callee reads only the scalar in this floating argument
+        // register's low lane (MedCallInfo::ArgReadBytes), though its
+        // parameter takes the whole vector register.  The lanes above pass
+        // nothing: a scalar instruction such as `cvtsi2sd` or `mulsd` keeps
+        // them as the caller found them, its own unknown entry value where
+        // nothing set them.  Pass the scalar with zero above it, as HighC
+        // passes the scalar alone.
+        if (const unsigned Bits = AV->getType()->getPrimitiveSizeInBits();
+            Want->isVectorTy() && Bits && !AV->getType()->isPointerTy() && CI &&
+            SourceIndex >= 0 &&
+            static_cast<size_t>(SourceIndex) < CI->ArgReadBytes.size())
+          if (const unsigned ReadBits = CI->ArgReadBytes[SourceIndex] * 8u;
+              ReadBits && ReadBits < Bits)
+            AV = Builder.CreateTrunc(
+                AV->getType()->isIntegerTy()
+                    ? AV
+                    : Builder.CreateBitCast(AV,
+                                            llvm::Type::getIntNTy(*Ctx, Bits)),
+                llvm::Type::getIntNTy(*Ctx, ReadBits), "read_lane");
         if (AV->getType() != Want) {
           llvm::Type *AT = AV->getType();
           if (AT->isIntegerTy() && Want->isIntegerTy()) {
@@ -1460,6 +1799,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             }
           }
         }
+      } else if (CalleeTy->isVarArg() &&
+                 ExactFloatingInput(ArgumentIndices[AI]) &&
+                 AV->getType()->isIntegerTy(64)) {
+        // A variadic argument keeps its own type.  A formatted call's
+        // floating one is the scalar its routine's conversion reads
+        // (MedOp::ExactFloatInputs): pass that value, which the convention
+        // carries in a vector register.  Its integer bits would travel in an
+        // integer register, where the routine reads no floating argument.
+        AV = Builder.CreateBitCast(AV, llvm::Type::getDoubleTy(*Ctx),
+                                   "formatted_double");
       }
       CoercedArgs.push_back(AV);
     }
@@ -1473,14 +1822,25 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       auto *PadTy = CalleeTy->getParamType(CoercedArgs.size());
       CoercedArgs.push_back(llvm::Constant::getNullValue(PadTy));
     }
-    auto *Call =
-        Builder.CreateCall(Callee, CoercedArgs,
-                           CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
+    llvm::Value *Callable = Callee;
+    if (PreserveHeaderTarget || Authentication) {
+      Callable = Target;
+      if (Callable->getType()->isIntegerTy())
+        Callable = Builder.CreateIntToPtr(Callable, PtrTy);
+    }
+    auto *Call = Builder.CreateCall(
+        CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
+        CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
     if (CookieCheck)
       Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;
   } else {
+    if (!Target) {
+      syncError() << "med_llvm_emitter: call has no resolved target\n";
+      FatalCodePointerResolution = true;
+      return;
+    }
     // Indirect call: the callee is unknown, so its LLVM signature is rebuilt
     // from the recovered register classes.  A target with a separate FP
     // register file (AArch64 v0-v7, x86-64 xmm0-7) passes a floating-point
@@ -1606,8 +1966,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     auto *FPtr =
         Builder.CreateIntToPtr(Target, llvm::PointerType::get(*Ctx, 0));
-    Result = Builder.CreateCall(IndirectFT, FPtr, CoercedArgs,
-                                CoercedArgs.empty() ? "icall" : "call");
+    Result =
+        Builder.CreateCall(IndirectFT, FPtr, CoercedArgs, AuthenticationBundles,
+                           CoercedArgs.empty() ? "icall" : "call");
   }
 
   // Itanium call-site ranges are tight around individual calls rather than
@@ -1620,7 +1981,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallBase>(Result)) {
     AttachSafetyCallsite(*Emitted);
     if (BoundArgumentBanks) {
-      const auto Banks = argumentBanks(*Callee);
+      const auto Banks = getLLVMArgumentBanks(*Callee);
       setLLVMArgumentBanks(*Emitted, Banks->first, Banks->second);
     } else if (CI && CI->IntegerRegisterArgCount >= 0 &&
                CI->FloatingRegisterArgCount >= 0 &&

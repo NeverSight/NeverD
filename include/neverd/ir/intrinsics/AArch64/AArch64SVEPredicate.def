@@ -1,0 +1,48 @@
+//===- AArch64SVEPredicate.def - SVE predicate storage ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// PTRUE fields and the canonical architectural predicate representation.
+/// Encoding authority: Arm DDI0602 (ID092025), version A, PTRUE. WIDTH rows
+/// enumerate the legal element sizes; VALUE rows own shared field constants.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_PREDICATE_VALUE
+#define NEVERD_A64_SVE_PREDICATE_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_SVE_PREDICATE_WIDTH
+#define NEVERD_A64_SVE_PREDICATE_WIDTH(Bytes)
+#endif
+#ifndef NEVERD_A64_SVE_PREDICATE_TEXT
+#define NEVERD_A64_SVE_PREDICATE_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_SVE_PREDICATE_VALUE(uint32_t, kPtrueMask, 0xff3ffc10u)
+NEVERD_A64_SVE_PREDICATE_VALUE(uint32_t, kPtrueEncoding, 0x2518e000u)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtrueRegisterMask, 0x0f)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtruePatternShift, 5)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtruePatternMask, 0x1f)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtrueElementShift, 22)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtrueElementMask, 3)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtruePatternAll, 31)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kMinimumPredicateLanes, 16)
+NEVERD_A64_SVE_PREDICATE_VALUE(uint16_t, kPredicateStorageBytes, 32)
+NEVERD_A64_SVE_PREDICATE_VALUE(uint64_t, kPredicateRegisterBase, 0x4000)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPredicateRegisterCount, 16)
+NEVERD_A64_SVE_PREDICATE_VALUE(unsigned, kPtrueOperandCount, 2)
+NEVERD_A64_SVE_PREDICATE_VALUE(uint16_t, kLowIntrinsicIdentifierBytes, 2)
+NEVERD_A64_SVE_PREDICATE_VALUE(uint16_t, kPatternOperandBytes, 4)
+NEVERD_A64_SVE_PREDICATE_VALUE(uint16_t, kElementOperandBytes, 1)
+NEVERD_A64_SVE_PREDICATE_TEXT(
+    kMalformedPtrue, "SVE PTRUE has an invalid predicate/operand contract")
+
+NEVERD_A64_SVE_PREDICATE_WIDTH(1)
+NEVERD_A64_SVE_PREDICATE_WIDTH(2)
+NEVERD_A64_SVE_PREDICATE_WIDTH(4)
+NEVERD_A64_SVE_PREDICATE_WIDTH(8)
+
+#undef NEVERD_A64_SVE_PREDICATE_VALUE
+#undef NEVERD_A64_SVE_PREDICATE_WIDTH
+#undef NEVERD_A64_SVE_PREDICATE_TEXT

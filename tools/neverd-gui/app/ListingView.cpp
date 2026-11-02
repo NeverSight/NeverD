@@ -1,3 +1,12 @@
+//===- ListingView.cpp - Interactive disassembly listing ------------------===//
+//
+//                         NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Fetch, navigate and paint the workbench's disassembly rows.
+//===----------------------------------------------------------------------===//
+
 #include "ListingView.h"
 
 #include "../Config.h"
@@ -19,13 +28,14 @@
 #include <QTextLine>
 #include <QToolTip>
 #include <algorithm>
+#include <iterator>
+#include <limits>
 #include <unordered_map>
 
 namespace neverd::gui {
 namespace {
 constexpr int JumpContextBefore = 48;
 constexpr int ScrollResolution = 1 << 20;
-constexpr int WheelLines = 3;
 constexpr int HintLines = 12;
 // A line's body runs to about this many characters after its prefix.
 constexpr int BodyChars = 120;
@@ -43,6 +53,10 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
                          QWidget *parent)
     : QAbstractScrollArea(parent), session_(session), space_(space) {
   setFocusPolicy(Qt::StrongFocus);
+  connect(&session_.highlightLocks(), &HighlightLocks::changed, viewport(),
+          qOverload<>(&QWidget::update));
+  connect(&session_, &Session::bytePatchesChanged, viewport(),
+          qOverload<>(&QWidget::update));
   setFrameShape(QFrame::NoFrame);
   viewport()->setAttribute(Qt::WA_OpaquePaintEvent);
   viewport()->setCursor(Qt::IBeamCursor);
@@ -99,10 +113,22 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
     updateMetrics();
     viewport()->update();
   });
-  connect(&session_, &Session::generationChanged, this, &ListingView::refresh);
+  connect(&session_, &Session::generationChanged, this, [this] {
+    // A reply can publish the generation of the rows it just delivered.
+    if (generation_ != session_.generation())
+      refresh();
+  });
   connect(&session_, &Session::opened, this, &ListingView::clear);
   connect(&session_, &Session::unloaded, this, &ListingView::clear);
-  connect(&session_, &Session::revisionChanged, this, &ListingView::refresh);
+  connect(&session_, &Session::revisionChanged, this, [this] {
+    // Local pseudocode names do not change assembly. Adopt the new revision
+    // only for settled rows; a pending semantic refresh must still complete.
+    if (session_.queries().localNamesOnly() && !pendingJump_ &&
+        contentSerial_ == serial_ && generation_ == session_.generation())
+      revision_ = session_.revision();
+    else
+      refresh();
+  });
   updateMetrics();
 }
 
@@ -126,6 +152,7 @@ void ListingView::clear() {
   selecting_ = false;
   highlight_.clear();
   generation_.clear();
+  revision_.clear();
   lastEmitted_.reset();
   lastFunction_.reset();
   contentReported_ = false;
@@ -138,13 +165,62 @@ void ListingView::clear() {
   QToolTip::hideText();
   viewport()->setCursor(Qt::IBeamCursor);
   viewport()->update();
+  emit searchDocumentChanged();
 }
 
 void ListingView::jumpTo(Address address) {
   scrollJump_.stop();
   pendingJump_ = address;
-  request(Fetch::Jump, address, 0, JumpContextBefore,
-          ::neverd::limits::gui::kListingViewPageLines);
+  // A new view needs its viewport before adjacent functions. Ordinary
+  // prefetch fills both margins after these current rows have arrived.
+  const bool firstPage = lines_.empty();
+  const int pageLines = ::neverd::limits::gui::kListingViewPageLines;
+  request(Fetch::Jump, address, 0, firstPage ? 0 : JumpContextBefore,
+          firstPage ? std::min(visibleLines(), pageLines) : pageLines);
+}
+
+bool ListingView::rowsCurrent() const {
+  return session_.loaded() && !pendingJump_ && contentSerial_ == serial_ &&
+         revision_ == session_.revision() &&
+         generation_ == session_.generation();
+}
+
+std::optional<Address> ListingView::loadedFunctionAt(Address address) const {
+  if (!rowsCurrent())
+    return std::nullopt;
+  for (const auto &line : lines_)
+    if (line.item == address && line.functionAddress)
+      return line.functionAddress;
+  return std::nullopt;
+}
+
+bool ListingView::revealItem(Address address) {
+  if (!rowsCurrent())
+    return false;
+  const auto item =
+      std::find_if(lines_.cbegin(), lines_.cend(), [address](const Line &line) {
+        return line.item == address;
+      });
+  if (item == lines_.cend())
+    return false;
+  const int anchor = int(std::distance(lines_.cbegin(), item));
+  // A page may start partway through a large item's rows. It cannot supply
+  // that item's ordinary jump position without consulting the worker.
+  if (lines_[anchor].sub != 0)
+    return false;
+  scrollJump_.stop();
+  const bool selected = anchor_.has_value();
+  const int oldTop = top_, oldLine = cursorLine_, oldColumn = cursorColumn_;
+  anchor_.reset();
+  placeJump(anchor, address);
+  updateScrollBar();
+  if (selected || oldTop != top_ || oldLine != cursorLine_ ||
+      oldColumn != cursorColumn_)
+    viewport()->update();
+  ensureLoaded();
+  emitLocation();
+  emit jumpSettled();
+  return true;
 }
 
 std::optional<Address> ListingView::topItem() const {
@@ -176,8 +252,16 @@ void ListingView::refresh() {
         cursor->content += contentKind(lines_[i].kind);
     }
   }
-  request(Fetch::Refresh, top.item, top.sub, JumpContextBefore,
-          ::neverd::limits::gui::kListingViewPageLines, cursor);
+  // Keep the loaded context instead of shrinking to a jump-sized window and
+  // immediately prefetching it again. Both paints would route the same visible
+  // branches through different gutter columns. A bounded refresh can discard
+  // distant cached rows, but must leave a prefetch margin around the viewport.
+  const int margin = ::neverd::limits::gui_config::kListingViewPrefetchMargin;
+  const int limit = ::neverd::limits::gui::kListingViewRefreshContextLines;
+  const int before = std::clamp(top_, margin, limit);
+  const int after = std::clamp(int(lines_.size()) - top_,
+                               std::min(visibleLines() + margin, limit), limit);
+  request(Fetch::Refresh, top.item, top.sub, before, after, cursor);
 }
 
 void ListingView::request(Fetch kind, Address address, int sub, int before,
@@ -187,6 +271,9 @@ void ListingView::request(Fetch kind, Address address, int sub, int before,
   if (kind == Fetch::Jump || kind == Fetch::Refresh) {
     ++serial_;
     fetchingBefore_ = fetchingAfter_ = false;
+    // The old rows are no longer a searchable document while this request
+    // is pending. Retire matches at the same boundary as their row serial.
+    emit searchDocumentChanged();
   } else if (kind == Fetch::Before) {
     fetchingBefore_ = true;
   } else {
@@ -197,6 +284,10 @@ void ListingView::request(Fetch kind, Address address, int sub, int before,
                       {"sub", sub},
                       {"before", before},
                       {"after", after}};
+  if (kind == Fetch::Jump && lines_.empty())
+    payload["complete_anchor_item"] = true;
+  if (kind == Fetch::Jump || kind == Fetch::Refresh)
+    payload["recover_address"] = hexAddress(cursor ? cursor->item : address);
   if (opcodeBytes_ > 0)
     payload["opcode_bytes"] = opcodeBytes_;
   session_.read(
@@ -216,7 +307,10 @@ void ListingView::request(Fetch kind, Address address, int sub, int before,
         else if (kind == Fetch::After)
           fetchingAfter_ = false;
         emit session_.message(message, 1);
-      });
+      },
+      kind == Fetch::Jump || kind == Fetch::Refresh
+          ? QueryService::QuerySpec::Visible
+          : QueryService::QuerySpec::Normal);
 }
 
 void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
@@ -233,6 +327,7 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
     const auto row = value.toObject();
     Line line;
     line.item = addressValue(row.value("item")).value_or(0);
+    line.itemSize = addressValue(row.value("item_size")).value_or(0);
     line.address = addressValue(row.value("address")).value_or(line.item);
     line.sub = row.value("sub").toInt();
     line.cls = row.value("cls").toInt();
@@ -248,13 +343,18 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
   }
   const int anchor =
       std::clamp(payload.value("anchor").toInt(), 0, int(fresh.size()));
-  generation_ = payload.value("generation").toString();
+  const auto generation = payload.value("generation").toString();
+  if (generation != generation_ || revision_ != session_.revision())
+    contentSerial_ = 0;
   const auto identity = [](const Line &line) {
     return std::pair{line.item, line.sub};
   };
   switch (kind) {
   case Fetch::Jump:
   case Fetch::Refresh: {
+    generation_ = generation;
+    revision_ = session_.revision();
+    contentSerial_ = serial;
     lines_ = std::move(fresh);
     atStart_ = payload.value("at_start").toBool();
     atEnd_ = payload.value("at_end").toBool();
@@ -264,23 +364,7 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
       break;
     }
     if (kind == Fetch::Jump) {
-      // Put the cursor on the item's instruction or data line, keeping its
-      // header lines visible above it.
-      int content = std::min(anchor, int(lines_.size()) - 1);
-      const Address item = lines_[content].item;
-      for (int i = content; i < int(lines_.size()) && lines_[i].item == item;
-           ++i)
-        if (contentKind(lines_[i].kind) &&
-            (lines_[i].address <= jumpAddress || i == content)) {
-          content = i;
-          if (lines_[i].address >= jumpAddress)
-            break;
-        }
-      cursorLine_ = content;
-      cursorColumn_ = 0;
-      top_ = std::max(0, std::min(anchor, cursorLine_ - visibleLines() / 3));
-      if (cursorLine_ - top_ >= visibleLines() - 1)
-        top_ = std::max(0, cursorLine_ - visibleLines() / 3);
+      placeJump(anchor, jumpAddress);
     } else {
       top_ = std::min(anchor, int(lines_.size()) - 1);
       cursorLine_ = top_;
@@ -346,8 +430,28 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
   // end of its first page.
   ensureLoaded();
   emitLocation();
+  emit searchDocumentChanged();
   if (settledJump)
     emit jumpSettled();
+}
+
+void ListingView::placeJump(int anchor, Address address) {
+  // Put the cursor on the item's instruction or data line, keeping its
+  // header lines visible above it. Cached and fetched jumps share this rule.
+  int content = std::min(anchor, int(lines_.size()) - 1);
+  const Address item = lines_[content].item;
+  for (int i = content; i < int(lines_.size()) && lines_[i].item == item; ++i)
+    if (contentKind(lines_[i].kind) &&
+        (lines_[i].address <= address || i == content)) {
+      content = i;
+      if (lines_[i].address >= address)
+        break;
+    }
+  cursorLine_ = content;
+  cursorColumn_ = 0;
+  top_ = std::max(0, std::min(anchor, cursorLine_ - visibleLines() / 3));
+  if (cursorLine_ - top_ >= visibleLines() - 1)
+    top_ = std::max(0, cursorLine_ - visibleLines() / 3);
 }
 
 void ListingView::ensureLoaded() {
@@ -445,6 +549,32 @@ int ListingView::columnAt(const Line &line, int x) const {
   if (layout.lineCount() == 0)
     return 0;
   return layout.lineAt(0).xToCursor(x - textLeft());
+}
+
+std::optional<std::pair<int, int>> ListingView::prefixWordAt(const Line &line,
+                                                             int x) const {
+  const int column = columnAt(line, x);
+  if (column >= 0 || x < arrowsWidth_)
+    return std::nullopt;
+  const int base = firstColumn(line);
+  const auto [begin, end] = tokenRange(line.prefix, column - base);
+  // The arrow gutter, the colon and the gap before the body hold no word.
+  if (begin == end || x < columnX(line, base + begin) ||
+      x >= columnX(line, base + end))
+    return std::nullopt;
+  return std::pair{base + begin, base + end};
+}
+
+bool ListingView::selectPrefixWord(int x) {
+  if (cursorLine_ < 0 || cursorLine_ >= int(lines_.size()))
+    return false;
+  const auto word = prefixWordAt(lines_[cursorLine_], x);
+  if (!word)
+    return false;
+  anchor_ = std::pair{cursorLine_, word->first};
+  cursorColumn_ = word->second;
+  viewport()->update();
+  return true;
 }
 
 int ListingView::firstColumn(const Line &line) const {
@@ -583,8 +713,8 @@ std::optional<int> ListingView::currentOperand() const {
   const auto *line = cursorLine();
   if (!line)
     return std::nullopt;
-  // The operands follow the mnemonic; a comma outside brackets starts the
-  // next one.
+  // The operands follow the mnemonic; a comma outside brackets, braces and
+  // parentheses starts the next one, as the worker counts them (`{r4, lr}`).
   bool operands = false;
   int depth = 0, index = 0;
   std::optional<int> under;
@@ -603,15 +733,40 @@ std::optional<int> ListingView::currentOperand() const {
       under = index;
     if (role == ListingRole::Punctuation)
       for (const QChar c : line->styled.text.mid(span.start, span.length)) {
-        if (c == QLatin1Char('['))
+        if (c == QLatin1Char('[') || c == QLatin1Char('{') ||
+            c == QLatin1Char('('))
           ++depth;
-        else if (c == QLatin1Char(']'))
+        else if ((c == QLatin1Char(']') || c == QLatin1Char('}') ||
+                  c == QLatin1Char(')')) &&
+                 depth > 0)
           --depth;
         else if (c == QLatin1Char(',') && depth == 0)
           ++index;
       }
   }
   return under;
+}
+
+std::optional<std::pair<Address, Address>> ListingView::byteSelection() const {
+  if (!rowsCurrent() || lines_.empty())
+    return std::nullopt;
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  const auto first = anchor_ ? std::min(*anchor_, cursor) : cursor;
+  const auto last = anchor_ ? std::max(*anchor_, cursor) : cursor;
+  Address begin = std::numeric_limits<Address>::max(), end = 0;
+  for (int i = first.first; i <= last.first; ++i) {
+    // A selection ending at the next line's start excludes that line.
+    if (i != first.first && i == last.first &&
+        last.second == firstColumn(lines_[i]))
+      break;
+    const auto &line = lines_[i];
+    if (!line.itemSize ||
+        line.itemSize - 1 > std::numeric_limits<Address>::max() - line.item)
+      return std::nullopt;
+    begin = std::min(begin, line.item);
+    end = std::max(end, line.item + line.itemSize - 1);
+  }
+  return std::pair{begin, end};
 }
 
 QString ListingView::selectedText() const {
@@ -642,6 +797,14 @@ QString ListingView::selectedText() const {
   return text.join(QLatin1Char('\n'));
 }
 
+QString ListingView::copyText() const {
+  if (anchor_ && *anchor_ != std::pair{cursorLine_, cursorColumn_})
+    return selectedText();
+  // A prefix word copies once a click selects it; the body's highlight
+  // marks the word.
+  return currentToken();
+}
+
 void ListingView::moveCursor(int line, int column, bool extend) {
   if (lines_.empty())
     return;
@@ -667,6 +830,7 @@ void ListingView::ensureCursorVisible() {
 }
 
 void ListingView::emitLocation() {
+  emit cursorChanged();
   const auto address = currentAddress();
   const auto function = currentFunction();
   if (!address || (address == lastEmitted_ && function == lastFunction_))
@@ -683,6 +847,7 @@ void ListingView::setShowPrefixes(bool show) {
   anchor_.reset();
   cursorColumn_ = std::max(0, cursorColumn_);
   viewport()->update();
+  emit searchDocumentChanged();
 }
 
 void ListingView::setOpcodeBytes(int count) {
@@ -709,6 +874,83 @@ bool ListingView::findInLoaded(const QString &text, bool forward) {
     }
   }
   return false;
+}
+
+QString ListingView::searchText() const {
+  QString text;
+  bool first = true;
+  for (const auto &line : lines_) {
+    if (!first)
+      text += u'\n';
+    first = false;
+    if (showPrefixes_)
+      text += line.prefix + u' ';
+    text += line.styled.text;
+  }
+  return text;
+}
+
+std::pair<int, int> ListingView::searchSelection() const {
+  const auto position = [this](int row, int column) {
+    int at = 0;
+    for (int i = 0; i < row && i < int(lines_.size()); ++i)
+      at += lines_[i].styled.text.size() - firstColumn(lines_[i]) + 1;
+    return row >= 0 && row < int(lines_.size())
+               ? at + column - firstColumn(lines_[row])
+               : at;
+  };
+  const int cursor = position(cursorLine_, cursorColumn_);
+  const int anchor =
+      anchor_ ? position(anchor_->first, anchor_->second) : cursor;
+  return {std::min(cursor, anchor), std::max(cursor, anchor)};
+}
+
+QString ListingView::searchSeed() const {
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  const QString selected =
+      anchor_ && *anchor_ != cursor ? selectedText() : QString();
+  return !selected.isEmpty() && !selected.contains(u'\n') ? selected
+                                                          : currentToken();
+}
+
+void ListingView::setSearchHighlight(const ViewSearchQuery &query) {
+  SearchHighlight = query;
+  viewport()->update();
+}
+
+bool ListingView::selectSearchRange(int begin, int length) {
+  if (!rowsCurrent() || lines_.empty() || begin < 0 || length <= 0)
+    return false;
+  const auto place = [this](int at) -> std::optional<std::pair<int, int>> {
+    for (int i = 0; i < int(lines_.size()); ++i) {
+      const int size = lines_[i].styled.text.size() - firstColumn(lines_[i]);
+      if (at <= size)
+        return std::pair{i, at + firstColumn(lines_[i])};
+      at -= size + 1;
+    }
+    return std::nullopt;
+  };
+  const auto first = place(begin);
+  const auto last = place(begin + length);
+  if (!first || !last)
+    return false;
+  anchor_ = *first;
+  cursorLine_ = last->first;
+  cursorColumn_ = last->second;
+  ensureCursorVisible();
+  const qreal left = columnX(lines_[first->first], first->second);
+  const qreal right = columnX(lines_[last->first], last->second);
+  const qreal gutter =
+      arrowsWidth_ + ::neverd::limits::gui_config::kListingViewTextMargin;
+  if (left < gutter || right - left > viewport()->width() - gutter)
+    horizontalScrollBar()->setValue(horizontalScrollBar()->value() +
+                                    int(left - gutter));
+  else if (right > viewport()->width())
+    horizontalScrollBar()->setValue(horizontalScrollBar()->value() +
+                                    int(right - viewport()->width()));
+  emitLocation();
+  viewport()->update();
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -749,8 +991,28 @@ void ListingView::paintEvent(QPaintEvent *) {
     const auto &line = lines_[i];
     const int y = (i - top_) * lineHeight_;
     const QRect row(arrowsWidth_, y, area.width() - arrowsWidth_, lineHeight_);
+    const bool patched =
+        contentKind(line.kind) &&
+        session_.hasBytePatch(line.item, std::max<Address>(1, line.itemSize));
     if (i == cursorLine_)
       painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
+    // The active row must reveal a committed patch without moving the cursor.
+    if (patched) {
+      painter.fillRect(row, theme.color(ColorRole::ListingPatched));
+      painter.setPen(theme.color(ColorRole::ListingPlain));
+      painter.drawText(QPointF(arrowsWidth_, y + ascent_), QStringLiteral("*"));
+    }
+    if (!SearchHighlight.Text.isEmpty()) {
+      const QString text =
+          (showPrefixes_ ? line.prefix + u' ' : QString()) + line.styled.text;
+      for (const int at : SearchHighlight.matches(text)) {
+        const qreal x0 = columnX(line, at + firstColumn(line));
+        const qreal x1 =
+            columnX(line, at + SearchHighlight.Text.size() + firstColumn(line));
+        painter.fillRect(QRectF(x0, y, x1 - x0, lineHeight_),
+                         theme.color(ColorRole::ListingHighlight));
+      }
+    }
     const bool selected = anchor_ && selectionFirst != selectionLast &&
                           i >= selectionFirst.first && i <= selectionLast.first;
     const int begin = selected && i == selectionFirst.first
@@ -759,32 +1021,44 @@ void ListingView::paintEvent(QPaintEvent *) {
     const int end = selected && i == selectionLast.first
                         ? selectionLast.second
                         : int(line.styled.text.size());
+    const auto selectionColor =
+        theme.color(patched ? ColorRole::ListingPatchedSelection
+                            : ColorRole::ListingSelection);
     if (selected && begin < 0) {
       const qreal x0 = columnX(line, std::max(begin, firstColumn(line)));
       const qreal x1 = columnX(line, std::min(end, 0));
-      painter.fillRect(QRectF(x0, y, x1 - x0, lineHeight_),
-                       theme.color(ColorRole::ListingSelection));
+      painter.fillRect(QRectF(x0, y, x1 - x0, lineHeight_), selectionColor);
     }
     if (showPrefixes_) {
       painter.setPen(theme.prefixColor(line.cls));
       painter.drawText(QPointF(prefixLeft, y + ascent_), line.prefix);
     }
     auto &layout = line.styled.layout(font, styleStamp_, colorOf);
-    if (!highlight_.isEmpty() && layout.lineCount()) {
+    if (SearchHighlight.Text.isEmpty() && layout.lineCount()) {
       const QTextLine textLine = layout.lineAt(0);
-      for (const int at : tokenOccurrences(line.styled.text, highlight_)) {
-        const qreal x0 = textLine.cursorToX(at);
-        const qreal x1 = textLine.cursorToX(at + int(highlight_.size()));
-        painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
-                         theme.color(ColorRole::ListingHighlight));
-      }
+      // Locked words keep their colors under the cursor's highlight.
+      const auto mark = [&](const QString &word, ColorRole role) {
+        for (const auto &[first, last] : highlightRanges(
+                 line.styled, word, static_cast<int>(ListingRole::Register))) {
+          const qreal x0 = textLine.cursorToX(first);
+          const qreal x1 = textLine.cursorToX(last);
+          painter.fillRect(QRectF(left + x0, y, x1 - x0, lineHeight_),
+                           theme.color(role));
+        }
+      };
+      const auto &locks = session_.highlightLocks();
+      for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+        if (const QString word = locks.word(slot); !word.isEmpty())
+          mark(word, highlightLockRole(slot));
+      if (!highlight_.isEmpty())
+        mark(highlight_, ColorRole::ListingHighlight);
     }
     QList<QTextLayout::FormatRange> selection;
     if (selected && end > 0) {
       QTextLayout::FormatRange range;
       range.start = std::max(0, begin);
       range.length = std::max(0, end - range.start);
-      range.format.setBackground(theme.color(ColorRole::ListingSelection));
+      range.format.setBackground(selectionColor);
       selection.append(range);
     }
     layout.draw(&painter, QPointF(left, y), selection);
@@ -796,7 +1070,7 @@ void ListingView::paintEvent(QPaintEvent *) {
   }
   painter.setClipping(false);
   paintArrows(painter, first, last);
-  if (!contentReported_) {
+  if (!contentReported_ && rowsCurrent()) {
     contentReported_ = true;
     emit contentPainted();
   }
@@ -915,45 +1189,53 @@ void ListingView::paintArrows(QPainter &painter, int first, int last) {
 void ListingView::keyPressEvent(QKeyEvent *event) {
   const bool shift = event->modifiers() & Qt::ShiftModifier;
   const bool control = event->modifiers() & Qt::ControlModifier;
+  // The highlight follows the cursor, as IDA's does, so Copy takes the word
+  // it marks.
+  const auto move = [&](int line, int column) {
+    moveCursor(line, column, shift);
+    highlight_ = currentToken();
+  };
   switch (event->key()) {
   case Qt::Key_Up:
-    moveCursor(cursorLine_ - 1, cursorColumn_, shift);
+    move(cursorLine_ - 1, cursorColumn_);
     return;
   case Qt::Key_Down:
-    moveCursor(cursorLine_ + 1, cursorColumn_, shift);
+    move(cursorLine_ + 1, cursorColumn_);
     return;
   case Qt::Key_PageUp:
     top_ = std::max(0, top_ - visibleLines() + 1);
-    moveCursor(cursorLine_ - visibleLines() + 1, cursorColumn_, shift);
+    move(cursorLine_ - visibleLines() + 1, cursorColumn_);
     return;
   case Qt::Key_PageDown:
     top_ = std::min(std::max(0, int(lines_.size()) - visibleLines()),
                     top_ + visibleLines() - 1);
-    moveCursor(cursorLine_ + visibleLines() - 1, cursorColumn_, shift);
+    move(cursorLine_ + visibleLines() - 1, cursorColumn_);
     return;
   case Qt::Key_Left:
-    moveCursor(cursorLine_, cursorColumn_ - 1, shift);
+    move(cursorLine_, cursorColumn_ - 1);
     return;
   case Qt::Key_Right:
-    moveCursor(cursorLine_, cursorColumn_ + 1, shift);
+    move(cursorLine_, cursorColumn_ + 1);
     return;
   case Qt::Key_Home:
     if (control)
       jumpTo(space_.first());
     else
-      moveCursor(cursorLine_, 0, shift);
+      move(cursorLine_, 0);
     return;
   case Qt::Key_End:
     if (control)
       jumpTo(space_.last());
     else if (const auto *line = cursorLine())
-      moveCursor(cursorLine_, int(line->styled.text.size()), shift);
+      move(cursorLine_, int(line->styled.text.size()));
     return;
   default:
     break;
   }
   if (event->matches(QKeySequence::Copy)) {
-    QApplication::clipboard()->setText(selectedText());
+    // Blank space leaves the clipboard as it was, as in IDA.
+    if (const QString text = copyText(); !text.isEmpty())
+      QApplication::clipboard()->setText(text);
     return;
   }
   QAbstractScrollArea::keyPressEvent(event);
@@ -974,6 +1256,10 @@ void ListingView::mousePressEvent(QMouseEvent *event) {
     highlight_ = lines_[index].styled.tokenAt(column);
   } else if (index != cursorLine_ || !anchor_) {
     moveCursor(index, column);
+    highlight_ = lines_[index].styled.tokenAt(column);
+    // The context menu's Copy then takes the word the click is on.
+    if (selectPrefixWord(int(event->position().x())))
+      emitLocation();
   }
   viewport()->update();
 }
@@ -1006,9 +1292,15 @@ void ListingView::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void ListingView::mouseReleaseEvent(QMouseEvent *event) {
+  const bool pressed = selecting_;
   selecting_ = false;
   if (anchor_ && *anchor_ == std::pair{cursorLine_, cursorColumn_})
     anchor_.reset();
+  // A plain click on the address prefix selects the word under it, so Ctrl+C
+  // copies the address. Selecting on release leaves a drag its own range.
+  if (pressed && !anchor_ && event->button() == Qt::LeftButton &&
+      !(event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier)))
+    selectPrefixWord(int(event->position().x()));
   if ((event->modifiers() & Qt::ControlModifier) &&
       event->button() == Qt::LeftButton)
     if (const auto target = operandTarget())
@@ -1024,18 +1316,12 @@ void ListingView::mouseDoubleClickEvent(QMouseEvent *event) {
 }
 
 void ListingView::wheelEvent(QWheelEvent *event) {
-  if (event->modifiers() & Qt::ControlModifier) {
-    Theme::instance().zoomCodeFont(event->angleDelta().y() > 0 ? 1 : -1);
+  if (wheel_.zoomCodeFont(*event, lineHeight_))
     return;
-  }
-  const int steps = event->angleDelta().y() / 120;
-  if (steps)
-    scrollLines(-steps * WheelLines);
-  else if (const int pixels = event->pixelDelta().y())
-    scrollLines(-pixels / std::max(1, lineHeight_));
-  if (event->angleDelta().x())
-    horizontalScrollBar()->setValue(horizontalScrollBar()->value() -
-                                    event->angleDelta().x());
+  const QPoint delta = wheel_.scroll(*event, lineHeight_);
+  if (delta.y())
+    scrollLines(-delta.y());
+  horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
 }
 
 void ListingView::contextMenuEvent(QContextMenuEvent *event) {
@@ -1101,6 +1387,13 @@ void ListingView::showHint(const QPoint &position) {
         QToolTip::showText(global, html, viewport());
       },
       [](const QString &, const QString &) {});
+}
+
+QRect ListingView::cursorViewportRect() const {
+  const int x = cursorLine_ >= 0 && cursorLine_ < lines_.size()
+                    ? qRound(columnX(lines_[cursorLine_], cursorColumn_))
+                    : textLeft();
+  return QRect(x, (cursorLine_ - top_) * lineHeight_, 1, lineHeight_);
 }
 
 } // namespace neverd::gui

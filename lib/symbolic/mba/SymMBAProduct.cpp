@@ -773,15 +773,40 @@ std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
   for (auto &Term : *Terms)
     (Term.Factors.size() < 2 ? LinearTerms : ByDegree[Term.Factors.size()])
         .push_back(std::move(Term));
+
+  // The linear tail has its own support too. Inputs used only by products
+  // duplicate every coefficient in this table and can make a small linear
+  // reading exceed its synthesis allowance. Project before expanding, keeping
+  // the caller's coordinate order and the complete polynomial proof below.
+  llvm::SmallVector<uint32_t, 16> LinearVariables, LinearIds;
+  for (const auto &Term : LinearTerms)
+    if (!Term.Factors.empty()) {
+      const SymRef Factor = Term.Factors.front();
+      if (!Budget.consume(Ctx.dagSize(Factor)))
+        return std::nullopt;
+      if (Ctx.op(Factor) == SymOp::Var)
+        LinearVariables.push_back(Ctx.varId(Factor));
+      else
+        Ctx.collectVars(Factor, LinearVariables);
+    }
+  llvm::SmallVector<SymRef, 16> LinearAtoms;
+  for (size_t I = 0; I != AtomIds.size(); ++I)
+    if (llvm::is_contained(LinearVariables, AtomIds[I])) {
+      LinearIds.push_back(AtomIds[I]);
+      LinearAtoms.push_back(Atoms[I]);
+    }
   auto LinearForm =
-      expandOverMinterms(Ctx, LinearTerms, AtomIds, Width, Budget);
+      expandOverMinterms(Ctx, LinearTerms, LinearIds, Width, Budget);
   if (!LinearForm)
     return std::nullopt;
 
   const size_t TermCeiling = termBudget(Ctx, Body, Opts);
   llvm::SmallVector<SymRef, 4> Linear;
-  linearCandidates(Ctx, std::move(LinearForm->Linear), Atoms, TermCeiling,
-                   Limits, Linear);
+  if (LinearAtoms.empty())
+    Linear.push_back(Ctx.mkConst(-LinearForm->Linear.front()));
+  else
+    linearCandidates(Ctx, std::move(LinearForm->Linear), LinearAtoms,
+                     TermCeiling, Limits, Linear);
   SymRef Remainder = cheapestOf(Ctx, Linear);
   if (!Remainder.isValid())
     return std::nullopt;

@@ -1,0 +1,172 @@
+//===- MachOThreadedBindFixtures.def - Original chain fixtures --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent on-disk bytes and expected values; no production encoding
+/// helper participates in the oracle. VALUE, TEXT and BYTES name test data.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_THREADED_VALUE
+#define NEVERD_THREADED_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_THREADED_TEXT
+#define NEVERD_THREADED_TEXT(Name, Value)
+#endif
+#ifndef NEVERD_THREADED_BYTES
+#define NEVERD_THREADED_BYTES(Name, ...)
+#endif
+#ifndef NEVERD_THREADED_MUTATION
+#define NEVERD_THREADED_MUTATION(Name, Index, Byte)
+#endif
+
+NEVERD_THREADED_VALUE(va_t, kBase, 0x100000000)
+NEVERD_THREADED_VALUE(va_t, kData, kBase + 0x1000)
+NEVERD_THREADED_VALUE(size_t, kStreamOffset, 0x300)
+NEVERD_THREADED_VALUE(size_t, kDataFileOffset, 0x400)
+NEVERD_THREADED_VALUE(size_t, kSegmentSize, 0x1000)
+NEVERD_THREADED_VALUE(uint32_t, kSubtype, 0x80000002)
+NEVERD_THREADED_VALUE(uint64_t, kAuthRebase, 0x8005beef00000080)
+NEVERD_THREADED_VALUE(uint64_t, kAuthBind, 0xc007123400000000)
+NEVERD_THREADED_VALUE(uint64_t, kPlainBind, 0x4007ffff00000000)
+NEVERD_THREADED_VALUE(uint64_t, kNext8, 0x0008000000000000)
+NEVERD_THREADED_VALUE(uint64_t, kPlainRebase, kBase + 0x100)
+NEVERD_THREADED_VALUE(size_t, kPointerBytes, 8)
+NEVERD_THREADED_VALUE(size_t, kSecondRootOffset, 16)
+NEVERD_THREADED_VALUE(unsigned, kKeyCount, 4)
+NEVERD_THREADED_VALUE(unsigned, kKeyShift, 49)
+NEVERD_THREADED_VALUE(unsigned, kAddressDiversityShift, 48)
+NEVERD_THREADED_VALUE(uint64_t, kSigningFieldsMask, uint64_t(7) << 48)
+NEVERD_THREADED_VALUE(uint16_t, kBindDiversity, 0x1234)
+NEVERD_THREADED_VALUE(int64_t, kTableAddend, -4)
+NEVERD_THREADED_VALUE(int64_t, kCombinedAddend, -5)
+NEVERD_THREADED_VALUE(int64_t, kOtherTableAddend, 7)
+NEVERD_THREADED_VALUE(va_t, kRebaseTargetOffset, 0x80)
+NEVERD_THREADED_VALUE(unsigned, kStorageMutationCount, 10)
+NEVERD_THREADED_VALUE(uint64_t, kReservedOrdinalBit, uint64_t(1) << 16)
+NEVERD_THREADED_VALUE(uint64_t, kLargestNext, uint64_t(0x7ff) << 51)
+NEVERD_THREADED_VALUE(size_t, kPublicSegmentOpcodeOffset, 2)
+NEVERD_THREADED_VALUE(uint8_t, kPublicSegmentOpcode, 0x71)
+NEVERD_THREADED_VALUE(size_t, kPublicApplyOpcodeOffset, 4)
+NEVERD_THREADED_VALUE(uint8_t, kInvalidApplyOpcode, 0xd2)
+NEVERD_THREADED_VALUE(uint8_t, kThreadedTableOpcode, 0xd0)
+NEVERD_THREADED_TEXT(kLinkeditName, "__LINKEDIT")
+NEVERD_THREADED_TEXT(kSymbol, "_import")
+NEVERD_THREADED_TEXT(kLibrary, "/usr/lib/libThreaded.dylib")
+NEVERD_THREADED_TEXT(kTextName, "__TEXT")
+NEVERD_THREADED_TEXT(kDataName, "__DATA")
+NEVERD_THREADED_TEXT(kSectionName, "__data")
+NEVERD_THREADED_TEXT(kBufferName, "threaded-arm64e.bundle")
+NEVERD_THREADED_TEXT(kError, "threaded binds")
+NEVERD_THREADED_TEXT(kDuplicateDyldInfo, "more than one LC_DYLD_INFO")
+NEVERD_THREADED_VALUE(unsigned, kToolTimeoutSeconds, 30)
+NEVERD_THREADED_TEXT(kClang, "clang")
+NEVERD_THREADED_TEXT(kXcrun, "xcrun")
+NEVERD_THREADED_TEXT(kFind, "--find")
+NEVERD_THREADED_TEXT(kClassicLinker, "ld-classic")
+NEVERD_THREADED_TEXT(kLinkerPrefix, "-fuse-ld=")
+NEVERD_THREADED_TEXT(kTargetOption, "-target")
+NEVERD_THREADED_TEXT(kTarget, "arm64e-apple-macos")
+NEVERD_THREADED_TEXT(kBundle, "-bundle")
+NEVERD_THREADED_TEXT(kDynamicLookup, "-Wl,-undefined,dynamic_lookup")
+NEVERD_THREADED_TEXT(kStripLocals, "-Wl,-x")
+NEVERD_THREADED_TEXT(kOutput, "-o")
+NEVERD_THREADED_TEXT(kO0, "-O0")
+NEVERD_THREADED_TEXT(kO2, "-O2")
+NEVERD_THREADED_TEXT(kTempPrefix, "neverd-arm64e-threaded")
+NEVERD_THREADED_TEXT(kSourceExtension, "m")
+NEVERD_THREADED_TEXT(kBundleExtension, "bundle")
+NEVERD_THREADED_TEXT(kLogExtension, "log")
+NEVERD_THREADED_TEXT(kPathExtension, "path")
+NEVERD_THREADED_TEXT(kNativeOnly,
+                     "classic Objective-C producer requires Apple tools")
+NEVERD_THREADED_TEXT(kClassicUnavailable,
+                     "the selected Apple SDK has no ld-classic")
+NEVERD_THREADED_TEXT(kClass, "ThreadedMetadata")
+NEVERD_THREADED_TEXT(kSelector, "increment:")
+NEVERD_THREADED_TEXT(kMethod, "-[ThreadedMetadata increment:]")
+NEVERD_THREADED_TEXT(kSupported, "supported")
+NEVERD_THREADED_TEXT(kWeakValue, "_threaded_weak_value")
+NEVERD_THREADED_TEXT(kWeakFunction, "_threaded_weak_function")
+NEVERD_THREADED_VALUE(int64_t, kWeakLookupOrdinal, -3)
+NEVERD_THREADED_TEXT(kObjCSource, R"(
+__attribute__((weak)) int threaded_weak_value = 7;
+__attribute__((weak,noinline)) int threaded_weak_function(int value) {
+  return value + threaded_weak_value;
+}
+int *threaded_weak_address = &threaded_weak_value;
+int (*threaded_weak_function_pointer)(int) = threaded_weak_function;
+__attribute__((objc_root_class))
+@interface ThreadedMetadata
+- (int)increment:(int)value;
+@end
+@implementation ThreadedMetadata
+- (int)increment:(int)value { return value + 1; }
+@end
+)")
+
+// One import with weak flag, library ordinal one and signed addend -4.
+// Segment zero at offset zero is the chain root in the utility fixture.
+NEVERD_THREADED_BYTES(kOneImport, 0xd0, 0x01, 0x11, 0x41, '_', 'i', 'm', 'p',
+                      'o', 'r', 't', 0, 0x51, 0x60, 0x7c, 0x90, 0x70, 0, 0xd1,
+                      0)
+NEVERD_THREADED_BYTES(kRebasesOnly, 0xd0, 0, 0x70, 0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kTwoRoots, 0xd0, 0, 0x70, 0, 0xd1, 0x70, 0x10, 0xd1, 0)
+NEVERD_THREADED_BYTES(kDuplicateRoots, 0xd0, 0, 0x70, 0, 0xd1, 0xd1, 0)
+NEVERD_THREADED_BYTES(kMissingSize, 0xd0)
+NEVERD_THREADED_BYTES(kBadSize, 0xd0, 0x80, 0x80, 0x04, 0)
+NEVERD_THREADED_BYTES(kIncompleteTable, 0xd0, 1, 0x70, 0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kMissingTable, 0x70, 0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kRepeatedTable, 0xd0, 0, 0xd0, 0, 0)
+NEVERD_THREADED_BYTES(kMissingSegment, 0xd0, 0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kBadSegment, 0xd0, 0, 0x7f, 0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kMisalignedRoot, 0xd0, 0, 0x70, 4, 0xd1, 0)
+NEVERD_THREADED_BYTES(kUnknownSubopcode, 0xd2, 0)
+NEVERD_THREADED_BYTES(kUnknownOpcode, 0xd0, 0, 0xe0, 0)
+NEVERD_THREADED_BYTES(kTruncatedSymbol, 0xd0, 1, 0x40, '_')
+NEVERD_THREADED_BYTES(kTruncatedSLEB, 0xd0, 0, 0x60, 0x80)
+NEVERD_THREADED_BYTES(kOverflowULEB, 0xd0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+                      0x80, 0x80, 0x80, 0x02)
+// This ordinary stream's symbol payload contains the threaded opcode.
+NEVERD_THREADED_BYTES(kOrdinaryPayload, 0x11, 0x40, '_', 0xd0, 'x', 0, 0x51,
+                      0x70, 0, 0x90, 0)
+NEVERD_THREADED_VALUE(va_t, kPayloadOffset, 0x50)
+NEVERD_THREADED_VALUE(int64_t, kPayloadAddend, 80)
+// 0xd0 is an operand byte in both LEB encodings, never a threaded opcode.
+NEVERD_THREADED_BYTES(kOrdinaryULEBPayload, 0x11, 0x40, '_', 'p', 0, 0x51, 0x70,
+                      0xd0, 0, 0x90, 0)
+NEVERD_THREADED_BYTES(kOrdinarySLEBPayload, 0x11, 0x40, '_', 'p', 0, 0x51, 0x60,
+                      0xd0, 0, 0x70, 0, 0x90, 0)
+NEVERD_THREADED_BYTES(kOrdinaryPrefix, 0x11, 0x40, '_', 'p', 0, 0x51, 0x70, 0,
+                      0x90)
+NEVERD_THREADED_VALUE(size_t, kAddendByteOffset, 14)
+NEVERD_THREADED_BYTES(kMinimumAddend, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+                      0x80, 0x80, 0x7f)
+
+NEVERD_THREADED_MUTATION("missing library ordinal", 2, 0x51)
+NEVERD_THREADED_MUTATION("out-of-range library ordinal", 2, 0x12)
+NEVERD_THREADED_MUTATION("unknown special library ordinal", 2, 0x3c)
+NEVERD_THREADED_MUTATION("reserved symbol flag", 3, 0x42)
+NEVERD_THREADED_MUTATION("non-pointer bind type", 12, 0x52)
+NEVERD_THREADED_MUTATION("missing pointer bind type", 12, 0x11)
+NEVERD_THREADED_MUTATION("reserved DO_BIND immediate", 15, 0x91)
+NEVERD_THREADED_MUTATION("too many ordinal records", 1, 0)
+NEVERD_THREADED_MUTATION("incomplete ordinal table", 1, 2)
+NEVERD_THREADED_MUTATION("reserved DONE immediate", 19, 1)
+
+NEVERD_THREADED_BYTES(kTwoImports, 0xd0, 2, 0x12, 0x40, '_', 'i', 'm', 'p', 'o',
+                      'r', 't', 0, 0x51, 0x60, 7, 0x90, 0x60, 0x7c, 0x90, 0x70,
+                      0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kTwoLibraries, 0xd0, 2, 0x11, 0x40, '_', 'i', 'm', 'p',
+                      'o', 'r', 't', 0, 0x51, 0x60, 7, 0x90, 0x12, 0x90, 0x70,
+                      0, 0xd1, 0)
+NEVERD_THREADED_BYTES(kUnsortedSegments, 0xd0, 0, 0x71, 0, 0xd1, 0x70, 0x10,
+                      0xd1, 0)
+NEVERD_THREADED_TEXT(kOtherLibrary, "/usr/lib/libOther.dylib")
+NEVERD_THREADED_TEXT(kOtherSymbol, "_different_import")
+
+#undef NEVERD_THREADED_MUTATION
+#undef NEVERD_THREADED_VALUE
+#undef NEVERD_THREADED_TEXT
+#undef NEVERD_THREADED_BYTES

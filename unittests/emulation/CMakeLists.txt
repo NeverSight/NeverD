@@ -1,3 +1,10 @@
+add_neverd_unittest(NeverDRegisterSnapshotTests
+  RegisterSnapshotTests.cpp
+  ContextRegisterSnapshotTests.cpp
+  TIMEOUT 20
+  NO_PRETTY_VALUES
+  LINK_COMPONENTS EmulationCPU)
+
 add_neverd_unittest(NeverDExecutionRunJSONTests
   ExecutionRunJSONTests.cpp
   TIMEOUT 20
@@ -38,60 +45,61 @@ if(APPLE AND NEVERD_EMULATION_BACKEND_HVF)
 endif()
 
 add_neverd_unittest(NeverDAArch64StateTests
-  AArch64StateTests.cpp
-  AArch64MachineProbeTests.cpp
+  aarch64/AArch64StateTests.cpp
+  aarch64/AArch64MachineProbeTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationArch)
 target_include_directories(NeverDAArch64StateTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/emulation)
 
 add_neverd_unittest(NeverDAArch64FPTests
-  AArch64FPStateTests.cpp
-  AArch64SIMDTests.cpp
-  AArch64ProbeExecutionTests.cpp
+  aarch64/AArch64FloatConversionTests.cpp
+  aarch64/AArch64FPStateTests.cpp
+  aarch64/AArch64SIMDTests.cpp
+  aarch64/AArch64ProbeExecutionTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
 target_include_directories(NeverDAArch64FPTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/emulation)
 
 add_neverd_unittest(NeverDAArch64PAuthTests
-  AArch64PAuthTests.cpp
+  aarch64/AArch64PAuthTests.cpp
   TIMEOUT 20
   LINK_COMPONENTS EmulationCPU)
 
 add_neverd_unittest(NeverDAArch64BTITests
-  AArch64BTITests.cpp
+  aarch64/AArch64BTITests.cpp
   TIMEOUT 20
   LINK_COMPONENTS EmulationCPU EmulationRuntime)
 
 add_neverd_unittest(NeverDAArch64CacheTests
-  AArch64CacheTests.cpp
+  aarch64/AArch64CacheTests.cpp
   TIMEOUT 20
   NO_PRETTY_VALUES
   LINK_COMPONENTS EmulationCPU EmulationRuntime)
 
 add_neverd_unittest(NeverDAArch64NZCVTests
-  AArch64NZCVTests.cpp
+  aarch64/AArch64NZCVTests.cpp
   TIMEOUT 20
   NO_PRETTY_VALUES
   LINK_COMPONENTS EmulationCPU EmulationRuntime)
 
 add_neverd_unittest(NeverDAArch64MemoryTests
-  AArch64CrossPageTests.cpp
-  AArch64VectorMemoryTests.cpp
-  AArch64StructureMemoryTests.cpp
-  AArch64AcquireReleaseTests.cpp
-  AArch64ExclusiveTests.cpp
-  AArch64AtomicTests.cpp
+  aarch64/AArch64CrossPageTests.cpp
+  aarch64/AArch64VectorMemoryTests.cpp
+  aarch64/AArch64StructureMemoryTests.cpp
+  aarch64/AArch64AcquireReleaseTests.cpp
+  aarch64/AArch64ExclusiveTests.cpp
+  aarch64/AArch64AtomicTests.cpp
   TIMEOUT 15
   NO_PRETTY_VALUES
   LINK_COMPONENTS EmulationCPU)
 
 add_neverd_unittest(NeverDX64FPTests
-  X64FPStateTests.cpp
-  X64XsaveTests.cpp
-  X64MachineProbeTests.cpp
-  X64ProbeExecutionTests.cpp
+  x86_64/X64FPStateTests.cpp
+  x86_64/X64XsaveTests.cpp
+  x86_64/X64MachineProbeTests.cpp
+  x86_64/X64ProbeExecutionTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
 target_include_directories(NeverDX64FPTests PRIVATE
@@ -122,7 +130,7 @@ add_neverd_unittest(NeverDExecutionSessionTests
   LINK_COMPONENTS EmulationRuntime EmulationImage)
 
 add_neverd_unittest(NeverDDirectX64Tests
-  DirectX64Tests.cpp
+  x86_64/DirectX64Tests.cpp
   NO_PRETTY_VALUES
   TIMEOUT 15
   LINK_COMPONENTS EmulationRuntime)
@@ -130,26 +138,26 @@ target_include_directories(NeverDDirectX64Tests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/emulation)
 
 add_neverd_unittest(NeverDX64MemoryUpdateTests
-  X64MemoryUpdateTests.cpp
-  X64BitStringTests.cpp
-  X64StringTransferTests.cpp
-  X64StringComparisonTests.cpp
-  X64MXCSRTests.cpp
-  X64DataTests.cpp
-  X64PackedIntegerTests.cpp
-  X64PackedShiftTests.cpp
-  X64VectorMaskTests.cpp
-  X64ShuffleTests.cpp
-  X64PartialMoveTests.cpp
-  X64WordLaneTests.cpp
-  X64IntegerFloatTests.cpp
-  X64FloatIntegerTests.cpp
-  X64SSEComparisonTests.cpp
-  X64SSEPredicateTests.cpp
-  X64SSEPrecisionTests.cpp
-  X64PackedFloatTests.cpp
-  X64PackedFloatIntegerTests.cpp
-  X64CrossPageTests.cpp
+  x86_64/X64MemoryUpdateTests.cpp
+  x86_64/X64BitStringTests.cpp
+  x86_64/X64StringTransferTests.cpp
+  x86_64/X64StringComparisonTests.cpp
+  x86_64/X64MXCSRTests.cpp
+  x86_64/X64DataTests.cpp
+  x86_64/X64PackedIntegerTests.cpp
+  x86_64/X64PackedShiftTests.cpp
+  x86_64/X64VectorMaskTests.cpp
+  x86_64/X64ShuffleTests.cpp
+  x86_64/X64PartialMoveTests.cpp
+  x86_64/X64WordLaneTests.cpp
+  x86_64/X64IntegerFloatTests.cpp
+  x86_64/X64FloatIntegerTests.cpp
+  x86_64/X64SSEComparisonTests.cpp
+  x86_64/X64SSEPredicateTests.cpp
+  x86_64/X64SSEPrecisionTests.cpp
+  x86_64/X64PackedFloatTests.cpp
+  x86_64/X64PackedFloatIntegerTests.cpp
+  x86_64/X64CrossPageTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
 target_include_directories(NeverDX64MemoryUpdateTests PRIVATE
@@ -158,8 +166,8 @@ target_include_directories(NeverDX64MemoryUpdateTests PRIVATE
 add_neverd_unittest(NeverDRAMTransactionTests
   RAMTransactionTests.cpp
   RAMReservationTests.cpp
-  X64AtomicTests.cpp
-  X64WideAtomicTests.cpp
+  x86_64/X64AtomicTests.cpp
+  x86_64/X64WideAtomicTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
 target_include_directories(NeverDRAMTransactionTests PRIVATE
@@ -183,30 +191,30 @@ add_neverd_unittest(NeverDThreadPointerTests
   LINK_COMPONENTS EmulationCPU)
 
 add_neverd_unittest(NeverDX64IntegerTests
-  X64IntegerTests.cpp
-  X64PauseTests.cpp
-  X64PushFlagsTests.cpp
-  X64PopFlagsTests.cpp
-  X64StatusFlagsTests.cpp
-  X64DoubleShiftTests.cpp
-  X64ScalarShiftTests.cpp
-  X64LoopTests.cpp
-  X64BranchTests.cpp
-  X64StackTests.cpp
-  X64FrameExitTests.cpp
-  X64FrameEntryTests.cpp
-  X64ReturnPrefixTests.cpp
+  x86_64/X64IntegerTests.cpp
+  x86_64/X64PauseTests.cpp
+  x86_64/X64PushFlagsTests.cpp
+  x86_64/X64PopFlagsTests.cpp
+  x86_64/X64StatusFlagsTests.cpp
+  x86_64/X64DoubleShiftTests.cpp
+  x86_64/X64ScalarShiftTests.cpp
+  x86_64/X64LoopTests.cpp
+  x86_64/X64BranchTests.cpp
+  x86_64/X64StackTests.cpp
+  x86_64/X64FrameExitTests.cpp
+  x86_64/X64FrameEntryTests.cpp
+  x86_64/X64ReturnPrefixTests.cpp
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
 target_include_directories(NeverDX64IntegerTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/emulation)
 
 add_neverd_unittest(NeverDX64ExceptionTests
-  X64ExceptionTests.cpp
-  X64SIMDExceptionTests.cpp
-  X64AlignmentTests.cpp
-  X64DivisionTests.cpp
-  X64StateTransitionTests.cpp
+  x86_64/X64ExceptionTests.cpp
+  x86_64/X64SIMDExceptionTests.cpp
+  x86_64/X64AlignmentTests.cpp
+  x86_64/X64DivisionTests.cpp
+  x86_64/X64StateTransitionTests.cpp
   NO_PRETTY_VALUES
   TIMEOUT 15
   LINK_COMPONENTS EmulationCPU)
@@ -309,14 +317,19 @@ add_neverd_unittest(NeverDAndroidNativeTests
   AndroidStdioTests.cpp
   AndroidProcTests.cpp
   AndroidJNITests.cpp
+  AndroidMessageQueueTests.cpp
   AndroidBinderTests.cpp
   AndroidSearchTests.cpp
   AndroidStringCopyTests.cpp
+  AndroidStringLengthTests.cpp
   AndroidMutexTests.cpp
   AndroidSemaphoreTests.cpp
+  AndroidDladdrTests.cpp
   AndroidRandomTests.cpp
   AndroidNetworkTests.cpp
   AndroidAuxvTests.cpp
+  AndroidEnvironmentTests.cpp
+  AndroidErrorTests.cpp
   AndroidCalendarTests.cpp
   AndroidFDSetTests.cpp
   AndroidReadinessTests.cpp
@@ -544,6 +557,12 @@ if(NEVERD_EMULATION_BACKEND_UNICORN)
   set_tests_properties(UnicornDecode.RegisterU UnicornDecode.RoundMemory PROPERTIES
     LABELS NeverDUnicornDecodeTests TIMEOUT 15)
   target_compile_definitions(NeverDExecutionConfigurationTests PRIVATE NEVERD_TEST_UNICORN=1)
+  add_neverd_unittest(NeverDUnicornStateReuseTests
+    UnicornStateReuseTests.cpp
+    TIMEOUT 15
+    LINK_COMPONENTS EmulationCPU)
+  target_include_directories(NeverDUnicornStateReuseTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/lib/emulation)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_neverd_unittest(NeverDUnicornStateTransferTests
       UnicornStateTransferTests.cpp
@@ -582,7 +601,7 @@ if(NEVERD_EMULATION_BACKEND_UNICORN)
   add_neverd_unittest(NeverDCPUEmulationTests
     CPUArchitectureTests.cpp
     ExecutionExitTests.cpp
-    AArch64ProjectionTests.cpp
+    aarch64/AArch64ProjectionTests.cpp
     LINK_COMPONENTS EmulationCPU
     LINK_LIBS unicorn)
   target_include_directories(NeverDCPUEmulationTests PRIVATE

@@ -13,7 +13,9 @@
 #include "neverd/symbolic/SymParse.h"
 
 #include <array>
+#include <bit>
 #include <random>
+#include <string>
 
 using namespace neverd;
 using namespace neverd::symbolic;
@@ -200,7 +202,17 @@ TEST(SymMBAHigherProduct, RefusesBeforeAllocationAndRequiresDistributionProof) {
     detail::WorkBudget Budget(Work);
     detail::SolveReport Limited;
     auto Value = detail::solveProductCofactors(C, Input, {}, Budget, Limited);
-    EXPECT_EQ(Value == Input, Work != Full.used());
+    if (Work <= 1)
+      EXPECT_EQ(Value, Input);
+    else if (Work == Full.used())
+      EXPECT_EQ(Value, R);
+    else {
+      // A complete distribution may now precede the final bookkeeping unit.
+      // A partial budget may retain that proved answer, never an unproved one.
+      EXPECT_TRUE(Value == Input || Value == R);
+      if (Value != Input)
+        EXPECT_EQ(Limited.Evidence, MBAEvidence::Derivation);
+    }
     EXPECT_LE(Budget.used(), Work);
   }
 }
@@ -1086,6 +1098,290 @@ TEST(SymMBAHigherProduct, ProductZeroProofHasIndependentFullWidthSMTCheck) {
     ASSERT_TRUE(C.isConstZero(Output));
     solver::SymSynthVerifier Verifier({}, solver::ProofBackend::Z3, 5000);
     EXPECT_EQ(Verifier(C, Input, Output), SynthVerification::Equivalent);
+  }
+}
+
+TEST(SymMBAHigherProduct, CancelsUnchangedSummandsBeforeDistributionProof) {
+  for (unsigned Width : {3u, 8u, 16u, 32u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    llvm::SmallVector<SymRef, 40> BeforeTerms, AfterTerms;
+    for (unsigned I = 0; I != 32; ++I) {
+      const auto Word = C.mkVar("unrelated" + std::to_string(I), Width);
+      llvm::SmallVector<SymRef, 16> Factors(12, Word);
+      Factors.push_back(C.mkConst(Width, 2 * I + 3));
+      BeforeTerms.push_back(C.mkMul(Factors));
+    }
+    AfterTerms = BeforeTerms;
+    BeforeTerms.push_back(C.mkMul(X, Z));
+    BeforeTerms.push_back(C.mkMul(Y, Z));
+    AfterTerms.push_back(C.mkMul(C.mkAdd(X, Y), Z));
+    const auto Before = C.mkAdd(BeforeTerms), After = C.mkAdd(AfterTerms);
+    detail::WorkBudget Full(4096);
+    ASSERT_TRUE(detail::proveArithmeticIdentity(C, Before, After, Full, 1 << 20,
+                                                false));
+    EXPECT_LT(Full.used(), 2048u);
+    for (size_t Work : {size_t(0), Full.used() - 1}) {
+      detail::WorkBudget Short(Work);
+      EXPECT_FALSE(detail::proveArithmeticIdentity(C, Before, After, Short,
+                                                   1 << 20, false));
+    }
+    detail::WorkBudget Exact(Full.used());
+    EXPECT_TRUE(detail::proveArithmeticIdentity(C, Before, After, Exact,
+                                                1 << 20, false));
+    detail::WorkBudget NoStorage(4096), Wrong(4096);
+    EXPECT_FALSE(
+        detail::proveArithmeticIdentity(C, Before, After, NoStorage, 0, false));
+    EXPECT_FALSE(detail::proveArithmeticIdentity(
+        C, Before, C.mkAdd(After, C.mkOne(Width)), Wrong, 1 << 20, false));
+  }
+}
+
+TEST(SymMBAHigherProduct, ExtractsCompleteSharedProductsBeforeQuotientSearch) {
+  for (unsigned Width : {3u, 8u, 16u, 32u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width), W = C.mkVar("w", Width);
+    const auto U = C.mkVar("u", Width), Odd = C.mkOr(Z, C.mkOne(Width));
+    llvm::SmallVector<SymRef, 16> Factors(8, Odd);
+    Factors.append(4, W);
+    const auto Common = C.mkMul(Factors), Scale = C.mkConst(Width, 37);
+    const auto Input =
+        C.mkAdd({C.mkMul({Scale, Common, C.mkAnd(X, Y)}),
+                 C.mkMul({Scale, Common, C.mkAnd(X, C.mkNot(Y))}), U});
+    const auto Expected = C.mkAdd(C.mkMul({Scale, Common, X}), U);
+    MBAOptions Options;
+    Options.VerifySamples = 0;
+    detail::WorkBudget Budget(65536);
+    detail::SolveReport Report;
+    const auto Output =
+        detail::solveStructuralFactors(C, Input, Options, Budget, Report);
+    EXPECT_EQ(Report.Evidence, MBAEvidence::Derivation);
+    EXPECT_LE(C.readabilityCost(Output), C.readabilityCost(Expected));
+    EXPECT_LT(Budget.used(), 8192u);
+    std::mt19937_64 Random(0x434F4D4D4F4E);
+    for (unsigned Sample = 0; Sample != 128; ++Sample) {
+      llvm::SmallVector<llvm::APInt, 5> Values;
+      for (unsigned I = 0; I != 5; ++I) {
+        llvm::APInt Value(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          Value |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+        Values.push_back(Value);
+      }
+      auto Want = llvm::APInt(Width, 37, false, true) * Values[0];
+      for (unsigned I = 0; I != 8; ++I)
+        Want *= Values[2] | llvm::APInt(Width, 1);
+      for (unsigned I = 0; I != 4; ++I)
+        Want *= Values[3];
+      Want += Values[4];
+      EXPECT_EQ(C.eval(Input, Values), Want);
+      EXPECT_EQ(C.eval(Output, Values), Want);
+    }
+  }
+}
+
+TEST(SymMBAHigherProduct, RejectsInconsistentProductDiagonalsWithoutExpansion) {
+  for (unsigned Width : {3u, 8u, 16u, 32u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const auto Input =
+        C.mkAdd(C.mkMul({X, Y, Z}), C.mkMul({C.mkConst(Width, 2), C.mkOr(X, Y),
+                                             C.mkOr(Y, Z), C.mkOr(X, Z)}));
+    auto Terms = detail::splitIntoTerms(C, Input);
+    ASSERT_TRUE(Terms);
+    llvm::SmallVector<uint32_t, 3> Atoms;
+    C.collectVars(Input, Atoms);
+    detail::WorkBudget Search(1024), Proof(4096);
+    EXPECT_FALSE(detail::expandOverMinterms(C, *Terms, Atoms, Width, Search,
+                                            true, true));
+    EXPECT_LT(Search.used(), 1024u);
+    // This is a rejection of single-product synthesis only. General identity
+    // proofs must still expand every coefficient of the original polynomial.
+    auto Form = detail::expandOverMinterms(C, *Terms, Atoms, Width, Proof,
+                                           false, false);
+    ASSERT_TRUE(Form);
+    EXPECT_FALSE(Form->Higher.empty());
+  }
+}
+
+TEST(SymMBAHigherProduct, RecoversQuadraticsOverRepeatedMembershipClasses) {
+  for (unsigned Width : {3u, 8u, 64u, 257u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 8> Vars;
+    llvm::SmallVector<uint32_t, 8> Ids;
+    for (unsigned I = 0; I != 8; ++I) {
+      Vars.push_back(C.mkVar("x" + std::to_string(I), Width));
+      Ids.push_back(C.varId(Vars.back()));
+    }
+    auto A = C.mkXor({Vars[0], Vars[1], Vars[2]});
+    auto B = C.mkOr({Vars[3], Vars[4], Vars[5]});
+    for (auto Scale : {llvm::APInt(Width, 37, false, true),
+                       llvm::APInt::getSignMask(Width)}) {
+      llvm::SmallVector<detail::PolyTerm, 4> Terms;
+      for (unsigned I = 0; I != 4; ++I)
+        Terms.push_back({Scale,
+                         {C.mkAnd(A, I & 1 ? Vars[6] : C.mkNot(Vars[6])),
+                          C.mkAnd(B, I & 2 ? Vars[7] : C.mkNot(Vars[7]))}});
+      detail::WorkBudget Budget(8192);
+      bool Determined = false;
+      auto Product = detail::recoverQuadraticTerms(
+          C, Terms, Ids, Width, Budget, MBAOptions{}.MaxTableBytes, Determined);
+      ASSERT_TRUE(Product);
+      ASSERT_TRUE(Determined);
+      EXPECT_LT(Budget.used(), 8192u);
+      for (unsigned I = 0; I != 256; ++I)
+        for (unsigned J = I; J != 256; ++J) {
+          auto Left = [](unsigned M) { return std::popcount(M & 7) % 2 != 0; };
+          auto Right = [](unsigned M) { return (M & 56) != 0; };
+          unsigned Want = Left(I) && Right(J);
+          unsigned Actual =
+              Product->Factors[0].at(I) && Product->Factors[1].at(J);
+          if (I != J) {
+            Want += Left(J) && Right(I);
+            Actual += Product->Factors[0].at(J) && Product->Factors[1].at(I);
+          }
+          EXPECT_EQ(Scale * llvm::APInt(Width, Want),
+                    Product->Coefficient * llvm::APInt(Width, Actual));
+        }
+      Terms[0].Coeff += 1;
+      detail::WorkBudget NearMiss(8192);
+      Determined = false;
+      EXPECT_FALSE(detail::recoverQuadraticTerms(C, Terms, Ids, Width, NearMiss,
+                                                 MBAOptions{}.MaxTableBytes,
+                                                 Determined));
+      EXPECT_TRUE(Determined);
+    }
+  }
+}
+
+TEST(SymMBAHigherProduct, ReadsWideAffineSumsWithoutCornerEnumeration) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 16> Terms;
+    for (unsigned I = 0; I != 13; ++I)
+      Terms.push_back(C.mkMul(C.mkConst(Width, 2 * I + 1),
+                              C.mkVar("x" + std::to_string(I), Width)));
+    auto Input = C.mkAdd(Terms);
+    MBAOptions Options;
+    Options.VerifySamples = 0;
+    Options.MaxWork = 8192;
+    auto R = simplifyMBADeep(C, Input, Options);
+    EXPECT_LT(R.Work, Options.MaxWork);
+    EXPECT_LE(R.SizeAfter, R.SizeBefore);
+    std::mt19937_64 Random(0x41464649);
+    for (unsigned Sample = 0; Sample != 128; ++Sample) {
+      llvm::SmallVector<llvm::APInt, 16> Values;
+      llvm::APInt Expected(Width, 0);
+      for (unsigned I = 0; I != 13; ++I) {
+        llvm::APInt V(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          V |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+        Expected += llvm::APInt(Width, 2 * I + 1) * V;
+        Values.push_back(V);
+      }
+      EXPECT_EQ(C.eval(R.Expr, Values), Expected);
+    }
+  }
+}
+
+TEST(SymMBAHigherProduct,
+     FinishesMixedDegreePartitionsWithChangedCoefficients) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width),
+               Z = C.mkVar("z", Width), W = C.mkVar("w", Width),
+               V = C.mkVar("v", Width);
+    std::array<SymRef, 4> Words{
+        C.mkXor(C.mkAdd(X, Y), Z), C.mkOr(C.mkMul(Y, Z), W),
+        C.mkAnd(C.mkAdd(X, Z), C.mkOr(Y, V)), C.mkXor(C.mkAdd(W, V), X)};
+    std::array<SymRef, 4> Common{C.mkOr(C.mkAdd(X, Y), C.mkOne(Width)),
+                                 C.mkOr(C.mkMul(Z, W), C.mkOne(Width)),
+                                 C.mkNot(C.mkAnd(C.mkXor(X, V), Z)),
+                                 C.mkOr(C.mkAdd(Y, V), C.mkOne(Width))};
+    std::array<SymRef, 3> Axes{X, Z, V};
+    llvm::SmallVector<SymRef, 24> Terms;
+    for (unsigned Block = 0; Block != 3; ++Block) {
+      const unsigned Degree = 48 + 16 * Block;
+      const auto Scale = Block == 0   ? llvm::APInt(Width, 1).shl(Width - 2)
+                         : Block == 1 ? llvm::APInt(Width, 37)
+                                      : -llvm::APInt(Width, 11);
+      for (unsigned Corner = 1; Corner != 7; ++Corner) {
+        auto Coefficient = Scale;
+        if (Corner == 1)
+          Coefficient += 13;
+        if (Corner == 4)
+          Coefficient -= 2 * Scale;
+        if (Corner == 2)
+          Coefficient += llvm::APInt::getSignMask(Width);
+        llvm::SmallVector<SymRef, 96> Factors{C.mkConst(Coefficient)};
+        for (unsigned I = 0; I != Degree - 3; ++I)
+          Factors.push_back(Common[(I + Block) % 4]);
+        for (unsigned I = 0; I != 3; ++I)
+          Factors.push_back(
+              C.mkAnd(Words[(I + Block) % 4],
+                      Corner & (1u << I) ? Axes[I] : C.mkNot(Axes[I])));
+        Terms.push_back(C.mkMul(Factors));
+      }
+    }
+    Terms.append({C.mkXor(X, Y), C.mkMul(C.mkConst(Width, 2), C.mkAnd(X, Y)),
+                  C.mkOr(Z, W), C.mkAnd(Z, W),
+                  C.mkMul({C.mkConst(Width, 19), X, Y, Z})});
+    const auto Input = C.mkAdd(Terms);
+    MBAOptions Options;
+    Options.MaxWork = Width <= 64 ? 65536 : 262144;
+    Options.VerifySamples = 0;
+    const auto R = simplifyMBADeep(C, Input, Options);
+    EXPECT_LT(R.Work, Options.MaxWork);
+    EXPECT_LT(R.SizeAfter, R.SizeBefore / 2);
+    EXPECT_EQ(R.Evidence, MBAEvidence::Derivation);
+    std::mt19937_64 Random(0x4D49584544);
+    for (unsigned Sample = 0; Sample != 128; ++Sample) {
+      llvm::SmallVector<llvm::APInt, 5> Values;
+      for (unsigned I = 0; I != 5; ++I) {
+        llvm::APInt Value(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          Value |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+        if (Sample < 8)
+          Value = llvm::APInt(Width, Sample);
+        Values.push_back(Value);
+      }
+      const auto &A = Values[0], &B = Values[1], &D = Values[2], &E = Values[3],
+                 &F = Values[4];
+      std::array<llvm::APInt, 4> Source{(A + B) ^ D, (B * D) | E,
+                                        (A + D) & (B | F), (E + F) ^ A};
+      std::array<llvm::APInt, 4> Prefix{(A + B) | 1, (D * E) | 1,
+                                        ~((A ^ F) & D), (B + F) | 1};
+      std::array<llvm::APInt, 3> Select{A, D, F};
+      llvm::APInt Expected = A + B + D + E + 19 * A * B * D;
+      for (unsigned Block = 0; Block != 3; ++Block) {
+        const auto Scale = Block == 0   ? llvm::APInt(Width, 1).shl(Width - 2)
+                           : Block == 1 ? llvm::APInt(Width, 37)
+                                        : -llvm::APInt(Width, 11);
+        llvm::APInt Power(Width, 1);
+        for (unsigned I = 0; I != 45 + 16 * Block; ++I)
+          Power *= Prefix[(I + Block) % 4];
+        for (unsigned Corner = 1; Corner != 7; ++Corner) {
+          auto Product = Scale;
+          if (Corner == 1)
+            Product += 13;
+          if (Corner == 4)
+            Product -= 2 * Scale;
+          if (Corner == 2)
+            Product += llvm::APInt::getSignMask(Width);
+          Product *= Power;
+          for (unsigned I = 0; I != 3; ++I)
+            Product *= Source[(I + Block) % 4] &
+                       (Corner & (1u << I) ? Select[I] : ~Select[I]);
+          Expected += Product;
+        }
+      }
+      EXPECT_EQ(C.eval(R.Expr, Values), Expected);
+    }
   }
 }
 

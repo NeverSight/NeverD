@@ -2,6 +2,8 @@
 
 #include "TranslationCacheIdentity.h"
 
+#include "X86/X87TranslationBoundary.h"
+
 #include "llvm/ADT/StringExtras.h"
 
 #include <array>
@@ -85,6 +87,10 @@ void hashTranslationOptions(StableHashWriter &Hash,
   Hash.addU64(Options.BlockBudget);
   Hash.addU64(Options.GeneratedCodeByteBudget);
   Hash.addString(Target.cacheKey());
+  if (Options.RuntimeProfile != TranslationRuntimeProfileV1::ScalarInteger) {
+    Hash.addString("neverd.translation.runtime-profile.v1");
+    Hash.addByte(static_cast<uint8_t>(Options.RuntimeProfile));
+  }
 }
 
 void hashSemanticPolicy(StableHashWriter &Hash,
@@ -160,6 +166,11 @@ void hashVariable(StableHashWriter &Hash, const NdVar &Variable) {
 void hashTranslationBlockDescriptor(
     StableHashWriter &Hash, const TranslationBlockDescriptorV1 &Descriptor) {
   const TranslationBlockDescriptorHeaderV1 &Header = Descriptor.Header;
+  if (Descriptor.RuntimeProfile != TranslationRuntimeProfileV1::ScalarInteger) {
+    Hash.addString("neverd.translation.runtime-boundary.v1");
+    Hash.addByte(static_cast<uint8_t>(Descriptor.RuntimeProfile));
+    Hash.addU16(kX87TranslationBoundarySchemaV1);
+  }
   Hash.addU32(Header.Magic);
   Hash.addU16(Header.Version);
   Hash.addU16(Header.Size);

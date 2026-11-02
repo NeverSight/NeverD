@@ -8,9 +8,9 @@
 
 #include "TargetRegInfoDetail.h"
 
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/ARMRegs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
 

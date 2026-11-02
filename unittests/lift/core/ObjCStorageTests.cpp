@@ -149,6 +149,52 @@ struct StorageImage {
   }
 };
 
+TEST(ObjCStorage, Arm64eDeclarationsDoNotGrantNativeStorageProof) {
+  StorageImage F;
+  F.Image.MachOCPUSubtype = 2;
+  F.pointer(0x1400,
+            9); // A bitfield's declaration need not be naturally aligned.
+  F.pointer(0x1408, 9); // Nor disjoint from another field's storage unit.
+  F.string(0x1520, "b1");
+  F.string(0x1560, "b3");
+  parseObjCStorage(F.Image);
+  ASSERT_TRUE(F.Image.ObjCMetadataDiagnostics.empty());
+  ASSERT_EQ(F.Image.ObjCClasses[0].Ivars.size(), 2u);
+  EXPECT_EQ(F.Image.ObjCClasses[0].IvarStatus, "metadata_only");
+  EXPECT_TRUE(F.Image.ObjCSourceReferences.empty());
+  ASSERT_EQ(F.Image.ObjCMetadataReferences.size(), 2u);
+  auto JSON = objcMetadataJSON(F.Image);
+  ASSERT_TRUE(JSON.getArray("metadata_references"));
+  EXPECT_EQ(JSON.getArray("metadata_references")->size(), 2u);
+  EXPECT_EQ((*JSON.getArray("metadata_references"))[0].getAsObject()->getString(
+                "view"),
+            "metadata_only");
+  F.Image.MachOCPUSubtype = 0;
+  parseObjCStorage(F.Image);
+  EXPECT_FALSE(F.Image.ObjCMetadataDiagnostics.empty());
+  EXPECT_TRUE(F.Image.ObjCMetadataReferences.empty());
+  EXPECT_TRUE(F.Image.ObjCSourceReferences.empty());
+}
+
+TEST(ObjCStorage, Arm64eSwiftMissingOffsetIsRetainedWithoutInventedSlot) {
+  StorageImage F;
+  F.Image.MachOCPUSubtype = 2;
+  F.pointer(0x1308, 0);
+  F.word(0x1344, 0);
+  parseObjCStorage(F.Image);
+  ASSERT_TRUE(F.Image.ObjCMetadataDiagnostics.empty());
+  ASSERT_EQ(F.Image.ObjCClasses[0].Ivars.size(), 2u);
+  EXPECT_FALSE(F.Image.ObjCClasses[0].Ivars[0].Offset);
+  EXPECT_FALSE(F.Image.ObjCMetadataReferences.count(0));
+  EXPECT_TRUE(F.Image.ObjCSourceReferences.empty());
+  // A missing global is distinct from a nonzero unreadable pointer.
+  F.pointer(0x1308, 0x3000);
+  parseObjCStorage(F.Image);
+  EXPECT_FALSE(F.Image.ObjCMetadataDiagnostics.empty());
+  EXPECT_EQ(F.Image.ObjCClasses[0].IvarStatus, "unresolved");
+  EXPECT_TRUE(F.Image.ObjCClasses[0].Ivars.empty());
+}
+
 struct StaticStringPairs : StorageImage {
   static constexpr va_t Base = 0x1608;
   static constexpr va_t Slot = 0x1f00;

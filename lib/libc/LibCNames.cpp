@@ -222,6 +222,7 @@ void registerPrototypeArity(
 // anything absent is left to the heuristic scans unchanged.
 struct ArityRegistry {
   std::unordered_map<std::string_view, LibCArity> Map;
+  std::unordered_set<std::string_view> NativeComplex;
 
   ArityRegistry() {
     registerArity(Map, kStdioArity);
@@ -232,6 +233,8 @@ struct ArityRegistry {
     registerArity(Map, kUnistdArity);
     registerArity(Map, kMathArity);
     registerArity(Map, kComplexArity);
+    for (const auto &Entry : kComplexArity)
+      NativeComplex.insert(Entry.Name);
     registerArity(Map, kTimeArity);
     registerArity(Map, kExceptionRuntimeArity);
     registerArity(Map, kSetjmpArity);
@@ -356,7 +359,13 @@ std::optional<LibCArity> libcArity(std::string_view Name, LibCVariant Variant) {
     if (variant_rows::variadic(Name, Variant))
       return std::nullopt;
   }
-  const auto &Map = getArityRegistry().Map;
+  const auto &Registry = getArityRegistry();
+  // Microsoft's complex.h uses _Dcomplex/_Fcomplex records, whose carrier
+  // depends on the target ABI. The native _Complex FP-register shorthand
+  // cannot describe them; their full header types own call classification.
+  if (Variant == LibCVariant::Windows && Registry.NativeComplex.count(Name))
+    return std::nullopt;
+  const auto &Map = Registry.Map;
   auto It = Map.find(Name);
   if (It == Map.end())
     return std::nullopt;

@@ -16,7 +16,9 @@
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatchPreparation.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
@@ -121,6 +123,10 @@ llvm::Expected<va_t> legacyTarget(llvm::StringRef Name,
 } // namespace
 
 llvm::Expected<std::string> sourcePatchTargetTriple(const BinaryImage &Image) {
+  if (Image.MachOSharedCache)
+    return patchError(macho_loader::cache_load::kSourceUnsupported);
+  if (Image.isArm64e())
+    return patchError(kArm64eSourceReplacementUnsupported);
   const char *Default = llvmCodegenTriple(Image.Arch, Image.Format);
   if (!Default)
     return patchError("unsupported native target");

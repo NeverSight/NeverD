@@ -9,6 +9,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -22,6 +23,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Object/ObjectFile.h"
@@ -99,6 +101,14 @@ public:
     const auto &Work = Emitter.AddressProvenanceWork;
     return {Work.EdgeClassifications, Work.RecurrenceProofs,
             Work.StableOffsetProofs, Work.IndexedBaseProofs};
+  }
+
+  static uint64_t indexedBaseNodes(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.IndexedBaseNodes;
+  }
+
+  static uint64_t fragmentReloadProofs(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.FragmentReloadProofs;
   }
 
   static void resetAddressProvenanceWork(MedLLVMEmitter &Emitter) {
@@ -1421,9 +1431,10 @@ BinaryImage makeChainedImage() {
   Data.VA = DataVA;
   Data.Size = 0x100;
   Data.FileSz = Data.Size;
-  // Mach-O keeps __DATA_CONST writable while dyld applies fixups even though
-  // the segment is immutable once loading completes.
+  // Model the loader's SG_READ_ONLY guarantee while retaining fixup-time
+  // permissions. The segment name alone does not grant this protection.
   Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.ReadOnlyAfterRelocations = true;
   Data.Data.resize(Data.Size);
 
   dyld_chained_ptr_64_bind Bind{};
@@ -1780,8 +1791,10 @@ makeSpilledConstTableImage(Arch TargetArch,
     Data.Size = 0x40;
     Data.FileSz = Data.Size;
     Data.Flags = SegmentFlags::Readable;
-    if (IsMachO || Format == BinaryFormat::ELF)
+    if (IsMachO || Format == BinaryFormat::ELF) {
       Data.Flags = Data.Flags | SegmentFlags::Writable;
+      Data.ReadOnlyAfterRelocations = true;
+    }
     Data.Data.assign(Data.Size, 0);
     fillTables(Data.Data, 0);
     Image.Segments.push_back(std::move(Data));
@@ -1850,6 +1863,7 @@ BinaryImage makeWritablePointerTableImage(Arch TargetArch,
       continue;
     Seg.Name = Format == BinaryFormat::MachO ? "__DATA" : ".data";
     Seg.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Seg.ReadOnlyAfterRelocations = false;
   }
   for (Section &Sec : Image.Sections) {
     if (!Sec.contains(SpilledConstTableVA))
@@ -6815,6 +6829,7 @@ InteriorPointerFixture makeInteriorPointerFixture(Arch TargetArch) {
   Data.Size = 0x60;
   Data.FileSz = Data.Size;
   Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.ReadOnlyAfterRelocations = true;
   Data.Data.assign(Data.Size, 0);
   for (size_t I = 0; I < Fixture.InteriorTargets.size(); ++I) {
     const va_t NameSlot = TableVA + I * 16;
@@ -7940,6 +7955,7 @@ TEST(MachOInteriorCodePointerCFG, DoesNotFoldWritableOrUnprovenRelay) {
   {
     InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::AArch64);
     Fixture.Image.Segments.back().Name = section_names::macho::DataSeg;
+    Fixture.Image.Segments.back().ReadOnlyAfterRelocations = false;
     Fixture.Image.Segments.back().Flags =
         Fixture.Image.Segments.back().Flags | SegmentFlags::Writable;
     LowFunc Func = buildInteriorPointerCFG(Fixture);
@@ -8211,6 +8227,7 @@ TEST(MachOInteriorCodePointerCFG,
         Entries.insert(RejectedTarget);
       } else if (TestCase == Writable) {
         Fixture.Image.Segments.back().Name = section_names::macho::DataSeg;
+        Fixture.Image.Segments.back().ReadOnlyAfterRelocations = false;
       } else if (TestCase == Unproven) {
         Fixture.Image.CodePtrRelocSlots.clear();
       } else {
@@ -12713,8 +12730,8 @@ TEST(MachOLLVMDataPointerBoundary,
 
   const auto Work = MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
   EXPECT_EQ(std::get<1>(Work), 2u)
-      << "preflight and body must each build the base reload proof; a LOAD "
-         "without a fragment seed needs no extra fragment-source query";
+      << "preflight must build the base reload once and body must rebuild it; "
+         "a suppressed target LOAD needs no empty-fragment proof";
   EXPECT_EQ(std::get<3>(Work), 2u)
       << "the body phase must rebuild the stable occurrence index";
 }
@@ -13590,6 +13607,58 @@ TEST(LLVMDataPointerInvariantBoundary,
                   std::string::npos)
             << Diagnostic;
       }
+}
+
+// The emitter names the body that refused, with the error it wrote, so that
+// a whole unit can declare that function only and emit every other one.
+TEST(LLVMDataPointerInvariantBoundary,
+     NamesTheRefusedBodySoTheOthersEmitWithoutIt) {
+  constexpr Arch TargetArch = Arch::X64;
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(formatTraceName(Format));
+    BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+    MedFunc Plain;
+    Plain.Entry = TextVA + 0x600;
+    Plain.Name = "plain_leaf";
+    Plain.ReturnType = NdType::makeVoid();
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Plain.Entry;
+    Block.EndAddr = Plain.Entry + 4;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(std::move(Return));
+    Plain.Blocks.push_back(std::move(Block));
+    const std::vector<MedFunc> Funcs = {
+        Plain, makeDifferentBaseRematerializedRecurrentTableLookup(TargetArch)};
+
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    testing::internal::CaptureStderr();
+    auto Refused = Emitter.emit(Funcs, Context, "refused-body", TargetArch, {},
+                                &Image, Format);
+    (void)testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Refused.get(), nullptr);
+    ASSERT_EQ(Emitter.refusedBodies().size(), 1u);
+    EXPECT_EQ(Emitter.refusedBodies()[0].Index, 1u);
+    const std::string &Reason = Emitter.refusedBodies()[0].Reason;
+    EXPECT_NE(Reason.find("refusing stale-address fallback"), std::string::npos)
+        << Reason;
+    EXPECT_NE(Reason.find(Funcs[1].Name), std::string::npos) << Reason;
+
+    const std::vector<char> Mask = {1, 0};
+    auto Module = MedLLVMEmitter().emit(Funcs, Context, "refused-body",
+                                        TargetArch, {}, &Image, Format,
+                                        /*MergeableGlobals=*/false, &Mask);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Lookup = Module->getFunction(Funcs[1].Name);
+    ASSERT_NE(Lookup, nullptr);
+    EXPECT_TRUE(Lookup->isDeclaration());
+    const llvm::Function *Kept = Module->getFunction(Plain.Name);
+    ASSERT_NE(Kept, nullptr);
+    EXPECT_FALSE(Kept->isDeclaration());
+  }
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
@@ -16086,6 +16155,35 @@ TEST(LLVMCodePointerInvariantBoundary,
       }
 }
 
+TEST(LLVMCodePointerInvariantBoundary,
+     WidenedIndexDoesNotAuthorizeMixedCallableAndScalarSlots) {
+  for (Arch TargetArch : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+      for (bool DirectBase : {false, true}) {
+        SCOPED_TRACE(std::string(formatTraceName(Format)) + "/" +
+                     std::to_string(static_cast<int>(TargetArch)) + "/" +
+                     std::to_string(DirectBase));
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        // An eight-byte stride can select the record's scalar, function or data
+        // fields. Zero-extending the index changes none of those slot roles.
+        MedFunc Caller = makeIndexedPointerTableIndirectCaller(
+            TargetArch, DataVA, /*ElementStride=*/8,
+            /*RoundTripNarrowIndex=*/true);
+        if (DirectBase)
+          for (auto &Op : Caller.Blocks.front().Ops)
+            if (Op.Opcode == NdOp::INT_ADD)
+              Op.Inputs[0] = MedVar::makeConst(
+                  DataVA, 8, ConstantAddressProvenance::DataAddress);
+        MedFunc Callee = makeReturnFunction("mixed_index_target", CodeVA);
+        llvm::LLVMContext Context;
+        auto Module = MedLLVMEmitter().emit({Caller, Callee}, Context,
+                                            "mixed-widened-index", TargetArch,
+                                            {}, &Image, Format);
+        EXPECT_EQ(Module.get(), nullptr);
+      }
+}
+
 TEST(LLVMDataPointerInvariantBoundary, ScalarTableBoundsBelongToTheLoadSite) {
   enum class Case {
     Less,
@@ -17292,11 +17390,11 @@ TEST(LLVMDataPointerInvariantBoundary,
         MedVar Scaled = temp();
         append(NdOp::INT_MULT, Scaled, {Word, number(Width)});
         append(NdOp::RETURN, {}, {Scaled});
-        const bool Expected = C == Case::Direct || C == Case::Nested ||
-                              C == Case::WidenedAddress ||
-                              C == Case::RoundTripAddress ||
-                              C == Case::ZeroFilled || C == Case::Nonzero ||
-                              C == Case::ObjectFootprint;
+        const bool Expected =
+            C == Case::Direct || C == Case::Nested ||
+            C == Case::WidenedAddress || C == Case::RoundTripAddress ||
+            C == Case::ZeroFilled || C == Case::Nonzero ||
+            C == Case::ReadOnlySection || C == Case::ObjectFootprint;
         MedLLVMEmitter Proof;
         MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Proof, F, Image, A,
                                                         Format);
@@ -22454,6 +22552,24 @@ TEST(LLVMCodePointerInvariantBoundary,
         std::vector<llvm::Value *> Observed;
         for (llvm::BasicBlock &Block : *EmittedCaller)
           for (llvm::Instruction &Instruction : Block) {
+            if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction))
+              if (auto *Assembly = llvm::dyn_cast<llvm::InlineAsm>(
+                      Call->getCalledOperand())) {
+                ASSERT_EQ(TargetArch, Arch::X64);
+                ASSERT_EQ(Sink, ExactCodeAddressAtomicSink::Exchange);
+                const auto Plan =
+                    x86AtomicRmwPlan(TargetArch, NdOp::ATOMIC_XCHG, 8,
+                                     NdMemoryAddressSpace::Default);
+                ASSERT_TRUE(Plan);
+                EXPECT_EQ(Assembly->getAsmString(), Plan->assembly());
+                EXPECT_EQ(Assembly->getConstraintString(), Plan->constraints());
+                EXPECT_TRUE(Assembly->hasSideEffects());
+                ASSERT_EQ(Call->arg_size(), 2u);
+                EXPECT_TRUE(Call->getArgOperand(0)->getType()->isPointerTy());
+                EXPECT_TRUE(Call->getType()->isIntegerTy(64));
+                EXPECT_EQ(Call->getArgOperand(1)->getType(), Call->getType());
+                Observed.push_back(Call->getArgOperand(1));
+              }
             if (auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
               Observed.push_back(RMW->getValOperand());
             if (auto *CompareExchange =
@@ -25338,10 +25454,15 @@ TEST(LLVMDataPointerInvariantBoundary,
       Block.Ops.push_back(std::move(Store));
       Func.Blocks.push_back(std::move(Block));
 
-      llvm::LLVMContext Context;
-      auto Module = MedLLVMEmitter().emit({Func}, Context, "fragment-escape",
-                                          TargetArch, {}, &Image, Format);
-      EXPECT_EQ(Module, nullptr);
+      for (bool OriginalImage : {false, true}) {
+        SCOPED_TRACE(OriginalImage);
+        llvm::LLVMContext Context;
+        MedLLVMEmitter Emitter;
+        Emitter.setOriginalImageStorageForSource(OriginalImage);
+        auto Module = Emitter.emit({Func}, Context, "fragment-escape",
+                                   TargetArch, {}, &Image, Format);
+        EXPECT_EQ(Module, nullptr);
+      }
     }
 }
 
@@ -26625,7 +26746,7 @@ TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
         F.edge(I, I - 1);
       F.edge(1, Consumer);
       std::vector<MedVar> Addresses;
-      const bool Expected[] = {false, true, true, false, true,
+      const bool Expected[] = {false, true,  true,  false, true,
                                false, false, false, true};
       for (unsigned Kind = 0; Kind < std::size(Expected); ++Kind) {
         const MedVar Address = F.temp();
@@ -26642,8 +26763,8 @@ TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
         if (Kind == 2 || Kind == 3) {
           MedVar Extended = F.temp();
           Extended.Size = F.Width * 2;
-          F.op(Consumer, Kind == 2 ? NdOp::INT_ZEXT : NdOp::INT_SEXT,
-               Extended, {Value});
+          F.op(Consumer, Kind == 2 ? NdOp::INT_ZEXT : NdOp::INT_SEXT, Extended,
+               {Value});
           Value = Extended;
         } else if (Kind == 4 || Kind == 5) {
           MedVar Slice = F.temp();
@@ -26653,12 +26774,10 @@ TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
           Value = Slice;
         } else if (Kind == 6) {
           ++Value.SSAVer;
-          F.op(Consumer, NdOp::COPY, Value,
-               {MedVar::makeConst(0, Value.Size)});
+          F.op(Consumer, NdOp::COPY, Value, {MedVar::makeConst(0, Value.Size)});
         } else if (Kind == 7) {
           Value.Kind = MedVar::Reg;
-          F.op(Consumer, NdOp::COPY, Value,
-               {MedVar::makeConst(0, Value.Size)});
+          F.op(Consumer, NdOp::COPY, Value, {MedVar::makeConst(0, Value.Size)});
         } else if (Kind == 8) {
           Value.Size = F.Width / 2;
         }
@@ -26676,8 +26795,8 @@ TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
       Image.Format = Format;
       Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
       MedLLVMEmitter Emitter;
-      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
-          Emitter, F.Func, Image, TargetArch, Format);
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, F.Func, Image,
+                                                      TargetArch, Format);
       for (unsigned I = 0; I < Addresses.size(); ++I) {
         SCOPED_TRACE(I);
         EXPECT_EQ(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
@@ -26813,6 +26932,71 @@ TEST(LLVMCallClobberIndex, SwitchingFunctionsRebuildsRecordAndOwnerIndexes) {
   EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, First, 3),
             &First.Blocks[0].Ops[0]);
   EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter), 1u);
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     ScalarFrameReloadsDoNotBuildAnEmptyFragmentClosure) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    const auto &TRI = getTargetRegInfo(TargetArch);
+    const uint16_t Width = TRI.PointerSize;
+    BinaryImage Image =
+        makeSpilledConstTableImage(TargetArch, BinaryFormat::ELF);
+    Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+    FrameSlotProofFixture F(TargetArch);
+    F.Func.Entry = CallerVA;
+    F.Func.Name = "scalar_frame_reloads";
+    F.Func.FrameSize = 16;
+    F.Func.ReturnType = NdType::makeInt(Width);
+    F.Func.Blocks.front().StartAddr = CallerVA;
+    F.SP.SSAVer = 0;
+    const MedVar Slot = F.temp();
+    F.op(0, NdOp::COPY, F.SP, {F.SP});
+    F.op(0, NdOp::INT_ADD, Slot,
+         {F.SP, MedVar::makeConst(uint64_t(-8), Width,
+                                  ConstantAddressProvenance::Scalar)});
+    F.op(0, NdOp::STORE, {},
+         {Slot,
+          MedVar::makeConst(42, Width, ConstantAddressProvenance::Scalar)});
+    for (unsigned I = 0; I != 128; ++I)
+      F.op(0, NdOp::LOAD, F.temp(), {Slot});
+    F.op(0, NdOp::RETURN, {},
+         {MedVar::makeConst(17, Width, ConstantAddressProvenance::Scalar)});
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    auto Module = Emitter.emit({F.Func}, Context, "empty-fragment-closure",
+                               TargetArch, {}, &Image, BinaryFormat::ELF);
+    ASSERT_NE(Module, nullptr);
+    expectValidModule(*Module);
+    // Other address resolvers may legitimately inspect these reads. The
+    // fragment closure itself must not repeat a proof with no possible seed.
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::fragmentReloadProofs(Emitter), 0u);
+  }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     SharedScalarDAGHasLinearIndexedBaseWork) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    BinaryImage Image =
+        makeSpilledConstTableImage(TargetArch, BinaryFormat::ELF);
+    FrameSlotProofFixture F(TargetArch);
+    MedVar Value = F.temp();
+    Value.Kind = MedVar::Param;
+    F.Func.Params.push_back(Value);
+    constexpr unsigned Depth = 28;
+    for (unsigned I = 0; I != Depth; ++I) {
+      const MedVar Next = F.temp();
+      F.op(0, NdOp::INT_ADD, Next, {Value, Value});
+      Value = Next;
+    }
+    MedLLVMEmitter Emitter;
+    MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+        Emitter, F.Func, Image, TargetArch, BinaryFormat::ELF);
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::indexedBase(Emitter, Value));
+    const auto Nodes = MedLLVMProvenanceTestPeer::indexedBaseNodes(Emitter);
+    EXPECT_LE(Nodes, Depth + 1);
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::indexedBase(Emitter, Value));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::indexedBaseNodes(Emitter), Nodes);
+  }
 }
 
 TEST(LLVMFrameSlotProof, SharedDiamondsRetainExactCoordinatesWithinBudget) {
@@ -27713,3 +27897,161 @@ TEST(LLVMDataPointerInvariantBoundary,
 }
 
 } // namespace
+
+TEST(LLVMDataPointerInvariantBoundary, LowMappedScalarStoresKeepTheirBits) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+      for (auto Provenance : {ConstantAddressProvenance::Unknown,
+                              ConstantAddressProvenance::Scalar,
+                              ConstantAddressProvenance::Address,
+                              ConstantAddressProvenance::DataAddress}) {
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(static_cast<unsigned>(Architecture));
+        SCOPED_TRACE(static_cast<unsigned>(Provenance));
+        BinaryImage Image = makeSpilledConstTableImage(Architecture, Format);
+        Segment Header;
+        Header.Name = ".headers";
+        Header.VA = 0;
+        Header.Size = Header.FileSz = 64;
+        Header.Data.resize(64);
+        Header.Flags = SegmentFlags::Readable;
+        Image.Segments.push_back(std::move(Header));
+        MedVar Destination;
+        Destination.Kind = MedVar::Param;
+        Destination.Id = 0;
+        Destination.TheArch = Architecture;
+        Destination.Size = getTargetRegInfo(Architecture).PointerSize;
+        MedFunc Function;
+        Function.Entry = CallerVA;
+        Function.Name = "low_mapped_literal_store";
+        Function.ReturnType = NdType::makeVoid();
+        Function.Params = {Destination};
+        MedBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = CallerVA;
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.addInput(Destination);
+        Store.addInput(MedVar::makeConst(42, Destination.Size, Provenance));
+        Block.Ops.push_back(std::move(Store));
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Block.Ops.push_back(std::move(Return));
+        Function.Blocks.push_back(std::move(Block));
+        llvm::LLVMContext Context;
+        auto Module = MedLLVMEmitter().emit({Function}, Context, "low-store",
+                                            Architecture, {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        auto *Lifted = Module->getFunction(Function.Name);
+        ASSERT_NE(Lifted, nullptr);
+        unsigned Stores = 0;
+        for (const auto &B : *Lifted)
+          for (const auto &Instruction : B)
+            if (const auto *Write =
+                    llvm::dyn_cast<llvm::StoreInst>(&Instruction)) {
+              ++Stores;
+              const auto *Integer =
+                  llvm::dyn_cast<llvm::ConstantInt>(Write->getValueOperand());
+              if (isExactAddressProvenance(Provenance))
+                EXPECT_EQ(Integer, nullptr);
+              else {
+                ASSERT_NE(Integer, nullptr);
+                EXPECT_EQ(Integer->getZExtValue(), 42u);
+              }
+            }
+        EXPECT_EQ(Stores, 1u);
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
+     LowMappedScalarCallArgumentsKeepTheirBits) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+      for (auto Provenance : {ConstantAddressProvenance::Unknown,
+                              ConstantAddressProvenance::Scalar,
+                              ConstantAddressProvenance::Address,
+                              ConstantAddressProvenance::DataAddress})
+        for (bool LoaderHint : {false, true})
+          for (bool Indirect : {false, true})
+            for (bool Forwarded : {false, true}) {
+              SCOPED_TRACE(static_cast<unsigned>(Format));
+              SCOPED_TRACE(static_cast<unsigned>(Architecture));
+              SCOPED_TRACE(static_cast<unsigned>(Provenance));
+              SCOPED_TRACE(LoaderHint);
+              SCOPED_TRACE(Indirect);
+              SCOPED_TRACE(Forwarded);
+              BinaryImage Image =
+                  makeSpilledConstTableImage(Architecture, Format);
+              Segment Header;
+              Header.Name = ".headers";
+              Header.VA = 0;
+              Header.Size = Header.FileSz = 64;
+              Header.Data.resize(64);
+              Header.Flags = SegmentFlags::Readable;
+              Image.Segments.push_back(std::move(Header));
+              if (LoaderHint)
+                Image.RelocDataAddrs.insert(42);
+              const auto Width = getTargetRegInfo(Architecture).PointerSize;
+              MedVar Value = MedVar::makeConst(42, Width, Provenance);
+              auto Function =
+                  makePointerCall("low_mapped_call", 0x4000, {Value});
+              auto &Info = Function.CallInfos.front();
+              Info.TargetName = "observe_carrier";
+              auto &Block = Function.Blocks.front();
+              Block.Ops.front().Inputs[0].Size = Width;
+              if (Indirect) {
+                MedVar Target;
+                Target.Kind = MedVar::Param;
+                Target.Id = 0;
+                Target.TheArch = Architecture;
+                Target.Size = Width;
+                Function.Params = {Target};
+                Block.Ops.front().Opcode = NdOp::INDIR_CALL;
+                Block.Ops.front().Inputs[0] = Target;
+                Info.IsIndirect = true;
+                Info.TargetAddr = 0;
+                Info.TargetName.clear();
+              }
+              if (Forwarded) {
+                MedVar Copy;
+                Copy.Kind = MedVar::Temp;
+                Copy.Id = 1;
+                Copy.SSAVer = 1;
+                Copy.TheArch = Architecture;
+                Copy.Size = Width;
+                MedOp Forward;
+                Forward.Opcode = NdOp::COPY;
+                Forward.Output = Copy;
+                Forward.addInput(Value);
+                Block.Ops.insert(Block.Ops.begin(), std::move(Forward));
+                Info.OpIdx = 1;
+                Info.Args = {Copy};
+              }
+              llvm::LLVMContext Context;
+              auto Module =
+                  MedLLVMEmitter().emit({Function}, Context, "low-call",
+                                        Architecture, {}, &Image, Format);
+              ASSERT_NE(Module, nullptr);
+              Pipeline::promoteScaffoldingAllocas(*Module);
+              EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+              auto *Lifted = Module->getFunction(Function.Name);
+              ASSERT_NE(Lifted, nullptr);
+              const auto Calls = callsIn(*Lifted);
+              ASSERT_EQ(Calls.size(), 1u);
+              ASSERT_EQ(Calls.front()->arg_size(), 1u);
+              const auto *Argument = Calls.front()->getArgOperand(0);
+              const auto *Integer = llvm::dyn_cast<llvm::ConstantInt>(Argument);
+              if (isExactAddressProvenance(Provenance) ||
+                  (Provenance == ConstantAddressProvenance::Unknown &&
+                   LoaderHint)) {
+                std::set<const llvm::Value *> Seen;
+                EXPECT_TRUE(valueReferencesConstantGlobal(Argument, Seen));
+              } else {
+                ASSERT_NE(Integer, nullptr);
+                EXPECT_EQ(Integer->getZExtValue(), 42u);
+              }
+            }
+}

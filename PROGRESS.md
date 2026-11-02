@@ -1,5 +1,60 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-10-23
+
+- Source and metadata cutoff: **2026-10-23T00:59:55Z**. Reviewed dev: [8af58bf704285b5accac83edf5d97464dfe9a1df](https://github.com/NeverSight/NeverD/commit/8af58bf704285b5accac83edf5d97464dfe9a1df).
+- Since [4f9394ed17bf5da84d194d2592e9825d89bc1d30](https://github.com/NeverSight/NeverD/commit/4f9394ed17bf5da84d194d2592e9825d89bc1d30): **269 commits and 773 changed non-directory paths** (253 added, 517 modified, 3 removed). Commit pages contained 100 + 100 + 69 entries; complete non-truncated trees supplied the path inventory because the comparison file list is capped. This is an inventory, not a full-source audit.
+- **No new defect was proved or repaired in this bounded static review.** This proposal changes only PROGRESS.md. Reporting-only changes are not implementation progress.
+- Read current root AGENTS.md (the sole AGENTS.md in the complete tree), CONTRIBUTING.md, SECURITY.md, architecture/testing guidance and prior progress. The documented topic-branch workflow is retained. Build/test requirements remain unperformed under the stricter static-only review constraint.
+
+### Bounded source review
+
+Inspected the current x86 system-extension production patches, then traced:
+- [X86LiftSystemState.cpp](lib/lift/X86/X86LiftSystemState.cpp): encoding/detail consistency, mandatory prefixes, mode restrictions, operand counts and widths, implicit registers, and emission after admission. TESTUI obtains CF from the intrinsic and clears the other five arithmetic flags without changing DF; SENDUIPI retains an eight-byte input; LKGS memory uses effective-address transport rather than a selector preload.
+- Shared [X86SystemState.h](include/neverd/ir/intrinsics/X86/X86SystemState.h), [inventory](include/neverd/ir/intrinsics/X86/X86SystemState.def) and [X86SystemStateAsm.h](include/neverd/backend/llvm/X86/X86SystemStateAsm.h), plus [MedLLVMX86SystemState.cpp](lib/backend/llvm/X86/MedLLVMX86SystemState.cpp) and [C renderer](lib/backend/c/render/X86/X86SystemState.cpp). HRESET retains EAX while canonicalizing its ignored immediate; INVLPGB retains address-width-specific scalar input and addr32 assembly. Native calls remain side-effecting with memory clobbers. Known but malformed owned assembly is rejected.
+- [X86LiftControl.cpp](lib/lift/X86/X86LiftControl.cpp) now refuses far/interrupt returns instead of emitting an ordinary ABI return. Read the related strict-refusal, malformed-detail, input-width and arithmetic-flag test patches. Source-route signal-oracle and object-format test additions were inspected as tests, not executed or treated as successful privileged execution.
+- Rotated into [Program.cpp](lib/diff/Program.cpp), its [declarations](include/neverd/diff/Program.h), [limits](include/neverd/diff/Limits.h), and selected [BinaryDiffTests.cpp](unittests/BinaryDiffTests.cpp) cases. Traced sorted function lookup, discontiguous-block lookup, widened index-range checks, builder reference deduplication and final call-target indexing. Read index-validation and cancellation/timeout assertions. This does not qualify all input producers, persisted data, SDK ownership, comparison scores or cancellation behavior.
+- Reread the prior fixture repair in [mock_engine.cpp](tools/neverd-worker/tests/mock_engine.cpp): the call-graph helper namespace remains outside C linkage and C linkage resumes for the SDK entry points.
+
+No new actionable defect was established from these traces. The binary-diff end-address arithmetic and producer invariants were not exhaustively proved; no speculative rewrite is made. The earlier discovery-readiness and main-CI outcome concerns are not closed merely because later source changed. All remaining changed implementations, complete decoder/submodule semantics, privileged hardware effects, GUI execution, full ABI behavior, performance and release acceptance remain outside this review.
+
+### Progress, issues and reviews
+
+- **55 open ordinary issues and 2 open PRs**, versus 55 / 1 in the preceding pre-publication snapshot. Open mixed issues returned 57 entries then an empty page; open PRs returned two then empty.
+- Window: **2026-10-22T01:03:00Z through the cutoff**. Updated items returned 38 PRs then an empty page, with no ordinary issue created, closed or updated. The all-state PR page sorted by update time crossed the prior cutoff and reconciled **37 created, 36 merged, zero closed without merge**. These are gross activity counts, not verified feature completion.
+- Yesterday's [#1633 fixture repair](https://github.com/NeverSight/NeverD/pull/1633) merged externally at **2026-10-22T01:18:17Z**, merge [296660ad](https://github.com/NeverSight/NeverD/commit/296660ad9a7e14bfde380b98222d4ff01bb2a932). Its source change is now in dev; its reporting commit is excluded from implementation progress. [#1632](https://github.com/NeverSight/NeverD/pull/1632) also merged externally at **2026-10-22T03:27:56Z**, resolving the prior open-PR state, not proving all semantic acceptance.
+- [#1664](https://github.com/NeverSight/NeverD/pull/1664), non-draft, head **d298e2ac4c3b740e11d2026e7a0b3fdebb2ffafb**, targets dev: allocator fixture and SDK delivery repairs. [#1666](https://github.com/NeverSight/NeverD/pull/1666), draft, head **e8d324fa3eefe2dc8cc797ecb998936be1c1e77d**, targets dev: shared source proofs and independent-entry indexing; its description states it includes #1664. Review the integration overlap rather than duplicate those repairs.
+- Both PRs had no requested reviewers, submitted reviews, inline comments or issue discussion in the inspected endpoints (empty first and second pages). Both reported mergeable with an unstable check state. Their local test/performance numbers and inherited GUI translation concerns remain author reports unless separately verified.
+- The new reporting draft is excluded from the pre-publication counts. No issue state, labels, assignees, reviewers, merge settings or workflows were changed.
+
+### Existing GitHub CI observations
+
+Sampled **2026-10-23T00:58:16Z–2026-10-23T00:59:55Z**; these are provider results, not tests performed here.
+
+For exact dev **8af58bf704285b5accac83edf5d97464dfe9a1df**, seven records and an empty next page:
+- [CI 39876771861](https://github.com/NeverSight/NeverD/actions/runs/39876771861), [LLVM Style 39876772036](https://github.com/NeverSight/NeverD/actions/runs/39876772036), [Mobile Decompilation 39876771917](https://github.com/NeverSight/NeverD/actions/runs/39876771917), [Lift native qualification 39876771846](https://github.com/NeverSight/NeverD/actions/runs/39876771846) and [Native pipeline compatibility 39876771843](https://github.com/NeverSight/NeverD/actions/runs/39876771843): queued.
+- [Windows Web product qualification 39876771893](https://github.com/NeverSight/NeverD/actions/runs/39876771893): in progress.
+- [Mobile Real Applications 39876778002](https://github.com/NeverSight/NeverD/actions/runs/39876778002): skipped.
+
+For #1664's exact head, nine records and an empty next page: [Windows Web 39870155049](https://github.com/NeverSight/NeverD/actions/runs/39870155049) succeeded; eight workflows, including CI, Desktop GUI, allocator, Python SDK and source-patch qualification, were queued. For #1666's exact head, ten records and an empty next page: [Windows Web 39876778572](https://github.com/NeverSight/NeverD/actions/runs/39876778572) succeeded; [Required Web qualification 39876778611](https://github.com/NeverSight/NeverD/actions/runs/39876778611) was pending; eight others were queued. One successful workflow is not overall qualification.
+
+No manual dispatch or rerun occurred. These workflow inventories do not prove every external check, branch-protection requirement, Windows fixture recovery, or full GUI/release readiness. Newly automatic reporting-head checks are separate from dev evidence.
+
+### Suggested priorities (not delivery commitments)
+
+1. **Obtain terminal exact-head integration evidence.** Dependency: normal dev/PR CI and retained logs. Acceptance: queued/running checks become explicit success/failure/skip, with Windows fixture and prior macOS readiness/outcome concerns checked separately; do not weaken gates or assume an old failure is resolved.
+2. **Review #1664 before overlapping #1666 integration.** Dependency: maintainer review, SDK/allocator/GUI evidence and the included-commit relationship. Acceptance: intended dev diff, preserved SDK ownership/export contracts, terminal required checks and explicit native platform gaps; no duplicate repair.
+3. **Qualify the new bounded x86 effects and binary-diff boundaries.** Dependency: existing semantic/source/object tests and appropriate hardware/platform environments. Acceptance: ordinary far returns remain refused, malformed contracts fail closed, real native completion is distinguished from signal-oracle simulation, and incomplete/cancelled comparisons never claim equality. Privileged user-interrupt/TLB behavior and full GUI/SDK operation remain unqualified until separately demonstrated.
+
+## Daily log — 2026-10-23
+
+Inventoried 269 commits / 773 paths; reviewed bounded x86 system contracts and consumers, selected regression definitions, binary-diff model validation and the merged fixture linkage fix. No new source bug was proved, so this change is documentation only. Recorded 55 issues / 2 implementation PRs, 37 gross PR creations / 36 merges, and exact-head queued/pending/running/skipped versus successful CI. Preserved all preceding history verbatim. No build, test, formatter, repository script, benchmark, project execution, manual CI, merge or deployment was performed.
+
+<details>
+<summary>Previous snapshots and daily history (preserved verbatim)</summary>
+
+# NeverD Daily Progress
+
 ## Current snapshot — 2026-10-22
 
 - Source cutoff: **2026-10-22T01:03:00Z**. Reviewed dev: [4f9394ed17bf5da84d194d2592e9825d89bc1d30](https://github.com/NeverSight/NeverD/commit/4f9394ed17bf5da84d194d2592e9825d89bc1d30).
@@ -2088,7 +2143,7 @@ The source/test audit covers **38 distinct artifacts** in total, including the n
 - `lib/emulation/backends/hvf/{HvfExecutor.cpp,HvfExecutor.h,HvfX64Machine.cpp,HvfX64Registers.def}`
 - `lib/emulation/backends/RunDeadline.h` and `lib/emulation/core/MachineRunControl.h`
 - `lib/emulation/arch/x86_64/{X64Machine.cpp,X64Machine.h,X64MachineProbe.cpp,X64MachineProbe.def,X64OperandRegisters.def,CheckedX64Instructions.def}`
-- `lib/emulation/os/windows/driver/WindowsX64ExecutionPolicy.cpp` and `include/neverd/emulation/X64Registers.def`
+- `lib/emulation/os/windows/driver/WindowsX64ExecutionPolicy.cpp` and `include/neverd/emulation/arch/x86_64/X64Registers.def`
 - `unittests/emulation/{HvfExecutorTests.cpp,HvfTests.cpp,HvfTestPolicy.h,X64StateTransitionTests.cpp,MachineRunControlTests.cpp,RunControlTests.cpp,NativeEntryTests.cpp}`
 - `scripts/NativeHVFTests.def`, also included in the evidence inventory review below
 
@@ -2269,7 +2324,7 @@ The following 31 artifacts were inspected at `d87f27d2`. Whole-file reads are di
 - [X86LiftSIMDMove.cpp](lib/lift/X86/X86LiftSIMDMove.cpp): masked memory-operand validation and full-vector move caller, including address construction and mask handling
 - [X86Regs.cpp](lib/lift/X86/X86Regs.cpp): general-register mapping and invalid-register fallback
 - [Decoder.cpp](lib/decode/Decoder.cpp): `liftToLow` dispatch and undefined-effects initialization
-- [X86Lifter.h](include/neverd/lift/X86Lifter.h): shared memory-intrinsic/address helpers
+- [X86Lifter.h](include/neverd/lift/X86/X86Lifter.h): shared memory-intrinsic/address helpers
 - [X86_64_NoIndexAddressTests.cpp](unittests/lift/x86_64/X86_64_NoIndexAddressTests.cpp): all nine regression cases
 - [X86_64_EVEXMemoryBroadcastTests.cpp](unittests/lift/x86_64/X86_64_EVEXMemoryBroadcastTests.cpp): absent-index masked-broadcast/move and contradictory-metadata cases, plus their helpers
 - [unittests/lift/CMakeLists.txt](unittests/lift/CMakeLists.txt): dedicated no-index test-target registration
@@ -2279,9 +2334,9 @@ The following 31 artifacts were inspected at `d87f27d2`. Whole-file reads are di
 - [X64FPState.cpp](lib/emulation/arch/x86_64/X64FPState.cpp), [.h](lib/emulation/arch/x86_64/X64FPState.h), and [.def](lib/emulation/arch/x86_64/X64FPState.def)
 - [X64Machine.h](lib/emulation/arch/x86_64/X64Machine.h), [X64MachineProbe.cpp](lib/emulation/arch/x86_64/X64MachineProbe.cpp), and [X64MachineProbe.def](lib/emulation/arch/x86_64/X64MachineProbe.def)
 - [WhpXsaveState.h](lib/emulation/backends/whp/WhpXsaveState.h), [WhpXsaveRegisters.def](lib/emulation/backends/whp/WhpXsaveRegisters.def), [WhpProtocol.def](lib/emulation/backends/whp/WhpProtocol.def), and [WhpMachine.cpp](lib/emulation/backends/whp/WhpMachine.cpp)
-- [X64XsaveTests.cpp](unittests/emulation/X64XsaveTests.cpp), [X64XsaveCases.def](unittests/emulation/X64XsaveCases.def), [WhpXsaveTests.cpp](unittests/emulation/WhpXsaveTests.cpp), and [WhpHostFailureCases.def](unittests/emulation/WhpHostFailureCases.def)
-- [X64FPStateTests.cpp](unittests/emulation/X64FPStateTests.cpp), [X64FPCases.def](unittests/emulation/X64FPCases.def), and [X64MachineProbeTests.cpp](unittests/emulation/X64MachineProbeTests.cpp)
-- [X64StateTransitionTests.cpp](unittests/emulation/X64StateTransitionTests.cpp) and [X64StateTransitionCases.def](unittests/emulation/X64StateTransitionCases.def)
+- [X64XsaveTests.cpp](unittests/emulation/x86_64/X64XsaveTests.cpp), [X64XsaveCases.def](unittests/emulation/x86_64/X64XsaveCases.def), [WhpXsaveTests.cpp](unittests/emulation/WhpXsaveTests.cpp), and [WhpHostFailureCases.def](unittests/emulation/WhpHostFailureCases.def)
+- [X64FPStateTests.cpp](unittests/emulation/x86_64/X64FPStateTests.cpp), [X64FPCases.def](unittests/emulation/x86_64/X64FPCases.def), and [X64MachineProbeTests.cpp](unittests/emulation/x86_64/X64MachineProbeTests.cpp)
+- [X64StateTransitionTests.cpp](unittests/emulation/x86_64/X64StateTransitionTests.cpp) and [X64StateTransitionCases.def](unittests/emulation/x86_64/X64StateTransitionCases.def)
 
 **WDK assertion and producer: 2 artifacts, read in full**
 
@@ -2750,6 +2805,8 @@ them are author reports unless separately confirmed by linked workflow results.
 
 </details>
 
+
+</details>
 
 </details>
 

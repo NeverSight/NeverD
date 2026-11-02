@@ -11,6 +11,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -24,6 +25,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -49,10 +51,79 @@ uint64_t languageOf(const llvm::DWARFDie &Die) {
               : 0;
 }
 
-/// Whether \p Die is of a Go unit, whose functions list their results as
-/// parameters marked DW_AT_variable_parameter.
+/// Whether \p Die is of a Go unit, whose functions list results as parameters.
 bool ofGo(const llvm::DWARFDie &Die) {
   return languageOf(Die) == dw::DW_LANG_Go;
+}
+
+struct GoFunctionArity {
+  size_t Inputs;
+  size_t Results;
+};
+
+/// Older Go describes results as trailing pointer parameters without marking
+/// them. Its anonymous function type's name still records both lists. Count
+/// those lists, keeping nested types and quoted struct tags together; the
+/// actual types continue to come from the DIE references.
+std::optional<GoFunctionArity> goFunctionArity(llvm::StringRef Name) {
+  if (!Name.consume_front("func"))
+    return std::nullopt;
+  const auto list = [](llvm::StringRef &Text) -> std::optional<size_t> {
+    if (!Text.consume_front("("))
+      return std::nullopt;
+    llvm::SmallVector<char, 8> Closing{')'};
+    size_t Count = 0, Start = 0;
+    char Quote = 0;
+    for (size_t I = 0; I < Text.size(); ++I) {
+      const char C = Text[I];
+      if (Quote) {
+        if (C == '\\' && Quote == '"')
+          ++I;
+        else if (C == Quote)
+          Quote = 0;
+        continue;
+      }
+      if (C == '"' || C == '`') {
+        Quote = C;
+      } else if (C == '(' || C == '[' || C == '{') {
+        Closing.push_back(C == '(' ? ')' : C == '[' ? ']' : '}');
+      } else if (C == ')' || C == ']' || C == '}') {
+        if (C != Closing.back())
+          return std::nullopt;
+        Closing.pop_back();
+        if (Closing.empty()) {
+          const bool Empty = Text.slice(Start, I).trim().empty();
+          if (Empty && Count)
+            return std::nullopt;
+          Text = Text.drop_front(I + 1).trim();
+          return Count + !Empty;
+        }
+      } else if (C == ',' && Closing.size() == 1) {
+        if (Text.slice(Start, I).trim().empty())
+          return std::nullopt;
+        ++Count;
+        Start = I + 1;
+      }
+    }
+    return std::nullopt;
+  };
+  const auto Inputs = list(Name);
+  if (!Inputs)
+    return std::nullopt;
+  if (Name.empty())
+    return GoFunctionArity{*Inputs, 0};
+  if (Name.starts_with("(")) {
+    const auto Results = list(Name);
+    if (Results && Name.empty())
+      return GoFunctionArity{*Inputs, *Results};
+    return std::nullopt;
+  }
+  const std::string Result = "(" + Name.str() + ")";
+  llvm::StringRef ResultList = Result;
+  const auto Results = list(ResultList);
+  if (Results == 1 && ResultList.empty())
+    return GoFunctionArity{*Inputs, 1};
+  return std::nullopt;
 }
 
 /// The type \p Die names, through its typedefs and qualifiers.
@@ -607,8 +678,16 @@ private:
                   ? std::optional<int64_t>(
                         int64_t(Upper->getAsUnsignedConstant().value_or(0)))
                   : Upper->getAsSignedConstant();
-          if (High && *High >= Lower)
-            Count = uint64_t(*High - Lower + 1);
+          if (High && *High >= Lower) {
+            // Subtract unsigned representations: even ordered signed bounds
+            // can have a difference greater than INT64_MAX.
+            const uint64_t Span = uint64_t(*High) - uint64_t(Lower);
+            if (Span == std::numeric_limits<uint64_t>::max()) {
+              Why = Refusal{"an array bound range that exceeds 64 bits"};
+              return nullptr;
+            }
+            Count = Span + 1;
+          }
         }
       }
       Counts.push_back(Count);
@@ -621,8 +700,10 @@ private:
   }
 
   /// A function type.  Go lists a function's results as parameters marked
-  /// DW_AT_variable_parameter: one is its result, and several, which C
-  /// returns as no one value, leave no function, with no reason.
+  /// DW_AT_variable_parameter, or as unmarked pointers in older DWARF. One
+  /// is its result, and several, which C returns as no one value, leave no
+  /// function, with no reason. An unmarked named type without a signature
+  /// does too: its input pointers cannot be told apart from result pointers.
   TypeExprRef function(const llvm::DWARFDie &Die, std::optional<Refusal> &Why,
                        unsigned Depth) {
     auto Function = std::make_shared<FunctionDef>();
@@ -634,6 +715,21 @@ private:
     if (!Function->Return)
       return nullptr;
     const bool Go = ofGo(Die);
+    std::optional<GoFunctionArity> Legacy;
+    if (Go && !Return.isValid() &&
+        !llvm::any_of(Die.children(), [](const llvm::DWARFDie &Child) {
+          return Child.getTag() == dw::DW_TAG_formal_parameter &&
+                 Child.find(dw::DW_AT_variable_parameter).has_value();
+        })) {
+      const llvm::StringRef Name(Die.getShortName() ? Die.getShortName() : "");
+      Legacy = goFunctionArity(Name);
+      if (!Legacy) {
+        if (Name.starts_with("func("))
+          Why = Refusal{"an incomplete Go function signature"};
+        return nullptr;
+      }
+    }
+    size_t Parameters = 0;
     unsigned Results = 0;
     for (const llvm::DWARFDie &Child : Die.children()) {
       if (Child.getTag() == dw::DW_TAG_unspecified_parameters) {
@@ -642,9 +738,20 @@ private:
       }
       if (Child.getTag() != dw::DW_TAG_formal_parameter)
         continue;
-      if (Go && dw::toUnsigned(Child.find(dw::DW_AT_variable_parameter), 0)) {
-        const llvm::DWARFDie Result =
+      const bool LegacyResult = Legacy && Parameters >= Legacy->Inputs;
+      ++Parameters;
+      if (LegacyResult ||
+          (Go && dw::toUnsigned(Child.find(dw::DW_AT_variable_parameter), 0))) {
+        llvm::DWARFDie Result =
             Child.getAttributeValueAsReferencedDie(dw::DW_AT_type);
+        if (LegacyResult) {
+          Result = heldType(Result);
+          if (Result.getTag() != dw::DW_TAG_pointer_type) {
+            Why = Refusal{"a legacy Go result that is not a pointer"};
+            return nullptr;
+          }
+          Result = Result.getAttributeValueAsReferencedDie(dw::DW_AT_type);
+        }
         if (++Results > 1)
           continue;
         Function->Return =
@@ -668,6 +775,10 @@ private:
         return nullptr;
       }
       Function->Params.push_back(std::move(Param));
+    }
+    if (Legacy && Parameters != Legacy->Inputs + Legacy->Results) {
+      Why = Refusal{"a Go signature that disagrees with its parameters"};
+      return nullptr;
     }
     if (Results > 1)
       return nullptr;

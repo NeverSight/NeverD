@@ -9,6 +9,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Select compression before LLVM discovers its dependencies. This provider is
+# built for the same target, so LLVM's configure-time probe of an installed
+# archive is unnecessary (our archive is produced during the build).
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDZlib.cmake)
+set(HAVE_ZLIB 1)
+
 # --- LLVM ---
 # Backends: X86 (i386+x86_64), ARM (arm32), AArch64 (arm64). See docs/targets.md.
 # Two ways to get LLVM (both expose the same LLVM_LIBS to the rest of the build):
@@ -58,9 +64,6 @@ else()
     set(LLVM_LINK_LLVM_DYLIB   OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS       OFF CACHE BOOL "" FORCE)
     add_subdirectory(third_party/llvm-project/llvm EXCLUDE_FROM_ALL)
-
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMAddressModel.cmake)
-    neverd_scope_llvm_address_model()
 
     # DXContainerInfo.cpp consumes the generated revision header.  Keep this
     # ordering edge in the integrating project so a clean Ninja build cannot

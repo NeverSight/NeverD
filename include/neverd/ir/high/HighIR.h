@@ -15,9 +15,12 @@
 #define NEVERD_IR_HIGH_HIGHIR_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/NdTypes.h"
+#include "neverd/ir/SourceFrameBytes.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/AArch64/AArch64ReturnProtection.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -93,6 +96,9 @@ struct HighExpr {
   NdOp Op = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
+  /// ATOMIC_ADD's source-only return-slot address, proved by MedIR. Preserve
+  /// the transaction but address the compiled function's actual return slot.
+  std::optional<uint16_t> SourceReturnSlotOffset;
   TypeRef Type;
 
   /// For Var
@@ -126,6 +132,9 @@ struct HighExpr {
   /// Unresolved `INDIR_CALL` callee.  Not a printed argument.
   std::shared_ptr<HighExpr> IndirectTarget;
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
+  /// Complete fixed scalar FP signature proven by call-ABI recovery. Operand
+  /// expression types alone cannot establish a nonvariadic declaration.
+  std::shared_ptr<const FloatingCallArguments> FloatingCallSignature;
   Intrinsic IntrinsicId = Intrinsic::None;
   std::vector<MedVar> IntrinsicOutputs;
   /// The MedIR call never returns: its callee is a routine the name list
@@ -355,6 +364,11 @@ struct HighStmt {
   /// short (nameRepeatedValues).  Folding it back into a reader would print
   /// the value there in full again.
   bool KeepsName = false;
+  /// A goto that ends a local unwind whose `__finally` clauses now run the
+  /// termination handlers (SEHFinallyBodies.h): C runs a filled clause as an
+  /// abnormal termination only when the goto leaves its `__try` as a jump,
+  /// so the writer prints it neither as a fall-through nor as `__leave`.
+  bool AbnormalExit = false;
 
   std::string str(int Indent = 0) const;
 };
@@ -578,6 +592,11 @@ struct HighLocal {
 };
 
 struct HighFunc {
+  /// Proven entry-SP PAC/AUT return policy, projected by MedToHigh without
+  /// changing machine IR. C emits a branch-protection target attribute.
+  std::optional<AArch64ReturnProtection> ReturnProtection;
+  /// Same original-machine byte observations carried by MedFunc.
+  std::vector<SourceFrameBytes> FrameBytes;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
   /// Bytes reserved below and above the synthetic entry stack pointer.
@@ -643,7 +662,18 @@ struct HighFunc {
   std::vector<HighStmt> Body;
   std::optional<ExceptionFunction> ExceptionMetadata;
   bool AnalysisOnly = false;
+  /// Entry-SP coordinates of frame PHIs when the Itanium C++ view enters
+  /// pads only from their protected calls. The machine range edges remain
+  /// unchanged. Use only after every pad has become a C++ clause.
+  std::vector<std::pair<MedVar, ExprPtr>> ItaniumCallFrameOffsets;
   bool HasUnresolvedSEHFrame = false;
+  /// MedFunc::SEHTerminationFrameBytes.
+  std::map<va_t, uint64_t> SEHTerminationFrameBytes;
+  /// MedFunc::SEHFuncletRegisters.
+  std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
+      SEHFuncletRegisters;
+  /// MedFunc::SEHLocalUnwindExits.
+  std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;
   std::set<va_t> CxxContinuationTargets;
   unsigned StructuredExceptionRegions = 0;
   unsigned UnstructuredExceptionRegions = 0;

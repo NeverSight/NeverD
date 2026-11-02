@@ -11,6 +11,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FileSystem.h"
@@ -86,7 +87,8 @@ void appendCheck(std::string &Checks, const std::string &Name,
 
 void compileAndExecute(const std::string &Source, bool CheckShiftUB,
                        bool CheckArithmeticUB = false,
-                       llvm::StringRef Optimization = "-O1") {
+                       llvm::StringRef Optimization = "-O1",
+                       llvm::ArrayRef<llvm::StringRef> ExtraArgs = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -122,6 +124,7 @@ void compileAndExecute(const std::string &Source, bool CheckShiftUB,
     Arguments.push_back("-fsanitize=signed-integer-overflow");
     Arguments.push_back("-fsanitize-trap=signed-integer-overflow");
   }
+  Arguments.append(ExtraArgs.begin(), ExtraArgs.end());
   Arguments.append({SourcePath, "-o", ExecutablePath});
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
@@ -1244,7 +1247,13 @@ TEST(HighCIntegerWidths, SegmentedOffsetsDoNotAliasOverlappingImageBacking) {
       << Source;
   EXPECT_NE(Body("read_gs_compound").find(" + 0x140002000"), std::string::npos)
       << Source;
-  EXPECT_NE(Body("atomic_gs_coincident").find("__atomic_fetch_add"),
+  // x86 keeps the decoded LOCK XADD on its segment (X86AtomicRmw.h): an
+  // arbitrary address cannot carry __atomic_fetch_add's alignment promise.
+  EXPECT_NE(Body("atomic_gs_coincident")
+                .find("__asm__ __volatile__(\"lock xaddq %0, %%gs:(%1)\""),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Body("atomic_gs_coincident").find("__atomic_fetch_add"),
             std::string::npos)
       << Source;
 }
@@ -1304,6 +1313,110 @@ static std::optional<std::string> compileForTarget(const std::string &Source,
     return std::nullopt;
   auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
   return Errors ? (*Errors)->getBuffer().str() : std::string("failed");
+}
+
+TEST(HighCIntegerWidths, SegmentOffsetsPreserveIntegerExtensions) {
+#if defined(__x86_64__) && defined(__linux__)
+  std::vector<HighFunc> Functions;
+  std::string Checks = R"(
+    uintptr_t saved_gs;
+    static volatile uint32_t word = 0x1234abcd;
+    if (syscall(SYS_arch_prctl, ARCH_GET_GS, &saved_gs)) return 2;
+)";
+  const auto U64 = NdType::makeInt(8, false);
+  auto Extend = [&](ExprPtr Value, bool Sign) {
+    auto E = HighExpr::makeUnary(Sign ? NdOp::INT_SEXT : NdOp::INT_ZEXT,
+                                 std::move(Value));
+    E->Type = U64;
+    return E;
+  };
+  auto Append = [&](HighFunc F, ExprPtr Offset, const std::string &Arguments,
+                    const char *Expected) {
+    F.ReturnType = NdType::makeInt(4, false);
+    returnValue(F, HighExpr::makeLoad(std::move(Offset), F.ReturnType,
+                                      NdMemoryOrdering::None,
+                                      NdMemoryAddressSpace::X86GS));
+    Checks += "    if (syscall(SYS_arch_prctl, ARCH_SET_GS, (uintptr_t)&word - "
+              "UINT64_C(" +
+              std::string(Expected) + "))) return 3;\n";
+    appendCheck(Checks, F.Name, Arguments, "0x1234abcd");
+    Functions.push_back(std::move(F));
+  };
+  for (uint16_t Bytes : {2, 4})
+    for (bool Signed : {false, true})
+      for (bool SignExtend : {false, true})
+        for (bool Literal : {false, true}) {
+          const auto Type = NdType::makeInt(Bytes, Signed);
+          HighFunc F;
+          F.Name = "segment_" + std::to_string(Bytes) + "_" +
+                   std::to_string(Signed) + "_" + std::to_string(SignExtend) +
+                   "_" + std::to_string(Literal);
+          if (!Literal)
+            F.Params = {{"arg0", Type}};
+          auto Input =
+              Literal
+                  ? HighExpr::makeConst(Bytes == 2 ? 0xf234 : 0xf2345678, Bytes,
+                                        ConstantAddressProvenance::Scalar)
+                  : parameter(0, Type);
+          Input->Type = Type;
+          const auto Bits = Bytes == 2 ? "0xf234" : "0xf2345678";
+          const auto Expected = !SignExtend  ? Bits
+                                : Bytes == 2 ? "0xfffffffffffff234"
+                                             : "0xfffffffff2345678";
+          Append(std::move(F), Extend(Input, SignExtend),
+                 Literal ? "" : argument(Type, Bits), Expected);
+        }
+  // Address-size wrapping precedes widening. The final two cases read low
+  // GPR aliases after sign extension or a narrowing integer conversion.
+  for (uint16_t Bytes : {2, 4}) {
+    HighFunc F;
+    F.Name = "wrapped_segment_" + std::to_string(Bytes);
+    auto Sum = HighExpr::makeBinop(
+        NdOp::INT_ADD,
+        HighExpr::makeConst(Bytes == 2 ? 0xfff0 : 0xfffffff0, Bytes,
+                            ConstantAddressProvenance::Scalar),
+        HighExpr::makeConst(0x30, Bytes, ConstantAddressProvenance::Scalar));
+    Sum->Type = NdType::makeInt(Bytes, false);
+    Append(std::move(F), Extend(Sum, false), "", "0x20");
+  }
+  auto Small =
+      HighExpr::makeConst(0xf234, 2, ConstantAddressProvenance::Scalar);
+  auto Slice = HighExpr::makeBinop(NdOp::SUBBYTES, Extend(Small, true),
+                                   HighExpr::makeConst(0, 4));
+  Slice->Type = NdType::makeInt(4, false);
+  HighFunc Extracted;
+  Extracted.Name = "extracted_segment";
+  Append(std::move(Extracted), Extend(Slice, false), "", "0xfffff234");
+  auto Narrow = std::make_shared<HighExpr>();
+  Narrow->Kind = ExprKind::Cast;
+  Narrow->Type = NdType::makeInt(2, true);
+  Narrow->Operands = {HighExpr::makeConst(0x12345678f234, 8,
+                                          ConstantAddressProvenance::Scalar)};
+  HighFunc Cast;
+  Cast.Name = "narrowed_segment";
+  Append(std::move(Cast), Extend(Narrow, true), "", "0xfffffffffffff234");
+  Checks +=
+      "    if (syscall(SYS_arch_prctl, ARCH_SET_GS, saved_gs)) return 4;\n";
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::ELF;
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  OS.flush();
+  Source += "\n#include <asm/prctl.h>\n#include <sys/syscall.h>\n"
+            "#include <unistd.h>\n";
+  // A PIE static object has headroom for both positive and negative offsets,
+  // independently of the subprocess stack's ASLR position.
+  for (const auto *Opt : {"-O0", "-O2"})
+    compileAndExecute(Source + executionHarness(Checks), false, true, Opt,
+                      {"-fPIE", "-pie"});
+  ASSERT_EQ(Functions.size(), 20u);
+  RecordProperty("native_gs_loads", 40);
+  RecordProperty("native_executables", 2);
+#else
+  GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
+#endif
 }
 
 TEST(HighCIntegerWidths, A32BitTargetSpellsA128BitIntegerAsBitInt) {
@@ -1545,5 +1658,50 @@ TEST(HighCIntegerWidths, LargeSignedLiteralsCompileWithTheirDeclaredWidths) {
       emitFunctions(Functions) + executionHarness(Checks);
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
     compileAndExecute(Source, false, true, Optimization);
+}
+TEST(HighCIntegerWidths, BooleanXorAndWideInplaceMasksKeepExactBits) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Wide = NdType::makeInt(16, false);
+  HighFunc Boolean;
+  Boolean.Name = "boolean_xor";
+  Boolean.ReturnType = Word;
+  Boolean.Params = {{"left", Word}, {"right", Word}};
+  returnValue(Boolean, HighExpr::makeBinop(NdOp::BOOL_XOR, parameter(0, Word),
+                                           parameter(1, Word)));
+  HighFunc Mask;
+  Mask.Name = "wide_mask";
+  Mask.ReturnType = Wide;
+  Mask.Params = {{"low", Word}, {"high", Word}};
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.Id = 10;
+  Local.Size = 16;
+  HighStmt Define;
+  Define.Kind = StmtKind::Assign;
+  Define.Dst = HighExpr::makeVar(Local, Wide);
+  Define.Val =
+      HighExpr::makeBinop(NdOp::CONCAT, parameter(1, Word), parameter(0, Word));
+  Define.Val->Type = Wide;
+  Define.KeepsName = true;
+  Mask.Body.push_back(Define);
+  Define.Val = HighExpr::makeBinop(
+      NdOp::INT_AND, HighExpr::makeVar(Local, Wide),
+      HighExpr::makeConst(UINT64_MAX, 16, ConstantAddressProvenance::Scalar));
+  Mask.Body.push_back(Define);
+  returnValue(Mask, HighExpr::makeVar(Local, Wide));
+  const std::string Source = emitFunctions({Boolean, Mask}) + R"(
+int main(void) {
+  const uint64_t values[] = {0, 1, 2, 4, 255, UINT64_MAX};
+  for (unsigned i = 0; i < 6; ++i)
+    for (unsigned j = 0; j < 6; ++j) {
+      unsigned expected = (values[i] ? 1 : 0) + (values[j] ? 1 : 0);
+      if (boolean_xor(values[i], values[j]) != (expected == 1)) return 1;
+      if (wide_mask(values[i], values[j]) != values[i]) return 2;
+    }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndExecute(Source, true, true, Optimization);
 }
 } // namespace

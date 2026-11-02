@@ -5,6 +5,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
 #include "neverd/libc/LibCObjC.h"
@@ -15,12 +16,16 @@
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 #include <stdexcept>
 
 namespace neverd {
 namespace {
+#define HIGH_C_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "HighCSourceCalls.def"
+
 std::string quotedRuntimeName(llvm::StringRef Name) {
   std::string Result = "\"";
   for (unsigned char Byte : Name.bytes()) {
@@ -141,20 +146,16 @@ HighCWriter::sourceCallDefinition(const SourceCallTypeHint &Hint,
 
 std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
   const auto &Hint = *E.SourceCallHint;
-  if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
-    std::string Diagnostic;
-    if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
-        Hint.Signature.Architecture != Opts.TheArch ||
-        !validateSourceABI(Hint.Signature, Diagnostic) ||
-        E.Operands.size() != Hint.Signature.Parameters.size())
-      throw std::invalid_argument("The call-site contract lost its original "
-                                  "occurrence or complete operands");
-    const auto &Signature = Hint.Signature;
-    const unsigned Fixed = Hint.AnalystFixedCount < 0
-                               ? Signature.Parameters.size()
-                               : Hint.AnalystFixedCount;
-    if (Fixed > Signature.Parameters.size())
-      throw std::invalid_argument("Invalid call-site variadic prefix");
+  const auto &Signature = Hint.Signature;
+  const bool AuthenticatedTarget =
+      E.IsIndirectCall && E.IndirectTarget &&
+      E.IndirectTarget->IntrinsicId == Intrinsic::A64_AuthBranch;
+  if (AuthenticatedTarget &&
+      Hint.CallKind != SourceCallTypeHint::Kind::Analyst &&
+      (Hint.CallKind != SourceCallTypeHint::Kind::Native ||
+       Signature.Convention != SourceFunctionTypeHint::ConventionKind::C))
+    throw std::invalid_argument(kUnsupportedAuthenticatedSourceCall);
+  const auto OriginalCallee = [&](unsigned Fixed, bool Variadic) {
     std::string Prototype = "(*)(";
     if (!Fixed)
       Prototype += "void";
@@ -163,22 +164,48 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Prototype += ", ";
       Prototype += declarationToC(Signature.Parameters[I].Type, "");
     }
-    if (Hint.AnalystFixedCount >= 0)
+    if (Variadic)
       Prototype += ", ...";
     Prototype += ")";
     if (E.IsIndirectCall && !E.IndirectTarget)
       throw std::invalid_argument(
           "The original indirect call target is unavailable");
-    std::string Target =
-        E.IsIndirectCall
-            ? exprStr(*E.IndirectTarget)
-            : functionIdentifier(!E.CallTarget.empty() ? E.CallTarget
-                                                       : Hint.TargetName);
-    if (Target.empty())
-      throw std::invalid_argument(
-          "The original call-site target is unresolved");
-    std::string Call = "((" + declarationToC(Signature.ReturnType, Prototype) +
-                       ")(uintptr_t)(" + Target + "))(";
+    const std::string PointerType =
+        declarationToC(Signature.ReturnType, Prototype);
+    std::string Callee;
+    if (E.IsIndirectCall &&
+        E.IndirectTarget->IntrinsicId == Intrinsic::A64_AuthBranch) {
+      Callee = authenticatedCalleeStr(*E.IndirectTarget, PointerType);
+    } else {
+      const std::string Target =
+          E.IsIndirectCall
+              ? exprStr(*E.IndirectTarget)
+              : functionIdentifier(!E.CallTarget.empty() ? E.CallTarget
+                                                         : Hint.TargetName);
+      if (Target.empty())
+        throw std::invalid_argument(
+            "The original call-site target is unresolved");
+      Callee = llvm::formatv(kTypedSourceCallee, PointerType, Target).str();
+      if (E.IsIndirectCall && Opts.TheArch == Arch::AArch64)
+        Callee = aarch64PAuthRawCalleeC(Callee);
+    }
+    return Callee;
+  };
+  if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
+    std::string Diagnostic;
+    if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
+        Hint.Signature.Architecture != Opts.TheArch ||
+        !validateSourceABI(Hint.Signature, Diagnostic) ||
+        E.Operands.size() != Hint.Signature.Parameters.size())
+      throw std::invalid_argument("The call-site contract lost its original "
+                                  "occurrence or complete operands");
+    const unsigned Fixed = Hint.AnalystFixedCount < 0
+                               ? Signature.Parameters.size()
+                               : Hint.AnalystFixedCount;
+    if (Fixed > Signature.Parameters.size())
+      throw std::invalid_argument("Invalid call-site variadic prefix");
+    std::string Callee = OriginalCallee(Fixed, Hint.AnalystFixedCount >= 0);
+    std::string Call = Callee + "(";
     for (unsigned I = 0; I < E.Operands.size(); ++I) {
       const auto &Argument = E.Operands[I];
       const auto Value = Argument
@@ -256,7 +283,6 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     }
     return Call + "))";
   }
-  const auto &Signature = Hint.Signature;
   const bool ErrorSlot = hasSwiftErrorResult(Signature);
   const bool NativeError = isNativeSwiftErrorSourceCall(Hint, Opts.TheArch);
   if (ErrorSlot) {
@@ -1141,6 +1167,9 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                                               : "objc_msgSend") +
            ")";
   }
+  if (E.IsIndirectCall && Hint.CallKind == Kind::Native &&
+      Signature.Convention == SourceFunctionTypeHint::ConventionKind::C)
+    Name = OriginalCallee(Signature.Parameters.size(), false);
   std::string Call = Name + "(";
   std::string IncomingError;
   const std::string ErrorName =

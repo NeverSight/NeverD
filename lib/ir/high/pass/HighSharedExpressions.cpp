@@ -18,14 +18,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "llvm/ADT/STLExtras.h"
 
 #include <cstdint>
 #include <functional>
+#include <iterator>
+#include <optional>
 #include <set>
 #include <unordered_map>
+#include <utility>
 
 namespace neverd {
 namespace {
@@ -149,7 +153,12 @@ public:
       for (const HighEHClause &Clause : S.EHClauses)
         Targets.insert(Clause.HandlerVA);
       forEachExpr(S, [&](const ExprPtr &E) { note(E); });
+      if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var)
+        ++Definitions[varKey(S.Dst->Var)];
     });
+    // Optional address scans together visit at most one function's worth of
+    // distinct expression nodes, independently of nested conditional depth.
+    AddressBudget = Noted.size();
   }
 
   bool run() { return visit(Func.Body); }
@@ -162,6 +171,8 @@ private:
   int NextTag = 0;
   Arch TheArch = Arch::Unknown;
   bool Changed = false;
+  VarKeyMap<unsigned> Definitions;
+  size_t AddressBudget = 0;
 
   void note(const ExprPtr &E) {
     if (!E || !Noted.insert(E.get()).second)
@@ -171,9 +182,180 @@ private:
       NextTag = std::max(NextTag, E->Var.RenameTag + 1);
       TheArch = E->Var.TheArch;
     }
+    for (const MedVar &Output : E->IntrinsicOutputs)
+      ++Definitions[varKey(Output)];
     for (const ExprPtr &Operand : E->Operands)
       note(Operand);
     note(E->IndirectTarget);
+  }
+
+  ExprPtr freshLocal(TypeRef Type) {
+    if (NextTag >= INT16_MAX)
+      return nullptr;
+    MedVar Local;
+    Local.Kind = MedVar::Temp;
+    Local.Id = NextId++;
+    Local.RenameTag = static_cast<int16_t>(NextTag++);
+    Local.Size = Type->Size;
+    Local.TheArch = TheArch;
+    return HighExpr::makeVar(Local, std::move(Type));
+  }
+
+  // A same-width integer/pointer view preserves the address bits. A float
+  // conversion or a narrowing is a different computation and stays explicit.
+  static const HighExpr *addressBits(const HighExpr *E) {
+    while (E && E->Operands.size() == 1 && E->Operands[0] && E->Type &&
+           E->Operands[0]->Type &&
+           E->Type->Size == E->Operands[0]->Type->Size &&
+           (E->Type->Kind == NdTypeKind::Int ||
+            E->Type->Kind == NdTypeKind::Ptr) &&
+           (E->Operands[0]->Type->Kind == NdTypeKind::Int ||
+            E->Operands[0]->Type->Kind == NdTypeKind::Ptr) &&
+           (E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast ||
+            (E->Kind == ExprKind::UnaryOp &&
+             (E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT))))
+      E = E->Operands[0].get();
+    return E;
+  }
+
+  /// A guard q!=s also tests ((q^k)-(s^k))!=0. If an address uses q^k plus
+  /// a large displacement, name that decoded base when its remaining field
+  /// offset is smaller. No value for q, object layout or callee is inferred.
+  std::vector<HighStmt> nameGuardedAddress(HighStmt &S) {
+    if (!AddressBudget || TheArch == Arch::Unknown || !Targets.empty() ||
+        (S.Kind != StmtKind::If && S.Kind != StmtKind::IfElse) || !S.Cond ||
+        S.Cond->Kind != ExprKind::BinOp ||
+        (S.Cond->Op != NdOp::INT_NOTEQUAL && S.Cond->Op != NdOp::INT_EQUAL) ||
+        S.Cond->Operands.size() != 2)
+      return {};
+    auto Q = S.Cond->Operands[0], Sentinel = S.Cond->Operands[1];
+    if (Q && Q->Kind == ExprKind::Const)
+      std::swap(Q, Sentinel);
+    if (!Q || Q->Kind != ExprKind::Var || !Q->Type || !Sentinel ||
+        Sentinel->Kind != ExprKind::Const || !Sentinel->Type ||
+        Sentinel->ConstProvenance != ConstantAddressProvenance::Scalar ||
+        (Q->Type->Kind != NdTypeKind::Int &&
+         Q->Type->Kind != NdTypeKind::Ptr) ||
+        (Q->Type->Size != 4 && Q->Type->Size != 8) ||
+        Sentinel->Type->Size != Q->Type->Size ||
+        Q->Type->Size != getTargetRegInfo(TheArch).PointerSize ||
+        (Q->Var.Kind != MedVar::Temp && Q->Var.Kind != MedVar::Param) ||
+        Definitions[varKey(Q->Var)] != (Q->Var.Kind == MedVar::Temp ? 1u : 0u))
+      return {};
+    auto &Arm = S.Cond->Op == NdOp::INT_NOTEQUAL ? S.Body : S.ElseBody;
+    if (Arm.empty())
+      return {};
+    const unsigned Bytes = Q->Type->Size;
+    const uint64_t Mask = Bytes == 8 ? UINT64_MAX : UINT32_MAX;
+    const auto Magnitude = [&](uint64_t V) {
+      V &= Mask;
+      return std::min(V, (uint64_t{0} - V) & Mask);
+    };
+    struct Address {
+      ExprPtr Xor;
+      uint64_t Key, Offset;
+    };
+    auto Match = [&](const ExprPtr &Root) -> std::optional<Address> {
+      const HighExpr *E = addressBits(Root.get());
+      if (!E || E->Kind != ExprKind::BinOp || E->Op != NdOp::INT_ADD ||
+          E->Operands.size() != 2 || !E->Type || E->Type->Size != Bytes)
+        return std::nullopt;
+      auto Xor = E->Operands[0], Offset = E->Operands[1];
+      if (Xor && Xor->Kind == ExprKind::Const)
+        std::swap(Xor, Offset);
+      const auto *Bits = addressBits(Xor.get());
+      if (!Bits || Bits->Kind != ExprKind::BinOp || Bits->Op != NdOp::INT_XOR ||
+          Bits->Operands.size() != 2 || !Bits->Type ||
+          Bits->Type->Size != Bytes || !Offset ||
+          Offset->Kind != ExprKind::Const || !Offset->Type ||
+          Offset->ConstProvenance != ConstantAddressProvenance::Scalar ||
+          Offset->Type->Size != Bytes)
+        return std::nullopt;
+      auto Input = Bits->Operands[0], Key = Bits->Operands[1];
+      if (Input && Input->Kind == ExprKind::Const)
+        std::swap(Input, Key);
+      const auto *InputBits = addressBits(Input.get());
+      if (!InputBits || InputBits->Kind != ExprKind::Var ||
+          InputBits->Var != Q->Var || !Key || Key->Kind != ExprKind::Const ||
+          Key->ConstProvenance != ConstantAddressProvenance::Scalar ||
+          !Key->Type || Key->Type->Size != Bytes)
+        return std::nullopt;
+      return Address{Xor, Key->ConstVal & Mask, Offset->ConstVal & Mask};
+    };
+    std::optional<Address> Chosen;
+    HighExprSet Seen;
+    std::function<void(const ExprPtr &)> Find = [&](const ExprPtr &E) {
+      if (!E || Chosen || !AddressBudget || !Seen.insert(E.get()).second ||
+          E->SourceCallHint)
+        return;
+      --AddressBudget;
+      if (E->Kind == ExprKind::Load && E->Operands.size() == 1) {
+        if (auto At = Match(E->Operands[0])) {
+          const uint64_t NullWord = (Sentinel->ConstVal ^ At->Key) & Mask;
+          if (NullWord &&
+              Magnitude(At->Offset + NullWord) < Magnitude(At->Offset))
+            Chosen = std::move(At);
+        }
+      }
+      E->forEachChildExpr(Find);
+    };
+    // Nested statement scopes have their own visit. Inspect only direct
+    // expressions so enclosing guards do not rescan complete descendants.
+    for (const HighStmt &T : Arm)
+      forEachRhsExpr(T, Find);
+    if (!Chosen)
+      return {};
+    const auto Type = NdType::makeInt(Bytes, false);
+    auto Local = freshLocal(Type);
+    if (!Local)
+      return {};
+    const uint64_t NullWord = (Sentinel->ConstVal ^ Chosen->Key) & Mask;
+    auto Xor = std::make_shared<HighExpr>(*addressBits(Chosen->Xor.get()));
+    Xor->Type = Type;
+    auto Base = HighExpr::makeBinop(
+        NdOp::INT_SUB, Xor,
+        HighExpr::makeConst(NullWord, Bytes,
+                            ConstantAddressProvenance::Scalar));
+    Base->Type = Type;
+    std::unordered_map<const HighExpr *, ExprPtr> Rewritten;
+    std::function<ExprPtr(const ExprPtr &)> Rewrite = [&](const ExprPtr &E) {
+      if (!E || E->SourceCallHint)
+        return E;
+      if (auto It = Rewritten.find(E.get()); It != Rewritten.end())
+        return It->second;
+      auto Copy = std::make_shared<HighExpr>(*E);
+      bool Changed = false;
+      for (size_t I = 0; I < Copy->Operands.size(); ++I) {
+        Copy->Operands[I] = Rewrite(Copy->Operands[I]);
+        Changed |= Copy->Operands[I] != E->Operands[I];
+      }
+      Copy->IndirectTarget = Rewrite(Copy->IndirectTarget);
+      Changed |= Copy->IndirectTarget != E->IndirectTarget;
+      if (E->Kind == ExprKind::Load && E->Operands.size() == 1)
+        if (auto At = Match(E->Operands[0]); At && At->Key == Chosen->Key) {
+          auto Address = HighExpr::makeBinop(
+              NdOp::INT_ADD, Local,
+              HighExpr::makeConst((At->Offset + NullWord) & Mask, Bytes,
+                                  ConstantAddressProvenance::Scalar));
+          Address->Type = E->Operands[0]->Type;
+          Copy->Operands[0] = std::move(Address);
+          Changed = true;
+        }
+      return Rewritten[E.get()] = Changed ? std::move(Copy) : E;
+    };
+    for (HighStmt &T : Arm)
+      forEachRhsExpr(T, [&](ExprPtr &E) { E = Rewrite(E); });
+    auto Condition = std::make_shared<HighExpr>(*S.Cond);
+    Condition->Operands = {
+        Local,
+        HighExpr::makeConst(0, Bytes, ConstantAddressProvenance::Scalar)};
+    S.Cond = std::move(Condition);
+    HighStmt Assign;
+    Assign.Kind = StmtKind::Assign;
+    Assign.Dst = Local;
+    Assign.Val = std::move(Base);
+    Assign.KeepsName = true;
+    return {std::move(Assign)};
   }
 
   bool visit(std::vector<HighStmt> &Body) {
@@ -185,7 +367,10 @@ private:
         visit(Case.Body);
       for (std::vector<HighStmt> &Clause : Body[I].EHClauseBodies)
         visit(Clause);
-      std::vector<HighStmt> Named = name(Body[I]);
+      std::vector<HighStmt> Named = nameGuardedAddress(Body[I]);
+      auto Repeated = name(Body[I]);
+      Named.insert(Named.end(), std::make_move_iterator(Repeated.begin()),
+                   std::make_move_iterator(Repeated.end()));
       if (Named.empty())
         continue;
       // A jump to the statement lands on the first new assignment instead,
@@ -307,22 +492,17 @@ private:
     std::set<const ExprPtr *> RootSlots(Roots.begin(), Roots.end());
     // Assigns \p E to a fresh local, which its readers read instead.
     auto NameValue = [&](const ExprPtr &E) {
-      if (NextTag >= INT16_MAX)
+      auto Local = freshLocal(E->Type);
+      if (!Local)
         return false;
-      MedVar Local;
-      Local.Kind = MedVar::Temp;
-      Local.Id = NextId++;
-      Local.RenameTag = static_cast<int16_t>(NextTag++);
-      Local.Size = E->Type->Size;
-      Local.TheArch = TheArch;
       HighStmt Assign;
       Assign.Kind = StmtKind::Assign;
-      Assign.Dst = HighExpr::makeVar(Local, E->Type);
+      Assign.Dst = Local;
       Assign.Val = E;
       Assign.KeepsName = true;
       Named.emplace_back(Position[E.get()], std::move(Assign));
       for (ExprPtr *Use : Readers[E.get()])
-        *Use = HighExpr::makeVar(Local, E->Type);
+        *Use = HighExpr::makeVar(Local->Var, E->Type);
       // The sizes above shrink.
       Printed.clear();
       return true;

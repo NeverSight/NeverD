@@ -1,0 +1,23 @@
+//===- IncomingHomeSourceProfiles.def - Incoming carrier cases -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Preserve each architecture/format/carrier combination as a bounded test.
+/// ARM64 uses X29 as full-width scratch while preserving its frame identity.
+//===----------------------------------------------------------------------===//
+
+#ifndef INCOMING_HOME_SOURCE_PROFILE
+#define INCOMING_HOME_SOURCE_PROFILE(Name, Architecture, Format, CarrierBytes)
+#endif
+
+INCOMING_HOME_SOURCE_PROFILE(X64COFF32, Arch::X64, BinaryFormat::COFF, 4)
+INCOMING_HOME_SOURCE_PROFILE(X64COFF64, Arch::X64, BinaryFormat::COFF, 8)
+INCOMING_HOME_SOURCE_PROFILE(X64ELF32, Arch::X64, BinaryFormat::ELF, 4)
+INCOMING_HOME_SOURCE_PROFILE(X64ELF64, Arch::X64, BinaryFormat::ELF, 8)
+INCOMING_HOME_SOURCE_PROFILE(AArch64COFF64, Arch::AArch64, BinaryFormat::COFF,
+                             8)
+INCOMING_HOME_SOURCE_PROFILE(AArch64ELF64, Arch::AArch64, BinaryFormat::ELF, 8)
+
+#undef INCOMING_HOME_SOURCE_PROFILE

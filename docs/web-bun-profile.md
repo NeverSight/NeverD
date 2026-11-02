@@ -107,11 +107,21 @@ module count, startup count, NUL terminators, encoding, alignment and unique
 module names. Payloads cannot overlap metadata or each other. Hashing starts
 only after this validation, preventing pointer aliases from multiplying work.
 
+The extraction also retains the ordered prelinked-file mapping and eight opaque
+runtime-option bytes when their respective flags are present. Compile-time
+arguments have a dedicated exact range, including empty arguments, appended
+after existing regions to preserve their indices. These fields never configure
+the analyzer's runtime. Local evidence manifests expose `startup_count`,
+`flags`, `side_id`, `prelinked_module_files`, `runtime_options_bytes` and
+`compile_exec_argv_file`; ordinary pages expose only counts, presence and a
+private argument-region reference.
+
 Limits are 256 MiB per original, 4,096 modules, 4,096 builtins, 1 MiB total
 private name bytes (32 KiB per name), 4,096 section headers, 1,024 program
 headers and four cached extractions per session. Original storage and source
-parser ceilings remain independent. All original range hashes together read
-at most the container size; parsing additionally reads bounded metadata.
+parser ceilings remain independent. Original range hashing reads the container
+partition plus the bounded compile-argument subrange of graph metadata; parsing
+additionally reads bounded metadata.
 There is no cancellation or whole-process memory guarantee for extraction.
 
 Module pages link to raw content, name, source-map, cache, module-info and

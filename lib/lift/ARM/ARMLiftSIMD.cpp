@@ -12,7 +12,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"

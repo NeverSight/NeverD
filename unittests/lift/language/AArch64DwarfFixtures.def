@@ -1,0 +1,98 @@
+//===- AArch64DwarfFixtures.def - Independent RA CFI bytes ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent aadwarf64 CFI programs, framing constants and test identities.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_DWARF_VALUE
+#define NEVERD_A64_DWARF_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_DWARF_TEXT
+#define NEVERD_A64_DWARF_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_A64_DWARF_PROGRAM
+#define NEVERD_A64_DWARF_PROGRAM(Name, ...)
+#endif
+
+NEVERD_A64_DWARF_VALUE(uint64_t, kText, 0x1000)
+NEVERD_A64_DWARF_VALUE(uint64_t, kFrame, 0x4000)
+NEVERD_A64_DWARF_VALUE(uint64_t, kCallback, 0x2000)
+NEVERD_A64_DWARF_VALUE(uint64_t, kRange, 0x40)
+NEVERD_A64_DWARF_VALUE(uint64_t, kCodeAlign, 4)
+NEVERD_A64_DWARF_VALUE(int64_t, kDataAlign, -8)
+NEVERD_A64_DWARF_VALUE(uint8_t, kReturnRegister, 30)
+NEVERD_A64_DWARF_VALUE(uint8_t, kVersion, 1)
+NEVERD_A64_DWARF_VALUE(uint8_t, kAbsoluteEncoding, 0)
+NEVERD_A64_DWARF_VALUE(uint8_t, kPCRelativeEncoding, 0x1c)
+NEVERD_A64_DWARF_VALUE(uint64_t, kMachOBase, 0x100000000)
+NEVERD_A64_DWARF_VALUE(uint32_t, kMachOTextOffset, 0x800)
+NEVERD_A64_DWARF_VALUE(uint32_t, kMachOFrameOffset, 0x1000)
+NEVERD_A64_DWARF_VALUE(uint32_t, kMachOPageSize, 0x4000)
+NEVERD_A64_DWARF_VALUE(uint32_t, kMachOSectionAlignment, 2)
+NEVERD_A64_DWARF_VALUE(uint8_t, kSetState, 0x2b)
+NEVERD_A64_DWARF_VALUE(uint8_t, kSetLocation, 0x01)
+NEVERD_A64_DWARF_VALUE(uint8_t, kUnsignedState, 0)
+NEVERD_A64_DWARF_VALUE(uint8_t, kSignedWithSP, 1)
+NEVERD_A64_DWARF_VALUE(uint8_t, kSignedWithPC, 2)
+NEVERD_A64_DWARF_VALUE(char, kBAugmentation, 'B')
+NEVERD_A64_DWARF_VALUE(char, kNAugmentation, 'N')
+NEVERD_A64_DWARF_VALUE(uint8_t, kSpareAugmentationByte, 0x55)
+NEVERD_A64_DWARF_TEXT(kMachOTextSegment, "__TEXT")
+NEVERD_A64_DWARF_TEXT(kMachOLinkeditSegment, "__LINKEDIT")
+NEVERD_A64_DWARF_TEXT(kMachOTextSection, "__text")
+NEVERD_A64_DWARF_TEXT(kMachOFrameSection, "__eh_frame")
+NEVERD_A64_DWARF_TEXT(kLayoutRefusal,
+                      "address-stable, non-language DWARF contract")
+NEVERD_A64_DWARF_TEXT(kLayoutUnknownState, "not statically known")
+NEVERD_A64_DWARF_TEXT(kLayoutBudget, "comparison budget")
+NEVERD_A64_DWARF_TEXT(kDuplicateNonHint, "zRNN")
+NEVERD_A64_DWARF_TEXT(kSignalAugmentation, "zRS")
+NEVERD_A64_DWARF_VALUE(uint64_t, kStateReplayWork, 72)
+NEVERD_A64_DWARF_VALUE(uint64_t, kTrailingAdvanceReplayWork, 112)
+NEVERD_A64_DWARF_VALUE(uint64_t, kEndAdvanceReplayWork, 84)
+NEVERD_A64_DWARF_TEXT(kOrdinary, "zR")
+NEVERD_A64_DWARF_TEXT(kBKey, "zRB")
+NEVERD_A64_DWARF_TEXT(kNonHint, "zRN")
+NEVERD_A64_DWARF_TEXT(kBKeyNonHint, "zRBN")
+NEVERD_A64_DWARF_TEXT(kNonHintBeforeEncoding, "zNBR")
+NEVERD_A64_DWARF_PROGRAM(kStates, 0x2b, 1, 0, 0x41, 0x2b, 2, 0x7f, 0x41, 0x2b,
+                         0, 0)
+NEVERD_A64_DWARF_PROGRAM(kStatesTrailingAdvance, 0x2b, 1, 0, 0x41, 0x2b, 2,
+                         0x7f, 0x41, 0x2b, 0, 0, 0x41)
+NEVERD_A64_DWARF_PROGRAM(kStatesAdvanceToEnd, 0x2b, 1, 0, 0x41, 0x2b, 2, 0x7f,
+                         0x41, 0x2b, 0, 0, 0x4e)
+NEVERD_A64_DWARF_PROGRAM(kLegacy, 0x2d, 0x41, 0x2d, 0x41, 0x2c, 0x41, 0x2c)
+NEVERD_A64_DWARF_PROGRAM(kInitialRemember, 0x2b, 1, 0, 0x0a)
+NEVERD_A64_DWARF_PROGRAM(kRestoreInitialRemember, 0x2b, 2, 0, 0x41, 0x0b)
+NEVERD_A64_DWARF_PROGRAM(kInitialPC, 0x2b, 2, 0)
+NEVERD_A64_DWARF_PROGRAM(kUnsignedIgnoredOffset, 0x2b, 0, 0x7f)
+NEVERD_A64_DWARF_PROGRAM(kSPIgnoredOffset, 0x2b, 1, 0x7f)
+NEVERD_A64_DWARF_PROGRAM(kInitialAdvance, 0x41)
+NEVERD_A64_DWARF_PROGRAM(kInitialSP, 0x2b, 1, 0)
+NEVERD_A64_DWARF_PROGRAM(kDynamic, 0x09, 34, 5, 0x41, 0x06, 34)
+NEVERD_A64_DWARF_PROGRAM(kExpression, 0x16, 34, 1, 0x30, 0x41, 0x06, 34)
+NEVERD_A64_DWARF_PROGRAM(kNested, 0x0a, 0x2b, 2, 0, 0x41, 0x0a, 0x2b, 0, 0,
+                         0x41, 0x0b, 0x41, 0x0b)
+NEVERD_A64_DWARF_PROGRAM(kLateUnderflow, 0x41, 0x0b)
+NEVERD_A64_DWARF_PROGRAM(kMixed, 0x2d, 0x09, 34, 5)
+NEVERD_A64_DWARF_PROGRAM(kReserved, 0x2b, 3, 0)
+NEVERD_A64_DWARF_PROGRAM(kReservedContinuation, 0x2b, 3, 0x7f, 0x41, 0x2b, 1, 0)
+NEVERD_A64_DWARF_PROGRAM(kReservedOperands, 3, 0x7f)
+NEVERD_A64_DWARF_PROGRAM(kOpaque, 0x17)
+NEVERD_A64_DWARF_PROGRAM(kMissingState, 0x2b)
+NEVERD_A64_DWARF_PROGRAM(kMissingOffset, 0x2b, 2)
+NEVERD_A64_DWARF_PROGRAM(kTruncatedState, 0x2b, 0x80)
+NEVERD_A64_DWARF_PROGRAM(kTruncatedOffset, 0x2b, 2, 0x80)
+NEVERD_A64_DWARF_PROGRAM(kLongOffset, 0x2b, 2, 0x80, 0x80, 0x80, 0x80, 0x80,
+                         0x80, 0x80, 0x80, 0x80, 0x80, 0)
+NEVERD_A64_DWARF_PROGRAM(kWindowSave, 0x2d)
+NEVERD_A64_DWARF_PROGRAM(kWindowSaveWithPC, 0x2c)
+NEVERD_A64_DWARF_PROGRAM(kNopCode, 0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03,
+                         0xd5, 0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5)
+
+#undef NEVERD_A64_DWARF_VALUE
+#undef NEVERD_A64_DWARF_TEXT
+#undef NEVERD_A64_DWARF_PROGRAM

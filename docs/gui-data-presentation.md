@@ -1,7 +1,8 @@
 # Arrays, alignment and enum operands
 
 The disassembly **Edit** menu includes **Make array** (`*`) and **Make
-alignment** (`L`). **Operand type → Enum operand** (`M`) selects an enumeration
+alignment** (`L`); the disassembly's context menu offers both on a data item.
+**Operand type → Enum operand** (`M`) selects an enumeration
 declared in Local Types. The normal operand format reset (`#`) restores numeric
 spelling; `U` undefines a complete array or a manually marked alignment span.
 All three edits use project undo/redo, sidecars and database/replica state.
@@ -27,7 +28,8 @@ Alignment is an explicit padding span ending at the requested power-of-two
 boundary (2 bytes to one MiB). At an already aligned address it marks one full
 alignment unit. It changes the listing's interpretation, never the input bytes.
 
-Enum operands currently use the existing native x86/x64 operand formatter.
+Enum operands use the native x86/x64, ARM, Thumb and AArch64 operand
+formatters.
 The SDK validates an actual decoded immediate, its logical width and the enum's
 underlying width. Signed values retain their width; aliases choose the first
 declared exact member deterministically. Flags mode combines named single bits
@@ -72,11 +74,17 @@ only runs after all supplied declaration files parse successfully.
 `--enum` selects an exact enum member; `--flags` additionally combines single
 bits and preserves residual bits numerically. `--operand` uses the original
 decoded operand index, starting at zero, so the immediate of `imul r,r,imm` is
-operand 2 even when the GUI folds its text to `imul r,imm`.
+operand 2 even when the GUI folds its text to `imul r,imm`. ARM-family
+operands count like their text, by the commas outside brackets, braces and
+parentheses; the immediate is the one its `#value` spells, so
+`ld1 {v0.16b, v1.16b}, [x0], #32` has `#32` as operand 2. SBF operands count
+the same way, so `mov64 r1, 5` has its immediate as operand 1, and EVM PUSH
+data is operand 0; an enumerator names PUSH data of at most 64 bits.
 The display uses the same decoded operand width as SDK admission; a byte shift
 count does not take the width of its destination register.
 SDK/CLI disassembly preserves raw `op_str` and adds `display_op_str` when an
-enum changes its spelling. Text output uses the same enum formatting. Missing
+enum changes its spelling; an SBF row's `op_str` holds its operands alone, as
+every other row's does. Text output uses the same enum formatting. Missing
 or deleted enum types leave the numeric operand visible.
 
 Run `neverd items program.exe --json` or `neverd operands program.exe --json`

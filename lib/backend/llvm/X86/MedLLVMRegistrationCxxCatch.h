@@ -8,7 +8,7 @@
 
 #include "MedLLVMRegistrationCxxStack.h"
 
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
 
 #include <set>
 

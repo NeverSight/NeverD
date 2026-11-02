@@ -9,8 +9,6 @@
 //===----------------------------------------------------------------------===//
 #include "AndroidInternal.h"
 
-#include "llvm/Support/Endian.h"
-
 namespace neverd::emulation::android_model {
 namespace {
 llvm::Expected<std::vector<uint8_t>> decode(llvm::StringRef Text) {
@@ -48,39 +46,6 @@ llvm::Expected<std::vector<uint8_t>> decode(llvm::StringRef Text) {
     }
     Out.push_back(uint8_t(Value));
     Out.push_back(uint8_t(Value >> 8));
-  }
-  return Out;
-}
-std::vector<uint8_t> encode(llvm::ArrayRef<uint8_t> UTF16) {
-  std::vector<uint8_t> Out;
-  for (size_t I = 0; I < UTF16.size(); I += 2) {
-    const uint16_t Value = llvm::support::endian::read16le(UTF16.data() + I);
-    // ART's JNI encoding uses four bytes for a complete surrogate pair;
-    // isolated surrogate units still retain their three-byte representation.
-    if (Value >= 0xd800 && Value < 0xdc00 && I + 2 < UTF16.size()) {
-      const uint16_t Next =
-          llvm::support::endian::read16le(UTF16.data() + I + 2);
-      if (Next >= 0xdc00 && Next <= 0xdfff) {
-        const uint32_t Scalar =
-            0x10000 + ((Value - 0xd800) << 10) + (Next - 0xdc00);
-        Out.push_back(0xf0 | (Scalar >> 18));
-        Out.push_back(0x80 | ((Scalar >> 12) & 63));
-        Out.push_back(0x80 | ((Scalar >> 6) & 63));
-        Out.push_back(0x80 | (Scalar & 63));
-        I += 2;
-        continue;
-      }
-    }
-    if (Value && Value < 0x80) {
-      Out.push_back(Value);
-    } else if (Value < 0x800) {
-      Out.push_back(0xc0 | (Value >> 6));
-      Out.push_back(0x80 | (Value & 63));
-    } else {
-      Out.push_back(0xe0 | (Value >> 12));
-      Out.push_back(0x80 | ((Value >> 6) & 63));
-      Out.push_back(0x80 | (Value & 63));
-    }
   }
   return Out;
 }
@@ -198,7 +163,7 @@ BionicResult Bionic::jniStrings(unsigned Slot, const NativeCallEvent &Call) {
     Bytes = Bytes.slice(uint64_t(Start) * 2, uint64_t(Length) * 2);
     std::vector<uint8_t> Encoded;
     if (Slot == 221) {
-      Encoded = encode(Bytes);
+      Encoded = mobile::dalvik::artStringUTF8({Bytes.data(), Bytes.size()});
       Bytes = Encoded;
     }
     if (auto E = access(A[4], Bytes.size(), Write))
@@ -210,7 +175,7 @@ BionicResult Bionic::jniStrings(unsigned Slot, const NativeCallEvent &Call) {
   }
   std::vector<uint8_t> Storage;
   if (Slot == 168 || Slot == 169)
-    Storage = encode(Bytes);
+    Storage = mobile::dalvik::artStringUTF8({Bytes.data(), Bytes.size()});
   else
     Storage.assign(Bytes.begin(), Bytes.end());
   if (Slot == 168)

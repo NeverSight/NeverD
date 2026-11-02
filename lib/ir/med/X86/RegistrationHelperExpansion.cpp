@@ -13,7 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/lift/LiftCommon.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <algorithm>
 #include <map>

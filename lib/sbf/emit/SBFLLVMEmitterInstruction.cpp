@@ -66,6 +66,8 @@ llvm::Value *extendResult(EmitContext &Context, llvm::Value *Value,
 
 llvm::Value *comparison(EmitContext &Context,
                         const MedInstruction &Instruction) {
+  if (const auto Result = Instruction.reflexiveComparisonResult())
+    return llvm::ConstantInt::getBool(Context.Module.getContext(), *Result);
   llvm::Value *L =
       widthValue(Context, Context.loadReg(Instruction.Dst), Instruction.Width);
   llvm::Value *R =
@@ -488,20 +490,10 @@ void emitInstruction(EmitContext &Context, const MedInstruction &Instruction) {
                         Context.i64(Context.Program.Low.Instructions.size())),
         FaultCode::UnknownIndirectCall, Instruction.Address, "callx.target");
     llvm::Value *TargetSlot = B.CreateTrunc(TargetSlot64, Context.I32);
-    auto *Default = llvm::BasicBlock::Create(
-        Context.Module.getContext(), "callx.invalid", &Context.Function);
-    llvm::SwitchInst *Switch =
-        B.CreateSwitch(TargetSlot, Default, Context.Blocks.size());
-    for (const auto &Entry : Context.Blocks)
-      Switch->addCase(Context.i32(static_cast<uint32_t>(Entry.first)),
-                      Entry.second);
-    Context.Builder.SetInsertPoint(Default);
-    Context.Builder.CreateCall(
-        Context.Runtime.Fault,
-        {Context.Environment,
-         Context.i32(static_cast<uint32_t>(FaultCode::UnknownIndirectCall)),
-         Context.i64(Instruction.Address)});
-    Context.Builder.CreateRet(Context.i64(0));
+    Context.CallXTargetSlot->addIncoming(TargetSlot, B.GetInsertBlock());
+    Context.CallXAddress->addIncoming(Context.i64(Instruction.Address),
+                                      B.GetInsertBlock());
+    B.CreateBr(Context.CallXDispatch);
     return;
   }
   case Operation::Exit: {

@@ -25,7 +25,8 @@ namespace neverd {
 // renameVars — assign sequential rename tags to SSA-versioned register vars
 //===----------------------------------------------------------------------===//
 
-void renameVars(std::vector<HighStmt> &Stmts) {
+static void renameVars(std::vector<HighStmt> &Stmts,
+                       std::vector<std::pair<MedVar, ExprPtr>> *FrameFacts) {
   VarKeyMap<int16_t> RenameMap;
   VarKeyMap<int> RenameIdMap;
   int16_t VarCounter = 0;
@@ -47,6 +48,15 @@ void renameVars(std::vector<HighStmt> &Stmts) {
   };
   walkStmts(Stmts, [&](const HighStmt &S) { forEachExpr(S, CollectVars); });
   if (!RenameMap.empty()) {
+    if (FrameFacts)
+      for (auto &[Variable, Address] : *FrameFacts) {
+        const auto Key = VK(Variable);
+        if (auto It = RenameMap.find(Key); It != RenameMap.end()) {
+          Variable.RenameTag = It->second;
+          Variable.Id = RenameIdMap.at(Key);
+          Variable.SSAVer = 0;
+        }
+      }
     HighExprSet RenameSeen;
     std::function<void(ExprPtr &)> DoRename;
     DoRename = [&](ExprPtr &E) {
@@ -68,6 +78,12 @@ void renameVars(std::vector<HighStmt> &Stmts) {
     };
     walkStmts(Stmts, [&](HighStmt &S) { forEachExpr(S, DoRename); });
   }
+}
+
+void renameVars(std::vector<HighStmt> &Stmts) { renameVars(Stmts, nullptr); }
+
+void renameVars(HighFunc &Func) {
+  renameVars(Func.Body, &Func.ItaniumCallFrameOffsets);
 }
 
 //===----------------------------------------------------------------------===//

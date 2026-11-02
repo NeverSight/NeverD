@@ -96,12 +96,13 @@ struct BinaryUndefinedIndependenceResult {
 /// Entry constants, byte order, X64FlagsProfile and optional frame-entry
 /// alignment must match Options. Alignment restricts only the shared entry
 /// root; it does not rewrite its value or supply memory/ABI evidence.
-/// Selecting UserX64NoFaultV1 or KernelX64NoFaultV1 enables shared, persistent
+/// Selecting an explicit supported flags profile enables shared, persistent
 /// PUSHFQ/POPFQ system state, canonical entry flag bits and mandatory final
-/// system-state equality. Every POPFQ must satisfy the TF/AC restriction in
-/// both executions. The kernel profile additionally requires IOPL=0 throughout
-/// and models IF as writable; the user profile preserves IF. The kernel profile
-/// supplies no kernel API, resource, IRQL, exception or source-ABI certificate.
+/// system-state equality. Every POPFQ must satisfy its profile restrictions in
+/// both executions. Kernel profiles require IOPL=0 and model IF as writable;
+/// the user profile preserves IF. KernelX64SmapNoFaultV2 additionally retains
+/// AC and requires CPUID SMAP support. These profiles supply no kernel API,
+/// resource, IRQL, exception or source-ABI certificate.
 /// Exact provider-marked CET-disabled RDSSP projections and
 /// unreachable INCSSP #UD boundaries retain Missing sidecars and require
 /// separate profile receipts; feasible INCSSP always violates the nonfaulting

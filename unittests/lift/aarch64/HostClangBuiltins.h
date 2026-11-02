@@ -32,9 +32,6 @@
 #define __builtin_arm_rcwscaspl(...) ((unsigned __int128)0)
 #endif
 
-#if !__has_builtin(__builtin_arm_pacga)
-#define __builtin_arm_pacga(...) ((unsigned long long)0)
-#endif
 #if !__has_builtin(__builtin_arm_addg)
 #define __builtin_arm_addg(...) ((void *)0)
 #endif

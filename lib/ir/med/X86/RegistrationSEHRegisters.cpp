@@ -7,8 +7,8 @@
 /// Materializes checked finally register exchanges before SSA construction.
 
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
 #include "llvm/ADT/STLExtras.h"
 

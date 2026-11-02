@@ -32,6 +32,9 @@
 namespace neverd {
 
 struct CSourceName;
+namespace types {
+class TypeLibrary;
+}
 
 enum class SourceDialect : uint8_t {
 #define NEVERD_SOURCE_DIALECT(Id, Key, Display) Id,
@@ -95,6 +98,12 @@ struct SourceDialectOptions {
   BinaryFormat Format = BinaryFormat::ELF;
   /// The names the C text spells, from CSourceMap::Names.
   llvm::ArrayRef<CSourceName> Names;
+  /// Target header types joined to the program's local types. The reader
+  /// obtains declarations of referenced header types from this library;
+  /// definitions in the emitted C remain authoritative.
+  const types::TypeLibrary *Types = nullptr;
+  /// Program types the emitter proved are supplied by matching headers.
+  llvm::ArrayRef<std::string> HeaderTypes;
   /// Rust and Go: the program's types, as the language defines them.
   std::optional<SourceDialectLocalTypes> LocalTypes;
 };

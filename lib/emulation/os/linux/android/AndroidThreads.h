@@ -31,23 +31,21 @@ public:
   enum class WaitSource { NativeCall, KernelService };
   GuestThreads(ExecutionBackend &CPU, const IntegerABI &Calls,
                const ProcessOptions &Options, ProcessResult &Result,
-               linux_model::LinuxClock &Clock,
-               linux_model::LinuxPriority &PriorityState,
-               linux_model::LinuxSignals &Signals)
-      : CPU(CPU), Calls(Calls), Options(Options), Result(Result), Clock(Clock),
-        PriorityState(PriorityState), Signals(Signals) {}
+               linux_model::LinuxServices &Kernel)
+      : CPU(CPU), Calls(Calls), Options(Options), Result(Result),
+        Kernel(Kernel), Clock(Kernel.clock()), PriorityState(Kernel.priority()),
+        Signals(Kernel.signals()) {}
   llvm::Error initialize(uint64_t StackBase);
   llvm::Error validateTLS();
   bool enabled() const { return Options.Android->ThreadLimit > 1; }
   uint64_t id() const { return current().Kernel.ID; }
   uint64_t tls() const { return current().Report.TLS; }
   bool isEntry() const { return Current == 0; }
+  BinderThreadState &binder() { return current().Binder; }
   linux_model::ThreadContext *kernel() {
     return enabled() ? &current().Kernel : nullptr;
   }
   std::vector<PendingCallback> &callbacks() { return current().Callbacks; }
-  void setReturnSP(uint64_t SP) { current().ReturnSP = SP; }
-  uint64_t returnSP() const { return current().ReturnSP; }
   BionicResult invoke(const NativeCallEvent &Call);
   bool onceActive(uint64_t Control) const;
   BionicResult waitOnce(uint64_t Control);
@@ -56,7 +54,7 @@ public:
   void wakeMutex(uint64_t Address);
   void waitSemaphore(uint64_t Address, bool Shared);
   void wakeSemaphore(uint64_t Address);
-  bool waitKernel();
+  bool waitKernel(const std::optional<SleepContinuation> &Sleep = std::nullopt);
   void waitNative(std::unique_ptr<NativeWait> Pending);
   void suspend(const ServiceRequest &Request, size_t Event,
                WaitSource Source = WaitSource::NativeCall);
@@ -67,6 +65,7 @@ public:
   /// Complete an interrupted libc wrapper only after its handler returns.
   llvm::Error resumeSignal(Bionic &LibC);
   void report();
+  std::vector<NativeThreadCPUState> observeCPUStates() const;
   std::vector<linux_model::ProcTask> procTasks() const;
 
 private:
@@ -96,26 +95,30 @@ private:
     std::optional<ServiceRequest> Request;
     size_t Event = 0;
     WaitSource Source = WaitSource::NativeCall;
+    std::optional<SleepContinuation> Sleep = std::nullopt;
   };
   struct SignalReturn {
     ServiceRequest Request;
     size_t Event, Depth;
+    std::optional<SleepContinuation> Sleep;
   };
   struct Thread {
     NativeThreadSnapshot Report;
     linux_model::ThreadContext Kernel;
+    BinderThreadState Binder;
     std::array<uint8_t, thread_attribute_abi::ObjectBytes> Attributes{};
     std::unique_ptr<BackendContext> Context;
     std::vector<PendingCallback> Callbacks;
     std::vector<SignalReturn> SignalReturns;
     std::optional<Wait> Waiting;
     std::optional<size_t> Joiner;
-    uint64_t MappingBase = 0, MappingSize = 0, ReturnSP = 0;
+    uint64_t MappingBase = 0, MappingSize = 0;
   };
   ExecutionBackend &CPU;
   const IntegerABI &Calls;
   const ProcessOptions &Options;
   ProcessResult &Result;
+  linux_model::LinuxServices &Kernel;
   linux_model::LinuxClock &Clock;
   linux_model::LinuxPriority &PriorityState;
   linux_model::LinuxSignals &Signals;

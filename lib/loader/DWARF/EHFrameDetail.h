@@ -20,11 +20,22 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace neverd::dwarf_eh {
 namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE detail {
+
+/// Read frame headers and augmentations for extent discovery, without
+/// constructing or diagnosing their CFI programs. The result is private to
+/// discovery: it must not supply unwind rules or language metadata. The full
+/// parseEHFrame reader still validates those programs during exception
+/// recovery. Runtime-index extension records also retain their full decode
+/// because their admission requires a complete record.
+ParseResult parseFrameHeaders(const BinaryImage &Img, const FrameSection &Sec,
+                              const PointerBases &Bases,
+                              const ParseLimits &Limits = {});
 
 /// Decode the call-frame instruction program of one entry.
 ///
@@ -34,7 +45,8 @@ namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE detail {
 bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
                       size_t End, const DwarfCIE &CIE, uint8_t FDEEncoding,
                       va_t BufVA, const PointerBases &Bases, unsigned PtrSize,
-                      const BinaryImage *Img, const ParseLimits &Limits,
+                      std::optional<va_t> FunctionStart, const BinaryImage *Img,
+                      const ParseLimits &Limits,
                       std::vector<CFIInstruction> &Out,
                       ExceptionParseStatus &Status,
                       std::vector<std::string> &Diagnostics);

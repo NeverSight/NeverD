@@ -30,6 +30,7 @@
 ///   - NeverDCAPIEmulation.h -- bounded Windows driver initialization
 ///   - NeverDCAPIModules.h -- explicit binary/debug resource catalogues
 ///   - NeverDCAPICPU.h     -- CPU configuration and capability queries
+///   - NeverDCAPIX87.h     -- scoped x87 capability inventory
 ///   - NeverDCAPIProcess.h -- explicit guest process workloads
 ///   - NeverDCAPIUnpack.h -- packed executable recovery
 ///   - NeverDCAPIBytecode.h -- external-profile bytecode source recovery
@@ -39,12 +40,16 @@
 #ifndef NEVERD_SDK_CAPI_H
 #define NEVERD_SDK_CAPI_H
 
+#include "neverd/sdk/NeverDCAPIBytePatch.h"
 #include "neverd/sdk/NeverDCAPIBytecode.h"
 #include "neverd/sdk/NeverDCAPICPU.h"
+#include "neverd/sdk/NeverDCAPIContinuation.h"
 #include "neverd/sdk/NeverDCAPIDevirtualize.h"
+#include "neverd/sdk/NeverDCAPIDiff.h"
 #include "neverd/sdk/NeverDCAPIDisasm.h"
 #include "neverd/sdk/NeverDCAPIEmulation.h"
 #include "neverd/sdk/NeverDCAPIExecution.h"
+#include "neverd/sdk/NeverDCAPILineage.h"
 #include "neverd/sdk/NeverDCAPILocalTypes.h"
 #include "neverd/sdk/NeverDCAPIModules.h"
 #include "neverd/sdk/NeverDCAPIOptimize.h"
@@ -62,5 +67,6 @@
 #include "neverd/sdk/NeverDCAPITranslate.h"
 #include "neverd/sdk/NeverDCAPITypes.h"
 #include "neverd/sdk/NeverDCAPIUnpack.h"
+#include "neverd/sdk/NeverDCAPIX87.h"
 
 #endif // NEVERD_SDK_CAPI_H

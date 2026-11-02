@@ -34,7 +34,23 @@
 
 namespace neverd::symbolic::detail {
 
+struct AbstractionMemo {
+  llvm::DenseMap<uint64_t, Abstraction> Entries;
+  size_t Bytes = 0;
+};
+
 namespace {
+
+// Most regions in the bottom-up walk contain only a few nodes. Keep their
+// classification and rewrite tables inline while retaining ordinary growth
+// for larger regions. Traversal and resource accounting stay unchanged.
+using NodeSet =
+    llvm::SmallDenseSet<uint32_t, limits::kMBAAbstractionInlineBuckets>;
+template <typename Value>
+using NodeMap =
+    llvm::SmallDenseMap<uint32_t, Value, limits::kMBAAbstractionInlineBuckets>;
+using NodeOrder =
+    llvm::SmallVector<uint32_t, limits::kMBAAbstractionInlineEntries>;
 
 /// What part an operator plays in the linear theory.
 ///
@@ -74,8 +90,8 @@ bool isBitwiseOperand(Role R) {
 }
 
 void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
-              const llvm::DenseSet<uint32_t> &ForcedAtoms, bool AllowProducts,
-              llvm::DenseMap<uint32_t, Role> &Roles) {
+              const NodeSet &ForcedAtoms, bool AllowProducts,
+              NodeMap<Role> &Roles) {
   for (uint32_t Index : Order) {
     SymRef R(Index);
     if (ForcedAtoms.contains(Index)) {
@@ -161,9 +177,8 @@ void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
 /// because the set of demoted nodes only ever grows.
 void demoteArithmeticUnderBitwise(const SymContext &Ctx,
                                   llvm::ArrayRef<uint32_t> Order,
-                                  bool AllowProducts,
-                                  llvm::DenseSet<uint32_t> &ForcedAtoms,
-                                  llvm::DenseMap<uint32_t, Role> &Roles) {
+                                  bool AllowProducts, NodeSet &ForcedAtoms,
+                                  NodeMap<Role> &Roles) {
   for (;;) {
     Roles.clear();
     classify(Ctx, Order, ForcedAtoms, AllowProducts, Roles);
@@ -204,7 +219,7 @@ void demoteArithmeticUnderBitwise(const SymContext &Ctx,
 /// result is returned.
 class Placeholders {
 public:
-  Placeholders(SymContext &Ctx, const llvm::DenseSet<uint32_t> &Reserved)
+  Placeholders(SymContext &Ctx, const NodeSet &Reserved)
       : Ctx(Ctx), Reserved(Reserved) {}
 
   /// A fresh input of \p Width bits.  The width is the subterm's own, not the
@@ -225,7 +240,7 @@ public:
 
 private:
   SymContext &Ctx;
-  const llvm::DenseSet<uint32_t> &Reserved;
+  const NodeSet &Reserved;
   unsigned Next = 0;
 };
 
@@ -247,6 +262,11 @@ class AffineResources {
 public:
   AffineResources(WorkBudget *Budget, size_t MaxBytes)
       : Work(Budget ? *Budget : Fallback), Bytes(MaxBytes) {}
+
+  ~AffineResources() {
+    if (!Complete)
+      ++Work.IncompleteAbstractions;
+  }
 
   bool charge(size_t Units, size_t Storage = 0) {
     if (!Complete || Storage > Bytes || !Work.consume(Units))
@@ -308,11 +328,11 @@ bool expandsAffine(const SymContext &Ctx, SymRef R) {
   return Ctx.op(R) == SymOp::Mul && Ops.size() == 2 && Ctx.isConst(Ops[0]);
 }
 
-std::optional<AffineInput>
-affineInput(const SymContext &Ctx, SymRef Root,
-            const llvm::DenseSet<uint32_t> &ForcedAtoms,
-            const llvm::DenseMap<uint32_t, Role> &Roles,
-            const AffineCache &Cache, AffineResources &Resources) {
+std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
+                                       const NodeSet &ForcedAtoms,
+                                       const NodeMap<Role> &Roles,
+                                       const AffineCache &Cache,
+                                       AffineResources &Resources) {
   const unsigned Width = Ctx.width(Root);
   if (!Resources.array((size_t(Width) + 63) / 64, sizeof(uint64_t)))
     return std::nullopt;
@@ -392,12 +412,12 @@ affineInput(const SymContext &Ctx, SymRef Root,
 /// every prefix would itself use quadratic space when each adds a new base.
 bool cacheSharedAffineInputs(const SymContext &Ctx,
                              llvm::ArrayRef<uint32_t> Roots,
-                             const llvm::DenseSet<uint32_t> &ForcedAtoms,
-                             const llvm::DenseMap<uint32_t, Role> &Roles,
-                             AffineCache &Cache, AffineResources &Resources) {
+                             const NodeSet &ForcedAtoms,
+                             const NodeMap<Role> &Roles, AffineCache &Cache,
+                             AffineResources &Resources) {
   llvm::SmallVector<uint32_t, 32> Pending, Shared;
-  llvm::DenseSet<uint32_t> Seen;
-  llvm::DenseMap<uint32_t, uint8_t> Uses;
+  NodeSet Seen;
+  NodeMap<uint8_t> Uses;
   if (!Resources.array(Roots.size(), 2 * sizeof(uint32_t)))
     return false;
   Pending.append(Roots.begin(), Roots.end());
@@ -472,10 +492,9 @@ struct WeightedInput {
 
 using WeightedInputs = llvm::DenseMap<uint32_t, WeightedInput>;
 
-bool recordWeightedInput(
-    const SymContext &Ctx, uint32_t Index,
-    const llvm::DenseMap<uint32_t, SymRef> &OriginalRewritten,
-    WeightedInputs &Inputs, AffineResources &Resources) {
+bool recordWeightedInput(const SymContext &Ctx, uint32_t Index,
+                         const NodeMap<SymRef> &OriginalRewritten,
+                         WeightedInputs &Inputs, AffineResources &Resources) {
   SymRef R(Index);
   llvm::ArrayRef<SymRef> Ops = Ctx.operands(R);
   if (Ctx.op(R) != SymOp::Mul || Ops.size() != 2 || !Ctx.isConst(Ops[0]))
@@ -558,9 +577,10 @@ std::optional<llvm::APInt> weightedQuotient(WeightedInput &Input,
 }
 
 bool affineOrder(const SymContext &Ctx, SymRef Root,
-                 std::vector<uint32_t> &Order, AffineResources &Resources) {
+                 llvm::SmallVectorImpl<uint32_t> &Order,
+                 AffineResources &Resources) {
   llvm::SmallVector<SymRef, 32> Pending;
-  llvm::DenseSet<uint32_t> Seen;
+  NodeSet Seen;
   if (!Resources.array(1, 2 * sizeof(SymRef)))
     return false;
   Pending.push_back(Root);
@@ -581,7 +601,7 @@ bool affineOrder(const SymContext &Ctx, SymRef Root,
   }
   if (!Resources.order(Order.size()))
     return false;
-  llvm::sort(Order);
+  std::sort(Order.begin(), Order.end());
   return true;
 }
 
@@ -628,7 +648,7 @@ std::optional<SymRef> weightedTerm(SymContext &Ctx, SymRef R,
 SymRef restoreWeightedUses(SymContext &Ctx, SymRef Body,
                            llvm::ArrayRef<uint32_t> Order,
                            WeightedInputs &Inputs, AffineResources &Resources) {
-  llvm::DenseMap<uint32_t, SymRef> Changed;
+  NodeMap<SymRef> Changed;
   for (uint32_t Index : Order) {
     if (!Resources.charge(1))
       return Body;
@@ -717,13 +737,12 @@ bool areComplements(const AffineInput &A, const AffineInput &B,
 /// inverse of either input is needed or inferred.
 class ComplementInputs {
   std::unordered_multimap<size_t, size_t> ByHash;
-  llvm::DenseMap<uint32_t, SymRef> Sources;
+  NodeMap<SymRef> Sources;
 
 public:
   bool record(const AffineInputs &Inputs, uint32_t Index,
-              const AffineInput &Input,
-              const llvm::DenseSet<uint32_t> &ForcedAtoms,
-              const llvm::DenseMap<uint32_t, SymRef> &OriginalRewritten,
+              const AffineInput &Input, const NodeSet &ForcedAtoms,
+              const NodeMap<SymRef> &OriginalRewritten,
               AffineResources &Resources) {
     auto Opposite = affineHash(Input, true, Resources);
     auto Hash = affineHash(Input, false, Resources);
@@ -762,10 +781,10 @@ public:
   SymRef apply(SymContext &Ctx, SymRef Body, AffineResources &Resources) {
     if (Sources.empty() || !Resources.complete())
       return Body;
-    std::vector<uint32_t> Order;
+    NodeOrder Order;
     if (!affineOrder(Ctx, Body, Order, Resources))
       return Body;
-    llvm::DenseMap<uint32_t, SymRef> Changed;
+    NodeMap<SymRef> Changed;
     for (uint32_t Index : Order) {
       if (!Resources.charge(1))
         return Body;
@@ -811,8 +830,7 @@ public:
 // terms; a nested linear source keeps the full relation search enabled. A
 // forced source also stays eligible for the direct -Source-1 relation.
 bool mayHaveComplements(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Roots,
-                        const llvm::DenseSet<uint32_t> &ForcedAtoms,
-                        const llvm::DenseMap<uint32_t, Role> &Roles,
+                        const NodeSet &ForcedAtoms, const NodeMap<Role> &Roles,
                         AffineResources &Resources) {
   if (Roots.size() < 2)
     return false;
@@ -874,12 +892,13 @@ bool mayHaveComplements(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Roots,
 /// width. This substitution is valid for every original assignment, while the
 /// later coefficient proof still quantifies over all abstract inputs
 /// independently.
-SymRef restoreAffineRelations(
-    SymContext &Ctx, SymRef Body, llvm::ArrayRef<uint32_t> OriginalOrder,
-    const llvm::DenseSet<uint32_t> &ForcedAtoms,
-    const llvm::DenseMap<uint32_t, Role> &OriginalRoles,
-    const llvm::DenseMap<uint32_t, SymRef> &OriginalRewritten,
-    bool AllowProducts, WorkBudget *Budget, size_t MaxBytes) {
+SymRef restoreAffineRelations(SymContext &Ctx, SymRef Body,
+                              llvm::ArrayRef<uint32_t> OriginalOrder,
+                              const NodeSet &ForcedAtoms,
+                              const NodeMap<Role> &OriginalRoles,
+                              const NodeMap<SymRef> &OriginalRewritten,
+                              bool AllowProducts, WorkBudget *Budget,
+                              size_t MaxBytes) {
   if (ForcedAtoms.empty())
     return Body;
   AffineResources Resources(Budget, MaxBytes);
@@ -934,16 +953,16 @@ SymRef restoreAffineRelations(
   if (!HasOddInputs && Weighted.empty())
     return finish(Body);
 
-  std::vector<uint32_t> Order;
+  NodeOrder Order;
   if (!affineOrder(Ctx, Body, Order, Resources))
     return Body;
   if (!HasOddInputs)
     return finish(restoreWeightedUses(Ctx, Body, Order, Weighted, Resources));
   if (!Resources.array(Order.size(), 320))
     return Body;
-  llvm::DenseMap<uint32_t, Role> Roles;
+  NodeMap<Role> Roles;
   classify(Ctx, Order, {}, AllowProducts, Roles);
-  llvm::DenseSet<uint32_t> VisibleBitwise;
+  NodeSet VisibleBitwise;
   for (uint32_t Index : Order) {
     if (!Resources.charge(1))
       return Body;
@@ -957,7 +976,7 @@ SymRef restoreAffineRelations(
     }
   }
 
-  llvm::DenseMap<uint32_t, SymRef> Aliases;
+  NodeMap<SymRef> Aliases;
   for (const auto &[Index, Input] : Inputs) {
     auto Pivot = Input.Terms.end();
     for (auto It = Input.Terms.begin(); It != Input.Terms.end(); ++It) {
@@ -1024,8 +1043,8 @@ SymRef restoreAffineRelations(
   // Templates use only the completed original abstraction, never one another.
   // The fixed traversal excludes newly built templates, so shared pivots and
   // dependent relations cannot recursively expand aliases or create cycles.
-  llvm::DenseMap<uint32_t, SymRef> Rewritten;
-  llvm::DenseMap<uint32_t, SymRef> Arithmetic;
+  NodeMap<SymRef> Rewritten;
+  NodeMap<SymRef> Arithmetic;
   for (uint32_t Index : Order) {
     if (!Resources.charge(1))
       return Body;
@@ -1055,6 +1074,23 @@ SymRef restoreAffineRelations(
   return finish(Rewritten.lookup(Body.index()));
 }
 
+template <typename Container>
+void collectReachableInOrder(const SymContext &Ctx, SymRef Root,
+                             Container &Order) {
+  NodeSet Seen;
+  llvm::SmallVector<SymRef, 64> Work{Root};
+  while (!Work.empty()) {
+    SymRef R = Work.pop_back_val();
+    if (!Seen.insert(R.index()).second)
+      continue;
+    Order.push_back(R.index());
+    for (SymRef C : Ctx.operands(R))
+      Work.push_back(C);
+  }
+  // Inline the integer comparisons in this frequently rebuilt node order.
+  std::sort(Order.begin(), Order.end());
+}
+
 } // namespace
 
 bool canMeasureAtRoot(const SymContext &Ctx, SymRef R) {
@@ -1073,27 +1109,24 @@ bool canMeasureAtRoot(const SymContext &Ctx, SymRef R) {
 
 std::vector<uint32_t> reachableInOrder(const SymContext &Ctx, SymRef Root) {
   std::vector<uint32_t> Order;
-  llvm::DenseSet<uint32_t> Seen;
-  llvm::SmallVector<SymRef, 64> Work{Root};
-  while (!Work.empty()) {
-    SymRef R = Work.pop_back_val();
-    if (!Seen.insert(R.index()).second)
-      continue;
-    Order.push_back(R.index());
-    for (SymRef C : Ctx.operands(R))
-      Work.push_back(C);
-  }
-  llvm::sort(Order);
+  collectReachableInOrder(Ctx, Root, Order);
   return Order;
 }
 
-std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
-                                         bool AllowProducts, WorkBudget *Budget,
-                                         size_t MaxBytes,
-                                         bool CoarsenMaskedXors) {
-  std::vector<uint32_t> Order = reachableInOrder(Ctx, Root);
-  llvm::DenseSet<uint32_t> ForcedAtoms;
-  llvm::DenseMap<uint32_t, Role> Roles;
+static std::optional<Abstraction>
+abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
+                  WorkBudget *Budget, size_t MaxBytes, bool CoarsenMaskedXors) {
+  // Without product measurement, a root with multiple nonconstant factors
+  // is always opaque in classify(), regardless of its descendants. The
+  // ordinary classification spends no work budget before that refusal.
+  // Keep the coarser reading's separately charged traversal unchanged.
+  if (!AllowProducts && !CoarsenMaskedXors && Ctx.op(Root) == SymOp::Mul &&
+      Ctx.numOperands(Root) > 1u + unsigned(Ctx.isConst(Ctx.operand(Root, 0))))
+    return std::nullopt;
+  NodeOrder Order;
+  collectReachableInOrder(Ctx, Root, Order);
+  NodeSet ForcedAtoms;
+  NodeMap<Role> Roles;
   if (CoarsenMaskedXors) {
     for (uint32_t Index : Order) {
       if (Budget && !Budget->consume(1))
@@ -1113,7 +1146,7 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
     return std::nullopt;
 
   Abstraction Out;
-  llvm::DenseSet<uint32_t> Reserved;
+  NodeSet Reserved;
   for (uint32_t Index : Order) {
     if (Ctx.isVar(SymRef(Index)))
       Reserved.insert(Index);
@@ -1124,11 +1157,11 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
   }
 
   Placeholders Pool(Ctx, Reserved);
-  llvm::DenseMap<uint32_t, SymRef> Rewritten;
-  llvm::DenseMap<uint32_t, SymRef> HiddenInputs;
+  NodeMap<SymRef> Rewritten;
+  NodeMap<SymRef> HiddenInputs;
   AffineResources WidenResources(Budget, MaxBytes);
   llvm::DenseMap<llvm::APInt, SymRef> MaskInputs;
-  llvm::DenseMap<uint32_t, SymRef> MaskedXorInputs;
+  NodeMap<SymRef> MaskedXorInputs;
   auto Hide = [&](SymRef R) {
     auto It = HiddenInputs.find(R.index());
     if (It != HiddenInputs.end())
@@ -1265,7 +1298,9 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
       continue;
     }
 
-    llvm::ArrayRef<SymRef> Ops = Ctx.operands(R);
+    auto SourceOperands = Ctx.operands(R);
+    llvm::SmallVector<SymRef, 8> Ops(SourceOperands.begin(),
+                                     SourceOperands.end());
     if (Ops.empty()) {
       Rewritten[Index] = R;
       continue;
@@ -1281,6 +1316,8 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
         continue;
       }
 
+      // Hiding a complementary mask can create NOT and grow Ctx's operand
+      // pool. Ops owns this iteration's source references across that growth.
       NewOps.push_back(Hide(C));
     }
 
@@ -1300,6 +1337,47 @@ std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
       restoreAffineRelations(Ctx, Out.IndependentBody, Order, ForcedAtoms,
                              Roles, Rewritten, AllowProducts, Budget, MaxBytes);
   return Out;
+}
+
+std::optional<Abstraction> abstractToMBA(SymContext &Ctx, SymRef Root,
+                                         bool AllowProducts, WorkBudget *Budget,
+                                         size_t MaxBytes,
+                                         bool CoarsenMaskedXors) {
+  const bool Cacheable =
+      Budget && Budget->MemoOwner == &Ctx && Budget->MemoCapacity;
+  const uint64_t Key = (uint64_t(Root.index()) << 2) |
+                       (unsigned(AllowProducts) << 1) |
+                       unsigned(CoarsenMaskedXors);
+  if (Cacheable && Budget->Abstractions) {
+    auto Found = Budget->Abstractions->Entries.find(Key);
+    if (Found != Budget->Abstractions->Entries.end()) {
+      const size_t Count = Found->second.Hidden.size();
+      if (MaxBytes >= 128 && Count <= (MaxBytes - 128) / 64 &&
+          Budget->canConsume(Count + 1)) {
+        Budget->consume(Count + 1);
+        return Found->second;
+      }
+    }
+  }
+  const size_t Start = Budget ? Budget->used() : 0;
+  const size_t Incomplete = Budget ? Budget->IncompleteAbstractions : 0;
+  auto Result = abstractToMBAImpl(Ctx, Root, AllowProducts, Budget, MaxBytes,
+                                  CoarsenMaskedXors);
+  if (!Cacheable || !Result || Budget->exhausted() ||
+      Budget->IncompleteAbstractions != Incomplete ||
+      Budget->used() - Start < limits::kMinCompletedRegionCacheWork)
+    return Result;
+  const size_t Limit = Budget->MemoCapacity * limits::kCompletedMemoEntryBytes;
+  const size_t Used = Budget->Abstractions ? Budget->Abstractions->Bytes : 0;
+  const size_t Bytes = 128 + Result->Hidden.size() * 64;
+  if (Bytes > Limit - Used || !Budget->canConsume(Result->Hidden.size() + 1))
+    return Result;
+  Budget->consume(Result->Hidden.size() + 1);
+  if (!Budget->Abstractions)
+    Budget->Abstractions = std::make_shared<AbstractionMemo>();
+  Budget->Abstractions->Bytes += Bytes;
+  Budget->Abstractions->Entries.try_emplace(Key, *Result);
+  return Result;
 }
 
 } // namespace neverd::symbolic::detail

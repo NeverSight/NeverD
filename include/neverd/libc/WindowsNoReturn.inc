@@ -20,6 +20,13 @@ LIBC_NO_RETURN_SYMBOL("amsg_exit")
 LIBC_NO_RETURN_SYMBOL("invoke_watson")
 LIBC_NO_RETURN_SYMBOL("invalid_parameter_noinfo_noreturn")
 LIBC_NO_RETURN_SYMBOL("std_terminate")
+// UCRT OS-state twins present in Microsoft's ucrt.osmode import libraries.
+// List the verified exports; an arbitrary _o_ prefix is not a no-return proof.
+LIBC_NO_RETURN_SYMBOL("o__exit")
+LIBC_NO_RETURN_SYMBOL("o__invalid_parameter_noinfo_noreturn")
+LIBC_NO_RETURN_SYMBOL("o_abort")
+LIBC_NO_RETURN_SYMBOL("o_exit")
+LIBC_NO_RETURN_SYMBOL("o_terminate")
 // Windows API routines the SDK declares DECLSPEC_NORETURN, as the user mode
 // header libraries do: function discovery reads no header.
 // RtlRestoreContext resumes the context it is given.
@@ -40,6 +47,7 @@ LIBC_NO_RETURN_SYMBOL("RtlRaiseNoncontinuableException")
 // __fastfail, end the process as a copy a build leaves uninlined does.
 LIBC_NO_RETURN_SYMBOL("RtlFailFast")
 LIBC_NO_RETURN_SYMBOL("RtlFatalListEntryError")
+LIBC_NO_RETURN_SYMBOL("fastfail")
 // Windows kernel routines the WDK declares DECLSPEC_NORETURN.  Routines that
 // can return (RtlRaiseException when the exception is continued,
 // PsTerminateSystemThread on failure) are deliberately absent.

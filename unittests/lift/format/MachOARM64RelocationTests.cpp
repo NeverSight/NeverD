@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -523,3 +524,57 @@ TEST(MachOX64Relocation, PCRelativeUsesEndOfFieldAddendAndTailSize) {
 }
 
 } // namespace
+
+TEST(MachOARM64Relocation, AuthenticatedPointerKeepsSigningRecipe) {
+  for (unsigned Key = 0; Key < 4; ++Key)
+    for (bool AddressDiversity : {false, true}) {
+      std::vector<uint8_t> Data(16);
+      const uint64_t Raw = (uint64_t(1) << 63) | (uint64_t(Key) << 49) |
+                           (uint64_t(AddressDiversity) << 48) |
+                           (uint64_t(0x1234) << 32) | uint32_t(-4);
+      writeLE<uint64_t>(Data.data(), Raw);
+      const RawRelocation R{0, 0,    false,
+                            3, true, ARM64_RELOC_AUTHENTICATED_POINTER};
+      auto Bytes = makeObject(CPU_TYPE_ARM64, Data, {R}, {SectionVA + 8});
+      auto Obj = parseObject(Bytes);
+      ASSERT_TRUE(Obj);
+      auto Image = makeImage(Arch::AArch64, Data);
+      auto Error = macho_loader::applyObjectRelocations(*Obj, Image);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      ASSERT_EQ(Image.MachOAuthenticatedPointers.size(), 1);
+      const auto &Auth = Image.MachOAuthenticatedPointers.at(SectionVA);
+      EXPECT_EQ(Auth.Target, SectionVA + 4);
+      EXPECT_EQ(Auth.EncodedValue, Raw);
+      EXPECT_EQ(macho_loader::readMetadataPointerTarget(Image, SectionVA),
+                SectionVA + 4);
+      EXPECT_EQ(Auth.Addend, -4);
+      EXPECT_EQ(Auth.Symbol, "_target0");
+      EXPECT_EQ(Auth.Key, Key);
+      EXPECT_EQ(Auth.Diversity, 0x1234);
+      EXPECT_EQ(Auth.AddressDiversity, AddressDiversity);
+      EXPECT_EQ(readLE<uint64_t>(Image.Segments[0].Data.data()), Raw);
+      EXPECT_TRUE(Image.CodePtrRelocSlots.empty());
+      EXPECT_TRUE(Image.DataPtrRelocSlots.empty());
+    }
+}
+
+TEST(MachOARM64Relocation, AuthenticatedPointerRejectsReservedBitsAndWidth) {
+  for (uint64_t Raw : {uint64_t(0), uint64_t(3) << 62,
+                       (uint64_t(1) << 63) | (uint64_t(1) << 51)}) {
+    std::vector<uint8_t> Data(16);
+    writeLE<uint64_t>(Data.data(), Raw);
+    EXPECT_TRUE(relocationApplicationFails(
+        Arch::AArch64, CPU_TYPE_ARM64, Data,
+        {{0, 0, false, 3, true, ARM64_RELOC_AUTHENTICATED_POINTER}},
+        {SectionVA + 8}));
+  }
+  std::vector<uint8_t> Data(16);
+  writeLE<uint64_t>(Data.data(), uint64_t(1) << 63);
+  for (const RawRelocation R :
+       {RawRelocation{0, 0, false, 2, true, ARM64_RELOC_AUTHENTICATED_POINTER},
+        RawRelocation{0, 0, true, 3, true, ARM64_RELOC_AUTHENTICATED_POINTER},
+        RawRelocation{0, 1, false, 3, false,
+                      ARM64_RELOC_AUTHENTICATED_POINTER}})
+    EXPECT_TRUE(relocationApplicationFails(Arch::AArch64, CPU_TYPE_ARM64, Data,
+                                           {R}, {SectionVA + 8}));
+}

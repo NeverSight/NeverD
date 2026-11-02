@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 32288410e4352dcbe779ee091bfc8728b8d4e783203704b4d3a6d09f0421c96a -->
+<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
 
 [← NeverD 项目](project.md)
 
@@ -26,6 +26,7 @@
 | [HTML 源码配置（英文）](../web-html-profile.md) | 有界 C++ 脚本清单、捕获的本地引用与原始内联源码锚点 |
 | [测试](testing.md) | 测试套件、生成 fixture、Unicorn 往返与增量命令 |
 | [桌面工作台 (英文)](../gui.md) | 经典反汇编器布局、独立工作进程、项目数据库、本地化和 MCP 连接 |
+| [分析镜像节区（英文）](../analysis-sections.md) | 通过 C ABI、工作进程、CLI 和工作台添加已物化的代码与数据；原生视图和项目持久化 |
 | [库识别（英文）](../library-recognition.md) | 基于证据的 STL、ATL/MFC、COM 和 libc 身份、配置与可恢复的 C 源码折叠 |
 | [桌面验收记录 (英文)](../gui-qualification.md) | 已测量的 GUI 证据、打包边界及尚未完成的平台验收 |
 | [解释器源码恢复](interpreter-recovery.md) | 实验性 x64 解释器特化、HighC/LLVMC 输出、执行前提、证据与限制; 嵌套循环证明候选; 显式发现预算和版本化 C API; 精确的原生到 LLVM 证明 API |

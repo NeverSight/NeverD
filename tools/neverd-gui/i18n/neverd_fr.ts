@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
+        <translation>Basculer vers un espace flottant avec désassemblage, pseudocode et sortie</translation>
+    </message>
+    <message>
+        <source>&amp;Focus mode</source>
+        <translation>Mode &amp;focus</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>&amp;Ouvrir...</translation>
     </message>
@@ -112,8 +120,8 @@
         <translation>&amp;Copier</translation>
     </message>
     <message>
-        <source>Copy the selection or current line</source>
-        <translation>Copier la sélection ou la ligne actuelle</translation>
+        <source>Copy the selection or the highlighted word</source>
+        <translation>Copier la sélection ou le mot surligné</translation>
     </message>
     <message>
         <source>Copy &amp;address</source>
@@ -140,16 +148,8 @@
         <translation>Renommer l&apos;adresse actuelle</translation>
     </message>
     <message>
-        <source>Enter &amp;comment...</source>
-        <translation>Saisir un &amp;commentaire...</translation>
-    </message>
-    <message>
         <source>Comment the current address</source>
         <translation>Commenter l&apos;adresse actuelle</translation>
-    </message>
-    <message>
-        <source>Enter re&amp;peatable comment...</source>
-        <translation>Saisir un commentaire &amp;répétable...</translation>
     </message>
     <message>
         <source>Mar&amp;k position...</source>
@@ -342,6 +342,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>Aller à l&apos;occurrence suivante de l&apos;identifiant en surbrillance</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>Verrouiller ou &amp;déverrouiller</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>Garder le mot surligné en surbrillance dans la première couleur libre, ou le déverrouiller</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>Couleur &amp;1</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>Couleur &amp;2</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>Couleur &amp;3</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>Couleur &amp;4</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>Couleur &amp;5</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>Couleur &amp;6</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>Couleur &amp;7</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>Couleur &amp;8</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>Verrouiller le mot surligné dans cette couleur, ou libérer la couleur</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -544,12 +588,12 @@
         <translation>Gérer les connexions MCP et le partage de session</translation>
     </message>
     <message>
-        <source>Ex&amp;tensions</source>
-        <translation>Ex&amp;tensions</translation>
+        <source>Analysis queries</source>
+        <translation>Requêtes d’analyse</translation>
     </message>
     <message>
-        <source>Manage declarative extensions</source>
-        <translation>Gérer les extensions déclaratives</translation>
+        <source>Run built-in or imported analysis queries</source>
+        <translation>Exécuter des requêtes d’analyse intégrées ou importées</translation>
     </message>
     <message>
         <source>&amp;Undo history</source>
@@ -1103,6 +1147,178 @@
         <source>Static register value...</source>
         <translation>Valeur statique du registre...</translation>
     </message>
+    <message>
+        <source>Compare &amp;binaries…</source>
+        <translation>Compa&amp;rer des binaires…</translation>
+    </message>
+    <message>
+        <source>Compare two binaries, inspect changes and review function correspondence</source>
+        <translation>Comparer deux binaires, inspecter les modifications et examiner les correspondances de fonctions</translation>
+    </message>
+    <message>
+        <source>Inspect x87 support and requirements</source>
+        <translation>Examiner la prise en charge de x87 et ses exigences</translation>
+    </message>
+    <message>
+        <source>x87 &amp;support…</source>
+        <translation>Prise en &amp;charge de x87…</translation>
+    </message>
+    <message>
+        <source>Unwind information…</source>
+        <translation>Informations de déroulement de pile…</translation>
+    </message>
+    <message>
+        <source>Inspect unwind metadata at the selected instruction</source>
+        <translation>Examiner les métadonnées de déroulement de pile à l’instruction sélectionnée</translation>
+    </message>
+    <message>
+        <source>Copy or save the selected bytes</source>
+        <translation>Copier ou enregistrer les octets sélectionnés</translation>
+    </message>
+    <message>
+        <source>Export data...</source>
+        <translation>Exporter les données...</translation>
+    </message>
+    <message>
+        <source>Always branch</source>
+        <translation>Toujours brancher</translation>
+    </message>
+    <message>
+        <source>Assemble…</source>
+        <translation>Assembler…</translation>
+    </message>
+    <message>
+        <source>Change a uniquely encoded immediate operand</source>
+        <translation>Modifier un opérande immédiat encodé de façon unique</translation>
+    </message>
+    <message>
+        <source>Change bytes…</source>
+        <translation>Modifier les octets…</translation>
+    </message>
+    <message>
+        <source>Change immediate…</source>
+        <translation>Modifier l’immédiat…</translation>
+    </message>
+    <message>
+        <source>Compile a replacement function into a new binary</source>
+        <translation>Compiler une fonction de remplacement dans un nouveau binaire</translation>
+    </message>
+    <message>
+        <source>Edit an instruction with a live byte preview</source>
+        <translation>Modifier une instruction avec aperçu des octets en direct</translation>
+    </message>
+    <message>
+        <source>Edit the bytes at the current address</source>
+        <translation>Modifier les octets à l’adresse courante</translation>
+    </message>
+    <message>
+        <source>Fill a whole instruction range with NOPs</source>
+        <translation>Remplir une plage d’instructions entières avec des NOP</translation>
+    </message>
+    <message>
+        <source>Fill selection with NOPs</source>
+        <translation>Remplir la sélection avec des NOP</translation>
+    </message>
+    <message>
+        <source>Inspect and selectively revert byte patches</source>
+        <translation>Examiner et annuler sélectivement les modifications d’octets</translation>
+    </message>
+    <message>
+        <source>Invert condition</source>
+        <translation>Inverser la condition</translation>
+    </message>
+    <message>
+        <source>NOP instruction</source>
+        <translation>Remplacer l’instruction par des NOP</translation>
+    </message>
+    <message>
+        <source>Never branch</source>
+        <translation>Ne jamais brancher</translation>
+    </message>
+    <message>
+        <source>Open the patch menu</source>
+        <translation>Ouvrir le menu de modification</translation>
+    </message>
+    <message>
+        <source>Patch</source>
+        <translation>Modifier le binaire</translation>
+    </message>
+    <message>
+        <source>Patched binary…</source>
+        <translation>Binaire modifié…</translation>
+    </message>
+    <message>
+        <source>Patched bytes</source>
+        <translation>Octets modifiés</translation>
+    </message>
+    <message>
+        <source>Replace the call with NOPs</source>
+        <translation>Remplacer l’appel par des NOP</translation>
+    </message>
+    <message>
+        <source>Replace the call with a return-register assignment</source>
+        <translation>Remplacer l’appel par une affectation du registre de retour</translation>
+    </message>
+    <message>
+        <source>Replace the conditional branch with NOPs</source>
+        <translation>Remplacer le branchement conditionnel par des NOP</translation>
+    </message>
+    <message>
+        <source>Replace the current instruction with NOPs</source>
+        <translation>Remplacer l’instruction courante par des NOP</translation>
+    </message>
+    <message>
+        <source>Replay all byte patches into a new binary</source>
+        <translation>Rejouer toutes les modifications d’octets dans un nouveau binaire</translation>
+    </message>
+    <message>
+        <source>Restore original bytes</source>
+        <translation>Restaurer les octets d’origine</translation>
+    </message>
+    <message>
+        <source>Restore the input bytes for this patch</source>
+        <translation>Restaurer les octets d’entrée de cette modification</translation>
+    </message>
+    <message>
+        <source>Reverse the conditional branch</source>
+        <translation>Inverser le branchement conditionnel</translation>
+    </message>
+    <message>
+        <source>Rewrite function in C…</source>
+        <translation>Réécrire la fonction en C…</translation>
+    </message>
+    <message>
+        <source>Skip call</source>
+        <translation>Ignorer l’appel</translation>
+    </message>
+    <message>
+        <source>Skip call and return value…</source>
+        <translation>Ignorer l’appel et renvoyer une valeur…</translation>
+    </message>
+    <message>
+        <source>Take the conditional branch unconditionally</source>
+        <translation>Prendre le branchement conditionnel sans condition</translation>
+    </message>
+    <message>
+        <source>Trace functions and inspect conflicting evidence across saved comparisons</source>
+        <translation>Suivre les fonctions et examiner les preuves contradictoires entre comparaisons enregistrées</translation>
+    </message>
+    <message>
+        <source>Version comparison &amp;graph…</source>
+        <translation>Graphe de comparaison des &amp;versions…</translation>
+    </message>
+    <message>
+        <source>Add analysis section...</source>
+        <translation>Ajouter une section d&apos;analyse...</translation>
+    </message>
+    <message>
+        <source>Map new code or data into this analysis</source>
+        <translation>Mapper du nouveau code ou de nouvelles données dans cette analyse</translation>
+    </message>
+    <message>
+        <source>Enter &amp;comment...</source>
+        <translation>Saisir un &amp;commentaire...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1237,6 +1453,18 @@
     <message>
         <source>Disassembly</source>
         <translation>Désassemblage</translation>
+    </message>
+    <message>
+        <source>Action</source>
+        <translation>Action</translation>
+    </message>
+    <message>
+        <source>Original bytes</source>
+        <translation>Octets d’origine</translation>
+    </message>
+    <message>
+        <source>Patched bytes</source>
+        <translation>Octets modifiés</translation>
     </message>
 </context>
 <context>
@@ -1428,6 +1656,10 @@
         <translation>&amp;Recherche</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>&amp;Verrouiller la surbrillance</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>Affic&amp;hage</translation>
     </message>
@@ -1478,6 +1710,10 @@
     <message>
         <source>Operand &amp;type</source>
         <translation>&amp;Type d&apos;opérande</translation>
+    </message>
+    <message>
+        <source>Patch</source>
+        <translation>Modifier le binaire</translation>
     </message>
 </context>
 <context>
@@ -1534,24 +1770,8 @@
         <translation>%1 n&apos;est pas une base de données NeverD.</translation>
     </message>
     <message>
-        <source>%1 does not exist.</source>
-        <translation>%1 n&apos;existe pas.</translation>
-    </message>
-    <message>
-        <source>%1 uses database format %2, which this NeverD cannot read.</source>
-        <translation>%1 utilise le format de base de données %2, que cette version de NeverD ne peut pas lire.</translation>
-    </message>
-    <message>
-        <source>%1 names an invalid input file.</source>
-        <translation>%1 désigne un fichier d&apos;entrée invalide.</translation>
-    </message>
-    <message>
         <source>Cannot write %1: %2</source>
         <translation>Impossible d&apos;écrire %1 : %2</translation>
-    </message>
-    <message>
-        <source>The input stored in %1 is damaged.</source>
-        <translation>Le fichier d&apos;entrée stocké dans %1 est endommagé.</translation>
     </message>
     <message>
         <source>Cannot write %1</source>
@@ -1568,6 +1788,10 @@
     <message>
         <source>The database changed while recovered edits are pending. Preserve the working copy before reopening.</source>
         <translation>La base de données a changé alors que des modifications récupérées sont en attente. Conservez la copie de travail avant de la rouvrir.</translation>
+    </message>
+    <message>
+        <source>The input filename cannot be stored in a portable project.</source>
+        <translation>Ce nom de fichier ne peut pas être enregistré dans un projet portable.</translation>
     </message>
 </context>
 <context>
@@ -1654,6 +1878,18 @@
 <context>
     <name>neverd::gui::ChooserModel</name>
     <message>
+        <source>The table changed before the address was selected.</source>
+        <translation>La table a changé avant la sélection de l’adresse.</translation>
+    </message>
+    <message>
+        <source>Another address selection took this one's place.</source>
+        <translation>Une autre sélection d’adresse a remplacé celle-ci.</translation>
+    </message>
+    <message>
+        <source>The worker did not locate the requested address.</source>
+        <translation>Le processus de travail n’a pas trouvé l’adresse demandée.</translation>
+    </message>
+    <message>
         <source>References are still being indexed…</source>
         <translation>Les références sont encore en cours d&apos;indexation…</translation>
     </message>
@@ -1664,6 +1900,18 @@
     <message>
         <source>Down</source>
         <translation>Bas</translation>
+    </message>
+    <message>
+        <source>Functions changed while refreshing the table.</source>
+        <translation>Les fonctions ont changé pendant l’actualisation du tableau.</translation>
+    </message>
+    <message>
+        <source>Selected functions exceed the table page budget.</source>
+        <translation>Les fonctions sélectionnées dépassent la limite de pages du tableau.</translation>
+    </message>
+    <message>
+        <source>Too many selection changes while refreshing the table.</source>
+        <translation>Trop de changements de sélection pendant l’actualisation du tableau.</translation>
     </message>
 </context>
 <context>
@@ -1771,12 +2019,12 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>Les noms de variables enregistrés correspondent à un autre rendu du code source</translation>
     </message>
     <message>
-        <source>Expand block (Ctrl+Shift+])</source>
-        <translation>Déplier le bloc (Ctrl+Shift+])</translation>
+        <source>Expand block (%1)</source>
+        <translation>Déplier le bloc (%1)</translation>
     </message>
     <message>
-        <source>Collapse block (Ctrl+Shift+[)</source>
-        <translation>Replier le bloc (Ctrl+Shift+[)</translation>
+        <source>Collapse block (%1)</source>
+        <translation>Replier le bloc (%1)</translation>
     </message>
     <message>
         <source>Symbolic simplification</source>
@@ -1797,6 +2045,27 @@ Double-cliquez pour aller à la déclaration.</translation>
     <message>
         <source>Saved call-site declaration needs review: </source>
         <translation>La déclaration enregistrée du site d’appel doit être vérifiée : </translation>
+    </message>
+    <message>
+        <source>Could not refresh source: %1</source>
+        <translation>Impossible d’actualiser le code source : %1</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>Interpréteur reconstitué · %1 blocs</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>Aucun code source complet n’a été produit</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>Reconstitution du flux de contrôle de l’interpréteur…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>Reconstitution arrêtée : %1</translation>
     </message>
 </context>
 <context>
@@ -1864,6 +2133,23 @@ Double-cliquez pour aller à la déclaration.</translation>
     <message>
         <source>Cancel transformation</source>
         <translation>Annuler la transformation</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>Options de reconstitution de l’interpréteur…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>Rapport de reconstitution de l’interpréteur…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>Reconstituer la fonction interprétée</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>Revenir au code source ordinaire</translation>
     </message>
 </context>
 <context>
@@ -2054,32 +2340,36 @@ Double-cliquez pour aller à la déclaration.</translation>
 <context>
     <name>neverd::gui::ExtensionsView</name>
     <message>
-        <source>Import manifest…</source>
-        <translation>Importer un manifeste…</translation>
+        <source>Import queries…</source>
+        <translation>Importer des requêtes…</translation>
     </message>
     <message>
         <source>Run</source>
         <translation>Exécuter</translation>
     </message>
     <message>
-        <source>Unload</source>
-        <translation>Décharger</translation>
+        <source>Remove group</source>
+        <translation>Retirer le groupe</translation>
     </message>
     <message>
-        <source>Import a declarative manifest to add analysis commands and views.</source>
-        <translation>Importez un manifeste déclaratif pour ajouter des commandes et des vues d&apos;analyse.</translation>
+        <source>Run built-in analysis queries or import query definitions from a JSON file.</source>
+        <translation>Exécuter les requêtes d’analyse intégrées ou importer des définitions de requêtes depuis un fichier JSON.</translation>
     </message>
     <message>
-        <source>Select an extension command to inspect its result.</source>
-        <translation>Sélectionnez une commande d&apos;extension pour consulter son résultat.</translation>
+        <source>Select a query and choose Run to view its result.</source>
+        <translation>Sélectionnez une requête et cliquez sur Exécuter pour afficher son résultat.</translation>
     </message>
     <message>
-        <source>Import extension manifest</source>
-        <translation>Importer un manifeste d&apos;extension</translation>
+        <source>Import analysis queries</source>
+        <translation>Importer des requêtes d’analyse</translation>
     </message>
     <message>
-        <source>Manifests (*.json)</source>
-        <translation>Manifestes (*.json)</translation>
+        <source>Query definitions (*.json)</source>
+        <translation>Définitions de requêtes (*.json)</translation>
+    </message>
+    <message>
+        <source>Remove all queries in the selected group.</source>
+        <translation>Retirer toutes les requêtes du groupe sélectionné.</translation>
     </message>
 </context>
 <context>
@@ -2087,6 +2377,14 @@ Double-cliquez pour aller à la déclaration.</translation>
     <message>
         <source>Laying out graph…</source>
         <translation>Disposition du graphe en cours…</translation>
+    </message>
+    <message>
+        <source>From %1</source>
+        <translation>Depuis %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>Vers %1</translation>
     </message>
 </context>
 <context>
@@ -2129,6 +2427,10 @@ Double-cliquez pour aller à la déclaration.</translation>
 <context>
     <name>neverd::gui::MainWindow</name>
     <message>
+        <source>Could not restore the layout before focus mode.</source>
+        <translation>Impossible de restaurer la disposition précédant le mode focus.</translation>
+    </message>
+    <message>
         <source>Reload the input file</source>
         <translation>Recharger le fichier d&apos;entrée</translation>
     </message>
@@ -2137,8 +2439,8 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>Bande de navigation</translation>
     </message>
     <message>
-        <source>Extensions</source>
-        <translation>Extensions</translation>
+        <source>Analysis queries</source>
+        <translation>Requêtes d’analyse</translation>
     </message>
     <message>
         <source>Hex View-1</source>
@@ -2185,8 +2487,8 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>Charger un pack de signatures</translation>
     </message>
     <message>
-        <source>Signature packs (*.pat *.json);;All files (*)</source>
-        <translation>Packs de signatures (*.pat *.json);;Tous les fichiers (*)</translation>
+        <source>Signature packs (*.pat *.npat *.json);;All files (*)</source>
+        <translation>Packs de signatures (*.pat *.npat *.json);;Tous les fichiers (*)</translation>
     </message>
     <message>
         <source>Signature directory</source>
@@ -2201,32 +2503,8 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>Description :</translation>
     </message>
     <message>
-        <source>Find in view</source>
-        <translation>Rechercher dans la vue</translation>
-    </message>
-    <message>
-        <source>Text:</source>
-        <translation>Texte :</translation>
-    </message>
-    <message>
-        <source>&apos;%1&apos; was not found among the loaded lines</source>
-        <translation>« %1 » est introuvable parmi les lignes chargées</translation>
-    </message>
-    <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>Historique : %1 entrées, position %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU : inactif</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU : occupé %1 %</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU : occupé</translation>
     </message>
     <message>
         <source>Down</source>
@@ -2942,6 +3220,164 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <source>Another link took this one's place.</source>
         <translation>Un autre lien a pris la place de celui-ci.</translation>
     </message>
+    <message>
+        <source>List commands take priority while their list has focus.</source>
+        <translation>Les commandes de la liste sont prioritaires lorsqu’elle a le focus.</translation>
+    </message>
+    <message>
+        <source>Filter by action, shortcut or scope</source>
+        <translation>Filtrer par action, raccourci ou portée</translation>
+    </message>
+    <message>
+        <source>Scope</source>
+        <translation>Portée</translation>
+    </message>
+    <message>
+        <source>Unassigned</source>
+        <translation>Non attribué</translation>
+    </message>
+    <message>
+        <source>Analysis views</source>
+        <translation>Vues d’analyse</translation>
+    </message>
+    <message>
+        <source>Workbench</source>
+        <translation>Espace de travail</translation>
+    </message>
+    <message>
+        <source>Quick filter</source>
+        <translation>Filtre rapide</translation>
+    </message>
+    <message>
+        <source>Lists</source>
+        <translation>Listes</translation>
+    </message>
+    <message>
+        <source>Add types…</source>
+        <translation>Ajouter des types…</translation>
+    </message>
+    <message>
+        <source>Edit type…</source>
+        <translation>Modifier le type…</translation>
+    </message>
+    <message>
+        <source>Delete types…</source>
+        <translation>Supprimer des types…</translation>
+    </message>
+    <message>
+        <source>Apply byte patch</source>
+        <translation>Appliquer la modification d’octets</translation>
+    </message>
+    <message>
+        <source>Before:
+%1
+After:
+%2</source>
+        <translation>Avant :
+%1
+Après :
+%2</translation>
+    </message>
+    <message>
+        <source>Checking available patches…</source>
+        <translation>Vérification des modifications disponibles…</translation>
+    </message>
+    <message>
+        <source>Export unsigned binary</source>
+        <translation>Exporter un binaire non signé</translation>
+    </message>
+    <message>
+        <source>Invalid patch value.</source>
+        <translation>Valeur de modification incorrecte.</translation>
+    </message>
+    <message>
+        <source>Original: %1</source>
+        <translation>Origine : %1</translation>
+    </message>
+    <message>
+        <source>Patch</source>
+        <translation>Modifier le binaire</translation>
+    </message>
+    <message>
+        <source>Patch value</source>
+        <translation>Valeur de modification</translation>
+    </message>
+    <message>
+        <source>Patched binary written to %1</source>
+        <translation>Binaire modifié écrit dans %1</translation>
+    </message>
+    <message>
+        <source>Patched: %1</source>
+        <translation>Modifié : %1</translation>
+    </message>
+    <message>
+        <source>Produce patched binary</source>
+        <translation>Produire un binaire modifié</translation>
+    </message>
+    <message>
+        <source>Remove the signature metadata and export an unsigned copy?</source>
+        <translation>Supprimer les métadonnées de signature et exporter une copie non signée ?</translation>
+    </message>
+    <message>
+        <source>Restore selected original bytes</source>
+        <translation>Restaurer les octets d’origine sélectionnés</translation>
+    </message>
+    <message>
+        <source>Unsigned patched binary written to %1</source>
+        <translation>Binaire modifié non signé écrit dans %1</translation>
+    </message>
+    <message>
+        <source>Unsigned value (decimal or 0x hexadecimal):</source>
+        <translation>Valeur non signée (décimale ou hexadécimale 0x) :</translation>
+    </message>
+    <message>
+        <source>Add analysis section</source>
+        <translation>Ajouter une section d&apos;analyse</translation>
+    </message>
+    <message>
+        <source>Binary bytes:</source>
+        <translation>Octets binaires :</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Parcourir…</translation>
+    </message>
+    <message>
+        <source>Define a function covering these bytes</source>
+        <translation>Définir une fonction couvrant ces octets</translation>
+    </message>
+    <message>
+        <source>Function name:</source>
+        <translation>Nom de la fonction :</translation>
+    </message>
+    <message>
+        <source>Map a binary file at a virtual address in the current image. Save the project to keep it. The input binary stays unchanged.</source>
+        <translation>Mapper un fichier binaire à une adresse virtuelle de l&apos;image actuelle. Enregistrez le projet pour le conserver. Le binaire d&apos;entrée reste inchangé.</translation>
+    </message>
+    <message>
+        <source>Permissions:</source>
+        <translation>Droits d&apos;accès :</translation>
+    </message>
+    <message>
+        <source>Section name:</source>
+        <translation>Nom de la section :</translation>
+    </message>
+    <message>
+        <source>Select binary bytes</source>
+        <translation>Sélectionner les octets binaires</translation>
+    </message>
+    <message>
+        <source>The project changed. Open this dialog again.</source>
+        <translation>Le projet a changé. Rouvrez cette boîte de dialogue.</translation>
+    </message>
+    <message>
+        <source>Virtual address:</source>
+        <translation>Adresse virtuelle :</translation>
+    </message>
+    <message>
+        <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
+        <translation>Choisissez un fichier de 1 octet à %1, une adresse hexadécimale et un nom de section. Une fonction nécessite un nom et des droits d&apos;exécution.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3136,10 +3572,6 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <translation>Fichier d&apos;entrée rechargé</translation>
     </message>
     <message>
-        <source>Comments and history saved</source>
-        <translation>Commentaires et historique enregistrés</translation>
-    </message>
-    <message>
         <source>The edit was prepared for a session that is no longer open and was not applied.</source>
         <translation>La modification a été préparée pour une session qui n&apos;est plus ouverte et n&apos;a pas été appliquée.</translation>
     </message>
@@ -3297,6 +3729,38 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
             <numerusform>%n opérande affiché comme membre de %1</numerusform>
             <numerusform>%n opérandes affichés comme membres de %1</numerusform>
         </translation>
+    </message>
+    <message>
+        <source>Applied patch at %1 (bytes: %2): %3 → %4</source>
+        <translation>Correctif appliqué à %1 (%2 octets) : %3 → %4</translation>
+    </message>
+    <message>
+        <source>Instructions: %1 → %2</source>
+        <translation>Instructions : %1 → %2</translation>
+    </message>
+    <message>
+        <source>Restored original bytes at %1 (%2 ranges).</source>
+        <translation>Octets d’origine restaurés à %1 (%2 plages).</translation>
+    </message>
+    <message>
+        <source>Patch at %1 made no changes.</source>
+        <translation>Le correctif à %1 n’a rien modifié.</translation>
+    </message>
+    <message>
+        <source>Undid edit at %1.</source>
+        <translation>Modification à %1 annulée.</translation>
+    </message>
+    <message>
+        <source>Redid edit at %1.</source>
+        <translation>Modification à %1 rétablie.</translation>
+    </message>
+    <message>
+        <source>Rewritten function at %1 saved to %2</source>
+        <translation>Fonction réécrite à %1 enregistrée dans %2</translation>
+    </message>
+    <message>
+        <source>Project changes saved</source>
+        <translation>Modifications du projet enregistrées</translation>
     </message>
 </context>
 <context>
@@ -3706,6 +4170,96 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
     <message>
         <source>Cannot save the symbol file to %1: %2</source>
         <translation>Impossible d&apos;enregistrer le fichier de symboles dans %1 : %2</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::FindInViewDialog</name>
+    <message>
+        <source>Find in view</source>
+        <translation>Rechercher dans la vue</translation>
+    </message>
+    <message>
+        <source>Find text</source>
+        <translation>Texte à rechercher</translation>
+    </message>
+    <message>
+        <source>Match case</source>
+        <translation>Respecter la casse</translation>
+    </message>
+    <message>
+        <source>Whole words</source>
+        <translation>Mots entiers</translation>
+    </message>
+    <message>
+        <source>Wrap around</source>
+        <translation>Reprendre au début</translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>Précédent</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>Suivant</translation>
+    </message>
+    <message>
+        <source>Previous match (%1 or %2)</source>
+        <translation>Correspondance précédente (%1 ou %2)</translation>
+    </message>
+    <message>
+        <source>Next match (%1 or %2)</source>
+        <translation>Correspondance suivante (%1 ou %2)</translation>
+    </message>
+    <message>
+        <source>&amp;Text:</source>
+        <translation>&amp;Texte :</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Fermer</translation>
+    </message>
+    <message>
+        <source>%1: current function, including folded code</source>
+        <translation>%1 : fonction actuelle, y compris le code replié</translation>
+    </message>
+    <message>
+        <source>Disassembly: loaded lines, including visible addresses</source>
+        <translation>Désassemblage : lignes chargées, y compris les adresses visibles</translation>
+    </message>
+    <message>
+        <source>End of search range</source>
+        <translation>Fin de la plage de recherche</translation>
+    </message>
+    <message>
+        <source>Start of search range</source>
+        <translation>Début de la plage de recherche</translation>
+    </message>
+    <message>
+        <source>Waiting for source…</source>
+        <translation>En attente du code source…</translation>
+    </message>
+    <message>
+        <source>No searchable text available</source>
+        <translation>Aucun texte disponible pour la recherche</translation>
+    </message>
+    <message>
+        <source>Enter text to find</source>
+        <translation>Saisissez le texte à rechercher</translation>
+    </message>
+    <message>
+        <source>No matches</source>
+        <translation>Aucune correspondance</translation>
+    </message>
+    <message>
+        <source>%1 of %2</source>
+        <translation>%1 sur %2</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n matches</source>
+        <translation>
+            <numerusform>%n correspondance</numerusform>
+            <numerusform>%n correspondances</numerusform>
+        </translation>
     </message>
 </context>
 <context>
@@ -4485,12 +5039,12 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         </translation>
     </message>
     <message>
-        <source>Ctrl+click to open</source>
-        <translation>Ctrl+clic pour ouvrir</translation>
+        <source>%1click to open</source>
+        <translation>%1clic pour ouvrir</translation>
     </message>
     <message>
-        <source>Double-click or Ctrl+click to open %1</source>
-        <translation>Double-cliquez ou Ctrl+clic pour ouvrir %1</translation>
+        <source>Double-click or %2click to open %1</source>
+        <translation>Double-cliquez ou %2clic pour ouvrir %1</translation>
     </message>
     <message>
         <source>bits %1 of the unit at %2</source>
@@ -4535,8 +5089,8 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <translation>Déclarer</translation>
     </message>
     <message>
-        <source>Read the declarations (Ctrl+Enter)</source>
-        <translation>Lire les déclarations (Ctrl+Entrée)</translation>
+        <source>Read the declarations (%1)</source>
+        <translation>Lire les déclarations (%1)</translation>
     </message>
     <message>
         <source>Line %1, column %2: %3</source>
@@ -4676,8 +5230,8 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
         <translation>L&apos;opérande garde son nombre.</translation>
     </message>
     <message>
-        <source>The program has no structures or unions. Declare them in Local types (Shift+F1).</source>
-        <translation>Le programme n&apos;a ni structure ni union. Déclarez-les dans Types locaux (Shift+F1).</translation>
+        <source>The program has no structures or unions. Declare them in Local types (%1).</source>
+        <translation>Le programme n&apos;a ni structure ni union. Déclarez-les dans Types locaux (%1).</translation>
     </message>
     <message>
         <source>The register points %1 bytes into %2, at %3: the accesses before it read the record&apos;s earlier members, as CONTAINING_RECORD undoes.</source>
@@ -5324,6 +5878,4366 @@ Charger quand même ses noms ? Des noms placés aux mauvaises adresses induisent
     <message>
         <source>No running NeverD has the link's program open, and no recently opened file is it; name the file too: neverd-gui FILE LINK</source>
         <translation>Aucun NeverD en cours d'exécution n'a ouvert le programme du lien, et aucun fichier récemment ouvert ne l'est ; indiquez aussi le fichier : neverd-gui FILE LINK</translation>
+    </message>
+</context>
+<context>
+    <name>ComparisonDialog</name>
+    <message>
+        <source>Applying debug symbols</source>
+        <translation>Application des symboles de débogage</translation>
+    </message>
+    <message>
+        <source>Checking ambiguous matches</source>
+        <translation>Vérification des correspondances ambiguës</translation>
+    </message>
+    <message>
+        <source>Checking file identity</source>
+        <translation>Vérification de l&apos;identité du fichier</translation>
+    </message>
+    <message>
+        <source>Comparing binaries</source>
+        <translation>Comparaison des binaires</translation>
+    </message>
+    <message>
+        <source>Comparing function context</source>
+        <translation>Comparaison du contexte des fonctions</translation>
+    </message>
+    <message>
+        <source>Comparing function features</source>
+        <translation>Comparaison des caractéristiques des fonctions</translation>
+    </message>
+    <message>
+        <source>Discovering functions</source>
+        <translation>Découverte des fonctions</translation>
+    </message>
+    <message>
+        <source>Finding function entries</source>
+        <translation>Recherche des entrées de fonctions</translation>
+    </message>
+    <message>
+        <source>Finding similar functions</source>
+        <translation>Recherche de fonctions similaires</translation>
+    </message>
+    <message>
+        <source>Identifying file format</source>
+        <translation>Identification du format de fichier</translation>
+    </message>
+    <message>
+        <source>Input ready</source>
+        <translation>Entrée prête</translation>
+    </message>
+    <message>
+        <source>Loading input</source>
+        <translation>Chargement de l&apos;entrée</translation>
+    </message>
+    <message>
+        <source>Matching exact features</source>
+        <translation>Appariement des caractéristiques exactes</translation>
+    </message>
+    <message>
+        <source>Measuring function changes</source>
+        <translation>Mesure des modifications de fonctions</translation>
+    </message>
+    <message>
+        <source>Preparing image metadata</source>
+        <translation>Préparation des métadonnées de l&apos;image</translation>
+    </message>
+    <message>
+        <source>Preparing input bytes</source>
+        <translation>Préparation des octets d&apos;entrée</translation>
+    </message>
+    <message>
+        <source>Primary: %1</source>
+        <translation>Principal : %1</translation>
+    </message>
+    <message>
+        <source>Reading debug symbols</source>
+        <translation>Lecture des symboles de débogage</translation>
+    </message>
+    <message>
+        <source>Reading file</source>
+        <translation>Lecture du fichier</translation>
+    </message>
+    <message>
+        <source>Reading format metadata</source>
+        <translation>Lecture des métadonnées du format</translation>
+    </message>
+    <message>
+        <source>Reading instructions</source>
+        <translation>Lecture des instructions</translation>
+    </message>
+    <message>
+        <source>Resolving calling convention</source>
+        <translation>Résolution de la convention d&apos;appel</translation>
+    </message>
+    <message>
+        <source>Secondary: %1</source>
+        <translation>Secondaire : %1</translation>
+    </message>
+    <message>
+        <source>Opening saved project</source>
+        <translation>Ouverture du projet enregistré</translation>
+    </message>
+    <message>
+        <source>Reading saved project settings</source>
+        <translation>Lecture des paramètres du projet enregistré</translation>
+    </message>
+    <message>
+        <source>Unpacking and checking saved input</source>
+        <translation>Décompression et vérification des données enregistrées</translation>
+    </message>
+    <message>
+        <source>Applying saved analysis</source>
+        <translation>Application de l’analyse enregistrée</translation>
+    </message>
+    <message>
+      <source>Checking saved evidence</source>
+      <translation>Vérification des éléments enregistrés</translation>
+    </message>
+    <message>
+      <source>Reading saved comparison</source>
+      <translation>Lecture de la comparaison enregistrée</translation>
+    </message>
+    <message>
+      <source>Checking saved comparison</source>
+      <translation>Vérification de la comparaison enregistrée</translation>
+    </message>
+    <message>
+      <source>Recomputing saved measurements</source>
+      <translation>Nouveau calcul des mesures enregistrées</translation>
+    </message>
+    <message>
+      <source>Restoring comparison</source>
+      <translation>Restauration de la comparaison</translation>
+    </message>
+    <message>
+        <source>Applying comparison edit</source>
+        <translation>Application de la modification de comparaison</translation>
+    </message>
+    <message>
+        <source>Preparing comparison edit</source>
+        <translation>Préparation de la modification de comparaison</translation>
+    </message>
+    <message>
+        <source>Updating affected functions</source>
+        <translation>Mise à jour des fonctions concernées</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonChangesDialog</name>
+    <message>
+        <source>  %1 bytes · %2</source>
+        <translation>  %1 octets · %2</translation>
+    </message>
+    <message>
+        <source>%1 slice · %2 operations · %3 · gaps: %4</source>
+        <translation>Tranche %1 · %2 opérations · %3 · lacunes : %4</translation>
+    </message>
+    <message>
+        <source>%1 ↔ %2 · %3 · %4 matching / %5 retained observations
+Native rows %6 / %7; coverage %8; ambiguous associations %9. SSA: primary %10; secondary %11.
+Boundaries: primary %12; secondary %13. Reference identities: %14.</source>
+        <translation>%1 ↔ %2 · %3 · %4 observations correspondantes / %5 conservées
+Lignes natives %6 / %7 ; couverture %8 ; associations ambiguës %9. SSA : principale %10 ; secondaire %11.
+Limites : principale %12 ; secondaire %13. Identités des références : %14.</translation>
+    </message>
+    <message>
+        <source>; indexing incomplete</source>
+        <translation>; indexation incomplète</translation>
+    </message>
+    <message>
+        <source>All local changes</source>
+        <translation>Toutes les modifications locales</translation>
+    </message>
+    <message>
+        <source>Association: %1; native row: %2 (%3)</source>
+        <translation>Association : %1 ; ligne native : %2 (%3)</translation>
+    </message>
+    <message>
+        <source>Call argument dependencies</source>
+        <translation>Dépendances des arguments d&apos;appel</translation>
+    </message>
+    <message>
+        <source>Call paths…</source>
+        <translation>Chemins d&apos;appel…</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Change context filter</source>
+        <translation>Filtre du contexte de modification</translation>
+    </message>
+    <message>
+        <source>Change review — NeverD</source>
+        <translation>Examen des modifications — NeverD</translation>
+    </message>
+    <message>
+        <source>Changes: %1</source>
+        <translation>Modifications : %1</translation>
+    </message>
+    <message>
+        <source>Choose an accepted function pair to review its changes.</source>
+        <translation>Choisissez une paire de fonctions acceptée pour examiner ses modifications.</translation>
+    </message>
+    <message>
+        <source>Comparison changed. Choose a function pair for a fresh review.</source>
+        <translation>La comparaison a changé. Choisissez une paire de fonctions pour un nouvel examen.</translation>
+    </message>
+    <message>
+        <source>Context: %1</source>
+        <translation>Contexte : %1</translation>
+    </message>
+    <message>
+        <source>Dependency slice</source>
+        <translation>Tranche de dépendances</translation>
+    </message>
+    <message>
+        <source>Evidence input</source>
+        <translation>Entrée des éléments probants</translation>
+    </message>
+    <message>
+        <source>Inspect function</source>
+        <translation>Inspecter la fonction</translation>
+    </message>
+    <message>
+        <source>Memory write dependencies</source>
+        <translation>Dépendances des écritures mémoire</translation>
+    </message>
+    <message>
+        <source>Native evidence only; no unique SSA association.</source>
+        <translation>Éléments probants natifs uniquement ; aucune association SSA unique.</translation>
+    </message>
+    <message>
+        <source>No original instruction on this side</source>
+        <translation>Aucune instruction d&apos;origine de ce côté</translation>
+    </message>
+    <message>
+        <source>Operation gaps: %1</source>
+        <translation>Lacunes des opérations : %1</translation>
+    </message>
+    <message>
+        <source>Original evidence</source>
+        <translation>Éléments probants d&apos;origine</translation>
+    </message>
+    <message>
+        <source>Predicate dependencies</source>
+        <translation>Dépendances du prédicat</translation>
+    </message>
+    <message>
+        <source>Primary input</source>
+        <translation>Entrée principale</translation>
+    </message>
+    <message>
+        <source>Priority orders review leads; it is not severity or confidence. Context is an observed dependency. Local operands and unique direct synthetic operands are compared; deeper expressions, security effects and fix presence remain unassessed.</source>
+        <translation>La priorité ordonne les pistes d&apos;examen ; elle ne représente ni la gravité ni la confiance. Le contexte est une dépendance observée. Les opérandes locaux et les opérandes synthétiques directs uniques sont comparés ; les expressions plus profondes, les effets sur la sécurité et la présence du correctif restent à évaluer.</translation>
+    </message>
+    <message>
+        <source>Refresh review</source>
+        <translation>Actualiser l&apos;examen</translation>
+    </message>
+    <message>
+        <source>Return dependencies</source>
+        <translation>Dépendances du retour</translation>
+    </message>
+    <message>
+        <source>Reviewing local changes…</source>
+        <translation>Examen des changements locaux…</translation>
+    </message>
+    <message>
+        <source>SSA node %1: %2, result %3 bytes; native anchor node %4</source>
+        <translation>Nœud SSA %1 : %2, résultat de %3 octets ; nœud d&apos;ancrage natif %4</translation>
+    </message>
+    <message>
+        <source>Secondary input</source>
+        <translation>Entrée secondaire</translation>
+    </message>
+    <message>
+        <source>Select a change, then trace its inputs or uses.</source>
+        <translation>Sélectionnez un changement, puis suivez ses entrées ou ses utilisations.</translation>
+    </message>
+    <message>
+        <source>Synthetic operation: linked by a direct operand; its address is not an original instruction.</source>
+        <translation>Opération synthétique : liée par un opérande direct ; son adresse n&apos;est pas une instruction d&apos;origine.</translation>
+    </message>
+    <message>
+        <source>Trace inputs</source>
+        <translation>Suivre les entrées</translation>
+    </message>
+    <message>
+        <source>Trace uses</source>
+        <translation>Suivre les utilisations</translation>
+    </message>
+    <message>
+        <source>Tracing %1 dependencies…</source>
+        <translation>Suivi des dépendances de %1…</translation>
+    </message>
+    <message>
+        <source>complete</source>
+        <translation>complet</translation>
+    </message>
+    <message>
+        <source>constant %1</source>
+        <translation>constante %1</translation>
+    </message>
+    <message>
+        <source>node %1</source>
+        <translation>nœud %1</translation>
+    </message>
+    <message>
+        <source>none recorded</source>
+        <translation>aucun enregistré</translation>
+    </message>
+    <message>
+        <source>parameter</source>
+        <translation>paramètre</translation>
+    </message>
+    <message>
+        <source>partial</source>
+        <translation>partiel</translation>
+    </message>
+    <message>
+        <source>unknown input</source>
+        <translation>entrée inconnue</translation>
+    </message>
+    <message>
+        <source>compared</source>
+        <translation>comparées</translation>
+    </message>
+    <message>
+        <source>unresolved</source>
+        <translation>non résolues</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonCounterpartDialog</name>
+    <message>
+        <source>
+Removes the candidate&apos;s existing pair %1 ↔ %2 · %3.</source>
+        <translation>
+Supprime la paire existante du candidat %1 ↔ %2 · %3.</translation>
+    </message>
+    <message>
+        <source>
+Removes the existing pair %1 ↔ %2.</source>
+        <translation>
+Supprime la paire existante %1 ↔ %2.</translation>
+    </message>
+    <message>
+        <source>
+This function has incomplete analysis.</source>
+        <translation>
+L&apos;analyse de cette fonction est incomplète.</translation>
+    </message>
+    <message>
+        <source>
+This records your chosen correspondence. Undo restores previous pairs.</source>
+        <translation>
+Ceci enregistre la correspondance que vous avez choisie. Annuler restaure les paires précédentes.</translation>
+    </message>
+    <message>
+        <source>%1 functions · Select a row to review its current pairing.</source>
+        <translation>%1 fonctions · Sélectionnez une ligne pour examiner son appariement actuel.</translation>
+    </message>
+    <message>
+        <source>%1 is already paired with this function.</source>
+        <translation>%1 est déjà appariée à cette fonction.</translation>
+    </message>
+    <message>
+        <source>%1 of %2 candidates · These are hypotheses; choose using your analysis.
+%3</source>
+        <translation>%1 candidats sur %2 · Ce sont des hypothèses ; choisissez selon votre analyse.
+%3</translation>
+    </message>
+    <message>
+        <source>Address: high to low</source>
+        <translation>Adresse : décroissante</translation>
+    </message>
+    <message>
+        <source>Address: low to high</source>
+        <translation>Adresse : croissante</translation>
+    </message>
+    <message>
+        <source>All functions</source>
+        <translation>Toutes les fonctions</translation>
+    </message>
+    <message>
+        <source>Ambiguity candidates</source>
+        <translation>Candidats ambigus</translation>
+    </message>
+    <message>
+        <source>Candidate scope</source>
+        <translation>Périmètre des candidats</translation>
+    </message>
+    <message>
+        <source>Choose a %1 counterpart for %2 · %3.</source>
+        <translation>Choisissez une contrepartie du côté %1 pour %2 · %3.</translation>
+    </message>
+    <message>
+        <source>Choose a %1 counterpart for %2.</source>
+        <translation>Choisissez une contrepartie du côté %1 pour %2.</translation>
+    </message>
+    <message>
+        <source>Choose counterpart — NeverD</source>
+        <translation>Choisir une contrepartie — NeverD</translation>
+    </message>
+    <message>
+        <source>Could not load candidates. %1</source>
+        <translation>Impossible de charger les candidats. %1</translation>
+    </message>
+    <message>
+        <source>Counterpart functions</source>
+        <translation>Fonctions correspondantes</translation>
+    </message>
+    <message>
+        <source>Current counterpart: %1. Select a replacement; Undo restores previous pairs.</source>
+        <translation>Contrepartie actuelle : %1. Sélectionnez un remplacement ; Annuler restaure les paires précédentes.</translation>
+    </message>
+    <message>
+        <source>Loading functions…</source>
+        <translation>Chargement des fonctions…</translation>
+    </message>
+    <message>
+        <source>Name: A to Z</source>
+        <translation>Nom : de A à Z</translation>
+    </message>
+    <message>
+        <source>Name: Z to A</source>
+        <translation>Nom : de Z à A</translation>
+    </message>
+    <message>
+        <source>No ambiguity candidates match. Clear the search or choose All functions.</source>
+        <translation>Aucun candidat ambigu ne correspond. Effacez la recherche ou choisissez Toutes les fonctions.</translation>
+    </message>
+    <message>
+        <source>No functions match. Try another name or address.</source>
+        <translation>Aucune fonction ne correspond. Essayez un autre nom ou une autre adresse.</translation>
+    </message>
+    <message>
+        <source>Pair %1 with %2 · %3.</source>
+        <translation>Apparier %1 avec %2 · %3.</translation>
+    </message>
+    <message>
+        <source>Pair functions</source>
+        <translation>Apparier les fonctions</translation>
+    </message>
+    <message>
+        <source>Search by function name or hexadecimal address</source>
+        <translation>Rechercher par nom de fonction ou adresse hexadécimale</translation>
+    </message>
+    <message>
+        <source>Search counterpart functions</source>
+        <translation>Rechercher des fonctions contreparties</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>Recherche…</translation>
+    </message>
+    <message>
+        <source>Select a function to pair. Browsing leaves your comparison unchanged.</source>
+        <translation>Sélectionnez une fonction à apparier. La navigation ne modifie pas votre comparaison.</translation>
+    </message>
+    <message>
+        <source>Size: large to small</source>
+        <translation>Taille décroissante</translation>
+    </message>
+    <message>
+        <source>Size: small to large</source>
+        <translation>Taille croissante</translation>
+    </message>
+    <message>
+        <source>Sort functions</source>
+        <translation>Trier les fonctions</translation>
+    </message>
+    <message>
+        <source>The comparison changed. Close this window and choose the function again.</source>
+        <translation>La comparaison a changé. Fermez cette fenêtre et choisissez à nouveau la fonction.</translation>
+    </message>
+    <message>
+        <source>The comparison worker is unavailable. Close this window and retry the comparison.</source>
+        <translation>Le processus de comparaison est indisponible. Fermez cette fenêtre et relancez la comparaison.</translation>
+    </message>
+    <message>
+        <source>This function has no retained ambiguity group. Choose All functions to select a counterpart.</source>
+        <translation>Cette fonction n&apos;a aucun groupe d&apos;ambiguïté conservé. Choisissez Toutes les fonctions pour sélectionner une contrepartie.</translation>
+    </message>
+    <message>
+        <source>primary</source>
+        <translation>principal</translation>
+    </message>
+    <message>
+        <source>secondary</source>
+        <translation>secondaire</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonDialog</name>
+    <message>
+        <source>
+
+Primary identity: %1
+Secondary identity: %2
+
+Structural correspondence does not establish semantic equivalence or patch presence.</source>
+        <translation>
+
+Identité de l&apos;entrée principale : %1
+Identité de l&apos;entrée secondaire : %2
+
+La correspondance structurelle n&apos;établit ni l&apos;équivalence sémantique ni la présence d&apos;un correctif.</translation>
+    </message>
+    <message>
+        <source> (difference %1)</source>
+        <translation> (différence %1)</translation>
+    </message>
+    <message>
+        <source> Function discovery is partial.</source>
+        <translation> La découverte des fonctions est partielle.</translation>
+    </message>
+    <message>
+        <source> image base</source>
+        <translation> base de l&apos;image</translation>
+    </message>
+    <message>
+        <source> input format</source>
+        <translation> format d&apos;entrée</translation>
+    </message>
+    <message>
+        <source> s</source>
+        <translation> s</translation>
+    </message>
+    <message>
+        <source>%1  %2 / %3</source>
+        <translation>%1  %2 / %3</translation>
+    </message>
+    <message>
+        <source>%1 %2  ↔  %3 %4</source>
+        <translation>%1 %2  ↔  %3 %4</translation>
+    </message>
+    <message>
+        <source>%1 matched  ·  %2 changed  ·  %3 ambiguous  ·  %4 / %5 unmatched  ·  %6 / %7 incomplete  ·  %8 uncertain</source>
+        <translation>%1 appariées · %2 modifiées · %3 ambiguës · %4 / %5 non appariées · %6 / %7 incomplètes  ·  %8 incertains</translation>
+    </message>
+    <message>
+        <source>All functions</source>
+        <translation>Toutes les fonctions</translation>
+    </message>
+    <message>
+        <source>Ambiguous</source>
+        <translation>Ambigu</translation>
+    </message>
+    <message>
+        <source>Analyst review…</source>
+        <translation>Examen de l&apos;analyste…</translation>
+    </message>
+    <message>
+        <source>Auto format</source>
+        <translation>Format automatique</translation>
+    </message>
+    <message>
+        <source>Binary comparison</source>
+        <translation>Comparaison binaire</translation>
+    </message>
+    <message>
+        <source>Bounded native instruction-run analysis for split, merge, inline and clone hypotheses. This does not validate behavior.</source>
+        <translation>Analyse bornée de séquences d&apos;instructions natives pour les hypothèses de division, fusion, insertion en ligne et clonage. Elle ne valide pas le comportement.</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Parcourir…</translation>
+    </message>
+    <message>
+        <source>Call paths…</source>
+        <translation>Chemins d&apos;appel…</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Cancellation requested — waiting for computation to stop…</source>
+        <translation>Annulation demandée — attente de l&apos;arrêt du calcul…</translation>
+    </message>
+    <message>
+        <source>Capture bounded SSA observations in address order. Pipeline cancellation is checked between functions. See Dependencies for omitted and unsupported functions.</source>
+        <translation>Capturer des observations SSA bornées par ordre d&apos;adresse. Le pipeline vérifie l&apos;annulation entre les fonctions. Consultez les dépendances pour les fonctions omises ou non prises en charge.</translation>
+    </message>
+    <message>
+        <source>Change review…</source>
+        <translation>Examen des modifications…</translation>
+    </message>
+    <message>
+        <source>Changed</source>
+        <translation>Modifié</translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation>Comparer</translation>
+    </message>
+    <message>
+        <source>Compare two x86, x64 or AArch64 inputs with the same architecture and ABI. Matching scores are heuristic.</source>
+        <translation>Comparer deux entrées x86, x64 ou AArch64 de même architecture et ABI. Les scores de correspondance sont heuristiques.</translation>
+    </message>
+    <message>
+        <source>Comparison complete. Scores are heuristic; inspect coverage and evidence.</source>
+        <translation>Comparaison terminée. Les scores sont heuristiques ; inspectez la couverture et les éléments probants.</translation>
+    </message>
+    <message>
+        <source>Comparison deadline</source>
+        <translation>Échéance de comparaison</translation>
+    </message>
+    <message>
+        <source>Computation stopped: %1. Partial results retained.</source>
+        <translation>Calcul arrêté : %1. Résultats partiels conservés.</translation>
+    </message>
+    <message>
+        <source>Confirm pair</source>
+        <translation>Confirmer la paire</translation>
+    </message>
+    <message>
+        <source>Control flow</source>
+        <translation>Flot de contrôle</translation>
+    </message>
+    <message>
+        <source>Counterpart</source>
+        <translation>Contrepartie</translation>
+    </message>
+    <message>
+        <source>Deadline</source>
+        <translation>Échéance</translation>
+    </message>
+    <message>
+        <source>Dependencies…</source>
+        <translation>Dépendances…</translation>
+    </message>
+    <message>
+        <source>Dependency evidence</source>
+        <translation>Éléments probants de dépendance</translation>
+    </message>
+    <message>
+        <source>Disassembly</source>
+        <translation>Désassemblage</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Éléments de preuve</translation>
+    </message>
+    <message>
+        <source>Filter by name or address</source>
+        <translation>Filtrer par nom ou adresse</translation>
+    </message>
+    <message>
+        <source>Filter functions</source>
+        <translation>Filtrer les fonctions</translation>
+    </message>
+    <message>
+        <source>Fit graphs</source>
+        <translation>Ajuster les graphes</translation>
+    </message>
+    <message>
+        <source>Function difference %1. No completed instruction comparison is available. Use Retry difference to recompute.
+
+</source>
+        <translation>Différence de fonction %1. Aucune comparaison d&apos;instructions terminée n&apos;est disponible. Utilisez « Recalculer la différence ».
+
+</translation>
+    </message>
+    <message>
+        <source>Function difference stopped. Use Retry difference to recompute; no completed instruction comparison is shown.</source>
+        <translation>Calcul de différence de fonction arrêté. Utilisez « Recalculer la différence » ; aucune comparaison d&apos;instructions terminée n&apos;est affichée.</translation>
+    </message>
+    <message>
+        <source>Function state</source>
+        <translation>État de la fonction</translation>
+    </message>
+    <message>
+        <source>Functions per input</source>
+        <translation>Fonctions par entrée</translation>
+    </message>
+    <message>
+        <source>Image base</source>
+        <translation>Base de l&apos;image</translation>
+    </message>
+    <message>
+        <source>Index and verify finite dependency neighborhoods across functions. Includes dependency evidence.</source>
+        <translation>Indexer et vérifier des voisinages de dépendances finis entre fonctions. Inclut les éléments probants de dépendance.</translation>
+    </message>
+    <message>
+        <source>Inputs changed. Reload before continuing review.</source>
+        <translation>Les entrées ont changé. Rechargez avant de poursuivre l&apos;examen.</translation>
+    </message>
+    <message>
+        <source>Inspect overlapping region and transformation hypotheses. Enable analysis in Settings before comparing.</source>
+        <translation>Inspecter les régions qui se chevauchent et les hypothèses de transformation. Activez l&apos;analyse dans les paramètres avant de comparer.</translation>
+    </message>
+    <message>
+        <source>Inventory side</source>
+        <translation>Côté de l&apos;inventaire</translation>
+    </message>
+    <message>
+        <source>Loading %1…</source>
+        <translation>Chargement de %1…</translation>
+    </message>
+    <message>
+        <source>Loading comparison inputs…</source>
+        <translation>Chargement des entrées de comparaison…</translation>
+    </message>
+    <message>
+        <source>Match: %1
+%2
+
+Similarity: %3
+Heuristic confidence: %4%
+Changes: %5
+Analyst confirmed: %6
+Coverage: %7</source>
+        <translation>Correspondance : %1
+%2
+
+Similitude : %3
+Confiance heuristique : %4%
+Modifications : %5
+Confirmé par l&apos;analyste : %6
+Couverture : %7</translation>
+    </message>
+    <message>
+        <source>Matched</source>
+        <translation>Apparié</translation>
+    </message>
+    <message>
+        <source>Matching evidence appears here.</source>
+        <translation>Les éléments probants de correspondance s&apos;affichent ici.</translation>
+    </message>
+    <message>
+        <source>Maximum dependency functions per input</source>
+        <translation>Nombre maximal de fonctions de dépendance par entrée</translation>
+    </message>
+    <message>
+        <source>Minimum similarity</source>
+        <translation>Similitude minimale</translation>
+    </message>
+    <message>
+        <source>Native instruction regions…</source>
+        <translation>Régions d&apos;instructions natives…</translation>
+    </message>
+    <message>
+        <source>NeverD comparison (*.nddiff)</source>
+        <translation>Comparaison NeverD (*.nddiff)</translation>
+    </message>
+    <message>
+        <source>NeverD comparison (*.nddiff);;JSON (*.json)</source>
+        <translation>Comparaison NeverD (*.nddiff);;JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>No accepted counterpart. Inspect ambiguity candidates or choose a pair manually.</source>
+        <translation>Aucune contrepartie acceptée. Examinez les candidats ambigus ou choisissez une paire manuellement.</translation>
+    </message>
+    <message>
+        <source>No deadline</source>
+        <translation>Sans délai limite</translation>
+    </message>
+    <message>
+        <source>Pair with…</source>
+        <translation>Apparier avec…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Pseudocode</source>
+        <translation>Pseudo-code</translation>
+    </message>
+    <message>
+        <source>Raw AArch64</source>
+        <translation>AArch64 brut</translation>
+    </message>
+    <message>
+        <source>Raw x64</source>
+        <translation>x64 brut</translation>
+    </message>
+    <message>
+        <source>Raw x86</source>
+        <translation>x86 brut</translation>
+    </message>
+    <message>
+        <source>Ready to compare two native binaries.</source>
+        <translation>Prêt à comparer deux binaires natifs.</translation>
+    </message>
+    <message>
+        <source>Recompute a cancelled or timed-out function difference.</source>
+        <translation>Recalculer une différence de fonctions annulée ou ayant dépassé le délai.</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>Rétablir</translation>
+    </message>
+    <message>
+        <source>Region hypotheses</source>
+        <translation>Hypothèses de régions</translation>
+    </message>
+    <message>
+        <source>Regions…</source>
+        <translation>Régions…</translation>
+    </message>
+    <message>
+        <source>Reopen comparison</source>
+        <translation>Rouvrir la comparaison</translation>
+    </message>
+    <message>
+        <source>Reopen…</source>
+        <translation>Rouvrir…</translation>
+    </message>
+    <message>
+        <source>Retry difference</source>
+        <translation>Réessayer la différence</translation>
+    </message>
+    <message>
+        <source>SSA dependency regions…</source>
+        <translation>Régions de dépendances SSA…</translation>
+    </message>
+    <message>
+        <source>SSA region hypotheses</source>
+        <translation>Hypothèses de régions SSA</translation>
+    </message>
+    <message>
+        <source>Save / export…</source>
+        <translation>Enregistrer / exporter…</translation>
+    </message>
+    <message>
+        <source>Save comparison</source>
+        <translation>Enregistrer la comparaison</translation>
+    </message>
+    <message>
+        <source>Saved %1</source>
+        <translation>%1 enregistré</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secondaire</translation>
+    </message>
+    <message>
+        <source>Select %1 input</source>
+        <translation>Choisir l&apos;entrée du côté %1</translation>
+    </message>
+    <message>
+        <source>Select a function to inspect its counterpart.</source>
+        <translation>Sélectionnez une fonction pour examiner sa contrepartie.</translation>
+    </message>
+    <message>
+        <source>Select blocks to follow their counterparts. %1wheel zooms.</source>
+        <translation>Sélectionnez des blocs pour suivre leurs contreparties. %1molette permet de zoomer.</translation>
+    </message>
+    <message>
+        <source>Select both inputs and their original settings, then reopen a saved comparison. Input hashes and analysis revisions are checked.</source>
+        <translation>Sélectionnez les deux entrées et leurs paramètres d&apos;origine, puis rouvrez une comparaison enregistrée. Les empreintes des entrées et les révisions de l&apos;analyse sont vérifiées.</translation>
+    </message>
+    <message>
+        <source>Settings</source>
+        <translation>Paramètres</translation>
+    </message>
+    <message>
+        <source>Starting comparison worker…</source>
+        <translation>Démarrage du processus de comparaison…</translation>
+    </message>
+    <message>
+        <source>Trace observed callers, callees and entry points of this function.</source>
+        <translation>Suivre les appelants, les fonctions appelées et les points d&apos;entrée observés de cette fonction.</translation>
+    </message>
+    <message>
+        <source>Undo</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Unmatch</source>
+        <translation>Supprimer la correspondance</translation>
+    </message>
+    <message>
+        <source>Unmatched</source>
+        <translation>Sans correspondance</translation>
+    </message>
+    <message>
+        <source>Use symbol names</source>
+        <translation>Utiliser les noms de symboles</translation>
+    </message>
+    <message>
+        <source>Validate returns…</source>
+        <translation>Valider les retours…</translation>
+    </message>
+    <message>
+        <source>decoded bodies complete</source>
+        <translation>corps décodés complets</translation>
+    </message>
+    <message>
+        <source>identity only; no bodies available</source>
+        <translation>identité uniquement ; aucun corps disponible</translation>
+    </message>
+    <message>
+        <source>incomplete</source>
+        <translation>incomplet</translation>
+    </message>
+    <message>
+        <source>no</source>
+        <translation>non</translation>
+    </message>
+    <message>
+        <source>not applicable</source>
+        <translation>sans objet</translation>
+    </message>
+    <message>
+        <source>yes</source>
+        <translation>oui</translation>
+    </message>
+    <message>
+        <source>New binary or saved project</source>
+        <translation>Nouveau binaire ou projet enregistré</translation>
+    </message>
+    <message>
+        <source>Original binary or saved project</source>
+        <translation>Binaire d’origine ou projet enregistré</translation>
+    </message>
+    <message>
+        <source>Select a binary or an NDDB saved project. Saved projects use their stored load settings and a private working copy.</source>
+        <translation>Sélectionnez un binaire ou un projet NDDB enregistré. Les projets enregistrés utilisent leurs paramètres de chargement et une copie de travail indépendante.</translation>
+    </message>
+    <message>
+        <source>SSA representation</source>
+        <translation>Représentation SSA</translation>
+    </message>
+    <message>
+        <source>Original SSA</source>
+        <translation>SSA d’origine</translation>
+    </message>
+    <message>
+        <source>Optimized SSA</source>
+        <translation>SSA optimisée</translation>
+    </message>
+    <message>
+        <source>Optimized SSA reduces compiler scaffolding for comparison. Functions outside its supported scope remain listed with a reason.</source>
+        <translation>La SSA optimisée réduit les structures auxiliaires du compilateur pour la comparaison. Les fonctions hors du périmètre pris en charge restent affichées avec une explication.</translation>
+    </message>
+    <message>
+        <source>Shared SSA fragments</source>
+        <translation>Fragments SSA communs</translation>
+    </message>
+    <message>
+        <source>Find shared computations across changed dependencies. External input producers remain unverified. Includes SSA region hypotheses.</source>
+        <translation>Trouver des calculs communs malgré des dépendances modifiées. Les producteurs des entrées externes restent non vérifiés. Inclut les hypothèses de régions SSA.</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with parameter views</source>
+        <translation>SSA optimisé avec vues des paramètres</translation>
+    </message>
+    <message>
+        <source>Parameter views compare the low 32 bits of eligible 64-bit native parameters. Original widths and sources remain available for review.</source>
+        <translation>Les vues des paramètres comparent les 32 bits de poids faible des paramètres natifs de 64 bits admissibles. Les largeurs et sources d’origine restent consultables.</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles</translation>
+    </message>
+    <message>
+        <source>Loop analysis proves return progress where supported before comparing computations. It includes parameter views and preserves unproved loop contracts.</source>
+        <translation>L’analyse des boucles prouve la terminaison dans les cas pris en charge avant de comparer les calculs. Elle inclut les vues des paramètres et conserve les contrats des boucles non prouvés.</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with multi-block loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à plusieurs blocs</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with nested loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles imbriquées</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with branching loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à branches</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with wrapping loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à rebouclage numérique</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with parameter-bound loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à borne paramétrique</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with expression-bound loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles bornées par une expression</translation>
+    </message>
+    <message>
+        <source>
+
+Primary name: %1
+Secondary name: %2</source>
+        <translation>
+
+Nom principal : %1
+Nom secondaire : %2</translation>
+    </message>
+    <message>
+        <source>Uncertain</source>
+        <translation>Incertain</translation>
+    </message>
+    <message>
+        <source>
+Reference identities: unresolved. Some call or data targets cannot be compared. This alone does not establish a change.</source>
+        <translation>
+Identités des références : non résolues. Certaines cibles d’appel ou de données ne peuvent pas être comparées. Cela ne suffit pas à établir une modification.</translation>
+    </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Inclure les appels associés</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Étendre les régions communes au-delà des appels directs dont les cibles sont associées. Les résultats dépendent des paires de fonctions actuelles et sont recalculés lorsque celles-ci changent. Le comportement des appels n’est pas validé.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonFlowDialog</name>
+    <message>
+        <source>%1 slice · %2 nodes · %3
+Gaps: %4</source>
+        <translation>Tranche %1 · %2 nœuds · %3
+Lacunes : %4</translation>
+    </message>
+    <message>
+        <source>%1 · %2
+%3</source>
+        <translation>%1 · %2
+%3</translation>
+    </message>
+    <message>
+        <source>%1 · %2 available / %3 processed / %4 eligible functions · %5 unprocessed
+%6 unsupported, %7 resource limited, %8 failed. Collection state: %9.</source>
+        <translation>%1 · %2 fonctions disponibles / %3 traitées / %4 admissibles · %5 non traitées
+%6 non prises en charge, %7 limitées par les ressources, %8 en échec. État de la collecte : %9.</translation>
+    </message>
+    <message>
+        <source>%1 · %2 · %3 SSA operations
+Select an operation to follow dependencies. Synthetic operations have block provenance.</source>
+        <translation>%1 · %2 · %3 opérations SSA
+Sélectionnez une opération pour suivre ses dépendances. Les opérations synthétiques ont une provenance de bloc.</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Dependency evidence — NeverD</source>
+        <translation>Éléments probants de dépendance — NeverD</translation>
+    </message>
+    <message>
+        <source>Enable dependency evidence in comparison settings, then compare the inputs.</source>
+        <translation>Activez les éléments probants de dépendance dans les paramètres de comparaison, puis comparez les entrées.</translation>
+    </message>
+    <message>
+        <source>Enable dependency evidence in comparison settings.</source>
+        <translation>Activez les éléments probants de dépendance dans les paramètres de comparaison.</translation>
+    </message>
+    <message>
+        <source>Inspect original function</source>
+        <translation>Inspecter la fonction d&apos;origine</translation>
+    </message>
+    <message>
+        <source>Observed SSA dependencies. Calls, aliases and unresolved control flow remain explicit gaps. These observations do not prove whole-function equivalence.</source>
+        <translation>Dépendances SSA observées. Les appels, les alias et le flot de contrôle non résolu restent des lacunes explicites. Ces observations ne prouvent pas l'équivalence de la fonction entière.</translation>
+    </message>
+    <message>
+        <source>Primary input</source>
+        <translation>Entrée principale</translation>
+    </message>
+    <message>
+        <source>Secondary input</source>
+        <translation>Entrée secondaire</translation>
+    </message>
+    <message>
+        <source>Select a function to inspect its SSA operations.</source>
+        <translation>Sélectionnez une fonction pour examiner ses opérations SSA.</translation>
+    </message>
+    <message>
+        <source>Select an operation, then trace its inputs or uses.</source>
+        <translation>Sélectionnez une opération, puis suivez ses entrées ou ses utilisations.</translation>
+    </message>
+    <message>
+        <source>Trace inputs</source>
+        <translation>Suivre les entrées</translation>
+    </message>
+    <message>
+        <source>Trace uses</source>
+        <translation>Suivre les utilisations</translation>
+    </message>
+    <message>
+        <source>Tracing %1 dependencies…</source>
+        <translation>Suivi des dépendances de %1…</translation>
+    </message>
+    <message>
+        <source>none observed within this model</source>
+        <translation>aucun observé dans ce modèle</translation>
+    </message>
+    <message>
+        <source>Original SSA</source>
+        <translation>SSA d’origine</translation>
+    </message>
+    <message>
+        <source>Optimized SSA</source>
+        <translation>SSA optimisée</translation>
+    </message>
+    <message>
+        <source>SSA representation: %1</source>
+        <translation>Représentation SSA : %1</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with parameter views</source>
+        <translation>SSA optimisé avec vues des paramètres</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles</translation>
+    </message>
+    <message>
+        <source>Return progress proved: acyclic control flow.</source>
+        <translation>Terminaison prouvée : flot de contrôle acyclique.</translation>
+    </message>
+    <message>
+        <source>Return progress proved · Counter loops: %1</source>
+        <translation>Terminaison prouvée · Boucles à compteur : %1</translation>
+    </message>
+    <message>
+        <source>Return progress unproved: original contracts retained.</source>
+        <translation>Terminaison non prouvée : contrats d’origine conservés.</translation>
+    </message>
+    <message>
+        <source>Source contract:
+%1
+Observed contract:
+%2
+Progress does not establish equal loop counts or function results.</source>
+        <translation>Contrat d’origine :
+%1
+Contrat observé :
+%2
+La terminaison ne prouve pas l’égalité des nombres d’itérations ou des résultats des fonctions.</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with multi-block loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à plusieurs blocs</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with nested loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles imbriquées</translation>
+    </message>
+    <message>
+        <source>Proved loop: header block %1 → latch block %2 · counter #%3 → update #%4 · guard #%5</source>
+        <translation>Boucle démontrée : bloc d’entrée %1 → bloc de retour %2 · compteur #%3 → mise à jour #%4 · condition #%5</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with branching loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à branches</translation>
+    </message>
+    <message>
+        <source>Return progress proved · Counter loops: %1 · Backedges: %2 · Guards: %3</source>
+        <translation>Progression du retour prouvée · Boucles à compteur : %1 · Arêtes de retour : %2 · Gardes : %3</translation>
+    </message>
+    <message>
+        <source>Proved loop: header block %1 → latch block %2 · counter #%3 → update #%4 · guard #%5 in block %6</source>
+        <translation>Boucle prouvée : bloc d’en-tête %1 → bloc de retour %2 · compteur #%3 → mise à jour #%4 · garde #%5 dans le bloc %6</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with wrapping loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à rebouclage numérique</translation>
+    </message>
+    <message>
+        <source>Proof: a monotone counter with a no-overflow contract.</source>
+        <translation>Preuve : un compteur monotone avec un contrat sans débordement.</translation>
+    </message>
+    <message>
+        <source>Proof: every counter cycle reaches a shared exit, including after wraparound.</source>
+        <translation>Preuve : chaque cycle du compteur atteint une sortie commune, même après rebouclage numérique.</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with parameter-bound loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles à borne paramétrique</translation>
+    </message>
+    <message>
+        <source>Optimized SSA with expression-bound loop analysis</source>
+        <translation>SSA optimisée avec analyse des boucles bornées par une expression</translation>
+    </message>
+    <message>
+        <source>Proof: every counter cycle reaches a shared exit relative to an input parameter. Undefined behavior may occur before exit.</source>
+        <translation>Preuve : chaque cycle du compteur atteint une sortie commune relative à un paramètre d’entrée. Un comportement indéfini peut survenir avant la sortie.</translation>
+    </message>
+    <message>
+        <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
+        <translation>Preuve : chaque cycle du compteur atteint une sortie commune relative à une expression dérivée des entrées. Un comportement indéfini peut survenir avant la sortie.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Accès aux arguments</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Afficher les lectures et écritures utilisant la même adresse calculée qu’un argument d’appel récupéré.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Inclure le contrôle</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Inclure les dépendances de contrôle dans le suivi des entrées ou utilisations.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Appel n%1 · %2 observations d’adresses · %3
+Lectures et écritures à l’adresse d’un argument récupéré. Les effets de l’appel et l’ordre d’exécution restent inconnus. Activez une ligne pour sélectionner son opération.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Inspection des adresses des arguments…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonGraph</name>
+    <message>
+        <source>%1 control-flow graph</source>
+        <translation>Graphe de flot de contrôle de %1</translation>
+    </message>
+    <message>
+        <source>Control-flow graph</source>
+        <translation>Graphe de flot de contrôle</translation>
+    </message>
+    <message>
+        <source>Incomplete control flow</source>
+        <translation>Flot de contrôle incomplet</translation>
+    </message>
+    <message>
+        <source>Laying out control flow…</source>
+        <translation>Disposition du flot de contrôle…</translation>
+    </message>
+    <message>
+        <source>No counterpart</source>
+        <translation>Aucune contrepartie</translation>
+    </message>
+    <message>
+        <source>Viewport limit reached — zoom in to inspect remaining blocks</source>
+        <translation>Limite de la zone visible atteinte — zoomez pour examiner les blocs restants</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonImpactDialog</name>
+    <message>
+        <source>%1 qualified call contracts in %2 retained sites; inspection %3. Scope: calls in reached functions, including unresolved and frontier targets. Native coverage remains independent. Select a row and open Selected call for roles and assumptions.</source>
+        <translation>%1 contrats d&apos;appel qualifiés sur %2 sites conservés ; inspection %3. Périmètre : appels dans les fonctions atteintes, y compris les cibles non résolues et à la frontière. La couverture native reste indépendante. Sélectionnez une ligne et ouvrez « Appel sélectionné » pour les rôles et hypothèses.</translation>
+    </message>
+    <message>
+        <source>%1 · %2 functions · %3 entries/exports · %4 call sites · %5 unresolved or coverage boundaries · %6 frontier sites
+Indexed %7 / %8 functions; %9; %10.</source>
+        <translation>%1 · %2 fonctions · %3 entrées/exports · %4 sites d&apos;appel · %5 sites non résolus ou limites de couverture · %6 sites à la frontière
+%7 fonctions indexées sur %8 ; %9 ; %10.</translation>
+    </message>
+    <message>
+        <source>%1: argument %2</source>
+        <translation>%1 : argument %2</translation>
+    </message>
+    <message>
+        <source>All reached functions</source>
+        <translation>Toutes les fonctions atteintes</translation>
+    </message>
+    <message>
+        <source>All traversed call sites</source>
+        <translation>Tous les sites d&apos;appel parcourus</translation>
+    </message>
+    <message>
+        <source>Analysis limit reached</source>
+        <translation>Limite d&apos;analyse atteinte</translation>
+    </message>
+    <message>
+        <source>Assumption: the imported function resolves to the declared built-in call contract.</source>
+        <translation>Hypothèse : la fonction importée se résout vers le contrat d&apos;appel intégré déclaré.</translation>
+    </message>
+    <message>
+        <source>Bytes: %1</source>
+        <translation>Octets : %1</translation>
+    </message>
+    <message>
+        <source>Call contracts in reached functions</source>
+        <translation>Contrats d&apos;appel dans les fonctions atteintes</translation>
+    </message>
+    <message>
+        <source>Call paths and possible impact — NeverD</source>
+        <translation>Chemins d&apos;appel et impact possible — NeverD</translation>
+    </message>
+    <message>
+        <source>Call sites</source>
+        <translation>Sites d&apos;appel</translation>
+    </message>
+    <message>
+        <source>Caller: %1 (%2)</source>
+        <translation>Fonction appelante : %1 (%2)</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Annulé</translation>
+    </message>
+    <message>
+        <source>Capacity</source>
+        <translation>Capacité</translation>
+    </message>
+    <message>
+        <source>Choose a starting function, then trace its callers or callees.</source>
+        <translation>Choisissez une fonction de départ, puis suivez ses appelants ou ses fonctions appelées.</translation>
+    </message>
+    <message>
+        <source>Complete</source>
+        <translation>Complet</translation>
+    </message>
+    <message>
+        <source>Destination</source>
+        <translation>Destination</translation>
+    </message>
+    <message>
+        <source>Format</source>
+        <translation>Format</translation>
+    </message>
+    <message>
+        <source>Function entry, e.g. 0x401000</source>
+        <translation>Entrée de fonction, par exemple 0x401000</translation>
+    </message>
+    <message>
+        <source>Global scanned scope, including functions with no known path to the starting function. Unknown callers may be missing.</source>
+        <translation>Périmètre global analysé, y compris les fonctions sans chemin connu vers la fonction de départ. Des appelants inconnus peuvent manquer.</translation>
+    </message>
+    <message>
+        <source>Input buffer</source>
+        <translation>Tampon d&apos;entrée</translation>
+    </message>
+    <message>
+        <source>Inspect original function</source>
+        <translation>Inspecter la fonction d&apos;origine</translation>
+    </message>
+    <message>
+        <source>Known edges beyond the depth or function limit</source>
+        <translation>Arêtes connues au-delà de la limite de profondeur ou de fonctions</translation>
+    </message>
+    <message>
+        <source>Known targets omitted by the depth or function limit. Work or index stops can leave further targets unobserved.</source>
+        <translation>Cibles connues omises par la limite de profondeur ou de fonctions. L&apos;arrêt du travail ou de l&apos;indexation peut laisser d&apos;autres cibles non observées.</translation>
+    </message>
+    <message>
+        <source>Length</source>
+        <translation>Longueur</translation>
+    </message>
+    <message>
+        <source>Maximum depth</source>
+        <translation>Profondeur maximale</translation>
+    </message>
+    <message>
+        <source>Native-associated SSA node: %1</source>
+        <translation>Nœud SSA associé au code natif : %1</translation>
+    </message>
+    <message>
+        <source>No parameter/return propagation, alias, capacity, path-safety or fix-presence proof. Use the original function and SSA dependency views to continue review.</source>
+        <translation>Aucune preuve de propagation des paramètres ou du retour, d&apos;alias, de capacité, de sûreté des chemins ou de présence du correctif. Poursuivez l&apos;examen à l&apos;aide de la fonction d&apos;origine et des vues de dépendances SSA.</translation>
+    </message>
+    <message>
+        <source>Object / handle</source>
+        <translation>Objet / handle</translation>
+    </message>
+    <message>
+        <source>Observed call paths provide possible impact context. Path feasibility, parameter and return binding, memory aliases and external callers are not modeled. Semantic validation has not been performed.</source>
+        <translation>Les chemins d&apos;appel observés donnent un contexte d&apos;impact possible. La faisabilité des chemins, les liaisons des paramètres et du retour, les alias mémoire et les appelants externes ne sont pas modélisés. Aucune validation sémantique n&apos;a été effectuée.</translation>
+    </message>
+    <message>
+        <source>Observed program entries and exports</source>
+        <translation>Points d&apos;entrée et exportations du programme observés</translation>
+    </message>
+    <message>
+        <source>Observed relations include admitted tail transfers and resolved imports. Double-click to inspect the caller.</source>
+        <translation>Les relations observées incluent les transferts terminaux admis et les importations résolues. Double-cliquez pour examiner l&apos;appelant.</translation>
+    </message>
+    <message>
+        <source>One shortest observed witness; alternate paths remain in all call sites. Seeds have an empty path.</source>
+        <translation>Un témoin observé de longueur minimale ; les chemins alternatifs restent dans l&apos;ensemble des sites d&apos;appel. Les points de départ ont un chemin vide.</translation>
+    </message>
+    <message>
+        <source>Original instruction: %1  %2 %3</source>
+        <translation>Instruction d&apos;origine : %1  %2 %3</translation>
+    </message>
+    <message>
+        <source>Primary input</source>
+        <translation>Entrée principale</translation>
+    </message>
+    <message>
+        <source>Recovered arguments: %1</source>
+        <translation>Arguments récupérés : %1</translation>
+    </message>
+    <message>
+        <source>Release can fail; successful release has not been proved.</source>
+        <translation>La libération peut échouer ; sa réussite n&apos;a pas été prouvée.</translation>
+    </message>
+    <message>
+        <source>Retained SSA boundaries: %1</source>
+        <translation>Frontières SSA conservées : %1</translation>
+    </message>
+    <message>
+        <source>Reviewing exact import identities and recovered call arguments. Collect SSA dependencies when starting the comparison to qualify contracts. Missing or ambiguous evidence remains visible.</source>
+        <translation>Examen des identités exactes des importations et des arguments d&apos;appel récupérés. Collectez les dépendances SSA au lancement de la comparaison pour qualifier les contrats. Les éléments probants manquants ou ambigus restent visibles.</translation>
+    </message>
+    <message>
+        <source>Roles (zero-based): %1</source>
+        <translation>Rôles (indices commençant à zéro) : %1</translation>
+    </message>
+    <message>
+        <source>Secondary input</source>
+        <translation>Entrée secondaire</translation>
+    </message>
+    <message>
+        <source>Selected call</source>
+        <translation>Appel sélectionné</translation>
+    </message>
+    <message>
+        <source>Shortest witness for the selected function</source>
+        <translation>Témoin le plus court pour la fonction sélectionnée</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Source</translation>
+    </message>
+    <message>
+        <source>Starting function entry</source>
+        <translation>Point d&apos;entrée de fonction initial</translation>
+    </message>
+    <message>
+        <source>Target: %1 (%2)</source>
+        <translation>Cible : %1 (%2)</translation>
+    </message>
+    <message>
+        <source>The contract accepts unbounded input; destination capacity has not been assessed.</source>
+        <translation>Le contrat accepte une entrée non bornée ; la capacité de destination n&apos;a pas été évaluée.</translation>
+    </message>
+    <message>
+        <source>Time limit reached</source>
+        <translation>Délai limite atteint</translation>
+    </message>
+    <message>
+        <source>Trace</source>
+        <translation>Suivre</translation>
+    </message>
+    <message>
+        <source>Trace callees</source>
+        <translation>Suivre les fonctions appelées</translation>
+    </message>
+    <message>
+        <source>Trace callers</source>
+        <translation>Suivre les appelants</translation>
+    </message>
+    <message>
+        <source>Tracing observed call paths…</source>
+        <translation>Suivi des chemins d&apos;appel observés…</translation>
+    </message>
+    <message>
+        <source>Unknown indirect call</source>
+        <translation>Appel indirect inconnu</translation>
+    </message>
+    <message>
+        <source>Unresolved sites and coverage gaps across the input</source>
+        <translation>Sites non résolus et lacunes de couverture dans l&apos;ensemble de l&apos;entrée</translation>
+    </message>
+    <message>
+        <source>complete</source>
+        <translation>complet</translation>
+    </message>
+    <message>
+        <source>index scan complete</source>
+        <translation>analyse de l&apos;index complète</translation>
+    </message>
+    <message>
+        <source>index scan partial</source>
+        <translation>analyse de l&apos;index partielle</translation>
+    </message>
+    <message>
+        <source>input discovery complete</source>
+        <translation>découverte de l&apos;entrée complète</translation>
+    </message>
+    <message>
+        <source>input discovery partial</source>
+        <translation>découverte de l&apos;entrée partielle</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonModel</name>
+    <message>
+        <source> @b%1</source>
+        <translation> @b%1</translation>
+    </message>
+    <message>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <source>%1 B</source>
+        <translation>%1 o</translation>
+    </message>
+    <message>
+        <source>Accepted pair</source>
+        <translation>Paire acceptée</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Adresse</translation>
+    </message>
+    <message>
+        <source>Ambiguous</source>
+        <translation>Ambigu</translation>
+    </message>
+    <message>
+        <source>Ambiguous SSA call association</source>
+        <translation>Association d&apos;appel SSA ambiguë</translation>
+    </message>
+    <message>
+        <source>Assessment</source>
+        <translation>Évaluation</translation>
+    </message>
+    <message>
+        <source>Association</source>
+        <translation>Association</translation>
+    </message>
+    <message>
+        <source>Author</source>
+        <translation>Auteur</translation>
+    </message>
+    <message>
+        <source>Availability</source>
+        <translation>Disponibilité</translation>
+    </message>
+    <message>
+        <source>Binding / history</source>
+        <translation>Liaison / historique</translation>
+    </message>
+    <message>
+        <source>Block %1 · Original operation %2
+%3</source>
+        <translation>Bloc %1 · Opération d&apos;origine %2
+%3</translation>
+    </message>
+    <message>
+        <source>Blocks</source>
+        <translation>Blocs</translation>
+    </message>
+    <message>
+        <source>Boundaries</source>
+        <translation>Limites</translation>
+    </message>
+    <message>
+        <source>Bytes</source>
+        <translation>Octets</translation>
+    </message>
+    <message>
+        <source>Callee</source>
+        <translation>Fonction appelée</translation>
+    </message>
+    <message>
+        <source>Caller</source>
+        <translation>Fonction appelante</translation>
+    </message>
+    <message>
+        <source>Case</source>
+        <translation>Dossier</translation>
+    </message>
+    <message>
+        <source>Change</source>
+        <translation>Modification</translation>
+    </message>
+    <message>
+        <source>Changed</source>
+        <translation>Modifié</translation>
+    </message>
+    <message>
+        <source>Confidence</source>
+        <translation>Confiance</translation>
+    </message>
+    <message>
+        <source>Context</source>
+        <translation>Contexte</translation>
+    </message>
+    <message>
+        <source>Contract / gaps</source>
+        <translation>Contrat / lacunes</translation>
+    </message>
+    <message>
+        <source>Control</source>
+        <translation>Contrôle</translation>
+    </message>
+    <message>
+        <source>Counterpart</source>
+        <translation>Contrepartie</translation>
+    </message>
+    <message>
+        <source>Coverage A / B</source>
+        <translation>Couverture A / B</translation>
+    </message>
+    <message>
+        <source>Current counterpart</source>
+        <translation>Contrepartie actuelle</translation>
+    </message>
+    <message>
+        <source>Data + control</source>
+        <translation>Données + contrôle</translation>
+    </message>
+    <message>
+        <source>Depth</source>
+        <translation>Profondeur</translation>
+    </message>
+    <message>
+        <source>Direct callee unavailable</source>
+        <translation>Fonction appelée directement indisponible</translation>
+    </message>
+    <message>
+        <source>Earlier</source>
+        <translation>Antérieur</translation>
+    </message>
+    <message>
+        <source>Entry evidence</source>
+        <translation>Éléments probants d&apos;entrée</translation>
+    </message>
+    <message>
+        <source>Event</source>
+        <translation>Événement</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Éléments de preuve</translation>
+    </message>
+    <message>
+        <source>Exception flow</source>
+        <translation>Flot d&apos;exceptions</translation>
+    </message>
+    <message>
+        <source>Export</source>
+        <translation>Exporter</translation>
+    </message>
+    <message>
+        <source>External function body</source>
+        <translation>Corps de fonction externe</translation>
+    </message>
+    <message>
+        <source>Finite SSA correspondence; open effects and control require review.
+%1</source>
+        <translation>Correspondance SSA finie ; les effets et le contrôle non résolus nécessitent un examen.
+%1</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Fonction</translation>
+    </message>
+    <message>
+        <source>Function entry</source>
+        <translation>Entrée de fonction</translation>
+    </message>
+    <message>
+        <source>Gaps</source>
+        <translation>Lacunes</translation>
+    </message>
+    <message>
+        <source>Heuristic confidence; structural similarity does not prove semantic equivalence.</source>
+        <translation>Confiance heuristique ; la similitude structurelle ne prouve pas l&apos;équivalence sémantique.</translation>
+    </message>
+    <message>
+        <source>Hypothesis</source>
+        <translation>Hypothèse</translation>
+    </message>
+    <message>
+        <source>Identity only</source>
+        <translation>Identité uniquement</translation>
+    </message>
+    <message>
+        <source>Incomplete</source>
+        <translation>Incomplet</translation>
+    </message>
+    <message>
+        <source>Incomplete discovery</source>
+        <translation>Découverte incomplète</translation>
+    </message>
+    <message>
+        <source>Incomplete native coverage</source>
+        <translation>Couverture native incomplète</translation>
+    </message>
+    <message>
+        <source>Inputs</source>
+        <translation>Entrées</translation>
+    </message>
+    <message>
+        <source>Instruction</source>
+        <translation>Instruction</translation>
+    </message>
+    <message>
+        <source>Instructions</source>
+        <translation>Instructions</translation>
+    </message>
+    <message>
+        <source>Internal callee; review its body</source>
+        <translation>Fonction appelée interne ; examinez son corps</translation>
+    </message>
+    <message>
+        <source>Latest</source>
+        <translation>Le plus récent</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>Chargement…</translation>
+    </message>
+    <message>
+        <source>No applicable call contract</source>
+        <translation>Aucun contrat d&apos;appel applicable</translation>
+    </message>
+    <message>
+        <source>No native-associated SSA call</source>
+        <translation>Aucun appel SSA associé au code natif</translation>
+    </message>
+    <message>
+        <source>No qualified import identity</source>
+        <translation>Aucune identité d&apos;importation qualifiée</translation>
+    </message>
+    <message>
+        <source>Node</source>
+        <translation>Nœud</translation>
+    </message>
+    <message>
+        <source>Node pairs</source>
+        <translation>Paires de nœuds</translation>
+    </message>
+    <message>
+        <source>Nodes</source>
+        <translation>Nœuds</translation>
+    </message>
+    <message>
+        <source>None</source>
+        <translation>Aucune</translation>
+    </message>
+    <message>
+        <source>Note</source>
+        <translation>Note</translation>
+    </message>
+    <message>
+        <source>Observed SSA</source>
+        <translation>SSA observée</translation>
+    </message>
+    <message>
+        <source>Observed call paths; feasibility and data effects remain unverified.
+%1</source>
+        <translation>Chemins d&apos;appel observés ; la faisabilité et les effets sur les données restent à vérifier.
+%1</translation>
+    </message>
+    <message>
+        <source>Operation</source>
+        <translation>Opération</translation>
+    </message>
+    <message>
+        <source>Original address</source>
+        <translation>Adresse d&apos;origine</translation>
+    </message>
+    <message>
+        <source>Pair inactive</source>
+        <translation>Paire inactive</translation>
+    </message>
+    <message>
+        <source>Paired</source>
+        <translation>Apparié</translation>
+    </message>
+    <message>
+        <source>Pairing</source>
+        <translation>Appariement</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Primary address</source>
+        <translation>Adresse principale</translation>
+    </message>
+    <message>
+        <source>Primary function</source>
+        <translation>Fonction principale</translation>
+    </message>
+    <message>
+        <source>Primary functions: %1
+Secondary functions: %2
+Heuristic explanations, not validated behavior.
+%3</source>
+        <translation>Fonctions principales : %1
+Fonctions secondaires : %2
+Explications heuristiques, comportement non validé.
+%3</translation>
+    </message>
+    <message>
+        <source>Primary instruction</source>
+        <translation>Instruction principale</translation>
+    </message>
+    <message>
+        <source>Primary node</source>
+        <translation>Nœud principal</translation>
+    </message>
+    <message>
+        <source>Primary operation</source>
+        <translation>Opération principale</translation>
+    </message>
+    <message>
+        <source>Primary origin</source>
+        <translation>Origine principale</translation>
+    </message>
+    <message>
+        <source>Primary root</source>
+        <translation>Racine principale</translation>
+    </message>
+    <message>
+        <source>Primary span</source>
+        <translation>Étendue principale</translation>
+    </message>
+    <message>
+        <source>Priority</source>
+        <translation>Priorité</translation>
+    </message>
+    <message>
+        <source>Program entry</source>
+        <translation>Point d&apos;entrée du programme</translation>
+    </message>
+    <message>
+        <source>Qualified %1 contract</source>
+        <translation>Contrat %1 qualifié</translation>
+    </message>
+    <message>
+        <source>Qualified %1 contract; release may fail</source>
+        <translation>Contrat %1 qualifié ; la libération peut échouer</translation>
+    </message>
+    <message>
+        <source>Reason</source>
+        <translation>Motif</translation>
+    </message>
+    <message>
+        <source>Recovered arguments unavailable</source>
+        <translation>Arguments récupérés indisponibles</translation>
+    </message>
+    <message>
+        <source>Repeated seed</source>
+        <translation>Point de départ répété</translation>
+    </message>
+    <message>
+        <source>SSA unavailable in collected scope</source>
+        <translation>SSA indisponible dans le périmètre collecté</translation>
+    </message>
+    <message>
+        <source>Scan incomplete</source>
+        <translation>Analyse incomplète</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary address</source>
+        <translation>Adresse secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary function</source>
+        <translation>Fonction secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary instruction</source>
+        <translation>Instruction secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary node</source>
+        <translation>Nœud secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary operation</source>
+        <translation>Opération secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary origin</source>
+        <translation>Origine secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary root</source>
+        <translation>Racine secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary span</source>
+        <translation>Étendue secondaire</translation>
+    </message>
+    <message>
+        <source>Seed evidence</source>
+        <translation>Éléments probants du point de départ</translation>
+    </message>
+    <message>
+        <source>Shared instructions</source>
+        <translation>Instructions communes</translation>
+    </message>
+    <message>
+        <source>Shared nodes</source>
+        <translation>Nœuds communs</translation>
+    </message>
+    <message>
+        <source>Shared normalized instruction runs are evidence for competing transformation hypotheses. They do not validate behavior, calls, memory effects or patch presence.</source>
+        <translation>Les séquences communes d&apos;instructions normalisées étayent des hypothèses de transformation concurrentes. Elles ne valident ni le comportement, ni les appels, ni les effets mémoire, ni la présence du correctif.</translation>
+    </message>
+    <message>
+        <source>Similarity</source>
+        <translation>Similarité</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>État</translation>
+    </message>
+    <message>
+        <source>Synthetic</source>
+        <translation>Synthétique</translation>
+    </message>
+    <message>
+        <source>Unchanged</source>
+        <translation>Inchangé</translation>
+    </message>
+    <message>
+        <source>Unique seed</source>
+        <translation>Point de départ unique</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>Inconnu</translation>
+    </message>
+    <message>
+        <source>Unknown indirect call</source>
+        <translation>Appel indirect inconnu</translation>
+    </message>
+    <message>
+        <source>Unknown indirect transfer</source>
+        <translation>Transfert indirect inconnu</translation>
+    </message>
+    <message>
+        <source>Unmeasured</source>
+        <translation>Non mesuré</translation>
+    </message>
+    <message>
+        <source>Unpaired</source>
+        <translation>Non apparié</translation>
+    </message>
+    <message>
+        <source>Unresolved / boundary</source>
+        <translation>Non résolu / frontière</translation>
+    </message>
+    <message>
+        <source>Unresolved call target</source>
+        <translation>Cible d&apos;appel non résolue</translation>
+    </message>
+    <message>
+        <source>Unsupported ABI or input profile</source>
+        <translation>ABI ou profil d&apos;entrée non pris en charge</translation>
+    </message>
+    <message>
+        <source>Width</source>
+        <translation>Largeur</translation>
+    </message>
+    <message>
+        <source>Witness instruction</source>
+        <translation>Instruction témoin</translation>
+    </message>
+    <message>
+        <source>arg %1: %2</source>
+        <translation>arg %1 : %2</translation>
+    </message>
+    <message>
+        <source>n%1</source>
+        <translation>n%1</translation>
+    </message>
+    <message>
+        <source>param %1</source>
+        <translation>param %1</translation>
+    </message>
+    <message>
+        <source>unknown</source>
+        <translation>inconnu</translation>
+    </message>
+    <message>
+        <source>—</source>
+        <translation>—</translation>
+    </message>
+    <message>
+        <source>Block %1 · Original addresses: %2
+%3</source>
+        <translation>Bloc %1 · Adresses d’origine : %2
+%3</translation>
+    </message>
+    <message>
+        <source>External input binding; the producers have not been compared.
+%1</source>
+        <translation>Correspondance des entrées externes ; leurs producteurs n’ont pas été comparés.
+%1</translation>
+    </message>
+    <message>
+        <source>param %1: low %2 of %3 bits</source>
+        <translation>paramètre %1 : %2 bits de poids faible sur %3</translation>
+    </message>
+    <message>
+        <source>Primary: %1
+Secondary: %2
+Every use of a projected parameter reads the same low bits. Whole-function behavior remains unverified.
+%3</source>
+        <translation>Primaire : %1
+Secondaire : %2
+Chaque utilisation d’un paramètre projeté lit les mêmes bits de poids faible. Le comportement de la fonction entière reste non vérifié.
+%3</translation>
+    </message>
+    <message>
+        <source>Every use of this parameter reads the same low bits; the original width and native site are retained.</source>
+        <translation>Chaque utilisation de ce paramètre lit les mêmes bits de poids faible ; la largeur et l’emplacement natif d’origine sont conservés.</translation>
+    </message>
+    <message>
+        <source>%1 (analyzed name: %2)</source>
+        <translation>%1 (nom analysé : %2)</translation>
+    </message>
+    <message>
+        <source>Counterpart: %1</source>
+        <translation>Fonction correspondante : %1</translation>
+    </message>
+    <message>
+        <source>Uncertain</source>
+        <translation>Incertain</translation>
+    </message>
+    <message>
+        <source>Argument</source>
+        <translation>Argument</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Accès</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>Entrée RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Écriture</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Lecture</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>Chemin COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>Non observé</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>Chemin COPY/PHI de même largeur vers un opérande RETURN. Cet opérande peut être une cible de contrôle ; cela n’établit ni une valeur de retour ABI ni l’ordre d’exécution.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonRegionsDialog</name>
+    <message>
+        <source>
+Dependency scope: %1 / %2 · %3 ambiguous candidates · %4 graphs exceeded analysis allowance</source>
+        <translation>
+Périmètre des dépendances : %1 / %2 · %3 candidats ambigus · %4 graphes ont dépassé le budget d&apos;analyse</translation>
+    </message>
+    <message>
+        <source>%1 hypotheses · %2 anchors · %3 frequent seed groups skipped · %4 oversized groups suppressed · %5 weak candidates skipped · %6</source>
+        <translation>%1 hypothèses · %2 ancrages · %3 groupes d&apos;amorces fréquents ignorés · %4 groupes surdimensionnés exclus · %5 candidats faibles ignorés · %6</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of decoded non-transfer instructions. Calls and control transfers need separate review.</source>
+        <translation>%1 fonctions principales / %2 secondaires · %3 segments communs
+Couverture : %4% / %5% des instructions décodées hors transferts. Les appels et transferts de contrôle nécessitent un examen séparé.</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 verified neighborhoods
+Coverage: %4% / %5% of observed SSA nodes in these functions. Control and external effects remain open; hover for original bytes.</source>
+        <translation>%1 fonctions principales / %2 secondaires · %3 voisinages vérifiés
+Couverture : %4% / %5% des nœuds SSA observés dans ces fonctions. Le contrôle et les effets externes restent à vérifier ; survolez pour afficher les octets d&apos;origine.</translation>
+    </message>
+    <message>
+        <source>%1 shared spans. These include unfinished or unclassified candidate groups. Select a span to inspect its original instructions.</source>
+        <translation>%1 segments communs, y compris les groupes de candidats inachevés ou non classés. Sélectionnez un segment pour examiner ses instructions d&apos;origine.</translation>
+    </message>
+    <message>
+        <source>%1 verified SSA neighborhoods, including unclassified groups. Select one for paired nodes; hover for operands and original bytes.</source>
+        <translation>%1 voisinages SSA vérifiés, y compris les groupes non classés. Sélectionnez-en un pour voir les nœuds appariés ; survolez pour afficher les opérandes et octets d&apos;origine.</translation>
+    </message>
+    <message>
+        <source>All hypotheses</source>
+        <translation>Toutes les hypothèses</translation>
+    </message>
+    <message>
+        <source>All shared spans (including unclassified)</source>
+        <translation>Tous les segments communs (y compris non classés)</translation>
+    </message>
+    <message>
+        <source>Clone</source>
+        <translation>Clone</translation>
+    </message>
+    <message>
+        <source>Enable SSA region hypotheses in comparison Settings, then compare again.</source>
+        <translation>Activez les hypothèses de régions SSA dans les paramètres de comparaison, puis comparez à nouveau.</translation>
+    </message>
+    <message>
+        <source>Enable region analysis in comparison Settings, then compare again.</source>
+        <translation>Activez l&apos;analyse des régions dans les paramètres de comparaison, puis comparez à nouveau.</translation>
+    </message>
+    <message>
+        <source>Inline</source>
+        <translation>Insertion en ligne</translation>
+    </message>
+    <message>
+        <source>Inputs changed. Reload the comparison.</source>
+        <translation>Les entrées ont changé. Rechargez la comparaison.</translation>
+    </message>
+    <message>
+        <source>Inspect primary function</source>
+        <translation>Inspecter la fonction principale</translation>
+    </message>
+    <message>
+        <source>Inspect secondary function</source>
+        <translation>Inspecter la fonction secondaire</translation>
+    </message>
+    <message>
+        <source>Merge</source>
+        <translation>Fusion</translation>
+    </message>
+    <message>
+        <source>Module movement</source>
+        <translation>Déplacement de module</translation>
+    </message>
+    <message>
+        <source>Outline</source>
+        <translation>Vue d&apos;ensemble</translation>
+    </message>
+    <message>
+        <source>Possible transformation</source>
+        <translation>Transformation possible</translation>
+    </message>
+    <message>
+        <source>Redistribution</source>
+        <translation>Redistribution</translation>
+    </message>
+    <message>
+        <source>Region hypotheses — Binary comparison</source>
+        <translation>Hypothèses de régions — Comparaison binaire</translation>
+    </message>
+    <message>
+        <source>SSA region hypotheses — Binary comparison</source>
+        <translation>Hypothèses de régions SSA — Comparaison binaire</translation>
+    </message>
+    <message>
+        <source>Select a hypothesis to inspect its shared spans.</source>
+        <translation>Sélectionnez une hypothèse pour examiner ses étendues communes.</translation>
+    </message>
+    <message>
+        <source>Shared native instruction runs suggest possible transformations. Review competing explanations and uncovered code; these results do not validate behavior or patch presence.</source>
+        <translation>Les séquences communes d&apos;instructions natives suggèrent des transformations possibles. Examinez les explications concurrentes et le code non couvert ; ces résultats ne valident ni le comportement ni la présence du correctif.</translation>
+    </message>
+    <message>
+        <source>Shared region</source>
+        <translation>Région commune</translation>
+    </message>
+    <message>
+        <source>Shared tail</source>
+        <translation>Fin commune</translation>
+    </message>
+    <message>
+        <source>Split</source>
+        <translation>Scission</translation>
+    </message>
+    <message>
+        <source>Verified finite SSA neighborhoods suggest possible transformations. Review gaps and open dependencies; correspondence does not validate behavior or patch presence.</source>
+        <translation>Les voisinages SSA finis vérifiés suggèrent des transformations possibles. Examinez les lacunes et les dépendances ouvertes ; la correspondance ne valide ni le comportement ni la présence du correctif.</translation>
+    </message>
+    <message>
+        <source>Waiting for comparison to finish…</source>
+        <translation>En attente de la fin de la comparaison…</translation>
+    </message>
+    <message>
+        <source>complete</source>
+        <translation>complet</translation>
+    </message>
+    <message>
+        <source>partial</source>
+        <translation>partiel</translation>
+    </message>
+    <message>
+        <source>Fragment evidence</source>
+        <translation>Éléments probants du fragment</translation>
+    </message>
+    <message>
+        <source>Matched operations</source>
+        <translation>Opérations correspondantes</translation>
+    </message>
+    <message>
+        <source>External inputs</source>
+        <translation>Entrées externes</translation>
+    </message>
+    <message>
+        <source>Depth %1 · Matched operations: %2 · External inputs: %3
+External input producers are not compared or counted as shared code.</source>
+        <translation>Profondeur %1 · Opérations correspondantes : %2 · Entrées externes : %3
+Les producteurs des entrées externes ne sont ni comparés ni comptés comme code commun.</translation>
+    </message>
+    <message>
+        <source>
+SSA recipe: %1</source>
+        <translation>
+Méthode SSA : %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Les appels utilisent les paires de fonctions actuelles ; le comportement n’est pas validé.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Contexte des appels…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secondaire</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 fonctions principales / %2 secondaires · %3 plages communes
+Couverture : %4% / %5% des instructions admissibles, y compris les appels directs associés. Ces éléments dépendent des paires de fonctions ; le comportement n’est pas validé.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonReviewDialog</name>
+    <message>
+        <source>%1 matching / %2 total events · newest first · manual assessments</source>
+        <translation>%1 événements correspondants / %2 au total · les plus récents d&apos;abord · évaluations manuelles</translation>
+    </message>
+    <message>
+        <source>Analyst review — NeverD</source>
+        <translation>Examen de l&apos;analyste — NeverD</translation>
+    </message>
+    <message>
+        <source>Analyst statements do not change computed matching or validate patch behavior. Authors are self-described. Save/export the comparison to keep this history on disk.</source>
+        <translation>Les déclarations des analystes ne modifient pas les correspondances calculées et ne valident pas le comportement du correctif. L&apos;identité des auteurs est déclarative. Enregistrez ou exportez la comparaison pour conserver cet historique sur disque.</translation>
+    </message>
+    <message>
+        <source>Append assessment</source>
+        <translation>Ajouter une évaluation</translation>
+    </message>
+    <message>
+        <source>Assessment</source>
+        <translation>Évaluation</translation>
+    </message>
+    <message>
+        <source>Assessment note</source>
+        <translation>Note d&apos;évaluation</translation>
+    </message>
+    <message>
+        <source>Author</source>
+        <translation>Auteur</translation>
+    </message>
+    <message>
+        <source>Candidate fix</source>
+        <translation>Correction candidate</translation>
+    </message>
+    <message>
+        <source>Case</source>
+        <translation>Dossier</translation>
+    </message>
+    <message>
+        <source>Case filter</source>
+        <translation>Filtre de dossier</translation>
+    </message>
+    <message>
+        <source>Case: %1
+Author (self-described): %2
+Assessment: %3
+Pair: %4 ↔ %5
+Pair binding: %6 · %7 assessment
+Reference: %8
+
+%9
+
+Event: %10
+Supersedes: %11</source>
+        <translation>Dossier : %1
+Auteur (identité déclarée) : %2
+Évaluation : %3
+Paire : %4 ↔ %5
+Liaison de la paire : %6 · évaluation %7
+Référence : %8
+
+%9
+
+Événement : %10
+Remplace : %11</translation>
+    </message>
+    <message>
+        <source>Draft exceeds the UTF-8 text allowance.</source>
+        <translation>Le brouillon dépasse le budget de texte UTF-8.</translation>
+    </message>
+    <message>
+        <source>Draft retained for %1 ↔ %2 on its original inputs. Choose New draft to use the selected pair.</source>
+        <translation>Brouillon conservé pour %1 ↔ %2 sur ses entrées d&apos;origine. Choisissez « Nouveau brouillon » pour utiliser la paire sélectionnée.</translation>
+    </message>
+    <message>
+        <source>Exact case identifier (empty: all cases)</source>
+        <translation>Identifiant exact du dossier (vide : tous les dossiers)</translation>
+    </message>
+    <message>
+        <source>Inconclusive</source>
+        <translation>Non concluant</translation>
+    </message>
+    <message>
+        <source>Investigating</source>
+        <translation>En cours d&apos;investigation</translation>
+    </message>
+    <message>
+        <source>Latest assessments only</source>
+        <translation>Évaluations les plus récentes uniquement</translation>
+    </message>
+    <message>
+        <source>Loading analyst history…</source>
+        <translation>Chargement de l&apos;historique de l&apos;analyste…</translation>
+    </message>
+    <message>
+        <source>Manual assessment of %1 ↔ %2</source>
+        <translation>Évaluation manuelle de %1 ↔ %2</translation>
+    </message>
+    <message>
+        <source>New assessment</source>
+        <translation>Nouvelle évaluation</translation>
+    </message>
+    <message>
+        <source>New draft for selected pair</source>
+        <translation>Nouveau brouillon pour la paire sélectionnée</translation>
+    </message>
+    <message>
+        <source>Partial patch</source>
+        <translation>Correctif partiel</translation>
+    </message>
+    <message>
+        <source>Patch absent</source>
+        <translation>Correctif absent</translation>
+    </message>
+    <message>
+        <source>Patch present</source>
+        <translation>Correctif présent</translation>
+    </message>
+    <message>
+        <source>Record the evidence and limitations behind your assessment.</source>
+        <translation>Consignez les éléments probants et les limites de votre évaluation.</translation>
+    </message>
+    <message>
+        <source>Reference</source>
+        <translation>Référence</translation>
+    </message>
+    <message>
+        <source>Refresh history</source>
+        <translation>Actualiser l&apos;historique</translation>
+    </message>
+    <message>
+        <source>Relevant change</source>
+        <translation>Changement pertinent</translation>
+    </message>
+    <message>
+        <source>Reverted patch</source>
+        <translation>Correctif annulé</translation>
+    </message>
+    <message>
+        <source>Save comparison…</source>
+        <translation>Enregistrer la comparaison…</translation>
+    </message>
+    <message>
+        <source>Select an accepted function pair to append an assessment.</source>
+        <translation>Sélectionnez une paire de fonctions acceptée pour ajouter une évaluation.</translation>
+    </message>
+    <message>
+        <source>Selected record</source>
+        <translation>Enregistrement sélectionné</translation>
+    </message>
+    <message>
+        <source>Unrelated change</source>
+        <translation>Changement sans rapport</translation>
+    </message>
+    <message>
+        <source>accepted</source>
+        <translation>accepté</translation>
+    </message>
+    <message>
+        <source>earlier</source>
+        <translation>antérieur</translation>
+    </message>
+    <message>
+        <source>inactive</source>
+        <translation>inactif</translation>
+    </message>
+    <message>
+        <source>latest</source>
+        <translation>le plus récent</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonSession</name>
+    <message>
+        <source>Comparison worker: %1</source>
+        <translation>Processus de comparaison : %1</translation>
+    </message>
+    <message>
+        <source>Could not replace the comparison. Your previous comparison is still available. %1</source>
+        <translation>Impossible de remplacer la comparaison. Votre comparaison précédente reste disponible. %1</translation>
+    </message>
+    <message>
+        <source>Loading stopped. Ready to try again.</source>
+        <translation>Chargement arrêté. Prêt pour un nouvel essai.</translation>
+    </message>
+    <message>
+        <source>Loading stopped. Your previous comparison is still available.</source>
+        <translation>Chargement arrêté. Votre comparaison précédente reste disponible.</translation>
+    </message>
+    <message>
+        <source>The worker could not acknowledge cancellation.</source>
+        <translation>Le processus n&apos;a pas pu confirmer l&apos;annulation.</translation>
+    </message>
+    <message>
+        <source>This worker does not support binary comparison.</source>
+        <translation>Ce processus ne prend pas en charge la comparaison binaire.</translation>
+    </message>
+    <message>
+      <source>Restore stopped. Ready to try again.</source>
+      <translation>Restauration arrêtée. Vous pouvez réessayer.</translation>
+    </message>
+    <message>
+      <source>Restore stopped. Your previous comparison is still available.</source>
+      <translation>Restauration arrêtée. Votre comparaison précédente reste disponible.</translation>
+    </message>
+    <message>
+      <source>Could not restore the comparison. Your previous comparison is still available. %1</source>
+      <translation>Impossible de restaurer la comparaison. Votre comparaison précédente reste disponible. %1</translation>
+    </message>
+    <message>
+        <source>Edit stopped. Your previous comparison and edit history are still available.</source>
+        <translation>Modification arrêtée. La comparaison précédente et son historique de modifications restent disponibles.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonValidationDialog</name>
+    <message>
+        <source>
+Proof work: %1; completed partitions: %2; attempts: %3
+</source>
+        <translation>
+Travail de preuve : %1 ; partitions terminées : %2 ; tentatives : %3
+</translation>
+    </message>
+    <message>
+        <source>Argument %1: %2 bits, register offset %3
+</source>
+        <translation>Argument %1 : %2 bits, décalage de registre %3
+</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Cancelled. No equivalence conclusion.</source>
+        <translation>Annulé. Aucune conclusion d&apos;équivalence.</translation>
+    </message>
+    <message>
+        <source>Check again</source>
+        <translation>Vérifier à nouveau</translation>
+    </message>
+    <message>
+        <source>Check equal integer returns and defined termination in the lifted models, for all defined input bitvectors at matching register locations. Native-state equivalence and security are outside this check.</source>
+        <translation>Vérifier l&apos;égalité des retours entiers et la terminaison définie dans les modèles traduits en IR, pour tous les vecteurs de bits d&apos;entrée définis aux positions de registre correspondantes. Cette vérification ne couvre ni l&apos;équivalence de l&apos;état natif ni la sécurité.</translation>
+    </message>
+    <message>
+        <source>Detail: %1
+
+</source>
+        <translation>Détail : %1
+
+</translation>
+    </message>
+    <message>
+        <source>Equal returns proved in the lifted scalar models.</source>
+        <translation>L&apos;égalité des retours est prouvée dans les modèles scalaires traduits en IR.</translation>
+    </message>
+    <message>
+        <source>Equivalence remains unproved; this does not establish a difference.</source>
+        <translation>L&apos;équivalence reste non prouvée ; cela n&apos;établit pas de différence.</translation>
+    </message>
+    <message>
+        <source>Full report</source>
+        <translation>Rapport complet</translation>
+    </message>
+    <message>
+        <source>Input assumption: defined integer bitvectors at identical register locations.
+Lift correctness is assumed. Complete native state, memory and call effects are not proved.
+This result does not assess vulnerability or fix status.
+
+</source>
+        <translation>Hypothèse d&apos;entrée : vecteurs de bits entiers définis aux mêmes positions de registre.
+La traduction en IR est supposée correcte. L&apos;état natif complet et les effets mémoire et d&apos;appel ne sont pas prouvés.
+Ce résultat n&apos;évalue pas la présence d&apos;une vulnérabilité ou d&apos;une correction.
+
+</translation>
+    </message>
+    <message>
+        <source>Inputs or pairing changed. Select the function pair again.</source>
+        <translation>Les entrées ou l&apos;appariement ont changé. Sélectionnez à nouveau la paire de fonctions.</translation>
+    </message>
+    <message>
+        <source>Inputs: retained comparison sources.
+</source>
+        <translation>Entrées : sources de comparaison conservées.
+</translation>
+    </message>
+    <message>
+        <source>Lifting and checking this pair… Cancellation is cooperative.</source>
+        <translation>Traduction en IR et vérification de cette paire… L&apos;annulation est coopérative.</translation>
+    </message>
+    <message>
+        <source>Limits changed. Check again.</source>
+        <translation>Les limites ont changé. Vérifiez à nouveau.</translation>
+    </message>
+    <message>
+        <source>Live input versions rechecked: %1
+</source>
+        <translation>Versions actuelles des entrées revérifiées : %1
+</translation>
+    </message>
+    <message>
+        <source>Maximum native instructions per function.</source>
+        <translation>Nombre maximal d&apos;instructions natives par fonction.</translation>
+    </message>
+    <message>
+        <source>Maximum work units for the scalar proof.</source>
+        <translation>Nombre maximal d&apos;unités de travail pour la preuve scalaire.</translation>
+    </message>
+    <message>
+        <source>Native instructions</source>
+        <translation>Instructions natives</translation>
+    </message>
+    <message>
+        <source>Pairing changed. Select the function pair again.</source>
+        <translation>L&apos;appariement a changé. Sélectionnez à nouveau la paire de fonctions.</translation>
+    </message>
+    <message>
+        <source>Primary %1 (%2) ↔ Secondary %3 (%4)</source>
+        <translation>Principal %1 (%2) ↔ Secondaire %3 (%4)</translation>
+    </message>
+    <message>
+        <source>Profile: %1
+
+Primary SHA-256: %2
+Secondary SHA-256: %3
+</source>
+        <translation>Profil : %1
+
+SHA-256 principal : %2
+SHA-256 secondaire : %3
+</translation>
+    </message>
+    <message>
+        <source>Proof work</source>
+        <translation>Travail de preuve</translation>
+    </message>
+    <message>
+        <source>Result and assumptions</source>
+        <translation>Résultat et hypothèses</translation>
+    </message>
+    <message>
+        <source>Return width: %1 bits
+</source>
+        <translation>Largeur du retour : %1 bits
+</translation>
+    </message>
+    <message>
+        <source>Select an accepted function pair.</source>
+        <translation>Sélectionnez une paire de fonctions acceptée.</translation>
+    </message>
+    <message>
+        <source>Selected %1 function: %2</source>
+        <translation>Fonction sélectionnée du côté %1 : %2</translation>
+    </message>
+    <message>
+        <source>This pair is outside the supported scalar model.</source>
+        <translation>Cette paire dépasse le cadre du modèle scalaire pris en charge.</translation>
+    </message>
+    <message>
+        <source>Time limit (ms)</source>
+        <translation>Délai limite (ms)</translation>
+    </message>
+    <message>
+        <source>Time limit reached. No equivalence conclusion.</source>
+        <translation>Délai limite atteint. Aucune conclusion d&apos;équivalence.</translation>
+    </message>
+    <message>
+        <source>Validate scalar returns — NeverD</source>
+        <translation>Valider les retours scalaires — NeverD</translation>
+    </message>
+    <message>
+        <source>Validation limit reached. Adjust the limits and check again.</source>
+        <translation>Limite de validation atteinte. Ajustez les limites et vérifiez à nouveau.</translation>
+    </message>
+    <message>
+        <source>no</source>
+        <translation>non</translation>
+    </message>
+    <message>
+        <source>yes</source>
+        <translation>oui</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ComparisonSourceView</name>
+    <message>
+        <source>View:</source>
+        <translation>Vue :</translation>
+    </message>
+    <message>
+        <source>Input language</source>
+        <translation>Langage de l’entrée</translation>
+    </message>
+    <message>
+        <source>Reload source</source>
+        <translation>Recharger le source</translation>
+    </message>
+    <message>
+        <source>Options</source>
+        <translation>Options</translation>
+    </message>
+    <message>
+        <source>Remove instruction allowance</source>
+        <translation>Lever la limite d’instructions</translation>
+    </message>
+    <message>
+        <source>Each pane shows its own source lines. Select a line to inspect its original instructions.</source>
+        <translation>Chaque volet affiche ses propres lignes source. Sélectionnez une ligne pour examiner ses instructions d’origine.</translation>
+    </message>
+    <message>
+        <source>Secondary source</source>
+        <translation>Source secondaire</translation>
+    </message>
+    <message>
+        <source>Primary source</source>
+        <translation>Source principal</translation>
+    </message>
+    <message>
+        <source>Previous source page</source>
+        <translation>Page source précédente</translation>
+    </message>
+    <message>
+        <source>Next source page</source>
+        <translation>Page source suivante</translation>
+    </message>
+    <message>
+        <source>Go to source line</source>
+        <translation>Aller à la ligne source</translation>
+    </message>
+    <message>
+        <source>Original instruction anchors</source>
+        <translation>Ancrages des instructions d’origine</translation>
+    </message>
+    <message>
+        <source>Show instruction</source>
+        <translation>Afficher l’instruction</translation>
+    </message>
+    <message>
+        <source>Secondary: %1 %2</source>
+        <translation>Secondaire : %1 %2</translation>
+    </message>
+    <message>
+        <source>Primary: %1 %2</source>
+        <translation>Principal : %1 %2</translation>
+    </message>
+    <message>
+        <source>No function selected on this side.</source>
+        <translation>Aucune fonction sélectionnée de ce côté.</translation>
+    </message>
+    <message>
+        <source>Source is ready to load.</source>
+        <translation>Le source est prêt à être chargé.</translation>
+    </message>
+    <message>
+        <source>This worker does not support source inspection.</source>
+        <translation>Ce processus de travail ne prend pas en charge l’inspection du source.</translation>
+    </message>
+    <message>
+        <source>Preparing source… Cancellation waits for the current analysis step.</source>
+        <translation>Préparation du source… L’annulation attend la fin de l’étape d’analyse en cours.</translation>
+    </message>
+    <message>
+        <source>Source exceeds the instruction allowance. Adjust Options to inspect this function.</source>
+        <translation>Le source dépasse la limite d’instructions. Ajustez les options pour examiner cette fonction.</translation>
+    </message>
+    <message>
+        <source>Source inspection stopped. Reload source to try again.</source>
+        <translation>Inspection du source arrêtée. Rechargez le source pour réessayer.</translation>
+    </message>
+    <message>
+        <source>Source unavailable: %1</source>
+        <translation>Source indisponible : %1</translation>
+    </message>
+    <message>
+        <source>Lines %1–%2 of %3</source>
+        <translation>Lignes %1–%2 sur %3</translation>
+    </message>
+    <message>
+        <source> · Native coverage is incomplete</source>
+        <translation> · Couverture native incomplète</translation>
+    </message>
+    <message>
+        <source>Unmapped line</source>
+        <translation>Ligne sans correspondance</translation>
+    </message>
+    <message>
+        <source>Align source lines</source>
+        <translation>Aligner les lignes source</translation>
+    </message>
+    <message>
+        <source>Remove alignment work allowance</source>
+        <translation>Lever la limite de travail d’alignement</translation>
+    </message>
+    <message>
+        <source>Remove source evidence byte allowance</source>
+        <translation>Lever la limite en octets des éléments source</translation>
+    </message>
+    <message>
+        <source>Include declarations in alignment</source>
+        <translation>Inclure les déclarations dans l’alignement</translation>
+    </message>
+    <message>
+        <source>Go to aligned row</source>
+        <translation>Aller à la ligne alignée</translation>
+    </message>
+    <message>
+        <source>Text differences: + inserted, − deleted, ~ changed. Select a line to inspect its original instructions.</source>
+        <translation>Différences de texte : + inséré, − supprimé, ~ modifié. Sélectionnez une ligne pour examiner ses instructions originales.</translation>
+    </message>
+    <message>
+        <source>Aligning source… Cancellation waits for the current analysis step.</source>
+        <translation>Alignement du code source… L’annulation attend la fin de l’étape d’analyse en cours.</translation>
+    </message>
+    <message>
+        <source>Source alignment exceeds its allowance. Adjust Options or view independent source.</source>
+        <translation>L’alignement dépasse sa limite. Ajustez les options ou consultez les sources séparément.</translation>
+    </message>
+    <message>
+        <source>Source alignment stopped. Reload source to try again.</source>
+        <translation>Alignement du code source arrêté. Rechargez le code source pour réessayer.</translation>
+    </message>
+    <message>
+        <source>Aligned rows %1–%2 of %3</source>
+        <translation>Lignes alignées %1–%2 sur %3</translation>
+    </message>
+    <message>
+        <source> · Source line %1</source>
+        <translation> · Ligne source %1</translation>
+    </message>
+    <message>
+        <source> · No line on this side</source>
+        <translation> · Aucune ligne de ce côté</translation>
+    </message>
+    <message>
+        <source> · Changed</source>
+        <translation> · Modifié</translation>
+    </message>
+    <message>
+        <source> · Inserted</source>
+        <translation> · Inséré</translation>
+    </message>
+    <message>
+        <source> · Deleted</source>
+        <translation> · Supprimé</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::X87CapabilitiesDialog</name>
+    <message>
+        <source>%1 instruction forms. Static inventory; no host probe, execution or proof.</source>
+        <translation>%1 formes d’instructions. Inventaire statique ; aucune détection de l’hôte, exécution ou preuve.</translation>
+    </message>
+    <message>
+        <source>&amp;Backend:</source>
+        <translation>&amp;Moteur :</translation>
+    </message>
+    <message>
+        <source>&amp;Consumer:</source>
+        <translation>&amp;Consommateur :</translation>
+    </message>
+    <message>
+        <source>&amp;Destination:</source>
+        <translation>&amp;Destination :</translation>
+    </message>
+    <message>
+        <source>&amp;Reload</source>
+        <translation>&amp;Recharger</translation>
+    </message>
+    <message>
+        <source>&amp;Source mode:</source>
+        <translation>Mode &amp;source :</translation>
+    </message>
+    <message>
+        <source>Call contract: %1</source>
+        <translation>Contrat d’appel : %1</translation>
+    </message>
+    <message>
+        <source>Could not load x87 support: %1</source>
+        <translation>Impossible de charger la prise en charge de x87 : %1</translation>
+    </message>
+    <message>
+        <source>Filter instructions, operands or support…</source>
+        <translation>Filtrer les instructions, les opérandes ou la prise en charge…</translation>
+    </message>
+    <message>
+        <source>Filter x87 instructions</source>
+        <translation>Filtrer les instructions x87</translation>
+    </message>
+    <message>
+        <source>Inspect support for an instruction and execution profile. Numerical results and architectural state are qualified separately.</source>
+        <translation>Examiner la prise en charge d’une instruction et d’un profil d’exécution. Les résultats numériques et l’état architectural sont validés séparément.</translation>
+    </message>
+    <message>
+        <source>Loading x87 support…</source>
+        <translation>Chargement de la prise en charge de x87…</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>Non</translation>
+    </message>
+    <message>
+        <source>Reason: %1</source>
+        <translation>Motif : %1</translation>
+    </message>
+    <message>
+        <source>Regression sources: %1</source>
+        <translation>Sources des tests de régression : %1</translation>
+    </message>
+    <message>
+        <source>Requirements: %1</source>
+        <translation>Exigences : %1</translation>
+    </message>
+    <message>
+        <source>Select an instruction to inspect its requirements. Clear the filter if no forms are visible.</source>
+        <translation>Sélectionnez une instruction pour examiner ses exigences. Effacez le filtre si aucune forme n’est visible.</translation>
+    </message>
+    <message>
+        <source>Selected instruction requirements and limits</source>
+        <translation>Exigences et limites de l’instruction sélectionnée</translation>
+    </message>
+    <message>
+        <source>Source &amp;ABI:</source>
+        <translation>&amp;ABI source :</translation>
+    </message>
+    <message>
+        <source>Source path available: %1; default for this ABI: %2</source>
+        <translation>Voie de génération du code source disponible : %1 ; voie par défaut pour cette ABI : %2</translation>
+    </message>
+    <message>
+        <source>State &amp;path:</source>
+        <translation>&amp;Voie de traitement de l’état :</translation>
+    </message>
+    <message>
+        <source>The analysis worker is disconnected.</source>
+        <translation>Le processus d’analyse est déconnecté.</translation>
+    </message>
+    <message>
+        <source>This combination is not listed; it is unsupported.</source>
+        <translation>Cette combinaison n’est pas répertoriée ; elle n’est pas prise en charge.</translation>
+    </message>
+    <message>
+        <source>This engine does not provide an x87 support report.</source>
+        <translation>Ce moteur ne fournit pas de rapport de prise en charge de x87.</translation>
+    </message>
+    <message>
+        <source>This source mode / ABI / state path is not listed.</source>
+        <translation>Ce mode source / cette ABI / cette voie de traitement de l’état n’est pas répertorié.</translation>
+    </message>
+    <message>
+        <source>Waiting for the analysis worker.</source>
+        <translation>En attente du processus d’analyse.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Oui</translation>
+    </message>
+    <message>
+        <source>long double: %1</source>
+        <translation>long double : %1</translation>
+    </message>
+    <message>
+        <source>x87 instruction support</source>
+        <translation>Prise en charge des instructions x87</translation>
+    </message>
+    <message>
+        <source>x87 support</source>
+        <translation>Prise en charge de x87</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::X87CapabilitiesModel</name>
+    <message>
+        <source>Architectural state</source>
+        <translation>État architectural</translation>
+    </message>
+    <message>
+        <source>Implemented</source>
+        <translation>Implémenté</translation>
+    </message>
+    <message>
+        <source>Instruction</source>
+        <translation>Instruction</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>Non</translation>
+    </message>
+    <message>
+        <source>Numerical result</source>
+        <translation>Résultat numérique</translation>
+    </message>
+    <message>
+        <source>Operands</source>
+        <translation>Opérandes</translation>
+    </message>
+    <message>
+        <source>Profile</source>
+        <translation>Profil</translation>
+    </message>
+    <message>
+        <source>The engine returned an incompatible x87 capability report.</source>
+        <translation>Le moteur a renvoyé un rapport de capacités x87 incompatible.</translation>
+    </message>
+    <message>
+        <source>This combination is not listed; it is unsupported.</source>
+        <translation>Cette combinaison n’est pas répertoriée ; elle n’est pas prise en charge.</translation>
+    </message>
+    <message>
+        <source>Unlisted</source>
+        <translation>Non répertorié</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Oui</translation>
+    </message>
+    <message>
+        <source>unqualified</source>
+        <translation>non validé</translation>
+    </message>
+    <message>
+        <source>unsupported</source>
+        <translation>non pris en charge</translation>
+    </message>
+</context>
+<context>
+    <name>Docking</name>
+    <message>
+        <source>Dock back into main window</source>
+        <translation>Rattacher à la fenêtre principale</translation>
+    </message>
+    <message>
+        <source>Move window</source>
+        <translation>Déplacer la fenêtre</translation>
+    </message>
+    <message>
+        <source>Lock floating window</source>
+        <translation>Verrouiller la fenêtre flottante</translation>
+    </message>
+    <message>
+        <source>Unlock floating window</source>
+        <translation>Déverrouiller la fenêtre flottante</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ExportDataDialog</name>
+    <message>
+        <source>%1 bytes ready.</source>
+        <translation>%1 octets prêts.</translation>
+    </message>
+    <message>
+        <source>%1 bytes ready. Preview shows the first %2; copy and save use the complete range.</source>
+        <translation>%1 octets prêts. L’aperçu montre les %2 premiers ; la copie et l’enregistrement utilisent toute la plage.</translation>
+    </message>
+    <message>
+        <source>C byte array (decimal)</source>
+        <translation>Tableau d’octets C (décimal)</translation>
+    </message>
+    <message>
+        <source>C byte array (hex)</source>
+        <translation>Tableau d’octets C (hexadécimal)</translation>
+    </message>
+    <message>
+        <source>C string literal</source>
+        <translation>Littéral de chaîne C</translation>
+    </message>
+    <message>
+        <source>Cannot read the complete range at %1. Nothing was exported.</source>
+        <translation>Impossible de lire toute la plage à %1. Rien n’a été exporté.</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Copier</translation>
+    </message>
+    <message>
+        <source>Could not save %1: %2</source>
+        <translation>Impossible d’enregistrer %1 : %2</translation>
+    </message>
+    <message>
+        <source>End address (inclusive):</source>
+        <translation>Adresse de fin (incluse) :</translation>
+    </message>
+    <message>
+        <source>Enter a valid address range.</source>
+        <translation>Saisissez une plage d’adresses valide.</translation>
+    </message>
+    <message>
+        <source>Export data</source>
+        <translation>Exporter les données</translation>
+    </message>
+    <message>
+        <source>Export takes at most %1 bytes; select a smaller range.</source>
+        <translation>L’exportation est limitée à %1 octets ; sélectionnez une plage plus petite.</translation>
+    </message>
+    <message>
+        <source>Format:</source>
+        <translation>Format :</translation>
+    </message>
+    <message>
+        <source>Hex string</source>
+        <translation>Chaîne hexadécimale</translation>
+    </message>
+    <message>
+        <source>Raw bytes (file only)</source>
+        <translation>Octets bruts (fichier uniquement)</translation>
+    </message>
+    <message>
+        <source>Reading bytes...</source>
+        <translation>Lecture des octets...</translation>
+    </message>
+    <message>
+        <source>Reading bytes: %1 / %2</source>
+        <translation>Lecture des octets : %1 / %2</translation>
+    </message>
+    <message>
+        <source>Save as...</source>
+        <translation>Enregistrer sous...</translation>
+    </message>
+    <message>
+        <source>Saved %1 bytes to %2</source>
+        <translation>%1 octets enregistrés dans %2</translation>
+    </message>
+    <message>
+        <source>Spaced hex string</source>
+        <translation>Chaîne hexadécimale avec espaces</translation>
+    </message>
+    <message>
+        <source>Start address:</source>
+        <translation>Adresse de début :</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PatchEditor</name>
+    <message>
+        <source>AT&amp;T</source>
+        <translation>AT&amp;T</translation>
+    </message>
+    <message>
+        <source>Apply patch</source>
+        <translation>Appliquer</translation>
+    </message>
+    <message>
+        <source>Assembly dialect</source>
+        <translation>Dialecte assembleur</translation>
+    </message>
+    <message>
+        <source>Assembly instruction</source>
+        <translation>Instruction assembleur</translation>
+    </message>
+    <message>
+        <source>Byte display truncated; the full range is %1 bytes.</source>
+        <translation>Affichage des octets tronqué ; la plage complète contient %1 octets.</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Fill with NOPs</source>
+        <translation>Compléter avec des NOP</translation>
+    </message>
+    <message>
+        <source>Hexadecimal bytes</source>
+        <translation>Octets hexadécimaux</translation>
+    </message>
+    <message>
+        <source>Intel</source>
+        <translation>Intel</translation>
+    </message>
+    <message>
+        <source>New: %1</source>
+        <translation>Nouveau : %1</translation>
+    </message>
+    <message>
+        <source>Original: %1</source>
+        <translation>Origine : %1</translation>
+    </message>
+    <message>
+        <source>Patch at %1 — Enter applies, Esc cancels</source>
+        <translation>Modification à %1 — Entrée applique, Échap annule</translation>
+    </message>
+    <message>
+        <source>Preparing preview…</source>
+        <translation>Préparation de l’aperçu…</translation>
+    </message>
+    <message>
+        <source>Replace following instructions</source>
+        <translation>Remplacer les instructions suivantes</translation>
+    </message>
+    <message>
+        <source>Review the covered instructions and enable replacement to apply.</source>
+        <translation>Vérifiez les instructions couvertes et autorisez leur remplacement pour appliquer.</translation>
+    </message>
+    <message>
+        <source>The input changed. Reopen the patch editor.</source>
+        <translation>L’entrée a changé. Rouvrez l’éditeur de modification.</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Fermer</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::RewriteFunctionDialog</name>
+    <message>
+        <source>%1 original symbol bindings prepared. Output uses a new file.</source>
+        <translation>%1 liaisons de symboles d’origine préparées. La sortie utilise un nouveau fichier.</translation>
+    </message>
+    <message>
+        <source>Compare with original</source>
+        <translation>Comparer à l’original</translation>
+    </message>
+    <message>
+        <source>Compile to new binary…</source>
+        <translation>Compiler dans un nouveau binaire…</translation>
+    </message>
+    <message>
+        <source>Compiler path:</source>
+        <translation>Chemin du compilateur :</translation>
+    </message>
+    <message>
+        <source>Compiler:</source>
+        <translation>Compilateur :</translation>
+    </message>
+    <message>
+        <source>Compiling and validating the replacement…</source>
+        <translation>Compilation et validation du remplacement…</translation>
+    </message>
+    <message>
+        <source>Empty selects the sole external definition</source>
+        <translation>Vide : sélectionne l’unique définition externe</translation>
+    </message>
+    <message>
+        <source>Executable name or full path</source>
+        <translation>Nom de l’exécutable ou chemin complet</translation>
+    </message>
+    <message>
+        <source>Open new binary</source>
+        <translation>Ouvrir le nouveau binaire</translation>
+    </message>
+    <message>
+        <source>Optional external function name to call the saved original body</source>
+        <translation>Nom de fonction externe facultatif pour appeler le corps d’origine sauvegardé</translation>
+    </message>
+    <message>
+        <source>Original-body binding:</source>
+        <translation>Liaison du corps d’origine :</translation>
+    </message>
+    <message>
+        <source>Preparing compilable C and original bindings…</source>
+        <translation>Préparation du C compilable et des liaisons d’origine…</translation>
+    </message>
+    <message>
+        <source>Produce replacement binary</source>
+        <translation>Produire le binaire de remplacement</translation>
+    </message>
+    <message>
+        <source>Publication receipt</source>
+        <translation>Reçu de publication</translation>
+    </message>
+    <message>
+        <source>Replacement C source</source>
+        <translation>Source C de remplacement</translation>
+    </message>
+    <message>
+        <source>Replacement function:</source>
+        <translation>Fonction de remplacement :</translation>
+    </message>
+    <message>
+        <source>Replacement published to %1</source>
+        <translation>Remplacement publié dans %1</translation>
+    </message>
+    <message>
+        <source>Rewrite function in C</source>
+        <translation>Réécrire la fonction en C</translation>
+    </message>
+    <message>
+        <source>The analysis changed. Reopen this editor before compiling.</source>
+        <translation>L’analyse a changé. Rouvrez cet éditeur avant de compiler.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LineageDialog</name>
+    <message>
+        <source> · unsaved</source>
+        <translation> · non enregistré</translation>
+    </message>
+    <message>
+        <source>%1 snapshots · %2 source comparisons · %3 functions · %4 conflict groups · %5 incomplete reports%6</source>
+        <translation>%1 instantanés · %2 comparaisons sources · %3 fonctions · %4 groupes de conflits · %5 rapports incomplets%6</translation>
+    </message>
+    <message>
+        <source>&amp;Add comparisons…</source>
+        <translation>&amp;Ajouter des comparaisons…</translation>
+    </message>
+    <message>
+        <source>&amp;Branch</source>
+        <translation>&amp;Branche</translation>
+    </message>
+    <message>
+        <source>&amp;Label</source>
+        <translation>&amp;Libellé</translation>
+    </message>
+    <message>
+        <source>&amp;Open graph…</source>
+        <translation>&amp;Ouvrir un graphe…</translation>
+    </message>
+    <message>
+        <source>&amp;Save graph…</source>
+        <translation>&amp;Enregistrer le graphe…</translation>
+    </message>
+    <message>
+        <source>&amp;Trace selected function</source>
+        <translation>&amp;Suivre la fonction sélectionnée</translation>
+    </message>
+    <message>
+        <source>Add saved comparisons</source>
+        <translation>Ajouter des comparaisons enregistrées</translation>
+    </message>
+    <message>
+        <source>Add saved comparisons between releases to trace functions, inspect conflicting paths and review the original evidence.</source>
+        <translation>Ajoutez des comparaisons enregistrées entre versions pour suivre les fonctions, examiner les chemins contradictoires et consulter les preuves originales.</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Adresse</translation>
+    </message>
+    <message>
+        <source>Ambiguous</source>
+        <translation>Ambigu</translation>
+    </message>
+    <message>
+        <source>Ambiguous candidates</source>
+        <translation>Candidats ambigus</translation>
+    </message>
+    <message>
+        <source>Analyzed snapshots</source>
+        <translation>Instantanés analysés</translation>
+    </message>
+    <message>
+        <source>Anchor</source>
+        <translation>Ancrage</translation>
+    </message>
+    <message>
+        <source>Anchors</source>
+        <translation>Ancrages</translation>
+    </message>
+    <message>
+        <source>Assessment</source>
+        <translation>Évaluation</translation>
+    </message>
+    <message>
+        <source>Assessment history</source>
+        <translation>Historique des évaluations</translation>
+    </message>
+    <message>
+        <source>Assessments</source>
+        <translation>Évaluations</translation>
+    </message>
+    <message>
+        <source>Associations come from saved reports. Release order and patch presence are not inferred.</source>
+        <translation>Les associations proviennent de rapports enregistrés. L'ordre des versions et la présence de correctifs ne sont pas déduits.</translation>
+    </message>
+    <message>
+        <source>Author</source>
+        <translation>Auteur</translation>
+    </message>
+    <message>
+        <source>Branch</source>
+        <translation>Branche</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Candidates are not accepted associations. Both sides retain every listed candidate.</source>
+        <translation>Les candidats ne sont pas des associations acceptées. Chaque côté conserve tous les candidats répertoriés.</translation>
+    </message>
+    <message>
+        <source>Case</source>
+        <translation>Dossier</translation>
+    </message>
+    <message>
+        <source>Changes</source>
+        <translation>Modifications</translation>
+    </message>
+    <message>
+        <source>Checking saved evidence…</source>
+        <translation>Vérification des preuves enregistrées…</translation>
+    </message>
+    <message>
+        <source>Conflict</source>
+        <translation>Conflit</translation>
+    </message>
+    <message>
+        <source>Conflicting function associations</source>
+        <translation>Associations de fonctions contradictoires</translation>
+    </message>
+    <message>
+        <source>Conflicts</source>
+        <translation>Conflits</translation>
+    </message>
+    <message>
+        <source>Deadline (milliseconds, 0: none)</source>
+        <translation>Délai (millisecondes, 0 : aucun)</translation>
+    </message>
+    <message>
+        <source>Decision</source>
+        <translation>Décision</translation>
+    </message>
+    <message>
+        <source>Decision history</source>
+        <translation>Historique des décisions</translation>
+    </message>
+    <message>
+        <source>Diagram of the current source-report page; layout does not indicate release order.</source>
+        <translation>Diagramme de la page actuelle des rapports sources ; la disposition n'indique pas l'ordre des versions.</translation>
+    </message>
+    <message>
+        <source>Direct evidence</source>
+        <translation>Preuves directes</translation>
+    </message>
+    <message>
+        <source>Distance</source>
+        <translation>Distance</translation>
+    </message>
+    <message>
+        <source>Distance counts report links. It is not a confidence score. Double-click a conflict to inspect its members.</source>
+        <translation>La distance compte les liens entre rapports. Ce n'est pas un score de confiance. Double-cliquez sur un conflit pour examiner ses membres.</translation>
+    </message>
+    <message>
+        <source>Edge</source>
+        <translation>Arête</translation>
+    </message>
+    <message>
+        <source>Edit &amp;label / branch…</source>
+        <translation>Modifier le &amp;libellé / la branche…</translation>
+    </message>
+    <message>
+        <source>Enter a value from %1 to %2 for the highlighted field.</source>
+        <translation>Saisissez une valeur entre %1 et %2 dans le champ sélectionné.</translation>
+    </message>
+    <message>
+        <source>Event</source>
+        <translation>Événement</translation>
+    </message>
+    <message>
+        <source>Explanation</source>
+        <translation>Explication</translation>
+    </message>
+    <message>
+        <source>Export original comparison</source>
+        <translation>Exporter la comparaison originale</translation>
+    </message>
+    <message>
+        <source>Export original report…</source>
+        <translation>Exporter le rapport original…</translation>
+    </message>
+    <message>
+        <source>Find a function by name or address</source>
+        <translation>Rechercher une fonction par nom ou adresse</translation>
+    </message>
+    <message>
+        <source>Fit</source>
+        <translation>Ajuster</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Fonction</translation>
+    </message>
+    <message>
+        <source>Function filter</source>
+        <translation>Filtre des fonctions</translation>
+    </message>
+    <message>
+        <source>Functions</source>
+        <translation>Fonctions</translation>
+    </message>
+    <message>
+        <source>Functions &amp; witnesses</source>
+        <translation>Fonctions et témoins</translation>
+    </message>
+    <message>
+        <source>Functions in %1</source>
+        <translation>Fonctions dans %1</translation>
+    </message>
+    <message>
+        <source>Graph / sources</source>
+        <translation>Graphe / sources</translation>
+    </message>
+    <message>
+        <source>Group</source>
+        <translation>Groupe</translation>
+    </message>
+    <message>
+        <source>Hypothesis</source>
+        <translation>Hypothèse</translation>
+    </message>
+    <message>
+        <source>Incomplete</source>
+        <translation>Incomplet</translation>
+    </message>
+    <message>
+        <source>Inspect conflict &amp;members…</source>
+        <translation>Examiner les &amp;membres du conflit…</translation>
+    </message>
+    <message>
+        <source>Inspect source &amp;evidence…</source>
+        <translation>Examiner les &amp;preuves sources…</translation>
+    </message>
+    <message>
+        <source>Instructions</source>
+        <translation>Instructions</translation>
+    </message>
+    <message>
+        <source>Kind</source>
+        <translation>Nature</translation>
+    </message>
+    <message>
+        <source>Label</source>
+        <translation>Libellé</translation>
+    </message>
+    <message>
+        <source>Latest</source>
+        <translation>Le plus récent</translation>
+    </message>
+    <message>
+        <source>Latest manual assessments stay attached to their original report and function pair. They do not establish a patch verdict in other snapshots.</source>
+        <translation>Les dernières évaluations manuelles restent rattachées à leur rapport et paire de fonctions d'origine. Elles n'établissent aucun verdict de correctif pour les autres instantanés.</translation>
+    </message>
+    <message>
+        <source>Matches</source>
+        <translation>Correspondances</translation>
+    </message>
+    <message>
+        <source>Members</source>
+        <translation>Membres</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Méthode</translation>
+    </message>
+    <message>
+        <source>Multiple functions from one snapshot, or an explicitly rejected pair reached through other reports, remain visible as conflicting evidence.</source>
+        <translation>Plusieurs fonctions d'un même instantané, ou une paire explicitement rejetée reliée par d'autres rapports, restent visibles comme preuves contradictoires.</translation>
+    </message>
+    <message>
+        <source>Native regions</source>
+        <translation>Régions natives</translation>
+    </message>
+    <message>
+        <source>NeverD comparison (*.nddiff)</source>
+        <translation>Comparaison NeverD (*.nddiff)</translation>
+    </message>
+    <message>
+        <source>NeverD comparisons (*.nddiff);;All files (*)</source>
+        <translation>Comparaisons NeverD (*.nddiff);;Tous les fichiers (*)</translation>
+    </message>
+    <message>
+        <source>NeverD version graphs (*.ndlineage)</source>
+        <translation>Graphes de versions NeverD (*.ndlineage)</translation>
+    </message>
+    <message>
+        <source>NeverD version graphs (*.ndlineage);;All files (*)</source>
+        <translation>Graphes de versions NeverD (*.ndlineage);;Tous les fichiers (*)</translation>
+    </message>
+    <message>
+        <source>Node</source>
+        <translation>Nœud</translation>
+    </message>
+    <message>
+        <source>Note</source>
+        <translation>Note</translation>
+    </message>
+    <message>
+        <source>Note: %1
+Reference: %2
+Primary: %3  Secondary: %4
+Supersedes: %5</source>
+        <translation>Note : %1
+Référence : %2
+Primaire : %3  Secondaire : %4
+Remplace : %5</translation>
+    </message>
+    <message>
+        <source>Open control frontier</source>
+        <translation>Frontière de contrôle ouverte</translation>
+    </message>
+    <message>
+        <source>Open version comparison graph</source>
+        <translation>Ouvrir un graphe de comparaison des versions</translation>
+    </message>
+    <message>
+        <source>Original assessment note and reference</source>
+        <translation>Note et référence originales de l'évaluation</translation>
+    </message>
+    <message>
+        <source>Original comparison evidence</source>
+        <translation>Preuves de comparaison originales</translation>
+    </message>
+    <message>
+        <source>Original region anchors</source>
+        <translation>Ancrages de région originaux</translation>
+    </message>
+    <message>
+        <source>Pair active</source>
+        <translation>Paire active</translation>
+    </message>
+    <message>
+        <source>Predecessor</source>
+        <translation>Prédécesseur</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Primary candidates</source>
+        <translation>Candidats primaires</translation>
+    </message>
+    <message>
+        <source>Primary function</source>
+        <translation>Fonction principale</translation>
+    </message>
+    <message>
+        <source>Primary function index</source>
+        <translation>Index de fonction primaire</translation>
+    </message>
+    <message>
+        <source>Primary instructions</source>
+        <translation>Instructions primaires</translation>
+    </message>
+    <message>
+        <source>Primary node</source>
+        <translation>Nœud principal</translation>
+    </message>
+    <message>
+        <source>Primary snapshot</source>
+        <translation>Instantané primaire</translation>
+    </message>
+    <message>
+        <source>Processing work allowance</source>
+        <translation>Budget de traitement</translation>
+    </message>
+    <message>
+        <source>Reading saved evidence…</source>
+        <translation>Lecture des preuves enregistrées…</translation>
+    </message>
+    <message>
+        <source>Ready</source>
+        <translation>Prêt</translation>
+    </message>
+    <message>
+        <source>Replacement accounts for the current collection, its trace and the candidate. A limit stops the operation and preserves the current graph. Report text allowance is not a process-memory limit.</source>
+        <translation>Le remplacement comptabilise la collection actuelle, sa trace et la collection candidate. Une limite arrête l'opération et conserve le graphe actuel. Le budget de texte des rapports n'est pas une limite de mémoire du processus.</translation>
+    </message>
+    <message>
+        <source>Report</source>
+        <translation>Rapport</translation>
+    </message>
+    <message>
+        <source>Report and history warnings</source>
+        <translation>Avertissements des rapports et de l'historique</translation>
+    </message>
+    <message>
+        <source>Report text and labels (bytes)</source>
+        <translation>Texte des rapports et libellés (octets)</translation>
+    </message>
+    <message>
+        <source>Resource settings will apply to subsequent loads and queries.</source>
+        <translation>Les paramètres de ressources s'appliqueront aux prochains chargements et requêtes.</translation>
+    </message>
+    <message>
+        <source>Resource settings…</source>
+        <translation>Paramètres de ressources…</translation>
+    </message>
+    <message>
+        <source>SSA nodes</source>
+        <translation>Nœuds SSA</translation>
+    </message>
+    <message>
+        <source>SSA regions</source>
+        <translation>Régions SSA</translation>
+    </message>
+    <message>
+        <source>Save current graph?</source>
+        <translation>Enregistrer le graphe actuel ?</translation>
+    </message>
+    <message>
+        <source>Save the current graph and snapshot labels before closing?</source>
+        <translation>Enregistrer le graphe actuel et les libellés des instantanés avant de fermer ?</translation>
+    </message>
+    <message>
+        <source>Save the current graph and snapshot labels before opening another graph?</source>
+        <translation>Enregistrer le graphe actuel et les libellés des instantanés avant d'ouvrir un autre graphe ?</translation>
+    </message>
+    <message>
+        <source>Save version comparison graph</source>
+        <translation>Enregistrer le graphe de comparaison des versions</translation>
+    </message>
+    <message>
+        <source>Save version graph?</source>
+        <translation>Enregistrer le graphe de versions ?</translation>
+    </message>
+    <message>
+        <source>Saved region evidence is not an accepted function association. Copy a row to inspect all retained fields; export the source for complete SSA node mappings.</source>
+        <translation>Les preuves de région enregistrées ne sont pas des associations de fonctions acceptées. Copiez une ligne pour examiner tous les champs conservés ; exportez le rapport source pour obtenir les correspondances complètes des nœuds SSA.</translation>
+    </message>
+    <message>
+        <source>Saving evidence…</source>
+        <translation>Enregistrement des preuves…</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary candidates</source>
+        <translation>Candidats secondaires</translation>
+    </message>
+    <message>
+        <source>Secondary function</source>
+        <translation>Fonction secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary function index</source>
+        <translation>Index de fonction secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary instructions</source>
+        <translation>Instructions secondaires</translation>
+    </message>
+    <message>
+        <source>Secondary node</source>
+        <translation>Nœud secondaire</translation>
+    </message>
+    <message>
+        <source>Secondary snapshot</source>
+        <translation>Instantané secondaire</translation>
+    </message>
+    <message>
+        <source>Select a snapshot to browse all retained functions.</source>
+        <translation>Sélectionnez un instantané pour parcourir toutes les fonctions conservées.</translation>
+    </message>
+    <message>
+        <source>Size</source>
+        <translation>Taille</translation>
+    </message>
+    <message>
+        <source>Snapshot</source>
+        <translation>Instantané</translation>
+    </message>
+    <message>
+        <source>Snapshot label and branch</source>
+        <translation>Libellé et branche de l'instantané</translation>
+    </message>
+    <message>
+        <source>Source report</source>
+        <translation>Rapport source</translation>
+    </message>
+    <message>
+        <source>Source report: %1
+Ambiguities and manual decisions remain report-local. Region hypotheses retain their original coordinates; full records remain in the exported report.</source>
+        <translation>Rapport source : %1
+Les ambiguïtés et décisions manuelles restent propres au rapport. Les hypothèses de région conservent leurs coordonnées originales ; les enregistrements complets restent dans le rapport exporté.</translation>
+    </message>
+    <message>
+        <source>Starting version graph worker…</source>
+        <translation>Démarrage du processus de graphe de versions…</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>État</translation>
+    </message>
+    <message>
+        <source>Stopping…</source>
+        <translation>Arrêt en cours…</translation>
+    </message>
+    <message>
+        <source>These labels describe your analysis. They do not assert release ancestry.</source>
+        <translation>Ces libellés décrivent votre analyse. Ils n'affirment aucune ascendance entre versions.</translation>
+    </message>
+    <message>
+        <source>These members remain in conflict. No counterpart or patch assessment is selected automatically. Activate a member to trace its evidence.</source>
+        <translation>Ces membres restent en conflit. Aucune correspondance ni évaluation de correctif n'est sélectionnée automatiquement. Activez un membre pour suivre ses preuves.</translation>
+    </message>
+    <message>
+        <source>Trace</source>
+        <translation>Suivre</translation>
+    </message>
+    <message>
+        <source>Trace a function to see every reachable association and its shortest-path witness.</source>
+        <translation>Suivez une fonction pour voir toutes les associations accessibles et le témoin de leur plus court chemin.</translation>
+    </message>
+    <message>
+        <source>Trace from %1 in %2</source>
+        <translation>Trace depuis %1 dans %2</translation>
+    </message>
+    <message>
+        <source>Tracing function associations…</source>
+        <translation>Suivi des associations de fonctions…</translation>
+    </message>
+    <message>
+        <source>Unresolved candidates</source>
+        <translation>Candidats non résolus</translation>
+    </message>
+    <message>
+        <source>Version comparison graph</source>
+        <translation>Graphe de comparaison des versions</translation>
+    </message>
+    <message>
+        <source>Version graph resource settings</source>
+        <translation>Ressources du graphe de versions</translation>
+    </message>
+    <message>
+        <source>Warnings</source>
+        <translation>Avertissements</translation>
+    </message>
+    <message>
+        <source>Witness edge</source>
+        <translation>Arête témoin</translation>
+    </message>
+    <message>
+        <source>Zoom in</source>
+        <translation>Agrandir</translation>
+    </message>
+    <message>
+        <source>Zoom out</source>
+        <translation>Réduire</translation>
+    </message>
+    <message>
+        <source>Association and parent link records</source>
+        <translation>Enregistrements d’associations et de liens parents</translation>
+    </message>
+    <message>
+        <source>Function and release records</source>
+        <translation>Enregistrements de fonctions et de versions</translation>
+    </message>
+    <message>
+        <source>Releases</source>
+        <translation>Versions publiées</translation>
+    </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Les appels de ces fragments enregistrés reposent sur les paires de fonctions du rapport source. Ils ne prouvent pas l’équivalence du comportement des fonctions appelées.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Tous les fragments natifs</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Tous les fragments SSA</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LineageGraph</name>
+    <message>
+        <source>Source report: %1
+Comparison direction: %2 → %3</source>
+        <translation>Rapport source : %1
+Sens de comparaison : %2 → %3</translation>
+    </message>
+    <message>
+        <source>Version comparison diagram for the current report page</source>
+        <translation>Diagramme de comparaison des versions pour la page de rapports actuelle</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LineagePageView</name>
+    <message>
+        <source> Try fewer rows or adjust Resource settings.</source>
+        <translation> Essayez moins de lignes ou ajustez les paramètres de ressources.</translation>
+    </message>
+    <message>
+        <source>%1 — previous page retained</source>
+        <translation>%1 — page précédente conservée</translation>
+    </message>
+    <message>
+        <source>%1–%2 of %3</source>
+        <translation>%1–%2 sur %3</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Annulé</translation>
+    </message>
+    <message>
+        <source>Candidate fix</source>
+        <translation>Correction candidate</translation>
+    </message>
+    <message>
+        <source>Choose a collection to begin.</source>
+        <translation>Choisissez une collection pour commencer.</translation>
+    </message>
+    <message>
+        <source>Complete</source>
+        <translation>Complet</translation>
+    </message>
+    <message>
+        <source>Confirm</source>
+        <translation>Confirmer</translation>
+    </message>
+    <message>
+        <source>Conflicting counterparts</source>
+        <translation>Correspondances contradictoires</translation>
+    </message>
+    <message>
+        <source>Copy full value</source>
+        <translation>Copier la valeur complète</translation>
+    </message>
+    <message>
+        <source>Copy row evidence</source>
+        <translation>Copier les preuves de la ligne</translation>
+    </message>
+    <message>
+        <source>Deadline reached</source>
+        <translation>Délai atteint</translation>
+    </message>
+    <message>
+        <source>Inconclusive</source>
+        <translation>Non concluant</translation>
+    </message>
+    <message>
+        <source>Investigating</source>
+        <translation>En cours d'investigation</translation>
+    </message>
+    <message>
+        <source>Loading evidence…</source>
+        <translation>Chargement des preuves…</translation>
+    </message>
+    <message>
+        <source>Match</source>
+        <translation>Associer</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>Page suivante</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>Non</translation>
+    </message>
+    <message>
+        <source>Partial patch</source>
+        <translation>Correctif partiel</translation>
+    </message>
+    <message>
+        <source>Patch absent</source>
+        <translation>Correctif absent</translation>
+    </message>
+    <message>
+        <source>Patch present</source>
+        <translation>Correctif présent</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>Page précédente</translation>
+    </message>
+    <message>
+        <source>Refresh page</source>
+        <translation>Actualiser la page</translation>
+    </message>
+    <message>
+        <source>Rejected pair connected</source>
+        <translation>Paire rejetée reliée</translation>
+    </message>
+    <message>
+        <source>Relevant change</source>
+        <translation>Changement pertinent</translation>
+    </message>
+    <message>
+        <source>Resource limit reached</source>
+        <translation>Limite de ressources atteinte</translation>
+    </message>
+    <message>
+        <source>Reverted patch</source>
+        <translation>Correctif annulé</translation>
+    </message>
+    <message>
+        <source>Rows per page</source>
+        <translation>Lignes par page</translation>
+    </message>
+    <message>
+        <source>Rows per page. Reduce this value if a page exceeds its byte allowance.</source>
+        <translation>Lignes par page. Réduisez cette valeur si une page dépasse son budget en octets.</translation>
+    </message>
+    <message>
+        <source>Rows: </source>
+        <translation>Lignes : </translation>
+    </message>
+    <message>
+        <source>Select evidence to view.</source>
+        <translation>Sélectionnez les preuves à consulter.</translation>
+    </message>
+    <message>
+        <source>The graph changed. Refresh this page.</source>
+        <translation>Le graphe a changé. Actualisez cette page.</translation>
+    </message>
+    <message>
+        <source>Unmatch</source>
+        <translation>Supprimer la correspondance</translation>
+    </message>
+    <message>
+        <source>Unrelated change</source>
+        <translation>Changement sans rapport</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Oui</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LineageSession</name>
+    <message>
+        <source>
+Your previous graph is still available.</source>
+        <translation>
+Votre graphe précédent reste disponible.</translation>
+    </message>
+    <message>
+        <source>Loading stopped. You can retry.</source>
+        <translation>Chargement arrêté. Vous pouvez réessayer.</translation>
+    </message>
+    <message>
+        <source>Saved %1</source>
+        <translation>%1 enregistré</translation>
+    </message>
+    <message>
+        <source>The worker could not acknowledge cancellation.</source>
+        <translation>Le processus n'a pas pu confirmer l'annulation.</translation>
+    </message>
+    <message>
+        <source>This worker does not support version comparison graphs.</source>
+        <translation>Ce processus ne prend pas en charge les graphes de comparaison des versions.</translation>
+    </message>
+    <message>
+        <source>Version graph loaded.</source>
+        <translation>Graphe de versions chargé.</translation>
+    </message>
+    <message>
+        <source>Version graph worker is unavailable or stopping.</source>
+        <translation>Le processus de graphe de versions est indisponible ou en cours d'arrêt.</translation>
+    </message>
+    <message>
+        <source>Version graph worker: %1</source>
+        <translation>Processus de graphe de versions : %1</translation>
+    </message>
+    <message>
+        <source>The version graph file is not valid UTF-8 JSON. Check the file and try again.</source>
+        <translation>Le fichier du graphe de versions n’est pas un JSON UTF-8 valide. Vérifiez le fichier et réessayez.</translation>
+    </message>
+    <message>
+        <source>Release metadata saved in the current graph.</source>
+        <translation>Métadonnées de version enregistrées dans le graphe actuel.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LineageReleaseView</name>
+    <message>
+        <source>%1 releases · %2 declared parent links. Dates and ancestry are your declarations; patch presence is not inferred.</source>
+        <translation>%1 versions · %2 liens parents déclarés. Les dates et la filiation reposent sur vos déclarations ; la présence d’un correctif n’est pas déduite.</translation>
+    </message>
+    <message>
+        <source>&amp;Add release…</source>
+        <translation>&amp;Ajouter une version…</translation>
+    </message>
+    <message>
+        <source>&amp;Branch</source>
+        <translation>&amp;Branche</translation>
+    </message>
+    <message>
+        <source>&amp;Edit release…</source>
+        <translation>&amp;Modifier la version…</translation>
+    </message>
+    <message>
+        <source>&amp;Label</source>
+        <translation>&amp;Libellé</translation>
+    </message>
+    <message>
+        <source>Add parent…</source>
+        <translation>Ajouter une version parente…</translation>
+    </message>
+    <message>
+        <source>Add release</source>
+        <translation>Ajouter une version</translation>
+    </message>
+    <message>
+        <source>Branch</source>
+        <translation>Branche</translation>
+    </message>
+    <message>
+        <source>Children</source>
+        <translation>Enfants</translation>
+    </message>
+    <message>
+        <source>Choose analyzed snapshot</source>
+        <translation>Choisir un instantané analysé</translation>
+    </message>
+    <message>
+        <source>Choose parent release</source>
+        <translation>Choisir une version parente</translation>
+    </message>
+    <message>
+        <source>Choose…</source>
+        <translation>Choisir…</translation>
+    </message>
+    <message>
+        <source>Declared children</source>
+        <translation>Enfants déclarés</translation>
+    </message>
+    <message>
+        <source>Declared parents</source>
+        <translation>Parents déclarés</translation>
+    </message>
+    <message>
+        <source>Edit release</source>
+        <translation>Modifier la version</translation>
+    </message>
+    <message>
+        <source>Find a release or branch</source>
+        <translation>Rechercher une version ou une branche</translation>
+    </message>
+    <message>
+        <source>ID</source>
+        <translation>ID</translation>
+    </message>
+    <message>
+        <source>Label</source>
+        <translation>Libellé</translation>
+    </message>
+    <message>
+        <source>Open snapshot</source>
+        <translation>Ouvrir l’instantané</translation>
+    </message>
+    <message>
+        <source>Parents</source>
+        <translation>Parents</translation>
+    </message>
+    <message>
+        <source>Publication time is known (UTC)</source>
+        <translation>Date de publication connue (UTC)</translation>
+    </message>
+    <message>
+        <source>Published (UTC)</source>
+        <translation>Publication (UTC)</translation>
+    </message>
+    <message>
+        <source>Release</source>
+        <translation>Version</translation>
+    </message>
+    <message>
+        <source>Release ID</source>
+        <translation>ID de version</translation>
+    </message>
+    <message>
+        <source>Release filter</source>
+        <translation>Filtre des versions</translation>
+    </message>
+    <message>
+        <source>Remove %1 from this graph? Its snapshot and saved comparisons remain available.</source>
+        <translation>Retirer %1 de ce graphe ? Son instantané et les comparaisons enregistrées resteront disponibles.</translation>
+    </message>
+    <message>
+        <source>Remove parent link</source>
+        <translation>Retirer le lien parent</translation>
+    </message>
+    <message>
+        <source>Remove release?</source>
+        <translation>Retirer la version ?</translation>
+    </message>
+    <message>
+        <source>Remove release…</source>
+        <translation>Retirer la version…</translation>
+    </message>
+    <message>
+        <source>Remove this release's parent links from its children before deleting it.</source>
+        <translation>Avant de la supprimer, retirez les liens qui désignent cette version comme parente de ses enfants.</translation>
+    </message>
+    <message>
+        <source>Select a release to inspect its declared parents and children.</source>
+        <translation>Sélectionnez une version pour examiner ses parents et enfants déclarés.</translation>
+    </message>
+    <message>
+        <source>Selected release: %1 · %2</source>
+        <translation>Version sélectionnée : %1 · %2</translation>
+    </message>
+    <message>
+        <source>Snapshot</source>
+        <translation>Instantané</translation>
+    </message>
+    <message>
+        <source>This engine does not support release timelines.</source>
+        <translation>Ce moteur ne prend pas en charge les chronologies de versions.</translation>
+    </message>
+    <message>
+        <source>Timeline</source>
+        <translation>Chronologie</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>Supposer que les écritures externes évitent le cadre d’entrée déclaré</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>Un champ vide ou nul conserve la valeur par défaut du moteur. Augmenter le travail n’autorise ni source incomplète ni hypothèses mémoire supplémentaires.</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>Transferts enchaînés</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>Visites enchaînées par destination</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>Contextes par adresse</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>Champs de contrôle</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>Raffinements du contrôle</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>Nœuds du flux de contrôle</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>Visites des dépendances</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>Terminer une chaîne à une destination répétée</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>Valeur par défaut du moteur</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>Saisissez un entier valide pour %1.</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>Saisissez les deux bornes du cadre d’entrée ou laissez-les toutes deux vides.</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>Alignement du RSP d’entrée</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>Fin de la plage du RSP d’entrée (exclue)</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>Début de la plage du RSP d’entrée</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>Reste du RSP d’entrée</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>Opérations évaluées</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>Registres généraux</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>Registres généraux et requêtes CPU</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>Registres généraux, requêtes CPU et XMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>Rapport de reconstitution de l’interpréteur</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>Évaluations des nœuds</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>Prouver que les écritures évitent les emplacements de retour et les cellules de cadre sauvegardées</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>Prouver que les écritures évitent le cadre d’entrée déclaré</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Reconstituer</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>Reconstituer la fonction interprétée</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>Reconstituer le flux de contrôle accessible et générer du C avec un état explicite des registres x64. Le source décrit une exécution normale sans faute avec des mappages d’image fixes. Les hypothèses mémoire ci-dessous ne s’appliquent que si vous les renseignez.</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>Décalages signés par rapport au RSP d’entrée. Déclarer cette plage suppose une arithmétique d’adresse sans bouclage ; cela ne prouve ni l’accessibilité ni l’absence de chevauchement.</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>Requêtes au solveur</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>État du source</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>État et mémoire</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>Nœuds d’expressions symboliques</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>Non spécifié</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>Limites de travail</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU : inactif</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU : chargement</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU : chargement %1 %</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU : recherche des fonctions</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU : indexation des références</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU : indexation des références %1 %</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU : analyse terminée</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>Analyse terminée en %1 s</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>Lecture du fichier</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>Analyse du format</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>Recherche du code</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>Chargement des informations de débogage</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>Ouverture du projet</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>Chargement</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>Ouverture de %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 s</translation>
     </message>
 </context>
 </TS>

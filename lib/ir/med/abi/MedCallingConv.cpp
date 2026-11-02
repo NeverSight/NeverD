@@ -23,9 +23,11 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -51,7 +53,9 @@ void detectFPParams(
     Arch TargetArch, BinaryFormat TargetFormat);
 
 // ---- x86-specific helpers (MedCallingConvX86.cpp) ----
-void detectCdeclStackParams(MedFunc &Func, Arch TargetArch);
+void detectSummaryVectorParams(MedFunc &Func, const TargetRegInfo &TRI,
+                               const GPRReadWidths &Summary, Arch TargetArch,
+                               BinaryFormat Fmt);
 
 // ---- variadic (...) prologue detection (MedVariadic.cpp) ----
 void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
@@ -64,6 +68,56 @@ using med_calling_conv_detail::isRenamedEntryLiveInCopy;
 
 namespace med_calling_conv_detail {
 ValueKey valueKey(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
+
+void preserveCallStackHomes(
+    const MedFunc &Func, Arch Architecture, BinaryFormat Format,
+    const BinaryImage *Image, int64_t Base, unsigned Slot,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    std::set<int64_t> &MutableSlots) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (!TRI.CallPushesReturnAddress ||
+      !llvm::any_of(Func.Blocks, [](const MedBlock &Block) {
+        return llvm::any_of(Block.Ops, [](const MedOp &Op) {
+          return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
+        });
+      }))
+    return;
+  // A converter without original bytes cannot authenticate a synthetic tail
+  // jump. Its calls remain possible writes in the same authoritative proof.
+  BinaryImage Unencoded;
+  if (!Image) {
+    Unencoded.Arch = Architecture;
+    Unencoded.Format = Format;
+    Unencoded.Bits = TRI.PointerSize == 8 ? Bitness::Bits64 : Bitness::Bits32;
+    Image = &Unencoded;
+  }
+  std::vector<MedCallReturnRead> Written;
+  std::string Diagnostic;
+  const bool Complete = validateSourceCallReturnReads(
+      Func, *Image, Diagnostic, limits::ir::kSourceCallReturnReadWork, nullptr,
+      nullptr, &Written);
+  if (Complete && Written.empty())
+    return;
+  std::set<std::pair<va_t, int>> Sites;
+  for (const auto &Read : Written)
+    Sites.emplace(Read.Load, Read.OriginSeq);
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Complete && !Sites.count({Op.Addr, Op.OriginSeq}))
+        continue;
+      const auto Read = stackMemoryRead(Op);
+      if (!Read)
+        continue;
+      const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
+      if (!Offset)
+        continue;
+      const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
+      const int64_t Last =
+          Base + ((*Offset - Base + Read->Bytes - 1) / Slot) * Slot;
+      for (int64_t Home = First; Home <= Last; Home += Slot)
+        MutableSlots.insert(Home);
+    }
+}
 
 /// True for an entry-block self-copy of \p RegOff, which declares the
 /// register's incoming value.  The copy takes a new version (`COPY R8.1 =
@@ -760,7 +814,7 @@ void computeFrameBounds(
 
 namespace med_calling_conv_detail {
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
-                       int64_t MaxStackOff) {
+                       int64_t MaxStackOff, const BinaryImage *Image) {
   // Stack parameters that follow the used registers (i386) are recovered by
   // detectCdeclStackParams instead.
   const CallArgumentConvention *Convention =
@@ -828,21 +882,18 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   // Offset of \p V relative to the entry stack pointer (folding the COPY /
   // zext / subpiece / push-sub chain detectCc sees before copy propagation),
   // or nullopt when V is not entry-SP-derived.
+  //
+  // PHI webs share their inputs, as SEH handler roots joining the protected
+  // range's SP with the normal path do, and a walk revisits them along every
+  // path. Below a value no cycle was cut, its offset at one depth depends on
+  // its definitions alone and is computed once; a cut only ever yields
+  // nullopt, so the memo changes no result.
   llvm::DenseSet<ValueKey> ActiveTrace;
-  std::function<std::optional<int64_t>(const MedVar &, int)> traceOff =
-      [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
-    if (Depth > ::neverd::limits::ir::
-                    kMedCallingConvDetectStackParamsTraceOffDepthLimit)
-      return std::nullopt;
-    const ValueKey Key = med_calling_conv_detail::valueKey(V);
-    if (!ActiveTrace.insert(Key).second)
-      return std::nullopt;
-    struct PopActive {
-      llvm::DenseSet<ValueKey> &Set;
-      ValueKey Key;
-      ~PopActive() { Set.erase(Key); }
-    } Guard{ActiveTrace, Key};
-
+  llvm::DenseMap<std::pair<ValueKey, int>, std::optional<int64_t>> TraceMemo;
+  unsigned CycleCuts = 0;
+  std::function<std::optional<int64_t>(const MedVar &, int)> traceOff;
+  auto traceDef = [&](const MedVar &V, const ValueKey &Key,
+                      int Depth) -> std::optional<int64_t> {
     if (AmbiguousPhis.count(Key))
       return std::nullopt;
     if (auto It = UniquePhis.find(Key); It != UniquePhis.end()) {
@@ -906,6 +957,29 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       return std::nullopt;
     }
   };
+  traceOff = [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
+    if (Depth > ::neverd::limits::ir::
+                    kMedCallingConvDetectStackParamsTraceOffDepthLimit)
+      return std::nullopt;
+    const ValueKey Key = med_calling_conv_detail::valueKey(V);
+    if (ActiveTrace.count(Key)) {
+      ++CycleCuts;
+      return std::nullopt;
+    }
+    if (auto It = TraceMemo.find({Key, Depth}); It != TraceMemo.end())
+      return It->second;
+    ActiveTrace.insert(Key);
+    struct PopActive {
+      llvm::DenseSet<ValueKey> &Set;
+      ValueKey Key;
+      ~PopActive() { Set.erase(Key); }
+    } Guard{ActiveTrace, Key};
+    const unsigned CutsBefore = CycleCuts;
+    const std::optional<int64_t> Offset = traceDef(V, Key, Depth);
+    if (CycleCuts == CutsBefore)
+      TraceMemo.try_emplace({Key, Depth}, Offset);
+    return Offset;
+  };
 
   // Offset of a stack read relative to the entry stack pointer, bounded to the
   // incoming-argument window.  Unlike a slot-aligned check it keeps sub-slot
@@ -939,12 +1013,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         if (auto Off = rawStackOff(Op.Inputs[Read->AddressInput])) {
           auto [SlotBase, ByteOff] = slotOf(*Off);
           Offsets.insert(SlotBase);
-          // A slot-aligned load wider than one pointer slot (an 8-byte double
-          // stack argument on a 4-byte-slot target, or a 10-byte x87 long
-          // double) spans several slots; record the one its last byte is in
-          // so every covered slot is created as a parameter below.
+          // Record the slot of the last byte even for an unaligned read, so
+          // every physical home it needs has an incoming parameter below.
           const unsigned LoadSz = Read->Bytes;
-          if (Read->AddressInput == 1 || (ByteOff == 0 && LoadSz > Slot))
+          if (ByteOff + LoadSz > Slot)
             Offsets.insert(slotOf(*Off + LoadSz - 1).first);
         }
   // A tail call at the entry stack pointer hands its callee this function's
@@ -1053,10 +1125,6 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   std::set<int64_t> MutableSlots;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Off = rawStackOff(Op.Inputs[0]))
-          MutableSlots.insert(slotOf(*Off).first); // direct write
       // SP and any stack-slot address thread through copies, extends and
       // address arithmetic to reach their real use; those propagation ops are
       // not escapes. On AArch64/ARM the first stack argument sits at [sp+0], so
@@ -1088,8 +1156,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       }
     }
 
-  med_calling_conv_detail::preserveFPStackHomes(Func, Base, Slot, rawStackOff,
-                                                MutableSlots);
+  med_calling_conv_detail::preserveCallStackHomes(
+      Func, TargetArch, Fmt, Image, Base, Slot, rawStackOff, MutableSlots);
+  med_calling_conv_detail::preserveStackReadHomes(Func, Base, Slot, rawStackOff,
+                                                  MutableSlots);
 
   // The home slot of each mutable stack argument is [frame_end + SlotBase].
   // Record it so the emitter seeds that headroom slot with the parameter at
@@ -1119,24 +1189,17 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       auto [SlotBase, ByteOff] = slotOf(*Off);
       uint16_t ReadSz =
           Op.Output.Size > 0 ? Op.Output.Size : static_cast<uint16_t>(Slot);
-      // A slot-aligned 8-byte scalar argument on a 4-byte-slot target (an ARM32
-      // `double` / `long long` passed on the stack as `vldr d,[sp+k]`) spans
-      // two pointer slots; rebuild it from the two slot parameters (low slot
-      // first) so it reads its arguments instead of an absolute address.  The
-      // caller passes the same value as two consecutive 4-byte slot arguments.
-      bool WidePair = ByteOff == 0 && Slot == 4 && ReadSz == 2u * Slot;
-      // A scalar that ends inside a later slot, the x86-64 `fld tbyte` of a
-      // 10-byte long double whose 16-byte home ends in padding, reads every
-      // slot it reaches.
+      // A wide load can copy several scalar arguments, as an AArch64 LDR Q
+      // forwarding two eight-byte slots. Rebuild all of its bytes from the
+      // incoming parameters, including a partial final slot (x87 long double).
       const unsigned Spanned =
-          ByteOff == 0 && ReadSz > Slot && ReadSz % Slot != 0
+          ByteOff == 0 && ReadSz > Slot
               ? (ReadSz + static_cast<unsigned>(Slot) - 1) /
                     static_cast<unsigned>(Slot)
               : 1;
       // Mutable stack-argument home (written or address-escaped): keep the load
       // as a memory read so a later write through it is observed.
-      bool Mutable = MutableSlots.count(SlotBase) ||
-                     (WidePair && MutableSlots.count(SlotBase + Slot));
+      bool Mutable = MutableSlots.count(SlotBase) != 0;
       for (unsigned K = 1; K < Spanned; ++K)
         Mutable |= MutableSlots.count(SlotBase + K * Slot) != 0;
       if (Mutable)
@@ -1154,23 +1217,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         Compositions[{BI, OI}] = std::move(Prefix);
         continue;
       }
-      // Any other read straddling the slot end (and not a clean two-slot pair)
-      // is not a clean field of this slot; leave it for a later pass.
-      if (!WidePair && ByteOff + static_cast<int64_t>(ReadSz) > Slot)
+      // An unaligned read crossing a slot end retains its physical homes.
+      if (ByteOff + static_cast<int64_t>(ReadSz) > Slot)
         continue;
-      if (WidePair) {
-        MedVar Lo, Hi;
-        Lo.Kind = Hi.Kind = MedVar::Param;
-        Lo.Id = offToIdx(SlotBase);
-        Hi.Id = offToIdx(SlotBase + Slot);
-        Lo.Size = Hi.Size = static_cast<uint16_t>(Slot);
-        Lo.RegOff = Hi.RegOff = kNoParamReg;
-        Lo.TheArch = Hi.TheArch = TargetArch;
-        Op.Opcode = NdOp::CONCAT;
-        Op.Inputs[0] = Hi;
-        Op.Inputs[1] = Lo;
-        Op.NumInputs = 2;
-      } else if (ByteOff == 0) {
+      if (ByteOff == 0) {
         MedVar Param;
         Param.Kind = MedVar::Param;
         Param.Id = offToIdx(SlotBase);
@@ -1418,6 +1468,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // promoted to double, and va_arg reads them from the area.
     if (!Func.IsVariadic) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
+      // Where a summary gives the floating arguments each in the next
+      // vector register (System V x86-64), it lists those a variadic call
+      // reads too, which no entry copy shows.
+      if (Summary && Convention->VectorArgumentsFromCalleeSummary &&
+          !Convention->PositionalArgumentSlots &&
+          !(Convention->PrototypeArgCount &&
+            Convention->PrototypeArgCount(Func.Name)) &&
+          !(Convention->SummaryListsNoParameters &&
+            Convention->SummaryListsNoParameters(*Summary)))
+        detectSummaryVectorParams(Func, TRI, *Summary, TargetArch,
+                                  TargetFormat);
     } else if (Func.takesVectorArgumentRegisters()) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
       const auto VectorRegs = TRI.floatingParamRegs(TargetFormat);
@@ -1442,7 +1503,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // pointer walk (PHI-merged, vectorized), invisible to this load scan; those
   // are recovered from the call sites in finalizeVariadicCallees instead.
   if (!Func.IsVariadic)
-    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt);
+    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt, 0, Image);
   else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count
@@ -1455,14 +1516,15 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // prefix as register params + these (the overflow count is everything past
     // them).
     const size_t Before = Func.Params.size();
-    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt,
-                                               Func.VariadicOverflowBase);
+    med_calling_conv_detail::detectStackParams(
+        Func, TargetArch, Fmt, Func.VariadicOverflowBase, Image);
     Func.VariadicFixedStackArgs = static_cast<int>(Func.Params.size() - Before);
   }
 
   // Stack parameters that follow the registers used (i386 cdecl and regparm).
   if (Convention && Convention->StackArgumentsFollowUsedRegisters)
-    detectCdeclStackParams(Func, TargetArch);
+    med_calling_conv_detail::detectCdeclStackParams(Func, TargetArch, Fmt,
+                                                    Image);
 
   if (Func.ConsumesX87Argument && TheArch == Arch::X86) {
     const auto It = RegVarMap.find({x86reg::ST0, x86reg::FPURegSize});

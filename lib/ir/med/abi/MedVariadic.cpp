@@ -29,22 +29,21 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 namespace med_variadic_detail {
 
-std::optional<int64_t> entrySpDelta(const VariadicValueIndex &Index,
-                                    uint64_t SpOff, const MedVar &Root,
+std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
                                     int Depth) {
   using Key = VariadicValueIndex::Key;
-  const auto &Definitions = Index.Definitions;
-  const auto &AmbiguousDefinitions = Index.AmbiguousDefinitions;
-  const auto &Phis = Index.Phis;
-  const auto &AmbiguousPhis = Index.AmbiguousPhis;
 
   std::set<Key> Active;
   std::function<std::optional<int64_t>(const MedVar &, int)> Eval =
@@ -59,9 +58,14 @@ std::optional<int64_t> entrySpDelta(const VariadicValueIndex &Index,
       return std::nullopt;
     if (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp)
       return std::nullopt;
-    if (V.Kind == MedVar::Reg && V.RegOff == SpOff && V.SSAVer == 0)
+    if (V.Kind == MedVar::Reg && V.RegOff == S.SpOff && V.SSAVer == 0)
       return int64_t{0};
 
+    const auto &Index = S.values();
+    const auto &Definitions = Index.Definitions;
+    const auto &AmbiguousDefinitions = Index.AmbiguousDefinitions;
+    const auto &Phis = Index.Phis;
+    const auto &AmbiguousPhis = Index.AmbiguousPhis;
     const Key K = VariadicValueIndex::keyOf(V);
     if (!Active.insert(K).second || AmbiguousDefinitions.count(K) ||
         AmbiguousPhis.count(K))
@@ -175,7 +179,7 @@ int firstSavedArgumentRegister(VariadicScan &S,
       const auto *It = llvm::find(Regs, Value.RegOff);
       if (It == Regs.end())
         continue;
-      if (auto Offset = entrySpDelta(S.values(), S.SpOff, Op.Inputs[0], 0))
+      if (auto Offset = entrySpDelta(S, Op.Inputs[0], 0))
         Slots[static_cast<size_t>(It - Regs.begin())].insert(*Offset);
     }
   // Walk down from the last register while each register's slot sits just
@@ -224,9 +228,11 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
   std::optional<int> FirstVariadicRegister;
   std::optional<int> FirstVariadicVectorRegister;
   std::optional<uint64_t> X64VaStartWord;
+  std::vector<std::pair<size_t, size_t>> UnreadVectorSpills;
   Func.VaListDisplacement.reset();
   Func.VaRegisterSaveArea.reset();
   Func.VaNamedIntegerRegisters = -1;
+  Func.VaStartNamedGPRs = -1;
   switch (TargetArch) {
   case Arch::X64: {
     uint64_t VaStartWord = 0;
@@ -250,8 +256,11 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       Marked = hasDarwinVariadicPrologue(S);
     } else {
       Marked = hasAAPCS64VariadicPrologue(S);
-      if (Marked)
+      if (Marked) {
         FirstVariadicRegister = aapcs64FirstVariadicRegister(S);
+        UnreadVectorSpills =
+            unreadAAPCS64VectorSpills(S, FirstVariadicRegister.value_or(-1));
+      }
     }
     break;
   case Arch::ARM:
@@ -273,7 +282,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     for (const auto &Op : Blk.Ops)
       if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto D = entrySpDelta(S.values(), S.SpOff, Op.Inputs[1], 0))
+        if (auto D = entrySpDelta(S, Op.Inputs[1], 0))
           if (*D >= 0 && *D <= limits::kVariadicOverflowBaseMax)
             if (!Base || *D < *Base)
               Base = *D;
@@ -298,6 +307,25 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       Func.VaNamedIntegerRegisters = static_cast<int>(
           (*X64VaStartWord & 0xFFFFFFFFu) / limits::kX64VaGpOffsetStep);
     }
+  // gp_offset alone counts the named integer registers, whatever the rest of
+  // the va_list shows (va_arg's update of overflow_arg_area hides where
+  // va_start pointed it).  Past them a call passes what its caller sets.
+  if (X64VaStartWord)
+    if (const auto Named = x64VaStartNamedGPRs(S, *X64VaStartWord))
+      Func.VaStartNamedGPRs = *Named;
+  // q0-q7 carry only the floating and vector arguments a caller passes, and
+  // this function's va_arg reads none: it saves them where no read observes
+  // them, so neither C route writes their unknown entry values.  The stores
+  // go last, as the scan above indexes the operations.
+  std::map<size_t, std::vector<size_t>> UnreadByBlock;
+  for (const auto &[Block, Index] : UnreadVectorSpills)
+    UnreadByBlock[Block].push_back(Index);
+  for (auto &[Block, Indices] : UnreadByBlock) {
+    std::sort(Indices.begin(), Indices.end(), std::greater<size_t>());
+    auto &Ops = Func.Blocks[Block].Ops;
+    for (size_t Index : Indices)
+      Ops.erase(Ops.begin() + static_cast<std::ptrdiff_t>(Index));
+  }
 }
 
 } // namespace neverd

@@ -6,6 +6,8 @@
 
 NeverD usa por defecto su solver de bitvectors integrado. La derivación MBA exacta no depende de un solver general. La síntesis de expresiones solo acepta un candidato tras demostrar equivalencia; un contraejemplo o consulta inconclusa conserva la expresión original.
 
+El circuito de multiplicación integrado elimina los bits bajos conocidos como cero de ambos factores, construye el producto restante y restaura la palabra de salida completa. El adaptador Z3 opcional también codifica los productos con coeficiente constante par con el ancho exacto que observan. Ambos conservan las consultas de igualdad de ancho completo, los modelos de entrada independientes y los límites de recursos existentes. La optimización de código fuente de CLI y GUI comparte el circuito integrado sin una opción adicional.
+
 <!-- i18n-section: builtin-comparisons -->
 
 ## Circuitos de comparación integrados
@@ -37,8 +39,8 @@ Al activar Z3, CMake descarga mediante `FetchContent` la revisión fijada 4.13.3
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DNEVERD_ENABLE_Z3=ON -DNEVERD_BUILD_SOLVER_BENCH=ON
-cmake --build build-release --target neverd NeverDSolverTests \
-  NeverDSymbolicTests neverd-solver-bench --parallel 4
+python scripts/build.py build-release --parallel 4 --target neverd \
+  NeverDSolverTests NeverDSymbolicTests neverd-solver-bench
 ```
 
 `NEVERD_Z3_PROVIDER=FETCH` es el valor predeterminado. La primera configuración descarga el código; las siguientes reutilizan `_deps`. No se compilan la CLI, pruebas, ejemplos, documentación ni bindings de Z3. Sus generadores Python usan el intérprete existente de NeverD. Para una biblioteca instalada, selecciona `-DNEVERD_Z3_PROVIDER=SYSTEM` y opcionalmente `-DZ3_ROOT=/path/to/prefix`; si faltan archivos de desarrollo falla y no cambia de proveedor silenciosamente. En modo offline puedes proporcionar un checkout local con `-DFETCHCONTENT_SOURCE_DIR_NEVERD_Z3=/path/to/z3`.
@@ -72,6 +74,8 @@ result = synthesize_expression(
 
 Con Z3 habilitado, `NeverDSolverTests` incluye evaluación independiente de expresiones y comparación entre backends. Las expresiones de referencia se construyen directamente para impedir que un error en los constructores de NeverD simplifique ambos lados del test. Las compilaciones deshabilitadas omiten expresamente esos oráculos y siguen comprobando el contrato del backend no disponible.
 
+Las pruebas de productos escalados comparan el circuito integrado con una multiplicación larga independiente y aritmética entera hasta 257 bits. Las pruebas Z3 demuestran su equivalencia con una codificación independiente de ancho completo y comprueban los bits altos de entrada y un bit más significativo de salida deliberadamente incorrecto.
+
 ```sh
 build-release/bin/NeverDSolverTests --gtest_brief=1
 build-release/bin/neverd-solver-bench \
@@ -82,6 +86,8 @@ build-release/bin/neverd-solver-bench \
 
 Cada línea no comentada es `original ; candidate`; si falta el punto y coma, se usa como candidato el resultado del simplificador MBA. La herramienta informa veredictos, reproducción de modelos y tiempos (incluyen creación de sesión, traducción y resolución; excluyen parsing, simplificación MBA, exportación y cierre). Cada repetición crea un solver nuevo. Los modelos SAT deben reproducir la diferencia en el evaluador de expresiones. Veredictos concluyentes opuestos o consultas/modelos inválidos hacen fallar la ejecución; `unknown` se registra, pero no prueba equivalencia.
 
-SMT-LIB exportado incluye el DAG original, aserciones permanentes y supuestos de la última consulta; se puede reproducir con `z3 query-N.smt2`. Registra límites y versiones: los backends usan unidades de presupuesto distintas, así que se comparan cargas acotadas, no trabajo idéntico. Las pruebas de bitvector usan semántica total de ancho fijo. Excepciones de máquina, efectos de memoria y LLVM poison siguen perteneciendo a los límites de lifting y traducción; una prueba de expresión no los certifica.
+SMT-LIB exportado incluye el DAG codificado equivalente, aserciones permanentes y supuestos de la última consulta; se puede reproducir con `z3 query-N.smt2`. Registra límites y versiones: los backends usan unidades de presupuesto distintas, así que se comparan cargas acotadas, no trabajo idéntico. Las pruebas de bitvector usan semántica total de ancho fijo. Excepciones de máquina, efectos de memoria y LLVM poison siguen perteneciendo a los límites de lifting y traducción; una prueba de expresión no los certifica.
 
 Una copia de la codificación aún no explorada elimina de su propia cola de decisiones las variables asignadas en la raíz y reconstruye el orden estricto del montículo por actividad e índice. Las asignaciones y cláusulas permanecen intactas; los hechos raíz sobreviven a todo retroceso. La propiedad de la fuente, las decisiones reales, los modelos completos y todos los presupuestos de búsqueda no cambian.
+
+El DAG exportado a SMT-LIB es una codificación semánticamente equivalente y puede incluir el cociente exacto descrito arriba; su estructura puede diferir del DAG original.

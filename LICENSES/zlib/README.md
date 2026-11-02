@@ -1,8 +1,9 @@
 # zlib 1.3.2
 
 `LICENSE` is copied unchanged from the zlib 1.3.2 source selected by
-`cmake/web-product-dependencies.json`. Windows product archives include it
-with the statically linked native decoder.
+`cmake/NeverDZlib.cmake` and `cmake/web-product-dependencies.json`. Core and
+standalone desktop builds use this static provider; installation includes
+the notice with the native decoder.
 
 Upstream: <https://github.com/madler/zlib/releases/tag/v1.3.2>
 

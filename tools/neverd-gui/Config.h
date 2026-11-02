@@ -20,6 +20,37 @@
 
 namespace neverd::limits::gui_config {
 
+// tools/neverd-gui/app/AnalysisProgress.cpp
+/// The status bar's bar, beside the AU text; slim, as Visual Studio Code
+/// draws progress.
+inline constexpr int kAnalysisProgressStripWidth = 96;
+inline constexpr int kAnalysisProgressStripHeight = 4;
+/// Before the bar: the status texts' own padding (theme.qss), so the bar
+/// starts where they do.
+inline constexpr int kAnalysisProgressStripMargin = 8;
+/// An unknown fraction sweeps a segment of this share of the bar across it
+/// in this time, redrawn 20 times a second: each frame repaints the whole
+/// window's buffer on some desktops, however small the bar.
+inline constexpr int kAnalysisProgressSegmentPercent = 30;
+inline constexpr int kAnalysisProgressSweepMs = 2000;
+inline constexpr int kAnalysisProgressFrameMs = 50;
+/// How long the indicator says the initial analysis finished.
+inline constexpr int kAnalysisProgressFinishedMs = 4000;
+/// The worker reports its background work with its replies and once a
+/// second; after an open, the indicator waits this long for a first report
+/// before it takes a worker that reports none as idle.
+inline constexpr int kAnalysisProgressReportWaitMs = 3000;
+/// The card over an empty workbench while a file opens; a load that takes
+/// less than the delay never shows it.
+inline constexpr int kLoadProgressCardWidth = 420;
+inline constexpr int kLoadProgressCardDelayMs = 400;
+/// The card's bar is four times as wide as the status bar's; at the same
+/// pace its segment would jump 13 pixels a frame, so it takes twice the time.
+inline constexpr int kLoadProgressCardSweepMs = 4000;
+/// The card's margins and the space between its lines, on the 4-pixel grid.
+inline constexpr int kLoadProgressCardMargin = 16;
+inline constexpr int kLoadProgressCardSpacing = 8;
+
 // tools/neverd-gui/app/ExtensionsView.cpp
 /// The narrowest each pane may get.  A scroll area asks at least for its
 /// scroll bars' room, and macOS's take enough that the two panes side by
@@ -44,6 +75,17 @@ inline constexpr int kCopiedLinkHashDigits = 16;
 inline constexpr int kMainWindowMaximumFunctionsWidth = 420;
 inline constexpr int kMainWindowMinimumOutputHeight = 120;
 inline constexpr int kMainWindowMaximumOutputHeight = 260;
+// Three deliberate taps enter focus mode; typing and held keys do not.
+inline constexpr int kFocusModeSequenceTimeoutMs = 1000;
+inline constexpr int kFocusModeSequenceLength = 3;
+
+// tools/neverd-gui/app/FocusSidebar.cpp
+inline constexpr int kFocusSidebarPreferredWidth = 360;
+inline constexpr int kFocusSidebarMinimumWidth = 240;
+inline constexpr int kFocusSidebarKeyboardResizeStep = 16;
+inline constexpr int kFocusSidebarToggleWidth = 20;
+inline constexpr int kFocusSidebarToggleHeight = 36;
+inline constexpr int kFocusSidebarBorderWidth = 1;
 
 // tools/neverd-gui/app/QuickStartDialog.cpp
 /// The widest the side grows for a translation's longer actions.
@@ -54,7 +96,6 @@ inline constexpr int kQuickStartDialogMaximumSideWidth = 440;
 inline constexpr qreal kStyledTextGridTolerance = 0.01;
 
 // tools/neverd-gui/app/Theme.cpp
-inline constexpr int kThemeDefaultCodePointSize = 10;
 inline constexpr int kThemeMinimumCodePointSize = 6;
 inline constexpr int kThemeMaximumCodePointSize = 48;
 
@@ -104,9 +145,29 @@ inline constexpr double kGraphViewWholeGraphExtent = 9e8;
 inline constexpr qreal kGraphViewWheelZoomStep = 1.15;
 inline constexpr qreal kGraphViewArrowLength = 9.0;
 inline constexpr qreal kGraphViewArrowHalfWidth = 4.5;
+/// How near an edge's line, in screen pixels, a click selects it and a hover
+/// shows its other end.
+inline constexpr qreal kGraphViewEdgeReachPixels = 4.0;
+/// The rows an edge's hover shows of the block at its other end; a longer
+/// block shows its first and last rows.
+inline constexpr int kGraphViewEdgeHintRows = 12;
 
 // tools/neverd-gui/app/HexView.cpp
 inline constexpr int kHexViewMargin = 6;
+
+// tools/neverd-gui/app/HighlightLocks.cpp
+/// The colors IDA's Lock highlight offers, one word each.
+inline constexpr int kHighlightLockColors = 8;
+
+// tools/neverd-gui/app/JumpDialog.cpp
+/// The dialog's first size: the matches beside a preview of where Enter goes.
+inline constexpr int kJumpDialogWidth = 980;
+inline constexpr int kJumpDialogHeight = 480;
+/// The match list's first width; the preview takes the rest.
+inline constexpr int kJumpDialogListWidth = 320;
+
+// tools/neverd-gui/app/WheelInput.cpp
+inline constexpr int kTextViewWheelLinesPerNotch = 3;
 
 // tools/neverd-gui/app/ListingView.cpp
 inline constexpr int kListingViewPrefetchMargin = 80;
@@ -131,6 +192,12 @@ inline constexpr int kMainWindowOutputHeight = 190;
 inline constexpr int kMainWindowOverviewHeight = 170;
 // Input dialogs leave room for a full name, comment or expression.
 inline constexpr int kMainWindowInputDialogWidth = 420;
+inline constexpr QSize kLocationChooserDialogSize{720, 480};
+/// The command palette; dropped from the command center, it is at least as
+/// wide as the field.
+inline constexpr QSize kCommandPaletteSize{560, 420};
+inline constexpr QSize kShortcutsDialogSize{800, 560};
+inline constexpr QSize kExportDataDialogSize{760, 520};
 
 // tools/neverd-gui/app/NavigationBand.cpp
 inline constexpr int kNavigationBandBandHeight = 16;
@@ -178,8 +245,8 @@ inline constexpr int kSecondaryTextDelegateSecondaryGap = 16;
 inline constexpr int kSecondaryTextDelegateSecondaryMargin = 8;
 
 // tools/neverd-gui/app/TitleBar.cpp
-// Visual Studio Code's custom title bar, in logical pixels; its height
-// is the platform's (WindowFramePlatform.h).
+// Shared title-bar geometry in logical pixels on every desktop.
+inline constexpr int kTitleBarHeight = 35;
 inline constexpr int kTitleBarIconSlot = 35;
 inline constexpr int kTitleBarIconSize = 16;
 inline constexpr int kTitleBarButtonWidth = 46;
@@ -202,18 +269,23 @@ inline constexpr int kTitleBarTitlePadding = 12;
 // tools/neverd-gui/app/WindowFrame.cpp
 /// The band outside the visible window that holds its shadow.
 inline constexpr int kWindowFrameShadowExtent = 10;
+/// Resize presses take precedence over content and docking inside this band.
+inline constexpr int kWindowFrameResizeInset = 8;
+/// Corner resize reach measured from the visible edge.
+inline constexpr int kWindowFrameCornerReach = 16;
+/// Bound a full-screen exit's wait if the user changed Dock/display settings.
+inline constexpr int kWindowFrameScreenRestoreTimeoutMs = 1000;
 
 // tools/neverd-gui/app/WorkbenchStyle.cpp
 /// The size of icons drawn on the 16 pixel grid of IconSet.def.
 inline constexpr int kWorkbenchStyleSmallIconSize = 16;
-
-// tools/neverd-gui/app/platform/WindowFrameUnix.cpp
-/// Visual Studio Code's custom title bar with its command center.
-inline constexpr int kWindowFrameUnixTitleBarHeight = 35;
-
-// tools/neverd-gui/app/platform/WindowFrameWindows.cpp
-/// Visual Studio Code's custom title bar with its command center.
-inline constexpr int kWindowFrameWindowsTitleBarHeight = 35;
+/// Qt's own file and font dialogs open at least this large, room to read a
+/// folder's details or a list of fonts.
+inline constexpr QSize kWorkbenchStyleFileDialogSize{860, 540};
+inline constexpr QSize kWorkbenchStyleFontDialogSize{600, 460};
+/// The widest a file dialog's size, type or date column fits its contents,
+/// so that one long type cannot crowd out the names.
+inline constexpr int kWorkbenchStyleFileColumnMaximumWidth = 200;
 
 inline constexpr QSize kQuickStartDialogSize{900, 560};
 inline constexpr QSize kQuickStartMinimumDialogSize{720, 460};

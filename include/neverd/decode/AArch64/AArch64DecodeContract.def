@@ -1,0 +1,19 @@
+//===- AArch64DecodeContract.def - Decode admission diagnostics -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// DIAGNOSTIC(Name, Text) owns AArch64 operand-detail admission messages.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_AARCH64_DECODE_DIAGNOSTIC
+#define NEVERD_AARCH64_DECODE_DIAGNOSTIC(Name, Text)
+#endif
+
+NEVERD_AARCH64_DECODE_DIAGNOSTIC(kMissingDetail,
+                                 "AArch64 operand detail unavailable")
+NEVERD_AARCH64_DECODE_DIAGNOSTIC(
+    kInvalidOccurrence, "AArch64 decode occurrence is stale or incomplete")
+
+#undef NEVERD_AARCH64_DECODE_DIAGNOSTIC

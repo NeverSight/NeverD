@@ -1,0 +1,72 @@
+//===- AArch64PAuthC.def - Pointer authentication C syntax ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// NEVERD_A64_PAUTH_C_TEXT(Name, Text) defines source fragments and
+/// llvm::formatv templates shared by HighC and LLVMC. These are GNU C
+/// expressions/assembly; the intrinsic table owns instruction mnemonics and
+/// builtin names.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_PAUTH_C_TEXT
+#error "Define NEVERD_A64_PAUTH_C_TEXT before including AArch64PAuthC.def"
+#endif
+
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCPointer, "__pointer")
+NEVERD_A64_PAUTH_C_TEXT(
+    kAArch64PAuthLRMachineC,
+    "({{ uint64_t {0}; __asm__ volatile(\"mov x17, %1\\n\\t"
+    "mov x16, %2\\n\\tmov x15, %3\\n\\t{1}\\n\\tmov %0, x17\" "
+    ": \"=r\"({0}) : \"r\"((uint64_t)({2})), \"r\"((uint64_t)({3})), "
+    "\"r\"((uint64_t)({4})) : \"x14\", \"x15\", \"x16\", \"x17\", \"cc\"); "
+    "{0}; })")
+NEVERD_A64_PAUTH_C_TEXT(
+    kAArch64PACMMachineC,
+    "({{ uint64_t {0}; __asm__ volatile(\"mov x17, %1\\n\\t"
+    "mov x16, %2\\n\\tmov x15, %3\\n\\t{1}\\n\\tmov %0, x17\" "
+    ": \"=r\"({0}) : \"r\"((uint64_t)({2})), \"r\"((uint64_t)({3})), "
+    "\"r\"((uint64_t)({4})), \"r\"((uint64_t)({5})) : "
+    "\"x14\", \"x15\", \"x16\", \"x17\", \"cc\"); {0}; })")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCPointerDeclaration,
+                        "uint64_t {0} = (uint64_t)({1}); ")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCMachineAsm,
+                        "__asm__ volatile(\"{0}{1}\" : \"+r\"({2}){3}); ")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCOperands, " %0, %1")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCStripOperands, " %0")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCModifier, " : \"r\"((uint64_t)({0}))")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCGenericSign,
+                        "uint64_t {0}; __asm__ volatile(\"{1} %0, %1, %2\" "
+                        ": \"=r\"({0}) : \"r\"((uint64_t)({2})), "
+                        "\"r\"((uint64_t)({3}))); ")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCAuthenticate,
+                        "(uint64_t){0}((void *)(uintptr_t)({1}), {2}, "
+                        "(uintptr_t)({3}))")
+NEVERD_A64_PAUTH_C_TEXT(
+    kAArch64PAuthCAuthenticatedCallee,
+    "(__builtin_ptrauth_auth_and_resign(({0})(uintptr_t)({1}), "
+    "{2}, (uintptr_t)({3}), 0, 0))")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCTargetDeclaration, "uint64_t {0} = {1}; ")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCTarget, "__target")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCRawCall, "__neverd_aarch64_raw_call({0})")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCRawCallHeader,
+                        "#ifndef __neverd_aarch64_raw_call\n"
+                        "#if defined(__clang__)\n"
+                        "#if __has_feature(ptrauth_calls)\n"
+                        "#define __neverd_aarch64_raw_call(fn) "
+                        "__builtin_ptrauth_sign_unauthenticated((fn), 0, 0)\n"
+                        "#endif\n"
+                        "#endif\n"
+                        "#ifndef __neverd_aarch64_raw_call\n"
+                        "#define __neverd_aarch64_raw_call(fn) (fn)\n"
+                        "#endif\n"
+                        "#endif\n\n")
+NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCTargetUse,
+                        "__asm__ volatile(\"{0}\" : : \"r\"({1})); ")
+NEVERD_A64_PAUTH_C_TEXT(kArm64eAuthenticatedStorageComment,
+                        " /* arm64e: dyld-authenticated storage */")
+
+#undef NEVERD_A64_PAUTH_C_TEXT

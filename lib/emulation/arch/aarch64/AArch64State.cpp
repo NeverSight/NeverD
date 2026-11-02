@@ -42,6 +42,19 @@ static_assert([] {
   return true;
 }());
 } // namespace
+void normalizeAArch64State(AArch64MachineState &State) {
+#define NEVERD_SCALAR_REGISTER(Arch, Name, Width, Backend)                     \
+  NEVERD_NORMALIZE_##Arch(Name, Width)
+#define NEVERD_NORMALIZE_X64(Name, Width)
+#define NEVERD_NORMALIZE_AArch64(Name, Width)                                  \
+  State.reg(AArch64Register::Name) &= llvm::maskTrailingOnes<uint64_t>(Width);
+#include "neverd/emulation/Registers.def"
+#undef NEVERD_NORMALIZE_AArch64
+#undef NEVERD_NORMALIZE_X64
+#undef NEVERD_SCALAR_REGISTER
+  State.reg(AArch64Register::NZCV) &= aarch64::NZCVMask;
+}
+
 llvm::Error captureAArch64State(AArch64MachineState &State,
                                 AArch64RegisterReader ReadScalar,
                                 AArch64VectorReader ReadVector) {
@@ -56,16 +69,15 @@ llvm::Error captureAArch64State(AArch64MachineState &State,
     auto Value = ReadScalar(Register);
     if (!Value)
       return Value.takeError();
-    Next.reg(Register) = *Value & llvm::maskTrailingOnes<uint64_t>(
-                                      registerWidth(cpuRegister(Register)));
+    Next.reg(Register) = *Value;
   }
-  Next.reg(AArch64Register::NZCV) &= aarch64::NZCVMask;
   for (unsigned Index : VectorRegisters) {
     auto Value = ReadVector(Index);
     if (!Value)
       return Value.takeError();
     Next.Vectors[Index] = *Value;
   }
+  normalizeAArch64State(Next);
   State = Next;
   return llvm::Error::success();
 }

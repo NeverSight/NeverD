@@ -226,11 +226,15 @@ def audit_bundle(bundle: Path) -> dict:
 
 
 def copy_notices(bundle: Path, source: Path, origins: set[Path], qt_version: str,
-                 qt_licenses: Path, kddw_source: Path, json_license: Path) -> None:
+                 qt_licenses: Path, kddw_source: Path, json_license: Path,
+                 engine_notices: Path) -> None:
     licenses = bundle / "Contents/Resources/Licenses"
     licenses.mkdir()
-    for name in ("LICENSE", "NOTICE", "ATTRIBUTION.md"):
+    for name in ("LICENSE", "NOTICE", "ATTRIBUTION.md", "THIRD_PARTY_NOTICES.md"):
         shutil.copy2(source.parents[1] / name, licenses / ("NeverD-" + name))
+    shutil.copytree(source.parents[1] / "LICENSES/zlib", licenses / "zlib")
+    if engine_notices.is_dir():
+        shutil.copytree(engine_notices, licenses / "Engine")
     if not qt_licenses.is_dir():
         raise RuntimeError(f"Qt {qt_version} license directory required: {qt_licenses}")
     shutil.copytree(qt_licenses, licenses / ("Qt-" + qt_version))
@@ -304,16 +308,18 @@ def main() -> None:
     macos, frameworks, resources = (bundle / "Contents" / name for name in ("MacOS", "Frameworks", "Resources"))
     for directory in (macos, frameworks, resources):
         directory.mkdir(parents=True)
-    for name in ("neverd-gui", *ENGINE_HOSTS):
-        shutil.copy2(args.build_dir / "bin" / name, macos / name)
-    shutil.copy2(args.engine, frameworks / "libneverd.dylib")
+    executables = {name: args.build_dir / "bin" / name
+                   for name in ("neverd-gui", *ENGINE_HOSTS)}
+    gui_bundle_binary = args.build_dir / "bin/neverd-gui.app/Contents/MacOS/neverd-gui"
+    if gui_bundle_binary.is_file():
+        executables["neverd-gui"] = gui_bundle_binary
+    inputs = [(name, origin, macos / name) for name, origin in executables.items()]
+    inputs.append(("libneverd.dylib", args.engine, frameworks / "libneverd.dylib"))
+    for name, origin, copied in inputs:
+        shutil.copy2(origin, copied)
     build_inputs = [{"name": name, "source": str(origin.resolve()),
                      "sha256": hashlib.sha256(copied.read_bytes()).hexdigest()}
-                    for name, origin, copied in (
-                        ("neverd-gui", args.build_dir / "bin/neverd-gui", macos / "neverd-gui"),
-                        ("neverd-worker", args.build_dir / "bin/neverd-worker", macos / "neverd-worker"),
-                        ("neverd-mcp", args.build_dir / "bin/neverd-mcp", macos / "neverd-mcp"),
-                        ("libneverd.dylib", args.engine, frameworks / "libneverd.dylib"))]
+                    for name, origin, copied in inputs]
     origins = {args.engine.resolve()}
     for dependency in dependencies(args.engine):
         if dependency.startswith("/") and "/Python.framework/" in dependency:
@@ -334,6 +340,10 @@ def main() -> None:
         plistlib.dump(plist, stream)
     for host in ENGINE_HOSTS:
         run("install_name_tool", "-add_rpath", "@executable_path/../Frameworks", macos / host)
+    # Preserve dependency discovery before macdeployqt rewrites framework
+    # extensions' absolute library paths. It can rewrite Python's _sqlite3
+    # reference without copying the keg-only SQLite library it names.
+    repair_dependencies(bundle, args.qt_dir, origins)
     # Qt 6.8 does not support -no-codesign. Any deployment-time signatures
     # are regenerated after dependency repairs by the signing steps below.
     run(args.qt_dir / "bin/macdeployqt", bundle,
@@ -347,10 +357,10 @@ def main() -> None:
     with (bundle / "Contents/Info.plist").open("wb") as stream:
         plistlib.dump(plist, stream)
     version = output(args.qt_dir / "bin/qmake", "-query", "QT_VERSION").strip()
-    kddw_source = args.kddw_source or args.build_dir / "_deps/kddockwidgets-src"
+    kddw_source = args.kddw_source or args.build_dir / "_deps/neverd_docking-src"
     json_license = args.json_license or args.build_dir / "_deps/neverd_worker_json-src/LICENSE.MIT"
     copy_notices(bundle, source, origins, version, args.qt_licenses or source / "licenses" / ("Qt-" + version),
-                 kddw_source, json_license)
+                 kddw_source, json_license, args.engine.parent / "licenses")
     (resources / "dependency-audit.json").write_text(json.dumps(report, indent=2) + "\n")
     # Dependency repair invalidates Mach-O signatures. Preserve entitlements
     # when the final recursive bundle signing revisits the engine hosts.

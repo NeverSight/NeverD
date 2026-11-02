@@ -1,7 +1,10 @@
-//===- AndroidScanning.cpp - Bounded Bionic integer scanning --------------===//
+//===- AndroidScanning.cpp - Bounded Bionic byte scanning -----------------===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+/// \file
+/// Implements bounded Android integer and narrow character/string scanning.
 //===----------------------------------------------------------------------===//
 #include "AndroidArguments.h"
 
@@ -30,9 +33,10 @@ bool overlaps(uint64_t A, uint64_t ASize, uint64_t B, uint64_t BSize) {
 }
 } // namespace
 
-/// Independently implements the integer subset of Android 9 sscanf/vsscanf.
-/// Parse and validate before publishing writes. Matching failures still commit
-/// the earlier assignments, while unsupported behavior produces no result.
+/// Independently implements bounded integer and byte sscanf/vsscanf
+/// conversions. Parse and validate before publishing writes. Matching failures
+/// still commit the earlier assignments, while unsupported behavior produces no
+/// result.
 class Bionic::IntegerScanner {
 public:
   IntegerScanner(Bionic &Model, const NativeCallEvent &Call)
@@ -51,8 +55,8 @@ private:
     llvm::StringRef Literal;
   };
   struct Assignment {
-    uint64_t Address, Value;
-    unsigned Size;
+    uint64_t Address;
+    llvm::SmallVector<uint8_t, 8> Bytes;
   };
   Bionic &Model;
   const NativeCallEvent &Call;
@@ -78,7 +82,10 @@ private:
   llvm::Expected<std::string> text(uint64_t Address);
   llvm::Error parse();
   llvm::Expected<bool> number(const Directive &D);
+  llvm::Error characters(const Directive &D);
   llvm::Error assign(const Directive &D, uint64_t Value);
+  llvm::Error assign(const Directive &D, llvm::ArrayRef<uint8_t> Bytes,
+                     bool Terminated = false);
   llvm::Expected<uint64_t> match();
   llvm::Error commit();
 };
@@ -154,8 +161,8 @@ llvm::Error Bionic::IntegerScanner::parse() {
       D.Size = 8;
       D.Conversion += 'a' - 'A';
     }
-    if (!llvm::StringRef("diouxXpn").contains(D.Conversion) ||
-        (D.Conversion == 'p' && HasLength) ||
+    if (!llvm::StringRef("diouxXpncs").contains(D.Conversion) ||
+        (llvm::StringRef("pcs").contains(D.Conversion) && HasLength) ||
         (D.Conversion == 'n' && (HasWidth || D.Suppressed)))
       return unsupported(diagnostic::ScanFormat);
     if (D.Conversion == 'p')
@@ -166,6 +173,14 @@ llvm::Error Bionic::IntegerScanner::parse() {
 }
 
 llvm::Error Bionic::IntegerScanner::assign(const Directive &D, uint64_t Value) {
+  std::array<uint8_t, 8> Bytes{};
+  llvm::support::endian::write64le(Bytes.data(), Value);
+  return assign(D, llvm::ArrayRef(Bytes).take_front(D.Size));
+}
+
+llvm::Error Bionic::IntegerScanner::assign(const Directive &D,
+                                           llvm::ArrayRef<uint8_t> Bytes,
+                                           bool Terminated) {
   if (D.Suppressed)
     return llvm::Error::success();
   auto Address = Arguments.next();
@@ -173,12 +188,33 @@ llvm::Error Bionic::IntegerScanner::assign(const Directive &D, uint64_t Value) {
     return Address.takeError();
   if (auto E = reserve(sizeof(Assignment)))
     return E;
-  if (auto E = Model.access(*Address, D.Size, Write))
+  const uint64_t Size = Bytes.size() + uint64_t(Terminated);
+  if (auto E = reserve(Size))
     return E;
-  Assignments.push_back({*Address, Value, D.Size});
+  if (auto E = Model.access(*Address, Size, Write))
+    return E;
+  Assignment A{*Address, {}};
+  A.Bytes.append(Bytes.begin(), Bytes.end());
+  if (Terminated)
+    A.Bytes.push_back(0);
+  Assignments.push_back(std::move(A));
   if (D.Conversion != 'n')
     ++Count;
   return llvm::Error::success();
+}
+
+llvm::Error Bionic::IntegerScanner::characters(const Directive &D) {
+  const bool Terminated = D.Conversion == 's';
+  llvm::StringRef Field = llvm::StringRef(Input).drop_front(Position);
+  const uint64_t Width = D.Width ? D.Width : Terminated ? Field.size() : 1;
+  Field = Field.take_front(Width);
+  if (Terminated)
+    Field = Field.take_until(isSpace);
+  Position += Field.size();
+  return assign(D,
+                llvm::ArrayRef(reinterpret_cast<const uint8_t *>(Field.data()),
+                               Field.size()),
+                Terminated);
 }
 
 llvm::Expected<bool> Bionic::IntegerScanner::number(const Directive &D) {
@@ -245,12 +281,18 @@ llvm::Expected<uint64_t> Bionic::IntegerScanner::match() {
       }
       continue;
     }
-    while (Position < Input.size() && isSpace(Input[Position]))
-      ++Position;
+    if (D.Conversion != 'c')
+      while (Position < Input.size() && isSpace(Input[Position]))
+        ++Position;
     if (D.Conversion == ' ')
       continue;
     if (Position == Input.size())
       return InputFailure();
+    if (D.Conversion == 'c' || D.Conversion == 's') {
+      if (auto E = characters(D))
+        return std::move(E);
+      continue;
+    }
     auto Matched = number(D);
     if (!Matched)
       return Matched.takeError();
@@ -265,15 +307,14 @@ llvm::Error Bionic::IntegerScanner::commit() {
   // Reject writes that would invalidate those snapshots. Destination aliases
   // with each other remain valid and are applied in conversion order.
   for (const auto &A : Assignments)
-    if (overlaps(A.Address, A.Size, Call.Arguments[0], Input.size() + 1) ||
-        overlaps(A.Address, A.Size, Call.Arguments[1], Format.size() + 1) ||
-        Arguments.overlaps(A.Address, A.Size))
+    if (overlaps(A.Address, A.Bytes.size(), Call.Arguments[0],
+                 Input.size() + 1) ||
+        overlaps(A.Address, A.Bytes.size(), Call.Arguments[1],
+                 Format.size() + 1) ||
+        Arguments.overlaps(A.Address, A.Bytes.size()))
       return unsupported(diagnostic::ScanAlias);
   for (const auto &A : Assignments) {
-    std::array<uint8_t, 8> Bytes{};
-    llvm::support::endian::write64le(Bytes.data(), A.Value);
-    if (auto E = Model.CPU.write(A.Address,
-                                 llvm::ArrayRef(Bytes).take_front(A.Size)))
+    if (auto E = Model.CPU.write(A.Address, A.Bytes))
       return E;
   }
   return llvm::Error::success();

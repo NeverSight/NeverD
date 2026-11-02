@@ -6,9 +6,9 @@
 /// \file
 /// Select the LLVM convention for an authenticated physical entry signature.
 //===----------------------------------------------------------------------===//
-#include "neverd/backend/llvm/X86RegistrationEntry.h"
+#include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationEntry.h"
+#include "neverd/ir/med/X86/X86RegistrationEntry.h"
 
 #include "llvm/IR/Function.h"
 

@@ -18,6 +18,9 @@ NEVERD_EXECUTION_DIAGNOSTIC(
 NEVERD_EXECUTION_DIAGNOSTIC(UnknownService, "unknown service request kind")
 NEVERD_EXECUTION_DIAGNOSTIC(Running, "operation requires a stopped CPU")
 NEVERD_EXECUTION_DIAGNOSTIC(ContextExpired, "CPU context owner has expired")
+NEVERD_EXECUTION_DIAGNOSTIC(
+    ContextObservationUnsupported,
+    "Saved CPU register observation is unsupported by this backend")
 NEVERD_EXECUTION_DIAGNOSTIC(ContextOwner,
                             "CPU context belongs to another backend instance")
 NEVERD_EXECUTION_DIAGNOSTIC(Register,

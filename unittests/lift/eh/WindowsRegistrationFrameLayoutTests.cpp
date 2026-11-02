@@ -6,8 +6,8 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
-#include "neverd/ir/med/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
 
 using namespace neverd;
 

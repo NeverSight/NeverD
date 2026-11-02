@@ -17,6 +17,9 @@ def run(executable):
             assert "cfg_viewport" in client.hello["capabilities"]
             assert client.call("open", {"path": str(binary)})["status"] == "ok"
             address = hex(int(BASE, 16) + 2)
+            # The synthetic graph selector must be an explicit entry. An
+            # ordinary interior byte now selects its containing function.
+            assert client.call("function_create", {"address": address})["status"] == "ok"
             assert client.call("cfg_viewport", {"address": address})["error"]["code"] == "stale_layout"
             summary = client.call("cfg_summary", {"address": address})
             assert summary["status"] == "ok", summary

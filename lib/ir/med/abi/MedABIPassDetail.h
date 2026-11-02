@@ -34,12 +34,15 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <tuple>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace neverd {
@@ -57,6 +60,18 @@ bool recoverI386RegistrationCookieCall(const MedFunc &Func,
                                        const MedBlock &Block, size_t CallIndex,
                                        const TargetRegInfo &TRI,
                                        MedCallInfo &Info);
+
+/// Physical pre-call SP definitions, using the shared ABI recovery walk.
+/// Source clients charge all walks to one budget and prove entry offsets
+/// separately. Missing or ambiguous bases provide no stack location.
+std::map<const MedOp *, MedVar> sourceCallStackPointers(const MedFunc &Func,
+                                                        Arch Architecture,
+                                                        size_t &Remaining);
+/// Also publishes each block's incoming physical SP under the same fixed
+/// point; absent entries have no unique reaching definition.
+std::map<const MedOp *, MedVar>
+sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
+                        size_t &Remaining, std::map<int, MedVar> &BlockEntries);
 
 struct AbiSpillContext {
   const MedFunc &Func;
@@ -122,28 +137,31 @@ struct AbiCallContext {
   const MedBlockIdIndex *Blocks = nullptr;
 };
 
-/// The incoming value of a scratch register that carries no argument is
-/// undefined where the convention says so: storing it, as an alignment
-/// `push rax` does, passes nothing (HighIR's CallArgCollection applies the same
-/// rule).
-inline bool isUndefinedIncomingScratch(const TargetRegInfo &TRI, Arch TheArch,
-                                       const CallArgumentConvention *Convention,
-                                       llvm::ArrayRef<uint64_t> ArgRegs,
-                                       const MedVar &V) {
-  if (!Convention || !Convention->UndefinedIncomingScratchRegisters ||
-      V.Kind != MedVar::Reg || V.SSAVer != 0 || TRI.isStackPointer(V.RegOff) ||
-      TRI.isCalleeSaveReg(V.RegOff) || TRI.isLinkRegister(V.RegOff))
-    return false;
-  const std::optional<unsigned> Family = gprFamilyOf(TheArch, V.RegOff);
-  return Family && llvm::none_of(ArgRegs, [&](uint64_t Reg) {
-           return gprFamilyOf(TheArch, Reg) == Family;
-         });
-}
+/// An original scalar or an index into CallSetupStackJoins::Nodes. Plans use
+/// no SSA identity until a required argument actually consumes them.
+using CallSetupStackValue = std::variant<MedVar, size_t>;
+struct CallSetupStackJoin {
+  int BlockId;
+  uint16_t Bytes;
+  std::vector<std::pair<int, CallSetupStackValue>> Args;
+};
+struct CallSetupStackJoins {
+  std::vector<CallSetupStackJoin> Nodes;
+  std::map<int64_t, size_t> Slots;
+};
 
 /// Outgoing scalar stores that agree along every predecessor path
 /// to a call. Unknown writes, calls, independent entries and cycles stop the
 /// proof. Offsets are relative to the call's SP, using its exact SSA basis.
-std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C);
+/// When requested, Joins keeps complete same-width definitions through nested
+/// joins. Nodes refer only to earlier nodes, and Slots names the final roots.
+/// The caller materializes only the nodes a required argument reaches.
+/// SharedWork, when supplied by an enclosing proof, also charges every visited
+/// operation and edge to that proof. The per-call limit still applies.
+std::map<int64_t, MedVar>
+callSetupStackStores(const AbiCallContext &C,
+                     CallSetupStackJoins *Joins = nullptr,
+                     size_t *SharedWork = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);
@@ -224,12 +242,37 @@ public:
   MedDefSite find(const MedVar &V);
   void invalidate() {
     Sites.clear();
+    StackDeltas.clear();
     Built = false;
   }
 
+  /// A stackPtrDelta answer that no depth cap shaped: the offset, and how
+  /// many levels below the value its walk went.  A query at a depth where
+  /// that walk stays under the cap gets the same answer, so an answer serves
+  /// every query for as long as the definitions do.
+  struct StackDelta {
+    std::optional<int64_t> Delta;
+    int Height = 0;
+  };
+  const StackDelta *stackDelta(const MedVar &V, uint64_t StackPointer) const {
+    const auto It = StackDeltas.find({key(V), StackPointer});
+    return It == StackDeltas.end() ? nullptr : &It->second;
+  }
+  void rememberStackDelta(const MedVar &V, uint64_t StackPointer,
+                          StackDelta Answer) {
+    StackDeltas.try_emplace(StackDeltaKey{key(V), StackPointer}, Answer);
+  }
+
 private:
+  using Identity = std::tuple<int, int, int, uint64_t>;
+  using StackDeltaKey = std::pair<Identity, uint64_t>;
+  static Identity key(const MedVar &V) {
+    return {static_cast<int>(V.Kind), V.Id, V.SSAVer, V.RegOff};
+  }
+
   const MedFunc &Func;
-  llvm::DenseMap<std::tuple<int, int, int, uint64_t>, MedDefSite> Sites;
+  llvm::DenseMap<Identity, MedDefSite> Sites;
+  llvm::DenseMap<StackDeltaKey, StackDelta> StackDeltas;
   bool Built = false;
 };
 
@@ -237,10 +280,10 @@ private:
 /// SP definition chain through constant add/sub decrements and width casts.
 /// nullopt when \p V does not derive from the SP. \p Defs, when given, must
 /// index \p Func.
-std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
-                                     const TargetRegInfo &TRI, const MedVar &V,
-                                     int Depth = 0,
-                                     MedDefSiteIndex *Defs = nullptr);
+std::optional<int64_t>
+stackPtrDelta(const MedFunc &Func, const TargetRegInfo &TRI, const MedVar &V,
+              int Depth = 0, MedDefSiteIndex *Defs = nullptr,
+              BinaryFormat Format = BinaryFormat::Unknown);
 
 /// Whether \p V is, or derives from (through copies, width casts and a constant
 /// add/sub), a frame register -- the stack OR frame pointer.

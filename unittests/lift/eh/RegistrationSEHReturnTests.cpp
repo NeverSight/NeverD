@@ -6,11 +6,11 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/backend/llvm/X86RegistrationSEHControl.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHControl.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace {
 using namespace neverd;

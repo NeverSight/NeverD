@@ -22,6 +22,9 @@ inline bool hasRelocationProvenanceIn(const BinaryImage &Img, va_t First,
                                       va_t End) {
   if (First >= End)
     return false;
+  if (const auto It = Img.MachOAuthenticatedPointers.lower_bound(First);
+      It != Img.MachOAuthenticatedPointers.end() && It->first < End)
+    return true;
   for (const std::set<uint64_t> *Slots :
        {&Img.CodePtrRelocSlots, &Img.DataPtrRelocSlots,
         &Img.RelDataPtrRelocSlots, &Img.RelCodeRelocSlots})

@@ -15,6 +15,8 @@
 ///     An integer typedef; Bits 0 is the pointer width.
 ///   NEVERD_C_HEADER_NAMED_TYPE(Name, Bits)
 ///     A type the reader keeps by name; Bits 0 when its size does not matter.
+///   NEVERD_C_HEADER_FLOATING(Name, Bits)
+///     A floating typedef of an intrinsic header.
 ///   NEVERD_C_HEADER_CONSTANT(Name, Value)
 ///     An `int` macro.
 ///   NEVERD_C_HEADER_FUNCTION(Prototype)
@@ -30,6 +32,9 @@
 #endif
 #ifndef NEVERD_C_HEADER_NAMED_TYPE
 #define NEVERD_C_HEADER_NAMED_TYPE(Name, Bits)
+#endif
+#ifndef NEVERD_C_HEADER_FLOATING
+#define NEVERD_C_HEADER_FLOATING(Name, Bits)
 #endif
 #ifndef NEVERD_C_HEADER_CONSTANT
 #define NEVERD_C_HEADER_CONSTANT(Name, Value)
@@ -50,6 +55,8 @@ NEVERD_C_HEADER_INTEGER("uint8_t", 8, false)
 NEVERD_C_HEADER_INTEGER("uint16_t", 16, false)
 NEVERD_C_HEADER_INTEGER("uint32_t", 32, false)
 NEVERD_C_HEADER_INTEGER("uint64_t", 64, false)
+NEVERD_C_HEADER_INTEGER("__int128_t", 128, true)
+NEVERD_C_HEADER_INTEGER("__uint128_t", 128, false)
 NEVERD_C_HEADER_INTEGER("intptr_t", 0, true)
 NEVERD_C_HEADER_INTEGER("uintptr_t", 0, false)
 NEVERD_C_HEADER_INTEGER("size_t", 0, false)
@@ -57,6 +64,12 @@ NEVERD_C_HEADER_INTEGER("ssize_t", 0, true)
 NEVERD_C_HEADER_INTEGER("ptrdiff_t", 0, true)
 // The data model sizes it.
 NEVERD_C_HEADER_INTEGER("wchar_t", 32, true)
+
+// <arm_neon.h> scalar types used by the AArch64 intrinsic renderers.
+NEVERD_C_HEADER_FLOATING("float16_t", 16)
+NEVERD_C_HEADER_FLOATING("bfloat16_t", 16)
+NEVERD_C_HEADER_FLOATING("float32_t", 32)
+NEVERD_C_HEADER_FLOATING("float64_t", 64)
 
 // <stdio.h>, <setjmp.h>, <link.h>, intrinsic vectors.
 NEVERD_C_HEADER_NAMED_TYPE("FILE", 0)
@@ -161,6 +174,9 @@ NEVERD_C_HEADER_FUNCTION("uint64_t __rdtsc(void);")
 NEVERD_C_HEADER_FUNCTION("uint64_t __rdtscp(uint32_t *);")
 NEVERD_C_HEADER_FUNCTION("void __cpuid(int *, int);")
 NEVERD_C_HEADER_FUNCTION("void __cpuidex(int *, int, int);")
+NEVERD_C_HEADER_FUNCTION("void _ReadWriteBarrier(void);")
+NEVERD_C_HEADER_FUNCTION("void __cpuidex(int *, int, int);")
+NEVERD_C_HEADER_FUNCTION("void _ReadWriteBarrier(void);")
 NEVERD_C_HEADER_FUNCTION("uint64_t _xgetbv(uint32_t);")
 NEVERD_C_HEADER_FUNCTION("uint32_t _mm_getcsr(void);")
 NEVERD_C_HEADER_FUNCTION("void _mm_setcsr(uint32_t);")
@@ -208,6 +224,7 @@ NEVERD_C_HEADER_GENERIC("__builtin_arm_stlex", Int)
 
 #undef NEVERD_C_HEADER_INTEGER
 #undef NEVERD_C_HEADER_NAMED_TYPE
+#undef NEVERD_C_HEADER_FLOATING
 #undef NEVERD_C_HEADER_CONSTANT
 #undef NEVERD_C_HEADER_FUNCTION
 #undef NEVERD_C_HEADER_GENERIC

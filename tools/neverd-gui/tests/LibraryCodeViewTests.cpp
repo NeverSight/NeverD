@@ -19,6 +19,67 @@ QJsonObject region(QString id, qint64 begin, qint64 end) {
 class LibraryCodeViewTests final : public QObject {
   Q_OBJECT
 private slots:
+  void generatedDetailsPreserveCopyNavigationAndVisibleBehavior() {
+    for (const QString &alignment : {QString("_Alignas"), QString("alignas")}) {
+      const QString source =
+          "/* neverd.exception: encoding=dwarf-fde, status=complete, "
+          "personality=__gxx_personality_v0\n"
+          " * highir.structured_regions=1, fallback_regions=0\n"
+          " * itanium.call_site[0]: [0x1000, 0x1004) pad=0x1010\n"
+          " */\n"
+          "void f() {\n  " +
+          alignment +
+          "(16) struct frame_1000 {\n"
+          "    uint8_t gap0[8];\n    int64_t var_m8;\n"
+          "  } stack_storage;\n"
+          "  try {\n    call(&stack_storage.var_m8);\n  } catch (...) {\n"
+          "    cleanup();\n    throw;\n  }\n}\n";
+      const QVariantList rows{
+          QVariantMap{{"line", 7}, {"addresses", QVariantList{"0x1000"}}},
+          QVariantMap{{"line", 12}, {"addresses", QVariantList{"0x1010"}}}};
+      LibraryCodeView view;
+      view.reset(source, rows, {}, 0, false, true);
+      QCOMPARE(view.defaultDetailBlocks().size(), 2);
+      view.setFoldedBlocks(view.defaultDetailBlocks());
+      QVERIFY(!view.text().contains("gap0"));
+      QVERIFY(!view.text().contains("itanium.call_site"));
+      QVERIFY(view.text().contains("status=complete"));
+      QVERIFY(view.text().contains("catch (...)"));
+      QVERIFY(view.text().contains("cleanup();\n    throw;"));
+      QCOMPARE(view.originalSelection(0, view.text().size()), source);
+      QCOMPARE(view.mappings().size(), 1);
+      QVERIFY(view.unfoldSourceLine(7));
+      QVERIFY(view.text().contains("var_m8;"));
+      QCOMPARE(view.mappings().size(), 2);
+      const auto folded = view.foldedBlocks();
+      view.reset(source, rows, {}, 0, false, true);
+      view.setFoldedBlocks(folded);
+      QVERIFY(view.text().contains("gap0"));
+      QVERIFY(!view.text().contains("itanium.call_site"));
+      QVERIFY(view.unfoldSourceLine(2));
+      QCOMPARE(view.text(), source);
+      QCOMPARE(view.mappings(), rows);
+    }
+  }
+
+  void warningsAndOrdinaryRecordsDoNotCollapseByDefault() {
+    for (const QString &status : {QString("complete"), QString("malformed")}) {
+      const QString source =
+          "/* neverd.exception: status=" + status +
+          ", personality=__gxx_personality_v0\n"
+          " * highir.structured_regions=0, fallback_regions=1\n"
+          " * cannot recover cleanup\n */\n"
+          "void f() {\n  struct frame_1000 {\n    int value;\n  } "
+          "user_record;\n"
+          "  if (user_record.value) {\n    effect();\n  }\n}\n";
+      LibraryCodeView view;
+      view.reset(source, {}, {}, 0, false, true);
+      QVERIFY(view.defaultDetailBlocks().isEmpty());
+      view.setFoldedBlocks(view.defaultDetailBlocks());
+      QCOMPARE(view.text(), source);
+    }
+  }
+
   void nestedBlocksRetainChildrenCopyAndOriginalRows() {
     const QString source = QString::fromUtf8("int f(int v7) {\n"
                                              "  // 中文 😀\n"

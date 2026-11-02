@@ -3,6 +3,8 @@
 #define NEVERD_EXPORTS 1
 #include "Protocol.h"
 
+#include "neverd/sdk/NeverDCAPIBytePatch.h"
+#include "neverd/sdk/NeverDCAPIDevirtualize.h"
 #include "neverd/sdk/NeverDCAPIDisasm.h"
 #include "neverd/sdk/NeverDCAPILocalTypes.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"
@@ -39,6 +41,34 @@ static std::filesystem::path projectFile(const std::string &input,
 }
 
 namespace {
+namespace discovery_fixture {
+constexpr auto kGateTimeout = std::chrono::seconds(5);
+constexpr auto kGatePollInterval = std::chrono::milliseconds(5);
+
+bool waitFor(const std::string &path) {
+  const auto deadline = std::chrono::steady_clock::now() + kGateTimeout;
+  while (!std::filesystem::exists(std::filesystem::u8path(path))) {
+    if (std::chrono::steady_clock::now() >= deadline)
+      return false;
+    std::this_thread::sleep_for(kGatePollInterval);
+  }
+  return true;
+}
+} // namespace discovery_fixture
+
+namespace unwind_query_fixture {
+#define NEVERD_UNWIND_TEST_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "UnwindQueryFixtures.def"
+struct Case {
+  const char *Address;
+  const char *Source;
+};
+constexpr Case Cases[] = {
+#define NEVERD_UNWIND_TEST_CASE(Address, Source, Expected) {Address, Source},
+#include "UnwindQueryFixtures.def"
+};
+} // namespace unwind_query_fixture
+
 constexpr std::uint64_t Base = 0xffff800012340000ULL;
 constexpr std::uint64_t CodeBase = Base + 0x2700;
 constexpr unsigned char CodeBytes[] = {0x90, 0x48, 0x83, 0xc4,
@@ -79,6 +109,7 @@ listedFunctions(const std::map<std::uint64_t, bool> &edits,
 constexpr std::uint64_t ChunkBegin = Base + 0x60;
 struct MockSession {
   std::string path, error;
+  std::map<uint64_t, Json> patches;
   /// Whether loading reads the debug information beside the input.
   bool debugInfo = true;
   /// Whether a load searches for the fixture PDB, and whether it found one.
@@ -124,6 +155,7 @@ struct MockSession {
   /// and refuse graph/IR reads against a different restricted pipeline.
   std::uint64_t preparedEntry = 0;
   unsigned sourcePrepares = 0, sourcePages = 0, sourceRenders = 0;
+  unsigned RecoveryCalls = 0;
   /// The functions the current neverd_warm_functions_json pass prepared.
   int warmed = 0;
   std::string preparedView;
@@ -138,6 +170,7 @@ struct MockSession {
            path.ends_with("source-export-fail.bin") ||
            path.ends_with("source-cache.bin") ||
            path.ends_with("source-cache-budget.bin") ||
+           path.ends_with("source-cache-refresh-budget.bin") ||
            path.ends_with("source-cache-prepare-fail.bin") ||
            path.ends_with("source-cache-ordered.bin") ||
            path.ends_with("source-cache-unordered.bin") ||
@@ -407,6 +440,7 @@ int neverd_session_load(neverd_session_t s, const char *path) {
     return 0;
   }
   session(s)->path = path;
+  (void)neverd_byte_patches_load(s);
   project_files::migrate(std::filesystem::u8path(path));
   session(s)->loadedWith =
       session(s)->requestedLoad.is_null()
@@ -666,6 +700,15 @@ const char *neverd_dashboard_json(neverd_session_t s) {
   return copy(Json{{"hashes", {{"sha256", fixtureDigest(s)}}}}.dump());
 }
 int neverd_func_count(neverd_session_t s) {
+  auto &state = *session(s);
+  if (state.path.ends_with("chooser-refresh.bin") &&
+      std::filesystem::exists(
+          std::filesystem::u8path(state.path + ".discover")) &&
+      std::find(state.functions.begin(), state.functions.end(), Base + 8) ==
+          state.functions.end())
+    state.functions.insert(std::upper_bound(state.functions.begin(),
+                                            state.functions.end(), Base + 8),
+                           Base + 8);
   return static_cast<int>(session(s)->functions.size());
 }
 // The ordering fixture publishes one new identity. Its first listing rebuild
@@ -686,6 +729,15 @@ int neverd_session_discover_functions(neverd_session_t s) {
 #endif
   if (state.path.find("discovery-order") != std::string::npos &&
       !state.discoveryPublished) {
+    if (std::filesystem::exists(
+            std::filesystem::u8path(state.path + ".pause-discovery"))) {
+      std::ofstream(std::filesystem::u8path(state.path + ".discovery-waiting"))
+          << "waiting";
+      if (!discovery_fixture::waitFor(state.path + ".finish-discovery")) {
+        state.error = "Fixture discovery gate timed out";
+        return -1;
+      }
+    }
     state.discoveryPublished = true;
     state.functions.push_back(Base + CodeSize);
   }
@@ -705,8 +757,7 @@ NEVERD_API int neverd_session_discover_functions_step(neverd_session_t s) {
   if (state.path.find("discovery-order") != std::string::npos &&
       !state.discoveryPolls++)
     return 0;
-  neverd_session_discover_functions(s);
-  return 1;
+  return neverd_session_discover_functions(s) < 0 ? -1 : 1;
 }
 #endif
 neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
@@ -715,12 +766,7 @@ neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
     state.discoveryRebuild = true;
     std::ofstream(std::filesystem::u8path(state.path + ".rebuild"))
         << "started";
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!std::filesystem::exists(
-               std::filesystem::u8path(state.path + ".continue")) &&
-           std::chrono::steady_clock::now() < deadline)
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    discovery_fixture::waitFor(state.path + ".continue");
   }
   const auto &functions = session(s)->functions;
   return index >= 0 && index < static_cast<int>(functions.size())
@@ -739,6 +785,8 @@ int neverd_func_size(neverd_session_t s, int index) {
 }
 const char *neverd_func_name(neverd_session_t s, int index) {
   const auto address = neverd_func_entry(s, index);
+  if (address == Base + 8 && session(s)->path.ends_with("chooser-refresh.bin"))
+    return copy("function_discovered");
   auto it = session(s)->names.find(address);
   if (it == session(s)->names.end() && address == Base + 0x150 &&
       session(s)->path.ends_with("pseudocode-navigation.bin"))
@@ -798,8 +846,8 @@ const char *neverd_resolve_addr(neverd_session_t s, neverd_va_t address) {
       {"linkage_name",
        name}}.dump());
 }
-int neverd_read_bytes(neverd_session_t, neverd_va_t address,
-                      unsigned char *buffer, int size) {
+int mock_original_bytes(neverd_session_t, neverd_va_t address,
+                        unsigned char *buffer, int size) {
   if (size >= 0 && address >= CodeBase &&
       address - CodeBase < sizeof(CodeBytes)) {
     const auto available = static_cast<int>(
@@ -1010,6 +1058,10 @@ const char *neverd_warm_functions_json(neverd_session_t s,
 const char *neverd_code_refs_json(neverd_session_t s, neverd_va_t firstEntry,
                                   int maxFunctions) {
   session(s)->error.clear();
+  if (session(s)->path.ends_with("source-cache-evm.bin")) {
+    session(s)->error = "Reference indexing is unsupported for EVM";
+    return nullptr;
+  }
   maxFunctions = std::clamp(maxFunctions, 1, 4096);
   Json refs = Json::array();
   int first =
@@ -1948,7 +2000,13 @@ const char *neverd_function_chunks_json(neverd_session_t s) {
                                 {"function", hexAddress(Base)}}})
                   .dump());
 }
-const char *neverd_unwind_frame_json(neverd_session_t, neverd_va_t address) {
+const char *neverd_unwind_frame_json(neverd_session_t s, neverd_va_t address) {
+  if (session(s)->path.ends_with(unwind_query_fixture::kInputName)) {
+    for (const auto &Case : unwind_query_fixture::Cases)
+      if (address == parseAddress(Case.Address))
+        return copy(Case.Source);
+    return copy(unwind_query_fixture::kNull);
+  }
   // function_0 has a plain frame; function_1 names a personality.
   if (address >= Base && address < Base + 16)
     return copy(Json{
@@ -2200,6 +2258,53 @@ std::string spelledPage(neverd_session_t s, neverd_va_t address,
 }
 } // namespace
 
+const char *neverd_devirtualize_machine_source_v10(
+    neverd_session_t S, neverd_va_t Entry,
+    const neverd_devirtualize_options_v10 *Options, const char **Report) {
+  auto *Session = session(S);
+  ++Session->RecoveryCalls;
+  const auto &Proof = Options->base;
+  const auto &Work = Proof.base.base;
+  const auto &Alignment = Work.base.base;
+  const auto &Frame = Alignment.base;
+  const auto &Base = Frame.base.base.base;
+  if (Session->path.ends_with("recovery-slow.bin")) {
+    std::fprintf(stderr, "fixture interpreter recovery started\n");
+    std::fflush(stderr);
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+  }
+  const bool Complete = !Session->path.ends_with("recovery-refused.bin");
+  Json Evidence{{"complete", Complete},
+                {"residualBlocks", 3},
+                {"sourceABI", "x64-machine-query-state-v2"},
+                {"fixture_calls", Session->RecoveryCalls},
+                {"fixture_prepares", Session->sourcePrepares},
+                {"fixture_entry", hexAddress(Entry)},
+                {"fixture_options",
+                 {{"size", Base.struct_size},
+                  {"abi", Options->machine_source_abi},
+                  {"llvm", Base.use_llvm},
+                  {"max_nodes", Base.max_nodes},
+                  {"max_operations", Base.max_operations},
+                  {"frame_begin", Frame.entry_frame_begin},
+                  {"frame_end", Frame.entry_frame_end},
+                  {"frame_flags", Frame.flags},
+                  {"alignment", Alignment.entry_frame_alignment},
+                  {"residue", Alignment.entry_frame_residue},
+                  {"separation_flags", Work.base.flags},
+                  {"proof_flags", Proof.flags}}}};
+  if (!Complete)
+    Evidence["error"] = "fixture unresolved indirect branch";
+  if (Report)
+    *Report = copy(Evidence.dump());
+  return Complete ? copy("/* recovered explicit state */\n"
+                         "unsigned recovered_fixture(void *state) {\n"
+                         "  (void)state;\n"
+                         "  return 0;\n"
+                         "}\n")
+                  : nullptr;
+}
+
 const char *neverd_ir_view_ex_json(neverd_session_t s, neverd_va_t address,
                                    const char *representation,
                                    std::size_t offset, std::size_t limit,
@@ -2395,13 +2500,17 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
   }
   if (session(s)->sourceCacheFixture()) {
     auto &state = *session(s);
+    static const auto Instance =
+        std::chrono::steady_clock::now().time_since_epoch().count();
     if (!state.wholeProgramPrepared && state.preparedEntry != address) {
       state.error = "fixture source read used another function's pipeline";
       return nullptr;
     }
     ++state.sourcePages;
+    const bool refreshBudget =
+        state.path.ends_with("source-cache-refresh-budget.bin");
     const bool large = state.path.ends_with("source-cache-budget.bin");
-    const std::size_t total = large ? 9000 : 4;
+    const std::size_t total = refreshBudget ? 600 : large ? 9000 : 4;
     const auto first = std::min(offset, total);
     const auto end = first + std::min(limit, total - first);
     std::string text;
@@ -2416,7 +2525,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
         return std::string("  return value;\n");
       if (index == 3)
         return std::string("}\n");
-      return "// " + std::string(512, 'x') + "\n";
+      return "// " + std::string(refreshBudget ? 4096 : 512, 'x') + "\n";
     };
     std::size_t begin = 0;
     for (std::size_t i = 0; i < first; ++i)
@@ -2472,6 +2581,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
                      {"code_names", names},
                      {"references", references},
                      {"fixture_prepares", state.sourcePrepares},
+                     {"fixture_instance", std::to_string(Instance)},
                      {"fixture_prepared_view", state.preparedView},
                      {"fixture_pages", state.sourcePages},
                      {"fixture_renders", state.sourceRenders}}
@@ -2486,6 +2596,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       session(s)->path.ends_with("code-frame.bin") ||
       session(s)->path.ends_with("code-folding.bin") ||
       session(s)->path.ends_with("code-folding-cpp.bin") ||
+      session(s)->path.ends_with("code-brackets.bin") ||
       session(s)->path.ends_with("local-references.bin") ||
       session(s)->path.ends_with("local-references-cpp.bin") ||
       session(s)->path.ends_with("tab-sync-paged.bin")) {
@@ -2575,6 +2686,18 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
              "    break;\n"
              "  }\n"
              "  return v7;\n"
+             "}\n";
+    // Brackets of the code, nested and across lines, beside brackets of a
+    // string and a comment.
+    if (session(s)->path.ends_with("code-brackets.bin"))
+      full = "#include <stdint.h>\n"
+             "int32_t function_20(int32_t v0) {\n"
+             "  const char *message = \"(v0]\";\n"
+             "  int32_t v1[2] = {v0, (v0 + 1)};\n"
+             "  if (v0) {\n"
+             "    v1[(v0 & 1)] = function_22(v1[0]); /* ) */\n"
+             "  }\n"
+             "  return v1[0];\n"
              "}\n";
     if (localReferences)
       full = "#include <stdint.h>\n"
@@ -2720,20 +2843,22 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
                       {"mapping_status", "unmapped"},
                       {"addresses", Json::array()}});
     }
-    return copy(Json{{"schema_version", 1},
-                     {"address", hexAddress(address)},
-                     {"representation", representation},
-                     {"mapping_status", "library_regions"},
-                     {"text", text},
-                     {"rows", rows},
-                     {"library_regions", Json::array()},
-                     {"offset", first},
-                     {"byte_offset", byteOffset},
-                     {"total_lines", total},
-                     {"complete", end == total},
-                     {"next_offset", end == total ? Json(nullptr) : Json(end)},
-                     {"prelude", {{"lines", 7}, {"end_byte", prelude.size()}}}}
-                    .dump());
+    Json result{{"schema_version", 1},
+                {"address", hexAddress(address)},
+                {"representation", representation},
+                {"mapping_status", "library_regions"},
+                {"text", text},
+                {"rows", rows},
+                {"library_regions", Json::array()},
+                {"offset", first},
+                {"byte_offset", byteOffset},
+                {"total_lines", total},
+                {"complete", end == total},
+                {"next_offset", end == total ? Json(nullptr) : Json(end)},
+                {"prelude", {{"lines", 7}, {"end_byte", prelude.size()}}}};
+    if (large)
+      result["fixture_pages"] = ++session(s)->sourcePages;
+    return copy(result.dump());
   }
   // Otherwise this mock represents an older page API that maps Low/Med only;
   // C requests exercise the worker's legacy fallback.
@@ -3048,10 +3173,22 @@ const char *neverd_entrypoints_json(neverd_session_t) {
           {{{"addr", hexAddress(Base)}, {"name", "start"}, {"type", "entry"}}})
           .dump());
 }
-// The fixture's "library" match names the second function.
+// An admitted library identity and a reference-confirmed candidate. Older
+// engines without an explicit admission decision also remain candidates.
 const char *neverd_sig_matches_json(neverd_session_t) {
   return copy(Json::array({{{"addr", hexAddress(Base + 16)},
                             {"name", "function_1"},
+                            {"auto_name", "function_1"},
+                            {"name_evidence", "image_symbol"},
+                            {"source", "mock"}},
+                           {{"addr", hexAddress(Base + 32)},
+                            {"name", "guessed_library_routine"},
+                            {"auto_name", ""},
+                            {"name_evidence", "none"},
+                            {"confirmed", true},
+                            {"source", "mock"}},
+                           {{"addr", hexAddress(Base + 48)},
+                            {"name", "legacy_guess"},
                             {"source", "mock"}}})
                   .dump());
 }
@@ -3629,5 +3766,166 @@ const char *neverd_string_at(neverd_session_t s, neverd_va_t address,
                     .dump());
   session(s)->error = "no string starts at " + hexAddress(address);
   return nullptr;
+}
+int neverd_read_bytes(neverd_session_t s, neverd_va_t address,
+                      unsigned char *buffer, int size) {
+  const int n = mock_original_bytes(s, address, buffer, size);
+  for (int i = 0; i < n; ++i) {
+    const auto found = session(s)->patches.find(address + i);
+    if (found != session(s)->patches.end())
+      buffer[i] = std::stoul(found->second.at("current").get<std::string>(),
+                             nullptr, 16);
+  }
+  return n;
+}
+const char *neverd_byte_patch_preview(neverd_session_t s,
+                                      const neverd_byte_patch_options_v1 *o) {
+  if (!o || o->struct_size < sizeof(*o) || o->address < Base ||
+      o->address - Base >= CodeSize) {
+    session(s)->error = "unmapped patch";
+    return nullptr;
+  }
+  std::string hex = o->bytes ? o->bytes : "";
+  Json covers = Json::array();
+  // Fixed preview fixtures exercise UI consent, not an alternative assembler.
+  if (std::string(o->kind) == "assemble") {
+    const std::string text = o->text ? o->text : "";
+    if (text == "ret")
+      hex = "c390";
+    else if (text == "mov eax, 1") {
+      if (!o->allow_overlap) {
+        session(s)->error = "overlap requires consent";
+        return nullptr;
+      }
+      hex = "b8010000009090";
+      covers.push_back({{"address", hexAddress(o->address + 2)},
+                        {"size", 5},
+                        {"text", "mov eax, 48"}});
+    }
+    covers.push_back({{"address", hexAddress(o->address)},
+                      {"size", 2},
+                      {"text", "jne next"}});
+  }
+  if (std::string(o->kind) == "nop")
+    hex = "90";
+  if (hex.empty() || hex.size() % 2 ||
+      !std::all_of(hex.begin(), hex.end(),
+                   [](unsigned char c) { return std::isxdigit(c); }) ||
+      hex.size() / 2 > Base + CodeSize - o->address) {
+    session(s)->error = "invalid patch bytes";
+    return nullptr;
+  }
+  std::string before;
+  constexpr char digits[] = "0123456789abcdef";
+  for (size_t i = 0; i < hex.size() / 2; ++i) {
+    unsigned char b;
+    neverd_read_bytes(s, o->address + i, &b, 1);
+    before += digits[b >> 4];
+    before += digits[b & 15];
+  }
+  return copy(Json{{"address", hexAddress(o->address)},
+                   {"size", hex.size() / 2},
+                   {"kind", o->kind},
+                   {"original", before},
+                   {"current", hex},
+                   {"covers", covers},
+                   {"decoded", Json::array()},
+                   {"warnings", Json::array()}}
+                  .dump());
+}
+const char *neverd_byte_patch_apply(neverd_session_t s,
+                                    const neverd_byte_patch_options_v1 *o) {
+  const char *raw = neverd_byte_patch_preview(s, o);
+  if (!raw)
+    return nullptr;
+  const auto plan = Json::parse(raw);
+  if (o->expected && plan.at("original") != o->expected) {
+    std::free(const_cast<char *>(raw));
+    session(s)->error = "stale preview";
+    return nullptr;
+  }
+  const auto hex = plan.at("current").get<std::string>();
+  constexpr char digits[] = "0123456789abcdef";
+  for (size_t i = 0; i < hex.size() / 2; ++i) {
+    unsigned char b;
+    mock_original_bytes(s, o->address + i, &b, 1);
+    const std::string original{digits[b >> 4], digits[b & 15]};
+    const auto now = hex.substr(i * 2, 2);
+    if (original == now)
+      session(s)->patches.erase(o->address + i);
+    else
+      session(s)->patches[o->address + i] = {
+          {"addr", hexAddress(o->address + i - Base)},
+          {"file_off", hexAddress(o->address + i - Base)},
+          {"va", hexAddress(o->address + i)},
+          {"size", 1},
+          {"original", original},
+          {"current", now},
+          {"kind", o->kind}};
+  }
+  return raw;
+}
+int neverd_byte_patch_revert(neverd_session_t s, neverd_va_t address,
+                             uint64_t size) {
+  if (!size)
+    size = 1;
+  auto &rows = session(s)->patches;
+  for (auto it = rows.lower_bound(address);
+       it != rows.end() && it->first - address < size;)
+    it = rows.erase(it);
+  return 0;
+}
+const char *neverd_byte_patches_json(neverd_session_t s) {
+  Json rows = Json::array();
+  for (const auto &[at, row] : session(s)->patches)
+    rows.push_back(row);
+  return copy(rows.dump());
+}
+int neverd_byte_patches_load(neverd_session_t s) {
+  try {
+    std::map<uint64_t, Json> rows;
+    for (const auto &row :
+         read(projectFile(session(s)->path, project_files::File::Patches)))
+      rows.emplace(parseAddress(row.at("va").get<std::string>()), row);
+    session(s)->patches = std::move(rows);
+    return 0;
+  } catch (const std::exception &e) {
+    session(s)->error = e.what();
+    return -1;
+  }
+}
+int neverd_byte_patches_export(neverd_session_t s, const char *path, int) {
+  if (std::filesystem::exists(path)) {
+    session(s)->error = "output already exists";
+    return -1;
+  }
+  std::ifstream input(session(s)->path, std::ios::binary);
+  std::string data((std::istreambuf_iterator<char>(input)), {});
+  for (const auto &[at, row] : session(s)->patches) {
+    if (at - Base >= data.size()) {
+      session(s)->error = "invalid fixture export";
+      return -1;
+    }
+    data[at - Base] =
+        std::stoul(row.at("current").get<std::string>(), nullptr, 16);
+  }
+  std::ofstream(path, std::ios::binary).write(data.data(), data.size());
+  return 0;
+}
+const char *neverd_byte_patch_context_json(neverd_session_t s,
+                                           neverd_va_t address) {
+  unsigned char b;
+  if (neverd_read_bytes(s, address, &b, 1) != 1)
+    return nullptr;
+  constexpr char digits[] = "0123456789abcdef";
+  Json actions = {"bytes", "nop", "assemble"};
+  if (session(s)->patches.contains(address))
+    actions.push_back("revert");
+  return copy(Json{
+      {"address", hexAddress(address)},
+      {"bytes", std::string{digits[b >> 4], digits[b & 15]}},
+      {"text", "nop"},
+      {"actions",
+       actions}}.dump());
 }
 }

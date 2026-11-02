@@ -7,6 +7,13 @@ remains independent of a general solver. Expression synthesis accepts a
 candidate only after an equivalence proof; a counterexample or inconclusive
 query retains the original expression.
 
+Multiplication in the built-in circuit removes known-zero low prefixes before
+building the remaining product, then restores the complete output word. The
+optional Z3 adapter similarly encodes products with even constant coefficients
+at the exact width they observe. Both retain full-width equality queries,
+independent input models, and existing resource limits. CLI and GUI source
+optimization share the built-in circuit without an additional switch.
+
 <!-- i18n-section: builtin-comparisons -->
 
 ## Built-in comparison circuits
@@ -51,8 +58,8 @@ is required:
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DNEVERD_ENABLE_Z3=ON -DNEVERD_BUILD_SOLVER_BENCH=ON
-cmake --build build-release --target neverd NeverDSolverTests \
-  NeverDSymbolicTests neverd-solver-bench --parallel 4
+python scripts/build.py build-release --parallel 4 --target neverd \
+  NeverDSolverTests NeverDSymbolicTests neverd-solver-bench
 ```
 
 `NEVERD_Z3_PROVIDER=FETCH` is the default. The first configure downloads the
@@ -112,7 +119,14 @@ semantic simplifier's proof callback.
 cross-backend checks when Z3 is enabled. These construct reference expressions
 directly, so a bug in NeverD's expression builders cannot simplify away both
 sides of the test. Disabled builds explicitly skip those oracle cases and
-still test the unavailable-backend contract.
+still test the unavailable-backend contract. Scaled-product tests compare the
+built-in circuit with independent long multiplication and integer arithmetic
+through 257 bits. Z3 tests prove agreement with a separate full-width encoding
+and retain high input bits and deliberately wrong high output bits.
+Repeated factors use shared squared powers in the Z3 encoding instead of a
+linear multiplication chain. Complete-word integer oracles cover factor counts
+around powers of two through 129 repetitions, widths 1–257, scaled products and
+correlated factors. Near misses still require full input counterexample models.
 
 ```sh
 build-release/bin/NeverDSolverTests --gtest_brief=1
@@ -130,9 +144,9 @@ repetition uses a fresh solver. SAT models must reproduce the difference in the
 expression evaluator. Opposing decisive verdicts, invalid queries, or invalid
 models fail the run; `unknown` is recorded and is not an equivalence proof.
 
-Exported SMT-LIB contains the original DAG, permanent assertions and the last
-query's assumptions. It can be replayed with `z3 query-N.smt2`. Resource limits
-and solver versions should be recorded alongside performance results; the two
+Exported SMT-LIB contains the equivalent encoded DAG, permanent assertions and
+the last query's assumptions, including any exact scaled-product quotient. It
+can be replayed with `z3 query-N.smt2`. Resource limits and solver versions should be recorded alongside performance results; the two
 backends use different budget units, so these are bounded workload comparisons,
 not identical-work comparisons.
 

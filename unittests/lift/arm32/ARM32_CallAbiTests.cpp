@@ -45,13 +45,16 @@ int pw(int a) {
 
   const std::string Reference = std::regex_replace(
       Kernel, std::regex("\\bpw\\("), std::string("ref_pw("));
+  // Softfp returns either spelling in R0. The tail call cannot distinguish
+  // the source's integer bit view from a float return, so compare its bits
+  // instead of numerically converting a recovered float on the host ABI.
   const auto Program = tmpFile("softfp-powf-host.exe");
   std::ofstream(tmpFile("softfp-powf-host.c")) << C << "\n"
                                                << Reference << R"C(
 int main(void) {
   static const int Values[] = {-2, 0, 1, 2, 3, 4, 6};
   for (unsigned I = 0; I != sizeof(Values) / sizeof(Values[0]); ++I)
-    if (pw(Values[I]) != ref_pw(Values[I]))
+    if (__builtin_bit_cast(unsigned, pw(Values[I])) != (unsigned)ref_pw(Values[I]))
       return 1;
   return 0;
 }

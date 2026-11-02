@@ -54,3 +54,12 @@ NEVERD_PROCESS_TEST_TEXT(
 NEVERD_PROCESS_TEST_TEXT(WindowsModuleName, "leaf.dll")
 NEVERD_PROCESS_TEST_TEXT(WindowsModulePath, "explicit/leaf.dll")
 #endif
+
+#ifdef NEVERD_PROCESS_INVALID_JSON
+NEVERD_PROCESS_INVALID_JSON(
+    AndroidServiceCacheUnknownProxy,
+    R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached","service_manager":{"cache":[{"name":"example","binder":7}]}}}})")
+NEVERD_PROCESS_INVALID_JSON(
+    AndroidServiceProxyNullKey,
+    R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached","service_manager":{"binder_proxies":[{"key":null}]}}}})")
+#endif

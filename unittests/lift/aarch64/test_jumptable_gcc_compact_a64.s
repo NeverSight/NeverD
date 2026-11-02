@@ -2,12 +2,12 @@
 // table base register becomes the anchor, and the entry is a signed offset
 // (`sxtb #2`/`sxth #2`), so a case may precede the anchor.
 .text
-.macro A64_GCC_COMPACT name, load, extend, entry
+.macro A64_GCC_COMPACT name, load, extend, entry, guard=w0
 .p2align 2
 .globl \name
 .type \name,@function
 \name:
-  cmp w0, #3
+  cmp \guard, #3
   b.hi .La64_gcc_default\@
   adrp x1, .La64_gcc_table\@
   add x1, x1, :lo12:.La64_gcc_table\@
@@ -39,6 +39,9 @@
 .endm
 A64_GCC_COMPACT a64_gcc_compact_byte, "ldrb w0, [x1, w0, uxtw]", sxtb, .byte
 A64_GCC_COMPACT a64_gcc_compact_half, "ldrh w0, [x1, w0, uxtw #1]", sxth, .hword
+// A full-width selector needs both halves of CMP/B.HI. Its encoded immediate
+// is narrower than X0, while the raw load must retain all 64 index bits.
+A64_GCC_COMPACT a64_gcc_compact_x_index, "ldrb w0, [x1, x0]", sxtb, .byte, x0
 
 // A halfword entry read through its low byte: whatever the table holds, the
 // dispatch reads another value from each entry, so no table is recovered.

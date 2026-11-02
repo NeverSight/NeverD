@@ -11,12 +11,19 @@
 
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <memory>
 
 namespace {
 std::string takeString(const char *Text) {
@@ -103,6 +110,12 @@ TEST_F(SessionFunctionDiscovery,
         ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
         const auto Entry = neverd_session_entry_addr(Session);
         ASSERT_EQ(neverd_session_discover_functions(Session), 1);
+        auto &State = *reinterpret_cast<neverd::sdk::Session *>(Session);
+        ASSERT_EQ(State.Functions.size(), 1u);
+        EXPECT_EQ(State.Functions.front().LinkageOrigin,
+                  neverd::NameOrigin::Synthesized);
+        EXPECT_EQ(State.Functions.front().ResolvedOrigin,
+                  neverd::NameOrigin::Synthesized);
         ASSERT_EQ(neverd_func_size(Session, 0), 0);
         const auto Name = takeString(neverd_func_name(Session, 0));
         if (Lazy)
@@ -112,6 +125,10 @@ TEST_F(SessionFunctionDiscovery,
         EXPECT_EQ(neverd_func_entry(Session, 0), Entry);
         EXPECT_EQ(neverd_func_size(Session, 0), AArch64 ? 8 : 6);
         EXPECT_EQ(takeString(neverd_func_name(Session, 0)), Name);
+        EXPECT_EQ(State.Functions.front().LinkageOrigin,
+                  neverd::NameOrigin::Synthesized);
+        EXPECT_EQ(State.Functions.front().ResolvedOrigin,
+                  neverd::NameOrigin::Synthesized);
         ASSERT_FALSE(takeString(neverd_ir_med(Session, Entry)).empty());
         ASSERT_EQ(neverd_session_analyze(Session), 1);
         EXPECT_EQ(neverd_func_size(Session, 0), AArch64 ? 8 : 6);
@@ -141,6 +158,174 @@ TEST_F(SessionFunctionDiscovery, CallsAtTheEntryAreSweptInStep) {
   ASSERT_EQ(neverd_session_discover_functions(Session), 5);
   for (const uint64_t Offset : {0x0, 0x10, 0x16, 0x1c, 0x22})
     EXPECT_GE(neverd_func_find_by_addr(Session, Entry + Offset), 0) << Offset;
+}
+
+TEST_F(SessionFunctionDiscovery,
+       ComparisonSharesKnownImportTerminationForSizedAndUnsizedBodies) {
+  for (bool Indirect : {false, true}) {
+    for (bool Sized : {false, true}) {
+      for (bool Returning : {false, true}) {
+        SCOPED_TRACE(Indirect);
+        SCOPED_TRACE(Sized);
+        SCOPED_TRACE(Returning);
+        std::string Code(0x40, '\xcc');
+        // A sole call ends this function's declared body. The bytes beyond
+        // it are deliberately not a return, so a missing contract stays
+        // incomplete instead of borrowing a layout-based no-return guess.
+        const std::string Call =
+            Indirect ? std::string("\xff\x15\x1a\x00\x00\x00", 6)
+                     : std::string("\xe8\x1b\x00\x00\x00", 5);
+        Code.replace(0, Call.size(), Call);
+        const auto Path = write("call-termination.elf",
+                                makeNativeELF(false, 0x400000, {}, Code));
+        ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+        auto &State = *reinterpret_cast<neverd::sdk::Session *>(Session);
+        const auto Entry = neverd_session_entry_addr(Session);
+        neverd::Import Import;
+        Import.Name = Returning ? "ordinary_call" : "__stack_chk_fail";
+        Import.IATAddr = Entry + 0x20;
+        State.Img.Imports = {Import};
+        State.Img.Symbols = {
+            neverd::Symbol::makeFunc(Entry, Sized ? Call.size() : 0)};
+        neverd::sdk::SessionTestAccess::resetFunctions(State);
+        const auto C = neverd_comparison_create();
+        const auto Destroy =
+            llvm::make_scope_exit([&] { neverd_comparison_destroy(C); });
+        ASSERT_EQ(neverd_comparison_run(C, Session, Session,
+                                        R"({"discover":false})", nullptr,
+                                        nullptr),
+                  1)
+            << takeString(neverd_comparison_last_error(C));
+        const auto Text = takeString(neverd_comparison_graph_json(
+            C, ("{\"side\":\"primary\",\"address\":\"0x" +
+                llvm::utohexstr(Entry) + "\"}")
+                   .c_str()));
+        auto Graph = llvm::json::parse(Text);
+        ASSERT_TRUE(bool(Graph)) << Text;
+        EXPECT_EQ(Graph->getAsObject()->getBoolean("analysis_complete"),
+                  !Returning)
+            << Text;
+        if (!Returning) {
+          EXPECT_TRUE(Graph->getAsObject()->getArray("edges")->empty());
+          ASSERT_EQ(Graph->getAsObject()->getArray("nodes")->size(), 1u);
+          EXPECT_EQ(Graph->getAsObject()
+                        ->getArray("nodes")
+                        ->front()
+                        .getAsObject()
+                        ->getInteger("insn_count"),
+                    1);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(SessionFunctionDiscovery, AddressedAssemblyKeepsOneCompleteNativeBody) {
+  using namespace neverd;
+  constexpr char Body[] = "\xf3\x0f\x1e\xfa\x50" // endbr64; push rax
+                          "\x48\xb8\xcd\xcc\xcc\xcc\xcc\xcc\xcc\xcc"
+                          "\x48\xf7\xe2"     // mul rdx
+                          "\x48\x83\xe0\x07" // and rax,7
+                          "\x58\xc3";        // pop rax; ret
+  std::string Code(512, '\xcc');
+  Code.replace(0, sizeof(Body) - 1, Body, sizeof(Body) - 1);
+  constexpr char Namer[] = "\x48\x8d\x05\xf9\xfe\xff\xff\xc3";
+  Code.replace(0x100, sizeof(Namer) - 1, Namer, sizeof(Namer) - 1);
+  auto Bytes = makeNativeELF(false, 0x400000, {}, Code);
+  llvm::object::ELF64LE::Ehdr Header;
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  const uint64_t Target = Header.e_entry;
+  Header.e_entry = Target + 0x100;
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  const auto Path = write("addressed-assembly.elf", Bytes);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *static_cast<sdk::Session *>(Session);
+  auto Guess = Symbol::makeFunc(Target + 18);
+  Guess.IsBoundaryGuess = true;
+  State.Img.Symbols.push_back(Guess);
+  ASSERT_EQ(neverd_session_discover_functions(Session), 2);
+  const int Index = neverd_func_find_by_addr(Session, Target);
+  ASSERT_GE(Index, 0);
+  EXPECT_EQ(neverd_func_entry(Session, Index), Target);
+  for (int I = 0; I < neverd_func_count(Session); ++I)
+    EXPECT_TRUE(neverd_func_entry(Session, I) == Target ||
+                neverd_func_entry(Session, I) == Target + 0x100);
+  ASSERT_FALSE(takeString(neverd_ir_low(Session, Target)).empty());
+  EXPECT_EQ(neverd_func_size(Session, Index), sizeof(Body) - 1);
+  EXPECT_EQ(neverd_session_discover_functions(Session), 2);
+
+  const auto Comparison = neverd_comparison_create();
+  ASSERT_TRUE(Comparison);
+  auto DestroyComparison =
+      llvm::scope_exit([&] { neverd_comparison_destroy(Comparison); });
+  EXPECT_EQ(neverd_comparison_run(Comparison, Session, Session,
+                                  R"({"discover":true})", nullptr, nullptr),
+            1)
+      << takeString(neverd_comparison_last_error(Comparison));
+  auto Result =
+      llvm::json::parse(takeString(neverd_comparison_export_json(Comparison)));
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  const auto *Matches = Result->getAsObject()->getArray("matches");
+  ASSERT_TRUE(Matches);
+  EXPECT_EQ(Matches->size(), 2u);
+  for (const auto &Match : *Matches)
+    EXPECT_EQ(Match.getAsObject()->getBoolean("analysis_complete"), true);
+}
+
+TEST_F(SessionFunctionDiscovery,
+       CompletedDiscoveryRefutesOnlyUnconfirmedLoaderGuesses) {
+  using namespace neverd;
+  for (bool Async : {false, true}) {
+    SCOPED_TRACE(Async);
+    // Bytes beyond the entry are invalid instruction starts. Only the
+    // provisional guess must disappear; stated and user-owned entries stay
+    // available for inspection even when their bodies cannot be decoded.
+    const auto Path = write(
+        "guesses.elf", makeNativeELF(false, 0x400000, std::string(64, '\x06')));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    auto &State = *static_cast<sdk::Session *>(Session);
+    const va_t Entry = neverd_session_entry_addr(Session);
+    const va_t Rejected = Entry + 8, Stated = Entry + 16, Renamed = Entry + 24,
+               Created = Entry + 32;
+    for (va_t Address : {Rejected, Stated, Renamed, Created}) {
+      Symbol Symbol = Symbol::makeFunc(Address);
+      Symbol.IsBoundaryGuess = Address != Stated;
+      State.Img.Symbols.push_back(Symbol);
+    }
+    State.Renames[Renamed] = "analyst_name";
+    State.FunctionEdits[Created] = true;
+    sdk::SessionTestAccess::resetFunctions(State);
+    ASSERT_GE(neverd_func_find_by_addr(Session, Rejected), 0);
+    if (Async) {
+      ASSERT_EQ(neverd_session_discover_functions_step(Session), 0);
+      ASSERT_TRUE(State.FunctionDiscovery);
+      State.FunctionDiscovery->Result.wait();
+      ASSERT_EQ(neverd_session_discover_functions_step(Session), 1);
+    } else {
+      ASSERT_GE(neverd_session_discover_functions(Session), 0);
+    }
+    ASSERT_TRUE(State.DiscoveredFunctions);
+    EXPECT_FALSE(llvm::any_of(*State.DiscoveredFunctions, [&](const auto &F) {
+      return F.first == Rejected;
+    }));
+    for (bool Rebuild : {false, true}) {
+      if (Rebuild)
+        sdk::SessionTestAccess::resetFunctions(State);
+      EXPECT_EQ(neverd_func_find_by_addr(Session, Rejected), -1);
+      for (va_t Kept : {Entry, Stated, Renamed, Created})
+        EXPECT_GE(neverd_func_find_by_addr(Session, Kept), 0) << Kept;
+      EXPECT_EQ(takeString(neverd_func_name(
+                    Session, neverd_func_find_by_addr(Session, Renamed))),
+                "analyst_name");
+    }
+    // The symbol remains diagnostic evidence in the image, not a mutated
+    // loader fact. Creating it explicitly restores the user-owned function.
+    EXPECT_TRUE(llvm::any_of(State.Img.Symbols, [&](const Symbol &Symbol) {
+      return Symbol.Addr == Rejected && Symbol.IsBoundaryGuess;
+    }));
+    ASSERT_EQ(neverd_func_create(Session, Rejected), 0);
+    EXPECT_GE(neverd_func_find_by_addr(Session, Rejected), 0);
+  }
 }
 
 TEST_F(SessionFunctionDiscovery,
@@ -217,6 +402,115 @@ TEST_F(SessionFunctionDiscovery,
     if (MissingEntry)
       EXPECT_EQ(neverd_func_size(Session, 2), 12);
   }
+}
+
+TEST_F(SessionFunctionDiscovery, CooperativeStopKeepsInventoryAndAllowsRetry) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    const std::string Padding(1024 * 1024, AArch64 ? '\0' : '\x90');
+    const auto Path =
+        write("cancel.elf", makeNativeELF(AArch64, 0x400000, Padding));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    auto &State = *static_cast<neverd::sdk::Session *>(Session);
+    const auto Count = neverd_func_count(Session);
+    const auto Revision = State.FunctionListRevision;
+    const auto Verified = State.Img.VerifiedFunctionEntries;
+    std::atomic<unsigned> Probes{0};
+    const auto Cancel = [](void *Context) -> int {
+      return static_cast<std::atomic<unsigned> *>(Context)->fetch_add(1) >= 64;
+    };
+    EXPECT_EQ(
+        neverd_session_discover_functions_cancellable(Session, Cancel, &Probes),
+        -2);
+    EXPECT_GT(Probes.load(), 64u);
+    EXPECT_FALSE(State.DiscoveredFunctions);
+    EXPECT_FALSE(State.FunctionDiscovery);
+    EXPECT_EQ(State.FunctionListRevision, Revision);
+    EXPECT_EQ(State.Img.VerifiedFunctionEntries, Verified);
+    EXPECT_EQ(neverd_func_count(Session), Count);
+    EXPECT_NE(takeString(neverd_last_error(Session)).find("cancelled"),
+              std::string::npos);
+    std::unique_ptr<void, decltype(&neverd_session_destroy)> Fresh(
+        neverd_session_create(), neverd_session_destroy);
+    ASSERT_EQ(neverd_session_load(Fresh.get(), Path.c_str()), 1);
+    const auto Complete = neverd_session_discover_functions(Fresh.get());
+    ASSERT_GE(Complete, 0);
+    ASSERT_EQ(neverd_session_discover_functions(Session), Complete);
+    const auto &Expected = *static_cast<neverd::sdk::Session *>(Fresh.get());
+    EXPECT_EQ(State.Functions, Expected.Functions);
+    EXPECT_EQ(State.Img.VerifiedFunctionEntries,
+              Expected.Img.VerifiedFunctionEntries);
+    EXPECT_TRUE(State.DiscoveredFunctions);
+    EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+  }
+}
+
+TEST_F(SessionFunctionDiscovery,
+       CooperativeStopJoinsPendingSnapshotBeforeRetry) {
+  const auto Path =
+      write("pending.elf",
+            makeNativeELF(false, 0x400000, std::string(1024 * 1024, '\x90')));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Count = neverd_func_count(Session);
+  auto &State = *static_cast<neverd::sdk::Session *>(Session);
+  ASSERT_EQ(neverd_session_discover_functions_step(Session), 0);
+  ASSERT_TRUE(State.FunctionDiscovery);
+  const auto Token = State.FunctionDiscovery->Cancel;
+  const auto Revision = State.FunctionListRevision;
+  EXPECT_EQ(neverd_session_discover_functions_cancellable(
+                Session, [](void *) { return 1; }, nullptr),
+            -2);
+  EXPECT_TRUE(Token->load());
+  EXPECT_FALSE(State.FunctionDiscovery);
+  EXPECT_FALSE(State.DiscoveredFunctions);
+  EXPECT_EQ(State.FunctionListRevision, Revision);
+  EXPECT_EQ(neverd_func_count(Session), Count);
+  std::unique_ptr<void, decltype(&neverd_session_destroy)> Fresh(
+      neverd_session_create(), neverd_session_destroy);
+  ASSERT_EQ(neverd_session_load(Fresh.get(), Path.c_str()), 1);
+  const auto Complete = neverd_session_discover_functions(Fresh.get());
+  ASSERT_GE(Complete, 0);
+  ASSERT_EQ(neverd_session_discover_functions(Session), Complete);
+  const auto &Expected = *static_cast<neverd::sdk::Session *>(Fresh.get());
+  EXPECT_EQ(State.Functions, Expected.Functions);
+  EXPECT_EQ(State.Img.VerifiedFunctionEntries,
+            Expected.Img.VerifiedFunctionEntries);
+  EXPECT_TRUE(State.DiscoveredFunctions);
+}
+
+TEST_F(SessionFunctionDiscovery, ClosingSessionStopsItsOwnedDiscovery) {
+  const auto Path =
+      write("closing.elf",
+            makeNativeELF(false, 0x400000, std::string(1024 * 1024, '\x90')));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  ASSERT_EQ(neverd_session_discover_functions_step(Session), 0);
+  auto &State = *static_cast<neverd::sdk::Session *>(Session);
+  ASSERT_TRUE(State.FunctionDiscovery);
+  const auto Token = State.FunctionDiscovery->Cancel;
+  neverd_session_destroy(Session);
+  Session = nullptr;
+  EXPECT_TRUE(Token->load());
+}
+
+TEST_F(SessionFunctionDiscovery,
+       NonNativeSynchronousQueryDoesNotJoinAnEarlierJob) {
+  const auto Native = write("earlier.elf", makeNativeELF(false));
+  const auto Contract = write("current.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Native.c_str()), 1);
+  auto &State = *static_cast<neverd::sdk::Session *>(Session);
+  std::promise<neverd::sdk::Session::FunctionDiscoveryResult> Pending;
+  State.FunctionDiscovery.emplace(neverd::sdk::Session::FunctionDiscoveryJob{
+      State.FunctionListRevision, Pending.get_future()});
+  ASSERT_EQ(neverd_session_load(Session, Contract.c_str()), 1);
+  ASSERT_TRUE(State.FunctionDiscovery);
+  // A query for the replacement input must not wait for an unrelated job.
+  // It requests retirement, then a later poll drains the completed future.
+  EXPECT_TRUE(State.FunctionDiscovery->Cancel->load());
+  EXPECT_GE(neverd_session_discover_functions(Session), 0);
+  EXPECT_TRUE(State.FunctionDiscovery);
+  Pending.set_value({});
+  EXPECT_EQ(neverd_session_discover_functions_step(Session), 1);
+  EXPECT_FALSE(State.FunctionDiscovery);
 }
 
 } // namespace

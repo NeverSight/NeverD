@@ -46,7 +46,11 @@ NavigationBand::NavigationBand(Session &session, AddressSpace &space,
   refresh_.setSingleShot(true);
   refresh_.setInterval(::neverd::limits::gui::kNavigationBandRefreshDebounceMs);
   connect(&refresh_, &QTimer::timeout, this, &NavigationBand::requestOverview);
-  connect(&session_, &Session::opened, this, [this] { refresh_.start(); });
+  connect(&session_, &Session::opened, this, [this] {
+    // The initial listing needs this address map before it can navigate.
+    refresh_.stop();
+    requestOverview();
+  });
   connect(&session_, &Session::generationChanged, this,
           [this] { refresh_.start(); });
   connect(&session_, &Session::revisionChanged, this,
@@ -86,15 +90,17 @@ void NavigationBand::requestOverview() {
   if (!session_.loaded())
     return;
   const quint64 serial = ++serial_;
-  session_.read(QStringLiteral("overview"), {{"buckets", bandRect().width()}},
-                this, [this, serial](const QJsonObject &payload) {
-                  if (serial != serial_)
-                    return;
-                  classes_ = payload.value("buckets").toString().toLatin1();
-                  space_.reset(payload.value("regions").toArray());
-                  emit spaceChanged();
-                  update();
-                });
+  session_.read(
+      QStringLiteral("overview"), {{"buckets", bandRect().width()}}, this,
+      [this, serial](const QJsonObject &payload) {
+        if (serial != serial_)
+          return;
+        classes_ = payload.value("buckets").toString().toLatin1();
+        space_.reset(payload.value("regions").toArray());
+        emit spaceChanged();
+        update();
+      },
+      {}, QueryService::QuerySpec::Visible);
 }
 
 void NavigationBand::setCurrent(std::optional<Address> address) {

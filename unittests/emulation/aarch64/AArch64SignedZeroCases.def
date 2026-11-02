@@ -1,0 +1,28 @@
+//===- AArch64SignedZeroCases.def - Signed integer zero comparisons ----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Independently assembled baseline CMLT forms. Define
+/// NEVERD_AARCH64_SIGNED_ZERO_CASE(Word, ElementBits, ElementCount).
+///
+//===----------------------------------------------------------------------===//
+
+// cmlt v31.8b, v1.8b, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x0e20a83f, 8, 8)
+// cmlt v31.16b, v1.16b, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x4e20a83f, 8, 16)
+// cmlt v31.4h, v1.4h, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x0e60a83f, 16, 4)
+// cmlt v31.8h, v1.8h, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x4e60a83f, 16, 8)
+// cmlt v31.2s, v1.2s, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x0ea0a83f, 32, 2)
+// cmlt v31.4s, v1.4s, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x4ea0a83f, 32, 4)
+// cmlt v31.2d, v1.2d, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x4ee0a83f, 64, 2)
+// cmlt d31, d1, #0
+NEVERD_AARCH64_SIGNED_ZERO_CASE(0x5ee0a83f, 64, 1)

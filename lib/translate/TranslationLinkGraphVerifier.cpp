@@ -118,13 +118,14 @@ llvm::Expected<std::pair<llvm::StringSet<>, llvm::StringSet<>>>
 validateManifest(ObjectFormat Format,
                  llvm::ArrayRef<TranslationObjectSymbolV1> ExpectedBlockSymbols,
                  llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
-                 llvm::StringRef SealedRuntimeRegistryIdentity) {
+                 llvm::StringRef SealedRuntimeRegistryIdentity,
+                 TranslationRuntimeProfileV1 Profile) {
   if (ExpectedBlockSymbols.empty())
     return failure(TranslationLinkGraphErrorCode::InvalidManifest,
                    "block manifest is empty");
 
   llvm::Expected<RuntimeSymbolRegistryV1> RegistryOrErr =
-      RuntimeSymbolRegistryV1::create();
+      RuntimeSymbolRegistryV1::create(Profile);
   if (!RegistryOrErr)
     return failure(TranslationLinkGraphErrorCode::InvalidManifest,
                    llvm::toString(RegistryOrErr.takeError()));
@@ -566,7 +567,8 @@ detail::auditTranslationLinkGraphPrePruneV1(
     const ResolvedHostTarget &ExpectedHostTarget,
     llvm::ArrayRef<TranslationObjectSymbolV1> ExpectedBlockSymbols,
     llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
-    llvm::StringRef SealedRuntimeRegistryIdentity) {
+    llvm::StringRef SealedRuntimeRegistryIdentity,
+    TranslationRuntimeProfileV1 Profile) {
   if (ObjectBytes.empty())
     return failure(TranslationLinkGraphErrorCode::InvalidInput,
                    "object is empty");
@@ -576,7 +578,7 @@ detail::auditTranslationLinkGraphPrePruneV1(
     return FormatOrErr.takeError();
   llvm::Expected<std::pair<llvm::StringSet<>, llvm::StringSet<>>> NamesOrErr =
       validateManifest(*FormatOrErr, ExpectedBlockSymbols, SealedRuntimeSymbols,
-                       SealedRuntimeRegistryIdentity);
+                       SealedRuntimeRegistryIdentity, Profile);
   if (!NamesOrErr)
     return NamesOrErr.takeError();
 
@@ -612,6 +614,19 @@ llvm::Expected<TranslationLinkGraphAuditV1> verifyTranslationLinkGraphV1(
     llvm::ArrayRef<TranslationObjectSymbolV1> ExpectedBlockSymbols,
     llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
     llvm::StringRef SealedRuntimeRegistryIdentity) {
+  return verifyTranslationLinkGraphV1(
+      ObjectBytes, ExpectedHostTarget, ExpectedBlockSymbols,
+      SealedRuntimeSymbols, SealedRuntimeRegistryIdentity,
+      TranslationRuntimeProfileV1::ScalarInteger);
+}
+
+llvm::Expected<TranslationLinkGraphAuditV1> verifyTranslationLinkGraphV1(
+    llvm::ArrayRef<uint8_t> ObjectBytes,
+    const ResolvedHostTarget &ExpectedHostTarget,
+    llvm::ArrayRef<TranslationObjectSymbolV1> ExpectedBlockSymbols,
+    llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
+    llvm::StringRef SealedRuntimeRegistryIdentity,
+    TranslationRuntimeProfileV1 Profile) {
   if (ObjectBytes.empty())
     return failure(TranslationLinkGraphErrorCode::InvalidInput,
                    "object is empty");
@@ -621,7 +636,7 @@ llvm::Expected<TranslationLinkGraphAuditV1> verifyTranslationLinkGraphV1(
     return FormatOrErr.takeError();
   llvm::Expected<std::pair<llvm::StringSet<>, llvm::StringSet<>>> NamesOrErr =
       validateManifest(*FormatOrErr, ExpectedBlockSymbols, SealedRuntimeSymbols,
-                       SealedRuntimeRegistryIdentity);
+                       SealedRuntimeRegistryIdentity, Profile);
   if (!NamesOrErr)
     return NamesOrErr.takeError();
 
@@ -638,14 +653,15 @@ llvm::Expected<TranslationLinkGraphAuditV1> verifyTranslationLinkGraphV1(
   LinkGraph &Graph = **GraphOrErr;
   return detail::auditTranslationLinkGraphPrePruneV1(
       Graph, ObjectBytes, ExpectedHostTarget, ExpectedBlockSymbols,
-      SealedRuntimeSymbols, SealedRuntimeRegistryIdentity);
+      SealedRuntimeSymbols, SealedRuntimeRegistryIdentity, Profile);
 }
 
 llvm::Expected<TranslationLinkGraphAuditV1>
 verifyTranslationLinkGraphV1(const TranslationObjectArtifactV1 &Artifact) {
   return verifyTranslationLinkGraphV1(
       Artifact.bytes(), Artifact.hostTarget(), Artifact.blockSymbols(),
-      Artifact.runtimeSymbols(), Artifact.runtimeRegistryIdentity());
+      Artifact.runtimeSymbols(), Artifact.runtimeRegistryIdentity(),
+      Artifact.runtimeProfile());
 }
 
 } // namespace neverd::translate

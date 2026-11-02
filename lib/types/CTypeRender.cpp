@@ -167,6 +167,10 @@ public:
   /// In a decompiled unit, the type a typedef of a name the implementation
   /// reserves stands for (reservedTypedef); none elsewhere.
   const TypeExpr *spelledThrough(llvm::StringRef Name) const {
+    if (Embedded && Options.PrototypeIntegerIdentity)
+      if (const LocalType *Local = Library.find(Name);
+          Local && Local->Kind == TypeKind::Typedef)
+        return Local->Target.get();
     return Embedded ? reservedTypedef(Library, Name) : nullptr;
   }
   /// Take the record \p Name from the system's headers, which name it by a
@@ -266,6 +270,17 @@ std::string CWriter::builtin(Builtin Type) const {
   case BuiltinSpelling::Keywords:
     return Info.Keywords;
   case BuiltinSpelling::Portable:
+    if (Options.PrototypeIntegerIdentity &&
+        (Type == Builtin::Long || Type == Builtin::ULong ||
+         Type == Builtin::LongLong || Type == Builtin::ULongLong)) {
+      // A Windows unsigned long and uint32_t have the same ABI width but
+      // distinct C types. Keep the header's identity on its own target while
+      // preserving the machine width when compiling the source on another.
+      const std::string Keywords = Info.Keywords;
+      return "__typeof__(__builtin_choose_expr(sizeof(" + Keywords +
+             ") == " + std::to_string(Library.builtinBytes(Type)) + ", (" +
+             Keywords + ")0, (" + portableBuiltin(Type, Library) + ")0))";
+    }
     return portableBuiltin(Type, Library);
   }
   return Info.Keywords;
@@ -319,6 +334,8 @@ std::string CWriter::declare(const TypeExpr &Type,
   }
   case TypeExprKind::Pointer: {
     std::string Inner = Type.Reference ? "&" : "*";
+    if (Type.PointerBytes != pointerBytes(Library.dataModel()))
+      Inner += " __ptr" + std::to_string(Type.PointerBytes * 8) + " ";
     if (Type.Const)
       Inner += "const";
     if (Type.Volatile)
@@ -802,6 +819,22 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
       Out += bareTypedef(Type);
     return;
   }
+  // A runtime can own a reserved record tag without a complete system
+  // library being joined (MSVCRT and UCRT both call FILE's tag _iobuf).
+  // Reuse the header only with unconditional checks of this program's
+  // layout. A different runtime must fail those checks, never silently
+  // substitute its definition or redefine the header's tag.
+  bool HeaderRecord = false;
+  if (Embedded && Options.Asserts && !SeparateAsserts && !Record.Union &&
+      Names.type(Type.Name) == Type.Name) {
+#define NEVERD_PRELUDE_RECORD(RecordName, Platform, Header, Declared)          \
+  if (Type.Name == #RecordName) {                                              \
+    Out += "#if " Platform "\n#include <" Header ">\n#endif\n";                \
+    Out += "#if !(" Platform " && " Declared ")\n";                            \
+    HeaderRecord = true;                                                       \
+  }
+#include "neverd/types/PreludeNames.def"
+  }
   Digits = offsetDigits(Record.Size);
   Fillers = 0;
   std::string Header = "// " + Type.Name + ": " + hex(Record.Size) + " (" +
@@ -826,10 +859,31 @@ void CWriter::record(const LocalType &Type, std::string &Out) {
   Out += "};\n";
   if (Pack)
     Out += "#pragma pack(pop)\n";
+  if (HeaderRecord)
+    Out += "#endif\n";
   if (!DeclaredAhead)
     Out += bareTypedef(Type);
   if (Options.Asserts && !SeparateAsserts)
     asserts(Type, Out);
+  if (HeaderRecord) {
+    // Equal offsets and sizes do not make an integer field a pointer. The
+    // source writer's member conversions depend on the declared type too.
+    Out += "#if defined(__cplusplus)\n#include <type_traits>\n#endif\n";
+    for (const auto &Field : flattenMembers(Record)) {
+      if (!Field.Type || Field.BitWidth || Field.Name.empty() ||
+          isFillerName(Field.Name))
+        continue;
+      const std::string Member = Names.member(Field.Name);
+      const std::string Access = "((" + tagged(Type) + " *)0)->" + Member;
+      const std::string Expected = declare(*Field.Type, "");
+      const std::string Message = stringLiteralBody(Type.Name + "." + Member);
+      Out += "#if defined(__cplusplus)\nstatic_assert(std::is_same<decltype(" +
+             Access + "), " + Expected + ">::value, \"" + Message +
+             " type\");\n#else\nstatic_assert(_Generic((" + Access + "), " +
+             Expected + ": 1, default: 0), \"" + Message +
+             " type\");\n#endif\n";
+    }
+  }
 }
 
 void CWriter::enumeration(const LocalType &Type, std::string &Out) {
@@ -1406,6 +1460,7 @@ EmbeddedC renderEmbeddedC(const TypeLibrary &Library,
   // spelling of the unit defines.
   for (const LocalType *Type : Theirs) {
     Result.Types.push_back(Type->Name);
+    Result.HeaderTypes.push_back(Type->Name);
     if (Type->Kind == TypeKind::Struct || Type->Kind == TypeKind::Union)
       Result.HeaderRecords.emplace_back(Names.type(Type->Name),
                                         Type->Kind == TypeKind::Union);

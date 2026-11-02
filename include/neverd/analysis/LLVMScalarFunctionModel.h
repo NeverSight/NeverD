@@ -9,7 +9,24 @@
 
 #include "neverd/analysis/LLVMInterpreterModel.h"
 
+#include <functional>
+
 namespace neverd::analysis {
+
+enum class LLVMScalarInputDomain {
+  /// Preserve the strict public LLVM contract: every argument is noundef.
+  RequireNoUndef,
+  /// Explicit caller precondition: consider only defined integer bitvectors.
+  /// This neither annotates the IR nor proves the native calling convention.
+  DefinedBitvectors,
+};
+
+struct LLVMScalarModelOptions {
+  LLVMScalarInputDomain InputDomain = LLVMScalarInputDomain::RequireNoUndef;
+  /// Cooperative stop during bounded construction and proof work. The callback
+  /// must not modify the input IR. Empty retains the original behavior.
+  std::function<bool()> StopRequested;
+};
 
 struct LLVMScalarArgument {
   NdVar Storage;
@@ -21,6 +38,7 @@ struct LLVMScalarArgument {
 /// identities, not addresses or an inferred native ABI. A one-bit argument
 /// must be zero-extended into its byte of storage. RETURN carries the result.
 struct LLVMScalarFunctionModel {
+  LLVMScalarInputDomain InputDomain = LLVMScalarInputDomain::RequireNoUndef;
   InterpreterMachineStateModel Graph;
   std::vector<LLVMScalarArgument> Arguments;
   unsigned ResultBits = 0;
@@ -36,9 +54,12 @@ struct LLVMScalarFunctionModel {
 /// prove that it remains zero on every admitted execution, as well as prove
 /// termination and the complete return value. Model construction alone is
 /// not an equivalence or ABI certificate. The source function is unchanged.
+/// DefinedBitvectors explicitly restricts the query to defined argument values
+/// when noundef is absent; all other admission and definedness checks remain.
 llvm::Expected<LLVMScalarFunctionModel>
 modelLLVMScalarFunction(const llvm::Function &Function,
-                        const LLVMInterpreterModelLimits &Limits = {});
+                        const LLVMInterpreterModelLimits &Limits = {},
+                        const LLVMScalarModelOptions &Options = {});
 
 } // namespace neverd::analysis
 

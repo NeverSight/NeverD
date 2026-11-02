@@ -291,7 +291,9 @@ const LibCVariadicForward *libcVariadicForward(std::string_view Name);
 /// The position of the va_list parameter of the routine C name \p Name links
 /// to, where it is the va_list form of a variadic one: 2 for
 /// `vfprintf(FILE *, const char *, va_list)`.  Empty for any other routine.
-std::optional<unsigned> vaListParameter(std::string_view Name);
+/// Same-named Windows legacy/ISO forms require the actual declaration.
+std::optional<unsigned> vaListParameter(std::string_view Name,
+                                        LibCVariant Variant);
 
 /// Whether a program of C library \p Variant declares \p Forward's routine
 /// variadic: every C library does where the row names no format, and where
@@ -378,6 +380,11 @@ std::optional<StackProbeEffect> stackProbeEffect(const BinaryImage &Img,
 /// internally.  Rust standard library routines declared to return `!` (a
 /// panic, abort or exit) are known by their demangled path.
 bool isNoReturnFunction(std::string_view Name);
+
+/// True if \p Imp never returns: by its name (isNoReturnFunction), or as the
+/// routine its module exports under a name a program may also define for
+/// itself, as the Universal CRT exports `terminate`.
+bool isNoReturnImport(const Import &Imp);
 
 /// True if \p Target resolves through \p Img to a known no-return import
 /// veneer, or to a function the image exports or a symbol names so.  This is

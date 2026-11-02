@@ -8,12 +8,13 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/ir/med/MedTypePass.h"
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -850,7 +851,8 @@ TEST(SourceABI, DarwinIntegerPairResultRequiresBothReturnRegisters) {
     ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic));
     EXPECT_TRUE(Hint.ReturnComponents.empty());
     Hint.Parameters = {{"wide", NdType::makeInt(16)}};
-    EXPECT_FALSE(assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic));
+    EXPECT_EQ(assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic),
+              Architecture == Arch::AArch64);
   }
 }
 
@@ -2101,6 +2103,143 @@ TEST(SourceABI, AArch64CallerFieldReadsDistinguishAnHFAFromAVectorReturn) {
     }
 }
 
+TEST(SourceABI, StructReturnFieldsNeedTheirLastRealWritesOnEveryReturn) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  auto Reg = [&](unsigned Index, int Version, uint16_t Size = 8) {
+    MedVar Value;
+    Value.Kind = MedVar::Reg;
+    Value.TheArch = Arch::AArch64;
+    Value.RegOff = TRI.IntReturnRegs[Index];
+    Value.Id = Index;
+    Value.SSAVer = Version;
+    Value.Size = Size;
+    return Value;
+  };
+  const std::vector<MedReturnReg> Fields = {{TRI.IntReturnRegs[0], 8, false},
+                                            {TRI.IntReturnRegs[1], 8, false}};
+  for (unsigned Mode = 0; Mode != 6; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    for (unsigned Index = 0; Index != 2; ++Index) {
+      MedOp Write;
+      Write.Opcode = NdOp::COPY;
+      Write.Output = Reg(Index, 1);
+      Write.addInput(MedVar::makeConst(7 + Index, 8));
+      Block.Ops.push_back(Write);
+    }
+    if (Mode == 3) {
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Output = Reg(0, 2);
+      Call.addInput(MedVar::makeConst(0x2000, 8));
+      Block.Ops.push_back(Call);
+    }
+    if (Mode >= 1 && Mode <= 4) {
+      MedOp Last;
+      Last.Opcode = NdOp::COPY;
+      Last.Output = Reg(1, 2, Mode == 1 ? 4 : 8);
+      Last.addInput(Mode == 2   ? MedVar::makeUnspecified(8, Arch::AArch64)
+                    : Mode == 1 ? MedVar::makeConst(9, 4)
+                                : Reg(1, 1));
+      Block.Ops.push_back(Last);
+    }
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Return);
+    if (Mode == 5) {
+      Function.Blocks.emplace_back();
+      Function.Blocks.back().Id = 1;
+      Function.Blocks.back().Ops.push_back(Return);
+    }
+    EXPECT_EQ(
+        returnsStructFields(Function, Fields, Arch::AArch64, BinaryFormat::ELF),
+        Mode == 0 || Mode == 4);
+  }
+}
+
+TEST(SourceABI, StructReturnFieldsFollowAllPredecessorsAndUnknownInputs) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto Reg = [&](unsigned Index, int Version, uint16_t Size = 8) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::AArch64;
+    V.RegOff = TRI.IntReturnRegs[Index];
+    V.Id = Index;
+    V.SSAVer = Version;
+    V.Size = Size;
+    return V;
+  };
+  const auto Copy = [&](MedVar Out, MedVar Input) {
+    MedOp Op;
+    Op.Opcode = NdOp::COPY;
+    Op.Output = Out;
+    Op.addInput(Input);
+    return Op;
+  };
+  const std::vector<MedReturnReg> Fields = {{TRI.IntReturnRegs[0], 8, false},
+                                            {TRI.IntReturnRegs[1], 8, false}};
+  for (unsigned Variant = 0; Variant != 6; ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Blocks.resize(3);
+    for (unsigned I = 0; I != 3; ++I) {
+      F.Blocks[I].Id = I;
+      F.Blocks[I].StartAddr = F.Entry + I * 0x10;
+    }
+    F.Blocks[0].Succs = {1};
+    F.Blocks[1].Preds = {0, 1};
+    F.Blocks[1].Succs = {1, 2};
+    F.Blocks[2].Preds = {1};
+    F.Blocks[0].Ops.push_back(Copy(Reg(0, 1), MedVar::makeConst(7, 8)));
+    if (Variant != 1)
+      F.Blocks[0].Ops.push_back(Copy(Reg(1, 1), MedVar::makeConst(11, 8)));
+    else
+      F.Blocks[0].Ops.push_back(
+          Copy(Reg(1, 1), MedVar::makeUnspecified(8, Arch::AArch64)));
+    if (Variant == 2) {
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Output = Reg(0, 2);
+      Call.addInput(MedVar::makeConst(0x2000, 8));
+      F.Blocks[1].Ops.push_back(Call);
+    }
+    if (Variant == 3)
+      F.Blocks[1].Ops.push_back(Copy(Reg(1, 2, 4), MedVar::makeConst(11, 4)));
+    if (Variant == 4) {
+      MedVar Temp;
+      Temp.Kind = MedVar::Temp;
+      Temp.Id = 10;
+      Temp.Size = 8;
+      F.Blocks[1].Ops.push_back(
+          Copy(Temp, MedVar::makeUnspecified(8, Arch::AArch64)));
+      F.Blocks[1].Ops.push_back(Copy(Reg(1, 2), Temp));
+    }
+    if (Variant == 5) {
+      PhiNode Phi;
+      Phi.Output = Reg(1, 2);
+      Phi.Args = {{0, MedVar::makeConst(11, 8)}};
+      Phi.ExceptionalEntry = MedVar::makeUnspecified(8, Arch::AArch64);
+      F.Blocks[1].Phis.push_back(Phi);
+      MedVar Temp = Phi.Output;
+      Temp.Kind = MedVar::Temp;
+      Temp.Id = 10;
+      F.Blocks[1].Ops.push_back(Copy(Temp, Phi.Output));
+      F.Blocks[1].Ops.push_back(Copy(Reg(1, 3), Temp));
+    }
+    MedOp Ret;
+    Ret.Opcode = NdOp::RETURN;
+    F.Blocks[2].Ops.push_back(Ret);
+    EXPECT_EQ(returnsStructFields(F, Fields, Arch::AArch64, BinaryFormat::ELF),
+              Variant == 0);
+  }
+}
+
 TEST(SourceABI, AArch64BodyReturnUsesPreDCELaterRegisterReads) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
   ASSERT_GE(TRI.IntReturnRegs.size(), 2U);
@@ -2206,6 +2345,16 @@ TEST(SourceABI, CallbackTypesKeepTheirSignaturesAndRejectMalformedGraphs) {
                                               NdType::makeInt(4), {Pointer}))));
   EXPECT_FALSE(equalSourceTypes(
       Callback, NdType::makePtr(NdType::makeFunc(NdType::makeVoid()))));
+  // A different callback convention cannot enter an ordinary-C projection,
+  // even if its integer and pointer carriers happen to be identical.
+  for (auto Convention :
+       {types::CallingConvention::Stdcall, types::CallingConvention::Vectorcall,
+        types::CallingConvention::Win64}) {
+    auto Specialized = NdType::makePtr(
+        NdType::makeFunc(NdType::makeVoid(), {Pointer}, Convention));
+    EXPECT_FALSE(equalSourceTypes(Specialized, Callback));
+    EXPECT_FALSE(equalSourceTypes(Specialized, Specialized));
+  }
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     SourceFunctionTypeHint Hint;
     Hint.ReturnType = Callback;
@@ -2546,6 +2695,101 @@ TEST(SourceABI, SourceStackExpressionsPreserveExactEntryOffsets) {
       EXPECT_EQ(Func.Params[Index].RegOff, kNoParamReg);
     }
   }
+}
+
+TEST(SourceABI, StoredParametersCannotAliasCallResultIdentities) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (auto Opcode : {NdOp::CALL, NdOp::INDIR_CALL, NdOp::INTRINSIC}) {
+      if (Opcode == NdOp::INTRINSIC && Architecture != Arch::X64)
+        continue;
+      SCOPED_TRACE(testing::Message() << static_cast<int>(Architecture) << ":"
+                                      << static_cast<int>(Opcode));
+      auto Hint = declaration(NdType::makeVoid());
+      for (unsigned I = 0; I != 9; ++I)
+        Hint.Parameters.push_back(
+            {"value" + std::to_string(I), NdType::makeFloat(8)});
+      std::string Error;
+      ASSERT_TRUE(assignDarwinObjCSourceABI(Hint, Architecture, Error))
+          << Error;
+      MedFunc Func;
+      Func.Entry = 0x1000;
+      Func.Name = "stored_parameter";
+      Func.SourceTypeHint = Hint;
+      Func.SourceParametersBound = true;
+      Func.ReturnType = Hint.ReturnType;
+      for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
+        const auto &Binding = Hint.Parameters[I];
+        MedVar Parameter;
+        Parameter.Kind = MedVar::Param;
+        Parameter.TheArch = Architecture;
+        Parameter.Id = static_cast<int>(I);
+        Parameter.Size = Binding.Type->Size;
+        Parameter.RegOff = Binding.Location.Kind == SourceABICarrierKind::Stack
+                               ? kNoParamReg
+                               : Binding.Location.RegisterOffset;
+        Func.Params.push_back(Parameter);
+        Func.TypedParams.push_back({Binding.Name, Binding.Type});
+      }
+      MedOp Store;
+      Store.Opcode = NdOp::STORE;
+      Store.Addr = Func.Entry;
+      Store.addInput(Func.Params[0]);
+      Store.addInput(Func.Params.back());
+      MedOp Call;
+      Call.Opcode = Opcode;
+      Call.Addr = Func.Entry + 4;
+      Call.Output = Func.Params.back();
+      Call.Output.Kind = MedVar::Temp;
+      Call.Output.RegOff = 0;
+      Call.Output.Size = 4;
+      Call.addInput(Opcode == NdOp::INTRINSIC
+                        ? MedVar::makeConst(
+                              static_cast<uint64_t>(Intrinsic::X86ReadMXCSR), 4)
+                    : Opcode == NdOp::INDIR_CALL
+                        ? Func.Params[1]
+                        : MedVar::makeConst(0x2000, 8));
+      MedOp StoreResult = Store;
+      StoreResult.Addr = Func.Entry + 8;
+      StoreResult.Inputs[0] = Func.Params[1];
+      StoreResult.Inputs[1] = Call.Output;
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Func.Entry + 12;
+      MedBlock Block;
+      Block.Id = 0;
+      Block.StartAddr = Func.Entry;
+      Block.Ops = {Store, Call, StoreResult, Return};
+      Func.Blocks.push_back(std::move(Block));
+      const auto High = MedToHighConverter().convert(Func, Architecture);
+      unsigned ParameterStores = 0, ResultStores = 0;
+      walkStmts(High.Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind != StmtKind::Store)
+          return;
+        if (Statement.Addr == Store.Addr) {
+          ++ParameterStores;
+          const auto &Bits = Statement.StoreVal;
+          ASSERT_TRUE(Bits);
+          ASSERT_EQ(Bits->Kind, ExprKind::BitCast);
+          ASSERT_EQ(Bits->Operands.size(), 1U);
+          const auto &Parameter = Bits->Operands[0];
+          ASSERT_EQ(Parameter->Kind, ExprKind::Var);
+          EXPECT_EQ(Parameter->Var.Kind, MedVar::Param);
+          EXPECT_EQ(Parameter->Var.Id, int(Hint.Parameters.size() - 1));
+          EXPECT_EQ(Parameter->Var.StackOff,
+                    Hint.Parameters.back().Location.EntryStackOffset);
+          EXPECT_TRUE(equalSourceTypes(Parameter->Type, NdType::makeFloat(8)));
+        } else if (Statement.Addr == StoreResult.Addr) {
+          ++ResultStores;
+          ASSERT_TRUE(Statement.StoreVal);
+          EXPECT_EQ(Statement.StoreVal->Kind, ExprKind::Var);
+          EXPECT_EQ(Statement.StoreVal->Var.Kind, MedVar::Temp);
+          EXPECT_EQ(Statement.StoreVal->Var.Id, Call.Output.Id);
+          EXPECT_EQ(Statement.StoreVal->Var.Size, Call.Output.Size);
+        }
+      });
+      EXPECT_EQ(ParameterStores, 1U);
+      EXPECT_EQ(ResultStores, 1U);
+    }
 }
 
 TEST(SourceABI, BitCastRejectsMismatchedWidthsAndDistinguishesTargetTypes) {

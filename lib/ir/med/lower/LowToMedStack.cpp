@@ -9,10 +9,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/ir/med/LowToMed.h"
-
 #include "neverd/Limits.h"
+#include "neverd/ir/SourceStackFrame.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
 #include <limits>
@@ -302,6 +305,31 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
       } else
         ClearOutput(Op);
     }
+  }
+
+  if (TargetArch == Arch::AArch64 &&
+      std::any_of(Low.Blocks.begin(), Low.Blocks.end(), [](const auto &Block) {
+        return std::any_of(Block.Ops.begin(), Block.Ops.end(),
+                           [](const LowOp &Op) {
+                             return lowAArch64AddressMemoryShapeIsValid(Op) ||
+                                    lowAArch64WritebackMemoryShapeIsValid(Op);
+                           });
+      })) {
+    // Raw memory operands retain a base, not a precomputed access address.
+    // Reuse the must-analysis at the exact use rather than the flow-insensitive
+    // address map above, which cannot establish joins or temporary lifetimes.
+    const auto Frame = analyzeSourceStackFrame(Low, TargetArch);
+    if (!Frame.Error.empty())
+      throw LowToMedConversionError(Frame.Error);
+    for (const auto &Access : Frame.Accesses)
+      if (Access.OriginalWord) {
+        // A nominal frame footprint does not prove the original checked
+        // address or its call-stack ABI. Keep analysis available without an
+        // image, but never silently drop stack arguments in a rebuilt image.
+        if (Image && Image->isArm64e())
+          throw LowToMedConversionError(kAddressMemorySPUnsupported);
+        AddSlot(Access.Offset, Access.Bytes);
+      }
   }
 
   std::sort(StackSlots.begin(), StackSlots.end(),

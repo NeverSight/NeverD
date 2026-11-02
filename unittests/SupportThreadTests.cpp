@@ -135,17 +135,6 @@ TEST(SupportThreads, ParallelLoopPropagatesWorkerFailure) {
                std::runtime_error);
 }
 
-TEST(SupportThreads, IRBatchBelowThresholdRunsOnCallerThread) {
-  const auto Caller = std::this_thread::get_id();
-  std::vector<std::thread::id> Seen(4);
-  neverd::parallelForEach(Seen.size(), [&](auto Claim, size_t Total) {
-    for (size_t Index; (Index = Claim()) < Total;)
-      Seen[Index] = std::this_thread::get_id();
-  });
-  for (size_t Index = 0; Index < Seen.size(); ++Index)
-    EXPECT_EQ(Seen[Index], Caller) << "index " << Index;
-}
-
 TEST(SupportThreads, WeightedLoopRetainsDescendingStableDispatch) {
   ScopedThreadCount Threads(1);
   std::vector<size_t> Visited;

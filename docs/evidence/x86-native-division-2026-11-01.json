@@ -1,0 +1,765 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "feature": "native full-dividend DIV/IDIV result pairs and architectural divide errors",
+  "commits": {
+    "neverd": "f8e1e0ea58e05e69713f300d23b7841b889b8ccf",
+    "llvm": "1c67e6be645fd373c0820179c7849f52c5d723f9",
+    "neverc": "64b3d564921808a96066732e066130076424d7ea"
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "regressions": [
+    {
+      "sdk": "native",
+      "target": "NeverDLLVMCValueTests",
+      "report": "native/qualified-NeverDLLVMCValueTests.xml",
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "f77ec83439f9866a79f8d51bfba7a2d381f554a9d9bb7b5c61e2a1946021c33e",
+      "log_sha256": "9f6f8baf1daa393f6e4c5bb3e02ef1d0cc6563935ef1cd6e3b83838a9ba69efc"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86NativeStateAuditTests",
+      "report": "native/qualified-NeverDX86NativeStateAuditTests.xml",
+      "passed": 48,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "37db3d96e3bb5d961875b1d2ce56aed7841817ce862a23961b6e2e083bb2985e",
+      "log_sha256": "9976e0bc8a970f806af96988e4345f0d30efbb9efbc51648d19604d2454da21e"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationSourceTests",
+      "report": "native/qualified-NeverDX64ContinuationSourceTests.xml",
+      "passed": 142,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "0c476cc8dcc4b77fb204e0975faee1b04eaf9879149f63d9559544e84fef84a9",
+      "log_sha256": "5faa68c845c464bde89cb969f2ce94f285c67918de579a25340bf1f8e17bb688"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationExportTests",
+      "report": "native/qualified-NeverDX64ContinuationExportTests.xml",
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "bd2d491bc5138d75bf961357ffb0fbf8f31f5200e83c4b35a0e9db3f4d532d00",
+      "log_sha256": "75e9c44b6c580842f462643294d354a7d5549fd5b78d7c0b099f2ddf870ed14a"
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86DivisionRoundTripTests",
+      "report": "native/qualified-NeverDX86DivisionRoundTripTests.xml",
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "7255186b9f068ecc6f24cc7896e13b944816149fb6cdda063de5a95fa97bd6de",
+      "log_sha256": "3f9befed52970d1088d405c785b7bb3c74bea1b443ab7fc925eb68ab8a3481e4"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDLLVMCValueTests",
+      "report": "r6/qualified-NeverDLLVMCValueTests.xml",
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "a33e234bbd5fd1d5aac7b26051db4a91bf1ea133aad72891a3a84e812f2dfaa1",
+      "log_sha256": "16ad960c35ecfbc05ada1d0ea71e4f5e3d7cc4d38cc3424e6dcdf07bbccc4bfa"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86NativeStateAuditTests",
+      "report": "r6/qualified-NeverDX86NativeStateAuditTests.xml",
+      "passed": 48,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "eec7acff616e838b96f3a85089fd5cdedd67aca9df1be97d9c38c10a4b205650",
+      "log_sha256": "47c5c607cc8e1eac079c2f35464d442dd78aae4504a767be476fce39c67fd4c9"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationSourceTests",
+      "report": "r6/qualified-NeverDX64ContinuationSourceTests.xml",
+      "passed": 142,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "d4232c9d247deeacb18fbe8db76f6b41724e4d7512c048be749489e3a30008e8",
+      "log_sha256": "bf5912addc1b28b99d27c884463e2b8bccd5def8b0f0abbc6fe36a382aac34d9"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationExportTests",
+      "report": "r6/qualified-NeverDX64ContinuationExportTests.xml",
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "b8124fe9b4e404b08cce97fb4738337c9766a27bd4fe6157b278bc73c4a00fb8",
+      "log_sha256": "0a4d0974aa822f2d319ce05b233eb8d7d7d707375086b0a85cf9b367692ec1c3"
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86DivisionRoundTripTests",
+      "report": "r6/qualified-NeverDX86DivisionRoundTripTests.xml",
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "sha256": "f94a8038c75f29938a01cacbb8d7ab5016552a6291e8c69186d1447740cbdfb3",
+      "log_sha256": "5da53390d0917bd17890a48d8ad025809b2ec1ff29d2e959f20b8d7e0732c0e2"
+    }
+  ],
+  "neverc_frontend": {
+    "report": "neverc-frontend.xml",
+    "passed": 13,
+    "failed": 0,
+    "skipped": 0,
+    "sha256": "0894965a580666b7f0ce2f82d7f0ac7ab77901de64a645342ed15706b2cecc5a",
+    "log_sha256": "a1bf05bd5aa014f94b8e3a88ac4e06e31889b9915c8703d8b2f3446f9505cd08"
+  },
+  "neverc_vm_frontend": {
+    "report": "neverc-vm.xml",
+    "passed": 8,
+    "failed": 0,
+    "skipped": 0,
+    "sha256": "c9285d16264cbe07086e238274c2e6a6815f96fdff74d795de75acd45a3af29d",
+    "log_sha256": "2e28aa42d92ad0c0816fa51f685be605c22b0388b3829ff9a06190bf9657cec1"
+  },
+  "llvm_lit": {
+    "passed": 9,
+    "failed": 0,
+    "skipped": 0,
+    "log_sha256": "652e4fa8f5e6a6f2102403c1e24bca6e26d2a86ae2c3793aeeda45b9f2e3e3fa"
+  },
+  "llvm_vm_lit": {
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "log_sha256": "e8c8b50137455249f684f3fe18163b00a6e4d668ac26f0e4d8a947e48a1b4668"
+  },
+  "neverc_schema": {
+    "passed": 10,
+    "failed": 0,
+    "log_sha256": "f105fa000a7213a800a393095c1250b681b83d3cc603e6cffa9b26e730352052"
+  },
+  "native_compiler_qualification": {
+    "schema_version": 1,
+    "tools": {
+      "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "neverc": "4eb585ed3d578521b2e84e9e29efdc901e22811f09ad1a0edb2ad1db8fc028dc",
+      "llc": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0",
+      "opt": "b16f0dbb6461388d55a0ff94e7a2373e59c8875b6b4110a682ce6aa8405cfd87",
+      "llvm-objdump": "9c2c0d267b2027db3c28e87ab338d14fc6d4afde33f924bc092513835304c7a7"
+    },
+    "oracle_sha256": "ef1cbf85034236a2e0d3abe60daaa698b968c810b822a5243ae222f85a5ee48e",
+    "profiles": [
+      {
+        "name": "32-llvm-legacy-O0",
+        "mode": 32,
+        "backend": "llvm-legacy",
+        "optimization": "O0",
+        "object_sha256": "2daa242addc8734fe22dff5109a23765cd53ecd1459c7a569798cfc8e4cb8967",
+        "source_sha256": "5ba8f234e6fb63830b1303d7eb7e0ef7ae9a4811a9cb83a211537dd3dba305a8",
+        "comparisons": 41472,
+        "faults": 23972,
+        "functions": 24
+      },
+      {
+        "name": "32-llvm-legacy-O2",
+        "mode": 32,
+        "backend": "llvm-legacy",
+        "optimization": "O2",
+        "object_sha256": "ca7a70d5d81a10cf5f53249244a4ef50f81b3c08a39b183c882244b309d534bc",
+        "source_sha256": "5ba8f234e6fb63830b1303d7eb7e0ef7ae9a4811a9cb83a211537dd3dba305a8",
+        "comparisons": 41472,
+        "faults": 23972,
+        "functions": 24
+      },
+      {
+        "name": "32-llvm-new-O0",
+        "mode": 32,
+        "backend": "llvm-new",
+        "optimization": "O0",
+        "object_sha256": "2daa242addc8734fe22dff5109a23765cd53ecd1459c7a569798cfc8e4cb8967",
+        "source_sha256": "5ba8f234e6fb63830b1303d7eb7e0ef7ae9a4811a9cb83a211537dd3dba305a8",
+        "comparisons": 41472,
+        "faults": 23972,
+        "functions": 24
+      },
+      {
+        "name": "32-llvm-new-O2",
+        "mode": 32,
+        "backend": "llvm-new",
+        "optimization": "O2",
+        "object_sha256": "ca7a70d5d81a10cf5f53249244a4ef50f81b3c08a39b183c882244b309d534bc",
+        "source_sha256": "5ba8f234e6fb63830b1303d7eb7e0ef7ae9a4811a9cb83a211537dd3dba305a8",
+        "comparisons": 41472,
+        "faults": 23972,
+        "functions": 24
+      },
+      {
+        "name": "64-llvm-legacy-O0",
+        "mode": 64,
+        "backend": "llvm-legacy",
+        "optimization": "O0",
+        "object_sha256": "63f0e08543018f65cf6d401ce9a31da2bc083409dc21629a005777913ff70f57",
+        "source_sha256": "1902a458026cdc82f7045a34c74cf9226da1267a59e3c1f659d626cb7f0f0dd6",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-llvm-legacy-O2",
+        "mode": 64,
+        "backend": "llvm-legacy",
+        "optimization": "O2",
+        "object_sha256": "c8e3870ed30a38b1235d5cfaa27f910690cf8552e8a07e707fd70ca3f207a1b3",
+        "source_sha256": "1902a458026cdc82f7045a34c74cf9226da1267a59e3c1f659d626cb7f0f0dd6",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-llvm-new-O0",
+        "mode": 64,
+        "backend": "llvm-new",
+        "optimization": "O0",
+        "object_sha256": "63f0e08543018f65cf6d401ce9a31da2bc083409dc21629a005777913ff70f57",
+        "source_sha256": "1902a458026cdc82f7045a34c74cf9226da1267a59e3c1f659d626cb7f0f0dd6",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-llvm-new-O2",
+        "mode": 64,
+        "backend": "llvm-new",
+        "optimization": "O2",
+        "object_sha256": "c8e3870ed30a38b1235d5cfaa27f910690cf8552e8a07e707fd70ca3f207a1b3",
+        "source_sha256": "1902a458026cdc82f7045a34c74cf9226da1267a59e3c1f659d626cb7f0f0dd6",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-neverc-O0",
+        "mode": 64,
+        "backend": "neverc",
+        "optimization": "O0",
+        "object_sha256": "a488c5ae4f3524166dafaf0537a8abffdb4e37af5e45276cdb3a28d82c89186f",
+        "source_sha256": "b1588a951130108b50cd9be82f2499876c1b82dd8f1c2b98f8d30f1d4032903a",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-neverc-O2",
+        "mode": 64,
+        "backend": "neverc",
+        "optimization": "O2",
+        "object_sha256": "083b3bf5c69ee64ce388fb8e223de549e21a958184cff3f1849d2bb72282b211",
+        "source_sha256": "b1588a951130108b50cd9be82f2499876c1b82dd8f1c2b98f8d30f1d4032903a",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-neverc-ir-legacy-O0",
+        "mode": 64,
+        "backend": "neverc-ir-legacy",
+        "optimization": "O0",
+        "object_sha256": "12df484ec06d80e00ca11621e6823c78c6932bc0ea26fe4c987c8f41fe84a118",
+        "source_sha256": "b1588a951130108b50cd9be82f2499876c1b82dd8f1c2b98f8d30f1d4032903a",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-neverc-ir-legacy-O2",
+        "mode": 64,
+        "backend": "neverc-ir-legacy",
+        "optimization": "O2",
+        "object_sha256": "154fcf0b73ba20c625465fd6ebb5a85a0118cb02fd4c0f16849a0d12adae54d2",
+        "source_sha256": "b1588a951130108b50cd9be82f2499876c1b82dd8f1c2b98f8d30f1d4032903a",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-neverc-ir-new-O0",
+        "mode": 64,
+        "backend": "neverc-ir-new",
+        "optimization": "O0",
+        "object_sha256": "12df484ec06d80e00ca11621e6823c78c6932bc0ea26fe4c987c8f41fe84a118",
+        "source_sha256": "b1588a951130108b50cd9be82f2499876c1b82dd8f1c2b98f8d30f1d4032903a",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      },
+      {
+        "name": "64-neverc-ir-new-O2",
+        "mode": 64,
+        "backend": "neverc-ir-new",
+        "optimization": "O2",
+        "object_sha256": "154fcf0b73ba20c625465fd6ebb5a85a0118cb02fd4c0f16849a0d12adae54d2",
+        "source_sha256": "b1588a951130108b50cd9be82f2499876c1b82dd8f1c2b98f8d30f1d4032903a",
+        "comparisons": 55296,
+        "faults": 32092,
+        "functions": 32
+      }
+    ],
+    "comparisons": 718848,
+    "faults": 416808,
+    "boundary": "Linux user-mode native register DIV/IDIV; OS handles #DE as SIGFPE; no guest event delivery"
+  },
+  "continuation_compiler_qualification": {
+    "schema_version": 1,
+    "tools": {
+      "neverc": {
+        "sha256": "4eb585ed3d578521b2e84e9e29efdc901e22811f09ad1a0edb2ad1db8fc028dc"
+      },
+      "llc": {
+        "sha256": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0"
+      },
+      "clang": {
+        "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      }
+    },
+    "oracle_sha256": "e09f7f72b57011547c9046f411b72a46eb95d214d949ef2912b861753b04dca0",
+    "profiles": [
+      {
+        "kind": "division",
+        "route": "high",
+        "optimization": "O0",
+        "backend": "neverc",
+        "source_sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+        "ir_sha256": "5fe7e275e7442e2772ad65e1262c1b20328dd90d7d66cd413253a7837f3abf31",
+        "object_sha256": "acdab100fc154d9166a30eadfb4f8d3208c5d7823bb6cf51ce64d94e1f3316db",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "high",
+        "optimization": "O0",
+        "backend": "llvm-legacy",
+        "source_sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+        "ir_sha256": "5fe7e275e7442e2772ad65e1262c1b20328dd90d7d66cd413253a7837f3abf31",
+        "object_sha256": "7b221fc3548421a410adb058159f42ab8a62fc2689bb40c846672e56b775a7ae",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "high",
+        "optimization": "O0",
+        "backend": "llvm-new",
+        "source_sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+        "ir_sha256": "5fe7e275e7442e2772ad65e1262c1b20328dd90d7d66cd413253a7837f3abf31",
+        "object_sha256": "7b221fc3548421a410adb058159f42ab8a62fc2689bb40c846672e56b775a7ae",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "high",
+        "optimization": "O2",
+        "backend": "neverc",
+        "source_sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+        "ir_sha256": "0bfdf21ef31b437e81c5db311332b0d7a17e72bf8119d09288c4bf29a48e00e4",
+        "object_sha256": "88ae1de998ebc9066646224e2ac61633e283d91dca7a2c1844767d68bf2f69aa",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "high",
+        "optimization": "O2",
+        "backend": "llvm-legacy",
+        "source_sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+        "ir_sha256": "0bfdf21ef31b437e81c5db311332b0d7a17e72bf8119d09288c4bf29a48e00e4",
+        "object_sha256": "a6b71b0ac77c3dcd561b4ca521a9ad38e159a8f10967ad42e63851d6455ab197",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "high",
+        "optimization": "O2",
+        "backend": "llvm-new",
+        "source_sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+        "ir_sha256": "0bfdf21ef31b437e81c5db311332b0d7a17e72bf8119d09288c4bf29a48e00e4",
+        "object_sha256": "1e9dc561be4b958359e930e38678a39dc877aa4d40ff16743d5396880d06d334",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "neverc",
+        "source_sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+        "ir_sha256": "c7d0049c3dedab1f23702f5a6a7b4c51c2d92e73a6fa1f781777cc91d049653a",
+        "object_sha256": "f6c89fc65cec13911e432d519714e87d84bfcef4b7e2d132d6a13adb1e32c8b0",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "llvm-legacy",
+        "source_sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+        "ir_sha256": "c7d0049c3dedab1f23702f5a6a7b4c51c2d92e73a6fa1f781777cc91d049653a",
+        "object_sha256": "6c34e3b762ecc42d36f0abf978c4feeae8dfb76d91216bba6e6c0d49e8d03209",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "llvm-new",
+        "source_sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+        "ir_sha256": "c7d0049c3dedab1f23702f5a6a7b4c51c2d92e73a6fa1f781777cc91d049653a",
+        "object_sha256": "6c34e3b762ecc42d36f0abf978c4feeae8dfb76d91216bba6e6c0d49e8d03209",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "neverc",
+        "source_sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+        "ir_sha256": "9695419007ca963f31d3c8e39914781f29c3d49baa0cdf30b6c464c49924981c",
+        "object_sha256": "2f9cb820bf3c24df55a91ba47e66e32009e1cec14ebdbed0d686ddeedc804e1d",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "llvm-legacy",
+        "source_sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+        "ir_sha256": "9695419007ca963f31d3c8e39914781f29c3d49baa0cdf30b6c464c49924981c",
+        "object_sha256": "c3a96bcd687f273a500edd3365acabcbc971f90702784125f201e550a50a1054",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division",
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "llvm-new",
+        "source_sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+        "ir_sha256": "9695419007ca963f31d3c8e39914781f29c3d49baa0cdf30b6c464c49924981c",
+        "object_sha256": "25692b856e30302e9100024e610d99ee7e495d8e89918a2c11d05492ce0bfdc6",
+        "original_cpu_comparisons": 12000
+      },
+      {
+        "kind": "division-event",
+        "route": "high",
+        "optimization": "O0",
+        "backend": "neverc",
+        "source_sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+        "ir_sha256": "3ab27461e20b863a9229da3acb02cf7353e4dfe6206b2ec6736787bf167e95bb",
+        "object_sha256": "3abc3bda615087a46c5ba1c6083b5adcc8fa0a24c9bcdf80ff9baf0828c7d675",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "high",
+        "optimization": "O0",
+        "backend": "llvm-legacy",
+        "source_sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+        "ir_sha256": "3ab27461e20b863a9229da3acb02cf7353e4dfe6206b2ec6736787bf167e95bb",
+        "object_sha256": "da8c31a30242ac25cad9f61c5e359a8f4984a9ac3c160549b4aa9a6880d268d2",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "high",
+        "optimization": "O0",
+        "backend": "llvm-new",
+        "source_sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+        "ir_sha256": "3ab27461e20b863a9229da3acb02cf7353e4dfe6206b2ec6736787bf167e95bb",
+        "object_sha256": "da8c31a30242ac25cad9f61c5e359a8f4984a9ac3c160549b4aa9a6880d268d2",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "high",
+        "optimization": "O2",
+        "backend": "neverc",
+        "source_sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+        "ir_sha256": "5c5a8e8b197824e6d88f45eea12f65066a907434d68583c07666b1e309fbbf6d",
+        "object_sha256": "e7f264d78fd13fa4a8fe528c8209f02e78475e8d1ab15d0c66d1950927d4bfdc",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "high",
+        "optimization": "O2",
+        "backend": "llvm-legacy",
+        "source_sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+        "ir_sha256": "5c5a8e8b197824e6d88f45eea12f65066a907434d68583c07666b1e309fbbf6d",
+        "object_sha256": "db76d04078830cf29a69d32e77767e7d288ccccd40160ecca0abb02e298501da",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "high",
+        "optimization": "O2",
+        "backend": "llvm-new",
+        "source_sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+        "ir_sha256": "5c5a8e8b197824e6d88f45eea12f65066a907434d68583c07666b1e309fbbf6d",
+        "object_sha256": "936551059de12734dc29c63da9d81c6eba45a2415d79aecc4aa371264078a50a",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "neverc",
+        "source_sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+        "ir_sha256": "0ffeb6b6b87ea3eb0a5ded0c76c74484ed806711628cb401eb031ffb668c1778",
+        "object_sha256": "764d1d82610c18efe23563c062a862f4ec2159f23180d0d2ec3844ef9a6b2fab",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "llvm-legacy",
+        "source_sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+        "ir_sha256": "0ffeb6b6b87ea3eb0a5ded0c76c74484ed806711628cb401eb031ffb668c1778",
+        "object_sha256": "3033a9a619071c840b455cc406350a5cea603f7227077c8a4c8fca12322eff61",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "llvm-new",
+        "source_sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+        "ir_sha256": "0ffeb6b6b87ea3eb0a5ded0c76c74484ed806711628cb401eb031ffb668c1778",
+        "object_sha256": "3033a9a619071c840b455cc406350a5cea603f7227077c8a4c8fca12322eff61",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "neverc",
+        "source_sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+        "ir_sha256": "9ac29d80af6a2750f72dff1eac2bbdf2803995c915f9796a7a9cb5c6f7fded19",
+        "object_sha256": "bbb2d1eae0296fd4bcf396c3601fbb41ac444541753d29ceabfa9a4ba103d3d5",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "llvm-legacy",
+        "source_sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+        "ir_sha256": "9ac29d80af6a2750f72dff1eac2bbdf2803995c915f9796a7a9cb5c6f7fded19",
+        "object_sha256": "6c5e3646c6d49c9a065bdadc73d2c74c2a147f86836e0eb800d26d5fa08d4542",
+        "original_cpu_comparisons": 1728
+      },
+      {
+        "kind": "division-event",
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "llvm-new",
+        "source_sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+        "ir_sha256": "9ac29d80af6a2750f72dff1eac2bbdf2803995c915f9796a7a9cb5c6f7fded19",
+        "object_sha256": "10310678bfa30a93d35491401fe635308ca9dfc0d71ff7c79b5e084b3dd430a7",
+        "original_cpu_comparisons": 1728
+      }
+    ],
+    "expired_oracle_signal_exit": 125,
+    "original_cpu_comparisons": 164736,
+    "limitations": [
+      "original CPU oracle executes register DIV/IDIV in long mode",
+      "event frames follow the existing qualified IA-32e delivery owner",
+      "no memory divisors, nested delivery faults or legacy i386 dispatcher"
+    ]
+  },
+  "llvmc_original_comparisons": {
+    "widths": [
+      8,
+      16,
+      32,
+      64
+    ],
+    "signedness": 2,
+    "result_liveness": 2,
+    "states": 216,
+    "compiler_profiles_per_sdk": 4,
+    "sdks": 2,
+    "total": 27648
+  },
+  "continuation_clang_original_comparisons": 109824,
+  "source_files": {
+    "neverd": [
+      {
+        "path": "include/neverd/backend/llvm/X86/LLVMX86DivRem.h",
+        "sha256": "fb38aeeb953ba45675af2435e4310130e8251c796e8d189eb3e2aa1275f042a4"
+      },
+      {
+        "path": "lib/backend/c/render/X86/X86DivRem.h",
+        "sha256": "e77d5bd670871683d8954227afac20ffc4f7f4fb0a73764b0d342e8102910a3b"
+      },
+      {
+        "path": "lib/backend/c/LLVMC/LLVMCStmtWriter.cpp",
+        "sha256": "65f36c3cde28ed6a3b89f59d69a3b7445312bfe6e27693ca947e0989f5f71f1d"
+      },
+      {
+        "path": "lib/backend/llvm/X86/MedLLVMX86ValueEmitter.cpp",
+        "sha256": "c8ebf1c6856b5db629afb2e590566888c103e4731a918c214901c5989073ab07"
+      },
+      {
+        "path": "unittests/lift/core/LLVMCValueTests.cpp",
+        "sha256": "730ab01f13562f137140cfe365a82f4464316bd96985d59c3375442635a4da92"
+      },
+      {
+        "path": "unittests/lift/x86/X86NativeDivisionTests.inc",
+        "sha256": "4da0f21e43514ccd026580cafa8249928db9bc3357aad322c86ee592f55260f3"
+      }
+    ],
+    "llvm": [
+      {
+        "path": "llvm/include/llvm/IR/IntrinsicsX86.td",
+        "sha256": "c5482b524913f4351964779d04db43ce773433a29d6e271b485d86980f2a76a4"
+      },
+      {
+        "path": "llvm/lib/Target/X86/X86NativeDivision.h",
+        "sha256": "2a0ee3e28642345d9ef3ecdac4e3838bcc751d9833c43570772cb7a7013d6c65"
+      },
+      {
+        "path": "llvm/lib/Target/X86/X86ISelLowering.cpp",
+        "sha256": "0f6f06a0cf1e3241916639df953596a3198f404842b5d5d493cb08c8a6d57af7"
+      },
+      {
+        "path": "llvm/test/CodeGen/X86/native-divrem.ll",
+        "sha256": "ca145a89735d202e4c80281a078b2727b59fc168c8c49ccf42933e79e09ba558"
+      }
+    ],
+    "neverc": [
+      {
+        "path": "llvm/lib/Target/X86/X86NativeDivision.h",
+        "sha256": "2a0ee3e28642345d9ef3ecdac4e3838bcc751d9833c43570772cb7a7013d6c65"
+      },
+      {
+        "path": "llvm/lib/Target/X86/X86ISelLowering.cpp",
+        "sha256": "3e8b0a0ccf5f9d98f45dda3b0ec9824087e508b3979c94f7c3019f49000afe0d"
+      },
+      {
+        "path": "llvm/include/llvm/IR/IntrinsicEnums.inc",
+        "sha256": "76a3539daf3f54842c1a5f92be7adc69837d4579ce4db195ec116d1708db9c20"
+      },
+      {
+        "path": "llvm/include/llvm/IR/IntrinsicImpl.inc",
+        "sha256": "b6fec271196ee15060bc30d61cbf71f3b506a600846067baa8de9693ff91f2f8"
+      },
+      {
+        "path": "llvm/include/llvm/IR/IntrinsicsX86.h",
+        "sha256": "3dd4e4ca6ac8a210e13e07de533e28fdb072ca89660cfd699ca860c99ae85418"
+      },
+      {
+        "path": "llvm/lib/Target/X86/X86GenDAGISel.inc",
+        "sha256": "996186281cbf4e08144becc889366cef331446272ff2782eea0371be2d4df214"
+      },
+      {
+        "path": "neverc/include/neverc/Foundation/Builtin/X86NativeDivision.def",
+        "sha256": "127a248a96e81726f0e0508277355038891916327c370798dfcbcfdb9177c4c1"
+      },
+      {
+        "path": "neverc/include/neverc/Foundation/Builtin/BuiltinsX86_64.def",
+        "sha256": "445de6c47636ee659726fd360614d11414617c8c0fe289bc955968d482ccb3cc"
+      },
+      {
+        "path": "neverc/lib/Emit/Builtin/BuiltinEmitterX86.cpp",
+        "sha256": "4dc326f986b8dfe2f13b219c764c89ea375ff27127a9c9f9ddb0ef5232c0708d"
+      },
+      {
+        "path": "utils/lint/sync-x86-native-intrinsics.py",
+        "sha256": "554220fe9905e7db2e92cc3906be1cea4728df497c34f94c6e698f515749242f"
+      },
+      {
+        "path": "utils/lint/test_sync_x86_native_intrinsics.py",
+        "sha256": "ae096afb0d225117ba292f067e7665ba78dc54123b5bc81163e53f53f9393780"
+      },
+      {
+        "path": "tests/neverc/CMakeLists.txt",
+        "sha256": "d593a9304bdfb806640bc773df84300db4a0ab0c8a95dd9d700063466579110d"
+      },
+      {
+        "path": "tests/neverc/X86/NativeDivisionFrontendTests.cpp",
+        "sha256": "9f98e2bebe07fd7ef58816118940e605cf703539b2cad56b19a3f01f0b425cc1"
+      },
+      {
+        "path": "tests/neverc/X86/native_division_harness.c",
+        "sha256": "ef1cbf85034236a2e0d3abe60daaa698b968c810b822a5243ae222f85a5ee48e"
+      },
+      {
+        "path": "tests/neverc/X86/verify_native_division.py",
+        "sha256": "9eb46cb452f9b5d64ae88111fe1a4050d8dbf6ab2be7d813008253317e6148d0"
+      }
+    ]
+  },
+  "continuation_sources": [
+    {
+      "name": "division-event-high.c",
+      "sha256": "112f17b651a93b410ba19c641c4df02a44c660b379763e58b371da3f98ba283c",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-event-high.json",
+      "sha256": "ef2889be07c31ea759be1b4cad2419f5bd3016f7d54d95c6c8f49fafe1cdea14",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-event-high.source.c",
+      "sha256": "57db1e62a668159e956cc27e80c8eb5e3aeed12ab9ffdadadecd4085c687225c",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-event-llvm.c",
+      "sha256": "84132162b438b9ccc49eb224b224ea65d3988186fde96c8b09fc1fc93cc0ed3e",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-event-llvm.json",
+      "sha256": "522edb6b10ebeb789c39979fe0ab8f2193525693a798969266b8fe1444636387",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-event-llvm.source.c",
+      "sha256": "755f6848320fe0b3431dc5b239ebd63cdf3702fe2a888ba39dfd222d63bb7fe0",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-high.c",
+      "sha256": "c0e205f4de0a303cf806b4720f2dc6787b85eba56799e1be248a46a0048ba895",
+      "identical_sdks": true
+    },
+    {
+      "name": "division-llvm.c",
+      "sha256": "d058e4f054b8f915df99e33656f13633c33260fce47206e278e045a55822ae0e",
+      "identical_sdks": true
+    }
+  ],
+  "counterexample": {
+    "source_sha256": "0997a6d212be5e568a639774b16b508e74005cd8be1ad56942e1a3f062efcf6f",
+    "old_neverc_sha256": "7b47834c100c215bbe1abe7bc18f1b3a978764fec62bfaf6cece5b65df27ed60",
+    "old_ir_sha256": "423afb4d3a98716cb96558abf409e935a8de95db7c7950e63d90ba2c93e20bb9",
+    "new_ir_sha256": "7616b1053e99fa7b259b069d2f12d9a7fc12e20b3cf5421f25402f7d7b87e43e",
+    "expression": "_udiv128(1, 0, 1, remainder)",
+    "optimization": "O2",
+    "format": "COFF",
+    "before": "call and first marker store removed; remainder becomes zero instead of native #DE",
+    "after": "native udivrem64 retained with original high/low ordering and memory effects"
+  },
+  "boundaries": [
+    "Native register intrinsics, not guest event routing or original-PC state continuations",
+    "LLVM code32 supports 8/16/32-bit, code64 and x32 support all widths; code16 is diagnosed",
+    "NeverC x86 frontend targets code64; LLVM i386 oracle executes actual 32-bit processes",
+    "Typed-source division retains its precondition contract; explicit continuations own rejection and #DE delivery",
+    "No general legacy i386 dispatcher, restartable memory faults, nested #DF, async scheduling or SGX AEX implementation",
+    "No LLVM release, SDK pin or submodule revision change"
+  ]
+}

@@ -40,7 +40,8 @@ enum {
   Read = 63,
   Write = 64,
   WriteV = 66,
-  Sleep = 101
+  Sleep = 101,
+  Clock = 113
 };
 #else
 enum {
@@ -57,7 +58,8 @@ enum {
   Read = 0,
   Write = 1,
   WriteV = 20,
-  Sleep = 35
+  Sleep = 35,
+  Clock = 228
 };
 #endif
 
@@ -596,6 +598,78 @@ U64 devices_gpu_commands(U64 Route) {
   CHECK(raw(Close, 4, 0, 0), 0);
   return 0;
 }
+U64 devices_gpu_stream(U64 Route) {
+  CHECK(raw(OpenAt, (U64)-100, (U64)Path, 2), 3);
+  CHECK(raw(OpenAt, (U64)-100, (U64)Path, 2), 4);
+  CHECK(raw(Dup, 3, 0, 0), 5);
+  U32 first[2] = {0x12, 0}, second[2] = {0x12, 0};
+  CHECK(invoke(Route, 3, CreateContext, (U64)first), 0);
+  CHECK(invoke(Route, 4, CreateContext, (U64)second), 0);
+  CHECK(first[1], 1);
+  CHECK(second[1], 2);
+  U64 store = mapping(0, 4, 4096, 4096, 1);
+  U64 code = raw6(Map, 0, 4096, 3, 0x22, (U64)-1, 0);
+  if (code > (U64)-4096)
+    return __LINE__;
+  struct GPUMap cmd = {-1, 0, 4096, 0, code, 2, 0};
+  CHECK(invoke(Route, 3, 0xc0300915, (U64)&cmd), 0);
+  volatile U32 *p = (volatile U32 *)code;
+  p[0] = 0xc0013d00; // CP_MEM_WRITE into RAM outside the fetched program.
+  p[1] = (U32)cmd.gpu + 128;
+  struct GPUSubmit submit = {first[1], cmd.gpu, 3, 0xdeadbeef, 0};
+  I64 start[2], end[2];
+  CHECK(raw(Clock, 1, (U64)start, 0), 0);
+  for (U32 i = 1; i <= 1024; ++i) {
+    if (i == 513) {
+      // The duplicate retains the context; a new independent open does not.
+      CHECK(raw(Close, 3, 0, 0), 0);
+      CHECK(raw(OpenAt, (U64)-100, (U64)Path, 2), 3);
+      U32 foreign[3] = {first[1], 3, 0xdeadbeef};
+      CHECK(invoke(0, 3, ReadTimestamp, (U64)foreign), -22);
+      CHECK(foreign[2], 0xdeadbeef);
+    }
+    p[2] = i ^ 0x12345678;
+    submit.timestamp = 0xdeadbeef;
+    CHECK(invoke(Route, 5, 0xc0200910, (U64)&submit), 0);
+    CHECK(submit.timestamp, i);
+    CHECK(p[31], 0);
+    CHECK(p[32], i ^ 0x12345678);
+    CHECK(p[33], 0);
+    CHECK(*(volatile U32 *)(store + 40), i);
+    CHECK(*(volatile U32 *)(store + 48), i);
+    CHECK(*(volatile U32 *)(store + 80), 0);
+    CHECK(*(volatile U32 *)(store + 88), 0);
+    CHECK(sleep_ms(1), 0);
+  }
+  CHECK(raw(Clock, 1, (U64)end, 0), 0);
+  CHECK((end[0] - start[0]) * 1000000000L + end[1] - start[1], 1024000000);
+  for (U32 type = 1; type <= 3; ++type) {
+    U32 query[3] = {first[1], type, 0xdeadbeef};
+    CHECK(invoke(Route, 5, ReadTimestamp, (U64)query), 0);
+    CHECK(query[2], 1024);
+  }
+  U32 wait[3] = {first[1], 1024, 0};
+  CHECK(invoke(Route, 5, 0x400c0907, (U64)wait), 0);
+  CHECK(invoke(Route, 5, DestroyContext, (U64)&first[1]), 0);
+  // Context ID reuse starts a fresh queue without replacing the shared page.
+  first[0] = 0x12;
+  CHECK(invoke(Route, 4, CreateContext, (U64)first), 0);
+  CHECK(first[1], 1);
+  CHECK(*(volatile U32 *)(store + 40), 0);
+  CHECK(*(volatile U32 *)(store + 48), 0);
+  CHECK(invoke(Route, 4, 0xc0200910, (U64)&submit), 0);
+  CHECK(submit.timestamp, 1);
+  CHECK(*(volatile U32 *)(store + 40), 1);
+  CHECK(*(volatile U32 *)(store + 48), 1);
+  CHECK(invoke(Route, 4, 0x40080921, (U64)&cmd.gpu), 0);
+  CHECK(raw(Unmap, code, 4096, 0), 0);
+  CHECK(raw(Unmap, store, 4096, 0), 0);
+  CHECK(raw(Close, 3, 0, 0), 0);
+  CHECK(raw(Close, 4, 0, 0), 0);
+  CHECK(raw(Close, 5, 0, 0), 0);
+  return 0;
+}
+
 U64 devices_gpu_rejected(U64 Mode, U64 Buffer) {
   CHECK(raw(OpenAt, (U64)-100, (U64)Path, 2), 3);
   U32 context[2] = {0x12, 0};
@@ -1122,11 +1196,12 @@ void process_main(U64 *Stack) {
   if (Stack[0] > 1) {
     char Mode = ((const char *)Stack[2])[0];
     if (Mode == 'd' || Mode == 'u' || Mode == 'k' || Mode == 'b' ||
-        Mode == 'g' || Mode == 'o' || Mode == 'l') {
+        Mode == 'g' || Mode == 'o' || Mode == 'l' || Mode == 's') {
       U64 Status = Mode == 'd'   ? devices_duplicates(0)
                    : Mode == 'u' ? devices_updates()
                    : Mode == 'k' ? devices_contexts(0)
                    : Mode == 'g' ? devices_gpu_commands(0)
+                   : Mode == 's' ? devices_gpu_stream(0)
                    : Mode == 'o' ? devices_gpu_objects(0, 1)
                    : Mode == 'l' ? devices_gpu_legacy(0, 1)
                                  : devices_busy_poll();

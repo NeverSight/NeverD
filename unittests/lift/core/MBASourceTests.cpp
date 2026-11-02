@@ -1128,7 +1128,9 @@ TEST_P(MBAMachOARMFiveSourceTest, RecoversFiveInputArithmeticAndRuns) {
   EXPECT_EQ(Body.find(" ^ "), std::string::npos) << Body;
   EXPECT_EQ(Body.find(" & "), std::string::npos) << Body;
   EXPECT_EQ(Body.find("~"), std::string::npos) << Body;
-  EXPECT_FALSE(functionBody(Source, "mba_five_fold").empty());
+  const auto FoldBody = functionBody(Source, "mba_five_fold");
+  EXPECT_FALSE(FoldBody.empty());
+  EXPECT_EQ(FoldBody.find("unknown register"), std::string::npos) << FoldBody;
 
   const char *Harness = R"(
 #include <stdint.h>
@@ -1362,7 +1364,9 @@ int main(void) {
   std::ofstream(Combined) << Source << Harness;
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
-    const auto Executable = tmpFile("macho-relocation-mode-execute");
+    const auto Executable =
+        tmpFile(std::string("macho-relocation-mode-execute") +
+                neverd::test::executableSuffix());
     const auto Recompiled = exec(
         NEVERD_TEST_CLANG, {"-std=c11", Optimization, "-Werror=return-type",
                             "-Werror=implicit-function-declaration",
@@ -1452,7 +1456,8 @@ int main(void) {
   std::ofstream(Combined) << Source << Harness;
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
-    const auto Executable = tmpFile("macho-thumb-only-execute");
+    const auto Executable = tmpFile(std::string("macho-thumb-only-execute") +
+                                    neverd::test::executableSuffix());
     const auto Recompiled = exec(
         NEVERD_TEST_CLANG, {"-std=c11", Optimization, "-Werror=return-type",
                             "-Werror=implicit-function-declaration",
@@ -1577,7 +1582,9 @@ int main(void) {
   std::ofstream(Combined) << Source << Harness;
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
-    const auto Executable = tmpFile("macho-explicit-mixed-execute");
+    const auto Executable =
+        tmpFile(std::string("macho-explicit-mixed-execute") +
+                neverd::test::executableSuffix());
     const auto Recompiled = exec(
         NEVERD_TEST_CLANG, {"-std=c11", Optimization, "-Werror=return-type",
                             "-Werror=implicit-function-declaration",
@@ -1676,7 +1683,8 @@ int main(void) {
   std::ofstream(Combined) << Source << Harness;
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
-    const auto Executable = tmpFile("native-five-execute");
+    const auto Executable = tmpFile(std::string("native-five-execute") +
+                                    neverd::test::executableSuffix());
     const auto Recompiled = exec(
         NEVERD_TEST_CLANG, {"-std=c11", Optimization, "-Werror=return-type",
                             "-Werror=implicit-function-declaration",

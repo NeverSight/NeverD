@@ -122,6 +122,7 @@ struct ProcessResult {
   std::optional<uint64_t> ReturnValue;
   bool InitializersEnabled = false, TraceTruncated = false;
   std::vector<NativeCallEvent> NativeCalls;
+  std::optional<uint64_t> EventLogWritesConsumed;
   std::vector<NativeJNIRegistration> JNIRegistrations;
   std::optional<mobile::dalvik::RuntimeSnapshot> JavaState;
   std::vector<uint64_t> Trace;
@@ -130,6 +131,8 @@ struct ProcessResult {
   /// Runs in Trace: each row owns PCs from Index to the next row's Index.
   std::vector<NativeTraceThread> TraceThreads;
   std::vector<NativeExecutionObservation> ExecutionObservations;
+  std::optional<NativeCPUState> CPUState;
+  std::optional<std::vector<NativeThreadCPUState>> ThreadCPUStates;
   bool ExecutionObservationsEnabled = false;
   bool ExecutionObservationsTruncated = false;
   /// Guest signal termination, distinct from a normal exit status. No host

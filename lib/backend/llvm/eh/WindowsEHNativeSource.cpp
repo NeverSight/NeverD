@@ -7,7 +7,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationCxxUnwind.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCxxUnwind.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/support/BinaryEncoding.h"
 

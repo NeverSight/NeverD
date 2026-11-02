@@ -9,11 +9,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../CDeferredValue.h"
 #include "../UnalignedMemory.h"
+#include "../render/X86/X86AtomicRmw.h"
 #include "HighCWriter.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/ir/high/HighIntegerProjection.h"
 
 #include "llvm/Support/ErrorHandling.h"
 
@@ -212,6 +215,34 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
 
 std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
                                              int ParentPrec) {
+  if (E.Op == NdOp::BOOL_XOR)
+    return typedText(E,
+                     "((" + exprStr(*E.Operands[0]) + " != 0) != (" +
+                         exprStr(*E.Operands[1]) + " != 0))",
+                     sizeof(int32_t), true);
+  if ((E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR) && E.Type &&
+      E.Type->Kind == NdTypeKind::Int && !E.Type->IsEnum &&
+      (E.Type->Size == 1 || E.Type->Size == 2 || E.Type->Size == 4 ||
+       E.Type->Size == 8) &&
+      E.Operands.size() == 2)
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto &Unknown = E.Operands[I];
+      const auto &Known = E.Operands[1 - I];
+      if (!Unknown || !Known || !isUnknownCallOperand(Unknown.get()) ||
+          isUnknownCallOperand(Known.get()) ||
+          (Known->Kind != ExprKind::Var && Known->Kind != ExprKind::Phi &&
+           Known->Kind != ExprKind::Const) ||
+          !Known->Type || Known->Type->Size != E.Type->Size)
+        continue;
+      const std::string Value = exprStr(*Known);
+      // A forwarded load/call must keep its native evaluation and effects.
+      if (Known->Kind == ExprKind::Const || Value == varName(Known->Var))
+        return shortCircuitUnknownBits(
+            E.Op == NdOp::INT_AND, E.Type->Size * 8, typeToC(E.Type),
+            exprStr(*Unknown), Value,
+            Known->Kind == ExprKind::Const ? std::optional(Known->ConstVal)
+                                           : std::nullopt);
+    }
   auto IsZeroLike = [this](const ExprPtr &Op) {
     if (!Op)
       return false;
@@ -467,6 +498,14 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
            " : " + exprStr(*E.Operands[2]) + ")";
   }
   auto atomicMemberAddr = [&]() -> std::string {
+    if (E.SourceReturnSlotOffset) {
+      auto Address = renderX86ReturnSlotAddress(
+          MemoryIdentifiers.allocate("llvm_return_slot"));
+      if (*E.SourceReturnSlotOffset)
+        Address = "((unsigned char *)" + Address + " + " +
+                  std::to_string(*E.SourceReturnSlotOffset) + ")";
+      return Address;
+    }
     if (E.Operands.empty() || !E.Operands[0])
       return {};
     if (E.MemoryAddressSpace == NdMemoryAddressSpace::Default)
@@ -815,10 +854,24 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
   case NdOp::SUBBYTES: {
     if (const HighExpr *Call = typedCallResult(&E))
       return exprStr(*Call, ParentPrec);
-    std::string Src = exprStr(*E.Operands[0], 99);
     uint64_t ByteOff = 0;
     if (E.Operands[1]->Kind == ExprKind::Const)
       ByteOff = E.Operands[1]->ConstVal;
+    if (E.Operands[1]->Kind == ExprKind::Const && E.Type &&
+        E.Type->Kind == NdTypeKind::Int && E.Type->Size && E.Type->Size <= 8 &&
+        ByteOff < 8) {
+      const uint64_t Mask = E.Type->Size == 8
+                                ? UINT64_MAX
+                                : (uint64_t{1} << (E.Type->Size * 8)) - 1;
+      auto Source =
+          projectHighIntegerBits(E.Operands[0], Mask << (ByteOff * 8));
+      if (Source != E.Operands[0]) {
+        HighExpr Projected = E;
+        Projected.Operands[0] = std::move(Source);
+        return renderBinOp(Projected, ParentPrec);
+      }
+    }
+    std::string Src = exprStr(*E.Operands[0], 99);
     std::string Ty = typeToC(E.Type);
     if (ByteOff == 0 && E.Type && E.Type->Kind == NdTypeKind::Int &&
         !E.Type->IsEnum && E.Operands[0]->Type &&
@@ -1184,7 +1237,7 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
             DbgTy && (DbgTy->Kind == NdTypeKind::Int || DbgTy->IsEnum))
           return DbgTy;
         if (Dbg && CurrentFunc) {
-          if (auto FS = Dbg->resolveFunction(CurrentFunc->Entry); FS) {
+          if (const auto &FS = resolvedFunction(*CurrentFunc); FS) {
             const std::string Printed = copyForwardName(Raw);
             for (const auto &[PName, PTy] : FS->Params) {
               if (PName == Printed && PTy &&

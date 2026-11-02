@@ -168,7 +168,9 @@ TEST(SymMBAFactorCost, RefusesLargeSumExposedByFactorRemoval) {
     EXPECT_EQ(detail::solveStructuralFactors(C, Input, Options, Budget, Report),
               Input);
     EXPECT_EQ(C.numNodes(), Nodes);
-    EXPECT_LE(Budget.used(), 2 * (RestCount + 6));
+    // The two small products are also intersected before the exposed wide
+    // sum is refused. That bounded scan must not walk the sum's 70 children.
+    EXPECT_LE(Budget.used(), 2 * (RestCount + 6) + 8);
     EXPECT_TRUE(Report.BudgetExhausted);
   }
 }

@@ -23,12 +23,17 @@
 #ifndef NEVERD_LIFT_AARCH64_AARCH64LIFTDETAIL_H
 #define NEVERD_LIFT_AARCH64_AARCH64LIFTDETAIL_H
 
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
 
 #include <capstone/capstone.h>
 #include <optional>
 
 namespace neverd {
+
+bool liftPAuth(AArch64Lifter &L, AArch64Lifter::LiftState &S,
+               const cs_insn *Insn, const cs_aarch64 &ARM64);
+bool liftCPA(AArch64Lifter &L, AArch64Lifter::LiftState &S, const cs_insn *Insn,
+             const cs_aarch64 &ARM64);
 
 //===----------------------------------------------------------------------===//
 // Helpers shared by more than one handler translation unit

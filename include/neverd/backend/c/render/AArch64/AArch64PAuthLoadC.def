@@ -1,0 +1,35 @@
+//===- AArch64PAuthLoadC.def - Combined load C syntax -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Shared GNU C syntax retains one machine load and both completed outputs.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_PAUTH_LOAD_C_TEXT
+#error "Define NEVERD_A64_PAUTH_LOAD_C_TEXT before including this file"
+#endif
+
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCValue, "__loaded")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCBase, "__base")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCPair, "__load_pair")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCAsm, ".inst %c2")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCClobbers, "\"memory\"")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCSPAsm,
+                             "mov x14, sp\\n\\tmov sp, x16\\n\\t.inst %c2\\n\\t"
+                             "mov x16, sp\\n\\tmov sp, x14")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCSPClobbers, "\"x14\", \"memory\"")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(
+    kPAuthLoadCExpression,
+    "({{ register uint64_t {0} __asm__(\"x17\"); "
+    "register uint64_t {1} __asm__(\"x16\") = (uint64_t)({2}); "
+    "__asm__ volatile(\"{4}\" : \"=&r\"({0}), \"+r\"({1}) "
+    ": \"i\"({3}) : {5}); "
+    "(unsigned __int128){0} | ((unsigned __int128){1} << 64); })")
+NEVERD_A64_PAUTH_LOAD_C_TEXT(kPAuthLoadCStructAssignment,
+                             "{{ unsigned __int128 {0} = {1}; "
+                             "{2}.field_0 = (uint64_t){0}; "
+                             "{2}.field_1 = (uint64_t)({0} >> 64); }\n")
+
+#undef NEVERD_A64_PAUTH_LOAD_C_TEXT

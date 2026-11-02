@@ -11,10 +11,13 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <tuple>
+
 namespace neverd::emulation {
 namespace {
 constexpr uint64_t Buffer = 0x20000000;
-class AndroidSleep : public testing::TestWithParam<const char *> {
+class AndroidSleep : public testing::TestWithParam<
+                         std::tuple<const char *, ExecutionBackendKind>> {
 protected:
   std::filesystem::path Path;
   ProcessOptions Options;
@@ -23,8 +26,8 @@ protected:
     GTEST_SKIP() << "Clang and ld.lld Android fixtures unavailable";
 #else
     Path = std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
-           (std::string(GetParam()) + ".so");
-    Options.Backend = ExecutionBackendKind::Unicorn;
+           (std::string(std::get<0>(GetParam())) + ".so");
+    Options.Backend = std::get<1>(GetParam());
     ExecutionConfiguration C;
     C.Backend = Options.Backend;
     C.Architecture = GuestArchitecture::AArch64;
@@ -165,7 +168,7 @@ TEST_P(AndroidSleep,
   Options.Android->ThreadLimit = 2;
   Options.Limits.Instructions = 5000;
   Options.Android->Memory[0].Bytes.assign(8192, 0);
-  for (uint64_t Route : {0u, 1u, 2u, 3u}) {
+  for (uint64_t Route : {0u, 1u, 2u, 3u, 4u}) {
     auto R = run("sleep_busy", {Buffer, Route});
     ASSERT_EQ(R.Stop, ProcessStopReason::InstructionLimit) << R.Diagnostic;
     EXPECT_EQ(R.Instructions, 5000u);
@@ -176,7 +179,7 @@ TEST_P(AndroidSleep,
     unsigned Pending = 0;
     for (const auto &Call : R.NativeCalls)
       if (Call.Name == "nanosleep" || Call.Name == "syscall" ||
-          Call.Name == "usleep") {
+          Call.Name == "usleep" || Call.Name == "sleep") {
         EXPECT_FALSE(Call.Result);
         ++Pending;
       }
@@ -319,9 +322,87 @@ TEST_P(AndroidSleep, MicrosecondPolicyOverflowAndInactiveProviderStayPending) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(OptimizationAndPacking, AndroidSleep,
-                         testing::Values("sleep-O0-none", "sleep-O0-android",
-                                         "sleep-O0-relr", "sleep-O2-none",
-                                         "sleep-O2-android", "sleep-O2-relr"));
+TEST_P(AndroidSleep, SecondsHonorUnsignedWidthAndAPI28MaximumWait) {
+  Options.Android->Libraries["libsleep-model.so"] = {"sleep"};
+  struct Case {
+    uint64_t Input, Elapsed, Left;
+  };
+  const Case Cases[] = {{0, 0, 0},
+                        {1, 1, 0},
+                        {3, 3, 0},
+                        {0x7fffffff, 0x7fffffff, 0},
+                        {0x80000000, 0x7fffffff, 1},
+                        {0xffffffff, 0x7fffffff, 0x80000000},
+                        {0xabcdef0100000000, 0, 0},
+                        {0xabcdef0100000001, 1, 0},
+                        {UINT64_MAX, 0x7fffffff, 0x80000000}};
+  for (unsigned ThreadLimit : {1u, 2u}) {
+    Options.Android->ThreadLimit = ThreadLimit;
+    for (uint64_t Route : {0u, 1u, 3u}) {
+      for (const auto &C : Cases) {
+        SCOPED_TRACE(testing::Message()
+                     << ThreadLimit << ":" << Route << ":" << C.Input);
+        auto R = run("sleep_seconds", {C.Input, Route, Buffer});
+        ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+        EXPECT_EQ(R.ReturnValue, C.Left);
+        ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+        auto Expected = Options.Android->Memory[0].Bytes;
+        const uint64_t Values[] = {73, 4294967297 + C.Elapsed, 999999998,
+                                   4294967297 + C.Elapsed};
+        for (size_t I = 0; I < std::size(Values); ++I)
+          llvm::support::endian::write64le(Expected.data() + I * 8, Values[I]);
+        EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+        unsigned Completed = 0;
+        for (const auto &Call : R.NativeCalls) {
+          EXPECT_TRUE(Call.Result) << Call.Name;
+          if (Call.Name == "sleep") {
+            EXPECT_EQ(Call.Result, C.Left);
+            EXPECT_EQ(Call.Arguments[0],
+                      Route == 3 ? C.Input : uint32_t(C.Input));
+            ++Completed;
+          }
+        }
+        EXPECT_EQ(Completed, 1u);
+        EXPECT_TRUE(R.Services.empty());
+      }
+    }
+  }
+}
+
+TEST_P(AndroidSleep, SecondsPolicyOverflowAndInactiveProviderStayPending) {
+  auto CheckPending = [&](const ProcessResult &R, const char *Diagnostic) {
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(R.Diagnostic.find(Diagnostic), std::string::npos);
+    ASSERT_FALSE(R.NativeCalls.empty());
+    EXPECT_EQ(R.NativeCalls.back().Name, "sleep");
+    EXPECT_FALSE(R.NativeCalls.back().Result);
+    ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes, Options.Android->Memory[0].Bytes);
+  };
+  for (unsigned ThreadLimit : {1u, 2u}) {
+    Options.Android->ThreadLimit = ThreadLimit;
+    Options.LinuxTime->AdvanceOnIdle = false;
+    for (uint64_t Duration : {0u, 1u, 0xffffffffu})
+      CheckPending(run("sleep_seconds", {Duration, 0, Buffer}),
+                   "advance_on_idle");
+    Options.LinuxTime->AdvanceOnIdle = true;
+    Options.LinuxTime->Clocks[0] = {INT64_MAX, 999999999};
+    CheckPending(run("sleep_seconds", {1, 0, Buffer}), "virtual clock");
+    Options.LinuxTime->Clocks[0] = {1, 0};
+    Options.Android->Libraries["libsleep-model.so"] = {"sleep"};
+    CheckPending(run("sleep_seconds", {1, 2, Buffer}),
+                 "inactive dynamic library");
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OptimizationPackingAndBackend, AndroidSleep,
+    testing::Combine(testing::Values("sleep-O0-none", "sleep-O0-android",
+                                     "sleep-O0-relr", "sleep-O2-none",
+                                     "sleep-O2-android", "sleep-O2-relr"),
+                     testing::Values(ExecutionBackendKind::Unicorn,
+                                     ExecutionBackendKind::KVM,
+                                     ExecutionBackendKind::WHP,
+                                     ExecutionBackendKind::HVF)));
 } // namespace
 } // namespace neverd::emulation

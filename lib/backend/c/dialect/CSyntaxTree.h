@@ -247,6 +247,8 @@ struct Expr {
   llvm::SmallVector<Expr *, 2> Ops;
   /// The type a cast, sizeof, compound literal or bit cast names.
   const CType *Written = nullptr;
+  /// A cast's unevaluated GNU typeof operand, resolved by the checker.
+  Expr *TypeQuery = nullptr;
   Stmt *Body = nullptr;
   CommentList Leading;
   CommentList Trailing;
@@ -356,6 +358,8 @@ struct Decl {
   bool Static = false;
   bool Inline = false;
   bool Register = false;
+  /// GNU __auto_type: the initializer supplies the variable's value type.
+  bool Inferred = false;
   bool Noreturn = false;
   std::optional<uint64_t> AlignAs;
   /// An enumerator's value, as the checker computes it.
@@ -432,6 +436,8 @@ public:
   BinaryFormat Format = BinaryFormat::Unknown;
   TypeContext Types;
   std::vector<TopLevel> Items;
+  /// Target header declarations used for typing, not printed as source.
+  std::vector<TopLevel> HeaderDeclarations;
   /// Declarations read from elsewhere, which the nodes point into.
   std::deque<std::string> Sources;
 
@@ -443,7 +449,8 @@ private:
 
 /// Reads \p Source into \p Result.  A top-level declaration it cannot read
 /// becomes an Unread item with the reason; the rest is still read.
-void parse(llvm::StringRef Source, Tree &Result);
+void parse(llvm::StringRef Source, Tree &Result,
+           llvm::StringRef HeaderDeclarations = {});
 
 /// Reads the declarations of \p Source, which must outlive \p Nodes, with
 /// \p Nodes' types and nodes but not into its items.

@@ -18,6 +18,8 @@
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/loader/ExceptionInfo.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -498,10 +500,24 @@ bool MedLLVMEmitter::emitNativeSEH(
         RangeTargets.push_back({Marker, Role, SourceVA, Region, Boundary});
       };
 
+  // A region's block set iterates in address order, which varies from run to
+  // run. Marker names, boundary provenance and the blocks appended for
+  // returns follow the layout instead. Outer regions are placed first, so a
+  // region's set holds only these blocks when it is placed.
+  llvm::DenseMap<const llvm::BasicBlock *, size_t> LayoutIndex;
+  for (const llvm::BasicBlock &BB : LLVMFunc)
+    LayoutIndex.try_emplace(&BB, LayoutIndex.size());
+
   // Outer-first placement produces the required nesting order on a shared
   // boundary: outer.begin -> inner.begin -> body -> inner.end -> outer.end.
   for (size_t RegionIndex = 0; RegionIndex < Regions.size(); ++RegionIndex) {
     Region &R = Regions[RegionIndex];
+    llvm::SmallVector<llvm::BasicBlock *, 16> Blocks(R.Blocks.begin(),
+                                                     R.Blocks.end());
+    llvm::sort(Blocks,
+               [&](const llvm::BasicBlock *A, const llvm::BasicBlock *B) {
+                 return LayoutIndex.lookup(A) < LayoutIndex.lookup(B);
+               });
     struct EntryEdge {
       llvm::BasicBlock *Pred = nullptr;
       llvm::BasicBlock *Target = nullptr;
@@ -510,7 +526,7 @@ bool MedLLVMEmitter::emitNativeSEH(
     llvm::SmallVector<EntryEdge, 8> Entries;
     bool EntryWithoutPred = false;
     llvm::BasicBlock *FunctionEntry = &LLVMFunc.getEntryBlock();
-    for (llvm::BasicBlock *Target : R.Blocks) {
+    for (llvm::BasicBlock *Target : Blocks) {
       bool HasNormalPred = false;
       for (llvm::BasicBlock *Pred : llvm::predecessors(Target)) {
         llvm::Instruction *Term = Pred->getTerminator();
@@ -576,7 +592,7 @@ bool MedLLVMEmitter::emitNativeSEH(
     };
     llvm::SmallVector<ExitEdge, 8> Exits;
     llvm::SmallVector<llvm::ReturnInst *, 4> Returns;
-    for (llvm::BasicBlock *Source : R.Blocks) {
+    for (llvm::BasicBlock *Source : Blocks) {
       llvm::Instruction *Term = Source->getTerminator();
       if (auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(Term)) {
         Returns.push_back(Ret);

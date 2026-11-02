@@ -4,7 +4,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <cstdint>
@@ -32,8 +32,8 @@ LiftedInstruction liftX64(const std::vector<uint8_t> &Bytes) {
     return {};
   }
   DecodedInsn Insn{};
-  const int Decoded = Dec.decodeOneForLift(
-      Bytes.data(), Bytes.size(), kInstructionAddress, Insn);
+  const int Decoded = Dec.decodeOneForLift(Bytes.data(), Bytes.size(),
+                                           kInstructionAddress, Insn);
   if (Decoded != static_cast<int>(Bytes.size())) {
     ADD_FAILURE() << "failed to decode complete instruction";
     return {};
@@ -44,15 +44,12 @@ LiftedInstruction liftX64(const std::vector<uint8_t> &Bytes) {
   return Result;
 }
 
-std::vector<uint8_t> encodePair(bool Push, bool Ppx, unsigned V,
-                                unsigned B) {
+std::vector<uint8_t> encodePair(bool Push, bool Ppx, unsigned V, unsigned B) {
   return {
       0x62,
-      static_cast<uint8_t>(0x44 | 0x80 | 0x10 |
-                           ((B & 8) != 0 ? 0 : 0x20) |
+      static_cast<uint8_t>(0x44 | 0x80 | 0x10 | ((B & 8) != 0 ? 0 : 0x20) |
                            ((B & 16) != 0 ? 0x08 : 0)),
-      static_cast<uint8_t>((Ppx ? 0x80 : 0) | (((~V) & 0xf) << 3) |
-                           0x04),
+      static_cast<uint8_t>((Ppx ? 0x80 : 0) | (((~V) & 0xf) << 3) | 0x04),
       static_cast<uint8_t>(0x10 | ((V & 16) != 0 ? 0 : 0x08)),
       static_cast<uint8_t>(Push ? 0xff : 0x8f),
       static_cast<uint8_t>(0xc0 | (Push ? 0x30 : 0) | (B & 7)),
@@ -64,8 +61,8 @@ std::optional<unsigned> decodeIdX64(const std::vector<uint8_t> &Bytes) {
   if (!Dec.init(Arch::X64))
     return std::nullopt;
   DecodedInsn Insn{};
-  const int Decoded = Dec.decodeOneForLift(
-      Bytes.data(), Bytes.size(), kInstructionAddress, Insn);
+  const int Decoded = Dec.decodeOneForLift(Bytes.data(), Bytes.size(),
+                                           kInstructionAddress, Insn);
   if (Decoded != static_cast<int>(Bytes.size()))
     return std::nullopt;
   return Insn.Id;
@@ -357,14 +354,12 @@ TEST(X86APXStack, PairRegisterBankAndArchitecturalConstraintsAreExact) {
         if (Reg == 4)
           continue;
         const unsigned Partner = Reg == 31 ? 30 : 31;
-        SCOPED_TRACE(::testing::Message()
-                     << (Push ? "push" : "pop") << " ppx=" << Ppx
-                     << " reg=" << Reg);
+        SCOPED_TRACE(::testing::Message() << (Push ? "push" : "pop")
+                                          << " ppx=" << Ppx << " reg=" << Reg);
         const LiftedInstruction Pair =
             liftX64(encodePair(Push, Ppx, Reg, Partner));
-        EXPECT_EQ(Pair.Id,
-                  Push ? (Ppx ? X86_INS_PUSH2P : X86_INS_PUSH2)
-                       : (Ppx ? X86_INS_POP2P : X86_INS_POP2));
+        EXPECT_EQ(Pair.Id, Push ? (Ppx ? X86_INS_PUSH2P : X86_INS_PUSH2)
+                                : (Ppx ? X86_INS_POP2P : X86_INS_POP2));
         EXPECT_FALSE(Pair.Ops.empty());
       }
     }

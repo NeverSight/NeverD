@@ -13,7 +13,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <cstdint>
@@ -342,6 +342,48 @@ TEST(MedStackDelta, FloatingResultNormalizationRebuildsMovedDefinitions) {
     ASSERT_EQ(Last.TargetAddr, Indirect ? 0x5004u : 0x4000u);
     ASSERT_EQ(Last.Args.size(), 1u);
     EXPECT_EQ(Last.Args.front(), MedVar::makeConst(42, 4));
+  }
+}
+
+TEST(MedStackDelta, SharedAnswersPreserveTheDepthOfEachQuery) {
+  for (const int FirstDepth : {0, 1}) {
+    MedFunc F;
+    const MedVar Last = joinChain(F, 64, {16, 16});
+    MedDefSiteIndex Defs(F);
+    const auto &TRI = getTargetRegInfo(Arch::X64);
+    const auto Expected = [](int Depth) -> std::optional<int64_t> {
+      return Depth == 0 ? std::optional<int64_t>(-1024) : std::nullopt;
+    };
+    EXPECT_EQ(stackPtrDelta(F, TRI, Last, FirstDepth, &Defs),
+              Expected(FirstDepth));
+    for (const int Depth : {0, 1, 0, 1})
+      EXPECT_EQ(stackPtrDelta(F, TRI, Last, Depth, &Defs), Expected(Depth));
+  }
+}
+
+TEST(MedStackDelta, InvalidationRetiresAnswersWithTheirDefinitions) {
+  MedFunc F;
+  const MedVar Last = joinChain(F, 3, {16, 16});
+  MedDefSiteIndex Defs(F);
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  EXPECT_EQ(stackPtrDelta(F, TRI, Last, 0, &Defs), std::optional<int64_t>(-48));
+  // One changed arm no longer agrees with the other path through the join.
+  F.Blocks[1].Ops[0].Inputs[1] = MedVar::makeConst(8, 8);
+  Defs.invalidate();
+  EXPECT_EQ(stackPtrDelta(F, TRI, Last, 0, &Defs), std::nullopt);
+}
+
+TEST(MedStackDelta, SharedAnswersKeepTheirStackPointerReference) {
+  MedFunc F;
+  const MedVar Last = joinChain(F, 3, {16, 16});
+  MedDefSiteIndex Defs(F);
+  const auto &X64 = getTargetRegInfo(Arch::X64);
+  const auto &A64 = getTargetRegInfo(Arch::AArch64);
+  ASSERT_NE(X64.StackPointer, A64.StackPointer);
+  for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+    EXPECT_EQ(stackPtrDelta(F, X64, Last, 0, &Defs),
+              std::optional<int64_t>(-48));
+    EXPECT_EQ(stackPtrDelta(F, A64, Last, 0, &Defs), std::nullopt);
   }
 }
 

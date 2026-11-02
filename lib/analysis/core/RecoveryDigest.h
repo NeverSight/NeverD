@@ -55,14 +55,15 @@ public:
     if (B.Immediate)
       number(*B.Immediate);
   }
-  void operation(const LowOp &Op) {
+  /// Binds the first \p InputSlots stored input slots, operands or not.
+  void operation(const LowOp &Op, size_t InputSlots) {
     number(static_cast<unsigned>(Op.Opcode));
     number(Op.Addr);
     number(Op.Seq);
     variable(Op.Output);
     number(Op.NumInputs);
-    for (const auto &V : Op.Inputs)
-      variable(V);
+    for (size_t I = 0; I != InputSlots; ++I)
+      variable(Op.Inputs[I]);
     number(static_cast<unsigned>(Op.MemoryOrdering));
     number(static_cast<unsigned>(Op.MemoryAddressSpace));
   }

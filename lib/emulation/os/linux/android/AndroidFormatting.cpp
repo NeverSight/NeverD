@@ -15,9 +15,21 @@ class Bionic::StringFormatter {
 public:
   StringFormatter(Bionic &Model, const NativeCallEvent &Call)
       : Model(Model), Call(Call), Remaining(Model.Options.MemoryLimit),
-        Bounded(Call.Name == symbol::Snprintf ||
+        CheckedSnprintf(Call.Name == symbol::SnprintfChk ||
+                        Call.Name == symbol::VsnprintfChk),
+        CheckedSprintf(Call.Name == symbol::SprintfChk ||
+                       Call.Name == symbol::VsprintfChk),
+        Bounded(CheckedSnprintf || Call.Name == symbol::Snprintf ||
                 Call.Name == symbol::Vsnprintf),
-        Arguments(Model, Call, Bounded ? 3 : 2, Remaining) {}
+        HasVAList(Call.Name == symbol::Vsnprintf ||
+                  Call.Name == symbol::Vsprintf ||
+                  Call.Name == symbol::VsnprintfChk ||
+                  Call.Name == symbol::VsprintfChk),
+        FormatArgument(CheckedSnprintf  ? 4
+                       : CheckedSprintf ? 3
+                       : Bounded        ? 2
+                                        : 1),
+        Arguments(Model, Call, FormatArgument + 1, Remaining) {}
 
   llvm::Expected<uint64_t> run();
   bool isUnsupported() const { return Unsupported; }
@@ -28,7 +40,8 @@ private:
   uint64_t Remaining, Capacity = 0, Count = 0;
   std::vector<uint8_t> Output;
   bool Unsupported = false;
-  const bool Bounded;
+  const bool CheckedSnprintf, CheckedSprintf, Bounded, HasVAList;
+  const unsigned FormatArgument;
   ArgumentReader Arguments;
   static constexpr uint64_t MaxCount = std::numeric_limits<int32_t>::max();
 
@@ -272,22 +285,29 @@ llvm::Error Bionic::StringFormatter::render(llvm::StringRef Format) {
 }
 
 llvm::Expected<uint64_t> Bionic::StringFormatter::run() {
-  const bool HasVAList =
-      Call.Name == symbol::Vsnprintf || Call.Name == symbol::Vsprintf;
   const auto &A = Call.Arguments;
-  Capacity = Bounded ? A[1] : MaxCount + 1;
+  Capacity = CheckedSprintf ? A[2] : Bounded ? A[1] : MaxCount + 1;
+  // API 28 ignores flags. The snprintf object guard precedes every guest
+  // read, including format and va_list admission; size_t stays full-width.
+  if (CheckedSnprintf && Capacity > A[3])
+    return unsupported(diagnostic::FormatFortify);
   // Large n has version-specific FILE counter behavior in Android 9. Do not
-  // import host behavior or promise the overflow/fortify failure path.
-  if (Bounded && Capacity > MaxCount)
+  // import host behavior, including checked sprintf's SIZE_MAX -> SSIZE_MAX
+  // mapping, or promise the overflow/fortify failure path.
+  if ((Bounded || CheckedSprintf) && Capacity > MaxCount)
     return unsupported(diagnostic::FormatCapacity);
-  auto Format = text(A[Bounded ? 2 : 1], UINT64_MAX);
+  auto Format = text(A[FormatArgument], UINT64_MAX);
   if (!Format)
     return Format.takeError();
   if (HasVAList)
-    if (auto E = Arguments.initializeVAList(A[Bounded ? 3 : 2]))
+    if (auto E = Arguments.initializeVAList(A[FormatArgument + 1]))
       return std::move(E);
   if (auto E = render(*Format))
     return std::move(E);
+  // A checked sprintf must fit its final NUL. Stop before publishing the
+  // retained prefix: Bionic's partial writes and abort are not modeled.
+  if (CheckedSprintf && Count >= Capacity)
+    return unsupported(diagnostic::FormatFortify);
   if (Capacity) {
     Output.push_back(0);
     if (auto E = Model.access(A[0], Output.size(), Write))

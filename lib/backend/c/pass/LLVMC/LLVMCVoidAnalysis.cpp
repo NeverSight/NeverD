@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "LLVMCFrameAliases.h"
+
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/c/pass/LLVMC/LLVMCPasses.h"
 
@@ -39,7 +41,9 @@ void analyzeVoidDeadChain(LLVMCAnalysisState &State, llvm::Function &Fn) {
     auto *Inst = llvm::dyn_cast<llvm::Instruction>(V);
     if (!Inst)
       return;
-    if (llvm::isa<llvm::CallInst>(Inst))
+    // Discarding a return carrier does not discard memory effects or control
+    // flow. Share the same eligibility gate as ordinary dead-value cleanup.
+    if (!llvmc::canDropDeadFrameValue(*Inst))
       return;
     bool AllDead = true;
     for (auto *U : Inst->users()) {

@@ -1,6 +1,6 @@
 **Lingue**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: 0e93112bfc87bdf7cfa9e280f8b7a9155214ae36187f32d8dd473c6f17fd92d3 -->
+<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
 
 # Contribuire a NeverD
 
@@ -155,7 +155,16 @@ fra batch, controlla stack da 8 MiB e non compila/carica `tbbmalloc` né il prox
 con stack grande riusano il margine disponibile; gli altri ricevono un coordinatore nativo.
 Host che eseguono fork dopo il primo uso o scaricano dinamicamente l’SDK devono usare thread
 nativi (`NEVERD_ENABLE_TBB=OFF`): questi cicli di vita non sono supportati dallo scheduler
-persistente. Non finalizza lo scheduler TBB condiviso dell’host. Distribuire la DLL/libreria condivisa runtime se abilitato.
+persistente. oneTBB viene collegato staticamente al nucleo condiviso e i suoi simboli
+restano privati a quel nucleo. Le chiamate ai componenti dalla CLI e le richieste al worker
+della GUI usano lo stesso scheduler; non viene distribuita alcuna DLL o libreria condivisa
+TBB. I target che collegano `neverd_shared` selezionano automaticamente lo scheduler
+condiviso. I client che accedono all’SDK tramite un altro target e collegano anche archivi
+di componenti devono usare `neverd_use_shared_task_scheduler` sul target finale.
+Gli strumenti di componenti autonomi mantengono il proprio runtime.
+Questa integrazione vincolata evita più scheduler NeverD nello stesso processo;
+il progetto upstream continua a considerare le [build statiche di oneTBB](https://uxlfoundation.github.io/oneTBB/main/intro/static_linking.html)
+non supportate e ne sconsiglia l’uso generale.
 
 Vedere [validazione delle accelerazioni](../testing.md#acceleration-libraries) per test nativi, confronti e limiti di compatibilità.
 
@@ -180,6 +189,11 @@ build universali devono usare la build LLVM locale predefinita. Le
 personalizzazioni avanzate, come `NEVERD_LLVM_PREBUILT_TAG`, URL del mirror,
 directory della cache e checksum esplicito, sono documentate in
 `cmake/NeverDLLVMPrebuilt.cmake`.
+
+Le correzioni LLVM appartengono al [fork LLVM NeverSight](https://github.com/NeverSight/llvm-project).
+Eseguirne commit e merge nel fork, poi aggiornare la revisione del sottomodulo LLVM di NeverD.
+La compilazione integrata compila direttamente questi sorgenti; non aggiungere file patch LLVM o copie modificate nella directory di build di NeverD.
+I pacchetti precompilati devono essere ricostruiti dal fork corretto per qualificare lo stesso comportamento.
 
 <!-- i18n-section: workflow -->
 ## Flusso di branch e pull request

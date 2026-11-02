@@ -20,7 +20,9 @@
 #include "neverd/sbf/image/SBFProgramImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <array>
 #include <cstddef>
@@ -28,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace neverd::sbf {
@@ -94,6 +97,9 @@ public:
   /// a program point reachable by two paths can claim.
   void meet(const MemoryModel &Other);
 
+  /// Include every retained byte and its address in a contextual-summary key.
+  void profile(llvm::FoldingSetNodeID &ID) const;
+
   bool operator==(const MemoryModel &Other) const;
   bool operator!=(const MemoryModel &Other) const { return !(*this == Other); }
 
@@ -104,11 +110,150 @@ private:
   uint64_t TrackedBytes = 0;
 };
 
+/// Inclusive unsigned interval. Scalar/capture bounds do not wrap; may-write
+/// intervals can wrap (Lower > Upper) to preserve modular address arithmetic.
+struct UnsignedValueRange {
+  uint64_t Lower = 0;
+  uint64_t Upper = UINT64_MAX;
+  bool operator==(const UnsignedValueRange &) const = default;
+};
+
+/// Bounds of immutable, analysis-local captured values. Distinct entries may
+/// alias: capture identity proves equality only, never allocation freshness.
+using SymbolicAddressSpace = std::vector<UnsignedValueRange>;
+
+RegisterValue unsignedRangeValue(UnsignedValueRange Range);
+std::optional<UnsignedValueRange>
+unsignedValueRange(const RegisterValue &Value,
+                   const SymbolicAddressSpace *Addresses = nullptr);
+/// Includes wrapped address intervals; unlike unsignedValueRange it does not
+/// widen an affine address merely because the displacement can wrap.
+std::optional<UnsignedValueRange>
+addressValueRange(const RegisterValue &Value,
+                  const SymbolicAddressSpace *Addresses = nullptr);
+/// Normalize an exact/affine address into a typed memory key. Unknown ranges
+/// have no identity and cannot name a cell.
+std::optional<RegisterValue> memoryAddress(const RegisterValue &Base,
+                                           int64_t Displacement = 0);
+
+/// Full-width stored values, retaining address provenance independently of the
+/// descriptor byte view. In particular, a frame-relative pointer is never a
+/// literal integer merely because its analysis coordinates were serialized.
+enum class MemoryCoordinate : uint8_t { Absolute, FrameRelative };
+
+/// A complete finite disjunction used by the optional contextual analysis.
+/// Empty denotes unknown, not an unreachable state. Ordinary must-analysis
+/// still reads only singleton values and uses the existing equality meet.
+class ProvenValueSet {
+public:
+  ProvenValueSet() = default;
+  ProvenValueSet(const RegisterValue &Value);
+  RegisterValue singleton() const;
+  llvm::ArrayRef<RegisterValue> values() const { return Values; }
+  bool unknown() const { return Values.empty(); }
+  void join(const ProvenValueSet &Other);
+  void profile(llvm::FoldingSetNodeID &ID) const;
+  uint64_t allocatedBytes() const;
+  bool operator==(const ProvenValueSet &) const = default;
+
+private:
+  llvm::SmallVector<RegisterValue, 1> Values;
+};
+
+/// Immutable coordinate configuration shared by every state of one analysis.
+struct StoredMemoryCoordinates {
+  std::optional<uint64_t> FrameTranslationLimit;
+  std::shared_ptr<const SymbolicAddressSpace> Addresses;
+};
+
+class StoredRegisterMemory {
+public:
+  void setCoordinates(std::shared_ptr<const StoredMemoryCoordinates> Context) {
+    Coordinates = std::move(Context);
+  }
+  void setSymbolicAddresses(std::shared_ptr<const SymbolicAddressSpace> Space);
+  const std::shared_ptr<const SymbolicAddressSpace> &symbolicAddresses() const;
+  std::optional<uint64_t> frameTranslationBound() const;
+  /// Whether this window can hold typed facts in a scratch region. Frame
+  /// coordinates may need translation; this proves neither validity nor
+  /// separation of a runtime address.
+  bool canModelRange(const RegisterValue &Address, uint64_t Size) const;
+  void writeValues(const RegisterValue &Address, ProvenValueSet Value);
+  const ProvenValueSet &readValues(const RegisterValue &Address) const;
+  void invalidate(const RegisterValue &Address, uint64_t Size);
+  void copyFrom(const StoredRegisterMemory &Source,
+                const RegisterValue &SourceAddress,
+                const RegisterValue &Destination, uint64_t Size);
+  /// Rebase captured values at a call boundary, or widen them to ranges at a
+  /// loop boundary. Dropping an address identity also drops its keyed cells.
+  void transformSymbols(llvm::function_ref<RegisterValue(RegisterValue)> Map);
+  void visitCells(
+      llvm::function_ref<void(const RegisterValue &, const ProvenValueSet &)>
+          Visit) const;
+  /// Overlay simultaneous must-facts after the caller has applied may-writes.
+  void includeCells(const StoredRegisterMemory &Other,
+                    llvm::function_ref<bool(const RegisterValue &)> Include);
+  /// Frame coordinates denote the same addresses translated by an unknown
+  /// delta in [0, Limit]. Only an established automatic-frame invariant may
+  /// supply this limit; unset coordinates retain conservative aliasing.
+  void setFrameTranslationLimit(std::optional<uint64_t> Limit);
+  /// The store/copy owner must first validate the complete scratch range.
+  void write(va_t Address, const RegisterValue &Value,
+             MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  void writeValues(va_t Address, ProvenValueSet Value,
+                   MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  /// A write in either coordinate system may alias any value in the other:
+  /// the current function's absolute call depth is not known. A validated
+  /// translation bound can exclude overlap, but cannot equate a frame with
+  /// one absolute address. Unbounded coordinates invalidate conservatively.
+  void invalidate(va_t Address, uint64_t Size,
+                  MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  void invalidateFrom(va_t Address,
+                      MemoryCoordinate Coordinate = MemoryCoordinate::Absolute);
+  /// Keep only absolute values independent of a symbolic frame anchor.
+  void discardFrameCoordinates();
+  /// Translate typed frame keys and values without shifting literal VM bits.
+  /// Leave the complete memory unchanged if any translation is unrepresentable.
+  bool translateFrameCoordinates(int64_t Delta);
+  void clear() { Values.clear(); }
+  bool empty() const { return Values.empty(); }
+  uint64_t retainedByteEstimate() const;
+  RegisterValue
+  read(va_t Address,
+       MemoryCoordinate Coordinate = MemoryCoordinate::Absolute) const;
+  const ProvenValueSet &
+  readValues(va_t Address,
+             MemoryCoordinate Coordinate = MemoryCoordinate::Absolute) const;
+  void meet(const StoredRegisterMemory &Other);
+  /// Contextual union of complete alternatives at cells present on both paths.
+  void joinValues(const StoredRegisterMemory &Other);
+  void profile(llvm::FoldingSetNodeID &ID) const;
+  size_t size() const { return Values.size(); }
+  void
+  copyFrom(const StoredRegisterMemory &Source, va_t SourceAddress,
+           va_t Destination, uint64_t Size,
+           MemoryCoordinate SourceCoordinate = MemoryCoordinate::Absolute,
+           MemoryCoordinate DestinationCoordinate = MemoryCoordinate::Absolute);
+  bool operator==(const StoredRegisterMemory &Other) const;
+
+private:
+  // Coordinate 0 is absolute, 1 is frame-relative, and N+2 denotes capture N.
+  // The second word is a numeric coordinate or a signed capture displacement.
+  std::map<std::pair<uint64_t, uint64_t>, ProvenValueSet> Values;
+  std::shared_ptr<const StoredMemoryCoordinates> Coordinates;
+};
+
 /// What the register fixed point does not carry: the scratch bytes a program
 /// has written.
 struct ScratchState {
   MemoryModel Memory;
+  StoredRegisterMemory Values;
 
+  bool empty() const { return Memory.empty() && Values.empty(); }
+  uint64_t retainedByteEstimate() const;
+  void clear();
+  void invalidate(va_t Address, uint64_t Size);
+  void invalidateFrom(va_t Address);
   void meet(const ScratchState &Other);
   bool operator==(const ScratchState &Other) const;
   bool operator!=(const ScratchState &Other) const { return !(*this == Other); }
@@ -137,23 +282,43 @@ private:
   std::vector<const MedInstruction *> BySlot;
 };
 
+/// Number of leading registers whose values a call can replace. A returning
+/// runtime syscall replaces only r0; its five arguments are passed by value.
+/// Calls that can execute guest code retain the conservative r0-r5 clobber.
+constexpr unsigned callClobberedRegisterCount(CallKind Kind) {
+  if (Kind == CallKind::None)
+    return 0;
+  return Kind == CallKind::Syscall ? kFirstArgumentRegister
+                                   : kFirstCalleeSavedRegister;
+}
+
 /// Apply one instruction's effect to \p State.
 ///
 /// This is the only transfer function of the SBF value lattice. The block fixed
 /// point in the analyzer and any per-instruction replay both call it, so a
 /// recovered value can never contradict the analyzer's block summary.
+/// Image is the immutable, relocated VM image. Without an explicit scratch
+/// context, only data-visible image loads can produce constants. A contextual
+/// analysis can additionally supply proven full-width stored register values;
+/// pointer provenance is retained and descriptor bytes never authorize a fold.
 void applyRegisterTransfer(const MedInstruction &Instruction,
-                           RegisterState &State);
+                           RegisterState &State, const ProgramImage &Image,
+                           const StoredRegisterMemory *Scratch = nullptr);
+
+enum class ScratchLoadPolicy : uint8_t { Ignore, ProvenValues };
 
 /// Apply one instruction's effect to registers and to scratch memory.
 ///
 /// This is \c applyRegisterTransfer plus the memory effects the register
 /// lattice alone cannot express, so the register half of the result is the
-/// same value the analyzer's fixed point computes. \p Image supplies the bytes
+/// same value the analyzer's fixed point computes with the default Ignore
+/// policy. ProvenValues is for a distinct, caller-seeded context, not replay of
+/// ordinary block summaries. \p Image supplies the bytes
 /// a copy can be following, which is how a payload copied out of read-only
 /// data becomes readable at the invocation that sends it.
 void applyTransfer(const MedInstruction &Instruction, MachineState &State,
-                   const ProgramImage &Image);
+                   const ProgramImage &Image,
+                   ScratchLoadPolicy Loads = ScratchLoadPolicy::Ignore);
 
 /// Whether Solana recovery reads scratch bytes at this runtime call. CPI and
 /// PDA decoding dereference program-built descriptors; other recovery
@@ -180,9 +345,14 @@ public:
     size_t SuccessorIndexEntryCount = 0;
   };
 
-  ScratchFlow(const SBFProgram &Program, const MedInstructionIndex &Index);
+  ScratchFlow(const SBFProgram &Program, const MedInstructionIndex &Index,
+              ScratchLoadPolicy Loads = ScratchLoadPolicy::Ignore);
 
   const ScratchState &entryState(size_t BlockID) const;
+  /// Joint register/scratch must-facts when ProvenValues was requested. A
+  /// widened or unreached state returns nullptr; callers then use the ordinary
+  /// block inputs and replay local stores rather than partial solver output.
+  const RegisterState *entryRegisters(size_t BlockID) const;
   const Statistics &statistics() const { return Stats; }
 
 private:
@@ -190,6 +360,7 @@ private:
   /// object, so the storage scales with distinct scratch mutations rather than
   /// with the program's block count.
   std::vector<std::shared_ptr<const ScratchState>> Entry;
+  std::vector<RegisterState> RegisterEntries;
   std::shared_ptr<const ScratchState> Empty =
       std::make_shared<const ScratchState>();
   ScratchState Unreached;

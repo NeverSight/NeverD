@@ -7,9 +7,9 @@
 /// Bind runtime thread fields to source loads and actual generated addresses.
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
 #include "neverd/backend/llvm/RegistrationFrameStores.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/med/MedIR.h"
 

@@ -1,7 +1,7 @@
 #include "NeverDLiftFixture.h"
 
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 class AArch64_WSP : public NeverDLiftTest {
 protected:
@@ -13,9 +13,7 @@ protected:
   }
 };
 
-static fs::path wspObj() {
-  return fs::path(TEST_OBJ_DIR) / "test_wsp_a64.o";
-}
+static fs::path wspObj() { return fs::path(TEST_OBJ_DIR) / "test_wsp_a64.o"; }
 
 TEST_F(AArch64_WSP, MapsWSPAsZeroExtendingSPSubregister) {
   auto WSP = neverd::mapCapstoneReg(AARCH64_REG_WSP);
@@ -33,8 +31,7 @@ TEST_F(AArch64_WSP, LiftPreservesWSPWriteAndZeroExtension) {
   ASSERT_EQ(Low.exitCode, 0) << Low.err;
   EXPECT_NE(Low.out.find("COPY reg:0xF8:4 reg:0xF8:4"), std::string::npos)
       << Low.out;
-  EXPECT_NE(Low.out.find("INTRINSIC reg:0xF8:8"), std::string::npos)
-      << Low.out;
+  EXPECT_NE(Low.out.find("INTRINSIC reg:0xF8:8"), std::string::npos) << Low.out;
 
   auto LLVM = liftToLLVMIR(wspObj());
   ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;

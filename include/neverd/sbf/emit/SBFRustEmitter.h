@@ -8,6 +8,7 @@
 #define NEVERD_SBF_EMIT_SBFRUSTEMITTER_H
 
 #include "neverd/sbf/SBFIR.h"
+#include "neverd/sbf/emit/SBFSourceLimits.h"
 
 #include "llvm/Support/Error.h"
 
@@ -19,6 +20,7 @@ struct RustEmitterOptions {
   std::string FunctionName = kEntryFunctionName.str();
   bool IncludeAnalysisComments = true;
   bool PreferStructuredControlFlow = true;
+  bool PartitionDispatcher = kPartitionDispatcherByDefault;
 };
 
 llvm::Expected<std::string> emitRust(const SBFProgram &Program,

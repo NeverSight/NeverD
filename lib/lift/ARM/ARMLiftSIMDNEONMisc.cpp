@@ -14,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -25,8 +25,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONMisc(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                      const cs_arm &ARM) {
+bool liftSIMDNEONMisc(ARMLifter &L, ARMLifter::LiftState &S,
+                      const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // NEON pairwise min/max: d[i]=op(a[2i],a[2i+1]), d[N/2+i]=op(b[2i],b[2i+1])
   case ARM_INS_VPMAX:

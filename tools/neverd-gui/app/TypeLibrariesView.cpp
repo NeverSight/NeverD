@@ -7,7 +7,9 @@
 #include "TypeLibrariesView.h"
 
 #include "Icons.h"
+#include "ModelessDialog.h"
 #include "Session.h"
+#include "ShortcutHint.h"
 #include "ShrinkableRow.h"
 
 #include <QDialog>
@@ -45,22 +47,23 @@ TypeLibrariesView::TypeLibrariesView(Session &session, QWidget *parent)
   auto *commands = new QWidget(this);
   auto *commandLayout = new QHBoxLayout(commands);
   commandLayout->setContentsMargins(0, 0, 0, 0);
+  const QKeySequence addKey(Qt::Key_Insert);
+  const QKeySequence removeKey(QKeySequence::Delete);
   const auto commandButton = [&](const char *iconName, const QString &text,
                                  const QKeySequence &key) {
     auto *button = new QToolButton(commands);
     button->setIcon(icon(QString::fromLatin1(iconName)));
     button->setToolTip(QStringLiteral("%1 (%2)").arg(
         text, key.toString(QKeySequence::NativeText)));
+    setShortcutHint(*button, key);
     button->setAutoRaise(true);
     commandLayout->addWidget(button);
     return button;
   };
-  add_ = commandButton("local_types_add", tr("Add a type library"),
-                       QKeySequence(Qt::Key_Insert));
+  add_ = commandButton("local_types_add", tr("Add a type library"), addKey);
   add_->setObjectName(QStringLiteral("typeLibrariesAdd"));
-  remove_ =
-      commandButton("local_types_delete", tr("Leave the selected library out"),
-                    QKeySequence(QKeySequence::Delete));
+  remove_ = commandButton("local_types_delete",
+                          tr("Leave the selected library out"), removeKey);
   remove_->setObjectName(QStringLiteral("typeLibrariesRemove"));
   commandLayout->addStretch(1);
   makeRowShrinkable(*commands);
@@ -90,24 +93,27 @@ TypeLibrariesView::TypeLibrariesView(Session &session, QWidget *parent)
           &TypeLibrariesView::removeLibrary);
   // IDA's keys of its list windows: Ins adds, Del removes.
   for (const auto &[key, slot] :
-       {std::pair(QKeySequence(Qt::Key_Insert), &TypeLibrariesView::addLibrary),
-        std::pair(QKeySequence(QKeySequence::Delete),
-                  &TypeLibrariesView::removeLibrary)}) {
+       {std::pair(addKey, &TypeLibrariesView::addLibrary),
+        std::pair(removeKey, &TypeLibrariesView::removeLibrary)}) {
     auto *shortcut = new QShortcut(key, table_);
     shortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(shortcut, &QShortcut::activated, this, slot);
   }
   connect(table_, &QTreeWidget::customContextMenuRequested, this,
-          [this](const QPoint &point) {
+          [this, addKey, removeKey](const QPoint &point) {
             QMenu menu(this);
-            menu.addAction(icon(QStringLiteral("local_types_add")),
-                           tr("Add a type library..."), this,
-                           &TypeLibrariesView::addLibrary)
-                ->setEnabled(add_->isEnabled());
-            menu.addAction(icon(QStringLiteral("local_types_delete")),
-                           tr("Leave the library out"), this,
-                           &TypeLibrariesView::removeLibrary)
-                ->setEnabled(remove_->isEnabled());
+            const auto item = [&](QToolButton *button, const QString &text,
+                                  const QKeySequence &key, auto slot) {
+              auto *action = menu.addAction(button->icon(), text, this, slot);
+              action->setShortcut(key);
+              action->setShortcutContext(Qt::WidgetShortcut);
+              action->setShortcutVisibleInContextMenu(true);
+              action->setEnabled(button->isEnabled());
+            };
+            item(add_, tr("Add a type library..."), addKey,
+                 &TypeLibrariesView::addLibrary);
+            item(remove_, tr("Leave the library out"), removeKey,
+                 &TypeLibrariesView::removeLibrary);
             menu.exec(table_->viewport()->mapToGlobal(point));
           });
   connect(table_, &QTreeWidget::currentItemChanged, this,
@@ -116,6 +122,8 @@ TypeLibrariesView::TypeLibrariesView(Session &session, QWidget *parent)
   connect(&session_, &Session::revisionChanged, this,
           &TypeLibrariesView::reload);
   connect(&session_, &Session::unloaded, this, &TypeLibrariesView::reload);
+  // The first catalogue arrives asynchronously; no choice is available yet.
+  updateButtons();
   reload();
 }
 
@@ -244,13 +252,15 @@ void TypeLibrariesView::addLibrary() {
     return;
   // The libraries whose records lay out as the program's that join none of
   // its types now: the image's left out among them.
-  QDialog dialog(this);
-  dialog.setObjectName(QStringLiteral("addTypeLibraryDialog"));
-  dialog.setWindowTitle(tr("Add a Type Library"));
-  auto *layout = new QVBoxLayout(&dialog);
+  const auto epoch = session_.epoch();
+  const auto revision = session_.revision();
+  auto *dialog = new QDialog(this);
+  dialog->setObjectName(QStringLiteral("addTypeLibraryDialog"));
+  dialog->setWindowTitle(tr("Add a Type Library"));
+  auto *layout = new QVBoxLayout(dialog);
   layout->addWidget(new QLabel(
-      tr("Libraries whose records lay out as the program's:"), &dialog));
-  auto *choices = new QTreeWidget(&dialog);
+      tr("Libraries whose records lay out as the program's:"), dialog));
+  auto *choices = new QTreeWidget(dialog);
   choices->setObjectName(QStringLiteral("typeLibraryChoices"));
   choices->setColumnCount(3);
   choices->setHeaderLabels({tr("Library"), tr("Data model"), tr("Record ABI")});
@@ -271,20 +281,25 @@ void TypeLibrariesView::addLibrary() {
   choices->header()->resizeSections(QHeaderView::ResizeToContents);
   layout->addWidget(choices, 1);
   auto *buttons = new QDialogButtonBox(
-      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
   buttons->button(QDialogButtonBox::Ok)->setText(tr("Add"));
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  connect(choices, &QTreeWidget::itemActivated, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+  connect(choices, &QTreeWidget::itemActivated, dialog, &QDialog::accept);
   layout->addWidget(buttons);
-  if (dialog.exec() != QDialog::Accepted || !choices->currentItem())
-    return;
-  const QString name = choices->currentItem()->text(0);
-  QStringList added = added_, removed = removed_;
-  // One of the image's the user left out joins again as it did.
-  if (!removed.removeAll(name))
-    added.push_back(name);
-  choose(added, removed);
+  connect(&session_, &Session::revisionChanged, dialog, &QDialog::reject);
+  connect(dialog, &QDialog::accepted, this, [this, choices, epoch, revision] {
+    if (!choices->currentItem() || !session_.loaded() ||
+        session_.epoch() != epoch || session_.revision() != revision)
+      return;
+    const QString name = choices->currentItem()->text(0);
+    QStringList added = added_, removed = removed_;
+    // One of the image's libraries the user left out joins again.
+    if (!removed.removeAll(name))
+      added.push_back(name);
+    choose(added, removed);
+  });
+  showModelessDialog(dialog, this, &session_);
 }
 
 void TypeLibrariesView::removeLibrary() {

@@ -1,0 +1,29 @@
+//===- AArch64CallAbiFixtures.def - Scalar call ABI checks ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent scalar interface widths and indirect-call observations.
+//===----------------------------------------------------------------------===//
+
+#ifndef CALL_ABI_VALUE
+#define CALL_ABI_VALUE(Type, Name, Value)
+#endif
+#ifndef CALL_ABI_TEXT
+#define CALL_ABI_TEXT(Name, Text)
+#endif
+
+CALL_ABI_VALUE(unsigned, kCallABIDoubleBits, 64)
+CALL_ABI_VALUE(unsigned, kCallABIFPParameter, 1)
+CALL_ABI_VALUE(unsigned, kCallABIParameters, 2)
+CALL_ABI_VALUE(unsigned, kCallABICallbackParameters, 1)
+CALL_ABI_TEXT(kCallABIIndirectDouble, "indirect_double_call")
+CALL_ABI_TEXT(kCallABIVectorCall, "call <2 x i64> %")
+CALL_ABI_TEXT(kCallABIVectorArgument, "(<2 x i64>")
+CALL_ABI_TEXT(kCallABIPointerArgument, "i64 %arg0")
+CALL_ABI_TEXT(kCallABIScalarReturn, "ret double ")
+CALL_ABI_TEXT(kCallABIModuleStart, "; ModuleID")
+
+#undef CALL_ABI_TEXT
+#undef CALL_ABI_VALUE

@@ -14,7 +14,7 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExceptionInfo.h"

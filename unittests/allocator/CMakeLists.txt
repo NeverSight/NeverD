@@ -60,9 +60,13 @@ if(WIN32 AND NEVERD_MIMALLOC_ENABLED)
 endif()
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 add_test(NAME NeverDMimallocConfigure
-  COMMAND "${Python3_EXECUTABLE}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/tests/test_mimalloc_configure.py")
-set_tests_properties(NeverDMimallocConfigure PROPERTIES LABELS NeverDAllocatorTests TIMEOUT 120)
+  COMMAND "${Python3_EXECUTABLE}" -u
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/tests/test_mimalloc_configure.py" -v)
+# Keep nested policy fixtures on the selected generator. Otherwise Windows
+# repeats platform-default generator discovery for every configure-only case.
+set_tests_properties(NeverDMimallocConfigure PROPERTIES
+  LABELS NeverDAllocatorTests TIMEOUT 120
+  ENVIRONMENT "CMAKE_GENERATOR=${CMAKE_GENERATOR}")
 
 if(WIN32 AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   # The standalone fixture also checks relocation of the installed runtime.

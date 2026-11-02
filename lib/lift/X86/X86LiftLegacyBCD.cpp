@@ -14,8 +14,9 @@
 
 #include "X86LiftDetail.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -167,9 +168,9 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       uint16_t Sz = static_cast<uint16_t>(X86.operands[0].size);
       if (Sz != 2 && Sz != 4)
         Sz = 4;
-      S.emitIntrinsic(Intrinsic::Bound, NdVar(),
-                      {NdVar::reg(Idx.Offset, Sz),
-                       S.computeEA(X86.operands[1])});
+      S.emitIntrinsic(
+          Intrinsic::Bound, NdVar(),
+          {NdVar::reg(Idx.Offset, Sz), S.computeEA(X86.operands[1])});
     } else {
       S.emitIntrinsic(Intrinsic::Bound);
     }
@@ -188,19 +189,15 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // LDS/LES/LSS/LFS/LGS — load far pointer. Approximate as COPY.
+  // A far-pointer load also validates and installs a segment descriptor.
+  // A scalar COPY cannot preserve the selector and hidden descriptor state
+  // or the fault-before-publication boundary.
   case X86_INS_LDS:
   case X86_INS_LES:
   case X86_INS_LSS:
   case X86_INS_LFS:
-  case X86_INS_LGS: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
-    break;
-  }
+  case X86_INS_LGS:
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
   default:
     return false;

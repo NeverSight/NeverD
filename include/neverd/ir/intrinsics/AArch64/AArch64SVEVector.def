@@ -1,0 +1,48 @@
+//===- AArch64SVEVector.def - SVE vector carrier policy -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Whole Z register storage and the supported typed vector operations.
+/// Storage follows AAPCS64 2025Q4 section 6.1.3: Z is an untyped register
+/// of up to 2048 bits, independent of an instruction's element width.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_VECTOR_VALUE
+#define NEVERD_A64_SVE_VECTOR_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_SVE_VECTOR_TEXT
+#define NEVERD_A64_SVE_VECTOR_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_A64_SVE_VECTOR_OPERATION
+#define NEVERD_A64_SVE_VECTOR_OPERATION(Id, Count, Element, Produces, Vectors, \
+                                        Predicates)
+#endif
+
+NEVERD_A64_SVE_VECTOR_VALUE(uint16_t, kVectorStorageBytes, 256)
+NEVERD_A64_SVE_VECTOR_VALUE(uint64_t, kVectorRegisterBase, 0x1000)
+NEVERD_A64_SVE_VECTOR_VALUE(unsigned, kVectorRegisterCount, 32)
+NEVERD_A64_SVE_VECTOR_VALUE(uint64_t, kNeonRegisterBase, 0x200)
+NEVERD_A64_SVE_VECTOR_VALUE(uint16_t, kNeonStorageBytes, 16)
+NEVERD_A64_SVE_VECTOR_VALUE(unsigned, kVectorMaxOperands, 5)
+NEVERD_A64_SVE_VECTOR_VALUE(unsigned, kVectorPointerBytes, 8)
+NEVERD_A64_SVE_VECTOR_VALUE(unsigned, kVectorInputIndex, 1)
+NEVERD_A64_SVE_VECTOR_VALUE(unsigned, kVectorAddressInputIndex, 2)
+// Input masks index semantic operands, excluding the intrinsic identifier.
+NEVERD_A64_SVE_VECTOR_OPERATION(A64_SveDup, 2, 1, true, 0, 0)
+NEVERD_A64_SVE_VECTOR_OPERATION(A64_SveIndex, 3, 2, true, 0, 0)
+NEVERD_A64_SVE_VECTOR_OPERATION(A64_SveLastb, 3, 2, false, 0x2, 0x1)
+NEVERD_A64_SVE_VECTOR_OPERATION(A64_SveSt1, 5, 3, false, 0x2, 0x1)
+NEVERD_A64_SVE_VECTOR_OPERATION(A64_SveStnt1, 5, 3, false, 0x2, 0x1)
+NEVERD_A64_SVE_VECTOR_TEXT(kMalformedVector,
+                           "SVE vector has an invalid typed operand contract")
+NEVERD_A64_SVE_VECTOR_TEXT(
+    kUnsupportedVectorTransport,
+    "HighC SVE vector requires local whole-register COPY/PHI transport")
+NEVERD_A64_SVE_VECTOR_TEXT(kUnsupportedLLVMVectorC,
+                           "LLVM-to-C has no scalable vector carrier")
+
+#undef NEVERD_A64_SVE_VECTOR_VALUE
+#undef NEVERD_A64_SVE_VECTOR_TEXT
+#undef NEVERD_A64_SVE_VECTOR_OPERATION

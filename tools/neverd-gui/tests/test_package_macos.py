@@ -140,10 +140,6 @@ class SqlDriverDeploymentTests(unittest.TestCase):
                 self.assertFalse((bundle / "Contents/PlugIns/sqldrivers").exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HypervisorSigningTests(unittest.TestCase):
     def test_final_recursive_signing_preserves_and_checks_engine_host_entitlements(self):
         with tempfile.TemporaryDirectory() as root:
@@ -170,3 +166,7 @@ class HypervisorSigningTests(unittest.TestCase):
                   mock.patch.object(PACKAGE, "output", return_value=plistlib.dumps({}).decode())):
                 with self.assertRaisesRegex(RuntimeError, "lost its Hypervisor entitlement"):
                     PACKAGE.sign_bundle(Path(root), Path(root) / "entitlements.plist")
+
+
+if __name__ == "__main__":
+    unittest.main()

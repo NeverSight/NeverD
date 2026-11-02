@@ -8,8 +8,8 @@
 #include "COFFRegistrationIRProof.h"
 
 #include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"

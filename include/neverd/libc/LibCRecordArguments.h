@@ -15,9 +15,13 @@
 #define NEVERD_LIBC_LIBCRECORDARGUMENTS_H
 
 #include "neverd/debug/DebugContext.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCNames.h"
+
+#include <algorithm>
 
 namespace neverd::libc {
 
@@ -27,8 +31,9 @@ inline bool isRecordCallParameter(const FunctionSym &Function, size_t Index,
     return false;
   const auto &Type = Function.Params[Index].second;
   return Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum &&
-         !isObjectPointerParameter(Function.Name, static_cast<unsigned>(Index),
-                                   Variant);
+         (Function.PrototypeLibrary == UserPrototypeLibrary ||
+          !isObjectPointerParameter(Function.Name, static_cast<unsigned>(Index),
+                                    Variant));
 }
 
 inline bool hasRecordCallParameters(const FunctionSym &Function,
@@ -53,13 +58,23 @@ recordCallScalarParameter(const FunctionSym &Function,
   return std::nullopt;
 }
 
-/// A user's declaration keeps its own call model. Header declarations retain
-/// their original name and header while their record pieces take the places
-/// SourceParameterPlacement assigns. Transparent pointer unions stay pointers.
-inline std::optional<IntegerCallArguments>
+struct RecordCallArguments : IntegerCallArguments {
+  /// The complete dense HFA is returned in the FP register bank, rather
+  /// than through ResultPointer. Its source object is reinterpreted as the
+  /// checked machine result carrier by the C emitter.
+  bool FloatingResult = false;
+};
+
+/// Header declarations and checked local FP/HFA declarations retain their
+/// original source types while their pieces take the places assigned by
+/// SourceParameterPlacement. Other user declarations keep their own call model.
+inline std::optional<RecordCallArguments>
 recordCallArguments(const FunctionSym &Function, Arch Architecture,
                     BinaryFormat Format, LibCVariant Variant) {
-  if (!Function.PrototypeFromCLibrary || !Function.PlatformConvention ||
+  const auto Floating = floatingCallArguments(Function, Architecture, Format);
+  if ((!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
+       !Floating) ||
+      !Function.PlatformConvention || Function.IsVariadic ||
       Function.CallConv == DebugCallConv::Fastcall ||
       Function.CallConv == DebugCallConv::Thiscall)
     return std::nullopt;
@@ -77,9 +92,29 @@ recordCallArguments(const FunctionSym &Function, Arch Architecture,
     }
     Types.push_back(std::move(Type));
   }
-  return HasRecord ? integerCallArguments(Architecture, Format,
-                                          Function.ReturnType, Types)
-                   : std::nullopt;
+  if (HasRecord)
+    if (auto Integer = integerCallArguments(Architecture, Format,
+                                            Function.ReturnType, Types))
+      return RecordCallArguments{std::move(*Integer), false};
+  if (!Floating ||
+      (Floating->ParameterElements.empty() && !Floating->ReturnElements))
+    return std::nullopt;
+  RecordCallArguments Result;
+  Result.FloatingResult = Floating->ReturnElements != 0;
+  size_t At = 0;
+  for (uint16_t Count : Floating->ParameterElements) {
+    IntegerCallParameter Parameter;
+    uint16_t Offset = 0;
+    for (uint16_t I = 0; I < std::max<uint16_t>(Count, 1); ++I, ++At) {
+      const auto &Scalar = Floating->Scalars[At];
+      Parameter.Pieces.push_back(
+          {static_cast<unsigned>(At), Offset, Scalar.Bytes, Scalar.Floating});
+      Offset += Scalar.Bytes;
+    }
+    Result.Parameters.push_back(std::move(Parameter));
+  }
+  Result.Positions = Floating->Scalars.size();
+  return Result;
 }
 
 } // namespace neverd::libc

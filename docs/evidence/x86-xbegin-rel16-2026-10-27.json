@@ -1,0 +1,297 @@
+{
+  "scope": "XBEGIN rel16 and rel32 full-code-width signed fallback ownership",
+  "goal_complete": false,
+  "sources": {
+    "neverd_fixed_code": "ed6a2adc27dab02b00369681d53ba42a92e7edbf",
+    "neverd_base": "e2bdee2a541ad353f9909bfe2e8d601cec31240e",
+    "llvm": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "qualified_capstone": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+    "llvm_release_and_pins_changed": false
+  },
+  "artifact_root": "/mnt/data/neverd-x86-xbegin-rel16",
+  "validation": {
+    "pinned": {
+      "tests": 38,
+      "reports": [
+        {
+          "path": "committed-pinned-NeverDX86NonlocalControlTests.xml",
+          "sha256": "7dabf950f25a658d0cda166a0caf7f4d70247f46fca181ce803bc4d11279eb07",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86SystemStateTests.xml",
+          "sha256": "31f5e436e40cf0562ad8860a2047aac90343f6609c094fcb6e2781659fd2f978",
+          "tests": 29,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86TransactionBeginTests.xml",
+          "sha256": "e20f14b4de5fc16b785428dd658bc7dba2bafe745c536499ded34e17f70ce671",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "committed-pinned-build.log",
+        "sha256": "a91c0b8b460e313fb3f22c36eed6575f5656a9708236b49e99f9c6b44b9d20e8"
+      },
+      "commands": {
+        "path": "committed-pinned-commands.json",
+        "sha256": "b0bd30cee1739d9a5cffd1730cadf263d64d073458626cb8ea7273bc7e55b644"
+      },
+      "native_and_c_objects": 120,
+      "object_inventory": {
+        "path": "committed-pinned-objects.json",
+        "sha256": "80eb486581103c66de19c951977aebf10aadee45c642ad8437e238892a53b767"
+      },
+      "neverc_objects": 48,
+      "neverc": {
+        "path": "committed-pinned-neverc/qualification.json",
+        "sha256": "d1c82f3dfa4ee4e599a52a024b4f9a1fe22f0c87249cf2c1d605a9e672cbb085"
+      }
+    },
+    "native": {
+      "tests": 38,
+      "reports": [
+        {
+          "path": "committed-native-NeverDX86NonlocalControlTests.xml",
+          "sha256": "b798975dbbacfd9a14962670913914cf90a1915f72aa5c75066d133a874eb1fc",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86SystemStateTests.xml",
+          "sha256": "f6cf7a2c22b68a2bbfa655ec493195ee560ed6cf596f2a27707ac2db77b072f1",
+          "tests": 29,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86TransactionBeginTests.xml",
+          "sha256": "5889258b8575476bf3391fe1ed31535016974d4f7b0062aca2d1efdfae3e2446",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "committed-native-build.log",
+        "sha256": "6bb512cf4d5e7d8d11f441b992c426247b0d8d255ddd5da794bf1a4745910bbe"
+      },
+      "commands": {
+        "path": "committed-native-commands.json",
+        "sha256": "e96f2029d37542c232f294ec83c4bbfa3857609e809d1cf9eca33ff60c7073d4"
+      },
+      "native_and_c_objects": 120,
+      "object_inventory": {
+        "path": "committed-native-objects.json",
+        "sha256": "e1c22bcdb0b7c432ef99426e27d7ae751a855e9cd53d808cba603c6d90dd8446"
+      },
+      "neverc_objects": 48,
+      "neverc": {
+        "path": "committed-native-neverc/qualification.json",
+        "sha256": "0f47f68d051de616332272321517491285d2c0caaa540f5afa6b82d85d80a807"
+      }
+    }
+  },
+  "admission_per_sdk": {
+    "all_rel16_decoder_lift_checks": 1572864,
+    "prefix_wrap_decoder_lift_checks": 1656,
+    "contradictory_detail_refusals": 96,
+    "controlled_status_completions": 16,
+    "decoder_routes": [
+      "full",
+      "lightweight",
+      "lift"
+    ],
+    "architectures": [
+      "i386",
+      "x64"
+    ]
+  },
+  "emission": {
+    "source_profiles": 24,
+    "formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "forms": [
+      "rel16 backward fallback only discovered from abort edge",
+      "rel32 forward fallback"
+    ],
+    "pipelines": [
+      "default",
+      "NoOpt"
+    ],
+    "routes": [
+      "LLVM object",
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "neverc_architecture": "x64",
+    "neverc_uses_real_intrinsic_headers": true,
+    "objects_disassembled_for_one_xbegin_and_one_xend": true,
+    "physical_rtm_execution": false
+  },
+  "counterexamples": [
+    {
+      "bytes": "66 c7 f8 fb ff",
+      "address": "0x12345000",
+      "decoded_before": "0x12355000",
+      "correct": "0x12345000",
+      "cause": "i386 addr32 zero-extends a negative rel16 displacement"
+    },
+    {
+      "bytes": "67 c7 f8 00 80 00 00",
+      "address": "0x10000",
+      "decoded_before": "0x8007",
+      "correct": "0x18007",
+      "cause": "i386 addr16 sign-extends rel32 from bit 15"
+    }
+  ],
+  "semantics": {
+    "reference": "https://cdrdv2-public.intel.com/874247/334569-090-sdm-vol-2d.pdf",
+    "section": "XBEGIN, PDF pages 30-32, Intel SDM Volume 2D revision 090",
+    "target_rule": "Sign-extend the encoded displacement and add the next instruction pointer at code width; rel16 does not truncate the fallback to 16 bits.",
+    "decoder_normalization": "Accept only authenticated XBEGIN metadata and the exact known Capstone representation; contradictory detail refuses before effects.",
+    "completion": "Abort publishes EAX and zero-extends RAX in long mode; successful start retains incoming EAX/RAX. Flags remain unchanged in controlled completions."
+  },
+  "remaining": [
+    "RTM checkpoint, nesting and complete register/memory rollback",
+    "Fallback canonical-address and segment-limit fault continuation",
+    "Physical RTM execution",
+    "Other x86 instruction/state gaps in docs/x86-instruction-support.md"
+  ],
+  "integration": {
+    "neverd_fixed_code": "f43d711955283bb9feda4fc2bd06ccd442b5361e",
+    "remote_exact_sha": "5c216c638c401806902552c4e337c045097ca49e",
+    "capstone": "991f4d6214c3c599bb84e8a6490ae034d819641e",
+    "capstone_update_origin": "Concurrent dev commit a772929df06d4bbac5461d93fb124eb57bc6e827, preserved during integration",
+    "qualification": {
+      "pinned": {
+        "tests": 38,
+        "reports": [
+          {
+            "path": "integrated-pinned-NeverDX86NonlocalControlTests.xml",
+            "sha256": "81fe46a1da7b6e79c95aaa264450b3f73430c482ae2cf1f532d8415299c130b9",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86SystemStateTests.xml",
+            "sha256": "be8a5467dd5a3b760b67a5b704113f874baf604aa51428eb30e9ef8e7dbd4bb0",
+            "tests": 29,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86TransactionBeginTests.xml",
+            "sha256": "7b66e0e981d2fb05c20a90fa5d88c3bc2c106a93fa446902486e05e337a3b5ad",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "build": {
+          "path": "integrated-pinned-build.log",
+          "sha256": "06ce6844fc419e90692fb181fcab34e6ff32adde5a1a52bd891cf8f017adda1b"
+        },
+        "commands": {
+          "path": "integrated-pinned-commands.json",
+          "sha256": "beb494b8a6f5034eb49ee403aa66c59ce9617d117400763a21eb77891f03e960"
+        },
+        "native_and_c_objects": 120,
+        "object_inventory": {
+          "path": "integrated-pinned-objects.json",
+          "sha256": "ec94a45f91345b16b3b7f4377a1611657b5a4e942e16ca2ee8b54e10c6cebc2c"
+        },
+        "neverc_objects": 48,
+        "neverc": {
+          "path": "integrated-pinned-neverc/qualification.json",
+          "sha256": "88ebd81872b051350eaf7410bb4dd9b5c88a9bb631ba40977a3639542d743c6e"
+        }
+      },
+      "native": {
+        "tests": 38,
+        "reports": [
+          {
+            "path": "integrated-native-NeverDX86NonlocalControlTests.xml",
+            "sha256": "c9c60e9f39dddcdf3169c6cd989c321c3c2038ca695995b7f26dad5569e81031",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86SystemStateTests.xml",
+            "sha256": "c631b3180aa5646f99c6ef50eef1e950f335fc2018263fb855862248c5d0f321",
+            "tests": 29,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86TransactionBeginTests.xml",
+            "sha256": "4a506e5700ad2397d8bbecc89bd7a5ff41a1f273ec1ce5be989839270836c989",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "build": {
+          "path": "integrated-native-build.log",
+          "sha256": "852e633cf9f564ce46694a8d05df766365d04e04cf216dec8c13326afb44ff42"
+        },
+        "commands": {
+          "path": "integrated-native-commands.json",
+          "sha256": "da5c70b02a5434906f1015a68a06d1b78c823185a86b26c48da8782246fbce71"
+        },
+        "native_and_c_objects": 120,
+        "object_inventory": {
+          "path": "integrated-native-objects.json",
+          "sha256": "d8dcd837403b1d1096ee1682939845b9afa4bfad0ac44a409024079afcb08e94"
+        },
+        "neverc_objects": 48,
+        "neverc": {
+          "path": "integrated-native-neverc/qualification.json",
+          "sha256": "c143105304a9d74e8b91aa2def879ea7facd8712ed6f67fb1e46766f6185b671"
+        }
+      }
+    }
+  }
+}

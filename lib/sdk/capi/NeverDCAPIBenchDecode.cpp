@@ -13,7 +13,7 @@
 
 #include "SessionImpl.h"
 
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/Parallel.h"
 

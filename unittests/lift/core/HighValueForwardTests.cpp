@@ -15,6 +15,8 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <string>
 
@@ -81,11 +83,12 @@ HighFunc function(const std::string &Name, std::vector<HighStmt> Body) {
   return F;
 }
 
-std::string emit(const std::vector<HighFunc> &Functions) {
+std::string emit(const std::vector<HighFunc> &Functions,
+                 Arch TheArch = Arch::X64) {
   std::string Source;
   llvm::raw_string_ostream Out(Source);
   CEmitterOptions Options;
-  Options.TheArch = Arch::X64;
+  Options.TheArch = TheArch;
   EXPECT_TRUE(HighCEmitter().emit(Functions, Out, Options));
   return Source;
 }
@@ -738,7 +741,14 @@ TEST(HighValueForward, AnAtomicAddACopyCarriesStaysBeforeALoadAfterIt) {
               Widen(HighExpr::makeLoad(typedParameter(0, Pointer), Half))),
        result(Sum)});
   F.Params = {{"arg0", Pointer}};
-  const std::string Source = emit({F});
+  // This checks HighIR effect sequencing on the executing host. The writer
+  // preserves target-native atomics, so x86 LOCK assembly cannot execute in
+  // an ARM64 C fixture; both hosts must execute the same memory/result oracle.
+  const auto NativeArch =
+      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isAArch64()
+          ? Arch::AArch64
+          : Arch::X64;
+  const std::string Source = emit({F}, NativeArch);
   compileAndRun(Source + R"(
 int main(void) {
   uint32_t value = 5;

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
+#include "neverd/sbf/analysis/SBFDataflow.h"
 #include "neverd/sbf/solana/SBFSolanaRecovery.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -92,6 +93,15 @@ std::string formatInstruction(const LowInstruction &Instruction) {
   }
   if (!Instruction.Info)
     return ".byte 0x" + llvm::utohexstr(Instruction.RawOpcode);
+  const std::string Operands = formatOperands(Instruction);
+  return Operands.empty() ? Instruction.Info->Mnemonic.str()
+                          : Instruction.Info->Mnemonic.str() + " " + Operands;
+}
+
+std::string formatOperands(const LowInstruction &Instruction) {
+  if (Instruction.IsContinuation || Instruction.isInvalid() ||
+      !Instruction.Info)
+    return {};
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
   auto PrintBranchTarget = [&] {
@@ -100,70 +110,95 @@ std::string formatInstruction(const LowInstruction &Instruction) {
     else
       OS << "<invalid-target>";
   };
-  OS << Instruction.Info->Mnemonic;
   switch (Instruction.Info->Form) {
   case OperandForm::None:
     break;
   case OperandForm::Dst:
-    OS << " r" << unsigned(Instruction.Dst);
+    OS << "r" << unsigned(Instruction.Dst);
     break;
   case OperandForm::DstImm:
-    OS << " r" << unsigned(Instruction.Dst) << ", "
+    OS << "r" << unsigned(Instruction.Dst) << ", "
        << static_cast<int64_t>(Instruction.RawImmediate);
     break;
   case OperandForm::DstSrc:
-    OS << " r" << unsigned(Instruction.Dst) << ", r"
+    OS << "r" << unsigned(Instruction.Dst) << ", r"
        << unsigned(Instruction.Src);
     break;
   case OperandForm::LDDW:
-    OS << " r" << unsigned(Instruction.Dst) << ", 0x"
+    OS << "r" << unsigned(Instruction.Dst) << ", 0x"
        << llvm::utohexstr(Instruction.Immediate);
     break;
   case OperandForm::Load:
-    OS << " r" << unsigned(Instruction.Dst) << ", [r"
+    OS << "r" << unsigned(Instruction.Dst) << ", [r"
        << unsigned(Instruction.Src) << (Instruction.Offset < 0 ? " - " : " + ")
        << std::abs(static_cast<int>(Instruction.Offset)) << "]";
     break;
   case OperandForm::StoreImm:
-    OS << " [r" << unsigned(Instruction.Dst)
+    OS << "[r" << unsigned(Instruction.Dst)
        << (Instruction.Offset < 0 ? " - " : " + ")
        << std::abs(static_cast<int>(Instruction.Offset)) << "], "
        << static_cast<int64_t>(Instruction.RawImmediate);
     break;
   case OperandForm::StoreReg:
-    OS << " [r" << unsigned(Instruction.Dst)
+    OS << "[r" << unsigned(Instruction.Dst)
        << (Instruction.Offset < 0 ? " - " : " + ")
        << std::abs(static_cast<int>(Instruction.Offset)) << "], r"
        << unsigned(Instruction.Src);
     break;
   case OperandForm::Endian:
-    OS << " r" << unsigned(Instruction.Dst) << ", " << Instruction.RawImmediate;
+    OS << "r" << unsigned(Instruction.Dst) << ", " << Instruction.RawImmediate;
     break;
   case OperandForm::Branch:
-    OS << " ";
     PrintBranchTarget();
     break;
   case OperandForm::BranchImm:
-    OS << " r" << unsigned(Instruction.Dst) << ", "
+    OS << "r" << unsigned(Instruction.Dst) << ", "
        << static_cast<int64_t>(Instruction.RawImmediate) << ", ";
     PrintBranchTarget();
     break;
   case OperandForm::BranchReg:
-    OS << " r" << unsigned(Instruction.Dst) << ", r"
-       << unsigned(Instruction.Src) << ", ";
+    OS << "r" << unsigned(Instruction.Dst) << ", r" << unsigned(Instruction.Src)
+       << ", ";
     PrintBranchTarget();
     break;
   case OperandForm::CallImm:
-    OS << " "
-       << (Instruction.ResolvedName.empty()
+    OS << (Instruction.ResolvedName.empty()
                ? std::to_string(Instruction.RawImmediate)
                : Instruction.ResolvedName);
     break;
   case OperandForm::CallReg:
-    OS << " r" << unsigned(Instruction.CallRegister);
+    OS << "r" << unsigned(Instruction.CallRegister);
     break;
   }
   return Buffer;
+}
+
+std::optional<OperandImmediate>
+operandImmediate(const LowInstruction &Instruction, unsigned Index) {
+  if (Index != 1 || Instruction.IsContinuation || Instruction.isInvalid() ||
+      !Instruction.Info)
+    return std::nullopt;
+  const unsigned Bits = Instruction.Info->Width;
+  switch (Instruction.Info->Form) {
+  case OperandForm::LDDW:
+    return OperandImmediate{Instruction.Immediate, kDoubleWordBitWidth};
+  case OperandForm::DstImm:
+  case OperandForm::StoreImm:
+  case OperandForm::BranchImm: {
+    if (!Bits || Bits > kDoubleWordBitWidth)
+      return std::nullopt;
+    const int64_t Raw = Instruction.RawImmediate;
+    if (Bits < kWordBitWidth &&
+        (Raw < -(int64_t(1) << (Bits - 1)) || Raw >= (int64_t(1) << Bits)))
+      return OperandImmediate{uint32_t(Instruction.RawImmediate),
+                              kWordBitWidth};
+    const uint64_t Mask =
+        Bits == kDoubleWordBitWidth ? ~uint64_t(0) : (uint64_t(1) << Bits) - 1;
+    return OperandImmediate{uint64_t(Raw) & Mask, Bits};
+  }
+  default:
+    return std::nullopt;
+  }
 }
 
 std::string dumpLowIR(const LowIR &IR) {
@@ -202,13 +237,15 @@ std::string dumpLowIR(const LowIR &IR) {
 std::string dumpMedIR(const MedIR &IR) {
   std::string Buffer;
   llvm::raw_string_ostream OS(Buffer);
+  const MedInstructionIndex Index(IR);
   OS << "; SBF MedIR " << versionDisplayName(IR.TheVersion) << "\n";
   for (const MedBlock &Block : IR.Blocks) {
     OS << "block_" << Block.ID << ":\n";
-    for (const MedInstruction &Instruction : IR.Instructions) {
-      if (Instruction.Slot < Block.StartSlot ||
-          Instruction.Slot >= Block.EndSlot)
+    for (size_t Slot = Block.StartSlot; Slot < Block.EndSlot; ++Slot) {
+      const MedInstruction *Found = Index.find(Slot);
+      if (!Found)
         continue;
+      const MedInstruction &Instruction = *Found;
       OS << "  %pc" << Instruction.Slot << " = "
          << operationName(Instruction.Op) << "." << unsigned(Instruction.Width)
          << " r" << unsigned(Instruction.Dst);

@@ -1,11 +1,19 @@
-#pragma once
+//===- StartupMetrics.h - GUI startup observations -----------------------===//
+//
+//                         NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Observe production workbench startup without changing its workload.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_TOOLS_GUI_APP_STARTUPMETRICS_H
+#define NEVERD_TOOLS_GUI_APP_STARTUPMETRICS_H
 
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointer>
-
-class QWidget;
 
 namespace neverd::gui {
 
@@ -34,10 +42,12 @@ private:
   QElapsedTimer clock_;
   QString output_;
   QJsonObject milestones_;
-  QPointer<QWidget> window_;
+  QPointer<MainWindow> window_;
   bool openingFile_;
   int timeoutMs_;
   bool finished_ = false;
 };
 
 } // namespace neverd::gui
+
+#endif // NEVERD_TOOLS_GUI_APP_STARTUPMETRICS_H

@@ -7,6 +7,7 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/support/AtomicOutput.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/ProjectFiles.h"
@@ -14,12 +15,47 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace neverd;
 using namespace neverd::sdk;
+
+std::filesystem::path Session::projectInputPath() const {
+  if (!Img.MachOSharedCache)
+    return FilePath;
+  auto Path = SanitizeSourcePath;
+  Path += projectNamespaceSuffix();
+  return Path;
+}
+
+std::string Session::projectNamespaceSuffix() const {
+  if (!Img.MachOSharedCache)
+    return {};
+  const auto Digest =
+      sha256(llvm::arrayRefFromStringRef(Img.MachOSharedCacheImagePath));
+  return std::string(macho_loader::cache_load::kProjectSuffix) +
+         llvm::toHex(Digest, true);
+}
+
+llvm::json::Object neverd::sdk::sharedCacheIdentity(const BinaryImage &Image) {
+  using namespace macho_loader::cache_load;
+  llvm::json::Array Files;
+  for (const auto &Digest : Image.MachOSharedCacheFileSHA256)
+    Files.push_back(llvm::toHex(Digest, true));
+  return llvm::json::Object{
+      {kImageKey, jsonSafeText(Image.MachOSharedCacheImagePath)},
+      {kFilesKey, std::move(Files)},
+      {kProjectionKey, true}};
+}
+
+bool neverd::sdk::matchesProjectInput(const llvm::json::Object &Left,
+                                      const llvm::json::Object &Right) {
+  const auto *L = Left.get(macho_loader::cache_load::kCacheKey);
+  const auto *R = Right.get(macho_loader::cache_load::kCacheKey);
+  return Left.getString("sha256") == Right.getString("sha256") &&
+         ((!L && !R) || (L && R && *L == *R));
+}
 
 bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
                               llvm::json::Value Values, llvm::StringRef Kind) {
@@ -30,8 +66,17 @@ bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
       if (llvm::json::Object *Object = Row.getAsObject())
         if (std::optional<llvm::StringRef> Address = Object->getString("addr"))
           (*Object)["addr"] = Address->lower();
+  return saveSidecar(
+      S, Path, [&](llvm::json::OStream &Output) { Output.value(Values); },
+      Kind);
+}
+
+bool neverd::sdk::saveSidecar(
+    Session *S, const std::filesystem::path &Path,
+    llvm::function_ref<void(llvm::json::OStream &)> Emit,
+    llvm::StringRef Kind) {
   // The project's files live in its folder beside the input.
-  if (std::error_code Folder = project_files::prepare(S->FilePath)) {
+  if (std::error_code Folder = project_files::prepare(S->projectInputPath())) {
     S->setError("cannot create the project folder: " + Folder.message());
     return false;
   }
@@ -52,7 +97,9 @@ bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
     // Two-space indentation, sorted keys and a final newline, byte for byte
     // as the workbench writes the same files (the worker's sidecarText), so
     // a project diffs and merges line by line under version control.
-    OS << llvm::formatv("{0:2}", Values) << '\n';
+    llvm::json::OStream Output(OS, 2);
+    Emit(Output);
+    OS << '\n';
     OS.flush();
     WriteError = OS.error();
     OS.clear_error();
@@ -70,8 +117,8 @@ bool neverd::sdk::saveSidecar(Session *S, const std::filesystem::path &Path,
     return false;
   }
   // A file the project now has describes this build of the input.
-  return Path ==
-             project_files::path(S->FilePath, project_files::File::Manifest) ||
+  return Path == project_files::path(S->projectInputPath(),
+                                     project_files::File::Manifest) ||
          recordProjectInput(S);
 }
 
@@ -92,15 +139,18 @@ std::string neverd::sdk::inputSha256(Session &S) {
 llvm::json::Object neverd::sdk::projectInput(Session &S) {
   std::error_code Error;
   const auto Size = std::filesystem::file_size(S.FilePath, Error);
-  return llvm::json::Object{
+  llvm::json::Object Input{
       {"name", jsonSafeText(pathToUTF8(S.FilePath.filename()))},
       {"size", Error ? 0 : static_cast<int64_t>(Size)},
       {"sha256", inputSha256(S)}};
+  if (S.Img.MachOSharedCache)
+    Input[macho_loader::cache_load::kCacheKey] = sharedCacheIdentity(S.Img);
+  return Input;
 }
 
 std::optional<llvm::json::Object> neverd::sdk::recordedInput(const Session &S) {
-  auto Buffer = llvm::MemoryBuffer::getFile(pathToUTF8(
-      project_files::path(S.FilePath, project_files::File::Manifest)));
+  auto Buffer = llvm::MemoryBuffer::getFile(pathToUTF8(project_files::path(
+      S.projectInputPath(), project_files::File::Manifest)));
   if (!Buffer)
     return std::nullopt;
   llvm::Expected<llvm::json::Value> Manifest =
@@ -124,10 +174,11 @@ bool neverd::sdk::recordProjectInput(Session *S) {
   if (Input.getString("sha256").value_or("").empty())
     return true;
   if (auto Recorded = recordedInput(*S);
-      Recorded && Recorded->getString("sha256") == Input.getString("sha256"))
+      Recorded && matchesProjectInput(*Recorded, Input))
     return true;
   return saveSidecar(
-      S, project_files::path(S->FilePath, project_files::File::Manifest),
+      S,
+      project_files::path(S->projectInputPath(), project_files::File::Manifest),
       llvm::json::Object{{"neverd_project", 1}, {"input", std::move(Input)}},
       "project");
 }

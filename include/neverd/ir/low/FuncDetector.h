@@ -20,11 +20,18 @@
 
 #include "llvm/ADT/ArrayRef.h"
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd {
+
+namespace func_detect_detail {
+struct Cancellation;
+}
 
 class FuncDetector {
 public:
@@ -32,12 +39,22 @@ public:
   std::vector<std::pair<va_t, std::string>> detect(const BinaryImage &Img,
                                                    Decoder &Dec);
 
+  /// The same discovery with cooperative cancellation. The probe may run on
+  /// scan workers: it must be thread-safe, nonblocking and nonthrowing. A
+  /// stopped scan joins all workers and returns nullopt without publishing
+  /// candidate entries into the image. Empty completed discovery is distinct.
+  std::optional<std::vector<std::pair<va_t, std::string>>>
+  detect(const BinaryImage &Img, Decoder &Dec,
+         const std::function<bool()> &Cancelled);
+
 private:
   friend class RelocatedFunctionEntryVerifier;
+  const func_detect_detail::Cancellation *Cancellation = nullptr;
   std::vector<std::pair<va_t, std::string>>
   detectImpl(const BinaryImage &Img, Decoder &Dec, bool RelocationsOnly);
   void scanCallTargets(const BinaryImage &Img, Decoder &Dec,
-                       std::set<va_t> &Out);
+                       std::set<va_t> &Out,
+                       std::vector<std::pair<va_t, va_t>> &CodeAddresses);
   /// Recover VC6 / MSVC functions that have no PDB symbol: EBP-frame
   /// prologues at any alignment, plus 16-byte-aligned SEH / callee-saved /
   /// stack-adjust starts.  Tagged entries skip the bounded verify walk so a

@@ -2,7 +2,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/APInt.h"

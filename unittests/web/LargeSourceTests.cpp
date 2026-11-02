@@ -15,6 +15,7 @@
 
 #include "neverd/web/PassiveReport.h"
 #include "neverd/web/SourceLimits.h"
+#include "neverd/web/SourceModules.h"
 
 #include <array>
 #include <cstdlib>
@@ -82,6 +83,41 @@ TEST(WebLargeSource, CompleteLexicalInventoryRetainsLateRequestAndFunction) {
   auto Changed = S;
   Changed.Mode = SourceAnalysisMode::Interactive;
   EXPECT_THROW(analyzeSourceBindings(Changed), Error);
+}
+
+TEST(WebLargeSource, ModuleInventoryUsesTheSameExplicitLargeWorkProfile) {
+  std::string Text;
+  Text.reserve(700128);
+  for (unsigned I = 0; I < 350000; ++I)
+    Text += "0;";
+  Text +=
+      "import {original as local} from './dep.js';export {local as exposed};";
+  const auto S = inspectLargeJavaScript("large-module", Text, "module");
+  ASSERT_EQ(S.ParseStatus, "parsed");
+  const auto B = analyzeSourceBindings(S);
+  ASSERT_EQ(B.Status, "ok");
+  const auto M = analyzeSourceModules(S, B);
+  ASSERT_EQ(M.Status, "ok");
+  EXPECT_GT(M.Steps, MaxJavaScriptModuleSteps);
+  EXPECT_LE(M.Steps, sourceWorkLimit(S, MaxJavaScriptModuleSteps));
+  ASSERT_EQ(M.Requests.size(), 1u);
+  ASSERT_EQ(M.Imports.size(), 1u);
+  ASSERT_EQ(M.Exports.size(), 1u);
+  EXPECT_EQ(M.Names[M.Requests[0].Specifier], u"./dep.js");
+  EXPECT_EQ(M.Names[M.Exports[0].ExportedName], u"exposed");
+  EXPECT_EQ(M.Exports[0].Binding, M.Imports[0].Binding);
+  EXPECT_EQ(M.Exports[0].LinkStatus, "lexical_binding");
+  const auto Recovery =
+      inspectRecoveryJavaScript("recovery", "export{};", "module");
+  SourceBindingAnalysis Unadmitted;
+  Unadmitted.SourceID = Recovery.ID;
+  Unadmitted.Status = "ok";
+  const auto Rejected = analyzeSourceModules(Recovery, Unadmitted);
+  EXPECT_EQ(Rejected.Status, "unsupported");
+  ASSERT_EQ(Rejected.Diagnostics.size(), 1u);
+  EXPECT_EQ(Rejected.Diagnostics[0].Code,
+            "recovery_source_model_not_analyzable");
+  EXPECT_TRUE(Rejected.Requests.empty());
 }
 
 TEST(WebLargeSource, MalformedEncodingSizeAndNodeBudgetsKeepRefusalExplicit) {

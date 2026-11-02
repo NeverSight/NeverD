@@ -24,6 +24,7 @@
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/PatchStorage.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"
 #include "neverd/loader/MachO/MachOLoader.h"
@@ -1579,6 +1580,10 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
     return PatchResult{};
   }
   BinaryImage AuthenticatedImage = std::move(*LoadedImage);
+  if (AuthenticatedImage.isArm64e()) {
+    llvm::WithColor::error() << kArm64eRebuildUnsupported;
+    return PatchResult{};
+  }
 
   std::vector<PatchedFunctionEntry> InstalledFunctions;
   PatchResult Patch = readPatchWrite(

@@ -1,6 +1,6 @@
 **語言**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: 0e93112bfc87bdf7cfa9e280f8b7a9155214ae36187f32d8dd473c6f17fd92d3 -->
+<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
 
 # 為 NeverD 做出貢獻
 
@@ -134,8 +134,14 @@ fork，相容性修復在各預設分支上；建置複製當前原始碼授權�
 `NEVERD_ENABLE_TBB` 預設均為 `ON`，可分別設為 `OFF` 進行比較。oneTBB 在批次間保留
 worker，檢查其 8 MiB 堆疊，絕不建置或載入 `tbbmalloc` 及其記憶體配置器代理。大堆疊呼叫方複用可用
 堆疊空間，小堆疊呼叫方獲得原生協調執行緒。首次使用後 fork 或動態卸載 SDK 的宿主必須使用原生
-執行緒基線 `NEVERD_ENABLE_TBB=OFF`，保留排程器不支援這些生命週期；它不會終結宿主共享的
-TBB 排程器。啟用時須一併分發執行時 DLL/共享程式庫。
+執行緒基線 `NEVERD_ENABLE_TBB=OFF`，保留排程器不支援這些生命週期。oneTBB 靜態連結至共用
+核心，其符號僅供該核心內部使用。CLI 元件呼叫與 GUI worker 請求使用同一個排程器；
+不發佈 TBB DLL/共用程式庫。連結 `neverd_shared` 的目標會自動選用共用排程器。
+透過其他目標存取 SDK、同時連結元件封存程式庫的用戶端，必須對最終目標使用
+`neverd_use_shared_task_scheduler`。獨立的元件工具保留各自的執行階段環境。
+這項限定範圍的整合避免同一行程中存在多個 NeverD 排程器；上游仍將
+[oneTBB 靜態建置](https://uxlfoundation.github.io/oneTBB/main/intro/static_linking.html)
+列為不受支援，並不建議將其用於一般用途。
 
 原生測試、關閉選項比較及排程器相容範圍見[加速驗證](../testing.md#acceleration-libraries)。
 
@@ -156,6 +162,11 @@ CMake 會下載儲存庫設定的發行套件、驗證 SHA-256，並在後續建
 使用者快取。預先建置通道僅支援 macOS arm64；Intel Mac 與通用二進位建置必須
 使用預設的本機 LLVM 建置。`NEVERD_LLVM_PREBUILT_TAG`、鏡像 URL、快取目錄和
 明確校驗和等進階覆寫項記錄於 `cmake/NeverDLLVMPrebuilt.cmake`。
+
+LLVM 修正應在 [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project) 中維護。
+先將修正提交並合併到 fork，再更新 NeverD 的 LLVM 子模組版本。
+整合建置直接編譯該原始碼，請勿在 NeverD 中加入 LLVM patch 檔案或建置目錄原始碼覆蓋層。
+預建套件必須從修正後的 fork 重新建置，才能驗證相同行為。
 
 <!-- i18n-section: workflow -->
 ## 分支與提取請求流程

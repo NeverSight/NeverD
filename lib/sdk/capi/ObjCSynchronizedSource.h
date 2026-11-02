@@ -6,7 +6,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/high/HighIR.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"

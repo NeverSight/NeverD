@@ -1,10 +1,14 @@
 #include "gtest/gtest.h"
 
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameAnalysis.h"
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/low/SourceFrameBytes.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
 
@@ -130,6 +134,379 @@ TEST(SourceFrameAnalysis, CallStorageKeepsDefinitionsAndPaddingDistinct) {
   // An observation supplies neither this consumer's borrow permission nor
   // the enclosing function's restoration/source certificate.
   EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, Calls));
+}
+
+TEST(SourceFrameAnalysis, CallStorageKeepsEveryByteOfAVectorDefinition) {
+  FrameFixture F;
+  auto &Ops = F.Low.Blocks.front().Ops;
+  const auto Vector = NdVar::reg(a64reg::V0, 16);
+  Ops[1] = op(NdOp::LOAD, Vector, {NdVar::addressFragment(0x6000, 8)}, 0x1004);
+  Ops[2] = op(NdOp::COPY, Vector, {Vector}, 0x1008);
+  Ops[4].Inputs[1] = Vector;
+  // A low eight-byte slice is not a complete pointer-producing definition.
+  EXPECT_FALSE(F.query());
+  Ops.insert(Ops.begin() + 7, op(NdOp::COPY, X0, {Slot}, 0x101a));
+  auto ABI = signature();
+  ABI.Parameters[0].Type = NdType::makePtr(NdType::makeVoid());
+  const auto Site = *nativeSourceCallKey(Ops[8]);
+  NativeSourceCallContract Contract;
+  Contract.Signature = &ABI;
+  const auto Storage = sourceFrameCallArgumentStorage(
+      F.Low, Arch::AArch64, {{Site, Contract}}, Site, 0, 16);
+  ASSERT_TRUE(Storage);
+  ASSERT_EQ(Storage->Bytes.size(), 16U);
+  for (unsigned I = 0; I < 16; ++I) {
+    const auto &Byte = Storage->Bytes[I];
+    EXPECT_TRUE(Byte.Initialized);
+    ASSERT_TRUE(Byte.Definition);
+    EXPECT_EQ(Byte.Definition->Instruction, 0x1004U);
+    EXPECT_EQ(Byte.Definition->Output, Vector);
+    EXPECT_EQ(Byte.DefinitionByte, I);
+    EXPECT_FALSE(Byte.Constant);
+  }
+}
+
+namespace {
+struct StorageObservationFixture {
+  LowFunc Function;
+  NdVar Stack, Pointer, Tail, External, Vector;
+
+  explicit StorageObservationFixture(Arch Architecture) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    Stack = NdVar::reg(TRI.StackPointer, 8);
+    Pointer =
+        NdVar::reg(Architecture == Arch::X64 ? x86reg::RCX : a64reg::X0, 8);
+    Tail = NdVar::reg(Architecture == Arch::X64 ? x86reg::R10 : a64reg::X8, 8);
+    External =
+        NdVar::reg(Architecture == Arch::X64 ? x86reg::RDX : a64reg::X1, 8);
+    Vector = NdVar::reg(TRI.FPReturnReg, 16);
+    Function.Entry = 0x1000;
+    LowBlock Block;
+    Block.Id = 7;
+    Block.StartAddr = Function.Entry;
+    Block.Ops = {
+        op(NdOp::INT_SUB, Stack, {Stack, NdVar::scalar(64, 8)}, 0x1000),
+        op(NdOp::COPY, Pointer, {Stack}, 0x1004),
+        op(NdOp::LOAD, Vector, {NdVar::addressFragment(0x9000, 8)}, 0x1008),
+        op(NdOp::STORE, {}, {Pointer, Vector}, 0x100c),
+        op(NdOp::INT_ADD, Tail, {Stack, NdVar::scalar(16, 8)}, 0x1010),
+        op(NdOp::STORE, {}, {Tail, NdVar::scalar(0, 2)}, 0x1014),
+        op(NdOp::CALL, {}, {NdVar::addressFragment(0x5000, 8)}, 0x1018),
+        op(NdOp::RETURN, {}, {}, 0x101c)};
+    Function.Blocks.push_back(std::move(Block));
+  }
+
+  auto query(Arch Architecture, BinaryFormat Format,
+             size_t *Remaining = nullptr) const {
+    const auto &Block = Function.Blocks.back();
+    return sourceFrameStorageBefore(
+        Function, Architecture, Format, Block.Id, Block.Ops.size() - 2,
+        {Pointer, External, Pointer}, 64, Remaining);
+  }
+};
+} // namespace
+
+TEST(SourceFrameAnalysis, ObservesInitializedPrefixesBeforeCallsAcrossTargets) {
+  for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
+    for (const auto Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(int(Architecture));
+      SCOPED_TRACE(int(Format));
+      StorageObservationFixture F(Architecture);
+      const auto Observed = F.query(Architecture, Format);
+      ASSERT_EQ(Observed.size(), 1U);
+      EXPECT_EQ(Observed[0].FrameOffset, -64);
+      ASSERT_EQ(Observed[0].Bytes.size(), 18U);
+      for (unsigned I = 0; I < 16; ++I) {
+        const auto &Byte = Observed[0].Bytes[I];
+        ASSERT_TRUE(Byte.Definition);
+        EXPECT_EQ(Byte.Definition->Instruction, 0x1008U);
+        EXPECT_EQ(Byte.Definition->Output, F.Vector);
+        EXPECT_EQ(Byte.DefinitionByte, I);
+        EXPECT_FALSE(Byte.Constant);
+      }
+      EXPECT_EQ(Observed[0].Bytes[16].Constant, 0);
+      EXPECT_EQ(Observed[0].Bytes[17].Constant, 0);
+      // The query observes the prefix; it does not authorize the call.
+      EXPECT_FALSE(restoresNativeSourceState(F.Function, Architecture, {}));
+    }
+  }
+}
+
+TEST(SourceFrameAnalysis, StorageObservationsRejectUnprovenMemoryAndLifetimes) {
+  for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      SCOPED_TRACE(int(Architecture));
+      SCOPED_TRACE(Mutation);
+      StorageObservationFixture F(Architecture);
+      auto &Ops = F.Function.Blocks.front().Ops;
+      switch (Mutation) {
+      case 0:
+        Ops.insert(
+            Ops.begin() + 6,
+            op(NdOp::STORE, {}, {F.External, NdVar::scalar(0, 8)}, 0x1016));
+        break;
+      case 1:
+        Ops.insert(Ops.begin() + 6,
+                   op(NdOp::STORE, {}, {F.External, F.Pointer}, 0x1016));
+        break;
+      case 2:
+        Ops.insert(Ops.begin() + 6,
+                   op(NdOp::CALL, {}, {NdVar::cst(0x7000, 8)}, 0x1016));
+        break;
+      case 3:
+        Ops.insert(Ops.begin() + 6,
+                   op(NdOp::INT_ADD, F.Stack, {F.Stack, NdVar::scalar(64, 8)},
+                      0x1016));
+        break;
+      case 4:
+        F.Function.Blocks.front().Succs = {7};
+        F.Function.Blocks.front().Preds = {7};
+        break;
+      }
+      EXPECT_TRUE(F.query(Architecture, BinaryFormat::COFF).empty());
+    }
+  }
+}
+
+TEST(SourceFrameAnalysis, StorageObservationsKeepUnknownBytesAndShareBudget) {
+  for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
+    StorageObservationFixture F(Architecture);
+    auto &Ops = F.Function.Blocks.front().Ops;
+    auto Unknown = F.External;
+    Unknown.Size = 1;
+    Ops.insert(Ops.begin() + 6,
+               op(NdOp::STORE, {}, {F.Pointer, Unknown}, 0x1016));
+    const auto Observed = F.query(Architecture, BinaryFormat::COFF);
+    ASSERT_EQ(Observed.size(), 1U);
+    ASSERT_EQ(Observed[0].Bytes.size(), 18U);
+    EXPECT_TRUE(Observed[0].Bytes[0].Initialized);
+    EXPECT_FALSE(Observed[0].Bytes[0].Constant);
+    EXPECT_FALSE(Observed[0].Bytes[0].Definition);
+    EXPECT_TRUE(Observed[0].Bytes[1].Definition);
+    size_t Remaining = 1;
+    EXPECT_TRUE(F.query(Architecture, BinaryFormat::COFF, &Remaining).empty());
+    EXPECT_LE(Remaining, 1U);
+    const auto Left = Remaining;
+    EXPECT_TRUE(F.query(Architecture, BinaryFormat::COFF, &Remaining).empty());
+    EXPECT_LE(Remaining, Left);
+    EXPECT_TRUE(F.query(Architecture, BinaryFormat::Unknown).empty());
+  }
+}
+
+TEST(SourceFrameAnalysis, StorageObservationsMeetEveryPathInEitherOrder) {
+  for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
+    for (bool Reverse : {false, true}) {
+      for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+        SCOPED_TRACE(int(Architecture));
+        SCOPED_TRACE(Reverse);
+        SCOPED_TRACE(Mutation);
+        StorageObservationFixture F(Architecture);
+        const auto Original = F.Function.Blocks.front();
+        F.Function.Blocks.resize(4);
+        for (unsigned I = 0; I != 4; ++I) {
+          auto &Block = F.Function.Blocks[I];
+          Block = {};
+          Block.Id = 7 + I;
+          Block.StartAddr = 0x1000 + 0x100 * I;
+        }
+        auto &Entry = F.Function.Blocks[0];
+        Entry.Ops.assign(Original.Ops.begin(), Original.Ops.begin() + 6);
+        Entry.Succs = {8, 9};
+        if (Mutation == 3 || Mutation == 4)
+          Entry.Ops.erase(Entry.Ops.begin() + 3);
+        for (unsigned I : {1U, 2U}) {
+          auto &Block = F.Function.Blocks[I];
+          Block.Preds = {7};
+          Block.Succs = {10};
+          Block.Ops = {op(NdOp::COPY, F.External, {NdVar::scalar(0, 8)},
+                          Block.StartAddr)};
+          if ((Mutation == 1 && I == 1) || Mutation == 2)
+            Block.Ops = {op(NdOp::STORE, {}, {F.Pointer, NdVar::scalar('X', 1)},
+                            Block.StartAddr)};
+          if ((Mutation == 3 && I == 1) || Mutation == 4)
+            Block.Ops = {
+                op(NdOp::STORE, {}, {F.Pointer, F.Vector}, Block.StartAddr)};
+          if (Mutation == 5 && I == 1)
+            Block.Ops = {
+                op(NdOp::CALL, {}, {NdVar::cst(0x7000, 8)}, Block.StartAddr)};
+        }
+        auto &Call = F.Function.Blocks[3];
+        Call.Preds = {8, 9};
+        Call.Ops.assign(Original.Ops.begin() + 6, Original.Ops.end());
+        Call.Ops[0].Addr = Call.StartAddr;
+        Call.Ops[1].Addr = Call.StartAddr + 4;
+        if (Reverse) {
+          std::reverse(Entry.Succs.begin(), Entry.Succs.end());
+          std::reverse(Call.Preds.begin(), Call.Preds.end());
+          std::swap(F.Function.Blocks[1], F.Function.Blocks[2]);
+        }
+        const auto Observed = sourceFrameStorageBefore(F.Function, Architecture,
+                                                       BinaryFormat::COFF, 10,
+                                                       0, {F.Pointer}, 64);
+        if (Mutation == 3 || Mutation == 5) {
+          EXPECT_TRUE(Observed.empty());
+          continue;
+        }
+        ASSERT_EQ(Observed.size(), 1U);
+        ASSERT_EQ(Observed[0].Bytes.size(), 18U);
+        const auto &First = Observed[0].Bytes[0];
+        EXPECT_TRUE(First.Initialized);
+        if (Mutation == 1) {
+          EXPECT_FALSE(First.Constant);
+          EXPECT_FALSE(First.Definition);
+        } else if (Mutation == 2) {
+          EXPECT_EQ(First.Constant, 'X');
+        } else {
+          ASSERT_TRUE(First.Definition);
+          EXPECT_EQ(First.Definition->Instruction, 0x1008U);
+        }
+      }
+    }
+  }
+}
+
+TEST(SourceFrameAnalysis, ReinitializationAndExactObservationBudget) {
+  for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
+    StorageObservationFixture F(Architecture);
+    auto &Ops = F.Function.Blocks.front().Ops;
+    auto Store = Ops[3], Zero = Ops[5];
+    Store.Addr = Zero.Addr = 0x1017;
+    Zero.Seq = 1;
+    Ops.insert(Ops.begin() + 6,
+               {op(NdOp::STORE, {}, {F.External, NdVar::scalar(0, 8)}, 0x1016),
+                Store, Zero});
+    size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
+    ASSERT_EQ(F.query(Architecture, BinaryFormat::COFF, &Remaining).size(), 1U);
+    const size_t Cost = limits::ir::kSourceFrameAnalysisRemaining - Remaining;
+    ASSERT_GT(Cost, 0U);
+    Remaining = Cost;
+    EXPECT_EQ(F.query(Architecture, BinaryFormat::COFF, &Remaining).size(), 1U);
+    EXPECT_EQ(Remaining, 0U);
+    Remaining = Cost - 1;
+    EXPECT_TRUE(F.query(Architecture, BinaryFormat::COFF, &Remaining).empty());
+    EXPECT_LT(Remaining, Cost);
+  }
+}
+
+TEST(SourceFrameAnalysis, ObservationGuardsPreserveChecksAndOriginalQueries) {
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    StorageObservationFixture F(Arch::X64);
+    auto &Block = F.Function.Blocks.front();
+    auto &Ops = Block.Ops;
+    const auto Address = NdVar::tmp(0x10000, 8);
+    LowOp Guard = op(NdOp::INTRINSIC, {},
+                     {NdVar::scalar(uint64_t(Intrinsic::RequireAligned), 2),
+                      Address, NdVar::scalar(16, 8)},
+                     0x1008);
+    Guard.Seq = 1;
+    switch (Mutation) {
+    case 1:
+      Guard.Inputs[2] = NdVar::scalar(0, 8);
+      break;
+    case 2:
+      Guard.Inputs[2] = NdVar::scalar(3, 8);
+      break;
+    case 3:
+      Guard.MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+      break;
+    case 4:
+      Guard.MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 5:
+      Guard.Output = F.External;
+      break;
+    case 6:
+      Guard.Inputs[1] = NdVar::ram(0x9000, 8);
+      break;
+    case 7:
+      Guard.Inputs[0].Size = 4;
+      break;
+    case 8:
+      Guard.Inputs[2] = F.External;
+      break;
+    case 9:
+      Guard.addInput(NdVar::scalar(0, 1));
+      break;
+    case 10:
+      Guard.addInput(NdVar::scalar(0, 8));
+      break;
+    }
+    const bool Valid = Mutation == 0 || Mutation == 9;
+    EXPECT_EQ(isSourceFrameObservationGuard(Guard), Valid);
+    Ops[2].Inputs[0] = Address;
+    Ops[2].Seq = 2;
+    Ops.insert(
+        Ops.begin() + 2,
+        {op(NdOp::COPY, Address, {NdVar::addressFragment(0x9000, 8)}, 0x1008),
+         Guard});
+    EXPECT_EQ(F.query(Arch::X64, BinaryFormat::COFF).size(), Valid ? 1U : 0U);
+    // The existing call-slot query still refuses an intrinsic by default.
+    EXPECT_FALSE(loadedCallSlot(F.Function, Block, 5, F.Vector));
+    LoadedCallSlotProof Proof;
+    Proof.AllowAlignmentChecks = true;
+    EXPECT_EQ(loadedCallSlot(F.Function, Block, 5, F.Vector, &Proof),
+              Valid ? std::optional<va_t>(0x9000) : std::nullopt);
+  }
+}
+
+TEST(SourceFrameAnalysis, DisplayBytesAuthenticateWholeImmutableLoads) {
+  for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
+    for (const auto Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      StorageObservationFixture F(Architecture);
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Format = Format;
+      Image.Bits = Bitness::Bits64;
+      Segment Data;
+      Data.VA = 0x9000;
+      Data.Name = ".rdata";
+      Data.Flags = SegmentFlags::Readable;
+      for (char Character : std::string("WideText")) {
+        Data.Data.push_back(Character);
+        Data.Data.push_back(0);
+      }
+      Data.Size = Data.Data.size();
+      Image.Segments.push_back(Data);
+      auto Expected = Data.Data;
+      Expected.insert(Expected.end(), {0, 0});
+      const auto Observed = observeSourceFrameBytes(F.Function, Image);
+      ASSERT_EQ(Observed.size(), 1U);
+      EXPECT_EQ(Observed[0].Instruction, 0x1018U);
+      EXPECT_EQ(Observed[0].FrameOffset, -64);
+      EXPECT_EQ(Observed[0].Bytes, Expected);
+      Section ReadOnly;
+      ReadOnly.VA = Data.VA;
+      ReadOnly.Size = Data.Size;
+      ReadOnly.Flags = SegmentFlags::Readable;
+      Image.Sections = {ReadOnly};
+      ASSERT_EQ(observeSourceFrameBytes(F.Function, Image).size(), 1U);
+      Image.Sections.push_back(ReadOnly);
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Sections.resize(1);
+      Image.Sections[0].Size = Data.Size - 1;
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Sections.clear();
+      Image.DataPtrRelocSlots.insert(0x8ffc);
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.DataPtrRelocSlots.clear();
+      Image.Segments.front().Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Segments.front() = Data;
+      Image.Segments.front().Data.resize(8);
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Segments.front() = Data;
+      Image.Segments.push_back(Data);
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Segments.pop_back();
+      F.Function.Blocks.front().Ops[2].MemoryOrdering =
+          NdMemoryOrdering::Acquire;
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+    }
+  }
 }
 
 TEST(SourceFrameAnalysis, CallStorageRejectsEscapesAndChangedOccurrence) {

@@ -117,6 +117,8 @@ private:
     case CType::Kind::Integer:
       return (Ty->Signed ? "int" : "uint") + std::to_string(Ty->Bits);
     case CType::Kind::Floating:
+      if (Ty->Bits != 32 && Ty->Bits != 64)
+        unsupported("floating type '" + Ty->Spelling + "'");
       return "float" + std::to_string(Ty->Bits);
     case CType::Kind::Pointer:
       if (Ty->Inner->AddressSpace)

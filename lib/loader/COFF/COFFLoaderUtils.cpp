@@ -9,7 +9,9 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/loader/Limits.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
@@ -34,6 +36,18 @@
 
 namespace neverd {
 namespace coff_loader {
+
+std::string ordinalImportName(Arch Architecture, llvm::StringRef Module,
+                              uint16_t Ordinal) {
+  // Microsoft's 10.0.26100 import libraries bind this public API to ordinal
+  // 101 on x86, x64 and ARM64. The SDK caller/compiler checks use the actual
+  // target libraries; neither another DLL nor another ordinal supplies it.
+  if ((Architecture == Arch::X86 || Architecture == Arch::X64 ||
+       Architecture == Arch::AArch64) &&
+      Module.equals_insensitive("d3d12.dll") && Ordinal == 101)
+    return "D3D12CreateDevice";
+  return (kOrdinalPrefix + llvm::Twine(Ordinal)).str();
+}
 
 using namespace llvm::COFF;
 using namespace llvm::object;
@@ -410,8 +424,10 @@ parseDelayImportDescriptor(const delay_import_directory_table_entry &Desc,
     const uint64_t OrdinalMask =
         Img.is64Bit() ? (uint64_t(1) << 63) : (uint64_t(1) << 31);
     if ((Raw & OrdinalMask) != 0) {
+      if (Raw & ~(OrdinalMask | uint64_t{0xffff}))
+        continue;
       Imp.Ordinal = static_cast<uint16_t>(Raw & 0xffffu);
-      Imp.Name = (kOrdinalPrefix + llvm::Twine(Imp.Ordinal)).str();
+      Imp.Name = ordinalImportName(Img.Arch, Resolved->Module, Imp.Ordinal);
     } else {
       if (Raw > std::numeric_limits<uint32_t>::max())
         continue;
@@ -719,6 +735,294 @@ void recordConstantCodeSlots(BinaryImage &Img) {
       Img.ConstantCodeSlots.emplace(Slot, Target);
 }
 
+void recordIndexedTableBasesInCode(BinaryImage &Img) {
+  if (!Img.isCOFF() || Img.IsRelocatable ||
+      (Img.Arch != Arch::X86 && Img.Arch != Arch::X64))
+    return;
+  const uint32_t Width = Img.getPointerSize();
+  if (Width != 4 && Width != 8)
+    return;
+
+  size_t Remaining = limits::loader::kCOFFIndexedTableEvidenceWork;
+  std::map<va_t, RelocatedAddressField> Candidates;
+  for (const auto *Operands :
+       {&Img.CodeAddressRelocOperands, &Img.DataAddressRelocOperands})
+    for (const auto &[Slot, Field] : *Operands) {
+      if (!Remaining--)
+        return;
+      if (Field.Width == Width && !Field.PCRelativeFromInstructionEnd &&
+          Field.Kind == RelocatedAddressFieldKind::Generic)
+        Candidates.emplace(Slot, Field);
+    }
+  if (Candidates.empty() && Img.CodePtrRelocSlots.empty() &&
+      Img.DataPtrRelocSlots.empty())
+    return;
+
+  std::set<va_t> Anchors = Img.RelCodeTableAnchors;
+  for (const Symbol &Sym : Img.Symbols) {
+    if (!Remaining--)
+      return;
+    if (!Sym.IsSection)
+      Anchors.insert(Sym.Addr);
+  }
+  for (const auto &[Slot, Field] : Img.DataAddressRelocOperands) {
+    if (!Remaining--)
+      return;
+    if (!Field.PCRelativeFromInstructionEnd && Field.TargetVA != InvalidVA)
+      Anchors.insert(Field.TargetVA);
+  }
+
+  std::set<va_t> Work;
+  if (Img.Entry)
+    Work.insert(Img.Entry);
+  for (const Symbol &Sym : Img.Symbols)
+    if (Sym.IsFunc && !Sym.IsSection)
+      Work.insert(Sym.Addr);
+  Work.insert(Img.RuntimeFunctionAddrs.begin(), Img.RuntimeFunctionAddrs.end());
+  for (const auto &[Begin, End] : Img.KnownCodeRanges)
+    Work.insert(Begin);
+  for (const Export &Exp : Img.Exports)
+    Work.insert(Exp.Addr);
+
+  // Only reached, complete instructions supply table-read evidence. A linear
+  // sweep could decode a table or a dead byte string as another indexed CALL.
+  Decoder Dec;
+  if (!Dec.init(Img))
+    return;
+  struct TableRead {
+    va_t Instruction;
+    bool Call;
+    bool Jump;
+  };
+  std::map<va_t, std::vector<TableRead>> Reads;
+  std::map<va_t, va_t> Instructions;
+  std::set<va_t> Seen;
+  std::map<va_t, std::vector<va_t>> TableSlots;
+  std::set<va_t> FollowedTables;
+  // Cache each relocation run once. Its instruction overlap and all discovered
+  // anchors are checked before publishing evidence, including any run used to
+  // reach another dispatcher.
+  auto SlotsAt = [&](va_t Base) -> const std::vector<va_t> * {
+    auto [It, Inserted] = TableSlots.try_emplace(Base);
+    auto &Slots = It->second;
+    if (!Inserted)
+      return &Slots;
+    const Section *Sec = Img.getSectionFor(Base);
+    const auto OwnerEnd = Img.mappedObjectOwnerEnd(Base);
+    if (!OwnerEnd || Sec->Size > InvalidVA - Sec->VA)
+      return &Slots;
+    va_t End = std::min(Sec->VA + Sec->Size, *OwnerEnd);
+    if (const auto Next = Anchors.upper_bound(Base); Next != Anchors.end())
+      End = std::min(End, *Next);
+    for (va_t Slot = Base; Slot < End && Width <= End - Slot; Slot += Width) {
+      if (!Remaining--)
+        return nullptr;
+      const uint8_t *Bytes = Img.readVA(Slot, Width);
+      if (!Bytes || (Sec->isExecutable() &&
+                     !isFileBackedCodeImageRange(Img, Slot, Width)))
+        break;
+      if (!Candidates.count(Slot) && !Img.CodePtrRelocSlots.count(Slot) &&
+          !Img.DataPtrRelocSlots.count(Slot)) {
+        // A constructor-list sentinel grants no callable identity itself.
+        const uint64_t Value = readPtr(Bytes, Img.is64Bit());
+        const uint64_t AllOnes = Width == 4 ? uint64_t(UINT32_MAX) : UINT64_MAX;
+        if (Slot == Base && (Value == 0 || Value == AllOnes) &&
+            !Img.hasPointerStorageProvenanceAt(Slot))
+          continue;
+        break;
+      }
+      Slots.push_back(Slot);
+    }
+    return &Slots;
+  };
+  while (!Work.empty()) {
+    if (!Remaining--)
+      return; // Publish no partial evidence after exhausting the walk.
+    const va_t Cur = *Work.begin();
+    Work.erase(Work.begin());
+    if (!Seen.insert(Cur).second || Img.DataInCode.count(Cur))
+      continue;
+    const Section *Sec = Img.getSectionFor(Cur);
+    if (!Sec || !Sec->isExecutable() || Sec->isWritable() ||
+        Sec->Size > InvalidVA - Sec->VA)
+      continue;
+    size_t Available =
+        std::min<va_t>(x86::kMaxInstructionLen, Sec->VA + Sec->Size - Cur);
+    const uint8_t *Bytes = nullptr;
+    while (Available && !(Bytes = Img.readVA(Cur, Available)))
+      --Available;
+    DecodedInsn Insn{};
+    const int Len = Bytes && Dec.selectMode(Img, Cur)
+                        ? Dec.decodeOne(Bytes, Available, Cur, Insn)
+                        : 0;
+    if (Len <= 0 || !Insn.Raw || !Insn.Raw->detail ||
+        !isFileBackedCodeImageRange(Img, Cur, Len))
+      continue;
+    const va_t End = Cur + Len;
+    const auto Next = Instructions.lower_bound(Cur);
+    if ((Next != Instructions.end() && Next->first < End) ||
+        (Next != Instructions.begin() && std::prev(Next)->second > Cur))
+      return; // Conflicting instruction boundaries cannot authenticate data.
+    Instructions.emplace(Cur, End);
+
+    const cs_detail &Detail = *Insn.Raw->detail;
+    const cs_x86 &X86 = Detail.x86;
+    for (uint8_t I = 0; I < X86.op_count; ++I) {
+      const cs_x86_op &Operand = X86.operands[I];
+      if (Insn.Id == X86_INS_LEA || Operand.type != X86_OP_MEM ||
+          Operand.size != Width || !(Operand.access & CS_AC_READ) ||
+          (Operand.access & CS_AC_WRITE) || X86.addr_size != Width ||
+          Operand.mem.segment != X86_REG_INVALID ||
+          Operand.mem.base != X86_REG_INVALID ||
+          Operand.mem.index == X86_REG_INVALID ||
+          Operand.mem.scale != static_cast<int>(Width))
+        continue;
+      const va_t Base =
+          Width == 4 ? uint32_t(Operand.mem.disp) : uint64_t(Operand.mem.disp);
+      const Section *Table = Img.getSectionFor(Base);
+      if (Base % Width == 0 && Table && Table->isReadable()) {
+        const bool ControlFlow =
+            Insn.Id == X86_INS_CALL || Insn.Id == X86_INS_JMP;
+        Reads[Base].push_back(
+            {Cur, Insn.Id == X86_INS_CALL, Insn.Id == X86_INS_JMP});
+        if (!ControlFlow || !FollowedTables.insert(Base).second)
+          continue;
+        const auto *Slots = SlotsAt(Base);
+        if (!Slots)
+          return;
+        for (va_t Slot : *Slots) {
+          va_t Target = InvalidVA;
+          if (Img.CodePtrRelocSlots.count(Slot) &&
+              !Img.DataPtrRelocSlots.count(Slot))
+            Target = readPtr(Img.readVA(Slot, Width), Img.is64Bit());
+          else if (const auto Field = Candidates.find(Slot);
+                   Field != Candidates.end() &&
+                   Img.CodeAddressRelocOperands.count(Slot))
+            Target = Field->second.TargetVA;
+          if (Target != InvalidVA && !Img.DataInCode.count(Target) &&
+              Img.hasExecutableCodeOwnerAt(Target))
+            Work.insert(Target);
+        }
+      }
+    }
+    bool Branch = false;
+    for (uint8_t I = 0; I < Detail.groups_count; ++I)
+      Branch |= Detail.groups[I] == CS_GRP_JUMP;
+    if (Branch && X86.op_count == 1 && X86.operands[0].type == X86_OP_IMM)
+      Work.insert(static_cast<va_t>(X86.operands[0].imm));
+    if (const va_t Callee = Dec.directCallTarget(Insn); Callee != InvalidVA)
+      Work.insert(Callee);
+    if (!Dec.isFunctionTerminator(Insn))
+      Work.insert(End);
+  }
+
+  auto OverlapsCode = [&](va_t Slot) {
+    const auto Next = Instructions.lower_bound(Slot);
+    return (Next != Instructions.end() && Next->first - Slot < Width) ||
+           (Next != Instructions.begin() && std::prev(Next)->second > Slot);
+  };
+  std::vector<AbsolutePointerRelocationEffect> Effects;
+  struct TableRun {
+    va_t Base;
+    va_t FirstSlot;
+    va_t End;
+  };
+  std::vector<TableRun> Runs;
+  for (const auto &[Base, Uses] : Reads)
+    Anchors.insert(Base);
+  for (const auto &[Base, Uses] : Reads) {
+    const auto *Slots = SlotsAt(Base);
+    if (!Slots)
+      return;
+    const auto Next = Anchors.upper_bound(Base);
+    const va_t End = Next == Anchors.end() ? InvalidVA : *Next;
+    size_t Count = 0;
+    // A skipped constructor sentinel is still table storage: reached code
+    // overlapping that header invalidates the table and its flow edges too.
+    if (!OverlapsCode(Base))
+      while (Count < Slots->size() && (*Slots)[Count] < End &&
+             Width <= End - (*Slots)[Count] && !OverlapsCode((*Slots)[Count]))
+        ++Count;
+    if (FollowedTables.count(Base) && Count != Slots->size())
+      return; // A disproved flow edge cannot authenticate its descendants.
+    if (Count == 0)
+      continue;
+    if (Count > Remaining / Uses.size())
+      return;
+    Remaining -= Count * Uses.size();
+    Runs.push_back({Base, Slots->front(), (*Slots)[Count - 1] + Width});
+  }
+
+  // Each complete contiguous run supplies its exact slots. A gap, instruction
+  // operand or section end never borrows table identity from nearby storage.
+  std::vector<va_t> Starts;
+  for (const auto &Run : Runs)
+    if (Img.hasExecutableCodeOwnerAt(Run.Base) &&
+        !Img.DataInCode.count(Run.Base))
+      Starts.push_back(Run.Base);
+  recordDataInCode(Img, Starts);
+  for (const auto &Run : Runs)
+    if (FollowedTables.count(Run.Base) &&
+        Img.hasExecutableCodeOwnerAt(Run.Base) &&
+        !Img.DataInCode.count(Run.Base)) {
+      // The shared metadata authority vetoed a flow table. Roll back only
+      // this pass's new markers; no descendant may keep that rejected edge.
+      for (va_t Start : Starts)
+        Img.DataInCode.erase(Start);
+      return;
+    }
+  std::map<va_t, va_t> AcceptedRuns;
+  for (const auto &[Begin, FirstSlot, End] : Runs) {
+    const bool InCode = Img.hasExecutableCodeOwnerAt(Begin);
+    if (InCode && !Img.DataInCode.count(Begin))
+      continue;
+    AcceptedRuns.emplace(Begin, End);
+    for (va_t Slot = FirstSlot; Slot < End; Slot += Width) {
+      if (auto It = Candidates.find(Slot); It != Candidates.end()) {
+        const auto &Field = It->second;
+        Effects.push_back(decideAbsolutePointerRelocation(
+            Img, Slot, Field.TargetVA, Field.TargetOwnerVA, [&](va_t Addr) {
+              auto Class = classifyPointerRelocationAddress(Img, Addr);
+              if (Addr == Slot)
+                Class.Executable = false;
+              return Class;
+            }));
+      }
+      for (const TableRead &Use : Reads.at(Begin)) {
+        if (Use.Call)
+          Img.CallDispatchRelocSlots.insert(Slot);
+        if (Use.Jump)
+          Img.JumpDispatchTableSources[Slot].insert(Use.Instruction);
+      }
+    }
+  }
+  // A relocated operand naming an exact accepted object is a data address.
+  for (const auto &[Slot, Field] : Img.CodeAddressRelocOperands) {
+    const auto Run = AcceptedRuns.upper_bound(Field.TargetVA);
+    if (Run == AcceptedRuns.begin() ||
+        Field.TargetVA >= std::prev(Run)->second || Field.Width != Width ||
+        Field.PCRelativeFromInstructionEnd ||
+        Field.Kind != RelocatedAddressFieldKind::Generic)
+      continue;
+    const auto Storage = AcceptedRuns.upper_bound(Slot);
+    if (Storage != AcceptedRuns.begin() && Slot < std::prev(Storage)->second)
+      continue;
+    Effects.push_back(decideAbsolutePointerRelocation(
+        Img, Slot, Field.TargetVA, InvalidVA, [&](va_t Addr) {
+          auto Class = classifyPointerRelocationAddress(Img, Addr);
+          if (Addr == Field.TargetVA)
+            Class.Executable = false;
+          return Class;
+        }));
+  }
+  for (const auto &Effect : Effects)
+    if (Effect.What != AbsolutePointerRelocationEffect::Kind::None) {
+      Img.CodeAddressRelocOperands.erase(Effect.SlotVA);
+      Img.DataAddressRelocOperands.erase(Effect.SlotVA);
+      applyAbsolutePointerRelocation(Img, Effect);
+    }
+}
+
 void recordRelocatedPointerRunsInCode(BinaryImage &Img) {
   if (Img.IsRelocatable)
     return;
@@ -945,6 +1249,43 @@ void parseDebugDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
 
 namespace {
 template <typename LoadCfgT>
+llvm::ArrayRef<LoadConfigCallableField> callableFields() {
+  static constexpr LoadConfigCallableField Fields[] = {
+      {offsetof(LoadCfgT, GuardCFCheckFunction),
+       RuntimeCallablePointerSlotKind::GuardCFCheck},
+      {offsetof(LoadCfgT, GuardCFCheckDispatch),
+       RuntimeCallablePointerSlotKind::GuardCFDispatch},
+      {offsetof(LoadCfgT, GuardRFFailureRoutineFunctionPointer),
+       RuntimeCallablePointerSlotKind::GuardRFFailureRoutine},
+      {offsetof(LoadCfgT, GuardRFVerifyStackPointerFunctionPointer),
+       RuntimeCallablePointerSlotKind::GuardRFVerifyStackPointer},
+      {offsetof(LoadCfgT, GuardXFGCheckFunctionPointer),
+       RuntimeCallablePointerSlotKind::GuardXFGCheck},
+      {offsetof(LoadCfgT, GuardXFGDispatchFunctionPointer),
+       RuntimeCallablePointerSlotKind::GuardXFGDispatch},
+      {offsetof(LoadCfgT, GuardXFGTableDispatchFunctionPointer),
+       RuntimeCallablePointerSlotKind::GuardXFGTableDispatch},
+      {offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode),
+       RuntimeCallablePointerSlotKind::CastGuardOsDeterminedFailureMode},
+      // The append-only ABI places GuardMemcpy after CastGuard. LLVM's
+      // older typed structures stop at CastGuard; don't change their sizeof.
+      {offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode) +
+           sizeof(LoadCfgT::CastGuardOsDeterminedFailureMode),
+       RuntimeCallablePointerSlotKind::GuardMemcpy}};
+  return Fields;
+}
+} // namespace
+
+llvm::ArrayRef<LoadConfigCallableField> loadConfigCallableFields(Bitness Bits) {
+  if (Bits == Bitness::Bits64)
+    return callableFields<coff_load_configuration64>();
+  if (Bits == Bitness::Bits32)
+    return callableFields<coff_load_configuration32>();
+  return {};
+}
+
+namespace {
+template <typename LoadCfgT>
 void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
                           uint64_t ImageBase, BinaryImage &Img) {
   if (AvailableSize < sizeof(uint32_t))
@@ -997,61 +1338,15 @@ void extractLoadCfgFields(uintptr_t CfgPtr, size_t AvailableSize,
           sizeof(Cfg.GuardEHContinuationCount)))
     Img.DynInfo.GuardEHContinuationCount = Cfg.GuardEHContinuationCount;
 
-  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardCFCheckFunction),
-                            sizeof(Cfg.GuardCFCheckFunction),
-                            Cfg.GuardCFCheckFunction,
-                            RuntimeCallablePointerSlotKind::GuardCFCheck);
-  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardCFCheckDispatch),
-                            sizeof(Cfg.GuardCFCheckDispatch),
-                            Cfg.GuardCFCheckDispatch,
-                            RuntimeCallablePointerSlotKind::GuardCFDispatch);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardRFFailureRoutineFunctionPointer),
-      sizeof(Cfg.GuardRFFailureRoutineFunctionPointer),
-      Cfg.GuardRFFailureRoutineFunctionPointer,
-      RuntimeCallablePointerSlotKind::GuardRFFailureRoutine);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardRFVerifyStackPointerFunctionPointer),
-      sizeof(Cfg.GuardRFVerifyStackPointerFunctionPointer),
-      Cfg.GuardRFVerifyStackPointerFunctionPointer,
-      RuntimeCallablePointerSlotKind::GuardRFVerifyStackPointer);
-  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardXFGCheckFunctionPointer),
-                            sizeof(Cfg.GuardXFGCheckFunctionPointer),
-                            Cfg.GuardXFGCheckFunctionPointer,
-                            RuntimeCallablePointerSlotKind::GuardXFGCheck);
-  RecordRuntimeCallableSlot(offsetof(LoadCfgT, GuardXFGDispatchFunctionPointer),
-                            sizeof(Cfg.GuardXFGDispatchFunctionPointer),
-                            Cfg.GuardXFGDispatchFunctionPointer,
-                            RuntimeCallablePointerSlotKind::GuardXFGDispatch);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, GuardXFGTableDispatchFunctionPointer),
-      sizeof(Cfg.GuardXFGTableDispatchFunctionPointer),
-      Cfg.GuardXFGTableDispatchFunctionPointer,
-      RuntimeCallablePointerSlotKind::GuardXFGTableDispatch);
-  RecordRuntimeCallableSlot(
-      offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode),
-      sizeof(Cfg.CastGuardOsDeterminedFailureMode),
-      Cfg.CastGuardOsDeterminedFailureMode,
-      RuntimeCallablePointerSlotKind::CastGuardOsDeterminedFailureMode);
-
-  // GuardMemcpyFunctionPointer immediately follows CastGuard in the
-  // append-only IMAGE_LOAD_CONFIG_DIRECTORY ABI.  LLVM releases predating the
-  // SDK field intentionally end their typed structure at CastGuard, so decode
-  // this tail by its versioned byte offset instead of changing LLVM's sizeof
-  // contract locally.  The structure's declared Size has already bounded
-  // AvailableSize above.
-  constexpr size_t GuardMemcpyOffset =
-      offsetof(LoadCfgT, CastGuardOsDeterminedFailureMode) +
-      sizeof(Cfg.CastGuardOsDeterminedFailureMode);
-  constexpr size_t PointerWidth = sizeof(Cfg.CastGuardOsDeterminedFailureMode);
-  if (Has(GuardMemcpyOffset, PointerWidth)) {
-    const auto *Field =
-        reinterpret_cast<const uint8_t *>(CfgPtr) + GuardMemcpyOffset;
-    const uint64_t SlotVA = PointerWidth == sizeof(uint64_t)
-                                ? readLE<uint64_t>(Field)
-                                : readLE<uint32_t>(Field);
-    RecordRuntimeCallableSlot(GuardMemcpyOffset, PointerWidth, SlotVA,
-                              RuntimeCallablePointerSlotKind::GuardMemcpy);
+  const size_t PointerWidth = sizeof(Cfg.CastGuardOsDeterminedFailureMode);
+  for (const auto &Field : loadConfigCallableFields(Img.Bits)) {
+    if (!Has(Field.Offset, PointerWidth))
+      continue;
+    const auto *Bytes =
+        reinterpret_cast<const uint8_t *>(CfgPtr) + Field.Offset;
+    RecordRuntimeCallableSlot(Field.Offset, PointerWidth,
+                              readPtr(Bytes, PointerWidth == sizeof(uint64_t)),
+                              Field.Kind);
   }
 }
 } // anonymous namespace

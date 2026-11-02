@@ -8,6 +8,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/types/TypeParse.h"
 
 #include <map>
@@ -17,6 +19,9 @@
 #include <vector>
 
 namespace {
+#define LOCAL_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
+#define LOCAL_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "LocalTypesSourceCallFixtures.def"
 
 /// Debug information that names functions and types none, as a PDB of
 /// public symbols does.
@@ -45,6 +50,259 @@ public:
 };
 
 } // namespace
+
+TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
+  using namespace neverd;
+  types::TypeLibrary Library(types::DataModel::LP64);
+  ASSERT_TRUE(types::parseCTypes(kSourceValueDeclarations, Library).ok());
+  const auto Parsed =
+      types::parseFunctionDeclaration(kSourceValueCall, Library);
+  ASSERT_TRUE(Parsed.ok());
+  ASSERT_TRUE(Parsed.Function);
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::Analyst;
+  Hint.Signature.ReturnType =
+      sdk::sourceCallTypeOf(Library, *Parsed.Function->Return);
+  ASSERT_TRUE(Hint.Signature.ReturnType);
+  EXPECT_EQ(Hint.Signature.ReturnType->Fields.size(), kSourceValueRecordFields);
+  EXPECT_TRUE(
+      Hint.Signature.ReturnType->Fields.front()->Pointee->Fields.empty());
+  const auto Pointer = Hint.Signature.ReturnType->Fields.front();
+  auto OtherPointee = std::make_shared<NdType>(*Pointer->Pointee);
+  EXPECT_TRUE(equalSourceTypes(Pointer, NdType::makePtr(OtherPointee)));
+  OtherPointee->SourceName = kDifferentOpaqueRecordName;
+  EXPECT_FALSE(equalSourceTypes(Pointer, NdType::makePtr(OtherPointee)));
+  EXPECT_FALSE(equalSourceTypes(OtherPointee, OtherPointee));
+  for (const auto &Parameter : Parsed.Function->Params) {
+    const auto Value = sdk::sourceCallTypeOf(Library, *Parameter.Type);
+    ASSERT_TRUE(Value);
+    EXPECT_EQ(Value->Size, kSourceValueWideBytes);
+    if (Value->Kind == NdTypeKind::Struct) {
+      EXPECT_FALSE(Value->Fields.empty());
+      EXPECT_TRUE(
+          sdk::decompilerTypeOf(Library, *Parameter.Type)->Fields.empty());
+    }
+    Hint.Signature.Parameters.push_back({Parameter.Name, Value});
+  }
+  std::string Diagnostic;
+  ASSERT_TRUE(assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO,
+                                   Diagnostic))
+      << Diagnostic;
+  EXPECT_EQ(sourceABIParameters(Hint.Signature).size(),
+            kSourceValuePhysicalArguments);
+  const auto Unsupported =
+      types::parseFunctionDeclaration(kUnsupportedSourceValueCall, Library);
+  ASSERT_TRUE(Unsupported.ok());
+  for (const auto &Parameter : Unsupported.Function->Params)
+    EXPECT_FALSE(sdk::sourceCallTypeOf(Library, *Parameter.Type));
+}
+
+TEST(LocalTypesDebugContext,
+     CallbackConventionsSurviveParameterAndReturnTypes) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      typedef int (__stdcall *EventCallback)(void *Context, unsigned int Code);
+      EventCallback __stdcall SetCallback(EventCallback Handler, void *Context);
+    )",
+                                   *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    const auto Signature = Context.resolvePrototype("SetCallback");
+    ASSERT_TRUE(Signature);
+    ASSERT_EQ(Signature->Params.size(), 2u);
+    for (const auto &Type :
+         {Signature->ReturnType, Signature->Params[0].second}) {
+      ASSERT_NE(Type, nullptr);
+      ASSERT_EQ(Type->Kind, NdTypeKind::Ptr);
+      ASSERT_NE(Type->Pointee, nullptr);
+      ASSERT_EQ(Type->Pointee->Kind, NdTypeKind::Func);
+      const auto Expected = Model == types::DataModel::ILP32
+                                ? types::CallingConvention::Stdcall
+                                : types::CallingConvention::Unspecified;
+      EXPECT_EQ(Type->Pointee->FunctionConvention, Expected);
+    }
+  }
+}
+
+TEST(LocalTypesDebugContext,
+     PortableDeclarationsRetainQualifiersAndConvention) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::ILP32);
+  ASSERT_TRUE(types::parseCTypes(R"(
+    const unsigned short *__stdcall ReadText(const unsigned short *const *Input,
+                                             volatile unsigned int *Output);
+    _Noreturn void __cdecl Stop(void);
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Signature = Context.resolvePrototype("ReadText");
+  ASSERT_TRUE(Signature);
+  EXPECT_EQ(Signature->CallConv, DebugCallConv::Stdcall);
+  EXPECT_EQ(Signature->PortablePrototypeDeclaration,
+            "const uint16_t *ReadText(const uint16_t *const *Input, volatile "
+            "uint32_t *Output)");
+  EXPECT_EQ(Signature->PortableParameterTypes,
+            (std::vector<std::string>{"const uint16_t *const *",
+                                      "volatile uint32_t *"}));
+  const auto Stop = Context.resolvePrototype("Stop");
+  ASSERT_TRUE(Stop);
+  EXPECT_TRUE(Stop->NoReturn);
+  EXPECT_EQ(Stop->PortablePrototypeDeclaration, "_Noreturn void Stop(void)");
+}
+
+TEST(LocalTypesDebugContext,
+     CallbackBorrowsKeepIdentityWithoutRecursiveLayouts) {
+  using namespace neverd;
+  for (const auto Model : {types::DataModel::ILP32, types::DataModel::LLP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"c(
+      struct Entry;
+      typedef void (*Observer)(const struct Entry *, volatile unsigned int *);
+      struct Entry { Observer Notify; struct Entry *Next; };
+      void Watch(Observer Notify, const struct Entry *Input);
+    )c",
+                                   *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    const auto Function = Context.resolvePrototype("Watch");
+    ASSERT_TRUE(Function);
+    ASSERT_EQ(Function->Params.size(), 2u);
+    const auto Callback = Function->Params[0].second->Pointee;
+    ASSERT_EQ(Callback->Kind, NdTypeKind::Func);
+    ASSERT_EQ(Callback->ParamTypes.size(), 2u);
+    const auto Borrow = Callback->ParamTypes[0]->Pointee;
+    EXPECT_EQ(Borrow->SourceName, "Entry");
+    EXPECT_EQ(Borrow->Size, 0);
+    EXPECT_TRUE(Borrow->Fields.empty());
+    EXPECT_TRUE(Borrow->FieldDisplayTypes.empty());
+    ASSERT_EQ(Function->PortableParameterTypes.size(), 2u);
+    EXPECT_EQ(Function->PortableParameterTypes[0],
+              "void (*)(const struct Entry *, volatile uint32_t *)");
+    EXPECT_EQ(Function->PortableParameterTypes[1], "const struct Entry *");
+  }
+}
+
+TEST(LocalTypesDebugContext, RecursiveRecordBorrowsReleaseAndComplete) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(types::parseCTypes(R"c(
+    struct Left;
+    struct Right { struct Left *Back; unsigned Tag; };
+    struct Left { struct Right *Next; struct Left *Self; unsigned Value; };
+    struct Left Read(void);
+  )c",
+                                 *Library)
+                  .ok());
+  const auto *Prototype = Library->findPrototype("Read");
+  ASSERT_TRUE(Prototype);
+  std::weak_ptr<NdType> RootLifetime, BorrowLifetime;
+  {
+    const auto Root = sdk::decompilerTypeOf(*Library, *Prototype->Return);
+    ASSERT_TRUE(Root);
+    ASSERT_EQ(Root->FieldDisplayTypes.size(), 3u);
+    const auto Right = Root->FieldDisplayTypes[0]->Pointee;
+    ASSERT_TRUE(Right);
+    ASSERT_EQ(Right->FieldDisplayTypes.size(), 2u);
+    const auto Back = Right->FieldDisplayTypes[0]->Pointee;
+    ASSERT_TRUE(Back);
+    EXPECT_EQ(Back->SourceName, "Left");
+    EXPECT_EQ(Back->Size, 0u);
+    EXPECT_TRUE(Back->FieldDisplayTypes.empty());
+    EXPECT_NE(Back.get(), Root.get());
+    EXPECT_NE(Root->FieldDisplayTypes[1]->Pointee.get(), Root.get());
+    RootLifetime = Root;
+    BorrowLifetime = Back;
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    Context.completeType(Back);
+    EXPECT_EQ(Back->FieldDisplayNames,
+              (std::vector<std::string>{"Next", "Self", "Value"}));
+  }
+  EXPECT_TRUE(RootLifetime.expired());
+  EXPECT_TRUE(BorrowLifetime.expired());
+}
+
+TEST(LocalTypesDebugContext, PortablePrototypesRetainIntegerKeywordIdentity) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,
+                     types::DataModel::LP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      typedef unsigned long DWORD;
+      typedef enum { OpFirst = 1, OpSecond = 2 } Operation;
+      double Scalar(DWORD Flags, Operation Op, double Value, long *Output,
+                    const long long *Wide);
+    )",
+                                   *Library)
+                    .ok());
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    const auto Signature = Context.resolvePrototype("Scalar");
+    ASSERT_TRUE(Signature);
+    const std::string Bytes = Model == types::DataModel::LP64 ? "8" : "4";
+    const std::string Bits = Model == types::DataModel::LP64 ? "64" : "32";
+    EXPECT_NE(Signature->PortablePrototypeDeclaration.find(
+                  "__typeof__(__builtin_choose_expr(sizeof(unsigned long) == " +
+                  Bytes + ", (unsigned long)0, (uint" + Bits + "_t)0)) Flags"),
+              std::string::npos)
+        << Signature->PortablePrototypeDeclaration;
+    EXPECT_NE(Signature->PortablePrototypeDeclaration.find("Operation Op"),
+              std::string::npos);
+    EXPECT_EQ(Signature->Params[0].second->Size,
+              Model == types::DataModel::LP64 ? 8u : 4u);
+    // Call conversions must use the declaration's C identity too. Equal
+    // widths do not make long *, long long * and int64_t * compatible.
+    EXPECT_NE(Signature->Params[3].second->Pointee->SourceName.find(
+                  "__typeof__(__builtin_choose_expr(sizeof(long) == " + Bytes),
+              std::string::npos);
+    EXPECT_NE(Signature->Params[4].second->Pointee->SourceName.find(
+                  "__typeof__(__builtin_choose_expr(sizeof(long long) == 8"),
+              std::string::npos);
+    EXPECT_EQ(Context.resolvePrototype("Scalar")->PortablePrototypeDeclaration,
+              Signature->PortablePrototypeDeclaration);
+  }
+}
+
+TEST(LocalTypesDebugContext, PointerDeclarationsDoNotRequireRecordLayouts) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(types::parseCTypes(R"(
+    struct Item { int Value; };
+    union Choice { int Number; void *Pointer; };
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Item = NdType::makeNamedRecord("Item");
+  const auto Choice = NdType::makeNamedRecord("Choice");
+  const auto ItemPointer = NdType::makePtr(Item);
+  const auto ChoicePointer = NdType::makePtr(Choice);
+  const auto Declarations = Context.definitions({ItemPointer, ChoicePointer});
+  EXPECT_TRUE(Declarations.Text.empty());
+  EXPECT_TRUE(Declarations.Records.empty());
+  ASSERT_EQ(Declarations.Tags.size(), 2u);
+  EXPECT_FALSE(Declarations.Tags.at("Item"));
+  EXPECT_TRUE(Declarations.Tags.at("Choice"));
+  EXPECT_TRUE(Context.readTypes().contains("Item"));
+  EXPECT_TRUE(Context.readTypes().contains("Choice"));
+  // Requiring a value or a member layout wins regardless of query order.
+  for (const auto &Requests :
+       {std::vector<TypeRef>{ItemPointer, ChoicePointer, Item, Choice},
+        std::vector<TypeRef>{Item, Choice, ItemPointer, ChoicePointer}}) {
+    const auto Definitions = Context.definitions(Requests);
+    EXPECT_NE(Definitions.Text.find("int32_t Value"), std::string::npos);
+    EXPECT_EQ(Definitions.Records.size(), 2u);
+    EXPECT_FALSE(Definitions.Records.at("Item"));
+    EXPECT_TRUE(Definitions.Records.at("Choice"));
+  }
+}
 
 TEST(LocalTypesDebugContext, TypesTheFunctionsDebugInformationLeavesUntyped) {
   using namespace neverd;
@@ -97,22 +355,33 @@ TEST(LocalTypesDebugContext, TypesTheFunctionsDebugInformationLeavesUntyped) {
   EXPECT_EQ(Record->FieldDisplayNames,
             (std::vector<std::string>{"Low", "High", "Top"}));
   EXPECT_EQ(Record->FieldDisplayOffsets, (std::vector<uint16_t>{0, 4, 4}));
-  // A callback is a pointer to a function of opaque pointers and scalars.
+  // Callback pointer parameters retain their named borrowed records.
   const TypeRef &Done = Pair->Params[2].second;
   ASSERT_EQ(Done->Kind, NdTypeKind::Ptr);
   ASSERT_EQ(Done->Pointee->Kind, NdTypeKind::Func);
   ASSERT_EQ(Done->Pointee->ParamTypes.size(), 2u);
   EXPECT_EQ(Done->Pointee->ParamTypes[0]->Kind, NdTypeKind::Ptr);
-  EXPECT_EQ(Done->Pointee->ParamTypes[0]->Pointee->Kind, NdTypeKind::Void);
+  EXPECT_EQ(Done->Pointee->ParamTypes[0]->Pointee->Kind, NdTypeKind::Struct);
+  EXPECT_EQ(Done->Pointee->ParamTypes[0]->Pointee->SourceName, "_PAIR");
+  EXPECT_EQ(Pair->PortableParameterTypes,
+            Context.resolvePrototype("Pair")->PortableParameterTypes);
 
   // A record returned by a C declaration's pointer is no hidden result.
   std::optional<FunctionSym> Next = Context.resolveFunction(0x2000);
   ASSERT_TRUE(Next.has_value());
   EXPECT_FALSE(
       isMsvcIndirectReturn(Next->ReturnType, Arch::X64, BinaryFormat::COFF));
-  // A variadic prototype's calls pass more than it declares; a name
-  // without one, an interior address and a typed declaration stay.
-  EXPECT_TRUE(Context.resolveFunction(0x3000)->Params.empty());
+  // A variadic prototype retains its fixed prefix and its open tail.
+  ASSERT_TRUE(Context.resolvePrototype("Print"));
+  EXPECT_TRUE(Context.resolvePrototype("Print")->IsVariadic);
+  EXPECT_EQ(Context.resolvePrototype("Print")->PortablePrototypeDeclaration,
+            "__typeof__(__builtin_choose_expr(sizeof(unsigned long) == 4, "
+            "(unsigned long)0, (uint32_t)0)) Print(const char *Format, ...)");
+  EXPECT_EQ(Context.resolvePrototype("Print")->Params.size(), 1u);
+  EXPECT_TRUE(Context.resolveFunction(0x3000)->IsVariadic);
+  EXPECT_EQ(Context.resolveFunction(0x3000)->Params.size(), 1u);
+  // A name without a prototype, an interior address and a typed declaration
+  // stay.
   EXPECT_TRUE(Context.resolveFunction(0x4000)->Params.empty());
   EXPECT_TRUE(Context.resolveFunction(0x1008)->Params.empty());
   EXPECT_TRUE(Context.resolveFunction(0x5000)->Params.empty());
@@ -262,6 +531,8 @@ TEST(LocalTypesDebugContext, NamesTheHeaderLibraryAPrototypeComesFrom) {
   std::optional<FunctionSym> Owner = Context.resolveFunction(0x1000);
   ASSERT_TRUE(Owner.has_value());
   EXPECT_EQ(Owner->PrototypeLibrary, "windows-kernel-x64");
+  EXPECT_TRUE(Owner->PrototypeFromHeader);
+  EXPECT_FALSE(Owner->PrototypeFromCLibrary);
   EXPECT_EQ(Owner->PrototypeDeclaration,
             "PEPROCESS IoThreadToProcess(PETHREAD Thread)");
   ASSERT_EQ(Owner->Params.size(), 1u);
@@ -344,6 +615,50 @@ TEST(LocalTypesDebugContext, GivesTheDebugInformationsRecordsTheirMembers) {
   EXPECT_TRUE(Holder->FieldDisplayNames.empty());
   EXPECT_EQ(Own->FieldDisplayNames, std::vector<std::string>{"Theirs"});
   EXPECT_EQ(Own->FieldDisplayOffsets, std::vector<uint16_t>{0});
+}
+
+TEST(LocalTypesDebugContext, MatchingNamesStillCompleteTheMemberTypes) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>();
+  ASSERT_TRUE(types::parseCTypes(R"(
+    struct STATUS_LIKE { LONG Status; ULONGLONG Information; };
+    union ASSOCIATED_LIKE { void *Buffer; ULONGLONG Bits; };
+    struct IRP_LIKE {
+      union ASSOCIATED_LIKE Associated;
+      struct STATUS_LIKE Status;
+      struct STATUS_LIKE *User;
+    };
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  auto Context = std::make_unique<sdk::LocalTypesDebugContext>(Names, Library);
+  const TypeRef Record = NdType::makeNamedRecord("IRP_LIKE", 32);
+  Record->FieldDisplayNames = {"Associated", "Status", "User"};
+  Record->FieldDisplayOffsets = {0, 8, 24};
+  // A bounded traversal may already have reached these names while leaving
+  // the member types absent or shallow. Equal names are not complete types.
+  const std::vector<TypeRef> Original = {
+      nullptr, NdType::makeNamedRecord("STATUS_LIKE", 16),
+      NdType::makePtr(NdType::makeVoid())};
+  Record->FieldDisplayTypes = Original;
+  Context->completeType(Record);
+  EXPECT_EQ(
+      Record->displayFieldPathAt(0, 8, true, true, NdAccessClass::Integer),
+      "Associated.Bits");
+  EXPECT_EQ(Record->displayFieldPathAt(8, 4), "Status.Status");
+  const auto Member = Record->displayFieldTypeAt(24, 8);
+  ASSERT_TRUE(Member);
+  ASSERT_EQ(Member->Kind, NdTypeKind::Ptr);
+  ASSERT_TRUE(Member->Pointee);
+  EXPECT_EQ(Member->Pointee->SourceName, "STATUS_LIKE");
+  const auto Completed = Record->FieldDisplayTypes;
+  Context->completeType(Record);
+  EXPECT_EQ(Record->FieldDisplayTypes, Completed);
+  // Completion belongs to this context; a later context gets the original
+  // debug graph, just as it does when the library changes member names.
+  Context.reset();
+  EXPECT_EQ(Record->FieldDisplayTypes, Original);
 }
 
 TEST(LocalTypesDebugContext, FlexibleArrayMembersHoldTheirElements) {

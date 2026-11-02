@@ -19,24 +19,6 @@ InstructionRelocations instructionRelocations(const BinaryImage &Img,
   const va_t Next = Cur + static_cast<va_t>(Sz);
   InstructionRelocations Result;
   std::vector<RelocatedAddressOperand> &RelocatedOperands = Result.Addresses;
-  // A code-provenance operand that is the displacement of a memory operand
-  // narrower than a pointer names data, not code: a sub-pointer load cannot
-  // read a code pointer, so a `movzx r, byte [sel + table]` byte index table
-  // among the code is data even though it lies in an executable segment.
-  auto narrowMemoryDisplacementField = [&](va_t FieldVA) -> bool {
-    if ((Img.Arch != Arch::X86 && Img.Arch != Arch::X64) || !DI.Raw ||
-        !DI.Raw->detail)
-      return false;
-    const cs_x86 &X86 = DI.Raw->detail->x86;
-    if (X86.encoding.disp_size == 0 ||
-        Cur + X86.encoding.disp_offset != FieldVA)
-      return false;
-    const unsigned PtrSize = Img.getPointerSize();
-    for (uint8_t I = 0; I < X86.op_count; ++I)
-      if (X86.operands[I].type == X86_OP_MEM)
-        return X86.operands[I].size != 0 && X86.operands[I].size < PtrSize;
-    return false;
-  };
   auto selectRelocatedOperand =
       [&](const std::map<va_t, RelocatedAddressField> &Occurrences,
           ConstantAddressProvenance Provenance) {
@@ -71,7 +53,9 @@ InstructionRelocations instructionRelocations(const BinaryImage &Img,
             continue;
           ConstantAddressProvenance FieldProvenance = Provenance;
           if (FieldProvenance == ConstantAddressProvenance::CodeAddress &&
-              narrowMemoryDisplacementField(It->first))
+              (Img.Arch == Arch::X86 || Img.Arch == Arch::X64) &&
+              instruction_relocations_detail::isX86NarrowMemoryDisplacement(
+                  Img, DI, It->first))
             FieldProvenance = ConstantAddressProvenance::DataAddress;
           RelocatedOperands.push_back(RelocatedAddressOperand{
               It->first, It->second.EncodedValue, TargetVA, It->second.Width,

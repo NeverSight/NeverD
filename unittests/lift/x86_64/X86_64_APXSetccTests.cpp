@@ -4,7 +4,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <array>
@@ -21,30 +21,27 @@ namespace {
 constexpr va_t kInstructionAddress = 0x1000;
 
 constexpr std::array<unsigned, 16> kSetIds = {
-    X86_INS_SETO,  X86_INS_SETNO, X86_INS_SETB,  X86_INS_SETAE,
-    X86_INS_SETE,  X86_INS_SETNE, X86_INS_SETBE, X86_INS_SETA,
-    X86_INS_SETS,  X86_INS_SETNS, X86_INS_SETP,  X86_INS_SETNP,
-    X86_INS_SETL,  X86_INS_SETGE, X86_INS_SETLE, X86_INS_SETG,
+    X86_INS_SETO, X86_INS_SETNO, X86_INS_SETB,  X86_INS_SETAE,
+    X86_INS_SETE, X86_INS_SETNE, X86_INS_SETBE, X86_INS_SETA,
+    X86_INS_SETS, X86_INS_SETNS, X86_INS_SETP,  X86_INS_SETNP,
+    X86_INS_SETL, X86_INS_SETGE, X86_INS_SETLE, X86_INS_SETG,
 };
 
 constexpr std::array<unsigned, 16> kSetzuIds = {
-    X86_INS_SETZUO,  X86_INS_SETZUNO, X86_INS_SETZUB,
-    X86_INS_SETZUAE, X86_INS_SETZUE,  X86_INS_SETZUNE,
-    X86_INS_SETZUBE, X86_INS_SETZUA,  X86_INS_SETZUS,
-    X86_INS_SETZUNS, X86_INS_SETZUP,  X86_INS_SETZUNP,
-    X86_INS_SETZUL,  X86_INS_SETZUGE, X86_INS_SETZULE,
-    X86_INS_SETZUG,
+    X86_INS_SETZUO, X86_INS_SETZUNO, X86_INS_SETZUB,  X86_INS_SETZUAE,
+    X86_INS_SETZUE, X86_INS_SETZUNE, X86_INS_SETZUBE, X86_INS_SETZUA,
+    X86_INS_SETZUS, X86_INS_SETZUNS, X86_INS_SETZUP,  X86_INS_SETZUNP,
+    X86_INS_SETZUL, X86_INS_SETZUGE, X86_INS_SETZULE, X86_INS_SETZUG,
 };
 
 constexpr std::array<x86_reg, 32> kGpr8 = {
-    X86_REG_AL,   X86_REG_CL,   X86_REG_DL,   X86_REG_BL,
-    X86_REG_SPL,  X86_REG_BPL,  X86_REG_SIL,  X86_REG_DIL,
-    X86_REG_R8B,  X86_REG_R9B,  X86_REG_R10B, X86_REG_R11B,
-    X86_REG_R12B, X86_REG_R13B, X86_REG_R14B, X86_REG_R15B,
-    X86_REG_R16B, X86_REG_R17B, X86_REG_R18B, X86_REG_R19B,
-    X86_REG_R20B, X86_REG_R21B, X86_REG_R22B, X86_REG_R23B,
-    X86_REG_R24B, X86_REG_R25B, X86_REG_R26B, X86_REG_R27B,
-    X86_REG_R28B, X86_REG_R29B, X86_REG_R30B, X86_REG_R31B,
+    X86_REG_AL,   X86_REG_CL,   X86_REG_DL,   X86_REG_BL,   X86_REG_SPL,
+    X86_REG_BPL,  X86_REG_SIL,  X86_REG_DIL,  X86_REG_R8B,  X86_REG_R9B,
+    X86_REG_R10B, X86_REG_R11B, X86_REG_R12B, X86_REG_R13B, X86_REG_R14B,
+    X86_REG_R15B, X86_REG_R16B, X86_REG_R17B, X86_REG_R18B, X86_REG_R19B,
+    X86_REG_R20B, X86_REG_R21B, X86_REG_R22B, X86_REG_R23B, X86_REG_R24B,
+    X86_REG_R25B, X86_REG_R26B, X86_REG_R27B, X86_REG_R28B, X86_REG_R29B,
+    X86_REG_R30B, X86_REG_R31B,
 };
 
 struct LiftedInstruction {
@@ -52,8 +49,8 @@ struct LiftedInstruction {
   std::vector<LowOp> Ops;
 };
 
-std::vector<uint8_t> encodeRegister(unsigned Condition, bool ZeroUpper,
-                                    bool W, unsigned Register) {
+std::vector<uint8_t> encodeRegister(unsigned Condition, bool ZeroUpper, bool W,
+                                    unsigned Register) {
   return {
       0x62,
       static_cast<uint8_t>(0xd4 | ((Register & 8) != 0 ? 0 : 0x20) |
@@ -77,10 +74,14 @@ std::vector<uint8_t> encodeMemory(unsigned Condition, bool ZeroUpper,
   if (Address32)
     Bytes.push_back(0x67);
   const uint8_t Encoding[] = {
-      0x62, 0xbc, 0x7b,
+      0x62,
+      0xbc,
+      0x7b,
       static_cast<uint8_t>((ZeroUpper ? 0x10 : 0) | 0x08),
       static_cast<uint8_t>(0x40 | (Condition & 15)),
-      0x44, 0xac, 0xf0,
+      0x44,
+      0xac,
+      0xf0,
   };
   Bytes.insert(Bytes.end(), std::begin(Encoding), std::end(Encoding));
   return Bytes;
@@ -224,10 +225,8 @@ TEST(X86APXSetcc, AllConditionsProduceExactFalseAndTrueResults) {
       const LiftedInstruction Set =
           liftX64(encodeRegister(Condition, ZeroUpper, Condition & 1, 29));
       SCOPED_TRACE(::testing::Message()
-                   << "condition=" << Condition
-                   << " zero_upper=" << ZeroUpper);
-      EXPECT_EQ(Set.Id,
-                ZeroUpper ? kSetzuIds[Condition] : kSetIds[Condition]);
+                   << "condition=" << Condition << " zero_upper=" << ZeroUpper);
+      EXPECT_EQ(Set.Id, ZeroUpper ? kSetzuIds[Condition] : kSetIds[Condition]);
       ASSERT_FALSE(Set.Ops.empty());
       for (unsigned Result = 0; Result < 2; ++Result) {
         BinaryImage Image;
@@ -255,8 +254,8 @@ TEST(X86APXSetcc, RegisterDestinationsCoverTheCompleteApxBank) {
     for (const bool ZeroUpper : {false, true}) {
       for (unsigned Result = 0; Result < 2; ++Result) {
         SCOPED_TRACE(::testing::Message()
-                     << "register=" << Register
-                     << " zero_upper=" << ZeroUpper << " result=" << Result);
+                     << "register=" << Register << " zero_upper=" << ZeroUpper
+                     << " result=" << Result);
         const LiftedInstruction Set =
             liftX64(encodeRegister(5, ZeroUpper, Register & 1, Register));
         EXPECT_EQ(Set.Id, ZeroUpper ? X86_INS_SETZUNE : X86_INS_SETNE);
@@ -292,8 +291,8 @@ struct MemoryCase {
 TEST(X86APXSetcc, MemoryFormsAlwaysStoreOneByteWithExactAddressing) {
   constexpr std::array<MemoryCase, 4> Cases = {{
       {"egpr", false, SegmentOverride::None, 0x5000, 4, 0, 0x5000},
-      {"addr32", true, SegmentOverride::None, UINT64_C(0xfffffff0), 0x1408,
-       0, 0x5000},
+      {"addr32", true, SegmentOverride::None, UINT64_C(0xfffffff0), 0x1408, 0,
+       0x5000},
       {"fs", false, SegmentOverride::FS, 0x20, 4, 0x6000, 0x6020},
       {"gs", false, SegmentOverride::GS, 0x30, 4, 0x7000, 0x7030},
   }};
@@ -302,11 +301,10 @@ TEST(X86APXSetcc, MemoryFormsAlwaysStoreOneByteWithExactAddressing) {
   for (const MemoryCase &Case : Cases) {
     for (const bool ZeroUpper : {false, true}) {
       for (unsigned Result = 0; Result < 2; ++Result) {
-        SCOPED_TRACE(::testing::Message()
-                     << Case.Name << " zero_upper=" << ZeroUpper
-                     << " result=" << Result);
-        const LiftedInstruction Set = liftX64(
-            encodeMemory(5, ZeroUpper, Case.Address32, Case.Segment));
+        SCOPED_TRACE(::testing::Message() << Case.Name << " zero_upper="
+                                          << ZeroUpper << " result=" << Result);
+        const LiftedInstruction Set =
+            liftX64(encodeMemory(5, ZeroUpper, Case.Address32, Case.Segment));
         EXPECT_EQ(Set.Id, ZeroUpper ? X86_INS_SETZUNE : X86_INS_SETNE);
         ASSERT_FALSE(Set.Ops.empty());
         BinaryImage Image = makeMemoryImage(Case.Target - 1, 3);

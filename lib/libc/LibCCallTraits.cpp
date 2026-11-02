@@ -14,10 +14,12 @@
 #include "neverd/Common.h"
 #include "neverd/libc/LibCFortify.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/libc/StackProbeIndex.h"
 #include "neverd/libc/WindowsCRT.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -71,9 +73,24 @@ std::string_view isoAliasTarget(std::string_view Name) {
   for (const std::string_view Prefix : kIsoAliasPrefixes)
     if (Bare.starts_with(Prefix))
       return Bare.substr(Prefix.size());
-  if (Bare.starts_with(kUCRTStdioPrefix))
-    return Bare.substr(kUCRTStdioPrefix.size());
+  for (const auto Prefix : kUCRTCommonPrefixes)
+    if (Bare.starts_with(Prefix)) {
+      std::string_view Routine = Bare.substr(Prefix.size());
+      for (const auto Suffix : kUCRTCommonSuffixes)
+        if (Routine.ends_with(Suffix))
+          Routine.remove_suffix(Suffix.size());
+      return Routine;
+    }
   return Name;
+}
+
+/// Windows' legacy/kernel and ISO wide formatters have different fixed
+/// prefixes under the same name. Only the actual declaration can choose one.
+bool wideFormatNeedsDeclaration(std::string_view Name, LibCVariant Variant) {
+  if (Variant != LibCVariant::Windows)
+    return false;
+  Name = stripLeadingUnderscores(Name);
+  return Name == "swprintf" || Name == "vswprintf";
 }
 
 } // anonymous namespace
@@ -84,6 +101,9 @@ unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
     Name = Routine;
   if (const std::string_view Standard = isoAliasTarget(Name); Standard != Name)
     return varArgFixedCount(Standard, Variant);
+  if (wideFormatNeedsDeclaration(Name, Variant))
+    return 0;
+  Name = stripLeadingUnderscores(Name);
   if (Variant != LibCVariant::GNU)
     if (const auto Kinds =
             variant_rows::variadic(stripLeadingUnderscores(Name), Variant))
@@ -357,6 +377,8 @@ std::optional<StackProbeEffect> stackProbeNamed(const BinaryImage &Img,
 
 std::optional<StackProbeEffect> stackProbeEffect(const BinaryImage &Img,
                                                  va_t Target) {
+  if (Img.functionHasBytePatch(Target))
+    return std::nullopt;
   if (!hasStackProbeRoutines(Img))
     return std::nullopt;
   // Only a name the binary or its debug information states proves the
@@ -485,15 +507,35 @@ bool isIndirectCallDispatchThunk(std::string_view Name) {
       .Default(false);
 }
 
+namespace {
+/// A routine \p Imp's module exports under a name a program may also give a
+/// returning routine of its own (WindowsNoReturnImports.inc).
+bool isNoReturnModuleExport(const Import &Imp) {
+  const llvm::StringRef Module(Imp.Module);
+#define LIBC_NO_RETURN_IMPORT(Library, Routine)                                \
+  if (Imp.Name == Routine && Module.equals_insensitive(Library))               \
+    return true;
+#include "neverd/libc/WindowsNoReturnImports.inc"
+#undef LIBC_NO_RETURN_IMPORT
+  return false;
+}
+} // namespace
+
+bool isNoReturnImport(const Import &Imp) {
+  return isNoReturnFunction(Imp.Name) || isNoReturnModuleExport(Imp);
+}
+
 bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
   if (Target == InvalidVA)
     return false;
   // The user's statement decides over every name.
   if (const auto Stated = Img.userNoReturnAt(Target))
     return *Stated;
+  if (Img.functionHasBytePatch(Target))
+    return false;
   const Import *Imp = Img.findImportAt(Target);
   if (Imp)
-    if (isNoReturnFunction(Imp->Name))
+    if (isNoReturnImport(*Imp))
       return true;
   // A pointer slot the loader binds to an import (an ELF GLOB_DAT or
   // JUMP_SLOT, a Mach-O bind): x86 calls through it as `call [slot]`.
@@ -526,14 +568,17 @@ NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img,
     return isNoReturnFunction(Name) ||
            (this->Declared && !Name.empty() && this->Declared(Name));
   };
+  const auto NoReturnImport = [&](const Import &Imp) {
+    return NoReturn(Imp.Name) || isNoReturnModuleExport(Imp);
+  };
   // Preserve first-IAT precedence even when its name is empty or returning.
   // Only an address absent from the IAT map can use an exact stub spelling.
   for (const Import &Imp : Img.Imports)
-    if (ImportAddresses.insert(Imp.IATAddr).second && NoReturn(Imp.Name))
+    if (ImportAddresses.insert(Imp.IATAddr).second && NoReturnImport(Imp))
       Targets.insert(Imp.IATAddr);
   for (const auto &[Address, Index] : Img.ImportStubIndices)
     if (!ImportAddresses.count(Address) && Index < Img.Imports.size() &&
-        NoReturn(Img.Imports[Index].Name) && Img.findImportStubAt(Address))
+        NoReturnImport(Img.Imports[Index]) && Img.findImportStubAt(Address))
       Targets.insert(Address);
   // Pointer slots the loader binds to imports, which x86 calls through as
   // `call [slot]`; an import directory entry for the same slot decides.
@@ -575,6 +620,8 @@ bool NoReturnTargetIndex::contains(const BinaryImage &Img, va_t Target) const {
     return false;
   if (const auto Stated = Img.userNoReturnAt(Target))
     return *Stated;
+  if (Img.functionHasBytePatch(Target))
+    return false;
   if (Targets.count(Target))
     return true;
   // A restricted x86 load may not have registered this decoded veneer, and
@@ -598,7 +645,7 @@ bool NoReturnTargetIndex::contains(const BinaryImage &Img, va_t Target) const {
   };
   if (ResolveImport)
     if (const Import *Imp = Img.findImportStubAt(Target))
-      It->second = NoReturn(Imp->Name);
+      It->second = NoReturn(Imp->Name) || isNoReturnModuleExport(*Imp);
   if (SymbolsIndexed || It->second)
     return It->second;
   if (const Symbol *Sym = Img.findSymbolAt(Target))
@@ -610,6 +657,17 @@ bool NoReturnTargetIndex::contains(const BinaryImage &Img, va_t Target) const {
     if (const Export *Exp = Img.findExportAt(Target))
       It->second = NoReturn(Exp->Name);
   return It->second;
+}
+
+bool isNoReturnLoadedTarget(const BinaryImage &Image, va_t Slot,
+                            const NoReturnTargetIndex *Index) {
+  if (const auto Stated = Image.userNoReturnAt(Slot))
+    return *Stated;
+  if (isNoReturnTarget(Image, Slot, Index))
+    return true;
+  if (const auto Target = readImmutableImageCodePointer(Image, Slot))
+    return isNoReturnTarget(Image, *Target, Index);
+  return false;
 }
 
 bool isNoReturnTarget(const BinaryImage &Img, va_t Target,
@@ -660,6 +718,8 @@ const LibCPrintfFormat *libcPrintfFormat(std::string_view Name) {
 }
 
 bool variadicIn(const LibCVariadicForward &Forward, LibCVariant Variant) {
+  if (wideFormatNeedsDeclaration(Forward.Name, Variant))
+    return false;
   switch (Forward.Format) {
   case BinaryFormat::Unknown:
     return true;
@@ -732,7 +792,10 @@ const LibCVariadicForward *libcVariadicForward(std::string_view Name) {
   return nullptr;
 }
 
-std::optional<unsigned> vaListParameter(std::string_view Name) {
+std::optional<unsigned> vaListParameter(std::string_view Name,
+                                        LibCVariant Variant) {
+  if (wideFormatNeedsDeclaration(Name, Variant))
+    return std::nullopt;
   // A va_list form takes the variadic routine's fixed parameters, then the
   // va_list.
   static const std::unordered_map<std::string_view, unsigned> Positions = [] {

@@ -1,0 +1,47 @@
+//===- UnwindSigningJSON.def - Public unwind signing vocabulary -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Stable JSON keys and spellings; loader models own the signing semantics.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_RA_JSON_TEXT
+#define NEVERD_RA_JSON_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_RA_JSON_STATUS
+#define NEVERD_RA_JSON_STATUS(Value, Name, Text)
+#endif
+#ifndef NEVERD_RA_JSON_KIND
+#define NEVERD_RA_JSON_KIND(Value, Name, Text)
+#endif
+
+NEVERD_RA_JSON_TEXT(kReturnAddress, "return_address")
+NEVERD_RA_JSON_TEXT(kQueryPC, "query_pc")
+NEVERD_RA_JSON_TEXT(kDwarfStateAtPC, "dwarf_state_at_pc")
+NEVERD_RA_JSON_TEXT(kCompactRecipe, "compact_recipe")
+NEVERD_RA_JSON_TEXT(kStatus, "status")
+NEVERD_RA_JSON_TEXT(kDiagnostic, "diagnostic")
+NEVERD_RA_JSON_TEXT(kKind, "kind")
+NEVERD_RA_JSON_TEXT(kKey, "key")
+NEVERD_RA_JSON_TEXT(kRecipe, "recipe")
+NEVERD_RA_JSON_TEXT(kSigningPC, "signing_pc")
+NEVERD_RA_JSON_TEXT(kKeyA, "a")
+NEVERD_RA_JSON_TEXT(kKeyB, "b")
+NEVERD_RA_JSON_TEXT(kHintPACM, "hint_pacm")
+NEVERD_RA_JSON_TEXT(kNonHintPAuthLR, "non_hint_pauth_lr")
+NEVERD_RA_JSON_TEXT(kAddressPrefix, "0x")
+NEVERD_RA_JSON_STATUS(Known, kKnown, "known")
+NEVERD_RA_JSON_STATUS(Unknown, kUnknown, "unknown")
+NEVERD_RA_JSON_STATUS(Unsupported, kUnsupported, "unsupported")
+NEVERD_RA_JSON_STATUS(Malformed, kMalformed, "malformed")
+NEVERD_RA_JSON_STATUS(OutOfRange, kOutOfRange, "out_of_range")
+NEVERD_RA_JSON_STATUS(ResourceLimit, kResourceLimit, "resource_limit")
+NEVERD_RA_JSON_KIND(Unsigned, kUnsigned, "unsigned")
+NEVERD_RA_JSON_KIND(SP, kSP, "sp")
+NEVERD_RA_JSON_KIND(SPAndPC, kSPAndPC, "sp_and_pc")
+
+#undef NEVERD_RA_JSON_TEXT
+#undef NEVERD_RA_JSON_STATUS
+#undef NEVERD_RA_JSON_KIND

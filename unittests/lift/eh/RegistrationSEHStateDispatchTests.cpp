@@ -10,7 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
-#include "neverd/ir/med/X86RegistrationSEHStateStore.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsX86.h"

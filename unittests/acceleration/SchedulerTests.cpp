@@ -168,6 +168,24 @@ TEST(TaskScheduler, SmallCallerUsesLargeWorkerStacks) {
   EXPECT_EQ(Completed.load(), 4u);
 }
 
+TEST(TaskScheduler, SmallAndSerialBatchesRetainTheWorkerStackContract) {
+  std::array<unsigned, 3> Completed{};
+  std::thread Caller([&] {
+    auto Work = [&](auto Claim, size_t Total) {
+      for (size_t Index; (Index = Claim()) < Total;) {
+        EXPECT_EQ(touchLargeStack(), 163200u);
+        ++Completed[Index];
+      }
+    };
+    neverd::parallelForEach(Completed.size(), Work);
+    neverd::parallelForEachWeighted({5, 15, 1}, Work);
+    // A caller may force serial work even above the batching threshold.
+    neverd::parallelForEachWeighted({5, 15, 1}, Work, 1, 1);
+  });
+  Caller.join();
+  EXPECT_EQ(Completed, (std::array<unsigned, 3>{3, 3, 3}));
+}
+
 TEST(TaskScheduler, NestedCallbacksRetainIndependentLargeFrames) {
   auto Work = [] { EXPECT_EQ(nestedLargeStack(), 163200u); };
   neverd::runPipelineWorkers(2, Work);

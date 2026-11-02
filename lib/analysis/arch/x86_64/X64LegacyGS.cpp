@@ -18,8 +18,16 @@ bool validDomain(const SpecializationOptions &Options) {
   return Options.Architecture == Arch::X64 && Options.ExplicitMachineState &&
          Options.NormalNonfaultingExecution &&
          Options.ByteOrder == llvm::endianness::little &&
-         Options.X64FlagsProfile ==
-             InterpreterMachineStateProfile::KernelX64NoFaultV1;
+         Options.X64FlagsProfile &&
+         isKernelX64MachineStateProfile(*Options.X64FlagsProfile);
+}
+
+bool operation(const LowOp &Op) {
+  return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 && !Op.Output.Size &&
+         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+         Op.MemoryOrdering == NdMemoryOrdering::None &&
+         Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+         Op.Inputs[0].Offset == uint64_t(Intrinsic::Swapgs);
 }
 
 bool temporary(NdVar Value, uint16_t Bytes) {
@@ -43,32 +51,20 @@ llvm::Error validateOptions(const SpecializationOptions &Options) {
 }
 
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options) {
-  return Options.X64LegacyGSState && validDomain(Options) &&
-         Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 && !Op.Output.Size &&
-         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-         Op.MemoryOrdering == NdMemoryOrdering::None &&
-         Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
-         Op.Inputs[0].Offset == uint64_t(Intrinsic::Swapgs);
+  return Options.X64LegacyGSState && validDomain(Options) && operation(Op);
 }
 
 std::optional<RuntimeControlTransition>
-lowerOperation(const LowOp &Op, symbolic::SymState &State,
-               const RuntimeControlState &Controls,
-               const SpecializationOptions &Options,
-               llvm::function_ref<NdVar(uint16_t)> Temporary) {
-  if (!supportsOperation(Op, Options) ||
-      !control::validState(State, Controls, Options))
+lowerScalarOperation(const LowOp &Op, NdVar Pair,
+                     llvm::function_ref<NdVar(uint16_t)> Temporary) {
+  if (!operation(Op))
     return std::nullopt;
-  const auto Pair = Temporary(16), Active = Temporary(8),
-             Inactive = Temporary(8);
+  const auto Active = Temporary(8), Inactive = Temporary(8);
   if (!temporary(Pair, 16) || !temporary(Active, 8) ||
       !temporary(Inactive, 8) || overlaps(Pair, Active) ||
       overlaps(Pair, Inactive) || overlaps(Active, Inactive))
     return std::nullopt;
 
-  const size_t Index = Options.X64MXCSRMask.has_value();
-  State.write(symbolic::SymSpace::Temporary, Pair.Offset,
-              Controls.Values[Index]);
   RuntimeControlTransition Result;
   const auto Emit = [&](NdOp Code, NdVar Output,
                         std::initializer_list<NdVar> Inputs) {
@@ -88,7 +84,27 @@ lowerOperation(const LowOp &Op, symbolic::SymState &State,
   Emit(NdOp::SUBBYTES, Active, {Pair, NdVar::scalar(0, 8)});
   Emit(NdOp::SUBBYTES, Inactive, {Pair, NdVar::scalar(8, 8)});
   Emit(NdOp::CONCAT, Pair, {Active, Inactive});
-  Result.OutputState = std::pair<size_t, NdVar>{Index, Pair};
+  Result.OutputState = std::pair<size_t, NdVar>{0, Pair};
   return Result;
 }
+
+std::optional<RuntimeControlTransition>
+lowerOperation(const LowOp &Op, symbolic::SymState &State,
+               const RuntimeControlState &Controls,
+               const SpecializationOptions &Options,
+               llvm::function_ref<NdVar(uint16_t)> Temporary) {
+  if (!supportsOperation(Op, Options) ||
+      !control::validState(State, Controls, Options))
+    return std::nullopt;
+  const auto Pair = Temporary(16);
+  auto Result = lowerScalarOperation(Op, Pair, Temporary);
+  if (!Result)
+    return std::nullopt;
+  const size_t Index = Options.X64MXCSRMask.has_value();
+  State.write(symbolic::SymSpace::Temporary, Pair.Offset,
+              Controls.Values[Index]);
+  Result->OutputState->first = Index;
+  return Result;
+}
+
 } // namespace neverd::analysis::x64::legacygs

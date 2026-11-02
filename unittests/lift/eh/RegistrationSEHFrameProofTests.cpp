@@ -8,7 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"

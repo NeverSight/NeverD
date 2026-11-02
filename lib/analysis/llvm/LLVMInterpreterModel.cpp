@@ -6,14 +6,26 @@
 
 #include "LLVMInterpreterModelInternal.h"
 
+#include "neverd/analysis/Limits.h"
+
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Errc.h"
 
 #include <limits>
+#include <system_error>
 
 namespace neverd::analysis::llvm_model {
 
 void Builder::charge(uint64_t &Counter, uint64_t Amount, uint64_t Limit) {
+  if (ScalarOptions && ScalarOptions->StopRequested) {
+    if (Amount >= UntilStopPoll) {
+      if (ScalarOptions->StopRequested())
+        throw Failure{"scalar model construction cancelled", false, true};
+      UntilStopPoll = limits::analysis::kLLVMScalarStopPollWork;
+    } else {
+      UntilStopPoll -= Amount;
+    }
+  }
   if (Amount > Limit || Counter > Limit - Amount)
     throw Failure{"LLVM machine-state model budget exhausted", true};
   Counter += Amount;
@@ -67,7 +79,9 @@ void Builder::preflight() {
     bytes(F.getReturnType());
     for (const auto &Arg : F.args()) {
       if (!Arg.getType()->isIntegerTy() ||
-          !Arg.hasAttribute(llvm::Attribute::NoUndef))
+          ((!ScalarOptions || ScalarOptions->InputDomain ==
+                                  LLVMScalarInputDomain::RequireNoUndef) &&
+           !Arg.hasAttribute(llvm::Attribute::NoUndef)))
         fail("scalar model requires noundef integer arguments");
       bytes(Arg.getType());
     }
@@ -326,16 +340,29 @@ InterpreterMachineStateModel Builder::build() {
 namespace neverd::analysis {
 llvm::Expected<LLVMScalarFunctionModel>
 modelLLVMScalarFunction(const llvm::Function &Function,
-                        const LLVMInterpreterModelLimits &Limits) {
+                        const LLVMInterpreterModelLimits &Limits,
+                        const LLVMScalarModelOptions &Options) {
   try {
+    if (Options.InputDomain != LLVMScalarInputDomain::RequireNoUndef &&
+        Options.InputDomain != LLVMScalarInputDomain::DefinedBitvectors)
+      llvm_model::fail("unsupported scalar input domain");
+    if (Options.StopRequested && Options.StopRequested())
+      throw llvm_model::Failure{"scalar model construction cancelled", false,
+                                true};
     LLVMScalarFunctionModel Model;
+    Model.InputDomain = Options.InputDomain;
     Model.Graph =
-        llvm_model::Builder(Function, Limits, 0, &Model.Arguments).build();
+        llvm_model::Builder(Function, Limits, 0, &Model.Arguments, &Options)
+            .build();
     Model.ResultBits = Function.getReturnType()->getIntegerBitWidth();
+    if (Options.StopRequested && Options.StopRequested())
+      throw llvm_model::Failure{"scalar model construction cancelled", false,
+                                true};
     return Model;
   } catch (const llvm_model::Failure &E) {
-    return llvm::createStringError(E.Budget ? llvm::errc::result_out_of_range
-                                            : llvm::errc::invalid_argument,
+    return llvm::createStringError(E.Cancelled ? std::errc::operation_canceled
+                                   : E.Budget  ? std::errc::result_out_of_range
+                                               : std::errc::invalid_argument,
                                    "%s", E.Message.c_str());
   }
 }

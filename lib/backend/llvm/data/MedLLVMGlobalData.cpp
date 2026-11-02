@@ -24,8 +24,9 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/med/I386PicAddress.h"
+#include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/loader/StringLiteralSymbols.h"
+#include "neverd/loader/SymbolDecoration.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/Diagnostic.h"
 
@@ -61,41 +62,81 @@
 
 namespace neverd {
 
+namespace {
+bool isMachORuntimeDataAddress(const BinaryImage &Image, uint64_t Address) {
+  if (!Image.isMachO())
+    return false;
+  const auto *Section = Image.getSectionFor(Address);
+  return Section &&
+         (llvm::StringRef(Section->Name)
+              .starts_with(section_names::macho::ObjCMetadataPrefix) ||
+          Section->Name == section_names::macho::CfString);
+}
+
+/// The declaration of data symbol \p Symbol another module defines: an
+/// existing declaration of its C name, else a new external byte array.  It
+/// is marked a data symbol, which LLVM C declares by the symbol.  A definition
+/// or function of the name collides and fails clearly.
+llvm::GlobalValue *externalDataDeclaration(
+    const BinaryImage &Img, llvm::Module &Mod, llvm::LLVMContext &Ctx,
+    std::map<std::string, llvm::GlobalVariable *> &Placeholders,
+    llvm::StringRef Symbol, bool Weak) {
+  const llvm::StringRef Name = cNameOfSymbol(Symbol, Img.Format, Img.Arch);
+  llvm::GlobalValue *Target = Mod.getNamedValue(Name);
+  if (Target) {
+    const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Target);
+    const auto *Function = llvm::dyn_cast<llvm::Function>(Target);
+    if ((!Global || !Global->isDeclaration()) &&
+        (!Function || !Function->isDeclaration() || Function->isIntrinsic()))
+      throw std::invalid_argument(
+          "data symbol collides with another LLVM identity: " + Symbol.str());
+  } else {
+    auto *Global = new llvm::GlobalVariable(
+        Mod, llvm::ArrayType::get(llvm::Type::getInt8Ty(Ctx), 0), false,
+        Weak ? llvm::GlobalValue::ExternalWeakLinkage
+             : llvm::GlobalValue::ExternalLinkage,
+        nullptr, Name);
+    Placeholders[Name.str()] = Global;
+    Target = Global;
+  }
+  if (auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Target))
+    data_symbol::mark(*Global);
+  return Target;
+}
+
+/// \p Addr in the storage ObjectExterns gives an undefined data symbol of a
+/// relocatable object, as that offset from the symbol's declaration: the
+/// storage is another module's, never one to define or copy.  Null for any
+/// other address.
+llvm::Constant *objectExternDataAddress(
+    const BinaryImage &Img, llvm::Module &Mod, llvm::LLVMContext &Ctx,
+    std::map<std::string, llvm::GlobalVariable *> &Placeholders,
+    uint64_t Addr) {
+  const auto Extern = Img.objectExternDataAt(Addr);
+  if (!Extern)
+    return nullptr;
+  return llvm::ConstantExpr::getGetElementPtr(
+      llvm::Type::getInt8Ty(Ctx),
+      externalDataDeclaration(Img, Mod, Ctx, Placeholders, Extern->first->Name,
+                              false),
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), Extern->second));
+}
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Global data resolution
 //===----------------------------------------------------------------------===//
 
 llvm::Constant *
 MedLLVMEmitter::resolveDataSymbolAddress(const DataSymbolBinding &Binding) {
-  llvm::Constant *Target = nullptr;
-  if (Binding.Definition) {
-    Target = tryResolveGlobalData(*Binding.Definition);
-  } else {
-    auto *Existing = Mod->getNamedValue(Binding.Name);
-    if (Existing) {
-      const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Existing);
-      const auto *Function = llvm::dyn_cast<llvm::Function>(Existing);
-      if ((!Global || !Global->isDeclaration()) &&
-          (!Function || !Function->isDeclaration() || Function->isIntrinsic()))
-        throw std::invalid_argument(
-            "data symbol collides with another LLVM identity: " + Binding.Name);
-      Target = Existing;
-    } else {
-      auto *Global = new llvm::GlobalVariable(
-          *Mod, llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), 0), false,
-          Binding.Weak ? llvm::GlobalValue::ExternalWeakLinkage
-                       : llvm::GlobalValue::ExternalLinkage,
-          nullptr, Binding.Name);
-      Target = Global;
-      ImportedSymbolPlaceholders[Binding.Name] = Global;
-    }
-  }
+  llvm::Constant *Target =
+      Binding.Definition ? tryResolveGlobalData(*Binding.Definition)
+                         : externalDataDeclaration(*Img, *Mod, *Ctx,
+                                                   ImportedSymbolPlaceholders,
+                                                   Binding.Name, Binding.Weak);
   if (!Target)
     throw std::invalid_argument("cannot materialize relocated data symbol: " +
                                 Binding.Name);
-  if (!Binding.Definition)
-    if (auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Target))
-      data_symbol::mark(*Global);
   auto *Integer = llvm::IntegerType::get(*Ctx, Img->getPointerSize() * 8);
   auto *Address = llvm::ConstantExpr::getPtrToInt(Target, Integer);
   return Binding.Addend
@@ -144,6 +185,10 @@ bool MedLLVMEmitter::canResolveGlobalDataConstant(uint64_t Addr) const {
   if (Addr == 0)
     return false;
 
+  // The image's own headers are the linker's `__ImageBase`, never bytes.
+  if (Img->imageBaseOffset(Addr))
+    return true;
+
   // An anchored folded base has an explicit owner.  If that owner cannot be
   // embedded, resolving the same numeric value through a different segment
   // would silently change the relocation's meaning.
@@ -182,15 +227,13 @@ bool MedLLVMEmitter::canResolveGlobalDataConstant(uint64_t Addr) const {
   if (!Seg->isReadable())
     return false;
 
+  if (OriginalImageStorageForSource && !Img->IsRelocatable)
+    return true;
+
   // Objective-C runtime objects intentionally remain external identities and
   // therefore do not require file-backed bytes in the rebuilt module.
-  if (Img->isMachO()) {
-    const Section *Sec = Img->getSectionFor(Addr);
-    if (Sec && (llvm::StringRef(Sec->Name).starts_with(
-                    section_names::macho::ObjCMetadataPrefix) ||
-                Sec->Name == section_names::macho::CfString))
-      return true;
-  }
+  if (isMachORuntimeDataAddress(*Img, Addr))
+    return true;
 
   if (isMutableDataSeg(Seg)) {
     uint64_t RunStart = 0, RunEnd = 0;
@@ -244,6 +287,15 @@ MedLLVMEmitter::tryResolveDirectGlobalDataAddress(const MedVar &Address,
   std::optional<uint64_t> NumericAddress =
       Address.isConst() ? std::optional<uint64_t>(Address.ConstVal)
                         : traceSSAConst(Address);
+  // A completed REP address followed by a constant displacement is still a
+  // direct access. Resolve the complete expression at this memory use, while
+  // its register value remains in the original coordinate model.
+  if (!NumericAddress)
+    if (const MedOp *Def = lookupDef(Address);
+        Def && (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs == 2 && traceSSAConst(Def->Inputs[0]) &&
+        traceSSAConst(Def->Inputs[1]))
+      NumericAddress = traceValueVA(Address);
   if (!NumericAddress)
     NumericAddress = traceAuthenticatedI386PicAddress();
   if (!NumericAddress)
@@ -259,11 +311,21 @@ MedLLVMEmitter::tryResolveDirectGlobalDataAddress(const MedVar &Address,
   return tryResolveGlobalData(*NumericAddress, DataSizeHint);
 }
 
-llvm::Constant *
-MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr, uint64_t OwnerVA,
-                                          uint16_t DataSizeHint) {
+llvm::Constant *MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr,
+                                                          uint64_t OwnerVA,
+                                                          uint16_t DataSizeHint,
+                                                          bool WholeOwner) {
   if (!Img || OwnerVA == InvalidVA)
     return tryResolveGlobalData(Addr, DataSizeHint);
+
+  if (llvm::Constant *Extern = objectExternDataAddress(
+          *Img, *Mod, *Ctx, ImportedSymbolPlaceholders, Addr))
+    return Extern;
+
+  // An address the image's headers own, mapped or not, is the linker's
+  // `__ImageBase`.
+  if (OwnerVA == Img->Base && Img->PEHeaderBytes)
+    return tryResolveImageHeaderData(Addr, OwnerVA);
 
   const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
   if (!OwnerSeg || !OwnerSeg->isReadable())
@@ -294,12 +356,18 @@ MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr, uint64_t OwnerVA,
   if (Addr < OwnerBegin || Addr > OwnerEnd)
     return nullptr;
 
+  if (auto [Storage, Base] = originalImageStorage(OwnerVA); Storage)
+    return llvm::ConstantExpr::getGetElementPtr(
+        llvm::Type::getInt8Ty(*Ctx), Storage,
+        llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Addr - Base));
+
   // Interior addresses keep every established special case (Objective-C
   // runtime identities, compact strings, pointer mirrors).  The owner-aware
   // path is required when zero denotes NOBITS storage or when one-past lands
   // in another section and value-only lookup would choose that neighbour.
   const Section *NumericSec = Img->getSectionFor(Addr);
-  if (Addr < OwnerEnd && NumericSec == OwnerSec &&
+  if ((!WholeOwner || isMachORuntimeDataAddress(*Img, Addr)) &&
+      Addr < OwnerEnd && NumericSec == OwnerSec &&
       !(Addr == 0 && !Img->hasObjectDataProvenance(0)))
     if (llvm::Constant *Direct = tryResolveGlobalData(Addr, DataSizeHint))
       return Direct;
@@ -329,6 +397,19 @@ MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr, uint64_t OwnerVA,
 
 llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
                                                      uint16_t DataSizeHint) {
+  // The headers are the linker's `__ImageBase`, also in the original image
+  // storage, which only spans them when the loader maps them.
+  if (Img && Img->imageBaseOffset(Addr))
+    return tryResolveImageHeaderData(Addr);
+  if (Img)
+    if (llvm::Constant *Extern = objectExternDataAddress(
+            *Img, *Mod, *Ctx, ImportedSymbolPlaceholders, Addr))
+      return Extern;
+  if (Addr != 0)
+    if (auto [Storage, Base] = originalImageStorage(Addr); Storage)
+      return llvm::ConstantExpr::getGetElementPtr(
+          llvm::Type::getInt8Ty(*Ctx), Storage,
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Addr - Base));
   if (!canResolveGlobalDataConstant(Addr))
     return nullptr;
 
@@ -428,21 +509,16 @@ llvm::Constant *MedLLVMEmitter::tryResolveGlobalData(uint64_t Addr,
   // still encoded for the on-disk image.  Keep every direct reference into
   // these sections anchored at its original VA; the patch resolver turns the
   // synthetic symbol back into that slid address.
-  if (Img->isMachO()) {
-    const Section *Sec = Img->getSectionFor(Addr);
-    if (Sec && (llvm::StringRef(Sec->Name).starts_with(
-                    section_names::macho::ObjCMetadataPrefix) ||
-                Sec->Name == section_names::macho::CfString)) {
-      std::string Name = makeNdDataSymbol(Addr);
-      llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
-      if (!GV)
-        GV = new llvm::GlobalVariable(
-            *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
-            llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
-      GV->setDSOLocal(true);
-      GlobalDataCache[Addr] = GV;
-      return GV;
-    }
+  if (isMachORuntimeDataAddress(*Img, Addr)) {
+    std::string Name = makeNdDataSymbol(Addr);
+    llvm::GlobalVariable *GV = Mod->getNamedGlobal(Name);
+    if (!GV)
+      GV = new llvm::GlobalVariable(
+          *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
+          llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
+    GV->setDSOLocal(true);
+    GlobalDataCache[Addr] = GV;
+    return GV;
   }
 
   // Writable data (.data / .bss): recreate the WHOLE segment as one cohesive

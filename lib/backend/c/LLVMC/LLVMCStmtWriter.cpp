@@ -12,9 +12,24 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CRecordCall.h"
+#include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
-#include "../render/X86FPStateHelpers.h"
+#include "../render/X86/X86APXAtomic.h"
+#include "../render/X86/X86AmxState.h"
+#include "../render/X86/X86AtomicRmw.h"
+#include "../render/X86/X86BoundedLeaf.h"
+#include "../render/X86/X86CompressExpand.h"
+#include "../render/X86/X86DivRem.h"
+#include "../render/X86/X86FPStateHelpers.h"
+#include "../render/X86/X86FourSource.h"
+#include "../render/X86/X86Hle.h"
+#include "../render/X86/X86RepState.h"
+#include "../render/X86/X86Sgx.h"
+#include "../render/X86/X86SystemState.h"
+#include "../render/X86/X86Virtualization.h"
+#include "../render/X86/X87NativeState.h"
+#include "LLVMCAtomicOrdering.h"
 #include "LLVMCIntegerMinMax.h"
 #include "LLVMCIntegerSaturation.h"
 #include "LLVMCScalarUnary.h"
@@ -26,14 +41,25 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MachineInstructionText.h"
-#include "neverd/backend/c/render/X87ContextRender.h"
+#include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
+#include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
+#include "neverd/backend/c/render/X86/X87ContextRender.h"
+#include "neverd/backend/c/render/X86/X87GuardedValueRender.h"
+#include "neverd/backend/llvm/AArch64/LLVMAArch64AuthenticatedCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
-#include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
-#include "neverd/backend/llvm/LLVMX86FPStateAsm.h"
-#include "neverd/backend/llvm/LLVMX86ShadowStackAsm.h"
-#include "neverd/backend/llvm/LLVMX86X87StateAsm.h"
-#include "neverd/backend/llvm/LLVMX87ConstantAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
+#include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86SHA.h"
+#include "neverd/backend/llvm/X86/LLVMX86ShadowStackAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86X87StateAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX87ConstantAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX87NativeState.h"
+#include "neverd/backend/llvm/X86/LLVMX87ValueAsm.h"
+#include "neverd/backend/llvm/X86/X86AmxNative.h"
+#include "neverd/backend/llvm/X86/X86SgxNative.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/libc/LibCRecordArguments.h"
@@ -43,6 +69,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -51,6 +78,8 @@
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <cctype>
 #include <iterator>
@@ -60,7 +89,26 @@
 
 namespace neverd {
 
+bool LLVMCWriter::needsCallSiteCType(const llvm::CallBase &Call) {
+  const auto *Declared = llvm::dyn_cast<llvm::Function>(
+      Call.getCalledOperand()->stripPointerCasts());
+  return Declared && (Declared->getFunctionType() != Call.getFunctionType() ||
+                      Declared->getCallingConv() != Call.getCallingConv());
+}
+
 namespace {
+std::string retainCallSiteCType(const llvm::CallBase &Call,
+                                llvm::StringRef Type, std::string Cast) {
+  if (!LLVMCWriter::needsCallSiteCType(Call))
+    return Cast;
+  // Clang can lower a directly cast function designator using its original
+  // declaration's non-variadic ABI, dropping Windows x64's floating GPR copy.
+  // A scalar compound literal supplies a value of the call's own pointer
+  // type. It evaluates the target once, preserves the symbol declaration and
+  // needs no volatile barrier; optimized C can still make a direct call.
+  return "((" + Type.str() + "){" + Cast + "})";
+}
+
 /// ` /* brk #0x3E8 */` for a call or fence that carries the instruction it
 /// was lifted from, where its C leaves out that instruction's operand.
 std::string instructionComment(const llvm::Instruction &I) {
@@ -81,9 +129,13 @@ constexpr uint32_t kCxxCatchAll = 0x40u;
 // refinement: it equals the LLVM value when defined, and chooses one stable
 // value when poison-producing flags would make the LLVM result poison. This
 // does not introduce C undefined behavior on an LLVM-defined execution.
-// Variable shifts, FP conversion and uninitialized PHI cycles remain
-// unsupported.
-bool freezeHasDefinedCProjection(const llvm::Value *Root) {
+// Shifts use bounded C counts, including on LLVM poison executions. Unsafe
+// division, FP conversion and uninitialized PHI cycles remain unsupported.
+// Memory/call results are reused, never evaluated again.
+bool freezeHasDefinedCProjection(const llvm::Value *Root,
+                                 const llvm::DataLayout &Layout,
+                                 const llvm::Instruction *Context,
+                                 const llvm::DominatorTree &Dominators) {
   std::vector<const llvm::Value *> Work{Root}, Anchors;
   std::set<const llvm::Value *> Seen, Defined;
   std::map<const llvm::Value *, std::vector<const llvm::Value *>> Users;
@@ -97,26 +149,81 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root) {
     if (!Seen.insert(Value).second)
       continue;
     auto *Type = llvm::dyn_cast<llvm::IntegerType>(Value->getType());
-    if (!Type || Type->getBitWidth() > 64 ||
+    if ((!Type && !Value->getType()->isPointerTy()) ||
+        (Type && Type->getBitWidth() > 128) ||
         llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value))
       return false;
-    if (llvm::isa<llvm::ConstantInt, llvm::Argument, llvm::FreezeInst>(Value)) {
+    if (llvm::isa<llvm::ConstantInt, llvm::ConstantPointerNull,
+                  llvm::GlobalValue, llvm::AllocaInst, llvm::Argument,
+                  llvm::FreezeInst>(Value)) {
+      Anchors.push_back(Value);
+      continue;
+    }
+    if (llvm::isGuaranteedNotToBeUndefOrPoison(Value, nullptr, Context,
+                                               &Dominators)) {
+      Anchors.push_back(Value);
+      continue;
+    }
+    if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Value)) {
+      int64_t Offset = 0;
+      const auto *Base =
+          llvm::GetPointerBaseWithConstantOffset(GEP, Offset, Layout);
+      llvm::Type *Object = nullptr;
+      if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Base))
+        Object = Global->getValueType();
+      else if (const auto *Local = llvm::dyn_cast<llvm::AllocaInst>(Base);
+               Local && !Local->isArrayAllocation())
+        Object = Local->getAllocatedType();
+      if (!Object || !Object->isSized() || Offset < 0 ||
+          uint64_t(Offset) > Layout.getTypeAllocSize(Object))
+        return false;
       Anchors.push_back(Value);
       continue;
     }
     if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
-      if (!Load->isSimple() || Load->getPointerAddressSpace() != 0)
+      if (Load->getPointerAddressSpace() != 0 &&
+          !isLLVMX86SegmentedAddressSpace(Load->getPointerAddressSpace()))
         return false;
       // The existing memory projection materializes this access. In C an
       // integer byte representation contains no LLVM poison bit.
       Anchors.push_back(Value);
       continue;
     }
+    if (const auto *Atomic = llvm::dyn_cast<llvm::AtomicRMWInst>(Value)) {
+      if (Atomic->getPointerAddressSpace() != 0)
+        return false;
+      // The atomic statement has already captured the old integer value.
+      // Reusing that result must neither repeat nor weaken the operation.
+      Anchors.push_back(Value);
+      continue;
+    }
     if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(Value)) {
       const auto *Callee = Call->getCalledFunction();
-      if (!Callee || Callee->isIntrinsic() || Call->hasOperandBundles() ||
+      if (Call->hasOperandBundles() ||
           Call->getCallingConv() != llvm::CallingConv::C)
         return false;
+      if (Callee && Callee->isIntrinsic()) {
+        // These integer intrinsics have total scalar C projections. Their
+        // operands still need the same definedness proof as ordinary integer
+        // arithmetic; accepting the intrinsic alone would hide poison inputs.
+        switch (Callee->getIntrinsicID()) {
+        case llvm::Intrinsic::smin:
+        case llvm::Intrinsic::smax:
+        case llvm::Intrinsic::umin:
+        case llvm::Intrinsic::umax:
+        case llvm::Intrinsic::ctpop:
+        case llvm::Intrinsic::ctlz:
+        case llvm::Intrinsic::cttz:
+        case llvm::Intrinsic::abs:
+        case llvm::Intrinsic::uadd_sat:
+        case llvm::Intrinsic::usub_sat:
+          if (!Type || Type->getBitWidth() > 64)
+            return false;
+          break;
+        default:
+          return false;
+        }
+      }
       // An ordinary integer C call materializes one returned bit pattern.
       // Reuse that value, without a new invocation or an LLVM noundef fact.
       // Its arguments must independently have a total projection: passing
@@ -126,6 +233,10 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root) {
       for (const auto &Argument : Call->args()) {
         Users[Argument].push_back(Value);
         Work.push_back(Argument);
+      }
+      if (!Callee) {
+        Users[Call->getCalledOperand()].push_back(Value);
+        Work.push_back(Call->getCalledOperand());
       }
       continue;
     }
@@ -142,12 +253,34 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root) {
       // wrapping C refinement of an upstream poison-producing expression.
       // Dropping an `exact` flag then merely chooses the ordinary rounded
       // quotient.
-      if (!llvm::all_of(Inst->operands(), [&](const llvm::Use &Operand) {
+      const bool DefinedInputs =
+          llvm::all_of(Inst->operands(), [&](const llvm::Use &Operand) {
             return llvm::isGuaranteedNotToBeUndefOrPoison(Operand, nullptr,
-                                                          Inst);
-          }))
+                                                          Inst, &Dominators);
+          });
+      if (DefinedInputs) {
+        Anchors.push_back(Value);
+        continue;
+      }
+      // A C-defined denominator makes a wrapping numerator safe as well.
+      // Ignore poison-generating flags when proving its nonzero value: an
+      // overflowing flagged multiply must not conceal a zero C denominator.
+      const llvm::SimplifyQuery Query(Layout, &Dominators, nullptr, Inst,
+                                      /*UseInstrInfo=*/false,
+                                      /*CanUseUndef=*/false);
+      auto *Denominator = Inst->getOperand(1);
+      if (!llvm::isKnownNonZero(Denominator, Query))
         return false;
-      Anchors.push_back(Value);
+      const bool Signed = Inst->getOpcode() == llvm::Instruction::SDiv ||
+                          Inst->getOpcode() == llvm::Instruction::SRem;
+      if (Signed &&
+          !llvm::isKnownNonEqual(Denominator,
+                                 llvm::ConstantInt::getSigned(Type, -1), Query))
+        return false;
+      for (const auto &Operand : Inst->operands()) {
+        Users[Operand].push_back(Value);
+        Work.push_back(Operand);
+      }
       continue;
     }
     switch (Inst->getOpcode()) {
@@ -164,18 +297,15 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root) {
     case llvm::Instruction::Trunc:
     case llvm::Instruction::ZExt:
     case llvm::Instruction::SExt:
+    case llvm::Instruction::PtrToInt:
+    case llvm::Instruction::IntToPtr:
     case llvm::Instruction::ICmp:
     case llvm::Instruction::Select:
       break;
     case llvm::Instruction::Shl:
     case llvm::Instruction::LShr:
-    case llvm::Instruction::AShr: {
-      const auto *Count =
-          llvm::dyn_cast<llvm::ConstantInt>(Inst->getOperand(1));
-      if (!Count || Count->getValue().uge(Type->getBitWidth()))
-        return false;
+    case llvm::Instruction::AShr:
       break;
-    }
     default:
       return false;
     }
@@ -361,12 +491,7 @@ bool LLVMCWriter::isTypedRecordCursorValue(const llvm::Value *V) const {
 }
 
 bool LLVMCWriter::allocaHasLoad(const llvm::AllocaInst *Slot) const {
-  if (!Slot)
-    return false;
-  for (const llvm::User *U : Slot->users())
-    if (llvm::isa<llvm::LoadInst>(U))
-      return true;
-  return false;
+  return Slot && !allocaUseFacts(Slot).Loads.empty();
 }
 
 bool LLVMCWriter::cursorSlotIsObserved(const llvm::AllocaInst *Slot) const {
@@ -496,6 +621,12 @@ LLVMCWriter::allocaStoredValueBefore(const llvm::LoadInst *Load,
   auto It = Definitions.find(Load);
   if (It != Definitions.end())
     return It->second;
+  // Module include discovery also queries image addresses before a function's
+  // dominance tree exists. Local reaching stores remain valid there, but a
+  // cross-block query must belong to the currently analyzed function.
+  const auto *Root = Dominators.getRootNode();
+  if (!Root || Root->getBlock()->getParent() != Load->getFunction())
+    return nullptr;
   if (InitializedAllocaLoads.count(Load))
     return CrossBlockLoadValues.lookup(Load);
   if (!Dominators.isReachableFromEntry(Load->getParent()))
@@ -1467,12 +1598,50 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
       SourceRecorder ? SourceRecorder->instruction(Inst) : std::nullopt;
   if (Event)
     OS << SourceRecorder->begin(*Event);
+  const auto *Load =
+      Opts.EmitComments ? llvm::dyn_cast<llvm::LoadInst>(&Inst) : nullptr;
+  const auto Begin = Load ? OS.stream().tell() : 0;
   writeInstructionImpl(Inst, Indent);
+  // Annotate only a read that emitted code. Forwarded or inlined reads must
+  // not leave an orphan comment where their old instruction used to be.
+  if (Load && OS.stream().tell() != Begin)
+    if (const auto Comment = imagePointerComment(Load->getPointerOperand());
+        !Comment.empty()) {
+      emitIndent(Indent);
+      OS << "/* " << Comment << " */\n";
+    }
   if (Event)
     OS << SourceRecorder->end(*Event);
 }
 
+bool LLVMCWriter::writeDeferredUnknownCopy(llvm::Instruction &Inst,
+                                           int Indent) {
+  const auto Flag = DeferredUnknownFlags.find(&Inst);
+  if (Flag == DeferredUnknownFlags.end() || llvm::isa<llvm::PHINode>(&Inst))
+    return false;
+  const auto Source = DeferredUnknownFlags.find(Inst.getOperand(0));
+  if (Source == DeferredUnknownFlags.end())
+    return false;
+  std::string Payload;
+  {
+    llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
+    InlineCache.clear();
+    Payload = renderInline(Inst);
+    InlineCache.clear();
+  }
+  emitIndent(Indent);
+  OS << getName(&Inst) << " = " << Source->second << " ? (" << Payload
+     << ") : 0;\n";
+  emitIndent(Indent);
+  OS << Flag->second << " = " << Source->second << ";\n";
+  return true;
+}
+
 void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
+  if (llvm_source_unknown::isValue(&Inst))
+    return;
+  if (writeDeferredUnknownCopy(Inst, Indent))
+    return;
   if (llvm::isa<llvm::DbgInfoIntrinsic>(&Inst))
     return;
   if (RawMemoryUpdateInputs.count(&Inst))
@@ -1525,7 +1694,8 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
       if (ChooseZero ||
           llvm::isGuaranteedNotToBeUndefOrPoison(Value, nullptr, Freeze,
                                                  &Dominators) ||
-          freezeHasDefinedCProjection(Value)) {
+          freezeHasDefinedCProjection(Value, CurMod->getDataLayout(), Freeze,
+                                      Dominators)) {
         emitIndent(Indent);
         OS << Name << " = " << (ChooseZero ? "0" : valueStr(Value)) << ";\n";
         return;
@@ -1540,14 +1710,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   // widths.  Copy through its original base+offset so a scalar access never
   // creates a separate C object or assumes alignment at an interior offset.
   if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-      Load && Load->getPointerAddressSpace() == 0) {
+      Load && !Load->isAtomic() && Load->getPointerAddressSpace() == 0) {
     const unsigned Size = imageIntegerAccessSize(Load->getType());
     if (Size)
       if (auto Pointer =
               imageByteArrayPointer(Load->getPointerOperand(), Size)) {
-        if (Load->isAtomic())
-          llvm::report_fatal_error(
-              "unsupported atomic image byte-array C projection");
         const std::string Name = getName(Load);
         emitIndent(Indent);
         OS << Name << " = 0;\n";
@@ -1569,15 +1736,12 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
       }
   }
   if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst);
-      Store && Store->getPointerAddressSpace() == 0) {
+      Store && !Store->isAtomic() && Store->getPointerAddressSpace() == 0) {
     const unsigned Size =
         imageIntegerAccessSize(Store->getValueOperand()->getType());
     if (Size)
       if (auto Pointer =
               imageByteArrayPointer(Store->getPointerOperand(), Size)) {
-        if (Store->isAtomic())
-          llvm::report_fatal_error(
-              "unsupported atomic image byte-array C projection");
         const std::string Bits = freshVar("image_bits");
         emitIndent(Indent);
         OS << "{ " << typeToCLLVM(Store->getValueOperand()->getType()) << " "
@@ -1600,14 +1764,19 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
         return;
       }
   }
-  // LLVM i80 is the exact ten-byte x87 memory image.  C has no scalar with a
-  // ten-byte object size, so use a zero-extended carrier and copy only ten
-  // bytes.  A typed __uint128_t dereference would read/write six extra bytes.
+  // Both i80 and x86_fp80 access the exact ten-byte x87 memory image. LLVM
+  // may fold an i80 load plus bitcast into an x86_fp80 load from the same
+  // integer alloca. Reading that C integer by value would convert it
+  // numerically. Copy the ten bytes for either LLVM view, without copying
+  // the padding in a C integer or long-double carrier.
+  const auto IsBinary80 = [](const llvm::Type *Type) {
+    return Type->isIntegerTy(80) || Type->isX86_FP80Ty();
+  };
   if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-      Load && Load->getType()->isIntegerTy(80) &&
+      Load && IsBinary80(Load->getType()) &&
       Load->getPointerAddressSpace() == 0) {
     if (Load->isAtomic())
-      llvm::report_fatal_error("unsupported atomic i80 C projection");
+      llvm::report_fatal_error("unsupported atomic binary80 C projection");
     const llvm::Value *Address = Load->getPointerOperand();
     std::string Pointer = valueStr(Address);
     if (std::string Image = imageDataCName(Address); !Image.empty())
@@ -1632,18 +1801,18 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     return;
   }
   if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst);
-      Store && Store->getValueOperand()->getType()->isIntegerTy(80) &&
+      Store && IsBinary80(Store->getValueOperand()->getType()) &&
       Store->getPointerAddressSpace() == 0) {
     if (Store->isAtomic())
-      llvm::report_fatal_error("unsupported atomic i80 C projection");
+      llvm::report_fatal_error("unsupported atomic binary80 C projection");
     const llvm::Value *Address = Store->getPointerOperand();
     std::string Pointer = valueStr(Address);
     if (std::string Image = imageDataCName(Address); !Image.empty())
       Pointer = "&" + Image;
     const std::string Bits = freshVar("x87_bits");
     emitIndent(Indent);
-    OS << "{ __uint128_t " << Bits << " = "
-       << valueStr(Store->getValueOperand()) << ";\n";
+    OS << "{ " << typeToCLLVM(Store->getValueOperand()->getType()) << " "
+       << Bits << " = " << valueStr(Store->getValueOperand()) << ";\n";
     if (Store->isVolatile()) {
       const std::string Index = freshVar("x87_byte");
       emitIndent(Indent + 1);
@@ -1659,6 +1828,32 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     }
     emitIndent(Indent);
     OS << "}\n";
+    return;
+  }
+  if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst);
+      SI && SI->isAtomic() && SI->getPointerAddressSpace() == 0) {
+    // An atomic store keeps its order, as an atomic load does: C writes the
+    // value through the same address with the builtin of that order.
+    const llvm::Value *Address = SI->getPointerOperand();
+    std::string AddressText;
+    if (std::string Image = imageDataCName(Address); !Image.empty())
+      AddressText = "&" + Image;
+    else if (const auto *Slot = asAllocaPointer(Address))
+      AddressText = "&" + getName(Slot);
+    else
+      AddressText = valueStr(Address);
+    const char *Ordering = "__ATOMIC_RELAXED";
+    if (SI->getOrdering() == llvm::AtomicOrdering::Release)
+      Ordering = "__ATOMIC_RELEASE";
+    else if (SI->getOrdering() == llvm::AtomicOrdering::SequentiallyConsistent)
+      Ordering = "__ATOMIC_SEQ_CST";
+    const std::string Type = typeToCLLVM(SI->getValueOperand()->getType());
+    const std::string Value = freshVar("atomic_store");
+    emitIndent(Indent);
+    OS << "{ " << Type << " " << Value << " = "
+       << valueStr(SI->getValueOperand()) << "; __atomic_store((" << Type
+       << (SI->isVolatile() ? " volatile" : "") << "*)(" << AddressText
+       << "), &" << Value << ", " << Ordering << "); }\n";
     return;
   }
   if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -1780,6 +1975,12 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   auto Name = Inst.getType()->isVoidTy() ? "" : getName(&Inst);
 
   if (Inst.isBinaryOp()) {
+    if (auto Text =
+            unknownBitwiseText(llvm::cast<llvm::BinaryOperator>(Inst))) {
+      emitIndent(Indent);
+      OS << Name << " = " << *Text << ";\n";
+      return;
+    }
     if (auto Identity =
             targetPointerMaskIdentity(llvm::cast<llvm::BinaryOperator>(Inst))) {
       emitIndent(Indent);
@@ -1865,8 +2066,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
       ValueTypes[&Inst] = Member->Type;
       // Memory may change before a use: read the slot here.
       if (!slotReadAtUses(*LI)) {
+        // A pointer member read into an integer temporary converts, as the
+        // read deferred to its uses does.
         emitIndent(Indent);
-        OS << Name << " = " << Member->Text << ";\n";
+        OS << Name << " = " << memberAsAccessed(*LI, Member->Text, Member->Type)
+           << ";\n";
         return;
       }
       ValueTexts[&Inst] = Member->Text;
@@ -2050,7 +2254,9 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
           std::string Value =
               ParamName != ValNames.end()
                   ? ParamName->second
-                  : integerCallStoredText(SI->getValueOperand());
+                  : integerCallStoredText(SI->getValueOperand(),
+                                          Member->Type && Member->Type->Kind ==
+                                                              NdTypeKind::Int);
           // A constant stored to an enumeration names its enumerator.
           if (const auto *Constant =
                   llvm::dyn_cast<llvm::ConstantInt>(SI->getValueOperand());
@@ -2156,8 +2362,9 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
         if (llvm::StringRef(Member->Text).ends_with(".m_pszData") &&
             isResultParamValue(Stored))
           return;
-        std::string StoredText =
-            integerCallStoredText(Stored, /*AsInteger=*/FrameRecord);
+        std::string StoredText = integerCallStoredText(
+            Stored, FrameRecord || (Member->Type &&
+                                    Member->Type->Kind == NdTypeKind::Int));
         if (Size >= 16 && Member->Type &&
             Member->Type->Kind == NdTypeKind::Struct &&
             !Member->Type->SourceName.empty()) {
@@ -2961,8 +3168,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
               AllocaImmediates.clear();
               AllocaLastValues.clear();
             }
-            if (ReferencedBlocks.count(&RegionBB))
-              OS << blockLabel(&RegionBB) << ":\n";
+            // This block still owns incoming edges when its final jump is
+            // replaced by the structured region's fallthrough. Later nested
+            // regions can discover a goto that the reference scan predicted
+            // would inline, so retain its position just like a full block.
+            writeBlockLabel(RegionBB);
             for (llvm::Instruction &RegionInst :
                  *const_cast<llvm::BasicBlock *>(&RegionBB)) {
               if (&RegionInst == RegionBB.getTerminator() ||
@@ -3352,7 +3562,14 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
         !edgePrintsPhiCopy(From, Else)) {
       const auto *LateBr =
           llvm::dyn_cast<llvm::CondBrInst>(Else->getTerminator());
-      if (LateBr && !edgePrintsPhiCopy(Else, LateBr->getSuccessor(0)) &&
+      // An earlier block has already printed its own branch and may have
+      // consumed an arm. Reprinting only its conditional here can jump to
+      // that consumed arm without a label. This fold owns later blocks only.
+      const llvm::BasicBlock *Later = From->getNextNode();
+      while (Later && Later != Else)
+        Later = Later->getNextNode();
+      if (Later && LateBr &&
+          !edgePrintsPhiCopy(Else, LateBr->getSuccessor(0)) &&
           !edgePrintsPhiCopy(Else, LateBr->getSuccessor(1))) {
         const llvm::BasicBlock *TrueT =
             printBranchTarget(LateBr->getSuccessor(0));
@@ -3643,6 +3860,64 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     return;
   }
 
+  if (auto *Exchange = llvm::dyn_cast<llvm::AtomicCmpXchgInst>(&Inst)) {
+    auto *ValueType = Exchange->getCompareOperand()->getType();
+    const auto &Layout = CurMod->getDataLayout();
+    auto *PointerType = llvm::dyn_cast<llvm::PointerType>(ValueType);
+    const unsigned Bits =
+        ValueType->isIntegerTy() ? ValueType->getIntegerBitWidth()
+        : PointerType            ? Layout.getPointerTypeSizeInBits(ValueType)
+                                 : 0;
+    const auto Success = Exchange->getSuccessOrdering();
+    const auto Failure = Exchange->getFailureOrdering();
+    // The C builtin requires native, naturally aligned objects in ordinary
+    // memory: 1, 2, 4 or 8 bytes, or 16 where C has a native 128-bit integer,
+    // as on the 64-bit targets whose pair compare-exchange (CASP, CMPXCHG16B)
+    // lifts to one. Atomic min/max already carries that width through the
+    // same builtin. Do not discard an address space or approximate a wider
+    // CAS.
+    const bool NativeWidth =
+        Bits == 8 || Bits == 16 || Bits == 32 || Bits == 64 ||
+        (Bits == 128 && !PointerType && Layout.getPointerSizeInBits() == 64);
+    if (!NativeWidth || Exchange->getNewValOperand()->getType() != ValueType ||
+        Exchange->getPointerAddressSpace() != 0 ||
+        (PointerType && (PointerType->getAddressSpace() != 0 ||
+                         Layout.isNonIntegralPointerType(PointerType))) ||
+        Exchange->getAlign().value() < Bits / 8 ||
+        Exchange->getSyncScopeID() != llvm::SyncScope::System)
+      throw std::runtime_error("unsupported LLVM C cmpxchg shape");
+    // LLVM allows some failure orders that the C builtin cannot express.
+    // Retain its exact pair or reject it instead of weakening an ordering.
+    if (!llvm::isAtLeastOrStrongerThan(Success,
+                                       llvm::AtomicOrdering::Monotonic) ||
+        (Failure != llvm::AtomicOrdering::Monotonic &&
+         Failure != llvm::AtomicOrdering::Acquire &&
+         Failure != llvm::AtomicOrdering::SequentiallyConsistent) ||
+        !llvm::isAtLeastOrStrongerThan(Success, Failure))
+      throw std::runtime_error("unsupported LLVM C cmpxchg ordering pair");
+    const std::string Type = typeToCLLVM(ValueType);
+    const std::string Old =
+        Name + aggregateMemberPath(Exchange->getType(), {0});
+    const std::string Succeeded =
+        Name + aggregateMemberPath(Exchange->getType(), {1});
+    // On failure the builtin replaces expected with the observed old value;
+    // on success expected already equals that value. Both LLVM result fields
+    // therefore describe this one operation, even across a later observer.
+    emitIndent(Indent);
+    OS << Old << " = (" << Type << ")("
+       << integerPointerOperandStr(Exchange->getCompareOperand()) << ");\n";
+    emitIndent(Indent);
+    OS << Succeeded << " = __atomic_compare_exchange_n((" << Type
+       << (Exchange->isVolatile() ? " volatile" : "") << " *)("
+       << valueStr(Exchange->getPointerOperand()) << "), &" << Old << ", ("
+       << Type << ")(" << integerPointerOperandStr(Exchange->getNewValOperand())
+       << "), " << (Exchange->isWeak() ? 1 : 0) << ", "
+       << llvmCAtomicOrderingToken(Success) << ", "
+       << llvmCAtomicOrderingToken(Failure) << ");\n";
+    HasCIntrinsics = true;
+    return;
+  }
+
   if (auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Inst)) {
     emitIndent(Indent);
     if (!RMW->getType()->isVoidTy())
@@ -3676,9 +3951,9 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
   // carriers can contain padding: transfer the LLVM store size and byte
   // order, never the C object's representation. The x87 memory image has
   // its own exact-byte path.
-  const bool WideInteger = Type->isIntegerTy() &&
-                           Type->getIntegerBitWidth() > 128 &&
-                           Type->getIntegerBitWidth() <= 512;
+  const bool WideInteger =
+      Type->isIntegerTy() && Type->getIntegerBitWidth() > 128 &&
+      Type->getIntegerBitWidth() <= limits::kMaxCSourceIntegerBytes * 8;
   const bool Integer = Type->isIntegerTy(8) || Type->isIntegerTy(16) ||
                        Type->isIntegerTy(32) || Type->isIntegerTy(64) ||
                        Type->isIntegerTy(128) || WideInteger;
@@ -3778,7 +4053,20 @@ bool LLVMCWriter::writeRawMemoryCopy(llvm::Instruction &Inst, int Indent) {
                    : valueStr(Store->getValueOperand()))
        << ";\n";
     emitIndent(Indent + 1);
-    OS << c_memory::storeCopy(Pointer, Value,
+    std::string CopyAddress = Pointer;
+    if (const auto *ConstantAddress =
+            llvm::dyn_cast<llvm::ConstantExpr>(Address);
+        ConstantAddress &&
+        ConstantAddress->getOpcode() == llvm::Instruction::IntToPtr) {
+      // An absolute guest address names memory in the invocation environment,
+      // not a host C object. Keep its integer carrier explicit: a literal
+      // high-half pointer inside memcpy triggers a false zero-object bound.
+      CopyAddress = freshVar("memory_address");
+      OS << "uintptr_t " << CopyAddress << " = "
+         << c_memory::integerOperand(Pointer) << ";\n";
+      emitIndent(Indent + 1);
+    }
+    OS << c_memory::storeCopy(CopyAddress, Value,
                               std::to_string(Size.getFixedValue()))
        << ";\n";
     emitIndent(Indent);
@@ -3812,9 +4100,239 @@ void LLVMCWriter::writeGEP(llvm::GetElementPtrInst &GEP,
 }
 
 bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
+  if (const auto Divide = classifyX86DivRemNative(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    OS << renderX86DivRemCall(
+        *Divide,
+        {valueStr(Call.getArgOperand(0)), valueStr(Call.getArgOperand(1)),
+         valueStr(Call.getArgOperand(2))},
+        valueFeedsPrintedUse(&Call) ? getName(&Call) : "",
+        {freshVar("divide_quotient"), freshVar("divide_remainder"),
+         freshVar("divide_divisor"), freshVar("divide_ax")});
+    return true;
+  }
   const llvm::Function *Callee = Call.getCalledFunction();
-  if (!Callee || !Callee->isIntrinsic())
+  if (!Callee)
     return false;
+  if (Callee->getName() == "llvm.x86.hle.context") {
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    emitIndent(Indent);
+    OS << renderX86HleNativeCall(Opts.TheArch, Call, !Call.use_empty(),
+                                 Arguments);
+    return true;
+  }
+  if (Callee->getName() == "llvm.x86.rsm.context" ||
+      Callee->getName() == "llvm.x86.enclu.transfer.at.context" ||
+      Callee->getName() == "llvm.x86.vmrun.context" ||
+      Callee->getName() == "llvm.x86.hyperv.call" ||
+      isX86KvmHypercallNativeName(Callee->getName()) ||
+      isX86SnpNativeName(Callee->getName())) {
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive =
+        !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
+    const auto Code = renderX86VirtualizationNativeCall(
+        Opts.TheArch, Call, ResultLive ? getName(&Call) : "", ResultLive,
+        Arguments);
+    if (!Code)
+      throw std::invalid_argument(
+          "native virtualization context has an unsupported source contract");
+    emitIndent(Indent);
+    OS << *Code;
+    return true;
+  }
+  if (const auto *State = classifyX87NativeState(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    OS << renderX87NativeState(
+        *State, State->HasPointer ? valueStr(Call.getArgOperand(0)) : "",
+        State->ReturnsStatus && valueFeedsPrintedUse(&Call) ? getName(&Call)
+                                                            : "");
+    return true;
+  }
+  if (!Callee->isIntrinsic())
+    return false;
+
+  if (Callee->getName() == "llvm.x86.rdtscp") {
+    const bool Live = valueFeedsPrintedUse(&Call);
+    const auto Timestamp = renderX86TimestampCall(
+        Opts.TheArch, Call, Live ? getName(&Call) : "", Live);
+    emitIndent(Indent);
+    OS << Timestamp->Code;
+    return true;
+  }
+
+  if (x86FourSourceNativeName(Callee->getName().str())) {
+    const auto *I = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!I)
+      throw std::invalid_argument(X86FourSourceMalformed);
+    std::vector<std::string> Args;
+    for (const auto &V : Call.args())
+      Args.push_back(valueStr(V.get()));
+    const bool Live =
+        !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
+    emitIndent(Indent);
+    OS << *renderX86FourSourceCall(Opts.TheArch, *I, Args,
+                                   Live ? getName(&Call) : "", Live,
+                                   typeToCLLVM(Call.getType()));
+    return true;
+  }
+  if (x86CompactNativeName(Callee->getName().str())) {
+    const auto *I = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!I)
+      throw std::invalid_argument(X86CompactMalformed);
+    std::vector<std::string> Args;
+    for (const auto &V : Call.args())
+      Args.push_back(valueStr(V.get()));
+    const bool Live =
+        !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
+    emitIndent(Indent);
+    OS << *renderX86CompactCall(Opts.TheArch, *I, Args,
+                                Live ? getName(&Call) : "", Live,
+                                typeToCLLVM(Call.getType()));
+    return true;
+  }
+  if (x86APXAtomicName(Callee->getName().str())) {
+    const auto *Instruction = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!Instruction)
+      throw std::invalid_argument(
+          "APX native intrinsic requires a direct call");
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool Live = valueFeedsPrintedUse(&Call);
+    emitIndent(Indent);
+    OS << *renderX86APXAtomicCall(Opts.TheArch, *Instruction,
+                                  Live ? getName(&Call) : "", Live, Arguments);
+    return true;
+  }
+
+  if (Callee->getName().starts_with("llvm.x86.rep.")) {
+    const auto *Instruction = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!Instruction)
+      throw std::invalid_argument(
+          "REP native intrinsic requires a direct call");
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive = valueFeedsPrintedUse(&Call);
+    const auto Code = renderX86RepCall(Opts.TheArch, *Instruction,
+                                       ResultLive ? getName(&Call) : "",
+                                       ResultLive, Arguments);
+    if (!Code)
+      throw std::invalid_argument("invalid REP native intrinsic");
+    emitIndent(Indent);
+    OS << *Code;
+    return true;
+  }
+
+  if ((Callee->getName().starts_with("llvm.x86.enclu.bounded.state") ||
+       Callee->getName().starts_with("llvm.x86.getsec.bounded.state"))) {
+    const auto *Instruction = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!Instruction)
+      throw std::invalid_argument(
+          "bounded leaf native intrinsic requires a direct call");
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive = valueFeedsPrintedUse(&Call);
+    const auto Code = renderX86BoundedLeafCall(Opts.TheArch, *Instruction,
+                                               ResultLive ? getName(&Call) : "",
+                                               ResultLive, Arguments);
+    if (!Code)
+      throw std::invalid_argument("invalid bounded leaf native intrinsic");
+    emitIndent(Indent);
+    OS << *Code;
+    return true;
+  }
+
+  if (isX86SgxNativeName(Callee->getName().str())) {
+    const auto *Instruction = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!Instruction)
+      throw std::invalid_argument(
+          "SGX native intrinsic requires a direct call");
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive = valueFeedsPrintedUse(&Call);
+    const auto Code = renderX86SgxCall(Opts.TheArch, *Instruction,
+                                       ResultLive ? getName(&Call) : "",
+                                       ResultLive, Arguments);
+    if (!Code)
+      throw std::invalid_argument("invalid SGX native intrinsic");
+    emitIndent(Indent);
+    OS << *Code;
+    return true;
+  }
+
+  if (x86AmxNativeDescriptor(Callee->getName().str())) {
+    const auto *Instruction = llvm::dyn_cast<llvm::CallInst>(&Call);
+    if (!Instruction)
+      throw std::invalid_argument(
+          "AMX native intrinsic requires a direct call");
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive =
+        !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
+    const auto Code = renderX86AmxCall(Opts.TheArch, *Instruction, Arguments,
+                                       ResultLive ? getName(&Call) : "",
+                                       ResultLive, typeToCLLVM(Call.getType()));
+    if (!Code)
+      throw std::invalid_argument("invalid AMX native intrinsic");
+    emitIndent(Indent);
+    OS << *Code;
+    return true;
+  }
+
+  if (isX86VirtualizationNativeName(Callee->getName()) ||
+      isX86SystemStateNativeName(Callee->getName()) ||
+      isX86SystemRegisterNativeName(Callee->getName()) ||
+      isX86ScalarSystemNativeName(Callee->getName()) ||
+      isX86DescriptorStateNativeName(Callee->getName())) {
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const bool ResultLive =
+        !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
+    if (const auto Code = renderX86DescriptorStateCall(
+            Opts.TheArch, Opts.Format, Call, ResultLive ? getName(&Call) : "",
+            ResultLive, Arguments)) {
+      emitIndent(Indent);
+      OS << Code->Code;
+      return true;
+    }
+    if (const auto Code = renderX86ScalarSystemCall(
+            Opts.TheArch, Opts.Format, Call, ResultLive ? getName(&Call) : "",
+            ResultLive, Arguments)) {
+      emitIndent(Indent);
+      OS << Code->Code;
+      return true;
+    }
+    if (const auto Code = renderX86SystemRegisterCall(
+            Opts.TheArch, Opts.Format, Call, ResultLive ? getName(&Call) : "",
+            ResultLive, Arguments)) {
+      emitIndent(Indent);
+      OS << Code->Code;
+      return true;
+    }
+    if (const auto Code = renderX86VirtualizationNativeCall(
+            Opts.TheArch, Call, ResultLive ? getName(&Call) : "", ResultLive,
+            Arguments)) {
+      emitIndent(Indent);
+      OS << *Code;
+      return true;
+    }
+    if (const auto Code = renderX86SystemStateNativeCall(
+            Opts.TheArch, Call, ResultLive ? getName(&Call) : "", ResultLive,
+            Arguments)) {
+      emitIndent(Indent);
+      OS << *Code;
+      return true;
+    }
+  }
 
   auto IID = Callee->getIntrinsicID();
   if (IID == llvm::Intrinsic::x86_fxsave ||
@@ -3896,6 +4414,48 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     OS << ";\n";
     emitIndent(Indent);
     OS << "}\n";
+    return true;
+  }
+  if (IID == llvm::Intrinsic::ptrauth_sign_generic) {
+    if (Opts.TheArch != Arch::AArch64)
+      throw std::runtime_error(kAArch64PAuthRequiresAArch64);
+    if (Call.arg_size() != 2 || !Call.getType()->isIntegerTy(64) ||
+        !Call.getArgOperand(0)->getType()->isIntegerTy(64) ||
+        !Call.getArgOperand(1)->getType()->isIntegerTy(64))
+      throw std::runtime_error(kAArch64PAuthMalformedOperation);
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = ";
+    OS << aarch64PAuthGenericSignC(valueStr(Call.getArgOperand(0)),
+                                   valueStr(Call.getArgOperand(1)))
+       << ";\n";
+    return true;
+  }
+  if (IID == llvm::Intrinsic::ptrauth_auth) {
+    if (Opts.TheArch != Arch::AArch64 || Call.arg_size() != 3)
+      throw std::runtime_error(kAArch64PAuthRequiresAArch64);
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = ";
+    OS << aarch64PAuthAuthenticateC(valueStr(Call.getArgOperand(0)),
+                                    valueStr(Call.getArgOperand(1)),
+                                    valueStr(Call.getArgOperand(2)))
+       << ";\n";
+    return true;
+  }
+  if (const char *Name = llvmX86SHA256CName(Call)) {
+    if (!isNativeVectorIntrinsic(Call, Opts.TheArch))
+      throw std::runtime_error("SHA-256 requires an x86 C projection");
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = (" << typeToCLLVM(Call.getType()) << ")";
+    OS << Name << "(";
+    for (unsigned I = 0; I < Call.arg_size(); ++I) {
+      if (I)
+        OS << ", ";
+      OS << "(__m128i)(" << valueStr(Call.getArgOperand(I)) << ")";
+    }
+    OS << ");\n";
     return true;
   }
   if (IID == llvm::Intrinsic::aarch64_neon_bfmmla) {
@@ -3997,7 +4557,22 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
        << "(0);\n";
     return true;
   }
+  if (IID == llvm::Intrinsic::addressofreturnaddress) {
+    if ((Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64) ||
+        !Call.getType()->isPointerTy() || Call.arg_size() != 0 ||
+        Call.getType()->getPointerAddressSpace() != 0)
+      throw std::invalid_argument("unsupported return-slot address intrinsic");
+    emitIndent(Indent);
+    OS << getName(&Call) << " = "
+       << renderX86ReturnSlotAddress(freshVar("llvm_return_slot")) << ";\n";
+    return true;
+  }
   if (IID == llvm::Intrinsic::localaddress) {
+    if (!SEHParentFrameName.empty()) {
+      emitIndent(Indent);
+      OS << getName(&Call) << " = " << SEHParentFrameName << ";\n";
+      return true;
+    }
     // Keep the target-specific LLVM intrinsic: it can select SP, FP, or a base
     // pointer depending on stack realignment. __builtin_frame_address differs.
     const std::string IntrinsicName = freshVar("llvm_localaddress");
@@ -4063,6 +4638,83 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     HasCIntrinsics = true;
     return true;
   }
+  // An exclusive load or store is the builtin HighC writes for it. A load
+  // still sets the monitor, and a store's status still reports, where
+  // nothing reads the result.
+  if (IID == llvm::Intrinsic::aarch64_ldxr ||
+      IID == llvm::Intrinsic::aarch64_ldaxr ||
+      IID == llvm::Intrinsic::aarch64_stxr ||
+      IID == llvm::Intrinsic::aarch64_stlxr) {
+    const bool Load = IID == llvm::Intrinsic::aarch64_ldxr ||
+                      IID == llvm::Intrinsic::aarch64_ldaxr;
+    const unsigned AddressArgument = Load ? 0 : 1;
+    llvm::Type *Element = Call.getParamElementType(AddressArgument);
+    const char *Type = Element && Element->isIntegerTy()
+                           ? aarch64ExclusiveAccessType(
+                                 Element->getIntegerBitWidth() / 8, nullptr)
+                           : nullptr;
+    if (Opts.TheArch != Arch::AArch64 || !Type ||
+        Call.arg_size() != AddressArgument + 1)
+      throw std::runtime_error("unsupported LLVM C exclusive access shape");
+    const std::string Address = valueStr(Call.getArgOperand(AddressArgument));
+    emitIndent(Indent);
+    OS << (Call.use_empty()
+               ? "(void)"
+               : getName(&Call) + " = (" + typeToCLLVM(Call.getType()) + ")")
+       << (Load ? aarch64ExclusiveLoadC(IID == llvm::Intrinsic::aarch64_ldaxr,
+                                        Type, Address)
+                : aarch64ExclusiveStoreC(IID == llvm::Intrinsic::aarch64_stlxr,
+                                         Type, valueStr(Call.getArgOperand(0)),
+                                         Address))
+       << ";\n";
+    HasCIntrinsics = true;
+    return true;
+  }
+  // A pair travels as one 128-bit access, as the builtin of that width
+  // selects LDXP or STXP: the low word at the lower address.
+  if (IID == llvm::Intrinsic::aarch64_ldxp ||
+      IID == llvm::Intrinsic::aarch64_ldaxp) {
+    if (Opts.TheArch != Arch::AArch64 || Call.arg_size() != 1)
+      throw std::runtime_error("unsupported LLVM C exclusive access shape");
+    const std::string Pair = freshVar("exclusive_pair");
+    emitIndent(Indent);
+    OS << "{ __uint128_t " << Pair << " = "
+       << aarch64ExclusiveLoadC(IID == llvm::Intrinsic::aarch64_ldaxp,
+                                "__uint128_t", valueStr(Call.getArgOperand(0)))
+       << ";\n";
+    emitIndent(Indent + 1);
+    if (Call.use_empty()) {
+      OS << "(void)" << Pair << ";\n";
+    } else {
+      OS << getName(&Call) << aggregateMemberPath(Call.getType(), {0})
+         << " = (uint64_t)" << Pair << ";\n";
+      emitIndent(Indent + 1);
+      OS << getName(&Call) << aggregateMemberPath(Call.getType(), {1})
+         << " = (uint64_t)(" << Pair << " >> 64);\n";
+    }
+    emitIndent(Indent);
+    OS << "}\n";
+    HasCIntrinsics = true;
+    return true;
+  }
+  if (IID == llvm::Intrinsic::aarch64_stxp ||
+      IID == llvm::Intrinsic::aarch64_stlxp) {
+    if (Opts.TheArch != Arch::AArch64 || Call.arg_size() != 3)
+      throw std::runtime_error("unsupported LLVM C exclusive access shape");
+    const std::string Value =
+        "((__uint128_t)(uint64_t)(" + valueStr(Call.getArgOperand(1)) +
+        ") << 64 | (uint64_t)(" + valueStr(Call.getArgOperand(0)) + "))";
+    emitIndent(Indent);
+    OS << (Call.use_empty()
+               ? "(void)"
+               : getName(&Call) + " = (" + typeToCLLVM(Call.getType()) + ")")
+       << aarch64ExclusiveStoreC(IID == llvm::Intrinsic::aarch64_stlxp,
+                                 "__uint128_t", Value,
+                                 valueStr(Call.getArgOperand(2)))
+       << ";\n";
+    HasCIntrinsics = true;
+    return true;
+  }
   return false;
 }
 
@@ -4122,15 +4774,25 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     OS << renderX87ContextAsm(*Context, Args) << "\n";
     return true;
   }
+  if (auto Id = classifyX87GuardedValueAsm(Call)) {
+    if (Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64)
+      llvm::report_fatal_error("guarded x87 C projection requires x86");
+    emitIndent(Indent);
+    OS << renderX87GuardedValueAsm(*Id, {valueStr(Call.getArgOperand(0)),
+                                         valueStr(Call.getArgOperand(1)),
+                                         valueStr(Call.getArgOperand(2)),
+                                         valueStr(Call.getArgOperand(3))})
+       << ";\n";
+    return true;
+  }
   if (auto Selector = classifyX87ConstantAsm(Call)) {
     if (Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64)
       llvm::report_fatal_error(
           "x87 constant/control C projection requires x86");
     emitIndent(Indent);
     if (*Selector >= 7) {
-      OS << "__asm__ volatile(\"" << (*Selector == 7 ? "fnstcw" : "fldcw")
-         << " (%0)\" :: \"r\"(" << valueStr(Call.getArgOperand(0))
-         << ") : \"memory\");\n";
+      OS << renderX87ControlAccess(*Selector == 8,
+                                   valueStr(Call.getArgOperand(0)));
     } else {
       OS << "__asm__ volatile(\"fldcw (%1)\\n\\t"
          << X87ConstantMnemonics[*Selector] << "\\n\\tfstpt (%0)\" :: \"r\"("
@@ -4366,8 +5028,36 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     return false;
 
   bool ResultLive = !Call.getType()->isVoidTy();
-  if (ResultLive && InferredVoid)
+  if (ResultLive && ReturnsNoValue)
     ResultLive = isCallResultLive(Analysis, &Call);
+
+  if (llvm::StringRef(AsmStr).starts_with(X86RepAsmMarker)) {
+    std::vector<std::string> Arguments;
+    for (const auto &Argument : Call.args())
+      Arguments.push_back(valueStr(Argument.get()));
+    const auto Code = renderX86RepCall(Opts.TheArch, Call, Name,
+                                       valueFeedsPrintedUse(&Call), Arguments);
+    if (!Code)
+      throw std::invalid_argument("invalid owned REP completion assembly");
+    emitIndent(Indent);
+    OS << *Code;
+    return true;
+  }
+
+  if (const auto Divide = classifyX86DivRemAsm(Call)) {
+    if ((Opts.TheArch != Arch::X86 && Opts.TheArch != Arch::X64) ||
+        (Divide->Bits == 64 && Opts.TheArch != Arch::X64))
+      llvm::report_fatal_error("native x86 divide target/type mismatch");
+    emitIndent(Indent);
+    OS << renderX86DivRemCall(
+        *Divide,
+        {valueStr(Call.getArgOperand(0)), valueStr(Call.getArgOperand(1)),
+         valueStr(Call.getArgOperand(2))},
+        ResultLive && !Call.use_empty() ? Name : "",
+        {freshVar("divide_quotient"), freshVar("divide_remainder"),
+         freshVar("divide_divisor"), freshVar("divide_ax")});
+    return true;
+  }
 
   // An SMC or HVC #0 under the SMC Calling Convention takes its function
   // identifier and arguments in x0-x7 (r0-r3) and hands back x0-x3 (r0-r3),
@@ -4535,6 +5225,27 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
 
   if (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) {
     const llvm::StringRef Constraints = IA->getConstraintString();
+    if (Call.getType()->isVoidTy() && Call.arg_size() == 1 &&
+        IA->hasSideEffects() && IA->getDialect() == llvm::InlineAsm::AD_ATT &&
+        Call.getArgOperand(0)->getType()->isIntegerTy(
+            Opts.TheArch == Arch::X86 ? 32 : 64)) {
+      for (const auto &Spec : X87NativeStateSpecs) {
+        if (!Spec.ImageBytes ||
+            Constraints !=
+                "r," + x87StateConstraints(x87NativeStateEffect(Spec)).str())
+          continue;
+        for (const char *Segment : {"", "fs", "gs"}) {
+          const std::string Memory =
+              *Segment ? "%" + std::string(Segment) + ":($0)" : "($0)";
+          if (AsmStr == std::string(Spec.Mnemonic) + " " + Memory) {
+            emitIndent(Indent);
+            OS << renderX87NativeState(Spec, valueStr(Call.getArgOperand(0)),
+                                       {}, Segment);
+            return true;
+          }
+        }
+      }
+    }
     if (AsmStr == "frndint" && Call.getType()->isX86_FP80Ty() &&
         Call.arg_size() == 1 &&
         Call.getArgOperand(0)->getType()->isX86_FP80Ty() &&
@@ -4568,16 +5279,28 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       }
       return valueStr(Arg);
     };
+    unsigned StatusOperands =
+        AsmStr == "fprem\n\tfnstsw $1" || AsmStr == "fprem1\n\tfnstsw $1" ? 2
+                                                                          : 0;
+    bool StatusPopsST1 = false;
+#define NEVERD_X87_VALUE_HELPER(ID, CName, Asm, Operands, PopsST1,             \
+                                SamplesStatus)                                 \
+  if (SamplesStatus && AsmStr == Asm "\n\tfnstsw $1") {                        \
+    StatusOperands = Operands;                                                 \
+    StatusPopsST1 = PopsST1;                                                   \
+  }
+#include "neverd/ir/intrinsics/X86/X87ValueInstructions.def"
+    const bool BinaryStatus = StatusOperands == 2;
     const auto *PairType = llvm::dyn_cast<llvm::StructType>(Call.getType());
-    if ((AsmStr == "fprem\n\tfnstsw $1" || AsmStr == "fprem1\n\tfnstsw $1") &&
-        PairType && PairType->getNumElements() == 2 &&
+    if (StatusOperands && PairType && PairType->getNumElements() == 2 &&
         PairType->getElementType(0)->isX86_FP80Ty() &&
-        PairType->getElementType(1)->isIntegerTy(16) && Call.arg_size() == 2 &&
+        PairType->getElementType(1)->isIntegerTy(16) &&
+        Call.arg_size() == StatusOperands &&
         Call.getArgOperand(0)->getType()->isX86_FP80Ty() &&
-        Call.getArgOperand(1)->getType()->isX86_FP80Ty() &&
-        Constraints == "=&{st},={ax},0,{st(1)},~{dirflag},~{fpsr},~{flags}") {
+        (!BinaryStatus || Call.getArgOperand(1)->getType()->isX86_FP80Ty()) &&
+        Constraints == x87ValueStatusConstraints(BinaryStatus, StatusPopsST1)) {
       const std::string Dividend = X87Operand(0);
-      const std::string Divisor = X87Operand(1);
+      const std::string Divisor = BinaryStatus ? X87Operand(1) : "";
       const std::string Result =
           ResultLive ? Name : freshVar("x87_unused_pair");
       if (!ResultLive) {
@@ -4589,8 +5312,10 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       emitIndent(Indent);
       OS << "__asm__ volatile(\"" << Mnemonic
          << "\\n\\tfnstsw %%ax\" : \"=&t\"(" << Result << ".field_0), \"=a\"("
-         << Result << ".field_1) : \"0\"(" << Dividend << "), \"u\"(" << Divisor
-         << ") : \"cc\");\n";
+         << Result << ".field_1) : \"0\"(" << Dividend << ")";
+      if (BinaryStatus)
+        OS << ", \"u\"(" << Divisor << ")";
+      OS << " : " << (StatusPopsST1 ? "\"st(1)\", " : "") << "\"cc\");\n";
       return true;
     }
     if ((AsmStr == "fprem" || AsmStr == "fprem1") &&
@@ -4637,12 +5362,13 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       return true;
     }
     bool KnownBinaryValue = false, PopsSecondInput = false;
-#define NEVERD_X87_VALUE_HELPER(ID, CName, Asm, Operands, PopsST1)             \
+#define NEVERD_X87_VALUE_HELPER(ID, CName, Asm, Operands, PopsST1,             \
+                                SamplesStatus)                                 \
   if (Operands == 2 && AsmStr == Asm) {                                        \
     KnownBinaryValue = true;                                                   \
     PopsSecondInput = PopsST1;                                                 \
   }
-#include "neverd/ir/intrinsics/X87ValueInstructions.def"
+#include "neverd/ir/intrinsics/X86/X87ValueInstructions.def"
     const std::string BinaryConstraints =
         PopsSecondInput
             ? "=&{st},0,{st(1)},~{st(1)},~{dirflag},~{fpsr},~{flags}"
@@ -4680,22 +5406,34 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     if (Call.getType()->isVoidTy() && Call.arg_size() == 0) {
       // x87 state instructions keep their register-stack clobbers in C, so
       // the C compiler holds no x87 value in a register across them either.
-      const bool IsFfree = AsmStr.size() == 12 &&
-                           llvm::StringRef(AsmStr).starts_with("ffree %st(") &&
-                           AsmStr[10] >= '0' && AsmStr[10] <= '7' &&
-                           AsmStr[11] == ')';
+      const auto Text = llvm::StringRef(AsmStr);
+      const bool FreePop = Text.starts_with("ffreep %st(");
+      const unsigned RegisterOffset = FreePop ? 11 : 10;
+      const bool IsFree =
+          (FreePop || Text.starts_with("ffree %st(")) &&
+          Text.size() == RegisterOffset + 2 && Text[RegisterOffset] >= '0' &&
+          Text[RegisterOffset] <= '7' && Text[RegisterOffset + 1] == ')';
       std::optional<X87StateEffect> Effect;
       if (AsmStr == intrinsicAsmMnemonic(Intrinsic::X87Fninit))
         Effect = X87StateEffect::Reset;
-      else if (IsFfree || AsmStr == intrinsicAsmMnemonic(Intrinsic::X87Fincstp))
+      else if (IsFree ||
+               AsmStr == intrinsicAsmMnemonic(Intrinsic::X87Fincstp) ||
+               AsmStr == intrinsicAsmMnemonic(Intrinsic::X87Fdecstp))
         Effect = X87StateEffect::Stack;
       else if (AsmStr == intrinsicAsmMnemonic(Intrinsic::X87Wait) ||
                AsmStr == intrinsicAsmMnemonic(Intrinsic::X87Fnclex))
         Effect = X87StateEffect::Status;
       if (Effect && x87StateEffectOf(Constraints) == Effect) {
+        for (Intrinsic Id :
+             {Intrinsic::X87Fninit, Intrinsic::X87Fnclex, Intrinsic::X87Wait})
+          if (AsmStr == intrinsicAsmMnemonic(Id)) {
+            emitIndent(Indent);
+            OS << renderX87NativeState(*x87NativeStateOfIntrinsic(Id));
+            return true;
+          }
         std::string Template = AsmStr;
-        if (IsFfree)
-          Template.insert(6, "%");
+        if (IsFree)
+          Template.insert(FreePop ? 7 : 6, "%");
         emitIndent(Indent);
         OS << "__asm__ volatile(\"" << Template
            << "\" ::: " << x87StateCClobbers(*Effect) << ");\n";
@@ -4828,6 +5566,110 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   std::vector<std::string> ArgStrs;
   for (unsigned I = 0; I < Call.arg_size(); ++I)
     ArgStrs.push_back(valueStr(Call.getArgOperand(I)));
+
+  if (auto Memory = renderAArch64AddressMemoryCall(Opts.TheArch, Call, Name,
+                                                   ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << Memory->Code;
+    return true;
+  }
+  if (auto Writeback = renderAArch64WritebackMemoryCall(
+          Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << Writeback->Code;
+    return true;
+  }
+  if (auto AuthenticatedLoad = renderAArch64PAuthLoadCall(
+          Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << AuthenticatedLoad->Code;
+    return true;
+  }
+  if (auto Descriptor = renderX86DescriptorStateCall(
+          Opts.TheArch, Opts.Format, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << Descriptor->Code;
+    HasCIntrinsics |= Descriptor->SetIntrinsics;
+    return true;
+  }
+  if (auto System = renderX86ScalarSystemCall(Opts.TheArch, Opts.Format, Call,
+                                              Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << System->Code;
+    HasCIntrinsics |= System->SetIntrinsics;
+    return true;
+  }
+  if (auto SystemRegister = renderX86SystemRegisterCall(
+          Opts.TheArch, Opts.Format, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << SystemRegister->Code;
+    HasCIntrinsics |= SystemRegister->SetIntrinsics;
+    return true;
+  }
+  if (auto Amx = renderX86AmxCall(Opts.TheArch, Call, ArgStrs, Name, ResultLive,
+                                  typeToCLLVM(Call.getType()))) {
+    emitIndent(Indent);
+    OS << *Amx;
+    return true;
+  }
+  if (auto FourSource =
+          renderX86FourSourceCall(Opts.TheArch, Call, ArgStrs, Name, ResultLive,
+                                  typeToCLLVM(Call.getType()))) {
+    emitIndent(Indent);
+    OS << *FourSource;
+    return true;
+  }
+  if (auto Compact =
+          renderX86CompactCall(Opts.TheArch, Call, ArgStrs, Name, ResultLive,
+                               typeToCLLVM(Call.getType()))) {
+    emitIndent(Indent);
+    OS << *Compact;
+    return true;
+  }
+  if (auto Atomic = renderX86APXAtomicCall(Opts.TheArch, Call, Name, ResultLive,
+                                           ArgStrs)) {
+    emitIndent(Indent);
+    OS << *Atomic;
+    return true;
+  }
+  if (const auto Plan = x86AtomicRmwCallPlan(Opts.TheArch, Call)) {
+    emitIndent(Indent);
+    if (ResultLive)
+      OS << Name << " = ";
+    OS << renderX86AtomicRmw(*Plan, ArgStrs.at(0), ArgStrs.at(1)) << ";\n";
+    return true;
+  }
+  if (auto BoundedLeaf = renderX86BoundedLeafCall(Opts.TheArch, Call, Name,
+                                                  ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << *BoundedLeaf;
+    return true;
+  }
+  if (auto Sgx =
+          renderX86SgxCall(Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << *Sgx;
+    return true;
+  }
+  if (auto SystemState = renderX86SystemStateCall(Opts.TheArch, Call, Name,
+                                                  ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << *SystemState;
+    return true;
+  }
+
+  if (auto Virtualization = renderX86VirtualizationCall(
+          Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << *Virtualization;
+    return true;
+  }
+
+  if (auto Prefetch = renderX86PrefetchCall(Opts.TheArch, Call, ArgStrs)) {
+    emitIndent(Indent);
+    OS << Prefetch->Code;
+    return true;
+  }
 
   auto Render =
       renderInlineAsm(Opts.TheArch, AsmStr, Call.getType()->isStructTy(), Name,
@@ -5014,7 +5856,7 @@ void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
     // The invoke and its unwind edge remain observable even when only dead
     // register copies consume its result. Do not invent a C assignment then.
     ResultLive = valueFeedsPrintedUse(&Call);
-  } else if (ResultLive && InferredVoid) {
+  } else if (ResultLive && ReturnsNoValue) {
     if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Call))
       ResultLive = isCallResultLive(Analysis, CI);
   }
@@ -5026,7 +5868,9 @@ void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
   // nothing reads, is called alone.
   if (ResultLive && !valueFeedsPrintedUse(&Call)) {
     const LibraryCallee Library = libraryCallee(Call);
-    if (calleeReturnsNothing(Call) ||
+    const auto *Source = sourceImportCallee(Call);
+    if ((Source && Source->ReturnType->Kind == NdTypeKind::Void) ||
+        calleeReturnsNothing(Call) ||
         (Library && libc::libcResult(Library.Name, libcVariant()) ==
                         libc::LibCResult::Void))
       ResultLive = false;
@@ -5067,6 +5911,10 @@ std::string LLVMCWriter::indirectCalleeType(const llvm::CallBase &Call,
   unsigned Params = Type->getNumParams();
   if (const std::optional<unsigned> Typed = typedSlotParamCount(Call))
     Params = std::min(Params, *Typed);
+  // The ordinary source projection can omit trailing unknown/live-in
+  // arguments. Its cast must describe the same argument list it prints.
+  if (!Strict)
+    Params = std::min(Params, printedCallArgLimit(Call, {}));
   std::string Parameters;
   for (unsigned I = 0; I < Params; ++I) {
     if (!Parameters.empty())
@@ -5118,12 +5966,21 @@ LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
   if (!Found || Call.arg_size() != Found->Signature.Parameters.size())
     throw std::runtime_error(
         "The call-site source declaration lost its complete operands");
-  if ((Call.getType()->isVoidTy() ? 0 : llvmAccessSize(Call.getType())) !=
-      Found->Signature.ReturnType->Size)
+  std::string Diagnostic;
+  if (!validateSourceABI(Found->Signature, Diagnostic) ||
+      hasIndirectSourceParameters(Found->Signature) ||
+      Found->Signature.ReturnLocation.Kind ==
+          SourceABICarrierKind::IndirectResultPointer)
+    throw std::runtime_error(c_detail::kInvalidSourceRecordABI);
+  if (Call.getType() != llvmSourceCallValueType(Call.getContext(),
+                                                Found->Signature.ReturnType,
+                                                /*Parameter=*/false))
     throw std::runtime_error("The call-site source result carrier changed");
   for (unsigned I = 0; I < Call.arg_size(); ++I)
-    if (llvmAccessSize(Call.getArgOperand(I)->getType()) !=
-        Found->Signature.Parameters[I].Type->Size)
+    if (Call.getArgOperand(I)->getType() !=
+        llvmSourceCallValueType(Call.getContext(),
+                                Found->Signature.Parameters[I].Type,
+                                /*Parameter=*/true))
       throw std::runtime_error("A call-site source argument carrier changed");
   return Found;
 }
@@ -5154,7 +6011,18 @@ LLVMCWriter::preservedIndirectCalleeStr(const llvm::CallBase &Call) {
     Type = declarationToC(cDisplayType(Hint->Signature.ReturnType),
                           "(" + Convention + "*)(" + Params + ")");
   }
-  return "((" + Type + ")(" + valueStr(Call.getCalledOperand()) + "))";
+  if (const auto Authentication =
+          llvmAArch64AuthenticatedCall(Call, Opts.TheArch))
+    return retainCallSiteCType(Call, Type,
+                               aarch64PAuthAuthenticatedCalleeC(
+                                   Type, valueStr(Call.getCalledOperand()),
+                                   std::to_string(Authentication->Key),
+                                   valueStr(Authentication->Modifier)));
+  std::string Callee =
+      "((" + Type + ")(" + valueStr(Call.getCalledOperand()) + "))";
+  if (Opts.TheArch == Arch::AArch64 && Call.isIndirectCall())
+    Callee = aarch64PAuthRawCalleeC(Callee);
+  return retainCallSiteCType(Call, Type, Callee);
 }
 
 std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
@@ -5178,10 +6046,30 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
                : sourceScalarType(Call.getArgOperand(I)->getType(),
                                   Call.getAttributes().hasParamAttr(
                                       I, LLVMSourceSignedParameter));
-      Expression += "(" + Type + ")(" + valueStr(Call.getArgOperand(I)) + ")";
+      const auto *Argument = Call.getArgOperand(I);
+      if (Hint &&
+          Hint->Signature.Parameters[I].Type->Kind == NdTypeKind::Struct)
+        Expression += c_detail::sourceRecordValue(
+            Hint->Signature.Parameters[I].Type,
+            typeToCLLVM(Argument->getType()), Type, valueStr(Argument));
+      else {
+        std::string Projected = "(" + Type + ")(" + valueStr(Argument) + ")";
+        const bool Pointer =
+            Hint ? Hint->Signature.Parameters[I].Type->Kind == NdTypeKind::Ptr
+                 : Argument->getType()->isPointerTy();
+        Expression += Pointer
+                          ? imagePointerArgument(Argument, std::move(Projected))
+                          : std::move(Projected);
+      }
     }
+    Expression += ")";
+    if (Hint && Hint->Signature.ReturnType->Kind == NdTypeKind::Struct)
+      Expression = c_detail::sourceRecordValue(
+          Hint->Signature.ReturnType,
+          declarationToC(cDisplayType(Hint->Signature.ReturnType), ""),
+          typeToCLLVM(Call.getType()), Expression);
     RenderingCalls.pop_back();
-    return Expression + ")";
+    return Expression;
   }
 
   if (scalarUnary(Call)) {
@@ -5195,10 +6083,10 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   if (scalarIntegerMinMax(Call) || scalarIntegerSaturation(Call)) {
     // An actual function captures each argument once, including when the
     // intrinsic itself is inlined into another rendered expression.
-    const std::string Expr = functionIdentifier(*Call.getCalledFunction()) +
-                             "(" + callArgStr(Call.getArgOperand(0), Call, 0) +
-                             ", " + callArgStr(Call.getArgOperand(1), Call, 1) +
-                             ")";
+    const std::string Expr =
+        functionIdentifier(*Call.getCalledFunction()) + "(" +
+        integerPointerOperandStr(Call.getArgOperand(0), &Call, 0) + ", " +
+        integerPointerOperandStr(Call.getArgOperand(1), &Call, 1) + ")";
     RenderingCalls.pop_back();
     return Expr;
   }
@@ -5236,7 +6124,19 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   }
 
   std::string CalleeName;
-  if (auto *Callee = Call.getCalledFunction()) {
+  if (const auto Authentication =
+          llvmAArch64AuthenticatedCall(Call, Opts.TheArch)) {
+    if (Opts.PreserveLLVMFunctionTypes || needsCallSiteCType(Call))
+      CalleeName = preservedIndirectCalleeStr(Call);
+    else
+      CalleeName = aarch64PAuthAuthenticatedCalleeC(
+          indirectCalleeType(Call, /*Strict=*/false),
+          valueStr(Call.getCalledOperand()),
+          std::to_string(Authentication->Key),
+          valueStr(Authentication->Modifier));
+  } else if (needsCallSiteCType(Call)) {
+    CalleeName = preservedIndirectCalleeStr(Call);
+  } else if (auto *Callee = Call.getCalledFunction()) {
     const std::string RawCalleeName = Callee->getName().str();
     const char *CN = llvmIntrinsicToCName(RawCalleeName.c_str());
     if (CN)
@@ -5258,8 +6158,11 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           Callee = Cast->getOperand(0);
         Target = "(" + valueStr(Callee) + ")";
       }
-      CalleeName = "((" + indirectCalleeType(Call, /*Strict=*/false) + ")" +
-                   Target + ")";
+      const auto Type = indirectCalleeType(Call, /*Strict=*/false);
+      CalleeName =
+          retainCallSiteCType(Call, Type, "((" + Type + ")" + Target + ")");
+      if (Opts.TheArch == Arch::AArch64)
+        CalleeName = aarch64PAuthRawCalleeC(CalleeName);
     }
   }
   if (Call.getCalledFunction() &&
@@ -5271,18 +6174,38 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   std::string Expr = CalleeName + "(";
   const unsigned Limit = printedCallArgLimit(Call, CalleeName);
   const LibraryCallee Library = libraryCallee(Call);
-  const auto Function = debugCallee(Call);
+  // Import-slot calls already have a checked source declaration even when
+  // debug lookup cannot name their loaded LLVM operand. Use that same
+  // declaration for record arguments and results, as for scalar conversions.
+  const auto *SourceImport = sourceImportCallee(Call);
+  const auto DebugFunction = SourceImport ? std::nullopt : debugCallee(Call);
+  const auto *Function = SourceImport    ? SourceImport
+                         : DebugFunction ? &*DebugFunction
+                                         : nullptr;
+  const bool SourceRecord =
+      Function && ((Library && Function->Name == Library.Name) || SourceImport);
+  const bool Grouped = Function && groupedFloatingCall(Call, *Function);
   const auto RecordCall =
-      Function && Library && Function->Name == Library.Name
-          ? libc::recordCallArguments(*Function, Opts.TheArch, Opts.Format,
-                                      libcVariant())
-          : std::nullopt;
-  if (Function && Library && Function->Name == Library.Name && !RecordCall &&
-      Function->PrototypeFromCLibrary &&
+      SourceRecord ? recordCallArguments(Call, *Function) : std::nullopt;
+  if (SourceRecord && !RecordCall &&
+      (Function->PrototypeFromHeader || Function->PrototypeFromCLibrary) &&
       libc::hasRecordCallParameters(*Function, libcVariant()))
     throw std::runtime_error("The header's record call ABI is unsupported");
-  if (RecordCall && RecordCall->Positions > Call.arg_size())
+  if (RecordCall && (Grouped ? RecordCall->Parameters.size()
+                             : RecordCall->Positions) > Call.arg_size())
     throw std::runtime_error("A record call argument is incomplete");
+  const char *RecordHeader =
+      RecordCall ? libc::headerFor(Library.Name) : nullptr;
+  if (RecordHeader && IncludedHeaders.count(RecordHeader)) {
+    const auto NoteRecord = [&](const TypeRef &Type) {
+      if (Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum &&
+          !Type->SourceName.empty())
+        HeaderCallRecords.insert(cNamedTypeSpelling(Type->SourceName));
+    };
+    NoteRecord(Function->ReturnType);
+    for (const auto &Parameter : Function->Params)
+      NoteRecord(Parameter.second);
+  }
   const unsigned Printed = RecordCall ? RecordCall->Parameters.size() : Limit;
   for (unsigned ArgIdx = 0; ArgIdx < Printed; ++ArgIdx) {
     if (ArgIdx > 0)
@@ -5295,13 +6218,20 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           libc::isRecordCallParameter(*Function, ArgIdx, libcVariant())
               ? c_detail::recordCallType(Type, Opts)
               : typeToC(Type);
+      if (Grouped) {
+        Expr += "__builtin_bit_cast(" + Spelling + ", " +
+                valueStr(Call.getArgOperand(ArgIdx)) + ")";
+        continue;
+      }
       Expr += c_detail::recordCallArgument(
           Spelling, RecordCall->Parameters[ArgIdx],
           [&](unsigned Index) { return valueStr(Call.getArgOperand(Index)); });
       continue;
     }
     const unsigned Source =
-        RecordCall ? RecordCall->Parameters[ArgIdx].Pieces[0].Argument : ArgIdx;
+        RecordCall && !Grouped
+            ? RecordCall->Parameters[ArgIdx].Pieces[0].Argument
+            : ArgIdx;
     const llvm::Value *Operand = Call.getArgOperand(Source);
     bool PointerSpelling = false;
     std::string Argument = callArgStr(Operand, Call, ArgIdx, &PointerSpelling);
@@ -5326,6 +6256,34 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       Argument = "(" + Spelling.str() + ")(" + Argument + ")";
     }
     const bool Integer = Operand->getType()->isIntegerTy();
+    if (SourceImport && ArgIdx < SourceImport->Params.size()) {
+      const auto &Type = SourceImport->Params[ArgIdx].second;
+      const std::string Bridge =
+          Integer || PointerSpelling || Operand->getType()->isPointerTy()
+              ? "(uintptr_t)"
+              : "";
+      const llvm::StringRef Spelled =
+          c_library::portableScalarParameterType(*SourceImport, ArgIdx);
+      std::string Projected =
+          "(" +
+          (Spelled.empty() ? declarationToC(cDisplayType(Type), "")
+                           : Spelled.str()) +
+          ")" + Bridge + "(" + Argument + ")";
+      Expr += Type->Kind == NdTypeKind::Ptr
+                  ? imagePointerArgument(Operand, std::move(Projected))
+                  : std::move(Projected);
+      continue;
+    }
+    if (const auto *Callee = Call.getCalledFunction();
+        Callee && !needsCallSiteCType(Call)) {
+      const auto &Parameters = definitionPointerTypes(*Callee).Parameters;
+      if (ArgIdx < Parameters.size() && Parameters[ArgIdx].Type) {
+        Expr += imagePointerArgument(Operand,
+                                     "(" + Parameters[ArgIdx].declaration() +
+                                         ")(uintptr_t)(" + Argument + ")");
+        continue;
+      }
+    }
     const bool HeaderInteger = Library && !Library.Prototype && Integer;
     const libc::LibCPrototype *Prototype =
         Library.Prototype && ArgIdx < Library.Prototype->ParamCount
@@ -5339,6 +6297,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     // takes as it is (`RaiseException(code, 0, 0, 0)`).
     const auto *Constant = llvm::dyn_cast<llvm::ConstantInt>(Operand);
     const bool Null = Constant && Constant->isZero();
+    // The parameter as the callee's declaration types it, where the debug
+    // context has one.
+    const TypeRef DeclaredParameter =
+        Function && ArgIdx < Function->Params.size()
+            ? Function->Params[ArgIdx].second
+            : nullptr;
     // A header's pointer parameter takes the integer that holds an address
     // converted, an object's or a function's (qsort's comparison).
     if (HeaderInteger &&
@@ -5368,10 +6332,38 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
              declaredParameterIsInteger(Call, CalleeName, ArgIdx))
       Argument = "(" + typeToCLLVM(Operand->getType()) + ")(uintptr_t)(" +
                  Argument + ")";
-    Expr += Argument;
+    // A frame member's address points to the type the frame record lays the
+    // member out as: the start of a stack buffer snprintf formats into is a
+    // `uint64_t` member.  A header's object pointer parameter of another type
+    // takes it through void *, as C converts it to no other object pointer.
+    else if (Library && !Library.Prototype && !Integer &&
+             libc::isObjectPointerParameter(Library.Name, ArgIdx,
+                                            libcVariant()) &&
+             frameAddressOfOtherType(*Operand, Argument, DeclaredParameter))
+      Argument = "(void *)" + Argument;
+    const bool PointerArgument =
+        Prototype       ? libc::isPointerType(Param)
+        : HeaderInteger ? libc::isObjectPointerParameter(Library.Name, ArgIdx,
+                                                         libcVariant())
+                        : Operand->getType()->isPointerTy();
+    Expr += PointerArgument ? imagePointerArgument(Operand, std::move(Argument))
+                            : std::move(Argument);
   }
   Expr += ")";
   RenderingCalls.pop_back();
+  if (RecordCall && RecordCall->FloatingResult) {
+    if (!Call.getType()->isStructTy() ||
+        Call.getModule()->getDataLayout().getTypeStoreSize(Call.getType()) !=
+            Function->ReturnType->Size)
+      throw std::runtime_error(
+          "A record call has an incompatible result carrier");
+    return "__builtin_bit_cast(" + typeToCLLVM(Call.getType()) + ", " + Expr +
+           ")";
+  }
+  if (RecordCall && RecordCall->ResultPointer)
+    return c_detail::recordCallResult(
+        c_detail::recordCallType(Function->ReturnType, Opts),
+        valueStr(Call.getArgOperand(*RecordCall->ResultPointer)), Expr);
   return Statement ? Expr : callResult(Call, std::move(Expr));
 }
 
@@ -5639,8 +6631,8 @@ TypeRef LLVMCWriter::enumTypeUsedAsCallArg(const llvm::AllocaInst *Slot) const {
         if (peelIntCast(CB->getArgOperand(I)) != LI)
           continue;
         unsigned Parameter = I;
-        if (const auto Layout = libc::recordCallArguments(
-                *FS, Opts.TheArch, Opts.Format, libcVariant())) {
+        if (const auto Layout = recordCallArguments(*CB, *FS);
+            Layout && !groupedFloatingCall(*CB, *FS)) {
           const auto Scalar =
               libc::recordCallScalarParameter(*FS, *Layout, I, libcVariant());
           if (!Scalar)
@@ -5799,9 +6791,22 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
       *PointerSpelling = true;
     return "\"" + escapeCString(String->getAsCString()) + "\"";
   }
+  // A declared C string parameter fixes the byte width, including a short
+  // literal whose following bytes would fail a generic wide-string probe.
+  if (const llvm::Function *Callee = Call.getCalledFunction();
+      Callee && Callee->isDeclaration() &&
+      libc::isCStringParameter(printedCalleeName(Call), ArgIdx))
+    if (const auto Address = imageDataVA(Arg))
+      if (const auto Literal = imageStringLiteral(Img, *Address,
+                                                  /*AllowEmpty=*/true,
+                                                  /*Narrow=*/true)) {
+        if (PointerSpelling)
+          *PointerSpelling = true;
+        return *Literal;
+      }
   const llvm::BasicBlock *BB = Call.getParent();
   if (const llvm::PHINode *Phi = joinPhiForCallArg(Arg, BB))
-    return getName(Phi);
+    return DeferredUnknownFlags.count(Phi) ? valueStr(Phi) : getName(Phi);
   if (const llvm::LoadInst *ArgLoad =
           llvm::dyn_cast<llvm::LoadInst>(peelCastFreeze(Arg))) {
     if (auto It = SelectUseText.find(ArgLoad); It != SelectUseText.end())
@@ -5851,7 +6856,8 @@ bool LLVMCWriter::declaredParameterIsInteger(const llvm::CallBase &Call,
   // (indirectCalleeType), and an import named for its slot is declared
   // without parameters.
   if (Opts.PreserveLLVMFunctionTypes)
-    return false;
+    return ArgIdx < Call.getFunctionType()->getNumParams() &&
+           Call.getFunctionType()->getParamType(ArgIdx)->isIntegerTy();
   const llvm::Function *Callee = Call.getCalledFunction();
   if (!Callee) {
     if (llvm::isa<llvm::InlineAsm>(Call.getCalledOperand()) ||
@@ -5868,6 +6874,27 @@ bool LLVMCWriter::declaredParameterIsInteger(const llvm::CallBase &Call,
       Callee ? Callee->getFunctionType() : Call.getFunctionType();
   return ArgIdx < Type->getNumParams() &&
          Type->getParamType(ArgIdx)->isIntegerTy();
+}
+
+bool LLVMCWriter::frameAddressOfOtherType(const llvm::Value &Pointer,
+                                          llvm::StringRef Text,
+                                          const TypeRef &Declared) const {
+  if (!Pointer.getType()->isPointerTy())
+    return false;
+  // The address of a frame slot, as valueStr spells it.
+  std::optional<TypedAccess> Address =
+      frameSlotAccess(&Pointer, 0, /*AddressOf=*/true);
+  if (!Address)
+    Address = frameSlotAccess(&Pointer, 8, /*AddressOf=*/true);
+  if (!Address || Address->Text != Text || !Address->Type ||
+      Address->Type->Kind != NdTypeKind::Ptr || !Address->Type->Pointee ||
+      Address->Type->Pointee->Kind == NdTypeKind::Void)
+    return false;
+  // A void * parameter takes any object pointer, and one of the member's own
+  // type takes its address as it is.
+  return !Declared || Declared->Kind != NdTypeKind::Ptr ||
+         (Declared->Pointee && Declared->Pointee->Kind != NdTypeKind::Void &&
+          typeToC(Declared) != typeToC(Address->Type));
 }
 
 bool LLVMCWriter::writeExclusiveSkip(
@@ -6496,8 +7523,7 @@ void LLVMCWriter::writeInvertedFalseSkip(const llvm::BasicBlock *From,
     }
     emitIndent(Indent);
     OS << "} else {\n";
-    if (ReferencedBlocks.count(SelDef))
-      OS << blockLabel(SelDef) << ":\n";
+    writeBlockLabel(*SelDef);
     WriteArm(SelDef, Indent + 1);
     emitIndent(Indent);
     OS << "}\n";
@@ -6748,6 +7774,8 @@ bool LLVMCWriter::phiIncomingIsPrinted(const llvm::PHINode *Phi,
                                        bool ForceMaterialized) {
   if (!Phi || !Incoming || Analysis.Inlinable.count(Phi))
     return false;
+  if (DeferredUnknownFlags.count(Phi))
+    return true;
   if ((OmittedUnknowns.count(Phi) || OmittedInlined.count(Phi) ||
        usersAreDeadCopies(Phi)) &&
       !phiPrintedAsJoinCallArg(Phi))
@@ -6842,6 +7870,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
   struct PhiCopy {
     const llvm::PHINode *Phi;
     const llvm::Value *Incoming;
+    llvm::Type *Type;
     std::string RHS;
     std::string Destination;
     std::string Temp;
@@ -6867,10 +7896,34 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
       if (auto Imm = foldImmediate(Incoming))
         EdgeImmediates.emplace(Phi, *Imm);
     if (phiIncomingIsPrinted(Phi, Incoming, MaterializeEdge)) {
-      const std::string RHS = integerPointerOperandStr(Incoming);
       const std::string Destination = getName(Phi);
+      if (auto Flag = DeferredUnknownFlags.find(Phi);
+          Flag != DeferredUnknownFlags.end()) {
+        std::string Available = "1";
+        std::string RHS;
+        if (isDeferredUnknownInput(Incoming)) {
+          Available = "0";
+          RHS = "0";
+        } else if (auto Source = DeferredUnknownFlags.find(Incoming);
+                   Source != DeferredUnknownFlags.end()) {
+          Available = Source->second;
+          llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
+          RHS =
+              Available + " ? (" + integerPointerOperandStr(Incoming) + ") : 0";
+        } else
+          RHS = integerPointerOperandStr(Incoming);
+        Copies.push_back({Phi, Incoming, Phi->getType(), RHS, Destination, {}});
+        Copies.push_back({nullptr,
+                          nullptr,
+                          llvm::Type::getInt8Ty(Phi->getContext()),
+                          Available,
+                          Flag->second,
+                          {}});
+        continue;
+      }
+      const std::string RHS = integerPointerOperandStr(Incoming);
       if (!ForceMaterialized || RHS != Destination)
-        Copies.push_back({Phi, Incoming, RHS, Destination, {}});
+        Copies.push_back({Phi, Incoming, Phi->getType(), RHS, Destination, {}});
     }
   }
   // Evaluate the whole edge against its predecessor state before publishing
@@ -6926,13 +7979,13 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
   const int CopyIndent = Indent + (HasTemps ? 1 : 0);
   for (const auto &Copy : Copies) {
     emitIndent(CopyIndent);
-    if (Copy.Phi == Declare && !HasTemps && Indent == 1) {
+    if (Copy.Phi && Copy.Phi == Declare && !HasTemps && Indent == 1) {
       ScopedScalarNames.insert(Copy.Destination);
       OS << typeToCLLVM(Copy.Phi->getType()) << " " << Copy.Destination << " = "
          << Copy.RHS << ";\n";
       continue;
     }
-    if (Copy.Temp.empty())
+    if (Copy.Temp.empty() && Copy.Phi && !DeferredUnknownFlags.count(Copy.Phi))
       if (auto Update = scalarConditionalUpdate(Copy.Phi, Copy.Incoming)) {
         if (!Update->Initial.empty()) {
           OS << Update->Initial << ";\n";
@@ -6941,13 +7994,13 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
         OS << "if (" << Update->Condition << ") " << Update->Update << ";\n";
         continue;
       }
-    if (Copy.Temp.empty())
+    if (Copy.Temp.empty() && Copy.Phi && !DeferredUnknownFlags.count(Copy.Phi))
       if (auto Update = scalarUpdateText(Copy.Phi, Copy.Incoming)) {
         OS << *Update << ";\n";
         continue;
       }
     if (!Copy.Temp.empty())
-      OS << typeToCLLVM(Copy.Phi->getType()) << " " << Copy.Temp;
+      OS << typeToCLLVM(Copy.Type) << " " << Copy.Temp;
     else
       OS << Copy.Destination;
     OS << " = " << Copy.RHS << ";\n";
@@ -7003,10 +8056,9 @@ std::string LLVMCWriter::importCalleeCName(const llvm::Value *Callee) const {
         continue;
       }
     }
-    if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Op)) {
-      Op = GEP->getPointerOperand()->stripPointerCasts();
-      continue;
-    }
+    // Keep a nonzero GEP for imageDataVA below. Its offset selects the import
+    // slot; peeling it would rename every entry in one IAT object as the
+    // first import. An unresolvable offset must keep its indirect target.
     break;
   }
   const llvm::Value *Ptr = Op;
@@ -7014,6 +8066,21 @@ std::string LLVMCWriter::importCalleeCName(const llvm::Value *Callee) const {
     Ptr = LI->getPointerOperand()->stripPointerCasts();
 
   auto nameFromSlot = [&](va_t Slot) -> std::string {
+    // A data object's debug name names its storage, not the function pointer
+    // currently loaded from it. Only a loader-bound import can replace that
+    // load with a fixed callee identity.
+    if (llvm::isa<llvm::LoadInst>(Op)) {
+      if (!Img)
+        return {};
+      const Import *Imported = Img->findImportAt(Slot);
+      const auto Bound = Img->ImportStorageSlots.find(Slot);
+      const bool BoundImport =
+          Bound != Img->ImportStorageSlots.end() &&
+          !Img->ConflictingImportStorageSlots.count(Slot) &&
+          Bound->second.Addend == 0;
+      if ((!Imported || Imported->IATAddr != Slot) && !BoundImport)
+        return {};
+    }
     if (Dbg) {
       if (auto Data = Dbg->resolveDataObject(Slot); Data && !Data->Name.empty())
         return canonicalizeCProjectionIdentifier(Data->Name, "nd_import");
@@ -7172,9 +8239,9 @@ std::string LLVMCWriter::windowsEHFilterExpr(const llvm::CatchSwitchInst &CS) {
     std::string Args = "GetExceptionInformation()";
     if (Fn->arg_size() == 2 && Fn->getArg(0)->getType()->isPointerTy() &&
         Fn->getArg(1)->getType()->isPointerTy()) {
-      if (SEHFilterFrameName.empty())
-        SEHFilterFrameName = freshVar("seh_parent_frame");
-      Args += ", " + SEHFilterFrameName;
+      if (SEHParentFrameName.empty())
+        SEHParentFrameName = freshVar("seh_parent_frame");
+      Args += ", " + SEHParentFrameName;
     } else if (Fn->arg_size() != 1 ||
                !Fn->getArg(0)->getType()->isPointerTy()) {
       throw std::runtime_error("unsupported Windows SEH filter source ABI");
@@ -7263,17 +8330,31 @@ void LLVMCWriter::writeCleanupRet(llvm::CleanupReturnInst &CR, int Indent) {
 }
 
 void LLVMCWriter::writeReturn(llvm::ReturnInst &Ret, int Indent) {
+  if (!WrappedFinallyNormalExit.empty()) {
+    emitIndent(Indent);
+    OS << WrappedFinallyNormalExit << " = 1;\n";
+  }
   emitIndent(Indent);
   if (InferredVoid) {
     OS << "return;\n";
     return;
   }
+  if (ReturnsNoValue && Ret.getReturnValue()) {
+    // Preserving a function type does not introduce a demand for the
+    // undefined machine return register. Only its unused ABI carrier needs
+    // a value; calls and other effects in the discarded chain stay live.
+    OS << "return "
+       << valueStr(
+              llvm::Constant::getNullValue(Ret.getFunction()->getReturnType()))
+       << ";\n";
+    return;
+  }
   if (auto *RV = Ret.getReturnValue()) {
     if (auto *Collapsed = tryCollapseHiLo(Analysis, RV)) {
-      OS << "return " << valueStr(Collapsed) << ";\n";
+      OS << "return " << integerPointerOperandStr(Collapsed) << ";\n";
     } else {
       auto *FnRetTy = Ret.getFunction()->getReturnType();
-      std::string RetExpr = valueStr(RV);
+      std::string RetExpr = integerPointerOperandStr(RV);
       if (RV->getType() != FnRetTy && FnRetTy->isIntegerTy() &&
           RV->getType()->isIntegerTy() &&
           FnRetTy->getIntegerBitWidth() < RV->getType()->getIntegerBitWidth())

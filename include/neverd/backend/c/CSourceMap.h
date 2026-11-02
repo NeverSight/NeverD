@@ -61,6 +61,7 @@ struct CSourceLocalTypes {
   std::string Text;
   std::vector<std::string> Types;
   std::vector<std::string> DeclaredTypes;
+  std::vector<std::string> HeaderTypes;
   bool operator==(const CSourceLocalTypes &) const = default;
 };
 

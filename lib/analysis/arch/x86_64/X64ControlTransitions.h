@@ -18,9 +18,21 @@ bool validState(symbolic::SymState &State, const RuntimeControlState &Controls,
                 const SpecializationOptions &Options);
 } // namespace neverd::analysis::x64::control
 
+namespace neverd::analysis::x64::readprefetch {
+/// Exact default-space read-hint shape. The residual and source retain the
+/// native hint; scalar evaluation neither reads nor writes guest memory.
+bool isOperation(const LowOp &Op);
+bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+} // namespace neverd::analysis::x64::readprefetch
+
 namespace neverd::analysis::x64::legacygs {
 llvm::Error validateOptions(const SpecializationOptions &Options);
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+/// Pure instruction transition on an already validated active/inactive pair.
+/// The caller supplies the execution domain and owns state storage/commit.
+std::optional<RuntimeControlTransition>
+lowerScalarOperation(const LowOp &Op, NdVar Pair,
+                     llvm::function_ref<NdVar(uint16_t)> Temporary);
 std::optional<RuntimeControlTransition>
 lowerOperation(const LowOp &Op, symbolic::SymState &State,
                const RuntimeControlState &Controls,
@@ -31,6 +43,14 @@ lowerOperation(const LowOp &Op, symbolic::SymState &State,
 namespace neverd::analysis::x64::mxcsr {
 llvm::Error validateOptions(const SpecializationOptions &Options);
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+/// Includes the memory store form. Native proof admission remains separate.
+bool supportsScalarOperation(const LowOp &Op,
+                             const SpecializationOptions &Options);
+/// Shared scalar transition; Rejected must be checked before committing any
+/// architectural effect. This function grants no execution-domain evidence.
+std::optional<RuntimeControlTransition>
+lowerScalarOperation(const LowOp &Op, NdVar Slot, uint32_t Mask,
+                     llvm::function_ref<NdVar(uint16_t)> Temporary);
 RuntimeControlState seedState(symbolic::SymContext &Ctx,
                               const SpecializationOptions &Options);
 std::optional<RuntimeControlTransition>
@@ -42,9 +62,31 @@ lowerOperation(const LowOp &Op, symbolic::SymState &State,
 
 namespace neverd::analysis::x64::alignment {
 bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+/// Known validity only for a supported check of a constant address.
+std::optional<bool> constantValidity(const LowOp &Op,
+                                     const SpecializationOptions &Options);
 std::optional<RuntimeControlTransition>
 lowerOperation(const LowOp &Op, const SpecializationOptions &Options,
                llvm::function_ref<NdVar(uint16_t)> Temporary);
 } // namespace neverd::analysis::x64::alignment
+
+namespace neverd::analysis::x64::pageglobal {
+enum class Operation { Read, Write };
+std::optional<Operation> describeOperation(const LowOp &Op);
+llvm::Error validateOptions(const SpecializationOptions &Options);
+bool supportsOperation(const LowOp &Op, const SpecializationOptions &Options);
+/// PGE-only scalar value transition. The caller must supply the complete
+/// execution domain and prove Rejected is zero before committing effects.
+/// Slot and allocated temporaries must be fresh and disjoint from each other
+/// and the instruction's temporaries, as in the owning recovery allocator.
+std::optional<RuntimeControlTransition>
+lowerScalarOperation(const LowOp &Op, NdVar Slot,
+                     llvm::function_ref<NdVar(uint16_t)> Temporary);
+std::optional<RuntimeControlTransition>
+lowerOperation(const LowOp &Op, symbolic::SymState &State,
+               const RuntimeControlState &Controls,
+               const SpecializationOptions &Options,
+               llvm::function_ref<NdVar(uint16_t)> Temporary);
+} // namespace neverd::analysis::x64::pageglobal
 
 #endif

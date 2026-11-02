@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/loader/BinaryImageFlags.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -60,16 +61,25 @@ llvm::Error buildSegments(const llvm::object::ELFFile<ELFT> &ELF,
   auto &Metadata = *Img.ELFMetadata;
   Metadata.HeaderSize = Header.e_ehsize;
   Metadata.ProgramHeaders.reserve(PhdrsOr->size());
+  bool HasInterpreter = false;
   for (const Elf_Phdr &PH : *PhdrsOr) {
     Metadata.ProgramHeaders.push_back({PH.p_type, PH.p_flags, PH.p_offset,
                                        PH.p_vaddr, PH.p_filesz, PH.p_memsz,
                                        PH.p_align});
     // The dynamic linker's path, its terminator dropped.
-    if (PH.p_type == PT_INTERP && PH.p_filesz > 0 &&
-        rangeInBounds(PH.p_offset, PH.p_filesz, Size)) {
+    if (PH.p_type == PT_INTERP) {
+      if (HasInterpreter || PH.p_filesz == 0 ||
+          !rangeInBounds(PH.p_offset, PH.p_filesz, Size))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                       "elf: invalid PT_INTERP record");
+      HasInterpreter = true;
       const llvm::StringRef Path(
           reinterpret_cast<const char *>(Data) + PH.p_offset, PH.p_filesz);
-      Metadata.Interpreter = Path.take_until([](char C) { return C == 0; });
+      if (Path.back() != '\0' || Path.drop_back().empty() ||
+          Path.drop_back().contains('\0'))
+        return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                       "elf: invalid PT_INTERP path");
+      Metadata.Interpreter = Path.drop_back().str();
     }
   }
 
@@ -126,6 +136,14 @@ llvm::Error buildSegments(const llvm::object::ELFFile<ELFT> &ELF,
       Seg.FileOff = SH.sh_offset;
       Seg.FileSz = SH.sh_type == SHT_NOBITS ? 0 : SH.sh_size;
       Seg.Flags = elfSHFlagsToNd(SH.sh_flags);
+      // A compiler places constant data that needs relocations in
+      // `.data.rel.ro`, which a linker maps read-only once relocated (RELRO).
+      // The loader is the one that maps an object's sections, so it gives
+      // that mapping the same protection.
+      if (hasFlag(Seg.Flags, SegmentFlags::Writable) &&
+          SH.sh_type != SHT_NOBITS &&
+          section_names::isDataRelRoSectionName(Name))
+        Seg.ReadOnlyAfterRelocations = true;
       if (Seg.Size > InvalidVA - Seg.VA)
         return llvm::make_error<llvm::StringError>(
             "elf: allocatable section range overflows",

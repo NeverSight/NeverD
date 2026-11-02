@@ -1,10 +1,19 @@
+//===- SourceABI.cpp - Checked source value and carrier contracts --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Validates complete logical source types and their physical value carriers.
+
 #include "neverd/ir/SourceABI.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <algorithm>
 #include <set>
@@ -17,6 +26,10 @@ bool isSourceBooleanType(const TypeRef &Type) {
 }
 
 namespace {
+#define SOURCE_ABI_CARRIER_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define SOURCE_ABI_CARRIER_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "SourceABICarriers.def"
+
 bool sameLocation(const SourceABIValueLocation &Left,
                   const SourceABIValueLocation &Right) {
   return Left.Kind == Right.Kind &&
@@ -51,8 +64,17 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
   case NdTypeKind::Float:
     return Left->Size == 4 || Left->Size == 8;
   case NdTypeKind::Ptr:
-    return Left->Size == 8 &&
-           equalTypes(Left->Pointee, Right->Pointee, Depth + 1, Remaining);
+    if (Left->Size != 8 || !Left->Pointee || !Right->Pointee)
+      return false;
+    // A named opaque pointee supplies identity, not a by-value layout.
+    if (Left->Pointee->Kind == NdTypeKind::Struct &&
+        Right->Pointee->Kind == NdTypeKind::Struct && !Left->Pointee->IsEnum &&
+        !Right->Pointee->IsEnum && Left->Pointee->Fields.empty() &&
+        Right->Pointee->Fields.empty() && !Left->Pointee->SourceName.empty() &&
+        !Right->Pointee->SourceName.empty())
+      return Left->Pointee->SourceName == Right->Pointee->SourceName &&
+             Left->Pointee->Size == Right->Pointee->Size;
+    return equalTypes(Left->Pointee, Right->Pointee, Depth + 1, Remaining);
   case NdTypeKind::Struct: {
     const auto Layout = NdType::makeStruct(Left->Fields);
     if (!Layout || Left->Size != Layout->Size || Right->Size != Layout->Size ||
@@ -68,7 +90,11 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
     return true;
   }
   case NdTypeKind::Func:
-    if (Left->Size != 0 || !Left->RetType || !Right->RetType ||
+    // These projections currently support the ordinary platform C convention.
+    // A displayable stdcall/vectorcall callback is not evidence for that ABI.
+    if (Left->FunctionConvention != types::CallingConvention::Unspecified ||
+        Right->FunctionConvention != types::CallingConvention::Unspecified ||
+        Left->Size != 0 || !Left->RetType || !Right->RetType ||
         Left->RetType->Kind == NdTypeKind::Func ||
         Left->ParamTypes.size() >
             ::neverd::limits::ir::kSourceABIEqualTypesLeftParamTypesSizeLimit ||
@@ -482,13 +508,21 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                : P.Type,
            P.Location});
     else {
-      const auto Members = sourceAggregateMembers(P.Type);
+      const auto Members = sourceABIValueMembers(P.Type);
       for (size_t J = 0; J < Members.size(); ++J)
         Result.push_back({I, Members[J].ByteOffset, P.Name, Members[J].Type,
                           P.Components[J]});
     }
   }
   return Result;
+}
+
+std::vector<SourceAggregateMember> sourceABIValueMembers(const TypeRef &Type) {
+  if (Type && Type->Kind == NdTypeKind::Int && Type->Size == kDarwinWideBytes &&
+      Type->SourceName != kSourceAArch64Vector128CType)
+    return {{NdType::makeInt(kDarwinWordBytes, false), 0},
+            {NdType::makeInt(kDarwinWordBytes, false), kDarwinWordBytes}};
+  return sourceAggregateMembers(Type);
 }
 
 std::optional<SourceABIParameter>
@@ -631,7 +665,16 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
              TRI.isVectorReg(Location.RegisterOffset) &&
              (!IsReturn || Location.RegisterOffset == TRI.FPReturnReg);
     if (Location.Kind == SourceABICarrierKind::IntegerRegister)
-      return Type->Kind != NdTypeKind::Float &&
+      // Windows ARM64 variadic arguments carry floating bits in X registers.
+      // Explicit source declarations retain that logical floating type; the
+      // source boundary reinterprets the complete bits rather than converting
+      // their integer value. Inferred signatures and result carriers keep
+      // their existing restrictions.
+      return (Type->Kind != NdTypeKind::Float ||
+              (!IsReturn && Hint.Architecture == Arch::AArch64 &&
+               Hint.Origin ==
+                   SourceFunctionTypeHint::OriginKind::ExplicitSource &&
+               Hint.Convention == SourceFunctionTypeHint::ConventionKind::C)) &&
              IntegerRegister(Location.RegisterOffset) &&
              (!IsReturn || Location.RegisterOffset == TRI.IntReturnReg);
     return false;
@@ -773,8 +816,36 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                      L.RegisterOffset) == TRI.IntParamRegs.end()))
         return fail(Diagnostic, "Unsupported source indirect record parameter");
     } else if (!Parameter.Components.empty()) {
-      if (!EmptyLocation(Parameter.Location) ||
-          !AggregateLocations(Parameter.Type, Parameter.Components, false))
+      if (Parameter.Type && Parameter.Type->Kind == NdTypeKind::Int &&
+          Parameter.Type->Size == kDarwinWideBytes) {
+        const auto &Parts = Parameter.Components;
+        const auto Members = sourceABIValueMembers(Parameter.Type);
+        if (Hint.Architecture != Arch::AArch64 ||
+            Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+            !EmptyLocation(Parameter.Location) ||
+            Parts.size() != kDarwinPairWords || Members.empty())
+          return fail(Diagnostic, kInvalidWideParameter);
+        const bool Stack = Parts.front().Kind == SourceABICarrierKind::Stack;
+        const auto First =
+            std::find(TRI.IntParamRegs.begin(), TRI.IntParamRegs.end(),
+                      Parts.front().RegisterOffset);
+        if (Stack ? Parts.front().EntryStackOffset % kDarwinWideBytes != 0
+                  : First == TRI.IntParamRegs.end() ||
+                        size_t(TRI.IntParamRegs.end() - First) < Parts.size())
+          return fail(Diagnostic, kInvalidWideParameter);
+        for (size_t I = 0; I < Parts.size(); ++I)
+          if (!ValidLocation(Members[I].Type, Parts[I], false) ||
+              Parts[I].ExtendTo32Bits ||
+              (Stack ? Parts[I].Kind != SourceABICarrierKind::Stack ||
+                           Parts[I].EntryStackOffset !=
+                               Parts.front().EntryStackOffset +
+                                   Members[I].ByteOffset
+                     : Parts[I].Kind != SourceABICarrierKind::IntegerRegister ||
+                           Parts[I].RegisterOffset != First[I]))
+            return fail(Diagnostic, kInvalidWideParameter);
+      } else if (!EmptyLocation(Parameter.Location) ||
+                 !AggregateLocations(Parameter.Type, Parameter.Components,
+                                     false))
         return fail(Diagnostic, "Unsupported source record parameter carriers");
     } else if (!ValidLocation(Parameter.Type, Parameter.Location, false)) {
       return fail(Diagnostic, "Unsupported source parameter carrier");
@@ -863,9 +934,68 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       StackOffset += Architecture == Arch::AArch64 ? Type->Size : 8;
     }
   };
-  for (auto &Parameter : Hint.Parameters) {
+  std::optional<SourceParameterPlacement> Placement;
+  if (Architecture == Arch::AArch64 &&
+      Convention == SourceFunctionTypeHint::ConventionKind::C) {
+    std::vector<TypeRef> Types;
+    Types.reserve(Hint.Parameters.size());
+    for (const auto &Parameter : Hint.Parameters) {
+      auto Type = Parameter.Type;
+      if (Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+          (!scalarType(Type) &&
+           !(Type && Type->Kind == NdTypeKind::Int &&
+             Type->Size == kDarwinWideBytes &&
+             Type->SourceName != kSourceAArch64Vector128CType) &&
+           !(Records && !sourceAggregateMembers(Type).empty())))
+        return fail(Diagnostic, kUnsupportedDarwinValue);
+      if (Type->Kind == NdTypeKind::Struct) {
+        Type = std::make_shared<NdType>(*Type);
+        Type->Passing = NdRecordPassing::ByValue;
+      }
+      Types.push_back(std::move(Type));
+    }
+    Placement = placeSourceParameters(Architecture, BinaryFormat::MachO,
+                                      Hint.ReturnType, Types);
+    if (!Placement || Placement->Parameters.size() != Types.size())
+      return fail(Diagnostic, kIncompleteDarwinPlacement);
+  }
+  for (size_t ParameterIndex = 0; ParameterIndex < Hint.Parameters.size();
+       ++ParameterIndex) {
+    auto &Parameter = Hint.Parameters[ParameterIndex];
     Parameter.Components.clear();
     Parameter.IndirectByValue = false;
+    if (Placement) {
+      const auto &Pieces = Placement->Parameters[ParameterIndex];
+      const auto Members = sourceABIValueMembers(Parameter.Type);
+      Parameter.Location = {};
+      if (Pieces.front().Indirect) {
+        Parameter.IndirectByValue = true;
+        Parameter.Location = Pieces.front().Location;
+      } else if (Members.empty()) {
+        Parameter.Location = Pieces.front().Location;
+        Parameter.Location.ExtendTo32Bits =
+            Parameter.Location.Kind == SourceABICarrierKind::IntegerRegister &&
+            Parameter.Type->Kind == NdTypeKind::Int &&
+            Parameter.Type->Size < kDarwinPromotedIntegerBytes;
+      } else {
+        for (const auto &Member : Members) {
+          const auto Piece = std::find_if(
+              Pieces.begin(), Pieces.end(), [&](const auto &Piece) {
+                return Piece.Offset <= Member.ByteOffset &&
+                       Member.ByteOffset + Member.Type->Size <=
+                           Piece.Offset + Piece.Location.ValueBytes;
+              });
+          if (Piece == Pieces.end())
+            return fail(Diagnostic, kIncompleteDarwinPlacement);
+          auto Location = Piece->Location;
+          if (Location.Kind == SourceABICarrierKind::Stack)
+            Location.EntryStackOffset += Member.ByteOffset - Piece->Offset;
+          Location.ValueBytes = Member.Type->Size;
+          Parameter.Components.push_back(Location);
+        }
+      }
+      continue;
+    }
     if (Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary) {
       if (Convention != SourceFunctionTypeHint::ConventionKind::Swift ||
           !Parameter.Type || Parameter.Type->Kind != NdTypeKind::Ptr)

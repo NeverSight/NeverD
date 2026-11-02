@@ -1,0 +1,976 @@
+{
+  "schema": "neverd-x87-qualification-ledger-v1",
+  "issue": "https://github.com/NeverSight/NeverD/issues/1677",
+  "status": "qualified within the named profiles; all 24 scoped acceptance gates passed",
+  "scope": "Explicit named profiles in x87-semantics.md; independent numerical, observed-state, execution and formal properties",
+  "execution_source_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+  "public_wording_commit": "83f6a3438ebfe7d88ed2ac213a5d00b0abcaddcb",
+  "integration_source_commit": "51747fe8c1398b9a7b14c320a58c536c6ef81522",
+  "integration_scope": "Public prerequisite strings and unrelated dev descriptor-address integration; x87 semantic owners, runtime, translation gate and LLVM revision unchanged after the recorded native qualification",
+  "hosts": {
+    "local-x64": {
+      "cpu": {
+        "Architecture": "x86_64",
+        "Vendor ID": "GenuineIntel",
+        "Model name": "13th Gen Intel(R) Core(TM) i9-13900H",
+        "CPU family": "6",
+        "Model": "186",
+        "Stepping": "2"
+      },
+      "environment": {
+        "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+        "machine": "x86_64",
+        "python": "3.14.4"
+      },
+      "compiler_version": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)",
+      "compiler_sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "configuration": "Release; -O3 -DNDEBUG; generated host artifacts at O0/O2",
+      "llvm_revision": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+      "llvm_build": "pinned neverd-llvm-v23.0.0-r6 x86_64 package"
+    },
+    "ci-x64": {
+      "cpu": {
+        "Architecture": "x86_64",
+        "Vendor ID": "AuthenticAMD",
+        "Model name": "AMD EPYC 9V45 96-Core Processor",
+        "CPU family": "26",
+        "Model": "2",
+        "Stepping": "1"
+      },
+      "environment": {
+        "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "python": "3.12.15"
+      },
+      "compiler_version": "Ubuntu clang version 23.1.5 (++20261023090852+395ba2c4d274-1~exp1~20261023090919.90)",
+      "compiler_sha256": "0cbdc67d7e3c3ebacf56a0a7cf44c80ce813c86dfbaa96d820626fd4e55a177d",
+      "configuration": "Release; -O3 -DNDEBUG; generated host artifacts at O0/O2",
+      "llvm_revision": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+      "llvm_build": "pinned neverd-llvm-v23.0.0-r6 x86_64 package"
+    },
+    "ci-arm64": {
+      "cpu": {
+        "Architecture": "aarch64",
+        "Vendor ID": "ARM",
+        "Model name": "Neoverse-N2",
+        "Model": "0",
+        "Stepping": "r0p0"
+      },
+      "environment": {
+        "platform": "Linux-6.17.0-1022-azure-aarch64-with-glibc2.39",
+        "machine": "aarch64",
+        "python": "3.12.15"
+      },
+      "compiler_version": "Ubuntu clang version 23.1.5 (++20261023090852+395ba2c4d274-1~exp1~20261023090919.90)",
+      "compiler_sha256": "c90a428f75b69ff38f4f9051dc417b2bbb78ea6f05840a42c1091d76a3c8c591",
+      "configuration": "Release; -O3 -DNDEBUG; generated host artifacts at O0/O2",
+      "llvm_revision": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+      "llvm_build": "built from the exact pinned repository LLVM revision; native AArch64"
+    }
+  },
+  "ci": {
+    "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+    "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+    "status_at_recording": "queued",
+    "conclusion_at_recording": null,
+    "jobs": [
+      {
+        "name": "Native x86_64 generated execution",
+        "job_id": 120695606368,
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "name": "Native aarch64 generated execution",
+        "job_id": 120695606934,
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "name": "Audit native cross-host state and arithmetic agreement",
+        "job_id": 120709151392,
+        "status": "queued",
+        "conclusion": null
+      }
+    ],
+    "cross_host_acceptance": "Passing strict local comparison of both native CI artifact sets; CI comparison job is tracked separately"
+  },
+  "records": [
+    {
+      "id": "native-call",
+      "record": "build-release/x87-closure-integrated-native-call1/record.json",
+      "record_sha256": "e5520b9958bdd274acd1ca16c7b2d88b5f1c5c445276149b3bf5af9db659b19d",
+      "protocol": "neverd-x87-native-generated-regression-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 841,
+      "tests": 3,
+      "retained_executables": 210
+    },
+    {
+      "id": "native-state",
+      "record": "build-release/x87-closure-integrated-native-state1/record.json",
+      "record_sha256": "625cb87dbbcfdf272405d5a43dce38548afd5c8745802ab72b39390539bd6f40",
+      "protocol": "neverd-x87-native-generated-regression-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 4714,
+      "tests": 85,
+      "retained_executables": 710
+    },
+    {
+      "id": "native-bcd",
+      "record": "build-release/x87-closure-integrated-native-bcd1/record.json",
+      "record_sha256": "9e3b88598461aaea6f0fb7d8fbbe2cabfa8cac3a43cd4f3cca7ee898731d9d3f",
+      "protocol": "neverd-x87-native-generated-regression-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 1605,
+      "tests": 5,
+      "retained_executables": 48
+    },
+    {
+      "id": "native-stack",
+      "record": "build-release/x87-closure-integrated-native-stack1/record.json",
+      "record_sha256": "4ea0cfe4d849ccd091f93bd7c112ccd82d60f244a9e784078c3c5f9aace392c2",
+      "protocol": "neverd-x87-native-generated-regression-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 465,
+      "tests": 4,
+      "retained_executables": 120
+    },
+    {
+      "id": "native-trig",
+      "record": "build-release/x87-closure-integrated-native-trig1/record.json",
+      "record_sha256": "1ed453c1480843c2c98ea0c47ef8b9dc88951641926eb219a32a7885ea5994cd",
+      "protocol": "neverd-x87-native-generated-regression-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 1391,
+      "tests": 10,
+      "retained_executables": 360
+    },
+    {
+      "id": "native-workload",
+      "record": "build-release/x87-closure-integrated-native-workload1/record.json",
+      "record_sha256": "e8194d9becf08f4307c42e7ed4326505d468672ee45b8b4aaabbde67a5b27932",
+      "protocol": "neverd-x87-native-generated-regression-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 833,
+      "tests": 5,
+      "retained_executables": 120
+    },
+    {
+      "id": "local-generated",
+      "record": "build-release/x87-closure-integrated-generated1/record.json",
+      "record_sha256": "f634720f928b3801840e575e8a58f5825a8c0aba8019ca4bbda1e19b619a1678",
+      "protocol": "neverd-x87-portable-generated-leaf-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 116,
+      "coverage": {
+        "artifacts": 36,
+        "observations": 6096,
+        "distinct_cases": 508,
+        "statuses": {
+          "0": 5772,
+          "2": 36,
+          "6": 36,
+          "5": 36,
+          "9": 36,
+          "10": 36,
+          "12": 36,
+          "13": 36,
+          "1": 72
+        },
+        "native_x64_original_comparisons": 5760,
+        "cross_route_and_optimization_agreement": true
+      }
+    },
+    {
+      "id": "local-arithmetic",
+      "record": "build-release/x87-closure-integrated-arithmetic1/record.json",
+      "record_sha256": "f032e518d373968088518bc5cec2147532f56959db267786135a16f38351c8d0",
+      "protocol": "neverd-x87-cross-host-arithmetic-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 14,
+      "seeds": [
+        8853111,
+        8853112,
+        8853113
+      ],
+      "observations": 57888,
+      "comparison": "local-arithmetic-comparison"
+    },
+    {
+      "id": "native-performance",
+      "record": "build-release/x87-closure-integrated-native-timing1/record.json",
+      "record_sha256": "0d2e45048e599ec02915803f16987783a25636032a71e526af22943195e39598",
+      "protocol": "neverd-x87-batch-measurement-v2",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 300,
+      "measurement_configuration": {
+        "cpu": 2,
+        "repetitions": 128,
+        "trials": 5,
+        "timeout": 60
+      },
+      "measurement_configurations": 30,
+      "bound_workload_record_sha256": "e8194d9becf08f4307c42e7ed4326505d468672ee45b8b4aaabbde67a5b27932"
+    },
+    {
+      "id": "local-portable-performance",
+      "record": "build-release/x87-closure-integrated-portable-timing1/record.json",
+      "record_sha256": "54f1933c649f2eab692f365acf37616dae3a6899bf90af96d3c23afe398efc7f",
+      "protocol": "neverd-x87-portable-measurement-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 200,
+      "measurement_configuration": {
+        "cpu": 2,
+        "iterations": 16384,
+        "session_iterations": 4,
+        "trials": 5
+      },
+      "measurement_configurations": 20,
+      "measurement_trials": 100,
+      "fallback_calls": 0,
+      "generated_record_sha256": "f634720f928b3801840e575e8a58f5825a8c0aba8019ca4bbda1e19b619a1678"
+    },
+    {
+      "id": "ci-x64-generated",
+      "record": "build-release/x87-ci-40036032606-x64/evidence/record.json",
+      "record_sha256": "9758b6dde220a1f88ed0e0ce12eaac7a36f394c0d25357bc6f13634fe69e8d11",
+      "protocol": "neverd-x87-portable-generated-leaf-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-x64",
+      "files_verified": 116,
+      "coverage": {
+        "artifacts": 36,
+        "observations": 6096,
+        "distinct_cases": 508,
+        "statuses": {
+          "0": 5772,
+          "2": 36,
+          "6": 36,
+          "5": 36,
+          "9": 36,
+          "10": 36,
+          "12": 36,
+          "13": 36,
+          "1": 72
+        },
+        "native_x64_original_comparisons": 5760,
+        "cross_route_and_optimization_agreement": true
+      },
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-x86_64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "ci-x64-arithmetic",
+      "record": "build-release/x87-ci-40036032606-x64/arithmetic-evidence/record.json",
+      "record_sha256": "2bf9aa0637aedcff84980a26228491657f6147b36401672afa7a9ae2b89fb2f3",
+      "protocol": "neverd-x87-cross-host-arithmetic-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-x64",
+      "files_verified": 14,
+      "seeds": [
+        8853111,
+        8853112,
+        8853113
+      ],
+      "observations": 57888,
+      "comparison": "cross-host",
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-x86_64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "ci-x64-performance",
+      "record": "build-release/x87-ci-40036032606-x64/performance-evidence/record.json",
+      "record_sha256": "e508f8f5f7527cf8ea1aa633756205338235dff11ce0da9bc5aa1d4b420bc654",
+      "protocol": "neverd-x87-portable-measurement-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-x64",
+      "files_verified": 200,
+      "measurement_configuration": {
+        "cpu": 0,
+        "iterations": 16384,
+        "session_iterations": 4,
+        "trials": 5
+      },
+      "measurement_configurations": 20,
+      "measurement_trials": 100,
+      "fallback_calls": 0,
+      "generated_record_sha256": "9758b6dde220a1f88ed0e0ce12eaac7a36f394c0d25357bc6f13634fe69e8d11",
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-x86_64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "ci-arm64-generated",
+      "record": "build-release/x87-ci-40036032606-arm64/evidence/record.json",
+      "record_sha256": "fd0f402189f924bdb068a664fd9a84f744c723572196209af35d83e2241fe900",
+      "protocol": "neverd-x87-portable-generated-leaf-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-arm64",
+      "files_verified": 116,
+      "coverage": {
+        "artifacts": 36,
+        "observations": 6096,
+        "distinct_cases": 508,
+        "statuses": {
+          "0": 5772,
+          "2": 36,
+          "6": 36,
+          "5": 36,
+          "9": 36,
+          "10": 36,
+          "12": 36,
+          "13": 36,
+          "1": 72
+        },
+        "native_x64_original_comparisons": 0,
+        "cross_route_and_optimization_agreement": true
+      },
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-aarch64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "ci-arm64-arithmetic",
+      "record": "build-release/x87-ci-40036032606-arm64/arithmetic-evidence/record.json",
+      "record_sha256": "5dba3281a79dbf7df972993e0ebd11e92f75fd91c5b8de0143c04549c6030606",
+      "protocol": "neverd-x87-cross-host-arithmetic-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-arm64",
+      "files_verified": 10,
+      "seeds": [
+        8853111,
+        8853112,
+        8853113
+      ],
+      "observations": 57888,
+      "comparison": "cross-host",
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-aarch64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "ci-arm64-performance",
+      "record": "build-release/x87-ci-40036032606-arm64/performance-evidence/record.json",
+      "record_sha256": "b7cd9c15cd694bcbd661756e193bafb550863c04d06bead97955b5fa988b4951",
+      "protocol": "neverd-x87-portable-measurement-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-arm64",
+      "files_verified": 210,
+      "measurement_configuration": {
+        "cpu": 0,
+        "iterations": 16384,
+        "session_iterations": 4,
+        "trials": 5
+      },
+      "measurement_configurations": 21,
+      "measurement_trials": 105,
+      "fallback_calls": 0,
+      "generated_record_sha256": "fd0f402189f924bdb068a664fd9a84f744c723572196209af35d83e2241fe900",
+      "translation_record_sha256": "ca42fd49d2ff0be0abe21f4015b29643ff896fbf7dae475c98b01c051422724e",
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-aarch64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "native-translation",
+      "record": "build-release/x87-ci-40036032606-arm64/translation-evidence/record.json",
+      "record_sha256": "ca42fd49d2ff0be0abe21f4015b29643ff896fbf7dae475c98b01c051422724e",
+      "protocol": "neverd-x87-linux-aarch64-translation-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "GitHub Actions artifact, 30 days; downloaded copy in local verification worktree",
+      "stable_inputs": true,
+      "host": "ci-arm64",
+      "files_verified": 1159,
+      "coverage": {
+        "cases": 96,
+        "observations": 192,
+        "objects": 1152,
+        "session_and_block_agreement": true,
+        "optimization_agreement": true
+      },
+      "tests": 13,
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/40036032606",
+      "artifact": "x87-portable-generated-aarch64-d8da52b927fd6d902800809db089762f0b0a8fbc"
+    },
+    {
+      "id": "cross-host",
+      "record": "build-release/x87-ci-40036032606-local-comparison/record.json",
+      "record_sha256": "f33f3f0818fc20289ebfe28d25382a808949d82e3d67662ff69fbd5daf4cddd3",
+      "protocol": "neverd-x87-cross-host-qualification-v1",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "retention": "local verification worktree",
+      "generated_observations_per_host": 6096,
+      "arithmetic_observations_per_host": 57888,
+      "mismatches": 0,
+      "input_record_sha256": [
+        "9758b6dde220a1f88ed0e0ce12eaac7a36f394c0d25357bc6f13634fe69e8d11",
+        "2bf9aa0637aedcff84980a26228491657f6147b36401672afa7a9ae2b89fb2f3",
+        "fd0f402189f924bdb068a664fd9a84f744c723572196209af35d83e2241fe900",
+        "5dba3281a79dbf7df972993e0ebd11e92f75fd91c5b8de0143c04549c6030606"
+      ],
+      "execution": "Strict comparison executed locally on the exact downloaded CI artifacts"
+    },
+    {
+      "id": "integration-generated",
+      "record": "build-release/x87-final-dev-integration-generated1/record.json",
+      "record_sha256": "5c2ca4c80d4cc0794052443f8efbb9061b2412302388a45c3d4eeda6b9c6c117",
+      "protocol": "neverd-x87-portable-generated-leaf-v1",
+      "tested_commit": "51747fe8c1398b9a7b14c320a58c536c6ef81522",
+      "passed": true,
+      "retention": "local verification worktree",
+      "stable_inputs": true,
+      "host": "local-x64",
+      "files_verified": 116,
+      "coverage": {
+        "artifacts": 36,
+        "observations": 6096,
+        "distinct_cases": 508,
+        "statuses": {
+          "0": 5772,
+          "2": 36,
+          "6": 36,
+          "5": 36,
+          "9": 36,
+          "10": 36,
+          "12": 36,
+          "13": 36,
+          "1": 72
+        },
+        "native_x64_original_comparisons": 5760,
+        "cross_route_and_optimization_agreement": true
+      }
+    },
+    {
+      "id": "native-arithmetic-matrix",
+      "record": "build-release/x87-closure-integrated-arithmetic-matrix1/summary.json",
+      "record_sha256": "c41ceed4cdfbed0445c9ad28726421583830bb76a6e21296083cc38d9bd47ae3",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "host": "local-x64",
+      "retention": "local verification worktree",
+      "observations": 154368,
+      "configurations": 8,
+      "configuration": "GCC 15.2.0 / Clang 23.1.2; i386 / x64; O0 / O2",
+      "original_reference_build_commit": "0d146937fc51779b171f959ec5f5f1a6363af717",
+      "original_reference_build_sha256": "030590e573fead6413af8c2f5abf9b772b873c606d8800d36ff209beb0e139ee",
+      "original_reference_reuse": "Unchanged original source and eight executable hashes checked before replay",
+      "records": [
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-clang-32-O0/record.json",
+          "record_sha256": "8449f6bb1ff767919e8ccab9f9e659a517ff038ba89d01933dac2958beb5bf35",
+          "reference": "original-clang-32-O0",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-clang-32-O2/record.json",
+          "record_sha256": "2e4b513424ff7151068b1f4263014cf3b648cdf0add866a5cfa7779a37e3e972",
+          "reference": "original-clang-32-O2",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-clang-64-O0/record.json",
+          "record_sha256": "f5d8082cf9abfce0e38413a08e7718be40a0209c220995c144a4ab6588a6d99d",
+          "reference": "original-clang-64-O0",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-clang-64-O2/record.json",
+          "record_sha256": "e3d5afca3ad8971910aa7d181b5df00504f1fd752bff2ae0c4f84e56c9b415de",
+          "reference": "original-clang-64-O2",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-gcc-32-O0/record.json",
+          "record_sha256": "5058996e1a1aca6f656969bb3b6236eb0d3fee96f4ca83ded8e6d76a67b43466",
+          "reference": "original-gcc-32-O0",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-gcc-32-O2/record.json",
+          "record_sha256": "39b6f53e33e063ab2053c244547dfa3a2fa6321ee8d81f1443d83c2a386be6ac",
+          "reference": "original-gcc-32-O2",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-gcc-64-O0/record.json",
+          "record_sha256": "1b7fedc3679fe723c8164606f5309fd224d9cdaf548de9bcb52b5ea8090ef775",
+          "reference": "original-gcc-64-O0",
+          "observations": 19296,
+          "mismatches": 0
+        },
+        {
+          "record": "build-release/x87-closure-integrated-arithmetic-matrix1/original-gcc-64-O2/record.json",
+          "record_sha256": "181bdfa3fa445f7e8b7747dfb58399271c8b4a1eb4bd5dba640e6b1717b37f3b",
+          "reference": "original-gcc-64-O2",
+          "observations": 19296,
+          "mismatches": 0
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "runtime-regressions",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "log": "build-release/x87-closure-integrated-regressions1.log",
+      "log_sha256": "912ee027555b831b3aeba087506bcf765232c794a28a14b889839ead3e77d76b",
+      "passed_tests": 373,
+      "skipped_tests": 49,
+      "skipped_reason": "Native AArch64 execution unavailable on this x64 host; native CI covers those tests separately"
+    },
+    {
+      "id": "record-auditing",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "log": "build-release/x87-closure-integrated-audits1.log",
+      "log_sha256": "f5e03cd38d36cb6958ccc2749fb8eed063b7250513a54b43108f6c569b4018a7",
+      "passed_tests": 21
+    },
+    {
+      "id": "integration-regressions",
+      "tested_commit": "51747fe8c1398b9a7b14c320a58c536c6ef81522",
+      "passed": true,
+      "log": "build-release/x87-final-dev-integration-regressions1.log",
+      "log_sha256": "7b79aca8704dffc7771322f8f714b2fe023032e742b24f822c7d4dec675c9b9d",
+      "passed_tests": 373,
+      "skipped_tests": 49
+    },
+    {
+      "id": "public-wording",
+      "tested_commit": "83f6a3438ebfe7d88ed2ac213a5d00b0abcaddcb",
+      "passed": true,
+      "log": "build-release/x87-public-policy-wording-tests1.log",
+      "log_sha256": "37c9b2026838c4cc27a5901ded3714a6ee3b0793f7fccccec742b0d57ba3cfc9",
+      "passed_tests": 29,
+      "report_diff": "build-release/x87-public-policy-wording-diff1.json",
+      "report_diff_sha256": "33afc3bbb2f498598d6760f6f3607ff35e22d77c46e1f9ce1523e5ff0935b2a6"
+    },
+    {
+      "id": "python-api-abi-ffi",
+      "tested_commit": "51747fe8c1398b9a7b14c320a58c536c6ef81522",
+      "passed": true,
+      "log": "build-release/x87-final-dev-integration-python1.log",
+      "log_sha256": "5492233103a3a4ef36099a0415ec52c801325d16ffb4761309b8ca1d1c2477c7",
+      "passed_tests": 95
+    },
+    {
+      "id": "documentation",
+      "tested_commit": "51747fe8c1398b9a7b14c320a58c536c6ef81522",
+      "passed": true,
+      "log": "build-release/x87-final-dev-integration-docs1.log",
+      "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "markdown_files": 309,
+      "locales": 10
+    },
+    {
+      "id": "gui-worker",
+      "tested_commit": "51747fe8c1398b9a7b14c320a58c536c6ef81522",
+      "passed": true,
+      "record": "build-gui-x87/x87-final-dev-integration-gui-verification1.json",
+      "workspace": "issue-1677-closure",
+      "record_sha256": "c81e07771cc087df76abb33dc009c5fdb54fe67707b0d4e8275f437ae151a60e",
+      "tests": [
+        "NeverDGuiQueries",
+        "NeverDGuiX87Capabilities",
+        "NeverDWorkerTransport",
+        "NeverDWorkerX87Capabilities"
+      ],
+      "captures": 6,
+      "visual_review": [
+        "x87-light-1100.png",
+        "x87-dark-720.png"
+      ]
+    },
+    {
+      "id": "local-arithmetic-comparison",
+      "tested_commit": "d8da52b927fd6d902800809db089762f0b0a8fbc",
+      "passed": true,
+      "record": "build-release/x87-closure-integrated-arithmetic1-local-comparison.json",
+      "record_sha256": "872d0a4eba6271a0ecd32c79fdcd35c7f5b466169db4a298915f852e4f296d78",
+      "observations": 57888,
+      "mismatches": 0
+    }
+  ],
+  "semantic-contract": {
+    "documents": [
+      {
+        "path": "docs/x87-semantics.md",
+        "sha256": "6db4820d5fcad24f255077266b6b60f490c481ec0a54c8e75c839f7a591f3652"
+      },
+      {
+        "path": "docs/x87-capabilities.md",
+        "sha256": "c841254066d243bdffba33679aee94b8a3a685a8039aac95818f026a5ba8c9c9"
+      }
+    ],
+    "inventory": {
+      "instruction_forms": 135,
+      "factorized_cells": 3456,
+      "source_abi_paths": 12,
+      "instruction_classes": 8
+    }
+  },
+  "acceptance": [
+    {
+      "id": "X0.1",
+      "requirement": "Build the mode × ABI × state-path × consumer/backend matrix, including instruction forms and known refusals.",
+      "scope": "135 instruction forms; 3456 factorized cells; 12 source/ABI paths",
+      "evidence": [
+        "public-wording",
+        "integration-regressions",
+        "python-api-abi-ffi",
+        "gui-worker"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X0.2",
+      "requirement": "Document portable state ownership, admitted CPU profiles, exact/approximate distinctions, and failure behavior.",
+      "scope": "Explicit owned/typed/native/portable profiles, layouts and refusal contracts",
+      "evidence": [
+        "semantic-contract"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X0.3",
+      "requirement": "Add capability-query and negative-case tests so unsupported cells cannot become silent success.",
+      "scope": "Malformed selectors, unsupported profiles and factorized/public report parity",
+      "evidence": [
+        "public-wording",
+        "integration-regressions",
+        "python-api-abi-ffi",
+        "runtime-regressions"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X0.4",
+      "requirement": "Preserve all currently supported binary80 and owned-context paths.",
+      "scope": "Native binary80 typed/owned replay and call contracts",
+      "evidence": [
+        "native-call",
+        "native-state"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X1.1",
+      "requirement": "Implement a portable reference slice for explicitly listed loads/stores, arithmetic, comparisons, conversions, stack operations, and control/status behavior.",
+      "scope": "Finite arithmetic and listed transport/conversion/compare/stack/control operations",
+      "evidence": [
+        "runtime-regressions",
+        "integration-regressions",
+        "local-generated",
+        "ci-x64-generated",
+        "ci-arm64-generated",
+        "integration-generated"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X1.2",
+      "requirement": "Cover every valid rounding/precision setting relevant to each admitted operation, including overflow/underflow boundaries and values distinguishable from binary64.",
+      "scope": "All valid PC/RC with boundary inputs and raw 80-bit observations",
+      "evidence": [
+        "local-arithmetic",
+        "local-arithmetic-comparison",
+        "ci-x64-arithmetic",
+        "ci-arm64-arithmetic",
+        "cross-host",
+        "native-arithmetic-matrix"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X1.3",
+      "requirement": "Compare result bits and observable state against independent references under a pinned CPU/profile contract.",
+      "scope": "Native original instructions, APFloat boundary fixtures and pinned Unicorn observations kept distinct",
+      "evidence": [
+        "local-arithmetic",
+        "local-arithmetic-comparison",
+        "ci-x64-arithmetic",
+        "ci-arm64-arithmetic",
+        "cross-host",
+        "native-state"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X1.4",
+      "requirement": "Exercise NaNs, signed zero, subnormals, stack underflow/overflow, conversion boundaries, and masked/unmasked exception cases; retain explicit refusal for unimplemented effects.",
+      "scope": "Nonfinite/raw encodings, faults and exception domains either checked or explicitly refused",
+      "evidence": [
+        "native-state",
+        "local-generated",
+        "ci-x64-generated",
+        "ci-arm64-generated",
+        "integration-generated",
+        "native-translation"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X1.5",
+      "requirement": "Demonstrate the admitted slice on ARM64 without executing host x87 instructions.",
+      "scope": "Actual native AArch64 generated execution and translation",
+      "evidence": [
+        "local-generated",
+        "ci-x64-generated",
+        "ci-arm64-generated",
+        "integration-generated",
+        "native-translation",
+        "cross-host"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X2.1",
+      "requirement": "Preserve binary80 and state effects through LowIR, MedIR, optimization, LLVM, HighC, and LLVM-C.",
+      "scope": "LowIR/MedIR and three generated routes with explicit state handoff",
+      "evidence": [
+        "local-generated",
+        "ci-x64-generated",
+        "ci-arm64-generated",
+        "integration-generated",
+        "native-state"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X2.2",
+      "requirement": "Qualify i386 and x64 contracts separately, including typed and owned-context paths, caller/callee stack behavior, CFG joins/backedges, and long-double argument/results.",
+      "scope": "Separate native i386/x64 typed/owned and ABI/call/CFG fixtures",
+      "evidence": [
+        "native-call",
+        "native-stack"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X2.3",
+      "requirement": "Add environment save/restore, MMX mixing, and state invalidation/synchronization tests for the admitted subset.",
+      "scope": "Admitted native environment/MMX synchronization and portable exclusion/refusal",
+      "evidence": [
+        "native-state",
+        "runtime-regressions",
+        "integration-regressions"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X2.4",
+      "requirement": "Enable ARM64 translation only for fully qualified profiles; mixed supported/unsupported programs must fail clearly.",
+      "scope": "Explicit source-x64 owned profile on native Linux AArch64 ELF only",
+      "evidence": [
+        "native-translation"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X2.5",
+      "requirement": "Verify C API/CLI/Python and applicable worker/GUI capability and diagnostic parity.",
+      "scope": "Shared C/CLI/Python/worker/GUI inventory, profile requirements and legacy refusals",
+      "evidence": [
+        "public-wording",
+        "integration-regressions",
+        "python-api-abi-ffi",
+        "gui-worker"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X3.1",
+      "requirement": "Reconcile remaining typed/owned-context differences, including BCD and stack-management forms.",
+      "scope": "Guarded typed BCD, rotate/free-pop and paired-result families; native owned replay",
+      "evidence": [
+        "native-bcd",
+        "native-stack",
+        "native-trig"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X3.2",
+      "requirement": "Qualify transcendental and remainder families against named CPU behavior and documented allowed differences.",
+      "scope": "Selected Intel CPU transcendental/remainder behavior, no cross-CPU bit-identity claim",
+      "evidence": [
+        "native-state",
+        "native-trig",
+        "native-workload"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X3.3",
+      "requirement": "Test pending exceptions, WAIT/non-WAIT behavior, memory-fault interactions, and environment transitions for each expanded profile.",
+      "scope": "Pending WAIT/non-WAIT, memory-fault order and admitted environment transitions",
+      "evidence": [
+        "native-state",
+        "native-translation"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X3.4",
+      "requirement": "Keep symbolic/refinement coverage separate from concrete support, with explicit unknown outcomes until the corresponding formal model is qualified.",
+      "scope": "Symbolic/refinement and complete-state properties remain conservative unknown",
+      "evidence": [
+        "public-wording",
+        "integration-regressions",
+        "python-api-abi-ffi",
+        "semantic-contract"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X4.1",
+      "requirement": "Pin original/generated artifacts, target CPU/ISA, compiler and optimization flags, backend versions, environment, and test seeds.",
+      "scope": "Frozen source, artifact, compiler/runtime, CPU/configuration and seed bindings",
+      "evidence": [
+        "native-state",
+        "local-generated",
+        "ci-x64-generated",
+        "ci-arm64-generated",
+        "integration-generated",
+        "native-translation",
+        "cross-host"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X4.2",
+      "requirement": "Compare raw result bits, defined status/condition bits, tags/TOP, relevant environment, exceptions, memory effects, and downstream branches. Compare only architecturally defined fields or explicitly selected processor behavior.",
+      "scope": "Raw values, defined state/status, memory and downstream branch observations",
+      "evidence": [
+        "native-state",
+        "local-generated",
+        "ci-x64-generated",
+        "ci-arm64-generated",
+        "integration-generated",
+        "native-translation",
+        "cross-host"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X4.3",
+      "requirement": "Include paired boundary/adversarial fixtures and randomized differential tests across i386/x64, ABIs, state paths, and supported destination hosts.",
+      "scope": "Native i386/x64 matrix plus actual native x64/AArch64 portable execution",
+      "evidence": [
+        "native-arithmetic-matrix",
+        "cross-host"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X4.4",
+      "requirement": "Verify exact and approximate modes independently; an approximate pass cannot close an exact-mode criterion.",
+      "scope": "No approximate execution mode and no approximation used as exact evidence",
+      "evidence": [
+        "semantic-contract",
+        "native-performance",
+        "local-portable-performance",
+        "ci-x64-performance",
+        "ci-arm64-performance"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X4.5",
+      "requirement": "Measure throughput, state-transport overhead, fallback frequency, memory use, and behavior on representative authorized workloads. Record unsupported cases and failures rather than removing them from coverage.",
+      "scope": "Native/portable throughput, transport, refusals, fallback counts and RSS recorded",
+      "evidence": [
+        "native-performance",
+        "local-portable-performance",
+        "ci-x64-performance",
+        "ci-arm64-performance"
+      ],
+      "status": "passed within the stated scope"
+    },
+    {
+      "id": "X4.6",
+      "requirement": "Use application-level deterministic replay where feasible as an additional layer, not a substitute for instruction/state tests or proof. Performance and application behavior claims require measured results.",
+      "scope": "Authored deterministic FSIN/status and raw-transport replay; no arbitrary-app claim",
+      "evidence": [
+        "native-workload",
+        "native-performance"
+      ],
+      "status": "passed within the stated scope"
+    }
+  ],
+  "pending_acceptance_gates": [],
+  "limitations": [
+    "No all-instruction, all-CPU, arbitrary-application or general OS-exception qualification",
+    "No complete architectural-state or formal-equivalence proof; symbolic/refinement results remain conservative unknown",
+    "Portable translation is explicit C++ source-x64 owned state to native Linux AArch64 ELF; legacy C/Python/CLI translation object APIs remain scalar-only",
+    "Portable runtime has no approximate execution mode and no native fallback",
+    "Processor-dependent native transcendental/remainder observations are scoped to the recorded Intel CPU, not the AMD numerical reference or all CPUs",
+    "No speed improvement claim; raw timing and memory reports stay in retained artifacts",
+    "Frozen records identify their actual tested sources and configurations; later integration checks are separate evidence",
+    "CI artifacts expire after 30 days; hashes and run links do not replace retained artifacts"
+  ]
+}

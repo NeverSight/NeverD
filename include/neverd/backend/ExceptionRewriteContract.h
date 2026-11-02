@@ -283,6 +283,29 @@ inline void setContract(llvm::Function &Function, SourceState Source,
            UInt(LoweredCalls, 64), UInt(SkippedPads, 64)}));
 }
 
+/// Exact source-only numeric contract with no required native EH lowering.
+/// This recognizes a published contract; it does not establish source facts.
+inline bool hasUnloweredContract(const llvm::Function &Function,
+                                 SourceState Source) {
+  const auto *M = Function.getMetadata(FunctionAttachment);
+  if (!M || M->getNumOperands() != OperandCount)
+    return false;
+  const uint64_t Values[] = {SchemaVersion,
+                             uint64_t(Source),
+                             uint64_t(LoweringState::NotRequired),
+                             0,
+                             0,
+                             0};
+  const unsigned Widths[] = {32, 8, 8, 64, 64, 64};
+  for (unsigned I = 0; I < OperandCount; ++I) {
+    const auto *C =
+        llvm::mdconst::dyn_extract_or_null<llvm::ConstantInt>(M->getOperand(I));
+    if (!C || C->getBitWidth() != Widths[I] || C->getZExtValue() != Values[I])
+      return false;
+  }
+  return true;
+}
+
 enum class ContractErrorReason : uint8_t {
   InvalidMetadata = 0,
   UnsupportedSchema = 1,

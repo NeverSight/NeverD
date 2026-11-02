@@ -9,7 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/InterpreterLLVMRefinement.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd::analysis::llvm_refinement_test {
 constexpr va_t Entry = 0x1000;

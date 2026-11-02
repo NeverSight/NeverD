@@ -1,0 +1,95 @@
+//===- RuntimeProviders.def - Reviewed PE runtime providers ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Exact, case-insensitive DLL sets consulted by independent PE contracts.
+/// Membership identifies a provider; callers still own architecture, symbol,
+/// storage, physical-call and language-record proofs. Keep distinct contracts
+/// separate even where their provider sets overlap.
+///
+/// Define NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(Query),
+/// NEVERD_COFF_RUNTIME_PROVIDER(Module) and
+/// NEVERD_COFF_RUNTIME_PROVIDERS_END() before including this file.
+///
+//===----------------------------------------------------------------------===//
+
+#if !defined(NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN) ||                           \
+    !defined(NEVERD_COFF_RUNTIME_PROVIDER) ||                                  \
+    !defined(NEVERD_COFF_RUNTIME_PROVIDERS_END)
+#error "Define all three runtime provider macros before including this file"
+#endif
+
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86ControlFPProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-math-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-runtime-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbased.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrt.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+// The PE32 caller-cleanup and x87 entry contracts use these legacy providers.
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86LegacyCRTProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrt.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("msvcr100.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86MathCleanupProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-math-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbased.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrt.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isRaiseExceptionProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("kernel32.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("kernelbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+// Capture/resume and local-unwind imports share this PE32 runtime family.
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86RegistrationRuntimeProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrt.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140d.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86SEHHandlerProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrt.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140d.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86CxxExceptionProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140d.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("msvcr100.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+// Continuation identity does not grant a local-unwind invocation contract.
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX86ContinuationRuntimeProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("vcruntime140d.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrt.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("msvcrtd.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX64CRTStdioProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbased.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-stdio-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+// The Win64 memory-effect contract does not include msvcrt.dll.
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX64ControlFPProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbased.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-runtime-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-math-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
+#undef NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN
+#undef NEVERD_COFF_RUNTIME_PROVIDER
+#undef NEVERD_COFF_RUNTIME_PROVIDERS_END

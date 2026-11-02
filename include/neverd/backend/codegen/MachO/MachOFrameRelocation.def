@@ -1,0 +1,44 @@
+//===- MachOFrameRelocation.def - Metadata relocation contract -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Framing spellings, diagnostics and bounded static RA comparison work.
+/// Define NEVERD_MACHO_FRAME_VALUE(Type, Name, Value),
+/// NEVERD_MACHO_FRAME_TEXT(Name, Text), or
+/// NEVERD_MACHO_FRAME_LIMIT(Type, Name, Value) before inclusion.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_MACHO_FRAME_VALUE
+#define NEVERD_MACHO_FRAME_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_MACHO_FRAME_TEXT
+#define NEVERD_MACHO_FRAME_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_MACHO_FRAME_LIMIT
+#define NEVERD_MACHO_FRAME_LIMIT(Type, Name, Value)
+#endif
+
+NEVERD_MACHO_FRAME_VALUE(char, kAugmentationLength, 'z')
+NEVERD_MACHO_FRAME_VALUE(char, kAugmentationEncoding, 'R')
+NEVERD_MACHO_FRAME_TEXT(kBasicAugmentation, "zR")
+// Each old/new query has a preflight and state replay. One extra unit charges
+// an empty program, so the total bounds both instruction work and query count.
+NEVERD_MACHO_FRAME_VALUE(uint64_t, kRAComparisonPasses, 4)
+NEVERD_MACHO_FRAME_LIMIT(uint64_t, kMachOFrameRAComparisonWork, 1u << 20)
+NEVERD_MACHO_FRAME_TEXT(
+    kFrameIdentityChanged,
+    "relocated DWARF frame identity or normalized CFI changed")
+NEVERD_MACHO_FRAME_TEXT(
+    kFrameStateUnavailable,
+    "relocated DWARF return-address state is not statically known")
+NEVERD_MACHO_FRAME_TEXT(kFrameStateChanged,
+                        "relocated DWARF return-address signing recipe changed")
+NEVERD_MACHO_FRAME_TEXT(
+    kFrameStateBudget,
+    "DWARF return-address relocation exceeds its comparison budget")
+
+#undef NEVERD_MACHO_FRAME_VALUE
+#undef NEVERD_MACHO_FRAME_TEXT
+#undef NEVERD_MACHO_FRAME_LIMIT

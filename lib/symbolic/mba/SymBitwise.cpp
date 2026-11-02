@@ -41,13 +41,16 @@
 #include "neverd/symbolic/SymBitwise.h"
 
 #include "Limits.h"
+#include "SymMBADetail.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cassert>
 #include <cstdint>
@@ -90,6 +93,8 @@ struct Recipe {
   uint32_t B = 0;
 };
 
+#include "SymBitwiseRecipes.inc"
+
 constexpr unsigned kUnreachable = ~0u;
 
 /// A lower bound on the work needed to settle the optimal table.
@@ -102,6 +107,9 @@ constexpr unsigned kUnreachable = ~0u;
 size_t optimalTableWork(unsigned NumVars) {
   assert(NumVars <=
          ::neverd::symbolic::detail::limits::kSymBitwiseMaxTabulatedAtoms);
+  if (NumVars < std::size(SmallRecipeMaxNodes))
+    return (size_t(1) << NumVars) * NumVars + 2 * SmallRecipeMaxNodes[NumVars] +
+           NumVars + 2;
   const size_t NumFunctions = size_t(1) << (size_t(1) << NumVars);
   return saturatingMul(NumFunctions, NumFunctions);
 }
@@ -114,6 +122,8 @@ size_t optimalTableWork(unsigned NumVars) {
 class SynthTable {
 public:
   explicit SynthTable(unsigned NumVars);
+  explicit SynthTable(llvm::ArrayRef<Recipe> Prepared)
+      : Recipes(Prepared.begin(), Prepared.end()) {}
 
   const Recipe &recipe(uint32_t Packed) const { return Recipes[Packed]; }
 
@@ -183,14 +193,19 @@ const SynthTable &synthTable(unsigned NumVars) {
   }
   // Built once on first use and shared thereafter: the search is cheap but not
   // free, and the simplifier calls into it in a loop.
-  static const SynthTable Tables[] = {SynthTable(0), SynthTable(1),
-                                      SynthTable(2), SynthTable(3)};
+  static const SynthTable Tables[] = {
+      SynthTable(SmallRecipes0), SynthTable(SmallRecipes1),
+      SynthTable(SmallRecipes2), SynthTable(SmallRecipes3)};
   return Tables[NumVars];
 }
 
+// Every prepared recipe has at most eight distinct nodes. Keep their memo
+// inline; the optional four-input search can still grow it when needed.
+using RecipeMemo = llvm::SmallDenseMap<uint32_t, SymRef, 16>;
+
 SymRef buildRecipe(SymContext &Ctx, const SynthTable &Table, uint32_t Packed,
                    llvm::ArrayRef<SymRef> Atoms, uint32_t Width,
-                   llvm::DenseMap<uint32_t, SymRef> &Memo) {
+                   RecipeMemo &Memo) {
   auto It = Memo.find(Packed);
   if (It != Memo.end())
     return It->second;
@@ -298,9 +313,16 @@ struct Implicant {
 /// The minterms an implicant covers.
 TruthTable coverage(Implicant P, unsigned NumVars) {
   TruthTable Covered = TruthTable::zero(NumVars);
-  for (size_t K = 0, E = Covered.entries(); K < E; ++K)
-    if ((static_cast<uint32_t>(K) & P.Care) == P.Value)
-      Covered.set(K);
+  const auto Free = static_cast<uint32_t>(Covered.entries() - 1) & ~P.Care;
+  // Only the uncared inputs vary. Visit the exact covered subcube instead
+  // of scanning every assignment and rejecting the constrained ones.
+  uint32_t Subset = Free;
+  for (;;) {
+    Covered.set(P.Value | Subset);
+    if (!Subset)
+      break;
+    Subset = (Subset - 1) & Free;
+  }
   return Covered;
 }
 
@@ -312,11 +334,12 @@ TruthTable coverage(Implicant P, unsigned NumVars) {
 /// grown.  The scan made a round cubic in the number of implicants, which is
 /// only invisible while the arity keeps that number in the dozens — exactly
 /// the assumption this file no longer makes.
+LLVM_ATTRIBUTE_NOINLINE
 std::vector<Implicant> primeImplicants(const TruthTable &Table,
                                        unsigned NumVars, size_t &Work,
                                        size_t Budget) {
   const auto Full = static_cast<uint32_t>((size_t(1) << NumVars) - 1);
-  std::vector<Implicant> Current;
+  llvm::SmallVector<Implicant, 16> Current;
   for (size_t K = 0, E = Table.entries(); K < E; ++K)
     if (Table.at(K))
       Current.push_back(Implicant{static_cast<uint32_t>(K), Full});
@@ -327,21 +350,62 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
     if (Work > Budget)
       return {};
 
-    std::vector<char> Merged(Current.size(), 0);
-    std::vector<Implicant> Next;
-    llvm::DenseSet<std::pair<uint32_t, uint32_t>> Seen;
-    for (size_t I = 0; I < Current.size(); ++I) {
-      for (size_t J = I + 1; J < Current.size(); ++J) {
-        if (Current[I].Care != Current[J].Care)
-          continue;
-        uint32_t Diff = (Current[I].Value ^ Current[J].Value) & Current[I].Care;
-        // Adjacent means differing in exactly one constrained input.
-        if (Diff == 0 || (Diff & (Diff - 1)) != 0)
-          continue;
-        Merged[I] = Merged[J] = 1;
-        Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
-        if (Seen.insert({Grown.Value, Grown.Care}).second)
-          Next.push_back(Grown);
+    // Small cover rounds stay inline; larger tables retain ordinary growth.
+    // Deduplication keeps both complete 32-bit fields in one integer key.
+    llvm::SmallVector<char, 16> Merged(Current.size(), 0);
+    llvm::SmallVector<Implicant, 16> Next;
+    llvm::SmallDenseSet<uint64_t, 64> Seen;
+    auto grow = [&](size_t I, size_t J, uint32_t Diff) {
+      Merged[I] = Merged[J] = 1;
+      Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
+      if (Seen.insert((uint64_t(Grown.Care) << 32) | Grown.Value).second)
+        Next.push_back(Grown);
+    };
+    // Every round removes exactly one cared bit. When indexing each term and
+    // looking up its possible one-bit neighbors needs fewer probes than the
+    // complete pair scan, visit only those exact neighbors. The original
+    // quadratic work admission stays in force.
+    const auto CareBits = std::popcount(Current.front().Care);
+    if (Current.size() - 1 > 2 * size_t(CareBits + 1)) {
+      auto key = [](uint32_t Value, uint32_t Care) {
+        return (uint64_t(Care) << 32) | Value;
+      };
+      llvm::SmallDenseMap<uint64_t, size_t, 64> Positions;
+      Positions.reserve(Current.size());
+      for (size_t I = 0; I < Current.size(); ++I)
+        Positions.try_emplace(key(Current[I].Value, Current[I].Care), I);
+      llvm::SmallVector<size_t, 8> Neighbors;
+      for (size_t I = 0; I < Current.size(); ++I) {
+        Neighbors.clear();
+        // Terms stay ordered by value: the initial minterms are ascending,
+        // and each round emits the smaller value of a merge in (I, J) order.
+        // Only a zero-to-one flip can reach a later term. The reverse lookup
+        // would discover the same pair again and immediately discard it.
+        for (uint32_t Rest = Current[I].Care & ~Current[I].Value; Rest;
+             Rest &= Rest - 1) {
+          const uint32_t Bit = Rest & -Rest;
+          const auto It =
+              Positions.find(key(Current[I].Value ^ Bit, Current[I].Care));
+          if (It != Positions.end() && It->second > I)
+            Neighbors.push_back(It->second);
+        }
+        // Preserve the old (I, J) discovery order: greedy cover ties must not
+        // change merely because the lookup table uses a different traversal.
+        std::sort(Neighbors.begin(), Neighbors.end());
+        for (size_t J : Neighbors)
+          grow(I, J, Current[I].Value ^ Current[J].Value);
+      }
+    } else {
+      for (size_t I = 0; I < Current.size(); ++I) {
+        for (size_t J = I + 1; J < Current.size(); ++J) {
+          if (Current[I].Care != Current[J].Care)
+            continue;
+          const uint32_t Diff =
+              (Current[I].Value ^ Current[J].Value) & Current[I].Care;
+          if (Diff == 0 || (Diff & (Diff - 1)) != 0)
+            continue;
+          grow(I, J, Diff);
+        }
       }
     }
     for (size_t I = 0; I < Current.size(); ++I)
@@ -670,7 +734,7 @@ SymRef buildParityKernel(SymContext &Ctx, const ParityKernel &Kernel,
   llvm::SmallVector<SymRef, 3> Core;
   for (unsigned I : Kernel.Inputs)
     Core.push_back(Atoms[I]);
-  llvm::DenseMap<uint32_t, SymRef> Memo;
+  RecipeMemo Memo;
   llvm::SmallVector<SymRef, 8> Parts;
   Parts.push_back(buildRecipe(Ctx, synthTable(Core.size()), Kernel.Packed, Core,
                               Width, Memo));
@@ -708,11 +772,27 @@ TruthTable projectTruthTable(const TruthTable &Table,
 } // namespace
 
 TruthTable atomTruthTable(unsigned Index, unsigned NumVars) {
-  TruthTable Out = TruthTable::zero(NumVars);
-  for (size_t K = 0, E = Out.entries(); K < E; ++K)
-    if ((K >> Index) & 1)
-      Out.set(K);
-  return Out;
+  const auto Entries = TruthTable::entryCount(NumVars);
+  if (Index >= NumVars)
+    return TruthTable(llvm::APInt::getZero(Entries));
+  // The first six input columns repeat within each 64-bit storage word.
+  // Higher columns alternate whole runs of words. Construct those exact
+  // patterns without visiting and setting every individual truth-table bit.
+  static constexpr std::array<uint64_t, 6> Patterns{
+      0xaaaaaaaaaaaaaaaaULL, 0xccccccccccccccccULL, 0xf0f0f0f0f0f0f0f0ULL,
+      0xff00ff00ff00ff00ULL, 0xffff0000ffff0000ULL, 0xffffffff00000000ULL};
+  constexpr unsigned WordBits = std::numeric_limits<uint64_t>::digits;
+  if (Index < Patterns.size()) {
+    if (Entries <= WordBits)
+      return TruthTable(llvm::APInt(Entries, Patterns[Index]));
+    return TruthTable(
+        llvm::APInt::getSplat(Entries, llvm::APInt(WordBits, Patterns[Index])));
+  }
+  auto Bits = llvm::APInt::getZero(Entries);
+  const unsigned Run = 1u << Index;
+  for (unsigned Start = Run; Start < Entries; Start += 2 * Run)
+    Bits.setBits(Start, Start + Run);
+  return TruthTable(std::move(Bits));
 }
 
 uint32_t truthTableSupport(const TruthTable &Table) {
@@ -731,6 +811,10 @@ uint32_t truthTableSupport(const TruthTable &Table) {
     }
   }
   return Support;
+}
+
+size_t detail::bitwiseSynthesisWork(unsigned NumVars) {
+  return optimalTableWork(NumVars);
 }
 
 std::optional<SymRef> synthesizeBitwise(SymContext &Ctx,
@@ -776,7 +860,7 @@ std::optional<SymRef> synthesizeBitwise(SymContext &Ctx,
 
     const SynthTable &Table = synthTable(NumVars);
     const auto Packed = static_cast<uint32_t>(Projected.packed());
-    llvm::DenseMap<uint32_t, SymRef> Memo;
+    RecipeMemo Memo;
     SymRef Result = buildRecipe(Ctx, Table, Packed, KeptAtoms, Width, Memo);
     if (Ctx.readabilityCost(Result) > Limits.MaxCost)
       return std::nullopt;

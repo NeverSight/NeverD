@@ -466,6 +466,10 @@ struct RegistrationStateAnalysis {
   std::optional<RegistrationCxxPrologueEffect> CxxPrologue;
   std::optional<RegistrationSEH4PrologueEffect> SEH4Prologue;
   std::vector<RegistrationFrameValue> FrameValues;
+  /// The proven return cleanup of the callees this function calls. A
+  /// callee's stack adjustment does not depend on the reaching registration
+  /// state, so these remain when that proof is incomplete.
+  std::vector<RegistrationCalleeStackContract> CalleeStacks;
   bool IncomingFrameAccessesComplete = true;
   std::vector<RegistrationIncomingFrameAccess> IncomingFrameAccesses;
   /// Every reaching call has checked source effects, possibly under an

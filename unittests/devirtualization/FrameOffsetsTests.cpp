@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/core/FrameEntryConstraints.h"
 #include "../../lib/analysis/core/FrameOffsets.h"
 #include "gtest/gtest.h"
 
@@ -20,9 +21,78 @@ using namespace neverd::symbolic;
 
 namespace {
 
+TEST(FrameOffsets, DisjointRelativeRangesKeepEqualRootsAndBoundaryBytes) {
+  struct Case {
+    uint64_t Frame;
+    int64_t FrameBegin;
+    int64_t FrameEnd;
+    uint64_t Object;
+    int64_t ObjectBegin;
+    int64_t ObjectEnd;
+    bool Allowed;
+  };
+  const Case Cases[] = {
+      {0, 0, 8, 0, 16, 24, true},
+      {0, 0, 8, 0, 0, 8, false},
+      {0, -1, 8, 16, 0, 8, false},
+      {32, -32, 8, 40, 0, 32, true},
+      {32, -32, 8, 39, 0, 32, false},
+      {32, -32, 8, 0, -1, 8, false},
+      {2, 0, 8, 1, -1, 0, true},
+      {UINT64_MAX - 7, 0, 8, 0, 0, 8, true},
+      {UINT64_MAX - 6, 0, 8, 0, 0, 8, false},
+      {0, 0, 8, UINT64_MAX, 0, 1, true},
+      {UINT64_C(1) << 63, INT64_MIN, INT64_MIN + 1, 1, 0, 1, true},
+      {UINT64_MAX, INT64_MIN, INT64_MIN + 1, UINT64_MAX, 0, 1, true},
+      {0, INT64_MAX - 1, INT64_MAX, 1, INT64_MIN, INT64_MIN + 1, false},
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Frame);
+    SCOPED_TRACE(C.Object);
+    SCOPED_TRACE(C.FrameBegin);
+    SCOPED_TRACE(C.ObjectBegin);
+    SymContext Ctx;
+    const auto Frame = Ctx.mkConst(64, C.Frame);
+    const auto Object = Ctx.mkConst(64, C.Object);
+    const auto Domain = Ctx.mkAnd(
+        {nonwrappingFramePredicate(Ctx, Frame, C.FrameBegin, C.FrameEnd),
+         nonwrappingFramePredicate(Ctx, Object, C.ObjectBegin, C.ObjectEnd),
+         disjointFrameRangesPredicate(Ctx, Frame, C.FrameBegin, C.FrameEnd,
+                                      Object, C.ObjectBegin, C.ObjectEnd)});
+    const auto Actual = Ctx.asConst(Domain);
+    ASSERT_TRUE(Actual);
+    EXPECT_EQ(!Actual->isZero(), C.Allowed);
+  }
+}
+
 SymRef residue(SymContext &Ctx, SymRef Root, uint64_t Mask, uint64_t Value) {
   return Ctx.mkEq(Ctx.mkAnd(Root, Ctx.mkConst(64, Mask)),
                   Ctx.mkConst(64, Value));
+}
+
+TEST(FrameOffsets, ConstantCoveredBitsExposeOffsetsWithoutSolverQueries) {
+  SymContext C;
+  const auto Root = C.mkVar("entry", 64);
+  const auto Adjusted = C.mkAdd(Root, C.mkConst(64, uint64_t{0} - 69));
+  const auto Mask = C.mkConst(64, 0xa5);
+  const auto Hidden =
+      C.mkNot(C.mkOr(C.mkConst(64, ~uint64_t{0xa5}), C.mkNot(Adjusted)));
+  const auto Address = C.mkAdd(Adjusted, C.mkOr(Mask, C.mkXor(Mask, Hidden)));
+  SpecializationOptions Options;
+  Options.MaxSolverQueries = 0;
+  uint64_t Queries = 0;
+  const auto Result =
+      proveFrameOffset(C, C.mkTrue(), Address, Root, Options, Queries);
+  ASSERT_EQ(Result.Status, FrameOffsetStatus::Exact);
+  EXPECT_EQ(Result.Offset, uint64_t{0xa5} - 69);
+  EXPECT_EQ(Queries, 0u);
+
+  // An uncovered high bit makes the displacement input-dependent.
+  const auto Wider =
+      C.mkNot(C.mkOr(C.mkConst(64, ~uint64_t{0x1a5}), C.mkNot(Adjusted)));
+  const auto Variable = C.mkAdd(Adjusted, C.mkOr(Mask, C.mkXor(Mask, Wider)));
+  EXPECT_EQ(proveFrameOffset(C, C.mkTrue(), Variable, Root, {}, Queries).Status,
+            FrameOffsetStatus::NonUnique);
 }
 
 TEST(FrameOffsets, EveryAlignmentResidueKeepsArbitraryHighBits) {

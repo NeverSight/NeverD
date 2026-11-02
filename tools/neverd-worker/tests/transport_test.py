@@ -166,9 +166,20 @@ def run(executable):
         revision = opened["revision"]
         assert opened["payload"]["entry_address"] == BASE
         assert opened["payload"]["function_count"] == 600
+        assert isinstance(opened["background_sequence"], str), opened
+        assert int(opened["background_sequence"]) > 0, opened
+        assert isinstance(opened["background"], dict), opened
+        snapshot_reply = client.call("overview", {"buckets": 8})
+        assert int(snapshot_reply["background_sequence"]) > int(opened["background_sequence"]), snapshot_reply
+        assert snapshot_reply["background"]["generation"] == snapshot_reply["payload"]["generation"], snapshot_reply
+        assert snapshot_reply["background"]["functions"] == 600, snapshot_reply
         functions = client.call("functions", {"limit": 3})["payload"]
         assert len(functions["items"]) == 3 and functions["next_offset"] == 3 and not functions["complete"]
         assert functions["items"][0]["address"] == BASE
+        assert functions["items"][1]["library"], functions
+        assert not functions["items"][2]["library"], functions
+        legacy = client.call("functions", {"offset": 3, "limit": 1})["payload"]["items"][0]
+        assert not legacy["library"], legacy
         assert client.call("functions", {"offset": 598, "limit": 3})["payload"]["complete"]
         assert client.call("functions", {"filter": "function_599"})["payload"]["total"] == 1
         assert client.call("functions", {"filter": "absent"})["payload"]["items"] == []
@@ -210,6 +221,7 @@ def run(executable):
         analyze_id = client.send("analyze")
         heartbeat = client.next(lambda item: item.get("type") == "heartbeat" and item.get("active_request_id") == analyze_id)
         assert heartbeat["revision"] != "0"
+        assert int(heartbeat["background_sequence"]) >= int(snapshot_reply["background_sequence"]), heartbeat
         pending = [client.send("metadata", request_id=f"queued-{index}") for index in range(40)]
         cancel = client.call("cancel", {"request_id": analyze_id})["payload"]
         assert cancel["accepted"] and not cancel["stopped"] and cancel["requires_restart"]
@@ -268,7 +280,18 @@ def run(executable):
             assert second["rows"][0]["line"] == 3 and "code line 3" in second["text"]
         cfg = client.call("cfg", {"address": BASE})["payload"]
         assert isinstance(cfg["nodes"][0]["id"], str) and cfg["complete"]
-        assert client.call("cfg", {"address": "0xffff800012340001"})["status"] == "budget_exceeded"
+        # Isolate the mock's oversized graph entry from the other protocol
+        # state. An interior byte selects the ordinary owner until defined.
+        graph_binary = Path(directory) / "cfg-budget.bin"
+        graph_binary.write_bytes(b"benign graph fixture")
+        with Client(executable) as graph_client:
+            assert graph_client.call("open", {"path": str(graph_binary)})["status"] == "ok"
+            interior = "0xffff800012340001"
+            assert len(graph_client.call("cfg", {"address": interior})["payload"]["nodes"]) == 2
+            assert graph_client.call("function_create", {"address": interior})["status"] == "ok"
+            assert graph_client.call("cfg", {"address": interior})["status"] == "budget_exceeded"
+            assert graph_client.call("function_delete", {"address": interior})["status"] == "ok"
+            assert len(graph_client.call("cfg", {"address": interior})["payload"]["nodes"]) == 2
         # Direct references come from the instruction index without analysis.
         direct = client.call("xrefs", {"address": BASE})["payload"]
         assert direct["items"][0]["address"] == "0xffff800012340008" and direct["items"][0]["type"] == "j", direct
@@ -339,6 +362,10 @@ def run(executable):
         item = {"address": "0xffff800012343230", "action": "data"}
         assert client.call("item_define", item)["payload"]["kind"] == "byte"
         assert client.call("item_define", item)["payload"]["kind"] == "word"
+        word_rows = client.call("listing", {
+            "address": item["address"], "before": 0, "after": 2})["payload"]["lines"]
+        extent_rows = [row for row in word_rows if row["item"] == item["address"]]
+        assert extent_rows and all(row["item_size"] == "0x2" for row in extent_rows), word_rows
         bss = [" ".join(line["text"].split()) for line in client.call(
             "listing", {"address": "0xffff800012343230", "before": 0, "after": 2})["payload"]["lines"]]
         assert any(line.startswith("word_FFFF800012343230 dw ?") for line in bss), bss
@@ -350,6 +377,10 @@ def run(executable):
         assert client.call("undo")["status"] == "ok"
         string = client.call("item_define", {"address": "0xffff800012343108", "action": "string"})["payload"]
         assert string == {"address": "0xffff800012343108", "kind": "string", "size": 10, "saved": True}, string
+        string_rows = client.call("listing", {
+            "address": string["address"], "before": 0, "after": 8})["payload"]["lines"]
+        extent_rows = [row for row in string_rows if row["item"] == string["address"]]
+        assert extent_rows and all(row["item_size"] == "0xa" for row in extent_rows), string_rows
         refused = client.call("item_define", {"address": BASE, "action": "data"})
         assert refused["error"]["code"] == "invalid_request", refused
         steps = [(step["kind"], step["address"]) for step in client.call("history")["payload"]["items"]

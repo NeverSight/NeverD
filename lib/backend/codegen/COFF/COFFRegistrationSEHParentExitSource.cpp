@@ -8,7 +8,7 @@
 
 #include "COFFRegistrationSEHParentExit.h"
 
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 
 namespace neverd::coff_registration {
 

@@ -13,10 +13,12 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -30,25 +32,24 @@ namespace {
 std::optional<LowSEHRuntimeCall> runtimeCall(const BinaryImage &Image,
                                              const Import &Imported,
                                              size_t &Remaining) {
-  const llvm::StringRef Module = Imported.Module;
   if (Imported.IsDelayImport || !Imported.IATAddr)
     return std::nullopt;
-  const bool UCRT = Module.equals_insensitive("ucrtbase.dll") ||
-                    Module.equals_insensitive("ucrtbased.dll");
-  const bool Stdio =
-      UCRT || Module.equals_insensitive("api-ms-win-crt-stdio-l1-1-0.dll");
-  LowSEHRuntimeCall Call;
-  if (Stdio && Imported.Name == "__acrt_iob_func")
-    Call.Routine = LowSEHRuntimeCall::Kind::CRTStream;
-  else if (Stdio && Imported.Name == "__stdio_common_vfprintf")
-    Call.Routine = LowSEHRuntimeCall::Kind::CRTVfprintf;
-  else if (Imported.Name == "_controlfp_s" &&
-           (UCRT ||
-            Module.equals_insensitive("api-ms-win-crt-runtime-l1-1-0.dll") ||
-            Module.equals_insensitive("api-ms-win-crt-math-l1-1-0.dll")))
-    Call.Routine = LowSEHRuntimeCall::Kind::CRTControlFP;
-  else
+  using Kind = LowSEHRuntimeCall::Kind;
+  const auto Routine = llvm::StringSwitch<std::optional<Kind>>(Imported.Name)
+#define NEVERD_SEH_RUNTIME_IMPORT(Name, Routine, Provider)                     \
+  .Case(Name, Kind::Routine)
+#include "Windows/SEHRuntimeImports.def"
+                           .Default(std::nullopt);
+  if (!Routine)
     return std::nullopt;
+  switch (*Routine) {
+#define NEVERD_SEH_RUNTIME_IMPORT(Name, Routine, Provider)                     \
+  case Kind::Routine:                                                          \
+    if (!coff_loader::Provider(Imported.Module))                               \
+      return std::nullopt;                                                     \
+    break;
+#include "Windows/SEHRuntimeImports.def"
+  }
   if (Image.Imports.size() + 1 > Remaining) {
     Remaining = 0;
     return std::nullopt;
@@ -56,6 +57,8 @@ std::optional<LowSEHRuntimeCall> runtimeCall(const BinaryImage &Image,
   Remaining -= Image.Imports.size() + 1;
   if (!isFileBackedPEImportSlot(Image, Imported.IATAddr))
     return std::nullopt;
+  LowSEHRuntimeCall Call;
+  Call.Routine = *Routine;
   Call.IATAddress = Imported.IATAddr;
   Call.Module = Imported.Module;
   Call.Name = Imported.Name;

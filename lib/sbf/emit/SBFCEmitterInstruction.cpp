@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringExtras.h"
 
 #include <cstdlib>
+#include <set>
 #include <string>
 
 namespace neverd::sbf {
@@ -53,9 +54,10 @@ std::string source(const MedInstruction &Instruction) {
 }
 
 void emitAssign(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-                llvm::StringRef Expression,
-                llvm::StringRef Indent = "        ") {
-  OS << Indent << reg(Instruction.Dst) << " = ";
+                llvm::StringRef Expression, llvm::StringRef Indent = "        ",
+                llvm::StringRef Target = "") {
+  OS << Indent << (Target.empty() ? reg(Instruction.Dst) : Target.str())
+     << " = ";
   switch (Instruction.Semantics.Result) {
   case ResultExtension::Zero32:
     OS << "(uint64_t)(uint32_t)(" << Expression << ")";
@@ -70,21 +72,61 @@ void emitAssign(llvm::raw_ostream &OS, const MedInstruction &Instruction,
   OS << ";\n";
 }
 
+std::string loadHelperName(ResultExtension Extension) {
+  return "nd_load_" + std::to_string(static_cast<unsigned>(Extension));
+}
+
+void emitLoadBody(llvm::raw_ostream &OS, const MedInstruction &Instruction,
+                  llvm::StringRef Address, llvm::StringRef Width,
+                  llvm::StringRef Target, llvm::StringRef Indent) {
+  OS << Indent
+     << "{ uint64_t value = 0; neverd_sbf_status_v2 runtime_status; if "
+        "(!env || !env->load) return "
+     << cSourceStatusName(FaultCode::MemoryAccess)
+     << "; runtime_status = nd_runtime_status(env, "
+        "env->load(env->context, "
+     << Address << ", " << Width << ", &value), "
+     << cSourceStatusName(FaultCode::MemoryAccess) << ", "
+     << cSourceStatusName(FaultCode::MemoryAccess)
+     << "); if (runtime_status != " << cSourceStatusName(SourceStatus::Ok)
+     << ") return runtime_status;\n";
+  emitAssign(OS, Instruction, "value", (Indent + "  ").str(), Target);
+  OS << Indent << "}\n";
+}
+
+void emitStoreBody(llvm::raw_ostream &OS, llvm::StringRef Address,
+                   llvm::StringRef Width, llvm::StringRef Value,
+                   llvm::StringRef Indent) {
+  OS << Indent
+     << "{ neverd_sbf_status_v2 runtime_status; if (!env || !env->store) "
+        "return "
+     << cSourceStatusName(FaultCode::MemoryAccess)
+     << "; runtime_status = nd_runtime_status(env, "
+        "env->store(env->context, "
+     << Address << ", " << Width << ", " << Value << "), "
+     << cSourceStatusName(FaultCode::MemoryAccess) << ", "
+     << cSourceStatusName(FaultCode::MemoryAccess)
+     << "); if (runtime_status != " << cSourceStatusName(SourceStatus::Ok)
+     << ") return runtime_status; }\n";
+}
+
 void emitAdvance(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-                 size_t InstructionCount) {
+                 size_t InstructionCount, bool FallThrough) {
   const size_t Next = Instruction.Slot + Instruction.SlotWidth;
-  if (Next < InstructionCount)
+  if (FallThrough)
+    OS << "        /* fall through */\n";
+  else if (Next < InstructionCount)
     OS << "        pc = " << Next << "; continue;\n";
   else
     OS << "        return " << cSourceStatusName(FaultCode::ExecutionOverrun)
        << ";\n";
 }
 
-void emitPushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-                   const SBFProgram &Program) {
+void emitPushFrameBody(llvm::raw_ostream &OS, llvm::StringRef ReturnPC,
+                       const SBFProgram &Program) {
   OS << "        if (depth + 1 >= NEVERD_SBF_MAX_CALL_DEPTH) return "
      << cSourceStatusName(FaultCode::CallDepth) << ";\n"
-     << "        return_pc[depth] = " << Instruction.Slot + 1 << ";\n"
+     << "        return_pc[depth] = " << ReturnPC << ";\n"
      << "        for (i = 0; i < NEVERD_SBF_SAVED_REGISTERS; ++i) "
         "saved[depth][i] = r[NEVERD_SBF_FIRST_SAVED_REGISTER + i];\n"
      << "        saved_fp[depth] = r[NEVERD_SBF_FRAME_POINTER];\n"
@@ -97,15 +139,117 @@ void emitPushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
   }
 }
 
+void emitPopFrameBody(llvm::raw_ostream &OS) {
+  OS << "        --depth; for (i = 0; i < NEVERD_SBF_SAVED_REGISTERS; ++i) "
+        "r[NEVERD_SBF_FIRST_SAVED_REGISTER + i] = saved[depth][i];\n"
+        "        r[NEVERD_SBF_FRAME_POINTER] = saved_fp[depth];\n";
+}
+
+void emitLegacyRuntimeBody(llvm::raw_ostream &OS, llvm::StringRef Hash) {
+  OS << "        { uint64_t value = 0; "
+        "neverd_sbf_status_v2 syscall_status = nd_runtime_status("
+        "env, nd_syscall(env, "
+     << Hash;
+  emitArgumentRegisters(OS);
+  OS << ", &value), " << cSourceStatusName(FaultCode::UnknownSyscall) << ", "
+     << cSourceStatusName(FaultCode::InvalidInstruction)
+     << "); if (syscall_status == " << cSourceStatusName(SourceStatus::Ok)
+     << ") { r[NEVERD_SBF_RETURN_REGISTER] = value; } else if "
+        "(syscall_status != "
+     << cSourceStatusName(FaultCode::UnknownSyscall)
+     << ") return syscall_status; }\n";
+}
+
+void emitPushFrame(llvm::raw_ostream &OS, const MedInstruction &Instruction,
+                   const SBFProgram &Program, bool InPartition) {
+  if (!InPartition) {
+    emitPushFrameBody(OS, std::to_string(Instruction.Slot + 1), Program);
+    return;
+  }
+  OS << "        { neverd_sbf_status_v2 status = nd_push_frame(r, saved, "
+        "saved_fp, return_pc, &depth, "
+     << Instruction.Slot + 1
+     << "); if (status != " << cSourceStatusName(SourceStatus::Ok)
+     << ") return status; }\n";
+}
+
 } // namespace
 
 namespace c_emitter_detail {
+
+void emitMemoryHelpers(llvm::raw_ostream &OS, const SBFProgram &Program) {
+  std::set<ResultExtension> Loads;
+  bool Stores = false;
+  for (const auto &Instruction : Program.Med.Instructions) {
+    if (Instruction.Op == Operation::Load)
+      Loads.insert(Instruction.Semantics.Result);
+    Stores |= Instruction.Op == Operation::Store;
+  }
+  for (ResultExtension Extension : Loads) {
+    MedInstruction Load;
+    Load.Semantics.Result = Extension;
+    OS << "static neverd_sbf_status_v2 " << loadHelperName(Extension)
+       << "(nd_environment_view *env, uint64_t address, uint32_t width, "
+          "uint64_t *target) {\n";
+    emitLoadBody(OS, Load, "address", "width", "*target", "  ");
+    OS << "  return " << cSourceStatusName(SourceStatus::Ok) << ";\n}\n\n";
+  }
+  if (Stores) {
+    OS << "static neverd_sbf_status_v2 nd_store(nd_environment_view *env, "
+          "uint64_t address, uint32_t width, uint64_t value) {\n";
+    emitStoreBody(OS, "address", "width", "value", "  ");
+    OS << "  return " << cSourceStatusName(SourceStatus::Ok) << ";\n}\n\n";
+  }
+}
+
+void emitCallHelpers(llvm::raw_ostream &OS, const SBFProgram &Program) {
+  bool Needed = false;
+  bool NeedsPop = false;
+  for (const auto &Instruction : Program.Med.Instructions)
+    NeedsPop |= Instruction.Op == Operation::Exit;
+  for (const auto &Instruction : Program.Med.Instructions)
+    Needed |=
+        Instruction.Op == Operation::CallX ||
+        (Instruction.Op == Operation::Call &&
+         Instruction.Call == CallKind::Internal && Instruction.CallTarget);
+  bool NeedsLegacyRuntime = false;
+  for (const auto &Instruction : Program.Med.Instructions)
+    NeedsLegacyRuntime |=
+        Instruction.Op == Operation::Call &&
+        Instruction.Call == CallKind::Internal && Instruction.CallTarget &&
+        Instruction.Dispatch == CallDispatchPolicy::LegacyRuntimeThenFunction;
+  if (NeedsLegacyRuntime) {
+    OS << "static neverd_sbf_status_v2 nd_legacy_runtime_call("
+          "nd_environment_view *env, uint64_t *r, uint32_t hash) {\n";
+    emitLegacyRuntimeBody(OS, "hash");
+    OS << "  return " << cSourceStatusName(SourceStatus::Ok) << ";\n}\n\n";
+  }
+  if (NeedsPop) {
+    OS << "static uint32_t nd_pop_frame(uint64_t *r, "
+          "uint64_t (*saved)[NEVERD_SBF_SAVED_REGISTERS], uint64_t *saved_fp, "
+          "uint32_t *return_pc, size_t *depth_address) {\n"
+          "  size_t depth = *depth_address, i;\n";
+    emitPopFrameBody(OS);
+    OS << "  *depth_address = depth; return return_pc[depth];\n}\n\n";
+  }
+  if (!Needed)
+    return;
+  OS << "static neverd_sbf_status_v2 nd_push_frame(uint64_t *r, "
+        "uint64_t (*saved)[NEVERD_SBF_SAVED_REGISTERS], uint64_t *saved_fp, "
+        "uint32_t *return_pc, size_t *depth_address, uint32_t next_pc) {\n"
+        "  size_t depth = *depth_address, i;\n";
+  emitPushFrameBody(OS, "next_pc", Program);
+  OS << "  *depth_address = depth; return "
+     << cSourceStatusName(SourceStatus::Ok) << ";\n}\n\n";
+}
 
 std::string word(uint64_t Value) {
   return "UINT64_C(0x" + llvm::utohexstr(Value) + ")";
 }
 
 std::string comparison(const MedInstruction &Instruction) {
+  if (const auto Result = Instruction.reflexiveComparisonResult())
+    return *Result ? "1" : "0";
   const std::string L = reg(Instruction.Dst);
   const std::string R = source(Instruction);
   const bool Width32 = Instruction.Width == kWordBitWidth;
@@ -145,7 +289,7 @@ std::string comparison(const MedInstruction &Instruction) {
 
 bool emitLinearInstruction(llvm::raw_ostream &OS,
                            const MedInstruction &Instruction,
-                           llvm::StringRef Indent) {
+                           llvm::StringRef Indent, bool SharedMemoryHelpers) {
   if (Instruction.Op == Operation::Invalid)
     return false;
   const std::string D = reg(Instruction.Dst);
@@ -258,20 +402,16 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
         reg(Instruction.Src) + (Instruction.Offset < 0 ? " - " : " + ") +
         word(static_cast<uint64_t>(
             std::abs(static_cast<int>(Instruction.Offset))));
-    OS << Indent
-       << "{ uint64_t value = 0; neverd_sbf_status_v2 runtime_status; if "
-          "(!env "
-          "|| !env->load) return "
-       << cSourceStatusName(FaultCode::MemoryAccess)
-       << "; runtime_status = nd_runtime_status(env, "
-          "env->load(env->context, "
-       << Address << ", " << unsigned(Instruction.Width) << ", &value), "
-       << cSourceStatusName(FaultCode::MemoryAccess) << ", "
-       << cSourceStatusName(FaultCode::MemoryAccess)
-       << "); if (runtime_status != " << cSourceStatusName(SourceStatus::Ok)
-       << ") return runtime_status;\n";
-    emitAssign(OS, Instruction, "value", (Indent + "  ").str());
-    OS << Indent << "}\n";
+    if (SharedMemoryHelpers)
+      OS << Indent
+         << "memory_status = " << loadHelperName(Instruction.Semantics.Result)
+         << "(env, " << Address << ", " << unsigned(Instruction.Width) << ", &"
+         << D
+         << "); if (memory_status != " << cSourceStatusName(SourceStatus::Ok)
+         << ") return memory_status;\n";
+    else
+      emitLoadBody(OS, Instruction, Address, std::to_string(Instruction.Width),
+                   D, Indent);
     break;
   }
   case Operation::Store: {
@@ -279,17 +419,13 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
         reg(Instruction.Dst) + (Instruction.Offset < 0 ? " - " : " + ") +
         word(static_cast<uint64_t>(
             std::abs(static_cast<int>(Instruction.Offset))));
-    OS << Indent
-       << "{ neverd_sbf_status_v2 runtime_status; if (!env || !env->store) "
-          "return "
-       << cSourceStatusName(FaultCode::MemoryAccess)
-       << "; runtime_status = nd_runtime_status(env, "
-          "env->store(env->context, "
-       << Address << ", " << unsigned(Instruction.Width) << ", " << S << "), "
-       << cSourceStatusName(FaultCode::MemoryAccess) << ", "
-       << cSourceStatusName(FaultCode::MemoryAccess)
-       << "); if (runtime_status != " << cSourceStatusName(SourceStatus::Ok)
-       << ") return runtime_status; }\n";
+    if (SharedMemoryHelpers)
+      OS << Indent << "memory_status = nd_store(env, " << Address << ", "
+         << unsigned(Instruction.Width) << ", " << S
+         << "); if (memory_status != " << cSourceStatusName(SourceStatus::Ok)
+         << ") return memory_status;\n";
+    else
+      emitStoreBody(OS, Address, std::to_string(Instruction.Width), S, Indent);
     break;
   }
   case Operation::Call:
@@ -329,13 +465,14 @@ bool emitLinearInstruction(llvm::raw_ostream &OS,
 }
 
 void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-                     const SBFProgram &Program) {
+                     const SBFProgram &Program, bool InPartition,
+                     bool FallThrough) {
   OS << "      case " << Instruction.Slot << ": /* "
      << opcodeName(Instruction.SourceOpcode) << " @ 0x"
      << llvm::utohexstr(Instruction.Address) << " */\n";
 
-  if (emitLinearInstruction(OS, Instruction, "        ")) {
-    emitAdvance(OS, Instruction, Program.Low.Instructions.size());
+  if (emitLinearInstruction(OS, Instruction, "        ", InPartition)) {
+    emitAdvance(OS, Instruction, Program.Low.Instructions.size(), FallThrough);
     return;
   }
 
@@ -377,20 +514,20 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
     if (Instruction.Call == CallKind::Internal && Instruction.CallTarget) {
       if (Instruction.Dispatch ==
           CallDispatchPolicy::LegacyRuntimeThenFunction) {
-        OS << "        { uint64_t value = 0; "
-              "neverd_sbf_status_v2 syscall_status = nd_runtime_status("
-              "env, nd_syscall(env, UINT32_C(0x"
-           << llvm::utohexstr(Instruction.SyscallHash) << ")";
-        emitArgumentRegisters(OS);
-        OS << ", &value), " << cSourceStatusName(FaultCode::UnknownSyscall)
-           << ", " << cSourceStatusName(FaultCode::InvalidInstruction)
-           << "); if (syscall_status == " << cSourceStatusName(SourceStatus::Ok)
-           << ") { r[NEVERD_SBF_RETURN_REGISTER] = value; } else if "
-              "(syscall_status != "
-           << cSourceStatusName(FaultCode::UnknownSyscall)
-           << ") return syscall_status; }\n";
+        const std::string Hash =
+            "UINT32_C(0x" + llvm::utohexstr(Instruction.SyscallHash) + ")";
+        if (InPartition) {
+          OS << "        { neverd_sbf_status_v2 status = "
+                "nd_legacy_runtime_call("
+                "env, r, "
+             << Hash
+             << "); if (status != " << cSourceStatusName(SourceStatus::Ok)
+             << ") return status; }\n";
+        } else {
+          emitLegacyRuntimeBody(OS, Hash);
+        }
       }
-      emitPushFrame(OS, Instruction, Program);
+      emitPushFrame(OS, Instruction, Program, InPartition);
       OS << "        pc = " << *Instruction.CallTarget << "; continue;\n";
       return;
     }
@@ -398,7 +535,7 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
        << ";\n";
     return;
   case Operation::CallX:
-    emitPushFrame(OS, Instruction, Program);
+    emitPushFrame(OS, Instruction, Program, InPartition);
     OS << "        { uint64_t target = r[" << unsigned(Instruction.CallRegister)
        << "], target_slot; if (target < NEVERD_SBF_TEXT_ADDRESS) return "
        << cSourceStatusName(FaultCode::UnknownIndirectCall)
@@ -409,13 +546,19 @@ void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
        << "; pc = (uint32_t)target_slot; continue; }\n";
     return;
   case Operation::Exit:
-    OS << "        if (depth == 0) { if (result) *result = "
+    OS << "        if (depth == 0) { ";
+    if (InPartition)
+      OS << "machine->halted = 1; ";
+    OS << "if (result) *result = "
           "r[NEVERD_SBF_RETURN_REGISTER]; return "
-       << cSourceStatusName(SourceStatus::Ok) << "; }\n"
-       << "        --depth; for (i = 0; i < NEVERD_SBF_SAVED_REGISTERS; ++i) "
-          "r[NEVERD_SBF_FIRST_SAVED_REGISTER + i] = saved[depth][i];\n"
-       << "        r[NEVERD_SBF_FRAME_POINTER] = saved_fp[depth]; pc = "
-          "return_pc[depth]; continue;\n";
+       << cSourceStatusName(SourceStatus::Ok) << "; }\n";
+    if (InPartition)
+      OS << "        pc = nd_pop_frame(r, saved, saved_fp, return_pc, &depth); "
+            "continue;\n";
+    else {
+      emitPopFrameBody(OS);
+      OS << "        pc = return_pc[depth]; continue;\n";
+    }
     return;
   case Operation::Invalid:
     OS << "        return "

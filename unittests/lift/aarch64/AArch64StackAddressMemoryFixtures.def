@@ -1,0 +1,96 @@
+//===- AArch64StackAddressMemoryFixtures.def - SP memory oracles -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent SP fields, native template expectations and export identities.
+/// VALUE and TEXT define fixture constants and text; the existing scalar,
+/// vector and immediate MC inventories supply independent instruction words.
+//===----------------------------------------------------------------------===//
+
+#ifndef STACK_MEMORY_VALUE
+#define STACK_MEMORY_VALUE(Type, Name, Value)
+#endif
+#ifndef STACK_MEMORY_TEXT
+#define STACK_MEMORY_TEXT(Name, Text)
+#endif
+
+STACK_MEMORY_VALUE(uint32_t, kStackBaseMask, 0x3e0U)
+STACK_MEMORY_VALUE(uint32_t, kStackGeneralBaseBits, 0x200U)
+STACK_MEMORY_VALUE(uint32_t, kStackSignedIndexBit, 0x8000U)
+STACK_MEMORY_VALUE(uint64_t, kStackNegativeNarrowIndex, 0xffffffffULL)
+STACK_MEMORY_VALUE(uint64_t, kStackNegativeWideIndex, 0xffffffffffffffffULL)
+STACK_MEMORY_VALUE(unsigned, kStackRegisterCaseCount, 184)
+STACK_MEMORY_VALUE(int64_t, kStackFrameDistance, 64)
+STACK_MEMORY_TEXT(kStackSaveSP, "mov x14, sp")
+STACK_MEMORY_TEXT(kStackSelectSP, "mov sp, x16")
+STACK_MEMORY_TEXT(kStackRestoreSP, "mov sp, x14")
+STACK_MEMORY_TEXT(kStackClobberSP, "~{x14}")
+STACK_MEMORY_TEXT(kStackArtifactEnvironment,
+                  "NEVERD_ARM64E_CPTA_STACK_ARTIFACT_DIR")
+STACK_MEMORY_TEXT(kStackArtifactPrefix, "stack-memory")
+STACK_MEMORY_TEXT(kStackArtifactProperty, "cpta_stack_memory_artifacts")
+STACK_MEMORY_TEXT(kStackRegisterArtifactPrefix, "stack-register-memory")
+STACK_MEMORY_TEXT(kStackRegisterArtifactProperty,
+                  "cpta_stack_register_memory_artifacts")
+STACK_MEMORY_TEXT(kRegisterArtifactPrefix, "register-memory")
+STACK_MEMORY_TEXT(kRegisterArtifactProperty, "cpta_register_memory_artifacts")
+
+STACK_MEMORY_TEXT(kStackCaptureSP, "mov x16, sp")
+STACK_MEMORY_TEXT(kStackWritebackArtifactProperty,
+                  "sp_writeback_memory_artifact_dir")
+STACK_MEMORY_TEXT(kStackVectorWritebackArtifactProperty,
+                  "sp_vector_writeback_memory_artifact_dir")
+STACK_MEMORY_TEXT(kStackPairArtifactProperty, "sp_pair_memory_artifact_dir")
+STACK_MEMORY_TEXT(kStackStructureArtifactProperty,
+                  "sp_structure_memory_artifact_dir")
+STACK_MEMORY_TEXT(kStackWritebackArtifactEnvironment,
+                  "NEVERD_ARM64E_SP_WRITEBACK_ARTIFACT_DIR")
+STACK_MEMORY_TEXT(kStackVectorWritebackArtifactEnvironment,
+                  "NEVERD_ARM64E_SP_VECTOR_WRITEBACK_ARTIFACT_DIR")
+STACK_MEMORY_TEXT(kStackPairArtifactEnvironment,
+                  "NEVERD_ARM64E_SP_PAIR_ARTIFACT_DIR")
+STACK_MEMORY_TEXT(kStackStructureDirectory, "/sp")
+STACK_MEMORY_TEXT(kStackOracleX9Before, "mov x12, sp\\n\\tmov sp, x9\\n\\t")
+STACK_MEMORY_TEXT(kStackOracleX9After, "\\n\\tmov x9, sp\\n\\tmov sp, x12")
+STACK_MEMORY_TEXT(kStackOracleX20Before, "mov x12, sp\\n\\tmov sp, x20\\n\\t")
+STACK_MEMORY_TEXT(kStackOracleX20After, "\\n\\tmov x20, sp\\n\\tmov sp, x12")
+STACK_MEMORY_TEXT(kStackOracleX21Before, "mov x12, sp\\n\\tmov sp, x21\\n\\t")
+STACK_MEMORY_TEXT(kStackOracleX21After, "\\n\\tmov x21, sp\\n\\tmov sp, x12")
+STACK_MEMORY_TEXT(kStackOracleClobbers, "\"x12\", ")
+STACK_MEMORY_TEXT(kStackStructureBaseArgument, "(uint64_t)(a + 80)")
+STACK_MEMORY_TEXT(kStackStructureNativeCall,
+                  "native_structure_{0}((uint64_t)(b + 80), (uint64_t)input, "
+                  "(uint64_t)expected, delta)")
+
+// A uniform bridge calls the unchanged emitted function with the fault SP.
+// Native fault verification appends its signal oracle before main().
+STACK_MEMORY_TEXT(kStackFaultBegin, "#if defined(SP_TEST_EXTENDED_MEMORY)\n")
+STACK_MEMORY_TEXT(kStackFaultEnd, "#endif\n")
+STACK_MEMORY_TEXT(
+    kStackFaultWrapper,
+    "static void raw_sp_fault_{0}(uint64_t base, uint64_t low, uint64_t high, "
+    "uint64_t *upper) {{ _Alignas(16) uint64_t input[8] = {{low, high}; "
+    "_Alignas(16) uint64_t result[8] = {{0}; (void)upper; (void)input; "
+    "(void)result; (void){1}({2}); }\n")
+STACK_MEMORY_TEXT(kStackFaultEntry, "{{raw_sp_fault_{0}},\n")
+STACK_MEMORY_TEXT(
+    kStackFaultTable,
+    "static const struct {{ void (*call)(uint64_t, uint64_t, uint64_t, "
+    "uint64_t *); } raw_sp_cases[] = {{{0}};\n")
+STACK_MEMORY_TEXT(kStackFaultLoadArguments, "base")
+STACK_MEMORY_TEXT(kStackFaultStoreArguments, "base, low")
+STACK_MEMORY_TEXT(kStackFaultOutputArguments, "base, (uintptr_t)result")
+STACK_MEMORY_TEXT(kStackFaultDataArguments,
+                  "base, low, high, (uintptr_t)result")
+STACK_MEMORY_TEXT(kStackFaultPairVectorArguments,
+                  "base, low, high, high, low, (uintptr_t)result")
+STACK_MEMORY_TEXT(kStackFaultStructureBase, "base")
+STACK_MEMORY_TEXT(kStackFaultStructureIndex, ", 17")
+STACK_MEMORY_TEXT(kStackFaultStructureInput, ", (uintptr_t)input")
+STACK_MEMORY_TEXT(kStackFaultStructureOutput, ", (uintptr_t)result")
+
+#undef STACK_MEMORY_VALUE
+#undef STACK_MEMORY_TEXT

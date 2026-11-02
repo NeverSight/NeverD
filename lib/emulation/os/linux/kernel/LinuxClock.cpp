@@ -14,7 +14,8 @@ namespace {
 constexpr uint64_t NanosecondsPerSecond = 1000000000;
 
 bool advancingClock(int32_t ID) {
-  return ID == ClockRealtime || ID == ClockMonotonic || ID == ClockBootTime;
+  return ID == ClockRealtime || ID == ClockMonotonic ||
+         ID == ClockMonotonicRaw || ID == ClockBootTime;
 }
 
 std::optional<LinuxTimespec> shifted(LinuxTimespec Value, uint64_t Elapsed) {

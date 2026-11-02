@@ -133,6 +133,8 @@ private:
   struct OpenSocket {
     uint32_t Family, Flags;
     const LinuxStreamConnection *Connection = nullptr;
+    // Ordinal of the bound input contract, valid only with Connection.
+    size_t ConnectionIndex = 0;
     const LinuxDatagramConnection *Datagram = nullptr;
     uint64_t Sent = 0, Received = 0;
     size_t ReceiveEvent = 0;
@@ -151,6 +153,7 @@ private:
   class EpollWait;
   struct EpollState;
   size_t NextConnection = 0;
+  uint32_t TCPConnectFailuresConsumed = 0;
   size_t NextDatagramConnection = 0;
   std::optional<uint64_t> receiveSocketError(OpenSocket &Socket,
                                              const LinuxNetworkReceive &Event,
@@ -201,9 +204,24 @@ private:
   tracedIoctl(const ProcessServiceEvent &Event, ProcessResult &Result);
   std::vector<std::weak_ptr<LinuxDeviceState>> DeviceDescriptions;
   std::map<std::string, MutableFile> MutableFiles;
+  // Pathnames bind to stable object keys. Newly created objects use internal
+  // NUL-prefixed keys, distinct from every canonical initial pathname.
+  // Open descriptions and write grants retain their keys across name changes.
+  std::optional<std::map<std::string, std::string>> FileNames;
+  std::map<std::string, uint64_t> CreatedFileLimits;
+  std::map<std::string, uint32_t> FileCreationCounts;
+  uint32_t FileRenameCount = 0;
+  uint32_t FileUnlinkCount = 0;
+  const std::string *fileIdentity(const std::string &Name) const;
+  std::optional<std::string> fileName(const std::string &Identity) const;
+  bool hasFileDescendant(const std::string &Prefix) const;
+  void
+  forEachFilePath(const std::function<void(const std::string &)> &Visit) const;
   std::map<std::string, LinuxFileMetadata> DirectoryMetadata;
   std::vector<std::string> CreatedDirectories;
   const LinuxFileMetadata *directoryMetadata(const std::string &Path) const;
+  static uint32_t metadataPermissions(const LinuxFileMetadata &Metadata);
+  bool canSearchPath(const std::string &Path) const;
   std::map<std::string, uint64_t> Inodes;
   std::set<uint64_t> UsedInodes;
   uint64_t NextInode = 1;
@@ -237,6 +255,8 @@ private:
   procRecords(const OpenProcFile &File, ProcessResult &Result, uint64_t &Error);
   void opened(uint32_t FD, uint32_t Flags);
   MutableFile &mutableFile(const std::string &Path);
+  std::optional<uint64_t> fileWriteLimit(const std::string &Identity) const;
+  bool tracksFileMetadata(const std::string &Identity) const;
   const LinuxFileMetadata *fileMetadata(const std::string &Path) const;
   bool touchWrite(MutableFile &File, ProcessResult &Result);
   void allocateWrittenPages(MutableFile &File, uint64_t Begin, uint64_t Size);
@@ -267,10 +287,17 @@ private:
   llvm::Expected<std::optional<uint64_t>>
   makeDirectory(uint64_t Address, uint32_t Mode, ProcessResult &Result);
   llvm::Expected<std::optional<uint64_t>>
-  open(uint64_t Address, uint32_t Flags, ProcessResult &Result,
+  createFile(const std::string &Path, uint32_t Flags, uint32_t Mode,
+             uint32_t FD, bool SearchAncestors, ProcessResult &Result);
+  llvm::Expected<std::optional<uint64_t>>
+  open(uint64_t Address, uint32_t Flags, uint32_t Mode, ProcessResult &Result,
        uint32_t Directory = AtCurrentDirectory);
   llvm::Expected<std::optional<uint64_t>>
   getWorkingDirectory(uint64_t Address, uint64_t Size, ProcessResult &Result);
+  llvm::Expected<std::optional<uint64_t>>
+  unlinkPath(uint64_t Address, uint32_t Flags, ProcessResult &Result);
+  llvm::Expected<std::optional<uint64_t>>
+  renameFile(uint64_t OldAddress, uint64_t NewAddress, ProcessResult &Result);
   llvm::Expected<uint64_t> read(OpenFile &File, uint64_t Address,
                                 uint64_t Size);
   uint64_t seek(OpenFile &File, uint64_t Offset, uint32_t Whence);

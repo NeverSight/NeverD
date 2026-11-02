@@ -38,6 +38,14 @@ inline constexpr uint32_t kRuntimeABIMagicV1 = 0x5452564e;
 inline constexpr uint16_t kRuntimeABIVersionV1 = 1;
 inline constexpr uint16_t kRuntimeControlBlockSizeV1 = 128;
 
+/// Protocol identity is separate from the unchanged control-block layout.
+/// A trusted invocation/profile must bind this identity before validating a
+/// record. Never infer the protocol from its extent or retry another validator.
+enum class RuntimeControlProtocolV1 : uint8_t {
+  Scalar = 1,
+  ExactSpan = 2,
+};
+
 enum class RuntimeABIExitKindV1 : uint32_t {
   None = 0,
   MemoryFault = 1,
@@ -189,6 +197,14 @@ makeRuntimeControlBlockV1(CodeInvalidationPolicy CodeInvalidation,
 /// exit records before dispatch consumes the control block.
 llvm::Error validateRuntimeControlBlockV1(const RuntimeControlBlockV1 &Block);
 
+/// Exact-span protocol using the v1 layout. Ordinary read/write faults and
+/// completed executable stores may describe any nonempty extent representable
+/// by MemoryFaultExit. All remaining v1 invariants are unchanged. This
+/// validator alone does not admit an exact-span artifact to an integer-only
+/// invocation.
+llvm::Error
+validateRuntimeControlBlockExactSpanV1(const RuntimeControlBlockV1 &Block);
+
 enum class RuntimeABIValueKind : uint8_t {
   Void = 0,
   I32 = 1,
@@ -212,6 +228,8 @@ struct RuntimeABIHelperSignatureV1 {
 /// result is the numeric RuntimeABIExitKindV1 value.  A successful load returns
 /// None and writes the zero-extended scalar to ScalarResult.
 llvm::ArrayRef<RuntimeABIHelperSignatureV1> runtimeABIHelperSignaturesV1();
+llvm::ArrayRef<RuntimeABIHelperSignatureV1>
+runtimeABIHelperSignaturesV1(TranslationRuntimeProfileV1 Profile);
 
 /// Direct translated-code access is limited to the load-result slot.  Runtime
 /// helpers and the outer host dispatcher own all remaining control-block
@@ -221,12 +239,18 @@ llvm::ArrayRef<TranslationIRMemorySlot> runtimeABIMemorySlotsV1();
 /// Exact-name lookup.  Prefix, suffix, and case-folded matches are rejected.
 const RuntimeABIHelperSignatureV1 *
 findRuntimeABIHelperSignatureV1(llvm::StringRef Name);
+const RuntimeABIHelperSignatureV1 *
+findRuntimeABIHelperSignatureV1(llvm::StringRef Name,
+                                TranslationRuntimeProfileV1 Profile);
 
 /// Materialize the fixed table as TranslationIRVerifier contracts in Context.
 /// LLVM owns the FunctionType objects; parameter provenance refers to static
 /// table storage.
 std::vector<TranslationRuntimeHelper>
 createRuntimeABIHelperPolicyV1(llvm::LLVMContext &Context);
+std::vector<TranslationRuntimeHelper>
+createRuntimeABIHelperPolicyV1(llvm::LLVMContext &Context,
+                               TranslationRuntimeProfileV1 Profile);
 
 } // namespace neverd::translate
 

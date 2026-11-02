@@ -15,8 +15,8 @@
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
-#include "neverd/ir/med/X86RegistrationCall.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/COFF.h"

@@ -24,6 +24,8 @@
 #ifndef NEVERD_TYPES_LOCALTYPES_H
 #define NEVERD_TYPES_LOCALTYPES_H
 
+#include "neverd/types/CallingConvention.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -125,12 +127,6 @@ enum class TypeOrigin : uint8_t {
   DWARF,  ///< DWARF type entries.
   Header, ///< A type library NeverD ships, read from headers.
   User,   ///< Declared or edited by the user.
-};
-
-/// How a function takes its arguments (CallingConventions.def).
-enum class CallingConvention : uint8_t {
-#define NEVERD_CALLING_CONVENTION(Name, C, Rust, IDA, Wide, Pops) Name,
-#include "neverd/types/CallingConventions.def"
 };
 
 struct RecordDef;

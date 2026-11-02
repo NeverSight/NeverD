@@ -35,7 +35,7 @@ class raw_ostream;
 
 namespace neverd::translate {
 
-inline constexpr uint32_t kX86TranslationBlockLoweringSchemaV1 = 9;
+inline constexpr uint32_t kX86TranslationBlockLoweringSchemaV1 = 10;
 
 /// Stable failures from the version-1 x86-64 block lowerer.  Append values
 /// without renumbering existing entries.

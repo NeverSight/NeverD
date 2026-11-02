@@ -6,7 +6,7 @@
 #ifdef NEVERD_SCALAR_REGISTER
 #define NEVERD_X64_REGISTER(Name, Decoder, Backend)                            \
   NEVERD_SCALAR_REGISTER(X64, Name, 64, Backend)
-#include "neverd/emulation/X64Registers.def"
+#include "neverd/emulation/arch/x86_64/X64Registers.def"
 #undef NEVERD_X64_REGISTER
 NEVERD_SCALAR_REGISTER(X64, GSBase, 64, UC_X86_REG_GS_BASE)
 NEVERD_SCALAR_REGISTER(AArch64, X0, 64, UC_ARM64_REG_X0)

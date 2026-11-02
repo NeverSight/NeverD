@@ -14,6 +14,7 @@
 #include <QCheckBox>
 #include <QDataStream>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFile>
 #include <QInputDialog>
 #include <QJsonDocument>
@@ -22,6 +23,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -58,6 +60,20 @@ QString fixture(const QTemporaryDir &Directory,
              ? Path
              : QString();
 }
+// Navigation and presentation cases need a stable user-owned entry before
+// the first view asks discovery for it. Function creation has separate tests.
+QString createdFunctionFixture(const QTemporaryDir &Directory,
+                               const QByteArray &Code) {
+  const QString Path = fixture(Directory, Code);
+  if (Path.isEmpty() || !QDir().mkpath(Path + ".neverd"))
+    return {};
+  QFile Functions(Path + ".neverd/functions.json");
+  const QByteArray State = R"json([{"addr":"0x400078","state":"created"}])json";
+  return Functions.open(QIODevice::WriteOnly) &&
+                 Functions.write(State) == State.size()
+             ? Path
+             : QString();
+}
 } // namespace
 
 class SourceVariableTypesTests : public QObject {
@@ -72,6 +88,48 @@ private slots:
                        Settings.path());
     configureDocking();
   }
+  void longSourceSearchSurvivesResizing_data() {
+    QTest::addColumn<QString>("Representation");
+    QTest::newRow("pseudocode") << "source";
+    QTest::newRow("llvm-c") << "llvmc";
+  }
+  void longSourceSearchSurvivesResizing() {
+    QFETCH(QString, Representation);
+    QTemporaryDir Directory;
+    const auto Path =
+        createdFunctionFixture(Directory, QByteArray::fromHex("b82a000000c3"));
+    QVERIFY(!Path.isEmpty());
+    Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    Session.open(Path);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
+    const QString Needle = QStringLiteral("visible_tail_marker");
+    const QString Name = QString(160, QLatin1Char('n')) + Needle;
+    bool Renamed = false;
+    Session.rename(0x400078, Name, {}, [&] { Renamed = true; });
+    QTRY_VERIFY_WITH_TIMEOUT(Renamed, 30000);
+    CodeText Code(Session);
+    Code.resize(560, 280);
+    Code.show();
+    Code.load(0x400078, Representation);
+    QTRY_VERIFY_WITH_TIMEOUT(Code.complete(), 30000);
+    const int Match = Code.allText().indexOf(Needle);
+    QVERIFY(Match >= 0);
+    auto *Across = Code.horizontalScrollBar();
+    const int Extent = Across->maximum() + Code.viewport()->width();
+    QVERIFY(Code.selectSearchRange(Match, Needle.size()));
+    QCOMPARE(Code.selectedText(), Needle);
+    QVERIFY(Across->value() > 0);
+    // A resize changes the viewport, not the document's horizontal extent.
+    // Searching a far-right match must not reduce the next range calculation.
+    for (const int Width : {640, 480, 800, 560}) {
+      Code.resize(Width, 280);
+      QTRY_COMPARE(Across->maximum() + Code.viewport()->width(), Extent);
+      QVERIFY(Code.selectSearchRange(Match, Needle.size()));
+      QCOMPARE(Code.selectedText(), Needle);
+      QVERIFY(Code.cursorViewportRect().left() >= 0);
+      QVERIFY(Code.cursorViewportRect().left() <= Code.viewport()->width());
+    }
+  }
   void immediateAndRegisterNavigation_data() {
     QTest::addColumn<QString>("Kind");
     QTest::newRow("immediate") << "immediate";
@@ -81,8 +139,9 @@ private slots:
   void immediateAndRegisterNavigation() {
     QFETCH(QString, Kind);
     QTemporaryDir Directory;
-    const auto Path =
-        fixture(Directory, QByteArray::fromHex("b82a00000089c183c007c3"));
+    const auto Path = createdFunctionFixture(
+        Directory, QByteArray::fromHex("b82a00000089c183c007c3"));
+    QVERIFY(!Path.isEmpty());
     Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
     McpConnectionManager Mcp;
     GuiSessionBroker Broker;
@@ -94,13 +153,6 @@ private slots:
     Window.show();
     Session.open(Path);
     QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
-    bool Created = false;
-    connect(&Session, &Session::message, this, [&](const QString &Text, int) {
-      if (Text.startsWith("Created a function"))
-        Created = true;
-    });
-    Session.createFunction(0x400078);
-    QTRY_VERIFY_WITH_TIMEOUT(Created, 30000);
     Window.disassembly()->navigate(0x40007D);
     QTRY_COMPARE_WITH_TIMEOUT(Window.disassembly()->currentItem(),
                               std::optional<Address>(0x40007D), 30000);
@@ -118,8 +170,11 @@ private slots:
         Input = true;
         Dialog->setTextValue(Kind == "immediate" ? "42" : "eax");
         Dialog->accept();
-      } else if (auto *Message = qobject_cast<QMessageBox *>(
-                     QApplication::activeModalWidget())) {
+      } else if (auto *Message = Window.findChild<QMessageBox *>(
+                     QStringLiteral("registerValueDialog"));
+                 Message && Message->isVisible()) {
+        QCOMPARE(Message->windowModality(), Qt::NonModal);
+        QVERIFY(!QApplication::activeModalWidget());
         Value = Message->text().contains("0x2A") &&
                 Message->text().contains("before instruction");
         Message->accept();
@@ -145,9 +200,19 @@ private slots:
   void dataPresentationDialogs() {
     QFETCH(QString, Kind);
     QTemporaryDir Directory;
-    const auto Path =
-        fixture(Directory, QByteArray::fromHex("554889e5b80b0000005dc3") +
-                               QByteArray(96, '\0'));
+    const auto Path = createdFunctionFixture(
+        Directory,
+        QByteArray::fromHex("554889e5b80b0000005dc3") + QByteArray(96, '\0'));
+    QVERIFY(!Path.isEmpty());
+    if (Kind == "alignment") {
+      // This dialog edits a chosen data item. A byte row gives the chosen
+      // address a stable boundary inside the automatically grouped padding.
+      QFile Item(Path + ".neverd/items.json");
+      const QByteArray Boundary =
+          R"json([{"addr":"0x4000a0","kind":"byte","size":1}])json";
+      QVERIFY(Item.open(QIODevice::WriteOnly));
+      QCOMPARE(Item.write(Boundary), Boundary.size());
+    }
     Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
     McpConnectionManager Mcp;
     GuiSessionBroker Broker;
@@ -159,15 +224,6 @@ private slots:
     Window.show();
     Session.open(Path);
     QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
-    // The minimal ELF fixture has no symbol table. Publish the function as
-    // user state so every analysis replica has the same code ownership.
-    bool Created = false;
-    connect(&Session, &Session::message, this, [&](const QString &Text, int) {
-      if (Text.startsWith("Created a function"))
-        Created = true;
-    });
-    Session.createFunction(0x400078);
-    QTRY_VERIFY_WITH_TIMEOUT(Created, 30000);
     bool Declared = false;
     Session.declareTypes("c", "enum GUI_FLAGS { GUI_READ = 1, GUI_WRITE = 2 };",
                          [&](const QJsonObject &) { Declared = true; });

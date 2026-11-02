@@ -9,12 +9,65 @@
 #include "neverd/libc/LibCNames.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
 
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace neverd::c_library {
+/// Whether \p Declaration, a C library's own declaration of the routine
+/// \p Name, names only what every unit that includes headers has: C's own
+/// types, <stdint.h>'s, and record and enumeration tags.  Such a unit then
+/// declares the routine as its header does, `const` and all, and agrees with
+/// the header wherever it includes it too.
+inline bool selfContainedDeclaration(
+    llvm::StringRef Declaration, llvm::StringRef Name,
+    const std::set<std::string, std::less<>> &DeclaredTypes = {}) {
+  if (Declaration.empty())
+    return false;
+  static const std::set<std::string, std::less<>> Known = {
+      "void",      "char",       "short",
+      "int",       "long",       "signed",
+      "unsigned",  "float",      "double",
+      "_Bool",     "const",      "volatile",
+      "restrict",  "__restrict", "__restrict__",
+      "_Noreturn", "struct",     "union",
+      "enum",      "int8_t",     "int16_t",
+      "int32_t",   "int64_t",    "uint8_t",
+      "uint16_t",  "uint32_t",   "uint64_t",
+      "intptr_t",  "uintptr_t",  "intmax_t",
+      "uintmax_t", "__typeof__", "__builtin_choose_expr",
+      "sizeof",    "__cdecl",    "__stdcall"};
+  llvm::StringRef Previous;
+  for (size_t I = 0; I < Declaration.size();) {
+    if (!llvm::isAlpha(Declaration[I]) && Declaration[I] != '_') {
+      ++I;
+      continue;
+    }
+    size_t End = I;
+    while (End < Declaration.size() &&
+           (llvm::isAlnum(Declaration[End]) || Declaration[End] == '_'))
+      ++End;
+    const llvm::StringRef Word = Declaration.slice(I, End);
+    size_t Next = End;
+    while (Next < Declaration.size() && Declaration[Next] == ' ')
+      ++Next;
+    // The routine's name, a tag, and a parameter's name, which a comma,
+    // bracket or closing parenthesis follows, name no type.
+    const bool Parameter = Next < Declaration.size() &&
+                           llvm::StringRef(",)[").contains(Declaration[Next]);
+    if (Word != Name && !Parameter && !Known.count(Word) &&
+        !DeclaredTypes.count(Word) && Previous != "struct" &&
+        Previous != "union" && Previous != "enum")
+      return false;
+    Previous = Word;
+    I = End;
+  }
+  return true;
+}
+
 /// The bytes of C's long in a program for \p TheArch and \p Format: eight
 /// on an LP64 target, four on 64-bit Windows (LLP64) and on 32-bit ones.
 inline unsigned longBytes(Arch TheArch, BinaryFormat Format) {

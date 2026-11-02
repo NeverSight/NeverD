@@ -24,6 +24,20 @@ will load it, and rebuild the plugin whenever NeverD is upgraded. The plugin and
 host must also use the same operating system and architecture and
 ABI-compatible toolchains.
 
+For byte-overlay inventories, `neverd_byte_patches_snapshot_v1` returns an owned
+immutable snapshot of canonical rows and their original/current bytes, ordered
+by file offset. Its frozen v1 row layout is declared in
+`neverd/sdk/NeverDCAPIBytePatch.h`. The snapshot remains valid after session
+mutation, reload or destruction. Release it exactly once with
+`neverd_byte_patch_snapshot_free_v1` from the same loaded SDK; do not use
+`neverd_free_string`. A loaded empty overlay returns a non-null snapshot with
+zero rows; acquisition failure returns null. Null release is allowed. Existing
+JSON inventory entry points remain available for older SDK integrations.
+`neverd_byte_patch_ranges_snapshot_v1` provides just address/size metadata with
+its own frozen v1 layout and the same lifetime and file-offset ordering. It does
+not copy patch bytes. Release it with
+`neverd_byte_patch_range_snapshot_free_v1`, from the same loaded SDK.
+
 Native plugins are arbitrary in-process code. NeverD does not sandbox them,
 isolate crashes, or restrict their access to the session or host process. Load
 only plugins that you trust.

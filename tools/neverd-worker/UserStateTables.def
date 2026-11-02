@@ -28,5 +28,6 @@ NEVERD_USER_STATE_TABLE("operands", "operand", Operands, true)
 NEVERD_USER_STATE_TABLE("code_edits", "code", Code, true)
 NEVERD_USER_STATE_TABLE("types", "types", Types, true)
 NEVERD_USER_STATE_ORDERED("types")
+NEVERD_USER_STATE_TABLE("patches", "patch", Patches, true)
 #undef NEVERD_USER_STATE_TABLE
 #undef NEVERD_USER_STATE_ORDERED

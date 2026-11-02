@@ -111,8 +111,14 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
   auto AddTable = [&](llvm::StringRef Name, uint32_t Type, uint64_t VA,
                       uint64_t Size, uint64_t EntrySize,
                       uint32_t Link) -> uint32_t {
-    if (std::optional<uint64_t> Offset = FileOffset(Name, VA, Size))
+    if (std::optional<uint64_t> Offset = FileOffset(Name, VA, Size)) {
+      if (Type == SHT_STRTAB &&
+          (Size == 0 || ELF.base()[*Offset + Size - 1] != 0)) {
+        Skip(Name, "its string bytes are empty or not null terminated");
+        return 0;
+      }
       return Add(Name, Type, VA, *Offset, Size, EntrySize, Link);
+    }
     return 0;
   };
 

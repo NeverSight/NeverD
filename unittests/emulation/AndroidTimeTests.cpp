@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "HvfTestPolicy.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
@@ -10,10 +11,13 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <tuple>
+
 namespace neverd::emulation {
 namespace {
 constexpr uint64_t Buffer = 0x20000000;
-class AndroidTime : public testing::TestWithParam<const char *> {
+class AndroidTime : public testing::TestWithParam<
+                        std::tuple<const char *, ExecutionBackendKind>> {
 protected:
   std::filesystem::path Path;
   ProcessOptions Options;
@@ -22,16 +26,19 @@ protected:
     GTEST_SKIP() << "Clang and ld.lld Android fixtures unavailable";
 #else
     Path = std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
-           (std::string(GetParam()) + ".so");
-    Options.Backend = ExecutionBackendKind::Unicorn;
+           (std::string(std::get<0>(GetParam())) + ".so");
+    Options.Backend = std::get<1>(GetParam());
     ExecutionConfiguration C;
     C.Backend = Options.Backend;
     C.Architecture = GuestArchitecture::AArch64;
     C.Contract = ExecutionContract::CheckedUserAArch64;
     auto Probe = probeExecutionBackend(C);
     ASSERT_TRUE(bool(Probe)) << llvm::toString(Probe.takeError());
-    if (Probe->Availability != BackendAvailability::Available)
+    if (Probe->Availability != BackendAvailability::Available) {
+      if (requireHvf(Options.Backend, GuestArchitecture::AArch64))
+        FAIL() << Probe->Reason;
       GTEST_SKIP() << Probe->Reason;
+    }
     Options.Android.emplace();
     Options.Android->Initialize = false;
     Options.Android->Memory.push_back(
@@ -123,6 +130,48 @@ TEST_P(AndroidTime, KnownClockIDsKeepIndependentObservationsAndLow32ABI) {
     EXPECT_EQ(llvm::support::endian::read64le(B + 8), uint64_t(999999999 - ID));
   }
 }
+TEST_P(AndroidTime, RawMonotonicAdvancesAcrossNamedRawAndDynamicCalls) {
+  Options.LinuxTime->AdvanceOnIdle = true;
+  Options.LinuxTime->Clocks[4] = {4294967301, 999999996};
+  Options.Android->Libraries["libclock-model.so"] = {"clock_gettime"};
+  auto R = run("raw_clock_sequence", {Buffer});
+  ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+  EXPECT_EQ(R.ReturnValue, 0u);
+  ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+  const uint64_t Words[] = {
+      4294967301, 999999996, 4294967301, 999999996, 4294967301, 999999996,
+      123,        456789,    4294967303, 3,         4294967303, 3,
+      4294967303, 3,         124,        456796,    73};
+  auto Expected = std::vector<uint8_t>(8192, 0xa5);
+  for (size_t I = 0; I < std::size(Words); ++I)
+    llvm::support::endian::write64le(Expected.data() + I * 8, Words[I]);
+  EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+  unsigned Dynamic = 0;
+  for (const auto &Call : R.NativeCalls)
+    if (Call.Library == "libclock-model.so" && Call.Name == "clock_gettime") {
+      EXPECT_EQ(Call.Result, 0u);
+      ++Dynamic;
+    }
+  EXPECT_EQ(Dynamic, 2u);
+  ASSERT_EQ(R.Services.size(), 2u);
+  for (const auto &Service : R.Services) {
+    EXPECT_EQ(Service.Number, 113u);
+    EXPECT_EQ(Service.Arguments[0], 0x1234567800000004ULL);
+    EXPECT_EQ(Service.Result, 0u);
+  }
+}
+
+TEST_P(AndroidTime, MissingRawMonotonicNeverAliasesAnAdvancingMonotonicClock) {
+  Options.LinuxTime->AdvanceOnIdle = true;
+  for (unsigned Op : {2, 4}) {
+    auto R = call(Op, 4, Buffer + 1);
+    incomplete(R, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R.Diagnostic, "Linux clock 4 has no explicit linux_time input");
+    ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes, std::vector<uint8_t>(8192, 0xa5));
+  }
+}
+
 TEST_P(AndroidTime, MissingValuesNeverBorrowHostTimeOrDefaultToEpoch) {
   Options.LinuxTime.reset();
   for (auto Op : {0, 1, 2})
@@ -151,9 +200,9 @@ TEST_P(AndroidTime, InvalidClockPrecedesPointerAccessAndEncodedClocksStop) {
   incomplete(call(4, 0xfffffffdu, 1), ProcessStopReason::UnsupportedService);
   incomplete(call(5, 0, Buffer), ProcessStopReason::UnsupportedService);
 }
-TEST_P(AndroidTime, ReleasedGKIProcessCPUClocksShareRawAndBionicObservations) {
+TEST_P(AndroidTime, ProcessCPUClockContractsShareRawAndBionicObservations) {
   struct KernelCase {
-    AndroidGKIKernel Kernel;
+    std::optional<AndroidGKIKernel> Kernel;
     const char *Label;
   };
   constexpr KernelCase Kernels[] = {
@@ -162,11 +211,14 @@ TEST_P(AndroidTime, ReleasedGKIProcessCPUClocksShareRawAndBionicObservations) {
   {AndroidGKIKernel::Name, Label},
 #include "GKIReleaseCases.def"
 #undef NEVERD_GKI_RELEASE_CASE
+      {std::nullopt, "closed task catalogue without GKI"},
   };
   for (const auto &K : Kernels) {
     SCOPED_TRACE(K.Label);
     auto &Kernel = Options.LinuxKernel.emplace();
     Kernel.GKI = K.Kernel;
+    if (!K.Kernel)
+      Kernel.UnavailableSyscalls.insert(LinuxUnavailableSyscall::PidFDOpen);
     Kernel.Tasks.emplace().emplace(2000, LinuxKernelTask{true});
     Kernel.Tasks->emplace(3000, LinuxKernelTask{false});
     Options.LinuxTime->Clocks[2] = {3, 4};
@@ -224,6 +276,39 @@ TEST_P(AndroidTime, ReleasedGKIProcessCPUClocksKeepUnobservedBoundaries) {
   Kernel.Tasks.reset();
   for (unsigned Op : {2, 4})
     incomplete(call(Op, uint32_t(-16006), 1),
+               ProcessStopReason::UnsupportedService);
+}
+TEST_P(AndroidTime, EmptyTaskCatalogueAdmitsSelfAndObservesForeignAbsence) {
+  auto &Kernel = Options.LinuxKernel.emplace();
+  Kernel.Tasks.emplace();
+  Options.LinuxTime->Clocks[2] = {3, 4};
+  for (unsigned Op : {2, 4}) {
+    for (int32_t ID : {-6, -8006}) {
+      auto R = call(Op, uint32_t(ID), Buffer + 1);
+      returned(R, 0);
+      auto Expected = std::vector<uint8_t>(8192, 0xa5);
+      llvm::support::endian::write64le(Expected.data() + 1, 3);
+      llvm::support::endian::write64le(Expected.data() + 9, 4);
+      llvm::support::endian::write32le(Expected.data() + 256, 73);
+      EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+    }
+    auto R = call(Op, uint32_t(-16006), 1);
+    returned(R, Op == 2 ? UINT64_MAX : uint64_t(0) - 22, Op == 2 ? 22 : 73);
+    auto Expected = std::vector<uint8_t>(8192, 0xa5);
+    llvm::support::endian::write32le(Expected.data() + 256, Op == 2 ? 22 : 73);
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+    incomplete(call(Op, uint32_t(-29), 1),
+               ProcessStopReason::UnsupportedService);
+    incomplete(call(Op, uint32_t(-2), 1),
+               ProcessStopReason::UnsupportedService);
+  }
+  Kernel.Tasks->emplace(2000, LinuxKernelTask{true});
+  for (unsigned Op : {2, 4})
+    incomplete(call(Op, uint32_t(-16006), 1),
+               ProcessStopReason::UnsupportedService);
+  Kernel.Tasks.reset();
+  for (unsigned Op : {2, 4})
+    incomplete(call(Op, uint32_t(-6), 1),
                ProcessStopReason::UnsupportedService);
 }
 TEST_P(AndroidTime, UserSpaceTimeStoreAndKernelFaultHaveDistinctOutcomes) {
@@ -299,9 +384,14 @@ TEST_P(AndroidTime, NamedDynamicCallsKeepProviderIdentityAndLifetime) {
   incomplete(R, ProcessStopReason::UnsupportedService);
   EXPECT_NE(R.Diagnostic.find("inactive dynamic library"), std::string::npos);
 }
-INSTANTIATE_TEST_SUITE_P(OptimizationAndPacking, AndroidTime,
-                         testing::Values("time-O0-none", "time-O0-android",
-                                         "time-O0-relr", "time-O2-none",
-                                         "time-O2-android", "time-O2-relr"));
+INSTANTIATE_TEST_SUITE_P(
+    OptimizationPackingAndBackend, AndroidTime,
+    testing::Combine(testing::Values("time-O0-none", "time-O0-android",
+                                     "time-O0-relr", "time-O2-none",
+                                     "time-O2-android", "time-O2-relr"),
+                     testing::Values(ExecutionBackendKind::Unicorn,
+                                     ExecutionBackendKind::KVM,
+                                     ExecutionBackendKind::WHP,
+                                     ExecutionBackendKind::HVF)));
 } // namespace
 } // namespace neverd::emulation

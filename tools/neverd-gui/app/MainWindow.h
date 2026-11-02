@@ -10,6 +10,8 @@
 
 #include "neverd/support/IntegerLiterals.h"
 
+#include <QByteArray>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -24,6 +26,7 @@
 class QDialog;
 class QLabel;
 class QMenuBar;
+class QToolBar;
 class McpConnectionManager;
 class GuiSessionBroker;
 
@@ -33,9 +36,16 @@ namespace web {
 class PackageReviewDialog;
 }
 
+class AnalysisIndicator;
+class AnalysisProgress;
+class ComparisonDialog;
+class LineageDialog;
+class LoadProgressCard;
 class CodeView;
 class DisassemblyView;
 class ExtensionsView;
+class FindInViewDialog;
+class FocusSidebar;
 class LocalTypesView;
 class PathfinderView;
 class TypeLibrariesView;
@@ -72,8 +82,13 @@ public:
   void initializeLayout();
   /// Show the workbench, laying out its desktop first if nothing did yet.
   void showWorkbench();
+  /// Restore startup geometry without resuming a previous F11 session.
+  bool restoreWindowedGeometry(const QByteArray &geometry);
+  /// Keep full screen local to this run when saving the startup geometry.
+  QByteArray saveWindowedGeometry() const;
   /// Before the workbench shows, the quick start greets alone and the
-  /// workbench follows the user's choice; closing it quits.
+  /// workbench follows the user's choice; closing it quits. Returns immediately
+  /// so minimizing never leaves an application-modal session running.
   void showQuickStart();
   /// Greet an empty startup on the next event-loop turn, unless opening a
   /// file takes precedence. No window-exposure or engine-ready event is needed.
@@ -93,12 +108,15 @@ public:
   /// input, no such function, type or bookmark, or no such address.
   void openLink(const DeepLink &link,
                 std::function<void(const QString &error)> done = {});
+  /// Report a link failure from a native URL event or local navigation.
+  void reportLinkError(const QString &error);
   /// The link to open once the next file opens, as the command line asks.
   void openLinkAfterOpen(const DeepLink &link) { pendingLink_ = {link, {}}; }
   /// What other programs reach this window by.
   InstanceServer &instanceServer() { return instances_; }
   /// The active disassembly view; Alt+Enter can open independent views.
   DisassemblyView *disassembly() const { return disassembly_; }
+  const AddressSpace &addressSpace() const { return space_; }
   ActionRegistry &actions() { return actions_; }
   /// The window's menus, which sit in its title bar when it draws its own
   /// frame.  This hides QMainWindow::menuBar(), which would replace that
@@ -111,6 +129,8 @@ public:
 signals:
   /// The disassembly painted its first content after a file opened.
   void firstContentPainted();
+  /// The workbench accepted exit after save/worker checks and closed its panes.
+  void shutdownAccepted();
 
 protected:
   void closeEvent(QCloseEvent *event) override;
@@ -123,7 +143,9 @@ private:
   static KDDockWidgets::Core::DockWidget *createDock(const QString &name);
   Dock *dockNamed(const QString &name);
   void retranslateUi();
-  void openDock(Dock *dock, bool tabbed);
+  void
+  openDock(Dock *dock, bool tabbed,
+           KDDockWidgets::Location location = KDDockWidgets::Location_OnBottom);
   void showConnections();
 
   void buildMenusAndToolbars();
@@ -143,7 +165,28 @@ private:
   Dock *makeDock(const QString &id, const char *title, const QString &icon,
                  QWidget *content);
   Dock *chooserDock(ChooserKind kind);
-  CodeView *codeView(const QString &representation);
+  CodeView *codeView(const QString &representation, bool newWindow = false);
+  Dock *codeDock(const QString &id, const QString &representation);
+  /// Open code beside the active disassembly, including in a floating window.
+  void openCodeDock(Dock *dock);
+  void toggleFocusMode();
+  void leaveFocusMode();
+  void resetFocusSequence();
+  void connectFunctions(ChooserView *view);
+  void connectPatchActions();
+  void preparePatchMenu(QMenu *menu);
+  void patchAction(const QString &kind);
+  struct PatchOrigin {
+    QPointer<QWidget> view, surface;
+    QRect anchor;
+  };
+  PatchOrigin patchOrigin() const;
+  void showPatchEditor(Address address, const QString &kind,
+                       const QString &initial, const PatchOrigin &origin);
+  void exportBytePatches();
+  void rewriteFunction();
+  QJsonObject patchRequest(const QString &kind) const;
+  void connectPatchedBytes(ChooserView *view);
   /// Title the pseudocode and IR windows by what they show, lettered apart.
   void retitleCodeDocks();
 
@@ -154,6 +197,10 @@ private:
   /// The code window receiving commands, including its open context menu.
   CodeView *focusedCodeView() const;
   std::optional<Address> currentFunction() const;
+  /// The function a command on a whole function acts on: the one a focused
+  /// code window shows, which can differ from the disassembly's, else the
+  /// disassembly's.
+  std::optional<Address> commandFunction() const;
   /// What Shift+F9 and Ctrl+Shift+F9 put on a call path: the function a
   /// focused code window shows, a list window's row, else the disassembly's
   /// location, which the Pathfinder takes as its function or import.
@@ -182,7 +229,15 @@ private:
                         bool selectSourceAddress = false);
   void navigateCodeFunction(CodeView *view, Address address, Address function,
                             std::optional<Address> from);
-  void navigateHistory(bool forward);
+  /// Go \p steps stops back or forward, the code window in focus along.
+  void navigateHistory(bool forward, std::size_t steps = 1);
+  /// Give the toolbar's Back and Forward buttons the lists of their stops,
+  /// as IDA's do.
+  void addHistoryLists(QToolBar &toolbar);
+  /// List the stops Back, or Forward, reaches, nearest first, each as the
+  /// listing names its place, or as its line in the code in focus, and what
+  /// is there.
+  void showHistoryList(QMenu &menu, bool forward);
   void synchronize(Address address, QObject *source);
   /// The pseudocode and IR windows that are showing.
   QVector<CodeView *> visibleCodeViews() const;
@@ -192,6 +247,7 @@ private:
 
   // Commands.
   void openDialog();
+  void addAnalysisSection();
   /// The binary or database to open, asked in a dialog over \p parent;
   /// empty when the user cancels.
   QString askForFile(QWidget *parent) const;
@@ -247,19 +303,22 @@ private:
   /// would read, at the top of its context menu.
   void addNumberActions(QMenu &menu, CodeView *code);
   /// The Functions window's context menu for the row at \p position.
-  void functionsMenu(const QPoint &position);
+  void functionsMenu(ChooserView *view, const QPoint &position);
   void comment();
   void jumpAnywhere();
   void showCrossReferences(std::optional<Address> address, bool to);
   void showLocalReferences(CodeView *origin, const QJsonObject &target);
   void showReferencesDialog(std::optional<Address> address, bool to,
                             CodeView *origin);
+  enum class CodeOpen { Reuse, Generate, Switch };
   void showPseudocode(const QString &representation,
-                      bool selectAssemblyAddress = false);
+                      CodeOpen mode = CodeOpen::Reuse);
   void toggleGraph();
   void searchBinary(const QString &kind, bool again);
   void queryRegister(const QString &kind);
   void searchHighlight(bool forward);
+  /// Lock highlight: color \p slot, or the first free color.
+  void lockHighlight(std::optional<int> slot);
   void stepFunction(bool forward);
   void showCalculator();
   void showAbout();
@@ -268,15 +327,20 @@ private:
   /// length, applied to the listing and the Strings window.
   void showStringOptions();
   void stringOptionsDialog(const QJsonArray &encodings,
-                           const QJsonObject &current);
+                           const QJsonObject &current, QWidget *owner);
   void chooseFont();
   void chooseTheme();
   void showShortcuts();
+  /// Choose a jump target without changing the corresponding dock's state.
+  void chooseLocation(ChooserKind kind, ActionId command);
   QWidget *commandFocusWidget() const;
+  QWidget *commandWindow() const;
+  QWidget *commandView() const;
   /// Edit > Copy: the selection of the view holding the focus.
   void copySelection();
   void showCommandPalette();
   void exportCurrent(bool pseudocode);
+  void exportData();
   void loadPdb();
   /// File, Load file, DWARF file: the DWARF of the open ELF or Mach-O image
   /// from a separate file the user picks.
@@ -289,11 +353,12 @@ private:
   void loadHeader();
   /// Load the MAP \p facts describe, as map_inspect read it, once the user
   /// confirmed a MAP of another build; nothing when the session changed.
-  void confirmMap(const QJsonObject &facts, quint64 epoch);
+  void confirmMap(const QJsonObject &facts, quint64 epoch, QWidget *owner);
   void runCommand(const QString &command, const QString &argument);
   void saveDesktop();
   void restoreDesktop();
   void resetDesktop();
+  void closeTransientDocks(bool discardContents = true);
   void cycleWindows(bool forward);
   void fillPlaceholder(QMenu *menu, const QString &name);
   void contextMenu(const QPoint &globalPosition);
@@ -349,6 +414,8 @@ private:
   QJsonObject pathfinderState_;
   ChooserView *functions_ = nullptr;
   QHash<QString, Dock *> docks_;
+  /// Creation order keeps generated window names stable across focus changes.
+  QVector<Dock *> codeDocks_;
   QHash<int, ChooserView *> choosers_;
   QPointer<CodeView> pseudocode_;
   QPointer<CodeView> lastCodeView_;
@@ -359,13 +426,32 @@ private:
   bool restoreGraph_ = false;
   QJsonArray bookmarks_;
   QPointer<QDialog> quickStart_;
+  QPointer<FindInViewDialog> FindDialog;
+  QPointer<QDialog> LocalReferencesDialog;
   QPointer<web::PackageReviewDialog> packageReview_;
+  QPointer<ComparisonDialog> comparison_;
+  QPointer<LineageDialog> lineage_;
   bool startupQuickStartPending_ = false;
-  QLabel *analysisLabel_ = nullptr, *directionLabel_ = nullptr,
-         *diskLabel_ = nullptr, *fileLabel_ = nullptr;
+  /// Maximize the first workbench shown after accepting the startup greeting.
+  bool maximizeWorkbenchOnShow_ = false;
+  /// Opening and background analysis, in the status bar and, while a file
+  /// opens into the empty workbench, over its main view.
+  AnalysisProgress *progress_ = nullptr;
+  AnalysisIndicator *analysisIndicator_ = nullptr;
+  LoadProgressCard *loadCard_ = nullptr;
+  QLabel *directionLabel_ = nullptr, *diskLabel_ = nullptr,
+         *fileLabel_ = nullptr;
   QMenu *recentMenu_ = nullptr;
   QMenu *windowsMenu_ = nullptr;
   QString layoutPath_;
+  QByteArray focusLayout_;
+  QPointer<QWidget> focusReturn_;
+  QPointer<FocusSidebar> focusSidebar_;
+  QPointer<QToolBar> focusToolbar_;
+  QPointer<ChooserView> focusFunctions_;
+  QPointer<QWidget> focusSequenceView_;
+  QTimer focusSequenceTimer_;
+  int focusSequenceCount_ = 0;
   QString lastTextSearch_, lastByteSearch_, lastImmediateSearch_;
   quint64 searchSerial_ = 0, searchSubscription_ = 0;
   QString lastPaletteCommand_;
@@ -375,13 +461,18 @@ private:
   /// Code windows and the disassembly follow each other's cursor.
   bool synchronizeCode_ = true;
   bool hexActive_ = false;
+  /// An asynchronous listing jump following the byte cursor must not echo its
+  /// rounded instruction address back into Hex or discard its selection.
+  QPointer<DisassemblyView> hexFollower_;
   bool quitting_ = false;
   bool layoutInitialized_ = false;
   bool defaultSizesPending_ = false;
   QTimer statusTimer_;
+  QString diskStatusPath_;
+  QElapsedTimer diskStatusAge_;
   QStringList pendingCommands_;
   /// The code view asked for while a jump was still loading.
-  std::optional<std::pair<QString, bool>> pseudocodeAfterJump_;
+  std::optional<std::pair<QString, CodeOpen>> pseudocodeAfterJump_;
   QHash<QString, const char *> dockTitles_;
   static inline MainWindow *instance_ = nullptr;
 };

@@ -81,8 +81,11 @@ def run(worker):
                 elif invalid:
                     assert payload["entry_address"] == "0x0", payload
                     assert payload["import_count"] == 0, payload
-                    assert codes == {"pe.entry_out_of_range", "pe.import_descriptor_invalid"}, payload
-                    assert len(payload["warnings"]) == 2, payload
+                    # Invalid loader writes also prevent proving that PE
+                    # headers retain their original bytes in the image.
+                    assert codes == {"pe.entry_out_of_range", "pe.headers_unmapped",
+                                     "pe.import_descriptor_invalid"}, payload
+                    assert len(payload["warnings"]) == 3, payload
                 else:
                     assert not codes and not payload["warnings"], payload
                 assembly = client.call("disasm", {"address": hex(base + 0x1000), "limit": 4})

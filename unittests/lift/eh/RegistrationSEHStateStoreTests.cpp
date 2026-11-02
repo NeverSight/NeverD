@@ -9,7 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationSEHStateStore.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
 
 using namespace neverd;
 

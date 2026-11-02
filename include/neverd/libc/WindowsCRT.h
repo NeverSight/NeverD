@@ -24,6 +24,13 @@ namespace neverd::libc {
 /// inline printf and scanf of its headers call: `__stdio_common_vfprintf`
 /// implements vfprintf and, like it, takes a va_list rather than `...`.
 inline constexpr std::string_view kUCRTStdioPrefix = "stdio_common_";
+// The reviewed conio and OS-state forms also forward a va_list. These are
+// implementation-family prefixes, not a general rule for arbitrary _o_ names.
+inline constexpr auto kUCRTCommonPrefixes =
+    std::to_array<std::string_view>({kUCRTStdioPrefix, "conio_common_",
+                                     "o___stdio_common_", "o___conio_common_"});
+inline constexpr auto kUCRTCommonSuffixes =
+    std::to_array<std::string_view>({"_s", "_p"});
 
 /// The prototype of a routine a Windows C runtime DLL exports.
 constexpr LibCPrototype
@@ -114,6 +121,21 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
                         {"const wchar_t *", "wchar_t **", "int"}, "stddef.h"),
     windowsCRTPrototype("_wcstoui64", "uint64_t",
                         {"const wchar_t *", "wchar_t **", "int"}, "stddef.h"),
+    // Bounds-checked wide strings (corecrt_wstring.h / sec_api/wchar_s.h).
+    // errno_t is a 32-bit int; rsize_t is the target's size_t.
+    windowsCRTPrototype("wcscat_s", "int",
+                        {"wchar_t *", "size_t", "const wchar_t *"}, "wchar.h"),
+    windowsCRTPrototype("wcscpy_s", "int",
+                        {"wchar_t *", "size_t", "const wchar_t *"}, "wchar.h"),
+    windowsCRTPrototype("wcsncat_s", "int",
+                        {"wchar_t *", "size_t", "const wchar_t *", "size_t"},
+                        "wchar.h"),
+    windowsCRTPrototype("wcsncpy_s", "int",
+                        {"wchar_t *", "size_t", "const wchar_t *", "size_t"},
+                        "wchar.h"),
+    // excpt.h: EXCEPTION_DISPOSITION and four exception-context pointers.
+    windowsCRTPrototype("__C_specific_handler", "int",
+                        {"void *", "void *", "void *", "void *"}),
     // Universal CRT start-up and exit.
     windowsCRTPrototype("_set_app_type", "void", {"int"}),
     windowsCRTPrototype("_configure_narrow_argv", "int", {"int"}),

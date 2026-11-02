@@ -1,6 +1,6 @@
 **语言**: [English](../../CONTRIBUTING.md) | [简体中文](CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: 0e93112bfc87bdf7cfa9e280f8b7a9155214ae36187f32d8dd473c6f17fd92d3 -->
+<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
 
 # 为 NeverD 做贡献
 
@@ -134,8 +134,14 @@ fork，兼容性修复在各默认分支上；构建复制当前源码许可证�
 `NEVERD_ENABLE_TBB` 默认均为 `ON`，可分别设为 `OFF` 进行比较。oneTBB 在批次间保留
 worker，检查其 8 MiB 栈，绝不构建或加载 `tbbmalloc` 及其分配器代理。大栈调用方复用可用
 栈空间，小栈调用方获得原生协调线程。首次使用后 fork 或动态卸载 SDK 的宿主必须使用原生
-线程基线 `NEVERD_ENABLE_TBB=OFF`，保留调度器不支持这些生命周期；它不会终结宿主共享的
-TBB 调度器。启用时须一并分发运行时 DLL/共享库。
+线程基线 `NEVERD_ENABLE_TBB=OFF`，保留调度器不支持这些生命周期。oneTBB 静态链接到共享
+核心中，其符号仅供该核心内部使用。CLI 组件调用与 GUI worker 请求使用同一个调度器；
+不分发 TBB DLL/共享库。链接 `neverd_shared` 的目标会自动选择共享调度器。
+通过其他目标访问 SDK、同时链接组件归档库的客户端，必须对最终目标使用
+`neverd_use_shared_task_scheduler`。独立的组件工具保留各自的运行时。
+这一限定范围的集成避免了同一进程中存在多个 NeverD 调度器；上游仍将
+[oneTBB 静态构建](https://uxlfoundation.github.io/oneTBB/main/intro/static_linking.html)
+列为不受支持，并不建议将其用于一般用途。
 
 原生测试、关闭选项比较及调度器兼容范围见[加速验证](../testing.md#acceleration-libraries)。
 
@@ -156,6 +162,11 @@ CMake 会下载仓库配置的发布包，校验 SHA-256，并在后续构建中
 用户缓存。预编译通道仅支持 macOS arm64；Intel Mac 和通用二进制构建必须
 使用默认的本地 LLVM 构建。`NEVERD_LLVM_PREBUILT_TAG`、镜像 URL、缓存目录
 和显式校验和等高级覆盖项记录在 `cmake/NeverDLLVMPrebuilt.cmake` 中。
+
+LLVM 修复应在 [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project) 中维护。
+先将修复提交并合并到 fork，再更新 NeverD 的 LLVM 子模块版本。
+集成构建直接编译该源码，不要在 NeverD 中添加 LLVM patch 文件或构建目录源码覆盖层。
+预编译包需要从修正后的 fork 重新构建，才能验证相同的行为。
 
 <!-- i18n-section: workflow -->
 ## 分支与拉取请求流程

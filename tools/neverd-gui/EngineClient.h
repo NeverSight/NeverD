@@ -13,6 +13,7 @@ public slots:
   void start(const QString &program, quint64 epoch);
   void send(const QJsonObject &request);
   void stop();
+  void shutdown();
 signals:
   void message(const QJsonObject &message, quint64 epoch);
   void diagnostic(const QString &message, quint64 epoch);

@@ -1,4 +1,4 @@
-//===- ExecutionLimits.h - Native transport timing policy ----------------===//
+//===- ExecutionLimits.h - Native transport policy -----------------------===//
 //
 // NeverD Decompiler
 //

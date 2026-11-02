@@ -19,6 +19,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/pass/ir/simplify/common/SymSimplifyDetail.h"
 #include "SemanticConvergence.h"
 #include "gtest/gtest.h"
 
@@ -345,6 +346,41 @@ TEST(SymSimplifyGuard, RewritesMixedBooleanArithmeticWhenUnstamped) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, GeneratedVariableShiftsRequireCompleteValueBounds) {
+  namespace sym = neverd::symbolic;
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    const bool Supported = Width <= sym::SymKnownBits::MaxWidth;
+    sym::SymContext Ctx;
+    Translator Xlat(Ctx);
+    auto X = Ctx.mkVar("x", Width);
+    auto Count = Ctx.mkVar("count", Width);
+    for (auto Op : {sym::SymOp::Shl, sym::SymOp::LShr, sym::SymOp::AShr}) {
+      auto Shift = [&](sym::SymRef N) {
+        return Op == sym::SymOp::Shl    ? Ctx.mkShl(X, N)
+               : Op == sym::SymOp::LShr ? Ctx.mkLShr(X, N)
+                                        : Ctx.mkAShr(X, N);
+      };
+      auto Bounded = Ctx.mkAnd(Count, Ctx.mkConst(Width, Width - 1));
+      EXPECT_EQ(Xlat.hasCompatibleResultSemantics(Shift(Bounded)), Supported);
+      EXPECT_FALSE(Xlat.hasCompatibleResultSemantics(Shift(Count)));
+      EXPECT_FALSE(Xlat.hasCompatibleResultSemantics(
+          Shift(Ctx.mkAnd(Count, Ctx.mkConst(Width, Width)))));
+      EXPECT_FALSE(Xlat.hasCompatibleResultSemantics(
+          Shift(Ctx.mkAdd(Bounded, Ctx.mkConst(Width, 1)))));
+      for (uint64_t I = 0; I < 2 * Width; ++I)
+        EXPECT_LT(
+            Ctx.eval(Bounded, {llvm::APInt(Width, 0), llvm::APInt(Width, I)})
+                .getLimitedValue(),
+            Width);
+    }
+    auto Small = Ctx.mkVar("small", 8);
+    auto Extended = Ctx.mkZExt(Ctx.mkAnd(Small, Ctx.mkConst(8, 7)), Width);
+    EXPECT_EQ(Xlat.hasCompatibleResultSemantics(Ctx.mkLShr(X, Extended)),
+              Supported);
+  }
+}
+
 TEST(SymSimplifyGuard, RewritesCarrySaveAdditionWithAConstantLeftShift) {
   llvm::LLVMContext C;
   llvm::Module M("m", C);
@@ -627,6 +663,89 @@ TEST(SymSimplifyGuard, NestedMaskedBoundsPreserveHiddenPoisonAndWideDomains) {
       EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
     }
   }
+}
+
+TEST(SymSimplifyGuard, MaskedMultiplyAdmissionMatchesExhaustiveByteDomains) {
+  llvm::LLVMContext C;
+  llvm::Module M("masked_mul_domains", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  for (unsigned A : {1u, 6u, 15u, 0x7fu, 0x80u, 0x93u, 0xffu})
+    for (unsigned B : {1u, 6u, 15u, 0x80u, 0xffu})
+      for (unsigned Flags : {1u, 2u, 3u}) {
+        SCOPED_TRACE(::testing::Message() << A << ',' << B << ',' << Flags);
+        auto *F =
+            llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty, Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+        llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+        auto make = [&] {
+          return IR.CreateMul(IR.CreateAnd(F->getArg(0), IR.getInt8(A)),
+                              IR.CreateAnd(F->getArg(1), IR.getInt8(B)), "",
+                              Flags & 1, Flags & 2);
+        };
+        auto *Root = IR.CreateXor(make(), make());
+        IR.CreateRet(Root);
+        bool Defined = true;
+        for (unsigned X = 0; X < 256; ++X)
+          for (unsigned Y = 0; Y < 256; ++Y) {
+            const unsigned L = X & A, R = Y & B;
+            const int SL = L < 128 ? int(L) : int(L) - 256;
+            const int SR = R < 128 ? int(R) : int(R) - 256;
+            Defined &= (!(Flags & 1) || L * R < 256) &&
+                       (!(Flags & 2) || (SL * SR >= -128 && SL * SR <= 127));
+          }
+        auto Result = SymSimplifyPass::constantValueOf(Root);
+        EXPECT_EQ(Result.has_value(), Defined) << printFunction(*F);
+        if (Result)
+          EXPECT_TRUE(Result->isZero());
+      }
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(SymSimplifyGuard, MaskedMultiplyPreservesPoisonAndBoundedAdmission) {
+  for (unsigned Width : {8u, 16u, 32u, 64u, 128u, 257u, 512u, 513u})
+    for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Mode);
+      llvm::LLVMContext C;
+      llvm::Module M("masked_mul_bounds", C);
+      auto *Ty = llvm::IntegerType::get(C, Width);
+      auto *F =
+          llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty, Ty}, false),
+                                 llvm::Function::ExternalLinkage, "f", &M);
+      llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+      auto make = [&] {
+        llvm::Value *X = F->getArg(0);
+        if (Mode == 1)
+          X = IR.CreateNSWAdd(X, llvm::ConstantInt::get(Ty, 1));
+        auto mask = [&](llvm::Value *V, unsigned Bits) {
+          return IR.CreateAnd(V, llvm::ConstantInt::get(Ty, Bits));
+        };
+        llvm::Value *L = mask(X, 3);
+        if (Mode == 2)
+          for (unsigned I = 0; I < 32; ++I)
+            L = IR.CreateAdd(L, mask(X, 1));
+        else
+          L = IR.CreateAdd(L, mask(X, 3));
+        auto *Product = IR.CreateMul(L, mask(F->getArg(1), 7), "", true, true);
+        if (Mode == 3)
+          llvm::cast<llvm::Instruction>(Product)->setMetadata(
+              llvm::LLVMContext::MD_range,
+              llvm::MDNode::get(C, {llvm::ConstantAsMetadata::get(
+                                        llvm::ConstantInt::get(Ty, 0)),
+                                    llvm::ConstantAsMetadata::get(
+                                        llvm::ConstantInt::get(Ty, 1))}));
+        return Product;
+      };
+      auto *Root = IR.CreateXor(make(), make());
+      IR.CreateRet(Root);
+      auto Result = SymSimplifyPass::constantValueOf(Root);
+      EXPECT_EQ(Result.has_value(), Mode == 0 && Width <= 512);
+      if (Result)
+        EXPECT_TRUE(Result->isZero());
+      // Range metadata on mul is deliberately malformed; admission must
+      // refuse it before the symbolic result could erase that annotation.
+      if (Mode != 3)
+        EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+    }
 }
 
 TEST(SymSimplifyGuard, MaskedDisjointOrMatchesExhaustiveByteDomains) {
@@ -2407,48 +2526,48 @@ TEST(SymSimplifyGuard, DeepO0ForwardsSemanticOptionsAndCountsDefinitionsOnce) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
-TEST(SymSimplifyGuard, DeepRepairsFrameRelativeIntToPtrAfterO2) {
-  llvm::LLVMContext C;
-  llvm::Module M("m", C);
-  auto *I32 = llvm::Type::getInt32Ty(C);
-  auto *I64 = llvm::Type::getInt64Ty(C);
-  auto *Ptr = llvm::PointerType::getUnqual(C);
-  auto *ObserveTy = llvm::FunctionType::get(llvm::Type::getVoidTy(C), {I64},
-                                            /*isVarArg=*/false);
-  llvm::FunctionCallee Observe = M.getOrInsertFunction("observe_sp", ObserveTy);
-  auto *FT = llvm::FunctionType::get(llvm::Type::getVoidTy(C), {Ptr},
-                                     /*isVarArg=*/false);
-  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage,
-                                   "frame_relative", &M);
-  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, kFrameSetupBlock, F));
-  llvm::Value *FrameBase = B.CreatePtrToInt(F->getArg(0), I64, kRspInitValue);
-  B.CreateCall(Observe, {FrameBase});
-  llvm::Constant *NegativeAddress = llvm::ConstantExpr::getIntToPtr(
-      llvm::ConstantInt::getSigned(I64, -16), Ptr);
-  B.CreateStore(llvm::ConstantInt::get(I32, 7), NegativeAddress,
-                /*isVolatile=*/true);
-  B.CreateRetVoid();
-
-  Pipeline::OptimizationOptions Options;
-  Options.LLVMLevel = llvm::OptimizationLevel::O2;
-  OptimizationResult Result = Pipeline::optimizeModule(M, Options);
-
-  EXPECT_NE(Result.Stop, OptimizationStopReason::InputInvalid);
-  EXPECT_NE(Result.Stop, OptimizationStopReason::VerificationFailed);
-  llvm::Function *Optimized = M.getFunction("frame_relative");
-  ASSERT_NE(Optimized, nullptr);
-  const llvm::StoreInst *StackStore = nullptr;
-  for (const llvm::Instruction &I : llvm::instructions(*Optimized))
-    if (const auto *Candidate = llvm::dyn_cast<llvm::StoreInst>(&I))
-      if (Candidate->isVolatile())
-        StackStore = Candidate;
-  ASSERT_NE(StackStore, nullptr) << printFunction(*Optimized);
-  const auto *Fixed =
-      llvm::dyn_cast<llvm::IntToPtrInst>(StackStore->getPointerOperand());
-  ASSERT_NE(Fixed, nullptr) << printFunction(*Optimized);
-  EXPECT_EQ(Fixed->getName(), "stackptr");
-  EXPECT_TRUE(llvm::isa<llvm::BinaryOperator>(Fixed->getOperand(0)));
-  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+TEST(SymSimplifyGuard, DeepKeepsAbsoluteAddressesDistinctFromFrameOffsets) {
+  for (bool BeforeFrame : {false, true}) {
+    for (unsigned Bits : {32u, 64u}) {
+      llvm::LLVMContext C;
+      llvm::Module M("absolute_address", C);
+      M.setDataLayout(Bits == 32 ? "e-p:32:32" : "e-p:64:64");
+      auto *Integer = llvm::IntegerType::get(C, Bits);
+      auto *Ptr = llvm::PointerType::getUnqual(C);
+      auto Observe = M.getOrInsertFunction(
+          "observe_sp",
+          llvm::FunctionType::get(llvm::Type::getVoidTy(C), {Integer}, false));
+      auto *F = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::Type::getVoidTy(C), {Ptr}, false),
+          llvm::Function::ExternalLinkage, "absolute_store", &M);
+      llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, kFrameSetupBlock, F));
+      auto *Address = llvm::ConstantExpr::getIntToPtr(
+          llvm::ConstantInt::getSigned(Integer, -16), Ptr);
+      auto Store = [&] { B.CreateStore(B.getInt32(7), Address, true); };
+      if (BeforeFrame)
+        Store();
+      auto *FrameBase = B.CreatePtrToInt(F->getArg(0), Integer, kRspInitValue);
+      B.CreateCall(Observe, {FrameBase});
+      if (!BeforeFrame)
+        Store();
+      B.CreateRetVoid();
+      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+      Pipeline::OptimizationOptions Options;
+      Options.LLVMLevel = llvm::OptimizationLevel::O2;
+      const auto Result = Pipeline::optimizeModule(M, Options);
+      ASSERT_NE(Result.Stop, OptimizationStopReason::VerificationFailed);
+      ASSERT_NE(Result.Stop, OptimizationStopReason::InputInvalid);
+      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+      unsigned Stores = 0;
+      for (const auto &I : llvm::instructions(*M.getFunction("absolute_store")))
+        if (const auto *Write = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+          ++Stores;
+          EXPECT_TRUE(Write->isVolatile());
+          EXPECT_EQ(Write->getPointerOperand(), Address);
+        }
+      EXPECT_EQ(Stores, 1u);
+    }
+  }
 }
 
 TEST(SymSimplifyGuard, VerifierRejectionIsTransactional) {

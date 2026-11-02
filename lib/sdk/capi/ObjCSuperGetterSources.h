@@ -17,6 +17,8 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <iterator>
+
 namespace neverd::sdk {
 
 struct ObjCSuperGetterContract {
@@ -115,7 +117,8 @@ inline const LowFunc *completeLow(const PipelineResult &Result, va_t Entry,
   std::set<va_t> Addresses;
   for (const auto &Operation : Block.Ops) {
     if (Operation.Addr < Entry || Operation.Addr - Entry >= Instructions * 4 ||
-        (Operation.Addr - Entry) % 4 || Operation.NumInputs > 6)
+        (Operation.Addr - Entry) % 4 ||
+        Operation.NumInputs > std::size(Operation.Inputs))
       return nullptr;
     Addresses.insert(Operation.Addr);
   }

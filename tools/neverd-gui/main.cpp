@@ -8,6 +8,7 @@
 #include "app/InteractionMetrics.h"
 #include "app/Language.h"
 #include "app/LinkDispatch.h"
+#include "app/LinkOpener.h"
 #include "app/ListingView.h"
 #include "app/MainWindow.h"
 #include "app/Session.h"
@@ -20,15 +21,16 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
-#include <QFileOpenEvent>
 #include <QScreen>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
+#include <algorithm>
 #include <memory>
 
 #ifdef NEVERD_GUI_TEST_PROBES
@@ -46,7 +48,7 @@ constexpr int SmokeDelayMs = 1500;
 
 void restoreGeometry(MainWindow &window) {
   const auto geometry = QSettings().value(GeometryKey).toByteArray();
-  if (!geometry.isEmpty() && window.restoreGeometry(geometry))
+  if (!geometry.isEmpty() && window.restoreWindowedGeometry(geometry))
     return;
   const QRect available = window.screen()->availableGeometry();
   const QSize size(
@@ -62,58 +64,7 @@ void restoreGeometry(MainWindow &window) {
   window.move(available.center() - QPoint(size.width() / 2, size.height() / 2));
 }
 
-/// macOS hands a neverd:// link clicked anywhere to the running workbench
-/// as a file to open (the bundle's CFBundleURLTypes).
-class LinkOpener final : public QObject {
-public:
-  LinkOpener(MainWindow &window, Session &session)
-      : window_(window), session_(session) {}
-
-protected:
-  bool eventFilter(QObject *object, QEvent *event) override {
-    if (event->type() != QEvent::FileOpen)
-      return QObject::eventFilter(object, event);
-    const QString text = static_cast<QFileOpenEvent *>(event)->url().toString();
-    if (!looksLikeDeepLink(text))
-      return QObject::eventFilter(object, event);
-    const ParsedLink parsed = parseDeepLink(text);
-    if (!parsed.link)
-      return true;
-    // Without a program, the file opened before that the link names.
-    if (!session_.loaded())
-      if (const auto file = recentFileFor(*parsed.link)) {
-        window_.openLinkAfterOpen(*parsed.link);
-        window_.openFile(*file);
-        return true;
-      }
-    window_.openLink(*parsed.link);
-    return true;
-  }
-
-private:
-  MainWindow &window_;
-  Session &session_;
-};
-} // namespace
-
-int main(int argc, char **argv) {
-  QElapsedTimer startupClock;
-  startupClock.start();
-  QApplication::setOrganizationName(QStringLiteral("NeverSight"));
-  QApplication::setOrganizationDomain(QStringLiteral("neversight.dev"));
-  QApplication::setApplicationName(QStringLiteral("NeverD"));
-  QApplication::setApplicationVersion(QStringLiteral("3389.0.1"));
-  gnome::prepareModalDialogs();
-  WindowFrame::prepareNativeWindows();
-  QApplication app(argc, argv);
-  const auto applicationCreatedMs = startupClock.nsecsElapsed() / 1.0e6;
-  gnome::detachModalDialogs(app);
-  WindowFrame::frameDialogs(app);
-  acceptDialogsOnReturn(app);
-  configureDocking();
-  const auto dockingFrontendMs = startupClock.nsecsElapsed() / 1.0e6;
-
-  QCommandLineParser parser;
+void configureOptions(QCommandLineParser &parser) {
   parser.setApplicationDescription(
       QStringLiteral("NeverD interactive disassembler and decompiler"));
   parser.addHelpOption();
@@ -155,8 +106,9 @@ int main(int argc, char **argv) {
                            kDefaultStartupBenchmarkTimeoutMilliseconds)});
   parser.addOption(
       {QStringLiteral("interaction-benchmark"),
-       QStringLiteral("Scroll, jump, open graphs and pseudocode in the opened "
-                      "file, write their latencies as JSON and exit"),
+       QStringLiteral("Scroll, jump, follow links, open graphs and pseudocode "
+                      "in the opened file, write their latencies as JSON "
+                      "and exit"),
        QStringLiteral("path")});
   parser.addOption(
       {QStringLiteral("interaction-benchmark-timeout"),
@@ -192,6 +144,52 @@ int main(int argc, char **argv) {
                                    "function named main and exit"),
                     QStringLiteral("binary")});
 #endif
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+  QElapsedTimer startupClock;
+  startupClock.start();
+  QApplication::setOrganizationName(QStringLiteral("NeverSight"));
+  QApplication::setOrganizationDomain(QStringLiteral("neversight.dev"));
+  QApplication::setApplicationName(QStringLiteral("NeverD"));
+  QApplication::setApplicationVersion(QStringLiteral("3389.0.1"));
+  QCommandLineParser parser;
+  configureOptions(parser);
+  QStringList arguments;
+  for (int index = 0; index < argc; ++index)
+    arguments << QString::fromLocal8Bit(argv[index]);
+  const bool parsed = parser.parse(arguments);
+  const auto positional = parser.positionalArguments();
+  const bool positionalLink =
+      std::any_of(positional.begin(), positional.end(), looksLikeDeepLink);
+  const bool headless =
+      parsed && (parser.isSet(QStringLiteral("list-instances")) ||
+                 parser.isSet(QStringLiteral("register-link-handler")) ||
+                 parser.isSet(QStringLiteral("unregister-link-handler")) ||
+                 parser.isSet(QStringLiteral("help")) ||
+                 parser.isSet(QStringLiteral("version")) ||
+                 (parser.isSet(QStringLiteral("no-launch")) &&
+                  (parser.isSet(QStringLiteral("link")) || positionalLink)));
+  std::unique_ptr<QCoreApplication> application;
+  if (headless) {
+    application = std::make_unique<QCoreApplication>(argc, argv);
+  } else {
+    gnome::prepareModalDialogs();
+    WindowFrame::prepareNativeWindows();
+    application = std::make_unique<QApplication>(argc, argv);
+  }
+  QCoreApplication &app = *application;
+  const auto applicationCreatedMs = startupClock.nsecsElapsed() / 1.0e6;
+  if (auto *gui = qobject_cast<QApplication *>(&app)) {
+    gnome::detachModalDialogs(*gui);
+    WindowFrame::frameDialogs(*gui);
+    acceptDialogsOnReturn(*gui);
+    configureDocking();
+  }
+  const auto dockingFrontendMs = startupClock.nsecsElapsed() / 1.0e6;
+
   parser.process(app);
   const auto optionsParsedMs = startupClock.nsecsElapsed() / 1.0e6;
 
@@ -246,6 +244,10 @@ int main(int argc, char **argv) {
   }
   QStringList files = parser.positionalArguments();
   QString linkText = parser.value(QStringLiteral("link"));
+  if (parser.isSet(QStringLiteral("link")) && linkText.isEmpty()) {
+    errors << parseDeepLink(linkText).error << '\n';
+    return 2;
+  }
   for (qsizetype index = 0; linkText.isEmpty() && index < files.size(); ++index)
     if (looksLikeDeepLink(files[index]))
       linkText = files.takeAt(index);
@@ -358,8 +360,12 @@ int main(int argc, char **argv) {
   if (!greet && !asksFirst)
     window.showWorkbench();
   QObject::connect(&app, &QApplication::aboutToQuit, &window, [&window] {
-    QSettings().setValue(GeometryKey, window.saveGeometry());
+    QSettings().setValue(GeometryKey, window.saveWindowedGeometry());
   });
+  // Cocoa can close the window while already handling an application quit.
+  // Do not reenter native termination from inside that close event.
+  QObject::connect(&window, &MainWindow::shutdownAccepted, &app,
+                   &QCoreApplication::quit, Qt::QueuedConnection);
 
 #ifdef NEVERD_GUI_TEST_PROBES
   if (probe) {

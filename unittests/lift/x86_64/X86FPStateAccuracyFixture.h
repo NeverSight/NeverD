@@ -15,14 +15,14 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/codegen/CodeGen.h"
-#include "neverd/backend/llvm/LLVMX86FPStateAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X86FPState.h"
+#include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -30,6 +30,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
@@ -121,6 +122,12 @@ protected:
     write(Path, Text);
   }
 
+  void retainFile(llvm::StringRef Name, llvm::StringRef Source) {
+    const char *Root = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR");
+    if (Root && *Root)
+      retain(Name, contents(Source));
+  }
+
   CommandResult command(llvm::StringRef Program,
                         const std::vector<std::string> &Arguments) {
     const auto Stdout = file("stdout-" + std::to_string(Files.size()));
@@ -135,6 +142,21 @@ protected:
                                                  Redirects, 30, 0, &Error);
     const auto Out = contents(Stdout);
     const auto Diagnostics = Error + contents(Stderr);
+    if (const char *Root = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR");
+        Root && *Root) {
+      llvm::json::Array Invocation;
+      Invocation.push_back(Program.str());
+      for (const auto &Arg : Arguments)
+        Invocation.push_back(Arg);
+      std::string Record;
+      llvm::raw_string_ostream Stream(Record);
+      Stream << llvm::json::Value(
+          llvm::json::Object{{"argv", std::move(Invocation)},
+                             {"status", Status},
+                             {"stdout", Out},
+                             {"stderr", Diagnostics}});
+      retain("command-" + std::to_string(Files.size()) + ".json", Record);
+    }
     if (Status != 0) {
       std::string Invocation = Program.str();
       for (const auto &Arg : Arguments)
@@ -369,6 +391,7 @@ int main(void) {
     retain("native.s", NativeText);
     auto Built = command(Compiler, {"-c", Original, "-o", OriginalObject});
     ASSERT_EQ(Built.Status, 0) << Built.Error;
+    retainFile("native.o", OriginalObject);
     if (Fault) {
       const auto ReferenceDriver = file("fault-reference.c");
       const auto Reference = file("fault-reference.exe");
@@ -381,6 +404,7 @@ int main(void) {
     }
     const auto Harness = file("driver.c");
     write(Harness, comparisonDriver(IsDouble, true, Fault));
+    retainFile("driver.c", Harness);
     for (bool NoOpt : {false, true}) {
       SCOPED_TRACE(NoOpt ? "NoOpt" : "default");
       auto Image = image(Bytes);
@@ -407,10 +431,12 @@ int main(void) {
       write(LiftedObject, llvm::StringRef(reinterpret_cast<const char *>(
                                               Object.ObjectData.data()),
                                           Object.ObjectData.size()));
+      retainFile(NoOpt ? "noopt.o" : "default.o", LiftedObject);
       const auto Executable = file(NoOpt ? "noopt.exe" : "default.exe");
       Built = command(Compiler, {"-O2", OriginalObject, LiftedObject, Harness,
                                  "-o", Executable});
       ASSERT_EQ(Built.Status, 0) << Built.Error;
+      retainFile(NoOpt ? "noopt.exe" : "default.exe", Executable);
       auto Actual = command(Executable, {});
       retain(NoOpt ? "noopt-native.txt" : "default-native.txt",
              Actual.Out + Actual.Error);
@@ -458,6 +484,8 @@ int main(void) {
              Source);
       const auto Standalone = file(LLVM ? "llvm-unit.c" : "high-unit.c");
       write(Standalone, Source);
+      const std::string ArtifactStem =
+          std::string(LLVM ? "llvm" : "high") + (SourceNoOpt ? "-noopt" : "");
       Built =
           command(Compiler, {"-O2", "-c", Standalone, "-o", file("unit.o")});
       ASSERT_EQ(Built.Status, 0) << Built.Error << Source;
@@ -483,6 +511,7 @@ int main(void) {
         CDriver.replace(Position, 28, "isa_probe((void *)actual)");
       }
       write(C, Source + CDriver);
+      retainFile(ArtifactStem + "-program.c", C);
       retain(std::string(LLVM ? "llvm" : "high") +
                  (SourceNoOpt ? "-noopt-driver.c" : "-driver.c"),
              CDriver);
@@ -493,9 +522,9 @@ int main(void) {
         Built = command(Compiler,
                         {Optimization, OriginalObject, C, "-o", Executable});
         ASSERT_EQ(Built.Status, 0) << Built.Error << Source;
+        retainFile(ArtifactStem + Optimization + ".exe", Executable);
         auto Actual = command(Executable, {});
-        retain(std::string(LLVM ? "llvm" : "high") + Optimization + ".txt",
-               Actual.Out + Actual.Error);
+        retain(ArtifactStem + Optimization + ".txt", Actual.Out + Actual.Error);
         EXPECT_EQ(Actual.Status, 0) << Actual.Out << Actual.Error;
       }
     }

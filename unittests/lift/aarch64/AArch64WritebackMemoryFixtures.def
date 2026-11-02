@@ -1,0 +1,220 @@
+//===- AArch64WritebackMemoryFixtures.def - Writeback oracles --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// LLVM MC 22.1.6 independently assembled x10/x9 and x17/x16 words.
+/// Every family exercises both modes and signed imm9 boundary values.
+//===----------------------------------------------------------------------===//
+
+#ifndef WRITEBACK_CASE
+#define WRITEBACK_CASE(Word, Scratch, Access, Result, Offset, Pre)
+#endif
+#ifndef WRITEBACK_VALUE
+#define WRITEBACK_VALUE(Type, Name, Value)
+#endif
+#ifndef WRITEBACK_TEXT
+#define WRITEBACK_TEXT(Name, Text)
+#endif
+
+WRITEBACK_CASE(0x3810052aU, 0x38100611U, 1, 0, -256, false)
+WRITEBACK_CASE(0x381ff52aU, 0x381ff611U, 1, 0, -1, false)
+WRITEBACK_CASE(0x3800052aU, 0x38000611U, 1, 0, 0, false)
+WRITEBACK_CASE(0x3800152aU, 0x38001611U, 1, 0, 1, false)
+WRITEBACK_CASE(0x380ff52aU, 0x380ff611U, 1, 0, 255, false)
+WRITEBACK_CASE(0x38100d2aU, 0x38100e11U, 1, 0, -256, true)
+WRITEBACK_CASE(0x381ffd2aU, 0x381ffe11U, 1, 0, -1, true)
+WRITEBACK_CASE(0x38000d2aU, 0x38000e11U, 1, 0, 0, true)
+WRITEBACK_CASE(0x38001d2aU, 0x38001e11U, 1, 0, 1, true)
+WRITEBACK_CASE(0x380ffd2aU, 0x380ffe11U, 1, 0, 255, true)
+WRITEBACK_CASE(0x3850052aU, 0x38500611U, 1, 4, -256, false)
+WRITEBACK_CASE(0x385ff52aU, 0x385ff611U, 1, 4, -1, false)
+WRITEBACK_CASE(0x3840052aU, 0x38400611U, 1, 4, 0, false)
+WRITEBACK_CASE(0x3840152aU, 0x38401611U, 1, 4, 1, false)
+WRITEBACK_CASE(0x384ff52aU, 0x384ff611U, 1, 4, 255, false)
+WRITEBACK_CASE(0x38500d2aU, 0x38500e11U, 1, 4, -256, true)
+WRITEBACK_CASE(0x385ffd2aU, 0x385ffe11U, 1, 4, -1, true)
+WRITEBACK_CASE(0x38400d2aU, 0x38400e11U, 1, 4, 0, true)
+WRITEBACK_CASE(0x38401d2aU, 0x38401e11U, 1, 4, 1, true)
+WRITEBACK_CASE(0x384ffd2aU, 0x384ffe11U, 1, 4, 255, true)
+WRITEBACK_CASE(0x3890052aU, 0x38900611U, 1, 8, -256, false)
+WRITEBACK_CASE(0x389ff52aU, 0x389ff611U, 1, 8, -1, false)
+WRITEBACK_CASE(0x3880052aU, 0x38800611U, 1, 8, 0, false)
+WRITEBACK_CASE(0x3880152aU, 0x38801611U, 1, 8, 1, false)
+WRITEBACK_CASE(0x388ff52aU, 0x388ff611U, 1, 8, 255, false)
+WRITEBACK_CASE(0x38900d2aU, 0x38900e11U, 1, 8, -256, true)
+WRITEBACK_CASE(0x389ffd2aU, 0x389ffe11U, 1, 8, -1, true)
+WRITEBACK_CASE(0x38800d2aU, 0x38800e11U, 1, 8, 0, true)
+WRITEBACK_CASE(0x38801d2aU, 0x38801e11U, 1, 8, 1, true)
+WRITEBACK_CASE(0x388ffd2aU, 0x388ffe11U, 1, 8, 255, true)
+WRITEBACK_CASE(0x38d0052aU, 0x38d00611U, 1, 4, -256, false)
+WRITEBACK_CASE(0x38dff52aU, 0x38dff611U, 1, 4, -1, false)
+WRITEBACK_CASE(0x38c0052aU, 0x38c00611U, 1, 4, 0, false)
+WRITEBACK_CASE(0x38c0152aU, 0x38c01611U, 1, 4, 1, false)
+WRITEBACK_CASE(0x38cff52aU, 0x38cff611U, 1, 4, 255, false)
+WRITEBACK_CASE(0x38d00d2aU, 0x38d00e11U, 1, 4, -256, true)
+WRITEBACK_CASE(0x38dffd2aU, 0x38dffe11U, 1, 4, -1, true)
+WRITEBACK_CASE(0x38c00d2aU, 0x38c00e11U, 1, 4, 0, true)
+WRITEBACK_CASE(0x38c01d2aU, 0x38c01e11U, 1, 4, 1, true)
+WRITEBACK_CASE(0x38cffd2aU, 0x38cffe11U, 1, 4, 255, true)
+WRITEBACK_CASE(0x7810052aU, 0x78100611U, 2, 0, -256, false)
+WRITEBACK_CASE(0x781ff52aU, 0x781ff611U, 2, 0, -1, false)
+WRITEBACK_CASE(0x7800052aU, 0x78000611U, 2, 0, 0, false)
+WRITEBACK_CASE(0x7800152aU, 0x78001611U, 2, 0, 1, false)
+WRITEBACK_CASE(0x780ff52aU, 0x780ff611U, 2, 0, 255, false)
+WRITEBACK_CASE(0x78100d2aU, 0x78100e11U, 2, 0, -256, true)
+WRITEBACK_CASE(0x781ffd2aU, 0x781ffe11U, 2, 0, -1, true)
+WRITEBACK_CASE(0x78000d2aU, 0x78000e11U, 2, 0, 0, true)
+WRITEBACK_CASE(0x78001d2aU, 0x78001e11U, 2, 0, 1, true)
+WRITEBACK_CASE(0x780ffd2aU, 0x780ffe11U, 2, 0, 255, true)
+WRITEBACK_CASE(0x7850052aU, 0x78500611U, 2, 4, -256, false)
+WRITEBACK_CASE(0x785ff52aU, 0x785ff611U, 2, 4, -1, false)
+WRITEBACK_CASE(0x7840052aU, 0x78400611U, 2, 4, 0, false)
+WRITEBACK_CASE(0x7840152aU, 0x78401611U, 2, 4, 1, false)
+WRITEBACK_CASE(0x784ff52aU, 0x784ff611U, 2, 4, 255, false)
+WRITEBACK_CASE(0x78500d2aU, 0x78500e11U, 2, 4, -256, true)
+WRITEBACK_CASE(0x785ffd2aU, 0x785ffe11U, 2, 4, -1, true)
+WRITEBACK_CASE(0x78400d2aU, 0x78400e11U, 2, 4, 0, true)
+WRITEBACK_CASE(0x78401d2aU, 0x78401e11U, 2, 4, 1, true)
+WRITEBACK_CASE(0x784ffd2aU, 0x784ffe11U, 2, 4, 255, true)
+WRITEBACK_CASE(0x7890052aU, 0x78900611U, 2, 8, -256, false)
+WRITEBACK_CASE(0x789ff52aU, 0x789ff611U, 2, 8, -1, false)
+WRITEBACK_CASE(0x7880052aU, 0x78800611U, 2, 8, 0, false)
+WRITEBACK_CASE(0x7880152aU, 0x78801611U, 2, 8, 1, false)
+WRITEBACK_CASE(0x788ff52aU, 0x788ff611U, 2, 8, 255, false)
+WRITEBACK_CASE(0x78900d2aU, 0x78900e11U, 2, 8, -256, true)
+WRITEBACK_CASE(0x789ffd2aU, 0x789ffe11U, 2, 8, -1, true)
+WRITEBACK_CASE(0x78800d2aU, 0x78800e11U, 2, 8, 0, true)
+WRITEBACK_CASE(0x78801d2aU, 0x78801e11U, 2, 8, 1, true)
+WRITEBACK_CASE(0x788ffd2aU, 0x788ffe11U, 2, 8, 255, true)
+WRITEBACK_CASE(0x78d0052aU, 0x78d00611U, 2, 4, -256, false)
+WRITEBACK_CASE(0x78dff52aU, 0x78dff611U, 2, 4, -1, false)
+WRITEBACK_CASE(0x78c0052aU, 0x78c00611U, 2, 4, 0, false)
+WRITEBACK_CASE(0x78c0152aU, 0x78c01611U, 2, 4, 1, false)
+WRITEBACK_CASE(0x78cff52aU, 0x78cff611U, 2, 4, 255, false)
+WRITEBACK_CASE(0x78d00d2aU, 0x78d00e11U, 2, 4, -256, true)
+WRITEBACK_CASE(0x78dffd2aU, 0x78dffe11U, 2, 4, -1, true)
+WRITEBACK_CASE(0x78c00d2aU, 0x78c00e11U, 2, 4, 0, true)
+WRITEBACK_CASE(0x78c01d2aU, 0x78c01e11U, 2, 4, 1, true)
+WRITEBACK_CASE(0x78cffd2aU, 0x78cffe11U, 2, 4, 255, true)
+WRITEBACK_CASE(0xb810052aU, 0xb8100611U, 4, 0, -256, false)
+WRITEBACK_CASE(0xb81ff52aU, 0xb81ff611U, 4, 0, -1, false)
+WRITEBACK_CASE(0xb800052aU, 0xb8000611U, 4, 0, 0, false)
+WRITEBACK_CASE(0xb800152aU, 0xb8001611U, 4, 0, 1, false)
+WRITEBACK_CASE(0xb80ff52aU, 0xb80ff611U, 4, 0, 255, false)
+WRITEBACK_CASE(0xb8100d2aU, 0xb8100e11U, 4, 0, -256, true)
+WRITEBACK_CASE(0xb81ffd2aU, 0xb81ffe11U, 4, 0, -1, true)
+WRITEBACK_CASE(0xb8000d2aU, 0xb8000e11U, 4, 0, 0, true)
+WRITEBACK_CASE(0xb8001d2aU, 0xb8001e11U, 4, 0, 1, true)
+WRITEBACK_CASE(0xb80ffd2aU, 0xb80ffe11U, 4, 0, 255, true)
+WRITEBACK_CASE(0xb850052aU, 0xb8500611U, 4, 4, -256, false)
+WRITEBACK_CASE(0xb85ff52aU, 0xb85ff611U, 4, 4, -1, false)
+WRITEBACK_CASE(0xb840052aU, 0xb8400611U, 4, 4, 0, false)
+WRITEBACK_CASE(0xb840152aU, 0xb8401611U, 4, 4, 1, false)
+WRITEBACK_CASE(0xb84ff52aU, 0xb84ff611U, 4, 4, 255, false)
+WRITEBACK_CASE(0xb8500d2aU, 0xb8500e11U, 4, 4, -256, true)
+WRITEBACK_CASE(0xb85ffd2aU, 0xb85ffe11U, 4, 4, -1, true)
+WRITEBACK_CASE(0xb8400d2aU, 0xb8400e11U, 4, 4, 0, true)
+WRITEBACK_CASE(0xb8401d2aU, 0xb8401e11U, 4, 4, 1, true)
+WRITEBACK_CASE(0xb84ffd2aU, 0xb84ffe11U, 4, 4, 255, true)
+WRITEBACK_CASE(0xb890052aU, 0xb8900611U, 4, 8, -256, false)
+WRITEBACK_CASE(0xb89ff52aU, 0xb89ff611U, 4, 8, -1, false)
+WRITEBACK_CASE(0xb880052aU, 0xb8800611U, 4, 8, 0, false)
+WRITEBACK_CASE(0xb880152aU, 0xb8801611U, 4, 8, 1, false)
+WRITEBACK_CASE(0xb88ff52aU, 0xb88ff611U, 4, 8, 255, false)
+WRITEBACK_CASE(0xb8900d2aU, 0xb8900e11U, 4, 8, -256, true)
+WRITEBACK_CASE(0xb89ffd2aU, 0xb89ffe11U, 4, 8, -1, true)
+WRITEBACK_CASE(0xb8800d2aU, 0xb8800e11U, 4, 8, 0, true)
+WRITEBACK_CASE(0xb8801d2aU, 0xb8801e11U, 4, 8, 1, true)
+WRITEBACK_CASE(0xb88ffd2aU, 0xb88ffe11U, 4, 8, 255, true)
+WRITEBACK_CASE(0xf810052aU, 0xf8100611U, 8, 0, -256, false)
+WRITEBACK_CASE(0xf81ff52aU, 0xf81ff611U, 8, 0, -1, false)
+WRITEBACK_CASE(0xf800052aU, 0xf8000611U, 8, 0, 0, false)
+WRITEBACK_CASE(0xf800152aU, 0xf8001611U, 8, 0, 1, false)
+WRITEBACK_CASE(0xf80ff52aU, 0xf80ff611U, 8, 0, 255, false)
+WRITEBACK_CASE(0xf8100d2aU, 0xf8100e11U, 8, 0, -256, true)
+WRITEBACK_CASE(0xf81ffd2aU, 0xf81ffe11U, 8, 0, -1, true)
+WRITEBACK_CASE(0xf8000d2aU, 0xf8000e11U, 8, 0, 0, true)
+WRITEBACK_CASE(0xf8001d2aU, 0xf8001e11U, 8, 0, 1, true)
+WRITEBACK_CASE(0xf80ffd2aU, 0xf80ffe11U, 8, 0, 255, true)
+WRITEBACK_CASE(0xf850052aU, 0xf8500611U, 8, 8, -256, false)
+WRITEBACK_CASE(0xf85ff52aU, 0xf85ff611U, 8, 8, -1, false)
+WRITEBACK_CASE(0xf840052aU, 0xf8400611U, 8, 8, 0, false)
+WRITEBACK_CASE(0xf840152aU, 0xf8401611U, 8, 8, 1, false)
+WRITEBACK_CASE(0xf84ff52aU, 0xf84ff611U, 8, 8, 255, false)
+WRITEBACK_CASE(0xf8500d2aU, 0xf8500e11U, 8, 8, -256, true)
+WRITEBACK_CASE(0xf85ffd2aU, 0xf85ffe11U, 8, 8, -1, true)
+WRITEBACK_CASE(0xf8400d2aU, 0xf8400e11U, 8, 8, 0, true)
+WRITEBACK_CASE(0xf8401d2aU, 0xf8401e11U, 8, 8, 1, true)
+WRITEBACK_CASE(0xf84ffd2aU, 0xf84ffe11U, 8, 8, 255, true)
+WRITEBACK_VALUE(size_t, kWritebackCaseCount, 130)
+WRITEBACK_VALUE(size_t, kWritebackFirstLoadCase, 10)
+WRITEBACK_VALUE(unsigned, kWritebackFirstOffset, 0)
+WRITEBACK_VALUE(unsigned, kWritebackLastImmediate, 512)
+WRITEBACK_VALUE(unsigned, kWritebackFixtureOffsetShift, 12)
+WRITEBACK_VALUE(uint32_t, kWritebackFixtureOffsetMask, 0x1ff000U)
+WRITEBACK_VALUE(unsigned, kWritebackFixtureBase, 9)
+WRITEBACK_VALUE(unsigned, kWritebackFixtureDestination, 10)
+WRITEBACK_VALUE(uint32_t, kWritebackOverlapLoad, 0xf8408c21U)
+WRITEBACK_VALUE(uint32_t, kWritebackOverlapStore, 0xf8008421U)
+WRITEBACK_VALUE(uint32_t, kWritebackStackLoad, 0xf84087e0U)
+WRITEBACK_VALUE(uint32_t, kWritebackZeroLoad, 0xf840853fU)
+WRITEBACK_VALUE(uint32_t, kWritebackZeroStore, 0xf800853fU)
+WRITEBACK_VALUE(uint32_t, kWritebackImageLoad, 0xf8408c20U)
+WRITEBACK_VALUE(uint32_t, kWritebackImageStore, 0xf8008420U)
+WRITEBACK_VALUE(uint32_t, kWritebackImageADRP, 0xd0000001U)
+WRITEBACK_VALUE(uint32_t, kWritebackImageADD, 0x91010021U)
+WRITEBACK_VALUE(uint32_t, kWritebackImageSecondLoad, 0xf9400020U)
+WRITEBACK_VALUE(va_t, kWritebackImageData, 0x3000)
+WRITEBACK_VALUE(uint32_t, kWritebackImageReturn, 0xd65f03c0U)
+WRITEBACK_VALUE(unsigned, kWritebackImagePosition, 64)
+WRITEBACK_VALUE(unsigned, kWritebackImageStorageBytes, 1024)
+WRITEBACK_VALUE(uint64_t, kWritebackImageLoaded, 0xfedcba9876543210ULL)
+WRITEBACK_TEXT(kWritebackNamePrefix, "writeback_")
+WRITEBACK_TEXT(kWritebackHarnessPrelude, "#include <stdint.h>\n")
+WRITEBACK_TEXT(kWritebackLoadDeclaration, "unsigned __int128 {0}(uint64_t);\n")
+WRITEBACK_TEXT(kWritebackStoreDeclaration,
+               "uint64_t {0}(uint64_t, uint64_t);\n")
+WRITEBACK_TEXT(
+    kWritebackNativeLoad,
+    "unsigned __int128 result = {0}(input); if ((uint64_t)result != value || "
+    "(uint64_t)(result >> 64) - input != base - origin) return 1;\n")
+WRITEBACK_TEXT(kWritebackNativeStore,
+               "uint64_t result = {0}(input, 0xfedcba9876543210ULL); if "
+               "(result - input != base - origin) return 1;\n")
+WRITEBACK_TEXT(
+    kWritebackNativeCase,
+    "static int writeback_case_{0}(void) {{ _Alignas(16) uint8_t "
+    "expected[1024], "
+    "actual[1024]; for (unsigned i = 0; i != 1024; ++i) expected[i] = "
+    "actual[i] = (uint8_t)(i * 37 + 129); uint64_t input = "
+    "(uint64_t)(uintptr_t)(actual + 384), origin = "
+    "(uint64_t)(uintptr_t)(expected + 384); register uint64_t base "
+    "__asm__(\"x9\") = origin; register uint64_t value __asm__(\"x10\") = "
+    "0xfedcba9876543210ULL; __asm__ volatile(\"{3}.inst %c2{4}\" : "
+    "\"+r\"(value), "
+    "\"+r\"(base) : \"i\"({1}) : {5}\"memory\"); {2} for (unsigned i = 0; i != "
+    "1024; ++i) if (expected[i] != actual[i]) return 2; return 0; }\n")
+WRITEBACK_TEXT(kWritebackHarnessCase, "{{ writeback_case_{0} },\n")
+WRITEBACK_TEXT(kWritebackHarnessTail,
+               "static const struct {{ int (*run)(void); } immediate_cases[] = "
+               "{{\n{0}};\nint main(void) {{ for (unsigned i = 0; i != "
+               "sizeof(immediate_cases) / sizeof(immediate_cases[0]); ++i) if "
+               "(immediate_cases[i].run()) return (int)i + 1; return 0; }\n")
+WRITEBACK_TEXT(kWritebackArtifactEnvironment,
+               "NEVERD_ARM64E_WRITEBACK_ARTIFACT_DIR")
+WRITEBACK_TEXT(kWritebackArtifactProperty,
+               "arm64e_writeback_memory_artifact_directory")
+WRITEBACK_TEXT(kWritebackHighArtifact, "high.c")
+WRITEBACK_TEXT(kWritebackLLVMArtifact, "llvm.c")
+WRITEBACK_TEXT(kWritebackObjectArtifact, "llvm.o")
+WRITEBACK_TEXT(kWritebackHarnessArtifact, "harness.c")
+WRITEBACK_VALUE(uint32_t, kWritebackImageReadback, 0xf85f8020U)
+WRITEBACK_TEXT(
+    kWritebackReturnedBaseHarness,
+    "int main(void) {{ return {0}() != UINT64_C(0xfedcba9876543210); }\n")
+
+#undef WRITEBACK_TEXT
+#undef WRITEBACK_VALUE
+#undef WRITEBACK_CASE

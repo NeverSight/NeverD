@@ -4,15 +4,25 @@
 
 #include "LowInstructionSlice.h"
 
-#include "neverd/ir/X87Constant.h"
+#include "neverd/ir/X86/X87Constant.h"
+#include "neverd/ir/X86/X87GuardedValue.h"
+#include "neverd/ir/X86/X87Value.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
+#include "neverd/ir/intrinsics/X86/X86Unsupported.h"
+#include "neverd/ir/low/AArch64WritebackMemory.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/low/X86/X86CompactShape.h"
+#include "neverd/ir/low/X86/X86FourSourceShape.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Errc.h"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 
 namespace neverd {
@@ -52,6 +62,8 @@ bool isKnownTargetMode(LowInstructionTargetMode Mode) {
 }
 
 llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
+  if (Op.NumInputs > std::size(Op.Inputs))
+    return invalid(kLowOperationInputOverflow);
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return invalid("LowOp has an unknown memory address space");
   const bool HasExplicitAddressSpace =
@@ -64,15 +76,102 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
   if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
     return invalid("intrinsic has no constant intrinsic ID");
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (isAArch64ExceptionReturnIntrinsic(Id))
+    return invalid(kAArch64ExceptionReturnUnsupported);
+  if (const char *Reason = x86NonlocalControlTransferReason(Id))
+    return invalid(Reason);
+  // The lifter publishes PACM as a pending instruction prefix. CFG resolves
+  // its executed successor before MedIR, where this marker is not admissible.
+  if (Id == Intrinsic::A64_PACMPending) {
+    if (Op.NumInputs != 1 || Op.Inputs[0].Size != 2 || Op.Output.Size ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return invalid(kAArch64PAuthMalformedOperation);
+    return llvm::Error::success();
+  }
+  if (isAArch64AddressMemoryIntrinsic(Id) &&
+      !lowAArch64AddressMemoryShapeIsValid(Op))
+    return invalid(kAddressMemoryMalformed);
+  if (isAArch64WritebackMemoryIntrinsic(Id) &&
+      !lowAArch64WritebackMemoryShapeIsValid(Op))
+    return invalid(kWritebackMalformed);
+  if (isAArch64PAuthLoadIntrinsic(Id) && !lowAArch64PAuthLoadShapeIsValid(Op))
+    return invalid(kPAuthLoadMalformed);
+  if (isAArch64PAuthIntrinsic(Id) && !lowAArch64PAuthShapeIsValid(Op))
+    return invalid(kAArch64PAuthMalformedOperation);
+  if (aarch64CPAOperation(Id) && !lowAArch64CPAShapeIsValid(Op))
+    return invalid(kAArch64CPAMalformedOperation);
+  if (aarch64_sve::vectorOperation(Id) && !lowAArch64VectorShapeIsValid(Op))
+    return invalid(aarch64_sve::kMalformedVector);
+  if (Id == Intrinsic::A64_SvePtrue && !lowAArch64PtrueShapeIsValid(Op))
+    return invalid(aarch64_sve::kMalformedPtrue);
   if (isX87ConstantControlIntrinsic(Id) &&
       !x87ConstantControlShapeIsValid(
           Id, x87ConstantControlLowShape(Op, Arch::X64)))
     return invalid("x87 constant/control intrinsic has an invalid shape");
-  if (isApxAtomicIntrinsic(Id)) {
+  if (isX87GuardedValueIntrinsic(Id) &&
+      !x87GuardedValueShapeIsValid(x87GuardedValueLowShape(Op, Arch::Unknown)))
+    return invalid(
+        "guarded x87 intrinsic has an invalid value/control contract");
+  if (x87ValueInfo(Id) &&
+      !x87ValueShapeIsValid(x87ValueLowShape(Op, Arch::Unknown)))
+    return invalid("x87 scalar intrinsic has an invalid value/status contract");
+  if (Id == Intrinsic::X86FourSourceMemory) {
+    if (!x86FourSourceShapeIsValid(x86FourSourceLowShape(Op)))
+      return invalid(X86FourSourceMalformed);
+    return llvm::Error::success();
+  }
+  if (isX86CompactMemory(Id)) {
+    if (!x86CompactShapeIsValid(Id, x86CompactLowShape(Op)))
+      return invalid(X86CompactMalformed);
+    return llvm::Error::success();
+  }
+  if (isX86AtomicIntrinsic(Id)) {
     if (!intrinsicApxAtomicShapeIsValid(Id,
                                         apxAtomicLowShape(Op, Arch::Unknown)))
       return invalid(
           "APX atomic intrinsic has an invalid operand/output contract");
+    return llvm::Error::success();
+  }
+  if (Id == Intrinsic::X86HleState) {
+    if (!x86HleShapeIsValid(x86HleLowShape(Op)))
+      return invalid("invalid x86 HLE state contract");
+    return llvm::Error::success();
+  }
+  if (isX86VirtualizationIntrinsic(Id)) {
+    if (!x86VirtualizationShapeIsValid(
+            Id, x86VirtualizationLowShape(Op, Arch::Unknown)))
+      return invalid("x86 virtualization intrinsic has an invalid "
+                     "operand/output contract");
+    return llvm::Error::success();
+  }
+  if (isX86DescriptorStateIntrinsic(Id)) {
+    if (Op.Inputs[0].Size != 2 ||
+        Op.Inputs[0].Offset != static_cast<uint64_t>(Id) ||
+        !x86DescriptorStateShapeIsValid(
+            Id, Arch::Unknown, Op.NumInputs, Op.Output.Size,
+            Op.NumInputs > 1 ? Op.Inputs[1].Size : 0, Op.MemoryAddressSpace,
+            Op.MemoryOrdering))
+      return invalid("x86 descriptor state intrinsic has an invalid shape");
+    return llvm::Error::success();
+  }
+  if (Id == Intrinsic::X86AMXState && !x86AmxShapeIsValid(x86AmxLowShape(Op)))
+    return invalid("AMX architectural bank operation has an invalid shape");
+  if (isX86BoundedLeafIntrinsic(Id) || isX86BoundedLeafPending(Id)) {
+    if (!x86BoundedLeafShapeIsValid(Id, x86BoundedLeafLowShape(Op)))
+      return invalid(X86BoundedLeafUnproven);
+    return llvm::Error::success();
+  }
+  if (isX86SgxIntrinsic(Id)) {
+    if (!x86SgxShapeIsValid(Id, x86SgxLowShape(Op)))
+      return invalid("x86 SGX intrinsic has an invalid completion contract");
+    return llvm::Error::success();
+  }
+  if (isX86SystemStateIntrinsic(Id)) {
+    if (!x86SystemStateShapeIsValid(Id,
+                                    x86SystemStateLowShape(Op, Arch::Unknown)))
+      return invalid("x86 system state intrinsic has an invalid "
+                     "operand/output contract");
     return llvm::Error::success();
   }
   if (Id == Intrinsic::X86Invalidate) {
@@ -129,6 +228,11 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
         !Op.Inputs[5].isConst() || Op.Inputs[3].Offset > 28 ||
         (Op.Inputs[3].Offset & 3) != 0 || Op.Inputs[5].Offset > 1)
       return invalid("x86 VP4DP intrinsic has an invalid operand/output shape");
+    return llvm::Error::success();
+  }
+  if (isX86RepStateIntrinsic(Id)) {
+    if (!x86RepShapeIsValid(Id, x86RepLowShape(Op)))
+      return invalid("x86 REP intrinsic has an invalid operand/output shape");
     return llvm::Error::success();
   }
   if (!HasExplicitAddressSpace && isX86StringIntrinsic(Id)) {
@@ -473,6 +577,14 @@ llvm::Error validateLowInstructionBoundaries(
     for (const LowOp &Op : *Ops) {
       if (llvm::Error Error = validateMemoryAddressSpace(Op))
         return Error;
+      if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+          Op.Inputs[0].isConst() &&
+          isAArch64WritebackAuxiliaryLoad(
+              static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+        const auto Following = Ops->drop_front(&Op - Ops->data() + 1);
+        if (!lowAArch64WritebackOutputs(Op, Following))
+          return invalid(kWritebackMalformed);
+      }
     }
 
     if (llvm::Error Error = validateControl(Block, Boundary))

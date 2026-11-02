@@ -12,6 +12,21 @@
 #include <algorithm>
 
 namespace neverd::emulation::linux_model {
+std::optional<uint64_t>
+LinuxFiles::fileWriteLimit(const std::string &Identity) const {
+  if (auto I = CreatedFileLimits.find(Identity); I != CreatedFileLimits.end())
+    return I->second;
+  if (auto I = Options->WriteLimits.find(Identity);
+      I != Options->WriteLimits.end())
+    return I->second;
+  return std::nullopt;
+}
+
+bool LinuxFiles::tracksFileMetadata(const std::string &Identity) const {
+  return CreatedFileLimits.contains(Identity) ||
+         Options->TrackWriteMetadata.contains(Identity);
+}
+
 LinuxFiles::MutableFile &LinuxFiles::mutableFile(const std::string &Path) {
   auto [I, Inserted] = MutableFiles.try_emplace(Path);
   auto &F = I->second;
@@ -97,7 +112,7 @@ LinuxFiles::writeDescriptor(ServiceKind Kind, uint32_t FD, uint64_t Address,
   auto &Object = MutableFiles.at(F->Path);
   uint64_t Position = (F->Flags & OpenAppend) ? Object.Bytes.size() : F->Offset;
   Size = std::min(Size, MaxReadWriteSize & ~(Layout.PageSize - 1));
-  const auto Limit = Options->WriteLimits.at(F->Path);
+  const auto Limit = *fileWriteLimit(F->Path);
   if (Size && (Position > Limit || Size > Limit - Position))
     return unsupported(Result,
                        "memory-file write exceeds explicit reservation");

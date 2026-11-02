@@ -1,0 +1,17 @@
+//===- AArch64PipelineFixtures.def - Pipeline fixture layout --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Linked smoke fixtures reserve room for the supported appended segment.
+/// Header-space refusal and rollback have separate transaction tests.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_PIPELINE_FIXTURE_TEXT
+#define NEVERD_A64_PIPELINE_FIXTURE_TEXT(Name, Value)
+#endif
+
+NEVERD_A64_PIPELINE_FIXTURE_TEXT(kMachOHeaderPadding, "-Wl,-headerpad,0x1000")
+
+#undef NEVERD_A64_PIPELINE_FIXTURE_TEXT

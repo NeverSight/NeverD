@@ -1175,7 +1175,15 @@ void verifyRuntime(bool Chained,
               1U + ConstantStringObjects + PointerOffsets.size());
   } else if (DiagnosticReports)
     EXPECT_FALSE(IdentityHelpers.empty());
-  else
+  else if (SwitchEffects && HostArch == "arm64") {
+    // Resolving the switch does not erase its original, effectful table
+    // read. Rebuild exactly the seventeen guarded bytes and execute that
+    // read as well as every recovered case in the runtime checks below.
+    ASSERT_EQ(IdentityHelpers.size(), 1U);
+    const llvm::StringRef Name(IdentityHelpers.begin()->first);
+    EXPECT_TRUE(Name.starts_with("neverd_borrowed_bytes_"));
+    EXPECT_TRUE(Name.ends_with("_17_address"));
+  } else
     EXPECT_EQ(IdentityHelpers.size(), (Associations       ? 0U
                                        : ConstantObjects  ? 13U
                                        : ConstantStrings  ? 7U

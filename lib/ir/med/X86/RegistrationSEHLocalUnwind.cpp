@@ -8,9 +8,9 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationCallResult.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
-#include "neverd/ir/med/X86RegistrationSEHLocalUnwind.h"
+#include "neverd/ir/med/X86/X86RegistrationCallResult.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
 
 #include "llvm/ADT/STLExtras.h"
 

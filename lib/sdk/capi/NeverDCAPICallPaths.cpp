@@ -16,6 +16,7 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/libc/LibCNames.h"
 #include "neverd/sdk/Limits.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -29,7 +30,6 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 using namespace neverd;
@@ -65,7 +65,7 @@ struct CallReferenceGraph {
     std::string Name;
     std::string Module;
     bool Import = false;
-    /// Byte signatures name the function as library code.
+    /// An independently admitted signature identity names library code.
     bool Library = false;
   };
   struct Edge {
@@ -106,10 +106,6 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
   G->Count = S.Functions.size();
   G->ImportCount = S.Img.Imports.size();
   const BinaryImage &Img = S.Img;
-
-  std::unordered_set<va_t> Library;
-  for (const auto &Match : S.SigDB.matches())
-    Library.insert(Match.Address);
 
   std::unordered_map<const Import *, uint32_t> ImportNodes;
   const auto ImportNode = [&](const Import &Imported, va_t Veneer) {
@@ -154,7 +150,7 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
     CallReferenceGraph::Node Node;
     Node.Address = F->Entry;
     Node.Name = F->Name;
-    Node.Library = Library.count(F->Entry) != 0;
+    Node.Library = S.SigDB.nameDecision(F->Entry) != nullptr;
     const uint32_t Index = G->Nodes.size();
     G->Nodes.push_back(std::move(Node));
     G->NodeAt.try_emplace(F->Entry, Index);
@@ -236,6 +232,10 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
   Entries.reserve(Ordered.size());
   for (const FuncInfo *F : Ordered)
     Entries.push_back(F->Entry);
+  std::optional<libc::NoReturnTargetIndex> NoReturnTargets;
+  if (std::any_of(Bodies.begin(), Bodies.end(),
+                  [](const FuncInfo *F) { return !F->Size; }))
+    NoReturnTargets.emplace(Img);
   for (size_t First = 0; First < Bodies.size();
        First += FunctionPage::MaxFunctionsPerPage) {
     FunctionPage Page;
@@ -243,11 +243,13 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
         Bodies.size(), First + FunctionPage::MaxFunctionsPerPage);
     Page.Functions.assign(Bodies.begin() + First, Bodies.begin() + Last);
     Page.Entries = Entries;
-    if (!decodeFunctions(Img, Page,
-                         [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
-                             InstructionFlowScratch &Scratch) {
-                           Collect(First + Index, Dec, DI, Scratch);
-                         })) {
+    if (!decodeFunctions(
+            Img, Page,
+            [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
+                InstructionFlowScratch &Scratch) {
+              Collect(First + Index, Dec, DI, Scratch);
+            },
+            {}, nullptr, NoReturnTargets ? &*NoReturnTargets : nullptr)) {
       S.setError("failed to initialize a decoder for the image");
       return nullptr;
     }

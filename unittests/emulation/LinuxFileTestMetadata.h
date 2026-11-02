@@ -31,5 +31,53 @@ inline LinuxFileMetadata fileTestMetadata() {
           {4294967297, 987654321},
           {0x7fffffffffffffffLL, 999999999}};
 }
+inline LinuxFileOptions fileRenameTestInput() {
+  LinuxFileOptions F;
+  F.Files["/fixture/data"] = {0, 0xff, 0x41, 0x0a, 0x80, 0x5a};
+  F.WriteLimits["/fixture/data"] = 8192;
+  F.TrackWriteMetadata.insert("/fixture/data");
+  LinuxFileMetadata M;
+  M.Device = 7;
+  M.Inode = 42;
+  M.Mode = 0100644;
+  M.UID = M.GID = 1000;
+  M.LinkCount = 1;
+  M.Size = 6;
+  M.BlockSize = 4096;
+  M.Blocks = 8;
+  M.AccessTime = {3, 4};
+  M.ModificationTime = {5, 6};
+  M.ChangeTime = {7, 8};
+  F.Metadata["/fixture/data"] = M;
+  M.Inode = 91;
+  M.Mode = 0040755;
+  M.LinkCount = 2;
+  M.Size = 60;
+  M.Blocks = 0;
+  F.DirectoryCreation.emplace().Parents["/fixture"] = M;
+  F.Directories.push_back("/fixture");
+  F.FileRenames.emplace().Parents.insert("/fixture");
+  F.FileRenames->Limit = 2;
+  F.DynamicProcFDs = true;
+  return F;
+}
+inline LinuxFileOptions fileUnlinkTestInput() {
+  auto F = fileRenameTestInput();
+  F.FileUnlinks.emplace().Parents.insert("/fixture");
+  F.FileUnlinks->Limit = 1;
+  return F;
+}
+inline LinuxFileOptions fileCreationTestInput() {
+  auto F = fileUnlinkTestInput();
+  F.FileCreations.emplace().Files["/fixture/data"] = {8192};
+  return F;
+}
+
+inline LinuxFileOptions fileCreationCountTestInput() {
+  auto F = fileCreationTestInput();
+  F.FileCreations->Files.at("/fixture/data") = {3, 2};
+  F.FileUnlinks->Limit = 2;
+  return F;
+}
 } // namespace neverd::emulation
 #endif

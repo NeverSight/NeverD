@@ -150,14 +150,14 @@ static void emit(const void *Data, unsigned Size) {
       Observation[FieldAfter0 + I] = Memory[I];                                \
     emit(Observation, sizeof(Observation));                                    \
   }
-#include "../AArch64ExclusiveCases.def"
+#include "../aarch64/AArch64ExclusiveCases.def"
 #undef NEVERD_EXCLUSIVE_CASE
 
 void entry(void) {
   unsigned Results[] = {
 #define NEVERD_EXCLUSIVE_CASE(Name, Load, Store, Width, Count)                 \
   checkExclusive##Name(),
-#include "../AArch64ExclusiveCases.def"
+#include "../aarch64/AArch64ExclusiveCases.def"
 #undef NEVERD_EXCLUSIVE_CASE
   };
   emit(Results, sizeof(Results));
@@ -177,7 +177,7 @@ void entry(void) {
       for (unsigned Scenario = 0; Scenario < MemoryScenarioCount; ++Scenario)  \
         alignment##Name(Index, Offset, Mode, Scenario);                        \
   ++Index;
-#include "../AArch64ExclusiveCases.def"
+#include "../aarch64/AArch64ExclusiveCases.def"
 #undef NEVERD_EXCLUSIVE_CASE
   if (!RemoveVectoredExceptionHandler(Handler))
     fail(SiteRetirement, 0, 0);

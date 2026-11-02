@@ -9,8 +9,8 @@
 
 #include "X86FPStateAccuracyFixture.h"
 
-#include "neverd/ir/X87Context.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -344,6 +344,12 @@ TEST(X87SignContract, OwnedContextStackSlotsAndPaddingRemainDistinct) {
       L.lift(I.Raw, Ops);
       const unsigned Top = (8 - Depth) & 7;
       NdOpEmulator E(Image);
+#if !(defined(__x86_64__) || defined(_M_X64)) ||                               \
+    !(defined(__clang__) || defined(__GNUC__))
+      // Keep this host-independent contract runnable through the explicit
+      // portable slice; native original-instruction tests remain separate.
+      E.setX87PortableMode(true);
+#endif
       std::array<std::vector<uint8_t>, 8> Expected;
       std::array<uint8_t, 512> State{};
       State[0] = 0x7f;

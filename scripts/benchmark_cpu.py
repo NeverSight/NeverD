@@ -18,6 +18,11 @@ import subprocess
 import sys
 import time
 
+try:
+    import resource
+except ImportError:
+    resource = None
+
 
 WORKLOADS = {
     "initialization": 0,
@@ -43,17 +48,20 @@ def command_output(command):
         return {"command": command, "error": str(error)}
 
 
-def validate(text, backend):
+def validate(text, backend, contract="checked", wide_loop=False):
     rows = [json.loads(line) for line in text.splitlines()]
-    expected = {(name, warmup) for name in WORKLOADS for warmup in (False, True)}
+    workloads = dict(WORKLOADS)
+    if wide_loop:
+        workloads["wide_loop"] = 65570
+    expected = {(name, warmup) for name in workloads for warmup in (False, True)}
     observed = set()
     for row in rows:
         key = (row["workload"], row["warmup"])
         if (key not in expected or key in observed
                 or row["schema_version"] != 1
-                or row["architecture"] != "aarch64" or row["contract"] != "checked"
+                or row["architecture"] != "aarch64" or row["contract"] != contract
                 or row["backend"] != backend
-                or row["guest_instructions"] != WORKLOADS[key[0]]
+                or row["guest_instructions"] != workloads[key[0]]
                 or type(row["elapsed_ns"]) is not int or row["elapsed_ns"] <= 0
                 or type(row["warmup"]) is not bool
                 or row["sample"] != (0 if row["warmup"] else 1)):
@@ -64,9 +72,12 @@ def validate(text, backend):
     return rows
 
 
-def summarize(runs, pairs):
+def summarize(runs, pairs, wide_loop=False):
     summary = {}
-    for workload in WORKLOADS:
+    workloads = list(WORKLOADS)
+    if wide_loop:
+        workloads.append("wide_loop")
+    for workload in workloads:
         samples = {side: [next(row["elapsed_ns"] for row in run["rows"]
                               if row["workload"] == workload and not row["warmup"])
                           for run in runs if run["side"] == side]
@@ -85,6 +96,15 @@ def summarize(runs, pairs):
     return summary
 
 
+def result_hash(rows):
+    # Backend identity is separately retained and validated; comparing two
+    # transports is supported. Every semantic row field must still agree.
+    values = [{key: value for key, value in row.items()
+               if key not in ("elapsed_ns", "backend")} for row in rows]
+    values.sort(key=lambda row: (row["workload"], row["warmup"]))
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for side in ("baseline", "candidate"):
@@ -92,6 +112,8 @@ def main():
         parser.add_argument(f"--{side}-label", required=True)
         parser.add_argument(f"--{side}-backend", choices=("hvf", "unicorn"), default="hvf")
     parser.add_argument("--pairs", type=int, default=9)
+    parser.add_argument("--contract", choices=("checked", "checked-user"), default="checked")
+    parser.add_argument("--wide-loop", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if os.environ.get("DYLD_INSERT_LIBRARIES") or os.environ.get("LD_PRELOAD"):
@@ -106,7 +128,8 @@ def main():
               "host": {"platform": platform.platform(), "machine": platform.machine(),
                        "cpu_count": os.cpu_count()},
               "driver_sha256": sha256(Path(__file__)),
-              "pairs": args.pairs, "binaries": {}, "runs": []}
+              "pairs": args.pairs, "contract": args.contract,
+              "wide_loop": args.wide_loop, "binaries": {}, "runs": []}
     for side in ("baseline", "candidate"):
         path = getattr(args, side).resolve(strict=True)
         report["binaries"][side] = {
@@ -128,20 +151,34 @@ def main():
                     raise ValueError(f"{side} executable changed during measurement")
                 command = [binary["path"], "--backend", binary["backend"],
                            "--samples", "1", "--warmup", "1"]
+                # Preserve compatibility with older benchmark executables for
+                # the unchanged default contract and workload inventory.
+                if args.contract != "checked":
+                    command += ["--contract", args.contract]
+                if args.wide_loop:
+                    command.append("--wide-loop")
                 run = {"pair": pair, "side": side, "command": command,
                        "load_before": os.getloadavg() if hasattr(os, "getloadavg") else None}
                 report["runs"].append(run)
+                before_cpu = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
                 start = time.monotonic_ns()
                 result = subprocess.run(command, capture_output=True, text=True, timeout=180)
                 run.update(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr,
                            process_elapsed_ns=time.monotonic_ns() - start,
                            load_after=os.getloadavg() if hasattr(os, "getloadavg") else None)
+                if resource:
+                    after_cpu = resource.getrusage(resource.RUSAGE_CHILDREN)
+                    run["process_user_seconds"] = after_cpu.ru_utime - before_cpu.ru_utime
+                    run["process_system_seconds"] = after_cpu.ru_stime - before_cpu.ru_stime
                 if result.returncode:
                     raise RuntimeError(f"{side} benchmark failed: {result.stderr}")
-                run["rows"] = validate(result.stdout, binary["backend"])
+                run["rows"] = validate(result.stdout, binary["backend"], args.contract, args.wide_loop)
+                run["non_timing_sha256"] = result_hash(run["rows"])
+                if run["non_timing_sha256"] != report["runs"][0]["non_timing_sha256"]:
+                    raise ValueError("non-timing benchmark output differs between runs")
                 args.output.write_text(json.dumps(report, indent=2) + "\n")
                 print(f"pair {pair + 1}/{args.pairs}: {side} passed", flush=True)
-        report["summary"] = summarize(report["runs"], args.pairs)
+        report["summary"] = summarize(report["runs"], args.pairs, args.wide_loop)
         report["complete"] = True
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as error:
         report["error"] = str(error)

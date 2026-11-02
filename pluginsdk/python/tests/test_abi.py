@@ -16,6 +16,81 @@ from scripts.check_python_plugin_sdk import (
 
 
 class ABIInventoryTests(unittest.TestCase):
+    def test_continuation_source_preserves_both_owned_addresses(self) -> None:
+        from neverd_plugin import abi
+
+        spec = abi.FUNCTION_SPECS["neverd_x64_continuation_source_v1"]
+        self.assertIs(spec.ownership, abi.Ownership.OWNED_STRING)
+        self.assertIs(spec.restype, ctypes.c_void_p)
+        self.assertEqual(spec.argtypes,
+                         (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+                          ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)))
+
+    def test_metadata_visitor_preserves_borrowed_layout_and_callback(self) -> None:
+        from neverd_plugin import abi
+
+        self.assertEqual(
+            abi.MetadataVisitorV1._argtypes_,
+            (ctypes.c_void_p, ctypes.POINTER(abi.NeverDMetadataItemV1)),
+        )
+        self.assertIs(abi.MetadataVisitorV1._restype_, ctypes.c_int)
+        self.assertIs(
+            abi.FUNCTION_SPECS["neverd_visit_metadata_items"].argtypes[3],
+            abi.MetadataVisitorV1,
+        )
+        for name in ("neverd_metadata_items_json",
+                     "neverd_function_presentation_json", "neverd_sha256_hex"):
+            self.assertIs(abi.FUNCTION_SPECS[name].ownership,
+                          abi.Ownership.OWNED_STRING)
+            self.assertIs(abi.FUNCTION_SPECS[name].restype, ctypes.c_void_p)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            for native, fields in (
+                (abi.NeverDMetadataFieldV1,
+                 ("struct_size", "offset", "size", "target", "name", "role")),
+                (abi.NeverDMetadataItemV1,
+                 ("struct_size", "address", "size", "type", "fields", "field_count")),
+            ):
+                self.assertEqual(ctypes.sizeof(native), 48)
+                for index, field in enumerate(fields):
+                    self.assertEqual(getattr(native, field).offset, index * 8)
+
+    def test_byte_patch_snapshot_preserves_native_pointer_and_frozen_layout(self) -> None:
+        from neverd_plugin import abi
+
+        acquire = abi.FUNCTION_SPECS["neverd_byte_patches_snapshot_v1"]
+        free = abi.FUNCTION_SPECS["neverd_byte_patch_snapshot_free_v1"]
+        pointer = ctypes.POINTER(abi.NeverDBytePatchSnapshotV1)
+        self.assertIs(acquire.ownership, abi.Ownership.OWNED_OBJECT)
+        self.assertIs(acquire.restype, pointer)
+        self.assertEqual(free.argtypes, (pointer,))
+        self.assertIsNone(free.restype)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDBytePatchRowV1), 48)
+            self.assertEqual(ctypes.sizeof(abi.NeverDBytePatchSnapshotV1), 16)
+            for field, offset in (("file_offset", 0), ("address", 8),
+                                  ("size", 16), ("original", 24),
+                                  ("current", 32), ("kind", 40)):
+                self.assertEqual(getattr(abi.NeverDBytePatchRowV1, field).offset,
+                                 offset)
+
+    def test_byte_patch_range_snapshot_preserves_native_pointer_and_layout(self) -> None:
+        from neverd_plugin import abi
+
+        acquire = abi.FUNCTION_SPECS["neverd_byte_patch_ranges_snapshot_v1"]
+        free = abi.FUNCTION_SPECS["neverd_byte_patch_range_snapshot_free_v1"]
+        pointer = ctypes.POINTER(abi.NeverDBytePatchRangeSnapshotV1)
+        self.assertIs(acquire.ownership, abi.Ownership.OWNED_OBJECT)
+        self.assertIs(acquire.restype, pointer)
+        self.assertEqual(free.argtypes, (pointer,))
+        self.assertIsNone(free.restype)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDBytePatchRangeV1), 16)
+            self.assertEqual(abi.NeverDBytePatchRangeV1.address.offset, 0)
+            self.assertEqual(abi.NeverDBytePatchRangeV1.size.offset, 8)
+            self.assertEqual(ctypes.sizeof(abi.NeverDBytePatchRangeSnapshotV1), 16)
+            self.assertEqual(abi.NeverDBytePatchRangeSnapshotV1.range_count.offset, 0)
+            self.assertEqual(abi.NeverDBytePatchRangeSnapshotV1.ranges.offset, 8)
+
     def test_execution_keeps_fixed_handles_layout_buffers_and_owned_reports(self) -> None:
         from neverd_plugin import abi
 
@@ -187,12 +262,32 @@ class ABIInventoryTests(unittest.TestCase):
         )
         if ctypes.sizeof(ctypes.c_void_p) == 8:
             self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV8), 168)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9.flags.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV8))
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9.reserved.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV8) + 4)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9), 176)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9().flags, 0)
+        self.assertEqual(int(abi.DevirtualizeFlagsV9.PROVE_STORE_RETURN_SLOT_SEPARATION), 1)
+        self.assertEqual(int(abi.DevirtualizeFlagsV9.PROVE_STORE_FRAME_SEPARATION), 2)
         options_v8 = abi.NeverDDevirtualizeOptionsV8()
         self.assertEqual(options_v8.max_chained_visits_per_destination, 0)
         self.assertEqual(options_v8.reserved, 0)
         options_v8.max_chained_visits_per_destination = (1 << 32) - 1
         self.assertEqual(options_v8.max_chained_visits_per_destination, (1 << 32) - 1)
-        for version in (1, 2, 3, 4, 5, 6, 7, 8):
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.machine_source_abi.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9))
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.reserved.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9) + 4)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV10), 184)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10().machine_source_abi, 0)
+        self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_V1), 1)
+        self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_XMM_V2), 2)
+        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
             for prefix in ("source", "machine_source"):
                 spec = abi.FUNCTION_SPECS[f"neverd_devirtualize_{prefix}_v{version}"]
                 self.assertEqual(

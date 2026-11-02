@@ -8,7 +8,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <cstdint>
 #include <vector>
@@ -110,6 +110,7 @@ TEST_F(X86UndefinedEffects, DefinedAndPreservedFlagsCreateNoArbitraryProducer) {
       {"sbb eax, ecx", {0x19, 0xc8}},
       {"cmp eax, ecx", {0x39, 0xc8}},
       {"mov eax, ecx", {0x89, 0xc8}},
+      {"BMI2 SHLX", {0xc4, 0xe2, 0x71, 0xf7, 0xc0}},
       {"nop", {0x90}},
   };
   for (const auto &Case : Cases) {
@@ -127,6 +128,44 @@ TEST_F(X86UndefinedEffects, DefinedAndPreservedFlagsCreateNoArbitraryProducer) {
               lowUndefinedOperationDigest(CertifiedOps));
     EXPECT_TRUE(Effects.Effects.empty());
     EXPECT_NE(Effects.Diagnostic, "stale certificate");
+  }
+}
+
+TEST_F(X86UndefinedEffects, BndTransfersHaveExactEmptyArbitraryOutputCoverage) {
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    ASSERT_TRUE(Dec.init(Target));
+    for (const auto &Bytes :
+         std::vector<std::vector<uint8_t>>{{0xf2, 0xe8, 0, 0, 0, 0},
+                                           {0xf2, 0xe9, 0, 0, 0, 0},
+                                           {0xf2, 0xeb, 0},
+                                           {0xf2, 0xff, 0xd0},
+                                           {0xf2, 0xff, 0xe0},
+                                           {0xf2, 0xc3},
+                                           {0xf2, 0xc2, 8, 0},
+                                           {0xf2, 0x74, 0},
+                                           {0xf2, 0x0f, 0x85, 0, 0, 0, 0}}) {
+      DecodedInsn Insn{};
+      ASSERT_TRUE(decode(Bytes, Insn));
+      std::vector<LowOp> Ops;
+      LowInstructionUndefinedEffects Effects;
+      Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+      EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete);
+      EXPECT_TRUE(Effects.Effects.empty());
+      EXPECT_EQ(Effects.OpCount, Ops.size());
+      EXPECT_EQ(Effects.OperationDigest, lowUndefinedOperationDigest(Ops));
+    }
+    for (const auto &Bytes :
+         std::vector<std::vector<uint8_t>>{{0xf2, 0x01, 0xc8},
+                                           {0xf2, 0xf2, 0xc3},
+                                           {0xf3, 0xf2, 0xc3},
+                                           {0xf2, 0xf3, 0xc3}}) {
+      DecodedInsn Insn{};
+      ASSERT_TRUE(decode(Bytes, Insn));
+      std::vector<LowOp> Ops;
+      auto Effects = staleEffects();
+      Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+      expectCleared(Effects);
+    }
   }
 }
 
@@ -227,7 +266,6 @@ TEST_F(X86UndefinedEffects, ShiftUnauditedPrefixesClearAllPartialEvidence) {
       {"REP shift", {0xf3, 0xd3, 0xe0}},
       {"REPNZ shift", {0xf2, 0xd3, 0xe0}},
       {"unused REX.R opcode extension", {0x44, 0xd3, 0xe0}},
-      {"BMI2 SHLX", {0xc4, 0xe2, 0x71, 0xf7, 0xc0}},
   };
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Name);
@@ -261,7 +299,7 @@ TEST_F(X86UndefinedEffects, CompatibilityShiftAliasDoesNotRelabelOtherGroups) {
 TEST_F(X86UndefinedEffects, XaddUnauditedFormsClearAllPartialEvidence) {
   const InstructionCase Cases[] = {
       {"segmented memory XADD", {0x64, 0x0f, 0xc1, 0x08}},
-      {"LOCK memory XADD", {0xf0, 0x0f, 0xc1, 0x08}},
+      {"duplicate LOCK memory XADD", {0xf0, 0xf0, 0x0f, 0xc1, 0x08}},
       {"LOCK register XADD", {0xf0, 0x0f, 0xc1, 0xc8}},
       {"REP XADD", {0xf3, 0x0f, 0xc1, 0xc8}},
       {"REPNZ XADD", {0xf2, 0x0f, 0xc1, 0xc8}},
@@ -340,6 +378,14 @@ TEST_F(X86UndefinedEffects, XaddChangedEncodingAndOperandsRemainUnaudited) {
     }
     std::vector<LowOp> Ops;
     auto Effects = staleEffects();
+    if (X.op_count < 2) {
+      EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects),
+                   UnliftedInstruction);
+      EXPECT_TRUE(Ops.empty());
+      EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Unsupported);
+      expectCleared(Effects);
+      continue;
+    }
     ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects));
     EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Missing);
     expectCleared(Effects);
@@ -525,6 +571,14 @@ TEST_F(X86UndefinedEffects, DoubleShiftChangedFormsDoNotPublishDraftEffects) {
       }
       std::vector<LowOp> Ops;
       auto Effects = staleEffects();
+      if (X.op_count < 3) {
+        EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects),
+                     UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+        EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Unsupported);
+        expectCleared(Effects);
+        continue;
+      }
       ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects));
       EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Missing);
       expectCleared(Effects);
@@ -533,8 +587,9 @@ TEST_F(X86UndefinedEffects, DoubleShiftChangedFormsDoNotPublishDraftEffects) {
 
 TEST_F(X86UndefinedEffects, BitAndRotateAuditBoundariesClearPartialEvidence) {
   const InstructionCase Cases[] = {
-      {"memory bit base", {0x0f, 0xb3, 0x08}},
-      {"locked memory bit base", {0xf0, 0x0f, 0xb3, 0x08}},
+      {"duplicate memory bit segment", {0x65, 0x65, 0x0f, 0xb3, 0x08}},
+      {"LOCK read-only bit test", {0xf0, 0x0f, 0xa3, 0x08}},
+      {"HLE locked memory bit base", {0xf2, 0xf0, 0x0f, 0xb3, 0x08}},
       {"REP bit test", {0xf3, 0x0f, 0xa3, 0xc8}},
       {"duplicate bit-test operand prefix", {0x66, 0x66, 0x0f, 0xb3, 0xc8}},
       {"unused bit-test REX.X", {0x42, 0x0f, 0xb3, 0xc8}},
@@ -610,6 +665,62 @@ TEST_F(X86UndefinedEffects, BitTestMutatedEncodingAndOperandsRemainUnaudited) {
       }
       std::vector<LowOp> Ops;
       auto Effects = staleEffects();
+      if (X.op_count < 2) {
+        EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects),
+                     UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+        EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Unsupported);
+        expectCleared(Effects);
+        continue;
+      }
+      ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects));
+      EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Missing);
+      expectCleared(Effects);
+    }
+}
+
+TEST_F(X86UndefinedEffects, MemoryBitTestBindsAddressAndImmediateDetails) {
+  for (bool Immediate : {false, true})
+    for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+      DecodedInsn Insn{};
+      ASSERT_TRUE(decode(
+          Immediate
+              ? std::vector<uint8_t>{0x66, 0x65, 0x0f, 0xba, 0x74, 0x4b, 0xfd,
+                                     0x12}
+              : std::vector<uint8_t>{0x65, 0x48, 0x0f, 0xb3, 0x4c, 0x53, 0xfd},
+          Insn));
+      auto &X = Insn.Raw->detail->x86;
+      switch (Mutation) {
+      case 0:
+        X.operands[0].mem.base = X86_REG_RDX;
+        break;
+      case 1:
+        X.operands[0].mem.index = X86_REG_R8;
+        break;
+      case 2:
+        X.operands[0].mem.scale = 8;
+        break;
+      case 3:
+        X.operands[0].mem.disp += 1;
+        break;
+      case 4:
+        X.operands[0].mem.segment = X86_REG_FS;
+        break;
+      case 5:
+        X.encoding.disp_offset -= 1;
+        break;
+      case 6:
+        X.encoding.imm_offset += 1;
+        break;
+      case 7:
+        X.sib ^= 1;
+        break;
+      case 8:
+        X.prefix[1] = 0;
+        break;
+      }
+      std::vector<LowOp> Ops;
+      auto Effects = staleEffects();
       ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects));
       EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Missing);
       expectCleared(Effects);
@@ -654,6 +765,14 @@ TEST_F(X86UndefinedEffects, ScalarCountMutatedWidthAndOpcodeRemainUnaudited) {
       }
       std::vector<LowOp> Ops;
       auto Effects = staleEffects();
+      if (X.op_count < 2) {
+        EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects),
+                     UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+        EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Unsupported);
+        expectCleared(Effects);
+        continue;
+      }
       ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects));
       EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Missing);
       expectCleared(Effects);
@@ -667,19 +786,18 @@ TEST_F(X86UndefinedEffects, ScalarCountMutatedWidthAndOpcodeRemainUnaudited) {
   expectCleared(Effects);
 }
 
-TEST_F(X86UndefinedEffects, PermissiveUnsupportedFallbackClearsOldCertificate) {
+TEST_F(X86UndefinedEffects, PermissiveUnsupportedFailureClearsOldCertificate) {
   DecodedInsn Insn{};
   ASSERT_TRUE(decode({0x90}, Insn));
   Insn.Raw->id = X86_INS_INVALID;
   Dec.setStrict(false);
   std::vector<LowOp> Ops;
   auto Effects = staleEffects();
-  Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+  EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects), UnliftedInstruction);
   EXPECT_EQ(Effects.Coverage, LowUndefinedCoverage::Unsupported);
   expectCleared(Effects);
-  ASSERT_EQ(Ops.size(), 1U);
-  EXPECT_EQ(Ops.front().Opcode, NdOp::NOP);
-  EXPECT_EQ(Effects.OpCount, Ops.size());
+  EXPECT_TRUE(Ops.empty());
+  EXPECT_EQ(Effects.OpCount, 0u);
 }
 
 TEST_F(X86UndefinedEffects, StrictFailureClearsOldCertificateBeforeThrowing) {
@@ -700,7 +818,7 @@ TEST_F(X86UndefinedEffects, MissingOperandDetailClearsOldCertificate) {
   Insn.Raw = &WithoutDetail;
   std::vector<LowOp> Ops;
   auto Effects = staleEffects();
-  Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+  EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects), UnliftedInstruction);
   expectCleared(Effects);
   EXPECT_EQ(Effects.OpCount, 0U);
   EXPECT_TRUE(Ops.empty());
@@ -741,7 +859,8 @@ TEST_F(X86UndefinedEffects, MalformedOperandCountCannotCertifyEmptyLift) {
   Dec.setStrict(false);
   std::vector<LowOp> Ops;
   auto Effects = staleEffects();
-  Dec.liftToLow(Insn, Ops, {}, {}, &Effects);
+  EXPECT_THROW(Dec.liftToLow(Insn, Ops, {}, {}, &Effects), UnliftedInstruction);
+  EXPECT_TRUE(Ops.empty());
   expectCleared(Effects);
 }
 

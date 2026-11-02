@@ -389,6 +389,16 @@ std::vector<va_t> CFGBuilder::emulateGroundedTargets(const BinaryImage &Img,
     return D;
   };
   for (int I = static_cast<int>(Ops.size()) - 1; I >= 0 && LoadPos < 0; --I) {
+    if (const auto Instruction = originalAArch64TableLoad(Ops[I]);
+        Instruction && Instruction->indexShift() == kAddressMemoryScaleShift &&
+        Ops[I].Output.Size == Info.EntrySize) {
+      const auto &Index = Ops[I].Inputs[kAddressMemoryIndexOperand + 1];
+      if (Index.isReg() || Index.isTemp()) {
+        InjVar = Index;
+        LoadPos = I;
+        continue;
+      }
+    }
     if (Ops[I].Opcode != NdOp::LOAD || Ops[I].NumInputs < 1 ||
         Ops[I].Output.Size != Info.EntrySize)
       continue;

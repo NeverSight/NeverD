@@ -5,8 +5,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/loader/ExceptionInfo.h"
 

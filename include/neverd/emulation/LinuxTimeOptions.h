@@ -21,15 +21,16 @@ struct LinuxTimezone {
 };
 /// Explicit observations for Linux ELF64 and Android native workloads. Keys
 /// are Linux clock IDs. An absent clock/timezone has no modeled value; zero
-/// must be supplied explicitly. Encoded process CPU clocks require explicit
-/// released GKI and live guest task observations. Reads never consult host
-/// time.
+/// must be supplied explicitly. Encoded process CPU clocks require a released
+/// GKI contract or an explicit closed task catalogue. Foreign process samples
+/// require observed live group leaders. Reads never consult host time.
 struct LinuxTimeOptions {
   std::map<int32_t, LinuxTimespec> Clocks;
   std::optional<LinuxTimezone> Timezone;
   /// Opt in to relative nanosleep without signals. Time advances to the next
-  /// sleep deadline only when no guest thread can run. Realtime, monotonic and
-  /// boottime observations advance; process CPU observations remain fixed.
+  /// sleep deadline only when no guest thread can run. Realtime, monotonic,
+  /// monotonic raw and boottime advance from independent declared epochs;
+  /// process CPU observations remain fixed.
   bool AdvanceOnIdle = false;
   /// Explicit deterministic virtual wall-time rate. Zero preserves a frozen
   /// clock during CPU execution. Account admitted instructions at stopped

@@ -9,7 +9,7 @@
 
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <cstdint>

@@ -1,0 +1,36 @@
+//===- X87CRTImports.def - Microsoft CRT register-stack entries -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Known case-sensitive x87 CRT names and their supported ST0/ST1 argument
+/// counts. Zero marks a recognized entry whose transport is unsupported; it
+/// must not become an ordinary zero-argument call. Provider and storage checks
+/// belong to X87ImportCall.h. Define NEVERD_X87_CRT_IMPORT(Name, Arguments).
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_X87_CRT_IMPORT
+#error "Define NEVERD_X87_CRT_IMPORT before including this file"
+#endif
+
+NEVERD_X87_CRT_IMPORT("_CIacos", 1)
+NEVERD_X87_CRT_IMPORT("_CIasin", 0)
+NEVERD_X87_CRT_IMPORT("_CIatan", 1)
+NEVERD_X87_CRT_IMPORT("_CIatan2", 0)
+NEVERD_X87_CRT_IMPORT("_CIcos", 1)
+NEVERD_X87_CRT_IMPORT("_CIcosh", 0)
+NEVERD_X87_CRT_IMPORT("_CIexp", 0)
+NEVERD_X87_CRT_IMPORT("_CIfmod", 0)
+NEVERD_X87_CRT_IMPORT("_CIlog", 0)
+NEVERD_X87_CRT_IMPORT("_CIlog10", 0)
+NEVERD_X87_CRT_IMPORT("_CIpow", 2)
+NEVERD_X87_CRT_IMPORT("_CIsin", 1)
+NEVERD_X87_CRT_IMPORT("_CIsinh", 0)
+NEVERD_X87_CRT_IMPORT("_CIsqrt", 1)
+NEVERD_X87_CRT_IMPORT("_CItan", 0)
+NEVERD_X87_CRT_IMPORT("_CItanh", 0)
+
+#undef NEVERD_X87_CRT_IMPORT

@@ -1,5 +1,6 @@
 // Classic x86 listing spellings: mnemonics, operand forms, size keywords,
-// immediates, displacements and frame variables.
+// immediates, displacements and frame variables; the user's number formats in
+// x86, ARM-family, SBF and EVM operands.
 #include "OperandFormat.h"
 
 #include <cstdio>
@@ -43,6 +44,7 @@ struct Format {
   bool wide = true;
   /// The user's number formats, by operand index.
   std::vector<NumberFormat> formats = {};
+  OperandDialect dialect = OperandDialect::X86;
 };
 
 /// The local type `_T`'s members: a structure offset lands in the one that
@@ -71,7 +73,7 @@ std::string format(const Format &input, const FrameNamer *frame = nullptr,
   static const StructNamer structs = landing;
   OperandFacts facts;
   facts.structs = &structs;
-  facts.dialect = OperandDialect::X86;
+  facts.dialect = input.dialect;
   facts.mnemonic = input.mnemonic;
   facts.address = 0x401000;
   facts.size = 4;
@@ -210,8 +212,8 @@ int main() {
             std::vector<bool>{false, true},
         "a displacement is no plain number");
   check(formattableOperands("w0, #0x20", OperandDialect::AArch64) ==
-            std::vector<bool>{false, false},
-        "AArch64 operands show no formats");
+            std::vector<bool>{false, true},
+        "an AArch64 immediate takes a format");
   expectFormat({"imul", "rsi, qword ptr [rax], -0xc8", "",
                 "rsi, [rax], 0FFFFFFFFFFFFFF38h"});
   // Thread storage offsets, missing base registers and zero displacements.
@@ -342,6 +344,283 @@ int main() {
         classicInstruction(OperandDialect::X86, "imul", "eax, eax, 0xb", "");
     check(folded.operandIndices == std::vector<std::size_t>{0, 2},
           "Classic folding lost original immediate identity");
+  }
+  {
+    // ARM-family operands keep the decoder's `#` and count an immediate in
+    // the first register's width: 32 bits for a `w` register, else 64.
+    const auto aarch64 = OperandDialect::AArch64, arm = OperandDialect::ARM;
+    const auto at = [](std::size_t operand, NumberFormat format) {
+      std::vector<NumberFormat> formats(operand + 1);
+      formats[operand] = std::move(format);
+      return formats;
+    };
+    const NumberFormat hexadecimal{NumberBase::Hex},
+        decimal{NumberBase::Decimal}, binary{NumberBase::Binary},
+        character{NumberBase::Char}, offset{NumberBase::Offset},
+        negate{NumberBase::Number, true},
+        invert{NumberBase::Number, false, true};
+    check(formattableOperands("x0, x1, #0x10, lsl #12", aarch64) ==
+              std::vector<bool>{false, false, true, false},
+          "a shift is no number");
+    check(formattableOperands("x0, [x1, #8]", aarch64) ==
+              std::vector<bool>{false, false},
+          "a displacement is no plain number");
+    check(formattableOperands("d0, #1.00000000", aarch64) ==
+              std::vector<bool>{false, false},
+          "a floating constant is no number");
+    check(formattableOperands("{r4, r5, lr}", arm) == std::vector<bool>{false},
+          "a register list is one operand");
+    check(structOperands("x29, x30, [sp, #-0x10]!", aarch64) ==
+              std::vector<bool>{false, false, true},
+          "a pre-indexed displacement takes a structure offset");
+    check(structOperands("r0, [pc, #0x10]", arm) ==
+              std::vector<bool>{false, false},
+          "a PC-relative operand names a location");
+    check(structOperands("x0, [x1, x2, lsl #3]", aarch64) ==
+              std::vector<bool>{false, false},
+          "a register index has no displacement");
+    check(operandNumber("w9, #-5", 1, aarch64) == -5 &&
+              !operandNumber("w9, #-5", 1, OperandDialect::X86),
+          "an ARM immediate's number keeps its sign");
+    expectFormat(
+        {"mov", "w8, #0x1234", "", "w8, #4660", true, at(1, decimal), aarch64});
+    expectFormat(
+        {"cmp", "x19, #8", "", "x19, #8", true, at(1, hexadecimal), aarch64});
+    expectFormat({"cmp", "x19, #0x65", "", "x19, #0b1100101", true,
+                  at(1, binary), aarch64});
+    expectFormat(
+        {"mov", "w0, #0x41", "", "w0, #'A'", true, at(1, character), aarch64});
+    expectFormat({"mov", "w9, #0xfffb", "", "w9, #-0xffff0005", true,
+                  at(1, negate), aarch64});
+    expectFormat({"and", "x9, x19, #0xff0", "", "x9, x19, #~0xfffffffffffff00f",
+                  true, at(2, invert), aarch64});
+    expectFormat({"mov", "w0, #-1", "", "w0, #0xffffffff", true,
+                  at(1, hexadecimal), aarch64});
+    expectFormat({"mov", "x0, #0x1000", "", "x0, unk_1000", true, at(1, offset),
+                  aarch64});
+    expectFormat({"ld1", "{v0.16b, v1.16b}, [x0], #32", "",
+                  "{v0.16b, v1.16b}, [x0], #0x20", true, at(2, hexadecimal),
+                  aarch64});
+    expectFormat({"fmov", "d0, #1.00000000", "", "d0, #1.00000000", true,
+                  at(1, hexadecimal), aarch64});
+    expectFormat(
+        {"movw", "r0, #0xfffb", "", "r0, #65531", true, at(1, decimal), arm});
+    // Structure offsets in displacements and immediates; one no member holds
+    // keeps the decoder's number.
+    expectFormat({"ldr", "x8, [x20, #0x10]", "", "x8, [x20, #_T.List.Flink]",
+                  true, member(1), aarch64});
+    expectFormat({"ldrb", "w8, [x20, #2]", "", "w8, [x20, #_T.Size]", true,
+                  member(1), aarch64});
+    expectFormat({"str", "x8, [x20, #0x18]!", "", "x8, [x20, #_T.List.Blink]!",
+                  true, member(1), aarch64});
+    expectFormat({"stp", "x29, x30, [sp, #-0x10]!", "",
+                  "x29, x30, [sp, #-0x10]!", true, member(2), aarch64});
+    expectFormat({"add", "x0, x0, #0x1c", "", "x0, x0, #_T.List.Blink+4", true,
+                  member(2), aarch64});
+    expectFormat({"ldr", "r0, [r5, #0x220]", "", "r0, [r5, #_T.Process]", true,
+                  member(1), arm});
+    expectFormat({"ldr", "r0, [pc, #0x10]", "", "r0, [pc, #0x10]", true,
+                  member(1), arm});
+    // An enumerator without a decoded operand width.
+    OperandFacts facts;
+    facts.dialect = aarch64;
+    facts.mnemonic = "mov";
+    std::vector<NumberFormat> formats(2);
+    formats[1] = {NumberBase::Enum, false, false, "NUMBERS", 0};
+    facts.numberFormats = &formats;
+    unsigned width = 0;
+    OperandFacts::EnumNamer enums = [&](std::string_view, std::uint64_t value,
+                                        unsigned bits,
+                                        bool) -> std::optional<std::string> {
+      width = value == 7 ? bits : 0;
+      return "SEVEN";
+    };
+    facts.enums = &enums;
+    const LocationNamer none = [](std::uint64_t, NameUse, std::string_view) {
+      return LocationName{};
+    };
+    check(formatOperands("w0, #7", facts, none).text() == "w0, #SEVEN" &&
+              width == 32,
+          "a w register's enumerator lost its width");
+    check(formatOperands("x0, #7", facts, none).text() == "x0, #SEVEN" &&
+              width == 64,
+          "an x register's enumerator lost its width");
+    facts.dialect = arm;
+    check(formatOperands("r0, #7", facts, none).text() == "r0, #SEVEN" &&
+              width == 32,
+          "an ARM enumerator lost its width");
+
+    // A 64-bit vector element keeps all of its immediate's bits, and an
+    // immediate no width holds counts wider rather than lose bits.
+    expectFormat({"vmov.i64", "d16, #0xffffffff00000000", "",
+                  "d16, #0xffffffff00000000", true, at(1, hexadecimal), arm});
+    expectFormat({"vmov.i64", "d0, #0xff00ff00ff00ff00", "",
+                  "d0, #18374966859414961920", true, at(1, decimal), arm});
+    expectFormat({"vmov.i64", "d0, #0xff", "", "d0, #~0xffffffffffffff00", true,
+                  at(1, invert), arm});
+    expectFormat({"vmov.i32", "q0, #0x100000000", "", "q0, #4294967296", true,
+                  at(1, decimal), arm});
+    // A shifted immediate is a field of a larger number: it takes a base but
+    // names no member.
+    expectFormat({"add", "x0, x1, #0x18, lsl #12", "", "x0, x1, #24, lsl #12",
+                  true, at(2, decimal), aarch64});
+    expectFormat({"add", "x0, x1, #0x18, lsl #12", "", "x0, x1, #0x18, lsl #12",
+                  true, member(2), aarch64});
+    check(structOperands("x0, x1, #0x18, lsl #12", aarch64) ==
+              std::vector<bool>{false, false, false, false},
+          "a shifted immediate takes a structure offset");
+
+    // A structure offset lands an access as wide as the data a load, store,
+    // swap or compare-and-swap moves.
+    std::vector<unsigned> asked;
+    const StructNamer sizes = [&](std::string_view, std::int64_t,
+                                  unsigned bytes) {
+      asked.push_back(bytes);
+      return std::optional<StructLanding>(StructLanding{"Field", 0});
+    };
+    const auto access = [&](OperandDialect dialect, std::string_view mnemonic,
+                            std::string_view operands, std::size_t operand) {
+      OperandFacts accessFacts;
+      accessFacts.dialect = dialect;
+      accessFacts.mnemonic = mnemonic;
+      accessFacts.structs = &sizes;
+      const auto formats = member(operand);
+      accessFacts.numberFormats = &formats;
+      asked.clear();
+      formatOperands(operands, accessFacts, none);
+      return asked.empty() ? -1 : int(asked.front());
+    };
+    check(access(aarch64, "ldr", "x8, [x20, #0x10]", 1) == 8,
+          "a load lost its register's width");
+    check(access(aarch64, "stxr", "w8, x9, [x10]", 2) == 8 &&
+              access(aarch64, "stlxp", "w8, x9, x11, [x10]", 3) == 8,
+          "an exclusive store took its status register's width");
+    check(access(aarch64, "stxrb", "w8, w9, [x10]", 2) == 1,
+          "an exclusive byte store lost its size");
+    check(access(aarch64, "swp", "x9, x8, [x10]", 2) == 8 &&
+              access(aarch64, "casal", "x9, x8, [x10]", 2) == 8 &&
+              access(aarch64, "casb", "w9, w8, [x10]", 2) == 1,
+          "a swap or compare-and-swap lost its width");
+    check(access(aarch64, "ldp", "w0, w1, [x2, #8]", 2) == 4 &&
+              access(arm, "ldrd", "r0, r1, [r2, #8]", 2) == 4,
+          "a pair counts other than one register");
+    check(access(arm, "ldrhs", "r0, [r1, #4]", 1) == 4 &&
+              access(arm, "ldrhhs", "r0, [r1, #4]", 1) == 2,
+          "a condition was taken for a size");
+    check(access(arm, "vld1.8", "{d0, d1}, [r0]", 1) == 0 &&
+              access(aarch64, "ld1", "{v0.16b}, [x0]", 1) == 0,
+          "a register list was given one register's size");
+    check(access(aarch64, "add", "x0, x0, #0x18", 2) == 0,
+          "an address computation was taken for an access");
+  }
+  {
+    // SBF and EVM operands keep their decoders' spellings: SBF's signed
+    // decimal, lddw's hexadecimal and `[r10 - 8]`, EVM's padded PUSH data.
+    const auto sbf = OperandDialect::SBF, evm = OperandDialect::EVM;
+    const auto at = [](std::size_t operand, NumberFormat format) {
+      std::vector<NumberFormat> formats(operand + 1);
+      formats[operand] = std::move(format);
+      return formats;
+    };
+    const NumberFormat hexadecimal{NumberBase::Hex},
+        decimal{NumberBase::Decimal}, binary{NumberBase::Binary},
+        character{NumberBase::Char}, negate{NumberBase::Number, true},
+        invert{NumberBase::Number, false, true};
+    // A call target, a byte swap's width and a stack position are numbers,
+    // but no constants of the program.
+    check(formattableOperands("r1, 5", sbf, "mov64") ==
+              std::vector<bool>{false, true},
+          "an SBF immediate is no number");
+    check(formattableOperands("r1, 65, block_7", sbf, "jeq") ==
+              std::vector<bool>{false, true, false},
+          "a branch target is a number");
+    check(formattableOperands("12345", sbf, "call") == std::vector<bool>{false},
+          "a call target is a constant");
+    check(formattableOperands("r1, 16", sbf, "le") ==
+              std::vector<bool>{false, false},
+          "a byte swap's width is a constant");
+    check(formattableOperands("r3, [r10 - 8]", sbf, "ldxdw") ==
+              std::vector<bool>{false, false},
+          "an SBF displacement is a plain number");
+    check(structOperands("r3, [r10 - 8]", sbf, "ldxdw") ==
+              std::vector<bool>{false, true},
+          "an SBF displacement takes no structure offset");
+    check(formattableOperands("0x0004", evm, "PUSH2") ==
+              std::vector<bool>{true},
+          "PUSH data is no number");
+    check(formattableOperands("0x01", evm, "DUPN") == std::vector<bool>{false},
+          "a stack position is a constant");
+    check(structOperands("0x0004", evm, "PUSH2") == std::vector<bool>{true} &&
+              structOperands("0xfffffffffffffffffffffffffffffffffffffffffffffff"
+                             "fffffffffffffffff",
+                             evm, "PUSH32") == std::vector<bool>{false},
+          "PUSH data wider than 64 bits takes a structure offset");
+
+    // An SBF immediate counts in its operation's width, a store's in the
+    // data's, unless the encoded number needs the field's 32 bits.
+    expectFormat(
+        {"mov64", "r1, 5", "", "r1, 0x5", true, at(1, hexadecimal), sbf});
+    expectFormat({"add64", "r1, -16", "", "r1, 0xfffffffffffffff0", true,
+                  at(1, hexadecimal), sbf});
+    expectFormat({"add64", "r1, -16", "", "r1, -16", true, at(1, negate), sbf});
+    expectFormat({"mov32", "r0, -1", "", "r0, 0xffffffff", true,
+                  at(1, hexadecimal), sbf});
+    expectFormat({"jeq", "r1, 65, block_7", "", "r1, 'A', block_7", true,
+                  at(1, character), sbf});
+    expectFormat({"stb", "[r1 + 2], -1", "", "[r1 + 2], 0xff", true,
+                  at(1, hexadecimal), sbf});
+    expectFormat({"stb", "[r1 + 2], 255", "", "[r1 + 2], 0b11111111", true,
+                  at(1, binary), sbf});
+    expectFormat({"stb", "[r1 + 2], 300", "", "[r1 + 2], 0x12c", true,
+                  at(1, hexadecimal), sbf});
+    expectFormat({"lddw", "r2, 0x912345678", "", "r2, 38960125560", true,
+                  at(1, decimal), sbf});
+    expectFormat({"lddw", "r2, 0x912345678", "", "r2, ~0xfffffff6edcba987",
+                  true, at(1, invert), sbf});
+    // A structure offset names a displacement's member or an immediate's.
+    expectFormat({"ldxdw", "r3, [r1 + 24]", "", "r3, [r1 + _T.List.Blink]",
+                  true, member(1), sbf});
+    expectFormat({"stxdw", "[r1 + 548], r3", "", "[r1 + _T.Process+4], r3",
+                  true, member(0), sbf});
+    expectFormat({"ldxb", "r3, [r10 - 8]", "", "r3, [r10 + _T.Type-8]", true,
+                  member(1, 8), sbf});
+    expectFormat(
+        {"ldxdw", "r3, [r10 - 8]", "", "r3, [r10 - 8]", true, member(1), sbf});
+    expectFormat(
+        {"mov64", "r1, 24", "", "r1, _T.List.Blink", true, member(1), sbf});
+
+    // PUSH data counts in the PUSH's own width, up to the 256-bit word.
+    expectFormat({"PUSH2", "0x0004", "", "4", true, at(0, decimal), evm});
+    expectFormat({"PUSH2", "0xff00", "", "~0x00ff", true, at(0, invert), evm});
+    expectFormat({"PUSH2", "0x0004", "", "-0xfffc", true, at(0, negate), evm});
+    expectFormat(
+        {"PUSH2", "0x1234", "", "0b1001000110100", true, at(0, binary), evm});
+    expectFormat({"PUSH1", "0x41", "", "'A'", true, at(0, character), evm});
+    expectFormat(
+        {"PUSH32",
+         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+         "",
+         "115792089237316195423570985008687907853269984665640564039457"
+         "584007913129639935",
+         true, at(0, decimal), evm});
+    expectFormat(
+        {"PUSH32",
+         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+         "",
+         "~0x0000000000000000000000000000000000000000000000000000000000000000",
+         true, at(0, invert), evm});
+    expectFormat(
+        {"PUSH32",
+         "0x45524332303a207472616e7366657220616d6f756e7420657863656564732062",
+         "", "'ERC20: transfer amount exceeds b'", true, at(0, character),
+         evm});
+    expectFormat({"PUSH1", "0x18", "", "_T.List.Blink", true, member(0), evm});
+    expectFormat(
+        {"PUSH32",
+         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+         "",
+         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+         true, member(0), evm});
   }
   return 0;
 }

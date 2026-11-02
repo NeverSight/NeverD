@@ -15,7 +15,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X86Interrupts.h"
+#include "neverd/ir/intrinsics/X86/X86Interrupts.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -253,6 +253,11 @@ bool isTerminatingHighCall(const ExprPtr &Expression) {
       Expression->MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return false;
   const Intrinsic Id = Expression->IntrinsicId;
+  if (Id == Intrinsic::X86Skinit && Expression->Operands.size() == 1) {
+    const auto &Address = Expression->Operands[0];
+    return Address && Address->Type && Address->Type->Kind == NdTypeKind::Int &&
+           Address->Type->Size == 4;
+  }
   if (Expression->Operands.empty())
     return isUnconditionalTrapIntrinsic(Id) ||
            intrinsicNeverReturns(Id, std::nullopt);

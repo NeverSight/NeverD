@@ -21,6 +21,11 @@ namespace neverd::llvmc {
 bool simplifyBitTests(
     llvm::Function &Function,
     unsigned WorkLimit = ::neverd::limits::backend::kLLVMCBitTestsWorkLimit);
+/// Reuse the bit proof for narrow integer reads. Unread register fragments
+/// disappear before C evaluates an unavailable enclosing word.
+bool simplifyIntegerSlices(
+    llvm::Function &Function,
+    unsigned WorkLimit = ::neverd::limits::backend::kLLVMCBitTestsWorkLimit);
 } // namespace neverd::llvmc
 
 #endif

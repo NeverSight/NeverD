@@ -8,7 +8,11 @@
 
 #include "RegistrationHelperExpansion.h"
 
+#include "neverd/decode/Decoder.h"
+#include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
+#include "neverd/lift/LiftCommon.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd::x86_registration {
 

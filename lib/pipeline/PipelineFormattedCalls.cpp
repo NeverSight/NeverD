@@ -16,13 +16,15 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterBody.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/pipeline/Limits.h"
 
@@ -35,6 +37,14 @@
 
 namespace neverd::pipeline_detail {
 namespace {
+
+/// Integer-register constants used to form a format address. The call-effect
+/// family numbering is x64-only; this local state also follows A64 X registers.
+std::optional<unsigned> formatRegister(Arch A, uint64_t Register) {
+  if (A == Arch::AArch64 && Register < a64reg::SP && Register % 8 == 0)
+    return static_cast<unsigned>(Register / 8);
+  return gprFamilyOf(A, Register);
+}
 
 /// The C string at \p Address, when the program cannot change it: in memory
 /// it reads but neither writes nor executes.
@@ -95,7 +105,7 @@ std::optional<PrintfCallee> printfCallee(const BinaryImage &Img, va_t Target) {
   if (FormatParameter >= TRI.IntParamRegs.size())
     return std::nullopt;
   const std::optional<unsigned> Family =
-      gprFamilyOf(Img.Arch, TRI.IntParamRegs[FormatParameter]);
+      formatRegister(Img.Arch, TRI.IntParamRegs[FormatParameter]);
   if (!Family)
     return std::nullopt;
   return PrintfCallee{Routine, *Family};
@@ -131,10 +141,30 @@ formattedCall(const BinaryImage &Img, const libc::LibCPrintfFormat &Routine,
     return std::nullopt;
   for (const TypeRef &Type : *Named)
     Signature.Parameters.push_back({"", Type});
-  std::string Diagnostic;
-  if (!assignSysVX64VariadicSourceABI(Signature, Routine.ParamCount,
-                                      Diagnostic))
-    return std::nullopt;
+  if (Img.Arch == Arch::X64) {
+    std::string Diagnostic;
+    if (!assignSysVX64VariadicSourceABI(Signature, Routine.ParamCount,
+                                        Diagnostic))
+      return std::nullopt;
+  } else {
+    // AAPCS64's promoted scalar variadic values use the same independent
+    // integer/vector banks as fixed scalars. Darwin and Windows variadics
+    // have different rules and do not enable this convention policy.
+    std::vector<TypeRef> Types;
+    for (const auto &Parameter : Signature.Parameters)
+      Types.push_back(Parameter.Type);
+    const auto Placement = placeSourceParameters(Img.Arch, Img.abiFormat(),
+                                                 Signature.ReturnType, Types);
+    if (!Placement || Placement->Parameters.size() != Types.size())
+      return std::nullopt;
+    for (size_t I = 0; I < Types.size(); ++I) {
+      const auto &Pieces = Placement->Parameters[I];
+      if (Pieces.size() != 1 || Pieces.front().Indirect ||
+          Pieces.front().Offset != 0)
+        return std::nullopt;
+      Signature.Parameters[I].Location = Pieces.front().Location;
+    }
+  }
   FormattedCall Result;
   unsigned Vectors = 0;
   for (const SourceParameterTypeHint &Parameter : Signature.Parameters) {
@@ -187,7 +217,7 @@ FamilyConstants scanBlock(const BinaryImage &Img, const LowBlock &Block,
                           FamilyConstants Constants,
                           PrintfCallVisitor OnCall = nullptr) {
   const std::optional<unsigned> VectorCountFamily =
-      gprFamilyOf(Img.Arch, x86reg::RAX);
+      Img.Arch == Arch::X64 ? gprFamilyOf(Img.Arch, x86reg::RAX) : std::nullopt;
   // The constant each temporary holds here, and the count AL holds.
   std::map<uint64_t, uint64_t> Temporaries;
   std::optional<uint8_t> VectorCount;
@@ -213,7 +243,7 @@ FamilyConstants scanBlock(const BinaryImage &Img, const LowBlock &Block,
       if (const auto It = Temporaries.find(V.Offset); It != Temporaries.end())
         return Truncated(It->second, V.Size);
     if (V.isReg() && V.Offset % 8 == 0)
-      if (const auto Family = gprFamilyOf(Img.Arch, V.Offset))
+      if (const auto Family = formatRegister(Img.Arch, V.Offset))
         if (const auto It = Constants.find(*Family);
             It != Constants.end() && It->second.size() == 1)
           return Truncated(*It->second.begin(), V.Size);
@@ -260,7 +290,7 @@ FamilyConstants scanBlock(const BinaryImage &Img, const LowBlock &Block,
     if (!Op.Output.isReg())
       continue;
     const std::optional<unsigned> Family =
-        gprFamilyOf(Img.Arch, Op.Output.Offset);
+        formatRegister(Img.Arch, Op.Output.Offset);
     if (!Family)
       continue;
     const bool LowByte = Op.Output.Offset % 8 == 0;

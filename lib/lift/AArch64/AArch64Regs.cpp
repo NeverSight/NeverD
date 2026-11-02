@@ -9,7 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 namespace neverd {
 

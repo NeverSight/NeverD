@@ -163,6 +163,10 @@ llvm::Expected<LinkedImage> loadImage(AddressSpace &Space,
       return std::move(E);
   if (auto E = initializeCalendar(Space, Native, Out))
     return std::move(E);
+  if (auto E = initializeErrorStrings(Space, Out))
+    return std::move(E);
+  if (auto E = initializeDladdrObservations(Space, Native, Out))
+    return std::move(E);
   for (const auto &Region : Plan->Regions)
     if (auto E = Space.protect(Region.Address, Region.Bytes.size(),
                                Region.Permissions))

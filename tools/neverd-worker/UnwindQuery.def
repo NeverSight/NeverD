@@ -1,0 +1,36 @@
+//===- UnwindQuery.def - Exact-address unwind transport words -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Transport vocabulary only; signing semantics belong to the loader query.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_QUERY_TEXT
+#define NEVERD_UNWIND_QUERY_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_UNWIND_QUERY_VALUE
+#define NEVERD_UNWIND_QUERY_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_UNWIND_QUERY_ADDRESS
+#define NEVERD_UNWIND_QUERY_ADDRESS(Name, Text)
+#endif
+
+NEVERD_UNWIND_QUERY_VALUE(unsigned, kRequestFieldCount, 1)
+NEVERD_UNWIND_QUERY_TEXT(kOperation, "unwind_frame")
+NEVERD_UNWIND_QUERY_TEXT(kSymbol, "neverd_unwind_frame_json")
+NEVERD_UNWIND_QUERY_TEXT(kAddress, "address")
+NEVERD_UNWIND_QUERY_TEXT(kUnsupported, "unsupported")
+NEVERD_UNWIND_QUERY_TEXT(kInvalidRequest, "invalid_request")
+NEVERD_UNWIND_QUERY_TEXT(kUnavailable,
+                         "This engine does not report unwind frames")
+NEVERD_UNWIND_QUERY_TEXT(kInvalidPayload,
+                         "unwind_frame requires only an address parameter")
+NEVERD_UNWIND_QUERY_ADDRESS(kBegin, "begin")
+NEVERD_UNWIND_QUERY_ADDRESS(kQueryPC, "query_pc")
+NEVERD_UNWIND_QUERY_ADDRESS(kSigningPC, "signing_pc")
+
+#undef NEVERD_UNWIND_QUERY_TEXT
+#undef NEVERD_UNWIND_QUERY_VALUE
+#undef NEVERD_UNWIND_QUERY_ADDRESS

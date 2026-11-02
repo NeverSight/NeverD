@@ -1,0 +1,68 @@
+//===- X86SystemState.def - System instruction inventory ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// NEVERD_X86_SYSTEM_STATE(Id, Mnemonic, Kind, MemoryArgument).
+// Intentionally no include guard. Completion and widths live in the contract.
+
+NEVERD_X86_SYSTEM_STATE(X86ReadPid, "rdpid", ReadPid, -1)
+NEVERD_X86_SYSTEM_STATE(X86ReadFsBase, "rdfsbase", ReadBase, -1)
+NEVERD_X86_SYSTEM_STATE(X86ReadGsBase, "rdgsbase", ReadBase, -1)
+NEVERD_X86_SYSTEM_STATE(X86WriteFsBase, "wrfsbase", WriteBase, -1)
+NEVERD_X86_SYSTEM_STATE(X86WriteGsBase, "wrgsbase", WriteBase, -1)
+NEVERD_X86_SYSTEM_STATE(X86ClearTaskSwitched, "clts", Void, -1)
+NEVERD_X86_SYSTEM_STATE(X86UserMonitor, "umonitor", Monitor, 0)
+NEVERD_X86_SYSTEM_STATE(X86UserWait, "umwait", Wait, -1)
+NEVERD_X86_SYSTEM_STATE(X86TimedPause, "tpause", Wait, -1)
+NEVERD_X86_SYSTEM_STATE(X86LoadAccessRights, "lar", AccessRights, -1)
+NEVERD_X86_SYSTEM_STATE(X86LoadAccessRightsMemory, "lar", AccessRights, 0)
+NEVERD_X86_SYSTEM_STATE(X86AdjustRpl, "arpl", AdjustRpl, -1)
+NEVERD_X86_SYSTEM_STATE(X86AdjustRplMemory, "arpl", AdjustRpl, 0)
+NEVERD_X86_SYSTEM_STATE(X86DirectStore, "movdiri", DirectStore, 0)
+NEVERD_X86_SYSTEM_STATE(X86DirectStore64B, "movdir64b", DirectStore64B, 0)
+NEVERD_X86_SYSTEM_STATE(X86WriteMsrNonSerializing, "wrmsrns", WriteMsr, -1)
+NEVERD_X86_SYSTEM_STATE(X86ReadMsrList, "rdmsrlist", MsrList, 0)
+NEVERD_X86_SYSTEM_STATE(X86WriteMsrList, "wrmsrlist", MsrList, 0)
+NEVERD_X86_SYSTEM_STATE(X86ClearUserInterrupt, "clui", Void64, -1)
+NEVERD_X86_SYSTEM_STATE(X86SetUserInterrupt, "stui", Void64, -1)
+NEVERD_X86_SYSTEM_STATE(X86TestUserInterrupt, "testui", TestUserInterrupt, -1)
+NEVERD_X86_SYSTEM_STATE(X86SendUserInterrupt, "senduipi", SendUserInterrupt, -1)
+NEVERD_X86_SYSTEM_STATE(X86LoadKernelGs, "lkgs", LoadKernelGs, -1)
+NEVERD_X86_SYSTEM_STATE(X86LoadKernelGsMemory, "lkgs", LoadKernelGs, 0)
+NEVERD_X86_SYSTEM_STATE(X86HistoryReset, "hreset", HistoryReset, -1)
+NEVERD_X86_SYSTEM_STATE(X86InvalidateBroadcast, "invlpgb", InvalidateBroadcast,
+                        -1)
+NEVERD_X86_SYSTEM_STATE(X86TlbSync, "tlbsync", Void, -1)
+
+// These IDs are allocated outside this inventory. Consumers opt in without
+// renumbering their serialized IDs or duplicating their name tables.
+#ifdef NEVERD_X86_EXISTING_SYSTEM_STATE
+NEVERD_X86_EXISTING_SYSTEM_STATE(Clac, "clac", Void, -1)
+NEVERD_X86_EXISTING_SYSTEM_STATE(Stac, "stac", Void, -1)
+NEVERD_X86_EXISTING_SYSTEM_STATE(Xend, "xend", Void, -1)
+NEVERD_X86_EXISTING_SYSTEM_STATE(Xabort, "xabort", TransactionAbort, -1)
+NEVERD_X86_EXISTING_SYSTEM_STATE(Clzero, "clzero", CacheZero, 0)
+NEVERD_X86_EXISTING_SYSTEM_STATE(CetWrss, "wrss", ShadowWrite, 0)
+NEVERD_X86_EXISTING_SYSTEM_STATE(CetWruss, "wruss", ShadowWrite, 0)
+NEVERD_X86_EXISTING_SYSTEM_STATE(Enqcmd, "enqcmd", Enqueue, 0)
+NEVERD_X86_EXISTING_SYSTEM_STATE(Enqcmds, "enqcmds", Enqueue, 0)
+NEVERD_X86_EXISTING_SYSTEM_STATE(X86SegmentedBlockMemory,
+                                 "# x86 segmented block:", SegmentedBlock, -1)
+#endif
+
+// Append-only IDs allocated after later architecture families. Metadata and
+// renderers opt in while the original enum expansion stays unchanged.
+#ifdef NEVERD_X86_APPENDED_SYSTEM_STATE
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LoadSegmentLimit, "lsl", AccessRights, -1)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LoadSegmentLimitMemory, "lsl", AccessRights,
+                                 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86Skinit, "skinit", SecureLaunch, -1)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedAnd, "lock and", LockedLogic, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedOr, "lock or", LockedLogic, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedXor, "lock xor", LockedLogic, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBts, "lock bts", LockedBit, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBtr, "lock btr", LockedBit, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86LockedBtc, "lock btc", LockedBit, 0)
+NEVERD_X86_APPENDED_SYSTEM_STATE(X86StreamStore128, "movntdq", StreamStore128, 0)
+#endif

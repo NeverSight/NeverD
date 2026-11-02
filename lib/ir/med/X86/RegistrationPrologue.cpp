@@ -8,7 +8,7 @@
 #include "RegistrationPrologue.h"
 
 #include "neverd/ir/low/RegistrationSharedCall.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 

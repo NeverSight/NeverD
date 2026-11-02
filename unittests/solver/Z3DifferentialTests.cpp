@@ -359,6 +359,39 @@ TEST(Z3Differential, IndependentlySizedShiftAndRotateCounts) {
   }
 }
 
+TEST(Z3Differential, ScaledProductsMatchIndependentFullWidthMultiplication) {
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 129u})
+    for (unsigned Observed : {1u, 4u})
+      for (bool Negative : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << Observed << ':' << Negative);
+        auto Scale = llvm::APInt(Width, 3).shl(Width - Observed);
+        if (Negative)
+          Scale = -Scale;
+        const auto Mask = ~llvm::APInt(Width, 1);
+        SymContext C;
+        const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+        const auto Output = C.mkVar("output", Width);
+        const auto Product = C.mkMul(
+            {C.mkConst(Scale), C.mkAdd(X, Y), C.mkXor(X, C.mkConst(Mask))});
+        Z3Solver Adapter(C);
+        ASSERT_TRUE(Adapter.assertEqual(Output, Product));
+        z3::context Z;
+        z3::solver Reference(Z, "QF_BV");
+        Reference.set("timeout", Z3SolverOptions{}.TimeoutMs);
+        Reference.from_string(Adapter.dumpSMT2().c_str());
+        const auto ZX = Z.bv_const("v0", Width);
+        const auto ZY = Z.bv_const("v1", Width);
+        const auto ZOutput = Z.bv_const("v2", Width);
+        // The independent side uses ordinary full-width multiplication, with
+        // no quotient or truncation and no pinned or sampled input values.
+        const auto Expected =
+            numeral(Z, Scale) * (ZX + ZY) * (ZX ^ numeral(Z, Mask));
+        Reference.add(ZOutput != Expected);
+        EXPECT_EQ(Reference.check(), z3::unsat) << Reference.reason_unknown();
+      }
+}
+
 TEST(Z3Differential, DumpsReplayTheCurrentQueryWithoutStaleAssumptions) {
   SymContext C;
   SymRef X = C.mkVar("x", 8), Y = C.mkVar("y", 8);

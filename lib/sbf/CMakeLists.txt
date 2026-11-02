@@ -1,9 +1,13 @@
 add_neverd_component_library(NeverDSBF
+  analysis/SBFAnalysisReport.cpp
   analysis/SBFAnalyzer.cpp
   analysis/SBFAnalyzerCFG.cpp
   analysis/SBFAnalyzerDecode.cpp
   analysis/SBFAnalyzerPrinter.cpp
   analysis/SBFAnalyzerRegions.cpp
+  analysis/SBFCallXContexts.cpp
+  analysis/SBFCallXContextFlow.cpp
+  analysis/SBFCallXMemoryEffects.cpp
   analysis/SBFDataflow.cpp
   analysis/SBFDataflowScratch.cpp
   analysis/SBFDataflowTransfer.cpp
@@ -13,12 +17,15 @@ add_neverd_component_library(NeverDSBF
   analysis/SBFVerifier.cpp
   emit/SBFCEmitter.cpp
   emit/SBFCEmitterInstruction.cpp
+  emit/SBFCEmitterPartitioned.cpp
   emit/SBFCEmitterStructured.cpp
   emit/SBFLLVMEmitter.cpp
   emit/SBFLLVMEmitterInstruction.cpp
   emit/SBFRustEmitter.cpp
   emit/SBFRustEmitterInstruction.cpp
+  emit/SBFRustEmitterPartitioned.cpp
   emit/SBFRustEmitterStructured.cpp
+  emit/SBFSourcePartition.cpp
   image/SBFProgramImage.cpp
   image/SBFRelocations.cpp
   image/SBFVersion.cpp

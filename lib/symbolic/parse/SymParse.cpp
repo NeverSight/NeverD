@@ -16,6 +16,7 @@
 
 #include "SymParseDetail.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -26,26 +27,46 @@ namespace neverd::symbolic::detail {
 namespace {
 
 int binaryPrec(llvm::StringRef S) {
-  if (S == "||")
-    return PrecLogOr;
-  if (S == "&&")
-    return PrecLogAnd;
-  if (S == "|")
-    return PrecBitOr;
-  if (S == "^")
-    return PrecBitXor;
-  if (S == "&")
-    return PrecBitAnd;
-  if (S == "==" || S == "!=")
-    return PrecEquality;
-  if (S == "<" || S == "<=" || S == ">" || S == ">=")
-    return PrecRelational;
-  if (S == "<<" || S == ">>")
-    return PrecShift;
-  if (S == "+" || S == "-")
-    return PrecAdditive;
-  if (S == "*" || S == "/" || S == "%")
-    return PrecMultiplicative;
+  if (S.size() == 1) {
+    switch (S.front()) {
+    case '|':
+      return PrecBitOr;
+    case '^':
+      return PrecBitXor;
+    case '&':
+      return PrecBitAnd;
+    case '<':
+    case '>':
+      return PrecRelational;
+    case '+':
+    case '-':
+      return PrecAdditive;
+    case '*':
+    case '/':
+    case '%':
+      return PrecMultiplicative;
+    default:
+      return 0;
+    }
+  }
+  if (S.size() == 2) {
+    switch (S.front()) {
+    case '|':
+      return S.back() == '|' ? PrecLogOr : 0;
+    case '&':
+      return S.back() == '&' ? PrecLogAnd : 0;
+    case '=':
+    case '!':
+      return S.back() == '=' ? PrecEquality : 0;
+    case '<':
+    case '>':
+      return S.back() == '='         ? PrecRelational
+             : S.back() == S.front() ? PrecShift
+                                     : 0;
+    default:
+      return 0;
+    }
+  }
   return 0;
 }
 
@@ -104,6 +125,29 @@ SymRef Parser::parseBinary(int MinPrec) {
     L = applyBinary(S, L, R);
     if (Failed)
       return {};
+
+    // Once a product has two nonconstant factors, a longer multiplication
+    // chain cannot expose the builder's single-shift/coefficient fold. Collect
+    // the rest at this width instead of interning every growing prefix. Other
+    // operators and width changes still finish the exact left-associated word.
+    if (S == "*" && Ctx.op(L) == SymOp::Mul &&
+        Ctx.numOperands(L) - unsigned(Ctx.isConst(Ctx.operand(L, 0))) >= 2 &&
+        isPunct("*")) {
+      llvm::SmallVector<SymRef, 16> Factors{L};
+      while (consumePunct("*")) {
+        R = parseBinary(P + 1);
+        if (Failed)
+          return {};
+        if (Ctx.width(R) != Ctx.width(L)) {
+          L = applyBinary("*", Ctx.mkMul(Factors), R);
+          Factors.clear();
+          break;
+        }
+        Factors.push_back(R);
+      }
+      if (!Factors.empty())
+        L = Ctx.mkMul(Factors);
+    }
   }
   return L;
 }
@@ -117,38 +161,44 @@ SymRef Parser::applyBinary(llvm::StringRef S, SymRef A, SymRef B) {
     return Ctx.mkOr(toBool(A), toBool(B));
 
   unify(A, B);
-  if (S == "|")
-    return Ctx.mkOr(A, B);
-  if (S == "^")
-    return Ctx.mkXor(A, B);
-  if (S == "&")
-    return Ctx.mkAnd(A, B);
+  if (S.size() == 1) {
+    switch (S.front()) {
+    case '|':
+      return Ctx.mkOr(A, B);
+    case '^':
+      return Ctx.mkXor(A, B);
+    case '&':
+      return Ctx.mkAnd(A, B);
+    case '<':
+      return Ctx.mkUlt(A, B);
+    case '>':
+      return Ctx.mkUgt(A, B);
+    case '+':
+      return Ctx.mkAdd(A, B);
+    case '-':
+      return Ctx.mkSub(A, B);
+    case '*':
+      return Ctx.mkMul(A, B);
+    case '/':
+      return Ctx.mkUDiv(A, B);
+    case '%':
+      return Ctx.mkURem(A, B);
+    default:
+      llvm_unreachable("binaryPrec accepted an unknown single-byte operator");
+    }
+  }
   if (S == "==")
     return Ctx.mkEq(A, B);
   if (S == "!=")
     return Ctx.mkNe(A, B);
-  if (S == "<")
-    return Ctx.mkUlt(A, B);
   if (S == "<=")
     return Ctx.mkUle(A, B);
-  if (S == ">")
-    return Ctx.mkUgt(A, B);
   if (S == ">=")
     return Ctx.mkUge(A, B);
   if (S == "<<")
     return Ctx.mkShl(A, B);
   if (S == ">>")
     return Ctx.mkLShr(A, B);
-  if (S == "+")
-    return Ctx.mkAdd(A, B);
-  if (S == "-")
-    return Ctx.mkSub(A, B);
-  if (S == "*")
-    return Ctx.mkMul(A, B);
-  if (S == "/")
-    return Ctx.mkUDiv(A, B);
-  if (S == "%")
-    return Ctx.mkURem(A, B);
   llvm_unreachable("binaryPrec accepted an operator applyBinary does not know");
 }
 

@@ -218,8 +218,11 @@ const char *neverd_stack_frame_json(neverd_session_t Sess, neverd_va_t Entry,
     if (!F)
       throw std::invalid_argument("Original LowIR is unavailable");
     const auto Policy = readSourceStackFrame(*O);
-    validateSourceStackFrame(*S, *F, Policy);
+    if (Policy != SourceStackFrame{})
+      validateSourceStackFrame(*S, *F, Policy);
     const auto Flow = analyzeSourceStackFrame(*F, S->Img.Arch, Policy);
+    if (!Flow.Error.empty())
+      throw std::invalid_argument(Flow.Error);
     llvm::json::Array Instructions, Accesses;
     for (const auto &[PC, I] : Flow.Instructions) {
       llvm::json::Object Row{{"address", vaHex(PC)},
@@ -228,6 +231,8 @@ const char *neverd_stack_frame_json(neverd_session_t Sess, neverd_va_t Entry,
           I.Before ? llvm::json::Value(*I.Before) : llvm::json::Value(nullptr);
       Row["after"] =
           I.After ? llvm::json::Value(*I.After) : llvm::json::Value(nullptr);
+      Row["frame_before"] = I.FrameBefore ? llvm::json::Value(*I.FrameBefore)
+                                          : llvm::json::Value(nullptr);
       Instructions.push_back(std::move(Row));
     }
     for (const auto &A : Flow.Accesses)
@@ -236,8 +241,9 @@ const char *neverd_stack_frame_json(neverd_session_t Sess, neverd_va_t Entry,
                                             {"offset", A.Offset},
                                             {"bytes", A.Bytes},
                                             {"write", A.Write}});
+    const auto Snapshot = sourceStackSnapshot(*F);
     llvm::json::Object SavedPolicy{
-        {"snapshot", sourceStackSnapshot(*F)},
+        {"snapshot", Snapshot},
         {"input_sha256", inputSha256(*S)},
         {"points", O->getArray("points")
                        ? llvm::json::Array(*O->getArray("points"))
@@ -246,7 +252,7 @@ const char *neverd_stack_frame_json(neverd_session_t Sess, neverd_va_t Entry,
                           ? llvm::json::Array(*O->getArray("variables"))
                           : llvm::json::Array()}};
     llvm::json::Value Result =
-        llvm::json::Object{{"snapshot", sourceStackSnapshot(*F)},
+        llvm::json::Object{{"snapshot", Snapshot},
                            {"policy", std::move(SavedPolicy)},
                            {"instructions", std::move(Instructions)},
                            {"accesses", std::move(Accesses)},

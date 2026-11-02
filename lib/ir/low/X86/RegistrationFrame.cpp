@@ -13,7 +13,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <algorithm>
 

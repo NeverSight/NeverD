@@ -1,5 +1,7 @@
 #pragma once
 
+#include "neverd/support/ProjectDatabase.h"
+
 #include <QByteArray>
 #include <QHash>
 #include <QJsonArray>
@@ -19,8 +21,8 @@ namespace neverd::gui {
 ///
 /// Every write is one SQLite transaction, so a database is never left half
 /// written.  The input is stored in independently compressed chunks that are
-/// compressed and expanded in parallel.  A file that is not a NeverD database
-/// is never written to.
+/// compressed in parallel and expanded through the shared streaming reader.  A
+/// file that is not a NeverD database is never written to.
 class ProjectDatabase final {
 public:
   static constexpr char Extension[] = ".nddb";
@@ -40,7 +42,7 @@ public:
   /// The SQLite application id in every database header: "NDDB" in ASCII,
   /// so NeverD and tools such as file(1) tell a database from other SQLite
   /// files whatever its name.
-  static constexpr qint32 ApplicationId = 0x4E444442;
+  static constexpr qint32 ApplicationId = project_database::ApplicationId;
   /// The database of \p binary: the binary's file name plus `.nddb`.
   static QString pathFor(const QString &binary);
   /// Whether \p path is opened as a database: it has the `.nddb` suffix or
@@ -73,9 +75,12 @@ public:
   /// Replace only the workbench state of an existing database.
   static QString saveState(const QString &database,
                            const QHash<QString, QByteArray> &state);
-  /// Read everything but the input bytes.
+  enum class ReadScope { InputIdentity, Project };
+  /// Read metadata, or the complete project except its input bytes. Identity
+  /// metadata is a lookup hint; unpack still authenticates the stored bytes.
   static std::optional<Contents> read(const QString &database,
-                                      QString *error = nullptr);
+                                      QString *error = nullptr,
+                                      ReadScope scope = ReadScope::Project);
   /// Unpack the input and its sidecars into \p directory, returning the
   /// input path.  An existing input with the recorded digest is reused, and
   /// sidecars with a pending crash-recovery journal are left for the worker.

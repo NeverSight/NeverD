@@ -242,6 +242,9 @@ add_neverd_unittest(NeverDInterpreterMachineStateTests
   MachineStringSourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC Support
 )
+
+add_subdirectory(x86_64)
+
 target_compile_definitions(NeverDInterpreterMachineStateTests PRIVATE
   TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
   NEVERD_BINARY="$<TARGET_FILE:neverd>"

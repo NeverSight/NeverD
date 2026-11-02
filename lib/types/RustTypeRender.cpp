@@ -211,6 +211,8 @@ std::string RustWriter::type(const TypeExpr &Type, bool Pointee) const {
   case TypeExprKind::Named:
     return Names.type(Type.Name);
   case TypeExprKind::Pointer: {
+    if (Type.PointerBytes != pointerBytes(Library.dataModel()))
+      return "u" + std::to_string(Type.PointerBytes * 8);
     if (!Type.Element) {
       Void = true;
       return "*mut c_void";

@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/backend/llvm/X86RegistrationCatchStack.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatchStack.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"

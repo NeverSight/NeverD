@@ -99,6 +99,16 @@ public:
   /// completed operation records ApproximatedOps. This survives reset().
   void setX87NativeReferenceMode(bool Enable) {
     X87NativeReferenceMode = Enable;
+    if (Enable)
+      X87PortableMode = false;
+  }
+  /// Select the explicit Intel 64 portable masked-state slice. Unsupported
+  /// instructions fail; no host-native fallback is attempted. Survives reset.
+  /// This does not select a translation backend or authenticate incoming state.
+  void setX87PortableMode(bool Enable) {
+    X87PortableMode = Enable;
+    if (Enable)
+      X87NativeReferenceMode = false;
   }
   void setMXCSR(uint32_t Value) {
     MXCSR = Value;
@@ -150,6 +160,8 @@ public:
   /// execution path: always for BRANCH/COND_BR/INDIR_BR/RETURN, and for
   /// CALL/INDIR_CALL unless call-preserved registers have been declared (see
   /// setCallPreservedRegisters), in which case the call is stepped over.
+  /// Multi-result operations require run() and their adjacent result bindings.
+  /// Without those bindings step() refuses before any effect.
   bool step(const LowOp &Op);
 
   /// Execute a sequence of ops.  Stops at the first terminator.  For backwards
@@ -243,6 +255,7 @@ private:
   bool StrictMode = false;
   bool X86Approx12ReferenceMode = false;
   bool X87NativeReferenceMode = false;
+  bool X87PortableMode = false;
   std::optional<NdVar> ReachedIndirectBranchTarget;
   std::optional<InstructionMode> ReachedSourceMode;
   std::optional<LowInstructionTargetMode> ReachedTargetMode;
@@ -254,6 +267,8 @@ private:
 
   uint64_t readOperand(const NdVar &Operand) const;
   std::vector<uint8_t> readOperandBytes(const NdVar &Operand) const;
+  bool knownOperandBytes(const NdVar &Operand, uint64_t Offset,
+                         uint64_t Bytes) const;
   std::optional<uint64_t> resolveMemoryAddress(const LowOp &Op,
                                                uint64_t Offset) const;
   bool isX86CanonicalMemoryRange(uint64_t Address, uint64_t Size) const;
@@ -272,6 +287,7 @@ private:
   bool storeMemoryBytes(uint64_t Addr, llvm::ArrayRef<uint8_t> Value);
   bool storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value);
 
+  bool stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following);
   bool executeArith(const LowOp &Op);
   bool executeFloatArith(const LowOp &Op);
   bool executeFloatConvert(const LowOp &Op);
@@ -283,6 +299,7 @@ private:
   bool executeMisc(const LowOp &Op);
   bool executeIntrinsic(const LowOp &Op);
   bool executeX86Crypto(const LowOp &Op);
+  bool executeX86FourSource(const LowOp &Op);
   bool executeX86FPArith(const LowOp &Op, bool AlternateAddSubtract = false);
   bool executeX86ScalarFPState(const LowOp &Op);
   bool executeX86FPConvert(const LowOp &Op);

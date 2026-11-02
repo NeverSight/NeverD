@@ -5,7 +5,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"

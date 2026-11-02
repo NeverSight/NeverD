@@ -349,7 +349,16 @@ TEST(SymMBAResidualBudget, BulkCommonPowersFitTheSameAllowance) {
       detail::WorkBudget Tight(Limit);
       detail::SolveReport Check;
       auto R = detail::solveArithmetic(C, Input, Options, Tight, Check);
-      EXPECT_EQ(R, Limit == Required ? Expected : Input);
+      if (Limit == Required)
+        EXPECT_EQ(R, Expected);
+      else if (!Limit)
+        EXPECT_EQ(R, Input);
+      else
+        // Extracting the complete common monomial is already a proof even
+        // when a later optional quotient search runs out of work.
+        EXPECT_TRUE(R == Input || R == Expected);
+      if (R != Input)
+        EXPECT_EQ(Check.Evidence, MBAEvidence::Derivation);
       EXPECT_LE(Tight.used(), Limit);
     }
     Options.MaxTableBytes = 128;

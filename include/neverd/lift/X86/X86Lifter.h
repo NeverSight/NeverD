@@ -1,0 +1,333 @@
+//===- X86Lifter.h - x86/x64 instruction lifter -------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Declares the X86Lifter class that translates decoded x86/x64 instructions
+/// into LowIR operations.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_LIFT_X86_X86LIFTER_H
+#define NEVERD_LIFT_X86_X86LIFTER_H
+
+#include "neverd/ir/low/LowPreservedState.h"
+#include "neverd/ir/low/LowUndefinedEffects.h"
+#include "neverd/lift/X86/X86Regs.h"
+
+#include "llvm/ADT/ArrayRef.h"
+
+#include <capstone/capstone.h>
+#include <initializer_list>
+#include <optional>
+#include <utility>
+#include <vector>
+
+namespace neverd {
+
+struct RelocatedAddressOperand;
+struct RelocatedScalarOperand;
+
+class X86Lifter {
+public:
+  explicit X86Lifter(Arch TargetArch);
+
+  /// Insn's bytes and detail must agree as supplied by the trusted decoder.
+  /// Optional metadata audits newly undefined outputs for supported forms;
+  /// it does not authenticate decoded detail or prove the whole LowIR lift.
+  /// Missing/Unsupported records contain no usable partial Effects.
+  /// PreservedState is a separate strict x64 bank audit, bound to the original
+  /// bytes and appended operation span. Failure or non-strict lifting resets
+  /// it to Missing; it never follows from undefined-output completeness.
+  void lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
+            llvm::ArrayRef<RelocatedAddressOperand> Relocs = {},
+            llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs = {},
+            LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+            LowInstructionPreservedState *PreservedState = nullptr);
+
+  /// Lift a certified ordinary x64 memory-indirect near CALL with an explicit
+  /// target LOAD, including constant IAT/GOT slots. Physical stack effects are
+  /// still omitted. Only canonical unsegmented r/m64 forms with optional
+  /// address-size override and REX are accepted. On false, Ops is unchanged.
+  bool
+  liftX64MemoryCall(const cs_insn *Insn, std::vector<LowOp> &Ops,
+                    LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+                    LowInstructionPreservedState *PreservedState = nullptr);
+
+  void setStrict(bool S) { Strict = S; }
+  bool isStrict() const { return Strict; }
+  Arch targetArch() const { return TargetArch; }
+
+  /// The system call convention an x64 SYSCALL follows: the operating
+  /// system's handler defines which registers carry the call and which it
+  /// returns, so the image's platform decides it.
+  enum class SyscallConvention : uint8_t { Linux, WindowsNT };
+  void setSyscallConvention(SyscallConvention C) { Syscalls = C; }
+  SyscallConvention syscallConvention() const { return Syscalls; }
+
+  /// Whether x64 x87 and MMX-state instructions execute on the function's
+  /// owned x87 context rather than as typed binary80 values; the image's
+  /// calling convention decides it (x87ContextOwnsStack).
+  void setX87ContextOwnership(bool Owned) { X87ContextOwned = Owned; }
+  bool ownsX87Context() const {
+    return X87ContextOwned && TargetArch == Arch::X64;
+  }
+
+  /// x87 stack-top (TOP) accessors.  The ST(i) macro names physical slot
+  /// (TOP+i)&7, so TOP advances in lift order; the CFG builder reads it around
+  /// each lift to later re-base ST references into control-flow order.
+  int getFpuTop() const { return FPUTop; }
+  /// Reset every instruction-sequence state item before lifting an independent
+  /// function or translation block.  The historical name is retained for API
+  /// compatibility; get-PC sequence state also cannot cross an independently
+  /// cached unit.
+  void resetFpuState() {
+    FPUTop = 0;
+    FpuReset = false;
+    FuncRetPopBytes = 0;
+    GetPcPending = false;
+    GetPcArmedThisInsn = false;
+    GetPcValue = 0;
+    GetPcCallAddr = InvalidVA;
+    LastGetPcOccurrence.reset();
+    LastScalarOperandOccurrence.reset();
+  }
+  bool fpuDidReset() const { return FpuReset; }
+
+  /// Exact producer emitted by the most recently lifted instruction when it
+  /// completed a `call $+5; pop reg` get-PC pair.
+  const std::optional<I386GetPcOccurrence> &getLastGetPcOccurrence() const {
+    return LastGetPcOccurrence;
+  }
+
+  const std::optional<RelocatedInstructionScalarOperandOccurrence> &
+  getLastScalarOperandOccurrence() const {
+    return LastScalarOperandOccurrence;
+  }
+
+  /// Largest `ret imm` pop seen while lifting the current function (the i386
+  /// SysV callee-cleanup byte count, e.g. 4 for the hidden sret pointer); 0 for
+  /// an ordinary `ret`.  Reset per function via resetFpuState().
+  int getRetPopBytes() const { return FuncRetPopBytes; }
+
+  //===--------------------------------------------------------------------===//
+  // Decode-time instruction classification (called by Decoder/FuncDetector)
+  //===--------------------------------------------------------------------===//
+
+  /// Correct capstone instruction-id quirks before lifting.  The SSE/SSE2 and
+  /// VEX/EVEX FP-compare pseudo-ops decode to ids that collide with unrelated
+  /// instructions; re-derive the real id from the opcode / mnemonic.
+  static void fixupDecodedInsn(cs_insn *I);
+
+  /// Whether \p I ends a function's straight-line decode (ret/jmp/ud2/...).
+  static bool isFunctionTerminator(const cs_insn *I);
+
+  /// Whether \p I returns to its caller: the near `ret`. Far, interrupt and
+  /// syscall returns are terminal state transfers (see liftControl), not
+  /// returns to the caller of the lifted function.
+  static bool isReturn(const cs_insn *I);
+
+  /// Whether \p I is a trap that execution can continue past.
+  ///
+  /// `int3` (including `int 3`) and `int1` raise debugger exceptions that can
+  /// resume, and a compiler emits `__debugbreak()` mid-function with the rest
+  /// of the body behind it. Undefined-instruction traps end the ordinary
+  /// decode instead.
+  static bool isResumableTrap(const cs_insn *I);
+
+  /// Direct (immediate) call target of \p I, or InvalidVA if \p I is not a
+  /// direct call.
+  static va_t directCallTarget(const cs_insn *I);
+
+  /// Encoded RET/RETF stack-pop immediate.  The optional preserves the
+  /// distinction between no immediate and an explicitly encoded zero.
+  static std::optional<uint64_t> returnImmediate(const cs_insn *I);
+
+  /// Target VA of a pure RIP/EIP-relative `lea` (`lea reg, [rip+disp]`), the
+  /// x86 address-of idiom that materializes a fixed code address into a
+  /// register without a relocation (a same-section function pointer the
+  /// assembler resolved).  InvalidVA when \p I is not such a `lea`.  The caller
+  /// records a target landing in an executable segment as a code reference so
+  /// the emitter symbolizes the resulting constant to `ptrtoint @func`.
+  static va_t pcRelCodeRefTarget(const cs_insn *I);
+
+  struct LiftState : LiftStateBase {
+    using LiftStateBase::LiftStateBase;
+
+    /// Optional instruction-local draft, published only after the whole lift
+    /// succeeds. Recording an effect never changes the selected LowIR value.
+    LowInstructionUndefinedEffects *UndefinedEffects = nullptr;
+    void recordUndefinedBits(NdVar Output, uint16_t BitOffset,
+                             uint16_t BitCount,
+                             std::optional<NdVar> When = {}) {
+      if (UndefinedEffects)
+        UndefinedEffects->Effects.push_back(
+            {Ops.size() - OpsStart, Output, BitOffset, BitCount, When});
+    }
+
+    /// Loader-authenticated provenance for this instruction's encoded memory
+    /// displacement.  It is populated only after the relocation field is
+    /// matched against Capstone's disp_offset/disp_size, so an equal-valued
+    /// immediate elsewhere in the instruction cannot inherit it.
+    std::optional<NdVar> RelocatedDisplacement;
+    bool RelocatedDisplacementIsCompleteAddress = false;
+
+    /// Loader-authenticated provenance for this instruction's encoded
+    /// immediate.  Kept separate from the displacement owner so an instruction
+    /// such as `mov $K, K(%reg)` cannot transfer one relocation field's role to
+    /// the equal-valued peer operand.
+    std::optional<NdVar> RelocatedImmediate;
+
+    /// Exact negative provenance for a multiply-owned i386 GOTOFF memory
+    /// displacement.  computeEA binds it to the one LowIR input produced from
+    /// Capstone's encoded displacement; it never upgrades the scalar to an
+    /// address.
+    bool HasAmbiguousI386GOTOFFDisplacement = false;
+    va_t AmbiguousI386GOTOFFFieldVA = InvalidVA;
+    uint64_t AmbiguousI386GOTOFFEncodedValue = 0;
+    uint8_t AmbiguousI386GOTOFFWidth = 0;
+    bool ConflictingAmbiguousI386GOTOFFUses = false;
+    std::optional<RelocatedInstructionScalarOperandOccurrence>
+        AmbiguousI386GOTOFFOccurrence;
+
+    /// Architectural width of this instruction's effective-address
+    /// arithmetic, in bytes (Capstone cs_x86::addr_size).  LowIR memory
+    /// addresses are represented as 8-byte VAs, but i386 and x86-64 address-
+    /// size overrides must wrap base/index/scale/displacement at 32 bits
+    /// before that final zero-extension.
+    uint16_t AddressSize = 8;
+
+    /// Per-instruction physical-target projection. The ordinary lift keeps
+    /// constant call slots visible for import binding; this projection reads
+    /// them through the same operandRead/computeEA path as dynamic addresses.
+    bool LoadMemoryCallTarget = false;
+
+    void emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(x86reg::RAX, 8),
+                       std::initializer_list<NdVar> Extra = {},
+                       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+                       NdMemoryAddressSpace MemoryAddressSpace =
+                           NdMemoryAddressSpace::Default) {
+      LiftStateBase::emitIntrinsic(Id, Out, Extra, MemoryOrdering,
+                                   MemoryAddressSpace);
+    }
+
+    /// Emit an intrinsic that owns one decoded x86 memory operand.  The
+    /// effective-address offset is always input 1 (immediately after the
+    /// intrinsic ID) and its architectural address space travels on the op.
+    /// Keeping this construction in one place prevents cache/state/system
+    /// instructions from degrading to an operandless mnemonic or losing an
+    /// FS/GS override in one of the legacy dispatchers.
+    bool emitMemoryIntrinsic(Intrinsic Id, const cs_x86_op &MemOp,
+                             std::initializer_list<NdVar> Extra = {},
+                             NdVar Out = NdVar()) {
+      if (MemOp.type != X86_OP_MEM)
+        return false;
+      LowOp Op;
+      Op.Opcode = NdOp::INTRINSIC;
+      Op.MemoryAddressSpace = memoryAddressSpace(MemOp);
+      Op.Addr = Addr;
+      Op.Seq = Seq++;
+      Op.Output = Out;
+      Op.addInput(NdVar::cst(static_cast<uint64_t>(Id), 2));
+      Op.addInput(computeEA(MemOp));
+      for (const NdVar &V : Extra)
+        Op.addInput(V);
+      Ops.push_back(Op);
+      return true;
+    }
+
+    /// SegmentOffset keeps every displacement scalar, even for DS/ES/SS/CS.
+    NdVar computeEA(const cs_x86_op &MemOp, bool ForMemoryAccess = true,
+                    bool SegmentOffset = false);
+    static NdMemoryAddressSpace memoryAddressSpace(const cs_x86_op &MemOp);
+    void storeToMem(const cs_x86_op &MemOp, NdVar Val);
+    NdVar emitByteSwap(NdVar Src);
+  };
+
+  NdVar operandRead(LiftState &S, const cs_x86_op &Op);
+  static NdVar operandWrite(const cs_x86_op &Op);
+
+  void emitFlagsArith(LiftState &S, NdVar Result, NdVar A, NdVar B, bool IsSub);
+  static void emitPF(LiftState &S, NdVar Result);
+  static void emitZSPF(LiftState &S, NdVar Result);
+  // AF (auxiliary carry) = carry/borrow out of bit 3 = bit 4 of (A ^ B ^
+  // Result).
+  static void emitAF(LiftState &S, NdVar Result, NdVar A, NdVar B);
+  static void emitFlagsLogic(LiftState &S, NdVar Result);
+  // Extract bit \p BitPos of \p Val as a 1-byte 0/1 boolean.
+  static NdVar extractBit(LiftState &S, NdVar Val, unsigned BitPos);
+  // Direction-aware pointer step for single string ops: +ElemSz when DF=0
+  // (forward), -ElemSz when DF=1 (backward).  Folds to a constant when the
+  // direction flag is statically known.
+  static NdVar dirStep(LiftState &S, unsigned ElemSz);
+  // x86 shifts/rotates define OF only for a 1-bit count: write \p OfBit to OF
+  // when \p Cnt == 1, otherwise leave OF unchanged (count 0 preserves the
+  // flags; for count > 1 OF is architecturally undefined).
+  static void emitShiftRotateOF(LiftState &S, NdVar Cnt, NdVar OfBit);
+  // x86 shifts/rotates leave the flags unchanged for a zero (post-mask) count.
+  // Restore each listed (flag register, pre-instruction snapshot) pair when
+  // \p Cnt == 0; otherwise keep the freshly computed flag.  Snapshot the flags
+  // (1-byte COPYs) before the handler overwrites them.
+  static void
+  emitZeroCountFlagGuard(LiftState &S, NdVar Cnt,
+                         std::initializer_list<std::pair<int, NdVar>> Flags);
+
+private:
+  void liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
+                llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+                llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+                bool LoadMemoryCallTarget,
+                LowInstructionUndefinedEffects *UndefinedEffects,
+                LowInstructionPreservedState *PreservedState);
+  bool liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftControl(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftAtomic(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftString(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+
+  bool liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftSIMD(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftSIMDAVX(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+  bool liftSIMDLegacy(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
+
+  /// AVX2 VSIB gather (VPGATHER{DD,DQ,QD,QQ} / VGATHER{DPS,DPD,QPS,QPD}): lift
+  /// natively to a per-lane conditional load (the index vector + scale + base
+  /// give each element's address; the mask sign bit selects load vs the source
+  /// lane) so the recompiled code is plain scalar loads — no opaque intrinsic.
+  /// \returns false when the operand shape is unexpected (caller keeps a stub).
+  bool liftVectorGather(LiftState &S, const cs_x86 &X86, unsigned InsnId);
+
+  Arch TargetArch;
+  bool Strict = true;
+  SyscallConvention Syscalls = SyscallConvention::Linux;
+  bool X87ContextOwned = false;
+  int FPUTop = 0;
+
+  /// Set when the instruction just lifted reset TOP to an absolute value
+  /// (FNINIT/FNCLEX) rather than a relative push/pop; cleared at each lift.
+  bool FpuReset = false;
+
+  /// Accumulated `ret imm` pop bytes for the current function (see
+  /// getRetPopBytes); reset per function in resetFpuState.
+  int FuncRetPopBytes = 0;
+
+  /// Cross-instruction state for the i386 PIC get-PC thunk `call $+5; pop reg`.
+  /// The CALL handler arms \c GetPcPending with the next-instruction address;
+  /// if the very next instruction is a `pop`, the POP handler records its
+  /// ordinary LOAD/COPY occurrence.  The CFG builder, not the lifter, decides
+  /// whether the call is the POP's sole predecessor before granting GOTPC
+  /// scalar-model semantics.
+  bool GetPcPending = false;
+  bool GetPcArmedThisInsn = false;
+  uint64_t GetPcValue = 0;
+  uint64_t GetPcCallAddr = InvalidVA;
+  std::optional<I386GetPcOccurrence> LastGetPcOccurrence;
+  std::optional<RelocatedInstructionScalarOperandOccurrence>
+      LastScalarOperandOccurrence;
+};
+
+} // namespace neverd
+
+#endif // NEVERD_LIFT_X86_X86LIFTER_H

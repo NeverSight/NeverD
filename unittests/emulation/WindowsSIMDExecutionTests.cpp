@@ -11,7 +11,7 @@ namespace neverd::emulation {
 namespace {
 namespace simd {
 #define NEVERD_SIMD_VALUE(Name, Value) constexpr uint64_t Name = Value;
-#include "X64SIMDExceptionCases.def"
+#include "x86_64/X64SIMDExceptionCases.def"
 #undef NEVERD_SIMD_VALUE
 } // namespace simd
 #define NEVERD_WINDOWS_SIMD_EXECUTION_VALUE(Name, Value)                       \
@@ -34,7 +34,7 @@ constexpr Operation Operations[] = {
   {#Name,        Status,       Left,         Right,                            \
    FaultStatus,  MaskedStatus, MaskedResult, simd::RepairedResult,             \
    {__VA_ARGS__}},
-#include "X64SIMDExceptionCases.def"
+#include "x86_64/X64SIMDExceptionCases.def"
 #undef NEVERD_SIMD_CASE
 };
 constexpr uint32_t StatusCodes[] = {

@@ -13,16 +13,24 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/SourceABI.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -31,9 +39,12 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
+#include <iterator>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -63,9 +74,11 @@ public:
   static LLVMEmissionResult emitShards(const std::vector<MedFunc> &Functions,
                                        llvm::LLVMContext &Context,
                                        const BinaryImage &Image,
-                                       unsigned Threads) {
-    return Pipeline::emitLLVMSharded(Functions, Context, Image.Arch, {}, Image,
-                                     Image.Format, true, Threads);
+                                       unsigned Threads,
+                                       bool OmitRefusedBodies = false) {
+    return Pipeline::emitLLVMSharded(
+        Functions, Context, Image.Arch, {}, Image, Image.Format, true, Threads,
+        false, {}, nullptr, {}, nullptr, false, {}, OmitRefusedBodies);
   }
 
   static void buildHighIR(const BinaryImage &Image, PipelineResult &Result) {
@@ -600,17 +613,25 @@ TEST(PipelineOutcome, SelectionsOutsideTheSymbolInventoryKeepTheirOwnFacts) {
   Cache.reset();
   EXPECT_EQ(PipelineTestPeer::analysisFacts(Cache), nullptr);
   EXPECT_EQ(PipelineTestPeer::selectionFacts(Cache), nullptr);
-  // Without a cache, or on another architecture, nothing is kept to warm.
-  EXPECT_FALSE(Pipeline().warmAnalysisCache(Image, PipelineOptions(), nullptr,
-                                            {0x1000}));
+  // i386 runs share the symbol inventory's facts too, which warming builds.
   BinaryImage Narrow = selectionCacheImage(false);
   Narrow.Arch = Arch::X86;
   Narrow.Bits = Bitness::Bits32;
   PipelineAnalysisCache NarrowCache;
   Options.AnalysisCache = &NarrowCache;
+  EXPECT_TRUE(Pipeline().warmAnalysisCache(Narrow, Options, nullptr, {0x1000}));
+  EXPECT_NE(PipelineTestPeer::analysisFacts(NarrowCache), nullptr);
+  // Without a cache, or on an architecture whose runs share none, nothing is
+  // kept to warm.
+  EXPECT_FALSE(Pipeline().warmAnalysisCache(Image, PipelineOptions(), nullptr,
+                                            {0x1000}));
+  BinaryImage Bytecode = selectionCacheImage(false);
+  Bytecode.Arch = Arch::EVM;
+  PipelineAnalysisCache BytecodeCache;
+  Options.AnalysisCache = &BytecodeCache;
   EXPECT_FALSE(
-      Pipeline().warmAnalysisCache(Narrow, Options, nullptr, {0x1000}));
-  EXPECT_EQ(PipelineTestPeer::analysisFacts(NarrowCache), nullptr);
+      Pipeline().warmAnalysisCache(Bytecode, Options, nullptr, {0x1000}));
+  EXPECT_EQ(PipelineTestPeer::analysisFacts(BytecodeCache), nullptr);
 }
 
 TEST(PipelineOutcome, WarmingStopsAtTheCacheBoundWithoutEvicting) {
@@ -850,6 +871,84 @@ TEST(PipelineOutcome, PatchDiscoversStandaloneELFEntryButPreservesCRTEntry) {
   PipelineResult CRT = run(true);
   ASSERT_TRUE(CRT.Success) << CRT.Error;
   EXPECT_TRUE(CRT.LowFuncs.empty());
+}
+
+TEST(PipelineOutcome, UnsupportedBodiesCannotPublishSuccessfulEmptyModules) {
+  for (Arch Architecture : {Arch::X86, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool Patch : {false, true})
+        for (bool Selected : {false, true}) {
+          SCOPED_TRACE(getArchName(Architecture));
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Patch);
+          SCOPED_TRACE(Selected);
+          BinaryImage Image;
+          Image.Arch = Architecture;
+          Image.Bits =
+              Architecture == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+          Image.Format = Format;
+          Image.Entry = 0x1000;
+          Segment Text;
+          Text.Name = ".text";
+          Text.VA = Image.Entry;
+          Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+          // MOV EAX, ESI; XACQUIRE LOCK XADD [RDI/EDI], EAX; RET.
+          Text.Data = {0x89, 0xf0, 0xf2, 0xf0, 0x0f, 0xc1, 0x07, 0xc3};
+          Text.Size = Text.FileSz = Text.Data.size();
+          Image.Symbols.push_back(
+              {"unsupported_hle", Image.Entry, Text.Size, true});
+          Image.Segments.push_back(std::move(Text));
+          PipelineOptions Options;
+          Options.LiftMode = !Patch;
+          Options.PatchMode = Patch;
+          Options.NoOpt = true;
+          if (Selected)
+            Options.OnlyFunctionEntries.insert(Image.Entry);
+          llvm::LLVMContext Context;
+          auto Result = Pipeline().run(Image, Context, Options);
+          EXPECT_FALSE(Result.Success);
+          EXPECT_EQ(Result.LlvmModule, nullptr);
+          EXPECT_TRUE(Result.MedFuncs.empty());
+          EXPECT_NE(Result.Error.find("function 0x1000 was not admitted"),
+                    std::string::npos)
+              << Result.Error;
+          EXPECT_NE(Result.Error.find("unsupported instruction at 0x1002"),
+                    std::string::npos)
+              << Result.Error;
+          ASSERT_EQ(Result.FunctionAudits.size(), 1u);
+          EXPECT_EQ(Result.FunctionAudits.front().UnsupportedInstructions,
+                    std::vector<va_t>{0x1002});
+          EXPECT_TRUE(
+              Result.FunctionAudits.front().NativeInstructionAddresses.empty());
+
+          if (!Selected) {
+            Options.LiftMode = Options.PatchMode = false;
+            Options.MedAnalysisOnly = true;
+            auto Analysis = Pipeline().run(Image, Context, Options);
+            EXPECT_TRUE(Analysis.Success) << Analysis.Error;
+            EXPECT_EQ(Analysis.LlvmModule, nullptr);
+            EXPECT_TRUE(Analysis.MedFuncs.empty());
+            ASSERT_EQ(Analysis.FunctionAudits.size(), 1u);
+            EXPECT_EQ(Analysis.FunctionAudits.front().UnsupportedInstructions,
+                      std::vector<va_t>{0x1002});
+          }
+          Options.LiftMode = Options.PatchMode = Options.MedAnalysisOnly =
+              false;
+          Options.DeferMedIR = true;
+          auto Selection = Pipeline().run(Image, Context, Options);
+          EXPECT_TRUE(Selection.Success) << Selection.Error;
+          EXPECT_TRUE(Selection.LowFuncs.empty());
+          EXPECT_TRUE(Selection.MedFuncs.empty());
+          EXPECT_EQ(Selection.LlvmModule, nullptr);
+          ASSERT_EQ(Selection.FunctionAudits.size(), 1u);
+          const auto &Audit = Selection.FunctionAudits.front();
+          EXPECT_EQ(Audit.UnsupportedInstructions, std::vector<va_t>{0x1002});
+          EXPECT_FALSE(Audit.HasLowIR);
+          EXPECT_NE(std::find(Audit.NativeInstructionAddresses.begin(),
+                              Audit.NativeInstructionAddresses.end(), 0x1002),
+                    Audit.NativeInstructionAddresses.end());
+        }
 }
 
 TEST(PipelineOutcome, RejectedLLVMEmissionRetainsStageDiagnostic) {
@@ -1526,6 +1625,110 @@ TEST(PipelineOutcome, AnalystCallDeclarationsRequireExplicitSourceProjection) {
   EXPECT_EQ(Call->arg_size(), 1u);
 }
 
+TEST(PipelineOutcome, OmittedPointerDeclarationsStayInSourceModules) {
+  ScopedThreadCount Threads(2);
+  constexpr va_t Target = 0x1100;
+  for (unsigned Count : {1u, 8u}) {
+    SCOPED_TRACE(Count);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Entry = 0x1000;
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = Image.Entry;
+    Text.Size = 0x104;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(Text.Size, 0xcc);
+    std::set<va_t> Entries;
+    for (unsigned I = 0; I != Count; ++I) {
+      const va_t Entry = Image.Entry + I * 0x20;
+      std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 8, 0xe8};
+      const uint32_t Displacement = Target - (Entry + 9);
+      for (unsigned Byte = 0; Byte != 4; ++Byte)
+        Code.push_back(Displacement >> (Byte * 8));
+      Code.insert(Code.end(), {0x48, 0x83, 0xc4, 8, 0xc3});
+      std::copy(Code.begin(), Code.end(),
+                Text.Data.begin() + (Entry - Text.VA));
+      auto Function = Symbol::makeFunc(Entry);
+      Function.Name = "forward_pointer_" + std::to_string(I);
+      Image.Symbols.push_back(std::move(Function));
+      Entries.insert(Entry);
+    }
+    const uint8_t Read[] = {0x48, 0x8b, 0x07, 0xc3}; // mov rax,[rdi]; ret
+    std::copy(std::begin(Read), std::end(Read), Text.Data.begin() + 0x100);
+    Image.Segments.push_back(std::move(Text));
+    auto Function = Symbol::makeFunc(Target);
+    Function.Name = "read_pointer";
+    Image.Symbols.push_back(std::move(Function));
+    for (bool HasException : {false, true}) {
+      SCOPED_TRACE(HasException);
+      if (HasException) {
+        ExceptionFunction Exception;
+        Exception.CodeRange = {Target, Target + sizeof(Read)};
+        Exception.Encoding = ExceptionEncoding::DwarfFDE;
+        Exception.Personality = ExceptionPersonality::None;
+        Exception.ParseStatus = ExceptionParseStatus::Complete;
+        Image.ExceptionMetadata.Functions.push_back(std::move(Exception));
+        Image.ExceptionMetadata.rebuildIndex();
+      }
+      PipelineAnalysisCache Cache;
+      // Reuse the same image cache across native, source and patch requests.
+      // Eight callers also exercise linked LLVM shards with one shared callee.
+      for (const auto [Source, Patch] : {std::pair{false, false},
+                                         {true, false},
+                                         {true, true},
+                                         {true, false}}) {
+        SCOPED_TRACE(Source);
+        SCOPED_TRACE(Patch);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.AnalysisCache = &Cache;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = Entries;
+        Options.MedAnalysisOnly = true;
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        Options.MedAnalysisOnly = false;
+        Options.LiftMode = true;
+        Options.SourceProjection = Source;
+        Options.PatchMode = Patch;
+        ASSERT_TRUE(PipelineTestPeer::runLift(Image, Context, Options, Result))
+            << Result.Error;
+        ASSERT_TRUE(Result.LlvmModule);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        // An exception-bearing body is outside the declaration contract. Its
+        // existing zero-stack summary must avoid a redundant signature lift.
+        if (HasException) {
+          ASSERT_TRUE(Result.OmittedCallees);
+          EXPECT_TRUE(Result.OmittedCallees->Bodies.empty());
+        }
+        for (unsigned I = 0; I != Count; ++I) {
+          auto *Caller = Result.LlvmModule->getFunction("forward_pointer_" +
+                                                        std::to_string(I));
+          ASSERT_TRUE(Caller);
+          unsigned Calls = 0;
+          for (const auto &Block : *Caller)
+            for (const auto &Instruction : Block)
+              if (const auto *Call =
+                      llvm::dyn_cast<llvm::CallBase>(&Instruction);
+                  Call && Call->getCalledFunction() &&
+                  !Call->getCalledFunction()->isIntrinsic()) {
+                const auto *Callee = Call->getCalledFunction();
+                ASSERT_TRUE(Callee->isDeclaration());
+                ASSERT_EQ(Callee->arg_size(), 1u);
+                EXPECT_EQ(Callee->getArg(0)->getType()->isPointerTy(),
+                          Source && !Patch && !HasException);
+                ++Calls;
+              }
+          EXPECT_EQ(Calls, 1u);
+        }
+      }
+    }
+  }
+}
+
 TEST(PipelineOutcome, ResolvedCallsPlaceNarrowStackValuesInTheirSlots) {
   // -O0 code passes each int stack argument in the low half of its
   // eight-byte System V slot: `mov [rsp], r11d`, `mov [rsp+8], r10d`. The
@@ -1681,6 +1884,432 @@ TEST(PipelineOutcome, RealShardedEmissionDefinesEverySourceFunction) {
     EXPECT_EQ(Function.getName(), Functions[Index++].Name);
   }
   EXPECT_EQ(Index, Functions.size());
+}
+
+// A body that refuses a stale address costs the unit only that definition:
+// its shard is emitted again without it, and the result names it with the
+// error the emitter wrote.
+TEST(PipelineOutcome, RealShardedEmissionLeavesOutOnlyTheRefusedBody) {
+  llvm::LLVMContext Context;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  std::vector<MedFunc> Functions;
+  for (unsigned I = 0; I < 8; ++I) {
+    MedFunc Function =
+        sourceFunction(0x1000 + I * 16, "source_" + std::to_string(I));
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    if (I == 3) {
+      // A page fragment whose low bits never arrive is stored as is.
+      MedVar Pointer;
+      Pointer.Kind = MedVar::Param;
+      Pointer.TheArch = Arch::X64;
+      Pointer.Id = 0;
+      Pointer.Size = 8;
+      Pointer.RegOff = x86reg::RDI;
+      Function.Params.push_back(Pointer);
+      MedOp Store;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(Pointer);
+      Store.addInput(MedVar::makeConst(
+          0x2000, 8, ConstantAddressProvenance::AddressFragment));
+      Block.Ops.push_back(Store);
+    }
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Return);
+    Function.Blocks.push_back(std::move(Block));
+    Functions.push_back(std::move(Function));
+  }
+  // A run whose output names nothing it leaves out, as a lift's, fails.
+  testing::internal::CaptureStderr();
+  auto Failed = PipelineTestPeer::emitShards(Functions, Context, Image, 2);
+  (void)testing::internal::GetCapturedStderr();
+  EXPECT_EQ(Failed.Module, nullptr);
+  EXPECT_TRUE(Failed.LeftOut.empty());
+
+  testing::internal::CaptureStderr();
+  auto Result = PipelineTestPeer::emitShards(Functions, Context, Image, 2,
+                                             /*OmitRefusedBodies=*/true);
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+  ASSERT_NE(Result.Module, nullptr) << Result.Error << Diagnostic;
+  EXPECT_TRUE(Result.Error.empty());
+  EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+  ASSERT_EQ(Result.LeftOut.size(), 1u) << Diagnostic;
+  EXPECT_EQ(Result.LeftOut[0].first, 3u);
+  EXPECT_NE(Result.LeftOut[0].second.find("source_3"), std::string::npos)
+      << Result.LeftOut[0].second;
+  EXPECT_NE(Result.LeftOut[0].second.find("refusing stale-address fallback"),
+            std::string::npos)
+      << Result.LeftOut[0].second;
+  for (unsigned I = 0; I < 8; ++I) {
+    const llvm::Function *Function =
+        Result.Module->getFunction(Functions[I].Name);
+    // Linking drops the left-out body's declaration where nothing calls it.
+    if (I == 3) {
+      EXPECT_TRUE(!Function || Function->isDeclaration());
+      continue;
+    }
+    ASSERT_NE(Function, nullptr) << Functions[I].Name;
+    EXPECT_FALSE(Function->isDeclaration()) << Functions[I].Name;
+  }
+}
+
+// A body whose contract the emitter refuses before any module, as an
+// original SP memory operation with an image, fails only the shard that
+// writes it, and a unit that names what it leaves out keeps the others.
+TEST(PipelineOutcome, RealShardedEmissionLeavesOutABodyItsContractRefuses) {
+  llvm::LLVMContext Context;
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  // `ldapurb w8, [sp, #0x20]`: an RCpc read keeps its original SP word,
+  // which no reconstructed source frame supplies.
+  constexpr uint32_t OrderedStackRead = 0x194203e8;
+  const auto Instruction = *aarch64AddressMemoryInstruction(OrderedStackRead);
+  ASSERT_TRUE(Instruction.stackBase());
+  std::vector<MedFunc> Functions;
+  for (unsigned I = 0; I < 8; ++I) {
+    MedFunc Function =
+        sourceFunction(0x1000 + I * 16, "source_" + std::to_string(I));
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    if (I == 3) {
+      MedVar Stack;
+      Stack.Kind = MedVar::Reg;
+      Stack.TheArch = Arch::AArch64;
+      Stack.Id = 1;
+      Stack.Size = kAddressMemoryPointerBytes;
+      Stack.RegOff = a64reg::SP;
+      MedVar Byte;
+      Byte.Kind = MedVar::Temp;
+      Byte.TheArch = Arch::AArch64;
+      Byte.Id = 2;
+      Byte.Size = static_cast<uint16_t>(Instruction.accessBytes());
+      MedOp Read;
+      Read.Opcode = NdOp::INTRINSIC;
+      Read.Addr = Function.Entry;
+      Read.Output = Byte;
+      Read.addInput(
+          MedVar::makeConst(static_cast<uint64_t>(Instruction.operation().Id),
+                            kAddressMemoryIdentifierBytes));
+      Read.addInput(Stack);
+      Read.addInput(MedVar::makeConst(0, Instruction.indexBytes()));
+      Read.addInput(
+          MedVar::makeConst(OrderedStackRead, kAddressMemoryWordBytes));
+      ASSERT_TRUE(aarch64AddressMemoryMedShapeIsValid(Read));
+      Block.Ops.push_back(Read);
+    }
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Return);
+    Function.Blocks.push_back(std::move(Block));
+    Functions.push_back(std::move(Function));
+  }
+  // A run whose output names nothing it leaves out, as a lift's, fails with
+  // the refusal, from the one shard that writes the body.
+  auto Failed = PipelineTestPeer::emitShards(Functions, Context, Image, 2);
+  EXPECT_EQ(Failed.Module, nullptr);
+  EXPECT_TRUE(Failed.LeftOut.empty());
+  EXPECT_EQ(llvm::StringRef(Failed.Error)
+                .count(kAddressMemoryImmediateImageUnsupported),
+            1u)
+      << Failed.Error;
+
+  auto Result = PipelineTestPeer::emitShards(Functions, Context, Image, 2,
+                                             /*OmitRefusedBodies=*/true);
+  ASSERT_NE(Result.Module, nullptr) << Result.Error;
+  EXPECT_TRUE(Result.Error.empty());
+  EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+  ASSERT_EQ(Result.LeftOut.size(), 1u);
+  EXPECT_EQ(Result.LeftOut[0].first, 3u);
+  EXPECT_EQ(Result.LeftOut[0].second, kAddressMemoryImmediateImageUnsupported);
+  for (unsigned I = 0; I < 8; ++I) {
+    const llvm::Function *Function =
+        Result.Module->getFunction(Functions[I].Name);
+    if (I == 3) {
+      EXPECT_TRUE(!Function || Function->isDeclaration());
+      continue;
+    }
+    ASSERT_NE(Function, nullptr) << Functions[I].Name;
+    EXPECT_FALSE(Function->isDeclaration()) << Functions[I].Name;
+  }
+}
+
+// Two functions with one name, as a Mach-O's local symbols of one generic in
+// two codegen units, each keep their own body, in one module or in two
+// shards: the later one takes its entry address after the name.
+TEST(PipelineOutcome, ShardedEmissionKeepsBothFunctionsOfOneName) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  std::vector<MedFunc> Functions;
+  for (unsigned I = 0; I < 8; ++I) {
+    MedFunc Function = sourceFunction(
+        0x1000 + I * 16,
+        I == 1 || I == 6 ? "twin" : "source_" + std::to_string(I));
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Return);
+    Function.Blocks.push_back(std::move(Block));
+    Functions.push_back(std::move(Function));
+  }
+  const auto OriginalVA = [](const llvm::Function &Function) -> uint64_t {
+    auto Address = rewrite_source::getOriginalVA(Function);
+    if (!Address) {
+      llvm::consumeError(Address.takeError());
+      return 0;
+    }
+    return Address->value_or(0);
+  };
+  for (unsigned Threads : {1u, 2u}) {
+    SCOPED_TRACE(Threads);
+    llvm::LLVMContext Context;
+    auto Result =
+        PipelineTestPeer::emitShards(Functions, Context, Image, Threads);
+    ASSERT_NE(Result.Module, nullptr) << Result.Error;
+    EXPECT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+    const llvm::Function *First = Result.Module->getFunction("twin");
+    const llvm::Function *Second = Result.Module->getFunction("twin_1060");
+    ASSERT_NE(First, nullptr);
+    ASSERT_NE(Second, nullptr);
+    EXPECT_FALSE(First->isDeclaration());
+    EXPECT_FALSE(Second->isDeclaration());
+    EXPECT_EQ(OriginalVA(*First), 0x1010u);
+    EXPECT_EQ(OriginalVA(*Second), 0x1060u);
+  }
+}
+
+// A real symbol may already use the address suffix chosen for a duplicate.
+// Preserve each body's value and the caller's target even across chained
+// collisions, reversed input order and independent LLVM shards.
+TEST(PipelineOutcome, FunctionAddressSuffixesDoNotAliasExistingNames) {
+  const auto OriginalVA = [](const llvm::Function &Function) -> uint64_t {
+    auto Address = rewrite_source::getOriginalVA(Function);
+    if (!Address) {
+      llvm::consumeError(Address.takeError());
+      return 0;
+    }
+    return Address->value_or(0);
+  };
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      for (bool Reverse : {false, true}) {
+        BinaryImage Image;
+        Image.Arch = Architecture;
+        Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                         ? Bitness::Bits32
+                         : Bitness::Bits64;
+        Image.Format = Format;
+        std::vector<MedFunc> Functions;
+        for (unsigned I = 0; I != 8; ++I) {
+          std::string Name = "source_" + std::to_string(I);
+          if (I == 0)
+            Name = "twin_1060_1060";
+          else if (I == 2)
+            Name = "twin_1060";
+          else if (I == 1 || I == 6)
+            Name = "twin";
+          MedFunc Function = sourceFunction(0x1000 + I * 16, std::move(Name));
+          Function.ReturnType = NdType::makeInt(Image.getPointerSize());
+          MedBlock Block;
+          Block.Id = 0;
+          Block.StartAddr = Function.Entry;
+          const auto &Registers = getTargetRegInfo(Architecture);
+          MedVar Value;
+          Value.Kind = MedVar::Reg;
+          Value.TheArch = Architecture;
+          Value.Id = 1;
+          Value.SSAVer = 1;
+          Value.Size = Image.getPointerSize();
+          Value.RegOff = Registers.IntReturnReg;
+          MedOp Produce;
+          Produce.Opcode = I == 7 ? NdOp::CALL : NdOp::COPY;
+          Produce.Addr = Function.Entry;
+          Produce.Output = Value;
+          Produce.addInput(MedVar::makeConst(I == 7 ? 0x1060 : I + 1,
+                                             Image.getPointerSize()));
+          Block.Ops.push_back(Produce);
+          MedOp Return;
+          Return.Opcode = NdOp::RETURN;
+          if (Registers.ReturnOperandIsValue)
+            Return.addInput(Value);
+          Block.Ops.push_back(Return);
+          Function.Blocks.push_back(std::move(Block));
+          Functions.push_back(std::move(Function));
+        }
+        if (Reverse)
+          std::reverse(Functions.begin(), Functions.end());
+        for (unsigned Threads : {1u, 2u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Architecture) << ':' << unsigned(Format)
+                       << ':' << Reverse << ':' << Threads);
+          llvm::LLVMContext Context;
+          auto Result =
+              PipelineTestPeer::emitShards(Functions, Context, Image, Threads);
+          ASSERT_NE(Result.Module, nullptr) << Result.Error;
+          ASSERT_FALSE(llvm::verifyModule(*Result.Module, &llvm::errs()));
+          for (unsigned I = 0; I != 8; ++I) {
+            const llvm::Function *Found = nullptr;
+            for (const llvm::Function &Emitted : *Result.Module) {
+              if (OriginalVA(Emitted) != 0x1000 + I * 16)
+                continue;
+              ASSERT_EQ(Found, nullptr);
+              Found = &Emitted;
+            }
+            ASSERT_NE(Found, nullptr) << I;
+            ASSERT_EQ(Found->size(), 1u);
+            if (I != 7) {
+              const auto *Return = llvm::dyn_cast<llvm::ReturnInst>(
+                  Found->getEntryBlock().getTerminator());
+              ASSERT_NE(Return, nullptr);
+              const auto *Value = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                  Return->getReturnValue());
+              ASSERT_NE(Value, nullptr);
+              EXPECT_EQ(Value->getZExtValue(), I + 1);
+            } else {
+              unsigned Calls = 0;
+              for (const llvm::Instruction &Instruction :
+                   Found->getEntryBlock()) {
+                const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+                if (!Call)
+                  continue;
+                const auto *Callee = llvm::dyn_cast<llvm::Function>(
+                    Call->getCalledOperand()->stripPointerCasts());
+                ASSERT_NE(Callee, nullptr);
+                EXPECT_EQ(OriginalVA(*Callee), 0x1060u);
+                ++Calls;
+              }
+              EXPECT_EQ(Calls, 1u);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+MedFunc unhandledIntrinsicFunction(Arch Architecture, uint16_t OutputSize,
+                                   va_t Entry = 0x1000) {
+  MedFunc Function = sourceFunction(Entry, "unsupported_intrinsic");
+  MedVar Output;
+  Output.Kind = MedVar::Temp;
+  Output.TheArch = Architecture;
+  Output.Id = 1;
+  Output.Size = OutputSize;
+  MedOp Operation;
+  Operation.Opcode = NdOp::INTRINSIC;
+  Operation.Addr = Entry;
+  Operation.addInput(MedVar::makeConst(0xffff, 2));
+  if (OutputSize)
+    Operation.Output = Output;
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  if (OutputSize) {
+    Return.addInput(Output);
+    Function.ReturnType = NdType::makeInt(OutputSize);
+  }
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Entry;
+  Block.Ops = {Operation, Return};
+  Function.Blocks.push_back(std::move(Block));
+  return Function;
+}
+
+TEST(PipelineOutcome, UnhandledIntrinsicNeverPublishesZeroOrAnEmptyEffect) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    for (uint16_t Size : {0, 4}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Architecture) << ':' << Size);
+      llvm::LLVMContext Context;
+      MedLLVMEmitter Emitter;
+      auto Function = unhandledIntrinsicFunction(Architecture, Size);
+      std::unique_ptr<llvm::Module> Module;
+      try {
+        Module = Emitter.emit({Function}, Context, "unsupported", Architecture);
+        ADD_FAILURE() << "an unsupported intrinsic published a module";
+      } catch (const std::runtime_error &Error) {
+        EXPECT_NE(std::string(Error.what()).find("unsupported LLVM intrinsic"),
+                  std::string::npos);
+        EXPECT_NE(std::string(Error.what()).find("65535"), std::string::npos);
+      }
+      EXPECT_EQ(Module, nullptr);
+      EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), Size ? 1u : 0u);
+
+      // Reuse the same emitter after refusal. No old LLVM values or refusal
+      // counter may contaminate a later, valid generation.
+      auto &Operation = Function.Blocks[0].Ops[0];
+      Operation.Opcode = NdOp::COPY;
+      Operation.NumInputs = 0;
+      if (Size)
+        Operation.addInput(MedVar::makeConst(7, Size));
+      else
+        Function.Blocks[0].Ops.erase(Function.Blocks[0].Ops.begin());
+      Module = Emitter.emit({Function}, Context, "supported", Architecture);
+      ASSERT_NE(Module, nullptr);
+      EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), 0u);
+    }
+  }
+}
+
+TEST(PipelineOutcome,
+     UnhandledIntrinsicRefusalsAgreeAcrossSingleAndShardedEmission) {
+  ScopedThreadCount Threads(2);
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {1u, 8u})
+      for (bool NoOpt : {false, true})
+        for (bool SourceProjection : {false, true})
+          for (uint16_t Size : {0, 4}) {
+            SCOPED_TRACE(::testing::Message()
+                         << unsigned(Architecture) << ':' << Count << ':'
+                         << NoOpt << ':' << SourceProjection << ':' << Size);
+            llvm::LLVMContext Context;
+            BinaryImage Image;
+            Image.Arch = Architecture;
+            Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                             ? Bitness::Bits32
+                             : Bitness::Bits64;
+            Image.Format = BinaryFormat::ELF;
+            PipelineResult Result;
+            for (unsigned Index = 0; Index != Count; ++Index) {
+              auto Function = unhandledIntrinsicFunction(
+                  Architecture, Size, 0x1000 + Index * 0x100);
+              Function.Name += "_" + std::to_string(Index);
+              if (Index + 1 != Count) {
+                Function.Blocks[0].Ops.erase(Function.Blocks[0].Ops.begin());
+                Function.Blocks[0].Ops[0].NumInputs = 0;
+                Function.ReturnType = NdType::makeVoid();
+              }
+              Result.MedFuncs.push_back(std::move(Function));
+            }
+            PipelineOptions Options;
+            Options.LiftMode = true;
+            Options.SourceProjection = SourceProjection;
+            Options.RetainLLVMSourceObservations = true;
+            Options.NoOpt = NoOpt;
+            EXPECT_FALSE(
+                PipelineTestPeer::runLift(Image, Context, Options, Result));
+            EXPECT_EQ(Result.LlvmModule, nullptr);
+            EXPECT_EQ(Result.LLVMSources, nullptr);
+            EXPECT_FALSE(Result.LLVMVerifierFailed);
+            EXPECT_NE(Result.Error.find("unsupported LLVM intrinsic"),
+                      std::string::npos)
+                << Result.Error;
+            if (Count == 8)
+              EXPECT_NE(Result.Error.find("LLVM shard "), std::string::npos);
+          }
 }
 
 TEST(PipelineOutcome, SourceEHRefusalsAgreeAcrossSingleAndShardedEmission) {

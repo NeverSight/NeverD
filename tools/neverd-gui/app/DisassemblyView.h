@@ -32,10 +32,14 @@ public:
   /// A code window can supply its own origin when it is pinned elsewhere.
   void navigate(Address address, bool record = true,
                 std::optional<Address> from = {});
-  void goBack();
-  void goForward();
+  /// Go \p steps stops back or forward at once, as picking a stop from the
+  /// Back or Forward button's list does.
+  void goBack(std::size_t steps = 1);
+  void goForward(std::size_t steps = 1);
   bool canGoBack() const { return historyIndex_ > 0; }
   bool canGoForward() const { return historyIndex_ + 1 < history_.size(); }
+  /// The stops Back, or Forward, reaches, nearest first.
+  std::vector<Address> stops(bool forward) const;
 
   std::optional<Address> currentAddress() const;
   std::optional<Address> currentItem() const;
@@ -45,8 +49,14 @@ public:
   /// The instruction operand the cursor is on (ListingView::currentOperand);
   /// none in the graph.
   std::optional<int> currentOperand() const;
+  /// Whether the cursor is on an instruction's own line, as every graph row
+  /// is, or on a data item's, rather than a name or comment line around it.
+  bool onInstruction() const;
+  bool onData() const;
   QString currentToken() const;
   QString selectedText() const;
+  /// What Copy takes in the listing or the graph shown.
+  QString copyText() const;
   void setSyncName(const QString &name) {
     syncName_ = name;
     updateStatus();
@@ -66,6 +76,12 @@ signals:
 private:
   void updateStatus();
   void remember(Address address);
+  /// Take the current history stop to the cursor, as IDA's history does: a
+  /// move since the jump that made the stop does not add one of its own.
+  void moveStopToCursor();
+  /// Go to the stop at \p index of the history, leaving the stops on both
+  /// sides of it.
+  void goToStop(std::size_t index);
   Session &session_;
   const AddressSpace &space_;
   QStackedWidget *stack_;

@@ -16,13 +16,14 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
-#include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/backend/llvm/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
+#include "neverd/backend/llvm/X86/X86AtomicRmw.h"
+#include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationSEHThread.h"
-#include "neverd/ir/med/I386PicAddress.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/libc/LibCNames.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-op-emitter"
@@ -91,8 +92,21 @@ llvm::Value *MedLLVMEmitter::resolveAtomicMemoryPtr(
   llvm::Value *Address = nullptr;
   if (AddressSpace == NdMemoryAddressSpace::Default && Img)
     Address = tryResolveDirectGlobalDataAddress(AddressVar, AccessBytes);
-  if (!Address && AddressSpace == NdMemoryAddressSpace::Default && Img)
+  if (!Address && AddressSpace == NdMemoryAddressSpace::Default && Img &&
+      !usesOriginalImageStorage()) {
     Address = tryResolveWritableData(AddressVar, AccessBytes, Builder);
+    if (!Address)
+      Address = tryResolveCodePtrTablePtr(AddressVar, Builder);
+    if (!Address)
+      Address = tryResolveI386GotRelativeReadOnlyPtr(AddressVar, AccessBytes,
+                                                     Builder);
+    if (!Address)
+      // Native memory operations need the same all-arms address proof as an
+      // ordinary load. A selected or recurrent immutable base must not fall
+      // back to an integer address in the original image.
+      Address = tryResolveReadOnlyDataPtr(AddressVar, AccessBytes,
+                                          /*FailClosed=*/true, Builder);
+  }
   if (!Address) {
     rejectEscapingAddressFragment(AddressVar,
                                   "an unresolved atomic memory address");
@@ -113,7 +127,9 @@ llvm::Value *MedLLVMEmitter::resolveAtomicMemoryPtr(
 
 void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                             int BlockId, int OpIdx) {
-  if (Op.Dead || SuppressedTableAddressOps.count({BlockId, OpIdx}))
+  if (Op.Dead || SuppressedTableAddressOps.count({BlockId, OpIdx}) ||
+      AArch64ReturnProtectionOps.contains(&Op) ||
+      AArch64CallAuthentications.contains(&Op))
     return;
 
   const bool IsSyntheticX87StatusRead =
@@ -121,8 +137,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Op.Inputs[0].isConst() &&
       static_cast<Intrinsic>(Op.Inputs[0].ConstVal) == Intrinsic::X87ReadStatus;
   if (!IsSyntheticX87StatusRead) {
-    PendingX87FpremStatus = nullptr;
-    PendingX87FpremBlock = nullptr;
+    PendingX87Status = nullptr;
+    PendingX87StatusBlock = nullptr;
   }
 
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
@@ -920,7 +936,11 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (!IsSegmentRelative && Op.NumInputs >= 1 && Img)
       Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Op.Output.Size);
     bool IsGlobalData = (Ptr != nullptr);
-    if (!IsSegmentRelative && !Ptr && Img && Op.NumInputs >= 1) {
+    // Live image operands already carry runtime addresses. Mirror resolution
+    // proves how to move file bytes to independent globals; applying it here
+    // would rebase loaded pointers or reject legitimate runtime pointer merges.
+    if (!IsSegmentRelative && !Ptr && Img && Op.NumInputs >= 1 &&
+        !usesOriginalImageStorage()) {
       // Runtime-indexed access into a writable .data / .bss segment: redirect
       // into the cohesive mutable global so it aliases the direct (constant)
       // loads/stores of the same global.  Checked first as it is the only path
@@ -1039,7 +1059,11 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Ptr = tryResolveDirectGlobalDataAddress(AddrVar, Hint);
     }
     bool IsGlobalData = (Ptr != nullptr);
-    if (!IsSegmentRelative && !Ptr && Img && Op.NumInputs >= 1) {
+    // Live image operands already carry runtime addresses. Mirror resolution
+    // proves how to move file bytes to independent globals; applying it here
+    // would rebase loaded pointers or reject legitimate runtime pointer merges.
+    if (!IsSegmentRelative && !Ptr && Img && Op.NumInputs >= 1 &&
+        !usesOriginalImageStorage()) {
       // Runtime-indexed store into a writable .data / .bss segment: redirect
       // into the cohesive mutable global so it aliases that global's loads.
       Ptr = tryResolveWritableData(AddrVar, AddrVar.Size, Builder);
@@ -1119,7 +1143,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return StoredAddressRelation ? traceValueVA(Op.Inputs[1])
                                    : traceSSAConst(Op.Inputs[1]);
     };
-    if (Img && Op.NumInputs >= 2 && Val && Val->getType()->isIntegerTy() &&
+    if (Img && !usesOriginalImageStorage() && Op.NumInputs >= 2 && Val &&
+        Val->getType()->isIntegerTy() &&
         (!StoredOccurrence.hasExplicitProvenance() || StoredAddressRelation)) {
       const bool HasMatchingSlotReload =
           frameSlotHasMatchingKeyLoad(Op.Inputs[0]);
@@ -1209,7 +1234,13 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         if (!Sym)
           if (auto C = traceStoredAddress()) {
             const Segment *Seg = Img->getSegmentFor(*C);
-            if (Seg && Seg->isReadable() && !Seg->isWritable() &&
+            // Reuse getVar's address intent instead of treating mapped bytes
+            // as evidence that a stored integer is a pointer. Exact address
+            // producers still authorize low-address objects.
+            if ((StoredAddressRelation ||
+                 getVarHasDirectDataSymbolizationIntent(*C,
+                                                        Op.Inputs[1].Size)) &&
+                Seg && Seg->isReadable() && !Seg->isWritable() &&
                 !Seg->isExecutable() && !Seg->Data.empty())
               Sym = tryResolveGlobalData(*C, Op.Inputs[1].Size);
           }
@@ -1271,8 +1302,30 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     llvm::Type *ValTy = sizeToType(Op.Output.Size);
     if (Val->getType() != ValTy)
       Val = Builder.CreateIntCast(Val, ValTy, false, "atomic_rmw_val");
-    llvm::Value *Ptr = resolveAtomicMemoryPtr(
-        Op.Inputs[0], Op.Output.Size, ValTy, Builder, Op.MemoryAddressSpace);
+    llvm::Value *Ptr;
+    if (Op.SourceReturnSlotOffset) {
+      Ptr = Builder.CreateIntrinsic(llvm::Intrinsic::addressofreturnaddress,
+                                    {Builder.getPtrTy()}, {}, nullptr,
+                                    "return_slot");
+      if (*Op.SourceReturnSlotOffset)
+        Ptr = Builder.CreateConstGEP1_64(Builder.getInt8Ty(), Ptr,
+                                         *Op.SourceReturnSlotOffset);
+    } else {
+      Ptr = resolveAtomicMemoryPtr(Op.Inputs[0], Op.Output.Size, ValTy, Builder,
+                                   Op.MemoryAddressSpace);
+    }
+    if (const auto Plan = x86AtomicRmwPlan(
+            TargetArch, Op.Opcode, Op.Output.Size, Op.MemoryAddressSpace)) {
+      // Generic atomicrmw with natural alignment would assert a fact the
+      // decoded address never supplied. Its unaligned libcall expansion
+      // also loses the original hardware transaction and fault behavior.
+      auto *Type =
+          llvm::FunctionType::get(ValTy, {Ptr->getType(), ValTy}, false);
+      auto *Assembly = llvm::InlineAsm::get(Type, Plan->assembly(),
+                                            Plan->constraints(), true);
+      Result = Builder.CreateCall(Assembly, {Ptr, Val}, "atomic_old");
+      break;
+    }
     llvm::AtomicRMWInst::BinOp RMWOp = Op.Opcode == NdOp::ATOMIC_ADD
                                            ? llvm::AtomicRMWInst::Add
                                            : llvm::AtomicRMWInst::Xchg;
@@ -1336,7 +1389,28 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     emitCallOp(Op, Builder, BlockId, OpIdx);
     return;
   case NdOp::INTRINSIC: {
+    // Intrinsics return through this arm rather than the common value path.
+    // Observe the emitted effect itself: a packed/query result can disappear
+    // during optimization while the CPUID, fence or memory effect survives.
+    auto *SourceBlock = Builder.GetInsertBlock();
+    const auto Insert = Builder.GetInsertPoint();
+    auto *Previous =
+        Insert == SourceBlock->begin() ? nullptr : &*std::prev(Insert);
+    auto *Following = Insert == SourceBlock->end() ? nullptr : &*Insert;
     Result = emitIntrinsic(Op, Builder);
+    if (SourceMap && Op.Addr != InvalidVA && Op.OriginSeq >= 0) {
+      if (!Previous || Previous->getParent() == SourceBlock)
+        for (auto *I = Previous               ? Previous->getNextNode()
+                       : SourceBlock->empty() ? nullptr
+                                              : &SourceBlock->front();
+             I && I != Following; I = I->getNextNode())
+          if (I->mayHaveSideEffects() || llvm::isa<llvm::CallBase>(I))
+            SourceMap->Observations.push_back(
+                {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, I});
+      if (llvm::isa_and_nonnull<llvm::Instruction>(Result))
+        SourceMap->Observations.push_back(
+            {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
+    }
     if (Result && Op.Output.Size > 0)
       setVar(Op.Output, Result, Builder);
 

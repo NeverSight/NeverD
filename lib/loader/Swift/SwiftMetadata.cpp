@@ -1130,9 +1130,6 @@ class Reader {
   void requirePlainEmptyStructLayout(va_t Metadata) const {
     if (Metadata < 8 || Metadata % 8)
       throw Unsupported("Swift empty struct metadata header is misaligned");
-    if (Image.MachOChainedFixupsAmbiguous)
-      throw Unsupported("Swift empty struct value-witness table has "
-                        "ambiguous fixups");
     const va_t Slot = Metadata - 8;
     if (!Data.bytes(Slot, 8))
       throw Unsupported(
@@ -1252,6 +1249,10 @@ class Reader {
   }
 
   va_t metadata(va_t Descriptor, bool IsClass) const {
+    // RuntimeData refuses ambiguous pointer fixups while building the index.
+    // Preserve that cause instead of reporting the rejected entry as absent.
+    if (Image.MachOChainedFixupsAmbiguous)
+      throw Unsupported("Swift type metadata has ambiguous fixups");
     const auto &Index = IsClass ? ClassMetadata : StructMetadata;
     auto It = Index.find(Descriptor);
     if (It == Index.end() || It->second.size() != 1)

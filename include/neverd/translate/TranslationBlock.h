@@ -41,6 +41,8 @@ enum class TranslationBlockTerminatorKindV1 : uint32_t {
   IndirectCall = 5,
   Return = 6,
   Opaque = 7,
+  /// A complete x87 instruction ending in the selected runtime helper.
+  X87Runtime = 8,
 };
 
 enum class TranslationBlockDescriptorFlagV1 : uint32_t {
@@ -104,6 +106,9 @@ struct TranslationBlockDescriptorV1 {
   std::vector<LowOp> Ops;
   std::vector<LowInstructionBoundary> InstructionBoundaries;
   std::vector<GuestExecutableRangeBinding> GenerationBindings;
+  /// Binds decoder ownership, canonical reconstruction and runtime boundary.
+  TranslationRuntimeProfileV1 RuntimeProfile =
+      TranslationRuntimeProfileV1::ScalarInteger;
 };
 
 /// Reject an unknown schema, inconsistent counts/ranges/control metadata, an

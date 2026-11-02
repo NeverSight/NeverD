@@ -1,0 +1,138 @@
+{
+  "scope": "Explicit V6 LSS/LFS/LGS including null SS at CPL0 and declared null FS/GS base policies",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-far-load-completion-20261029",
+  "neverd_base": "6d961029fb0b3ad7685f547322b8120c59e8fe51",
+  "qualified_source": {
+    "path": "qualified-source.json",
+    "sha256": "5c246e00227c9202887619221f5c2c4d1ac7957fa1e9d0b246a9a352941fdc2d",
+    "bytes": 1519
+  },
+  "source_files": {
+    "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h": {
+      "sha256": "7fc32a268cd34176544ce5bd048e419fad91f44bd2cd2fc2872364cdb17d22f7",
+      "bytes": 14319
+    },
+    "lib/analysis/arch/x86_64/X64ContinuationEvents.h": {
+      "sha256": "60298e4b7eabb7783934c49bd9afaeab7ee4a6ef8a9ee7d3159054b0f167c6e4",
+      "bytes": 20399
+    },
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": {
+      "sha256": "bdfacbf89b4f87414a87d371569f63c4b19bae0aad4898776cd0a325cf7a8efc",
+      "bytes": 55755
+    },
+    "lib/analysis/arch/x86_64/X64FarPointerEncoding.h": {
+      "sha256": "5c40d832dfcb14e12f21a0401790be23b05275560736ce0ab09f28ef83134906",
+      "bytes": 3565
+    },
+    "lib/pipeline/X64ContinuationExport.cpp": {
+      "sha256": "3657f0e614153f6df8003b1670fed14c27c2e6b2cfa8a915e9258f939f485af0",
+      "bytes": 20036
+    },
+    "unittests/devirtualization/OriginalBinaryUndefinedIndependenceTests.cpp": {
+      "sha256": "de8b16183faf71ae684e253168e7ac5ecce1e2172f4db5a4413f6da18e666cef",
+      "bytes": 111347
+    },
+    "unittests/devirtualization/X64ContinuationExportTests.cpp": {
+      "sha256": "abb5a21d9d550f520d0125d95fe172b15d8b172f810793ccc457ee7f2f98819d",
+      "bytes": 23672
+    },
+    "unittests/devirtualization/X64FarPointerContinuationTests.inc": {
+      "sha256": "bdb2127ee5a4faafdff55030471a79e3be4a1a5de4309ac1fc9a7f41f8a69750",
+      "bytes": 23597
+    },
+    "unittests/devirtualization/fixtures/x64_continuation_kvm.c": {
+      "sha256": "d0ef6e4dd87e25678a5290f6d08f7936b888c00963ad370a54113e7c3e87d372",
+      "bytes": 16402
+    }
+  },
+  "qualification_driver": {
+    "path": "make-evidence.py",
+    "sha256": "4db3acb81d9d8f43c6136fbbdaea314ee06a743c108fd7d61c61f27e834a28a1",
+    "bytes": 5069
+  },
+  "checks": {
+    "qualification": {
+      "tests": 134,
+      "passed": 134,
+      "skipped": 0,
+      "artifact": "qualification.xml",
+      "sha256": "d11287f996747beb34e79f4ee9353bd9bf0ad871ab1473ce633071f5d9de5ebd",
+      "bytes": 141782
+    },
+    "proof_regressions": {
+      "tests": 870,
+      "passed": 870,
+      "skipped": 0,
+      "artifact": "proof-regressions.xml",
+      "sha256": "6278be12d6d740ae5a5de51254f1dab8ae08a6d4deccfe4bdeaa797b8049097a",
+      "bytes": 910338
+    }
+  },
+  "tests_passed": 1004,
+  "tests_skipped": 0,
+  "native": {
+    "processor": "Intel Core i9-13900H",
+    "profiles": [
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "state_and_ram_pairs": 175040,
+    "new_lss_matrix_pairs": 16128,
+    "null_fs_gs_pairs": 24576,
+    "compared": [
+      "complete represented V6 state",
+      "4096 source/descriptor RAM bytes",
+      "64 selector/descriptor alias bytes",
+      "32 extra high-alias bytes for addr32-wrap cases"
+    ],
+    "event_boundary": "Hardware execution breakpoints stop immediately at each original far-load fallthrough; KVM interrupt.shadow must be zero before and after. No intervening helper instruction.",
+    "null_base_policy": "clear; preservation is checked against its explicit portable contract, not claimed as measured AMD execution"
+  },
+  "portable": {
+    "invalid_lss_state_and_ram_cases": 3120,
+    "existing_invalid_lfs_lgs_cases": 408,
+    "null_policy_guard_page_cases": 648,
+    "exact_width_and_read_only_descriptor_cases": 36,
+    "old_base_read_new_base_access_cases": 8,
+    "positive_prefix_permutations": 18,
+    "ordinary_source_and_certificate_refusals": 36,
+    "sdk": "Both policies, both C routes at O0/O2 under ASan/UBSan; exact manifest binding, null FS/GS, SS/RSP stack switch, resumed load and physical RET; malformed policy values rejected"
+  },
+  "correction": {
+    "previous_claim": "LSS required a new interrupt/debug shadow owner",
+    "result": "Incorrect. LSS atomically loads its two destinations and does not establish MOV SS / POP SS inhibition.",
+    "source": "Intel SDM 253668-085US, section 7.8.3",
+    "url": "https://cdrdv2-public.intel.com/835754/253668-sdm-vol-3a.pdf",
+    "historical_records": [
+      "x86-far-pointer-native-2026-10-29.json",
+      "x86-lfs-lgs-continuation-2026-10-29.json"
+    ]
+  },
+  "initial_failure": {
+    "artifact": "focused.xml",
+    "sha256": "37a4cc24bf0601b3812ceb74c3166536326cf27488f471664faf98c8122596a7",
+    "bytes": 20716,
+    "cause": "Native fixtures supplied a noncanonical GDTR base. VM-entry rejected before executing LSS/LFS/LGS (exit 9, hardware reason 0x80000021).",
+    "fix": "Native no-descriptor-access checks use unmapped canonical 0x400000; portable guard pages retain unmapped/noncanonical/wrapping GDT cases."
+  },
+  "build": {
+    "configuration": "Release",
+    "receipt": {
+      "path": "neverd-build-receipt.json",
+      "sha256": "94efaf4f08b765005b1968bc6079c4e06f44db0fdd0fde1d70325cd05ef1200c",
+      "bytes": 3700
+    }
+  },
+  "limitations": [
+    "Intel operand-size and long-mode CPL0 successful sequential ordinary-RAM profile",
+    "other CPU models, i386/compatibility loads and exception delivery are unqualified",
+    "null base policy must be bound to original processor behavior, not inferred from vendor",
+    "ordinary source and native proof admission remain unchanged",
+    "global x86 gaps and NeverC full CI remain open"
+  ],
+  "release_and_pins_changed": false
+}

@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -24,8 +24,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONPermute(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                         const cs_arm &ARM) {
+bool liftSIMDNEONPermute(ARMLifter &L, ARMLifter::LiftState &S,
+                         const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // VSWP swaps the full contents of two D/Q registers.  The old handler emitted
   // an unhandled intrinsic (silently 0) into operand 0 and never wrote operand

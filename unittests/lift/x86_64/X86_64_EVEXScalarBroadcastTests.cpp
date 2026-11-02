@@ -4,7 +4,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
@@ -28,18 +28,30 @@ struct BroadcastCase {
 };
 
 constexpr std::array<BroadcastCase, 6> kBroadcastCases = {{
-    {"single", {0x62, 0x62, 0x7d, 0xcf, 0x18, 0x30},
-     {0x62, 0x02, 0x7d, 0x4f, 0x18, 0xf5}, 4},
-    {"double", {0x62, 0x62, 0xfd, 0xcf, 0x19, 0x30},
-     {0x62, 0x02, 0xfd, 0x4f, 0x19, 0xf5}, 8},
-    {"byte", {0x62, 0x62, 0x7d, 0xcf, 0x78, 0x30},
-     {0x62, 0x02, 0x7d, 0x4f, 0x78, 0xf5}, 1},
-    {"word", {0x62, 0x62, 0x7d, 0xcf, 0x79, 0x30},
-     {0x62, 0x02, 0x7d, 0x4f, 0x79, 0xf5}, 2},
-    {"dword", {0x62, 0x62, 0x7d, 0xcf, 0x58, 0x30},
-     {0x62, 0x02, 0x7d, 0x4f, 0x58, 0xf5}, 4},
-    {"qword", {0x62, 0x62, 0xfd, 0xcf, 0x59, 0x30},
-     {0x62, 0x02, 0xfd, 0x4f, 0x59, 0xf5}, 8},
+    {"single",
+     {0x62, 0x62, 0x7d, 0xcf, 0x18, 0x30},
+     {0x62, 0x02, 0x7d, 0x4f, 0x18, 0xf5},
+     4},
+    {"double",
+     {0x62, 0x62, 0xfd, 0xcf, 0x19, 0x30},
+     {0x62, 0x02, 0xfd, 0x4f, 0x19, 0xf5},
+     8},
+    {"byte",
+     {0x62, 0x62, 0x7d, 0xcf, 0x78, 0x30},
+     {0x62, 0x02, 0x7d, 0x4f, 0x78, 0xf5},
+     1},
+    {"word",
+     {0x62, 0x62, 0x7d, 0xcf, 0x79, 0x30},
+     {0x62, 0x02, 0x7d, 0x4f, 0x79, 0xf5},
+     2},
+    {"dword",
+     {0x62, 0x62, 0x7d, 0xcf, 0x58, 0x30},
+     {0x62, 0x02, 0x7d, 0x4f, 0x58, 0xf5},
+     4},
+    {"qword",
+     {0x62, 0x62, 0xfd, 0xcf, 0x59, 0x30},
+     {0x62, 0x02, 0xfd, 0x4f, 0x59, 0xf5},
+     8},
 }};
 
 BinaryImage emptyImage() {
@@ -104,8 +116,7 @@ void expectMutatedLiftFailsClosed(const std::array<uint8_t, 6> &Bytes,
 
 uint64_t relevantMask(uint16_t ElementSize) {
   const unsigned LaneCount = 64 / ElementSize;
-  return LaneCount == 64 ? UINT64_MAX
-                         : ((UINT64_C(1) << LaneCount) - 1);
+  return LaneCount == 64 ? UINT64_MAX : ((UINT64_C(1) << LaneCount) - 1);
 }
 
 bool isMaskOperand(const cs_x86_op &Operand) {
@@ -150,8 +161,8 @@ TEST(X86EVEXScalarBroadcast,
     ASSERT_TRUE(Dec.init(Arch::X64));
     DecodedInsn Insn{};
     ASSERT_EQ(Dec.decodeOneForLift(Case.MemoryBytes.data(),
-                                   Case.MemoryBytes.size(),
-                                   kInstructionAddress, Insn),
+                                   Case.MemoryBytes.size(), kInstructionAddress,
+                                   Insn),
               static_cast<int>(Case.MemoryBytes.size()));
     ASSERT_NE(Insn.Raw, nullptr);
     ASSERT_NE(Insn.Raw->detail, nullptr);
@@ -186,9 +197,9 @@ TEST(X86EVEXScalarBroadcast,
     Emulator.setRegisterBytes(x86reg::XMM29, Source);
     Emulator.setRegister(x86reg::K7, Mask);
     ASSERT_EQ(Emulator.run(Ops), Ops.size());
-    EXPECT_EQ(Emulator.getRegisterBytes(x86reg::XMM30),
-              expectedBroadcast(Scalar, Case.ElementSize, Mask,
-                                OldDestination));
+    EXPECT_EQ(
+        Emulator.getRegisterBytes(x86reg::XMM30),
+        expectedBroadcast(Scalar, Case.ElementSize, Mask, OldDestination));
     EXPECT_FALSE(Emulator.skips().any());
   }
 }
@@ -208,8 +219,7 @@ TEST(X86EVEXScalarBroadcast,
     Suppressed.setLoadCollect(true);
     Suppressed.setRegister(x86reg::RAX, kMemoryAddress);
     Suppressed.setRegister(x86reg::K7, 0);
-    Suppressed.setRegisterBytes(x86reg::XMM30,
-                                std::vector<uint8_t>(64, 0xa5));
+    Suppressed.setRegisterBytes(x86reg::XMM30, std::vector<uint8_t>(64, 0xa5));
     ASSERT_EQ(Suppressed.run(Ops), Ops.size());
     EXPECT_EQ(Suppressed.getRegisterBytes(x86reg::XMM30),
               std::vector<uint8_t>(64, 0));
@@ -223,8 +233,7 @@ TEST(X86EVEXScalarBroadcast,
     Active.setLoadCollect(true);
     Active.setRegister(x86reg::RAX, kMemoryAddress);
     Active.setRegister(x86reg::K7, Mask & relevantMask(Case.ElementSize));
-    Active.setRegisterBytes(x86reg::XMM30,
-                            std::vector<uint8_t>(64, 0xa5));
+    Active.setRegisterBytes(x86reg::XMM30, std::vector<uint8_t>(64, 0xa5));
     ASSERT_TRUE(runExactly(Active, Ops));
     EXPECT_EQ(Active.getRegisterBytes(x86reg::XMM30),
               expectedBroadcast(Scalar, Case.ElementSize, Mask,
@@ -254,7 +263,8 @@ TEST(X86EVEXScalarBroadcast,
 
   for (const GprCase &Case : Cases) {
     SCOPED_TRACE(Case.Name);
-    const std::vector<LowOp> Ops = liftX64(Case.Bytes.data(), Case.Bytes.size());
+    const std::vector<LowOp> Ops =
+        liftX64(Case.Bytes.data(), Case.Bytes.size());
     ASSERT_FALSE(Ops.empty());
     const uint64_t Mask = sparseMask(Case.ElementSize);
     std::vector<uint8_t> OldDestination(64);
@@ -287,20 +297,17 @@ TEST(X86EVEXScalarBroadcast,
     bool Zeroing;
   };
   constexpr std::array<ExtendedGprCase, 4> Cases = {{
-      {"byte-xmm", {0x62, 0x4a, 0x7d, 0x08, 0x7a, 0xf5}, 16, 1, false,
-       false},
-      {"word-ymm", {0x62, 0x4a, 0x7d, 0x2f, 0x7b, 0xf5}, 32, 2, true,
-       false},
-      {"dword-zmm", {0x62, 0x4a, 0x7d, 0xcf, 0x7c, 0xf5}, 64, 4, true,
-       true},
-      {"qword-zmm", {0x62, 0x4a, 0xfd, 0x4f, 0x7c, 0xf5}, 64, 8, true,
-       false},
+      {"byte-xmm", {0x62, 0x4a, 0x7d, 0x08, 0x7a, 0xf5}, 16, 1, false, false},
+      {"word-ymm", {0x62, 0x4a, 0x7d, 0x2f, 0x7b, 0xf5}, 32, 2, true, false},
+      {"dword-zmm", {0x62, 0x4a, 0x7d, 0xcf, 0x7c, 0xf5}, 64, 4, true, true},
+      {"qword-zmm", {0x62, 0x4a, 0xfd, 0x4f, 0x7c, 0xf5}, 64, 8, true, false},
   }};
   constexpr uint64_t Scalar = UINT64_C(0x8877665544332211);
 
   for (const ExtendedGprCase &Case : Cases) {
     SCOPED_TRACE(Case.Name);
-    const std::vector<LowOp> Ops = liftX64(Case.Bytes.data(), Case.Bytes.size());
+    const std::vector<LowOp> Ops =
+        liftX64(Case.Bytes.data(), Case.Bytes.size());
     ASSERT_FALSE(Ops.empty());
 
     const uint64_t Mask =
@@ -308,8 +315,8 @@ TEST(X86EVEXScalarBroadcast,
     std::vector<uint8_t> OldDestination(64);
     for (unsigned Index = 0; Index < OldDestination.size(); ++Index)
       OldDestination[Index] = static_cast<uint8_t>(0xb0 + Index);
-    std::vector<uint8_t> Inactive(
-        OldDestination.begin(), OldDestination.begin() + Case.VectorSize);
+    std::vector<uint8_t> Inactive(OldDestination.begin(),
+                                  OldDestination.begin() + Case.VectorSize);
     if (Case.Zeroing || !Case.HasMask)
       std::fill(Inactive.begin(), Inactive.end(), 0);
     std::vector<uint8_t> Expected =
@@ -330,33 +337,29 @@ TEST(X86EVEXScalarBroadcast,
 }
 
 TEST(X86EVEXScalarBroadcast, RawDetailMismatchFailsClosedAtomically) {
-  constexpr std::array<uint8_t, 6> ExtendedDword = {
-      0x62, 0x4a, 0x7d, 0xcf, 0x7c, 0xf5};
+  constexpr std::array<uint8_t, 6> ExtendedDword = {0x62, 0x4a, 0x7d,
+                                                    0xcf, 0x7c, 0xf5};
   expectMutatedLiftFailsClosed(
-      kBroadcastCases[4].RegisterBytes,
-      [](cs_insn &, cs_x86 &X86) {
+      kBroadcastCases[4].RegisterBytes, [](cs_insn &, cs_x86 &X86) {
         if (X86.op_count != 3 || X86.operands[2].type != X86_OP_REG)
           return false;
         X86.operands[2].reg = X86_REG_XMM28;
         return true;
       });
   expectMutatedLiftFailsClosed(
-      kBroadcastCases[0].MemoryBytes,
-      [](cs_insn &, cs_x86 &X86) {
+      kBroadcastCases[0].MemoryBytes, [](cs_insn &, cs_x86 &X86) {
         if (X86.op_count != 3 || !isMaskOperand(X86.operands[1]))
           return false;
         X86.operands[1].avx_zero_opmask = false;
         return true;
       });
-  expectMutatedLiftFailsClosed(
-      ExtendedDword,
-      [](cs_insn &, cs_x86 &X86) {
-        if (X86.op_count != 3 || X86.operands[2].type != X86_OP_REG ||
-            X86.operands[2].reg != X86_REG_R29D)
-          return false;
-        X86.operands[2].reg = X86_REG_R28D;
-        return true;
-      });
+  expectMutatedLiftFailsClosed(ExtendedDword, [](cs_insn &, cs_x86 &X86) {
+    if (X86.op_count != 3 || X86.operands[2].type != X86_OP_REG ||
+        X86.operands[2].reg != X86_REG_R29D)
+      return false;
+    X86.operands[2].reg = X86_REG_R28D;
+    return true;
+  });
 }
 
 } // namespace

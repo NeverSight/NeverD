@@ -11,6 +11,8 @@
 
 namespace neverd::sbf {
 
+inline constexpr bool kPartitionDispatcherByDefault = true;
+
 #define SBF_SOURCE_LIMIT(NAME, VALUE) inline constexpr size_t k##NAME = VALUE;
 #include "neverd/sbf/emit/SBFSourceLimits.def"
 

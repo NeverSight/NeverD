@@ -1,0 +1,46 @@
+//===- CompactUnwindPage.def - Darwin unwind page validation -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Shared structural address rules for strict and tolerant compact-unwind
+/// parsing. VALUE(Type, Name, Value) owns packed-field constants;
+/// TEXT(Name, Text) owns diagnostics for the same checks in both readers.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_COMPACT_PAGE_VALUE
+#define NEVERD_COMPACT_PAGE_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_COMPACT_PAGE_TEXT
+#define NEVERD_COMPACT_PAGE_TEXT(Name, Text)
+#endif
+
+NEVERD_COMPACT_PAGE_VALUE(uint32_t, kCompressedFunctionDeltaMask, 0x00ffffffu)
+NEVERD_COMPACT_PAGE_VALUE(uint32_t, kCompressedEncodingIndexShift, 24)
+NEVERD_COMPACT_PAGE_TEXT(
+    kPageIndexNotIncreasing,
+    "first-level function offsets are not strictly increasing")
+NEVERD_COMPACT_PAGE_TEXT(
+    kPageIndexInvalidSentinel,
+    "first-level index does not have one final terminal sentinel")
+NEVERD_COMPACT_PAGE_TEXT(kPageHasNoEntries, "second-level page has no entries")
+NEVERD_COMPACT_PAGE_TEXT(kCompressedFunctionDeltaOverflow,
+                         "compressed function delta overflows")
+NEVERD_COMPACT_PAGE_TEXT(kRegularEntryOutsidePage,
+                         "regular entry lies outside its page range")
+NEVERD_COMPACT_PAGE_TEXT(kCompressedEntryOutsidePage,
+                         "compressed entry lies outside its page range")
+NEVERD_COMPACT_PAGE_TEXT(kRegularPageStartMismatch,
+                         "regular page does not begin at its index key")
+NEVERD_COMPACT_PAGE_TEXT(kCompressedPageStartMismatch,
+                         "compressed page does not begin at its index key")
+NEVERD_COMPACT_PAGE_TEXT(
+    kRegularEntriesNotIncreasing,
+    "regular entries are duplicated or not strictly sorted")
+NEVERD_COMPACT_PAGE_TEXT(
+    kCompressedEntriesNotIncreasing,
+    "compressed entries are duplicated or not strictly sorted")
+
+#undef NEVERD_COMPACT_PAGE_VALUE
+#undef NEVERD_COMPACT_PAGE_TEXT

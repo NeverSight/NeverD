@@ -221,6 +221,13 @@ jobs:
         env:
           PYTHON: ${{ matrix.python }}
 
+      - name: Install DIFF source-truth test dependency
+        if: runner.os == 'Linux'
+        shell: bash
+        run: '"$PYTHON" -m pip install --require-hashes -r scripts/requirements-binary-diff-bench.txt'
+        env:
+          PYTHON: ${{ matrix.python }}
+
       - name: Verify Debug and Release target flags
         shell: bash
         run: |
@@ -234,15 +241,33 @@ jobs:
             scripts.tests.test_audit_ci_test_results \
             scripts.tests.test_ci_test_reuse \
             scripts.tests.test_run_lift_qualification \
+            scripts.tests.test_run_gtest_qualification \
             scripts.tests.test_prepare_source_dialect_corpus \
             scripts.tests.test_run_native_cpu_ci \
             scripts.tests.test_probe_native_host \
             scripts.tests.test_run_native_cpu_methods \
             scripts.tests.test_first_fatal_snapshots \
             scripts.tests.test_neverd_bench_harness \
+            scripts.tests.test_benchmark_cpu \
+            scripts.tests.test_benchmark_binary_diff \
+            scripts.tests.test_benchmark_binary_diff_bindiff \
+            scripts.tests.test_benchmark_binary_diff_binexport \
+            scripts.tests.test_benchmark_binary_diff_corpus \
+            scripts.tests.test_benchmark_binary_diff_external \
+            scripts.tests.test_benchmark_binary_diff_qualification \
+            scripts.tests.test_radare2_cli_compare \
+            scripts.tests.test_ida_source_order \
             scripts.tests.test_audit_evm_opcode_metadata \
             scripts.tests.test_eh_signature_generation \
             scripts.tests.test_msvc_signature_generation \
+            scripts.tests.test_generate_microsoft_windows_types \
+            scripts.tests.test_microsoft_rdbss_types \
+            scripts.tests.test_microsoft_ucrt_types \
+            scripts.tests.test_check_microsoft_provider_abis \
+            scripts.tests.test_signature_supplement \
+            scripts.tests.test_signature_metadata \
+            scripts.tests.test_vtable_context \
+            scripts.tests.test_runtime_pointer_context \
             scripts.tests.test_generate_rich_comp_ids \
             scripts.tests.test_generate_objc_declarations \
             scripts.tests.test_generate_objc_framework_declarations \
@@ -258,6 +283,8 @@ jobs:
             -v
           "$PYTHON" -m unittest discover \
             -s pluginsdk/python/tests -v
+          "$PYTHON" -m unittest discover \
+            -s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py -v
           "$PYTHON" -m unittest \
             scripts.tests.test_check_capabilities \
             scripts.tests.test_check_docs_i18n \
@@ -650,6 +677,40 @@ jobs:
                    "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("MedConstantPropagation.BudgetExhaustionLeavesAllOperandsUnchanged",
                    "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                  ("MedConstantPropagation.DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects",
+                   "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                  ("MedConstantPropagation.ComplementPairsKeepAddressOriginsAndSSAChanges",
+                   "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                  ("MedConstantPropagation.DefaultNegationsCancelWithoutLosingWidthOrMemoryEffects",
+                   "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                  ("MedConstantPropagation.NegationPairsKeepAddressOriginsAndSSAChanges",
+                   "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                  ("MedConstantPropagation.NegationAndComplementDoNotCancelEachOther",
+                   "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                  ("UnaryIdentitySource.X64ComplementsPreserveOriginalWordsAndNarrowing",
+                   "NeverDUnaryIdentitySourceTests"),
+                  ("UnaryIdentitySource.ARM64ComplementsPreserveWordsAndNarrowing",
+                   "NeverDUnaryIdentitySourceTests"),
+                  ("UnaryIdentitySource.X64NegationsPreserveWordsAndNarrowing",
+                   "NeverDUnaryIdentitySourceTests"),
+                  ("UnaryIdentitySource.ARM64NegationsPreserveWordsAndNarrowing",
+                   "NeverDUnaryIdentitySourceTests"),
+                  ("SourceInlineCalls.KeepsActualPointerReadsWritesAndOutgoingAliases",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SourceInlineCalls.ObservedMissingSlotsRemainUnavailable",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SourceInlineCalls.NestedMissingInputsDoNotBecomeNewFailures",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SourceInlineCalls.NestedUnusedInputsKeepEveryMemoryEffect",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SourceInlineCalls.NestedObserversCyclesAndLimitsRetainTheOriginalView",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SourceInlineCalls.DeadUnknownPhisNeedNoInputButReadersDo",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SourceInlineCalls.HelperOriginsDoNotBindNativeDebugAtAddressZero",
+                   "NeverDSourceInlineCallsTests"),
+                  ("SessionLLVMTest.DllEntryPrototypeRequiresARealPEEntry",
+                   "NeverDSessionLLVMTests"),
                   ("MedConstantPropagation.LowConversionPreservesOneValueAcrossLoopDefinitions",
                    "NeverDImageAnalysisBoundaryTests", "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("JumpTableTargetOwners.IndexesFragmentOwnershipForLargeCompactDispatch",
@@ -661,27 +722,37 @@ jobs:
                   ("JumpTableTargetOwners.IndexedTargetsRejectIndependentFunctionEntries",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("SourceABI.PartialFPRegisterPreservationDoesNotInventArguments",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.EntryByteDemandsKeepPhiEffectsAndRejectIncompleteGraphs",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.SwiftWordCallsKeepConventionAndRejectUnmodelledResults",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCSourceBindings.SwiftMetadataCallsRevalidateDeclarationAndConvention",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("HighCSourceCalls.SwiftConventionSurvivesDefinitionsAndRejectsConflicts",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.NarrowReturnExtensionRequiresAnExplicitDarwinArm64Carrier",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.NarrowParameterExtensionRequiresAnIntegerRegisterCarrier",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.NarrowParameterCallArgumentsKeepDeclaredWidths",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.NarrowParametersPreserveKnownBytesThroughWideCopies",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.NarrowDarwinReturnsPreserveWordReadsWithoutInventingHighBits",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.CallbackTypesKeepTheirSignaturesAndRejectMalformedGraphs",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceAggregate.RecordLayoutPreservesNestedMembersAndRejectsMalformedGraphs",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("SourceAggregate.FixedCRecordsAllocateOnlyExplicitParameters",
@@ -707,15 +778,20 @@ jobs:
                   ("SourceAggregate.FieldIdentityIncludesPositionAndCompleteRecordShape",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("SourceABI.DarwinIntegerPairResultRequiresBothReturnRegisters",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.IntegerPairCallsPreserveBothWordsThroughSSAAndReturns",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.SourceReturnComponentsNeverBecomeRewriteABIEvidence",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.FusedMultiplyAddPreservesSingleRoundingAndAllOperands",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.UnsupportedArithmeticNeverManufacturesAZeroResult",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCCallHints.NSStringBridgePreservesBothResultWordsAndExactImport",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("SwiftABIProjectionPlan.PairResultsAndCallbackTypesKeepCompleteABIKeys",
@@ -723,35 +799,50 @@ jobs:
                   ("ObjCCallHints.SwiftOnceKeepsCallbackContextAndVoidResult",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("HighCSourceCalls.GuardedPhiCleanupKeepsTargetLabelsExecutable",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.CallbackDeclaratorsPreserveArgumentsAndReturnTypes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.RuntimeCallbackPreservesPredicateAndContextOperands",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.VoidFramesRestoreEntryBytesAcrossBranchesAndLoops",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.VoidFramesRejectClobbersEscapesAndStaleSpills",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.VoidFrameByteProofHonorsImplicitZeroExtensions",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.RefinesOnlyUnusedAuxiliaryVoidSourceInputs",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.SourceInputRefinementRetainsUsesAndIncompleteBodies",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.VoidTailForwardersNeverSupplyAnUnprovenResult",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.VoidTailContractsRejectHiddenOutputsAndIncompleteEvidence",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.FloatingLanesPreserveScalarParametersAndResults",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.FloatingReturnPathsRequireCompleteDefinedLanes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.FloatingParametersRequireProvenEntryBytes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.TypedRecordCallResultsDefineTheNativeReturnCarrier",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.RecordResultDefinitionsRequireTheCompleteCallPrefix",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCCallHints.SwiftRuntimeRecordResultsKeepBothDeclaredCarriers",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("ObjCCallHints.SwiftRuntimeRecordResultsRevalidateShapeAndImport",
@@ -781,45 +872,65 @@ jobs:
                   ("ObjCCallHints.SwiftFixedRuntimeDeclarationsExcludeCustomParameterABIs",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("SourceABI.EntryDemandsDistinguishImplicitCallDefinitionsFromInputs",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.EntryDemandsTraceOnlyProvenCallPreservedPrefixes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.AuxiliaryInputsAllowLaterCallerSavedWrites",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.AuxiliaryParametersRequireCompleteNativeReadEvidence",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.AuxiliaryCallClobbersCannotBecomeEntryParameters",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ReadOnlyContextsRetainObservedPreservedRegisters",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ContextProofRejectsClobbersAndIncompleteNativeReads",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ContextDemandExcludesSeedsAndInternalDefinitions",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ObservedIncomingResultsKeepExactWidthsAndLocations",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.IncomingResultsRejectUnobservedNarrowAndLaterVersions",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.IncomingResultFactsInvalidateNarrowedSelfCopies",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.IncomingResultBackedgesMeetInitialAndClobberedStates",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ComputedReturnsMergeAcrossEveryPathAndBlockOrder",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ReturnLoopsRequireComputationOnTheirEntryPath",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ReturnPathsInvalidateCallsAndPartialCarrierWrites",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ReturnPathsRejectUnobservedInputAndEpilogueRestores",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ReturnProofRejectsMalformedOrUnboundedControlFlow",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.PointerUsesFollowWholeValuesWithoutChangingMachineTypes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.ConflictingOrPartialUsesCannotInventPointerParameters",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("NativeSourceHints.AmbiguousValuesAndUnboundCallsDoNotSupplyPointerFacts",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCCallHints.DiagnosticRuntimeUsesCABIAndKeepsItsLinkerSpelling",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("ObjCCallHints.ImmutableBytesRejectAliasingWritableAndRelocatedStorage",
@@ -943,17 +1054,17 @@ jobs:
                   ("LowInstructionBoundary.IndexedNoReturnPreservesConditionalAndReturningPaths",
                    "NeverDLiftTests", "NeverDLowInstructionBoundaryTests"),
                   ("ExecutableCodeOwnerIndex.PreservesMetadataBoundariesAndRawThumbSpelling",
-                   "NeverDLiftTests"),
+                   "NeverDExecutableCodeOwnerTests"),
                   ("ExecutableCodeOwnerIndex.FreshScopeObservesEditsAndMismatchUsesLiveImage",
-                   "NeverDLiftTests"),
+                   "NeverDExecutableCodeOwnerTests"),
                   ("ExecutableCodeOwnerIndex.KeepsMappingPrecedenceAndLiveEntryEvidence",
-                   "NeverDLiftTests"),
+                   "NeverDExecutableCodeOwnerTests"),
                   ("ExecutableCodeOwnerIndex.FunctionEndsKeepExactRawEntriesAndSmallestEnd",
-                   "NeverDLiftTests"),
+                   "NeverDExecutableCodeOwnerTests"),
                   ("ExecutableCodeOwnerIndex.FunctionEndScopeObservesEditsAndImageMismatch",
-                   "NeverDLiftTests"),
+                   "NeverDExecutableCodeOwnerTests"),
                   ("ExecutableCodeOwnerIndex.IndexedFunctionEndsPreserveNativeInteriorRoots",
-                   "NeverDLiftTests"),
+                   "NeverDExecutableCodeOwnerTests"),
                   ("MedVariadic.HomeSlotProofKeepsIdentityPhiAndAddressSpaceBoundaries",
                    "NeverDLiftTests"),
                   ("MedVariadic.DefinitionLookupIsFreshForEachFunctionAndEdit",
@@ -1057,11 +1168,14 @@ jobs:
                   ("ObjCSourceBindings.DarwinFormattedCallsRequireExactImportAndFormat",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("HighCSourceCalls.VariadicCDeclarationsMergeOnlyTheirFixedPrefixes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("SourceABI.DarwinVariadicArgumentsKeepPromotionsAndStackBoundary",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.VariadicMessageCompilesAndPreservesPromotedArguments",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCSourceBindings.FormatArgumentsRequireCompleteConsistentSlots",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("ObjCSourceBindings.PredicateFormatsRespectQuotedTokensAndScalarPromotions",
@@ -1131,7 +1245,8 @@ jobs:
                   ("ObjCSourceBindings.ProfileCountersExecuteAcrossTranslationUnits",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("HighCSourceCalls.RuntimeWeakCallsUsePublicObjectStorageTypes",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCIntegerWidths.NegationWrapsAndNestedNegativeConstantsCompile",
                    "NeverDLiftTests"),
                   ("MobileIOSNative.SharedAssociationKeysPreserveOneDefinitionAndRejectConflicts",
@@ -1187,11 +1302,14 @@ jobs:
                   ("HighControlFlowSemantics.SharedMergeDoesNotHideAnotherFalseArmEntry",
                    "NeverDLiftTests", "NeverDHighControlFlowTests"),
                   ("HighCSourceCalls.PartialIntegerCarriersPreserveExactMemoryWidths",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.PartialIntegerCarriersPreserveWideValuesAndShiftBounds",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.PartialIntegerAtomicsRejectWidenedMemoryAccess",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCCallHints.PrivateFrameSelectorSurvivesADeclaredCall",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("ObjCCallHints.FrameSelectorsRejectEscapesOverwritesAndUnknownCalls",
@@ -1205,13 +1323,17 @@ jobs:
                   ("ObjCCallHints.FrameBackedgesRevokeProvisionalSpillBindings",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("HighCSourceCalls.ConditionalRunsPreserveSharedLoopPhiContinuations",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.DeadPhiCleanupPreservesConditionalEntryAndCallEffects",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.DeadPhiCleanupKeepsUnprovenNestedEntriesAmbiguous",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.ConditionalDefaultPreservesResultsAndCallCounts",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("ObjCCallHints.ReceiverFactsSurviveOnlyAgreedCopiesAndPreservedViews",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("ObjCCallHints.ReceiverExactClassDispatchExcludesDerivedOverrides",
@@ -1439,9 +1561,11 @@ jobs:
                   ("ObjCCallHints.StackGuardAddressRequiresExactRuntimeIdentity",
                    "NeverDLiftTests", "NeverDObjCSourceCallTests"),
                   ("HighCSourceCalls.ConditionalEntryEvaluatesBeforeItsTakenEdgeCopies",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCSourceCalls.ConditionalEntryDoesNotHideOtherNestedInstructions",
-                   "NeverDLiftTests", "NeverDObjCSourceCallTests"),
+                   "NeverDLiftTests", "NeverDObjCSourceCallTests",
+                   "NeverDSourceEntryBindingTests"),
                   ("HighCIntegerWidths.ArithmeticWrapsBeforeWideningWithoutSignedOverflow",
                    "NeverDLiftTests"),
                   ("AArch64_RoundTrip.ParameterWidthFlowsThroughBranchPhi",
@@ -1452,9 +1576,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 522,
-              ("macOS", "macos-patch"): 577,
-              ("Windows", "windows-focused"): 518,
+              ("Linux", "linux-semantic"): 540,
+              ("macOS", "macos-patch"): 594,
+              ("Windows", "windows-focused"): 535,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os == "macOS":
               expected += tuple(TestRecord(name, frozenset({"NeverDObjCRuntimeSourceTests"}))
@@ -1524,6 +1648,11 @@ jobs:
               ),)
           if runner_os == "Linux":
               expected += (TestRecord(
+                  "UnaryIdentitySource.NativeX64NegationsPreserveArithmeticFlags",
+                  frozenset({"NeverDUnaryIdentitySourceTests"}),
+              ),)
+          if runner_os == "Linux":
+              expected += (TestRecord(
                   "SessionCAPITest.NativePhaseTraceFullStderrPreservesActualLoadContract",
                   frozenset({"NeverDSessionCAPITests"}),
               ),)
@@ -1562,15 +1691,18 @@ jobs:
           tests_file.write_text(
               "".join(item.name + "\n" for item in expected), encoding="utf-8"
           )
-          # CTest accepts any matching label. Select the owning aggregates;
-          # additional labels remain part of each exact expected identity.
-          owners = (
-              "NeverDLanguageEHTests", "NeverDLibCTests", "NeverDLiftTests",
-              "NeverDMetadataJSONTests",
-              "NeverDMobileTests", "NeverDSessionCAPITests",
-              "NeverDObjCRuntimeSourceTests",
-              "NeverDPipelineOutcomeTests",
-          )
+          # A case may exist in both the lift aggregate and focused binaries.
+          # Select its aggregate once; secondary labels describe coverage but
+          # must not admit the focused copies of the same test name.
+          owners = set()
+          for item in expected:
+              if "NeverDLiftTests" in item.labels:
+                  owners.add("NeverDLiftTests")
+              elif len(item.labels) == 1:
+                  owners.update(item.labels)
+              else:
+                  raise RuntimeError(f"ambiguous focused owner: {item}")
+          owners = sorted(owners)
           owner_regex = "^(" + "|".join(re.escape(owner) for owner in owners) + ")$"
           common = [
               "ctest", "--test-dir", "build-ci", "--build-config", "Release",

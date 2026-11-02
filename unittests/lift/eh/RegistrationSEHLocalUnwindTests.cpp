@@ -10,8 +10,8 @@
 
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationSEHLocalUnwind.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 using namespace neverd;
 

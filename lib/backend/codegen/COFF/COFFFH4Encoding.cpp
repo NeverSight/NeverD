@@ -344,12 +344,12 @@ llvm::Expected<TryMap> parseTryMap(ParseContext &Context, uint32_t TryMapRVA) {
     TryEntry Entry;
     Entry.Range.BeginRVA = Reader.position();
     llvm::Expected<CompressedUInt> TryLow = Reader.readCompressedUInt();
-    llvm::Expected<CompressedUInt> TryHigh = Reader.readCompressedUInt();
-    llvm::Expected<CompressedUInt> CatchHigh = Reader.readCompressedUInt();
     if (!TryLow)
       return TryLow.takeError();
+    llvm::Expected<CompressedUInt> TryHigh = Reader.readCompressedUInt();
     if (!TryHigh)
       return TryHigh.takeError();
+    llvm::Expected<CompressedUInt> CatchHigh = Reader.readCompressedUInt();
     if (!CatchHigh)
       return CatchHigh.takeError();
     if (TryLow->Value > std::numeric_limits<int32_t>::max() ||
@@ -397,9 +397,9 @@ llvm::Expected<IPMap> parseIPMap(ParseContext &Context, uint32_t IPMapRVA) {
     IPEntry Entry;
     Entry.Range.BeginRVA = Reader.position();
     llvm::Expected<CompressedUInt> Delta = Reader.readCompressedUInt();
-    llvm::Expected<CompressedUInt> State = Reader.readCompressedUInt();
     if (!Delta)
       return Delta.takeError();
+    llvm::Expected<CompressedUInt> State = Reader.readCompressedUInt();
     if (!State)
       return State.takeError();
     if (Delta->Value > std::numeric_limits<uint32_t>::max() - FunctionOffset)
@@ -439,9 +439,9 @@ llvm::Expected<SeparatedIPMap> parseSeparatedIPMap(ParseContext &Context,
     SeparatedIPEntry Entry;
     Entry.Range.BeginRVA = Reader.position();
     llvm::Expected<uint32_t> FunctionStartRVA = Reader.readUInt32();
-    llvm::Expected<uint32_t> IPMapRVA = Reader.readUInt32();
     if (!FunctionStartRVA)
       return FunctionStartRVA.takeError();
+    llvm::Expected<uint32_t> IPMapRVA = Reader.readUInt32();
     if (!IPMapRVA)
       return IPMapRVA.takeError();
     Entry.FunctionStartRVA = *FunctionStartRVA;

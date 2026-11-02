@@ -132,6 +132,8 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
           CheckCalls && Cleanups ? &*Cleanups : nullptr,
           Stacks ? &*Stacks : nullptr, LocalUnwinds ? &*LocalUnwinds : nullptr,
           SEHControls ? &*SEHControls : nullptr);
+    if (Stacks)
+      Func.RegistrationStates->CalleeStacks = std::move(*Stacks);
     if (CurrentImg && !SEHControls) {
       Func.RegistrationStates->Complete = false;
       Func.RegistrationStates->SEHStateStoresComplete = false;

@@ -16,7 +16,7 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/ARMRegs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"

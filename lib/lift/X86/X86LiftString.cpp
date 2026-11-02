@@ -7,8 +7,8 @@
 /// \file
 /// Dispatches the x86/x64 string operations, and lifts the compare/scan forms
 /// (CMPS/SCAS and the CMPSD/CMPSS disambiguation) here because they reach the
-/// private liftRepCmpScas, defined below along with the direction-flag step
-/// helper.  MOVS/STOS/LODS/XLATB are in X86LiftStringMove.cpp and the
+/// shared REP completion helper and the local direction-flag step helper.
+/// MOVS/STOS/LODS/XLATB are in X86LiftStringMove.cpp and the
 /// trap/serializing/system-call instructions in X86LiftSystem.cpp.
 ///
 //===----------------------------------------------------------------------===//
@@ -17,7 +17,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -114,95 +114,6 @@ NdVar X86Lifter::dirStep(LiftState &S, unsigned ElemSz) {
   return Step;
 }
 
-// REP/REPE/REPNE CMPS / SCAS.
-//
-// The loop exits on whichever comes first: RCX hitting zero, or the ZF
-// transition the prefix selects (REPE stops on the first mismatch, REPNE on the
-// first match).  That termination point is data dependent, so unlike REP
-// MOVS/STOS the trip count is not known here; the backend lowers the intrinsic
-// to the real `rep cmps/scas` and yields the hardware's leftover RCX.
-//
-// Everything else follows from that one value.  The loop decrements RCX and
-// advances the pointer(s) by one direction step in lockstep, so
-//   iterations = RCX_in - RCX_out,  RSI/RDI += iterations * step,
-// and the flags come back from the same hardware loop as a compact LAHF/SETO
-// snapshot.  A loop that never ran (RCX == 0 on entry) compares nothing and
-// leaves the flags untouched, so each modelled flag falls back to its incoming
-// value without issuing a speculative reconstruction load.
-void X86Lifter::liftRepCmpScas(LiftState &S, Intrinsic Id, unsigned ElemSz,
-                               bool IsScas, bool IsRepne,
-                               NdMemoryAddressSpace SourceAddressSpace) {
-  const uint16_t AddrSz = S.AddressSize;
-  NdVar Rsi = NdVar::reg(x86reg::RSI, AddrSz);
-  NdVar Rdi = NdVar::reg(x86reg::RDI, AddrSz);
-  NdVar Rcx = NdVar::reg(x86reg::RCX, AddrSz);
-  NdVar Df = NdVar::reg(x86reg::DF, 1);
-  NdVar RepKind = NdVar::scalar(IsRepne ? 1 : 0, 1);
-
-  // Snapshot the entry count and "the loop body ran at least once" before the
-  // count is overwritten.
-  NdVar RcxIn = S.makeTemp(AddrSz);
-  S.emit(NdOp::COPY, RcxIn, {Rcx});
-  NdVar RcxNZ = S.makeTemp(1);
-  S.emit(NdOp::INT_NOTEQUAL, RcxNZ, {RcxIn, NdVar::scalar(0, AddrSz)});
-  NdVar Step = dirStep(S, ElemSz);
-
-  // The intrinsic yields the leftover count.  Note the destination is NOT the
-  // default RAX: SCAS reads the accumulator but never writes it, so an RAX
-  // destination would clobber a live accumulator.
-  NdVar RcxOut = S.makeTemp(AddrSz);
-  if (IsScas)
-    S.emitIntrinsic(Id, RcxOut,
-                    {Rdi, Rcx, NdVar::reg(x86reg::RAX, ElemSz), Df, RepKind});
-  else
-    S.emitIntrinsic(Id, RcxOut, {Rsi, Rdi, Rcx, Df, RepKind},
-                    NdMemoryOrdering::None, SourceAddressSpace);
-
-  // REP CMPS/SCAS returns a LAHF/SETO flag snapshot as its one auxiliary
-  // output.  Keeping the flags in the hardware intrinsic is essential for the
-  // RCX==0 case: a flat LowIR LOAD would execute even behind a later SELECT,
-  // whereas hardware REP performs no operand access when the entry count is
-  // zero.  The COPY-input convention binds the auxiliary result in both the
-  // LLVM and HighIR lowering paths.
-  NdVar PackedFlagsResult = S.makeTemp(2);
-  NdVar PackedFlags = S.makeTemp(2);
-  S.emit(NdOp::COPY, PackedFlags, {PackedFlagsResult});
-
-  NdVar Iters = S.makeTemp(AddrSz);
-  S.emit(NdOp::INT_SUB, Iters, {RcxIn, RcxOut});
-  NdVar Delta = S.makeTemp(AddrSz);
-  S.emit(NdOp::INT_MULT, Delta, {Iters, Step});
-
-  NdVar NewSi;
-  if (!IsScas) {
-    NewSi = S.makeTemp(AddrSz);
-    S.emit(NdOp::INT_ADD, NewSi, {Rsi, Delta});
-  }
-  NdVar NewDi = S.makeTemp(AddrSz);
-  S.emit(NdOp::INT_ADD, NewDi, {Rdi, Delta});
-  if (!IsScas)
-    S.emit(NdOp::COPY, Rsi, {NewSi});
-  S.emit(NdOp::COPY, Rdi, {NewDi});
-  S.emit(NdOp::COPY, Rcx, {RcxOut});
-
-  static constexpr uint64_t FlagRegs[] = {x86reg::CF, x86reg::PF, x86reg::AF,
-                                          x86reg::ZF, x86reg::SF, x86reg::OF};
-  // LAHF stores SF:ZF:0:AF:0:PF:1:CF in AH; SETO stores OF in AL bit 0.
-  static constexpr unsigned PackedFlagBits[] = {8, 10, 12, 14, 15, 0};
-  NdVar Old[std::size(FlagRegs)];
-  for (size_t I = 0; I < std::size(FlagRegs); ++I) {
-    Old[I] = S.makeTemp(1);
-    S.emit(NdOp::COPY, Old[I], {NdVar::reg(FlagRegs[I], 1)});
-  }
-
-  for (size_t I = 0; I < std::size(FlagRegs); ++I) {
-    NdVar New = extractBit(S, PackedFlags, PackedFlagBits[I]);
-    NdVar Sel = S.makeTemp(1);
-    S.emit(NdOp::SELECT, Sel, {RcxNZ, New, Old[I]});
-    S.emit(NdOp::COPY, NdVar::reg(FlagRegs[I], 1), {Sel});
-  }
-}
-
 bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
                            const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
@@ -221,7 +132,7 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       }
     }
     if (HasXmm || InsnId == X86_INS_CMPSS ||
-        hasLegacyFPMaskCompareOpcode(Insn)) {
+        hasLegacyFPMaskCompareOpcode(Insn, TargetArch)) {
       return liftFPMaskCompareState(*this, S, Insn, X86,
                                     InsnId == X86_INS_CMPSD, true, false);
     } else if (!hasRepOrRepnePrefix(X86)) {
@@ -249,8 +160,8 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       // String CMPSD (`cmpsl`) under REP/REPE/REPNE.  stringElemSize cannot
       // classify X86_INS_CMPSD (it doubles as the SSE scalar compare), so the
       // 4-byte element size is passed explicitly.
-      liftRepCmpScas(S, Intrinsic::Cmpsd_str, /*ElemSz=*/4, /*IsScas=*/false,
-                     hasRepnePrefix(X86), stringSourceAddressSpace(X86));
+      liftRepState(*this, S, X86, Intrinsic::X86RepCmpsState, 4,
+                   hasRepnePrefix(X86));
     }
     break;
   }
@@ -268,7 +179,7 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
   //
   // The REP/REPE/REPNE forms terminate on a data-dependent ZF transition, so
   // the final RCX/RDI/RSI come back from the hardware loop the backend emits
-  // for the intrinsic; see liftRepCmpScas.
+  // for the intrinsic; see liftRepState.
   case X86_INS_CMPSB:
   case X86_INS_CMPSW:
   case X86_INS_CMPSQ:
@@ -310,33 +221,11 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       break;
     }
     // REP/REPE/REPNE form: data-dependent loop, lowered to the hardware
-    // instruction (see liftRepCmpScas).
-    Intrinsic Id;
-    switch (InsnId) {
-    case X86_INS_CMPSB:
-      Id = Intrinsic::Cmpsb;
-      break;
-    case X86_INS_CMPSW:
-      Id = Intrinsic::Cmpsw;
-      break;
-    case X86_INS_CMPSQ:
-      Id = Intrinsic::Cmpsq;
-      break;
-    case X86_INS_SCASB:
-      Id = Intrinsic::Scasb;
-      break;
-    case X86_INS_SCASW:
-      Id = Intrinsic::Scasw;
-      break;
-    case X86_INS_SCASD:
-      Id = Intrinsic::Scasd;
-      break;
-    default:
-      Id = Intrinsic::Scasq;
-      break;
-    }
-    liftRepCmpScas(S, Id, stringElemSize(InsnId), IsScas, hasRepnePrefix(X86),
-                   stringSourceAddressSpace(X86));
+    // instruction (see liftRepState).
+    liftRepState(*this, S, X86,
+                 IsScas ? Intrinsic::X86RepScasState
+                        : Intrinsic::X86RepCmpsState,
+                 stringElemSize(InsnId), hasRepnePrefix(X86));
     break;
   }
 

@@ -320,6 +320,10 @@ void SymState::write(SymSpace Space, uint64_t Offset, SymRef Value) {
   (void)writeBank(bank(Space), Offset, Value);
 }
 
+bool SymState::canWriteRegister(uint64_t Offset, SymRef Value) const {
+  return validBankWrite(*Ctx, {}, Offset, Value);
+}
+
 size_t SymState::numLiveBytes() const {
   size_t Total = Registers.Bytes.size() + Temporaries.Bytes.size() +
                  AbsoluteMemory.Bytes.size();
@@ -436,6 +440,21 @@ SymState::materializedAbsoluteRanges(uint64_t &WorkBudget) const {
     return std::nullopt;
   --WorkBudget;
   return materializedBankRanges(AbsoluteMemory, WorkBudget);
+}
+
+bool SymState::hasMaterializedRegionRange(SymRef Base, uint64_t Offset,
+                                          uint16_t Bytes) const {
+  if (!Base || !Bytes)
+    return false;
+  const auto Found = Regions.find(Base.index());
+  if (Found == Regions.end() ||
+      (!hasModularCoordinates(*Ctx, Base) &&
+       Offset > std::numeric_limits<uint64_t>::max() - (Bytes - 1)))
+    return false;
+  for (uint16_t I = 0; I < Bytes; ++I)
+    if (!Found->second.Bytes.count(Offset + I))
+      return false;
+  return true;
 }
 
 std::optional<llvm::SmallVector<SymState::MaterializedRange, 8>>

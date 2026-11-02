@@ -489,8 +489,11 @@ neverd_decompile_all_ex(neverd_session_t Sess, const char *InputPath,
 /// and do not include is declared, with one set of includes, types and
 /// globals for all of them.  Pass a function and the functions it calls
 /// (neverd_call_tree_json's "bottom_up") for that function's file.  Entries
-/// the image holds no native code at fail the call; EVM and SBF images
-/// answer with their whole program.
+/// the image holds no native code at fail the call; one the pipeline
+/// refuses, or whose C cannot be written, is named in a
+/// `neverd.not-decompiled` note at the unit's head, as the whole program
+/// names it.  EVM and SBF images answer with their whole
+/// program.
 NEVERD_API const char *
 neverd_decompile_functions(neverd_session_t Sess, const char *InputPath,
                            neverd_output_language_t Language,

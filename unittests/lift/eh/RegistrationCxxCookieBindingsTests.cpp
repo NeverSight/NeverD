@@ -14,7 +14,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/BinaryImage.h"

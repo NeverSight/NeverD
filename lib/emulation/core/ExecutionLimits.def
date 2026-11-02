@@ -1,4 +1,4 @@
-//===- ExecutionLimits.def - Native transport timing policy --------------===//
+//===- ExecutionLimits.def - Native transport policy ---------------------===//
 //
 // NeverD Decompiler
 //
@@ -9,3 +9,7 @@ NEVERD_EXECUTION_LIMIT(InstructionRAMWriteBytes, 4096)
 NEVERD_EXECUTION_LIMIT(MMIOAtomicBytes, 16)
 NEVERD_EXECUTION_LIMIT(MMIOObserverBytes, 8)
 NEVERD_EXECUTION_LIMIT(InstructionCacheEntries, 1024)
+// Avoid translation churn in 16 KiB ARM64 loops. The wide-loop benchmark gains
+// no material benefit from doubling this retention again. Entries still check
+// current executable bytes; this bounds identities, not admitted instructions.
+NEVERD_EXECUTION_LIMIT(UnicornInstructionCacheEntries, 4096)

@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 32288410e4352dcbe779ee091bfc8728b8d4e783203704b4d3a6d09f0421c96a -->
+<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -26,6 +26,7 @@
 | [HTML 소스 프로필 (영문)](../web-html-profile.md) | 유한 범위의 C++ 스크립트 목록, 캡처한 로컬 참조 및 원본 인라인 소스 앵커 |
 | [테스트](testing.md) | 테스트 스위트, 생성 fixture, Unicorn 왕복, 증분 명령 |
 | [데스크톱 워크벤치 (영문)](../gui.md) | 고전적인 디스어셈블러 레이아웃, 별도 작업 프로세스, 프로젝트 데이터베이스, 현지화와 MCP 연결 |
+| [분석 이미지 섹션 (영어)](../analysis-sections.md) | C ABI, 워커, CLI, 워크벤치로 구체화된 코드와 데이터 추가; 네이티브 뷰와 프로젝트 저장 |
 | [라이브러리 인식 (영문)](../library-recognition.md) | 근거에 따른 STL, ATL/MFC, COM, libc 식별, 프로필 및 복원 가능한 C 코드 접기 |
 | [데스크톱 검증 기록 (영문)](../gui-qualification.md) | 측정된 GUI 증거, 패키징 범위와 남은 플랫폼 검증 |
 | [인터프리터 소스 복원](interpreter-recovery.md) | 실험적 x64 인터프리터 특수화, HighC/LLVMC 출력, 실행 전제, 근거와 제한; 중첩 루프 증명 후보; 명시적 탐색 예산과 버전별 C API; 정확한 네이티브에서 LLVM으로의 증명 API |

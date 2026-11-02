@@ -1,0 +1,37 @@
+//===- LLVMAArch64ReturnProtection.def - Native frame policy ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// LLVM attribute spellings and diagnostics for compiler-owned signed frames.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_RETURN_LLVM_TEXT
+#error "Define NEVERD_A64_RETURN_LLVM_TEXT before including this file"
+#endif
+
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningScopeAttribute, "sign-return-address")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningKeyAttribute,
+                            "sign-return-address-key")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningArm64eAttribute, "ptrauth-returns")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningPCAttribute,
+                            "branch-protection-pauth-lr")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningAll, "all")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningNonLeaf, "non-leaf")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningNone, "none")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningAKey, "a_key")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningBKey, "b_key")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningFeaturesAttribute, "target-features")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningFeature, "+pauth")
+NEVERD_A64_RETURN_LLVM_TEXT(kReturnSigningMalformed,
+                            "Malformed AArch64 return-signing function policy")
+NEVERD_A64_RETURN_LLVM_TEXT(
+    kReturnSigningPCSourceUnsupported,
+    "PC-dependent return signing requires its source ABI contract")
+
+NEVERD_A64_RETURN_LLVM_TEXT(
+    kReturnSigningArm64eUnwindUnsupported,
+    "codegen: arm64e unwind requires an IB return-signing policy\n")
+
+#undef NEVERD_A64_RETURN_LLVM_TEXT

@@ -278,6 +278,8 @@ std::optional<va_t> startRoutineMain(const BinaryImage &Img) {
 } // namespace
 
 std::optional<va_t> findProgramMain(const BinaryImage &Img) {
+  if (Img.Arch == Arch::SBF)
+    return std::nullopt;
   if (const auto Main = startRoutineMain(Img))
     return Main;
   for (const Symbol &Sym : Img.Symbols)

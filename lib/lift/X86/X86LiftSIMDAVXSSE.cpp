@@ -14,10 +14,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86FPRoundState.h"
+#include "X86LegacyVectorMoveAudit.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -49,9 +50,22 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // Non-temporal stores/loads — semantically identical to normal moves for
-  // our purposes (the non-temporal hint only affects cache behavior).
-  case X86_INS_MOVNTDQ:
+  case X86_INS_MOVNTDQ: {
+    if (!vectormoveaudit::form(Insn, L.targetArch()))
+      return false;
+    const NdVar Address = S.computeEA(X86.operands[0]);
+    const auto Space =
+        X86Lifter::LiftState::memoryAddressSpace(X86.operands[0]);
+    S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                    {Address, NdVar::scalar(16, 8)}, NdMemoryOrdering::None,
+                    Space);
+    S.emitIntrinsic(Intrinsic::X86StreamStore128, {},
+                    {Address, L.operandRead(S, X86.operands[1])},
+                    NdMemoryOrdering::None, Space);
+    break;
+  }
+
+  // Other non-temporal families remain outside the audited raw-state domain.
   case X86_INS_MOVNTDQA:
   case X86_INS_MOVNTI:
   case X86_INS_MOVNTPD:
@@ -323,8 +337,7 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::INT_ZEXT, Address, {Offset});
     }
     S.emitIntrinsic(Intrinsic::MaskedStoreB, {}, {Address, Mask, Src},
-                    NdMemoryOrdering::None,
-                    stringSourceAddressSpace(X86));
+                    NdMemoryOrdering::None, stringSourceAddressSpace(X86));
     break;
   }
 
@@ -365,8 +378,7 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     NdVar FirstIndex = NdVar::cst(0, 2);
     for (unsigned I = 1; I < 8; ++I) {
       NdVar Candidate = S.makeTemp(2);
-      S.emit(NdOp::SUBBYTES, Candidate,
-             {Src, NdVar::cst(I * 2, 4)});
+      S.emit(NdOp::SUBBYTES, Candidate, {Src, NdVar::cst(I * 2, 4)});
       NdVar IsLess = S.makeTemp(1);
       S.emit(NdOp::INT_LESS, IsLess, {Candidate, Minimum});
 
@@ -374,8 +386,7 @@ bool liftSIMDAVXSSE(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::SELECT, NextMinimum, {IsLess, Candidate, Minimum});
       Minimum = NextMinimum;
       NdVar NextIndex = S.makeTemp(2);
-      S.emit(NdOp::SELECT, NextIndex,
-             {IsLess, NdVar::cst(I, 2), FirstIndex});
+      S.emit(NdOp::SELECT, NextIndex, {IsLess, NdVar::cst(I, 2), FirstIndex});
       FirstIndex = NextIndex;
     }
 

@@ -158,6 +158,81 @@ TEST_F(SBFIntegrationTest, ExposesAllStagesAndBothSourceLanguages) {
             std::string::npos);
 }
 
+TEST_F(SBFIntegrationTest,
+       HeadersRemainAvailableBeforeFailedInstructionAnalysis) {
+  neverd::sbf::test::StrictELFOptions Options;
+  Options.Text.assign(neverd::sbf::kInstructionSize, 0);
+  Options.Text[neverd::sbf::kOpcodeOffset] = 0xff;
+  write(neverd::sbf::test::buildStrictELF(Options));
+  testing::internal::CaptureStderr();
+  const int Loaded = neverd_session_load(Session, Path.string().c_str());
+  const std::string HeaderText = takeString(neverd_headers_json(Session));
+  const std::string Diagnostics = testing::internal::GetCapturedStderr();
+  ASSERT_EQ(Loaded, 1);
+  EXPECT_EQ(Diagnostics.find("unsupported arch for decoder"),
+            std::string::npos);
+  auto Headers = llvm::json::parse(HeaderText);
+  ASSERT_TRUE(static_cast<bool>(Headers));
+  const auto *Root = Headers->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getString("arch"), "sbf");
+  EXPECT_EQ(Root->getString("func_count_status"), "image_inventory");
+  EXPECT_EQ(neverd_session_analyze(Session), 0);
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+  auto AfterFailure =
+      llvm::json::parse(takeString(neverd_headers_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(AfterFailure));
+  ASSERT_NE(AfterFailure->getAsObject(), nullptr);
+  EXPECT_EQ(AfterFailure->getAsObject()->getString("func_count_status"),
+            "image_inventory");
+}
+
+TEST_F(SBFIntegrationTest, OperandEnumsNameImmediatesInTheirWidth) {
+  // mov64 r1, 5; mov32 r2, -1; exit
+  neverd::sbf::test::LegacyELFOptions Options;
+  Options.Text = {0xb7, 0x01, 0,    0,    5,    0, 0, 0, 0xb4, 0x02, 0, 0,
+                  0xff, 0xff, 0xff, 0xff, 0x95, 0, 0, 0, 0,    0,    0, 0};
+  write(neverd::sbf::test::buildLegacyELF(Options));
+  ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const std::string Declared = takeString(neverd_local_types_declare(
+      Session, "enum KIND { FIVE = 5 }; enum MASK : unsigned { ALL = ~0u };",
+      nullptr));
+  ASSERT_NE(Declared.find(R"("problems":[])"), std::string::npos) << Declared;
+  const neverd_va_t Start = neverd::sbf::kBytecodeStart;
+  // A register names no enumerator; a 32-bit operation's immediate has 32
+  // bits, a 64-bit one's the sign-extended 64.
+  EXPECT_EQ(neverd_operand_format_set(Session, Start, 0,
+                                      R"({"base":"enum","type":"KIND"})"),
+            -1);
+  ASSERT_EQ(neverd_operand_format_set(Session, Start, 1,
+                                      R"({"base":"enum","type":"KIND"})"),
+            0)
+      << takeString(neverd_last_error(Session));
+  ASSERT_EQ(neverd_operand_format_set(Session,
+                                      Start + neverd::sbf::kInstructionSize, 1,
+                                      R"({"base":"enum","type":"MASK"})"),
+            0)
+      << takeString(neverd_last_error(Session));
+  auto Rows =
+      llvm::json::parse(takeString(neverd_disasm_json(Session, Start, 3)));
+  ASSERT_TRUE(static_cast<bool>(Rows)) << llvm::toString(Rows.takeError());
+  const llvm::json::Array *Array = Rows->getAsArray();
+  ASSERT_TRUE(Array && Array->size() == 3);
+  const auto Field = [&](size_t Row, llvm::StringRef Name) {
+    const llvm::json::Object *Object = (*Array)[Row].getAsObject();
+    const auto Value = Object ? Object->getString(Name) : std::nullopt;
+    return Value ? Value->str() : std::string("<none>");
+  };
+  // The operands alone: the mnemonic has its own field.
+  EXPECT_EQ(Field(0, "op_str"), "r1, 5");
+  EXPECT_EQ(Field(0, "display_op_str"), "r1, FIVE");
+  EXPECT_EQ(Field(1, "op_str"), "r2, -1");
+  EXPECT_EQ(Field(1, "display_op_str"), "r2, ALL");
+  EXPECT_EQ(Field(2, "mnemonic"), "exit");
+  EXPECT_EQ(Field(2, "op_str"), "");
+}
+
 TEST_F(SBFIntegrationTest, RejectsInvalidConfigurationAndPatchRoutes) {
   write(neverd::sbf::test::buildStrictELF());
   ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1);
@@ -307,11 +382,21 @@ TEST_F(SBFIntegrationTest, DisassemblyHonorsRecoveredFunctionBoundaries) {
   ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1)
       << takeString(neverd_last_error(Session));
 
+  auto Inventory = llvm::json::parse(takeString(neverd_headers_json(Session)));
+  ASSERT_TRUE(static_cast<bool>(Inventory));
+  ASSERT_NE(Inventory->getAsObject(), nullptr);
+  EXPECT_EQ(Inventory->getAsObject()->getInteger("func_count"), 1);
+  EXPECT_EQ(Inventory->getAsObject()->getString("func_count_status"),
+            "image_inventory");
+  // The second function is discovered from CALL, not stated by the ELF.
+  // Function requests explicitly synchronize recovery before header counts.
+  ASSERT_EQ(neverd_func_count(Session), 2);
   auto Headers = llvm::json::parse(takeString(neverd_headers_json(Session)));
   ASSERT_TRUE(static_cast<bool>(Headers));
   const llvm::json::Object *HeaderRoot = Headers->getAsObject();
   ASSERT_NE(HeaderRoot, nullptr);
   EXPECT_EQ(HeaderRoot->getInteger("func_count"), 2);
+  EXPECT_EQ(HeaderRoot->getString("func_count_status"), "recovered");
 
   auto Dashboard =
       llvm::json::parse(takeString(neverd_dashboard_json(Session)));

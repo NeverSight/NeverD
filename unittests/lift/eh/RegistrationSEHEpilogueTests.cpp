@@ -13,7 +13,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/STLExtras.h"

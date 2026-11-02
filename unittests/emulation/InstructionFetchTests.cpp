@@ -7,6 +7,7 @@
 #include "HvfTestPolicy.h"
 #include "gtest/gtest.h"
 
+#include "neverd/emulation/AddressSpace.h"
 #include "neverd/emulation/CPU.h"
 
 #include "llvm/Support/Endian.h"
@@ -239,6 +240,64 @@ TEST_P(InstructionFetch, ExecutePermissionIsRecheckedAfterResumption) {
   EXPECT_EQ(Exit.Fault->Address, Code);
   EXPECT_EQ(Exit.Fault->Access, BackendAccessKind::Execute);
   EXPECT_EQ(Seen, 0u);
+  EXPECT_EQ(value(Result), FirstValue);
+}
+
+TEST_P(InstructionFetch,
+       ExternalDeviceMappingsRetainEntryAdmissionAfterWarmRuns) {
+  const auto Program = bytes(FirstX64, FirstARM);
+  const uint64_t End = Code + Program.size() - nopSize();
+  auto Exit = program(Program);
+  ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
+  EXPECT_EQ(value(Result), FirstValue);
+  auto Space = CPU->addressSpace();
+  llvm::cantFail(Space->unmapAlias(Alias, PageSize));
+  unsigned DeviceCalls = 0, Observations = 0;
+  GuestMMIOCallbacks IO;
+  IO.Validate = [&](uint64_t, uint64_t, bool) {
+    ++DeviceCalls;
+    return llvm::Error::success();
+  };
+  IO.Read = [&](uint64_t, unsigned) -> llvm::Expected<uint64_t> {
+    ++DeviceCalls;
+    return FirstValue;
+  };
+  IO.Write = [&](uint64_t, unsigned, uint64_t) {
+    ++DeviceCalls;
+    return llvm::Error::success();
+  };
+  llvm::cantFail(Space->mapMMIO(Alias, PageSize, std::move(IO)));
+  BackendHooks Hooks;
+  Hooks.Instruction = [&](uint64_t PC, uint32_t) {
+    ++Observations;
+    if (PC == End)
+      CPU->stop();
+  };
+  llvm::cantFail(CPU->installHooks(std::move(Hooks)));
+  const bool User =
+      GetParam().Contract == ExecutionContract::CheckedUserX64 ||
+      GetParam().Contract == ExecutionContract::CheckedUserAArch64;
+  for (unsigned Attempt = 0; Attempt < 2; ++Attempt) {
+    llvm::cantFail(CPU->writeRegister(Result, {SecondValue, 0}));
+    auto Outcome = CPU->runUntilExit(Code, Timeout);
+    if (User) {
+      ASSERT_FALSE(bool(Outcome));
+      EXPECT_NE(llvm::toString(Outcome.takeError()).find("device mapping"),
+                std::string::npos);
+      EXPECT_EQ(value(Result), SecondValue);
+      EXPECT_EQ(value(PCRegister), End);
+      EXPECT_EQ(Observations, 0u);
+    } else {
+      ASSERT_TRUE(bool(Outcome)) << llvm::toString(Outcome.takeError());
+      EXPECT_EQ(Outcome->Kind, ExecutionExitKind::Stopped)
+          << Outcome->Diagnostic;
+      EXPECT_EQ(value(Result), FirstValue);
+    }
+  }
+  EXPECT_EQ(DeviceCalls, 0u);
+  llvm::cantFail(Space->unmapMMIO(Alias, PageSize));
+  Exit = run(Code, End);
+  EXPECT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
   EXPECT_EQ(value(Result), FirstValue);
 }
 

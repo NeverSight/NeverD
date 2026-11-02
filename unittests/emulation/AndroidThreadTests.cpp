@@ -326,6 +326,67 @@ TEST_P(AndroidThread, ThreadAndProcessExitKeepDifferentOwnership) {
     }
   }
 }
+TEST_P(AndroidThread, StartRoutineReturnAndExplicitExitShareThreadCompletion) {
+  Options.Android->DrainThreads = true;
+  for (uint64_t Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    auto R = run("threads_terminal_return", Mode);
+    ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+    EXPECT_EQ(R.ReturnValue, 80u);
+    ASSERT_EQ(R.NativeThreads.size(), 2u);
+    EXPECT_EQ(word(R, 0), 0u);
+    EXPECT_EQ(word(R, 2), 0u);
+    EXPECT_EQ(word(R, 3), Mode & 2 ? 0u : 0xfedcba9876543210UL);
+    EXPECT_TRUE(R.NativeThreads[1].Finished);
+    EXPECT_TRUE(R.NativeThreads[1].Retired);
+    EXPECT_EQ(R.NativeThreads[1].Detached, bool(Mode & 2));
+    EXPECT_EQ(R.NativeThreads[1].ReturnValue, 0xfedcba9876543210UL);
+  }
+}
+TEST_P(AndroidThread, EntryAndCallbackReturnsStillRequireTheirCallerStack) {
+  for (bool Drain : {false, true}) {
+    SCOPED_TRACE(Drain);
+    Options.Android->DrainThreads = Drain;
+    auto R = run("threads_return_with_stack_residue");
+    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
+    EXPECT_NE(R.Diagnostic.find(android_model::diagnostic::ThreadStack),
+              std::string::npos);
+    EXPECT_FALSE(R.ReturnValue);
+    ASSERT_EQ(R.NativeThreads.size(), 1u);
+    EXPECT_FALSE(R.NativeThreads[0].Finished);
+    R = run("threads_callback_stack");
+    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
+    EXPECT_NE(R.Diagnostic.find(android_model::diagnostic::CallbackStack),
+              std::string::npos);
+    EXPECT_FALSE(R.ReturnValue);
+    ASSERT_EQ(R.NativeThreads.size(), 1u);
+    EXPECT_FALSE(R.NativeThreads[0].Finished);
+  }
+}
+TEST_P(AndroidThread, TerminalReturnsAgreeWithNativeTransport) {
+  ExecutionConfiguration C;
+  C.Backend = ExecutionBackendKind::HVF;
+  C.Architecture = GuestArchitecture::AArch64;
+  C.Contract = ExecutionContract::CheckedUserAArch64;
+  auto Probe = probeExecutionBackend(C);
+  ASSERT_TRUE(bool(Probe)) << llvm::toString(Probe.takeError());
+  if (Probe->Availability != BackendAvailability::Available)
+    GTEST_SKIP() << Probe->Reason;
+  Options.Android->DrainThreads = true;
+  for (uint64_t Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    Options.Backend = ExecutionBackendKind::Unicorn;
+    auto Software = run("threads_terminal_return", Mode);
+    ASSERT_EQ(Software.Stop, ProcessStopReason::Returned)
+        << Software.Diagnostic;
+    Options.Backend = ExecutionBackendKind::HVF;
+    auto Native = run("threads_terminal_return", Mode);
+    ASSERT_EQ(Native.Stop, ProcessStopReason::Returned) << Native.Diagnostic;
+    Native.SelectedBackend = Software.SelectedBackend;
+    Native.BackendSelectionReason = Software.BackendSelectionReason;
+    EXPECT_EQ(processResultJSON(Native), processResultJSON(Software));
+  }
+}
 TEST_P(AndroidThread,
        CreationRefusalPreservesErrnoAndDoesNotPublishAnIdentity) {
   Options.Android->ThreadLimit = 2;
@@ -660,9 +721,7 @@ TEST(AndroidThreadMemory, CapacityRefusalKeepsInputsAndGenericMappingFailures) {
     const linux_model::MemoryLayout Layout{linux_model::UserLimitARM64, Page};
     linux_model::LinuxServices Kernel(CPU, Layout, Buffer + 2 * Page, Options,
                                       Result);
-    android_model::GuestThreads Threads(CPU, *Calls, Options, Result,
-                                        Kernel.clock(), Kernel.priority(),
-                                        Kernel.signals());
+    android_model::GuestThreads Threads(CPU, *Calls, Options, Result, Kernel);
     ASSERT_EQ(llvm::toString(Threads.initialize(Buffer + Page)), "");
 
     std::vector<std::shared_ptr<MemoryRegion>> Owners;

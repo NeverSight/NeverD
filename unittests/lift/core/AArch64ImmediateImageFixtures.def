@@ -1,0 +1,21 @@
+//===- AArch64ImmediateImageFixtures.def - Image proof oracles --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent raw words and addresses for immediate-memory image proofs.
+/// A64_IMMEDIATE_IMAGE_VALUE(Type, Name, Value) declares each fixture value.
+//===----------------------------------------------------------------------===//
+
+A64_IMMEDIATE_IMAGE_VALUE(va_t, kImmediateImagePage, 0x9000)
+A64_IMMEDIATE_IMAGE_VALUE(va_t, kImmediateImageTarget, 0x9010)
+A64_IMMEDIATE_IMAGE_VALUE(uint32_t, kImmediateImageADRP, 0x90000048U)
+A64_IMMEDIATE_IMAGE_VALUE(uint32_t, kImmediateImageADD, 0x91004108U)
+A64_IMMEDIATE_IMAGE_VALUE(uint32_t, kImmediateImageLoad, 0xf9400908U)
+A64_IMMEDIATE_IMAGE_VALUE(uint32_t, kImmediateImageOffsetLoad, 0xf9400500U)
+A64_IMMEDIATE_IMAGE_VALUE(uint32_t, kImmediateImageReturn, 0xd65f03c0U)
+A64_IMMEDIATE_IMAGE_VALUE(unsigned, kImmediateImageWordBytes, 4)
+A64_IMMEDIATE_IMAGE_VALUE(unsigned, kImmediateImageAccessBytes, 8)
+
+#undef A64_IMMEDIATE_IMAGE_VALUE

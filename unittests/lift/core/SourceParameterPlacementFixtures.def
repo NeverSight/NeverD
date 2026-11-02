@@ -1,0 +1,29 @@
+//===- SourceParameterPlacementFixtures.def - Darwin carriers --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent Darwin integer-pair and packed-stack expectations.
+//===----------------------------------------------------------------------===//
+
+#ifndef SOURCE_PARAMETER_VALUE
+#define SOURCE_PARAMETER_VALUE(Type, Name, Value)
+#endif
+#ifndef SOURCE_PARAMETER_WIDE_SPILL
+#define SOURCE_PARAMETER_WIDE_SPILL(Bytes, Offset)
+#endif
+
+SOURCE_PARAMETER_VALUE(unsigned, kAArch64ArgumentRegisters, 8)
+SOURCE_PARAMETER_VALUE(uint16_t, kAArch64IntegerBytes, 8)
+SOURCE_PARAMETER_VALUE(uint16_t, kAArch64WideIntegerBytes, 16)
+SOURCE_PARAMETER_VALUE(unsigned, kAArch64WideIntegerRegisters, 2)
+SOURCE_PARAMETER_WIDE_SPILL(1, 0)
+SOURCE_PARAMETER_WIDE_SPILL(2, 2)
+SOURCE_PARAMETER_WIDE_SPILL(16, 16)
+SOURCE_PARAMETER_WIDE_SPILL(1, 32)
+SOURCE_PARAMETER_WIDE_SPILL(16, 48)
+SOURCE_PARAMETER_WIDE_SPILL(8, 64)
+
+#undef SOURCE_PARAMETER_VALUE
+#undef SOURCE_PARAMETER_WIDE_SPILL

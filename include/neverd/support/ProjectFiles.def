@@ -26,6 +26,10 @@ NEVERD_PROJECT_FILE(Functions, "functions.json", ".neverd-functions.json", true)
 NEVERD_PROJECT_FILE(Items, "items.json", ".neverd-items.json", true)
 NEVERD_PROJECT_FILE(Operands, "operands.json", ".neverd-operands.json", true)
 NEVERD_PROJECT_FILE(Code, "code.json", ".neverd-code.json", true)
+NEVERD_PROJECT_FILE(Patches, "patches.json", "", true)
+// Source-bound code/data mapped into the analysis image.
+NEVERD_PROJECT_FILE(AnalysisSections, "analysis-sections.json",
+                    ".neverd-analysis-sections.json", true)
 // The declarations of the local types, in the order they read.
 NEVERD_PROJECT_FILE(Types, "types.json", ".neverd-types.json", true)
 // How a binary file is read: processor, placement and platform.

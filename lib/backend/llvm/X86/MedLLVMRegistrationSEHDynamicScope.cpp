@@ -8,7 +8,7 @@
 
 #include "../eh/MedLLVMEHHelpers.h"
 
-#include "neverd/backend/llvm/X86RegistrationSEHScope.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHScope.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/IR/IRBuilder.h"

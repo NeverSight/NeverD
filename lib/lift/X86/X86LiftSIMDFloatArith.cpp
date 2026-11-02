@@ -18,7 +18,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -224,10 +224,8 @@ bool validateEvexFloatArith(X86Lifter &L, const cs_insn *Insn,
   if (((Encoding.ModRM & 0xc0) != 0xc0) != MemoryForm ||
       !isVectorRegisterOfSize(Destination, VectorSize) ||
       !isVectorRegisterOfSize(Left, VectorSize) ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          vectorRegisterIndex(Left))
+      Encoding.regIndex() != vectorRegisterIndex(Destination) ||
+      Encoding.vvvvIndex() != vectorRegisterIndex(Left))
     return false;
 
   const unsigned LaneCount = Spec.Scalar ? 1 : VectorSize / Spec.ElementSize;
@@ -257,8 +255,7 @@ bool validateEvexFloatArith(X86Lifter &L, const cs_insn *Insn,
   if (!MemoryForm) {
     return isVectorRegisterOfSize(Right, VectorSize) &&
            Right.avx_bcast == X86_AVX_BCAST_INVALID &&
-           decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) ==
-               vectorRegisterIndex(Right) &&
+           Encoding.rmIndex() == vectorRegisterIndex(Right) &&
            validateCanonicalEvexRegisterTail(Insn, X86, Encoding);
   }
 
@@ -315,8 +312,7 @@ bool validateEvexSqrt(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   if (X86.avx_sae != EmbeddedRounding || X86.avx_rm != ExpectedRounding ||
       ((Encoding.ModRM & 0xc0) != 0xc0) != MemoryForm ||
       !isVectorRegisterOfSize(Destination, VectorSize) ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorRegisterIndex(Destination))
+      Encoding.regIndex() != vectorRegisterIndex(Destination))
     return false;
 
   if (Spec.UnaryPacked) {
@@ -325,8 +321,7 @@ bool validateEvexSqrt(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       return false;
   } else if (!MergeSource ||
              !isVectorRegisterOfSize(*MergeSource, VectorSize) ||
-             decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-                 vectorRegisterIndex(*MergeSource)) {
+             Encoding.vvvvIndex() != vectorRegisterIndex(*MergeSource)) {
     return false;
   }
 
@@ -358,8 +353,7 @@ bool validateEvexSqrt(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
 
   if (!MemoryForm)
     return isVectorRegisterOfSize(Source, VectorSize) &&
-           decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) ==
-               vectorRegisterIndex(Source) &&
+           Encoding.rmIndex() == vectorRegisterIndex(Source) &&
            validateCanonicalEvexRegisterTail(Insn, X86, Encoding);
 
   const uint16_t TupleSize =

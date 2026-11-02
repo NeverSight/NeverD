@@ -15,8 +15,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-simd"
 #include "neverd/ir/intrinsics/Intrinsics.h"

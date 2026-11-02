@@ -10,7 +10,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"

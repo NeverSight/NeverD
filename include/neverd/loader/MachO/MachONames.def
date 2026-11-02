@@ -21,6 +21,15 @@ NEVERD_MACHO_CPU(llvm::MachO::CPU_TYPE_POWERPC64, "PPC64")
 #undef NEVERD_MACHO_CPU
 #endif
 
+// NEVERD_MACHO_CPU_SUBTYPE(CPU, Subtype, Name): subtype without capability
+// bits.
+#ifdef NEVERD_MACHO_CPU_SUBTYPE
+#define NEVERD_MACHO_ARM64E_SUBTYPE(Name, Value, Label)                        \
+  NEVERD_MACHO_CPU_SUBTYPE(llvm::MachO::CPU_TYPE_ARM64, Value, Label)
+#include "neverd/loader/MachO/MachOArm64e.def"
+#undef NEVERD_MACHO_CPU_SUBTYPE
+#endif
+
 // NEVERD_MACHO_FILE(Value, Name): a filetype value.
 #ifdef NEVERD_MACHO_FILE
 NEVERD_MACHO_FILE(llvm::MachO::MH_OBJECT, "OBJECT")

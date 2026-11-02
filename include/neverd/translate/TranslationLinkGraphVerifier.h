@@ -105,6 +105,14 @@ llvm::Expected<TranslationLinkGraphAuditV1> verifyTranslationLinkGraphV1(
     llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
     llvm::StringRef SealedRuntimeRegistryIdentity);
 
+llvm::Expected<TranslationLinkGraphAuditV1> verifyTranslationLinkGraphV1(
+    llvm::ArrayRef<uint8_t> ObjectBytes,
+    const ResolvedHostTarget &ExpectedHostTarget,
+    llvm::ArrayRef<TranslationObjectSymbolV1> ExpectedBlockSymbols,
+    llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
+    llvm::StringRef SealedRuntimeRegistryIdentity,
+    TranslationRuntimeProfileV1 Profile);
+
 /// Audit an immutable compiler artifact.  Its runtime declaration is first
 /// checked against the independently reconstructed v1 runtime registry; graph
 /// contents remain authoritative for sections, symbols, and relocations.

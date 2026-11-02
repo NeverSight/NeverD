@@ -1,0 +1,218 @@
+//===- AArch64VectorWritebackMemoryFixtures.def - Native SIMD words ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent LLVM MC 22.1.6 encodings. Define VECTOR_WRITEBACK_CASE for
+/// (word, scratch word, access bytes, load, pre-index, signed displacement).
+/// VECTOR_WRITEBACK_TEXT and VECTOR_WRITEBACK_VALUE select harness data.
+/// X21 and V21 deliberately share their numeric register index.
+//===----------------------------------------------------------------------===//
+
+#ifdef VECTOR_WRITEBACK_CASE
+VECTOR_WRITEBACK_CASE(0x3c5006b5U, 0x3c500611U, 1, true, false, -256)
+VECTOR_WRITEBACK_CASE(0x3c5ff6b5U, 0x3c5ff611U, 1, true, false, -1)
+VECTOR_WRITEBACK_CASE(0x3c4006b5U, 0x3c400611U, 1, true, false, 0)
+VECTOR_WRITEBACK_CASE(0x3c4016b5U, 0x3c401611U, 1, true, false, 1)
+VECTOR_WRITEBACK_CASE(0x3c4ff6b5U, 0x3c4ff611U, 1, true, false, 255)
+VECTOR_WRITEBACK_CASE(0x3c500eb5U, 0x3c500e11U, 1, true, true, -256)
+VECTOR_WRITEBACK_CASE(0x3c5ffeb5U, 0x3c5ffe11U, 1, true, true, -1)
+VECTOR_WRITEBACK_CASE(0x3c400eb5U, 0x3c400e11U, 1, true, true, 0)
+VECTOR_WRITEBACK_CASE(0x3c401eb5U, 0x3c401e11U, 1, true, true, 1)
+VECTOR_WRITEBACK_CASE(0x3c4ffeb5U, 0x3c4ffe11U, 1, true, true, 255)
+VECTOR_WRITEBACK_CASE(0x7c5006b5U, 0x7c500611U, 2, true, false, -256)
+VECTOR_WRITEBACK_CASE(0x7c5ff6b5U, 0x7c5ff611U, 2, true, false, -1)
+VECTOR_WRITEBACK_CASE(0x7c4006b5U, 0x7c400611U, 2, true, false, 0)
+VECTOR_WRITEBACK_CASE(0x7c4016b5U, 0x7c401611U, 2, true, false, 1)
+VECTOR_WRITEBACK_CASE(0x7c4ff6b5U, 0x7c4ff611U, 2, true, false, 255)
+VECTOR_WRITEBACK_CASE(0x7c500eb5U, 0x7c500e11U, 2, true, true, -256)
+VECTOR_WRITEBACK_CASE(0x7c5ffeb5U, 0x7c5ffe11U, 2, true, true, -1)
+VECTOR_WRITEBACK_CASE(0x7c400eb5U, 0x7c400e11U, 2, true, true, 0)
+VECTOR_WRITEBACK_CASE(0x7c401eb5U, 0x7c401e11U, 2, true, true, 1)
+VECTOR_WRITEBACK_CASE(0x7c4ffeb5U, 0x7c4ffe11U, 2, true, true, 255)
+VECTOR_WRITEBACK_CASE(0xbc5006b5U, 0xbc500611U, 4, true, false, -256)
+VECTOR_WRITEBACK_CASE(0xbc5ff6b5U, 0xbc5ff611U, 4, true, false, -1)
+VECTOR_WRITEBACK_CASE(0xbc4006b5U, 0xbc400611U, 4, true, false, 0)
+VECTOR_WRITEBACK_CASE(0xbc4016b5U, 0xbc401611U, 4, true, false, 1)
+VECTOR_WRITEBACK_CASE(0xbc4ff6b5U, 0xbc4ff611U, 4, true, false, 255)
+VECTOR_WRITEBACK_CASE(0xbc500eb5U, 0xbc500e11U, 4, true, true, -256)
+VECTOR_WRITEBACK_CASE(0xbc5ffeb5U, 0xbc5ffe11U, 4, true, true, -1)
+VECTOR_WRITEBACK_CASE(0xbc400eb5U, 0xbc400e11U, 4, true, true, 0)
+VECTOR_WRITEBACK_CASE(0xbc401eb5U, 0xbc401e11U, 4, true, true, 1)
+VECTOR_WRITEBACK_CASE(0xbc4ffeb5U, 0xbc4ffe11U, 4, true, true, 255)
+VECTOR_WRITEBACK_CASE(0xfc5006b5U, 0xfc500611U, 8, true, false, -256)
+VECTOR_WRITEBACK_CASE(0xfc5ff6b5U, 0xfc5ff611U, 8, true, false, -1)
+VECTOR_WRITEBACK_CASE(0xfc4006b5U, 0xfc400611U, 8, true, false, 0)
+VECTOR_WRITEBACK_CASE(0xfc4016b5U, 0xfc401611U, 8, true, false, 1)
+VECTOR_WRITEBACK_CASE(0xfc4ff6b5U, 0xfc4ff611U, 8, true, false, 255)
+VECTOR_WRITEBACK_CASE(0xfc500eb5U, 0xfc500e11U, 8, true, true, -256)
+VECTOR_WRITEBACK_CASE(0xfc5ffeb5U, 0xfc5ffe11U, 8, true, true, -1)
+VECTOR_WRITEBACK_CASE(0xfc400eb5U, 0xfc400e11U, 8, true, true, 0)
+VECTOR_WRITEBACK_CASE(0xfc401eb5U, 0xfc401e11U, 8, true, true, 1)
+VECTOR_WRITEBACK_CASE(0xfc4ffeb5U, 0xfc4ffe11U, 8, true, true, 255)
+VECTOR_WRITEBACK_CASE(0x3cd006b5U, 0x3cd00611U, 16, true, false, -256)
+VECTOR_WRITEBACK_CASE(0x3cdff6b5U, 0x3cdff611U, 16, true, false, -1)
+VECTOR_WRITEBACK_CASE(0x3cc006b5U, 0x3cc00611U, 16, true, false, 0)
+VECTOR_WRITEBACK_CASE(0x3cc016b5U, 0x3cc01611U, 16, true, false, 1)
+VECTOR_WRITEBACK_CASE(0x3ccff6b5U, 0x3ccff611U, 16, true, false, 255)
+VECTOR_WRITEBACK_CASE(0x3cd00eb5U, 0x3cd00e11U, 16, true, true, -256)
+VECTOR_WRITEBACK_CASE(0x3cdffeb5U, 0x3cdffe11U, 16, true, true, -1)
+VECTOR_WRITEBACK_CASE(0x3cc00eb5U, 0x3cc00e11U, 16, true, true, 0)
+VECTOR_WRITEBACK_CASE(0x3cc01eb5U, 0x3cc01e11U, 16, true, true, 1)
+VECTOR_WRITEBACK_CASE(0x3ccffeb5U, 0x3ccffe11U, 16, true, true, 255)
+VECTOR_WRITEBACK_CASE(0x3c1006b5U, 0x3c100611U, 1, false, false, -256)
+VECTOR_WRITEBACK_CASE(0x3c1ff6b5U, 0x3c1ff611U, 1, false, false, -1)
+VECTOR_WRITEBACK_CASE(0x3c0006b5U, 0x3c000611U, 1, false, false, 0)
+VECTOR_WRITEBACK_CASE(0x3c0016b5U, 0x3c001611U, 1, false, false, 1)
+VECTOR_WRITEBACK_CASE(0x3c0ff6b5U, 0x3c0ff611U, 1, false, false, 255)
+VECTOR_WRITEBACK_CASE(0x3c100eb5U, 0x3c100e11U, 1, false, true, -256)
+VECTOR_WRITEBACK_CASE(0x3c1ffeb5U, 0x3c1ffe11U, 1, false, true, -1)
+VECTOR_WRITEBACK_CASE(0x3c000eb5U, 0x3c000e11U, 1, false, true, 0)
+VECTOR_WRITEBACK_CASE(0x3c001eb5U, 0x3c001e11U, 1, false, true, 1)
+VECTOR_WRITEBACK_CASE(0x3c0ffeb5U, 0x3c0ffe11U, 1, false, true, 255)
+VECTOR_WRITEBACK_CASE(0x7c1006b5U, 0x7c100611U, 2, false, false, -256)
+VECTOR_WRITEBACK_CASE(0x7c1ff6b5U, 0x7c1ff611U, 2, false, false, -1)
+VECTOR_WRITEBACK_CASE(0x7c0006b5U, 0x7c000611U, 2, false, false, 0)
+VECTOR_WRITEBACK_CASE(0x7c0016b5U, 0x7c001611U, 2, false, false, 1)
+VECTOR_WRITEBACK_CASE(0x7c0ff6b5U, 0x7c0ff611U, 2, false, false, 255)
+VECTOR_WRITEBACK_CASE(0x7c100eb5U, 0x7c100e11U, 2, false, true, -256)
+VECTOR_WRITEBACK_CASE(0x7c1ffeb5U, 0x7c1ffe11U, 2, false, true, -1)
+VECTOR_WRITEBACK_CASE(0x7c000eb5U, 0x7c000e11U, 2, false, true, 0)
+VECTOR_WRITEBACK_CASE(0x7c001eb5U, 0x7c001e11U, 2, false, true, 1)
+VECTOR_WRITEBACK_CASE(0x7c0ffeb5U, 0x7c0ffe11U, 2, false, true, 255)
+VECTOR_WRITEBACK_CASE(0xbc1006b5U, 0xbc100611U, 4, false, false, -256)
+VECTOR_WRITEBACK_CASE(0xbc1ff6b5U, 0xbc1ff611U, 4, false, false, -1)
+VECTOR_WRITEBACK_CASE(0xbc0006b5U, 0xbc000611U, 4, false, false, 0)
+VECTOR_WRITEBACK_CASE(0xbc0016b5U, 0xbc001611U, 4, false, false, 1)
+VECTOR_WRITEBACK_CASE(0xbc0ff6b5U, 0xbc0ff611U, 4, false, false, 255)
+VECTOR_WRITEBACK_CASE(0xbc100eb5U, 0xbc100e11U, 4, false, true, -256)
+VECTOR_WRITEBACK_CASE(0xbc1ffeb5U, 0xbc1ffe11U, 4, false, true, -1)
+VECTOR_WRITEBACK_CASE(0xbc000eb5U, 0xbc000e11U, 4, false, true, 0)
+VECTOR_WRITEBACK_CASE(0xbc001eb5U, 0xbc001e11U, 4, false, true, 1)
+VECTOR_WRITEBACK_CASE(0xbc0ffeb5U, 0xbc0ffe11U, 4, false, true, 255)
+VECTOR_WRITEBACK_CASE(0xfc1006b5U, 0xfc100611U, 8, false, false, -256)
+VECTOR_WRITEBACK_CASE(0xfc1ff6b5U, 0xfc1ff611U, 8, false, false, -1)
+VECTOR_WRITEBACK_CASE(0xfc0006b5U, 0xfc000611U, 8, false, false, 0)
+VECTOR_WRITEBACK_CASE(0xfc0016b5U, 0xfc001611U, 8, false, false, 1)
+VECTOR_WRITEBACK_CASE(0xfc0ff6b5U, 0xfc0ff611U, 8, false, false, 255)
+VECTOR_WRITEBACK_CASE(0xfc100eb5U, 0xfc100e11U, 8, false, true, -256)
+VECTOR_WRITEBACK_CASE(0xfc1ffeb5U, 0xfc1ffe11U, 8, false, true, -1)
+VECTOR_WRITEBACK_CASE(0xfc000eb5U, 0xfc000e11U, 8, false, true, 0)
+VECTOR_WRITEBACK_CASE(0xfc001eb5U, 0xfc001e11U, 8, false, true, 1)
+VECTOR_WRITEBACK_CASE(0xfc0ffeb5U, 0xfc0ffe11U, 8, false, true, 255)
+VECTOR_WRITEBACK_CASE(0x3c9006b5U, 0x3c900611U, 16, false, false, -256)
+VECTOR_WRITEBACK_CASE(0x3c9ff6b5U, 0x3c9ff611U, 16, false, false, -1)
+VECTOR_WRITEBACK_CASE(0x3c8006b5U, 0x3c800611U, 16, false, false, 0)
+VECTOR_WRITEBACK_CASE(0x3c8016b5U, 0x3c801611U, 16, false, false, 1)
+VECTOR_WRITEBACK_CASE(0x3c8ff6b5U, 0x3c8ff611U, 16, false, false, 255)
+VECTOR_WRITEBACK_CASE(0x3c900eb5U, 0x3c900e11U, 16, false, true, -256)
+VECTOR_WRITEBACK_CASE(0x3c9ffeb5U, 0x3c9ffe11U, 16, false, true, -1)
+VECTOR_WRITEBACK_CASE(0x3c800eb5U, 0x3c800e11U, 16, false, true, 0)
+VECTOR_WRITEBACK_CASE(0x3c801eb5U, 0x3c801e11U, 16, false, true, 1)
+VECTOR_WRITEBACK_CASE(0x3c8ffeb5U, 0x3c8ffe11U, 16, false, true, 255)
+#undef VECTOR_WRITEBACK_CASE
+#endif
+
+#ifdef VECTOR_WRITEBACK_TEXT
+VECTOR_WRITEBACK_TEXT(kVectorWritebackNamePrefix, "vector_writeback_")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackLoadDeclaration,
+                      "uint64_t {0}(uint64_t, uint64_t);\n")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackStoreDeclaration,
+                      "uint64_t {0}(uint64_t, uint64_t, uint64_t, uint64_t);\n")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackLoadCall,
+                      "{0}((uintptr_t)(left+512), (uintptr_t)out)")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackStoreCall,
+                      "{0}((uintptr_t)(left+512), (uint64_t)data, "
+                      "(uint64_t)(data>>64), (uintptr_t)out)")
+VECTOR_WRITEBACK_TEXT(
+    kVectorWritebackHarnessPrelude,
+    "#include <stdint.h>\ntypedef unsigned __int128 vwb_bits;\ntypedef int64_t "
+    "vwb_vector __attribute__((vector_size(16)));\nunion vwb_representation { "
+    "vwb_bits bits; vwb_vector vector; };\nstruct vwb_result { vwb_bits bits; "
+    "uint64_t base; };\n")
+VECTOR_WRITEBACK_TEXT(
+    kVectorWritebackNativeLoad,
+    "static struct vwb_result vwb_original_{0}(uint64_t input, vwb_bits data) "
+    "{{\n  register vwb_vector value __asm__(\"v21\");\n  register uint64_t "
+    "base __asm__(\"x21\") = input;\n  __asm__ volatile(\"{2}.inst {1}{3}\" : "
+    "\"=&w\"(value), \"+r\"(base) : : {4}\"memory\");\n  union "
+    "vwb_representation "
+    "bits = {{ .vector = value };\n  return (struct vwb_result){{ bits.bits, "
+    "base };\n}\n")
+VECTOR_WRITEBACK_TEXT(
+    kVectorWritebackNativeStore,
+    "static struct vwb_result vwb_original_{0}(uint64_t input, vwb_bits data) "
+    "{{\n  union vwb_representation given = {{ .bits = data };\n  register "
+    "vwb_vector value __asm__(\"v21\") = given.vector;\n  register uint64_t "
+    "base __asm__(\"x21\") = input;\n  __asm__ volatile(\"{2}.inst {1}{3}\" : "
+    "\"+r\"(base) : \"w\"(value) : {4}\"memory\");\n  return (struct "
+    "vwb_result){{ data, base };\n}\n")
+VECTOR_WRITEBACK_TEXT(
+    kVectorWritebackNativeCase,
+    "static int vwb_run_{0}(void) {{\n  _Alignas(16) unsigned char left[1024], "
+    "right[1024], expected[1024];\n  for (unsigned j=0; j!=1024; ++j) "
+    "left[j]=right[j]=expected[j]=(unsigned char)(j*37+19);\n  const vwb_bits "
+    "data=((vwb_bits)UINT64_C(0x8172635445362718)<<64)|UINT64_C("
+    "0xf1e2d3c4b5a69788);\n  const unsigned at=512+({2} ? {1} : 0);\n  "
+    "vwb_bits expected_bits={4} ? 0 : data;\n  if ({4}) {{\n    for (unsigned "
+    "j=0; j!={3}; ++j) expected_bits |= (vwb_bits)left[at+j]<<(8*j);\n  } "
+    "else {{\n    for (unsigned j=0; j!={3}; ++j) expected[at+j]=(unsigned "
+    "char)(data>>(8*j));\n  }\n  const struct vwb_result "
+    "native=vwb_original_{0}((uintptr_t)(right+512),data);\n  uint64_t "
+    "out[2]={{ UINT64_C(0xbad), UINT64_C(0xbad) };\n  const uint64_t "
+    "base={5};\n  const vwb_bits "
+    "actual=(vwb_bits)out[0]|((vwb_bits)out[1]<<64);\n  if "
+    "(actual!=expected_bits || native.bits!=expected_bits) return 1;\n  if "
+    "(base!=(uintptr_t)(left+512+({1})) || "
+    "native.base!=(uintptr_t)(right+512+({1}))) return 2;\n  for (unsigned "
+    "j=0; j!=1024; ++j) if (left[j]!=expected[j] || right[j]!=expected[j]) "
+    "return 3;\n  return 0;\n}\n")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackHarnessEntry, "vwb_run_{0},\n")
+VECTOR_WRITEBACK_TEXT(
+    kVectorWritebackHarnessTail,
+    "static int (*const vwb_cases[])(void) = {{ {0} };\nint main(void) {{\n  "
+    "for (unsigned i=0; i!=sizeof(vwb_cases)/sizeof(*vwb_cases); ++i)\n    if "
+    "(vwb_cases[i]()) return (int)i+1;\n  return 0;\n}\n")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackArtifactEnvironment,
+                      "NEVERD_ARM64E_VECTOR_WRITEBACK_ARTIFACT_DIR")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackArtifactProperty,
+                      "arm64e_vector_writeback_memory_artifact_directory")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackHiddenFunction, "hidden_vector_writeback")
+VECTOR_WRITEBACK_TEXT(kVectorWritebackOwnedHarness,
+                      "int main(void) {{ return {0}() != UINT64_C({1}); }\n")
+#undef VECTOR_WRITEBACK_TEXT
+#endif
+
+#ifdef VECTOR_WRITEBACK_VALUE
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackLoadParameters, 2)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackStoreParameters, 4)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackStorageBytes, 1024)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackBasePosition, 512)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackSeedMultiplier, 37)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackSeedBias, 19)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackVectorSeed, 0x80)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackBaseMask, 0x3e0U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackSPBase, 0x3e0U)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackLowMutations, 3)
+VECTOR_WRITEBACK_VALUE(unsigned, kVectorWritebackCallMutations, 12)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackVectorBit, 0x04000000U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackLoadBit, 0x00400000U)
+VECTOR_WRITEBACK_VALUE(uint64_t, kVectorWritebackDataLow, 0xf1e2d3c4b5a69788ULL)
+VECTOR_WRITEBACK_VALUE(uint64_t, kVectorWritebackDataHigh,
+                       0x8172635445362718ULL)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackFollowLoad, 0xf94002a0U)
+VECTOR_WRITEBACK_VALUE(int, kVectorWritebackOwnedOffset, 1)
+VECTOR_WRITEBACK_VALUE(int, kVectorWritebackOnePastOffset, 255)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageADRP, 0xd0000010U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageADD, 0x91010210U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageInitialLoad, 0x3dc00210U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageLoad, 0x3cc10610U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageStore, 0x3c810610U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageMove, 0x9e660201U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageReadback, 0xf9400200U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackImageXor, 0xca010000U)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackV31Load, 0x3cc016bfU)
+VECTOR_WRITEBACK_VALUE(uint32_t, kVectorWritebackV31Store, 0x3c801ebfU)
+#undef VECTOR_WRITEBACK_VALUE
+#endif

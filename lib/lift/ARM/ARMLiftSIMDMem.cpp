@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -38,8 +38,8 @@ bool liftSIMDMem(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar EA = (ARM.operands[1].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[1])
-                     : L.operandRead(S, ARM.operands[1]);
+                   ? L.operandEffAddr(S, ARM.operands[1])
+                   : L.operandRead(S, ARM.operands[1]);
     S.emit(NdOp::LOAD, Dst, {EA});
     break;
   }
@@ -52,8 +52,8 @@ bool liftSIMDMem(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Src = L.operandRead(S, ARM.operands[0]);
     NdVar EA = (ARM.operands[1].type == ARM_OP_MEM)
-                     ? L.operandEffAddr(S, ARM.operands[1])
-                     : L.operandRead(S, ARM.operands[1]);
+                   ? L.operandEffAddr(S, ARM.operands[1])
+                   : L.operandRead(S, ARM.operands[1]);
     S.emit(NdOp::STORE, {}, {EA, Src});
     break;
   }

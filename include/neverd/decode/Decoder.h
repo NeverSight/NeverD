@@ -6,14 +6,15 @@
 ///
 /// \file
 /// Declares the Decoder class that wraps Capstone for instruction decoding
-/// and lifting to LowIR, and the UnliftedInstruction exception for strict
-/// mode failures.
+/// and lifting to LowIR, and the UnliftedInstruction exception for explicit
+/// semantic refusal.
 ///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_DECODE_DECODER_H
 #define NEVERD_DECODE_DECODER_H
 
+#include "neverd/decode/AArch64/AArch64DecodeContract.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowPreservedState.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
@@ -22,6 +23,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <capstone/capstone.h>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -34,8 +36,8 @@ class X86Lifter;
 class ARMLifter;
 class AArch64Lifter;
 
-/// Thrown by Decoder::liftToLow when strict mode is enabled and an
-/// instruction has no lifter.
+/// Thrown when the selected architecture cannot lift an instruction.
+/// x86 refuses unsupported instructions in both strict and permissive modes.
 class UnliftedInstruction : public std::runtime_error {
 public:
   UnliftedInstruction(va_t Addr, const char *Mnem, const char *Ops)
@@ -55,7 +57,7 @@ private:
     S += ": ";
     S += (M ? M : "?");
     if (O && *O) {
-      S += " ";
+      S += ' ';
       S += O;
     }
     return S;
@@ -65,11 +67,27 @@ private:
   std::string TheOpStr;
 };
 
+/// Exact raw words captured together for one AArch64 prefix occurrence.
+struct AArch64PrefixWords {
+  uint32_t Prefix;
+  uint32_t Follower;
+};
+
 struct DecodedInsn {
   va_t Addr;
   uint16_t Size;
   uint32_t Id;
+  /// Borrowed until the next decode attempt, reset or successful init of the
+  /// producing Decoder. An owned snapshot must copy both cs_insn and cs_detail
+  /// and retain the occurrence evidence below.
   cs_insn *Raw;
+  /// Snapshot of PC+4 from the same decode buffer for an AArch64 MOVPRFX.
+  /// Missing bytes never grant prefix semantics; this is not executed state.
+  /// Classification-only decoding carries no pair evidence.
+  std::optional<AArch64PrefixWords> AArch64Prefix = std::nullopt;
+  /// Raw identity and operand availability captured by the producing decoder.
+  /// Native decoding can supply complete detail without rendered text.
+  std::optional<AArch64DecodeOccurrence> AArch64Occurrence = std::nullopt;
 };
 
 /// One loader-authenticated address occurrence inside an encoded instruction.
@@ -169,10 +187,16 @@ public:
   /// subsequent decodes.  Text is on by default.  With it off, a decode fills
   /// only Addr/Size/Id and the instruction bytes: no text and no operand
   /// detail, and an x86 compare with a predicate keeps capstone's base id.
+  /// decodeOneForLift can still supply complete AArch64 native operand detail;
+  /// its Capstone fallback remains classification-only with text disabled.
   /// About half an x86 decode is printing, so a sweep that reads only sizes
   /// and call ids turns it off.  No-op if the state is unchanged.
   void setText(bool On);
   bool textEnabled() const { return Text; }
+
+  /// Whether this AArch64 occurrence still owns complete operand detail.
+  /// Classification-only and expired borrowed records cannot supply operands.
+  bool hasAArch64OperandDetail(const DecodedInsn &Insn) const;
 
   /// True when \p Insn is a trap execution can continue past, so the bytes
   /// after it may still belong to the same function (x86, ARM32, or the
@@ -180,8 +204,8 @@ public:
   bool isResumableTrap(const DecodedInsn &Insn) const;
 
   /// A decoded NOP or a mode-correct legacy alignment self-copy. Canonical
-  /// x86 NOP identities include valid prefixes and the compatibility profile's
-  /// MPX-disabled forms; validity and extent remain the decoder's decisions.
+  /// x86 NOP identities include valid prefixes and the architectural register
+  /// NOP forms of 0F 1A/1B; memory forms retain their MPX identity.
   bool isAlignmentNop(const DecodedInsn &Insn) const;
 
   /// Lift a single decoded instruction to LowIR ops. When supplied, \p Relocs
@@ -269,20 +293,54 @@ public:
   std::optional<I386GetPcOccurrence> getX86GetPcOccurrence() const;
 
 private:
+  /// Clear occurrence evidence and invalidate the previous borrowed result.
+  bool beginDecode(DecodedInsn &Out);
+
+  /// Reserve the maximum generation as permanent exhaustion, never wrap.
+  bool advanceAArch64DecodeGeneration();
+  static uint64_t nextAArch64DecodeIdentity();
+
+  /// Apply the active architecture's fallback when Capstone rejects bytes.
+  bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
+
+  /// Use the AArch64 native decoder, returning zero when it declines.
+  int decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
+                           DecodedInsn &Out);
+
+  /// Publish complete operand detail and any available MOVPRFX follower.
+  void recordAArch64Decode(const uint8_t *Bytes, size_t Len, DecodedInsn &Out,
+                           bool HasOperandDetail) const;
+
+  /// Check raw identity without requiring operand detail for classification.
+  bool hasAArch64DecodeOccurrence(const DecodedInsn &Insn) const;
+  bool isCurrentAArch64Decode(const AArch64DecodeOccurrence &Occurrence) const;
+
+  /// Select an authenticated initial mode for a mixed ARM/Thumb image.
+  bool initARMImageMode(const BinaryImage &Img);
+
+  /// Configure the x86 platform ABI and x87 ownership, when active.
+  void configureX86For(const BinaryImage &Img);
+
+  void liftAArch64ToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+                        llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs);
+  void liftARMToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+                    llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs);
+
   /// Decode an x86 fence carrying otherwise redundant operand-size prefixes.
   /// Capstone rejects these encodings even though LLVM and real x86-64
   /// binaries accept them.  Returns true after populating InsnBuf.
   bool decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len, va_t Addr);
 
-  /// Decode the unprefixed register forms of 0F 1A /r and 0F 1B /r.  These
-  /// encodings are no-ops, but Capstone rejects them instead of consuming the
-  /// ModR/M byte.  Mandatory-prefix MPX encodings are deliberately excluded.
-  bool decodeUnprefixedX86MpxRegisterNop(const uint8_t *Bytes, size_t Len,
-                                         va_t Addr);
+  /// Decode qualified MPX forms rejected by Capstone, including LOCK BNDMOV
+  /// stores and architectural register NOPs. Never infer MPX enablement.
+  bool decodeX86MpxFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
-  /// Apply instruction-id normalization that does not require operand detail.
-  /// Both full and lightweight decode paths use this semantic profile.
-  void fixupDecodedInsnId(cs_insn *I) const;
+  /// Normalize MPX address operands from the original encoding, including
+  /// ignored 67H in long mode. Shared by full and lightweight decoding.
+  void fixupX86MpxDetail(cs_insn *I) const;
+
+  /// Both full and lightweight decodes use the same x86 metadata profile.
+  void fixupX86DecodeMetadata(cs_insn *I) const;
 
   /// Correct a known long-mode disp32 width misreport only when the complete
   /// encoded field agrees with the decoded displacement and memory operands.
@@ -295,6 +353,8 @@ private:
 
   csh Handle = 0;
   cs_insn *InsnBuf = nullptr;
+  const uint64_t AArch64DecodeIdentity;
+  uint64_t AArch64DecodeGeneration = 0;
   Arch TargetArch = Arch::Unknown;
   InstructionMode CurrentMode = InstructionMode::Default;
   bool Strict = true;

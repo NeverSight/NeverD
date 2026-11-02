@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Prove restoration of the native stack and link before an indirect tail call.
+//===----------------------------------------------------------------------===//
 
 #include "IndirectTailFrame.h"
 
@@ -14,13 +17,15 @@
 #include <algorithm>
 #include <bit>
 #include <deque>
+#include <iterator>
 #include <map>
+#include <optional>
 
 namespace neverd {
 namespace {
 
 struct FrameWord {
-  enum Kind { Unknown, Stack, Link } K = Unknown;
+  enum Kind { Unknown, Stack, Link, SignedLink } K = Unknown;
   int64_t Offset = 0;
   // Keep derived-frame taint when arithmetic or a join loses the exact offset.
   // Losing an exact address must not make a later escape appear harmless.
@@ -29,6 +34,12 @@ struct FrameWord {
   // switch's case table): a branch there is a computed jump within the
   // function, not a tail call.
   bool MayBeLocalCode = false;
+  // For SignedLink, Offset is the signing modifier's entry-SP offset.
+  unsigned AuthenticationKey = 0;
+  bool ZeroModifier = false;
+  std::optional<uint64_t> SecondModifier;
+  bool ImplicitPrefix = false;
+  std::optional<uint64_t> Constant;
   bool operator==(const FrameWord &) const = default;
 };
 
@@ -44,6 +55,22 @@ class TailFrameGuard {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
   const std::vector<TargetRegisterRange> Preserved;
   size_t Remaining;
+  const LowFunc *Owner = nullptr;
+
+  bool functionTemporary(uint64_t Offset) const {
+    const auto &Ranges = Owner->FunctionTemporaries;
+    const auto It =
+        std::upper_bound(Ranges.begin(), Ranges.end(), Offset,
+                         [](uint64_t Byte, const LowFunctionTemporary &Range) {
+                           return Byte < Range.Offset;
+                         });
+    if (It == Ranges.begin())
+      return false;
+    const auto &Range = *std::prev(It);
+    return Offset - Range.Offset <= Range.Bytes &&
+           sizeof(uint64_t) <= Range.Bytes - (Offset - Range.Offset);
+  }
+
   /// The function's own code: the span from its lowest block to the end of
   /// its highest, and the range its frame description covers.  A switch's
   /// case code that only its unresolved table reaches lies there, though no
@@ -96,6 +123,8 @@ class TailFrameGuard {
 
   bool read(const FrameState &State, const NdVar &Value, FrameWord &Word) {
     Word = lookup(State, Value);
+    if (Value.isConst() && Value.Size == sizeof(uint64_t))
+      Word.Constant = Value.Offset;
     if ((!Value.isReg() && !Value.isTemp()) || Value.Size == 8)
       return true;
     if (!validRange(Value) || !charge(State.Values.size()))
@@ -132,9 +161,12 @@ class TailFrameGuard {
         State.Escaped |= Fact.MayBeStack;
       It = State.Values.erase(It);
     }
-    if (Output.Size != 8)
+    if (Output.Size != 8) {
       Word.K = FrameWord::Unknown;
-    if (Word.K != FrameWord::Unknown || Word.MayBeStack || Word.MayBeLocalCode)
+      Word.Constant.reset();
+    }
+    if (Word.K != FrameWord::Unknown || Word.MayBeStack ||
+        Word.MayBeLocalCode || Word.Constant)
       State.Values[{Output.Space, Output.Offset}] = Word;
     return true;
   }
@@ -184,8 +216,9 @@ class TailFrameGuard {
   bool forgetTemps(FrameState &State) {
     if (!charge(State.Values.size()))
       return false;
-    std::erase_if(State.Values, [](const auto &Item) {
-      return Item.first.first == VnodeSpace::TEMP;
+    std::erase_if(State.Values, [&](const auto &Item) {
+      return Item.first.first == VnodeSpace::TEMP &&
+             !functionTemporary(Item.first.second);
     });
     return true;
   }
@@ -194,14 +227,14 @@ class TailFrameGuard {
                 std::set<va_t> *Candidates = nullptr) {
     va_t Instruction = InvalidVA;
     for (const LowOp &Op : Block.Ops) {
-      if (!charge(1) || Op.NumInputs > 6)
+      if (!charge(1) || Op.NumInputs > std::size(Op.Inputs))
         return false;
       if (Op.Addr != Instruction) {
         if (!forgetTemps(State))
           return false;
         Instruction = Op.Addr;
       }
-      FrameWord Inputs[6];
+      FrameWord Inputs[kLowOperationInputs];
       FrameWord Result;
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
         if (!read(State, Op.Inputs[I], Inputs[I]))
@@ -219,6 +252,7 @@ class TailFrameGuard {
             SP.K == FrameWord::Stack && SP.Offset == 0 &&
             LR.K == FrameWord::Link && !Inputs[0].MayBeStack &&
             !Inputs[0].MayBeLocalCode && Inputs[0].K != FrameWord::Link &&
+            Inputs[0].K != FrameWord::SignedLink &&
             (!Unwind || exceptionForwardsUnwindAt(*Unwind, Op.Addr)))
           Candidates->insert(Op.Addr);
       }
@@ -231,6 +265,12 @@ class TailFrameGuard {
       case NdOp::INT_ADD:
       case NdOp::INT_SUB:
         if (Op.NumInputs == 2 && Op.Output.Size == 8) {
+          if (Inputs[0].Constant && Inputs[1].Constant &&
+              Op.Inputs[0].Size == sizeof(uint64_t) &&
+              Op.Inputs[1].Size == sizeof(uint64_t))
+            Result.Constant = Op.Opcode == NdOp::INT_ADD
+                                  ? *Inputs[0].Constant + *Inputs[1].Constant
+                                  : *Inputs[0].Constant - *Inputs[1].Constant;
           for (unsigned Base = 0; Base < 2; ++Base) {
             const unsigned Scalar = 1 - Base;
             const NdVar &Delta = Op.Inputs[Scalar];
@@ -288,9 +328,10 @@ class TailFrameGuard {
                 State.Escaped |= Item.second.MayBeStack;
               return Overlap;
             });
-            const bool Recorded = Memory.AccessSize == 8 &&
-                                  (Value.K != FrameWord::Unknown ||
-                                   Value.MayBeStack || Value.MayBeLocalCode);
+            const bool Recorded =
+                Memory.AccessSize == 8 &&
+                (Value.K != FrameWord::Unknown || Value.MayBeStack ||
+                 Value.MayBeLocalCode || Value.Constant);
             if (Recorded)
               State.Spills[Address.Offset] = Value;
             // A frame address no spill records, or stored outside the frame
@@ -338,8 +379,9 @@ class TailFrameGuard {
                  Item.first < SP.Offset || Item.first + 8 > 0;
         });
         std::erase_if(State.Values, [&](const auto &Item) {
-          return Item.first.first == VnodeSpace::TEMP ||
-                 !callPreserves(Item.first.second);
+          return Item.first.first == VnodeSpace::TEMP
+                     ? !functionTemporary(Item.first.second)
+                     : !callPreserves(Item.first.second);
         });
         Result = {};
         break;
@@ -348,6 +390,66 @@ class TailFrameGuard {
       case NdOp::ATOMIC_ADD:
       case NdOp::ATOMIC_CMPXCHG:
       case NdOp::INTRINSIC: {
+        // Checked arithmetic writes only its explicit result. Retain all
+        // operand taint without assuming checking controls or an exact value.
+        if (lowAArch64CPAShapeIsValid(Op) || lowAArch64SVECPAShapeIsValid(Op) ||
+            lowAArch64SVEPrefixShapeIsValid(Op))
+          break;
+        if (lowAArch64PAuthShapeIsValid(Op)) {
+          // A modifier's stack address is not the authenticated target.
+          // A saved link is restored only by its matching key and modifier.
+          Result = Inputs[1];
+          Result.Constant.reset();
+          const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+          if (const auto Auth = aarch64PAuthOperation(Id)) {
+            Result.K = FrameWord::Unknown;
+            const bool Zero = Op.NumInputs == 3 && Op.Inputs[2].isConst() &&
+                              Op.Inputs[2].Offset == 0;
+            const bool KnownModifier = Zero || Inputs[2].K == FrameWord::Stack;
+            const int64_t Modifier = Zero ? 0 : Inputs[2].Offset;
+            if (!Auth->Strip && !Auth->Authenticate && KnownModifier &&
+                Inputs[1].K == FrameWord::Link) {
+              Result.K = FrameWord::SignedLink;
+              Result.Offset = Modifier;
+              Result.AuthenticationKey = Auth->Key;
+              Result.ZeroModifier = Zero;
+            } else if (Auth->Authenticate && KnownModifier &&
+                       Inputs[1].K == FrameWord::SignedLink &&
+                       !Inputs[1].SecondModifier &&
+                       Inputs[1].AuthenticationKey == Auth->Key &&
+                       Inputs[1].ZeroModifier == Zero &&
+                       Inputs[1].Offset == Modifier) {
+              Result = {FrameWord::Link};
+            }
+          } else if (const auto Auth = aarch64PAuthExtendedOperation(Id)) {
+            Result.K = FrameWord::Unknown;
+            const bool Zero = Inputs[2].Constant == 0;
+            const bool KnownModifier = Zero || Inputs[2].K == FrameWord::Stack;
+            const int64_t Modifier = Zero ? 0 : Inputs[2].Offset;
+            const bool KnownPrefix =
+                !Auth->ConditionalPrefix ||
+                Inputs[kAArch64PACMOperandCount].Constant == 1;
+            if (KnownModifier && Inputs[3].Constant && KnownPrefix) {
+              if (!Auth->Authenticate && Inputs[1].K == FrameWord::Link) {
+                Result.K = FrameWord::SignedLink;
+                Result.Offset = Modifier;
+                Result.AuthenticationKey = Auth->Key;
+                Result.ZeroModifier = Zero;
+                Result.SecondModifier = Inputs[3].Constant;
+                Result.ImplicitPrefix = Auth->ConditionalPrefix;
+              } else if (Auth->Authenticate &&
+                         Inputs[1].K == FrameWord::SignedLink &&
+                         Inputs[1].AuthenticationKey == Auth->Key &&
+                         Inputs[1].ZeroModifier == Zero &&
+                         Inputs[1].Offset == Modifier &&
+                         Inputs[1].SecondModifier == Inputs[3].Constant &&
+                         Inputs[1].ImplicitPrefix == Auth->ConditionalPrefix) {
+                Result = {FrameWord::Link};
+              }
+            }
+          }
+          break;
+        }
         // A value-only intrinsic is an ordinary value, and a trap ends its
         // path, so nothing after it is reached.
         if (lowIntrinsicHasOnlyValueEffects(Op) ||
@@ -395,8 +497,14 @@ class TailFrameGuard {
     const auto Merge = [](FrameWord A, FrameWord B) {
       const bool May = A.MayBeStack || B.MayBeStack;
       const bool LocalCode = A.MayBeLocalCode || B.MayBeLocalCode;
-      if (A.K != B.K || A.Offset != B.Offset)
+      if (A.K != B.K || A.Offset != B.Offset ||
+          A.AuthenticationKey != B.AuthenticationKey ||
+          A.ZeroModifier != B.ZeroModifier ||
+          A.SecondModifier != B.SecondModifier ||
+          A.ImplicitPrefix != B.ImplicitPrefix)
         A = {};
+      if (A.Constant != B.Constant)
+        A.Constant.reset();
       A.MayBeStack = May;
       A.MayBeLocalCode = LocalCode;
       return A;
@@ -406,7 +514,7 @@ class TailFrameGuard {
       It->second =
           Merge(It->second, Found == Other.end() ? FrameWord{} : Found->second);
       if (It->second.K == FrameWord::Unknown && !It->second.MayBeStack &&
-          !It->second.MayBeLocalCode)
+          !It->second.MayBeLocalCode && !It->second.Constant)
         It = Into.erase(It);
       else
         ++It;
@@ -432,8 +540,12 @@ public:
     // edges.
     Unwind =
         Function.ExceptionMetadata ? &*Function.ExceptionMetadata : nullptr;
-    if (Function.Blocks.empty() || !Function.FunctionTemporaries.empty() ||
-        !Function.hasCompleteLiftCoverage() ||
+    Owner = &Function;
+    if (auto Error = validateLowInstructionBoundaries(Function)) {
+      llvm::consumeError(std::move(Error));
+      return {};
+    }
+    if (Function.Blocks.empty() || !Function.hasCompleteLiftCoverage() ||
         (Unwind && !Unwind->describesUnwindOnly() && !Unwind->Itanium))
       return {};
     const size_t Count = Function.Blocks.size();

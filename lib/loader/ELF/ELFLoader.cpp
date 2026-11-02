@@ -71,7 +71,8 @@ Arch tripleToArch(llvm::Triple::ArchType TA) {
 }
 
 template <typename ELFT>
-llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
+llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
+                    const LoadProgress &Progress) {
   using namespace llvm::ELF;
   using Elf_Ehdr = typename ELFT::Ehdr;
   using Elf_Shdr = typename ELFT::Shdr;
@@ -113,6 +114,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
   if (IsRelocatable) {
     va_t Next = 0;
     for (uint32_t I = 0; I < SectionsOr->size(); ++I) {
+      Progress.check();
       const Elf_Shdr &SH = (*SectionsOr)[I];
       if (!(SH.sh_flags & SHF_ALLOC) || SH.sh_size == 0)
         continue;
@@ -147,6 +149,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
   if (IsRelocatable) {
     va_t ImageEnd = 0;
     for (uint32_t I = 0; I < SectionsOr->size(); ++I) {
+      Progress.check();
       const Elf_Shdr &SH = (*SectionsOr)[I];
       if ((SH.sh_flags & SHF_ALLOC) && SH.sh_size != 0)
         ImageEnd = std::max<va_t>(ImageEnd,
@@ -159,10 +162,12 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
     Externs = std::move(*PlanOr);
   }
 
+  Progress.check();
   if (llvm::Error E = elf_loader::detail::buildSegments<ELFT>(
           ELF, *SectionsOr, ShStrTab, Data, Size, SecBase, IsRelocatable, Img))
     return E;
 
+  Progress.check();
   if (llvm::Error E = elf_loader::detail::buildSections<ELFT>(
           *SectionsOr, ShStrTab, Data, Size, SecBase, IsRelocatable, Img))
     return E;
@@ -184,9 +189,11 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
     TableNames = Reconstructed.Names;
   }
 
+  Progress.check();
   elf_loader::detail::collectRelocations<ELFT>(ELF, Tables, TableNames, Data,
                                                Size, IsRelocatable, Img);
 
+  Progress.check();
   // --- Apply relocations for relocatable objects (.o files) ---
   // PC-relative references in .text to .rodata need fixup so the lifter
   // sees correct displacements for constant pool loads.
@@ -198,28 +205,34 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
     elf_loader::detail::applyDynamicRelativeRelocations<ELFT>(ELF, Tables, Data,
                                                               Size, Img);
 
+  Progress.check();
   if (llvm::Error E = elf_loader::detail::collectSymbols<ELFT>(
           ELF, Tables, *SectionsOr, Size, SecBase, IsRelocatable,
           Externs.CommonSlots, Img))
     return E;
 
+  Progress.check();
   // --- .dynamic ---
   for (const Elf_Shdr &SH : Tables) {
+    Progress.check();
     if (SH.sh_type == SHT_DYNAMIC) {
       elf_loader::parseDynamic(ELF, Tables, SH, Data, Size, Img);
       break;
     }
   }
 
+  Progress.check();
   // --- .rela.plt / .rel.plt imports ---
   elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
 
+  Progress.check();
   // --- Loader-invoked lifecycle arrays and legacy constructor sections ---
   elf_loader::parseRuntimeSections(Img);
 
   // Every PLT family is dynamic-linker machinery even when a malformed or
   // stripped indirect-symbol table prevents exact stub-to-import recovery.
   for (const Section &Sec : Img.Sections) {
+    Progress.check();
     llvm::StringRef Name = Sec.Name;
     if (Name == section_names::elf::Plt || Name == section_names::elf::Iplt ||
         Name.starts_with(section_names::elf::PltPrefix))
@@ -231,17 +244,21 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img) {
   // every `.ARM.extab` entry that has one.
   elf_loader::recordARMPLTVeneers(Img);
 
+  Progress.check();
   // --- .got / .got.plt ---
   elf_loader::parseGOTEntries(ELF, *SectionsOr, Data, Size, Img);
   // Every symbol has stated its mode by now; the pointers the image stores
   // state the modes of the routines no symbol names.
   recordARMStoredCodePointerModes(Img);
 
+  Progress.check();
   // --- PT_NOTE (build-id, ABI tag) ---
   elf_loader::parseNotes(ELF, Data, Size, Img);
 
+  Progress.check();
   // --- .eh_frame_hdr ---
   for (const Elf_Shdr &SH : Tables) {
+    Progress.check();
     if (elf_loader::detail::getSectionName<ELFT>(TableNames, SH) !=
         section_names::elf::EhFrameHdr)
       continue;
@@ -284,7 +301,7 @@ std::string elfTypeName(uint16_t Type) {
 } // anonymous namespace
 
 llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
-  auto BufOrErr = readFileBuffer(Path, BinaryFormat::ELF);
+  auto BufOrErr = readFileBuffer(Path, BinaryFormat::ELF, Progress);
   if (!BufOrErr)
     return BufOrErr.takeError();
   return loadBuffer((*BufOrErr)->getMemBufferRef());
@@ -293,7 +310,7 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
 llvm::Expected<BinaryImage>
 ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   BinaryImage Img;
-  initializeImage(Buffer, Img, BinaryFormat::ELF);
+  initializeImage(Buffer, Img, BinaryFormat::ELF, true, Progress);
   Img.ReadsStaticSymbols = ReadsStaticSymbols;
 
   if (Img.Raw.size() < llvm::ELF::EI_NIDENT)
@@ -310,6 +327,7 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
     return llvm::make_error<llvm::StringError>("elf: big-endian not supported",
                                                llvm::inconvertibleErrorCode());
 
+  Progress.report("parse", 0, 1, "ELF tables");
   auto IsSBF = loadSBFELF(Img);
   if (!IsSBF)
     return IsSBF.takeError();
@@ -327,9 +345,9 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   // result is ever looked at.
   auto Loaded = [&]() -> llvm::Error {
     if (auto *ELF64 = llvm::dyn_cast<llvm::object::ELF64LEObjectFile>(Obj))
-      return loadELF(*ELF64, Img);
+      return loadELF(*ELF64, Img, Progress);
     if (auto *ELF32 = llvm::dyn_cast<llvm::object::ELF32LEObjectFile>(Obj))
-      return loadELF(*ELF32, Img);
+      return loadELF(*ELF32, Img, Progress);
     return llvm::make_error<llvm::StringError>("elf: unsupported ELF class",
                                                llvm::inconvertibleErrorCode());
   }();
@@ -357,11 +375,14 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
 
   // Frame extents are function boundaries the discovery heuristics must not
   // guess inside, as PE .pdata ranges already are when they run.
+  Progress.check();
   dwarf_eh::recordFrameExtents(Img);
   runPostLoadDiscovery(
-      Img, "elf: loaded " + pathToUTF8(std::filesystem::u8path(
-                                           Buffer.getBufferIdentifier().str())
-                                           .filename()));
+      Img,
+      "elf: loaded " +
+          pathToUTF8(std::filesystem::u8path(Buffer.getBufferIdentifier().str())
+                         .filename()),
+      Progress);
   // Classified before any table is read: a decoder that finds an Itanium LSDA
   // cannot tell from the table alone whether its cleanup pads are C++
   // destructors or Rust drop glue, and the evidence that settles it is the
@@ -369,24 +390,30 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   Img.ExceptionMetadata.Runtime = detectLanguageRuntime(Img);
   // Personality routines are usually reached through a dynamically bound slot,
   // so language-table decoding waits until imports and veneers are known.
+  Progress.check();
   dwarf_eh::parseItaniumExceptions(Img);
   // ARM32 keeps its unwinding in an index of its own rather than in DWARF, and
   // a C++ frame's language data inside that index's table rather than in a
   // section.  Runs after the DWARF reader because an image built with
   // `-fasynchronous-unwind-tables` has both, and the two agree about the
   // frames they share.
+  Progress.check();
   arm_ehabi::parseARMEHABIExceptions(Img);
   if (llvm::Error E = ARMModes.followLandingPads())
     return std::move(E);
   // Go emits no DWARF frame information for its own functions, so a Go image
   // reaches this point with nothing recovered.  Its metadata lives in the
   // runtime's own table, which is present in every container format.
+  Progress.check();
   go_loader::parseGoExceptions(Img);
   // Rust and Objective-C share the Itanium tables above rather than emitting
   // their own, so their readings of them run last, over records that are
   // already normalized.
+  Progress.check();
   rust_eh::parseRustExceptions(Img);
+  Progress.check();
   objc_eh::parseObjCExceptions(Img);
+  Progress.report("parse", 1, 1);
   return Img;
 }
 

@@ -83,6 +83,7 @@ protected:
       const char *Name = Route == 1   ? "recv"
                          : Route == 3 ? "read"
                          : Route == 4 ? "syscall"
+                         : Route == 6 ? "__read_chk"
                                       : "recvfrom";
       for (const auto &C : R.NativeCalls)
         if (C.ThreadID == 1001 && C.Name == Name) {
@@ -123,6 +124,35 @@ TEST_P(AndroidReceive, RawAndLibcReadAndRecvSuspendBeforeDataArrival) {
     EXPECT_EQ(word(R, 3), 7u);
     EXPECT_EQ(word(R, 5), 0x5au);
   }
+}
+TEST_P(AndroidReceive,
+       ReadChkResumesTheOriginalReadAcrossDescriptorAndMemoryChanges) {
+  for (uint64_t Action : {0u, 1u}) {
+    SCOPED_TRACE(Action);
+    auto R = run(6, Action);
+    completed(R, 6, 1);
+    EXPECT_EQ(word(R, 3), 7u);
+    EXPECT_EQ(word(R, 5), 0x5au);
+    if (Action == 1)
+      EXPECT_EQ(word(R, 16), 0xb6u);
+  }
+  // The shared atomic socket contract refuses a lost destination mapping.
+  // It leaves the original call pending instead of claiming an errno result.
+  auto Refused = run(6, 2);
+  EXPECT_EQ(Refused.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Refused.Diagnostic.find("completely accessible"),
+            std::string::npos);
+  callResult(Refused, 6, std::nullopt);
+  EXPECT_EQ(word(Refused, 4), 0u);
+  EXPECT_EQ(word(Refused, 512), 0u);
+  EXPECT_EQ(word(Refused, 9), 3u);
+  EXPECT_EQ(word(Refused, 6), 456u);
+  Options.LinuxNetwork->Connections[0].ReceiveEvents = {
+      {{0x5a}, 0, 0, 3 * Second}};
+  auto R = run(6, 3);
+  completed(R, 6, UINT64_MAX, 11);
+  EXPECT_EQ(word(R, 2), 102u);
+  EXPECT_EQ(word(R, 3), 0u);
 }
 TEST_P(AndroidReceive, TimeoutSnapshotSurvivesOptionChangeAndArrivalWinsTie) {
   for (uint64_t Arrival : {2 * Second, 3 * Second}) {

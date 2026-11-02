@@ -20,6 +20,18 @@
 
 namespace neverd::limits::loader {
 
+#define NEVERD_DWARF_A64_LIMIT(Type, Name, Value)                              \
+  inline constexpr Type Name = Value;
+#include "neverd/loader/DWARF/AArch64ReturnAddressState.def"
+
+#define NEVERD_RA_QUERY_LIMIT(Type, Name, Value)                               \
+  inline constexpr Type Name = Value;
+#include "neverd/loader/ReturnAddressSigning.def"
+
+#define NEVERD_MACHO_ARM64E_LIMIT(Type, Name, Value)                           \
+  inline constexpr Type Name = Value;
+#include "neverd/loader/MachO/MachOArm64e.def"
+
 // include/neverd/loader/BinaryImageModel.h
 inline constexpr size_t kBinaryImageModelMaxDiagnostics = 64;
 
@@ -30,6 +42,11 @@ inline constexpr size_t kLSDAMaxRecords = 1u << 16;
 inline constexpr uint32_t kLanguageEHGoMaxBitmaps = 1u << 12;
 inline constexpr uint32_t kLanguageEHGoMaxBits = 1u << 16;
 inline constexpr uint32_t kLanguageEHGoMaxTotalBytes = 1u << 20;
+
+// lib/loader/COFF/COFFLoaderUtils.cpp
+/// Whole-image instruction/slot visits for indexed pointer-table evidence.
+/// Exhaustion publishes none of the partial scan's table classifications.
+inline constexpr size_t kCOFFIndexedTableEvidenceWork = 1u << 20;
 
 // lib/loader/COFF/eh/COFFDelphiEH.cpp
 /// Bound on one `except on` arm table.  Delphi allows any number of arms, but
@@ -93,6 +110,10 @@ inline constexpr size_t kCOFFRegistrationEHScanMaxInstallWindow = 64;
 // decorated name. Its cache word may be writable; it is not an object-size
 // authority and must not be conflated with the immutable ThrowInfo graph.
 inline constexpr uint32_t kCOFFRegistrationEHThrowInfoMaxTypeName = 4096;
+
+// lib/loader/COFF/RTTI.cpp
+/// Bound the complete class/struct exception graph, including every base.
+inline constexpr uint32_t kMsvcThrowInfoMaxCatchableTypes = 64;
 
 // lib/loader/COFF/eh/COFFRegistrationScalarLeaf.cpp
 inline constexpr unsigned kCOFFRegistrationScalarLeafMaxHelperBytes = 256;
@@ -271,11 +292,11 @@ inline constexpr int kSwiftValueWitnessCallsAtBudget = 4096;
 inline constexpr size_t kSwiftVirtualCallsBudget = 16384;
 inline constexpr size_t kSwiftVirtualCallsNativeSelfCallsBudget = 1U << 18;
 
-// lib/loader/discovery/FunctionDiscoveryARM.cpp
+// lib/loader/discovery/ARM/FunctionDiscoveryARM.cpp
 inline constexpr size_t kFunctionDiscoveryARMMaxDiscoveredInstructions =
     4'000'000;
 
-// lib/loader/discovery/FunctionDiscoveryX86.cpp
+// lib/loader/discovery/X86/FunctionDiscoveryX86.cpp
 /// The most bytes of literals and padding the check reads, and the most
 /// instructions it follows through them.
 inline constexpr size_t kFunctionDiscoveryX86MaxLiteralRegion = 64 * 1024;

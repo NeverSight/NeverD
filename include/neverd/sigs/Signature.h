@@ -12,7 +12,7 @@
 ///   - CRC16 checksum over trailing bytes for verification
 ///   - One or more function name associations with offsets; several names
 ///     at one offset are aliases, the linkage names one routine has
-///   - Optionally, the routines the function branches to directly
+///   - Optionally, relocated code, import, RTTI or external-data references
 ///
 /// The current loader accepts the text representation of these records.  A
 /// PatternModule is one record as a value; a StoredModule is the same record
@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -54,7 +55,15 @@ struct PatternByte {
 
 struct FuncRef {
   uint32_t Offset = 0;
+  bool IsData = false;
+  bool IsLocalData = false;
   std::string Name;
+
+  FuncRef() = default;
+  FuncRef(uint32_t Offset, std::string Name, bool IsData = false,
+          bool IsLocalData = false)
+      : Offset(Offset), IsData(IsData), IsLocalData(IsLocalData),
+        Name(std::move(Name)) {}
 };
 
 struct PatternModule {
@@ -63,11 +72,33 @@ struct PatternModule {
   uint16_t CRC16 = 0;
   uint8_t CRCLen = 0;
 
+  /// `!refs`: every reference must be confirmed before this byte hit can
+  /// become a candidate or support another candidate. This is a NeverD
+  /// extension; older readers must reject it, not ignore the requirement.
+  bool RequireReferences : 1 = false;
+  /// `!caller`: indexed by expected linkage name only. An anchored complete
+  /// caller must unanimously name this target at a reference site. A short
+  /// caller additionally needs an independent ordinary callee; descendants
+  /// never confirm their ancestors or supply that independent evidence.
+  /// Complete literal bodies may also participate in a checked two-body x64
+  /// code-address fingerprint; neither body alone supplies its identity.
+  bool RequireCaller : 1 = false;
+  /// `!vtable`: source-owned primary COFF x64 table metadata, never a
+  /// function-byte claim. PublicNames names the table; References names its
+  /// absolute code-pointer slots. Every pointer is a complete wildcard.
+  bool IsVTable : 1 = false;
+  /// `!loadcfg`: source configuration fields pairing external pointer storage
+  /// (&) with its default function (^). Metadata, never a byte-index claim.
+  bool IsLoadConfig : 1 = false;
+  /// !layout: complete nonsplittable source code contribution. Never enters
+  /// the byte index or supplies individual bodies to reference inference.
+  bool IsCodeLayout : 1 = false;
+
   uint32_t TotalLen = 0;
 
   std::vector<FuncRef> PublicNames;
 
-  /// The routines the function branches to directly, as `^offset name`
+  /// The routines or COFF import pointers referenced by `^offset name`
   /// states them.  Offset is where the relocated branch field starts: the
   /// rel32 of an x86 or x64 `call`/`jmp` (E8/E9), and the branch instruction
   /// itself on ARM64 (B/BL) and Thumb-2 (B.W/BL/BLX).  An ARM-state (A32)
@@ -78,17 +109,37 @@ struct PatternModule {
   /// alternate name a link resolves it to where no object defines it, or
   /// the routines two builds of the same bytes call there -- and any of them
   /// confirms it.  The bytes there are wildcards, so matching checks the
-  /// target separately; see SignatureDB::apply.
+  /// target separately; see SignatureDB::apply. COFF x86/x64 additionally
+  /// accepts canonical unprefixed conditional rel32 branches (0F 80..8F)
+  /// from zero-addend relocations naming explicit function symbols. These
+  /// references never create function entries. COFF x86/x64 also supports
+  /// the four-byte field of FF 15/FF 25 import calls/jumps, either unprefixed
+  /// or with a single canonical REX.W prefix in x64, named
+  /// `__imp_<export>`. Only an exact name at the addressed, mapped IAT slot
+  /// confirms that reference; absent or different spellings are unknown.
+  /// A COFF x64 RIP-relative LEA can reference a primary MSVC vftable by its
+  /// exact `??_7...6B@` linkage name. The loader validates RTTI to compare
+  /// the mangled type; unsupported or incomplete metadata remains unknown.
+  /// `&offset name` explicitly names external data, never a function. Only
+  /// complete contextual records may contain it. The source instruction and
+  /// independently frozen full-function anchors must agree on its storage.
   std::vector<FuncRef> References;
 
   std::vector<PatternByte> TailBytes;
 };
 
 /// A name a StoredModule gives an offset: one of its public names, or a
-/// routine it references.
+/// routine or external data it references. Public names are never data.
 struct StoredName {
   uint32_t Offset = 0;
+  bool IsData = false;
+  bool IsLocalData = false;
   std::string_view Name;
+
+  StoredName() = default;
+  StoredName(uint32_t Offset, std::string_view Name, bool IsData = false,
+             bool IsLocalData = false)
+      : Offset(Offset), IsData(IsData), IsLocalData(IsLocalData), Name(Name) {}
 };
 
 /// A PatternModule packed for a large signature set.
@@ -115,6 +166,24 @@ struct StoredModule {
   uint32_t ReferenceCount = 0;
   uint16_t CRC16 = 0;
   uint8_t CRCLen = 0;
+  bool RequireReferences : 1 = false;
+  /// `!caller`: indexed by expected linkage name only. An anchored complete
+  /// caller must unanimously name this target at a reference site. A short
+  /// caller additionally needs an independent ordinary callee; descendants
+  /// never confirm their ancestors or supply that independent evidence.
+  /// Complete literal bodies may also participate in a checked two-body x64
+  /// code-address fingerprint; neither body alone supplies its identity.
+  bool RequireCaller : 1 = false;
+  /// `!vtable`: source-owned primary COFF x64 table metadata, never a
+  /// function-byte claim. PublicNames names the table; References names its
+  /// absolute code-pointer slots. Every pointer is a complete wildcard.
+  bool IsVTable : 1 = false;
+  /// `!loadcfg`: source configuration fields pairing external pointer storage
+  /// (&) with its default function (^). Metadata, never a byte-index claim.
+  bool IsLoadConfig : 1 = false;
+  /// !layout: complete nonsplittable source code contribution. Never enters
+  /// the byte index or supplies individual bodies to reference inference.
+  bool IsCodeLayout : 1 = false;
 
   bool isStated(size_t Byte) const {
     return (Stated[Byte / CHAR_BIT] >> (Byte % CHAR_BIT)) & 1;
@@ -159,7 +228,7 @@ inline bool preferredAliasOrder(std::string_view A, std::string_view B) {
 
 struct SigMatch {
   uint64_t Address = 0;
-  /// The routine's name: of the names the module gives this offset, the one
+  /// The candidate name: of the names the module gives this offset, the one
   /// preferredAliasOrder puts first.
   std::string Name;
   /// The module's other names for the same offset, in that order.
@@ -167,9 +236,15 @@ struct SigMatch {
   std::string LibraryName;
   uint32_t FuncLen = 0;
   /// The module has references and the image confirmed every one of them;
-  /// see SignatureDB::apply.  Such a match settles an address that other
-  /// matches name differently.
+  /// see SignatureDB::apply. This can settle a candidate disputed by other
+  /// patterns, but does not prove its original name or nominal source types.
   bool Confirmed = false;
+  /// A frozen caller or independently validated source metadata requests this
+  /// exact name at this address. Its outgoing constraints have no known
+  /// contradiction. Multiple such incoming names are candidate aliases at the
+  /// same target; they cannot prove source identity or confirm an ancestor's
+  /// references.
+  bool CallerConfirmed = false;
 };
 
 } // namespace sigs

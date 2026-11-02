@@ -13,6 +13,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/loader/BinaryImage.h"
@@ -35,7 +36,10 @@ void LowToMedConverter::propagate(MedFunc &Func) {
   auto keyOf = [](const MedVar &V) -> DefKey {
     return {static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
-  // Looked up and replaced by key, never walked.
+  // Output identities and operation storage stay unchanged below. Keep one
+  // index for both propagation loops; its pointers observe each rewrite's
+  // current opcode and inputs, including folds earlier in the same round.
+  // Duplicate definitions keep the last operation in traversal order.
   llvm::DenseMap<DefKey, const MedOp *> Defs;
 
   const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
@@ -75,6 +79,21 @@ void LowToMedConverter::propagate(MedFunc &Func) {
     }
   }
 
+  // Complement and modular negation are distinct involutions at one unchanged
+  // bit width. Look through named SSA producers, never through a truncate or
+  // a new register definition. Producers and observed flag calculations stay
+  // for the normal DCE owner.
+  const auto PlainInvolution = [](const MedOp &Op) {
+    return (Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::INT_NEGATE ||
+            Op.Opcode == NdOp::INT_NEG2) &&
+           Op.NumInputs == 1 && Op.Output.Size &&
+           Op.Inputs[0].Size == Op.Output.Size && !Op.Dead &&
+           Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+           !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+           Op.MemoryOrdering == NdMemoryOrdering::None &&
+           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
+
   // Copy propagation: if def is COPY from another var, replace uses
   bool Changed = true;
   int Iters = 0;
@@ -98,6 +117,9 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Def->RegistrationRoot == MedOp::RegistrationRootKind::None &&
               Def->Inputs[0].Size == Op.Inputs[I].Size) {
             MedVar Replacement = Def->Inputs[0];
+            if (Replacement.isConst() &&
+                !canPropagateConstantToOperand(Op.Opcode, I))
+              continue;
             // COPY is value transport, so an untagged immediate remains
             // role-neutral at its definition.  Once SSA substitutes it into a
             // numeric operand, classify only this occurrence as scalar.  Exact
@@ -114,9 +136,65 @@ void LowToMedConverter::propagate(MedFunc &Func) {
             }
           }
         }
+        if (PlainInvolution(Op)) {
+          const auto At = Defs.find(keyOf(Op.Inputs[0]));
+          if (At != Defs.end() && PlainInvolution(*At->second) &&
+              At->second->Output.Size == Op.Output.Size &&
+              (At->second->Opcode == NdOp::INT_NEG2) ==
+                  (Op.Opcode == NdOp::INT_NEG2)) {
+            const auto Value = At->second->Inputs[0];
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = Value;
+            Changed = true;
+          }
+        }
       }
     }
   }
+
+  // Absorption only compares already named SSA values. It neither expands
+  // their definitions nor evaluates their producers, so a large dispatcher
+  // expression costs the same as a register operand. Keep loads, calls and
+  // their effects as separate operations for the ordinary DCE policy.
+  auto FoldWordAbsorption = [&](MedOp &Op) {
+    const auto PlainWord = [](const MedOp &Value) {
+      return (Value.Opcode == NdOp::INT_AND || Value.Opcode == NdOp::INT_OR) &&
+             Value.NumInputs == 2 && Value.Output.Size &&
+             Value.Output.Size <= sizeof(uint64_t) &&
+             Value.Inputs[0].Size == Value.Output.Size &&
+             Value.Inputs[1].Size == Value.Output.Size && !Value.Dead &&
+             Value.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+             !Value.SourceCallHint && Value.IntrinsicOutputs.empty() &&
+             Value.MemoryOrdering == NdMemoryOrdering::None &&
+             Value.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+    };
+    if (!PlainWord(Op))
+      return false;
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto &Retained = Op.Inputs[1 - I];
+      // Two Unspecified occurrences do not denote one stable machine word.
+      if (!Retained.isConst() &&
+          (Retained.Id < 0 ||
+           (Retained.Kind != MedVar::Reg && Retained.Kind != MedVar::Temp &&
+            Retained.Kind != MedVar::Param)))
+        continue;
+      const auto It = Defs.find(keyOf(Op.Inputs[I]));
+      if (It == Defs.end())
+        continue;
+      const auto &Nested = *It->second;
+      if (!PlainWord(Nested) || Nested.Opcode == Op.Opcode ||
+          Nested.Output.Size != Op.Output.Size ||
+          (Nested.Inputs[0] != Retained && Nested.Inputs[1] != Retained))
+        continue;
+      // x | (x & y) and x & (x | y) retain x's width and address provenance.
+      const auto Value = Retained;
+      Op.Opcode = NdOp::COPY;
+      Op.Inputs[0] = Value;
+      Op.NumInputs = 1;
+      return true;
+    }
+    return false;
+  };
 
   // Constant folding: fold binary ops of two constants
   Changed = true;
@@ -124,18 +202,31 @@ void LowToMedConverter::propagate(MedFunc &Func) {
   while (Changed &&
          Iters++ < ::neverd::limits::ir::kMaxMedFoldPropagationRounds) {
     Changed = false;
-    Defs.clear();
-    for (auto &Blk : Func.Blocks) {
-      for (auto &Op : Blk.Ops) {
-        if (Op.Output.Id >= 0 && Op.Output.Size > 0)
-          Defs[keyOf(Op.Output)] = &Op;
-      }
-    }
-
     for (auto &Blk : Func.Blocks) {
       for (auto &Op : Blk.Ops) {
         if (Op.NumInputs < 2)
           continue;
+        // Some lifters emit the boolean flag directly, without passing
+        // through MedFlags' compound-condition rewrite. Both routes use the
+        // same identity rule; producers and their effects remain separate.
+        if (Op.NumInputs == 2 && Op.Output.Size == 1 && !Op.Dead &&
+            Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+            !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+            Op.MemoryOrdering == NdMemoryOrdering::None &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+          if (const auto Known = selfComparisonConstant(Op.Opcode, Op.Inputs[0],
+                                                        Op.Inputs[1])) {
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = MedVar::makeConst(*Known, 1);
+            Op.NumInputs = 1;
+            Changed = true;
+            continue;
+          }
+        }
+        if (FoldWordAbsorption(Op)) {
+          Changed = true;
+          continue;
+        }
         switch (Op.Opcode) {
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
@@ -152,6 +243,7 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         case NdOp::INT_SLESS:
         case NdOp::INT_LESSEQUAL:
         case NdOp::INT_SLESSEQUAL:
+        case NdOp::SELECT:
           break;
         default:
           continue;
@@ -204,7 +296,58 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         };
 
         auto A = ResolveConst(Op.Inputs[0]);
+        if (Op.Opcode == NdOp::SELECT) {
+          // A scalar constant chooses one SSA value. Preserve the chosen
+          // value's identity and relocation provenance, without evaluating
+          // or retaining dependencies on the unselected register.
+          if (Op.NumInputs != 3 || !A || !A->IsStableScalar ||
+              Op.RegistrationRoot != MedOp::RegistrationRootKind::None ||
+              Op.SourceCallHint || !Op.IntrinsicOutputs.empty() ||
+              Op.MemoryOrdering != NdMemoryOrdering::None ||
+              Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+              !Op.Inputs[0].Size || Op.Inputs[0].Size > 8)
+            continue;
+          const unsigned Bits = Op.Inputs[0].Size * 8;
+          const uint64_t Condition =
+              Bits == 64 ? A->Value : A->Value & ((uint64_t{1} << Bits) - 1);
+          const auto Selected = Op.Inputs[Condition ? 1 : 2];
+          if (!Op.Output.Size || Selected.Size != Op.Output.Size)
+            continue;
+          Op.Opcode = NdOp::COPY;
+          Op.Inputs[0] = Selected;
+          Op.NumInputs = 1;
+          Changed = true;
+          continue;
+        }
         auto B = ResolveConst(Op.Inputs[1]);
+        // An absorbing scalar mask observes none of the other operand's bits.
+        // Keep that operand's producer and memory effects for ordinary DCE;
+        // only this pure value operation becomes a constant. An address
+        // whose original VA is zero is not a scalar zero after relocation.
+        if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR) &&
+            Op.NumInputs == 2 && Op.Output.Size &&
+            Op.Output.Size <= sizeof(uint64_t) &&
+            Op.Inputs[0].Size == Op.Output.Size &&
+            Op.Inputs[1].Size == Op.Output.Size && !Op.Dead &&
+            Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+            !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+            Op.MemoryOrdering == NdMemoryOrdering::None &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+          std::optional<uint64_t> Absorbed;
+          for (const auto *Value : {&A, &B})
+            if (*Value && (*Value)->IsStableScalar)
+              if (auto Bits = absorbingBitwiseConstant(
+                      Op.Opcode, Op.Output.Size, (*Value)->Value))
+                Absorbed = Bits;
+          if (Absorbed) {
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = MedVar::makeConst(*Absorbed, Op.Output.Size,
+                                             ConstantAddressProvenance::Scalar);
+            Op.NumInputs = 1;
+            Changed = true;
+            continue;
+          }
+        }
         if (!A || !B)
           continue;
 

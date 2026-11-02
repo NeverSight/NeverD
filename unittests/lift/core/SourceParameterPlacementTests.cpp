@@ -18,9 +18,15 @@
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 
+#include <iterator>
+#include <vector>
+
 using namespace neverd;
 
 namespace {
+
+#define SOURCE_PARAMETER_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "SourceParameterPlacementFixtures.def"
 
 TypeRef intType(uint16_t Size) { return NdType::makeInt(Size, true); }
 TypeRef floatType(uint16_t Size) { return NdType::makeFloat(Size); }
@@ -251,6 +257,90 @@ TEST(SourceParameterPlacement, AAPCS64UsesHomogeneousAggregatesAndPairs) {
                  8, 8);
   expectRegister(P.Parameters[3][0], IntegerReg, integerRegister(A64, ELF, 4),
                  0, 8, /*Indirect=*/true);
+}
+
+TEST(SourceParameterPlacement, DarwinWideArgumentsStartAtOddRegisters) {
+  const auto WideRecord =
+      record(kAArch64WideIntegerBytes, NdRecordPassing::ByValue,
+             {{0, kAArch64IntegerBytes, false},
+              {kAArch64IntegerBytes, kAArch64IntegerBytes, false}},
+             kAArch64WideIntegerBytes);
+  for (const auto Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (const auto Wide : {intType(kAArch64WideIntegerBytes), WideRecord})
+      for (unsigned Prefix = 0; Prefix < kAArch64ArgumentRegisters; ++Prefix) {
+        std::vector<TypeRef> Params(Prefix, intType(kAArch64IntegerBytes));
+        Params.push_back(Wide);
+        Params.push_back(intType(kAArch64IntegerBytes));
+        const auto P =
+            place(Arch::AArch64, Format, intType(kAArch64IntegerBytes), Params);
+        const unsigned First = Format == BinaryFormat::MachO
+                                   ? Prefix
+                                   : (Prefix + 1) /
+                                         kAArch64WideIntegerRegisters *
+                                         kAArch64WideIntegerRegisters;
+        if (First + kAArch64WideIntegerRegisters > kAArch64ArgumentRegisters) {
+          ASSERT_EQ(P.Parameters.size(), Params.size());
+          ASSERT_EQ(P.Parameters[Prefix].size(), 1u);
+          expectStack(P.Parameters[Prefix][0], 0, kAArch64WideIntegerBytes);
+          expectStack(P.Parameters.back()[0], kAArch64WideIntegerBytes,
+                      kAArch64IntegerBytes);
+        } else {
+          ASSERT_EQ(P.Parameters.size(), Params.size());
+          ASSERT_EQ(P.Parameters[Prefix].size(), kAArch64WideIntegerRegisters);
+          for (unsigned I = 0; I < kAArch64WideIntegerRegisters; ++I)
+            expectRegister(P.Parameters[Prefix][I], IntegerReg,
+                           integerRegister(Arch::AArch64, Format, First + I),
+                           I * kAArch64IntegerBytes, kAArch64IntegerBytes);
+        }
+      }
+}
+
+TEST(SourceParameterPlacement, DarwinWideScalarSpillsKeepSixteenByteAlignment) {
+  struct Spill {
+    uint16_t Bytes;
+    int64_t Offset;
+  };
+  const Spill Spills[] = {
+#define SOURCE_PARAMETER_WIDE_SPILL(Bytes, Offset) {Bytes, Offset},
+#include "SourceParameterPlacementFixtures.def"
+  };
+  std::vector<TypeRef> Params(kAArch64ArgumentRegisters,
+                              intType(kAArch64IntegerBytes));
+  for (const auto &S : Spills)
+    Params.push_back(intType(S.Bytes));
+  const auto P = place(Arch::AArch64, BinaryFormat::MachO,
+                       intType(kAArch64IntegerBytes), Params);
+  ASSERT_EQ(P.Parameters.size(), Params.size());
+  for (unsigned I = 0; I < std::size(Spills); ++I) {
+    ASSERT_EQ(P.Parameters[kAArch64ArgumentRegisters + I].size(), 1u);
+    expectStack(P.Parameters[kAArch64ArgumentRegisters + I][0],
+                Spills[I].Offset, Spills[I].Bytes);
+  }
+}
+
+TEST(SourceParameterPlacement, AAPCS64KeepsTheResultPointerApartFromArguments) {
+  constexpr Arch A64 = Arch::AArch64;
+  const auto Large = record(24, NdRecordPassing::ByValue,
+                            {{0, 8, false}, {8, 8, false}, {16, 8, false}}, 8);
+  const auto Floating = record(24, NdRecordPassing::ByValue,
+                               {{0, 8, true}, {8, 8, true}, {16, 8, true}}, 8);
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF}) {
+    const auto P = place(A64, Format, Large, {intType(8)});
+    ASSERT_TRUE(P.ResultPointer);
+    EXPECT_EQ(P.ResultPointer->RegisterOffset,
+              getTargetRegInfo(A64).indirectResultReg());
+    expectRegister(P.Parameters[0][0], IntegerReg,
+                   integerRegister(A64, Format, 0), 0, 8);
+    EXPECT_FALSE(place(A64, Format, Floating, {}).ResultPointer);
+    EXPECT_FALSE(
+        place(A64, Format, record(24, NdRecordPassing::Unknown, {}, 8), {})
+            .ResultPointer);
+    EXPECT_TRUE(
+        place(A64, Format, pairOfLongs(NdRecordPassing::ByReference), {})
+            .ResultPointer);
+  }
 }
 
 TEST(SourceParameterPlacement, I386PassesEverythingOnTheStack) {

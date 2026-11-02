@@ -1,0 +1,44 @@
+//===- MachOCompactPAuthLRFixtures.def - Signed unwind ranges ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent compact-unwind words and range boundaries. CASE describes the
+/// encoded PACIBSPPC offset relative to its own recipe, never its owner symbol.
+/// VALUE supplies addresses and lengths used by rewrite round-trip fixtures.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_COMPACT_PAUTH_LR_CASE
+#define NEVERD_COMPACT_PAUTH_LR_CASE(Name, Encoding, BeginDelta, Length,       \
+                                     Offset, Valid)
+#endif
+#ifndef NEVERD_COMPACT_PAUTH_LR_VALUE
+#define NEVERD_COMPACT_PAUTH_LR_VALUE(Type, Name, Value)
+#endif
+
+NEVERD_COMPACT_PAUTH_LR_CASE(FirstInstruction, 0x05000000, 0, 4, 0, true)
+NEVERD_COMPACT_PAUTH_LR_CASE(MiddleInstruction, 0x05002000, 0, 32, 8, true)
+NEVERD_COMPACT_PAUTH_LR_CASE(LastInstruction, 0x05007000, 0, 32, 28, true)
+NEVERD_COMPACT_PAUTH_LR_CASE(AllRegisterPairs, 0x05001f1f, 0, 32, 4, true)
+NEVERD_COMPACT_PAUTH_LR_CASE(OutsideRecipe, 0x05008000, 0, 32, 32, false)
+NEVERD_COMPACT_PAUTH_LR_CASE(TruncatedInstruction, 0x05007000, 0, 31, 28, false)
+NEVERD_COMPACT_PAUTH_LR_CASE(UnalignedInstruction, 0x05000000, 2, 32, 0, false)
+NEVERD_COMPACT_PAUTH_LR_CASE(ReservedRegisterBit, 0x05000020, 0, 32, 0, false)
+
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRRecipeEncoding, 0x05002001)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kReservedARM64Mode, 0x06000000)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRReservedEncoding, 0x05000020)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRPastShortFrame, 0x05004000)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRSigningOffset, 8)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRRecipeLength, 32)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRSubentryDelta, 16)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRSourceRVA, 0x200)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRDestinationRVA, 0x500)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRTooShortLength, 8)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint32_t, kPAuthLRTruncatedLength, 11)
+NEVERD_COMPACT_PAUTH_LR_VALUE(uint64_t, kPAuthLROverflowImageBase,
+                              UINT64_MAX - kPAuthLRSourceRVA)
+
+#undef NEVERD_COMPACT_PAUTH_LR_CASE
+#undef NEVERD_COMPACT_PAUTH_LR_VALUE

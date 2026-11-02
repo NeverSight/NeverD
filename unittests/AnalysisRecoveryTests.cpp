@@ -13,13 +13,14 @@
 #include "../lib/pipeline/PipelineAnalysis.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -407,6 +408,9 @@ TEST(AnalysisRecovery, PipelineModeOwnsTheOptIn) {
   Options.LiftMode = false;
   Options.DumpLlvm = true;
   EXPECT_FALSE(Options.allowsAnalysisRecovery());
+  Options.DumpLlvm = false;
+  Options.MedAnalysisOnly = true;
+  EXPECT_FALSE(Options.allowsAnalysisRecovery());
 }
 
 TEST(AnalysisRecovery, DisplayRetainsMetadataWithoutNativeFrameClaims) {
@@ -646,6 +650,20 @@ TEST(AnalysisRecovery, UnprovedSelectorKeepsCandidateBodiesAndUnknownTarget) {
   EXPECT_EQ(Unknown, 1u);
   EXPECT_TRUE(Med.UnsafeIndirectBranchAddresses.count(Dispatch));
   EXPECT_TRUE(High.SwitchLabelsByJump.empty());
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(HighCEmitter().emit({High}, Output, Options));
+  EXPECT_NE(Source.find("; /* 0x401003: jmp dword ptr [ecx*4 + 0x402000]; "
+                        "unresolved target */"),
+            std::string::npos);
+  Options.EmitComments = false;
+  Source.clear();
+  ASSERT_TRUE(HighCEmitter().emit({High}, Output, Options));
+  EXPECT_EQ(Source.find("unresolved target"), std::string::npos);
   llvm::LLVMContext Context;
   EXPECT_THROW(MedLLVMEmitter().emit({Med}, Context, "display", Image.Arch, {},
                                      &Image, Image.Format),

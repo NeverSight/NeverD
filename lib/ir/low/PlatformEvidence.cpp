@@ -18,7 +18,7 @@
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/Raw/RawLoader.h"
 
 #include "llvm/ADT/ArrayRef.h"

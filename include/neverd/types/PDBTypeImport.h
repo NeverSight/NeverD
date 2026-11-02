@@ -43,6 +43,9 @@ struct PDBTypeImportStats {
   unsigned Enums = 0;
   /// Records declared but never defined in the stream.
   unsigned DeclaredOnly = 0;
+  /// Function type occurrences with a convention local types cannot represent.
+  /// Pointers to these types stay opaque instead of inventing a C signature.
+  unsigned UnsupportedFunctionTypes = 0;
   /// Named records whose rebuilt members do not flatten back to the list
   /// MSVC wrote; empty when every nesting holds.
   std::vector<std::string> NestingMismatches;

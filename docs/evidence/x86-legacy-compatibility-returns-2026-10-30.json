@@ -1,0 +1,258 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-30",
+  "scope": "Explicit IRETQ/RETFQ compatibility return state",
+  "global_instruction_goal_complete": false,
+  "artifacts_root": "/mnt/data/neverd-legacy-returns-20261030",
+  "neverd_base": "daa0331986f8db64231689736912e0e91f1de842",
+  "capstone_head": "e9d920fb32b39411186e46230b1f1b10ffbe3283",
+  "llvm_head": "d0aad189fd7d2689cbe51a883a986df9efd8871b",
+  "neverc_head": "3d1f7b851b6f8e5d9194f5f6f53887441cbc73ce",
+  "references": [
+    {
+      "url": "https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf",
+      "document": "Intel SDM 325462-090, IRET and RET; Vol. 1 section 3.4.1.1; Vol. 3A section 7.14.3",
+      "artifact": "/mnt/data/neverd-uiret-20261030/intel-sdm-090.pdf",
+      "sha256": "3686e42931e893b5016c70fb131403795ef173237d073afcfec52755fcd3ea50"
+    },
+    {
+      "url": "https://github.com/torvalds/linux/blob/master/arch/x86/kernel/espfix_64.c",
+      "use": "Independent primary-source description of retained old stack bits on a 16-bit IRET return; no implementation code copied."
+    }
+  ],
+  "implementation": {
+    "domain": "V6 and inheriting V7/V8 retain 64-bit CPL0 entry, CET/FRED disabled, ordinary successful sequential RAM and no asynchronous events. Canonical IRETQ and RETFQ with or without imm16 can now return to compatibility code at CPL0..3.",
+    "target": "The raw saved RIP must be canonical at the declared active paging width. Compatibility mode then uses its low 32 bits as a CS-relative offset and checks that offset against the effective code limit. Both CS.D values are allowed; L=1/D=1 refuses.",
+    "stack": "IRETQ and outer RETFQ require a non-null compatibility SS. A 32-bit target stack restores ESP; a 16-bit stack restores SP and preserves the original ESP[31:16], even across frame-pop or cleanup carries. Same-CPL RETFQ retains the original SS cache. Unsigned immediate cleanup wraps at the target stack width.",
+    "choices": "A shared encoding-order inventory supplies all eight conditional legacy GPR high-half choices for IRETQ/RETFQ. ERETU continues to use seven, because its explicit full RSP restoration defines the high half. These profile records drive both lowering and manifest effects, without an ordinary LowIR certificate or invented after_operation index.",
+    "ordering": "Target mode, limit and null-stack checks precede all state/RAM publication. Deferred CS accessed-bit updates still affect later aliased frame reads. State/RAM refusal remains transactional within the invocation contract, not CPU fault emulation.",
+    "completion": "Status 6 stops before the selected target executes and consumes one budget unit. Reentry in compatibility mode refuses before execution. IRETQ unblocks NMI; RETFQ preserves NMI state and invalidates the V8 user monitor only on a CPL change.",
+    "organization": "A dedicated X64FrameReturnContinuationTests.inc owns compatibility return matrices. The shared segment owner has one return-code validation rule and one choice inventory; both C emitters reuse them.",
+    "compiler": "Existing LLVM and NeverC native frame-return APIs need no source changes for this explicit-state extension."
+  },
+  "qualification": {
+    "routes": [
+      "high-c",
+      "llvm-c"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "portable_sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "native_original_instructions": 9312,
+    "native_paired_state_and_ram_comparisons": 37248,
+    "portable_limit_state_and_ram_cases": 12288,
+    "portable_limit_successes": 6144,
+    "portable_limit_refusals": 6144,
+    "additional_null_mode_and_raw_rip_refusals": 92,
+    "native_observations": "Independent KVM CPU GPRs, flags, RIP, segment caches, descriptor tables, control/event state and NMI blocking; all affected 4096-byte descriptor and 131136-byte frame RAM ranges. Every represented source-state byte is compared. The legacy event oracle does not independently sample arbitrary full XSAVE/vector banks.",
+    "portable_paging_widths": [
+      48,
+      57
+    ],
+    "native_paging_width": 48,
+    "host": "GenuineIntel family 6 model 186 stepping 2, Core i9-13900H"
+  },
+  "exploratory_noncanonical_rip": {
+    "qualified_in_profile": false,
+    "input": "IRETQ from CPL0 to compatibility CPL3, raw RIP 0x0100000000001800",
+    "affinity_runs": 12,
+    "cpu_0_and_8": "CPUID.1A:EAX core type 0x40; all six runs failed to reach the target breakpoint.",
+    "cpu_12_and_16": "CPUID.1A:EAX core type 0x20; all six runs reached the target with RIP 0x1800.",
+    "conclusion": "Vendor identity alone cannot bind this behavior on a hybrid host. The current profile refuses noncanonical raw RIP before publication. The experiment did not qualify exception delivery or assign an exception class to failed runs."
+  },
+  "checks": [
+    {
+      "name": "Initial focused frame, FRED and export checks",
+      "tests": 8,
+      "failed": 0,
+      "skipped": 0,
+      "junit": "neverd-focused.xml"
+    },
+    {
+      "name": "Integrated continuation, original state, refinement and system-state checks",
+      "tests": 1557,
+      "failed": 0,
+      "skipped": 0,
+      "labels": 10,
+      "junit": "neverd-integrated.xml"
+    },
+    {
+      "name": "Release compilation through scripts/build.py",
+      "passed": true,
+      "receipt": "neverd-build-receipt.json"
+    },
+    {
+      "name": "Changed-range clang-format 22.1.2",
+      "files": 8,
+      "new_files": 1,
+      "passed": true
+    },
+    {
+      "name": "Localized documentation",
+      "markdown_files": 309,
+      "locales": 10,
+      "passed": true
+    }
+  ],
+  "environment": {
+    "temporary_files": "Task TMPDIR plus a private user/mount namespace binding it over /tmp for GoogleTest CapturedStream. No host mount or test assertion is changed.",
+    "intentional_child_faults": "Task-local PR_SET_DUMPABLE helper suppresses Apport handling of intentional child faults; it is loaded after namespace creation."
+  },
+  "remaining_limits": [
+    "Noncanonical raw RIP needs an original-processor behavior binding",
+    "16-/32-bit operand forms and compatibility source contexts",
+    "CET/FRED, CPU faults, partial-fault ordering, MMIO and asynchronous event delivery",
+    "Ordinary source still requires a complete original machine-state continuation",
+    "Independent arbitrary full XSAVE/vector-bank qualification",
+    "Other x86 gaps in docs/x86-instruction-support.md"
+  ],
+  "release": {
+    "published": false,
+    "pin_changed": false
+  },
+  "artifacts": [
+    {
+      "path": "canonical-stack-probes.log",
+      "sha256": "3cc4feeb944b8b616e555bd8d22a833b0e9b3fd6eea1cb4a6bcde00cf6021b77",
+      "bytes": 3972
+    },
+    {
+      "path": "core-affinity-probes.log",
+      "sha256": "2c0a2b6c064a29f209287c35e45126eb0767b0a229106e53076df15c4a5f908b",
+      "bytes": 2040
+    },
+    {
+      "path": "core-type.c",
+      "sha256": "15dfa30ee1de58ecb5d82b51ebad3baad01b2269d8fe9a1e7d7d5b07b834ed2a",
+      "bytes": 188
+    },
+    {
+      "path": "core-types.log",
+      "sha256": "09f72d009ab4ddf2175f7f25d4c647f1a8217e4703cca8d9dacc3355a14926f1",
+      "bytes": 166
+    },
+    {
+      "path": "docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "path": "format.log",
+      "sha256": "80025fde574386af3c238c7540dfc9e6da4e0dcb52aef1f16d808ab6cace02ff",
+      "bytes": 63
+    },
+    {
+      "path": "neverd-build-receipt.json",
+      "sha256": "95969e68e131812aac86d563d3d0350db395320e0a04e122d033c056b730123a",
+      "bytes": 3852
+    },
+    {
+      "path": "neverd-build.log",
+      "sha256": "c046c76afb6ba54e9f4a599055721422a99ae04202db9ab855049c5e3dba11a0",
+      "bytes": 177532
+    },
+    {
+      "path": "neverd-final-build.log",
+      "sha256": "585a7dd114e76231df2c045c08e0f38aa3862980f5b101e9057aff51375609a5",
+      "bytes": 40567
+    },
+    {
+      "path": "neverd-focused.log",
+      "sha256": "6f70e8c9c595755ba1eea56b7938e4e8d498647ac0f18aa416524a53d4217503",
+      "bytes": 2033
+    },
+    {
+      "path": "neverd-focused.xml",
+      "sha256": "5df1e210b84ae7bb3c21c8112bf6dd14912dd3f71b49eba41dbf5624d01b418b",
+      "bytes": 8840
+    },
+    {
+      "path": "neverd-integrated.log",
+      "sha256": "b406afaa9a11945796c103e5fcfd037fa9135044b6f8b0c7ec963c49e26117a7",
+      "bytes": 485673
+    },
+    {
+      "path": "neverd-integrated.xml",
+      "sha256": "78fae8a77c5b957a5596653c51c2dd9a36dd50a85529dfadbe20780a99af92df",
+      "bytes": 1630922
+    },
+    {
+      "path": "pc-probes.log",
+      "sha256": "4522d1cf941efe95e61f3c5d2ff47e372b89cdd1ec4a64dc9b9625269b4405a9",
+      "bytes": 5505
+    },
+    {
+      "path": "private-tmp-runner.py",
+      "sha256": "a9d28a18f6e0751d7ec7c7212c441879c641349c4f3fc430d6457208d2fb1fd5",
+      "bytes": 322
+    },
+    {
+      "path": "probe.py",
+      "sha256": "2a887ef1d0871d69fea6780d2cf341592aaecb2e710996ab799ab5602cb853c3",
+      "bytes": 2440
+    },
+    {
+      "path": "probes.log",
+      "sha256": "60dd2bdfb73d425a4c15fda43c0d6af28bc5692dd93fd96dbfa3f08a3e9ecc34",
+      "bytes": 11436
+    },
+    {
+      "path": "run_x64_continuation_kvm.py",
+      "sha256": "78aca0ac469fa37c281fda84d55fbc6363d3a910ce3890d35d9d7f3e5d78aed3",
+      "bytes": 2725
+    },
+    {
+      "path": "same-stack-probes.log",
+      "sha256": "7f152a281e04124860d42797d70c1e508d8a6dfa87f36eda1f3132323a7a9ba3",
+      "bytes": 640
+    },
+    {
+      "path": "stack-probes.log",
+      "sha256": "ab1158590f7fd7a84d23750548863f8b86ffd41cf66201edab9a8656a2729301",
+      "bytes": 5104
+    }
+  ],
+  "sources": [
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "9edabf5dbe9d0a683a3ee72d71ef1462b807346e9a1fb9deb2af3593e35b404e"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationEvents.h",
+      "sha256": "69e668bdac7f49f40ded3e9352f19d52ba4442ec5d221ff810dae706e1bd24c9"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationFredReturns.h",
+      "sha256": "05f140cbcef2aec57c21ab7906d69671fc439a5463eaae134d2d05f46afcb8c9"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSegments.h",
+      "sha256": "d6b52f8dac0a5bdae052a3294d997347fdd093cc6af00b11849a86fabbe4e60f"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "d35d99787fd8caa7765d6ee1c79ced759752dd4ca00d8887fd40555956da3c2c"
+    },
+    {
+      "path": "lib/pipeline/X64ContinuationExport.cpp",
+      "sha256": "80ea82517280a7315fbd534640f60a22159e8bdfde05d71fc2af9e218585c4e7"
+    },
+    {
+      "path": "unittests/devirtualization/X64ContinuationExportTests.cpp",
+      "sha256": "ae874513c5553127f54d921e43e7610d3fb57c98433dab9b561c6c074de02076"
+    },
+    {
+      "path": "unittests/devirtualization/X64ContinuationSourceTests.cpp",
+      "sha256": "ea7b78415bc1e6897670d3e12627395951fa5ff2363be18b6513799d778db40b"
+    },
+    {
+      "path": "unittests/devirtualization/X64FrameReturnContinuationTests.inc",
+      "sha256": "6554ea8b37941a6a8631e3403df44066c6a8ee47ea68fb1287ad52dfbc436dc4"
+    }
+  ]
+}

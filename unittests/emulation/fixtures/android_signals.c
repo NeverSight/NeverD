@@ -461,6 +461,7 @@ struct SleepTime {
   long Seconds, Nanoseconds;
 };
 extern int nanosleep(const struct SleepTime *, struct SleepTime *);
+extern unsigned sleep(unsigned);
 extern int clock_gettime(int, struct SleepTime *);
 extern int sem_init(void *, int, unsigned);
 extern int sem_wait(void *);
@@ -497,8 +498,16 @@ static void sleep_handler(int Number, void *Info, void *Context) {
     UC->Machine.Regs[0] = 77;
   if (SleepMode == 6)
     UC->Machine.Regs[0] = (U64)-22;
+  if (SleepMode == 18)
+    UC->Machine.Regs[0] = 0xffffffff;
+  if (SleepMode == 19) {
+    UC->Machine.Regs[0] = 0xabcdef01ffffffff;
+    *__errno() = 4;
+  }
+  if (SleepMode == 20)
+    UC->Machine.Regs[0] = 0xabcdef0100000001;
   if (SleepMode == 11 && SleepOut[0] == 1) {
-    SleepOut[7] = (U64)(long)usleep(100);
+    SleepOut[7] = SleepOp >= 4 ? sleep(1) : (U64)(long)usleep(100);
     SleepOut[12] = (unsigned)*__errno();
     *__errno() = 55;
   }
@@ -548,8 +557,10 @@ static void *sleep_worker(void *Arg) {
     R = (U64)syscall(101, Request, SleepRemainder);
   else if (SleepOp == 2)
     R = raw_signal(101, (U64)Request, (U64)SleepRemainder, 0, 0);
-  else
+  else if (SleepOp == 3)
     R = (U64)(long)usleep(SleepMode == 14 ? 1 : 2500000);
+  else
+    R = sleep(SleepMode == 14 ? 1 : SleepOp == 4 ? 3 : 0xffffffffu);
   SleepOut[8] = R;
   SleepOut[9] = (unsigned)*__errno();
   SleepOut[10] = sleep_clock();
@@ -585,7 +596,11 @@ U64 signal_sleep(U64 Op, U64 Mode, volatile U64 *Out) {
   if (Mode == 14)
     __atomic_store_n(Out + 22, 1, __ATOMIC_RELEASE);
   // Both threads must enter their waits before idle time can advance.
-  if (usleep(1) || kill(getpid(), Number))
+  if (usleep(Mode == 17 || Mode == 18 || Mode == 19 ||
+                     (SleepOp >= 4 && Mode == 14)
+                 ? 1000000
+                 : 1) ||
+      kill(getpid(), Number))
     return 94;
   if (Mode == 11) {
     if (usleep(2) || kill(getpid(), Number))

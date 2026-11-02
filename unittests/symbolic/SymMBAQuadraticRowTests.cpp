@@ -5,13 +5,17 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// Independent coefficient oracles for lazy rows and shared-power recovery.
+//===----------------------------------------------------------------------===//
 
 #include "../../lib/symbolic/mba/SymMBADetail.h"
 #include "gtest/gtest.h"
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <random>
+#include <string>
+#include <vector>
 
 using namespace neverd::symbolic;
 
@@ -292,6 +296,66 @@ TEST(SymMBAQuadraticRows, ShortKnownFactorsRetainTheImprovedLinearTail) {
       EXPECT_EQ(C.eval(*Result, Values), Want);
     }
   }
+}
+
+TEST(SymMBAQuadraticRows, SparseLinearTailKeepsItsOwnSynthesisAllowance) {
+  std::mt19937_64 Random(0x6c696e737570706f);
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u})
+    for (bool ConstantOnly : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << ConstantOnly);
+      SymContext C;
+      C.mkVar("unused", 1);
+      llvm::SmallVector<SymRef, 16> Inputs, Factors;
+      llvm::SmallVector<uint32_t, 16> Ids;
+      for (unsigned I = 0; I != 12; ++I) {
+        Inputs.push_back(C.mkVar("v" + std::to_string(I), Width));
+        Ids.push_back(C.varId(Inputs.back()));
+        if (I != 1 && I != 10)
+          Factors.push_back(Inputs.back());
+      }
+      const auto Product = C.mkMul(Factors);
+      const auto Offset = C.mkConst(Width, 13);
+      const auto X = Inputs[1], Y = Inputs[10];
+      const auto Tail =
+          ConstantOnly ? Offset
+                       : C.mkAdd({Offset, C.mkXor(X, Y),
+                                  C.mkMul(C.mkConst(Width, 2), C.mkAnd(X, Y))});
+      const auto Source = C.mkAdd(Product, Tail);
+      const auto Expected = ConstantOnly ? C.mkAdd(Product, Offset)
+                                         : C.mkAdd({Product, Offset, X, Y});
+      // Noncontiguous ids and reversed coordinates must still bind the tail
+      // correctly. Its two variables need four corners, not the product's
+      // 4096: that larger table cannot fit this synthesis allowance.
+      std::reverse(Ids.begin(), Ids.end());
+      std::reverse(Inputs.begin(), Inputs.end());
+      MBAOptions Options;
+      Options.MaxWork = 512;
+      detail::WorkBudget Budget(Options.MaxWork);
+      auto Result =
+          detail::solvePolynomial(C, Source, Ids, Inputs, Options, Budget);
+      ASSERT_TRUE(Result);
+      EXPECT_LE(C.readability(*Result), C.readability(Expected));
+      EXPECT_LT(Budget.used(), Options.MaxWork);
+      detail::WorkBudget Proof(65536);
+      EXPECT_TRUE(detail::provePolynomialIdentity(C, Source, *Result, 12, Proof,
+                                                  Options.MaxTableBytes));
+      for (unsigned Sample = 0; Sample != 128; ++Sample) {
+        std::vector<llvm::APInt> Values(C.numVars(), llvm::APInt(Width, 0));
+        for (auto Input : Inputs) {
+          std::array<uint64_t, 5> Words;
+          for (auto &Word : Words)
+            Word = Sample == 0 ? 0 : Sample == 1 ? UINT64_MAX : Random();
+          Values[C.varId(Input)] = llvm::APInt(Width, Words);
+        }
+        llvm::APInt Want(Width, 1);
+        for (auto Factor : Factors)
+          Want *= Values[C.varId(Factor)];
+        Want += 13;
+        if (!ConstantOnly)
+          Want += Values[C.varId(X)] + Values[C.varId(Y)];
+        EXPECT_EQ(C.eval(*Result, Values), Want);
+      }
+    }
 }
 
 TEST(SymMBAQuadraticRows, CommonPowersLeaveOnlyTheLowDegreeProof) {

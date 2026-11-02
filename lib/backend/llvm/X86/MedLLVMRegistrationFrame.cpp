@@ -4,9 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/ir/med/X86RegistrationFrame.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 
 #include <stdexcept>

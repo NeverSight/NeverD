@@ -12,7 +12,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
-#include "neverd/backend/llvm/X86RegistrationLocalUnwind.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLocalUnwind.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/Analysis/ValueTracking.h"

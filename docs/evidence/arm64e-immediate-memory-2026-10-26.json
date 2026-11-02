@@ -1,0 +1,431 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-26",
+  "neverd_source_revision": "f75f95db77c8ad70b358a8128debddb1f416c055",
+  "tested_dev_ancestor": "fe9e99bd40d633dc5e260a7e9dedcc2de6271968",
+  "host": "Apple M4 Max, Darwin arm64",
+  "build": {
+    "profile": "Release",
+    "receipt_sha256": "21ca69faa9549c85ab85b487f1b2d4f243e55b39921f56757a1b7123a3f0ad31",
+    "dependency_inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+    "requested_options": [
+      "--target",
+      "NeverDArm64eAnalysisTests",
+      "NeverDLiftTests",
+      "NeverDLowInstructionBoundaryTests",
+      "NeverDSourceStackFrameTests",
+      "NeverDJumpTableTests",
+      "NeverDAAPCS64CallContractTests",
+      "NeverDReturnContractTests",
+      "NeverDReadOnlyBytesTests",
+      "NeverDSourceCallABITests",
+      "--parallel",
+      "8"
+    ],
+    "binary_sha256": {
+      "NeverDLowInstructionBoundaryTests": "c330c18f33dbfd9780592e5580e9592f3d08f4a6dd42ddcca7f6748a925f7c66",
+      "NeverDJumpTableTests": "784e17ffcc6c5de07dec4bd74ceefba68af388456adef6750a706ca4c29c0ca0",
+      "NeverDSourceStackFrameTests": "010b20c13bd773048416e9ea971e4926cce0bb8ea77aabb9ae8f3429d1f5a0d9",
+      "NeverDReturnContractTests": "5a0f5b51219380d905ec4b2c17dedd0f0ba20cda8131d08f0835a59ab6bb8693",
+      "NeverDReadOnlyBytesTests": "873289c9f20653cbf685ab367eb381d90960fed0055c9c876017119e7b145c3c",
+      "NeverDAAPCS64CallContractTests": "743e58f444000b42e489cc3d1efc74cc09995d50583a5bfa978db904c16f00a5",
+      "NeverDSourceCallABITests": "e03c39f9400169efae9bbd7874d519e3f8a12c3e0e884ef79f4989c0a37a215b",
+      "NeverDLiftTests": "b6751bfc7b3046df898095e11e474ad95c0ada1cbbca6f9610643af3b20e7d67",
+      "NeverDArm64eAnalysisTests": "cd6c7a435732ae677205ce02a4b544d2a27aed73711e34e5d102109f5cc41b1f"
+    }
+  },
+  "format": {
+    "llvm_clang_format": "22.1.2",
+    "owning_diff_check_passed": true
+  },
+  "tests": [
+    {
+      "inventory": "immediate",
+      "registered": 8,
+      "passed": 8,
+      "failures": [],
+      "skipped": [],
+      "seconds": "158.362s",
+      "report_sha256": "449abcc7e5f0a478616f94d51425b588a70c2ff894b95c535fc7e43c90bc9573"
+    },
+    {
+      "inventory": "low",
+      "registered": 87,
+      "passed": 87,
+      "failures": [],
+      "skipped": [],
+      "seconds": "1.148s",
+      "report_sha256": "77306f38b2af5064c390b5c982da859d45fd04abb2f9f6be44b2964c224c5cc6"
+    },
+    {
+      "inventory": "jump",
+      "registered": 57,
+      "passed": 57,
+      "failures": [],
+      "skipped": [],
+      "seconds": "5.631s",
+      "report_sha256": "414818f1533e23ca1c5c13077ea2597ab440745fcd21804dcd997a43c1642110"
+    },
+    {
+      "inventory": "source-stack",
+      "registered": 8,
+      "passed": 8,
+      "failures": [],
+      "skipped": [],
+      "seconds": "0s",
+      "report_sha256": "7b97d68c3d4ab8f44fc749c5cefe4862474fd55fba879d1755a2602234f2c546"
+    },
+    {
+      "inventory": "return",
+      "registered": 24,
+      "passed": 24,
+      "failures": [],
+      "skipped": [],
+      "seconds": "0.001s",
+      "report_sha256": "ab6980e2b5b83fbcea8b7b9c23d78b5bc77e4252c99c05988e1070049996b8be"
+    },
+    {
+      "inventory": "read-only",
+      "registered": 5,
+      "passed": 5,
+      "failures": [],
+      "skipped": [],
+      "seconds": "0s",
+      "report_sha256": "84d3e21798c320a22a31d4403ddc9838e7897df8104411efa7a1ba00209a440a"
+    },
+    {
+      "inventory": "aapcs",
+      "registered": 15,
+      "passed": 15,
+      "failures": [],
+      "skipped": [],
+      "seconds": "200.411s",
+      "report_sha256": "9099b1c6a9c902a8c3976189322008b0dbbb78ec1a7596fcf7e0db04955808e0"
+    },
+    {
+      "inventory": "source-call",
+      "registered": 7,
+      "passed": 7,
+      "failures": [],
+      "skipped": [],
+      "seconds": "0s",
+      "report_sha256": "731cf7d36c55fd3307a94ce6ed3b805ad7201b0c845eb773a0c74f9ba7770e06"
+    },
+    {
+      "inventory": "lift",
+      "registered": 291,
+      "passed": 290,
+      "failures": [
+        "AArch64_HighCExecution.AVariadicCalleeReadsItsStackArgumentsInPlace"
+      ],
+      "skipped": [],
+      "seconds": "124.893s",
+      "report_sha256": "605da7dea72307f20cb12bcf905f08ea36ef86cb0fb125aa4c47b2e5e4aaf590"
+    },
+    {
+      "inventory": "arm64e",
+      "registered": 145,
+      "passed": 142,
+      "failures": [],
+      "skipped": [
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+      ],
+      "seconds": "197.651s",
+      "report_sha256": "d5157260609ac288ea24f70b72ffebbb0d9549319338334bcab3820028d7dc66"
+    },
+    {
+      "inventory": "sp",
+      "registered": 7,
+      "passed": 7,
+      "failures": [],
+      "skipped": [],
+      "seconds": "16.446s",
+      "report_sha256": "49befcb11a54734528709dc8897b885c468b357c4bfe917e520ca5daca09999e"
+    }
+  ],
+  "total": {
+    "registered": 654,
+    "passed": 650,
+    "failed": 1,
+    "skipped": 3
+  },
+  "retained_failure": {
+    "test": "AArch64_HighCExecution.AVariadicCalleeReadsItsStackArgumentsInPlace",
+    "observed": "The generic AArch64 ELF variadic source fixture still writes unknown incoming Q0-Q7 save state.",
+    "earlier_same_failure_reports": [
+      "lift-release.json",
+      "lift-publish.json"
+    ]
+  },
+  "fixed_regression": {
+    "test": "AArch64PAuthSemantics.CompilerGeneratedArm64eObjectRetainsAuthentication",
+    "retained_failed_report": "arm64e-publish.json",
+    "fix": "Select automatic checked immediate memory for x1, keeping classic arm64e frame lowering; both O0/O2 compiler-generated paths pass again."
+  },
+  "model": {
+    "name": "Official unmodified Arm AEM FVP",
+    "version": "11.32.19",
+    "archive_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "environment_repository": "https://github.com/gmh5225/test_mac_intel",
+    "environment_revision": "006814dec518fd683d8a12620477c343bc5d0b7b",
+    "environment_unit_tests_passed": 17,
+    "container_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "process_timeout_seconds": 45,
+    "controls": [
+      "CPTA=0,CPTA0=0",
+      "CPTA=1,CPTA0=0",
+      "CPTA=0,CPTA0=1",
+      "CPTA=1,CPTA0=1"
+    ],
+    "profiles": [
+      {
+        "profile": "image",
+        "scope": "Actual NeverD explicit-IR immediate-memory output emitted with a Mach-O image context and runtime GPR parameters, with alternating scalar SSA arithmetic: 177 samples, five unchanged source/object routes, all four effective CPTA/CPTA0 settings at EL1. Model-only nonoverflow qualification. This does not qualify image-derived addresses, automatic lifting, SP or stack ABI, EL0, writeback/pairs, tagging, overflowing memory or Apple CPA2 hardware.",
+        "qualification_key": "explicit_image_context_runtime_memory_output_qualified",
+        "summary_sha256": "c3af048fc3c9b391237087405f6bc8e7651a530921a48ab5c1999fd16769dbdd",
+        "provenance_sha256": "46ea026827a35d299b35d5bdd392de436fb6305f4269fd9d2b0a1612bdb6be1a",
+        "input_sha256": {
+          "high.c": "7c09c7ea2163f846d6dce92f78433556a27366f13d5357a8696b9c87e5b42a5f",
+          "harness.c": "71472a4c9368919498fc11f6c1f1bc24fdafe48b9355f6e11d2c9965a50f39a6",
+          "llvm.o": "1eda1f87666a8733d881bf3ef66ea5500e5bdb1f761c3097dc980450de408fa2",
+          "input-tests.json": "449abcc7e5f0a478616f94d51425b588a70c2ff894b95c535fc7e43c90bc9573",
+          "llvm.c": "4c24b6423655a463aaf9574abf5bf52c8c13e15d12589edb123b87c9aeb7cea4"
+        },
+        "routes": [
+          {
+            "name": "high-O0",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 8.333,
+            "guest_sha256": "b2186b2138567432e1609a6ff2f316b3a0abdb988e0ab858e89025a24162cf7e"
+          },
+          {
+            "name": "high-O2",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.15,
+            "guest_sha256": "5d02ff266e6080c8e3256746121f2bf8371b64e8a2da3fc0a928c5cf0bac2f2d"
+          },
+          {
+            "name": "llvm-c-O0",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 8.159,
+            "guest_sha256": "b8be7323a3cee96c9760638aae425d9d9b129e3058eafaa3e578e96b48537fd6"
+          },
+          {
+            "name": "llvm-c-O2",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.206,
+            "guest_sha256": "e1420d4b5dbac7bb276b2e53b3c0f287d569c0f59c42c1526f1c3205f3de61b5"
+          },
+          {
+            "name": "llvm-object",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.226,
+            "guest_sha256": "f054f21eda8f721b80c942c9819a242088a16d76c7e5e8d2b70227faaf0bac0f"
+          }
+        ]
+      },
+      {
+        "profile": "el0-image",
+        "scope": "Actual NeverD explicit-IR immediate-memory output emitted with a Mach-O image context and runtime GPR parameters, with alternating scalar SSA arithmetic: 177 samples, five unchanged C/object routes, all four effective CPTA/CPTA0 settings at EL0, with hardware SPSR_EL1.M and exact SVC origin checks. Model-only nonoverflow qualification. This does not qualify image-derived addresses, automatic whole-pipeline lifting, original SP or stack ABI, writeback/pairs, tagging, overflowing memory, native half/whole-vector ABI or Apple CPA2 hardware.",
+        "qualification_key": "explicit_el0_image_context_runtime_memory_output_qualified",
+        "summary_sha256": "1e518e229f34f3c785b706207ac6cca794ef65ae0ef605c4716b12fc5996be75",
+        "provenance_sha256": "d930b981fe9a46042ce29432a6c69179d53de113d9b0a57ad0bab88cc461b899",
+        "input_sha256": {
+          "high.c": "7c09c7ea2163f846d6dce92f78433556a27366f13d5357a8696b9c87e5b42a5f",
+          "harness.c": "71472a4c9368919498fc11f6c1f1bc24fdafe48b9355f6e11d2c9965a50f39a6",
+          "llvm.o": "1eda1f87666a8733d881bf3ef66ea5500e5bdb1f761c3097dc980450de408fa2",
+          "input-tests.json": "449abcc7e5f0a478616f94d51425b588a70c2ff894b95c535fc7e43c90bc9573",
+          "llvm.c": "4c24b6423655a463aaf9574abf5bf52c8c13e15d12589edb123b87c9aeb7cea4"
+        },
+        "routes": [
+          {
+            "name": "high-O0",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 7.248,
+            "guest_sha256": "d53cd8a99cdaec3acc0f3f9bc5b7862107aaff53b557836df8020ef7e204b47f"
+          },
+          {
+            "name": "high-O2",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 7.161,
+            "guest_sha256": "7b5c1d74d7f0727ce6b722ef6115127d32825cda1e8954ca60d35bef6ed4eff1"
+          },
+          {
+            "name": "llvm-c-O0",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 7.09,
+            "guest_sha256": "ffeb583e3d3419e55662038e5c934737e032750a6d1b0fc015b713fa5de4b419"
+          },
+          {
+            "name": "llvm-c-O2",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 7.104,
+            "guest_sha256": "ae7f5624fbd8bf8a7b3a56c54ee50bc2d0867ef4e8eda4442942b776ef9df9d6"
+          },
+          {
+            "name": "llvm-object",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 6.098,
+            "guest_sha256": "7184b0087e3a919adef892b3dd8ea0905852ffedfae70fee13b3edc07acc0464"
+          }
+        ]
+      },
+      {
+        "profile": "image-relocated",
+        "scope": "Actual NeverD explicit-IR immediate-memory output using relocated image-owned GPR bases: 177 samples, alternating direct address occurrences and SSA COPY, five unchanged C/object routes, all four effective CPTA/CPTA0 settings at EL1. Each access must alias an independent getter for the same complete initialized image storage; all bytes are compared with native oracles. Model-only nonoverflow qualification. No automatic whole-pipeline qualification, original SP or stack ABI, EL0, writeback/pairs, tagging, overflowing memory, native half/whole-vector ABI or Apple CPA2 hardware.",
+        "qualification_key": "explicit_relocated_image_memory_output_qualified",
+        "summary_sha256": "a589bb4db4447bce61dd9609e5068b5c694bf3396fcd9527f673d76609a3297d",
+        "provenance_sha256": "b16a24a823e486d0716ffb0c6dbb49b726d81d94ed24d31f301857a234963ed0",
+        "input_sha256": {
+          "high.c": "ea26033ce8fb900f1cced31107a1502af774ffe3771872e87248b6a0744622de",
+          "harness.c": "3b528a96b7e1c6e61c0b20e14513ce60bf4880afa7729f4dcab5b2fe7bb558ca",
+          "llvm.o": "097adaec99326fcd0e4df25906507da6ad911e1bcb7b47f4dc366fc13223d7cd",
+          "input-tests.json": "449abcc7e5f0a478616f94d51425b588a70c2ff894b95c535fc7e43c90bc9573",
+          "llvm.c": "300bad076aa53c2e91857719ecf84bdfb80aa6d2152b49347d2fb90ac531caaa"
+        },
+        "routes": [
+          {
+            "name": "high-O0",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.037,
+            "guest_sha256": "88325dfb42064a57f102d0bce4438c2cd356f30eb99e0e555ac0f46438299edf"
+          },
+          {
+            "name": "high-O2",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.038,
+            "guest_sha256": "841b5750e4609d7b90cd4e3a5f52769492a0c3f455737f9d73c011e8348db9ae"
+          },
+          {
+            "name": "llvm-c-O0",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.011,
+            "guest_sha256": "b83b408f30bc0956cebe29164604c2689e5f68ac423498fca0d10c2c5c4ce25e"
+          },
+          {
+            "name": "llvm-c-O2",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 8.154,
+            "guest_sha256": "c167e66f3018acf403bde7b219cda65c80fd2685f5a5ba7cdbf5fe7096968c1f"
+          },
+          {
+            "name": "llvm-object",
+            "passed": true,
+            "passed_checks": 79,
+            "samples_per_control": 177,
+            "seconds": 7.045,
+            "guest_sha256": "106b291347f6e5b741fe76f7b9336306e94d2d4a8acb5d657522708713a98b05"
+          }
+        ]
+      },
+      {
+        "profile": "el0-image-relocated",
+        "scope": "Actual NeverD explicit-IR immediate-memory output using relocated image-owned GPR bases: 177 samples, alternating direct address occurrences and SSA COPY, five unchanged C/object routes, all four effective CPTA/CPTA0 settings at EL0, with hardware SPSR_EL1.M and exact SVC origin checks. Each access must alias an independent getter for the same complete initialized image storage; all bytes are compared with native oracles. Model-only nonoverflow qualification. No automatic whole-pipeline qualification, original SP or stack ABI, writeback/pairs, tagging, overflowing memory, native half/whole-vector ABI or Apple CPA2 hardware.",
+        "qualification_key": "explicit_el0_relocated_image_memory_output_qualified",
+        "summary_sha256": "b43ea13f5e5547885c60ef9c6b8c29b37e895b16a43732b08ae4789b85eb458c",
+        "provenance_sha256": "41b3867bcb91b0a70842d4b80aef58f72fa170025d2f332dbea238438eada2c6",
+        "input_sha256": {
+          "high.c": "ea26033ce8fb900f1cced31107a1502af774ffe3771872e87248b6a0744622de",
+          "harness.c": "3b528a96b7e1c6e61c0b20e14513ce60bf4880afa7729f4dcab5b2fe7bb558ca",
+          "llvm.o": "097adaec99326fcd0e4df25906507da6ad911e1bcb7b47f4dc366fc13223d7cd",
+          "input-tests.json": "449abcc7e5f0a478616f94d51425b588a70c2ff894b95c535fc7e43c90bc9573",
+          "llvm.c": "300bad076aa53c2e91857719ecf84bdfb80aa6d2152b49347d2fb90ac531caaa"
+        },
+        "routes": [
+          {
+            "name": "high-O0",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 7.178,
+            "guest_sha256": "f39435f024a5f09b753f2f47a7a209cf86f6de67d072ac75d6ea523f4aa3c43a"
+          },
+          {
+            "name": "high-O2",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 7.106,
+            "guest_sha256": "4050edf96743647748cf668c7279f2ed131e85ebbe239175eaa32a80aa7843ad"
+          },
+          {
+            "name": "llvm-c-O0",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 5.984,
+            "guest_sha256": "0e97c1d60e341eaaf66226d23ba6a0dbcf5b5daefc72c5c549e9eb0fe8213ad3"
+          },
+          {
+            "name": "llvm-c-O2",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 5.968,
+            "guest_sha256": "72cf89546fe9128ceb2164ff979ce1302e783ae39779ebba4671bc6633e27bdc"
+          },
+          {
+            "name": "llvm-object",
+            "passed": true,
+            "passed_checks": 83,
+            "samples_per_control": 177,
+            "seconds": 5.858,
+            "guest_sha256": "f6dcdca6509afed6ab0ef75e21c75391798c7c88a04035c89fd3909bc20a634e"
+          }
+        ]
+      }
+    ],
+    "scope": "Explicit-IR, nonoverflow initialized Normal-memory output. Automatic decoding is separately tested locally; these model routes do not qualify a whole automatically lifted image."
+  },
+  "scope": {
+    "automatic_x1_gpr_single_immediate_lifting": true,
+    "complete_initialized_image_span_relocation": true,
+    "source_runtime_and_image_base_admission": true,
+    "complete_arm64e_coverage": false,
+    "apple_native_cpa2_qualified": false,
+    "whole_arm64e_image_abi_rebuilding_qualified": false
+  },
+  "remaining": [
+    "Original-SP and complete stack/call ABI",
+    "Pre/post-index and pair families",
+    "Dynamic or mixed image-base span proofs, zero-fill storage",
+    "Complete authenticated image ABI, signing/fixup rebuilding",
+    "Native half/whole-vector entry ABI, asynchronous unwind/tagging and overflowing memory",
+    "Actual Apple CPA2 hardware validation"
+  ],
+  "remote_ci": {
+    "status": "unavailable",
+    "diagnostic": "The required Codex CI tool returned Connect your GitHub account to continue; no CLI or Actions API fallback was used."
+  },
+  "local_evidence_directory": "build-arm64e/arm64e-auto-immediate-evidence"
+}

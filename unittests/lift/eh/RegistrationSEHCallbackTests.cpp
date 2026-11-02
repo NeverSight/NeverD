@@ -6,7 +6,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 
 #include <algorithm>
 

@@ -229,7 +229,7 @@ TEST(SymStorePreservation, HugeAbsentRangeMaterializesNoProtectedMemory) {
   EXPECT_TRUE(S.constantRegionBytes(Root).empty());
 }
 
-TEST(SymStorePreservation, ExecutorAppliesContractToOneOrdinaryStoreOnly) {
+TEST(SymStorePreservation, ExecutorDoesNotPersistContractIntoLaterOperations) {
   SymContext C;
   SymState S(C);
   SymExec E(C, S);
@@ -247,10 +247,60 @@ TEST(SymStorePreservation, ExecutorAppliesContractToOneOrdinaryStoreOnly) {
   EXPECT_FALSE(C.isConst(S.load(Root, 8)));
   Store.Output = NdVar::reg(16, 8);
   Store.Opcode = NdOp::ATOMIC_ADD;
-  EXPECT_EQ(E.step(Store, nullptr, &P), StepResult::Continue);
-  EXPECT_EQ(P.Status, SymStorePreservationStatus::Invalid);
+  EXPECT_EQ(E.step(Store), StepResult::Continue);
   EXPECT_EQ(S.read(SymSpace::Register, 16, 8), C.mkConst(64, 17));
   EXPECT_EQ(S.load(S.read(SymSpace::Register, 8, 8), 8), C.mkConst(64, 34));
+}
+
+TEST(SymStorePreservation,
+     AtomicAddAndExchangeShareWriteBudgetAndOldPublication) {
+  for (const auto Opcode : {NdOp::ATOMIC_ADD, NdOp::ATOMIC_XCHG}) {
+    for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+      for (const uint16_t Bytes : {1, 2, 4, 8}) {
+        SymContext C;
+        SymState Initial(C, Order);
+        const auto Root = C.mkVar("frame", 64);
+        const auto Address = C.mkConst(64, 0x4000);
+        Initial.store(Root, C.mkConst(64, 19));
+        SymStorePreservation Seed{Root, 0, 8, 24};
+        Initial.store(Address, C.mkConst(Bytes * 8, 7), Seed);
+        ASSERT_EQ(Seed.Status, SymStorePreservationStatus::Applied);
+        Initial.write(SymSpace::Register, 0, C.mkConst(Bytes * 8, 11));
+        LowOp Op;
+        Op.Opcode = Opcode;
+        Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+        Op.Output = NdVar::reg(0, Bytes);
+        Op.addInput(NdVar::scalar(0x4000, 8));
+        Op.addInput(NdVar::reg(0, Bytes));
+        for (const uint64_t Budget : {uint64_t(23), uint64_t(24)}) {
+          auto S = Initial;
+          SymExec E(C, S);
+          SymStorePreservation P{Root, 0, 8, Budget};
+          const auto Flow = E.step(Op, nullptr, &P);
+          EXPECT_LE(P.WorkUsed, Budget);
+          if (Budget == 24) {
+            EXPECT_EQ(Flow, StepResult::Continue);
+            EXPECT_EQ(P.Status, SymStorePreservationStatus::Applied);
+            EXPECT_EQ(P.WorkUsed, 24u);
+            EXPECT_EQ(S.read(SymSpace::Register, 0, Bytes),
+                      C.mkConst(Bytes * 8, 7));
+            EXPECT_EQ(
+                S.load(Address, Bytes),
+                C.mkConst(Bytes * 8, Opcode == NdOp::ATOMIC_ADD ? 18 : 11));
+            EXPECT_EQ(S.load(Root, 8), C.mkConst(64, 19));
+            EXPECT_EQ(E.opaqueOperationCount(), 0u);
+          } else {
+            EXPECT_EQ(Flow, StepResult::Unmodelled);
+            EXPECT_EQ(P.Status, SymStorePreservationStatus::BudgetExceeded);
+            EXPECT_EQ(E.opaqueOperationCount(), 1u);
+            EXPECT_EQ(E.memoryHavocCount(), 1u);
+            EXPECT_FALSE(C.isConst(S.read(SymSpace::Register, 0, Bytes)));
+            EXPECT_FALSE(C.isConst(S.load(Address, Bytes)));
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST(SymStorePreservation, AdditionalRangesRetainTheUnionAndDiscardItsGaps) {

@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "NeverDLiftFixture.h"
+#include "JumpTableSourceExecution.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -19,7 +19,7 @@
 
 namespace {
 
-class JumpTableSharedAbsolute : public NeverDLiftTest {
+class JumpTableSharedAbsolute : public JumpTableSourceExecution {
 protected:
   void SetUp() override {
     NeverDLiftTest::SetUp();
@@ -153,7 +153,31 @@ TEST_F(JumpTableSharedAbsolute, ExhaustedEvidencePublishesNoPartialGroup) {
 }
 
 TEST_F(JumpTableSharedAbsolute, BothSourceRoutesExecuteEverySelection) {
+  const auto Emulator = executor("aarch64");
+  if (!Emulator)
+    GTEST_SKIP() << "Execution of AArch64 source requires qemu-aarch64";
   const auto Object = compileFixture();
+  const std::string Main = R"C(
+int main(void) {
+  const uint32_t inputs[] = {0, 1, 2, UINT32_MAX, UINT32_C(0x80000000)};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i)
+    for (unsigned j = 0; j < sizeof(inputs) / sizeof(inputs[0]); ++j)
+      for (unsigned k = 0; k < sizeof(inputs) / sizeof(inputs[0]); ++k) {
+        const uint32_t expected = inputs[i] == 0
+            ? (inputs[k] == 0 ? 71 : 53) : (inputs[j] == 0 ? 37 : 19);
+        if (shared_absolute(inputs[i], inputs[j], inputs[k]) != expected)
+          return 1;
+      }
+  return 0;
+}
+)C";
+  const auto Original = tmpFile("original-shared-selection.c");
+  std::ofstream(Original)
+      << "#include <stdint.h>\n"
+         "uint32_t shared_absolute(uint32_t, uint32_t, uint32_t);\n"
+      << Main;
+  ASSERT_NO_FATAL_FAILURE(
+      expectSourceRuns(Original, "aarch64", *Emulator, {Object.string()}));
   for (unsigned Route : {0u, 1u, 2u}) {
     SCOPED_TRACE(Route);
     const auto File = tmpFile("shared-selection.c");
@@ -171,33 +195,9 @@ TEST_F(JumpTableSharedAbsolute, BothSourceRoutesExecuteEverySelection) {
     ASSERT_EQ(Source.find("unresolved indirect branch"), std::string::npos)
         << Source;
     std::ofstream Out(File, std::ios::app);
-    Out << R"C(
-int main(void) {
-  const uint32_t inputs[] = {0, 1, 2, UINT32_MAX, UINT32_C(0x80000000)};
-  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i)
-    for (unsigned j = 0; j < sizeof(inputs) / sizeof(inputs[0]); ++j)
-      for (unsigned k = 0; k < sizeof(inputs) / sizeof(inputs[0]); ++k) {
-        const uint32_t expected = inputs[i] == 0
-            ? (inputs[k] == 0 ? 71 : 53) : (inputs[j] == 0 ? 37 : 19);
-        if (shared_absolute(inputs[i], inputs[j], inputs[k]) != expected)
-          return 1;
-      }
-  return 0;
-}
-)C";
+    Out << Main;
     Out.close();
-    for (const char *Optimization : {"-O0", "-O2"}) {
-      SCOPED_TRACE(Optimization);
-      const auto Exe = tmpFile(std::string("shared-selection") +
-                               neverd::test::executableSuffix());
-      const auto Built = exec(
-          NEVERD_TEST_CLANG,
-          {"-std=c11", Optimization, "-Werror", "-fsanitize=undefined",
-           "-fsanitize-trap=undefined", File.string(), "-o", Exe.string()});
-      ASSERT_TRUE(Built.ok()) << Built.err << "\n" << Source;
-      const auto Run = exec(Exe.string(), {});
-      EXPECT_TRUE(Run.ok()) << Run.err;
-    }
+    ASSERT_NO_FATAL_FAILURE(expectSourceRuns(File, "aarch64", *Emulator));
   }
 }
 

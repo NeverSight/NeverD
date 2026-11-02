@@ -8,7 +8,7 @@
 /// Project checked catch identities into current MedIR blocks and parents.
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 
 namespace neverd {
 std::optional<std::map<int, RegistrationCatchIdentity>>

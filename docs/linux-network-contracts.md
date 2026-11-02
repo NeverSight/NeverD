@@ -53,8 +53,8 @@ bytes). Ports and addresses use network byte order; the family uses the guest's
 little-endian ABI. A peer must match the next supplied attempt. `connect_errno`
 can supply EINTR, ECONNREFUSED, ETIMEDOUT, ENETUNREACH, EHOSTUNREACH or EACCES instead of
 success. A failed connection cannot carry stream data, and its socket must be
-closed before retry. There are at most 256 TCP/UDP attempts and 1 MiB of payload
-bytes combined.
+closed before retry. There are at most 4,096 stored TCP/UDP entries and 1 MiB of
+payload bytes combined. Counted failures use separate finite counters.
 
 `socket`, `connect`, `sendto` and `recvfrom` share one implementation across raw
 x64/AArch64 Linux syscalls, Android named wrappers and `syscall`. Bionic `send`
@@ -67,6 +67,15 @@ Every outgoing byte is compared before the cursor advances. Per-call ceilings
 of 1–65536 bytes model short transfers. The receive stream ends only when
 `receive_eof` explicitly says so; exhausted input without EOF remains unknown.
 Bad peer or transfer bytes do not consume the connection or stream contract.
+An outgoing TCP mismatch identifies the first differing byte by its absolute
+stream offset and its offset in the current buffer, with expected and actual
+byte values. Only the admitted short-transfer window is compared; a matching
+prefix within a failed window is not consumed. Descriptor aliases report
+offsets using their shared stream cursor. The diagnostic also identifies the
+zero-based index in `linux_network.connections`. This index belongs to the
+bound open description, so aliases retain it and a reused FD can refer to a
+different index. Declared failed connection attempts occupy indices; rejected
+peer or memory admission does not consume one.
 Socket seek returns ESPIPE. `setsockopt`/`getsockopt` share SO_RCVTIMEO and
 SO_SNDTIMEO state across aliases, accepting whole seconds up to one day;
 negative seconds retain immediate-timeout state. Fractional timeouts stop
@@ -291,3 +300,23 @@ Semantics are independently implemented from
 [Linux eventpoll](https://github.com/torvalds/linux/blob/v6.6/fs/eventpoll.c),
 [Linux select/poll](https://github.com/torvalds/linux/blob/v6.6/fs/select.c) and
 [Android's poll wrappers](https://github.com/aosp-mirror/platform_bionic/blob/android-9.0.0_r1/libc/bionic/poll.cpp).
+
+### Counted TCP failures
+
+An explicit `tcp_connect_failures` object contains a nonzero `errno` and finite
+nonzero `count`. It becomes available only after all ordered TCP attempts have
+been consumed. It admits canonical IPv4/IPv6 peers matching the socket family
+and returns only the supplied failure; it creates no route, connection, bytes
+or readiness and never contacts the host network. Missing or exhausted input,
+wrong peers while exact attempts remain, nonblocking completion and failed
+socket reuse stop explicitly. Descriptor aliases share the failed description.
+
+The failure count accepts 1 through `UINT32_MAX`, independently of the 4,096
+stored TCP/UDP entries. It retains one counter and creates no per-attempt
+inventory. The exhausted count is checked before incrementing, including at
+`UINT32_MAX`. Execution instruction, event and time budgets still bound each
+run. JSON and typed input use the shared validator; decimal strings follow the
+existing integer wire contract. Allowed errors match explicit TCP attempts:
+EINTR, ECONNREFUSED, ETIMEDOUT, ENETUNREACH, EHOSTUNREACH and EACCES. The guest must
+close a failed socket before retrying, including after EINTR; this bounded contract does not
+model an asynchronous handshake.

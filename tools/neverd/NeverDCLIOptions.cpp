@@ -15,15 +15,18 @@
 
 #include "NeverDCLI.h"
 #include "ResourceLimits.h"
+#include "UnwindQuery.h"
 
 #include "neverd/dalvik/Budget.h"
+#include "neverd/diff/Limits.h"
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/ExecutionBackend.h"
 #include "neverd/emulation/ExecutionCLIStrings.h"
 #include "neverd/emulation/ExecutionReportFields.h"
 #include "neverd/emulation/ProcessCLIStrings.h"
 #include "neverd/emulation/ProcessReportFields.h"
-#include "neverd/loader/ARMModeCLIStrings.h"
+#include "neverd/loader/ARM/ARMModeCLIStrings.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/pass/Limits.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/Limits.h"
@@ -144,6 +147,8 @@ cl::opt<uint64_t> MobileMaxBytes("max-bytes",
                                  cl::sub(MobileCmd));
 cl::SubCommand DecompileCmd("decompile",
                             "Decompile binary to C, Rust, or Solidity");
+cl::SubCommand PatchBytesCmd("patch-bytes",
+                             "Preview, apply, revert and export byte patches");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
 cl::SubCommand InfoCmd("info", "Show binary metadata summary");
 cl::SubCommand IdentifyCmd("identify",
@@ -180,6 +185,20 @@ cl::SubCommand OperandsCmd("operands",
                            "list those formats");
 cl::SubCommand SearchCmd("search", "Search bytes/strings in binary");
 cl::SubCommand SectionsCmd("sections", "List binary sections");
+cl::SubCommand
+    AnalysisSectionsCmd("analysis-sections",
+                        "List, add or remove analysis image sections");
+cl::opt<std::string>
+    AnalysisSectionAdd("add",
+                       cl::desc("Add a section described by this JSON file"),
+                       cl::sub(AnalysisSectionsCmd));
+cl::opt<std::string>
+    AnalysisSectionData("data",
+                        cl::desc("Raw machine-code/data file for --add"),
+                        cl::sub(AnalysisSectionsCmd));
+cl::opt<std::string> AnalysisSectionRemove(
+    "remove", cl::desc("Remove a previously added analysis section by name"),
+    cl::sub(AnalysisSectionsCmd));
 cl::SubCommand SymbolsCmd("symbols", "List all symbols");
 cl::SubCommand RelocsCmd("relocs", "List relocations");
 cl::SubCommand HeadersCmd("headers", "Show comprehensive binary headers");
@@ -219,6 +238,8 @@ cl::SubCommand
                      "Run bounded x64 WDM driver initialization and emit JSON");
 cl::SubCommand CPUCapabilitiesCmd(execution_cli::CapabilitiesCommand,
                                   execution_cli::CapabilitiesHelp);
+cl::SubCommand X87CapabilitiesCmd("x87-capabilities",
+                                  "Report scoped x87 semantic capabilities");
 cl::SubCommand EmulateProcessCmd(process_cli::Command, process_cli::Help);
 cl::SubCommand
     ModulesCmd("modules",
@@ -271,27 +292,27 @@ cl::SubCommand TranslateObjectCmd(
 // Common options (registered with all subcommands)
 //===----------------------------------------------------------------------===//
 
-cl::opt<std::string>
-    InputFile(cl::Positional, cl::desc("<binary>"), cl::Required,
-              cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
-              cl::sub(InfoCmd), cl::sub(IdentifyCmd), cl::sub(StringsCmd),
-              cl::sub(XrefsCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
-              cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd),
-              cl::sub(HexCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
-              cl::sub(SegmentsCmd), cl::sub(ExportCmd), cl::sub(BookmarksCmd),
-              cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
-              cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
-              cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
-              cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-              cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-              cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-              cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(MobileCmd));
+cl::opt<std::string> InputFile(
+    cl::Positional, cl::desc("<binary>"), cl::Required, cl::sub(PatchBytesCmd),
+    cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
+    cl::sub(InfoCmd), cl::sub(IdentifyCmd), cl::sub(StringsCmd),
+    cl::sub(XrefsCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
+    cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd),
+    cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
+    cl::sub(ExportCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
+    cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(FunctionEditsCmd),
+    cl::sub(ItemsCmd), cl::sub(OperandsCmd), cl::sub(SearchCmd),
+    cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
+    cl::sub(HeadersCmd), cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
+    cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
+    cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(MobileCmd),
+    cl::sub(AnalysisSectionsCmd));
 
 cl::opt<std::string> OutputFile("o", cl::desc("Output file"), cl::init(""),
-                                cl::sub(LiftCmd), cl::sub(DecompileCmd),
-                                cl::sub(PatchCmd), cl::sub(AuditCmd),
-                                cl::sub(HuntCmd), cl::sub(MobileCmd),
-                                cl::sub(TypesCmd));
+                                cl::sub(PatchBytesCmd), cl::sub(LiftCmd),
+                                cl::sub(DecompileCmd), cl::sub(PatchCmd),
+                                cl::sub(AuditCmd), cl::sub(HuntCmd),
+                                cl::sub(MobileCmd), cl::sub(TypesCmd));
 
 cl::opt<bool>
     Verbose("v", cl::desc("Verbose output"), cl::sub(LiftCmd),
@@ -471,12 +492,27 @@ cl::opt<bool> NoSymtab(
     cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd));
 
 cl::opt<std::string> LoadLoader(
-    "loader",
-    cl::desc("How to read an input that names no format itself: \"binary\" "
-             "as code of --processor at --load-base, \"evm\" as EVM "
-             "bytecode, \"auto\" as its header or contents say.  The choice "
-             "is kept with the input"),
-    cl::init(""), cl::value_desc("loader"), cl::sub(LiftCmd),
+    "loader", cl::desc(macho_loader::cache_load::kLoaderHelp), cl::init(""),
+    cl::value_desc("loader"), cl::sub(LiftCmd), cl::sub(DecompileCmd),
+    cl::sub(PatchCmd), cl::sub(InfoCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
+    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
+    cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
+    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(AuditCmd),
+    cl::sub(HuntCmd));
+cl::opt<bool> ListCacheImages(macho_loader::cache_load::kImagesOption,
+                              cl::desc(macho_loader::cache_load::kImagesHelp),
+                              cl::sub(InfoCmd));
+
+cl::opt<std::string> LoadCacheImage(
+    macho_loader::cache_load::kImageOption,
+    cl::desc(macho_loader::cache_load::kImageHelp),
+    cl::value_desc(macho_loader::cache_load::kImageValue), cl::sub(LiftCmd),
     cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
     cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
     cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
@@ -772,6 +808,16 @@ cl::opt<bool>
     LlvmRoute("llvm", cl::desc("Emit LLVM-to-C (goto-style) instead of HighC"),
               cl::sub(DecompileCmd), cl::sub(ExportCmd));
 
+cl::opt<std::string> X64Continuation(
+    "x64-continuation",
+    cl::desc("Export explicit x64 state C using a declared request JSON"),
+    cl::value_desc("path"), cl::sub(DecompileCmd));
+cl::opt<std::string>
+    ContinuationReport("continuation-report",
+                       cl::desc("Write the exact instruction and state "
+                                "manifest for --x64-continuation"),
+                       cl::value_desc("path"), cl::sub(DecompileCmd));
+
 cl::opt<bool> Devirtualize(
     "devirtualize",
     cl::desc("Recover an x64 interpreter (experimental; requires --func)"),
@@ -810,6 +856,11 @@ cl::opt<bool> VMMachineState(
     cl::desc(
         "Explicit x64 state ABI; normal nonfaulting CPL3 execution, CET off"),
     cl::sub(DecompileCmd));
+cl::opt<std::string> VMMachineSourceABI(
+    "vm-source-abi",
+    cl::desc("Machine source storage: scalar, queries or xmm (requires "
+             "--vm-machine-state)"),
+    cl::init("scalar"), cl::sub(DecompileCmd));
 cl::list<std::string> VMControlRegisters(
     "vm-control",
     cl::desc("Full GPR used to separate interpreter contexts (repeatable)"),
@@ -882,6 +933,14 @@ cl::opt<bool> VMNoControlDiscovery(
     "vm-no-control-discovery",
     cl::desc("Disable automatic recovery control-state discovery"),
     cl::init(false), cl::sub(DecompileCmd));
+cl::opt<bool> VMProveStoreReturnSeparation(
+    "vm-prove-store-return-separation",
+    cl::desc("Prove each store avoids return and retained frame cells"),
+    cl::sub(DecompileCmd));
+cl::opt<bool> VMProveStoreFrameSeparation(
+    "vm-prove-store-frame-separation",
+    cl::desc("Prove store separation from declared frame and absolute cells"),
+    cl::sub(DecompileCmd));
 cl::opt<uint64_t>
     VMMaxOperations("vm-max-operations", cl::desc("Recovery operation budget"),
                     cl::init(::neverd::limits::cli::kDefaultVMMaxOperations),
@@ -1143,6 +1202,17 @@ cl::list<std::string> TypesDeclare(
     cl::desc("Add the types this file declares first: C (.h, .c), C++ (.hpp, "
              ".cpp), Rust (.rs) or Go (.go); repeat for more"),
     cl::value_desc("file"), cl::sub(TypesCmd));
+cl::opt<bool> TypesMergePrototypes(
+    "merge-prototypes",
+    cl::desc("Convert independent --declare providers: import only missing "
+             "prototypes from later files and prefix conflicting types with "
+             "their file stems; requires --data-model without a binary"),
+    cl::sub(TypesCmd));
+cl::list<std::string> TypesImportPrototypes(
+    "import-prototype",
+    cl::desc("With --merge-prototypes and exactly two --declare files, import "
+             "only this prototype from the second file; repeat for more"),
+    cl::value_desc("name"), cl::sub(TypesCmd));
 cl::opt<bool>
     TypesSave("save",
               cl::desc("Persist --declare types in the binary's project for "
@@ -1390,21 +1460,25 @@ ConcolicStringList ConcolicSolverGates(
 // JSON output option (shared)
 //===----------------------------------------------------------------------===//
 
-cl::opt<bool>
-    JsonOutput("json", cl::desc("Output as JSON"), cl::sub(InfoCmd),
-               cl::sub(IdentifyCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
-               cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(StringsCmd),
-               cl::sub(XrefsCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
-               cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
-               cl::sub(PluginsCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
-               cl::sub(CallGraphCmd), cl::sub(RenameCmd),
-               cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
-               cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
-               cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-               cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-               cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(AuditCmd),
-               cl::sub(HuntCmd), cl::sub(MobileCmd), cl::sub(DecompileCmd),
-               cl::sub(TypesCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd));
+cl::opt<std::string>
+    InfoUnwindFrame(unwind_query::kOption, cl::desc(unwind_query::kDescription),
+                    cl::value_desc(unwind_query::kAddressValue),
+                    cl::sub(InfoCmd));
+
+cl::opt<bool> JsonOutput(
+    "json", cl::desc("Output as JSON"), cl::sub(InfoCmd), cl::sub(IdentifyCmd),
+    cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
+    cl::sub(SegmentsCmd), cl::sub(PluginsCmd), cl::sub(BookmarksCmd),
+    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
+    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
+    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
+    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
+    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(MobileCmd),
+    cl::sub(DecompileCmd), cl::sub(TypesCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options
@@ -1457,6 +1531,303 @@ cl::opt<std::string> DiffFunc("func",
                               cl::init(""), cl::sub(DiffCmd));
 
 cl::opt<bool> DiffJson("json", cl::desc("Output as JSON"), cl::sub(DiffCmd));
+
+cl::opt<bool>
+    DiffStructural("structural",
+                   cl::desc("Compare decoded instructions and control flow"),
+                   cl::sub(DiffCmd));
+cl::opt<std::string> DiffProfile("profile",
+                                 cl::desc("Structural comparison profile"),
+                                 cl::init(limits::diff::kDefaultNativeProfile),
+                                 cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffOptions("options", cl::desc("Structural comparison options JSON file"),
+                cl::sub(DiffCmd));
+cl::opt<std::string> DiffSave("save",
+                              cl::desc("Save versioned .nddiff comparison"),
+                              cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffReopen("reopen",
+               cl::desc("Restore .nddiff against both current inputs"),
+               cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffOverrides("overrides",
+                  cl::desc("Apply JSON array of match/unmatch/confirm edits"),
+                  cl::sub(DiffCmd));
+cl::opt<bool> DiffIgnoreNames("ignore-names",
+                              cl::desc("Do not use symbol names to match"),
+                              cl::sub(DiffCmd));
+cl::opt<bool> DiffRegions(
+    "regions",
+    cl::desc("Analyze overlapping native region and transformation hypotheses"),
+    cl::sub(DiffCmd));
+cl::opt<bool> DiffRegionCalls(
+    "region-calls",
+    cl::desc(
+        "Include direct calls using current function pairs (enables regions; "
+        "not semantic validation)"),
+    cl::sub(DiffCmd));
+cl::opt<bool>
+    DiffDataFlow("dataflow",
+                 cl::desc("Capture bounded native SSA dependency evidence"),
+                 cl::sub(DiffCmd));
+cl::opt<std::string> DiffDataFlowProfile(
+    "dataflow-profile",
+    cl::desc("SSA evidence profile: med-ssa-v2 (default) "
+             "or llvm-ssa-v1 (optimized) or "
+             "llvm-parameter-ssa-v1 (native low-bit views) or "
+             "llvm-progress-ssa-v1 (self-loop progress), "
+             "llvm-progress-ssa-v2 (multi-block loop progress), "
+             "llvm-progress-ssa-v3 (nested loop progress), "
+             "llvm-progress-ssa-v4 (branching loop progress), "
+             "llvm-progress-ssa-v5 (wrapping counter progress), "
+             "llvm-progress-ssa-v6 (parameter-bound loop progress), "
+             "llvm-progress-ssa-v7 (expression-bound loop progress)"),
+    cl::sub(DiffCmd));
+cl::opt<bool>
+    DiffFlowFragments("flow-fragments",
+                      cl::desc("Match finite SSA fragments with explicit "
+                               "external inputs (enables flow regions)"),
+                      cl::sub(DiffCmd));
+cl::opt<bool>
+    DiffFlowRegions("flow-regions",
+                    cl::desc("Analyze verified finite SSA region hypotheses"),
+                    cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffFlowRegion("flow-region",
+                   cl::desc("Page anchors of an SSA region hypothesis ID"),
+                   cl::sub(DiffCmd));
+cl::opt<unsigned> DiffFlowRegionAnchor(
+    "flow-region-anchor",
+    cl::desc("Page paired SSA nodes of a global anchor index"),
+    cl::sub(DiffCmd));
+cl::opt<std::string> DiffFlowRegionCoordinates(
+    "flow-region-coordinates",
+    cl::desc("SSA anchor page: nodes, phi_blocks or frontier"),
+    cl::init("nodes"), cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffFlowFunction("flow-function",
+                     cl::desc("Page SSA evidence at a function entry address"),
+                     cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffFlowSide("flow-side",
+                 cl::desc("SSA evidence side: primary or secondary"),
+                 cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<std::string> DiffFlowKind("flow-kind",
+                                  cl::desc("SSA page kind: nodes or blocks"),
+                                  cl::init("nodes"), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffArgumentAccessCall(
+    "argument-access-call",
+    cl::desc("Review address uses of a recovered call in --flow-function"),
+    cl::sub(DiffCmd));
+cl::opt<unsigned>
+    DiffSliceNode("slice-node",
+                  cl::desc("Slice dependencies of a node in --flow-function"),
+                  cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffSliceDirection("slice-direction",
+                       cl::desc("Dependency slice: backward or forward"),
+                       cl::init("backward"), cl::sub(DiffCmd));
+cl::opt<bool> DiffSliceDataOnly(
+    "slice-data-only",
+    cl::desc("Exclude control dependencies from the SSA slice"),
+    cl::sub(DiffCmd));
+cl::opt<std::string> DiffReviewRecord(
+    "review-record",
+    cl::desc("Append an explicit analyst record from JSON; requires --save"),
+    cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffReviewCase("review-case",
+                   cl::desc("Filter --list reviews by exact case identifier"),
+                   cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffReviewFunction("review-function",
+                       cl::desc("Filter --list reviews by function entry"),
+                       cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffReviewSide("review-side",
+                   cl::desc("Review function input: primary or secondary"),
+                   cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<bool> DiffReviewLatest(
+    "review-latest",
+    cl::desc("Show latest analyst assessment per case/function pair"),
+    cl::sub(DiffCmd));
+cl::opt<std::string> DiffSourceFunction(
+    "source-function",
+    cl::desc("Inspect a comparison function's paged source by entry address"),
+    cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffSourceSide("source-side",
+                   cl::desc("Source input: primary or secondary"),
+                   cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<std::string> DiffSourceRepresentation(
+    "source-representation",
+    cl::desc("Source representation: c, llvmc, source, cpp, rust or go"),
+    cl::init("c"), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffSourceInstructions(
+    "source-max-instructions",
+    cl::desc(
+        "Source analysis instruction allowance (0 removes this allowance)"),
+    cl::init(::neverd::limits::diff::kDefaultSourceNativeInstructions),
+    cl::sub(DiffCmd));
+cl::opt<bool> DiffSourceDifference(
+    "source-difference",
+    cl::desc("Align complete source renderings of the accepted function pair"),
+    cl::sub(DiffCmd));
+cl::opt<bool>
+    DiffSourcePrelude("source-include-prelude",
+                      cl::desc("Include declarations in source line alignment"),
+                      cl::sub(DiffCmd));
+cl::opt<unsigned long long> DiffSourceWork(
+    "source-max-work",
+    cl::desc("Source alignment work allowance (0 removes this allowance)"),
+    cl::init(::neverd::limits::diff::kDefaultSourceAlignmentWork),
+    cl::sub(DiffCmd));
+cl::opt<unsigned long long> DiffSourceBytes(
+    "source-max-bytes",
+    cl::desc("Source pair evidence byte allowance (0 removes this allowance)"),
+    cl::init(::neverd::limits::diff::kDefaultSourceAlignmentBytes),
+    cl::sub(DiffCmd));
+cl::opt<std::string> DiffValidationFunction(
+    "validate-function",
+    cl::desc("Check bounded lifted scalar returns of an accepted pair"),
+    cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffValidationSide("validation-side",
+                       cl::desc("Validation input: primary or secondary"),
+                       cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffValidationInstructions(
+    "validation-max-instructions",
+    cl::desc("Native admission limit per validated function"),
+    cl::init(::neverd::limits::diff::kDefaultValidationNativeInstructions),
+    cl::sub(DiffCmd));
+cl::opt<unsigned long long>
+    DiffValidationWork("validation-max-work",
+                       cl::desc("Maximum scalar proof work"), cl::sub(DiffCmd));
+cl::opt<std::string> DiffChangesFunction(
+    "changes-function",
+    cl::desc(
+        "Review local changes in an accepted function pair by entry address"),
+    cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffChangesSide("changes-side",
+                    cl::desc("Change review input: primary or secondary"),
+                    cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<std::string> DiffChangesContext(
+    "changes-context",
+    cl::desc("Filter review: all, predicate_dependency, return_dependency, "
+             "call_argument_dependency or memory_write_dependency"),
+    cl::init("all"), cl::sub(DiffCmd));
+cl::opt<unsigned>
+    DiffChangesRows("changes-max-rows",
+                    cl::desc("Maximum inspected native alignment rows"),
+                    cl::init(::neverd::limits::diff::kDefaultObservationRows),
+                    cl::sub(DiffCmd));
+cl::opt<unsigned>
+    DiffChangesCount("changes-max-observations",
+                     cl::desc("Maximum retained local change observations"),
+                     cl::init(::neverd::limits::diff::kDefaultObservations),
+                     cl::sub(DiffCmd));
+cl::opt<unsigned long long>
+    DiffChangesWork("changes-max-work",
+                    cl::desc("Maximum change review graph and row work"),
+                    cl::init(::neverd::limits::diff::kDefaultObservationWork),
+                    cl::sub(DiffCmd));
+cl::opt<std::string> DiffImpactFunction(
+    "impact-function",
+    cl::desc("Trace native call paths from comma-separated function entries"),
+    cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffImpactSide("impact-side",
+                   cl::desc("Call path input: primary or secondary"),
+                   cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffImpactDirection("impact-direction",
+                        cl::desc("Call path direction: callers or callees"),
+                        cl::init("callers"), cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffImpactKind("impact-kind",
+                   cl::desc("Call path page: functions, entrypoints, sites, "
+                            "boundaries, frontier, path or effects"),
+                   cl::init("functions"), cl::sub(DiffCmd));
+cl::opt<unsigned>
+    DiffImpactWitness("impact-witness",
+                      cl::desc("Retained function row for --impact-kind path"),
+                      cl::sub(DiffCmd));
+cl::opt<unsigned> DiffImpactDepth(
+    "impact-depth", cl::desc("Maximum call path depth (0: seeds only)"),
+    cl::init(::neverd::limits::diff::kDefaultImpactDepth), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffImpactFunctions(
+    "impact-max-functions", cl::desc("Maximum retained call path functions"),
+    cl::init(::neverd::limits::diff::kDefaultImpactFunctions),
+    cl::sub(DiffCmd));
+cl::opt<unsigned> DiffImpactSites(
+    "impact-max-sites", cl::desc("Maximum indexed call and boundary sites"),
+    cl::init(::neverd::limits::diff::kDefaultImpactSites), cl::sub(DiffCmd));
+cl::opt<unsigned long long>
+    DiffImpactWork("impact-max-work",
+                   cl::desc("Maximum call path indexing and traversal work"),
+                   cl::init(::neverd::limits::diff::kDefaultImpactWork),
+                   cl::sub(DiffCmd));
+cl::opt<unsigned> DiffEffectRecords(
+    "effect-max-records", cl::desc("Maximum --impact-kind effects records"),
+    cl::init(::neverd::limits::diff::kDefaultEffectRecords), cl::sub(DiffCmd));
+cl::opt<unsigned long long> DiffEffectWork(
+    "effect-max-work", cl::desc("Maximum import-call contract review work"),
+    cl::init(::neverd::limits::diff::kDefaultEffectWork), cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffRegion("region", cl::desc("Page anchors of a region hypothesis ID"),
+               cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffRegionKind("region-kind",
+                   cl::desc("Filter region hypotheses by explanation"),
+                   cl::init("all"), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffRegionAnchor(
+    "region-anchor",
+    cl::desc("Page original instructions of a global region anchor index"),
+    cl::sub(DiffCmd));
+cl::opt<double> DiffMinSimilarity(
+    "min-similarity", cl::desc("Minimum heuristic similarity"),
+    cl::init(::neverd::limits::diff::kDefaultMinimumSimilarity),
+    cl::sub(DiffCmd));
+cl::opt<unsigned long long>
+    DiffTimeout("timeout-ms",
+                cl::desc("Comparison timeout in milliseconds (0: no deadline)"),
+                cl::init(0), cl::sub(DiffCmd));
+cl::opt<std::string> DiffList(
+    "list",
+    cl::desc("Page all/matched/changed/uncertain/ambiguous/unmatched "
+             "functions, regions or "
+             "region-anchors, dataflow, flow-regions, flow-region-anchors or "
+             "reviews"),
+    cl::sub(DiffCmd));
+cl::opt<unsigned> DiffOffset("offset", cl::desc("Inventory page offset"),
+                             cl::init(0), cl::sub(DiffCmd));
+cl::opt<unsigned> DiffLimit("limit", cl::desc("Inventory page size"),
+                            cl::init(::neverd::limits::diff::kDefaultPageSize),
+                            cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffListSide("list-side",
+                 cl::desc("Function inventory side: primary or secondary"),
+                 cl::init("primary"), cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffListSearch("list-search",
+                   cl::desc("Filter function names or hexadecimal addresses"),
+                   cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffListSort("list-sort",
+                 cl::desc("Sort functions: address, name, size, similarity, "
+                          "confidence or changes"),
+                 cl::init("address"), cl::sub(DiffCmd));
+cl::opt<bool>
+    DiffListDescending("list-descending",
+                       cl::desc("Reverse the function inventory sort order"),
+                       cl::sub(DiffCmd));
+cl::opt<std::string>
+    DiffAmbiguousWith("ambiguous-with",
+                      cl::desc("Page all retained candidates for this "
+                               "opposite-side function entry (hex)"),
+                      cl::sub(DiffCmd));
 
 //===----------------------------------------------------------------------===//
 // Annotate-specific options
@@ -1566,7 +1937,8 @@ cl::opt<bool> DecompileCallees(
     "callees",
     cl::desc("With --func, also decompile every function it calls, directly "
              "or not, into one C file; imports and library functions stay "
-             "declarations"),
+             "declarations, and a callee that is not decompiled is named in "
+             "a note at the top"),
     cl::sub(DecompileCmd));
 
 //===----------------------------------------------------------------------===//

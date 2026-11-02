@@ -15,6 +15,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/web/Bun.h"
+#include "neverd/web/Session.h"
 
 #include "llvm/Support/FileSystem.h"
 
@@ -324,6 +325,121 @@ TEST_F(WebBun, PrelinkedGraphAndRuntimeMetadataHaveTheirOwnLayoutProfile) {
   EXPECT_EQ(extractBun(input(BunFixture{}.Bytes)).Profile, BunProfile);
 }
 
+std::string graphWithArguments(const BunFixture &F,
+                               std::string_view Arguments) {
+  const auto At = get(F.Graph, F.Footer + 20, 4);
+  auto Graph = F.Graph.substr(0, At);
+  Graph += Arguments;
+  Graph.push_back('\0');
+  const auto Footer = Graph.size();
+  Graph += F.Graph.substr(F.Footer);
+  put(Graph, Footer, Footer, 8);
+  put(Graph, Footer + 24, Arguments.size(), 4);
+  return Graph;
+}
+
+TEST_F(WebBun,
+       OrderedPrelinkedFilesOpaqueOptionsAndBinaryArgumentsAreRetained) {
+  const BunFixture F(true, "map", "asset", true);
+  const std::array<uint8_t, 8> Options{0xff, 0, 0x81, 4, 9, 0, 0xfe, 1};
+  for (const std::string Args :
+       {std::string(), std::string("--PRIVATE_ARG\0\xff", 15)}) {
+    auto Graph = graphWithArguments(F, Args);
+    put(Graph, F.PrelinkedRecord + 12, 1, 4);
+    put(Graph, F.PrelinkedRecord + 16, 0, 4);
+    for (size_t I = 0; I < Options.size(); ++I)
+      put(Graph, F.PrelinkedRecord + 20 + I, Options[I], 1);
+    const auto E = extractBun(input(bunELF(Graph)));
+    EXPECT_EQ(E.PrelinkedModuleFiles, (std::vector<uint32_t>{1, 0}));
+    ASSERT_TRUE(E.RuntimeOptions);
+    EXPECT_EQ(*E.RuntimeOptions, Options);
+    ASSERT_LT(E.CompileArguments, E.Regions.size());
+    const auto &R = E.Regions[E.CompileArguments];
+    EXPECT_EQ(R.Kind, "compile_exec_argv");
+    EXPECT_EQ(R.Content.read(0, R.Content.size()), Args);
+    EXPECT_EQ(R.BlobHash, sha256(Args));
+    EXPECT_EQ(R.Offset, E.GraphOffset + get(F.Graph, F.Footer + 20, 4));
+  }
+  const auto Legacy = extractBun(input(BunFixture{}.Bytes));
+  EXPECT_TRUE(Legacy.PrelinkedModuleFiles.empty());
+  EXPECT_FALSE(Legacy.RuntimeOptions);
+  ASSERT_LT(Legacy.CompileArguments, Legacy.Regions.size());
+  const auto &Args = Legacy.Regions[Legacy.CompileArguments];
+  EXPECT_EQ(Args.Content.read(0, Args.Content.size()), "--fixture-canary");
+}
+
+TEST_F(WebBun, ExportManifestRetainsRebuildMetadataWithoutArgumentDisclosure) {
+  for (bool Prelinked : {false, true}) {
+    const BunFixture F(true, "map", "asset", Prelinked);
+    auto Graph = F.Graph;
+    // The first source is a client-side UTF-8 module, not server Latin-1.
+    put(Graph, F.Table + 48, 0, 1);
+    put(Graph, F.Table + 51, 1, 1);
+    const auto A = input(bunELF(Graph));
+    Session S;
+    auto Preview = llvm::json::parse(S.preview((Root / "input").string(), ""));
+    ASSERT_TRUE(bool(Preview));
+    S.commit(field(*Preview, "preview_token"));
+    const auto ExtractText = S.extractBun("1", A.ID);
+    auto Extraction = llvm::json::parse(ExtractText);
+    ASSERT_TRUE(bool(Extraction));
+    EXPECT_EQ(Extraction->getAsObject()->getInteger("prelinked_module_count"),
+              Prelinked ? 2 : 0);
+    EXPECT_EQ(Extraction->getAsObject()->getBoolean("runtime_options_present"),
+              Prelinked);
+    const auto ID = field(*Extraction, "extraction_id");
+    auto Records = llvm::json::parse(S.bunRecords("1", ID, "regions", 0, 512));
+    ASSERT_TRUE(bool(Records));
+    bool FoundArguments = false;
+    for (const auto &R : *Records->getAsObject()->getArray("items")) {
+      if (field(R, "kind") != "compile_exec_argv")
+        continue;
+      FoundArguments = true;
+      EXPECT_EQ(field(R, "region_id"),
+                field(*Extraction, "compile_exec_argv_region_id"));
+      EXPECT_EQ(R.getAsObject()->getBoolean("hash_redacted"), true);
+      EXPECT_EQ(*R.getAsObject()->get("blob_sha256"), nullptr);
+    }
+    EXPECT_TRUE(FoundArguments);
+    const auto Destination = Root / (Prelinked ? "extended" : "legacy");
+    const auto Reply = S.exportBun("1", ID, Destination.string());
+    auto Read = [&](std::string_view Name) {
+      std::ifstream File(Destination / Name, std::ios::binary);
+      return std::string(std::istreambuf_iterator<char>(File), {});
+    };
+    auto Manifest = llvm::json::parse(Read("manifest.json"));
+    ASSERT_TRUE(bool(Manifest));
+    const auto &M = *Manifest->getAsObject();
+    EXPECT_EQ(M.getInteger("startup_count"), 2);
+    EXPECT_EQ(M.getInteger("flags"), Prelinked ? 0x1bf0 : 0x3f0);
+    EXPECT_EQ((*M.getArray("modules"))[0].getAsObject()->getInteger("side_id"),
+              1);
+    EXPECT_EQ(Read(field(*Manifest, "compile_exec_argv_file")),
+              "--fixture-canary");
+    if (Prelinked) {
+      const auto *Indices = M.getArray("prelinked_module_files");
+      ASSERT_NE(Indices, nullptr);
+      ASSERT_EQ(Indices->size(), 2);
+      EXPECT_EQ((*Indices)[0].getAsInteger(), 0);
+      EXPECT_EQ((*Indices)[1].getAsInteger(), 1);
+      const auto *Options = M.getArray("runtime_options_bytes");
+      ASSERT_NE(Options, nullptr);
+      const std::array<uint8_t, 8> Expected{2, 0, 0, 0, 0, 0, 0x80, 0x3f};
+      ASSERT_EQ(Options->size(), Expected.size());
+      for (size_t I = 0; I < Expected.size(); ++I)
+        EXPECT_EQ((*Options)[I].getAsInteger(), Expected[I]);
+    } else {
+      EXPECT_EQ(*M.get("prelinked_module_files"), nullptr);
+      EXPECT_EQ(*M.get("runtime_options_bytes"), nullptr);
+    }
+    for (const auto &Text : {ExtractText, Reply, json(std::move(*Records))}) {
+      EXPECT_EQ(Text.find("fixture-canary"), std::string::npos);
+      EXPECT_EQ(Text.find("BUN_SOURCE_CANARY"), std::string::npos);
+      EXPECT_EQ(Text.find("runtime_options_bytes"), std::string::npos);
+    }
+  }
+}
+
 TEST_F(WebBun, PrelinkedIndicesPointersAndUnknownCacheAliasingFailClosed) {
   const BunFixture F(true, "map", "asset", true);
   auto Mutate = [&](uint64_t At, uint64_t Value, const char *Code) {
@@ -497,7 +613,7 @@ TEST_F(WebBun, ClaudeCode21296FullContainerWhenSupplied) {
   const auto E = extractBun(Original);
   ASSERT_EQ(E.Profile, BunPrelinkedProfile);
   ASSERT_EQ(E.Modules.size(), 2589);
-  EXPECT_EQ(E.Regions.size(), 10005);
+  EXPECT_EQ(E.Regions.size(), 10006);
   EXPECT_EQ(E.EntryPoint, 6);
   EXPECT_EQ(E.StartupCount, 7);
   EXPECT_EQ(E.GraphOffset, 89120776);
@@ -636,6 +752,48 @@ TEST_F(WebBun, TextProjectionBudgetsAndUnpairedSurrogatesKeepRawEvidence) {
   EXPECT_EQ(Raw.Regions[Raw.Modules[1].Contents].Content.read(0, 2),
             std::string("\0\xd8", 2));
   EXPECT_THROW(bunSourceBytes(E, E.Modules[2], 1024), Error);
+}
+
+TEST_F(WebBun, TextLoaderUsesStrictUnicodeDecoderWithoutSourceIdentity) {
+  const BunFixture F(false);
+  auto Graph = F.Graph;
+  put(Graph, F.Table + 52 + 49, 13, 1);
+  put(Graph, F.Table + 52 + 50, 0, 1);
+  const auto E = extractBun(input(bunELF(Graph)));
+  const auto &M = E.Modules[1];
+  ASSERT_TRUE(M.SourceArtifactID.empty());
+  ASSERT_EQ(M.Encoding, 2);
+  const std::string Text = "export const x = '中文🌱';";
+  EXPECT_EQ(bunTextBytes(E, M, Text.size()), Text);
+  EXPECT_THROW(bunTextBytes(E, M, Text.size() - 1), Error);
+  EXPECT_THROW(bunSourceBytes(E, M, 1024), Error);
+  EXPECT_THROW(bunSourceRange(E, M, 0, 0, 1024), Error);
+  EXPECT_EQ(bunTextBytes(E, E.Modules[0], 1024),
+            bunSourceBytes(E, E.Modules[0], 1024));
+  EXPECT_THROW(bunTextBytes(E, E.Modules[2], 1024), Error);
+  auto FalseSource = M;
+  FalseSource.SourceArtifactID = "not-a-javascript-source";
+  EXPECT_THROW(bunSourceBytes(E, FalseSource, 1024), Error);
+  const auto Offset = E.Regions[M.Contents].Offset - E.GraphOffset;
+  for (uint16_t Unit : {0xd800, 0xdc00}) {
+    auto Broken = Graph;
+    put(Broken, Offset, Unit, 2);
+    const auto Raw = extractBun(input(bunELF(Broken)));
+    EXPECT_THROW(bunTextBytes(Raw, Raw.Modules[1], 1024), Error);
+    EXPECT_EQ(
+        get(Raw.Regions[Raw.Modules[1].Contents].Content.read(0, 2), 0, 2),
+        Unit);
+  }
+  // The same asset loader also retains Latin-1 decoding and its UTF-8 budget.
+  auto Latin = F.Graph;
+  put(Latin, F.Table + 49, 13, 1);
+  put(Latin, F.Table + 50, 0, 1);
+  const auto Source = get(Latin, F.Table + 8, 4);
+  put(Latin, Source, 0xe9, 1);
+  const auto L = extractBun(input(bunELF(Latin)));
+  const auto Decoded = bunTextBytes(L, L.Modules[0], 1024);
+  EXPECT_TRUE(Decoded.starts_with("é"));
+  EXPECT_THROW(bunTextBytes(L, L.Modules[0], Decoded.size() - 1), Error);
 }
 
 TEST_F(WebBun, SourceRangesFollowUtf16ScalarsAndExcludeStorageTerminators) {

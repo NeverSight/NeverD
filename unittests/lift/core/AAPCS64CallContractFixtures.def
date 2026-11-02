@@ -1,0 +1,37 @@
+//===- AAPCS64CallContractFixtures.def - Native FP ABI checks -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Expected native scalar interfaces, independent of physical V carriers.
+//===----------------------------------------------------------------------===//
+
+#ifndef AAPCS64_CALL_VALUE
+#define AAPCS64_CALL_VALUE(Type, Name, Value)
+#endif
+#ifndef AAPCS64_CALL_TEXT
+#define AAPCS64_CALL_TEXT(Name, Text)
+#endif
+
+AAPCS64_CALL_VALUE(unsigned, kMixedHeaderFPParameters, 2)
+AAPCS64_CALL_TEXT(kMixedWrapperName, "mixed_wrapper")
+AAPCS64_CALL_TEXT(kFloatSpelling, "float")
+AAPCS64_CALL_TEXT(kDoubleSpelling, "double")
+AAPCS64_CALL_TEXT(kMixedHeaderOracle, R"(
+double mixed_wrapper(double, double);
+int main(void) {
+  return mixed_wrapper(2.5, -6.5) != 42.25;
+}
+)")
+AAPCS64_CALL_TEXT(kHeaderFloatOracle, R"(
+{0} {4}({2}, {3});
+{0} {1}({2} x, {3} y) {{
+  if (x != 1.25 || y != -2.5) __builtin_trap();
+  return 7.75;
+}
+int main(void) {{ return {4}(1.25, -2.5) != 7.75; }
+)")
+
+#undef AAPCS64_CALL_TEXT
+#undef AAPCS64_CALL_VALUE

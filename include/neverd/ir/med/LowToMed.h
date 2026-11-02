@@ -15,6 +15,8 @@
 #ifndef NEVERD_IR_MED_LOWTOMED_H
 #define NEVERD_IR_MED_LOWTOMED_H
 
+#include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/FormattedCall.h"
@@ -65,6 +67,10 @@ public:
   /// and lifting: these declarations are not authenticated semantic evidence.
   void setSourceCallHintsEnabled(bool Enabled) {
     SourceCallHintsEnabled = Enabled;
+  }
+  /// Permit explicit call bindings without discovering runtime source ABIs.
+  void setSourceCallRuntimeHintsEnabled(bool Enabled) {
+    SourceCallRuntimeHintsEnabled = Enabled;
   }
   void setSourceCallSiteHints(
       const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Hints) {
@@ -120,9 +126,15 @@ public:
   void setCallMayWriteGPRs(const std::map<va_t, uint32_t> *M) {
     CallMayWriteGPRs = M;
   }
+  void setCallExitConstants(const std::map<va_t, GPRExitConstants> *M) {
+    CallExitConstants = M;
+  }
   /// Direct-callee entry-read summaries (PipelineResult::CallEntryReadGPRs).
   void setCallEntryReadGPRs(const std::map<va_t, GPRReadWidths> *M) {
     CallEntryReadGPRs = M;
+  }
+  void setCallUnreadGPRs(const std::map<va_t, GPRFamilyMask> *M) {
+    CallUnreadGPRs = M;
   }
   /// The routine whose summary gives a call through each function-pointer
   /// variable its arguments (PipelineResult::CallArgumentSources).
@@ -142,6 +154,18 @@ public:
   /// calls their arguments (PipelineResult::CallEntryArgumentCounts).
   void setCallEntryArgumentCounts(const std::map<va_t, int> *M) {
     CallEntryArgumentCounts = M;
+  }
+  void setCallEntryIntegerArguments(
+      const std::map<va_t, FixedIntegerCallArguments> *M) {
+    CallEntryIntegerArguments = M;
+  }
+  void setCallEntryFloatingArguments(
+      const std::map<va_t, FloatingCallArguments> *M) {
+    CallEntryFloatingArguments = M;
+  }
+  void setCallEntryVariadicArguments(
+      const std::map<va_t, std::vector<uint16_t>> *M) {
+    CallEntryVariadicArguments = M;
   }
   /// Imports whose supported user prototypes already own the argument
   /// summaries (PipelineResult::CallUserPrototypes). Automatic Darwin SDK
@@ -259,6 +283,10 @@ private:
   /// Keep the architectural data registers of checked ordinary SEH callbacks
   /// on explicit state edges before SSA applies the ordinary calling ABI.
   void modelSEHFinallyRegisters(MedFunc &Func);
+  /// Replace each certified same-frame Windows local unwind by the
+  /// termination-handler calls it makes and a jump to its target, before SSA
+  /// (MedFunc::SEHLocalUnwindExits).
+  void modelSEHLocalUnwindExits(MedFunc &Func, const LowFunc &Low);
 
   // --- Architecture-specific sub-register fixups (LLVM target-dispatch) ---
   // Each helper guards on TargetArch internally and is a no-op on other
@@ -293,6 +321,14 @@ private:
   RelativeLiteralOutputs armRelativeLiteralOutputs(const LowFunc &Low,
                                                    Arch TheArch,
                                                    BinaryFormat Fmt) const;
+  /// x86-64: the zero extensions that complete a relocated 32-bit address,
+  /// keyed by instruction and op sequence of the extension.  `mov r32, imm32`
+  /// sets the low register to the field and zero-extends it into the full
+  /// register; where the field's occurrence names a target that is its zero
+  /// extension (R_X86_64_32), the full register holds that whole address
+  /// (LowToMedX86.cpp).  Empty for other targets.
+  std::map<std::pair<va_t, int>, const RelocatedInstructionAddressOccurrence *>
+  x86ZeroExtendedAddressOutputs(const LowFunc &Low, Arch TheArch) const;
   /// ARM/AArch64: reconstruct a full-width NEON Q read from its two more-recent
   /// 8-byte D halves within a block (LowToMedARM.cpp, Phase B3).
   void mergeWideVectorReadsARM(MedFunc &Func);
@@ -350,7 +386,8 @@ private:
   /// its result.  Runs before buildSsa.
   void liftRuntimeRoutineCalls(MedFunc &Func);
   /// Record which GPRs a direct call's callee never writes.
-  void applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp);
+  void applyCallRegisterEffect(MedBlock &Block, MedOp &MOp, const LowOp &LOp,
+                               bool TailCall);
   /// The fixed parameters of the variadic C library routine the import a
   /// call at \p Key reaches is, where no prototype counts what it reads
   /// (`open(path, flags, ...)`: 2); 0 for any other callee.
@@ -358,6 +395,9 @@ private:
   /// Bind the arguments of a formatted call as its inputs, adding to \p MB
   /// the extraction of each floating one; false for any other operation.
   bool bindFormattedCall(MedBlock &MB, MedOp &MOp, const LowOp &LOp);
+  MedVar loadCallStackArgument(MedBlock &Block, const LowOp &Call,
+                               int64_t EntryOffset, uint16_t Bytes,
+                               bool TailCall);
   /// The import slot the register an INDIR_CALL being converted goes
   /// through was loaded from, else 0.
   va_t RegisterCallSlot = 0;
@@ -368,6 +408,7 @@ private:
   void runDce(MedFunc &Func);
   void propagate(MedFunc &Func);
   void resolveSwitchSelectorPlans(MedFunc &Func);
+  void projectOriginalAddressSelectors(MedFunc &Func);
   void resolveScalarAddressModels(
       MedFunc &Func,
       const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);
@@ -396,6 +437,7 @@ private:
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;
+  bool SourceCallRuntimeHintsEnabled = true;
   const std::map<SourceCallOccurrenceKey, SourceCallTypeHint>
       *SourceCallSiteHints = nullptr;
   bool SEHSourceProjectionEnabled = false;
@@ -422,15 +464,23 @@ private:
   /// Per-callee callee-cleanup pop (entry VA -> bytes); see setCalleePopMap.
   const std::map<va_t, int> *CalleePopMap = nullptr;
   const std::map<va_t, uint32_t> *CallMayWriteGPRs = nullptr;
+  const std::map<va_t, GPRExitConstants> *CallExitConstants = nullptr;
   const std::map<va_t, GPRReadWidths> *CallEntryReadGPRs = nullptr;
+  const std::map<va_t, GPRFamilyMask> *CallUnreadGPRs = nullptr;
   const std::map<va_t, va_t> *CallArgumentSources = nullptr;
   const std::map<va_t, int> *CallEntryStackArgs = nullptr;
   const std::set<va_t> *CallEntryStackSlots = nullptr;
   const std::map<va_t, int> *CallEntryArgumentCounts = nullptr;
+  const std::map<va_t, FixedIntegerCallArguments> *CallEntryIntegerArguments =
+      nullptr;
+  const std::map<va_t, FloatingCallArguments> *CallEntryFloatingArguments =
+      nullptr;
   const std::set<va_t> *UserPrototypeCallees = nullptr;
   const std::set<va_t> *CallDispatchThunks = nullptr;
   std::set<va_t> *CallSummaryKeysRead = nullptr;
   const std::map<va_t, int> *CallVariadicFrom = nullptr;
+  const std::map<va_t, std::vector<uint16_t>> *CallEntryVariadicArguments =
+      nullptr;
   const std::map<va_t, FormattedCall> *FormattedCalls = nullptr;
   /// Argument registers DispatchCallDefinedArgs tracks, one bit each.
   static constexpr size_t kTrackedArgSlots = 8;

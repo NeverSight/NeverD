@@ -3,6 +3,8 @@
 #include "Address.h"
 #include "LibraryCodeView.h"
 #include "StyledText.h"
+#include "ViewSearch.h"
+#include "WheelInput.h"
 
 #include "neverd/support/IntegerLiterals.h"
 
@@ -14,6 +16,7 @@
 #include <QVector>
 #include <QWidget>
 #include <optional>
+#include <tuple>
 
 class QComboBox;
 class QLabel;
@@ -67,6 +70,8 @@ public:
   void load(Address function, const QString &representation,
             std::optional<QJsonObject> options = std::nullopt);
   const QJsonObject &sourceOptions() const { return sourceOptions_; }
+  const QJsonObject &recoveryReport() const { return RecoveryReport; }
+  const QJsonObject &recoveryOptions() const { return RecoveryOptions; }
   void setSourceOptions(const QJsonObject &options);
   /// The options a function opens with in this representation.
   QJsonObject defaultSourceOptions() const;
@@ -81,6 +86,7 @@ public:
   QString representation() const { return representation_; }
   /// The assembly-selected address on the cursor line, or its primary mapping.
   std::optional<Address> currentAddress() const;
+  QRect cursorViewportRect() const;
   QVector<Address> currentAddresses() const;
   /// Select the first row mapped to \p address, waiting for all pages and
   /// expanding its fold if needed. A new load or cursor move cancels the wait.
@@ -89,6 +95,17 @@ public:
   /// row mapped to it and mark the others, without unfolding, waiting or
   /// reporting an instruction no row maps. Neither move says locationChanged.
   void revealAddress(Address address);
+  /// Keep the cursor's row and column and the first shown row as the place
+  /// to come back to at \p address, the jump history's stop for it.
+  void keepPlace(Address address);
+  /// Go back to the place kept at \p address, as Hex-Rays' Esc does: now, or
+  /// once the text on its way completes. Only the same function, shown the
+  /// same way, has that place; false otherwise.
+  bool returnToPlace(Address address);
+  /// The number the margin shows for the line Back returns to at
+  /// \p address, when the place kept there is in \p function and the code is
+  /// shown as it was then.
+  std::optional<int> keptLine(Address address, Address function) const;
   QString currentToken() const;
   /// The selected source name's image address or declared-local identity.
   std::optional<QJsonObject> renameTarget() const;
@@ -102,8 +119,9 @@ public:
   /// Reveal and select an occurrence, expanding any fold that contains it.
   bool selectLocalReference(const QJsonObject &target,
                             const LocalReference &reference);
-  /// Changes when a load, cancellation or clear retires this source document.
-  quint64 documentVersion() const { return serial_; }
+  /// Changes when a load or clear replaces this source document. Hiding a
+  /// complete document cancels requests without replacing its contents.
+  quint64 documentVersion() const { return DocumentVersion; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -128,14 +146,33 @@ public:
   };
   std::optional<NumberTarget> numberTarget() const;
   QString selectedText() const;
+  /// What Copy takes: the selection, a folded summary as the code it stands
+  /// for, or, as in IDA, the name or word under the cursor, which the
+  /// highlight marks; nothing on blank space.
+  QString copyText() const;
+  /// The source name or token under the cursor; none in a folded summary.
+  QString cursorWord() const;
   QString allText() const;
   bool findText(const QString &text, bool forward);
+  /// Source coordinates, independent of the current fold projection.
+  std::pair<int, int> searchSelection() const;
+  bool selectSearchRange(int begin, int length);
+  void setSearchHighlight(const ViewSearchQuery &query);
+  QString searchSeed() const;
   /// Move the cursor to \p line and reveal it.
   void setCursorLine(int line) { moveCursor(line, 0, false); }
   /// Select the whole text, as Ctrl+A does, without moving the view.
   void selectAll();
   /// The displayed line the cursor is on.
   int cursorLine() const { return cursorLine_; }
+  int cursorColumn() const { return cursorColumn_; }
+  /// The bracket the cursor is on and the one it pairs with, as shown lines
+  /// and columns, which Hex-Rays marks together; none off a bracket, for one
+  /// in a string or comment, or while its partner is not in the text.
+  struct BracketPair {
+    int line = 0, column = 0, partnerLine = 0, partnerColumn = 0;
+  };
+  std::optional<BracketPair> bracketPair() const;
   int lineCount() const { return int(lines_.size()); }
   /// Recognized library operations that can fold into one-line summaries.
   int foldableCount() const { return library_.foldableCount(); }
@@ -252,6 +289,9 @@ private:
   int epilogueLine() const;
   /// The token at a line and column; in LLVM IR, a name with its sigil.
   QString tokenAt(int line, int column) const;
+  /// How this page's words take dots: pseudocode, in any of its languages,
+  /// splits member accesses; IR keeps dotted names.
+  TokenDots tokenDots() const;
   /// A double-click in LLVM IR: a global goes to the image address it stands
   /// for, or else to what the binary names so; any other name goes to the
   /// line that defines it.
@@ -278,6 +318,7 @@ private:
   int textLeft() const;
   void moveCursor(int line, int column, bool extend);
 
+  WheelInput wheel_;
   Session &session_;
   QVector<Line> lines_;
   QVector<int> lineStarts_;
@@ -301,15 +342,36 @@ private:
     int cursorLine = 0, cursorColumn = 0, topLine = 0;
   };
   std::optional<SourcePlace> placeAfterLoad_;
+  /// The places keepPlace kept, newest last, with the text they were in.
+  struct KeptPlace {
+    Address address = 0, function = 0;
+    QString representation;
+    QJsonObject options;
+    SourcePlace place;
+  };
+  QVector<KeptPlace> keptPlaces_;
+  /// The place kept at \p address, if the code is shown as it was then.
+  const KeptPlace *keptPlace(Address address) const;
+  SourcePlace currentPlace() const;
+  /// The first shown line at or after a source line.
+  int shownLine(int sourceLine) const;
   QString representation_, status_, highlight_;
+  ViewSearchQuery SearchHighlight;
   /// Why the source on its way is not the one asked for (showOrdinary).
   QString statusNote_;
   QJsonObject sourceOptions_, renderedOptions_;
+  QJsonObject RecoveryReport, RecoveryOptions;
   quint64 serial_ = 0;
+  quint64 DocumentVersion = 0;
   bool inComment_ = false, loading_ = false, foldAfterLoad_ = false;
   bool complete_ = false;
+  int pageLines_ = 0;
+  /// A checked name-only refresh keeps the painted document until every
+  /// replacement page arrives. Cancellation discards these pages together.
+  std::optional<QVector<QJsonObject>> refreshPages_;
   bool interrupted_ = false;
   bool foldPreludeAfterLoad_ = true;
+  bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;
   QString blockStructureAfterLoad_;
   /// The first page's prelude: lines and end_byte.
@@ -327,6 +389,18 @@ private:
   /// The global last activated by its name, whose declaration shows if the
   /// binary does not name it.
   QString unresolvedDeclaration_;
+  /// Hint the type of the import a call at \p line and \p column names, and
+  /// where its arguments go, as Hex-Rays' hint does, once the worker answers;
+  /// false where no call is named.
+  bool hintFunction(int line, int column, const QPoint &globalPosition);
+  /// This document's hints by the name asked about, empty for a name that
+  /// names no function.
+  QHash<QString, QString> functionHints_;
+  quint64 hintsVersion_ = 0;
+  /// The hint on its way, which another hover, a move off its name or a
+  /// scroll drops, and the rectangle of its name.
+  quint64 hintSerial_ = 0;
+  QRect hintRect_;
   /// The language the first page names, and how many declarations it shows
   /// as C because that language could not spell them.
   QString pageLanguage_;
@@ -355,6 +429,11 @@ private:
   const Declarations &declarations() const;
   mutable std::optional<Declarations> declarations_;
   int cursorLine_ = 0, cursorColumn_ = 0;
+  /// Changes whenever the shown lines do, so the bracket pair found for a
+  /// cursor place is found again.
+  quint64 linesStamp_ = 0;
+  mutable std::optional<BracketPair> brackets_;
+  mutable std::tuple<int, int, quint64> bracketsAt_{-1, -1, 0};
   std::optional<std::pair<int, int>> anchor_;
   bool selecting_ = false;
   /// Extend the selection to a point of the viewport, as dragging does; a

@@ -1,20 +1,22 @@
 #include "../../LLVMHostFixture.h"
 #include "NeverDLiftFixture.h"
+#include "X87ProjectionFixture.h"
 
 #include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
-#include "neverd/backend/llvm/X86X87ImportCall.h"
+#include "neverd/backend/llvm/X86/X86X87ImportCall.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
+#include "neverd/ir/low/X86/X87ImportCall.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -60,6 +62,7 @@ struct X87CallGraphCacheTestAccess {
 } // namespace neverd::detail
 
 class X86_32_X87FPU : public NeverDLiftTest {};
+class X87CallReplay : public X87ProjectionFixture {};
 
 static fs::path testObj() {
   return fs::path(TEST_OBJ_DIR) / "test_x87_fpu32.o";
@@ -374,6 +377,40 @@ BinaryImage x87ExamineImage(Arch A, BinaryFormat Format,
   return Image;
 }
 
+BinaryImage x87NestedContextImage(BinaryFormat Format, bool ContextFirst,
+                                  bool ContextLeaf, bool RecursiveSibling) {
+  BinaryImage Image =
+      x87ExamineImage(Arch::X64, Format, std::vector<uint8_t>(0x400, 0xcc));
+  Image.X87ContextOverride = true;
+  Image.Symbols.clear();
+  Image.KnownCodeRanges.clear();
+  const auto Publish = [&](va_t Address, const std::vector<uint8_t> &Bytes) {
+    std::copy(Bytes.begin(), Bytes.end(),
+              Image.Segments[0].Data.begin() + Address - Image.Entry);
+    Image.Symbols.push_back(Symbol::makeFunc(Address, Bytes.size()));
+    Image.KnownCodeRanges.emplace_back(Address, Address + Bytes.size());
+  };
+  Publish(0x1000, {0xe8, 0xfb, 0, 0, 0, 0x31, 0xc0, 0xc3});
+  std::vector<uint8_t> Body;
+  for (va_t Target : ContextFirst ? std::array<va_t, 2>{0x1200, 0x1300}
+                                  : std::array<va_t, 2>{0x1300, 0x1200}) {
+    const uint32_t Displacement = uint32_t(Target - (0x1100 + Body.size() + 5));
+    Body.push_back(0xe8);
+    for (unsigned I = 0; I != 4; ++I)
+      Body.push_back(uint8_t(Displacement >> (8 * I)));
+  }
+  Body.insert(Body.end(), {0xb8, 7, 0, 0, 0, 0xc3});
+  Publish(0x1100, Body);
+  Publish(0x1200, ContextLeaf ? std::vector<uint8_t>{0xd9, 0xe8, 0xdd, 0xd8,
+                                                     0xc3} // fld1; pop; ret
+                              : std::vector<uint8_t>{0xc3});
+  Publish(0x1300, RecursiveSibling
+                      ? std::vector<uint8_t>{0xe8, 0xfb, 0xff, 0xff, 0xff, 0xc3}
+                      // call self; ret
+                      : std::vector<uint8_t>{0xff, 0xe0}); // jmp rax
+  return Image;
+}
+
 BinaryImage x87SwitchImage(Arch A) {
   // A linked PE switch with relocated pointers embedded after the code.
   // All ordinary paths enter with an empty x87 stack and define ST0.
@@ -558,6 +595,33 @@ TEST(X87ImportCall, NativeCallsCarryTheOriginalStackArgumentsAndResult) {
       }
 }
 
+TEST(X87ImportCall, RecognizedNamesDoNotGrantUnsupportedTransport) {
+  for (const char *Name :
+       {"_CIasin", "_CIatan2", "_CIcosh", "_CIexp", "_CIfmod", "_CIlog",
+        "_CIlog10", "_CIsinh", "_CItan", "_CItanh"}) {
+    SCOPED_TRACE(Name);
+    EXPECT_TRUE(isX87CRTImportName(Name));
+    auto Image = x87CRTCallImage(Name, 1);
+    EXPECT_EQ(x87CRTImportArguments(Image, 0x2000), 0u);
+    EXPECT_EQ(x87CRTImportArguments(Image, 0x1100), 0u);
+  }
+  for (const char *Name : {"_ciacos", "_CIACOS", "_CIsqrt_extra"}) {
+    SCOPED_TRACE(Name);
+    EXPECT_FALSE(isX87CRTImportName(Name));
+    auto Image = x87CRTCallImage(Name, 1);
+    EXPECT_EQ(x87CRTImportArguments(Image, 0x2000), 0u);
+  }
+  auto Image = x87CRTCallImage("_CIsqrt", 1);
+  Image.Imports[0].Module = "mSvCrT.dLl";
+  EXPECT_EQ(x87CRTImportArguments(Image, 0x2000), 1u);
+  for (const char *Module :
+       {"ucrtbase.dll", "msvcrtd.dll", "msvcr100.dll.extra"}) {
+    SCOPED_TRACE(Module);
+    Image.Imports[0].Module = Module;
+    EXPECT_EQ(x87CRTImportArguments(Image, 0x2000), 0u);
+  }
+}
+
 TEST(X87ImportCall, UnprovedInputsAndUnsupportedNativeContractsStayRejected) {
   for (unsigned Mutation = 0; Mutation < 11; ++Mutation) {
     auto Image = x87CRTCallImage(Mutation == 2 ? "_CIpow" : "_CIsqrt",
@@ -655,7 +719,7 @@ TEST(X87ImportCall, AdapterDeclarationsRequireTheCheckedPE32ABI) {
   }
 }
 
-TEST_F(X86_32_X87FPU, NativeCRTStackCallsMatchIndependentMachineCallers) {
+TEST_F(X87CallReplay, NativeCRTStackCallsMatchIndependentMachineCallers) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "requires a Linux x86-64 host with native i386 execution";
 #else
@@ -667,6 +731,7 @@ TEST_F(X86_32_X87FPU, NativeCRTStackCallsMatchIndependentMachineCallers) {
         SCOPED_TRACE(Count);
         SCOPED_TRACE(Route);
         SCOPED_TRACE(NoOpt);
+        selectCase(Arch::X86, (Count * 3 + Route) * 2 + unsigned(NoOpt));
         const char *Name = Count == 1 ? "_CIsqrt" : "_CIpow";
         auto Image = x87CRTCallImage(Name, Count, Route);
         llvm::LLVMContext Context;
@@ -706,13 +771,13 @@ TEST_F(X86_32_X87FPU, NativeCRTStackCallsMatchIndependentMachineCallers) {
             << (Count == 1 ? "0xc0a00000" : "0x40000000")
             << "\n.section .note.GNU-stack,\"\",@progbits\n";
         for (const std::string Opt : {"-O0", "-O2"}) {
-          const auto Object = tmpFile("crt-stack.obj");
+          const auto Object = tmpFile("crt-stack" + Opt + ".obj");
           const auto COFF = exec(NEVERD_TEST_CLANG,
                                  {"--target=i686-pc-windows-msvc", Opt, "-c",
                                   LLVMFile.string(), "-o", Object.string()});
           ASSERT_TRUE(COFF.ok()) << COFF.err << IR;
           for (const auto &Source : {NativeFile, LLVMFile}) {
-            const auto Binary = tmpFile("crt-stack-execution");
+            const auto Binary = tmpFile(Source.stem().string() + Opt + ".exe");
             const auto Build = exec(
                 NEVERD_TEST_CLANG,
                 {"--target=i386-linux-gnu", Opt, "-ffreestanding",
@@ -727,12 +792,13 @@ TEST_F(X86_32_X87FPU, NativeCRTStackCallsMatchIndependentMachineCallers) {
 #endif
 }
 
-TEST_F(X86_32_X87FPU, NativeCRTAdaptersTransportAllBinary80Bits) {
+TEST_F(X87CallReplay, NativeCRTAdaptersTransportAllBinary80Bits) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "requires a Linux x86-64 host with native i386 execution";
 #else
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "requires Clang's i386 target";
+  selectCase(Arch::X86, 0);
   llvm::LLVMContext Context;
   llvm::Module Module("x87-crt-adapter", Context);
   Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
@@ -780,7 +846,7 @@ TEST_F(X86_32_X87FPU, NativeCRTAdaptersTransportAllBinary80Bits) {
          "movl %eax,%ebx\nmovl $1,%eax\nint $0x80\n"
          ".section .note.GNU-stack,\"\",@progbits\n";
   for (const std::string Opt : {"-O0", "-O2"}) {
-    const auto Binary = tmpFile("crt-adapter-execution");
+    const auto Binary = tmpFile("crt-adapter" + Opt + ".exe");
     const auto Build =
         exec(NEVERD_TEST_CLANG,
              {"--target=i386-linux-gnu", Opt, "-ffreestanding", "-fuse-ld=lld",
@@ -788,7 +854,7 @@ TEST_F(X86_32_X87FPU, NativeCRTAdaptersTransportAllBinary80Bits) {
               HarnessFile.string(), "-o", Binary.string()});
     ASSERT_TRUE(Build.ok()) << Build.err << IR;
     ASSERT_TRUE(exec(Binary.string(), {}).ok()) << IR;
-    const auto Object = tmpFile("crt-adapter.obj");
+    const auto Object = tmpFile("crt-adapter" + Opt + ".obj");
     const auto COFF =
         exec(NEVERD_TEST_CLANG, {"--target=i686-pc-windows-msvc", Opt, "-c",
                                  LLVMFile.string(), "-o", Object.string()});
@@ -1326,6 +1392,90 @@ TEST(X87CallStack, ProvesCrossBlockResultsBeforeExpandingLoopStates) {
       }
 }
 
+TEST(X87CallStack, KnownContextRequirementSurvivesUnresolvedSiblingCalls) {
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (bool ContextFirst : {false, true})
+      for (bool ContextLeaf : {false, true})
+        for (bool RecursiveSibling : {false, true})
+          for (bool SharedGraphs : {false, true}) {
+            SCOPED_TRACE(static_cast<int>(Format));
+            SCOPED_TRACE(ContextFirst);
+            SCOPED_TRACE(ContextLeaf);
+            SCOPED_TRACE(RecursiveSibling);
+            SCOPED_TRACE(SharedGraphs);
+            BinaryImage Image = x87NestedContextImage(
+                Format, ContextFirst, ContextLeaf, RecursiveSibling);
+            Decoder Dec;
+            ASSERT_TRUE(Dec.init(Image));
+            const std::set<va_t> Entries{0x1000, 0x1100, 0x1200, 0x1300};
+            const std::set<va_t> Unsafe{0x1300};
+            CFGBuilder Builder;
+            Builder.setKnownFuncEntries(&Entries);
+            Builder.setUnsafeJumpTableBranches(&Unsafe);
+            if (SharedGraphs)
+              Builder.setX87CallGraphCache(createX87CallGraphCache());
+            for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+              const LowFunc Low =
+                  Builder.build(Image, Dec, Image.Entry, "nested_context");
+              ASSERT_TRUE(Low.hasCompleteInstructionLift());
+              unsigned Captures = 0;
+              for (const LowBlock &Block : Low.Blocks)
+                for (const LowOp &Op : Block.Ops)
+                  Captures += Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                              Op.Inputs[0].isConst() &&
+                              Op.Inputs[0].Offset ==
+                                  unsigned(Intrinsic::X87ContextBegin);
+              EXPECT_EQ(Captures, unsigned(ContextLeaf));
+              if (ContextLeaf)
+                expectOwnedCallTransport(Low);
+            }
+          }
+}
+
+TEST(X87CallStack, SignatureOnlyWin64WrappersKeepLocalStateObservers) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  const auto Captures = [](const LowFunc &F) {
+    unsigned Count = 0;
+    for (const auto &Block : F.Blocks)
+      for (const auto &Op : Block.Ops)
+        Count += Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                 Op.Inputs[0].isConst() &&
+                 Op.Inputs[0].Offset == unsigned(Intrinsic::X87ContextBegin);
+    return Count;
+  };
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (bool Owned : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(Owned);
+      auto Image = x87NestedContextImage(Format, false, true, true);
+      Image.X87ContextOverride = Owned;
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Image));
+      const std::set<va_t> Entries{0x1000, 0x1100, 0x1200, 0x1300};
+      CFGBuilder Builder;
+      Builder.setKnownFuncEntries(&Entries);
+      Builder.setX87CallGraphCache(createX87CallGraphCache());
+      for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+        const auto Signature =
+            Builder.buildCallSignatureProof(Image, Dec, 0x1100, "signature");
+        ASSERT_TRUE(Signature.hasCompleteInstructionLift());
+        EXPECT_EQ(Captures(Signature),
+                  unsigned(Owned && Format != BinaryFormat::COFF));
+        if (Owned && Format == BinaryFormat::COFF && Repeat == 0)
+          EXPECT_EQ(Access::stats(Builder)[1], 0u);
+        const auto Local =
+            Builder.buildCallSignatureProof(Image, Dec, 0x1200, "local");
+        ASSERT_TRUE(Local.hasCompleteInstructionLift());
+        EXPECT_EQ(Captures(Local), unsigned(Owned));
+        const auto Definition = Builder.build(Image, Dec, 0x1100, "definition");
+        ASSERT_TRUE(Definition.hasCompleteInstructionLift());
+        EXPECT_EQ(Captures(Definition), unsigned(Owned));
+      }
+    }
+}
+
 TEST(X87CallStack, IncompleteCallClosureCannotAcquireAnEffect) {
   for (unsigned Count :
        {limits::kMaxX87CallProofDepth, limits::kMaxX87CallProofDepth + 1}) {
@@ -1631,6 +1781,56 @@ TEST(X87CallStack, SelectedCallerKeepsTheConsumerDeclarationBinary80) {
       ASSERT_EQ(Callee->arg_size(), 1u);
       EXPECT_TRUE(Callee->getReturnType()->isIntegerTy(32));
       EXPECT_TRUE(Callee->getArg(0)->getType()->isX86_FP80Ty());
+    }
+}
+
+TEST(X87CallStack, CachedSelectionsKeepMissingPrefixBeforeBinary80) {
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (bool NoOpt : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(NoOpt);
+      auto Image =
+          x87ConsumingCallImage(Format,
+                                {0x83, 0xec, 4, 0xdb, 0x1c, 0x24, 0x58, 0x01,
+                                 0xc8, 0x01, 0xd0, 0x03, 0x44, 0x24, 4, 0xc3},
+                                false, true);
+      auto &Bytes = Image.Segments[0].Data;
+      const std::array<uint8_t, 4> OutgoingStore{0x89, 0x04, 0x24, 0xb9};
+      const auto At = std::search(Bytes.begin(), Bytes.end(),
+                                  OutgoingStore.begin(), OutgoingStore.end());
+      ASSERT_NE(At, Bytes.end());
+      std::fill(At, At + 3, 0x90);
+      PipelineAnalysisCache Cache;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.NoOpt = NoOpt;
+      Options.AnalysisCache = &Cache;
+      llvm::LLVMContext Context;
+      for (const va_t Entry : {va_t(0x1000), va_t(0x1100), va_t(0x1000)}) {
+        Options.OnlyFunctionEntries = {Entry};
+        auto Source = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Source.Success) << Source.Error;
+        if (Entry != 0x1000)
+          continue;
+        const auto Caller =
+            llvm::find_if(Source.MedFuncs,
+                          [](const MedFunc &F) { return F.Entry == 0x1000; });
+        ASSERT_NE(Caller, Source.MedFuncs.end());
+        ASSERT_EQ(Caller->CallInfos.size(), 1u);
+        const auto &Args = Caller->CallInfos.front().Args;
+        ASSERT_EQ(Args.size(), 4u);
+        EXPECT_EQ(Args[2].Kind, MedVar::Unspecified);
+        EXPECT_EQ(Args[3].Size, 10u);
+        EXPECT_NE(Args[3].Kind, MedVar::Unspecified);
+      }
+      Options.OnlyFunctionEntries = {0x1000};
+      Options.LiftMode = true;
+      const auto Lift = Pipeline().run(Image, Context, Options);
+      EXPECT_FALSE(Lift.Success);
+      EXPECT_NE(Lift.Error.find("missing an ordinary argument"),
+                std::string::npos)
+          << Lift.Error;
     }
 }
 
@@ -2984,6 +3184,30 @@ TEST(CallRegisterBodyCache, ParallelReadersAndEvictionKeepBorrowedBodiesAlive) {
   EXPECT_EQ(First->Blocks.front().StartAddr, Image.Entry);
 }
 
+TEST(CompleteFunctionCache,
+     KnownContextUseCannotBeHiddenByAnUnresolvedSibling) {
+  using Access = detail::X87CallGraphCacheTestAccess;
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (bool ContextFirst : {false, true})
+      for (bool ContextLeaf : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(ContextFirst);
+        SCOPED_TRACE(ContextLeaf);
+        BinaryImage Image =
+            x87NestedContextImage(Format, ContextFirst, ContextLeaf, true);
+        const std::set<va_t> Entries{0x1000, 0x1100, 0x1200, 0x1300};
+        auto Cache = createX87CallGraphCache(nullptr, nullptr, true);
+        CFGBuilder Seed;
+        Seed.setKnownFuncEntries(&Entries);
+        Seed.setX87CallGraphCache(Cache);
+        Access::query(Seed, Image, Image.Entry);
+        ASSERT_GT(Access::summaryStats(Seed)[0], 0u);
+        for (unsigned Repeat = 0; Repeat != 2; ++Repeat)
+          EXPECT_EQ(bool(cachedFunction(Cache, Image, &Entries)), !ContextLeaf);
+      }
+}
+
 TEST(X87CallGraphCache, ImmutableProjectionRejectionsReplayBudgetsExactly) {
   using Access = detail::X87CallGraphCacheTestAccess;
   for (Arch Architecture : {Arch::X86, Arch::X64})
@@ -3685,7 +3909,7 @@ TEST(X87CallGraphCache, EvictionBoundsRetentionWithoutChangingResults) {
   EXPECT_EQ(Access::stats(Builder)[0], Before[0] + 1);
 }
 
-TEST_F(X86_32_X87FPU, NativeAndLiftedCallLoopsReturnTheIndependentSum) {
+TEST_F(X87CallReplay, NativeAndLiftedCallLoopsReturnTheIndependentSum) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "requires a Linux x86-64 host with native i386 execution";
 #else
@@ -3698,6 +3922,7 @@ TEST_F(X86_32_X87FPU, NativeAndLiftedCallLoopsReturnTheIndependentSum) {
         SCOPED_TRACE(static_cast<int>(Architecture));
         SCOPED_TRACE(Shape);
         SCOPED_TRACE(NoOpt);
+        selectCase(Architecture, Shape * 2 + unsigned(NoOpt));
         const std::string Target = Architecture == Arch::X86
                                        ? "--target=i386-linux-gnu"
                                        : "--target=x86_64-linux-gnu";
@@ -3732,6 +3957,12 @@ TEST_F(X86_32_X87FPU, NativeAndLiftedCallLoopsReturnTheIndependentSum) {
         Emit.EmitIncludes = false;
         ASSERT_TRUE(HighCEmitter().emit(High.HighFuncs, COS, Emit));
         std::ofstream(CFile) << C;
+        const auto LLVMCFile = tmpFile("call-loop-llvm.c");
+        std::string LLVMC = "#include <stdint.h>\n#include <stddef.h>\n";
+        llvm::raw_string_ostream LOS(LLVMC);
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, LOS, Emit, nullptr,
+                                        &Image));
+        std::ofstream(LLVMCFile) << LLVMC;
         // A separately emitted caller must declare the same return carrier
         // when its callee is linked from independently assembled machine code.
         const auto ExternalCFile = tmpFile("call-loop-external.c");
@@ -3770,10 +4001,11 @@ TEST_F(X86_32_X87FPU, NativeAndLiftedCallLoopsReturnTheIndependentSum) {
         Harness.close();
         for (const std::string Opt : {"-O0", "-O2"})
           for (const auto &Source :
-               {NativeFile, LLVMFile, CFile, ExternalCFile}) {
+               {NativeFile, LLVMFile, CFile, LLVMCFile, ExternalCFile}) {
             SCOPED_TRACE(Opt);
             SCOPED_TRACE(Source.string());
-            const auto Binary = tmpFile("call-loop-execution");
+            const auto Binary =
+                tmpFile(Source.filename().string() + Opt + ".exe");
             std::vector<std::string> Args{Target,
                                           Opt,
                                           "-ffreestanding",
@@ -3789,9 +4021,10 @@ TEST_F(X86_32_X87FPU, NativeAndLiftedCallLoopsReturnTheIndependentSum) {
             if (Source == ExternalCFile)
               Args.push_back(NativeCalleesFile.string());
             auto Build = exec(NEVERD_TEST_CLANG, Args);
-            ASSERT_TRUE(Build.ok()) << Build.err << IR << C << ExternalC;
+            ASSERT_TRUE(Build.ok())
+                << Build.err << IR << C << LLVMC << ExternalC;
             const auto Run = exec(Binary.string(), {});
-            ASSERT_TRUE(Run.ok()) << Run.err << IR << C << ExternalC;
+            ASSERT_TRUE(Run.ok()) << Run.err << IR << C << LLVMC << ExternalC;
           }
       }
 #endif

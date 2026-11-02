@@ -50,6 +50,47 @@ TEST_F(PEFixedImageTest, RawArchitectureReceiptCompatibility) {
   }
 }
 
+TEST_F(PEFixedImageTest, RawReceiptExtensionSlotsSelectAndBindV2) {
+  // Bits stored in an input slot beyond the six that v1 encodes move the
+  // graph to its v2 domain, which binds them; the evidence keeps v1.
+  auto Loaded = load(returningImportFixture());
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  const auto O = returningRawOptions(0x400000);
+  const auto Good = specializeBinaryInterpreter(*Loaded, Base + 0x1100, O);
+  ASSERT_TRUE(Good.complete()) << Good.Diagnostic;
+  ASSERT_TRUE(Good.RawEnvironment);
+  const auto Body = [](SpecializationResult &R) -> LowOp & {
+    return R.Residual.Blocks.back().Ops.front();
+  };
+  for (size_t Slot = kLowUndefinedV1InputSlots; Slot != kLowOperationInputs;
+       ++Slot) {
+    SCOPED_TRACE(Slot);
+    auto R = Good;
+    ASSERT_LE(Body(R).NumInputs, kLowUndefinedV1InputSlots);
+    ++Body(R).Inputs[Slot].Offset;
+    auto Error = validateSpecializationRawEnvironment(R, O);
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+    Error = sealRawEnvironment(R, Good.RawEnvironment->Domain, O);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    EXPECT_NE(R.RawEnvironment->GraphDigest, Good.RawEnvironment->GraphDigest);
+    EXPECT_EQ(R.RawEnvironment->EvidenceDigest,
+              Good.RawEnvironment->EvidenceDigest);
+    for (bool Clear : {false, true}) {
+      SCOPED_TRACE(Clear);
+      auto Changed = R;
+      auto &Input = Body(Changed).Inputs[Slot];
+      if (Clear)
+        Input = NdVar{};
+      else
+        ++Input.Offset;
+      Error = validateSpecializationRawEnvironment(Changed, O);
+      ASSERT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+    }
+  }
+}
+
 TEST_F(PEFixedImageTest, RawArchitectureCannotRelabelEvidence) {
   auto Loaded = load(machineExitFixture({0xff, 0xd0}));
   ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());

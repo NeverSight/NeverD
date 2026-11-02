@@ -114,8 +114,9 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
     NeedsSignExtension |=
         Instruction.Semantics.Result == ResultExtension::Sign32;
     const bool SignedCompare =
-        Instruction.Op == Operation::SGt || Instruction.Op == Operation::SGe ||
-        Instruction.Op == Operation::SLt || Instruction.Op == Operation::SLe;
+        !Instruction.reflexiveComparisonResult() &&
+        (Instruction.Op == Operation::SGt || Instruction.Op == Operation::SGe ||
+         Instruction.Op == Operation::SLt || Instruction.Op == Operation::SLe);
     NeedsSignedCompare32 |= SignedCompare && Instruction.Width == kWordBitWidth;
     NeedsSignedCompare64 |=
         SignedCompare && Instruction.Width == kDoubleWordBitWidth;
@@ -422,6 +423,15 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
           "}\n";
   };
 
+  if (!Structured && Options.PartitionDispatcher) {
+    auto Partition = partitionSource(Program);
+    if (!Partition)
+      return Partition.takeError();
+    emitPartitionedProgram(OS, Program, BySlot, *Partition);
+    EmitPublicEntrypoints();
+    return Buffer;
+  }
+
   OS << "static neverd_sbf_status_v2 nd_program_impl("
         "nd_environment_view *env, uint64_t input, "
         "uint64_t instruction_data, uint64_t *result) {\n"
@@ -435,7 +445,10 @@ llvm::Expected<std::string> emitC(const SBFProgram &Program,
           "  uint64_t saved_fp[NEVERD_SBF_MAX_CALL_DEPTH] = {0};\n"
           "  uint32_t return_pc[NEVERD_SBF_MAX_CALL_DEPTH] = {0};\n"
           "  size_t depth = 0, i = 0; uint32_t pc = "
-       << Program.Low.EntrySlot << ";\n";
+       << Program.Low.EntrySlot
+       << ";\n"
+          "  (void)saved; (void)saved_fp; (void)return_pc; (void)depth; "
+          "(void)i;\n";
   OS << "  r[NEVERD_SBF_INPUT_REGISTER] = input; "
         "r[NEVERD_SBF_INSTRUCTION_DATA_REGISTER] = instruction_data; "
         "r[NEVERD_SBF_FRAME_POINTER] = NEVERD_SBF_STACK_START "

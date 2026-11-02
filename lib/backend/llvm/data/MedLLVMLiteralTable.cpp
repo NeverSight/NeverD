@@ -382,10 +382,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           OwnerSec->isReadable() &&
           (Img->isMachO() ? !Img->isCodeAddress(OwnerVA)
                           : !OwnerSec->isExecutable()) &&
-          (!OwnerSec->isWritable() ||
-           section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) ||
-           section_names::isReadOnlyAfterRelocSectionName(
-               OwnerSec->SegmentName));
+          Img->readOnlyAfterRelocations(OwnerVA, 1);
     if (OwnerSeg->isWritable() && !isReadOnlyAfterReloc(OwnerSeg) &&
         !HasReadOnlySectionEvidence)
       return false;

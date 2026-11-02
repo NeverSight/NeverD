@@ -18,12 +18,16 @@
 
 namespace neverd::limits::transport {
 
+// Classic listing protocol: the maximum rows on either side of an anchor.
+inline constexpr std::size_t kListingMaxPageLines = 2000;
+
 // tools/common/transport/Json.h
 inline constexpr std::size_t kJsonMaxJsonBytes = 8 * 1024 * 1024;
 inline constexpr std::size_t kJsonMax = 4096;
 
 // tools/common/transport/Json.cpp
 inline constexpr int kJsonParseJsonDepthLimit = 64;
+inline constexpr std::size_t kJsonRetainedParserBytes = 64 * 1024;
 
 } // namespace neverd::limits::transport
 

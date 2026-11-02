@@ -12,10 +12,11 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86CompatibilityReturnUndefined.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -118,7 +119,8 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch) {
   } else if (Insn->bytes[0] == 0xc4 || X86.opcode[0] == 0xc4) {
     CanonicalVex3EncodingInfo Encoding;
     if (!parseCanonicalVex3EncodingInfo(Insn, X86, TargetArch, Encoding) ||
-        (Encoding.P0 & 0x1f) != 7 || Encoding.Opcode != 0xf8 ||
+        (Encoding.P0 & 0x1f) != 7 ||
+        (Encoding.Opcode != 0xf8 && Encoding.Opcode != 0xf6) ||
         (Encoding.P1 & 0xfc) != 0x78 || (Encoding.ModRM & 0xf8) != 0xc0 ||
         !validateCanonicalVex3RegisterTail(Insn, X86, Encoding, 4) ||
         X86.encoding.imm_offset != Encoding.Offset + 5 ||
@@ -128,10 +130,14 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch) {
     const bool Write = (Encoding.P1 & 3) == 2;
     if (!Write && (Encoding.P1 & 3) != 3)
       return std::nullopt;
-    BNumber = ((~Encoding.P0 & 0x20) >> 2) | (Encoding.ModRM & 7);
+    BNumber = Encoding.rmIndex();
     Immediate = readImmediate32(&Insn->bytes[Encoding.Offset + 5]);
-    Kind = Write ? X86MsrAccessKind::UwrmsrVexImmediate
-                 : X86MsrAccessKind::UrdmsrVexImmediate;
+    if (Encoding.Opcode == 0xf6)
+      Kind = Write ? X86MsrAccessKind::WrmsrnsVexImmediate
+                   : X86MsrAccessKind::RdmsrVexImmediate;
+    else
+      Kind = Write ? X86MsrAccessKind::UwrmsrVexImmediate
+                   : X86MsrAccessKind::UrdmsrVexImmediate;
   } else {
     size_t OpcodeOffset = 0;
     uint8_t SegmentPrefix = 0;
@@ -222,7 +228,9 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch) {
   }
 
   const bool Privileged = *Kind == X86MsrAccessKind::RdmsrImmediate ||
-                          *Kind == X86MsrAccessKind::WrmsrnsImmediate;
+                          *Kind == X86MsrAccessKind::WrmsrnsImmediate ||
+                          *Kind == X86MsrAccessKind::RdmsrVexImmediate ||
+                          *Kind == X86MsrAccessKind::WrmsrnsVexImmediate;
   if (Privileged) {
     if (Insn->detail->groups_count != 1 ||
         Insn->detail->groups[0] != X86_GRP_PRIVILEGE)
@@ -233,8 +241,10 @@ classifyExplicitMsr(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch) {
 
   switch (*Kind) {
   case X86MsrAccessKind::RdmsrImmediate:
+  case X86MsrAccessKind::RdmsrVexImmediate:
     return Insn->id == X86_INS_RDMSR ? Kind : std::nullopt;
   case X86MsrAccessKind::WrmsrnsImmediate:
+  case X86MsrAccessKind::WrmsrnsVexImmediate:
     return Insn->id == X86_INS_WRMSRNS ? Kind : std::nullopt;
   case X86MsrAccessKind::UrdmsrLegacyRegister:
   case X86MsrAccessKind::UrdmsrVexImmediate:
@@ -273,14 +283,19 @@ void writeEdxEax(X86Lifter::LiftState &S, Arch TargetArch, NdVar Value) {
 } // namespace
 
 bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
+  if (liftVirtualization(*this, S, Insn, X86))
+    return true;
   unsigned InsnId = Insn->id;
   auto LiftOuts = [&](Intrinsic Id, unsigned ElemSz) {
     const uint16_t AddrSz = S.AddressSize;
     bool Repeat = false;
     for (uint8_t Prefix : X86.prefix)
       Repeat |= Prefix == X86_PREFIX_REP || Prefix == X86_PREFIX_REPNE;
-    NdVar Count =
-        Repeat ? NdVar::reg(x86reg::RCX, AddrSz) : NdVar::scalar(1, AddrSz);
+    if (Repeat) {
+      liftRepState(*this, S, X86, Intrinsic::X86RepOutsState, ElemSz);
+      return;
+    }
+    NdVar Count = NdVar::scalar(1, AddrSz);
     NdVar Df = NdVar::reg(x86reg::DF, 1);
     S.emitIntrinsic(Id, NdVar(),
                     {NdVar::reg(x86reg::RSI, AddrSz), Count,
@@ -296,17 +311,17 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     NdVar NewSi = S.makeTemp(AddrSz);
     S.emit(NdOp::INT_ADD, NewSi, {NdVar::reg(x86reg::RSI, AddrSz), Delta});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::RSI, AddrSz), {NewSi});
-    if (Repeat)
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, AddrSz),
-             {NdVar::scalar(0, AddrSz)});
   };
   auto LiftIns = [&](Intrinsic Id, unsigned ElemSz) {
     const uint16_t AddrSz = S.AddressSize;
     bool Repeat = false;
     for (uint8_t Prefix : X86.prefix)
       Repeat |= Prefix == X86_PREFIX_REP || Prefix == X86_PREFIX_REPNE;
-    NdVar Count =
-        Repeat ? NdVar::reg(x86reg::RCX, AddrSz) : NdVar::scalar(1, AddrSz);
+    if (Repeat) {
+      liftRepState(*this, S, X86, Intrinsic::X86RepInsState, ElemSz);
+      return;
+    }
+    NdVar Count = NdVar::scalar(1, AddrSz);
     NdVar Df = NdVar::reg(x86reg::DF, 1);
     S.emitIntrinsic(Id, NdVar(),
                     {NdVar::reg(x86reg::RDI, AddrSz), Count,
@@ -321,25 +336,33 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     NdVar NewDi = S.makeTemp(AddrSz);
     S.emit(NdOp::INT_ADD, NewDi, {NdVar::reg(x86reg::RDI, AddrSz), Delta});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::RDI, AddrSz), {NewDi});
-    if (Repeat)
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, AddrSz),
-             {NdVar::scalar(0, AddrSz)});
   };
   switch (InsnId) {
 
-  // --- SYSENTER / SYSEXIT / SYSRET ---
+  // SYSENTER's target, stack and selectors belong to the explicit environment.
+  // The terminal intrinsic is opaque until that owner supplies the live MSRs.
   case X86_INS_SYSENTER:
-  case X86_INS_SYSEXIT:
-  case X86_INS_SYSRET:
-    S.emitIntrinsic(Intrinsic::Syscall);
+    S.emitVoidIntrinsic(Intrinsic::X86Sysenter, {});
     break;
+  case X86_INS_RSM:
+    // RSM still requires the complete SMM save-state environment.
+    return false;
 
-  // --- RSM (return from SMM) ---
-  case X86_INS_RSM: {
-    uint16_t PtrSize = (TargetArch == Arch::X64) ? 8 : 4;
-    S.emit(NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, PtrSize)});
+  // --- SYSEXIT / SYSRET (compat-mode syscall returns) ---
+  case X86_INS_SYSEXIT:
+    // SYSEXIT transfers to EDX with stack ECX; terminal, never resumes here.
+    S.emitVoidIntrinsic(Intrinsic::Sysexitq, {NdVar::reg(x86reg::RDX, 4),
+                                              NdVar::reg(x86reg::RCX, 4)});
+    if (TargetArch == Arch::X64)
+      compatibilityreturn::record(S);
     break;
-  }
+  case X86_INS_SYSRET:
+    // SYSRET transfers to ECX with EFLAGS from R11D; terminal.
+    S.emitVoidIntrinsic(Intrinsic::Sysretq, {NdVar::reg(x86reg::RCX, 4),
+                                             NdVar::reg(x86reg::R11, 4)});
+    if (TargetArch == Arch::X64)
+      compatibilityreturn::record(S);
+    break;
 
   // --- INT1 (ICEBP) ---
   case X86_INS_INT1:
@@ -424,9 +447,8 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
 
   // ========================================================================
   // Descriptor-table loads/stores + INVLPG — capture the memory-address
-  // operand (best-effort: base register, as CLFLUSH does) so codegen can
-  // re-emit `mnemonic (addr)`.  A bare mnemonic would be rejected by the
-  // assembler (too few operands).
+  // operand as an instruction-owned access. Retain the legacy 16-bit
+  // descriptor-table operand size independently of effective-address size.
   // ========================================================================
   case X86_INS_LGDT:
   case X86_INS_LIDT:
@@ -451,6 +473,24 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
       Id = Intrinsic::Invlpg;
       break;
     }
+    if (TargetArch == Arch::X86 && X86.prefix[2] == 0x66) {
+      switch (Id) {
+      case Intrinsic::Lgdt:
+        Id = Intrinsic::X86Lgdt16;
+        break;
+      case Intrinsic::Lidt:
+        Id = Intrinsic::X86Lidt16;
+        break;
+      case Intrinsic::Sgdt:
+        Id = Intrinsic::X86Sgdt16;
+        break;
+      case Intrinsic::Sidt:
+        Id = Intrinsic::X86Sidt16;
+        break;
+      default:
+        break;
+      }
+    }
     if (X86.op_count < 1 || !S.emitMemoryIntrinsic(Id, X86.operands[0]))
       return false;
     break;
@@ -459,10 +499,10 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   // ========================================================================
   // r/m16 system-register loads/stores: LLDT/LTR/LMSW read r/m16, while the
   // memory forms of SLDT/STR/SMSW write 16 bits.  Their register-destination
-  // forms retain the decoded register width so r32/r64 receive the selector or
-  // machine-status word zero-extended to the full destination.  A memory base
-  // is captured as an 8-byte pointer input; a register destination becomes the
-  // INTRINSIC output.
+  // forms retain the decoded width, including native undefined upper SMSW
+  // result bits; a narrow read followed by zero extension is not equivalent.  A
+  // memory base is captured as an 8-byte pointer input; a register destination
+  // becomes the INTRINSIC output.
   // ========================================================================
   case X86_INS_LLDT:
   case X86_INS_LTR:
@@ -585,12 +625,6 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         NdMemoryOrdering::None, LiftState::memoryAddressSpace(Descriptor));
     break;
   }
-  // VMX invalidation requires VMCS/VMX state that LowIR does not model.  Keep
-  // these instructions unlifted instead of collapsing them into INVPCID or a
-  // generic system placeholder.
-  case X86_INS_INVEPT:
-  case X86_INS_INVVPID:
-    return false;
   // Explicit-operand MSR forms retain their exact encoding family so an
   // authenticated executor can apply the correct feature, privilege, bitmap,
   // interception, and exception-order rules. The legacy operand-free RDMSR
@@ -606,6 +640,9 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     }
     [[fallthrough]];
   case X86_INS_WRMSRNS:
+    if (InsnId == X86_INS_WRMSRNS && X86.op_count == 0)
+      return liftSystemState(*this, S, Insn, X86);
+    [[fallthrough]];
   case X86_INS_URDMSR:
   case X86_INS_UWRMSR: {
     const std::optional<X86MsrAccessKind> Kind =
@@ -651,18 +688,12 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   }
 
-  // A Hyper-V hypercall (TLFS): RCX holds the hypercall input value, RDX and
-  // R8 its input and output parameters, and the status comes back in RAX.
+  // The opcode does not identify a hypervisor ABI. Even Hyper-V rep/fast
+  // calls can update registers beyond RAX. Explicit continuations must bind
+  // the actual environment before projecting inputs, outputs or preservation.
   case X86_INS_VMCALL:
   case X86_INS_VMMCALL:
-    if (TargetArch != Arch::X64)
-      return false;
-    S.emitIntrinsic(InsnId == X86_INS_VMCALL ? Intrinsic::Vmcall
-                                             : Intrinsic::Vmmcall,
-                    NdVar::reg(x86reg::RAX, 8),
-                    {NdVar::reg(x86reg::RCX, 8), NdVar::reg(x86reg::RDX, 8),
-                     NdVar::reg(x86reg::R8, 8)});
-    break;
+    return false;
 
   // VERR/VERW set ZF when the selector names a segment readable or writable
   // at the current privilege; nothing else changes.  VERW also flushes the
@@ -684,37 +715,6 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     } else {
       return false;
     }
-    break;
-  }
-
-  // LSL loads the limit of the segment a selector names, as MSVC's
-  // __segmentlimit does, and sets ZF when the selector is valid.
-  case X86_INS_LSL: {
-    if (X86.op_count < 2 || X86.operands[0].type != X86_OP_REG)
-      return false;
-    NdVar Selector;
-    if (X86.operands[1].type == X86_OP_REG) {
-      const RegInfo Source =
-          mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
-      Selector = NdVar::reg(Source.Offset, 2);
-    } else if (X86.operands[1].type == X86_OP_MEM) {
-      Selector = operandRead(S, X86.operands[1]);
-      if (Selector.Size != 2)
-        return false;
-    } else {
-      return false;
-    }
-    const NdVar Limit = S.makeTemp(4);
-    S.emitIntrinsic(Intrinsic::SegmentLimit, Limit, {Selector});
-    const NdVar Dst = operandWrite(X86.operands[0]);
-    if (Dst.Size == 4)
-      S.emit(NdOp::COPY, Dst, {Limit});
-    else if (Dst.Size > 4)
-      S.emit(NdOp::INT_ZEXT, Dst, {Limit});
-    else
-      S.emit(NdOp::SUBBYTES, Dst, {Limit, NdVar::cst(0, 4)});
-    S.emitIntrinsic(Intrinsic::SegmentLimitValid, NdVar::reg(x86reg::ZF, 1),
-                    {Selector});
     break;
   }
 
@@ -776,40 +776,47 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   }
 
-  // The rest need processor state LowIR does not model: virtual-machine and
-  // enclave control, segment and FS/GS base registers, SMX, user waits.
-  // Keep them unlifted rather than collapsing them into another instruction.
+  case X86_INS_XBEGIN:
+  case X86_INS_XABORT:
+  case X86_INS_XEND:
+  case X86_INS_XTEST:
+    return liftTransactions(*this, S, Insn, X86);
+
   case X86_INS_RDPID:
+  case X86_INS_CLUI:
+  case X86_INS_STUI:
+  case X86_INS_TESTUI:
+  case X86_INS_SENDUIPI:
+  case X86_INS_LKGS:
+  case X86_INS_HRESET:
+  case X86_INS_INVLPGB:
+  case X86_INS_TLBSYNC:
+  case X86_INS_RDMSRLIST:
+  case X86_INS_WRMSRLIST:
   case X86_INS_RDFSBASE:
   case X86_INS_RDGSBASE:
   case X86_INS_WRFSBASE:
   case X86_INS_WRGSBASE:
-  case X86_INS_VMRUN:
-  case X86_INS_VMSAVE:
-  case X86_INS_VMLOAD:
-  case X86_INS_VMLAUNCH:
-  case X86_INS_VMRESUME:
-  case X86_INS_VMXOFF:
-  case X86_INS_VMXON:
-  case X86_INS_VMCLEAR:
-  case X86_INS_VMPTRLD:
-  case X86_INS_VMPTRST:
-  case X86_INS_VMREAD:
-  case X86_INS_VMWRITE:
-  case X86_INS_VMFUNC:
-  case X86_INS_STGI:
-  case X86_INS_CLGI:
-  case X86_INS_SKINIT:
   case X86_INS_LAR:
+  case X86_INS_LSL:
   case X86_INS_ARPL:
   case X86_INS_CLTS:
-  case X86_INS_GETSEC:
-  case X86_INS_ENCLS:
-  case X86_INS_ENCLU:
-  case X86_INS_ENCLV:
   case X86_INS_TPAUSE:
   case X86_INS_UMONITOR:
   case X86_INS_UMWAIT:
+  case X86_INS_SKINIT:
+    return liftSystemState(*this, S, Insn, X86);
+
+  case X86_INS_ENCLS:
+  case X86_INS_ENCLV:
+    return liftSgx(*this, S, Insn, X86);
+
+  case X86_INS_GETSEC:
+  case X86_INS_ENCLU:
+    return liftBoundedLeaf(*this, S, Insn, X86);
+
+  // Machine transitions need a complete-state continuation contract.
+  case X86_INS_VMRUN:
     return false;
 
   // These change processor state only; none of them produces a value, so
@@ -861,7 +868,7 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   }
 
   default:
-    return liftExtBMI(*this, S, Insn, X86);
+    return liftExtBMI(*this, S, Insn);
   }
   return true;
 }

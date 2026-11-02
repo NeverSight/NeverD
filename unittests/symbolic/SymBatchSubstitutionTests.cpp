@@ -83,4 +83,47 @@ TEST(SymBatchSubstitution, DeepSharedGraphsDoNotUseTheHostStack) {
   EXPECT_EQ(Results[0], C.mkConst(8, 7));
 }
 
+TEST(SymBatchSubstitution, SharedWideGraphsKeepSimultaneousSubgraphOverrides) {
+  for (unsigned Width : {8U, 64U, 65U, 257U}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Z = C.mkVar("z", Width);
+    auto Shared = C.mkUDiv(X, Y);
+    auto Overridden = C.mkAdd(X, Z);
+    std::vector<SymRef> Roots;
+    for (unsigned I = 0; I != 96; ++I)
+      Roots.push_back(
+          C.mkXor(C.mkAdd(Shared, C.mkConst(Width, I + 1)),
+                  C.mkMul(Overridden, C.mkConst(Width, 2 * I + 1))));
+    Roots.push_back(Roots.front());
+    Roots.push_back(Shared);
+    Roots.push_back(X);
+    Roots.push_back(Y);
+    // Overrides apply to the old graph simultaneously. In particular the X
+    // supplied for Overridden must not be chased through the X -> Y entry.
+    auto Results = C.substituteAll(
+        Roots, {{X.index(), Y}, {Y.index(), Z}, {Overridden.index(), X}});
+    ASSERT_EQ(Results.size(), Roots.size());
+    EXPECT_EQ(Results[96], Results.front());
+    EXPECT_EQ(Results[97], C.mkUDiv(Y, Z));
+    EXPECT_EQ(Results[98], Y);
+    EXPECT_EQ(Results[99], Z);
+    for (unsigned Sample = 0; Sample != 20; ++Sample) {
+      SCOPED_TRACE(Sample);
+      llvm::APInt A(Width, 13 * Sample + 1);
+      llvm::APInt B = llvm::APInt::getOneBitSet(Width, Width - 1) |
+                      llvm::APInt(Width, 7 * Sample + 3);
+      llvm::APInt D(Width, Sample);
+      llvm::APInt Inputs[] = {A, B, D};
+      auto Quotient = D.isZero() ? llvm::APInt::getAllOnes(Width) : B.udiv(D);
+      for (unsigned I = 0; I != 96; ++I) {
+        auto Expected = (Quotient + llvm::APInt(Width, I + 1)) ^
+                        (A * llvm::APInt(Width, 2 * I + 1));
+        EXPECT_EQ(C.eval(Results[I], Inputs), Expected) << I;
+      }
+    }
+  }
+}
+
 } // namespace

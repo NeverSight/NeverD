@@ -717,6 +717,40 @@ integerValue(const ExprPtr &E, uint64_t X, uint64_t Y = 0,
   }
 }
 
+TEST(HighSymSimplify, PreservesSupportedAndRefusedSubByteProjections) {
+  uint64_t Random = 0x737562627974;
+  for (uint16_t Bytes : {1, 2, 4, 8})
+    for (unsigned Bits : {1u, 3u, 7u})
+      for (unsigned Low : {0u, 1u, unsigned(Bytes * 8 - Bits)}) {
+        SCOPED_TRACE(std::to_string(Bytes) + ":" + std::to_string(Bits) + ":" +
+                     std::to_string(Low));
+        auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+        auto Y = HighExpr::makeVar(tempOfSize(2, Bytes));
+        auto Before = HighExpr::makeBinop(
+            NdOp::INT_AND,
+            HighExpr::makeBinop(NdOp::INT_RIGHT, carrySum(X, Y),
+                                HighExpr::makeConst(Low, Bytes)),
+            HighExpr::makeConst((uint64_t(1) << Bits) - 1, Bytes));
+        auto After = simplified(Before);
+        // Some projections additionally require non-byte-width arithmetic;
+        // unsupported interiors must retain the original semantics as well.
+        for (unsigned I = 0; I < 512; ++I) {
+          Random ^= Random << 13;
+          Random ^= Random >> 7;
+          Random ^= Random << 17;
+          const auto A = Random;
+          Random ^= Random << 13;
+          Random ^= Random >> 7;
+          Random ^= Random << 17;
+          const auto B = Random;
+          auto Expected = llvm::APInt(Bytes * 8, A) + llvm::APInt(Bytes * 8, B);
+          Expected = Expected.lshr(Low) & ((uint64_t(1) << Bits) - 1);
+          EXPECT_EQ(integerValue(Before, A, B), Expected);
+          EXPECT_EQ(integerValue(After, A, B), Expected);
+        }
+      }
+}
+
 TEST(HighSymSimplify, SourceToggleReachesProvedAffineSynthesis) {
   for (uint16_t Bytes : {1, 2, 4, 8, 16, 32}) {
     SCOPED_TRACE(Bytes);
@@ -1280,6 +1314,72 @@ TEST(HighSymSimplify, UsesVisiblePureDefinitionsWithoutExpandingTheOutput) {
   EXPECT_NE(Text.find('+'), std::string::npos) << Text;
 }
 
+TEST(HighSymSimplify, EmptyAnchorsPreserveAvailableDefinitions) {
+  for (uint16_t Bytes : {1, 2, 4, 8}) {
+    SCOPED_TRACE(Bytes);
+    const auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+    const auto Y = HighExpr::makeVar(tempOfSize(2, Bytes));
+    const auto T = HighExpr::makeVar(tempOfSize(3, Bytes));
+    HighStmt Anchor;
+    Anchor.Kind = StmtKind::Block;
+    Anchor.Addr = 0x402000;
+    std::vector<HighStmt> Body{
+        assignValue(T, HighExpr::makeBinop(NdOp::INT_AND, X, Y)), Anchor,
+        returnValue(sharedMaskUse(X, Y, T))};
+    simplifyExprSemantics(Body);
+    EXPECT_EQ(Body[1].Kind, StmtKind::Block);
+    EXPECT_EQ(Body[1].Addr, Anchor.Addr);
+    const auto &After = Body.back().RetVal;
+    EXPECT_EQ(After->str().find('|'), std::string::npos) << After->str();
+    for (uint64_t A : {0ULL, 1ULL, 127ULL, 0x80000000ULL, ~0ULL})
+      for (uint64_t B : {0ULL, 17ULL, 0x8000000000000000ULL, ~0ULL})
+        EXPECT_EQ(integerValue(After, A, B),
+                  llvm::APInt(Bytes * 8, A, false, true) +
+                      llvm::APInt(Bytes * 8, B, false, true));
+  }
+}
+
+TEST(HighSymSimplify, AnchorsKeepControlFlowAndEffectBoundaries) {
+  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+  const auto T = HighExpr::makeVar(tempOfSize(3, 4));
+  for (unsigned Boundary = 0; Boundary < 7; ++Boundary) {
+    SCOPED_TRACE(Boundary);
+    HighStmt Anchor;
+    Anchor.Kind = StmtKind::Block;
+    Anchor.Addr = 0x402000;
+    std::vector<HighStmt> Body;
+    if (Boundary == 0) {
+      HighStmt Jump;
+      Jump.Kind = StmtKind::Goto;
+      Jump.GotoTarget = Anchor.Addr;
+      Body.push_back(Jump);
+    } else if (Boundary == 1) {
+      HighStmt Try;
+      Try.Kind = StmtKind::ItaniumTry;
+      Try.EHClauses.emplace_back();
+      Try.EHClauses.back().HandlerVA = Anchor.Addr;
+      Body.push_back(Try);
+    } else if (Boundary == 2) {
+      Anchor.Body.push_back(assignValue(T, X));
+    } else if (Boundary == 3) {
+      Anchor.Val = HighExpr::makeConst(1, 4);
+    } else if (Boundary == 4) {
+      Anchor.Dst = T;
+    } else if (Boundary == 5) {
+      Anchor.MemoryOrdering = NdMemoryOrdering::Acquire;
+    } else {
+      Anchor.IsPhiCopy = true;
+    }
+    Body.push_back(assignValue(T, HighExpr::makeBinop(NdOp::INT_AND, X, Y)));
+    Body.push_back(Anchor);
+    Body.push_back(returnValue(sharedMaskUse(X, Y, T)));
+    simplifyExprSemantics(Body);
+    EXPECT_NE(Body.back().RetVal->str().find('|'), std::string::npos)
+        << Body.back().RetVal->str();
+  }
+}
+
 TEST(HighSymSimplify, InvalidatesDefinitionsAcrossRenamedLocalWrites) {
   const auto X = HighExpr::makeVar(tempOfSize(1, 4));
   X->Var.RenameTag = 7;
@@ -1389,6 +1489,59 @@ TEST(HighSymSimplify, EffectBoundariesInvalidateAvailableDefinitions) {
   simplifyExprSemantics(Body);
   EXPECT_EQ(Body[1].CallExpr.get(), Call.get());
   EXPECT_NE(Body.back().RetVal->str().find('|'), std::string::npos);
+}
+
+TEST(HighSymSimplify, ReusesLiveAffineWordInNonzeroResidueLookups) {
+  constexpr uint64_t Units[] = {0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D, 0x27D4EB2F,
+                                0x165667B1, 0xD3A2646D, 0xA24BAED5, 0x9FB21C65};
+  for (uint16_t Bytes : {1, 2, 4, 8})
+    for (unsigned Extended : {0u, 1u, 2u}) {
+      if (Extended && Bytes == 8)
+        continue;
+      SCOPED_TRACE(std::to_string(Bytes) + ":" + std::to_string(Extended));
+      auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+      auto Y = HighExpr::makeVar(tempOfSize(2, Bytes));
+      auto T = HighExpr::makeVar(tempOfSize(3, Extended ? 8 : Bytes));
+      auto View = Extended ? integerCast(T, Bytes) : T;
+      auto C = [&](uint64_t V) { return HighExpr::makeConst(V, Bytes); };
+      auto Base = HighExpr::makeBinop(
+          NdOp::INT_ADD, X, HighExpr::makeBinop(NdOp::INT_MULT, C(3), Y));
+      auto Product = C(uint64_t(1) << (8 * Bytes - 7));
+      for (unsigned I = 0; I < 8; ++I) {
+        auto Factor = HighExpr::makeBinop(
+            NdOp::INT_ADD,
+            HighExpr::makeBinop(NdOp::INT_MULT, C(Units[I]), View),
+            C(Units[I] * (I == 7 ? 6 : I)));
+        Product = HighExpr::makeBinop(NdOp::INT_MULT, Product, Factor);
+      }
+      auto Original = HighExpr::makeBinop(
+          NdOp::INT_ADD, Product, HighExpr::makeBinop(NdOp::INT_ADD, X, Y));
+      std::vector<HighStmt> Body{
+          assignValue(T,
+                      Extended ? extendInteger(Base, 8, Extended == 2) : Base),
+          returnValue(Original)};
+      simplifyExprSemantics(Body);
+      EXPECT_NE(Body.back().RetVal->str().find(">>"), std::string::npos)
+          << Body.back().RetVal->str();
+      EXPECT_NE(Body.back().RetVal->str().find(T->str()), std::string::npos);
+      for (uint64_t I = 0; I < 512; ++I) {
+        const unsigned Width = Bytes * 8;
+        auto A = llvm::APInt(Width, I * 0x9e3779b97f4a7c15ULL);
+        auto B = llvm::APInt(Width, (I + 17) * 0xd1b54a32d192ed03ULL);
+        auto Word = A + 3 * B;
+        auto Want = llvm::APInt(Width, 1).shl(Width - 7);
+        for (unsigned J = 0; J < 8; ++J)
+          Want *= Units[J] * (Word + (J == 7 ? 6 : J));
+        Want += A + B;
+        std::unordered_map<int, uint64_t> Values{
+            {1, A.getZExtValue()},
+            {2, B.getZExtValue()},
+            {3, (Extended == 2 ? Word.sextOrTrunc(64) : Word.zextOrTrunc(64))
+                    .getZExtValue()}};
+        EXPECT_EQ(integerValue(Original, 0, 0, &Values), Want);
+        EXPECT_EQ(integerValue(Body.back().RetVal, 0, 0, &Values), Want);
+      }
+    }
 }
 
 TEST(HighSymSimplify, DefinitionBindingsPreserveAssignmentWidthAndSignedness) {
@@ -1600,6 +1753,38 @@ TEST(HighSymSimplify, DoesNotMergeUnrelatedOrMalformedParameterViews) {
   }
 }
 
+TEST(HighExprSimplify, WalksDeepExpressionGraphsOnAWorkerStack) {
+  const auto Input = HighExpr::makeVar(tempOfSize(1, kWordBytes));
+  for (bool Ordered : {false, true}) {
+    SCOPED_TRACE(Ordered);
+    auto Value = Input;
+    if (Ordered) {
+      Value = HighExpr::makeUnary(NdOp::INT_NOT, Input);
+      Value->MemoryOrdering = NdMemoryOrdering::Acquire;
+    }
+    auto Deep = Value;
+    for (unsigned I = 0; I < 8192; ++I)
+      Deep = HighExpr::makeBinop(NdOp::INT_SUB, std::move(Deep),
+                                 HighExpr::makeConst(0, kWordBytes));
+    std::vector<HighStmt> Body{returnValue(Deep)};
+    bool Changed = false;
+    std::thread Worker([&] { Changed = simplifyAllExprs(Body); });
+    Worker.join();
+    EXPECT_EQ(Changed, !Ordered);
+    EXPECT_EQ(Body.front().RetVal, Ordered ? Deep : Input);
+
+    // Keep shared-pointer teardown outside the worker-stack assertion. The
+    // ordered graph deliberately remains deep because its accesses survive.
+    Body.clear();
+    auto Current = std::move(Deep);
+    while (Current && Current != Value && !Current->Operands.empty()) {
+      auto Next = std::move(Current->Operands[0]);
+      Current->Operands.clear();
+      Current = std::move(Next);
+    }
+  }
+}
+
 TEST(HighCDeadStoreAnalysis, WalksDeepExpressionGraphsOnAWorkerStack) {
   MedVar Input;
   Input.Kind = MedVar::Param;
@@ -1664,8 +1849,10 @@ TEST(HighSymSimplify,
   const auto SharedUse = sharedMaskUse(X, Y, T);
   const auto OriginalUse = SharedUse->str();
   auto Arm = [&](NdOp Op) {
+    HighStmt Anchor;
+    Anchor.Kind = StmtKind::Block;
     return std::vector<HighStmt>{assignValue(T, HighExpr::makeBinop(Op, X, Y)),
-                                 returnValue(SharedUse)};
+                                 Anchor, returnValue(SharedUse)};
   };
   std::vector<HighStmt> Serial;
   for (unsigned I = 0; I < 256; ++I) {
@@ -1703,7 +1890,8 @@ TEST(HighSymSimplify,
   EXPECT_EQ(SharedUse->Operands[1]->Operands[0].get(), T.get());
 
   auto CheckArm = [&](const std::vector<HighStmt> &Body, bool Xor) {
-    ASSERT_EQ(Body.size(), 2U);
+    ASSERT_EQ(Body.size(), 3U);
+    EXPECT_EQ(Body[1].Kind, StmtKind::Block);
     if (!Xor)
       EXPECT_EQ(Body.back().RetVal->str().find('|'), std::string::npos);
     for (uint64_t A : {0ULL, 1ULL, 7ULL, 0x80000000ULL, 0xffffffffULL})

@@ -6,6 +6,7 @@
 
 #include "TypeShape.h"
 
+#include "neverd/types/CodeViewCallingConvention.h"
 #include "neverd/types/PDBTypeImport.h"
 
 #include <cstdlib>
@@ -63,9 +64,29 @@ protected:
 
 } // namespace
 
+TEST(PDBTypeImport, CodeViewCallbackConventionsFollowTheTargetWidth) {
+  using CC = llvm::codeview::CallingConvention;
+  EXPECT_EQ(codeViewCallingConvention(CC::NearStdCall, 4),
+            CallingConvention::Stdcall);
+  EXPECT_EQ(codeViewCallingConvention(CC::NearFast, 4),
+            CallingConvention::Fastcall);
+  EXPECT_EQ(codeViewCallingConvention(CC::ThisCall, 4),
+            CallingConvention::Thiscall);
+  for (auto Convention :
+       {CC::NearC, CC::NearStdCall, CC::NearFast, CC::ThisCall})
+    EXPECT_EQ(codeViewCallingConvention(Convention, 8),
+              CallingConvention::Unspecified);
+  for (unsigned Width : {4u, 8u}) {
+    EXPECT_EQ(codeViewCallingConvention(CC::NearVector, Width),
+              CallingConvention::Vectorcall);
+    EXPECT_FALSE(codeViewCallingConvention(CC::NearPascal, Width));
+  }
+}
+
 TEST_F(PDBTypeImportFixture, ReadsEveryNamedType) {
   EXPECT_EQ(Library->dataModel(), DataModel::LLP64);
   EXPECT_TRUE(Stats.NestingMismatches.empty());
+  EXPECT_EQ(Stats.UnsupportedFunctionTypes, 0u);
   for (const char *Name :
        {"_LIST_ENTRY", "_LARGE_INTEGER", "_PUSH_LOCK", "_THREAD_LIKE",
         "_DEVICE", "_PACKED", "_USES_FORWARD", "_POOL_KIND", "_SIGNED_KIND"})

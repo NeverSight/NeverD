@@ -17,8 +17,8 @@
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
-#include "neverd/loader/COFF/PEHeaderMapping.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/types/CodeViewCallingConvention.h"
 
 #define DEBUG_TYPE "neverd-pdb-loader"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -116,21 +116,24 @@ bool isPostLinkRewrittenSection(llvm::StringRef Name) {
 
 bool pdb_loader_detail::recordedSectionsMatch(
     const BinaryImage &Image, llvm::ArrayRef<RecordedSection> Recorded) {
-  if (Recorded.size() != Image.Sections.size() &&
-      !coff_loader::hasCheckedPEHeaderMapping(Image, Recorded.size()))
+  llvm::ArrayRef<Section> Sections = Image.Sections;
+  if (!Sections.empty() && Sections.back().IsImageHeader)
+    Sections = Sections.drop_back();
+  if (Recorded.size() != Sections.size())
     return false;
   // Sections from FirstMovable on may be re-laid out; see the declaration.
-  size_t FirstMovable = Recorded.size();
+  size_t FirstMovable = Sections.size();
   while (FirstMovable > 0 &&
-         isPostLinkRewrittenSection(Image.Sections[FirstMovable - 1].Name))
+         isPostLinkRewrittenSection(Sections[FirstMovable - 1].Name))
     --FirstMovable;
   constexpr uint64_t MaxCOFFField = std::numeric_limits<uint32_t>::max();
-  for (size_t I = 0; I < Recorded.size(); ++I) {
-    const Section &Loaded = Image.Sections[I];
+  for (size_t I = 0; I < Sections.size(); ++I) {
+    const Section &Loaded = Sections[I];
     const RecordedSection &Header = Recorded[I];
-    if (Loaded.VA < Image.Base || Loaded.Size > MaxCOFFField ||
-        Loaded.FileOff > MaxCOFFField || Loaded.FileSz > MaxCOFFField ||
-        Header.Name != Loaded.Name || Header.Characteristics != Loaded.Type)
+    if (Loaded.IsImageHeader || Loaded.VA < Image.Base ||
+        Loaded.Size > MaxCOFFField || Loaded.FileOff > MaxCOFFField ||
+        Loaded.FileSz > MaxCOFFField || Header.Name != Loaded.Name ||
+        Header.Characteristics != Loaded.Type)
       return false;
     if (I >= FirstMovable)
       continue;
@@ -1368,7 +1371,9 @@ TypeRef PDBDebugContext::Impl::resolveRecord(llvm::codeview::CVType CV,
         }
       }
     }
-    return NdType::makeFunc(Return, std::move(Params));
+    return NdType::makeFunc(
+        Return, std::move(Params),
+        types::codeViewCallingConvention(Rec.CallConv, PtrSize));
   }
   case LK::LF_MFUNCTION: {
     llvm::codeview::MemberFunctionRecord Rec;
@@ -1410,7 +1415,9 @@ TypeRef PDBDebugContext::Impl::resolveRecord(llvm::codeview::CVType CV,
         }
       }
     }
-    return NdType::makeFunc(Return, std::move(Params));
+    return NdType::makeFunc(
+        Return, std::move(Params),
+        types::codeViewCallingConvention(Rec.CallConv, PtrSize));
   }
   case LK::LF_BITFIELD: {
     llvm::codeview::BitFieldRecord Rec;
@@ -1871,7 +1878,12 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
   // enter LLVM's SymbolCache lazy type graph.
 
   auto ResolveVA = [&](uint16_t Seg, uint32_t Off) -> va_t {
-    return Ctx->PImpl->resolveVA(Seg, Off);
+    if (Seg == 0 || Seg > SecHeaders.size())
+      return 0;
+    const Section &Owner = Image.Sections[Seg - 1];
+    if (Off >= Owner.Size || Off > InvalidVA - Owner.VA)
+      return 0;
+    return Owner.VA + Off;
   };
 
   pdb_loader_detail::FunctionNameRegistry FunctionNames;
@@ -1948,6 +1960,8 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
 
         Progress.report("debug", 0, PubCount, "pdb publics");
         for (uint32_t I = 0; I < PubCount; ++I) {
+          if (I % limits::debug::kPDBLoadPublicProgressRecords == 0)
+            Progress.check();
           const uint32_t Off = llvm::support::endian::read32le(
               AddrBytes.data() + I * sizeof(uint32_t));
           pdb_loader_detail::ParsedPublicSym32 Pub;
@@ -1965,7 +1979,8 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
             DataNames.observe(VA, Pub.Name);
           }
           const uint32_t Done = I + 1;
-          if (Done == PubCount || (Done % 4096u) == 0)
+          if (Done == PubCount ||
+              (Done % limits::debug::kPDBLoadPublicProgressRecords) == 0)
             Progress.report("debug", Done, PubCount, "pdb publics");
         }
 
@@ -2089,10 +2104,12 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
   } else {
     parallelForEach(ModuleCount, [&](auto Claim, size_t Total) {
       for (size_t Index = Claim(); Index < Total; Index = Claim()) {
+        Progress.check();
         ScanModule(static_cast<uint32_t>(Index));
         const uint32_t Done =
             Finished.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (Done == ModuleCount || (Done % 16) == 0) {
+        if (Done == ModuleCount ||
+            (Done % limits::debug::kPDBLoadModuleProgressRecords) == 0) {
           std::lock_guard<std::mutex> Guard(ProgressMutex);
           Progress.report("debug", Done, ModuleCount, "pdb modules");
         }

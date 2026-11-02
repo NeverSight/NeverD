@@ -9,8 +9,9 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
-#include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
-#include "neverd/backend/llvm/LLVMX86X87StateAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
+#include "neverd/backend/llvm/X86/LLVMX86X87StateAsm.h"
+#include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -24,10 +25,14 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/ModRef.h"
 #include "llvm/Support/Program.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <iterator>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -69,7 +74,7 @@ struct StosFixture {
     const bool Dynamic = Dir == X86RepStos::Dynamic;
     std::string Constraints = std::string("={di},={cx},0,1,{ax},") +
                               (Dynamic ? "r," : "") +
-                              "~{memory},~{dirflag},~{cc}";
+                              "~{memory},~{dirflag},~{flags}";
     if (BadConstraints)
       Constraints += ",~{flags}";
     auto *Ret =
@@ -122,7 +127,7 @@ struct MovsFixture {
     const bool Dynamic = Dir == X86RepMovs::Dynamic;
     std::string Constraints = std::string("={si},={di},={cx},0,1,2,") +
                               (Dynamic ? "r," : "") +
-                              "~{memory},~{dirflag},~{cc}";
+                              "~{memory},~{dirflag},~{flags}";
     if (BadConstraints)
       Constraints += ",~{flags}";
     auto *Ret = llvm::StructType::get(
@@ -154,7 +159,9 @@ struct MovsFixture {
 void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
                      llvm::ArrayRef<llvm::StringRef> ExpectedIR = {},
                      llvm::StringRef Optimization = "-O1",
-                     bool CheckUndefined = false) {
+                     bool CheckUndefined = false,
+                     llvm::StringRef ExtraInput = {},
+                     llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
   auto Compiler = llvm::sys::findProgramByName("clang");
   ASSERT_TRUE(static_cast<bool>(Compiler)) << "clang is required";
   llvm::SmallString<128> Input, Output, Errors;
@@ -182,6 +189,9 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
       Input,
       "-o",
       Output};
+  if (!ExtraInput.empty())
+    Args.push_back(ExtraInput);
+  Args.append(ExtraFlags.begin(), ExtraFlags.end());
   if (LLVMOnly)
     Args.append({"-target", "x86_64-pc-windows-msvc", "-S", "-emit-llvm"});
   // Clang lowers the i128 conversion controls to its compiler runtime. The
@@ -853,6 +863,486 @@ int main(void) {
     compileAndCheck(Source, false, {}, Optimization, true);
 }
 
+TEST(LLVMCIntrinsicSemantics, IntegerHelpersAndAtomicsTakeFrameAddressBits) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("integer-frame-operands", Context);
+  Module.setDataLayout("e-p:64:64-i64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Integer = Builder.getInt64Ty();
+  auto Observe = Module.getOrInsertFunction("observe_frame", Integer, Integer);
+  const llvm::Intrinsic::ID Kinds[] = {
+      llvm::Intrinsic::uadd_sat, llvm::Intrinsic::usub_sat,
+      llvm::Intrinsic::umin, llvm::Intrinsic::umax};
+  for (unsigned Kind = 0; Kind != 6; ++Kind) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Integer, {Builder.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        "frame_integer_" + std::to_string(Kind), Module);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame = Builder.CreateAlloca(
+        llvm::ArrayType::get(Builder.getInt8Ty(), 64), nullptr, "frame");
+    auto *End = Builder.CreateGEP(Builder.getInt8Ty(), Frame,
+                                  Builder.getInt64(40), "frame_end");
+    auto *Address = Builder.CreateSub(Builder.CreatePtrToInt(End, Integer),
+                                      Builder.getInt64(16), "address");
+    auto *Pointer = Builder.CreateIntToPtr(Address, Builder.getPtrTy());
+    Builder.CreateStore(Builder.getInt64(0x123456789), Pointer);
+    llvm::Value *Result;
+    if (Kind < 4) {
+      auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+          &Module, Kinds[Kind], {Integer});
+      auto *Bound = Builder.getInt64(Kind == 2 ? UINT64_MAX : 0);
+      llvm::Value *Left = Kind == 2 ? Bound : Address;
+      llvm::Value *Right = Kind == 2 ? Address : Bound;
+      Result = Builder.CreateCall(Intrinsic, {Left, Right});
+      Builder.CreateRet(Builder.CreateCall(Observe, {Result}));
+    } else if (Kind == 4) {
+      Result = Builder.CreateAtomicRMW(
+          llvm::AtomicRMWInst::Xchg, Function->getArg(0), Address,
+          llvm::Align(8), llvm::AtomicOrdering::SequentiallyConsistent);
+      auto *Stored = Builder.CreateLoad(Integer, Function->getArg(0));
+      auto *Observed = Builder.CreateCall(Observe, {Stored});
+      Builder.CreateRet(Builder.CreateXor(Result, Observed));
+    } else {
+      auto *NextAddress = Builder.CreateAdd(Address, Builder.getInt64(8));
+      Builder.CreateStore(
+          Builder.getInt64(0x987654321),
+          Builder.CreateIntToPtr(NextAddress, Builder.getPtrTy()));
+      Builder.CreateStore(Address, Function->getArg(0));
+      auto *Exchange = Builder.CreateAtomicCmpXchg(
+          Function->getArg(0), Address, NextAddress, llvm::Align(8),
+          llvm::AtomicOrdering::SequentiallyConsistent,
+          llvm::AtomicOrdering::SequentiallyConsistent);
+      auto *Before = Builder.CreateCall(
+          Observe, {Builder.CreateExtractValue(Exchange, 0)});
+      auto *After = Builder.CreateCall(
+          Observe, {Builder.CreateLoad(Integer, Function->getArg(0))});
+      Builder.CreateRet(Builder.CreateXor(Before, After));
+    }
+  }
+  const std::string Text = emit(Module);
+  const std::string Source = R"(
+#include <stdint.h>
+#include <stdbool.h>
+)" + Text + R"(
+static unsigned visits;
+uint64_t observe_frame(uint64_t address) {
+    ++visits;
+    return *(uint64_t *)(uintptr_t)address;
+}
+int main(void) {
+    uint64_t cell = 0xfeedface;
+    if (frame_integer_0(&cell) != UINT64_C(0x123456789)) return 1;
+    if (frame_integer_1(&cell) != UINT64_C(0x123456789)) return 2;
+    if (frame_integer_2(&cell) != UINT64_C(0x123456789)) return 3;
+    if (frame_integer_3(&cell) != UINT64_C(0x123456789)) return 4;
+    if (frame_integer_4(&cell) != (UINT64_C(0xfeedface) ^
+                                    UINT64_C(0x123456789))) return 5;
+    if (frame_integer_5(&cell) != (UINT64_C(0x123456789) ^
+                                    UINT64_C(0x987654321))) return 6;
+    return visits != 7;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, AtomicUpdatesKeepProgramOrderAcrossObservers) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("ordered-rmw-results", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  auto *Word = B.getInt32Ty();
+  auto Observe =
+      Module.getOrInsertFunction("observe_atomic_cell", Word, B.getPtrTy());
+  const llvm::AtomicRMWInst::BinOp Operations[] = {
+      llvm::AtomicRMWInst::Xchg, llvm::AtomicRMWInst::Add,
+      llvm::AtomicRMWInst::Sub,  llvm::AtomicRMWInst::And,
+      llvm::AtomicRMWInst::Or,   llvm::AtomicRMWInst::Xor,
+      llvm::AtomicRMWInst::Min,  llvm::AtomicRMWInst::Max,
+      llvm::AtomicRMWInst::UMin, llvm::AtomicRMWInst::UMax};
+  std::string Driver;
+  for (unsigned Kind = 0; Kind < std::size(Operations); ++Kind)
+    for (unsigned Uses = 0; Uses < 3; ++Uses) {
+      const auto Name =
+          "ordered_rmw_" + std::to_string(Kind) + "_" + std::to_string(Uses);
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(Word, {B.getPtrTy(), Word}, false),
+          llvm::GlobalValue::ExternalLinkage, Name, Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+      auto *Old = B.CreateAtomicRMW(
+          Operations[Kind], Fn->getArg(0), Fn->getArg(1), llvm::Align(4),
+          llvm::AtomicOrdering::SequentiallyConsistent);
+      // This load and callback both observe the completed write. The RMW
+      // must remain here even if its returned snapshot has only one user.
+      auto *After = B.CreateLoad(Word, Fn->getArg(0));
+      auto *Observed = B.CreateCall(Observe, {Fn->getArg(0)});
+      auto *Result = B.CreateAdd(After, Observed);
+      if (Uses)
+        Result = B.CreateXor(
+            Result, Uses == 1
+                        ? Old
+                        : B.CreateAdd(Old, B.CreateMul(Old, B.getInt32(3))));
+      B.CreateRet(Result);
+      Driver += "for(unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) {\n"
+                "uint32_t old=values[i], desired=values[j], cell=old;\n";
+      Driver += "uint32_t expected=updated(" + std::to_string(Kind) +
+                ",old,desired); calls=0;\n";
+      Driver += "uint32_t result=" + Name + "(&cell,desired);\n";
+      Driver += "if(cell!=expected || calls!=1 || seen!=expected) return 1;\n";
+      Driver += "if(result!=((expected+expected) ^ " +
+                (Uses == 0   ? std::string("0u")
+                 : Uses == 1 ? "old"
+                             : "old*4u") +
+                ")) return 2;\n}\n";
+    }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Text = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                    emit(Module) + R"(
+static unsigned calls;
+static uint32_t seen;
+uint32_t observe_atomic_cell(void *cell) {
+  ++calls;
+  seen = *(uint32_t *)cell;
+  return seen;
+}
+static uint32_t updated(unsigned kind, uint32_t a, uint32_t b) {
+  switch(kind) {
+  case 0: return b;
+  case 1: return a+b;
+  case 2: return a-b;
+  case 3: return a&b;
+  case 4: return a|b;
+  case 5: return a^b;
+  case 6: return (int32_t)a < (int32_t)b ? a : b;
+  case 7: return (int32_t)a > (int32_t)b ? a : b;
+  case 8: return a < b ? a : b;
+  default: return a > b ? a : b;
+  }
+}
+int main(void) {
+  const uint32_t values[] = {0, UINT32_MAX, 0x80000001u, 0x7fffffffu};
+)" + Driver + "return 0;\n}\n";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndCheck(Text, false, {}, Level, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, CompareExchangePreservesResultsEffectsAndOrder) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("ordered-compare-exchange", Context);
+  Module.setDataLayout("e-p:64:64-i64:64");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  auto Observe = Module.getOrInsertFunction("observe_exchange", B.getVoidTy(),
+                                            B.getPtrTy(), B.getInt32Ty());
+  using Order = llvm::AtomicOrdering;
+  const std::pair<Order, Order> Orders[] = {
+      {Order::Monotonic, Order::Monotonic},
+      {Order::Acquire, Order::Monotonic},
+      {Order::Acquire, Order::Acquire},
+      {Order::Release, Order::Monotonic},
+      {Order::AcquireRelease, Order::Monotonic},
+      {Order::AcquireRelease, Order::Acquire},
+      {Order::SequentiallyConsistent, Order::Monotonic},
+      {Order::SequentiallyConsistent, Order::Acquire},
+      {Order::SequentiallyConsistent, Order::SequentiallyConsistent}};
+  unsigned Index = 0;
+  std::string Declarations, Driver;
+  for (unsigned Bits : {8u, 16u, 32u, 64u})
+    for (bool Weak : {false, true})
+      for (bool Volatile : {false, true})
+        for (bool Frame : {false, true})
+          for (unsigned Uses = 0; Uses != 4; ++Uses) {
+            SCOPED_TRACE(Index);
+            const std::string Name = "exchange_" + std::to_string(Index);
+            const auto [Success, Failure] = Orders[Index++ % std::size(Orders)];
+            auto *Word = B.getIntNTy(Bits);
+            auto *Fn = llvm::Function::Create(
+                llvm::FunctionType::get(B.getVoidTy(),
+                                        {B.getPtrTy(), B.getInt64Ty(),
+                                         B.getInt64Ty(), B.getPtrTy()},
+                                        false),
+                llvm::GlobalValue::ExternalLinkage, Name, Module);
+            B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+            llvm::Value *Cell = Fn->getArg(0);
+            if (Frame) {
+              Cell = B.CreateAlloca(Word, nullptr, "cell");
+              B.CreateStore(B.CreateLoad(Word, Fn->getArg(0)), Cell);
+            }
+            auto *Exchange = B.CreateAtomicCmpXchg(
+                Cell, B.CreateTruncOrBitCast(Fn->getArg(1), Word),
+                B.CreateTruncOrBitCast(Fn->getArg(2), Word),
+                llvm::Align(Bits / 8), Success, Failure);
+            Exchange->setWeak(Weak);
+            Exchange->setVolatile(Volatile);
+            auto *After = B.CreateLoad(Word, Cell);
+            B.CreateCall(Observe, {Cell, B.getInt32(Bits)});
+            if (Frame)
+              B.CreateStore(B.CreateLoad(Word, Cell), Fn->getArg(0));
+            // The observer changes the cell again. Reading the old value or
+            // recomputing success later would lose this operation's snapshot.
+            if (Uses & 1)
+              B.CreateStore(
+                  B.CreateZExtOrBitCast(B.CreateExtractValue(Exchange, 0),
+                                        B.getInt64Ty()),
+                  Fn->getArg(3));
+            if (Uses & 2)
+              B.CreateStore(
+                  B.CreateZExt(B.CreateExtractValue(Exchange, 1),
+                               B.getInt64Ty()),
+                  B.CreateGEP(B.getInt64Ty(), Fn->getArg(3), B.getInt64(1)));
+            B.CreateStore(
+                B.CreateZExtOrBitCast(After, B.getInt64Ty()),
+                B.CreateGEP(B.getInt64Ty(), Fn->getArg(3), B.getInt64(2)));
+            B.CreateRetVoid();
+            Declarations +=
+                "void " + Name + "(void *, uint64_t, uint64_t, void *);\n";
+            const auto Type = "uint" + std::to_string(Bits) + "_t";
+            Driver += "{ typedef " + Type + " word;\n";
+            Driver += "const uint64_t sign=UINT64_C(1)<<" +
+                      std::to_string(Bits - 1) + ";\n";
+            Driver += R"(
+  const uint64_t values[] = {0, 1, UINT64_MAX, sign, sign-1};
+  for(unsigned i=0;i<5;++i) for(unsigned j=0;j<5;++j)
+    for(unsigned k=0;k<5;++k) {
+      const word old=(word)values[i], expected=(word)values[j],
+                 desired=(word)values[k];
+      struct { word before, cell, after; } cells = {17, old, 39};
+      uint64_t output[3] = {UINT64_MAX, UINT64_MAX, UINT64_MAX};
+      visits=0; seen=0;
+)";
+            Driver += Name + "(&cells.cell,values[j],values[k],output);\n";
+            Driver += R"(
+      if(visits!=1 || cells.before!=17 || cells.after!=39) return 1;
+      if(cells.cell!=(word)(seen ^ 0x5a) || output[2]!=seen) return 2;
+      if(old!=expected && seen!=old) return 3;
+)";
+            Driver += Weak ? "if(old==expected && seen!=old && seen!=desired) "
+                             "return 4;\n"
+                           : "if(old==expected && seen!=desired) return 4;\n";
+            if (Uses & 1)
+              Driver += "if(output[0]!=old) return 5;\n";
+            if (Uses & 2) {
+              Driver +=
+                  "if(output[1]>1 || (output[1] && old!=expected)) return 6;\n";
+              if (!Weak)
+                Driver += "if(output[1]!=(old==expected)) return 7;\n";
+              Driver += "if(seen!=(output[1]?desired:old)) return 8;\n";
+            }
+            Driver += "}}\n";
+          }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Text =
+      "#include <stdint.h>\n#include <stdbool.h>\n" + emit(Module);
+  EXPECT_EQ(llvm::StringRef(Text).count("__atomic_compare_exchange_n("), Index);
+  EXPECT_EQ(Text.find("/* unhandled:"), std::string::npos);
+  // Keep the independent observer and oracle in another translation unit.
+  // An undefined aggregate from a missing CAS must not let optimization
+  // erase its own runtime checks.
+  llvm::SmallString<128> Harness;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-cas", "c", Harness));
+  llvm::FileRemover RemoveHarness(Harness);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream OS(Harness, EC);
+    ASSERT_FALSE(EC);
+    OS << "#include <stdint.h>\n"
+       << Declarations << R"(
+static unsigned visits;
+static uint64_t seen;
+void observe_exchange(void *cell, uint32_t bits) {
+  ++visits;
+  switch(bits) {
+  case 8: seen=*(uint8_t *)cell; *(uint8_t *)cell=(uint8_t)(seen^0x5a); break;
+  case 16: seen=*(uint16_t *)cell; *(uint16_t *)cell=(uint16_t)(seen^0x5a); break;
+  case 32: seen=*(uint32_t *)cell; *(uint32_t *)cell=(uint32_t)(seen^0x5a); break;
+  default: seen=*(uint64_t *)cell; *(uint64_t *)cell=seen^0x5a; break;
+  }
+}
+int main(void) {
+)" << Driver
+       << "return 0;\n}\n";
+  }
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndCheck(Text, false, {}, Level, true, Harness);
+  compileAndCheck(Text, true,
+                  {"cmpxchg ptr", "cmpxchg weak ptr", "cmpxchg volatile ptr",
+                   "cmpxchg weak volatile ptr", "monotonic monotonic",
+                   "acquire acquire", "release monotonic", "acq_rel acquire",
+                   "seq_cst seq_cst"},
+                  "-O0");
+}
+
+TEST(LLVMCIntrinsicSemantics, CompareExchangePreservesPointerSnapshots) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("pointer-compare-exchange", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  auto Observe = Module.getOrInsertFunction("observe_pointer", B.getVoidTy(),
+                                            B.getPtrTy());
+  for (bool Volatile : {false, true}) {
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(
+            B.getPtrTy(),
+            {B.getPtrTy(), B.getPtrTy(), B.getPtrTy(), B.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Volatile ? "exchange_volatile_pointer" : "exchange_pointer", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    auto *Exchange = B.CreateAtomicCmpXchg(
+        Fn->getArg(0), Fn->getArg(1), Fn->getArg(2), llvm::Align(8),
+        llvm::AtomicOrdering::SequentiallyConsistent,
+        llvm::AtomicOrdering::SequentiallyConsistent);
+    Exchange->setVolatile(Volatile);
+    B.CreateCall(Observe, {Fn->getArg(0)});
+    B.CreateStore(
+        B.CreateZExt(B.CreateExtractValue(Exchange, 1), B.getInt32Ty()),
+        Fn->getArg(3));
+    B.CreateRet(B.CreateExtractValue(Exchange, 0));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Text =
+      "#include <stdint.h>\n#include <stdbool.h>\n" + emit(Module) + R"(
+static unsigned visits;
+static void *seen;
+static int replacement;
+void observe_pointer(void *cell) {
+  ++visits; seen=*(void **)cell; *(void **)cell=&replacement;
+}
+int main(void) {
+  int a, b;
+  void *values[]={0,&a,&b};
+  for(unsigned vol=0;vol<2;++vol) for(unsigned i=0;i<3;++i)
+    for(unsigned j=0;j<3;++j) for(unsigned k=0;k<3;++k) {
+      void *cell=values[i]; uint32_t success=9; visits=0;
+      void *old=vol ? exchange_volatile_pointer(&cell,values[j],values[k],&success)
+                    : exchange_pointer(&cell,values[j],values[k],&success);
+      if(old!=values[i] || success!=(i==j)) return 1;
+      if(visits!=1 || seen!=(i==j?values[k]:values[i])) return 2;
+      if(cell!=&replacement) return 3;
+    }
+  return 0;
+}
+)";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndCheck(Text, false, {}, Level, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, CompareExchangeCarriesA128BitPair) {
+  // AArch64 CASP and x86-64 LOCK CMPXCHG16B lift to one 128-bit
+  // compare-exchange. Where C has a native 128-bit integer the builtin
+  // carries the whole pair: either half decides the comparison, and the old
+  // value comes back whole.
+  llvm::LLVMContext Context;
+  llvm::Module Module("pair-compare-exchange", Context);
+  Module.setDataLayout("e-p:64:64-i64:64-i128:128");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  using Order = llvm::AtomicOrdering;
+  // CASP, CASPA, CASPAL, CASPL and LOCK CMPXCHG16B.
+  const std::pair<Order, Order> Orders[] = {
+      {Order::Monotonic, Order::Monotonic},
+      {Order::Acquire, Order::Acquire},
+      {Order::AcquireRelease, Order::Acquire},
+      {Order::Release, Order::Monotonic},
+      {Order::SequentiallyConsistent, Order::SequentiallyConsistent}};
+  auto *Pair = B.getInt128Ty();
+  std::string Exchanges;
+  for (unsigned I = 0; I != std::size(Orders); ++I) {
+    const std::string Name = "exchange_pair_" + std::to_string(I);
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(
+            B.getVoidTy(), {B.getPtrTy(), B.getPtrTy(), B.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage, Name, Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    auto *Expected = B.CreateLoad(Pair, Fn->getArg(1));
+    auto *Desired =
+        B.CreateLoad(Pair, B.CreateGEP(Pair, Fn->getArg(1), B.getInt64(1)));
+    auto *Exchange =
+        B.CreateAtomicCmpXchg(Fn->getArg(0), Expected, Desired, llvm::Align(16),
+                              Orders[I].first, Orders[I].second);
+    B.CreateStore(B.CreateExtractValue(Exchange, 0), Fn->getArg(2));
+    B.CreateStore(B.CreateZExt(B.CreateExtractValue(Exchange, 1), Pair),
+                  B.CreateGEP(Pair, Fn->getArg(2), B.getInt64(1)));
+    B.CreateRetVoid();
+    Exchanges += Name + ", ";
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Text = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                    emit(Module) +
+                    "void (*const exchanges[])(void *, void *, void *) = {" +
+                    Exchanges + "};\n" + R"(
+int main(void) {
+  const __uint128_t high = (__uint128_t)1 << 64;
+  const __uint128_t values[] = {0, 1, high, high | 1, ~(__uint128_t)0};
+  for(unsigned f=0;f<sizeof(exchanges)/sizeof(exchanges[0]);++f)
+    for(unsigned i=0;i<5;++i) for(unsigned j=0;j<5;++j) for(unsigned k=0;k<5;++k) {
+      _Alignas(16) __uint128_t cell = values[i];
+      _Alignas(16) __uint128_t in[2] = {values[j], values[k]};
+      _Alignas(16) __uint128_t out[2] = {7, 7};
+      exchanges[f](&cell, in, out);
+      if(out[0]!=values[i]) return 1;
+      if(out[1]!=(values[i]==values[j])) return 2;
+      if(cell!=(values[i]==values[j]?values[k]:values[i])) return 3;
+    }
+  return 0;
+}
+)";
+  EXPECT_EQ(llvm::StringRef(Text).count(
+                "__atomic_compare_exchange_n((__uint128_t *)"),
+            std::size(Orders))
+      << Text;
+  for (const char *Pair : {"__ATOMIC_RELAXED, __ATOMIC_RELAXED",
+                           "__ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE",
+                           "__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE",
+                           "__ATOMIC_RELEASE, __ATOMIC_RELAXED",
+                           "__ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST"})
+    EXPECT_NE(Text.find(Pair), std::string::npos) << Pair << "\n" << Text;
+  // x86-64 inlines the 16-byte builtin only with CMPXCHG16B, which LOCK
+  // CMPXCHG16B itself requires; AArch64 always inlines it.
+  llvm::SmallVector<llvm::StringRef, 1> Flags;
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArch() ==
+      llvm::Triple::x86_64)
+    Flags.push_back("-mcx16");
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndCheck(Text, false, {}, Level, true, {}, Flags);
+}
+
+TEST(LLVMCIntrinsicSemantics, CompareExchangeRejectsUnrepresentableContracts) {
+  for (unsigned Variant = 0; Variant != 8; ++Variant) {
+    SCOPED_TRACE(Variant);
+    llvm::LLVMContext Context;
+    llvm::Module Module("unsupported-compare-exchange", Context);
+    // Variant 0 is a 128-bit pair where C has no 128-bit integer.
+    Module.setDataLayout(Variant == 0 ? "e-p:32:32-p1:64:64-ni:1"
+                                      : "e-p:64:64-p1:64:64-ni:1");
+    llvm::IRBuilder<> B(Context);
+    auto *Value = Variant == 4 ? static_cast<llvm::Type *>(B.getPtrTy(1))
+                               : B.getIntNTy(Variant == 0 ? 128 : 64);
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(
+            B.getVoidTy(), {B.getPtrTy(Variant == 2 ? 1 : 0), Value, Value},
+            false),
+        llvm::GlobalValue::ExternalLinkage, "unsupported_exchange", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    auto *Exchange = B.CreateAtomicCmpXchg(
+        Fn->getArg(0), Fn->getArg(1), Fn->getArg(2),
+        llvm::Align(Variant == 0   ? 16
+                    : Variant == 1 ? 1
+                                   : 8),
+        Variant == 5   ? llvm::AtomicOrdering::Monotonic
+        : Variant == 6 ? llvm::AtomicOrdering::Release
+                       : llvm::AtomicOrdering::SequentiallyConsistent,
+        (Variant == 5 || Variant == 6) ? llvm::AtomicOrdering::Acquire
+                                       : llvm::AtomicOrdering::Monotonic);
+    if (Variant == 3)
+      Exchange->setSyncScopeID(Context.getOrInsertSyncScopeID("device"));
+    if (Variant == 7)
+      Exchange->setSyncScopeID(llvm::SyncScope::SingleThread);
+    B.CreateRetVoid();
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    EXPECT_THROW(emit(Module), std::runtime_error);
+  }
+}
+
 TEST(LLVMCIntrinsicSemantics,
      UnsignedSaturationRejectsUnsupportedScalarWidths) {
   for (unsigned Bits : {2u, 7u, 24u, 65u, 129u}) {
@@ -1030,7 +1520,7 @@ TEST(LLVMCIntrinsicSemantics, RepStosFrameBufferSharesBackingWithIndexedLoads) {
         RetTy, {B.getInt64Ty(), B.getInt64Ty(), B.getInt8Ty()}, false);
     auto *IA = llvm::InlineAsm::get(
         AsmTy, Backward ? "std\n\trep stosb\n\tcld" : "rep stosb",
-        "={di},={cx},0,1,{ax},~{memory},~{dirflag},~{cc}", true);
+        "={di},={cx},0,1,{ax},~{memory},~{dirflag},~{flags}", true);
     B.CreateCall(IA,
                  {B.CreatePtrToInt(Addr(Backward ? 143 : 80), B.getInt64Ty()),
                   F->getArg(1), B.getInt8(0x5A)});
@@ -1188,6 +1678,61 @@ TEST(LLVMCIntrinsicSemantics, RepMovsRejectsUnprovedContracts) {
 }
 
 TEST(LLVMCIntrinsicSemantics,
+     TimestampPairRetainsUnusedReadsAndChecksContracts) {
+  for (bool Live : {false, true})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      llvm::LLVMContext C;
+      llvm::Module M("rdtscp", C);
+      M.setDataLayout("e-p:64:64-i64:64");
+      llvm::IRBuilder<> B(C);
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(B.getVoidTy(), false),
+          llvm::GlobalValue::ExternalLinkage, "sample", M);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+      auto *Native = llvm::Intrinsic::getOrInsertDeclaration(
+          &M, llvm::Intrinsic::x86_rdtscp);
+      auto *Call = B.CreateCall(Native);
+      B.CreateRetVoid();
+      switch (Mutation) {
+      case 1:
+        Call->setMemoryEffects(llvm::MemoryEffects::none());
+        break;
+      case 2:
+        Call->setCallingConv(llvm::CallingConv::Fast);
+        break;
+      case 3:
+        Call->addFnAttr(llvm::Attribute::Speculatable);
+        break;
+      case 4:
+        Call->addFnAttr(llvm::Attribute::NoReturn);
+        break;
+      }
+      if (Mutation) {
+        EXPECT_THROW(renderX86TimestampCall(Arch::X64, *Call, "answer", Live),
+                     std::invalid_argument);
+        continue;
+      }
+      const auto Rendered =
+          renderX86TimestampCall(Arch::X64, *Call, "answer", Live);
+      ASSERT_TRUE(Rendered);
+      EXPECT_NE(Rendered->Code.find("__rdtscp(&"), std::string::npos);
+      EXPECT_EQ(Rendered->Code.find("llvm_x86_rdtscp"), std::string::npos);
+      EXPECT_THROW(renderX86TimestampCall(Arch::AArch64, *Call, "answer", Live),
+                   std::invalid_argument);
+      if (Live) {
+        EXPECT_NE(Rendered->Code.find("answer.field_0"), std::string::npos);
+        EXPECT_NE(Rendered->Code.find("answer.field_1"), std::string::npos);
+      } else {
+        const auto Source = emit(M);
+        EXPECT_NE(Source.find("__rdtscp(&"), std::string::npos);
+        compileAndCheck("#include <stdint.h>\n#include <x86intrin.h>\n" +
+                            Source + "\nint main(void) { sample(); return 0; }",
+                        false, {}, "-O2");
+      }
+    }
+}
+
+TEST(LLVMCIntrinsicSemantics,
      LocalAddressKeepsTargetIntrinsicAndInitializesResult) {
   llvm::LLVMContext C;
   llvm::Module M("localaddress", C);
@@ -1207,6 +1752,81 @@ TEST(LLVMCIntrinsicSemantics,
   EXPECT_NE(Text.find("__asm__(\"llvm.localaddress\")"), std::string::npos)
       << Text;
   compileAndCheck(Text, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, ReturnSlotAddressTracksTheCompiledFrame) {
+#if !defined(__x86_64__) && !defined(_M_X64)
+  GTEST_SKIP() << "the return-slot execution control requires x64";
+#endif
+  llvm::LLVMContext C;
+  llvm::Module M("return_slot", C);
+  M.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(C);
+  auto *Fn = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "slot_matches", M);
+  B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+  auto *Storage = B.CreateAlloca(B.getInt8Ty(), Fn->getArg(0));
+  Storage->setAlignment(llvm::Align(64));
+  B.CreateStore(B.getInt8(37), Storage)->setVolatile(true);
+  auto *Last = B.CreateGEP(B.getInt8Ty(), Storage,
+                           B.CreateSub(Fn->getArg(0), B.getInt64(1)));
+  B.CreateStore(B.getInt8(37), Last)->setVolatile(true);
+  auto *Address = B.CreateIntrinsic(llvm::Intrinsic::addressofreturnaddress,
+                                    {B.getPtrTy()}, {});
+  auto *Expected = B.CreateIntrinsic(llvm::Intrinsic::returnaddress,
+                                     {B.getPtrTy()}, {B.getInt32(0)});
+  auto *Actual = B.CreateLoad(B.getInt64Ty(), Address);
+  auto *Marker = B.CreateLoad(B.getInt8Ty(), Last);
+  Marker->setVolatile(true);
+  B.CreateRet(B.CreateZExt(
+      B.CreateAnd(
+          B.CreateICmpEQ(Actual, B.CreatePtrToInt(Expected, B.getInt64Ty())),
+          B.CreateICmpEQ(Marker, B.getInt8(37))),
+      B.getInt64Ty()));
+  ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  const auto Text = "#include <stdint.h>\n" + emit(M) + R"C(
+int main(void) {
+  for (unsigned n = 1; n <= 96; ++n)
+    if (!slot_matches(n)) return 1;
+  return 0;
+}
+)C";
+  for (auto Optimization : {"-O0", "-O2"})
+    for (auto Frame : {"-fomit-frame-pointer", "-fno-omit-frame-pointer"})
+      compileAndCheck(Text, false, {}, Optimization, true, {}, {Frame});
+}
+
+TEST(LLVMCIntrinsicSemantics, ReturnSlotAddressRejectsUnrepresentedTargets) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (unsigned Space : {0u, 1u}) {
+      SCOPED_TRACE(testing::Message()
+                   << unsigned(Architecture) << '/' << Space);
+      llvm::LLVMContext C;
+      llvm::Module M("return_slot", C);
+      M.setDataLayout(Architecture == Arch::X86 ? "e-p:32:32" : "e-p:64:64");
+      llvm::IRBuilder<> B(C);
+      auto *Pointer = B.getPtrTy(Space);
+      auto *Fn = llvm::Function::Create(llvm::FunctionType::get(Pointer, false),
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        "get_slot", M);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+      B.CreateRet(B.CreateIntrinsic(llvm::Intrinsic::addressofreturnaddress,
+                                    {Pointer}, {}));
+      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      std::string Text;
+      llvm::raw_string_ostream Output(Text);
+      if (Space || Architecture == Arch::AArch64)
+        EXPECT_THROW(LLVMCEmitter().emit(M, Output, Options),
+                     std::invalid_argument);
+      else {
+        ASSERT_TRUE(LLVMCEmitter().emit(M, Output, Options));
+        EXPECT_NE(Text.find("llvm.addressofreturnaddress.p0"),
+                  std::string::npos);
+      }
+    }
 }
 
 TEST(LLVMCIntrinsicSemantics, IntegerAddressAdditionUsesIntegerArithmetic) {
@@ -1737,6 +2357,241 @@ int main(void) {
   return 0;
 }
 )");
+}
+
+TEST(LLVMCIntrinsicSemantics, IntegerToFloatUsesOpcodeSignednessAndWidth) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("integer-to-floating-values", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  std::string Main = "int main(void) {\n";
+  for (unsigned FloatBits : {32U, 64U}) {
+    auto *Float =
+        FloatBits == 32 ? Builder.getFloatTy() : Builder.getDoubleTy();
+    const std::string FloatType = FloatBits == 32 ? "float" : "double";
+    for (unsigned Bits : {1U, 7U, 8U, 15U, 16U, 24U, 32U, 40U, 64U, 80U, 128U,
+                          129U, 256U, 512U}) {
+      // Keep every oracle value finite in its floating destination.
+      if (FloatBits == 32 && Bits > 64)
+        continue;
+      auto *Integer = Builder.getIntNTy(Bits);
+      const std::string Suffix =
+          std::to_string(Bits) + "_" + std::to_string(FloatBits);
+      for (bool Signed : {false, true}) {
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Float, {Integer}, false),
+            llvm::GlobalValue::ExternalLinkage,
+            (Signed ? "signed_to_float_" : "unsigned_to_float_") + Suffix,
+            Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Function));
+        Builder.CreateRet(Builder.CreateCast(Signed ? llvm::Instruction::SIToFP
+                                                    : llvm::Instruction::UIToFP,
+                                             Function->getArg(0), Float));
+      }
+      const std::string SignValue = "0x1p" + std::to_string(Bits - 1);
+      Main += "{ typedef unsigned _BitInt(" + std::to_string(Bits) +
+              ") bits; const bits sign = (bits)1 << " +
+              std::to_string(Bits - 1) +
+              ";\n"
+              "const bits values[] = {0, 1, sign - 1, sign, ~(bits)0};\n"
+              "const " +
+              FloatType + " signed_values[] = {0, " + (Bits == 1 ? "-1" : "1") +
+              ", (" + FloatType + ")(" + SignValue + " - 1.0), -" + SignValue +
+              ", -1};\n"
+              "const " +
+              FloatType + " unsigned_values[] = {0, 1, (" + FloatType + ")(" +
+              SignValue + " - 1.0), " + SignValue + ", (" + FloatType +
+              ")(0x1p" + std::to_string(Bits) +
+              " - 1.0)};\n"
+              "for (unsigned i = 0; i != 5; ++i) {\n"
+              "if (signed_to_float_" +
+              Suffix +
+              "(values[i]) != signed_values[i]) return 1;\n"
+              "if (unsigned_to_float_" +
+              Suffix +
+              "(values[i]) != unsigned_values[i]) return 2;\n"
+              "}}\n";
+    }
+  }
+  Main += "return 0; }\n";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Source = "#include <stdint.h>\n" + emit(Module) + Main;
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Level, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, FloatToIntegerPreservesSignedResultBits) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("floating-to-integer-values", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  std::string Main = "int main(void) {\n";
+  for (unsigned FloatBits : {32U, 64U}) {
+    auto *Float =
+        FloatBits == 32 ? Builder.getFloatTy() : Builder.getDoubleTy();
+    const std::string FloatType = FloatBits == 32 ? "float" : "double";
+    for (unsigned Bits : {1U, 7U, 8U, 15U, 16U, 24U, 32U, 40U, 64U, 80U, 128U,
+                          129U, 256U, 512U}) {
+      if (FloatBits == 32 && Bits > 64)
+        continue;
+      auto *Integer = Builder.getIntNTy(Bits);
+      const std::string Suffix =
+          std::to_string(Bits) + "_" + std::to_string(FloatBits);
+      for (bool Signed : {false, true}) {
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Integer, {Float}, false),
+            llvm::GlobalValue::ExternalLinkage,
+            (Signed ? "float_to_signed_" : "float_to_unsigned_") + Suffix,
+            Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Function));
+        Builder.CreateRet(Builder.CreateCast(Signed ? llvm::Instruction::FPToSI
+                                                    : llvm::Instruction::FPToUI,
+                                             Function->getArg(0), Integer));
+      }
+      const std::string SignValue = "0x1p" + std::to_string(Bits - 1);
+      Main += "{ typedef unsigned _BitInt(" + std::to_string(Bits) +
+              ") bits; const bits sign = (bits)1 << " +
+              std::to_string(Bits - 1) +
+              ";\n"
+              "const " +
+              FloatType + " signed_values[] = {-" + SignValue +
+              ", -1.75, -0.75, 0, 0.75, " + (Bits == 1 ? "0" : "1.75") + ", " +
+              SignValue +
+              " / 2};\n"
+              "const bits signed_bits[] = {sign, ~(bits)0, 0, 0, 0, " +
+              (Bits == 1 ? "0" : "1") + ", " + (Bits == 1 ? "0" : "sign >> 1") +
+              "};\n"
+              "const " +
+              FloatType + " unsigned_values[] = {-0.75, 0, 0.75, 1.75, " +
+              SignValue +
+              "};\n"
+              "const bits unsigned_bits[] = {0, 0, 0, 1, sign};\n"
+              "for (unsigned i = 0; i != 7; ++i)\n"
+              "if (float_to_signed_" +
+              Suffix +
+              "(signed_values[i]) != signed_bits[i]) return 1;\n"
+              "for (unsigned i = 0; i != 5; ++i)\n"
+              "if (float_to_unsigned_" +
+              Suffix +
+              "(unsigned_values[i]) != unsigned_bits[i]) return 2;\n"
+              "}\n";
+    }
+  }
+  Main += "return 0; }\n";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Source = "#include <stdint.h>\n" + emit(Module) + Main;
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Level, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, PackedIntegerNumericCastsKeepEveryLimb) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("packed-integer-numeric-casts", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  std::string Main = "int main(void) {\n";
+  for (unsigned Bits : {1024U, 1984U, 2048U}) {
+    auto *Integer = Builder.getIntNTy(Bits);
+    auto *Float = Builder.getDoubleTy();
+    const std::string Width = std::to_string(Bits);
+    for (bool ToFloat : {false, true})
+      for (bool Signed : {false, true}) {
+        llvm::Type *Input = ToFloat ? Integer : Float;
+        llvm::Type *Output = ToFloat ? Float : Integer;
+        const auto Opcode = ToFloat ? (Signed ? llvm::Instruction::SIToFP
+                                              : llvm::Instruction::UIToFP)
+                                    : (Signed ? llvm::Instruction::FPToSI
+                                              : llvm::Instruction::FPToUI);
+        const std::string Name =
+            std::string(ToFloat ? "to_float_" : "from_float_") +
+            (Signed ? "signed_" : "unsigned_") + Width;
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Output, {Input}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Function));
+        Builder.CreateRet(
+            Builder.CreateCast(Opcode, Function->getArg(0), Output));
+      }
+    // The complete integer sign/magnitude may exceed double's range. Small
+    // signed values still observe every upper limb of the wider carrier.
+    Main += "{ typedef unsigned _BitInt(" + Width +
+            ") bits;\n"
+            "const int values[] = {-17, -1, 0, 1, 17};\n"
+            "for (unsigned i = 0; i != 5; ++i) {\n"
+            "const bits expected = (bits)values[i];\n"
+            "if (from_float_signed_" +
+            Width +
+            "(values[i]) != expected) return 1;\n"
+            "if (to_float_signed_" +
+            Width +
+            "(expected) != values[i]) return 2;\n"
+            "if (values[i] >= 0 && (from_float_unsigned_" +
+            Width + "(values[i]) != expected || to_float_unsigned_" + Width +
+            "(expected) != values[i])) return 3;\n"
+            "}\n"
+            "if (from_float_signed_" +
+            Width + "(-1.75) != ~(bits)0 || from_float_unsigned_" + Width +
+            "(1.75) != 1) return 4;\n"
+            "}\n";
+  }
+  Main += "return 0; }\n";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const auto Source = "#include <stdint.h>\n" + emit(Module) + Main;
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Level, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, PackedWideVectorCastsKeepLaneOrder) {
+  for (bool LittleEndian : {false, true}) {
+    SCOPED_TRACE(LittleEndian);
+    llvm::LLVMContext Context;
+    llvm::Module Module("packed-wide-vector-casts", Context);
+    Module.setDataLayout(LittleEndian ? "e-p:64:64" : "E-p:64:64");
+    llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+    std::string Main = "int main(void) {\n";
+    for (unsigned Bits : {1024U, 2048U}) {
+      auto *Integer = Builder.getIntNTy(Bits);
+      auto *Vector =
+          llvm::FixedVectorType::get(Builder.getInt64Ty(), Bits / 64);
+      const std::string Width = std::to_string(Bits);
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(Integer, {Integer}, false),
+          llvm::GlobalValue::ExternalLinkage, "lanes" + Width, Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      llvm::Value *Value = Builder.CreateBitCast(Function->getArg(0), Vector);
+      for (unsigned Lane = 0; Lane != Bits / 64; ++Lane) {
+        auto *Part = Builder.CreateExtractElement(Value, Lane);
+        Value = Builder.CreateInsertElement(
+            Value, Builder.CreateXor(Part, Builder.getInt64(Lane + 1)), Lane);
+      }
+      Builder.CreateRet(Builder.CreateBitCast(Value, Integer));
+      Main += "{ typedef unsigned _BitInt(" + Width +
+              ") bits;\n"
+              "bits input = 0, mask = 0;\n"
+              "for (unsigned i = 0; i != " +
+              std::to_string(Bits / 64) +
+              "; ++i) {\n"
+              "const unsigned shift = " +
+              (LittleEndian ? "64 * i" : Width + " - 64 * (i + 1)") +
+              ";\n"
+              "input |= (bits)(UINT64_C(0xfedcba9876543210) + i) << shift;\n"
+              "mask |= (bits)(i + 1) << shift;\n"
+              "}\n"
+              "if (lanes" +
+              Width +
+              "(input) != (input ^ mask)) return 1;\n"
+              "}\n";
+    }
+    Main += "return 0; }\n";
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    const auto Source = "#include <stdint.h>\n" + emit(Module) + Main;
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndCheck(Source, false, {}, Level, true);
+  }
 }
 
 TEST(LLVMCIntrinsicSemantics, FloatingComparisonsReadBitcastValue) {
@@ -2464,13 +3319,22 @@ TEST(LLVMCIntrinsicSemantics, CPUQueriesRejectChangedAssemblyContracts) {
       llvm::SmallVector<llvm::Type *, 4> Fields(
           Mutation == 0 ? Words - 1 : Words,
           Mutation == 1 ? B.getInt64Ty() : B.getInt32Ty());
-      auto *Result = llvm::StructType::get(C, Fields, Mutation == 2);
+      llvm::Type *Result = llvm::StructType::get(C, Fields, Mutation == 2);
+      if (Mutation == 0 && XCR)
+        Result = B.getInt32Ty();
       llvm::SmallVector<llvm::Type *, 2> Inputs(
           XCR ? 1 : 2, Mutation == 3 ? B.getInt64Ty() : B.getInt32Ty());
       const std::string Mnemonic = XCR ? "xgetbv" : "cpuid";
       std::string Constraints =
           XCR ? "={eax},={edx},{ecx},~{memory}"
               : "={eax},={ebx},={ecx},={edx},{eax},{ecx},~{memory}";
+      // The shortened register tuple is invalid for the CPU query, but must
+      // remain valid LLVM assembly so construction reaches our recognizer.
+      // Newer LLVM checks output-count/type consistency in InlineAsm::get;
+      // a single remaining output also requires a scalar result above.
+      if (Mutation == 0)
+        Constraints = XCR ? "={eax},{ecx},~{memory}"
+                          : "={eax},={ebx},={ecx},{eax},{ecx},~{memory}";
       if (Mutation == 4)
         Constraints += ",~{cc}";
       auto *IA = llvm::InlineAsm::get(
@@ -2674,6 +3538,161 @@ int main(void) {
 )";
   for (const char *Level : {"-O0", "-O2"})
     compileAndCheck(Text + Main, false, {}, Level);
+}
+
+static void checkNativeRmwMemory(NdOp Opcode) {
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).getArch() !=
+      llvm::Triple::x86_64)
+    GTEST_SKIP() << "Native x64 memory operations require an x64 host";
+  llvm::LLVMContext Context;
+  llvm::Module Module("native-rmw", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  std::string Driver, Declarations;
+  for (unsigned Bytes : {1U, 2U, 4U, 8U})
+    for (auto Space :
+         {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
+          NdMemoryAddressSpace::X86GS})
+      for (bool Live : {false, true}) {
+        const auto Plan = x86AtomicRmwPlan(Arch::X64, Opcode, Bytes, Space);
+        ASSERT_TRUE(Plan);
+        const auto Name = "atomic_update_" + std::to_string(Bytes) + "_" +
+                          std::to_string(static_cast<unsigned>(Space)) + "_" +
+                          std::to_string(Live);
+        auto *Word = B.getIntNTy(Bytes * 8);
+        auto *Pointer = B.getPtrTy(llvmX86MemoryAddressSpace(Space));
+        auto *Type = llvm::FunctionType::get(Word, {Pointer, Word}, false);
+        auto *Fn = llvm::Function::Create(
+            llvm::FunctionType::get(Live ? Word : B.getVoidTy(),
+                                    {Pointer, Word}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        Fn->getArg(0)->setName("neverd_atomic_value");
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+        auto *Assembly = llvm::InlineAsm::get(Type, Plan->assembly(),
+                                              Plan->constraints(), true);
+        auto *Old = B.CreateCall(Assembly, {Fn->getArg(0), Fn->getArg(1)});
+        if (Live)
+          B.CreateRet(Old);
+        else
+          B.CreateRetVoid();
+        // Segment-relative functions are compiled but must not touch the
+        // host's TLS. The default-space calls exercise live and dead results.
+        if (Space != NdMemoryAddressSpace::Default)
+          continue;
+        const auto CWord = "uint" + std::to_string(Bytes * 8) + "_t";
+        Declarations +=
+            (Live ? CWord : "void") + " " + Name + "(void *, " + CWord + ");\n";
+        Driver += "for (unsigned offset=8; offset<24; ++offset) {\n";
+        Driver += CWord + " initial = (" + CWord +
+                  ")UINT64_C(0x8877665544332211), desired = (" + CWord +
+                  ")UINT64_C(0x123456789abcdef0), current;\n";
+        Driver += "memset(storage, 0x5a, sizeof(storage));\n"
+                  "memcpy(storage+offset, &initial, sizeof(initial));\n";
+        Driver += Live ? CWord + " old = " : "";
+        Driver += Name + "((void *)(storage+offset), desired);\n";
+        if (Live)
+          Driver += "if (old != initial) return 1;\n";
+        const std::string Expected = Opcode == NdOp::ATOMIC_ADD
+                                         ? "(" + CWord + ")(initial + desired)"
+                                         : "desired";
+        Driver += "memcpy(&current, storage+offset, sizeof(current));\n"
+                  "if (current != " +
+                  Expected +
+                  ") return 2;\n"
+                  "for (unsigned i=0; i<sizeof(storage); ++i)\n"
+                  " if ((i<offset || i>=offset+sizeof(current)) && "
+                  "storage[i]!=0x5a) return 3;\n}\n";
+      }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  llvm::SmallString<128> IRPath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-native-rmw", "ll", IRPath));
+  llvm::FileRemover RemoveIR(IRPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream IR(IRPath, EC);
+    ASSERT_FALSE(EC);
+    Module.print(IR, nullptr);
+  }
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  EXPECT_EQ(Text.find("__atomic_exchange_n"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("__atomic_fetch_add"), std::string::npos) << Text;
+  EXPECT_NE(Text.find(Opcode == NdOp::ATOMIC_ADD ? "lock xadd" : "xchg"),
+            std::string::npos)
+      << Text;
+  EXPECT_NE(Text.find("%%fs:"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("%%gs:"), std::string::npos) << Text;
+  const std::string Main = "\n#include <string.h>\nint main(void) {\n"
+                           "_Alignas(64) unsigned char storage[64];\n" +
+                           Driver + "return 0;\n}\n";
+  for (const char *Level : {"-O0", "-O2"}) {
+    compileAndCheck(Text + Main, false, {}, Level, true);
+    // Compile the original LLVM assembly too: the C recognizer uses a
+    // separate constraint spelling and cannot validate LLVM code generation.
+    compileAndCheck("#include <stdint.h>\n" + Declarations + Main, false, {},
+                    Level, true, IRPath);
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, NativeExchangeKeepsDeadWritesAndUnalignedBytes) {
+  checkNativeRmwMemory(NdOp::ATOMIC_XCHG);
+}
+
+TEST(LLVMCIntrinsicSemantics, NativeAdditionKeepsDeadWritesAndUnalignedBytes) {
+  checkNativeRmwMemory(NdOp::ATOMIC_ADD);
+}
+
+static void checkNativeRmwContract(NdOp Opcode) {
+  for (bool Live : {false, true})
+    for (unsigned Mutation = 0; Mutation < 10; ++Mutation) {
+      SCOPED_TRACE(Live);
+      SCOPED_TRACE(Mutation);
+      llvm::LLVMContext Context;
+      llvm::Module Module("changed-exchange", Context);
+      Module.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> B(Context);
+      const auto Plan =
+          x86AtomicRmwPlan(Arch::X64, Opcode, 8, NdMemoryAddressSpace::Default);
+      auto *Type = llvm::FunctionType::get(
+          B.getInt64Ty(), {B.getPtrTy(Mutation == 8 ? 1 : 0), B.getInt64Ty()},
+          false);
+      auto *Fn = llvm::Function::Create(
+          Type, llvm::GlobalValue::ExternalLinkage, "exchange", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+      auto *Assembly = llvm::InlineAsm::get(
+          Type, Plan->assembly() + (Mutation == 0 ? "\n\tnop" : ""),
+          Plan->constraints() + (Mutation == 1 ? ",~{cc}" : ""), Mutation != 2,
+          Mutation == 3,
+          Mutation == 4 ? llvm::InlineAsm::AD_Intel : llvm::InlineAsm::AD_ATT);
+      auto *Call = B.CreateCall(Assembly, {Fn->getArg(0), Fn->getArg(1)});
+      if (Mutation == 5)
+        Call->addFnAttr(llvm::Attribute::NoSync);
+      if (Mutation == 6)
+        Call->setMemoryEffects(llvm::MemoryEffects::readOnly());
+      if (Mutation == 7)
+        Call->setCallingConv(llvm::CallingConv::Fast);
+      B.CreateRet(Live ? static_cast<llvm::Value *>(Call) : B.getInt64(0));
+      CEmitterOptions Options;
+      Options.TheArch = Mutation == 9 ? Arch::X86 : Arch::X64;
+      Options.PreserveLLVMFunctionTypes = true;
+      std::string Text;
+      llvm::raw_string_ostream OS(Text);
+      EXPECT_THROW(LLVMCEmitter().emit(Module, OS, Options),
+                   std::invalid_argument);
+    }
+}
+
+TEST(LLVMCIntrinsicSemantics, NativeExchangeRejectsChangedContracts) {
+  checkNativeRmwContract(NdOp::ATOMIC_XCHG);
+}
+
+TEST(LLVMCIntrinsicSemantics, NativeAdditionRejectsChangedContracts) {
+  checkNativeRmwContract(NdOp::ATOMIC_ADD);
 }
 
 } // namespace

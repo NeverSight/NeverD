@@ -1,3 +1,6 @@
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDPerformance.cmake")
+neverd_add_sorted_search()
+
 # The binary-file ISA model (scripts/generate_isa_model.py), embedded so a
 # lookup reads no file at run time.
 set(NEVERD_ISA_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/Raw/ISAModel.bin")
@@ -23,6 +26,7 @@ add_neverd_component_library(NeverDLoader
   COFF/PEFixedImage.cpp
   COFF/PEProgramExports.cpp
   COFF/RichHeader.cpp
+  COFF/RTTI.cpp
   COFF/eh/COFFDelphiEH.cpp
   COFF/eh/COFFException.cpp
   COFF/eh/COFFExceptionCommon.cpp
@@ -61,12 +65,15 @@ add_neverd_component_library(NeverDLoader
   COFF/unwind/COFFUnwindARM64Codes.cpp
   COFF/unwind/COFFUnwindARMCommon.cpp
   COFF/unwind/COFFUnwindARMPacked.cpp
+  DWARF/AArch64ReturnAddressState.cpp
+  ReturnAddressSigning.cpp
   DWARF/ColdFragments.cpp
   DWARF/EHFrame.cpp
   DWARF/EHFrameCFI.cpp
   DWARF/EHFrameEncoding.cpp
   DWARF/ItaniumEH.cpp
   DWARF/LSDA.cpp
+  CodePointerSources.cpp
   DataSymbolBinding.cpp
   DirectBranch.cpp
   ELF/ARMEHABI.cpp
@@ -90,6 +97,7 @@ add_neverd_component_library(NeverDLoader
   Raw/RawLoader.cpp
   ${NEVERD_ISA_MODEL_INC}
   ExecutableCodeOwnerIndex.cpp
+  ImageProfile.cpp
   ExceptionEdge.cpp
   Go/GoDeferInfo.cpp
   Go/GoFuncTable.cpp
@@ -103,16 +111,21 @@ add_neverd_component_library(NeverDLoader
   PointerRelocation.cpp
   StaticSymbolTable.cpp
   MachO/DarwinRuntimeCalls.cpp
+  MachO/DyldSharedCache.cpp
+  MachO/DyldCacheImage.cpp
+  MachO/DyldCacheLoading.cpp
   MachO/DarwinSourceDeclarations.cpp
   MachO/CFunctionParameterCalls.cpp
   MachO/ImmutableNativeCalls.cpp
   MachO/ImmutableNativeFrame.cpp
   MachO/RuntimeFunctionAddress.cpp
+  MachO/MachOArm64eFixups.cpp
   MachO/MachOChainedFixups.cpp
   MachO/MachOARM32Mode.cpp
   MachO/MachOCompactUnwind.cpp
   MachO/MachOCompactUnwindEncoding.cpp
   MachO/MachODyldBind.cpp
+  MachO/MachOThreadedBind.cpp
   MachO/MachODyldRebase.cpp
   MachO/MachOProgramLinking.cpp
   MachO/MachOExceptions.cpp
@@ -121,6 +134,7 @@ add_neverd_component_library(NeverDLoader
   MachO/MachOLoader.cpp
   MachO/MachOExecutionImage.cpp
   MachO/MachOLoaderUtils.cpp
+  MachO/MachOMetadataPointer.cpp
   MachO/MachOLocalFunction.cpp
   MachO/MachOObjectExterns.cpp
   MachO/SourceRegisterCopy.cpp
@@ -131,6 +145,7 @@ add_neverd_component_library(NeverDLoader
   ObjC/ObjCEH.cpp
   ObjC/ObjCMethods.cpp
   ObjC/ObjCMethodLists.cpp
+  ObjC/ObjCRelativeLists.cpp
   ObjC/ObjCProtocols.cpp
   ObjC/ObjCProperties.cpp
   ObjC/ObjCReceiverDeclarations.cpp
@@ -160,9 +175,9 @@ add_neverd_component_library(NeverDLoader
   Swift/SwiftVirtualCalls.cpp
   Rust/RustEH.cpp
   discovery/FunctionDiscovery.cpp
-  discovery/FunctionDiscoveryAArch64.cpp
-  discovery/FunctionDiscoveryARM.cpp
-  discovery/FunctionDiscoveryX86.cpp
+  discovery/AArch64/FunctionDiscoveryAArch64.cpp
+  discovery/ARM/FunctionDiscoveryARM.cpp
+  discovery/X86/FunctionDiscoveryX86.cpp
   language/LanguageEH.cpp
   language/LanguagePersonality.cpp
   language/LanguageRuntime.cpp
@@ -182,6 +197,7 @@ add_neverd_component_library(NeverDLoader
 
   LINK_LIBS
   LLVMSwiftDemangle
+  neverd_sorted_search
 )
 
 target_include_directories(NeverDLoader PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Raw")

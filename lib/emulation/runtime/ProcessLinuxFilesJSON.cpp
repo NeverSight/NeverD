@@ -29,7 +29,11 @@ ioctlTrace(const llvm::json::Value &Value) {
   const auto *Rows = O ? O->getArray(field::IoctlTraceRequests) : nullptr;
   auto Events = O ? O->getInteger(field::IoctlTraceEventLimit) : std::nullopt;
   auto Bytes = O ? O->getInteger(field::IoctlTraceByteLimit) : std::nullopt;
-  if (!O || O->size() != 3 || !Rows ||
+  const bool HasUnlisted = O && O->get(field::IoctlTraceIncludeUnlisted);
+  auto Unlisted =
+      O ? O->getBoolean(field::IoctlTraceIncludeUnlisted) : std::nullopt;
+  if (!O || O->size() != 3 + unsigned(HasUnlisted) ||
+      (HasUnlisted && !Unlisted) || !Rows ||
       Rows->size() > ::neverd::limits::emulation::
                          kProcessLinuxFilesJSONIoctlTraceRowsSizeLimit ||
       !Events || *Events <= 0 ||
@@ -41,6 +45,7 @@ ioctlTrace(const llvm::json::Value &Value) {
   LinuxIoctlTraceOptions Out;
   Out.EventLimit = *Events;
   Out.ByteLimit = *Bytes;
+  Out.IncludeUnlisted = Unlisted.value_or(Out.IncludeUnlisted);
   for (const auto &Row : *Rows) {
     const auto *R = Row.getAsObject();
     const auto *N = R ? R->get(field::DeviceRequest) : nullptr;
@@ -235,6 +240,68 @@ linuxFileOptionsFromJSON(const llvm::json::Value &Value) {
         if (!Parsed)
           return Parsed.takeError();
         D.Parents.emplace(Path->str(), *Parsed);
+      }
+      continue;
+    }
+    if (Name == field::FileCreations) {
+      const auto *Rows = V.getAsArray();
+      if (!Rows || Rows->size() > LinuxFileCreationOptions::MaxFiles)
+        return invalid(Name);
+      auto &Creations = Out.FileCreations.emplace();
+      for (const auto &Row : *Rows) {
+        const auto *R = Row.getAsObject();
+        auto Path = R ? R->getString(field::Path) : std::nullopt;
+        const auto *N = R ? R->get(field::FileWriteLimit) : nullptr;
+        auto Limit = N ? process_json::integer<uint64_t>(*N) : std::nullopt;
+        LinuxFileCreationReservation Reservation;
+        const auto *C = R ? R->get(field::FileCreationCount) : nullptr;
+        auto Count = C ? process_json::integer<uint32_t>(*C)
+                       : std::optional<uint32_t>(Reservation.Count);
+        if (!R || R->size() != 2 + bool(C) || !Path || !Limit || !Count ||
+            Path->size() >= linux_model::FilePathLimit ||
+            !Creations.Files
+                 .emplace(Path->str(),
+                          LinuxFileCreationReservation{*Limit, *Count})
+                 .second)
+          return invalid(Name);
+      }
+      continue;
+    }
+    if (Name == field::FileRenames) {
+      const auto *R = V.getAsObject();
+      const auto *Parents =
+          R ? R->getArray(field::DirectoryCreationParents) : nullptr;
+      const auto *N = R ? R->get(field::DirectoryCreationLimit) : nullptr;
+      auto Limit = N ? process_json::integer<uint32_t>(*N) : std::nullopt;
+      if (!R || R->size() != 2 || !Parents ||
+          Parents->size() > LinuxFileRenameOptions::MaxParents || !Limit)
+        return invalid(Name);
+      auto &Renames = Out.FileRenames.emplace();
+      Renames.Limit = *Limit;
+      for (const auto &P : *Parents) {
+        auto Path = P.getAsString();
+        if (!Path || Path->size() >= linux_model::FilePathLimit ||
+            !Renames.Parents.insert(Path->str()).second)
+          return invalid(Name);
+      }
+      continue;
+    }
+    if (Name == field::FileUnlinks) {
+      const auto *U = V.getAsObject();
+      const auto *Parents =
+          U ? U->getArray(field::DirectoryCreationParents) : nullptr;
+      const auto *N = U ? U->get(field::DirectoryCreationLimit) : nullptr;
+      auto Limit = N ? process_json::integer<uint32_t>(*N) : std::nullopt;
+      if (!U || U->size() != 2 || !Parents ||
+          Parents->size() > LinuxFileUnlinkOptions::MaxParents || !Limit)
+        return invalid(Name);
+      auto &Unlinks = Out.FileUnlinks.emplace();
+      Unlinks.Limit = *Limit;
+      for (const auto &P : *Parents) {
+        auto Path = P.getAsString();
+        if (!Path || Path->size() >= linux_model::FilePathLimit ||
+            !Unlinks.Parents.insert(Path->str()).second)
+          return invalid(Name);
       }
       continue;
     }

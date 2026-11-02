@@ -1,0 +1,12 @@
+//===- X87PortableABI.def - Explicit portable generated-call ABI ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Define NEVERD_X87_PORTABLE_HELPER(Role, Name, Result, Parameters).
+
+NEVERD_X87_PORTABLE_HELPER(Step, nvd_x87_v1_step, uint32_t,
+                           (void *Execution, uint32_t Selector,
+                            uint64_t GuestIP, uint64_t GuestDP))
+NEVERD_X87_PORTABLE_HELPER(Result, nvd_x87_v1_result, uint64_t,
+                           (void *Execution))

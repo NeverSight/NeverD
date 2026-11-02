@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QKeyEvent>
 #include <QRadioButton>
@@ -15,9 +16,11 @@ public:
 
 protected:
   bool eventFilter(QObject *object, QEvent *event) override {
+    const auto *choices = qobject_cast<QComboBox *>(object);
     if (event->type() != QEvent::KeyPress ||
         !(qobject_cast<QCheckBox *>(object) ||
-          qobject_cast<QRadioButton *>(object)))
+          qobject_cast<QRadioButton *>(object) ||
+          (choices && !choices->isEditable())))
       return false;
     const auto *key = static_cast<QKeyEvent *>(event);
     auto *dialog =

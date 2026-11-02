@@ -141,7 +141,7 @@ struct RecordedSection {
 /// .reloc sections may be re-laid out, because post-link resource stamping
 /// rewrites them without relinking and neither holds a code or data symbol;
 /// every other section must match exactly.
-/// An independently checked loader header mapping is excluded; it is not a
+/// Loader-owned image header storage is excluded; it is not a
 /// native COFF section and cannot supply a PDB segment number.
 bool recordedSectionsMatch(const BinaryImage &Image,
                            llvm::ArrayRef<RecordedSection> Recorded);

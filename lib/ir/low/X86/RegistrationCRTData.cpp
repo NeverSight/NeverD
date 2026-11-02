@@ -15,7 +15,7 @@
 #include "RegistrationScalarPackets.h"
 
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 

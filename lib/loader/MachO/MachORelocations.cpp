@@ -8,6 +8,7 @@
 #include "MachORelocationsDetail.h"
 
 #include "neverd/loader/DirectBranch.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -743,6 +744,43 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
           std::memcpy(ApplySeg->Data.data() + SegOff, &Val, 8);
           if (SymOwnerVA != InvalidVA)
             recordAbsolutePointerRelocation(Img, P, Val, SymOwnerVA);
+        } else if (RType == ARM64_RELOC_AUTHENTICATED_POINTER) {
+          if (Info.IsScattered || Info.IsPCRel ||
+              Info.Length != arm64e::kObjectPointerLength || !Info.IsExternal ||
+              !Resolved ||
+              !rangeInBounds(SegOff, arm64e::kPointerBytes,
+                             ApplySeg->Data.size()))
+            return relocationError(arm64e::kInvalidObjectPointer, SecAddr,
+                                   RAddr);
+          const uint64_t Raw = readLE<uint64_t>(ApplySeg->Data.data() + SegOff);
+          if (!arm64e::kAuthentication.extract(Raw) ||
+              arm64e::kObjectReserved.extract(Raw))
+            return relocationError(arm64e::kInvalidObjectPointerBits, SecAddr,
+                                   RAddr);
+          const int64_t Addend = arm64e::kObjectAddend.signExtend(Raw);
+          const auto Target = addSigned(S, Addend);
+          if (!Target || Img.MachOAuthenticatedPointers.count(P))
+            return relocationError(arm64e::kConflictingObjectPointer, SecAddr,
+                                   RAddr);
+          MachOAuthenticatedPointer Auth;
+          Auth.Target = *Target;
+          Auth.EncodedValue = Raw;
+          Auth.Addend = Addend;
+          Auth.Diversity = arm64e::kDiversity.extract(Raw);
+          Auth.AddressDiversity = arm64e::kAddressDiversity.extract(Raw);
+          Auth.Key = arm64e::kKey.extract(Raw);
+          if (const auto Symbol = Reloc.getSymbol();
+              Symbol != Obj.symbol_end()) {
+            auto Name = Symbol->getName();
+            if (!Name)
+              return Name.takeError();
+            Auth.Symbol = Name->str();
+          }
+          Img.MachOAuthenticatedPointers.emplace(P, std::move(Auth));
+          // Keep the relocation recipe separate from ordinary pointer bits.
+          // In particular it cannot establish an immutable raw-pointer load.
+          Img.CodePtrRelocSlots.erase(P);
+          Img.DataPtrRelocSlots.erase(P);
         } else if (RType == ARM64_RELOC_BRANCH26 ||
                    RType == ARM64_RELOC_PAGE21 ||
                    RType == ARM64_RELOC_PAGEOFF12) {
@@ -804,8 +842,7 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
                    RType == ARM64_RELOC_GOT_LOAD_PAGEOFF12 ||
                    RType == ARM64_RELOC_POINTER_TO_GOT ||
                    RType == ARM64_RELOC_TLVP_LOAD_PAGE21 ||
-                   RType == ARM64_RELOC_TLVP_LOAD_PAGEOFF12 ||
-                   RType == ARM64_RELOC_AUTHENTICATED_POINTER) {
+                   RType == ARM64_RELOC_TLVP_LOAD_PAGEOFF12) {
           return relocationError("unsupported ARM64 indirection relocation",
                                  SecAddr, RAddr);
         } else {

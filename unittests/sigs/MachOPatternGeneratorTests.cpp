@@ -250,7 +250,7 @@ std::unique_ptr<object::ObjectFile> open(const std::vector<uint8_t> &Bytes) {
   return std::move(*Obj);
 }
 
-Generated generate(const std::vector<uint8_t> &Bytes) {
+Generated generate(const std::vector<uint8_t> &Bytes, bool Evidence = false) {
   Generated Out;
   std::unique_ptr<object::ObjectFile> Obj = open(Bytes);
   if (!Obj)
@@ -258,6 +258,7 @@ Generated generate(const std::vector<uint8_t> &Bytes) {
   PatternGeneratorOptions Opts;
   Opts.TailLen = 0xFFFF;
   Opts.EmitReferences = true;
+  Opts.CollisionEvidence = Evidence;
   std::string Text;
   raw_string_ostream OS(Text);
   Out.Stats = generatePatterns(*Obj, Opts, OS);
@@ -462,6 +463,36 @@ TEST(MachOPatternGenerator, FootprintTable) {
   EXPECT_FALSE(machORelocationFootprint(MachO::CPU_TYPE_ARM64, 12, 2));
   EXPECT_FALSE(machORelocationFootprint(MachO::CPU_TYPE_I386,
                                         MachO::GENERIC_RELOC_VANILLA, 2));
+}
+
+TEST(MachOPatternGenerator, CollisionEvidenceRetainsSelfReferenceAliases) {
+  for (bool ARM64 : {false, true}) {
+    std::vector<uint8_t> Code = sequentialCode(48);
+    const unsigned Field = ARM64 ? 0 : 1;
+    if (ARM64) {
+      Code[0] = Code[1] = Code[2] = 0;
+      Code[3] = 0x94;
+    } else {
+      Code[0] = 0xe8;
+    }
+    MachOObjectBuilder Builder(
+        ARM64 ? MachO::CPU_TYPE_ARM64 : MachO::CPU_TYPE_X86_64, Code);
+    Builder.addSymbol("_self", 0);
+    Builder.addSymbol("_self_alias", 0);
+    Builder.addRelocation(Field,
+                          ARM64 ? uint32_t(MachO::ARM64_RELOC_BRANCH26)
+                                : uint32_t(MachO::X86_64_RELOC_BRANCH),
+                          2, "_self_alias");
+    const auto Ordinary = generate(Builder.build());
+    ASSERT_EQ(Ordinary.Lines.size(), 1u);
+    EXPECT_EQ(Ordinary.Lines.front().find('^'), std::string::npos);
+    const auto Evidence = generate(Builder.build(), true);
+    ASSERT_EQ(Evidence.Lines.size(), 1u);
+    EXPECT_NE(Evidence.Lines.front().find(" !evidence "), std::string::npos);
+    EXPECT_NE((Evidence.Lines.front() + " ")
+                  .find("^000" + std::to_string(Field) + " _self_alias "),
+              std::string::npos);
+  }
 }
 
 TEST(MachOPatternGenerator, KeepsTheObjectsOfItsMachine) {

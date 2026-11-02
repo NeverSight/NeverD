@@ -10,6 +10,9 @@
 #include "DialectPrinter.h"
 
 #include "neverd/loader/SymbolSpelling.h"
+#include "neverd/types/TypeRender.h"
+
+#include "llvm/ADT/StringSet.h"
 
 using namespace neverd;
 using namespace neverd::csyntax;
@@ -118,7 +121,27 @@ SourceDialectText neverd::spellInDialect(llvm::StringRef C,
                                          const SourceDialectOptions &Options) {
   Tree T(CDataModel::forTarget(Options.TheArch, Options.Format));
   T.Format = Options.Format;
-  parse(C, T);
+  std::string Headers;
+  if (Options.Types) {
+    auto Tokens = lex(C);
+    if (Tokens) {
+      llvm::StringSet<> Seen;
+      std::vector<const types::LocalType *> Referenced;
+      for (const Token &Tok : *Tokens)
+        if (Tok.Kind == TokenKind::Identifier && Seen.insert(Tok.Text).second)
+          if (const types::LocalType *Type = Options.Types->find(Tok.Text);
+              Type && (Type->Origin == types::TypeOrigin::Header ||
+                       llvm::is_contained(Options.HeaderTypes, Type->Name)))
+            Referenced.push_back(Type);
+      types::RenderOptions Render;
+      Render.Spelling = types::BuiltinSpelling::Portable;
+      if (!Referenced.empty())
+        Headers = types::renderTypes(*Options.Types, Referenced, Render);
+    } else {
+      llvm::consumeError(Tokens.takeError());
+    }
+  }
+  parse(C, T, Headers);
   check(T);
   std::unique_ptr<DialectPrinter> Printer;
   switch (Options.Dialect) {

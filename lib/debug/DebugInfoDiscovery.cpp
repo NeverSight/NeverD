@@ -18,6 +18,7 @@
 #include "neverd/debug/MapFile.h"
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/support/FilePath.h"
@@ -523,14 +524,16 @@ std::string describeMapMismatch(const MapCheck &Check) {
   return "it does not match the image";
 }
 
-DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
-                              const BinaryImage &Img,
-                              const DebugInfoRequest &Req,
-                              const LoadProgress &Progress) {
+static DebugInfoResult
+loadDebugInfoImpl(const std::filesystem::path &BinaryPath,
+                  const BinaryImage &Img, const DebugInfoRequest &Req,
+                  const LoadProgress &Progress) {
   DebugInfoResult Result;
   if (!Req.Enabled)
     return Result;
-  const bool Searches = searchesDebugInfo(Img.Arch);
+  // The cache container and its companions describe many images. Only an
+  // explicitly selected companion can belong to this projected Mach-O image.
+  const bool Searches = searchesDebugInfo(Img.Arch) && !Img.MachOSharedCache;
 
   // The PDB or DWARF: the file the caller named, else the one discovery
   // finds.
@@ -587,6 +590,7 @@ DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
   if (Result || !Searches || !Req.SearchMap)
     return Result;
   for (const std::filesystem::path &C : mapCandidates(BinaryPath)) {
+    Progress.check();
     if (!isReadableFile(C))
       continue;
     MapRead Map = readMap(C, Img, BinaryPath);
@@ -602,6 +606,16 @@ DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
     return Result;
   }
 
+  return Result;
+}
+
+DebugInfoResult loadDebugInfo(const std::filesystem::path &BinaryPath,
+                              const BinaryImage &Img,
+                              const DebugInfoRequest &Req,
+                              const LoadProgress &Progress) {
+  Progress.report("debug", 0, 1);
+  auto Result = loadDebugInfoImpl(BinaryPath, Img, Req, Progress);
+  Progress.report("debug", 1, 1);
   return Result;
 }
 
@@ -711,6 +725,8 @@ unsigned applyDebugSymbols(BinaryImage &Img, const DebugContext &Dbg) {
   // Static functions of several modules share names (ntoskrnl's PDB names
   // thirteen twice).
   Img.numberSharedFunctionNames();
+  if (Applied && Img.Format == BinaryFormat::COFF)
+    coff_loader::refreshExceptionHandlerNames(Img);
   LLVM_DEBUG(llvm::dbgs() << "debug-discovery: published " << Applied << " of "
                           << DbgFuncs.size() << " debug function symbols\n");
   return Applied;

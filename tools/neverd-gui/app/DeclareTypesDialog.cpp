@@ -1,5 +1,6 @@
 #include "DeclareTypesDialog.h"
 
+#include "ShortcutHint.h"
 #include "Theme.h"
 #include "TypeSourceHighlighter.h"
 
@@ -84,13 +85,15 @@ DeclareTypesDialog::DeclareTypesDialog(const QString &language,
   auto *buttons = new QDialogButtonBox(this);
   declare_ = buttons->addButton(tr("Declare"), QDialogButtonBox::AcceptRole);
   declare_->setObjectName(QStringLiteral("declare"));
-  declare_->setToolTip(tr("Read the declarations (Ctrl+Enter)"));
+  const QKeySequence declareKey(Qt::CTRL | Qt::Key_Return);
+  declare_->setToolTip(tr("Read the declarations (%1)")
+                           .arg(declareKey.toString(QKeySequence::NativeText)));
+  setShortcutHint(*declare_, declareKey);
   buttons->addButton(QDialogButtonBox::Cancel);
   layout->addWidget(buttons);
 
   // Return writes a line break in the editor; Ctrl+Return declares.
-  for (const auto &key : {QKeySequence(Qt::CTRL | Qt::Key_Return),
-                          QKeySequence(Qt::CTRL | Qt::Key_Enter)}) {
+  for (const auto &key : {declareKey, QKeySequence(Qt::CTRL | Qt::Key_Enter)}) {
     auto *shortcut = new QShortcut(key, this);
     shortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(shortcut, &QShortcut::activated, this,

@@ -9,6 +9,7 @@
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/SourcePatchCallback.h"
+#include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/LanguageEHDwarf.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -136,6 +137,9 @@ llvm::Error encodeRules(std::vector<uint8_t> &Out,
     case CFIOpKind::NegateRAState:
       Out.push_back(llvm::dwarf::DW_CFA_AARCH64_negate_ra_state);
       break;
+    case CFIOpKind::SetRAState:
+    case CFIOpKind::NegateRAStateWithPC:
+      return fail(dwarf_eh::aarch64::kUnsafeRewrite);
     default:
       return fail("frame rule needs an unmodeled expression or PC identity");
     }
@@ -154,6 +158,9 @@ encodeSourceCallbackDwarfFrame(const SourceCallbackPrefix &Prefix,
       FDE.AddressRange < Prefix.CopiedSize || !CIE.CodeAlignmentFactor ||
       !CIE.DataAlignmentFactor || CIE.ReturnAddressRegister > 255 ||
       FDE.LSDAVA || CIE.IsSignalFrame || CIE.HasPointerAuth ||
+      CIE.UsesArm64eReturnAddressABI || CIE.UsesNonHintPAuthLR ||
+      CIE.ParseStatus != ExceptionParseStatus::Complete ||
+      FDE.ParseStatus != ExceptionParseStatus::Complete ||
       CIE.HasMTETaggedFrame || CIE.SegmentSelectorSize ||
       FrameVA > uint64_t(INT64_MAX) / 2 ||
       Prefix.CallbackVA > uint64_t(INT64_MAX) / 2)

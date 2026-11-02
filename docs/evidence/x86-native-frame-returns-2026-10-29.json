@@ -1,0 +1,845 @@
+{
+  "scope": "Fourteen native x86 IRET/RETF/SYSENTER/RSM/FRED/UIRET LLVM and NeverC compiler interfaces",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-native-frame-returns-20261029",
+  "llvm_commit": "739d6012881cf29bfac0f6bec5627334b5d0cb26",
+  "neverc_commit": "d85e5c9c91c8b77610f8bd69a01e64b14cb37a45",
+  "neverd_base": "5bb4ca4c682d82628d5e74d0e759a8a3fe13c891",
+  "source_files": {
+    "llvm": {
+      "llvm/docs/X86NativeFrameReturns.rst": {
+        "sha256": "10a47983aef8b5c97ff04cbfbdcaf4b0df7616f9e0e696cb4bb7cc7b2801ff0e",
+        "bytes": 3655
+      },
+      "llvm/include/llvm/IR/IntrinsicsX86.td": {
+        "sha256": "70107fc36f554b8d2ac22c4e3d061ea2b22f65e2e67d2c69522fdddde4b50b10",
+        "bytes": 454109
+      },
+      "llvm/lib/Target/X86/X86ISelLowering.cpp": {
+        "sha256": "36d7b01a16f919276333e138e3fe6d0431eb47544bc24ca9e0f649d35e2f3656",
+        "bytes": 2760157
+      },
+      "llvm/lib/Target/X86/X86InstrCompiler.td": {
+        "sha256": "2a7859df7aab143f27161ab56ec05a8c45cfa7f54dd1fe1102a35387a53fa0a4",
+        "bytes": 119044
+      },
+      "llvm/lib/Target/X86/X86InstrSystem.td": {
+        "sha256": "f78ef218af6e149ac9f45480a0ca698a2bada79e8e621c6612b0c8e6f89c4fbd",
+        "bytes": 48804
+      },
+      "llvm/lib/Target/X86/X86MCInstLower.cpp": {
+        "sha256": "7732b4029f1919508c2aed3b3959df86d9e9d4b8644a730d078f7d86477efe8e",
+        "bytes": 140350
+      },
+      "llvm/lib/Target/X86/X86NativeFrameReturn.h": {
+        "sha256": "f05136f6976f1c8f1b139bdfe9148eb602cdc43f86bea4cd1b155f97622afc27",
+        "bytes": 1357
+      },
+      "llvm/lib/Target/X86/X86NativeFrameReturns.def": {
+        "sha256": "7c40e1bbba0625e8f2a387237502ff943452d4bc28e5cc2bb856dfd641c5c024",
+        "bytes": 1096
+      },
+      "llvm/test/CodeGen/X86/native-frame-returns.ll": {
+        "sha256": "116f3ab589b9a7ebb16f7835dc8b7c5f5ff52bf983b93cb1624b84f8a6ece528",
+        "bytes": 14242
+      }
+    },
+    "neverc": {
+      ".github/workflows/lint-generated-td.yml": {
+        "sha256": "764806746319ec209303232cee693e05f2d76d505278cba9a493ce7d8edaacb1",
+        "bytes": 8629
+      },
+      "development.md": {
+        "sha256": "91318da0b76a948e09513af2b1dc281649ff5db83b8c30a5af79ecacfc34a8e7",
+        "bytes": 131219
+      },
+      "llvm/include/llvm/IR/IntrinsicEnums.inc": {
+        "sha256": "71046cb3bc1da0101d531cf1723faa7f2344db67f0bb099783ee83e23b620f09",
+        "bytes": 27186
+      },
+      "llvm/include/llvm/IR/IntrinsicImpl.inc": {
+        "sha256": "a1587f0cfcfdaa948b8f28dcb384b1b55330365dfe3d775eb4a974da102afca2",
+        "bytes": 653710
+      },
+      "llvm/include/llvm/IR/IntrinsicsX86.h": {
+        "sha256": "d12f97d83f9a7a99d0efe8c29939bb268595fcd45cfbff10e0e355485536648f",
+        "bytes": 145146
+      },
+      "llvm/lib/Target/X86/X86GenAsmMatcher.inc": {
+        "sha256": "95f4bf7a27712561b876ac8fe8add97b91d212a645b5ae5381fe780acb2d71dd",
+        "bytes": 6030422
+      },
+      "llvm/lib/Target/X86/X86GenAsmWriter.inc": {
+        "sha256": "4ce77e52a2e249dbc00f15d9a7f95c05a038d0d5681e2bc39b00bb351100cdd5",
+        "bytes": 1695148
+      },
+      "llvm/lib/Target/X86/X86GenAsmWriter1.inc": {
+        "sha256": "1ce08c6b46809b095ffa4a86ea58b4aa2b012765c63ae9e6b0b8098436b500eb",
+        "bytes": 1224882
+      },
+      "llvm/lib/Target/X86/X86GenDAGISel.inc": {
+        "sha256": "5fe988dc41c7d50f237bc2177e8f35e33ca103ee3d99d55094a36c81c56b386c",
+        "bytes": 10097926
+      },
+      "llvm/lib/Target/X86/X86GenInstrInfo.inc": {
+        "sha256": "001cbeab0381d43aa991ccb44f493de79517692bdd9bac75e52d9db3a9ebc506",
+        "bytes": 6948565
+      },
+      "llvm/lib/Target/X86/X86ISelLowering.cpp": {
+        "sha256": "78b0d8d3dfc9610aebbc60050eac88fc35d48c37cb12d5dd20fbb98c4cad7e53",
+        "bytes": 2377305
+      },
+      "llvm/lib/Target/X86/X86MCInstLower.cpp": {
+        "sha256": "efabb672e2d01bfb6fb0f4c10b50192d02f67784cb727f17196e2203a7141e4e",
+        "bytes": 86278
+      },
+      "llvm/lib/Target/X86/X86NativeFrameReturn.h": {
+        "sha256": "f05136f6976f1c8f1b139bdfe9148eb602cdc43f86bea4cd1b155f97622afc27",
+        "bytes": 1357
+      },
+      "llvm/lib/Target/X86/X86NativeFrameReturns.def": {
+        "sha256": "7c40e1bbba0625e8f2a387237502ff943452d4bc28e5cc2bb856dfd641c5c024",
+        "bytes": 1096
+      },
+      "neverc/include/neverc/Foundation/Builtin/BuiltinsX86_64.def": {
+        "sha256": "4362fff8098295319cc98faec75eb51baf971d91d0c0e673acfbaa6f3ea0c00d",
+        "bytes": 25045
+      },
+      "neverc/include/neverc/Foundation/Builtin/X86NativeTransfers.def": {
+        "sha256": "1797fc0b5d30c1790f38ed5e0b379f9c02dc1a0646a1742400b52416f11da993",
+        "bytes": 884
+      },
+      "neverc/lib/Emit/Builtin/BuiltinEmitterX86.cpp": {
+        "sha256": "974ec0f3944356c931f3c7fee4c7635dc1319d0584f2449c9d1d16ffbafd4d4c",
+        "bytes": 186234
+      },
+      "tests/neverc/CMakeLists.txt": {
+        "sha256": "aba40787c2cb53c8938ad1fc70d0daf62506759fd2cf1f0bf1a227e045fa4616",
+        "bytes": 127656
+      },
+      "tests/neverc/X86/FrameReturnFrontendTests.cpp": {
+        "sha256": "924ac0251eee6e5523b242d7e6a6758d254e6f4f4edef0d84888b07857699ffd",
+        "bytes": 5400
+      },
+      "tests/neverc/X86/KvmTransferFixture.h": {
+        "sha256": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "bytes": 4951
+      },
+      "tests/neverc/X86/frame_return_kvm.c": {
+        "sha256": "ccc5a95cf7f9f88060d0cfaa777551a5750db455920519076d6df2776ca9b132",
+        "bytes": 10814
+      },
+      "tests/neverc/X86/smm_return_kvm.c": {
+        "sha256": "c2dfb28019e47ef505eb0bed05ed2a26d5a0c30d5cc20d32e3543783bdb2e6a7",
+        "bytes": 8055
+      },
+      "tests/neverc/X86/system_return_kvm.c": {
+        "sha256": "21a242821c686c7b65c7898158307159fca633cde3945fa5f8bc475f79598e2d",
+        "bytes": 8458
+      },
+      "tests/neverc/X86/verify_frame_return_encodings.py": {
+        "sha256": "7482bddf8676569ec9d4b41825cebaeefa244fbb55aac93ad42d9a8f62d6892f",
+        "bytes": 5757
+      },
+      "tests/neverc/X86/verify_frame_returns.py": {
+        "sha256": "2611efad44aa49030a817a05d745e35b0025fc555cd0f538ad6b0c89223fe2c7",
+        "bytes": 13726
+      },
+      "tests/neverc/X86/verify_system_returns.py": {
+        "sha256": "f3f50a97dd88303903dc1d0a8389cd35d0b677ae9b8fd43b478dc7e49e49bcf8",
+        "bytes": 13818
+      },
+      "utils/lint/sync-x86-frame-returns.py": {
+        "sha256": "bfe08b511d4cf43a48f85d63c2b2b016f81086b6c47f543a189a202095e1a983",
+        "bytes": 3478
+      },
+      "utils/lint/sync-x86-native-intrinsics.py": {
+        "sha256": "f5d7d67e9f3030d37f79d7f3e48b79337566114e8550b18ca3c7e6013dc40df2",
+        "bytes": 21255
+      },
+      "utils/lint/sync-x86-system-effects.py": {
+        "sha256": "b379ec4acb3b7723223a11320a18660246bd364f63f313cf496ed7e772ace142",
+        "bytes": 10965
+      },
+      "utils/lint/test_sync_x86_frame_returns.py": {
+        "sha256": "08bdba638dbfbe58bd87c2aead04a803ec41ab9a871fcfa56000625ea75b8ad6",
+        "bytes": 2868
+      }
+    }
+  },
+  "checks": {
+    "llvm": {
+      "tests": 39,
+      "passed": 39,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "llvm-regression-final.xml",
+      "sha256": "4a0e04b1567ba4deb74df3bd746e3848f6e2d31ae35bb9b1da4c37de593f3b15",
+      "bytes": 3505
+    },
+    "neverc_x86": {
+      "tests": 45,
+      "passed": 45,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "neverc-regression.xml",
+      "sha256": "653930a89a275b19fb2c73d7790f2b29a2f591a94fc617ecfd7df44517d9186d",
+      "bytes": 16311
+    },
+    "neverc_privileged_and_headers": {
+      "tests": 78,
+      "passed": 78,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "neverc-privileged.xml",
+      "sha256": "227edf188e2cb42bfac9030e77b943bafffe9dc2e0c4b715c019df64b6c655d6",
+      "bytes": 23735
+    },
+    "generators": {
+      "generators-final.log": {
+        "passed": 68,
+        "artifact": "generators-final.log",
+        "sha256": "90104016ffd4fafdc8c448e8c3566a2359392fb820f7176d29374a5c21f63f19",
+        "bytes": 168
+      },
+      "sorting.log": {
+        "passed": 7,
+        "artifact": "sorting.log",
+        "sha256": "593089b461409d37fd72aac0cf61f7a443914b216ca5a1deef285deab922c559",
+        "bytes": 105
+      }
+    }
+  },
+  "unique_tests_passed": 237,
+  "object_encoding_checks": {
+    "operations": 168,
+    "profiles": 12,
+    "report": {
+      "artifact": "encodings-final/evidence.json",
+      "sha256": "44382d148a7e2f9d595204df0afbbdffcc881be2bde03c78bfdaa6ec130f6559",
+      "bytes": 3137
+    },
+    "commands": {
+      "artifact": "encodings-final/commands.json",
+      "sha256": "52c515222e64fd7a0e7dd271b5d5d9818c75f1523e020d522ce3feed8e97c041",
+      "bytes": 17989
+    }
+  },
+  "native": {
+    "new_profiles": [
+      {
+        "fixture": "native-x64",
+        "code_bits": 64,
+        "profile": "llvm-O0",
+        "functions": 40,
+        "complete_state_pairs": 7680,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "1340fe61187a12c029cb4e58676f19131e73873a68be75108a0cfad8af0566e6",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-x64",
+        "code_bits": 64,
+        "profile": "llvm-O2",
+        "functions": 40,
+        "complete_state_pairs": 7680,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "0c43d5143e52b33b57367f4fb96279344478425dffd9b303e95127493de22fba",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-x64",
+        "code_bits": 64,
+        "profile": "neverc-O0",
+        "functions": 40,
+        "complete_state_pairs": 7680,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "51e0f7937f77eb551ff9d8a9f1fa113916e2b1480d227073cc38b1d64ba2763c",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-x64",
+        "code_bits": 64,
+        "profile": "neverc-O2",
+        "functions": 40,
+        "complete_state_pairs": 7680,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "3350db8fb7a8c70f7ae5733f9ff0d2dc23d7a21c97d8c8b3f13916227ed32a88",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-x64",
+        "code_bits": 64,
+        "profile": "neverc-ir-O0",
+        "functions": 40,
+        "complete_state_pairs": 7680,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "47cf99ade4074b687785d95fb556c62588a6f0ce314e46f083a5ea97f0c2314d",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-x64",
+        "code_bits": 64,
+        "profile": "neverc-ir-O2",
+        "functions": 40,
+        "complete_state_pairs": 7680,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "feb13df57c2987d143ed2cf772f36627961396b0103e5d8887fc1996797997ad",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-i386-final",
+        "code_bits": 32,
+        "profile": "llvm-O0",
+        "functions": 28,
+        "complete_state_pairs": 5376,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "8eb5c2f985ce4192fbc5e929b74500bb2a4dab33045741ef24a4766f54c01424",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-i386-final",
+        "code_bits": 32,
+        "profile": "llvm-O2",
+        "functions": 28,
+        "complete_state_pairs": 5376,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "e24d94a413971449d717622fd8a21cc6204f8c96d03d43afe3ab7d9570417acd",
+        "negative_control": "wrong stack rejected"
+      },
+      {
+        "fixture": "native-smm",
+        "code_bits": 64,
+        "profile": "llvm-O0",
+        "functions": 4,
+        "complete_state_pairs": 384,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "1bc1772cf5256b45304db59b89f89ceb5a22e5691c45005684af65f690daa55b",
+        "negative_control": "wrong opcode rejected"
+      },
+      {
+        "fixture": "native-smm",
+        "code_bits": 64,
+        "profile": "llvm-O2",
+        "functions": 4,
+        "complete_state_pairs": 384,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "fbfae64acb7f676f56f26a2bdeb9e970a1bf8247cfbc25dfdc27163baad4eb4d",
+        "negative_control": "wrong opcode rejected"
+      },
+      {
+        "fixture": "native-smm",
+        "code_bits": 64,
+        "profile": "neverc-O0",
+        "functions": 4,
+        "complete_state_pairs": 384,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "6dc10d19b32a7e0b9378f6a7b2e10cbecad275e6f418b9e66452817fc4ec4783",
+        "negative_control": "wrong opcode rejected"
+      },
+      {
+        "fixture": "native-smm",
+        "code_bits": 64,
+        "profile": "neverc-O2",
+        "functions": 4,
+        "complete_state_pairs": 384,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "5735daa13cab5a7dcdf47a227ab3bdcc554d8880c5f31056081ebac49d58ac9d",
+        "negative_control": "wrong opcode rejected"
+      },
+      {
+        "fixture": "native-smm",
+        "code_bits": 64,
+        "profile": "neverc-ir-O0",
+        "functions": 4,
+        "complete_state_pairs": 384,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "4dda2fb40020530e6f9df714668ff5b5e1e128d4246b4b231cdfb0ecdfa11588",
+        "negative_control": "wrong opcode rejected"
+      },
+      {
+        "fixture": "native-smm",
+        "code_bits": 64,
+        "profile": "neverc-ir-O2",
+        "functions": 4,
+        "complete_state_pairs": 384,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "5735daa13cab5a7dcdf47a227ab3bdcc554d8880c5f31056081ebac49d58ac9d",
+        "negative_control": "wrong opcode rejected"
+      }
+    ],
+    "prior_system_return_regression": [
+      {
+        "fixture": "system-return-regression",
+        "code_bits": 64,
+        "profile": "llvm-O0",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "bcdc7fbe1b9a421753bad76464e4a9ee0316a889bdb326610705b925a2a4c22c",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-regression",
+        "code_bits": 64,
+        "profile": "llvm-O2",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "f16aaac355d6b29c1d37da5e2a9360a74457ad09cf0fe2c1bf678e1a965fe0af",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-regression",
+        "code_bits": 64,
+        "profile": "neverc-O0",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "09d7fa8ece2c40e12aa90166f95ed2a13a24d8062bc09204b082cc0c191376e3",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-regression",
+        "code_bits": 64,
+        "profile": "neverc-O2",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "b0a6e2fee89dbe04ad8158c89ce15a065b457af5a01199f9eea87e64caa25b01",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-regression",
+        "code_bits": 64,
+        "profile": "neverc-ir-O0",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "b059f0ecd5ddf179519ca43337b8a2cd874d493064d08bec2af71d41666b82a7",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-regression",
+        "code_bits": 64,
+        "profile": "neverc-ir-O2",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "b9dde5d65aad4461985f8901f0df9bf3a3264921a587ec04ded2da13e63530b6",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-i386-regression",
+        "code_bits": 32,
+        "profile": "llvm-O0",
+        "functions": 4,
+        "complete_state_pairs": 21760,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "036a9045c40129327543d1d6bb7ebf8c78a80797c4b4a6ad87f2d618d108df8d",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "fixture": "system-return-i386-regression",
+        "code_bits": 32,
+        "profile": "llvm-O2",
+        "functions": 4,
+        "complete_state_pairs": 21760,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "dbbe4d7236e6c20746388de5fede9ff963cd0531deca0d5b68d4e2fa09579b31",
+        "wrong_stack_negative_control": "rejected"
+      }
+    ],
+    "new_complete_represented_state_pairs": 59136,
+    "old_complete_represented_state_pairs": 565760,
+    "complete_represented_state_pairs": 624896,
+    "negative_controls": 22,
+    "compared": "All kvm_regs, kvm_sregs and every mapped RAM byte; new frame/SMM fixtures also compare kvm_vcpu_events. XSTATE is not compared.",
+    "matrix": "IRET/RETF widths and SYSENTER: four compiler-frame variants, CPL0/CPL3, six flag samples, four frame/address placements, four size/stack cases. RSM: four variants, six flags, four restored stacks, four frame sizes in KVM-mediated SMM.",
+    "environment": {
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "cpu": {
+        "vendor_id": "GenuineIntel",
+        "cpu family": "6",
+        "model": "186",
+        "model name": "13th Gen Intel(R) Core(TM) i9-13900H",
+        "stepping": "2",
+        "microcode": "0x6134",
+        "flags": "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize pconfig arch_lbr ibt flush_l1d arch_capabilities"
+      },
+      "kvm_device": "/dev/kvm",
+      "xstate_compared": false,
+      "cet_enabled": false
+    },
+    "artifacts": {
+      "native-x64": {
+        "report": {
+          "artifact": "native-x64/evidence.json",
+          "sha256": "1e3f14b6a930bb195799c8505edfb98d387b71880d6ef42df786a4ca0cd53673",
+          "bytes": 4143
+        },
+        "commands": {
+          "artifact": "native-x64/commands.json",
+          "sha256": "fb12c58a42c0a582e9b988b6fbf10ac8d83af089dfc855715f78573113acd4ed",
+          "bytes": 19415
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "native-x64/llvm-O0-native.stdout",
+            "sha256": "eb27cbd1387bf9295243ae022c3fb99596283cd6e9988ee4b3cb326353c0b2e5",
+            "bytes": 84
+          },
+          "llvm-O2": {
+            "artifact": "native-x64/llvm-O2-native.stdout",
+            "sha256": "eb27cbd1387bf9295243ae022c3fb99596283cd6e9988ee4b3cb326353c0b2e5",
+            "bytes": 84
+          },
+          "neverc-O0": {
+            "artifact": "native-x64/neverc-O0-native.stdout",
+            "sha256": "eb27cbd1387bf9295243ae022c3fb99596283cd6e9988ee4b3cb326353c0b2e5",
+            "bytes": 84
+          },
+          "neverc-O2": {
+            "artifact": "native-x64/neverc-O2-native.stdout",
+            "sha256": "eb27cbd1387bf9295243ae022c3fb99596283cd6e9988ee4b3cb326353c0b2e5",
+            "bytes": 84
+          },
+          "neverc-ir-O0": {
+            "artifact": "native-x64/neverc-ir-O0-native.stdout",
+            "sha256": "eb27cbd1387bf9295243ae022c3fb99596283cd6e9988ee4b3cb326353c0b2e5",
+            "bytes": 84
+          },
+          "neverc-ir-O2": {
+            "artifact": "native-x64/neverc-ir-O2-native.stdout",
+            "sha256": "eb27cbd1387bf9295243ae022c3fb99596283cd6e9988ee4b3cb326353c0b2e5",
+            "bytes": 84
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "native-x64/llvm-O0-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          },
+          "llvm-O2": {
+            "artifact": "native-x64/llvm-O2-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          },
+          "neverc-O0": {
+            "artifact": "native-x64/neverc-O0-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          },
+          "neverc-O2": {
+            "artifact": "native-x64/neverc-O2-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          },
+          "neverc-ir-O0": {
+            "artifact": "native-x64/neverc-ir-O0-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          },
+          "neverc-ir-O2": {
+            "artifact": "native-x64/neverc-ir-O2-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          }
+        }
+      },
+      "native-i386-final": {
+        "report": {
+          "artifact": "native-i386-final/evidence.json",
+          "sha256": "dcdc924e638edd5ee51e80b53070734f1f9f36335c03c9c1f5fb34ea3ad630a0",
+          "bytes": 2993
+        },
+        "commands": {
+          "artifact": "native-i386-final/commands.json",
+          "sha256": "113274fbef864fdd04380be1ec0354865355010bdc352033590851d9c427744d",
+          "bytes": 6384
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "native-i386-final/llvm-O0-native.stdout",
+            "sha256": "d1472afab9cc8588ca7b0d1d73b39729a5ac81496fd51765c9a9712f293056ad",
+            "bytes": 84
+          },
+          "llvm-O2": {
+            "artifact": "native-i386-final/llvm-O2-native.stdout",
+            "sha256": "d1472afab9cc8588ca7b0d1d73b39729a5ac81496fd51765c9a9712f293056ad",
+            "bytes": 84
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "native-i386-final/llvm-O0-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          },
+          "llvm-O2": {
+            "artifact": "native-i386-final/llvm-O2-negative.stderr",
+            "sha256": "ab7bcd5b39951ed66d6570204be3251790b4227063385aba071ee88d62db190c",
+            "bytes": 73
+          }
+        }
+      },
+      "native-smm": {
+        "report": {
+          "artifact": "native-smm/evidence.json",
+          "sha256": "6c4fc432f191a07c81de42744ef6019808f7ec1bfce5de149009b8da422862e1",
+          "bytes": 4099
+        },
+        "commands": {
+          "artifact": "native-smm/commands.json",
+          "sha256": "977544815e7b21e61592a6bc6afb2842eb4734ed60e12bb133dc7c08d9b1c6d2",
+          "bytes": 19422
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "native-smm/llvm-O0-native.stdout",
+            "sha256": "ab6887e59e2bb8d540d2d6189844c850a1f56e6e1807cf25abbfd5b920a96f15",
+            "bytes": 82
+          },
+          "llvm-O2": {
+            "artifact": "native-smm/llvm-O2-native.stdout",
+            "sha256": "ab6887e59e2bb8d540d2d6189844c850a1f56e6e1807cf25abbfd5b920a96f15",
+            "bytes": 82
+          },
+          "neverc-O0": {
+            "artifact": "native-smm/neverc-O0-native.stdout",
+            "sha256": "ab6887e59e2bb8d540d2d6189844c850a1f56e6e1807cf25abbfd5b920a96f15",
+            "bytes": 82
+          },
+          "neverc-O2": {
+            "artifact": "native-smm/neverc-O2-native.stdout",
+            "sha256": "ab6887e59e2bb8d540d2d6189844c850a1f56e6e1807cf25abbfd5b920a96f15",
+            "bytes": 82
+          },
+          "neverc-ir-O0": {
+            "artifact": "native-smm/neverc-ir-O0-native.stdout",
+            "sha256": "ab6887e59e2bb8d540d2d6189844c850a1f56e6e1807cf25abbfd5b920a96f15",
+            "bytes": 82
+          },
+          "neverc-ir-O2": {
+            "artifact": "native-smm/neverc-ir-O2-native.stdout",
+            "sha256": "ab6887e59e2bb8d540d2d6189844c850a1f56e6e1807cf25abbfd5b920a96f15",
+            "bytes": 82
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "native-smm/llvm-O0-negative.stderr",
+            "sha256": "3f0546bd945707e221afb2307b0ac051c395c1129900a2e4f67f420a9ab4e3ed",
+            "bytes": 108
+          },
+          "llvm-O2": {
+            "artifact": "native-smm/llvm-O2-negative.stderr",
+            "sha256": "3f0546bd945707e221afb2307b0ac051c395c1129900a2e4f67f420a9ab4e3ed",
+            "bytes": 108
+          },
+          "neverc-O0": {
+            "artifact": "native-smm/neverc-O0-negative.stderr",
+            "sha256": "3f0546bd945707e221afb2307b0ac051c395c1129900a2e4f67f420a9ab4e3ed",
+            "bytes": 108
+          },
+          "neverc-O2": {
+            "artifact": "native-smm/neverc-O2-negative.stderr",
+            "sha256": "3f0546bd945707e221afb2307b0ac051c395c1129900a2e4f67f420a9ab4e3ed",
+            "bytes": 108
+          },
+          "neverc-ir-O0": {
+            "artifact": "native-smm/neverc-ir-O0-negative.stderr",
+            "sha256": "3f0546bd945707e221afb2307b0ac051c395c1129900a2e4f67f420a9ab4e3ed",
+            "bytes": 108
+          },
+          "neverc-ir-O2": {
+            "artifact": "native-smm/neverc-ir-O2-negative.stderr",
+            "sha256": "3f0546bd945707e221afb2307b0ac051c395c1129900a2e4f67f420a9ab4e3ed",
+            "bytes": 108
+          }
+        }
+      },
+      "system-return-regression": {
+        "report": {
+          "artifact": "system-return-regression/evidence.json",
+          "sha256": "bf12e6baa1c069504dfd97a3d5f1b3e97fc8ca6fa34af0bb3677540d246d9847",
+          "bytes": 3947
+        },
+        "commands": {
+          "artifact": "system-return-regression/commands.json",
+          "sha256": "daa180183916c45a9a70e3dde68971e8cc4d7b86394a9d828cf732ad5f873cb3",
+          "bytes": 20728
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "system-return-regression/llvm-O0-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "llvm-O2": {
+            "artifact": "system-return-regression/llvm-O2-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-O0": {
+            "artifact": "system-return-regression/neverc-O0-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-O2": {
+            "artifact": "system-return-regression/neverc-O2-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-ir-O0": {
+            "artifact": "system-return-regression/neverc-ir-O0-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-ir-O2": {
+            "artifact": "system-return-regression/neverc-ir-O2-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "system-return-regression/llvm-O0-negative.stderr",
+            "sha256": "ceffd3092b51408516aea3b8e91b7695222bd274ce94d8aa700946cf21121163",
+            "bytes": 80
+          },
+          "llvm-O2": {
+            "artifact": "system-return-regression/llvm-O2-negative.stderr",
+            "sha256": "ceffd3092b51408516aea3b8e91b7695222bd274ce94d8aa700946cf21121163",
+            "bytes": 80
+          },
+          "neverc-O0": {
+            "artifact": "system-return-regression/neverc-O0-negative.stderr",
+            "sha256": "ceffd3092b51408516aea3b8e91b7695222bd274ce94d8aa700946cf21121163",
+            "bytes": 80
+          },
+          "neverc-O2": {
+            "artifact": "system-return-regression/neverc-O2-negative.stderr",
+            "sha256": "ceffd3092b51408516aea3b8e91b7695222bd274ce94d8aa700946cf21121163",
+            "bytes": 80
+          },
+          "neverc-ir-O0": {
+            "artifact": "system-return-regression/neverc-ir-O0-negative.stderr",
+            "sha256": "ceffd3092b51408516aea3b8e91b7695222bd274ce94d8aa700946cf21121163",
+            "bytes": 80
+          },
+          "neverc-ir-O2": {
+            "artifact": "system-return-regression/neverc-ir-O2-negative.stderr",
+            "sha256": "ceffd3092b51408516aea3b8e91b7695222bd274ce94d8aa700946cf21121163",
+            "bytes": 80
+          }
+        }
+      },
+      "system-return-i386-regression": {
+        "report": {
+          "artifact": "system-return-i386-regression/evidence.json",
+          "sha256": "de9b3349f6a4a04ac9eee1a246c2d70acd11aaa854f08cba5676c6e403a578cf",
+          "bytes": 2791
+        },
+        "commands": {
+          "artifact": "system-return-i386-regression/commands.json",
+          "sha256": "8dc46483b72b67df5af6e2a12162c0c28d602597f7e1c8b4ebbb478259428b2b",
+          "bytes": 6764
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "system-return-i386-regression/llvm-O0-native.stdout",
+            "sha256": "32684f3746cf9c19bdef4348cf56b8ae592a7a632769a44e1db6399607625c35",
+            "bytes": 84
+          },
+          "llvm-O2": {
+            "artifact": "system-return-i386-regression/llvm-O2-native.stdout",
+            "sha256": "32684f3746cf9c19bdef4348cf56b8ae592a7a632769a44e1db6399607625c35",
+            "bytes": 84
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "system-return-i386-regression/llvm-O0-negative.stderr",
+            "sha256": "95b39f4e5f0600666f1b93d93b81c71b5cfcdd48fdf819e602e1e05bcc11d686",
+            "bytes": 147
+          },
+          "llvm-O2": {
+            "artifact": "system-return-i386-regression/llvm-O2-negative.stderr",
+            "sha256": "95b39f4e5f0600666f1b93d93b81c71b5cfcdd48fdf819e602e1e05bcc11d686",
+            "bytes": 147
+          }
+        }
+      }
+    }
+  },
+  "implementation": "The explicit frame pointer is retained in one terminal machine pseudo through allocation and scheduling. MC output emits adjacent stack assignment and native transfer without an ordinary ABI epilogue. The backend registry and frontend registry each own their respective identities; pruned tables retain stable prior opcode IDs.",
+  "red": [
+    {
+      "reason": "Pre-change LLVM has no native lowering for the new frame APIs.",
+      "artifact": "llvm-red.log",
+      "sha256": "f143035a9f97abefb63db0a37d7e50d1cb2129cbf9c1f51af84547fad976a46a",
+      "bytes": 36058
+    },
+    {
+      "reason": "Pre-change pruned tables lack FRED/frame carrier records and terminal immediate attributes.",
+      "artifact": "generators-red.log",
+      "sha256": "3a86c50a04bac240370a17663d59961461a8b08bc948b6bd1070f73507c53195",
+      "bytes": 3518
+    }
+  ],
+  "test_repairs": [
+    {
+      "reason": "The code32 adjacency check initially matched the compiler dynamic allocation instead of the final frame switch. Anchored it after the volatile frame store.",
+      "artifact": "llvm-focused.log",
+      "sha256": "d6c115a6b5fd1f63fefc442f68f2d519e7129447da917f0fe345f018c2a95e9b",
+      "bytes": 32113
+    },
+    {
+      "reason": "An x32 pointer formal already has ABI-known zero upper bits. The widening check now uses an arbitrary i64 converted to a 32-bit pointer, which requires an actual truncation/extension.",
+      "artifact": "llvm-focused-2.log",
+      "sha256": "71ae3f8dcd5f99f41a620d7e1e5fcf903e0e19424d5571160366e439e45e6c27",
+      "bytes": 33843
+    }
+  ],
+  "final_builds": [
+    {
+      "artifact": "llvm-rebuild.log",
+      "sha256": "b88012f1a270afd2a6a0f95410bda9251eb3a54fa1b01380b22a17fd29a1c3df",
+      "bytes": 316
+    },
+    {
+      "artifact": "neverc-rebuild.log",
+      "sha256": "33034cf68fc4c1415defd052e2d3f1b0cde434f1afc945d3fc98a877dd1e1038",
+      "bytes": 925221
+    }
+  ],
+  "documentation_checks": [
+    {
+      "artifact": "docs-links.log",
+      "sha256": "125529d1a9a46607a5341c15e641a1b96abdc6af34c1749b990638171483521f",
+      "bytes": 128
+    },
+    {
+      "artifact": "docs-facts.log",
+      "sha256": "c301ac6b3b5369439af026074cbb2a50ec8c8bf63d8cc21e3aceaf5b03e10d52",
+      "bytes": 167
+    },
+    {
+      "artifact": "neverd-docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    }
+  ],
+  "qualification_limits": [
+    "Successful FRED/UIRET transitions are not exercised; their compiler identities, feature/mode rules and object bytes are verified.",
+    "RSM evidence is KVM-mediated SMM using SMI-created save state and explicit code64 setup inside SMM, not bare-metal firmware qualification.",
+    "CET, XSTATE, NT/task-resume returns, faults, asynchronous events/unwinding and other CPU models remain unqualified.",
+    "These APIs provide named compiler inputs, not a complete original-image GPR/vector continuation. NeverD lifting and explicit-state admission remain separate contracts.",
+    "NeverC stage-1 and focused regressions pass; full product CI and stage-2 qualification are not claimed.",
+    "Global NeverD state, decoder and qualification gaps remain in the support table; this phase changes NeverD documentation only."
+  ],
+  "release_and_pins_changed": false
+}

@@ -19,6 +19,7 @@
 #define NEVERD_LIB_PASS_IR_SIMPLIFY_SYMSIMPLIFYDETAIL_H
 
 #include "neverd/symbolic/SymExpr.h"
+#include "neverd/symbolic/SymKnownBits.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -101,13 +102,16 @@ public:
   /// Whether rebuilding \p R as LLVM IR preserves the symbolic operator's
   /// total bitvector domain.  In particular, a synthesis policy may search
   /// variable shifts, but LLVM shifts are poison when the amount is out of
-  /// range and therefore cannot cross the production rewrite boundary.
+  /// range. Generated shifts need a value-only bound before crossing the
+  /// production rewrite boundary.
   bool hasCompatibleResultSemantics(sym::SymRef R) const {
     if (!R.isValid())
       return false;
 
     llvm::SmallVector<sym::SymRef, 32> Work{R};
     llvm::DenseSet<uint32_t> Seen;
+    sym::SymKnownBits Known(Ctx);
+    unsigned BoundWork = sym::SymKnownBits::MaxQueryWork;
     while (!Work.empty()) {
       const sym::SymRef Current = Work.pop_back_val();
       if (!Seen.insert(Current.index()).second)
@@ -132,9 +136,17 @@ public:
       case sym::SymOp::LShr:
       case sym::SymOp::AShr: {
         const sym::SymRef Amount = Ctx.operand(Current, 1);
-        if (!Ctx.isConst(Amount) ||
-            Ctx.constValue(Amount).uge(Ctx.width(Current)))
-          return false;
+        if (Ctx.isConst(Amount)) {
+          if (Ctx.constValue(Amount).uge(Ctx.width(Current)))
+            return false;
+        } else {
+          // LLVM overshifts are poison. Admit a generated variable shift only
+          // when value-only facts bound every count strictly below its width;
+          // instruction flags and path assumptions cannot supply this proof.
+          auto Bits = Known.query(Amount, BoundWork);
+          if (!Bits || Bits->getMaxValue().uge(Ctx.width(Current)))
+            return false;
+        }
         break;
       }
       default:

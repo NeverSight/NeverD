@@ -53,6 +53,9 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
   };
   if (!S.requireFileBacked())
     return Fail(S.LastError);
+  if (!S.BytePatches.empty())
+    return Fail(
+        "export and open the byte-patched binary before source replacement");
   if (!S.Loaded)
     return Fail("no binary loaded");
   if (!Input || InputSize == 0 ||

@@ -1,0 +1,41 @@
+//===- ReturnAddressSigning.def - Unified unwind query policy -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Diagnostics and limits owned by the normalized unwind-signing query.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_RA_QUERY_TEXT
+#define NEVERD_RA_QUERY_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_RA_QUERY_LIMIT
+#define NEVERD_RA_QUERY_LIMIT(Type, Name, Value)
+#endif
+
+NEVERD_RA_QUERY_LIMIT(size_t, kReturnAddressQueryMaxCIEs, 1u << 20)
+NEVERD_RA_QUERY_TEXT(kUnsupportedArchitecture,
+                     "return-address signing query requires AArch64")
+NEVERD_RA_QUERY_TEXT(kInvalidOwner,
+                     "unwind signing metadata has an invalid owning range")
+NEVERD_RA_QUERY_TEXT(kOutOfRange, "query PC is outside the owning unwind range")
+NEVERD_RA_QUERY_TEXT(kIncompleteOwner,
+                     "owning unwind record is not completely decoded")
+NEVERD_RA_QUERY_TEXT(kInvalidCIE,
+                     "DWARF return-address query needs one matching CIE")
+NEVERD_RA_QUERY_TEXT(kCIEBudget,
+                     "DWARF return-address query exceeds its CIE search budget")
+NEVERD_RA_QUERY_TEXT(kIncompleteCompact,
+                     "compact return-address recipe is not completely decoded")
+NEVERD_RA_QUERY_TEXT(
+    kInvalidCompact,
+    "compact return-address recipe has invalid encoding or range")
+NEVERD_RA_QUERY_TEXT(
+    kStaleCompact, "compact return-address recipe disagrees with its encoding")
+NEVERD_RA_QUERY_TEXT(
+    kNoCompactRecipe,
+    "compact encoding does not declare a return-address signing recipe")
+
+#undef NEVERD_RA_QUERY_TEXT
+#undef NEVERD_RA_QUERY_LIMIT

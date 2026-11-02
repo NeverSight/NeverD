@@ -56,7 +56,7 @@ llvm::Error stateMismatch(llvm::StringRef Instruction,
 #define NEVERD_X64_REGISTER(Name, Decoder, Backend)                            \
   Field(#Name, Expected.reg(X64Register::Name),                                \
         Observed.reg(X64Register::Name));
-#include "neverd/emulation/X64Registers.def"
+#include "neverd/emulation/arch/x86_64/X64Registers.def"
 #undef NEVERD_X64_REGISTER
 #define NEVERD_X64_PROBE_FIELD(Member)                                         \
   Field(#Member, Expected.Member, Observed.Member);

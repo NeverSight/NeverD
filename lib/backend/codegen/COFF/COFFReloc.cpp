@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/COFF/COFFReloc.h"
 
 #include "neverd/backend/codegen/BinaryUtils.h"
+#include "neverd/object/PELayout.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Object/COFF.h"
@@ -107,9 +108,26 @@ bool COFFRelocResolver::parse(const std::vector<uint8_t> &Binary,
     }
   }
 
+  if (COFF->getPE32Header() || COFF->getPE32PlusHeader())
+    addImageBase(ImageBase);
+
   LLVM_DEBUG(llvm::dbgs() << "coff_reloc: parsed " << Entries.size()
                           << " imports (incl. delay)\n");
   return !Entries.empty();
+}
+
+void COFFRelocResolver::addImageBase(uint64_t ImageBase) {
+  // The linker defines `__ImageBase` at a linked image's own DOS header,
+  // which the emitters reach the headers through.
+  const std::string Name(kPEImageBaseSymbol);
+  if (ByName.count(Name))
+    return;
+  RelocEntry E;
+  E.Name = Name;
+  E.Addr = ImageBase;
+  E.IsCode = false;
+  ByName[E.Name] = Entries.size();
+  Entries.push_back(std::move(E));
 }
 
 bool COFFRelocResolver::populateFromImage(const BinaryImage &Image,
@@ -130,6 +148,8 @@ bool COFFRelocResolver::populateFromImage(const BinaryImage &Image,
     ByName[E.Name] = Entries.size();
     Entries.push_back(std::move(E));
   }
+  if (!Image.IsRelocatable)
+    addImageBase(Image.Base);
 
   LLVM_DEBUG(llvm::dbgs() << "coff_reloc: populated " << Entries.size()
                           << " IAT entries from image\n");

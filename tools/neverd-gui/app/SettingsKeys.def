@@ -24,6 +24,7 @@ NEVERD_SETTINGS_KEY(QuickStart, "ui/quickStart")
 NEVERD_SETTINGS_KEY(QuickStartSize, "ui/quickStartSize")
 // Whether windows keep the window manager's frame instead of drawing their
 // own title bar; read as each window is created.
+// Retired appearance preference, retained only for migration regressions.
 NEVERD_SETTINGS_KEY(NativeTitleBar, "ui/nativeTitleBar")
 // Whether every function's source opens simplified symbolically, as the
 // code windows' Optimization menu and Options > General set it.
@@ -31,5 +32,10 @@ NEVERD_SETTINGS_KEY(SymbolicSimplification, "code/symbolicSimplification")
 // Whether a workbench keeps other programs from finding it and opening links
 // in it (InstanceServer), as IDA's DisableIpcServer does.
 NEVERD_SETTINGS_KEY(InstancesDisabled, "instances/disabled")
+
+NEVERD_SETTINGS_KEY(PatchAssemblerDialect, "patch/assemblerDialect")
+NEVERD_SETTINGS_KEY(PatchFillNops, "patch/fillNops")
+NEVERD_SETTINGS_KEY(PatchCompiler, "patch/compiler")
+NEVERD_SETTINGS_KEY(PatchCompilerPaths, "patch/compilerPaths")
 
 #undef NEVERD_SETTINGS_KEY

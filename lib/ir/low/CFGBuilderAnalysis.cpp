@@ -14,7 +14,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFStackProbe.h"
 #include "neverd/support/BinaryEncoding.h"

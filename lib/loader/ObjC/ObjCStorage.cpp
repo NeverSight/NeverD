@@ -1,3 +1,12 @@
+//===- ObjCStorage.cpp - Objective-C storage declarations ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Read storage declarations separately from native object reconstruction.
+//===----------------------------------------------------------------------===//
+
 #include "../MachO/DarwinRuntimeImport.h"
 #include "ObjCRuntimeData.h"
 
@@ -10,6 +19,11 @@
 
 namespace neverd {
 namespace {
+#define NEVERD_OBJC_STORAGE_VALUE(Name, Value)                                 \
+  inline constexpr uint64_t Name = Value;
+#define NEVERD_OBJC_STORAGE_TEXT(Name, Text)                                   \
+  inline constexpr char Name[] = Text;
+#include "ObjCStorage.def"
 
 void diagnostic(BinaryImage &Image, llvm::StringRef Message) {
   auto &Diagnostics = Image.ObjCMetadataDiagnostics;
@@ -21,65 +35,78 @@ void diagnostic(BinaryImage &Image, llvm::StringRef Message) {
 }
 
 bool readIvars(ObjCClass &Class, const objc::RuntimeData &Data,
-               uint64_t &Remaining, uint16_t OffsetWidth, bool AllowEmptyType) {
+               uint64_t &Remaining, uint16_t OffsetWidth, bool AllowEmptyType,
+               bool MetadataOnly) {
   auto RO = Data.classRO(Class.Address);
   if (!RO)
     return false;
-  auto Start = Data.u32(*RO + 4);
-  auto Size = Data.u32(*RO + 8);
-  auto List = Data.pointer(*RO + 48);
-  if (!Start || !Size || !List || *Start > *Size || *Size > (1U << 24))
+  auto Start = Data.u32(*RO + kInstanceStartOffset);
+  auto Size = Data.u32(*RO + kInstanceSizeOffset);
+  auto List = Data.pointer(*RO + kIvarsOffset);
+  if (!Start || !Size || !List || *Start > *Size || *Size > kMaxInstanceBytes)
     return false;
   Class.InstanceStart = *Start;
   Class.InstanceSize = *Size;
   if (!*List)
     return true;
   auto EntrySize = Data.u32(*List);
-  auto Count = *List <= InvalidVA - 4 ? Data.u32(*List + 4) : std::nullopt;
-  if (!EntrySize || !Count || *EntrySize < 32 ||
+  auto Count = *List <= InvalidVA - kWordBytes ? Data.u32(*List + kWordBytes)
+                                               : std::nullopt;
+  if (!EntrySize || !Count || *EntrySize < kIvarBytes ||
       *EntrySize >
           ::neverd::limits::loader::kObjCStorageReadIvarsEntrySizeLimit ||
       *Count > Remaining ||
-      !Data.bytes(*List, 8 + uint64_t(*EntrySize) * *Count))
+      !Data.bytes(*List, kListHeaderBytes + uint64_t(*EntrySize) * *Count))
     return false;
   Remaining -= *Count;
   std::set<std::string> Names;
   std::set<va_t> OffsetSlots;
   std::vector<ObjCIvar> Ivars;
   for (uint32_t Index = 0; Index < *Count; ++Index) {
-    const va_t Record = *List + 8 + uint64_t(Index) * *EntrySize;
+    const va_t Record = *List + kListHeaderBytes + uint64_t(Index) * *EntrySize;
     auto OffsetSlot = Data.pointer(Record);
-    auto NameSlot = Data.pointer(Record + 8);
-    auto TypeSlot = Data.pointer(Record + 16);
-    auto Align = Data.u32(Record + 24);
-    auto Width = Data.u32(Record + 28);
+    auto NameSlot = Data.pointer(Record + kIvarNameOffset);
+    auto TypeSlot = Data.pointer(Record + kIvarTypeOffset);
+    auto Align = Data.u32(Record + kIvarAlignmentOffset);
+    auto Width = Data.u32(Record + kIvarSizeOffset);
     const auto *OffsetBytes = OffsetSlot && *OffsetSlot
                                   ? Data.bytes(*OffsetSlot, OffsetWidth)
                                   : nullptr;
     std::optional<uint64_t> Offset;
     if (OffsetBytes)
-      Offset = OffsetWidth == 8 ? llvm::support::endian::read64le(OffsetBytes)
-                                : llvm::support::endian::read32le(OffsetBytes);
-    const bool RuntimeOffset = !Offset && AllowEmptyType && OffsetWidth == 8 &&
-                               OffsetSlot &&
+      Offset = OffsetWidth == kPointerBytes
+                   ? llvm::support::endian::read64le(OffsetBytes)
+                   : llvm::support::endian::read32le(OffsetBytes);
+    const bool RuntimeOffset = !Offset && AllowEmptyType &&
+                               OffsetWidth == kPointerBytes && OffsetSlot &&
                                Data.runtimeOffsetSlot(*OffsetSlot);
     auto Name = NameSlot ? Data.string(*NameSlot) : std::nullopt;
     auto Type = TypeSlot && *TypeSlot ? Data.string(*TypeSlot, AllowEmptyType)
                                       : std::nullopt;
-    if ((!Offset && !RuntimeOffset) || !Name || !Type || !Align || !Width ||
-        (!*Width && !AllowEmptyType) || *Width > (1U << 24) ||
-        !Names.insert(*Name).second || !OffsetSlot ||
-        !OffsetSlots.insert(*OffsetSlot).second ||
-        (Offset &&
+    // An analysis declaration retains the metadata's byte size and offset.
+    // Bitfields can overlap or be unaligned, trailing arrays can have size
+    // zero, and Swift can omit an offset global. None proves native storage.
+    const bool MissingMetadataOffset =
+        MetadataOnly && AllowEmptyType && OffsetSlot && !*OffsetSlot;
+    if ((!Offset && !RuntimeOffset && !MissingMetadataOffset) || !Name ||
+        !Type || !Align || !Width ||
+        (!MetadataOnly && !*Width && !AllowEmptyType) ||
+        *Width > kMaxInstanceBytes || !Names.insert(*Name).second ||
+        !OffsetSlot ||
+        (*OffsetSlot && !OffsetSlots.insert(*OffsetSlot).second) ||
+        (Offset && *Offset > std::numeric_limits<uint32_t>::max()) ||
+        (!MetadataOnly && Offset &&
          (*Offset < *Start || !rangeInBounds(*Offset, *Width, *Size))) ||
-        (*Align > 16 && *Align != std::numeric_limits<uint32_t>::max()))
+        (*Align > kMaxAlignmentShift &&
+         *Align != std::numeric_limits<uint32_t>::max()))
       return false;
-    const uint32_t Alignment =
-        *Align == std::numeric_limits<uint32_t>::max() ? 8 : 1U << *Align;
-    if (Offset && *Offset % Alignment)
+    const uint32_t Alignment = *Align == std::numeric_limits<uint32_t>::max()
+                                   ? kPointerBytes
+                                   : 1U << *Align;
+    if (!MetadataOnly && Offset && *Offset % Alignment)
       return false;
     for (const auto &Other : Ivars)
-      if (Offset && Other.Offset && *Width && Other.Size &&
+      if (!MetadataOnly && Offset && Other.Offset && *Width && Other.Size &&
           *Offset < uint64_t(*Other.Offset) + Other.Size &&
           *Other.Offset < uint64_t(*Offset) + *Width)
         return false;
@@ -96,9 +123,9 @@ std::optional<ObjCSourceReference>
 importedClassReference(va_t Slot, llvm::StringRef Name) {
   ObjCSourceReference Reference;
   Reference.Address = Slot;
-  if (Name.consume_front("_OBJC_CLASS_$_"))
+  if (Name.consume_front(kClassPrefix))
     Reference.TheKind = ObjCSourceReference::Kind::Class;
-  else if (Name.consume_front("_OBJC_METACLASS_$_"))
+  else if (Name.consume_front(kMetaclassPrefix))
     Reference.TheKind = ObjCSourceReference::Kind::Metaclass;
   else
     return std::nullopt;
@@ -114,7 +141,7 @@ std::optional<ObjCSourceReference> readReference(const BinaryImage &Image,
                                                  va_t Slot) {
   ObjCSourceReference Reference;
   Reference.Address = Slot;
-  if (Section.Name == "__objc_selrefs") {
+  if (Section.Name == kSelectorReferences) {
     auto Pointer = Data.pointer(Slot);
     auto Name = Pointer ? Data.string(*Pointer) : std::nullopt;
     if (!Name)
@@ -134,8 +161,9 @@ std::optional<ObjCSourceReference> readReference(const BinaryImage &Image,
   auto Name = Pointer ? Data.className(*Pointer) : std::nullopt;
   if (!Flags || !Name)
     return std::nullopt;
-  Reference.TheKind = (*Flags & 1) ? ObjCSourceReference::Kind::Metaclass
-                                   : ObjCSourceReference::Kind::Class;
+  Reference.TheKind = (*Flags & kMetaClassFlag)
+                          ? ObjCSourceReference::Kind::Metaclass
+                          : ObjCSourceReference::Kind::Class;
   Reference.Name = *Name;
   return Reference;
 }
@@ -144,24 +172,31 @@ std::optional<ObjCSourceReference> readReference(const BinaryImage &Image,
 
 void parseObjCStorage(BinaryImage &Image) {
   Image.ObjCSourceReferences.clear();
+  Image.ObjCMetadataReferences.clear();
   if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
       Image.IsRelocatable)
     return;
-  objc::RuntimeData Data(Image);
+  const bool MetadataOnly = Image.MachOSharedCache || Image.isArm64e() ||
+                            !Image.MachOAuthenticatedPointers.empty();
+  objc::RuntimeData Data(Image, MetadataOnly
+                                    ? objc::PointerView::MetadataTarget
+                                    : objc::PointerView::PlainRuntimeValue);
+  auto &References =
+      MetadataOnly ? Image.ObjCMetadataReferences : Image.ObjCSourceReferences;
   uint64_t Remaining = ::neverd::limits::loader::kObjCStorageMaxRecords;
   std::set<va_t> Conflicts;
   auto Publish = [&](ObjCSourceReference Reference) {
     if (Conflicts.count(Reference.Address))
       return;
     auto [Position, Inserted] =
-        Image.ObjCSourceReferences.emplace(Reference.Address, Reference);
+        References.emplace(Reference.Address, Reference);
     if (!Inserted && (Position->second.TheKind != Reference.TheKind ||
                       Position->second.Size != Reference.Size ||
                       Position->second.Name != Reference.Name ||
                       Position->second.ClassName != Reference.ClassName)) {
       Conflicts.insert(Reference.Address);
-      Image.ObjCSourceReferences.erase(Position);
-      diagnostic(Image, "Conflicting Objective-C source reference identities");
+      References.erase(Position);
+      diagnostic(Image, kConflictingIdentity);
     }
   };
   // Linkers can coalesce a class reference into an ordinary imported pointer
@@ -171,40 +206,45 @@ void parseObjCStorage(BinaryImage &Image) {
     if (!Reference)
       continue;
     if (!Remaining) {
-      diagnostic(Image,
-                 "Objective-C imported references exceed the record limit");
+      diagnostic(Image, kImportedReferenceLimit);
       break;
     }
     --Remaining;
     const auto *Section = Image.getSectionFor(Slot);
     const auto *Segment = Image.getSegmentFor(Slot);
-    if (Slot % 8 || !Section || !Segment || Section->isExecutable() ||
-        Segment->isExecutable() || !Data.bytes(Slot, 8) ||
-        !darwinRuntimeImport(Image, Slot))
+    if (Slot % kPointerBytes || !Section || !Segment ||
+        Section->isExecutable() || Segment->isExecutable() ||
+        !Data.bytes(Slot, kPointerBytes) || !darwinRuntimeImport(Image, Slot))
       continue;
     Publish(std::move(*Reference));
   }
   for (auto &Class : Image.ObjCClasses) {
     Class.Ivars.clear();
-    Class.IvarStatus = "unresolved";
-    const auto ClassBits = Data.pointer(Class.Address + 32);
-    const bool SwiftStable = ClassBits && (*ClassBits & 3) == 2;
+    Class.IvarStatus = kUnresolved;
+    const auto ClassBits = Data.pointer(Class.Address + kClassBitsOffset);
+    const bool SwiftStable =
+        ClassBits && (*ClassBits & kSwiftBitsMask) == kSwiftStableBits;
     // Swift's stable class metadata uses pointer-sized field-offset globals,
     // including on arm64. Its unexposed fields retain an empty type encoding;
     // their byte layout is still explicit. Preserve that missing type fact.
     // Ordinary arm64 Objective-C classes use 32-bit offset globals instead.
-    const uint16_t OffsetWidth = Image.Arch == Arch::X64 || SwiftStable ? 8 : 4;
-    if (!readIvars(Class, Data, Remaining, OffsetWidth, SwiftStable)) {
-      diagnostic(Image, "Objective-C instance storage layout is incomplete");
+    const uint16_t OffsetWidth =
+        Image.Arch == Arch::X64 || SwiftStable ? kPointerBytes : kWordBytes;
+    if (!readIvars(Class, Data, Remaining, OffsetWidth, SwiftStable,
+                   MetadataOnly)) {
+      diagnostic(Image, kIncompleteLayout);
       continue;
     }
-    Class.IvarStatus = std::all_of(Class.Ivars.begin(), Class.Ivars.end(),
-                                   [](const ObjCIvar &Ivar) {
-                                     return Ivar.Offset && Ivar.Size;
-                                   })
-                           ? "recovered"
-                           : "runtime";
+    Class.IvarStatus = MetadataOnly ? kMetadataOnly
+                       : std::all_of(Class.Ivars.begin(), Class.Ivars.end(),
+                                     [](const ObjCIvar &Ivar) {
+                                       return Ivar.Offset && Ivar.Size;
+                                     })
+                           ? kRecovered
+                           : kRuntime;
     for (const auto &Ivar : Class.Ivars) {
+      if (!Ivar.OffsetAddress)
+        continue;
       Publish({ObjCSourceReference::Kind::IvarOffset, Ivar.OffsetAddress,
                OffsetWidth, Ivar.Name, Class.Name});
     }
@@ -214,8 +254,7 @@ void parseObjCStorage(BinaryImage &Image) {
   for (const auto &Protocol : Image.ObjCProtocols) {
     if (!Remaining) {
       Protocols.clear();
-      diagnostic(Image,
-                 "Objective-C protocol identities exceed the record limit");
+      diagnostic(Image, kProtocolIdentityLimit);
       break;
     }
     --Remaining;
@@ -224,9 +263,9 @@ void parseObjCStorage(BinaryImage &Image) {
     // establishes identity only; selector ABI merging still inspects every
     // declaration and cannot choose a winner from this name.
     // https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-runtime-new.mm
-    if (Protocol.Status != "recovered" || Protocol.Name.empty())
+    if (Protocol.Status != kRecovered || Protocol.Name.empty())
       AmbiguousProtocols.insert(Protocol.Name);
-    if (Protocol.Status == "recovered") {
+    if (Protocol.Status == kRecovered) {
       auto [It, Inserted] = Protocols.emplace(Protocol.Address, Protocol.Name);
       if (!Inserted) {
         AmbiguousProtocols.insert(It->second);
@@ -235,40 +274,44 @@ void parseObjCStorage(BinaryImage &Image) {
     }
   }
   for (const auto &Section : Image.Sections) {
-    if (Section.Name != "__objc_selrefs" &&
-        Section.Name != "__objc_classrefs" &&
-        Section.Name != "__objc_superrefs" &&
-        Section.Name != "__objc_protorefs")
+    if (Section.Name != kSelectorReferences &&
+        Section.Name != kClassReferences &&
+        Section.Name != kSuperclassReferences &&
+        Section.Name != kProtocolReferences)
       continue;
-    if (Section.Size % 8 || Section.Size / 8 > Remaining ||
+    if (Section.Size % kPointerBytes ||
+        Section.Size / kPointerBytes > Remaining ||
         Image.getSectionFor(Section.VA) != &Section ||
         !Data.bytes(Section.VA, Section.Size)) {
-      diagnostic(Image, "Objective-C runtime reference section is incomplete");
+      diagnostic(Image, kIncompleteSection);
       continue;
     }
-    Remaining -= Section.Size / 8;
-    for (uint64_t Offset = 0; Offset < Section.Size; Offset += 8) {
+    Remaining -= Section.Size / kPointerBytes;
+    for (uint64_t Offset = 0; Offset < Section.Size; Offset += kPointerBytes) {
       const auto Slot = Section.VA + Offset;
-      if (Section.Name == "__objc_protorefs") {
+      if (Section.Name == kProtocolReferences) {
         const auto Address = Data.localPointer(Slot);
         const auto Found = Address ? Protocols.find(*Address) : Protocols.end();
-        if (Slot % 8 || Section.isExecutable() || !Image.getSegmentFor(Slot) ||
+        if (Slot % kPointerBytes || Section.isExecutable() ||
+            !Image.getSegmentFor(Slot) ||
             Image.getSegmentFor(Slot)->isExecutable() || !Address ||
             Found == Protocols.end() ||
             AmbiguousProtocols.count(Found->second)) {
-          diagnostic(Image,
-                     "Objective-C protocol reference identity is unresolved");
+          diagnostic(Image, kUnresolvedProtocol);
           continue;
         }
-        Publish(
-            {ObjCSourceReference::Kind::Protocol, Slot, 8, Found->second, {}});
+        Publish({ObjCSourceReference::Kind::Protocol,
+                 Slot,
+                 kPointerBytes,
+                 Found->second,
+                 {}});
         continue;
       }
       auto Reference = readReference(Image, Data, Section, Slot);
       if (Reference)
         Publish(std::move(*Reference));
       else
-        diagnostic(Image, "Objective-C runtime reference slot is unresolved");
+        diagnostic(Image, kUnresolvedReference);
     }
   }
 }

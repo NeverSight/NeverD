@@ -2,16 +2,24 @@ add_neverd_component_library(NeverDDecode
   Decoder.cpp
   NativeOperands.cpp
   InstructionRelocations.cpp
-  InstructionRelocationsAArch64.cpp
-  InstructionRelocationsARM.cpp
-  InstructionRelocationsX86.cpp
+
+  AArch64/AArch64Decoder.cpp
+  AArch64/AArch64InstructionRelocations.cpp
+  AArch64/AArch64NativeOperands.cpp
+  ARM/ARMDecoder.cpp
+  ARM/ARMInstructionRelocations.cpp
+  ARM/ARMNativeOperands.cpp
+  X86/X86Decoder.cpp
+  X86/X86MpxDecoder.cpp
+  X86/X86InstructionRelocations.cpp
+  X86/X86NativeOperands.cpp
 
   LINK_COMPONENTS
   IR
   Lift
 )
 
-# Decoder.cpp contains the native AArch64 operand decoder in its hot path.  Keep
+# AArch64/AArch64Decoder.cpp contains the native operand decode hot path. Keep
 # it explicitly optimized in non-Debug configurations, but let Debug retain the
 # toolchain's unoptimized flags for reliable stepping, local inspection, and
 # MSVC runtime checks.  Use RelWithDebInfo for profiling with debug symbols.

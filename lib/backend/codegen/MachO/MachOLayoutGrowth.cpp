@@ -15,15 +15,26 @@
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
+#include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <map>
+#include <set>
+#include <tuple>
+
 namespace neverd {
 namespace {
+#define NEVERD_MACHO_FRAME_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define NEVERD_MACHO_FRAME_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "neverd/backend/codegen/MachO/MachOFrameRelocation.def"
+
 llvm::Error fail(const llvm::Twine &S) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "Mach-O layout: " + S);
@@ -117,9 +128,146 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
   return VA;
 }
 
+bool hasRelocatableAugmentation(const DwarfCIE &CIE, Arch Architecture) {
+  if (Architecture != Arch::AArch64)
+    return CIE.Augmentation == kBasicAugmentation;
+  llvm::StringRef Augmentation(CIE.Augmentation);
+  if (Augmentation.empty() || Augmentation.front() != kAugmentationLength)
+    return false;
+  bool Encoding = false, BKey = false, NonHint = false;
+  for (char Character : Augmentation.drop_front()) {
+    bool *Seen = nullptr;
+    switch (Character) {
+    case kAugmentationEncoding:
+      Seen = &Encoding;
+      break;
+    case dwarf_eh::aarch64::kBKeyAugmentation:
+      Seen = &BKey;
+      break;
+    case dwarf_eh::aarch64::kNonHintAugmentation:
+      Seen = &NonHint;
+      break;
+    default:
+      return false;
+    }
+    if (*Seen)
+      return false;
+    *Seen = true;
+  }
+  return Encoding && BKey == CIE.HasPointerAuth &&
+         NonHint == CIE.UsesNonHintPAuthLR;
+}
+
+bool sameCFI(llvm::ArrayRef<CFIInstruction> Before,
+             llvm::ArrayRef<CFIInstruction> After) {
+  return Before.size() == After.size() &&
+         llvm::equal(Before, After, [](const auto &A, const auto &B) {
+           return std::tie(A.Kind, A.CodeOffset, A.Register, A.Register2,
+                           A.Offset, A.Expression, A.OperandBytes, A.RAState) ==
+                  std::tie(B.Kind, B.CodeOffset, B.Register, B.Register2,
+                           B.Offset, B.Expression, B.OperandBytes, B.RAState);
+         });
+}
+
+llvm::Error compareFrameStates(const dwarf_eh::ParseResult &Before,
+                               const dwarf_eh::ParseResult &After,
+                               Arch Architecture, uint64_t RemainingWork) {
+  if (Before.ParseStatus != ExceptionParseStatus::Complete ||
+      After.ParseStatus != ExceptionParseStatus::Complete ||
+      Before.CIEs.size() != After.CIEs.size() ||
+      Before.FDEs.size() != After.FDEs.size())
+    return fail(kFrameIdentityChanged);
+  const auto CIEIdentity = [](const DwarfCIE &C) {
+    return std::tie(
+        C.SectionOffset, C.Version, C.Augmentation, C.CodeAlignmentFactor,
+        C.DataAlignmentFactor, C.ReturnAddressRegister, C.AddressSize,
+        C.SegmentSelectorSize, C.FDEPointerEncoding, C.LSDAPointerEncoding,
+        C.PersonalityEncoding, C.PersonalityVA, C.PersonalitySlotVA,
+        C.HasAugmentationData, C.IsSignalFrame, C.HasPointerAuth,
+        C.UsesArm64eReturnAddressABI, C.UsesNonHintPAuthLR, C.HasMTETaggedFrame,
+        C.ParseStatus);
+  };
+  std::map<uint64_t, size_t> CIEIndices;
+  for (size_t Index = 0; Index < Before.CIEs.size(); ++Index) {
+    const auto &Old = Before.CIEs[Index];
+    const auto &New = After.CIEs[Index];
+    if (CIEIdentity(Old) != CIEIdentity(New) ||
+        !sameCFI(Old.InitialInstructions, New.InitialInstructions) ||
+        !CIEIndices.emplace(Old.SectionOffset, Index).second)
+      return fail(kFrameIdentityChanged);
+  }
+  const auto FDEIdentity = [](const DwarfFDE &F) {
+    return std::tie(F.SectionOffset, F.CIESectionOffset, F.InitialLocation,
+                    F.InitialLocationOffset, F.AddressRange, F.LSDAVA,
+                    F.ParseStatus);
+  };
+  for (size_t Index = 0; Index < Before.FDEs.size(); ++Index) {
+    const auto &Old = Before.FDEs[Index];
+    const auto &New = After.FDEs[Index];
+    const auto Found = CIEIndices.find(Old.CIESectionOffset);
+    if (Found == CIEIndices.end() || FDEIdentity(Old) != FDEIdentity(New) ||
+        !sameCFI(Old.Instructions, New.Instructions))
+      return fail(kFrameIdentityChanged);
+    if (Architecture != Arch::AArch64)
+      continue;
+    const auto &OldCIE = Before.CIEs[Found->second];
+    const auto &NewCIE = After.CIEs[Found->second];
+    const uint64_t InitialCount = OldCIE.InitialInstructions.size();
+    const uint64_t Count = Old.Instructions.size();
+    if (Count >= UINT64_MAX - InitialCount)
+      return fail(kFrameStateBudget);
+    const uint64_t Units = InitialCount + Count + 1;
+    if (Units > RemainingWork / kRAComparisonPasses)
+      return fail(kFrameStateBudget);
+    const uint64_t PerBoundary = Units * kRAComparisonPasses;
+    const uint64_t BoundaryLimit = RemainingWork / PerBoundary;
+    std::set<uint64_t> Boundaries{0};
+    const auto AddBoundary = [&](uint64_t Offset) {
+      if (Offset < Old.AddressRange)
+        Boundaries.insert(Offset);
+      return Boundaries.size() <= BoundaryLimit;
+    };
+    for (const auto &I : Old.Instructions) {
+      if (I.CodeOffset > Old.AddressRange)
+        return fail(kFrameIdentityChanged);
+      if (!AddBoundary(I.CodeOffset))
+        return fail(kFrameStateBudget);
+      if (I.Kind != CFIOpKind::AdvanceLoc)
+        continue;
+      if (I.Offset < 0 || !OldCIE.CodeAlignmentFactor ||
+          uint64_t(I.Offset) >
+              (UINT64_MAX - I.CodeOffset) / OldCIE.CodeAlignmentFactor)
+        return fail(kFrameIdentityChanged);
+      const uint64_t Next =
+          I.CodeOffset + uint64_t(I.Offset) * OldCIE.CodeAlignmentFactor;
+      if (Next > Old.AddressRange)
+        return fail(kFrameIdentityChanged);
+      if (!AddBoundary(Next))
+        return fail(kFrameStateBudget);
+    }
+    RemainingWork -= Boundaries.size() * PerBoundary;
+    for (uint64_t Offset : Boundaries) {
+      if (!Old.AddressRange || Offset >= Old.AddressRange ||
+          Old.InitialLocation > UINT64_MAX - Offset)
+        return fail(kFrameIdentityChanged);
+      const auto A = dwarf_eh::evaluateAArch64ReturnAddressState(
+          Architecture, OldCIE, Old, Old.InitialLocation + Offset);
+      const auto B = dwarf_eh::evaluateAArch64ReturnAddressState(
+          Architecture, NewCIE, New, New.InitialLocation + Offset);
+      if (A.Status != dwarf_eh::AArch64RAQueryStatus::Known ||
+          B.Status != dwarf_eh::AArch64RAQueryStatus::Known || !A.State ||
+          !B.State)
+        return fail(kFrameStateUnavailable);
+      if (*A.State != *B.State)
+        return fail(kFrameStateChanged);
+    }
+  }
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::vector<uint8_t>>
 relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
-                uint64_t VA) {
+                uint64_t VA, const MachOUnwindRelocationLimits &Limits) {
   const auto Raw = llvm::ArrayRef<uint8_t>(Binary).slice(
       R.SectionFileOff, R.AppendFileOff - R.SectionFileOff);
   auto Records = decodeDwarfEHFrameRecords(Raw, R.SectionVA, R.Is64);
@@ -132,13 +280,14 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
       "layout-frames"));
   if (!Image)
     return Image.takeError();
+  const auto OriginalFrames =
+      dwarf_eh::parseEHFrame(*Image, {Raw.data(), Raw.size(), R.SectionVA}, {});
   auto StableRules = [](llvm::ArrayRef<CFIInstruction> Rules) {
     return llvm::none_of(Rules, [](const auto &I) {
       return I.Kind == CFIOpKind::SetLoc || I.Kind == CFIOpKind::Opaque ||
              I.Kind == CFIOpKind::Expression ||
              I.Kind == CFIOpKind::ValExpression ||
-             I.Kind == CFIOpKind::DefCFAExpression ||
-             I.Kind == CFIOpKind::NegateRAStateWithPC;
+             I.Kind == CFIOpKind::DefCFAExpression;
     });
   };
   for (const auto &S : Image->Symbols)
@@ -154,7 +303,8 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
     if (!F || !C || F->ParseStatus != ExceptionParseStatus::Complete ||
         F->Dwarf->InitialLocation != Record.BeginVA ||
         F->Dwarf->AddressRange != Record.EndVA - Record.BeginVA ||
-        C->Augmentation != "zR" || C->PersonalityVA || C->PersonalitySlotVA ||
+        !hasRelocatableAugmentation(*C, Image->Arch) || C->IsSignalFrame ||
+        C->HasMTETaggedFrame || C->PersonalityVA || C->PersonalitySlotVA ||
         F->Dwarf->LSDAVA || !StableRules(C->InitialInstructions) ||
         !StableRules(F->Dwarf->Instructions) ||
         Record.HasLanguageAugmentation ||
@@ -190,6 +340,11 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
     if ((*Replay)[I].BeginVA != (*Records)[I].BeginVA ||
         (*Replay)[I].EndVA != (*Records)[I].EndVA)
       return fail("relocated FDE changed its original code range");
+  const auto RelocatedFrames =
+      dwarf_eh::parseEHFrame(*Image, {Result.data(), Result.size(), VA}, {});
+  if (auto Error = compareFrameStates(OriginalFrames, RelocatedFrames,
+                                      Image->Arch, Limits.MaxRAStateWork))
+    return Error;
   return Result;
 }
 } // namespace
@@ -375,10 +530,9 @@ llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
   return VA;
 }
 
-llvm::Expected<bool> reserveMachOSourceUnwind(std::vector<uint8_t> &Binary,
-                                              Arch A,
-                                              uint64_t AdditionalEHBytes,
-                                              uint64_t AdditionalFunctions) {
+llvm::Expected<bool> reserveMachOSourceUnwind(
+    std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
+    uint64_t AdditionalFunctions, const MachOUnwindRelocationLimits &Limits) {
   if (AdditionalEHBytes >
           ::neverd::limits::backend::
               kMachOLayoutGrowthReserveMachOSourceUnwindAdditionalEHBytesLimit ||
@@ -513,7 +667,7 @@ llvm::Expected<bool> reserveMachOSourceUnwind(std::vector<uint8_t> &Binary,
       const uint64_t VA = P.plannedExecSegmentVA(Candidate, A);
       if (!VA)
         return fail("cannot plan relocated frame storage");
-      auto Frames = relocatedFrames(Candidate, *R, VA);
+      auto Frames = relocatedFrames(Candidate, *R, VA, Limits);
       if (!Frames)
         return Frames.takeError();
       auto Moved = moveTextSection(

@@ -78,6 +78,10 @@ NON_LINUX_SESSION_SKIPS = {
         ("SourcePagesNameTheSymbolsOfRenamedFunctions", "builds a glibc program"),
         ("FunctionsThatShareANameAreNumberedAsIDANumbersThem", "builds a glibc program"),
         ("AnalyzedLLVMPagesEmitTheirFunctionAlone", "builds a glibc program"),
+        ("LLVMViewShowsTheFunctionInAModuleOfItsOwn", "builds an x86-64 glibc program"),
+        ("LLVMViewMapsEachSpellingOfAMirrorToItsOwnOffset",
+         "reads the engine's internal view of an LLVM function"),
+        ("APLTEntryOfALibrarysOwnVariadicRoutineIsTheRoutine", "builds a glibc shared object"),
     )
 }
 # These four opt-in checks read developer-supplied Windows kernel/PDB files.

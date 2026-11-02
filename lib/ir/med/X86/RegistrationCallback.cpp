@@ -6,8 +6,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
-#include "neverd/ir/med/X86RegistrationFrame.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
 
 #include "llvm/ADT/STLExtras.h"
 

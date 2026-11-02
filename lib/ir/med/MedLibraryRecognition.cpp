@@ -1018,7 +1018,7 @@ MedLibraryIdentityIndex::MedLibraryIdentityIndex(const BinaryImage &Image)
 
 llvm::ArrayRef<std::string>
 MedLibraryIdentityIndex::names(const BinaryImage &Image, va_t Entry) const {
-  if (this->Image != &Image)
+  if (this->Image != &Image || Image.functionHasBytePatch(Entry))
     return {};
   auto I = Names.find(Entry);
   return I == Names.end() ? llvm::ArrayRef<std::string>{}

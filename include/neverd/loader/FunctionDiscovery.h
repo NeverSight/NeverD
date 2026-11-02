@@ -16,6 +16,7 @@
 #define NEVERD_LOADER_FUNCTIONDISCOVERY_H
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/LoadProgress.h"
 #include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/Support/Debug.h"
@@ -57,17 +58,18 @@ void scanImportThunks(BinaryImage &Img);
 
 /// Scan executable segments for padding boundaries (int3 / zero runs)
 /// and register functions at the first plausible prologue after each gap.
-void scanPaddingBoundaries(BinaryImage &Img);
+void scanPaddingBoundaries(BinaryImage &Img, const LoadProgress &Progress = {});
 
 /// Register the hotpatchable entries of a linked x86 PE image (see
 /// isX86HotpatchEntryAt).  x86 PE has no function table, and optimized MSVC
 /// code packs functions after `ret` without padding, where the padding scan
 /// cannot see them.
-void scanX86HotpatchEntries(BinaryImage &Img);
+void scanX86HotpatchEntries(BinaryImage &Img,
+                            const LoadProgress &Progress = {});
 
 /// Scan read-only data segments for pointer-sized values that point into
 /// executable segments at plausible function prologues.
-void scanDataFuncPointers(BinaryImage &Img);
+void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress = {});
 
 /// How an image holds an AArch32 code pointer, which says how much of the
 /// instruction set its bit 0 states.
@@ -161,13 +163,19 @@ void recordRelocatedLiteralTargets(BinaryImage &Img);
 // header self-contained and never leaks the macro to the including TU.
 #define DEBUG_TYPE "neverd-func-discovery"
 inline void runPostLoadDiscovery(BinaryImage &Img,
-                                 [[maybe_unused]] llvm::StringRef DebugTag) {
+                                 [[maybe_unused]] llvm::StringRef DebugTag,
+                                 const LoadProgress &Progress = {}) {
+  Progress.report("load-discovery", 0, 1, "relocated literals");
   recordRelocatedLiteralTargets(Img);
   // Format-stated entries come before every heuristic scan.
+  Progress.check();
+  Progress.report("load-discovery", 0, 1, "loader entries");
   registerLoaderRunFunctions(Img);
+  Progress.check();
   // A `--func` PE load already has `.pdata` ranges and the requested body.
   // Import-thunk scanning walks every executable byte looking for IAT veneers
   // outside that table; skip it when the caller named the work set.
+  Progress.report("load-discovery", 0, 1, "import thunks");
   if (Img.LoadOnlyFunctionEntries.empty())
     scanImportThunks(Img);
   // x64/ARM PE .pdata is the format-native function table, the same role as
@@ -184,10 +192,17 @@ inline void runPostLoadDiscovery(BinaryImage &Img,
   if (!RestrictToExceptionDirectory) {
     // Before the padding scan, which would otherwise record a hotpatch entry
     // after padding as a mere boundary guess.
-    scanX86HotpatchEntries(Img);
-    scanPaddingBoundaries(Img);
-    scanDataFuncPointers(Img);
+    Progress.check();
+    Progress.report("load-discovery", 0, 1, "hotpatch entries");
+    scanX86HotpatchEntries(Img, Progress);
+    Progress.check();
+    Progress.report("load-discovery", 0, 1, "padding boundaries");
+    scanPaddingBoundaries(Img, Progress);
+    Progress.check();
+    Progress.report("load-discovery", 0, 1, "data function pointers");
+    scanDataFuncPointers(Img, Progress);
   }
+  Progress.report("load-discovery", 1, 1);
   LLVM_DEBUG(Img.debugDumpSummary(llvm::dbgs(), DebugTag));
 }
 #undef DEBUG_TYPE

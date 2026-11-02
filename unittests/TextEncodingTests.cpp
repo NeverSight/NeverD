@@ -1,5 +1,4 @@
-//===- TextEncodingTests.cpp - External text normalization
-//-----------------===//
+//===- TextEncodingTests.cpp - External text normalization ---------------===//
 //
 // NeverD Decompiler
 //
@@ -27,6 +26,13 @@ TEST(TextEncodingAcceleration,
     for (size_t I = 0; I < Count; ++I)
       Text += Unit;
     EXPECT_EQ(neverd::escapeInvalidUTF8(Text), Text);
+    const auto Expected = Text;
+    const auto *Storage = Text.data();
+    const auto Capacity = Text.capacity();
+    neverd::escapeInvalidUTF8InPlace(Text);
+    EXPECT_EQ(Text, Expected);
+    EXPECT_EQ(Text.data(), Storage);
+    EXPECT_EQ(Text.capacity(), Capacity);
   }
 }
 
@@ -45,6 +51,11 @@ TEST(TextEncodingAcceleration,
       EXPECT_EQ(neverd::escapeInvalidUTF8(Start + Bad), Start + Escaped);
       EXPECT_EQ(neverd::escapeInvalidUTF8(Start + Bad + "valid\xe4\xb8\xad"),
                 Start + Escaped + "valid\xe4\xb8\xad");
+      for (const auto *Suffix : {"", "valid\xe4\xb8\xad"}) {
+        auto Text = Start + Bad + Suffix;
+        neverd::escapeInvalidUTF8InPlace(Text);
+        EXPECT_EQ(Text, Start + Escaped + Suffix);
+      }
     }
 }
 
@@ -61,5 +72,7 @@ TEST(TextEncodingAcceleration, EverySingleByteHasTheSameLosslessEscape) {
       Want += Hex[Byte & 15];
     }
     EXPECT_EQ(neverd::escapeInvalidUTF8(Text), Want);
+    neverd::escapeInvalidUTF8InPlace(Text);
+    EXPECT_EQ(Text, Want);
   }
 }

@@ -52,8 +52,8 @@ Dispatched dispatchLink(const QString &text, const DeepLink &link);
 /// whether its analysis is done.
 QString describeInstances();
 
-/// A file the user opened before, newest first, that \p link names by its
-/// name and, when the link gives one, its SHA-256.
+/// A recently opened input or database. A hash outranks names; a database
+/// names its stored input, whose bytes unpack verifies before navigation.
 std::optional<QString> recentFileFor(const DeepLink &link);
 
 /// Makes this executable the system's handler of neverd:// links, or stops

@@ -1,0 +1,18 @@
+//===- AArch64PointerC.def - Pointer result statements ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// TEXT(Name, Text) owns statement syntax shared by PAuth and CPA projections.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_POINTER_C_TEXT
+#define NEVERD_A64_POINTER_C_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_POINTER_C_TEXT(kAArch64PointerCAssignment, "{0} = {1};\n")
+NEVERD_A64_POINTER_C_TEXT(kAArch64PointerCDiscardExpression, "(void){0}")
+NEVERD_A64_POINTER_C_TEXT(kAArch64PointerCDiscardStatement, "(void){0};\n")
+
+#undef NEVERD_A64_POINTER_C_TEXT

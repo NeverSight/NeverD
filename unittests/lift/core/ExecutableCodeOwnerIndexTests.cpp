@@ -6,6 +6,9 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
+#include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/IR/LLVMContext.h"
 
 #include <algorithm>
 #include <atomic>
@@ -14,6 +17,56 @@
 #include <thread>
 
 using namespace neverd;
+
+TEST(ExecutableCodeOwnerIndex, DenseAddressSetsMatchLiveMetadata) {
+  for (const auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    for (const auto ISA : {Arch::X64, Arch::AArch64, Arch::ARM}) {
+      const bool Thumb = ISA == Arch::ARM;
+      const va_t Base = Thumb ? 0x100000 : (uint64_t{1} << 63);
+      BinaryImage Image;
+      Image.Format = Format;
+      Image.Arch = ISA;
+      Image.Mode = Thumb ? InstructionMode::Thumb : InstructionMode::Default;
+      Segment Mapping;
+      Mapping.VA = Base;
+      Mapping.Size = 0x4000;
+      Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Image.Segments.push_back(Mapping);
+      // A non-code section forces the metadata ownership path inside the
+      // coarse executable mapping, including the dense import-address index.
+      Section Data;
+      Data.VA = Base;
+      Data.Size = Mapping.Size;
+      Data.Flags = SegmentFlags::Readable;
+      Image.Sections.push_back(Data);
+      for (size_t I = 0; I != 257; ++I) {
+        Symbol Sym;
+        Sym.Addr = Base + I * 32 + Thumb;
+        Sym.IsFunc = true;
+        Sym.IsBoundaryGuess = I % 3 == 0;
+        Image.Symbols.push_back(Sym);
+        Image.ImportStubIndices.emplace(Base + I * 32 + 8,
+                                        Image.Imports.size());
+        Image.Imports.emplace_back();
+      }
+      const ExecutableCodeOwnerIndex Index(Image);
+      for (size_t I = 0; I != 258; ++I) {
+        for (const va_t Offset : {0u, 1u, 2u, 8u, 9u, 10u, 31u}) {
+          const va_t Addr = Base + I * 32 + Offset;
+          SCOPED_TRACE(::testing::Message() << unsigned(Format) << ' '
+                                            << unsigned(ISA) << ' ' << Addr);
+          EXPECT_EQ(Image.hasFunctionSymbolAt(Addr, &Index),
+                    Image.hasFunctionSymbolAt(Addr));
+          EXPECT_EQ(Image.hasFunctionSymbolAt(Addr, &Index, false),
+                    Image.hasFunctionSymbolAt(Addr, nullptr, false));
+          EXPECT_EQ(Image.hasExecutableCodeOwnerAt(Addr, &Index),
+                    Image.hasExecutableCodeOwnerAt(Addr));
+        }
+      }
+    }
+  }
+}
 
 namespace {
 
@@ -93,6 +146,66 @@ void expectSame(const BinaryImage &Image,
 }
 
 } // namespace
+
+TEST(ExecutableCodeOwnerIndex, COFFCodeContentsDoNotRequireExecutePermission) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool DeclaredCode : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(DeclaredCode);
+      BinaryImage Image;
+      Image.Format = Format;
+      Image.Arch = Arch::X64;
+      Segment Mapping;
+      Mapping.VA = 0x1000;
+      Mapping.Size = 16;
+      Mapping.Data = {0x0F, 0x0D, 0x09, 0xC3}; // prefetchw [rcx]; ret
+      Mapping.Data.resize(Mapping.Size, 0xCC);
+      Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Image.Segments.push_back(Mapping);
+      Section Code;
+      Code.VA = Mapping.VA;
+      Code.Size = 4;
+      Code.Flags = Mapping.Flags;
+      Code.Type = DeclaredCode ? llvm::COFF::IMAGE_SCN_CNT_CODE : 0;
+      Image.Sections.push_back(Code);
+      Image.Symbols.push_back(Symbol::makeFunc(Code.VA, Code.Size));
+      const ExecutableCodeOwnerIndex Index(Image);
+      const bool Expected = Format == BinaryFormat::COFF && DeclaredCode;
+      EXPECT_EQ(Image.isCodeAddress(0x1000), Expected);
+      EXPECT_EQ(Image.hasExecutableCodeOwnerAt(0x1000), Expected);
+      EXPECT_EQ(Image.hasExecutableCodeOwnerAt(0x1000, &Index), Expected);
+      EXPECT_EQ(Image.hasExecutableCodeOwnerRange(0x1000, 4), Expected);
+      EXPECT_EQ(Image.isFunctionEntryCandidateAt(0x1000), Expected);
+      EXPECT_FALSE(Image.hasExecutableCodeOwnerRange(0x1000, 5));
+      EXPECT_FALSE(Image.hasExecutableCodeOwnerAt(0x1004, &Index));
+      EXPECT_FALSE(Image.Segments.front().isExecutable());
+      EXPECT_FALSE(Image.Sections.front().isExecutable());
+      if (Expected) {
+        Decoder Decoder;
+        ASSERT_TRUE(Decoder.init(Image));
+        const auto Function = CFGBuilder().build(Image, Decoder, 0x1000);
+        ASSERT_EQ(Function.Blocks.size(), 1u);
+        EXPECT_EQ(Function.computedSize(), 4u);
+        for (bool LLVM : {false, true}) {
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {0x1000};
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          const auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          EXPECT_EQ(Result.LowFuncs.size(), 1u);
+          EXPECT_EQ(Result.MedFuncs.size(), 1u);
+          if (LLVM)
+            EXPECT_TRUE(Result.LlvmModule);
+          else
+            EXPECT_EQ(Result.HighFuncs.size(), 1u);
+        }
+      }
+    }
+}
 
 TEST(ExecutableCodeOwnerIndex, PreservesMetadataBoundariesAndRawThumbSpelling) {
   for (BinaryFormat Format :

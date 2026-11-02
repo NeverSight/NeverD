@@ -52,12 +52,63 @@ enum LibraryOperation {
   FileParent,
   FileIsAbsolute,
   ThreadInstrumentation,
-  LoadNativeLibrary
+  LoadNativeLibrary,
+  ContextContentResolver,
+  BuilderAppendChar,
+  BuilderString,
+  SecureSettingString,
+  SecureSettingIntDefault,
+  ContextApplicationInfo,
+  ContextPackageManager,
+  PackageApplicationInfo,
+  PackageApplicationLabel,
+  PackageResourcePath,
+  PackageInfoQuery,
+  LocaleDefault,
+  LocaleLanguage,
+  LocaleCountry,
+  ClassLoaderString,
+  MainLooper,
+  HandlerPost,
+  LooperQueue,
+  MessageQueueNext,
+  MessageCallback,
+  MessageTarget,
+  URLOpenConnection,
+  StringGetBytes,
+  UptimeMillis,
+  ElapsedRealtime,
+  ElapsedRealtimeNanos,
+  PropertyInt,
+  MapSize,
+  MapIsEmpty,
+  MapGet,
+  MapPut,
+  MapContainsKey,
+  MapRemove,
+  MapClear,
+  StatLoggerTime,
+  MapPutAll,
+  ServiceGet,
+  ServiceCheck,
+  ServiceInitCache,
+  BinderAllowBlocking,
+  BinderQueryLocalInterface,
+  ServiceAsBinder,
+  StatLoggerRecord,
+  EventLogWrite,
+  ParcelData,
+  BinderGetStrictMode,
+  BinderSetStrictMode
 };
 struct LibraryMethod {
   const char *Class, *Name, *Signature;
   LibraryOperation Op;
   bool Static = false;
+  bool Final = false;
+  // JNI may resolve nonpublic methods. Direct DEX library dispatch must not
+  // turn that permission into public Java access.
+  bool Public = true;
 };
 
 std::span<const LibraryMethod> libraryMethods();

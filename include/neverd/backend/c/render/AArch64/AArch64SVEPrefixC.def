@@ -1,0 +1,24 @@
+//===- AArch64SVEPrefixC.def - Predicated MOVPRFX C syntax ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Pure copy semantics of a validated prefix, kept separate from its consumer.
+/// Canonical svbool predicates select .D elements of untyped Z carriers.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_PREFIX_C_TEXT
+#define NEVERD_A64_SVE_PREFIX_C_TEXT(Name, Value)
+#endif
+
+NEVERD_A64_SVE_PREFIX_C_TEXT(
+    kPrefixZeroC,
+    "svreinterpret_u8_u64(svsel_u64({0}, svreinterpret_u64_u8({1}), "
+    "svdup_n_u64(0)))")
+NEVERD_A64_SVE_PREFIX_C_TEXT(
+    kPrefixMergeC,
+    "svreinterpret_u8_u64(svsel_u64({0}, svreinterpret_u64_u8({1}), "
+    "svreinterpret_u64_u8({2})))")
+
+#undef NEVERD_A64_SVE_PREFIX_C_TEXT

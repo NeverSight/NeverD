@@ -26,7 +26,7 @@ namespace {
 bool isSEHHandlerEntryBody(const HighEHClause &Clause,
                            const std::vector<HighStmt> &Body) {
   if (Clause.Kind != HighEHClauseKind::SEHExcept || !Clause.HandlerVA ||
-      Body.size() < 2)
+      Body.empty())
     return false;
   const HighStmt &Jump = Body.back();
   if (Jump.Kind != StmtKind::Goto || Jump.GotoTarget != Clause.HandlerVA)
@@ -37,6 +37,29 @@ bool isSEHHandlerEntryBody(const HighEHClause &Clause,
 }
 
 } // namespace
+
+std::string HighCWriter::sehFilterName(const HighEHClause &Clause) {
+  if (Clause.Kind != HighEHClauseKind::SEHExcept || !Clause.FilterOrActionVA ||
+      Clause.FilterValue)
+    return {};
+  // Declarations and filter expressions must use the same definition/image/
+  // debug identity. A named filter is a callee even though no Call expression
+  // appears in the protected body.
+  if (auto It = DefinedFunctionsByAddress.find(Clause.FilterOrActionVA);
+      It != DefinedFunctionsByAddress.end() && It->second)
+    return functionIdentifier(*It->second);
+  if (Opts.Image) {
+    const std::string &Listed = imageFunctionNameAt(Clause.FilterOrActionVA);
+    if (!llvm::StringRef(Listed).starts_with(kAutoFuncPrefix))
+      return functionIdentifier(Listed);
+  }
+  if (Dbg)
+    if (auto Symbol = Dbg->resolveFunction(Clause.FilterOrActionVA);
+        Symbol && !Symbol->Name.empty())
+      return functionIdentifier(Symbol->Name);
+  return functionIdentifier(
+      (kAutoFuncPrefix + llvm::utohexstr(Clause.FilterOrActionVA)).str());
+}
 
 void HighCWriter::writeSEHScopeAnnotation(const HighFunc &Func, int Indent) {
   if (!Func.ExceptionMetadata || !Func.ExceptionMetadata->SEH)

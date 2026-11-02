@@ -7,9 +7,15 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/RTTI.h"
 #include "neverd/sigs/SignatureDB.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 
@@ -68,6 +74,130 @@ neverd::BinaryImage makeMatchingImage() {
 
 } // namespace
 
+TEST(SignatureDBIdentity, ByteAgreementNeverInventsSourceIdentity) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABB 00 0000 0002 :0000 library_guess\n", "candidate"));
+  Database.apply(makeMatchingImage(), {0x1000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "library_guess");
+  EXPECT_TRUE(Database.buildNameMap().empty());
+  EXPECT_EQ(Database.nameDecision(0x1000), nullptr);
+}
+
+TEST(SignatureDBIdentity, OnlyTheIndependentlyStatedAliasIsAdmitted) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABB 00 0000 0002 :0000 short :0000 independently_stated\n"
+      "AABB 00 0000 0002 :0000 conflicting_candidate\n",
+      "aliases"));
+  auto Image = makeMatchingImage();
+  neverd::Symbol Stated;
+  Stated.Addr = 0x1000;
+  Stated.Name = "independently_stated";
+  Stated.IsFunc = true;
+  Stated.Origin = neverd::NameOrigin::Stated;
+  Image.Symbols.push_back(Stated);
+  Database.apply(Image, {0x1000});
+  ASSERT_EQ(Database.matches().size(), 2u);
+  EXPECT_TRUE(Database.buildCandidateNameMap().empty());
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "independently_stated");
+  ASSERT_NE(Database.nameDecision(0x1000), nullptr);
+  EXPECT_EQ(Database.nameDecision(0x1000)->Evidence,
+            SignatureNameEvidence::ImageSymbol);
+
+  // Neither the pattern's preferred alias nor its competing pattern acquires
+  // identity from the symbol that proves only one spelling at this address.
+  Image.Symbols.front().Name = "different_type_same_code";
+  Database.apply(Image, {0x1000});
+  EXPECT_TRUE(Database.buildNameMap().empty());
+}
+
+TEST(SignatureDBIdentity, AnalysisUserDataAndOtherAddressesAreNotEvidence) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText("AABB 00 0000 0002 :0000 candidate\n",
+                                        "candidate"));
+  for (neverd::NameOrigin Origin :
+       {neverd::NameOrigin::Synthesized, neverd::NameOrigin::Analysis,
+        neverd::NameOrigin::User, neverd::NameOrigin::Stated}) {
+    auto Image = makeMatchingImage();
+    neverd::Symbol Symbol;
+    Symbol.Addr = 0x1000;
+    Symbol.Name = "candidate";
+    Symbol.IsFunc = Origin != neverd::NameOrigin::Stated;
+    Symbol.Origin = Origin;
+    Image.Symbols.push_back(Symbol);
+    Symbol.Addr = 0x2000;
+    Symbol.IsFunc = true;
+    Symbol.Origin = neverd::NameOrigin::Stated;
+    Image.Symbols.push_back(Symbol);
+    Database.apply(Image, {0x1000});
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBIdentity, ExportsReapplyAndTransactionsRetainOnlyCurrentProof) {
+  SignatureDB Database;
+  const char *Pattern = "AABB 00 0000 0002 :0000 candidate\n";
+  ASSERT_FALSE(Database.loadPatternText(Pattern, "source"));
+  auto Image = makeMatchingImage();
+  neverd::Export Export;
+  Export.Addr = 0x1000;
+  Export.Name = "candidate";
+  Image.Exports.push_back(Export);
+  Database.apply(Image, {0x1000});
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "candidate");
+
+  auto Error = Database.loadPatternText("invalid record\n", "source");
+  ASSERT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(Database.buildNameMap().at(0x1000), "candidate");
+  ASSERT_FALSE(Database.loadPatternText(Pattern, "source"));
+  EXPECT_TRUE(Database.buildNameMap().empty());
+
+  Database.apply(Image, {0x1000});
+  ASSERT_NE(Database.nameDecision(0x1000), nullptr);
+  Image.Exports.clear();
+  Database.apply(Image, {0x1000});
+  EXPECT_EQ(Database.nameDecision(0x1000), nullptr);
+  EXPECT_EQ(Database.matches().size(), 1u);
+  Image.Exports.push_back(Export);
+  Database.apply(Image, {0x1000});
+  Database.clear();
+  EXPECT_TRUE(Database.buildNameMap().empty());
+}
+
+TEST(SignatureDBIdentity, FoldedAliasesAreIndependentOfSymbolOrder) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "AABB 00 0000 0002 :0000 short :0000 _also_stated :0000 longest_name\n",
+      "folded"));
+  auto Image = makeMatchingImage();
+  for (const char *Name : {"longest_name", "_also_stated", "_also_stated"}) {
+    neverd::Symbol S;
+    S.Addr = 0x1000;
+    S.Name = Name;
+    S.IsFunc = true;
+    S.Origin = neverd::NameOrigin::Stated;
+    Image.Symbols.push_back(std::move(S));
+  }
+  for (unsigned Order = 0; Order != 2; ++Order) {
+    Database.apply(Image, {0x1000});
+    EXPECT_EQ(Database.buildNameMap().at(0x1000), "longest_name");
+    std::reverse(Image.Symbols.begin(), Image.Symbols.end());
+  }
+  for (auto &S : Image.Symbols)
+    S.IsBoundaryGuess = true;
+  Database.apply(Image, {0x1000});
+  EXPECT_TRUE(Database.buildNameMap().empty());
+  for (auto &S : Image.Symbols) {
+    S.IsBoundaryGuess = false;
+    S.IsSection = true;
+  }
+  Database.apply(Image, {0x1000});
+  EXPECT_TRUE(Database.buildNameMap().empty());
+}
+
 TEST(SignatureDBTransactions, FailedInMemoryBatchDoesNotMutateDatabase) {
   SignatureDB Database;
   ASSERT_FALSE(Database.loadPatternText("AABB 00 0000 0002 :0000 first_name\n",
@@ -85,6 +215,47 @@ TEST(SignatureDBTransactions, FailedInMemoryBatchDoesNotMutateDatabase) {
             std::string::npos);
   EXPECT_EQ(Database.moduleCount(), 1u);
   EXPECT_EQ(Database.fileCount(), 1u);
+}
+
+TEST_F(SignatureDirectoryTest, AutomaticSelectionSkipsFilesBeforeOpeningThem) {
+  const auto Relative = std::filesystem::path("pe/x86/64");
+  std::filesystem::create_directories(Directory / Relative);
+  write("pe/x86/64/supplemental-bds.pat",
+        "deliberately invalid user library\n");
+  write("pe/x86/64/supplemental-ms64wdk.pat",
+        "AABB 00 0000 0002 :0000 driver_routine\n");
+  write("pe/x86/64/custom.pat", "CCDD 00 0000 0002 :0000 custom_routine\n");
+  auto Image = makeMatchingImage();
+  Image.Format = neverd::BinaryFormat::COFF;
+  Image.Arch = neverd::Arch::X64;
+  Image.Bits = neverd::Bitness::Bits64;
+  Image.DynInfo.PESubsystem = 1; // PE native subsystem.
+  Image.Imports.push_back({"ntoskrnl.exe", "ExAllocatePool2"});
+  SignatureDB Database;
+  auto Error = Database.loadForImage(Image, Directory);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  EXPECT_EQ(Database.moduleCount(), 2u);
+  ASSERT_TRUE(Database.automaticSelection());
+  EXPECT_EQ(Database.automaticSelection()->AvailableFiles, 3u);
+  EXPECT_EQ(Database.automaticSelection()->SelectedFiles, 2u);
+
+  // An unclassified image must attempt the full directory; a failed load
+  // retains both the previous database and its successful selection report.
+  Image.Imports.clear();
+  Error = Database.loadForImage(Image, Directory);
+  EXPECT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(Database.fileCount(), 2u);
+  ASSERT_TRUE(Database.automaticSelection());
+  EXPECT_EQ(Database.automaticSelection()->SelectedFiles, 2u);
+
+  // Explicit directory loads bypass automatic platform selection.
+  Error = Database.loadDirectory(Directory / Relative);
+  EXPECT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  ASSERT_FALSE(
+      Database.loadPatternText("EEFF 00 0000 0002 :0000 manual\n", "manual"));
+  EXPECT_FALSE(Database.automaticSelection());
 }
 
 TEST(SignatureDBTransactions, ReloadingOneSourceReplacesItsOldModules) {
@@ -257,10 +428,10 @@ TEST(SignatureDBAddresses, NeverWrapsASecondaryPublicNameAddress) {
   Database.apply(Image, {std::numeric_limits<uint64_t>::max()});
 
   EXPECT_TRUE(Database.matches().empty());
-  EXPECT_TRUE(Database.buildNameMap().empty());
+  EXPECT_TRUE(Database.buildCandidateNameMap().empty());
 }
 
-TEST(SignatureDBAddresses, OmitsDisputedNamesFromTheApplicationMap) {
+TEST(SignatureDBAddresses, OmitsDisputedNamesFromTheCandidateMap) {
   SignatureDB Database;
   ASSERT_FALSE(Database.loadPatternText("AABB 00 0000 0002 :0000 first_name\n"
                                         "AABB 00 0000 0002 :0000 second_name\n",
@@ -270,7 +441,7 @@ TEST(SignatureDBAddresses, OmitsDisputedNamesFromTheApplicationMap) {
   Database.apply(Image, {0x1000});
 
   ASSERT_EQ(Database.matches().size(), 2u);
-  EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1000), 0u);
 }
 
 namespace {
@@ -319,9 +490,31 @@ TEST(SignatureDBReferences, ACallToARoutineNamedOtherwiseDropsTheMatch) {
       CalleeLine + callerLine("caller", " ^0005 somebody_else"), "refs"));
   Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
 
-  const auto Names = Database.buildNameMap();
+  const auto Names = Database.buildCandidateNameMap();
   EXPECT_EQ(Names.count(0x1000), 0u);
   EXPECT_EQ(Names.at(0x1100), "callee");
+}
+
+TEST(SignatureDBIdentity, ConfirmedReferencesDoNotRecoverErasedTypes) {
+  // The same load/call sequence can implement read(First *) or read(Second *)
+  // when the nominally different types share a layout. Naming its callee does
+  // not recover the caller's erased source type, even with no known collision.
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      CalleeLine + callerLine("read_first", " ^0005 callee"), "types"));
+  auto Image = makeCallingImage(0x1100);
+  neverd::Symbol Symbol;
+  Symbol.Addr = 0x1100;
+  Symbol.Name = "callee";
+  Symbol.IsFunc = true;
+  Symbol.Origin = neverd::NameOrigin::Stated;
+  Image.Symbols.push_back(Symbol);
+  Database.apply(Image, {0x1000, 0x1100});
+  ASSERT_NE(Database.findMatch(0x1000), nullptr);
+  EXPECT_TRUE(Database.findMatch(0x1000)->Confirmed);
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "read_first");
+  EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);
+  EXPECT_EQ(Database.buildNameMap().at(0x1100), "callee");
 }
 
 TEST(SignatureDBReferences, ACallNothingNamesKeepsTheMatch) {
@@ -330,7 +523,7 @@ TEST(SignatureDBReferences, ACallNothingNamesKeepsTheMatch) {
       callerLine("caller", " ^0005 somebody_else"), "refs"));
   Database.apply(makeCallingImage(0x1100), {0x1000});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
 }
 
 TEST(SignatureDBReferences, AConfirmedCallSettlesIdenticalBytes) {
@@ -342,7 +535,7 @@ TEST(SignatureDBReferences, AConfirmedCallSettlesIdenticalBytes) {
       "refs"));
   Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller_of_callee");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller_of_callee");
   for (const SigMatch &Match : Database.matches())
     EXPECT_EQ(Match.Confirmed, Match.Name == "caller_of_callee") << Match.Name;
 }
@@ -358,7 +551,7 @@ TEST(SignatureDBReferences, ThePatternOfADisputedCalleeConfirms) {
       "refs"));
   Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
 
-  const auto Names = Database.buildNameMap();
+  const auto Names = Database.buildCandidateNameMap();
   EXPECT_EQ(Names.count(0x1100), 0u);
   EXPECT_EQ(Names.at(0x1000), "caller_of_callee");
 }
@@ -373,7 +566,7 @@ TEST(SignatureDBReferences, IncrementalLinkingThunksAreFollowed) {
       "refs"));
   Database.apply(makeCallingImage(0x1200), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
 }
 
 TEST(SignatureDBReferences, ARoutineThatOnlyJumpsOnContradictsNothing) {
@@ -385,7 +578,7 @@ TEST(SignatureDBReferences, ARoutineThatOnlyJumpsOnContradictsNothing) {
       CalleeLine + callerLine("caller", " ^0005 free"), "refs"));
   Database.apply(makeCallingImage(0x1200), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
   for (const SigMatch &Match : Database.matches())
     if (Match.Address == 0x1000)
       EXPECT_FALSE(Match.Confirmed);
@@ -434,7 +627,7 @@ TEST(SignatureDBReferences, ReferencesAtOneOffsetAreAlternatives) {
   Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
 
   ASSERT_EQ(Database.matches().size(), 2u);
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
   for (const SigMatch &Match : Database.matches())
     if (Match.Address == 0x1000)
       EXPECT_TRUE(Match.Confirmed);
@@ -451,7 +644,7 @@ TEST(SignatureDBReferences, AnELFImportsStubSettlesACallToIt) {
       << "the call to another import contradicts do_toupper";
   EXPECT_EQ(Database.matches()[0].Name, "do_tolower");
   EXPECT_TRUE(Database.matches()[0].Confirmed);
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "do_tolower");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "do_tolower");
 }
 
 TEST(SignatureDBReferences, AVersionedReferenceNamesTheImportItBindsTo) {
@@ -477,7 +670,367 @@ TEST(SignatureDBReferences, ACOFFImportThunkSettlesNothing) {
   EXPECT_EQ(Database.matches().size(), 2u);
   for (const SigMatch &Match : Database.matches())
     EXPECT_FALSE(Match.Confirmed) << Match.Name;
-  EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1000), 0u);
+}
+
+namespace {
+
+std::string importCallerLine(llvm::StringRef Name, llvm::StringRef Reference) {
+  return ("90909090FF15........90909090909090909090909090909090909090909090"
+          " 00 0000 0020 :0000 " +
+          Name + " ^0006 " + Reference + "\n")
+      .str();
+}
+
+neverd::BinaryImage makeIndirectImportImage(neverd::Arch Arch) {
+  neverd::BinaryImage Image;
+  Image.Format = neverd::BinaryFormat::COFF;
+  Image.Arch = Arch;
+  Image.Bits = Arch == neverd::Arch::X64 ? neverd::Bitness::Bits64
+                                         : neverd::Bitness::Bits32;
+  neverd::Segment Code;
+  Code.VA = 0x1000;
+  Code.Size = Code.FileSz = 32;
+  Code.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  Code.Data.assign(32, 0x90);
+  Code.Data[4] = 0xff;
+  Code.Data[5] = 0x15;
+  const uint32_t Field = Arch == neverd::Arch::X64 ? 0x2000 - 0x100a : 0x2000;
+  std::memcpy(Code.Data.data() + 6, &Field, sizeof(Field));
+  Image.Segments.push_back(std::move(Code));
+  neverd::Segment Slots;
+  Slots.VA = 0x2000;
+  Slots.Size = Slots.FileSz = 8;
+  Slots.Flags = neverd::SegmentFlags::Readable;
+  Slots.Data.assign(8, 0);
+  Image.Segments.push_back(std::move(Slots));
+  neverd::Import Imp;
+  Imp.Module = "runtime.dll";
+  Imp.Name = "RuntimeB";
+  Imp.IATAddr = 0x2000;
+  Image.Imports.push_back(Imp);
+  return Image;
+}
+
+} // namespace
+
+TEST(SignatureDBReferences, COFFImportSlotsDisambiguateCandidatesNotIdentity) {
+  for (const auto Arch : {neverd::Arch::X86, neverd::Arch::X64}) {
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(
+        importCallerLine("wrapper_a", "__imp_RuntimeA") +
+            importCallerLine("wrapper_b", "__imp_RuntimeB"),
+        "imports"));
+    auto Image = makeIndirectImportImage(Arch);
+    Database.apply(Image, {0x1000});
+    ASSERT_EQ(Database.matches().size(), 2u);
+    EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "wrapper_b");
+    for (const SigMatch &Match : Database.matches())
+      EXPECT_EQ(Match.Confirmed, Match.Name == "wrapper_b");
+    EXPECT_TRUE(Database.buildNameMap().empty());
+    // The new evidence is withdrawn when the import spelling changes.
+    Image.Imports.front().Name = "unresolved_alias";
+    Database.apply(Image, {0x1000});
+    EXPECT_TRUE(Database.buildCandidateNameMap().empty());
+    for (const SigMatch &Match : Database.matches())
+      EXPECT_FALSE(Match.Confirmed);
+  }
+}
+
+TEST(SignatureDBReferences, COFFImportSlotRequiresExactMappedEvidence) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      importCallerLine("wrapper", "__imp_RuntimeB"), "imports"));
+  const auto Unconfirmed = [&](const neverd::BinaryImage &Image) {
+    Database.apply(Image, {0x1000});
+    ASSERT_EQ(Database.matches().size(), 1u);
+    EXPECT_FALSE(Database.matches().front().Confirmed);
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  };
+  auto Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Imports.front().Name.clear();
+  Unconfirmed(Image);
+  Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Imports.front().Name = "runtimeb";
+  Unconfirmed(Image);
+  Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Imports.front().IATAddr += 1;
+  Unconfirmed(Image);
+  Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Segments.pop_back();
+  Unconfirmed(Image);
+  Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Imports.push_back(Image.Imports.front());
+  Image.Imports.back().Name = "different_import";
+  Unconfirmed(Image);
+  Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Format = neverd::BinaryFormat::ELF;
+  Unconfirmed(Image);
+}
+
+TEST(SignatureDBReferences, COFFImportJumpsAndNegativeDisplacements) {
+  for (const auto Arch : {neverd::Arch::X86, neverd::Arch::X64}) {
+    for (bool Jump : {false, true}) {
+      auto Image = makeIndirectImportImage(Arch);
+      // Put the slot below the caller: x64 must sign-extend its displacement.
+      Image.Segments.back().VA = Image.Imports.front().IATAddr = 0x800;
+      const uint32_t Field = Arch == neverd::Arch::X64
+                                 ? uint32_t(0x800 - 0x100a)
+                                 : uint32_t(0x800);
+      std::memcpy(Image.Segments.front().Data.data() + 6, &Field,
+                  sizeof(Field));
+      std::string Pattern = importCallerLine("wrapper", "__imp_RuntimeB");
+      if (Jump) {
+        Image.Segments.front().Data[5] = 0x25;
+        Pattern[10] = '2';
+      }
+      SignatureDB Database;
+      ASSERT_FALSE(Database.loadPatternText(Pattern, "imports"));
+      Database.apply(Image, {0x1000});
+      ASSERT_EQ(Database.matches().size(), 1u);
+      EXPECT_TRUE(Database.matches().front().Confirmed);
+      EXPECT_TRUE(Database.buildNameMap().empty());
+    }
+  }
+}
+
+TEST(SignatureDBReferences, COFFImportPrefixesRemainUnconfirmed) {
+  for (uint8_t Prefix : {0x64, 0x65, 0x66, 0x67, 0x49, 0x4c, 0x4f}) {
+    auto Image = makeIndirectImportImage(neverd::Arch::X64);
+    Image.Segments.front().Data[3] = Prefix;
+    std::string Pattern = importCallerLine("wrapper", "__imp_RuntimeB");
+    // Keep a byte match while refusing to assign unprefixed slot semantics.
+    Pattern[6] = Pattern[7] = '.';
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(Pattern, "imports"));
+    Database.apply(Image, {0x1000});
+    ASSERT_EQ(Database.matches().size(), 1u);
+    EXPECT_FALSE(Database.matches().front().Confirmed);
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBReferences, COFFREXWImportsRequireExactSlotEvidence) {
+  for (bool Jump : {false, true}) {
+    for (bool ExtraPrefix : {false, true}) {
+      auto Image = makeIndirectImportImage(neverd::Arch::X64);
+      auto &Code = Image.Segments.front().Data;
+      Code[2] = ExtraPrefix ? 0x67 : 0x90;
+      Code[3] = 0x48;
+      Code[5] = Jump ? 0x25 : 0x15;
+      Image.Segments.back().VA = Image.Imports.front().IATAddr = 0x800;
+      neverd::writeLE<uint32_t>(Code.data() + 6, uint32_t(0x800 - 0x100a));
+      std::string Pattern = importCallerLine("wrapper", "__imp_RuntimeB");
+      Pattern.replace(4, 4, "....");
+      if (Jump)
+        Pattern[10] = '2';
+      SignatureDB Database;
+      ASSERT_FALSE(Database.loadPatternText(Pattern, "imports"));
+      Database.apply(Image, {0x1000});
+      ASSERT_EQ(Database.matches().size(), 1u);
+      EXPECT_EQ(Database.matches().front().Confirmed, !ExtraPrefix);
+      EXPECT_TRUE(Database.buildNameMap().empty());
+      Image.Imports.front().Name = "different";
+      Database.apply(Image, {0x1000});
+      ASSERT_EQ(Database.matches().size(), 1u);
+      EXPECT_FALSE(Database.matches().front().Confirmed);
+    }
+  }
+}
+
+namespace {
+
+std::string vtableCallerLine(llvm::StringRef Name, llvm::StringRef Reference) {
+  return ("90909090488D05........909090909090909090909090909090909090909090"
+          " 00 0000 0020 :0000 " +
+          Name + " ^0007 " + Reference + "\n")
+      .str();
+}
+
+neverd::BinaryImage makeVTableImage() {
+  auto Image = makeIndirectImportImage(neverd::Arch::X64);
+  Image.Imports.clear();
+  Image.Base = 0x1000;
+  auto &Code = Image.Segments.front().Data;
+  Code[4] = 0x48;
+  Code[5] = 0x8d;
+  Code[6] = 0x05;
+  neverd::writeLE<uint32_t>(Code.data() + 7, 0x2108 - 0x100b);
+  auto &Data = Image.Segments.back();
+  Data.Size = Data.FileSz = 0x300;
+  Data.Data.assign(Data.Size, 0);
+  auto Put = [&](size_t At, uint32_t Value) {
+    neverd::writeLE<uint32_t>(Data.Data.data() + At, Value);
+  };
+  neverd::writeLE<uint64_t>(Data.Data.data() + 0x100, 0x2140);
+  neverd::writeLE<uint64_t>(Data.Data.data() + 0x108, 0x1000);
+  Put(0x140, 1); // Locator version, zero offset and construction displacement.
+  Put(0x14c, 0x1200);     // Type descriptor.
+  Put(0x150, 0x1180);     // Class hierarchy.
+  Put(0x154, 0x1140);     // Locator self RVA.
+  Put(0x188, 1);          // One base: the complete class itself.
+  Put(0x18c, 0x11a0);     // Base array.
+  Put(0x1a0, 0x11c0);     // Self base descriptor.
+  Put(0x1c0, 0x1200);     // Same type descriptor.
+  Put(0x1cc, 0xffffffff); // No virtual base displacement.
+  Put(0x1d4, 0x40);       // HASPCHD.
+  Put(0x1d8, 0x1180);     // Same hierarchy.
+  constexpr char Name[] = ".?AVWidget@@";
+  std::memcpy(Data.Data.data() + 0x210, Name, sizeof(Name));
+  return Image;
+}
+
+} // namespace
+
+TEST(SignatureDBReferences, VTableTypeDisambiguatesCandidatesNotIdentity) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      vtableCallerLine("widget_ctor", "??_7Widget@@6B@") +
+          vtableCallerLine("other_ctor", "??_7Other@@6B@"),
+      "constructors"));
+  auto Image = makeVTableImage();
+  const auto Type =
+      neverd::coff_loader::readPrimaryVTableTypeName(Image, 0x2108);
+  ASSERT_TRUE(Type);
+  EXPECT_EQ(*Type, "Widget@@");
+  Database.apply(Image, {0x1000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_EQ(Database.matches().front().Name, "widget_ctor");
+  EXPECT_TRUE(Database.matches().front().Confirmed);
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "widget_ctor");
+  EXPECT_TRUE(Database.buildNameMap().empty());
+  // Reapplication must not reuse metadata from the preceding image.
+  Image.Segments.back().Data[0x140] = 0;
+  Database.apply(Image, {0x1000});
+  EXPECT_EQ(Database.matches().size(), 2u);
+  EXPECT_TRUE(Database.buildCandidateNameMap().empty());
+  EXPECT_TRUE(Database.buildNameMap().empty());
+}
+
+TEST(SignatureDBReferences, VTableMalformedMetadataCannotConfirmOrContradict) {
+  const std::vector<std::pair<size_t, uint32_t>> Corruptions = {
+      {0x100, 0x9000},     {0x108, 0x2000}, {0x140, 0},
+      {0x144, 8},          {0x148, 4},      {0x14c, 0},
+      {0x14c, 0xffffffff}, {0x150, 0},      {0x154, 0x1144},
+      {0x180, 1},          {0x188, 0},      {0x188, 0xffffffff},
+      {0x18c, 0x12ff},     {0x1a0, 0x12ff}, {0x1c0, 0x1204},
+      {0x1c4, 1},          {0x1c8, 4},      {0x1cc, 0},
+      {0x1d0, 4},          {0x1d4, 0},      {0x1d8, 0x1184},
+      {0x210, 0}};
+  for (const auto &[Offset, Value] : Corruptions) {
+    auto Image = makeVTableImage();
+    neverd::writeLE<uint32_t>(Image.Segments.back().Data.data() + Offset,
+                              Value);
+    EXPECT_FALSE(neverd::coff_loader::readPrimaryVTableTypeName(Image, 0x2108))
+        << Offset;
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(
+        vtableCallerLine("widget_ctor", "??_7Widget@@6B@") +
+            vtableCallerLine("other_ctor", "??_7Other@@6B@"),
+        "constructors"));
+    Database.apply(Image, {0x1000});
+    ASSERT_EQ(Database.matches().size(), 2u) << Offset;
+    for (const auto &Match : Database.matches())
+      EXPECT_FALSE(Match.Confirmed) << Offset;
+    EXPECT_TRUE(Database.buildCandidateNameMap().empty()) << Offset;
+  }
+}
+
+TEST(SignatureDBReferences, VTableEvidenceRequiresCompleteSupportedData) {
+  for (unsigned Variant = 0; Variant != 10; ++Variant) {
+    auto Image = makeVTableImage();
+    auto &Data = Image.Segments.back();
+    switch (Variant) {
+    case 0:
+      Image.Format = neverd::BinaryFormat::ELF;
+      break;
+    case 1:
+      Image.Arch = neverd::Arch::X86;
+      break;
+    case 2:
+      Image.Bits = neverd::Bitness::Bits32;
+      break;
+    case 3:
+      Data.Flags = Data.Flags | neverd::SegmentFlags::Writable;
+      break;
+    case 4:
+      Data.Flags = Data.Flags | neverd::SegmentFlags::Executable;
+      break;
+    case 5:
+      Data.Data.resize(0x21b);
+      break; // No string terminator.
+    case 6:
+      Data.Size = 0x21b;
+      break;
+    case 7:
+      std::fill(Data.Data.begin() + 0x21b, Data.Data.end(), 'x');
+      break;
+    case 8:
+      Data.Data[0x214] = ' ';
+      break;
+    case 9:
+      Image.Base = std::numeric_limits<uint64_t>::max() - 0x1000;
+      break;
+    }
+    EXPECT_FALSE(neverd::coff_loader::readPrimaryVTableTypeName(Image, 0x2108))
+        << Variant;
+  }
+  auto Image = makeVTableImage();
+  Image.Segments.back().Data[0x213] = 'U'; // Struct type spelling.
+  EXPECT_EQ(*neverd::coff_loader::readPrimaryVTableTypeName(Image, 0x2108),
+            "Widget@@");
+}
+
+TEST(SignatureDBReferences, VTableAddressRequiresCanonicalInstruction) {
+  for (uint8_t Prefix : {0x65, 0x67, 0x48}) {
+    auto Image = makeVTableImage();
+    Image.Segments.front().Data[3] = Prefix;
+    std::string Pattern = vtableCallerLine("ctor", "??_7Widget@@6B@");
+    Pattern[6] = Pattern[7] = '.';
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(Pattern, "constructors"));
+    Database.apply(Image, {0x1000});
+    ASSERT_EQ(Database.matches().size(), 1u);
+    EXPECT_FALSE(Database.matches().front().Confirmed);
+  }
+  auto Image = makeVTableImage();
+  Image.Segments.front().VA = 0x3000;
+  neverd::writeLE<uint32_t>(Image.Segments.front().Data.data() + 7,
+                            uint32_t(0x2108 - 0x300b));
+  neverd::writeLE<uint64_t>(Image.Segments.back().Data.data() + 0x108, 0x3000);
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      vtableCallerLine("ctor", "??_7Widget@@6B@"), "constructors"));
+  Database.apply(Image, {0x3000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_TRUE(Database.matches().front().Confirmed);
+}
+
+TEST(SignatureDBReferences, EveryImportReferenceMustBeConfirmed) {
+  auto Image = makeIndirectImportImage(neverd::Arch::X64);
+  auto &Code = Image.Segments.front().Data;
+  Code[16] = 0xff;
+  Code[17] = 0x15;
+  const int32_t Field = 0x2008 - 0x1016;
+  std::memcpy(Code.data() + 18, &Field, sizeof(Field));
+  Image.Segments.back().Data.resize(16, 0);
+  Image.Segments.back().Size = Image.Segments.back().FileSz = 16;
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "90909090FF15........909090909090FF15........90909090909090909090"
+      " 00 0000 0020 :0000 wrapper ^0006 __imp_RuntimeB ^0012 __imp_Other\n",
+      "imports"));
+  Database.apply(Image, {0x1000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_FALSE(Database.matches().front().Confirmed);
+  Image.Imports.push_back(Image.Imports.front());
+  Image.Imports.back().IATAddr = 0x2008;
+  Image.Imports.back().Name = "Other";
+  Database.apply(Image, {0x1000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_TRUE(Database.matches().front().Confirmed);
+  EXPECT_TRUE(Database.buildNameMap().empty());
 }
 
 TEST(SignatureDBReferences, WhatReferencesNameSettlesTheirCallersInTurn) {
@@ -504,9 +1057,188 @@ TEST(SignatureDBReferences, WhatReferencesNameSettlesTheirCallersInTurn) {
       "refs"));
   Database.apply(Image, {0x1000, 0x1100});
 
-  const auto Names = Database.buildNameMap();
+  const auto Names = Database.buildCandidateNameMap();
   EXPECT_EQ(Names.at(0x1100), "inner_a");
   EXPECT_EQ(Names.at(0x1000), "outer_a");
+}
+
+namespace {
+
+/// A caller at 0x1000 reaches 0x1100, whose call reaches import_a at 0x1200.
+neverd::BinaryImage makeNestedCallingImage() {
+  neverd::BinaryImage Image =
+      makeImportCallingImage(neverd::BinaryFormat::ELF, "import_a");
+  auto &Data = Image.Segments[0].Data;
+  const int32_t Outer = 0x1100 - 0x1009;
+  std::memcpy(Data.data() + 5, &Outer, sizeof(Outer));
+  const uint8_t Inner[] = {0x53, 0xE8, 0, 0, 0, 0, 0x5B, 0xC3};
+  std::copy(std::begin(Inner), std::end(Inner), Data.begin() + 0x100);
+  const int32_t ToStub = 0x1200 - 0x1106;
+  std::memcpy(Data.data() + 0x102, &ToStub, sizeof(ToStub));
+
+  return Image;
+}
+
+} // namespace
+
+TEST(SignatureDBReferences, RejectedCalleeCannotRemainConfirmationEvidence) {
+  // The inner candidate's call contradicts its claimed identity. Two other
+  // inner names stay ambiguous, so its settled name is absent both before
+  // and after that rejection. Its raw byte hit must not keep confirming the
+  // outer candidate, and the outer must be reconsidered even though the
+  // inner's settled name did not change.
+  neverd::BinaryImage Image = makeNestedCallingImage();
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      callerLine("outer_rejected", " ^0005 inner_rejected") +
+          callerLine("outer_twin", "") +
+          "53E8........5BC3 00 0000 0008 :0000 inner_rejected ^0002 import_b\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin_a\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin_b\n",
+      "refs"));
+  Database.apply(Image, {0x1000, 0x1100});
+
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1000), 0u);
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  for (const SigMatch &Match : Database.matches()) {
+    EXPECT_NE(Match.Name, "inner_rejected");
+    if (Match.Address == 0x1000)
+      EXPECT_FALSE(Match.Confirmed) << Match.Name;
+  }
+}
+
+TEST(SignatureDBReferences, WithdrawingEvidenceDoesNotPermanentlyDropACaller) {
+  // The outer candidate first appears confirmed, which provisionally rejects
+  // grand_b. Withdrawing that evidence must restore grand_b as well.
+  neverd::BinaryImage Image = makeNestedCallingImage();
+  auto &Code = Image.Segments[0];
+  auto &Data = Code.Data;
+  Code.Size = Code.FileSz = 0x400;
+  Data.resize(0x400, 0xCC);
+  const uint8_t Grand[] = {0x56, 0xE8, 0, 0, 0, 0, 0x5E, 0xC3};
+  std::copy(std::begin(Grand), std::end(Grand), Data.begin() + 0x300);
+  const int32_t ToOuter = 0x1000 - 0x1306;
+  std::memcpy(Data.data() + 0x302, &ToOuter, sizeof(ToOuter));
+
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      callerLine("outer_rejected", " ^0005 inner_rejected") +
+          callerLine("outer_twin", "") +
+          "53E8........5BC3 00 0000 0008 :0000 inner_rejected ^0002 import_b\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin_a\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin_b\n"
+          "56E8........5EC3 00 0000 0008 :0000 grand_a ^0002 outer_rejected\n"
+          "56E8........5EC3 00 0000 0008 :0000 grand_b ^0002 outer_twin\n",
+      "refs"));
+  Database.apply(Image, {0x1000, 0x1100, 0x1300});
+
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1300), 0u);
+  EXPECT_TRUE(
+      std::any_of(Database.matches().begin(), Database.matches().end(),
+                  [](const SigMatch &M) { return M.Name == "grand_b"; }));
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1000), 0u);
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  for (const SigMatch &Match : Database.matches()) {
+    EXPECT_NE(Match.Name, "inner_rejected");
+    if (Match.Address == 0x1000)
+      EXPECT_FALSE(Match.Confirmed) << Match.Name;
+  }
+}
+
+TEST(SignatureDBReferences, AnotherViableModuleWithTheSameNameStillConfirms) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      callerLine("outer", " ^0005 inner") + callerLine("outer_twin", "") +
+          "53E8........5BC3 00 0000 0008 :0000 inner ^0002 import_b\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin\n",
+      "refs"));
+  Database.apply(makeNestedCallingImage(), {0x1000, 0x1100});
+
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "outer");
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  EXPECT_EQ(std::count_if(Database.matches().begin(), Database.matches().end(),
+                          [](const SigMatch &M) { return M.Name == "inner"; }),
+            1);
+  for (const SigMatch &Match : Database.matches())
+    if (Match.Name == "outer")
+      EXPECT_TRUE(Match.Confirmed);
+}
+
+TEST(SignatureDBReferences, ParallelWithdrawalAgreesWithSerialChecking) {
+  neverd::BinaryImage Image = makeNestedCallingImage();
+  auto &Code = Image.Segments[0];
+  auto &Data = Code.Data;
+  constexpr size_t CallerCount = 4096;
+  constexpr uint64_t FirstCaller = 0x2000;
+  constexpr size_t Stride = 16;
+  const std::vector<uint8_t> Caller(Data.begin(), Data.begin() + 11);
+  Code.Size = Code.FileSz = FirstCaller - Code.VA + CallerCount * Stride;
+  Data.resize(Code.FileSz, 0xCC);
+  std::vector<uint64_t> Entries{0x1100};
+  for (size_t I = 0; I < CallerCount; ++I) {
+    const uint64_t Address = FirstCaller + I * Stride;
+    const size_t Offset = Address - Code.VA;
+    std::copy(Caller.begin(), Caller.end(), Data.begin() + Offset);
+    const int32_t Disp = static_cast<int32_t>(0x1100 - (Address + 9));
+    std::memcpy(Data.data() + Offset + 5, &Disp, sizeof(Disp));
+    Entries.push_back(Address);
+  }
+
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      callerLine("outer_rejected", " ^0005 inner_rejected") +
+          callerLine("outer_twin", "") +
+          "53E8........5BC3 00 0000 0008 :0000 inner_rejected ^0002 import_b\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin_a\n"
+          "53E8........5BC3 00 0000 0008 :0000 inner_twin_b\n",
+      "refs"));
+  const unsigned Previous = neverd::workerThreadOverride().load();
+  for (unsigned Threads : {1u, 4u}) {
+    neverd::setWorkerThreadCount(Threads);
+    Database.apply(Image, Entries);
+    EXPECT_TRUE(Database.buildCandidateNameMap().empty());
+    EXPECT_EQ(Database.matches().size(), 2 * CallerCount + 2);
+    for (const SigMatch &Match : Database.matches())
+      EXPECT_FALSE(Match.Confirmed);
+    std::reverse(Entries.begin(), Entries.end());
+  }
+  neverd::setWorkerThreadCount(Previous);
+}
+
+TEST(SignatureDBReferences, UnsettledCyclesCannotNameTheirDependentCallers) {
+  neverd::BinaryImage Image = makeNestedCallingImage();
+  auto &Code = Image.Segments[0];
+  auto &Data = Code.Data;
+  // 0x1000 and 0x1100 each contradict the other's only proposed identity.
+  const int32_t ToOuter = 0x1000 - 0x1106;
+  std::memcpy(Data.data() + 0x102, &ToOuter, sizeof(ToOuter));
+  Code.Size = Code.FileSz = 0x400;
+  Data.resize(0x400, 0xCC);
+  const uint8_t Grand[] = {0x56, 0xE8, 0, 0, 0, 0, 0x5E, 0xC3};
+  std::copy(std::begin(Grand), std::end(Grand), Data.begin() + 0x300);
+  const int32_t GrandCall = 0x1000 - 0x1306;
+  std::memcpy(Data.data() + 0x302, &GrandCall, sizeof(GrandCall));
+  const uint8_t Independent[] = {0xAA, 0xBB, 0xCC, 0xDD, 0xC3};
+  std::copy(std::begin(Independent), std::end(Independent),
+            Data.begin() + 0x250);
+
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      callerLine("outer", " ^0005 other_inner") +
+          "53E8........5BC3 00 0000 0008 :0000 inner ^0002 other_outer\n"
+          "56E8........5EC3 00 0000 0008 :0000 grand ^0002 outer\n"
+          "56E8........5EC3 00 0000 0008 :0000 grand_twin\n" +
+          CalleeLine,
+      "refs"));
+  for (const std::vector<uint64_t> Entries :
+       {std::vector<uint64_t>{0x1000, 0x1100, 0x1250, 0x1300},
+        std::vector<uint64_t>{0x1300, 0x1250, 0x1100, 0x1000}}) {
+    Database.apply(Image, Entries);
+    const auto Names = Database.buildCandidateNameMap();
+    ASSERT_EQ(Names.size(), 1u);
+    EXPECT_EQ(Names.at(0x1250), "callee");
+  }
 }
 
 TEST(SignatureDBReferences, AStubTheLoaderPairedWithAnImportSettlesACall) {
@@ -604,7 +1336,7 @@ TEST(SignatureDBReferences, AnOddOffsetStatesAnARMStateBranch) {
       "refs"));
   Database.apply(makeARMStateCallingImage(0x1100), {0x1000, 0x1100});
 
-  const auto Names = Database.buildNameMap();
+  const auto Names = Database.buildCandidateNameMap();
   EXPECT_EQ(Names.at(0x1000), "caller");
   EXPECT_EQ(Names.at(0x1100), "callee");
   for (const SigMatch &Match : Database.matches())
@@ -620,7 +1352,7 @@ TEST(SignatureDBReferences, AnARMStateVeneerIsFollowedInARMState) {
       "refs"));
   Database.apply(makeARMStateCallingImage(0x1200), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller")
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller")
       << "the veneer leads to the callee";
 }
 
@@ -641,7 +1373,7 @@ TEST(SignatureDBReferences, AnEvenOffsetStatesAThumbBranch) {
       "refs"));
   Database.apply(makeARMImage(std::move(Data)), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
 }
 
 TEST(SignatureDBReferences, AnARMLongBranchThunkIsFollowed) {
@@ -664,7 +1396,7 @@ TEST(SignatureDBReferences, AnARMLongBranchThunkIsFollowed) {
       "refs"));
   Database.apply(makeARMImage(std::move(Data)), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
 }
 
 TEST(SignatureDBReferences, AThumbPositionIndependentThunkIsFollowed) {
@@ -689,7 +1421,7 @@ TEST(SignatureDBReferences, AThumbPositionIndependentThunkIsFollowed) {
       "refs"));
   Database.apply(makeARMImage(std::move(Data)), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
 }
 
 TEST(SignatureDBReferences, AnARMv5LongBranchIsFollowed) {
@@ -711,7 +1443,7 @@ TEST(SignatureDBReferences, AnARMv5LongBranchIsFollowed) {
       "refs"));
   Database.apply(makeARMImage(std::move(Data)), {0x1000, 0x1100});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller");
 }
 
 TEST(SignatureDBReferences, AArch64RangeThunksAreFollowed) {
@@ -753,7 +1485,7 @@ TEST(SignatureDBReferences, AArch64RangeThunksAreFollowed) {
         "refs"));
     Database.apply(Image, {0x1000, 0x1100});
 
-    EXPECT_EQ(Database.buildNameMap().at(0x1000), "caller")
+    EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "caller")
         << "thunk starting " << std::hex << Thunk[0];
   }
 }
@@ -766,8 +1498,9 @@ TEST(SignatureDBAliases, OneModulesNamesForAnOffsetAreOneRoutine) {
 
   ASSERT_EQ(Database.matches().size(), 1u);
   EXPECT_EQ(Database.matches()[0].Name, "puts");
-  EXPECT_EQ(Database.matches()[0].Aliases, std::vector<std::string>{"_IO_puts"});
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "puts");
+  EXPECT_EQ(Database.matches()[0].Aliases,
+            std::vector<std::string>{"_IO_puts"});
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "puts");
 }
 
 TEST(SignatureDBAliases, MatchesThatShareANameAgreeOnIt) {
@@ -779,18 +1512,18 @@ TEST(SignatureDBAliases, MatchesThatShareANameAgreeOnIt) {
       "libc"));
   Database.apply(makeMatchingImage(), {0x1000});
 
-  EXPECT_EQ(Database.buildNameMap().at(0x1000), "__libc_malloc");
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "__libc_malloc");
 }
 
 TEST(SignatureDBAliases, AliasSetsWithNothingInCommonAreDisputed) {
   SignatureDB Database;
-  ASSERT_FALSE(Database.loadPatternText(
-      "AABB 00 0000 0002 :0000 puts :0000 _IO_puts\n"
-      "AABB 00 0000 0002 :0000 fputs\n",
-      "libc"));
+  ASSERT_FALSE(
+      Database.loadPatternText("AABB 00 0000 0002 :0000 puts :0000 _IO_puts\n"
+                               "AABB 00 0000 0002 :0000 fputs\n",
+                               "libc"));
   Database.apply(makeMatchingImage(), {0x1000});
 
-  EXPECT_EQ(Database.buildNameMap().count(0x1000), 0u);
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1000), 0u);
 }
 
 TEST(SignatureDBAliases, ACallByAnyNameOfTheCalleeConfirms) {
@@ -804,7 +1537,1167 @@ TEST(SignatureDBAliases, ACallByAnyNameOfTheCalleeConfirms) {
       "refs"));
   Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
 
-  const auto Names = Database.buildNameMap();
+  const auto Names = Database.buildCandidateNameMap();
   EXPECT_EQ(Names.at(0x1100), "callee");
   EXPECT_EQ(Names.at(0x1000), "caller");
+}
+
+namespace {
+std::string requireReferences(std::string Line) {
+  Line.insert(Line.find(" :"), " !refs");
+  return Line;
+}
+} // namespace
+
+TEST(SignatureDBContext, UnknownReferenceNeverAdmitsAByteCandidate) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      requireReferences(callerLine("wrapper", " ^0005 callee")), "context"));
+  Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
+  EXPECT_TRUE(Database.matches().empty());
+  EXPECT_TRUE(Database.buildCandidateNameMap().empty());
+  ASSERT_FALSE(Database.loadPatternText(CalleeLine, "ordinary"));
+  Database.apply(makeCallingImage(0x1100), {0x1000, 0x1100});
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "wrapper");
+  EXPECT_TRUE(Database.buildNameMap().empty());
+}
+
+TEST(SignatureDBContext, ImportAndTypeMetadataCanAnchorARequiredCandidate) {
+  for (bool Type : {false, true}) {
+    auto Image =
+        Type ? makeVTableImage() : makeIndirectImportImage(neverd::Arch::X64);
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(
+        requireReferences(Type ? vtableCallerLine("wrapper", "??_7Widget@@6B@")
+                               : importCallerLine("wrapper", "__imp_RuntimeB")),
+        "context"));
+    Database.apply(Image, {0x1000});
+    ASSERT_EQ(Database.matches().size(), 1u);
+    EXPECT_TRUE(Database.matches().front().Confirmed);
+    EXPECT_TRUE(Database.buildNameMap().empty());
+    if (Type)
+      Image.Segments.back().Data[0x140] = 0;
+    else
+      Image.Imports.clear();
+    Database.apply(Image, {0x1000});
+    EXPECT_TRUE(Database.matches().empty());
+  }
+}
+
+TEST(SignatureDBContext, RequiredCandidatesDoNotBootstrapCycles) {
+  auto Image = makeNestedCallingImage();
+  Image.Imports.clear();
+  neverd::writeLE<uint32_t>(Image.Segments.front().Data.data() + 0x102,
+                            uint32_t(0x1000 - 0x1106));
+  const std::string Outer =
+      requireReferences(callerLine("outer", " ^0005 inner"));
+  const std::string Inner =
+      "53E8........5BC3 00 0000 0008 !refs :0000 inner ^0002 outer\n";
+  for (bool Reverse : {false, true}) {
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(
+        Reverse ? Inner + Outer : Outer + Inner, "context"));
+    Database.apply(Image, {0x1000, 0x1100});
+    EXPECT_TRUE(Database.matches().empty());
+    // A raw hit at a target outside the entry set cannot bypass !refs either.
+    Database.apply(Image, {0x1000});
+    EXPECT_TRUE(Database.matches().empty());
+  }
+  SignatureDB Recursive;
+  ASSERT_FALSE(Recursive.loadPatternText(
+      requireReferences(callerLine("self", " ^0005 self")), "context"));
+  Recursive.apply(makeCallingImage(0x1000), {0x1000});
+  EXPECT_TRUE(Recursive.matches().empty());
+}
+
+TEST(SignatureDBContext, AnchoredChainsSettleAndWithdrawInEitherOrder) {
+  const std::string Outer =
+      requireReferences(callerLine("outer", " ^0005 inner"));
+  const std::string Inner =
+      "53E8........5BC3 00 0000 0008 !refs :0000 inner ^0002 import_a\n";
+  for (bool Reverse : {false, true}) {
+    auto Image = makeNestedCallingImage();
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(
+        Reverse ? Inner + Outer : Outer + Inner, "context"));
+    Database.apply(Image, {0x1000, 0x1100});
+    const auto Names = Database.buildCandidateNameMap();
+    ASSERT_EQ(Names.size(), 2u);
+    EXPECT_EQ(Names.at(0x1000), "outer");
+    EXPECT_EQ(Names.at(0x1100), "inner");
+    EXPECT_TRUE(Database.buildNameMap().empty());
+    Image.Imports.front().Name = "import_b";
+    Database.apply(Image, {0x1000, 0x1100});
+    EXPECT_TRUE(Database.matches().empty());
+  }
+}
+
+TEST(SignatureDBContext, EveryRequiredReferenceMustBeConfirmed) {
+  auto Image = makeIndirectImportImage(neverd::Arch::X64);
+  auto &Code = Image.Segments.front().Data;
+  Code[16] = 0xff;
+  Code[17] = 0x15;
+  neverd::writeLE<uint32_t>(Code.data() + 18, 0x2008 - 0x1016);
+  Image.Segments.back().Data.resize(16, 0);
+  Image.Segments.back().Size = Image.Segments.back().FileSz = 16;
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      "90909090FF15........909090909090FF15........90909090909090909090"
+      " 00 0000 0020 !refs :0000 wrapper ^0006 __imp_RuntimeB ^0012 "
+      "__imp_Other\n",
+      "context"));
+  Database.apply(Image, {0x1000});
+  EXPECT_TRUE(Database.matches().empty());
+  auto Imp = Image.Imports.front();
+  Imp.Name = "Other";
+  Imp.IATAddr = 0x2008;
+  Image.Imports.push_back(Imp);
+  Database.apply(Image, {0x1000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_TRUE(Database.matches().front().Confirmed);
+}
+
+TEST(SignatureDBContext, FunctionAddressReferencesRequireAnExecutableTarget) {
+  auto Image = makeVTableImage();
+  auto &Code = Image.Segments.front();
+  Code.Size = Code.FileSz = 0x200;
+  Code.Data.resize(0x200, 0xcc);
+  const uint8_t Callee[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+  std::copy(std::begin(Callee), std::end(Callee), Code.Data.begin() + 0x100);
+  neverd::writeLE<uint32_t>(Code.Data.data() + 7, 0x1100 - 0x100b);
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      requireReferences(vtableCallerLine("getter", "callee")) + CalleeLine,
+      "addresses"));
+  Database.apply(Image, {0x1000, 0x1100});
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "getter");
+  EXPECT_TRUE(Database.buildNameMap().empty());
+  neverd::writeLE<uint32_t>(Code.Data.data() + 7, 0x2000 - 0x100b);
+  std::copy(std::begin(Callee), std::end(Callee),
+            Image.Segments.back().Data.begin());
+  Database.apply(Image, {0x1000, 0x1100});
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1000), 0u);
+}
+
+TEST_F(SignatureDirectoryTest,
+       NativePatternsShareLibrarySelectionAndExplicitLoading) {
+  write("vs2022.pat", CalleeLine);
+  write("vs2022.part3.npat",
+        requireReferences(importCallerLine("wrapper", "__imp_RuntimeB")));
+  write("ignored.txt", "invalid record");
+  auto Files = SignatureDB::listDirectory(Directory);
+  ASSERT_TRUE(bool(Files)) << llvm::toString(Files.takeError());
+  ASSERT_EQ(Files->size(), 2u);
+  EXPECT_EQ(SignatureDB::libraryName(Directory / "vs2022.part3.npat"),
+            "vs2022");
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadFile(Directory / "vs2022.part3.npat"));
+  Database.apply(makeIndirectImportImage(neverd::Arch::X64), {0x1000});
+  ASSERT_EQ(Database.matches().size(), 1u);
+  EXPECT_TRUE(Database.matches().front().Confirmed);
+  EXPECT_EQ(Database.matches().front().LibraryName, "vs2022");
+  ASSERT_FALSE(Database.loadDirectory(Directory));
+  EXPECT_EQ(Database.fileCount(), 2u);
+}
+
+namespace {
+std::string incomingCallerLine(llvm::StringRef Name,
+                               llvm::StringRef References) {
+  return ("554889E5E8........909090909090909090909090909090905DC3 00 0000 001B "
+          ":0000 " +
+          Name + References + "\n")
+      .str();
+}
+neverd::BinaryImage incomingCallerImage() {
+  auto Image = makeCallingImage(0x1100);
+  auto &Code = Image.Segments.front().Data;
+  std::fill(Code.begin() + 9, Code.begin() + 25, 0x90);
+  Code[25] = 0x5d;
+  Code[26] = 0xc3;
+  return Image;
+}
+constexpr const char *IncomingLeaf =
+    "AABBCCDDC3 00 0000 0005 !caller :0000 callee\n";
+
+struct IncomingChain {
+  neverd::BinaryImage Image = incomingCallerImage();
+  std::vector<uint64_t> Entries;
+  std::string Patterns;
+
+  explicit IncomingChain(size_t MiddleCount) {
+    auto &Segment = Image.Segments.front();
+    const std::vector<uint8_t> Body(Segment.Data.begin(),
+                                    Segment.Data.begin() + 27);
+    Segment.Size = Segment.FileSz = (MiddleCount + 2) * 0x100;
+    Segment.Data.assign(Segment.Size, 0xcc);
+    for (size_t I = 0; I <= MiddleCount; ++I) {
+      Entries.push_back(0x1000 + I * 0x100);
+      std::copy(Body.begin(), Body.end(), Segment.Data.begin() + I * 0x100);
+      const std::string Name = I == 0 ? "root" : "chain" + std::to_string(I);
+      const std::string Target =
+          I == MiddleCount ? "callee" : "chain" + std::to_string(I + 1);
+      auto Line = incomingCallerLine(Name, " ^0005 " + Target);
+      if (I != 0) {
+        Segment.Data[I * 0x100] = 0x53;
+        Line.replace(0, 2, "53");
+        Line.insert(Line.find(":0000"), "!caller ");
+      }
+      Patterns += Line;
+    }
+    Entries.push_back(0x1000 + (MiddleCount + 1) * 0x100);
+    const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+    std::copy(std::begin(Leaf), std::end(Leaf),
+              Segment.Data.begin() + (MiddleCount + 1) * 0x100);
+    Patterns += IncomingLeaf;
+  }
+};
+} // namespace
+
+TEST(SignatureDBCallerContext, ConditionalTailReferencesPreserveEntryScope) {
+  for (auto Arch : {neverd::Arch::X86, neverd::Arch::X64})
+    for (uint8_t Condition = 0x80; Condition <= 0x8f; ++Condition)
+      for (bool Backward : {false, true}) {
+        auto Image = incomingCallerImage();
+        Image.Format = neverd::BinaryFormat::COFF;
+        Image.Arch = Arch;
+        Image.Bits = Arch == neverd::Arch::X64 ? neverd::Bitness::Bits64
+                                               : neverd::Bitness::Bits32;
+        auto &Code = Image.Segments.front().Data;
+        std::vector<uint8_t> Parent(Code.begin(), Code.begin() + 27);
+        Parent.insert(Parent.begin() + 4, 0x0f);
+        Parent[5] = Condition;
+        const uint64_t Source = Backward ? 0x1100 : 0x1000;
+        const uint64_t Target = Backward ? 0x1000 : 0x1100;
+        neverd::writeLE<int32_t>(Parent.data() + 6,
+                                 static_cast<int32_t>(Target - (Source + 10)));
+        std::fill(Code.begin(), Code.end(), 0xcc);
+        std::copy(Parent.begin(), Parent.end(), Code.begin() + Source - 0x1000);
+        const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+        std::copy(std::begin(Leaf), std::end(Leaf),
+                  Code.begin() + Target - 0x1000);
+        std::string Prefix = "554889E50F";
+        constexpr char Hex[] = "0123456789ABCDEF";
+        Prefix += Hex[Condition >> 4];
+        Prefix += Hex[Condition & 15];
+        const std::string Pattern =
+            Prefix +
+            "........909090909090909090909090909090905DC3 00 0000 001C "
+            ":0000 parent ^0006 callee\n";
+        SignatureDB DB;
+        ASSERT_FALSE(DB.loadPatternText(Pattern + IncomingLeaf, "conditional"));
+        DB.apply(Image, {Source, Target});
+        auto Names = DB.buildCandidateNameMap();
+        ASSERT_EQ(Names.size(), 2u);
+        EXPECT_EQ(Names.at(Target), "callee");
+        EXPECT_TRUE(DB.buildNameMap().empty());
+        DB.apply(Image, {Source});
+        EXPECT_EQ(DB.buildCandidateNameMap().count(Target), 0u);
+        // Without a known boundary, a prefix-looking preceding byte must not
+        // silently turn a different instruction form into a rel32 reference.
+        Code[Source - 0x1000 + 3] = 0x66;
+        std::string Prefixed = Pattern;
+        Prefixed.replace(6, 2, "66");
+        SignatureDB Other;
+        ASSERT_FALSE(Other.loadPatternText(Prefixed + IncomingLeaf, "prefix"));
+        Other.apply(Image, {Source, Target});
+        EXPECT_EQ(Other.buildCandidateNameMap().count(Target), 0u);
+      }
+}
+
+TEST(SignatureDBCallerContext, StrongIncomingChainsKeepTheirOriginalRoot) {
+  for (bool Reverse : {false, true}) {
+    IncomingChain Chain(3);
+    if (Reverse) {
+      std::reverse(Chain.Entries.begin(), Chain.Entries.end());
+      llvm::SmallVector<llvm::StringRef, 8> Lines;
+      llvm::StringRef(Chain.Patterns).split(Lines, '\n', -1, false);
+      std::string Reversed;
+      for (llvm::StringRef Line : llvm::reverse(Lines))
+        Reversed += Line.str() + "\n";
+      Chain.Patterns = std::move(Reversed);
+    }
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(Chain.Patterns, "chain"));
+    Database.apply(Chain.Image, Chain.Entries);
+    const auto Names = Database.buildCandidateNameMap();
+    ASSERT_EQ(Names.size(), 5u);
+    EXPECT_EQ(Names.at(0x1400), "callee");
+    EXPECT_TRUE(Database.buildNameMap().empty());
+    for (const auto &Match : Database.matches())
+      EXPECT_FALSE(Match.Confirmed); // Descendants never certify ancestors.
+  }
+}
+
+TEST(SignatureDBCallerContext, UnrootedOrContradictedChainsCannotExpand) {
+  IncomingChain Chain(3);
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      llvm::StringRef(Chain.Patterns).split('\n').second, "unrooted"));
+  // A cycle made only of context records has no initial evidence.
+  neverd::writeLE<uint32_t>(Chain.Image.Segments.front().Data.data() + 0x305,
+                            uint32_t(0x1100 - 0x1309));
+  Database.apply(Chain.Image, Chain.Entries);
+  EXPECT_TRUE(Database.matches().empty());
+
+  IncomingChain Contradicted(1);
+  SignatureDB Other;
+  ASSERT_FALSE(Other.loadPatternText(
+      Contradicted.Patterns + "AABBCCDDC3 00 0000 0005 :0000 different\n",
+      "contradicted"));
+  Other.apply(Contradicted.Image, Contradicted.Entries);
+  const auto Names = Other.buildCandidateNameMap();
+  EXPECT_EQ(Names.at(0x1000), "root");
+  EXPECT_EQ(Names.at(0x1200), "different");
+  EXPECT_EQ(Names.count(0x1100), 0u);
+}
+
+TEST(SignatureDBCallerContext, WeakIncomingBodiesCannotExtendTheFrontier) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      incomingCallerLine("root", " ^0005 middle") +
+          "53E8........5BC3 00 0000 0008 !caller :0000 middle ^0002 callee\n" +
+          IncomingLeaf,
+      "weak"));
+  auto Image = incomingCallerImage();
+  auto &Code = Image.Segments.front().Data;
+  const uint8_t Middle[] = {0x53, 0xe8, 0xfa, 0, 0, 0, 0x5b, 0xc3};
+  std::copy(std::begin(Middle), std::end(Middle), Code.begin() + 0x100);
+  const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+  std::copy(std::begin(Leaf), std::end(Leaf), Code.begin() + 0x200);
+  Database.apply(Image, {0x1000, 0x1100, 0x1200});
+  const auto Names = Database.buildCandidateNameMap();
+  EXPECT_EQ(Names.at(0x1100), "middle");
+  EXPECT_EQ(Names.count(0x1200), 0u);
+}
+
+namespace {
+struct AnchoredShortCaller {
+  neverd::BinaryImage Image = incomingCallerImage();
+  const std::string Body;
+  const std::string Source =
+      Body + " !caller :0000 middle ^0002 anchor ^0007 callee\n";
+  const std::string Anchor =
+      "101112131415161718191A1B1C1D1EC3 00 0000 0010 :0000 anchor\n";
+  std::vector<uint64_t> Entries = {0x1000, 0x1100, 0x1200, 0x1300};
+
+  explicit AnchoredShortCaller(bool Long = false)
+      : Body(Long ? "53E8........E8........90909090909090909090909090909090"
+                    "5BC3 00 0000 001D"
+                  : "53E8........E8........5BC3 00 0000 000D") {
+    auto &Code = Image.Segments.front();
+    Code.Size = Code.FileSz = 0x400;
+    Code.Data.resize(0x400, 0xcc);
+    const uint8_t Middle[] = {0x53, 0xe8, 0xfa, 1, 0,    0,   0xe8,
+                              0xf5, 0,    0,    0, 0x5b, 0xc3};
+    std::copy(std::begin(Middle), std::end(Middle), Code.Data.begin() + 0x100);
+    if (Long) {
+      std::fill(Code.Data.begin() + 0x10b, Code.Data.begin() + 0x11b, 0x90);
+      Code.Data[0x11b] = 0x5b;
+      Code.Data[0x11c] = 0xc3;
+    }
+    const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+    std::copy(std::begin(Leaf), std::end(Leaf), Code.Data.begin() + 0x200);
+    for (unsigned I = 0; I < 15; ++I)
+      Code.Data[0x300 + I] = 0x10 + I;
+    Code.Data[0x30f] = 0xc3;
+  }
+};
+} // namespace
+
+namespace {
+struct ShortCodePair {
+  neverd::BinaryImage Image = incomingCallerImage();
+  std::string Body = "488D05........48895108488901488BC1C3 00 0000 0012";
+  std::string Required = Body + " !refs :0000 factory ^0003 leaf\n";
+  std::string Source = Body + " !caller :0000 factory ^0003 leaf\n";
+  std::string Leaf = "48895120C3 00 0000 0005 !caller :0000 leaf\n";
+  std::vector<uint64_t> Entries = {0x1000, 0x1100};
+
+  ShortCodePair() {
+    Image.Format = neverd::BinaryFormat::COFF;
+    auto &Code = Image.Segments.front().Data;
+    const uint8_t Factory[] = {0x48, 0x8d, 0x05, 0xf9, 0,    0,
+                               0,    0x48, 0x89, 0x51, 0x08, 0x48,
+                               0x89, 0x01, 0x48, 0x8b, 0xc1, 0xc3};
+    const uint8_t Setter[] = {0x48, 0x89, 0x51, 0x20, 0xc3};
+    std::fill(Code.begin(), Code.end(), 0xcc);
+    std::copy(std::begin(Factory), std::end(Factory), Code.begin());
+    std::copy(std::begin(Setter), std::end(Setter), Code.begin() + 0x100);
+  }
+};
+} // namespace
+
+TEST(SignatureDBCodePairs, CompleteAddressPairSuppliesJointByteEvidence) {
+  for (bool Reverse : {false, true}) {
+    ShortCodePair Pair;
+    if (Reverse)
+      std::reverse(Pair.Entries.begin(), Pair.Entries.end());
+    SignatureDB DB;
+    ASSERT_FALSE(
+        DB.loadPatternText(Reverse ? Pair.Leaf + Pair.Source + Pair.Required
+                                   : Pair.Required + Pair.Source + Pair.Leaf,
+                           "pair"));
+    DB.apply(Pair.Image, Pair.Entries);
+    const auto Names = DB.buildCandidateNameMap();
+    ASSERT_EQ(Names.size(), 2u);
+    EXPECT_EQ(Names.at(0x1000), "factory");
+    EXPECT_EQ(Names.at(0x1100), "leaf");
+    EXPECT_TRUE(DB.buildNameMap().empty());
+    // Each application reads the live body; an earlier pair is not an anchor.
+    Pair.Image.Segments.front().Data[0x103] = 0x28;
+    DB.apply(Pair.Image, Pair.Entries);
+    EXPECT_TRUE(DB.buildCandidateNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCodePairs, IncompleteOrWeakComponentsDoNotBootstrapNames) {
+  for (unsigned Mutation = 0; Mutation != 15; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ShortCodePair Pair;
+    switch (Mutation) {
+    case 0:
+      Pair.Source.clear();
+      break;
+    case 1:
+      Pair.Required.clear();
+      break;
+    case 2:
+      Pair.Leaf.clear();
+      break;
+    case 3:
+      Pair.Entries.pop_back();
+      break;
+    case 4:
+      Pair.Entries.erase(Pair.Entries.begin());
+      break;
+    case 5:
+      Pair.Image.IsRelocatable = true;
+      break;
+    case 6:
+      Pair.Image.Format = neverd::BinaryFormat::ELF;
+      break;
+    case 7:
+      Pair.Source += Pair.Body + " !caller :0000 factory\n";
+      break;
+    case 8:
+      Pair.Source += Pair.Body + " !caller :0000 factory ^0003 other\n";
+      break;
+    case 9:
+      Pair.Source =
+          Pair.Body + " !caller :0000 factory ^0003 leaf ^000C other\n";
+      break;
+    case 10:
+      Pair.Source =
+          Pair.Body + " !caller :0000 factory :0000 alias ^0003 leaf\n";
+      break;
+    case 11:
+      Pair.Leaf = "48895120C3 00 0000 0005 !caller :0000 leaf ^0001 factory\n";
+      break;
+    case 12:
+      Pair.Leaf = "488951..C3 00 0000 0005 !caller :0000 leaf\n";
+      break;
+    case 13:
+      Pair.Image.Segments.front().Data[0x100] = 0xc3;
+      Pair.Leaf = "C3 00 0000 0001 !caller :0000 leaf\n";
+      break;
+    case 14:
+      Pair.Leaf += "48895120C3CC 00 0000 0006 !caller :0000 leaf\n";
+      break;
+    }
+    SignatureDB DB;
+    ASSERT_FALSE(
+        DB.loadPatternText(Pair.Required + Pair.Source + Pair.Leaf, "refuse"));
+    DB.apply(Pair.Image, Pair.Entries);
+    EXPECT_TRUE(DB.buildCandidateNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCodePairs, CompetingPairsAndFrozenNamesRemainUnresolved) {
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ShortCodePair Pair;
+    std::string Extra;
+    if (Mutation == 0) {
+      Extra = Pair.Body + " !refs :0000 rival ^0003 twin\n" + Pair.Body +
+              " !caller :0000 rival ^0003 twin\n" +
+              "48895120C3 00 0000 0005 !caller :0000 twin\n";
+    } else if (Mutation == 1)
+      Extra = "488D05F900000048895108488901488BC1C3 00 0000 0012 :0000 "
+              "known_factory\n";
+    else
+      Extra =
+          "48895120C3CCCCCCCCCCCCCCCCCCCCCC 00 0000 0010 :0000 known_leaf\n";
+    SignatureDB DB;
+    ASSERT_FALSE(DB.loadPatternText(
+        Pair.Required + Pair.Source + Pair.Leaf + Extra, "rivals"));
+    DB.apply(Pair.Image, Pair.Entries);
+    const auto Names = DB.buildCandidateNameMap();
+    if (Mutation == 0)
+      EXPECT_TRUE(Names.empty());
+    else if (Mutation == 1) {
+      ASSERT_EQ(Names.size(), 1u);
+      EXPECT_EQ(Names.at(0x1000), "known_factory");
+    } else {
+      ASSERT_EQ(Names.size(), 1u);
+      EXPECT_EQ(Names.at(0x1100), "known_leaf");
+    }
+  }
+}
+
+TEST(SignatureDBCodePairs, WholeBodiesNeedSeparateExecutableOwners) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ShortCodePair Pair;
+    if (Mutation < 2) {
+      neverd::Section Data;
+      Data.VA = Mutation ? 0x1100 : 0x1009;
+      Data.Size = 1;
+      Data.Flags = neverd::SegmentFlags::Readable;
+      neverd::Section Text;
+      Text.VA = 0x1000;
+      Text.Size = 0x300;
+      Text.Flags =
+          neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+      Pair.Image.Sections = {Data, Text};
+    } else if (Mutation == 2) {
+      Pair.Image.ContinuationCodeStarts.insert(0x1100);
+    } else {
+      Pair.Body = "488D05........48895120C3909090909090 00 0000 0012";
+      Pair.Required = Pair.Body + " !refs :0000 factory ^0003 leaf\n";
+      Pair.Source = Pair.Body + " !caller :0000 factory ^0003 leaf\n";
+      auto &Code = Pair.Image.Segments.front().Data;
+      neverd::writeLE<int32_t>(Code.data() + 3, 0);
+      const uint8_t Inner[] = {0x48, 0x89, 0x51, 0x20, 0xc3, 0x90,
+                               0x90, 0x90, 0x90, 0x90, 0x90};
+      std::copy(std::begin(Inner), std::end(Inner), Code.begin() + 7);
+      Pair.Entries = {0x1000, 0x1007};
+    }
+    SignatureDB DB;
+    ASSERT_FALSE(
+        DB.loadPatternText(Pair.Required + Pair.Source + Pair.Leaf, "owners"));
+    DB.apply(Pair.Image, Pair.Entries);
+    EXPECT_TRUE(DB.buildCandidateNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, IndependentOrdinaryCalleeSupportsShortCaller) {
+  for (bool RequiredRoot : {false, true}) {
+    for (bool Reverse : {false, true}) {
+      AnchoredShortCaller F;
+      std::string Patterns = F.Anchor + F.Source + IncomingLeaf;
+      Patterns += RequiredRoot ? F.Body + " !refs :0000 middle ^0002 anchor\n"
+                               : incomingCallerLine("root", " ^0005 middle");
+      if (Reverse) {
+        std::reverse(F.Entries.begin(), F.Entries.end());
+        llvm::SmallVector<llvm::StringRef, 8> Lines;
+        llvm::StringRef(Patterns).split(Lines, '\n', -1, false);
+        std::string Reversed;
+        for (llvm::StringRef Line : llvm::reverse(Lines))
+          Reversed += Line.str() + "\n";
+        Patterns = std::move(Reversed);
+      }
+      SignatureDB DB;
+      ASSERT_FALSE(DB.loadPatternText(Patterns, "short-anchor"));
+      DB.apply(F.Image, F.Entries);
+      auto Names = DB.buildCandidateNameMap();
+      ASSERT_EQ(Names.count(0x1200), 1u);
+      EXPECT_EQ(Names.at(0x1200), "callee");
+      EXPECT_TRUE(DB.buildNameMap().empty());
+      // Reusing the same buffer cannot retain the independent proof.
+      F.Image.Segments.front().Data[0x300] ^= 1;
+      DB.apply(F.Image, F.Entries);
+      EXPECT_EQ(DB.buildCandidateNameMap().count(0x1200), 0u);
+    }
+  }
+}
+
+TEST(SignatureDBCallerContext,
+     IndependentOrdinaryCalleeSupportsRequiredCaller) {
+  for (bool Long : {false, true}) {
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(Long);
+      SCOPED_TRACE(Reverse);
+      AnchoredShortCaller F(Long);
+      const std::string Required =
+          F.Body + " !refs :0000 middle ^0002 anchor\n";
+      const std::string Patterns =
+          Reverse ? IncomingLeaf + F.Source + Required + F.Anchor
+                  : F.Anchor + Required + F.Source + IncomingLeaf;
+      if (Reverse)
+        std::reverse(F.Entries.begin(), F.Entries.end());
+      SignatureDB DB;
+      ASSERT_FALSE(DB.loadPatternText(Patterns, "required-caller"));
+      DB.apply(F.Image, F.Entries);
+      const auto Names = DB.buildCandidateNameMap();
+      ASSERT_EQ(Names.count(0x1200), 1u);
+      EXPECT_EQ(Names.at(0x1200), "callee");
+      EXPECT_TRUE(DB.buildNameMap().empty());
+      F.Image.Segments.front().Data[0x300] ^= 1;
+      DB.apply(F.Image, F.Entries);
+      EXPECT_EQ(DB.buildCandidateNameMap().count(0x1200), 0u);
+    }
+  }
+}
+
+TEST(SignatureDBCallerContext, RequiredCallerNeedsCompleteIndependentEvidence) {
+  for (unsigned Case = 0; Case != 10; ++Case) {
+    SCOPED_TRACE(Case);
+    AnchoredShortCaller F(true);
+    std::string Anchor = F.Anchor, Source = F.Source;
+    std::string Required = F.Body + " !refs :0000 middle ^0002 anchor\n";
+    switch (Case) {
+    case 0:
+      Anchor.clear();
+      break;
+    case 1:
+      Anchor += "101112131415161718191A1B1C1D1EC3 00 0000 0010 :0000 rival\n";
+      break;
+    case 2:
+      Anchor.replace(Anchor.find("0010"), 4, "0011");
+      break;
+    case 3:
+      Anchor = "1011121314 00 0000 0005 :0000 anchor\n";
+      break;
+    case 4:
+      Anchor.insert(Anchor.find(" :"), " !caller");
+      break;
+    case 5:
+      Source += F.Body + " !caller :0000 middle ^0007 callee\n";
+      break;
+    case 6:
+      Source += F.Body + " !caller :0000 middle ^0002 other ^0007 callee\n";
+      break;
+    case 7:
+      Source.clear();
+      break;
+    case 8:
+      Source = F.Body +
+               " !caller :0000 middle ^0002 anchor ^0002 other ^0007 callee\n";
+      break;
+    case 9:
+      F.Entries.erase(F.Entries.begin() + 2);
+      break;
+    }
+    SignatureDB DB;
+    ASSERT_FALSE(DB.loadPatternText(Required + Source + Anchor + IncomingLeaf,
+                                    "required-caller-negative"));
+    DB.apply(F.Image, F.Entries);
+    EXPECT_EQ(DB.buildCandidateNameMap().count(0x1200), 0u);
+  }
+}
+
+TEST(SignatureDBCallerContext, ShortCallerNeedsCompleteIndependentEvidence) {
+  for (unsigned Case = 0; Case < 11; ++Case) {
+    SCOPED_TRACE(Case);
+    AnchoredShortCaller F;
+    std::string Anchor = F.Anchor, Source = F.Source;
+    std::string Root = incomingCallerLine("root", " ^0005 middle");
+    switch (Case) {
+    case 0:
+      Anchor.clear();
+      break;
+    case 1:
+      Anchor += "101112131415161718191A1B1C1D1EC3 00 0000 0010 :0000 rival\n";
+      break;
+    case 2:
+      Anchor.replace(Anchor.find("0010"), 4, "0011");
+      break;
+    case 3:
+      Anchor = "1011121314 00 0000 0005 :0000 anchor\n";
+      break;
+    case 4:
+      Anchor.insert(Anchor.find(" :"), " !caller");
+      break;
+    case 5:
+      Source += F.Body + " !caller :0000 middle ^0007 callee\n";
+      break;
+    case 6:
+      Source += F.Body + " !caller :0000 middle ^0002 other ^0007 callee\n";
+      break;
+    case 7:
+      // A pruned required clause cannot invent the remaining outgoing sites.
+      Root = F.Body + " !refs :0000 middle ^0002 anchor ^0007 callee\n" +
+             F.Body + " !refs :0000 middle ^0002 anchor\n";
+      Source.clear();
+      break;
+    case 8:
+      Root.clear(); // An otherwise unrooted short body cannot start a chain.
+      break;
+    case 9:
+      Source = F.Body +
+               " !caller :0000 middle ^0002 anchor ^0002 other ^0007 callee\n";
+      break;
+    case 10:
+      F.Entries.pop_back(); // The proposed callee is not a requested function.
+      break;
+    }
+    SignatureDB DB;
+    ASSERT_FALSE(DB.loadPatternText(Root + Source + Anchor + IncomingLeaf,
+                                    "short-anchor-negative"));
+    DB.apply(F.Image, F.Entries);
+    EXPECT_EQ(DB.buildCandidateNameMap().count(0x1200), 0u);
+  }
+}
+
+TEST(SignatureDBCallerContext, IndependentCalleeMustBeSeparateExecutableCode) {
+  for (bool Overlap : {false, true}) {
+    AnchoredShortCaller F;
+    std::string Anchor = F.Anchor;
+    auto &Code = F.Image.Segments.front();
+    if (Overlap) {
+      for (unsigned I = 0; I < 16; ++I)
+        Code.Data[0xf0 + I] = 0x10 + I;
+      neverd::writeLE<uint32_t>(Code.Data.data() + 0x102,
+                                uint32_t(0x10f0 - 0x1106));
+      Anchor = "101112131415161718191A1B1C1D1E1F53E8........E8........5BC3 "
+               "00 0000 001D :0000 anchor\n";
+      F.Entries.push_back(0x10f0);
+    } else {
+      neverd::Segment Data;
+      Data.VA = 0x1300;
+      Data.Size = Data.FileSz = 16;
+      Data.Flags = neverd::SegmentFlags::Readable;
+      Data.Data.assign(Code.Data.begin() + 0x300, Code.Data.begin() + 0x310);
+      Code.Size = Code.FileSz = 0x300;
+      Code.Data.resize(0x300);
+      F.Image.Segments.push_back(std::move(Data));
+    }
+    SignatureDB DB;
+    ASSERT_FALSE(
+        DB.loadPatternText(incomingCallerLine("root", " ^0005 middle") +
+                               F.Source + Anchor + IncomingLeaf,
+                           "separate-code"));
+    DB.apply(F.Image, F.Entries);
+    const auto Names = DB.buildCandidateNameMap();
+    ASSERT_EQ(Names.count(0x1100), 1u);
+    EXPECT_EQ(Names.count(0x1200), 0u);
+  }
+}
+
+TEST(SignatureDBCallerContext, IndependentShortCallerUsesAArch64BranchFields) {
+  AnchoredShortCaller F;
+  F.Image.Arch = neverd::Arch::AArch64;
+  auto &Code = F.Image.Segments.front().Data;
+  auto Put = [&](size_t Offset, uint32_t Word) {
+    neverd::writeLE<uint32_t>(Code.data() + Offset, Word);
+  };
+  Put(0, 0x94000040); // BL middle.
+  for (size_t I = 4; I < 20; I += 4)
+    Put(I, 0xd503201f);
+  Put(20, 0xd65f03c0);
+  Put(0x100, 0x94000080); // BL anchor.
+  Put(0x104, 0x9400003f); // BL callee.
+  Put(0x108, 0xd65f03c0);
+  Put(0x200, 0x52800540); // MOV W0, #42.
+  Put(0x204, 0xd65f03c0);
+  for (size_t I = 0x300; I < 0x30c; I += 4)
+    Put(I, 0xd503201f);
+  Put(0x30c, 0xd65f03c0);
+  SignatureDB DB;
+  ASSERT_FALSE(DB.loadPatternText(
+      "........1F2003D51F2003D51F2003D51F2003D5C0035FD6 00 0000 0018 "
+      ":0000 root ^0000 middle\n"
+      "................C0035FD6 00 0000 000C !caller :0000 middle "
+      "^0000 anchor ^0004 callee\n"
+      "1F2003D51F2003D51F2003D5C0035FD6 00 0000 0010 :0000 anchor\n"
+      "40058052C0035FD6 00 0000 0008 !caller :0000 callee\n",
+      "aarch64-short"));
+  DB.apply(F.Image, F.Entries);
+  const auto Names = DB.buildCandidateNameMap();
+  ASSERT_EQ(Names.count(0x1200), 1u);
+  EXPECT_EQ(Names.at(0x1200), "callee");
+  EXPECT_TRUE(DB.buildNameMap().empty());
+  Put(0x100, 0xd503201f); // An absent branch cannot retain the proof.
+  DB.apply(F.Image, F.Entries);
+  EXPECT_EQ(DB.buildCandidateNameMap().count(0x1200), 0u);
+}
+
+TEST(SignatureDBCallerContext, NewlySettledNominalBodyCannotAnchorShortCaller) {
+  AnchoredShortCaller F;
+  auto &Code = F.Image.Segments.front().Data;
+  neverd::writeLE<uint32_t>(Code.data() + 5, uint32_t(0x1300 - 0x1009));
+  Code[0x300] = 0x90;
+  Code[0x301] = 0xe8;
+  neverd::writeLE<uint32_t>(Code.data() + 0x302, uint32_t(0x1100 - 0x1306));
+  std::fill(Code.begin() + 0x306, Code.begin() + 0x315, 0x90);
+  Code[0x315] = 0xc3;
+  const std::string Body =
+      "90E8........909090909090909090909090909090C3 00 0000 0016";
+  SignatureDB DB;
+  ASSERT_FALSE(DB.loadPatternText(
+      incomingCallerLine("root", " ^0005 anchor") + F.Source + IncomingLeaf +
+          Body + " :0000 anchor\n" + Body + " :0000 rival\n" + Body +
+          " !caller :0000 anchor ^0002 middle\n",
+      "late-name"));
+  DB.apply(F.Image, F.Entries);
+  const auto Names = DB.buildCandidateNameMap();
+  ASSERT_EQ(Names.count(0x1100), 1u);
+  EXPECT_EQ(Names.at(0x1100), "middle");
+  EXPECT_EQ(Names.at(0x1300), "anchor");
+  EXPECT_EQ(Names.count(0x1200), 0u);
+}
+
+TEST(SignatureDBCallerContext,
+     IncomingDepthBudgetRetainsOnlySupportedPrefixes) {
+#define NEVERD_SIGS_REFERENCE_LIMIT(Name, Value)                               \
+  [[maybe_unused]] constexpr size_t Name = Value;
+#include "../../lib/sigs/ReferenceCheckLimits.def"
+  IncomingChain Chain(MaxIncomingRounds + 1);
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(Chain.Patterns, "bounded"));
+  Database.apply(Chain.Image, Chain.Entries);
+  const auto Names = Database.buildCandidateNameMap();
+  EXPECT_EQ(Names.size(), MaxIncomingRounds + 1);
+  EXPECT_EQ(Names.at(0x1000 + MaxIncomingRounds * 0x100),
+            "chain" + std::to_string(MaxIncomingRounds));
+  EXPECT_EQ(Names.count(0x1000 + (MaxIncomingRounds + 1) * 0x100), 0u);
+  EXPECT_TRUE(Database.buildNameMap().empty());
+}
+
+TEST(SignatureDBCallerContext, OnlyAnEstablishedCallerCanRequestTheLeaf) {
+  for (bool Reverse : {false, true}) {
+    SignatureDB Database;
+    const std::string Parent = incomingCallerLine("parent", " ^0005 callee");
+    ASSERT_FALSE(Database.loadPatternText(
+        Reverse ? IncomingLeaf + Parent : Parent + IncomingLeaf, "incoming"));
+    auto Image = incomingCallerImage();
+    Database.apply(Image, {0x1100, 0x1000});
+    ASSERT_EQ(Database.buildCandidateNameMap().size(), 2u);
+    EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100), "callee");
+    EXPECT_TRUE(Database.buildNameMap().empty());
+    for (const SigMatch &Match : Database.matches())
+      EXPECT_FALSE(Match.Confirmed); // No circular outgoing confirmation.
+    Database.apply(Image, {0x1000});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+    Database.apply(Image, {0x1100});
+    EXPECT_TRUE(Database.matches().empty());
+    Image.Segments.front().Data[0x104] ^= 1;
+    Database.apply(Image, {0x1000, 0x1100});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  }
+}
+
+TEST(SignatureDBCallerContext,
+     WeakPartialUnrootedAndAmbiguousParentsCannotAnchor) {
+  const std::string Strong = incomingCallerLine("parent", " ^0005 callee");
+  std::string Partial = Strong;
+  Partial.replace(Partial.find("001B"), 4, "001C");
+  for (const auto &Parent :
+       {callerLine("parent", " ^0005 callee"), Partial,
+        requireReferences(Strong),
+        Strong + incomingCallerLine("rival", " ^0005 callee")}) {
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(Parent + IncomingLeaf, "incoming"));
+    auto Image = Parent == callerLine("parent", " ^0005 callee")
+                     ? makeCallingImage(0x1100)
+                     : incomingCallerImage();
+    Database.apply(Image, {0x1000, 0x1100});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  }
+}
+
+TEST(SignatureDBCallerContext, EveryParentVariantMustNameTheSameTarget) {
+  for (const std::string &Parent :
+       {incomingCallerLine("parent", " ^0005 callee ^0005 rival"),
+        incomingCallerLine("parent", " ^0005 callee") +
+            incomingCallerLine("parent", " ^0005 rival"),
+        incomingCallerLine("parent", " ^0005 callee") +
+            incomingCallerLine("parent", "")}) {
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(Parent + IncomingLeaf, "incoming"));
+    Database.apply(incomingCallerImage(), {0x1000, 0x1100});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  }
+}
+
+TEST(SignatureDBCallerContext,
+     AlternativesRequireCompleteAndUniqueBodyEvidence) {
+  for (const std::string &Fallback : {"", "AABBCCDDC3", "11223344C3"}) {
+    SignatureDB Database;
+    ASSERT_FALSE(Database.loadPatternText(
+        incomingCallerLine("parent", " ^0005 callee ^0005 fallback") +
+            IncomingLeaf +
+            (Fallback.empty()
+                 ? ""
+                 : Fallback + " 00 0000 0005 !caller :0000 fallback\n"),
+        "alternatives"));
+    Database.apply(incomingCallerImage(), {0x1000, 0x1100});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100),
+              Fallback == "11223344C3" ? 1u : 0u);
+    if (Fallback == "11223344C3")
+      EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100), "callee");
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, AlternativesUseTheSameFrozenReferenceChecks) {
+  for (bool KnownSupport : {false, true}) {
+    SignatureDB Database;
+    const std::string Body = "53E8........5BC3 00 0000 0008 !caller :0000 ";
+    ASSERT_FALSE(Database.loadPatternText(
+        incomingCallerLine("parent", " ^0005 callee ^0005 fallback") + Body +
+            "callee ^0002 support\n" + Body + "fallback ^0002 wrong\n" +
+            (KnownSupport ? "AABBCCDDC3 00 0000 0005 :0000 support\n" : ""),
+        "alternatives"));
+    auto Image = incomingCallerImage();
+    auto &Code = Image.Segments.front().Data;
+    const uint8_t Child[] = {0x53, 0xe8, 0, 0, 0, 0, 0x5b, 0xc3};
+    std::copy(std::begin(Child), std::end(Child), Code.begin() + 0x100);
+    neverd::writeLE<uint32_t>(Code.data() + 0x102, 0x1200 - 0x1106);
+    const uint8_t Support[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+    std::copy(std::begin(Support), std::end(Support), Code.begin() + 0x200);
+    Database.apply(Image, {0x1000, 0x1100, 0x1200});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100),
+              KnownSupport ? 1u : 0u);
+    if (KnownSupport)
+      EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100), "callee");
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, SourceMetadataRefinesOnlyACompleteParent) {
+  for (bool Partial : {false, true}) {
+    SignatureDB Database;
+    std::string Old = incomingCallerLine("parent", "");
+    if (Partial)
+      Old.replace(Old.find("001B"), 4, "001C");
+    std::string Source = incomingCallerLine("parent", " ^0005 callee");
+    Source.insert(Source.find(":0000"), "!caller ");
+    ASSERT_FALSE(
+        Database.loadPatternText(Old + Source + IncomingLeaf, "metadata"));
+    Database.apply(incomingCallerImage(), {0x1000, 0x1100});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100),
+              Partial ? 0u : 1u);
+    EXPECT_EQ(Database.matches().size(), Partial ? 1u : 2u);
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, SourceMetadataCannotNarrowOldAlternatives) {
+  SignatureDB Database;
+  std::string Source = incomingCallerLine("parent", " ^0005 callee");
+  Source.insert(Source.find(":0000"), "!caller ");
+  ASSERT_FALSE(Database.loadPatternText(
+      incomingCallerLine("parent", " ^0005 callee ^0005 rival") + Source +
+          IncomingLeaf,
+      "metadata"));
+  Database.apply(incomingCallerImage(), {0x1000, 0x1100});
+  EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+  EXPECT_EQ(Database.matches().size(), 1u);
+}
+
+TEST(SignatureDBCallerContext,
+     ContradictedSourceMetadataCannotSupportChildren) {
+  for (const std::string &Type : {"Widget", "Other"}) {
+    auto Image = makeVTableImage();
+    auto &Segment = Image.Segments.front();
+    Segment.Size = Segment.FileSz = 0x200;
+    Segment.Data.resize(0x200, 0xcc);
+    Segment.Data[11] = 0xe8;
+    neverd::writeLE<uint32_t>(Segment.Data.data() + 12, 0x1100 - 0x1010);
+    const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+    std::copy(std::begin(Leaf), std::end(Leaf), Segment.Data.begin() + 0x100);
+    std::string Source = vtableCallerLine("parent", "??_7" + Type + "@@6B@");
+    Source.replace(22, 10, "E8........");
+    const std::string Old = Source.substr(0, Source.find(" ^")) + "\n";
+    Source.insert(Source.find(":0000"), "!caller ");
+    Source.insert(Source.size() - 1, " ^000C callee");
+    SignatureDB Database;
+    ASSERT_FALSE(
+        Database.loadPatternText(Old + Source + IncomingLeaf, "metadata"));
+    Database.apply(Image, {0x1000, 0x1100});
+    EXPECT_EQ(Database.buildCandidateNameMap().at(0x1000), "parent");
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100),
+              Type == "Widget" ? 1u : 0u);
+    EXPECT_EQ(Database.matches().size(), Type == "Widget" ? 2u : 1u);
+
+    // Another caller independently supports a different alias of the same
+    // body. Withdrawing the refinement must withdraw only its own name.
+    Segment.Size = Segment.FileSz = 0x400;
+    Segment.Data.resize(0x400, 0xcc);
+    auto Other = incomingCallerImage();
+    std::copy_n(Other.Segments.front().Data.begin(), 27,
+                Segment.Data.begin() + 0x300);
+    neverd::writeLE<uint32_t>(Segment.Data.data() + 0x305,
+                              uint32_t(0x1100 - 0x1309));
+    ASSERT_FALSE(Database.loadPatternText(
+        Old + Source + incomingCallerLine("second", " ^0005 alternate") +
+            "AABBCCDDC3 00 0000 0005 !caller :0000 callee :0000 alternate\n",
+        "metadata"));
+    Database.apply(Image, {0x1000, 0x1100, 0x1300});
+    EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100),
+              Type == "Widget" ? "callee" : "alternate");
+    if (Type == "Other")
+      for (const SigMatch &Match : Database.matches())
+        if (Match.Address == 0x1100)
+          EXPECT_TRUE(Match.Aliases.empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, AContradictedParentCannotNameItsTarget) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      incomingCallerLine("parent", " ^0005 callee") + IncomingLeaf +
+          "AABBCCDDC3 00 0000 0005 :0000 other\n",
+      "incoming"));
+  Database.apply(incomingCallerImage(), {0x1000, 0x1100});
+  const auto Names = Database.buildCandidateNameMap();
+  EXPECT_EQ(Names.count(0x1000), 0u);
+  EXPECT_EQ(Names.at(0x1100), "other");
+}
+
+TEST(SignatureDBCallerContext, OnlyExplicitContextBodiesCanBeReused) {
+  for (bool Required : {false, true}) {
+    SignatureDB Database;
+    const std::string Body = "53E8........5BC3 00 0000 0008 ";
+    const std::string Callee = Required
+                                   ? Body + "!refs :0000 callee ^0002 unknown\n"
+                                   : Body + ":0000 callee ^0002 unknown\n" +
+                                         Body + ":0000 rival ^0002 unknown\n";
+    ASSERT_FALSE(Database.loadPatternText(
+        incomingCallerLine("parent", " ^0005 callee") + Callee, "existing"));
+    auto Image = incomingCallerImage();
+    auto &Code = Image.Segments.front().Data;
+    const uint8_t Child[] = {0x53, 0xe8, 0, 0, 0, 0, 0x5b, 0xc3};
+    std::copy(std::begin(Child), std::end(Child), Code.begin() + 0x100);
+    neverd::writeLE<uint32_t>(Code.data() + 0x102, 0x1200 - 0x1106);
+    Database.apply(Image, {0x1000, 0x1100, 0x1200});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100), 0u);
+    // Native incoming context can reuse !refs bodies. It cannot turn an
+    // ordinary nominal byte claim into a new incoming-context claim.
+    ASSERT_FALSE(Database.loadPatternText(
+        "33C0C3 00 0000 0003 !caller :0000 unrelated\n", "native"));
+    Database.apply(Image, {0x1000, 0x1100, 0x1200});
+    EXPECT_EQ(Database.buildCandidateNameMap().count(0x1100),
+              Required ? 1u : 0u);
+    if (Required)
+      EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100), "callee");
+    EXPECT_EQ(llvm::count_if(Database.matches(),
+                             [](const SigMatch &Match) {
+                               return Match.Address == 0x1100 &&
+                                      Match.CallerConfirmed;
+                             }),
+              Required ? 1 : 0);
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, OutgoingConstraintsCannotChangeTheirAnchor) {
+  for (const std::string &Known : {"support", "different", ""}) {
+    SignatureDB Database;
+    const std::string Callee =
+        "53E8........5BC3 00 0000 0008 !caller :0000 callee ^0002 support\n";
+    const std::string Support =
+        Known.empty() ? "" : "AABBCCDDC3 00 0000 0005 :0000 " + Known + "\n";
+    ASSERT_FALSE(Database.loadPatternText(
+        incomingCallerLine("parent", " ^0005 callee") + Callee + Support,
+        "incoming"));
+    auto Image = incomingCallerImage();
+    auto &Code = Image.Segments.front().Data;
+    const uint8_t Child[] = {0x53, 0xe8, 0, 0, 0, 0, 0x5b, 0xc3};
+    std::copy(std::begin(Child), std::end(Child), Code.begin() + 0x100);
+    neverd::writeLE<uint32_t>(Code.data() + 0x102, 0x1200 - 0x1106);
+    const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+    std::copy(std::begin(Leaf), std::end(Leaf), Code.begin() + 0x200);
+    Database.apply(Image, {0x1000, 0x1100, 0x1200});
+    const auto Names = Database.buildCandidateNameMap();
+    EXPECT_EQ(Names.at(0x1000), "parent");
+    EXPECT_EQ(Names.count(0x1100), Known == "different" ? 0u : 1u);
+    for (const SigMatch &Match : Database.matches()) {
+      if (Match.Address == 0x1000)
+        EXPECT_FALSE(Match.Confirmed);
+      if (Match.Address == 0x1100)
+        EXPECT_EQ(Match.Confirmed, Known == "support");
+    }
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
+}
+
+TEST(SignatureDBCallerContext, IncomingCandidatesCannotConfirmEachOther) {
+  SignatureDB Database;
+  std::string Second = incomingCallerLine("second_parent", " ^0005 support");
+  Second.replace(0, 2, "53");
+  ASSERT_FALSE(Database.loadPatternText(
+      incomingCallerLine("parent", " ^0005 callee") + Second +
+          "53E8........5BC3 00 0000 0008 !caller :0000 callee ^0002 support\n"
+          "AABBCCDDC3 00 0000 0005 !caller :0000 support\n",
+      "incoming"));
+  auto Image = incomingCallerImage();
+  auto &Segment = Image.Segments.front();
+  Segment.Data.resize(0x400, 0xcc);
+  Segment.Size = Segment.FileSz = 0x400;
+  auto &Code = Segment.Data;
+  std::copy_n(Code.begin(), 27, Code.begin() + 0x300);
+  Code[0x300] = 0x53;
+  neverd::writeLE<uint32_t>(Code.data() + 0x305, uint32_t(0x1200 - 0x1309));
+  const uint8_t Child[] = {0x53, 0xe8, 0, 0, 0, 0, 0x5b, 0xc3};
+  std::copy(std::begin(Child), std::end(Child), Code.begin() + 0x100);
+  neverd::writeLE<uint32_t>(Code.data() + 0x102, 0x1200 - 0x1106);
+  const uint8_t Leaf[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xc3};
+  std::copy(std::begin(Leaf), std::end(Leaf), Code.begin() + 0x200);
+  Database.apply(Image, {0x1000, 0x1100, 0x1200, 0x1300});
+  EXPECT_EQ(Database.buildCandidateNameMap().size(), 4u);
+  for (const SigMatch &Match : Database.matches())
+    EXPECT_FALSE(Match.Confirmed);
+}
+
+TEST(SignatureDBCallerContext,
+     IncomingEvidenceResolvesUnsettledByteAlternatives) {
+  SignatureDB Database;
+  ASSERT_FALSE(Database.loadPatternText(
+      incomingCallerLine("parent", " ^0005 callee") + IncomingLeaf +
+          "AABBCCDDC3 00 0000 0005 :0000 rival_a\n"
+          "AABBCCDDC3 00 0000 0005 :0000 rival_b\n",
+      "incoming"));
+  Database.apply(incomingCallerImage(), {0x1000, 0x1100});
+  EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100), "callee");
+  EXPECT_TRUE(Database.buildNameMap().empty());
+  size_t Supported = 0;
+  for (const SigMatch &Match : Database.matches())
+    if (Match.CallerConfirmed) {
+      ++Supported;
+      EXPECT_EQ(Match.Name, "callee");
+      EXPECT_FALSE(Match.Confirmed);
+    }
+  EXPECT_EQ(Supported, 1u);
+}
+
+TEST(SignatureDBCallerContext,
+     OnlyRequestedIncomingNamesBecomeCandidateAliases) {
+  for (bool SameModule : {false, true}) {
+    SignatureDB Database;
+    std::string Second =
+        incomingCallerLine("second_parent", " ^0005 alternate");
+    Second.replace(0, 2, "53");
+    const std::string Leaves =
+        SameModule
+            ? "AABBCCDDC3 00 0000 0005 !caller :0000 aa_unused :0000 callee "
+              ":0000 alternate\n"
+            : "AABBCCDDC3 00 0000 0005 !caller :0000 aa_unused :0000 callee\n"
+              "AABBCCDDC3 00 0000 0005 !caller :0000 alternate\n";
+    ASSERT_FALSE(Database.loadPatternText(
+        incomingCallerLine("parent", " ^0005 callee") + Second + Leaves,
+        "incoming"));
+    auto Image = incomingCallerImage();
+    auto &Segment = Image.Segments.front();
+    Segment.Data.resize(0x400, 0xcc);
+    Segment.Size = Segment.FileSz = 0x400;
+    auto &Code = Segment.Data;
+    std::copy_n(Code.begin(), 27, Code.begin() + 0x300);
+    Code[0x300] = 0x53;
+    neverd::writeLE<uint32_t>(Code.data() + 0x305, uint32_t(0x1100 - 0x1309));
+    Database.apply(Image, {0x1000, 0x1100, 0x1300});
+    EXPECT_EQ(Database.buildCandidateNameMap().at(0x1100), "callee");
+    bool CalledAlias = false;
+    for (const SigMatch &Match : Database.matches())
+      if (Match.Address == 0x1100) {
+        EXPECT_TRUE(Match.CallerConfirmed);
+        EXPECT_NE(Match.Name, "aa_unused");
+        EXPECT_FALSE(llvm::is_contained(Match.Aliases, "aa_unused"));
+        CalledAlias |= Match.Name == "alternate" ||
+                       llvm::is_contained(Match.Aliases, "alternate");
+      }
+    EXPECT_TRUE(CalledAlias);
+    EXPECT_TRUE(Database.buildNameMap().empty());
+  }
 }

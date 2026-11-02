@@ -25,6 +25,10 @@ inline constexpr size_t BytecodeInstructionByteLimit = 4096;
 
 namespace neverd::limits::analysis {
 
+// Read-only scalar model construction and equivalence queries.
+inline constexpr uint64_t kLLVMScalarStopPollWork = 1024;
+inline constexpr uint64_t kLLVMScalarEquivalenceDefaultWork = 16777216;
+
 // include/neverd/analysis/BytecodeSource.h
 inline constexpr uint64_t kBytecodeSourceMaxOperations = 10000000;
 
@@ -33,6 +37,14 @@ inline constexpr uint64_t kLowIRRefinementMaxMetadata = 65536;
 
 // include/neverd/analysis/arch/x86_64/InterpreterMachineState.h
 inline constexpr uint64_t kInterpreterMachineStateMaxOperations = 65536;
+
+// include/neverd/analysis/arch/x86_64/InterpreterMachineRegionSource.h
+inline constexpr uint64_t kInterpreterMachineRegionChoiceSourceMaxOperations =
+    16777216;
+
+// include/neverd/analysis/arch/x86_64/X64ContinuationSource.h
+inline constexpr uint64_t kX64ContinuationMaxInstructions = 65536;
+inline constexpr uint64_t kX64ContinuationMaxOperations = 16777216;
 
 // lib/analysis/llvm/LLVMScalarLoopBounds.cpp
 inline constexpr unsigned kLLVMScalarLoopBoundsMaxValues = 32;

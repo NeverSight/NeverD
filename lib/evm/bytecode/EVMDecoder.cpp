@@ -145,6 +145,16 @@ std::string formatImmediate(const LowInstruction &Instruction) {
   return "0x" + Result;
 }
 
+std::optional<llvm::APInt> operandImmediate(const LowInstruction &Instruction,
+                                            unsigned Index) {
+  if (Index != 0 || Instruction.Info.Immediate != ImmediateKind::PushData ||
+      Instruction.ImmediateStatus != ImmediateDecodeStatus::Complete ||
+      !Instruction.Info.ImmediateBytes)
+    return std::nullopt;
+  return Instruction.Immediate.zextOrTrunc(Instruction.Info.ImmediateBytes *
+                                           kBitsPerByte);
+}
+
 std::string formatDecodeAnnotation(const LowInstruction &Instruction) {
   if (Instruction.DecodeStatus != OpcodeDecodeStatus::Active)
     return "opcode=" + opcodeDecodeStatusName(Instruction.DecodeStatus).str();

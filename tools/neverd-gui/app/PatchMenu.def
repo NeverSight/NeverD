@@ -1,0 +1,23 @@
+//===- PatchMenu.def - Language-independent patch keys ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file J is free in IDA 9.5 and Hex-Rays; Z is hx:JmpStrucDef.
+//===----------------------------------------------------------------------===//
+// NEVERD_PATCH_ITEM(Action, Key, EngineKind)
+NEVERD_PATCH_ITEM(EditPatchNop, J, "nop")
+NEVERD_PATCH_ITEM(EditPatchAssemble, A, "assemble")
+NEVERD_PATCH_ITEM(EditPatchBytes, B, "bytes")
+NEVERD_PATCH_ITEM(EditPatchFillNops, F, "fill_nops")
+NEVERD_PATCH_ITEM(EditPatchAlwaysBranch, G, "branch_always")
+NEVERD_PATCH_ITEM(EditPatchNeverBranch, N, "branch_never")
+NEVERD_PATCH_ITEM(EditPatchInvertBranch, I, "branch_invert")
+NEVERD_PATCH_ITEM(EditPatchSkipCall, S, "skip_call")
+NEVERD_PATCH_ITEM(EditPatchSkipCallValue, K, "skip_call_value")
+NEVERD_PATCH_ITEM(EditPatchConstant, C, "constant")
+NEVERD_PATCH_ITEM(EditPatchRewriteFunction, W, "rewrite")
+NEVERD_PATCH_ITEM(EditPatchRevert, R, "revert")
+NEVERD_PATCH_ITEM(EditPatchedBytes, P, "patches")
+NEVERD_PATCH_ITEM(FileProducePatchedBinary, E, "export")
+#undef NEVERD_PATCH_ITEM

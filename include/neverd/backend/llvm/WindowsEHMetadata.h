@@ -18,6 +18,10 @@
 namespace neverd::windows_eh_md {
 
 inline constexpr llvm::StringLiteral FunctionAttachment("neverd.windows.eh");
+/// Source-only projection with independently rooted runtime stack values.
+/// This is not a native frame reconstruction certificate.
+inline constexpr llvm::StringLiteral
+    UnresolvedSourceFrame("neverd.source.unresolved-seh-frame");
 inline constexpr llvm::StringLiteral
     NativeAttachment("neverd.windows.eh.native");
 inline constexpr llvm::StringLiteral

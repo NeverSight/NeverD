@@ -1,6 +1,16 @@
+//===- HighSourceInputs.cpp - Entry-only scalar read proofs --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Prove single entry reads without moving them across competing effects.
+//===----------------------------------------------------------------------===//
+
 #include "neverd/ir/high/HighSourceInputs.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/high/AArch64AddressMemory.h"
 
 namespace neverd {
 namespace {
@@ -74,21 +84,37 @@ const HighExpr *directEntryLoad(const ExprPtr &Value, unsigned Parameter) {
 /// takes its address/arguments before performing its own observable operation;
 /// every sibling must be free of memory accesses and other effects.
 const HighExpr *entryLoad(const ExprPtr &Expression, unsigned Parameter,
-                          size_t &Budget, unsigned Depth = 0) {
+                          Arch Architecture, size_t &Budget,
+                          unsigned Depth = 0) {
   if (!Expression || !Budget ||
-      Depth > ::neverd::limits::ir::kHighSourceInputsEntryLoadDepthLimit ||
-      !plain(*Expression))
+      Depth > ::neverd::limits::ir::kHighSourceInputsEntryLoadDepthLimit)
     return nullptr;
+  if (!plain(*Expression)) {
+    if (Architecture != Arch::AArch64 || Expression->SourceCallHint ||
+        Expression->IndirectParamIdx >= 0 ||
+        !isAArch64AddressMemoryIntrinsic(Expression->IntrinsicId) ||
+        !aarch64AddressMemoryHighShapeIsValid(*Expression))
+      return nullptr;
+    const auto Instruction = *aarch64AddressMemoryInstruction(
+        Expression->Operands[kAddressMemoryWordOperand]->ConstVal);
+    if (!Instruction.isLoad() || Instruction.stackBase())
+      return nullptr;
+    // The original read evaluates its inputs before performing the access.
+    // Only a single dependency with pure siblings can expose an entry read;
+    // the surrounding instruction remains effectful and is never replaced.
+  }
   --Budget;
   if (Expression->Kind == ExprKind::Load) {
     if (!scalarEntryType(Expression->Type) || Expression->Operands.size() != 1)
       return nullptr;
     if (const auto *Load = directEntryLoad(Expression, Parameter))
       return Load;
-    return entryLoad(Expression->Operands[0], Parameter, Budget, Depth + 1);
+    return entryLoad(Expression->Operands[0], Parameter, Architecture, Budget,
+                     Depth + 1);
   }
   if (entryConversion(*Expression))
-    return entryLoad(Expression->Operands[0], Parameter, Budget, Depth + 1);
+    return entryLoad(Expression->Operands[0], Parameter, Architecture, Budget,
+                     Depth + 1);
   if ((Expression->Kind != ExprKind::BinOp ||
        !scalarEntryType(Expression->Type) ||
        (Expression->Op != NdOp::INT_ADD && Expression->Op != NdOp::INT_SUB) ||
@@ -104,8 +130,8 @@ const HighExpr *entryLoad(const ExprPtr &Expression, unsigned Parameter,
         break;
       }
     if (PureSiblings)
-      if (const auto *Load =
-              entryLoad(Expression->Operands[I], Parameter, Budget, Depth + 1))
+      if (const auto *Load = entryLoad(Expression->Operands[I], Parameter,
+                                       Architecture, Budget, Depth + 1))
         return Load;
   }
   return nullptr;
@@ -210,7 +236,10 @@ TypeRef entryScalarLoadInput(const HighFunc &Function, unsigned Parameter) {
     } else {
       return {};
     }
-    if (const auto *Entry = entryLoad(Value, Parameter, Budget)) {
+    const auto Architecture = Function.SourceTypeHint
+                                  ? Function.SourceTypeHint->Architecture
+                                  : Arch::Unknown;
+    if (const auto *Entry = entryLoad(Value, Parameter, Architecture, Budget)) {
       Load = Entry;
       AtEntry = false;
       continue;

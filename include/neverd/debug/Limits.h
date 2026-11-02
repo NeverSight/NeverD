@@ -28,6 +28,9 @@ inline constexpr size_t kDWARFLoaderMaxLayoutLeaves = 64;
 inline constexpr uint64_t kDWARFLoaderMaxLayoutElements = uint64_t(1) << 32;
 
 // lib/debug/PDBLoader.cpp
+/// Progress/checkpoint granularity, never a limit on accepted debug records.
+inline constexpr uint32_t kPDBLoadPublicProgressRecords = 4096;
+inline constexpr uint32_t kPDBLoadModuleProgressRecords = 16;
 inline constexpr size_t kPDBLoaderPDBDebugContextImplLoadRecordParametersWork =
     200000;
 

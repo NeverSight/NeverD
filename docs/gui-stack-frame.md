@@ -13,6 +13,11 @@ therefore recover a known SP after a dynamic adjustment; unknown is never zero.
 An unknown value leaves the correction field blank until you enter an offset.
 It does not move any machine instruction or change the loaded bytes.
 
+The disassembly's context menu also offers **Stack variables** anywhere in a
+function and **Change stack pointer** on an instruction. A code window's
+context menu offers **Stack variables** of the function it shows, even when
+the disassembly is elsewhere.
+
 Stack offsets, widths and SP corrections use decimal by default, including
 leading zeros. A `0x` or `0X` prefix selects hexadecimal: `-016` and `-0x10`
 both mean minus sixteen bytes.

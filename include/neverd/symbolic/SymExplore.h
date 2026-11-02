@@ -100,12 +100,20 @@ struct SymCallOccurrence {
   int BlockId = -1;
   size_t OpIndex = 0;
   unsigned Invocation = 0;
+  /// Conjunction describing the current path immediately before this call,
+  /// including previous call effects and merged path disjunctions. Empty
+  /// means true. Expressions belong to the callback's SymContext; this view
+  /// is valid only during the callback. Copy the references to retain them.
+  /// These conditions are not necessarily solver-proved feasible.
+  llvm::ArrayRef<SymRef> PathConstraints;
 };
 
 /// Supplies a complete, analysis-neutral effect for an exact call occurrence.
 /// Returning no value preserves conservative call havoc.  The provider may
 /// read \p State to recover arguments, but must express every state mutation in
-/// the returned effect.
+/// the returned effect. A conditional contract must hold for the entire domain
+/// in the occurrence's PathConstraints; observing a condition does not prove
+/// unrelated argument, alias, lifetime or ABI prerequisites.
 using SymCallEffectProvider = std::function<std::optional<SymCallEffect>(
     SymContext &, SymState &, const LowOp &, const SymCallOccurrence &)>;
 

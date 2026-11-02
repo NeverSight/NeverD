@@ -40,17 +40,32 @@ BionicResult Bionic::kernelCall(std::optional<linux_model::ServiceKind> Kind,
   return kernelResult(*Returned);
 }
 
-BionicResult Bionic::kernelResult(std::optional<uint64_t> Returned) {
-  if (!Returned && Threads && Threads->waitKernel())
+BionicResult
+Bionic::kernelResult(std::optional<uint64_t> Returned,
+                     const std::optional<SleepContinuation> &Sleep) {
+  if (!Returned && Threads && Threads->waitKernel(Sleep))
     return std::optional<BionicValue>(GuestThreadWait{});
   if (!Returned)
     return std::optional<BionicValue>();
   if (*Returned >= uint64_t(0) - 4095) {
     if (auto E = setErrno(uint64_t(0) - *Returned))
       return std::move(E);
-    return value(UINT64_MAX);
+    Returned = UINT64_MAX;
   }
+  if (Sleep)
+    return sleepResult(*Returned, *Sleep);
   return value(*Returned);
+}
+
+BionicResult Bionic::checkedRead(const NativeCallEvent &Call) {
+  const auto &A = Call.Arguments;
+  if (A[2] > linux_model::MaxSignedIOSize)
+    return failure(diagnostic::FortifiedReadCount);
+  if (A[2] > A[3])
+    return failure(diagnostic::FortifiedReadBounds);
+  // The supplied object bound is checked before descriptor lookup or user
+  // access. The ordinary read owner retains cursors, waits and libc errno.
+  return kernelCall(linux_model::ServiceKind::Read, Call);
 }
 
 BionicResult Bionic::usleep(const NativeCallEvent &Call) {
@@ -61,6 +76,34 @@ BionicResult Bionic::usleep(const NativeCallEvent &Call) {
   return kernelResult(linux_model::sleepRelative(
       CPU, Layout, Duration, Kernel.clock(),
       Threads ? Threads->kernel() : nullptr, Result));
+}
+
+BionicResult Bionic::sleep(const NativeCallEvent &Call) {
+  const uint32_t Seconds = uint32_t(Call.Arguments[0]);
+  // API 28 attempts only INT_MAX seconds and returns the unattempted excess,
+  // including when the inner nanosleep succeeds or is interrupted.
+  const auto Attempted = std::min<uint32_t>(Seconds, INT32_MAX);
+  SleepContinuation Continuation{Seconds, Seconds - Attempted,
+                                 std::make_shared<LinuxTimespec>()};
+  auto Returned = linux_model::sleepRelative(
+      CPU, Layout, {Attempted, 0}, Kernel.clock(),
+      Threads ? Threads->kernel() : nullptr, Result, Continuation.Remaining);
+  return kernelResult(Returned, Continuation);
+}
+
+BionicResult Bionic::sleepResult(uint64_t Returned,
+                                 const SleepContinuation &Continuation) {
+  // nanosleep returns int. A mutable signal context can supply arbitrary
+  // upper bits, or a non-kernel-error value whose low word is still -1.
+  if (uint32_t(Returned) != UINT32_MAX)
+    return value(Continuation.Excess);
+  auto Error = errnoValue();
+  if (!Error)
+    return Error.takeError();
+  if (*Error != linux_model::InterruptedCall)
+    return value(Continuation.Seconds);
+  const auto &Left = *Continuation.Remaining;
+  return value(Continuation.Excess + Left.Seconds + (Left.Nanoseconds != 0));
 }
 
 BionicResult Bionic::getcwd(const NativeCallEvent &Call) {

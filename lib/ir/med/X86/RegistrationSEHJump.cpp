@@ -11,8 +11,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
-#include "neverd/ir/med/X86RegistrationSEHJump.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/ADT/STLExtras.h"
 

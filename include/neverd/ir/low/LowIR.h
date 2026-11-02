@@ -15,10 +15,19 @@
 #define NEVERD_IR_LOW_LOWIR_H
 
 #include "neverd/ir/NdOps.h"
+#include "neverd/ir/OperationLimits.h"
 #include "neverd/ir/RegistrationState.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/ir/X86ShadowStack.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/X86/X86ShadowStack.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X86AmxState.h"
+#include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
+#include "neverd/ir/intrinsics/X86/X86BoundedLeaf.h"
+#include "neverd/ir/intrinsics/X86/X86Hle.h"
+#include "neverd/ir/intrinsics/X86/X86RepState.h"
+#include "neverd/ir/intrinsics/X86/X86Sgx.h"
+#include "neverd/ir/intrinsics/X86/X86SystemState.h"
+#include "neverd/ir/intrinsics/X86/X86Virtualization.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/Support/Errc.h"
@@ -29,6 +38,7 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -215,7 +225,7 @@ struct LowOp {
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
   NdVar Output = {};
-  NdVar Inputs[6] = {};
+  NdVar Inputs[kLowOperationInputs] = {};
   uint8_t NumInputs = 0;
   va_t Addr = 0;
   int Seq = 0;
@@ -229,8 +239,9 @@ struct LowOp {
   uint8_t X87ImportArguments = 0;
 
   void addInput(NdVar V) {
-    if (NumInputs < 6)
-      Inputs[NumInputs++] = V;
+    if (NumInputs >= std::size(Inputs))
+      throw std::length_error(kLowOperationInputOverflow);
+    Inputs[NumInputs++] = V;
   }
 
   bool operator==(const LowOp &Other) const = default;
@@ -290,7 +301,8 @@ inline X86FPStateShape x86FPStateLowShape(const LowOp &Op, Arch TargetArch) {
                           isX86FPConversionStateIntrinsic(
                               static_cast<Intrinsic>(Op.Inputs[0].Offset));
   bool Scalar = true;
-  for (unsigned Index = 1; Index < Op.NumInputs && Index < 6; ++Index)
+  for (unsigned Index = 1; Index < Op.NumInputs && Index < std::size(Op.Inputs);
+       ++Index)
     Scalar &= Op.Inputs[Index].isConst() || Op.Inputs[Index].isReg() ||
               Op.Inputs[Index].isTemp();
   return {
@@ -345,9 +357,13 @@ inline ApxAtomicIntrinsicShape apxAtomicLowShape(const LowOp &Op,
   const auto IsScalar = [](const NdVar &Value) {
     return Value.isConst() || Value.isReg() || Value.isTemp();
   };
+  const auto ControlIndex = x86AtomicAddressControlIndex(
+      Op.NumInputs ? static_cast<Intrinsic>(Op.Inputs[0].Offset)
+                   : Intrinsic::None);
   return {
       .TargetArch = TargetArch,
       .MemoryOrdering = Op.MemoryOrdering,
+      .MemoryAddressSpace = Op.MemoryAddressSpace,
       .NumInputs = Op.NumInputs,
       .IntrinsicIdIsConst = Op.NumInputs > 0 && Op.Inputs[0].isConst(),
       .IntrinsicIdSize = Op.NumInputs > 0 ? Op.Inputs[0].Size : uint16_t{0},
@@ -362,7 +378,189 @@ inline ApxAtomicIntrinsicShape apxAtomicLowShape(const LowOp &Op,
       .ConditionIsConst = Op.NumInputs > 4 && Op.Inputs[4].isConst(),
       .Condition = Op.NumInputs > 4 ? Op.Inputs[4].Offset : 0,
       .ConditionSize = Op.NumInputs > 4 ? Op.Inputs[4].Size : uint16_t{0},
+      .AddressControlIsConst =
+          Op.NumInputs > ControlIndex && Op.Inputs[ControlIndex].isConst() &&
+          !isAddressProvenance(Op.Inputs[ControlIndex].Provenance),
+      .AddressControl =
+          Op.NumInputs > ControlIndex ? Op.Inputs[ControlIndex].Offset : 0,
+      .AddressControlSize = Op.NumInputs > ControlIndex
+                                ? Op.Inputs[ControlIndex].Size
+                                : uint16_t{0},
   };
+}
+
+inline X86HleShape x86HleLowShape(const LowOp &Op, Arch A = Arch::Unknown) {
+  X86HleShape S;
+  S.TargetArch = A;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].Offset == uint16_t(Intrinsic::X86HleState);
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputSizes[I] = V.Size;
+    S.ScalarInputs[I] = V.isConst() || V.isReg() || V.isTemp();
+    if (I == 4 && V.isConst())
+      S.Control = V.Offset;
+  }
+  return S;
+}
+
+inline X86VirtualizationShape x86VirtualizationLowShape(const LowOp &Op,
+                                                        Arch TargetArch) {
+  X86VirtualizationShape Shape;
+  Shape.TargetArch = TargetArch;
+  Shape.MemoryOrdering = Op.MemoryOrdering;
+  Shape.MemoryAddressSpace = Op.MemoryAddressSpace;
+  Shape.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+                  Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+                  Op.Inputs[0].Offset <= UINT16_MAX;
+  Shape.OutputSize = Op.Output.Size;
+  Shape.WritableOutput = Op.Output.isReg() || Op.Output.isTemp();
+  Shape.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  for (uint8_t I = 0; I < Shape.Arguments && I < Shape.InputSizes.size(); ++I) {
+    const auto &Input = Op.Inputs[I + 1];
+    Shape.InputSizes[I] = Input.Size;
+    Shape.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+    if (I == 1 && Input.isConst()) {
+      Shape.AddressWidth = Input.Offset;
+      Shape.OriginalPC = Input.Offset;
+    }
+    if (I == 2 && Input.isConst())
+      Shape.SnpControl = Input.Offset;
+    if (I == 3 && Input.isConst())
+      Shape.VectorStride = Input.Offset;
+  }
+  return Shape;
+}
+
+inline X86AmxShape x86AmxLowShape(const LowOp &Op, Arch A = Arch::Unknown) {
+  X86AmxShape S;
+  S.TargetArch = A;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  S.ValidId =
+      Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+      Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+      Op.Inputs[0].Offset == static_cast<uint16_t>(Intrinsic::X86AMXState);
+  S.WritableOutput = (Op.Output.isReg() || Op.Output.isTemp());
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputSizes[I] = V.Size;
+    S.ScalarInputs[I] = V.isConst() || V.isReg() || V.isTemp();
+  }
+  if (Op.NumInputs > 1)
+    S.EmptyBase = Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0;
+  if (Op.NumInputs > 2 && Op.Inputs[2].isConst() && Op.Inputs[2].Size == 4 &&
+      Op.Inputs[2].Offset <= UINT32_MAX)
+    S.Descriptor = static_cast<uint32_t>(Op.Inputs[2].Offset);
+  if (Op.NumInputs > 3 && Op.Inputs[3].isConst())
+    S.RowImmediate = Op.Inputs[3].Offset;
+  return S;
+}
+
+inline X86RepShape x86RepLowShape(const LowOp &Op,
+                                  Arch TargetArch = Arch::Unknown) {
+  X86RepShape S;
+  S.TargetArch = TargetArch;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].Offset <= UINT16_MAX;
+  S.WritableOutput = Op.Output.isReg() || Op.Output.isTemp();
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &Input = Op.Inputs[I + 1];
+    S.InputSizes[I] = Input.Size;
+    S.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+  }
+  if (Op.NumInputs > 5 && Op.Inputs[5].isConst() &&
+      Op.Inputs[5].Size == X86RepDescriptorBytes &&
+      Op.Inputs[5].Offset <= UINT32_MAX)
+    S.Descriptor = static_cast<uint32_t>(Op.Inputs[5].Offset);
+  return S;
+}
+
+inline X86SgxShape x86SgxLowShape(const LowOp &Op,
+                                  Arch TargetArch = Arch::Unknown) {
+  X86SgxShape S;
+  S.TargetArch = TargetArch;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].Offset <= UINT16_MAX;
+  S.WritableOutput = Op.Output.isReg() || Op.Output.isTemp();
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &Input = Op.Inputs[I + 1];
+    S.InputSizes[I] = Input.Size;
+    S.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+  }
+  return S;
+}
+
+inline X86BoundedLeafShape
+x86BoundedLeafLowShape(const LowOp &Op, Arch TargetArch = Arch::Unknown) {
+  X86BoundedLeafShape S;
+  S.TargetArch = TargetArch;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].Offset <= UINT16_MAX;
+  S.WritableOutput = Op.Output.isReg() || Op.Output.isTemp();
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &Input = Op.Inputs[I + 1];
+    S.InputSizes[I] = Input.Size;
+    S.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+  }
+  if (Op.NumInputs > 1 && Op.Inputs[1].isConst() &&
+      !isAddressProvenance(Op.Inputs[1].Provenance))
+    S.Ax = Op.Inputs[1].Offset;
+  return S;
+}
+
+inline X86SystemStateShape x86SystemStateLowShape(const LowOp &Op,
+                                                  Arch TargetArch) {
+  X86SystemStateShape Shape;
+  Shape.TargetArch = TargetArch;
+  Shape.MemoryOrdering = Op.MemoryOrdering;
+  Shape.MemoryAddressSpace = Op.MemoryAddressSpace;
+  Shape.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+                  Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+                  Op.Inputs[0].Offset <= UINT16_MAX;
+  Shape.OutputSize = Op.Output.Size;
+  Shape.WritableOutput = Op.Output.isReg() || Op.Output.isTemp();
+  Shape.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  for (uint8_t I = 0; I < Shape.Arguments && I < Shape.InputSizes.size(); ++I) {
+    const auto &Input = Op.Inputs[I + 1];
+    Shape.InputSizes[I] = Input.Size;
+    Shape.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+  }
+  if (Shape.ValidId &&
+      Op.Inputs[0].Offset ==
+          static_cast<uint16_t>(Intrinsic::X86SegmentedBlockMemory) &&
+      Op.NumInputs > 1 && Op.Inputs[1].isConst() && Op.Inputs[1].Size == 2 &&
+      Op.Inputs[1].Offset <= UINT16_MAX)
+    Shape.SegmentedBlockSelector = static_cast<uint16_t>(Op.Inputs[1].Offset);
+  if (Shape.ValidId &&
+      Op.Inputs[0].Offset == static_cast<uint16_t>(Intrinsic::Xabort) &&
+      Op.NumInputs > 1 && Op.Inputs[1].isConst() && Op.Inputs[1].Size == 1 &&
+      !isAddressProvenance(Op.Inputs[1].Provenance) &&
+      Op.Inputs[1].Offset <= UINT8_MAX)
+    Shape.TransactionAbortCode = static_cast<uint8_t>(Op.Inputs[1].Offset);
+  return Shape;
 }
 
 inline X86InvalidateIntrinsicShape x86InvalidateLowShape(const LowOp &Op,
@@ -407,6 +605,7 @@ inline X86MsrAccessIntrinsicShape x86MsrAccessLowShape(const LowOp &Op,
       .Kind = Op.NumInputs > 1 ? Op.Inputs[1].Offset : UINT64_C(0),
       .KindSize = Op.NumInputs > 1 ? Op.Inputs[1].Size : uint16_t{0},
       .SelectorIsScalar = Op.NumInputs > 2 && IsScalar(Op.Inputs[2]),
+      .SelectorIsConst = Op.NumInputs > 2 && Op.Inputs[2].isConst(),
       .SelectorSize = Op.NumInputs > 2 ? Op.Inputs[2].Size : uint16_t{0},
       .ValueIsScalar = Op.NumInputs > 3 && IsScalar(Op.Inputs[3]),
       .ValueSize = Op.NumInputs > 3 ? Op.Inputs[3].Size : uint16_t{0},
@@ -1024,6 +1223,10 @@ struct JumpTable {
   /// selector plan after SSA/copy propagation; absence or ambiguity is a hard
   /// failure for shapes that require exact selector ownership.
   std::vector<JumpTableSelectorUseRef> SelectorUseRefs;
+  /// A table-free finite cover compares the branch value with original image
+  /// addresses. Low-to-Med preserves that numeric coordinate in a separate
+  /// selector slice; observable code-pointer uses retain their address roles.
+  bool OriginalAddressSelector = false;
   /// Exact composite recipe for a runtime-selected table base.  This is kept
   /// separate from SelectorUseRefs because its selector lives in the final
   /// byte-address coordinate and also depends on a certified
@@ -1304,9 +1507,10 @@ struct LowFunc {
   uint64_t LiftedInstructionCount = 0;
   std::vector<va_t> DecodeFailureAddresses;
   std::vector<va_t> UnsupportedInstructionAddresses;
-  /// The subset of UnsupportedInstructionAddresses that are returns which may
-  /// pop a return address this function pushed itself, after a call into its
-  /// own body (see CFGBuilder::rewriteOwnInteriorCall).
+  /// The subset of UnsupportedInstructionAddresses with unproved physical
+  /// return-address ownership after a call into this function's own body.
+  /// Includes returns and tail transfers with an invalid parent stack or PC
+  /// (see CFGBuilder::rewriteOwnInteriorCall).
   std::vector<va_t> UnprovenReturnAddresses;
   std::vector<va_t> TruncatedPathAddresses;
 
@@ -1347,6 +1551,11 @@ struct LowFunc {
   std::vector<va_t> CodeRefTargets;
 
   LowBlock *blockFor(va_t Addr) {
+    // Overlapping x86 instruction streams can share bytes. An exact entry
+    // belongs to its own stream even when an earlier instruction covers it.
+    for (auto &B : Blocks)
+      if (Addr == B.StartAddr)
+        return &B;
     for (auto &B : Blocks)
       if (Addr >= B.StartAddr && Addr < B.EndAddr)
         return &B;

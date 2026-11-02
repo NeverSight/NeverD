@@ -21,6 +21,9 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/Support/Allocator.h"
+#include "llvm/Support/StringSaver.h"
 
 #include <functional>
 
@@ -35,7 +38,9 @@ enum class Encoding : uint8_t { Plain, Wide, UTF16, UTF32, UTF8 };
 
 struct Token {
   TokenKind Kind = TokenKind::End;
-  std::string Text;
+  /// Ordinary spelling borrows the parse input; generated spelling belongs
+  /// to that parse's arena. Both outlive all tokens, including macro copies.
+  llvm::StringRef Text;
   uint64_t Value = 0;
   /// A quoted literal's prefix; a character constant's type follows it.
   Encoding Quoted = Encoding::Plain;
@@ -57,6 +62,8 @@ uint64_t packToken(PackAction Action, uint64_t Value) {
 
 /// The value of a #pragma neverd_header token, whose text is the header.
 constexpr uint64_t HeaderPragma = uint64_t(0xFF) << 32;
+/// A source unit's unannotated function types use the convention in Text.
+constexpr uint64_t DefaultConventionPragma = uint64_t(0xFE) << 32;
 
 /// Whether \p A and \p B lay their members out alike.
 bool sameLayout(const RecordDef &A, const RecordDef &B) {
@@ -70,15 +77,16 @@ bool sameLayout(const RecordDef &A, const RecordDef &B) {
   return true;
 }
 
-const char *const Punctuators[] = {
+constexpr llvm::StringLiteral Punctuators[] = {
     "...", "::", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "->", "{",
     "}",   "(",  ")",  "[",  "]",  ";",  ",",  "*",  "&",  ":",  "=",  "<",
     ">",   "+",  "-",  "~",  "!",  "/",  "%",  "^",  "|",  "?",  ".",  "#"};
 
 class Lexer {
 public:
-  Lexer(llvm::StringRef Source, std::vector<SourceProblem> &Problems)
-      : Source(Source), Problems(Problems) {}
+  Lexer(llvm::StringRef Source, std::vector<SourceProblem> &Problems,
+        llvm::StringSaver &Spellings)
+      : Source(Source), Problems(Problems), Spellings(Spellings) {}
 
   std::vector<Token> run() {
     std::vector<Token> Tokens;
@@ -116,10 +124,11 @@ public:
       }
       LineStart = false;
       Token Next = token();
-      if (Next.Kind == TokenKind::Word) {
-        expand(Next, Tokens, 0);
-        continue;
-      }
+      if (Next.Kind == TokenKind::Word)
+        if (auto Found = Macros.find(Next.Text); Found != Macros.end()) {
+          expand(std::move(Next), Found->second, Tokens, 0);
+          continue;
+        }
       if (Next.Kind != TokenKind::End)
         Tokens.push_back(std::move(Next));
     }
@@ -174,7 +183,7 @@ private:
         }
       }
       Result.Kind = TokenKind::Word;
-      Result.Text = Word.str();
+      Result.Text = Word;
       return Result;
     }
     if (llvm::isDigit(C) ||
@@ -196,7 +205,7 @@ private:
           (Hex ? Text.contains_insensitive("p")
                : Text.find_first_of("eE") != llvm::StringRef::npos)) {
         Result.Kind = TokenKind::Number;
-        Result.Text = Text.str();
+        Result.Text = Text;
         Result.Floating = true;
         return Result;
       }
@@ -226,7 +235,7 @@ private:
         Radix = 8;
       }
       Result.Kind = TokenKind::Number;
-      Result.Text = Text.str();
+      Result.Text = Text;
       if (Digits.getAsInteger(Radix, Result.Value))
         problem(Result.Line, Result.Column,
                 "'" + Text.str() + "' is no integer this reads");
@@ -236,9 +245,9 @@ private:
       quoted(Result);
       return Result;
     }
-    for (const char *Punct : Punctuators)
-      if (Source.substr(At).starts_with(Punct)) {
-        advance(strlen(Punct));
+    for (const llvm::StringRef Punct : Punctuators)
+      if (C == Punct.front() && Source.substr(At).starts_with(Punct)) {
+        advance(Punct.size());
         Result.Kind = TokenKind::Punct;
         Result.Text = Punct;
         return Result;
@@ -276,24 +285,25 @@ private:
     } else {
       Result.Kind = TokenKind::String;
     }
-    Result.Text = std::move(Text);
+    Result.Text = Spellings.save(Text);
   }
 
-  /// A word, or the tokens of the macro it names.
-  void expand(Token Word, std::vector<Token> &Tokens, unsigned Depth) {
-    auto Found = Macros.find(Word.Text);
-    if (Found == Macros.end() ||
-        Depth > ::neverd::limits::types::kCTypeParserExpandDepthLimit) {
+  /// Expand a known macro. Ordinary identifiers stay on the token append path.
+  void expand(Token Word, const std::vector<Token> &Replacements,
+              std::vector<Token> &Tokens, unsigned Depth) {
+    if (Depth > ::neverd::limits::types::kCTypeParserExpandDepthLimit) {
       Tokens.push_back(std::move(Word));
       return;
     }
-    for (Token Replacement : Found->second) {
+    for (Token Replacement : Replacements) {
       Replacement.Line = Word.Line;
       Replacement.Column = Word.Column;
       if (Replacement.Kind == TokenKind::Word)
-        expand(std::move(Replacement), Tokens, Depth + 1);
-      else
-        Tokens.push_back(std::move(Replacement));
+        if (auto Found = Macros.find(Replacement.Text); Found != Macros.end()) {
+          expand(std::move(Replacement), Found->second, Tokens, Depth + 1);
+          continue;
+        }
+      Tokens.push_back(std::move(Replacement));
     }
   }
 
@@ -312,10 +322,35 @@ private:
       Text += Source[At];
       advance();
     }
-    llvm::StringRef Rest = llvm::StringRef(Text).drop_front().ltrim();
+    // Line splicing and nested macro lexers must borrow storage that remains
+    // live after this directive and after a later #undef or redefinition.
+    llvm::StringRef Rest = Spellings.save(Text).drop_front().ltrim();
     const llvm::StringRef Name =
         Rest.take_while([](char C) { return llvm::isAlnum(C) || C == '_'; });
     Rest = Rest.drop_front(Name.size()).ltrim();
+    // Preprocessing does not preserve compiler defaults such as the WDK's
+    // x86 /Gz. A generated source unit supplies that default explicitly;
+    // rendered function declarations carry the convention themselves.
+    constexpr llvm::StringLiteral DefaultConventionDirective =
+        "neverd_default_calling_convention";
+    if (Name == "pragma" && Rest.starts_with(DefaultConventionDirective)) {
+      llvm::StringRef Arguments =
+          Rest.drop_front(DefaultConventionDirective.size()).trim();
+      if (!Arguments.consume_front("(") || !Arguments.consume_back(")")) {
+        problem(L, Col,
+                "#pragma neverd_default_calling_convention takes a "
+                "convention in parentheses");
+        return;
+      }
+      Token Pragma;
+      Pragma.Kind = TokenKind::Pragma;
+      Pragma.Text = Arguments.trim();
+      Pragma.Value = DefaultConventionPragma;
+      Pragma.Line = L;
+      Pragma.Column = Col;
+      Tokens.push_back(std::move(Pragma));
+      return;
+    }
     // The system header the declarations after it come from, as NeverD's
     // libraries of a system's headers name it: neverd_header("stdio.h"),
     // or neverd_header() for none.
@@ -331,7 +366,7 @@ private:
       }
       Token Pragma;
       Pragma.Kind = TokenKind::Pragma;
-      Pragma.Text = Arguments.str();
+      Pragma.Text = Arguments;
       Pragma.Value = HeaderPragma;
       Pragma.Line = L;
       Pragma.Column = Col;
@@ -360,37 +395,42 @@ private:
           return Macro->second.front().Value;
         return std::nullopt;
       };
-      bool HasNumber = false;
-      for (llvm::StringRef Part : Parts)
-        HasNumber |= number(Part.trim()).has_value();
-      for (llvm::StringRef Part : Parts) {
+      for (llvm::StringRef &Part : Parts)
         Part = Part.trim();
-        if (Part == "push") {
-          Action = PackAction::Push;
-        } else if (Part == "pop") {
-          Action = PackAction::Pop;
-        } else if (Part == "show") {
-          continue;
-        } else if (std::optional<uint64_t> Number = number(Part)) {
+      if (Parts.size() == 1 && Parts.front() == "show")
+        return;
+      llvm::StringRef Label;
+      const bool Stack =
+          !Parts.empty() && (Parts.front() == "push" || Parts.front() == "pop");
+      if (Parts.size() > (Stack ? 3u : 1u)) {
+        problem(L, Col, "#pragma pack has too many arguments");
+        return;
+      }
+      for (size_t I = 0; I < Parts.size(); ++I) {
+        const llvm::StringRef Part = Parts[I];
+        if (I == 0 && Stack) {
+          Action = Part == "push" ? PackAction::Push : PackAction::Pop;
+        } else if (std::optional<uint64_t> Number = number(Part);
+                   Number && I + 1 == Parts.size()) {
           Value = *Number;
+          if (!Value || Value > 16 || (Value & (Value - 1))) {
+            problem(L, Col, "#pragma pack takes 1, 2, 4, 8 or 16");
+            return;
+          }
           Action = Action == PackAction::Push  ? PackAction::PushSet
                    : Action == PackAction::Pop ? PackAction::PopSet
                                                : PackAction::Set;
-        } else if (Action == PackAction::Push && HasNumber) {
-          // push, label, n: the label names the push, which this reads
-          // without.
-          continue;
+        } else if (Stack && I == 1 && !Part.empty() &&
+                   (llvm::isAlpha(Part.front()) || Part.front() == '_') &&
+                   llvm::all_of(Part, [](char C) {
+                     return llvm::isAlnum(C) || C == '_';
+                   })) {
+          Label = Part;
         } else {
-          // An identifier alone may be a label or a macro this source does
-          // not define; the packing is not known either way.
           problem(L, Col,
                   "'" + Part.str() +
                       "' in #pragma pack is no packing this knows; define it "
                       "as a number");
-          return;
-        }
-        if (Value && (Value > 16 || (Value & (Value - 1)))) {
-          problem(L, Col, "#pragma pack takes 1, 2, 4, 8 or 16");
           return;
         }
       }
@@ -398,7 +438,7 @@ private:
         Action = PackAction::Reset;
       Token Pragma;
       Pragma.Kind = TokenKind::Pragma;
-      Pragma.Text = "pack";
+      Pragma.Text = Label;
       Pragma.Value = packToken(Action, Value);
       Pragma.Line = L;
       Pragma.Column = Col;
@@ -413,7 +453,7 @@ private:
       if (Macro.empty() || Body.starts_with("("))
         return;
       std::vector<SourceProblem> Ignored;
-      Lexer Inner(Body, Ignored);
+      Lexer Inner(Body, Ignored, Spellings);
       std::vector<Token> Replacement = Inner.run();
       Replacement.pop_back();
       // A header NeverD renders names a system's types otherwise for
@@ -432,6 +472,7 @@ private:
 
   llvm::StringRef Source;
   std::vector<SourceProblem> &Problems;
+  llvm::StringSaver &Spellings;
   size_t At = 0;
   unsigned Line = 1;
   unsigned Column = 1;
@@ -504,6 +545,7 @@ bool ignoredWord(llvm::StringRef Word) {
       std::initializer_list<llvm::StringRef>{"extern",
                                              "static",
                                              "inline",
+                                             "_inline",
                                              "__inline",
                                              "__inline__",
                                              "__forceinline",
@@ -576,6 +618,11 @@ llvm::StringRef attributeName(llvm::StringRef Name) {
   return Name;
 }
 
+/// Microsoft's original spelling remains an alias in SDK/WDK headers.
+bool declspecWord(llvm::StringRef Word) {
+  return Word == "__declspec" || Word == "_declspec";
+}
+
 class Parser {
 public:
   Parser(std::vector<Token> Tokens, TypeLibrary &Library,
@@ -632,9 +679,9 @@ private:
     fail(peek(), "expected '" + Punct.str() + "' " + Where.str());
     return false;
   }
-  void fail(const Token &At, const std::string &Message) {
+  void fail(const Token &At, const llvm::Twine &Message) {
     if (!Failed)
-      Result.Problems.push_back({At.Line, At.Column, Message});
+      Result.Problems.push_back({At.Line, At.Column, Message.str()});
     Failed = true;
   }
   /// Skips past the declaration a problem was found in: to the semicolon
@@ -739,8 +786,8 @@ private:
     return builtinKeyword(Word) || conventionWord(Word) || ignoredWord(Word) ||
            Word == "struct" || Word == "union" || Word == "enum" ||
            Word == "class" || Word == "const" || Word == "volatile" ||
-           Word == "typedef" || Word == "__declspec" ||
-           Word == "__attribute__" || Word == "sizeof" || typeofWord(Word);
+           Word == "typedef" || declspecWord(Word) || Word == "__attribute__" ||
+           Word == "sizeof" || typeofWord(Word);
   }
 
   static bool typeofWord(llvm::StringRef Word) {
@@ -749,7 +796,11 @@ private:
 
   // The pack in force.
   uint32_t Pack = 0;
-  std::vector<uint32_t> PackStack;
+  struct PackEntry {
+    uint32_t Value;
+    llvm::StringRef Label;
+  };
+  std::vector<PackEntry> PackStack;
   // The system header the declarations come from (#pragma neverd_header).
   std::string Header;
   // The names `typedef struct X X` gives a record, enumeration or union.
@@ -759,8 +810,34 @@ private:
       Header = Pragma.Text;
       return;
     }
+    if (Pragma.Value == DefaultConventionPragma) {
+      DefaultConvention = conventionWord(Pragma.Text);
+      if (!Pragma.Text.empty() && !DefaultConvention)
+        fail(Pragma,
+             "unknown default calling convention '" + Pragma.Text + "'");
+      return;
+    }
     const auto Action = PackAction(Pragma.Value >> 32);
     const auto Value = uint32_t(Pragma.Value);
+    const auto pop = [&] {
+      if (!Pragma.Text.empty()) {
+        for (size_t I = PackStack.size(); I; --I) {
+          if (PackStack[I - 1].Label != Pragma.Text)
+            continue;
+          Pack = PackStack[I - 1].Value;
+          PackStack.resize(I - 1);
+          return;
+        }
+        // Microsoft pack(pop, label) ignores a label not on the stack.
+        return;
+      }
+      if (PackStack.empty()) {
+        fail(Pragma, "#pragma pack(pop) has no push to return to");
+        return;
+      }
+      Pack = PackStack.back().Value;
+      PackStack.pop_back();
+    };
     switch (Action) {
     case PackAction::Set:
       Pack = Value;
@@ -769,26 +846,17 @@ private:
       Pack = 0;
       break;
     case PackAction::Push:
-      PackStack.push_back(Pack);
+      PackStack.push_back({Pack, Pragma.Text});
       break;
     case PackAction::PushSet:
-      PackStack.push_back(Pack);
+      PackStack.push_back({Pack, Pragma.Text});
       Pack = Value;
       break;
     case PackAction::Pop:
-      if (PackStack.empty()) {
-        fail(Pragma, "#pragma pack(pop) has no push to return to");
-        return;
-      }
-      Pack = PackStack.back();
-      PackStack.pop_back();
+      pop();
       break;
     case PackAction::PopSet:
-      if (PackStack.empty()) {
-        fail(Pragma, "#pragma pack(pop) has no push to return to");
-        return;
-      }
-      PackStack.pop_back();
+      pop();
       Pack = Value;
       break;
     }
@@ -817,6 +885,8 @@ private:
     Attributes Asked;
     /// Whether the specifiers define the record or enumeration they name.
     bool Defines = false;
+    /// An existing type name rather than a struct/union tag declaration.
+    bool TypeName = false;
     bool NoReturn = false;
   };
 
@@ -1168,6 +1238,21 @@ private:
       } else if (volatileWord(W)) {
         take();
         Spec.Volatile = true;
+      } else if ((W == "__ptr32" || W == "__ptr64") && Spec.Type) {
+        const TypeExpr *Pointer = Spec.Type.get();
+        if (Pointer->Kind == TypeExprKind::Named) {
+          const LocalType *Resolved = Library.resolve(Pointer->Name);
+          Pointer = Resolved ? Resolved->Target.get() : nullptr;
+        }
+        if (!Pointer || Pointer->Kind != TypeExprKind::Pointer) {
+          fail(T, "a pointer width annotation requires a pointer type");
+          return false;
+        }
+        auto Sized = std::make_shared<TypeExpr>(*Pointer);
+        Sized->PointerBytes = W == "__ptr32" ? 4 : 8;
+        Spec.Type = std::move(Sized);
+        Spec.TypeName = false;
+        take();
       } else if (ignoredWord(W) || W == "typename") {
         take();
       } else if (W == "_Noreturn" || W == "DECLSPEC_NORETURN" ||
@@ -1286,6 +1371,7 @@ private:
           // A typedef the declarations made, such as glibc's size_t, keeps
           // its name.
           Spec.Type = named(W);
+          Spec.TypeName = true;
         } else if (W == "size_t" || W == "uintptr_t")
           Spec.Type = makeBuiltin(pointerSize() == 8 ? Builtin::ULongLong
                                                      : Builtin::UInt);
@@ -1313,12 +1399,12 @@ private:
         Type = Words.Long ? Builtin::LongDouble : Builtin::Double;
       else if (Words.WChar)
         Type = Builtin::WChar;
-      else if (Words.Char)
+      // Microsoft's unqualified __int8 is char, whose type identity differs
+      // from signed char even when both have the same signed representation.
+      else if (Words.Char || Words.Int8)
         Type = U              ? Builtin::UChar
                : Words.Signed ? Builtin::SChar
                               : Builtin::Char;
-      else if (Words.Int8)
-        Type = U ? Builtin::UChar : Builtin::SChar;
       else if (Words.Int16 || Words.Short)
         Type = U ? Builtin::UShort : Builtin::Short;
       else if (Words.Int32)
@@ -1358,7 +1444,7 @@ private:
       return true;
     return T.Kind == TokenKind::Word &&
            (T.Text == "__attribute__" || T.Text == "__attribute" ||
-            T.Text == "__declspec" || T.Text == "DECLSPEC_ALIGN" ||
+            declspecWord(T.Text) || T.Text == "DECLSPEC_ALIGN" ||
             T.Text == "alignas" || T.Text == "_Alignas" ||
             T.Text == "__asm__" || T.Text == "__asm");
   }
@@ -1422,7 +1508,7 @@ private:
       }
       // __attribute__((a, b(x))) lists its attributes in a second pair of
       // parentheses; __declspec(a b(x)) in its one.
-      const bool Gnu = Word != "__declspec";
+      const bool Gnu = !declspecWord(Word);
       if (Gnu && !expect("(", "after " + Word.str() + "("))
         return false;
       while (!Failed && !isPunct(")")) {
@@ -1530,6 +1616,7 @@ private:
         Def->Defined = false;
         Declared.Record = std::move(Def);
         Library.define(std::move(Declared));
+        note(Result.Types, NotedTypes, Name);
       }
       return makeNamed(Name, Kind);
     }
@@ -1604,13 +1691,36 @@ private:
         continue;
       }
       // An unnamed bitfield without specifiers is not C.
+      const Token MemberAt = peek();
       Specifiers Spec;
       if (!specifiers(Spec))
         return;
       if (accept(";")) {
-        // An anonymous record; a definition alone adds no member.
+        // An anonymous record, including Microsoft's named C extensions.
         if (Spec.Type->Kind == TypeExprKind::Record)
           Draft.Members.push_back({"", Spec.Type, false, 0, ""});
+        else if (!Cpp && !Spec.Typedef &&
+                 libraryRecordABIOf(Library.recordABI()) ==
+                     RecordABI::Microsoft &&
+                 Spec.Type->Kind == TypeExprKind::Named) {
+          // Microsoft's C admits both typedef and tagged anonymous members,
+          // including a reference to an existing tag: struct S;. This embeds
+          // the record, and an incomplete tag is an incomplete field error.
+          if (const LocalType *Named = Library.resolve(Spec.Type->Name)) {
+            if (Named->Record) {
+              if (!Named->Record->Defined) {
+                fail(MemberAt, "an anonymous member needs a complete record");
+                return;
+              }
+              DraftMember Field;
+              Field.Type = qualified(makeRecord(Named->Record),
+                                     Spec.Type->Const, Spec.Type->Volatile);
+              Field.Alignment = Spec.Asked.Alignment;
+              Field.Packed = Spec.Asked.Packed;
+              Draft.Members.push_back(std::move(Field));
+            }
+          }
+        }
         continue;
       }
       while (!Failed) {
@@ -1784,6 +1894,11 @@ private:
 
   std::function<TypeExprRef(TypeExprRef)>
   parseDeclarator(std::string &Name, Token &NameToken, bool Abstract) {
+    // Microsoft places this access annotation before the pointer too,
+    // including after a comma in a list of typedef declarators.
+    while (isWord("__unaligned") &&
+           (isPunct("*", 1) || isWord("__unaligned", 1)))
+      take();
     struct Pointer {
       bool Const = false, Volatile = false, Reference = false;
       uint32_t Bytes = 0;
@@ -1852,7 +1967,8 @@ private:
       // C++ qualified names keep their spelling.
       while (isPunct("::") && peek(1).Kind == TokenKind::Word) {
         take();
-        Name += "::" + take().Text;
+        Name += "::";
+        Name += take().Text;
       }
     }
     // Arrays and parameters, in their order.
@@ -1948,12 +2064,14 @@ private:
     const Attributes Outer = Declared;
     auto Restore = llvm::make_scope_exit([&] { Declared = Outer; });
     auto Function = std::make_shared<FunctionDef>();
-    if (PendingConvention) {
+    const auto Convention =
+        PendingConvention ? PendingConvention : DefaultConvention;
+    PendingConvention.reset();
+    if (Convention) {
       // A convention the target ignores, as 64-bit x86 does __stdcall, is
       // no convention of the function's.
-      if (pointerSize() < 8 || keptWide(*PendingConvention))
-        Function->Convention = *PendingConvention;
-      PendingConvention.reset();
+      if (pointerSize() < 8 || keptWide(*Convention))
+        Function->Convention = *Convention;
     }
     take(); // (
     if (accept(")"))
@@ -2035,7 +2153,7 @@ private:
       const int Level = Op.Kind == TokenKind::Punct ? precedence(Op.Text) : 0;
       if (!Level || Level <= Lowest)
         break;
-      const std::string Text = take().Text;
+      const llvm::StringRef Text = take().Text;
       std::optional<int64_t> Right = binary(Level);
       if (!Right)
         return std::nullopt;
@@ -2263,9 +2381,13 @@ private:
   std::optional<int64_t> memberSize(const Token &At) {
     take();
     take();
-    const TypeExprRef Pointer = typeInParentheses();
+    TypeExprRef Pointer = typeInParentheses();
     if (!Pointer)
       return std::nullopt;
+    if (Pointer->Kind == TypeExprKind::Named)
+      if (const LocalType *Named = Library.resolve(Pointer->Name);
+          Named && Named->Kind == TypeKind::Typedef && Named->Target)
+        Pointer = Named->Target;
     if (Pointer->Kind != TypeExprKind::Pointer || !Pointer->Element ||
         peek().Kind != TokenKind::Number || peek().Value != 0) {
       fail(peek(), "expected a null pointer to a record");
@@ -2334,7 +2456,7 @@ private:
   /// _Static_assert and static_assert: checked against the layout.
   void staticAssert() {
     const Token At = take();
-    if (!expect("(", "after " + At.Text))
+    if (!expect("(", "after " + At.Text.str()))
       return;
     std::optional<int64_t> Value = constant();
     if (!Value)
@@ -2370,6 +2492,7 @@ private:
   bool Failed = false;
   /// Open extern "C" and namespace blocks.
   unsigned Blocks = 0;
+  std::optional<CallingConvention> DefaultConvention;
   std::optional<CallingConvention> PendingConvention;
   /// What the attributes of the declarator being read say.
   Attributes Declared;
@@ -2410,7 +2533,9 @@ ParseResult parseTypes(llvm::StringRef Source, TypeLibrary &Library,
 ParseResult parseCTypes(llvm::StringRef Source, TypeLibrary &Library,
                         const ParseOptions &Options) {
   ParseResult Result;
-  std::vector<Token> Tokens = Lexer(Source, Result.Problems).run();
+  llvm::BumpPtrAllocator Storage;
+  llvm::StringSaver Spellings(Storage);
+  std::vector<Token> Tokens = Lexer(Source, Result.Problems, Spellings).run();
   if (!Result.Problems.empty())
     return Result;
   TypeLibrary Scratch(Library);
@@ -2430,7 +2555,9 @@ FunctionDeclaration parseFunctionDeclaration(llvm::StringRef Source,
   if (!llvm::StringRef(Text).ends_with(";") &&
       !llvm::StringRef(Text).ends_with("}"))
     Text += ";";
-  std::vector<Token> Tokens = Lexer(Text, Result.Problems).run();
+  llvm::BumpPtrAllocator Storage;
+  llvm::StringSaver Spellings(Storage);
+  std::vector<Token> Tokens = Lexer(Text, Result.Problems, Spellings).run();
   if (Result.Problems.empty()) {
     TypeLibrary Scratch(Library);
     ParseOptions One = Options;

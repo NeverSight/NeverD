@@ -239,10 +239,12 @@ void addObjectExterns(const llvm::object::ELFFile<ELFT> &ELF,
       if (auto It = Externs.SymbolSlots.find(Name);
           It != Externs.SymbolSlots.end()) {
         Address = It->second;
-        if (Externs.CalledSymbols.count(Name))
+        if (Externs.CalledSymbols.count(Name)) {
           ImportEntries.push_back({EntryVA, Name});
-        else
+        } else {
           OwnerVA = Externs.ExternBase;
+          Img.ObjectExternDataCells[EntryVA] = Name;
+        }
       }
     } else if (Sym.st_shndx == SHN_COMMON) {
       if (auto It = Externs.CommonSlots.find(Name);
@@ -261,7 +263,10 @@ void addObjectExterns(const llvm::object::ELFFile<ELFT> &ELF,
     if (!Address)
       continue;
     object_externs::writeCell(Externs, GOT, Index, *Address);
-    if (OwnerVA != InvalidVA)
+    // An undefined data symbol's entry binds that symbol, as a linked GOT
+    // slot does (collectDataSymbolBindings): it points into no storage of
+    // the object's.
+    if (OwnerVA != InvalidVA && !Img.ObjectExternDataCells.count(EntryVA))
       PointerEntries.push_back({EntryVA, {*Address, OwnerVA}});
   }
   object_externs::addCellSegment(Externs, section_names::elf::Got,

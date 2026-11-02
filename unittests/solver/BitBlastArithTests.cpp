@@ -4,8 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Check sums and output carries against independent integer arithmetic and
-// the original ripple circuit, including interrupted and commuted bit runs.
+// Check arithmetic against independent integer values and original circuits,
+// including repeated carries, known-zero prefixes and full-word products.
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <utility>
 
 using namespace neverd::solver;
@@ -207,5 +208,83 @@ TEST(RepeatedAdderCarry, EmptyInputPreservesInputCarry) {
   EXPECT_EQ(Carry, In);
   circuit::addBits(E, {}, {}, In, Out);
   EXPECT_TRUE(Out.empty());
+}
+
+void originalMultiplier(CnfEncoder &E, circuit::LitSpan A, circuit::LitSpan B,
+                        circuit::LitVec &Out) {
+  Out.assign(A.size(), E.falseLit());
+  circuit::LitVec Row, Sum;
+  for (size_t J = 0; J < B.size(); ++J) {
+    Row.assign(A.size(), E.falseLit());
+    for (size_t I = J; I < A.size(); ++I)
+      Row[I] = E.mkAnd(A[I - J], B[J]);
+    originalAdder(E, Out, Row, E.falseLit(), Sum, nullptr);
+    Out.swap(Sum);
+  }
+}
+
+TEST(ZeroPrefixProduct, IndependentCircuitProvesEveryOutputBit) {
+  for (unsigned Width : {8u, 32u, 64u, 129u})
+    for (unsigned AZeros : {0u, 1u, Width / 2, Width - 1, Width})
+      for (unsigned BZeros : {0u, 1u, Width / 2, Width - 1, Width}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << AZeros << ':' << BZeros);
+        SatSolver S;
+        CnfEncoder E(S);
+        circuit::LitVec A, B, Actual, Expected, Difference;
+        for (unsigned I = 0; I < Width; ++I) {
+          A.push_back(I < AZeros ? E.falseLit() : E.freshLit());
+          B.push_back(I < BZeros ? E.falseLit() : E.freshLit());
+        }
+        circuit::multiplyBits(E, A, B, Actual);
+        originalMultiplier(E, A, B, Expected);
+        ASSERT_EQ(Actual.size(), Width);
+        ASSERT_EQ(Expected.size(), Width);
+        for (unsigned I = 0; I < Width; ++I)
+          Difference.push_back(E.mkXor(Actual[I], Expected[I]));
+        E.assertTrue(E.mkOr(Difference));
+        EXPECT_EQ(S.solve(), SatResult::Unsat);
+      }
+}
+
+TEST(ZeroPrefixProduct, IntegerOracleCoversTruncatedAndWideProducts) {
+  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 65u, 129u, 257u})
+    for (unsigned AZeros : {0u, Width / 2, Width - 1, Width})
+      for (unsigned BZeros : {0u, Width / 2, Width - 1, Width}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << AZeros << ':' << BZeros);
+        SatSolver S;
+        CnfEncoder E(S);
+        const std::array Inputs{E.freshLit(), E.freshLit(), E.freshLit(),
+                                E.freshLit()};
+        circuit::LitVec A, B, Product;
+        for (unsigned I = 0; I < Width; ++I) {
+          A.push_back(I < AZeros ? E.falseLit() : Inputs[I % 2]);
+          const auto Bit = Inputs[2 + I % 2];
+          B.push_back(I < BZeros ? E.falseLit() : (I % 3 ? Bit : ~Bit));
+        }
+        circuit::multiplyBits(E, A, B, Product);
+        ASSERT_EQ(Product.size(), Width);
+        for (unsigned Assignment = 0; Assignment < 16; ++Assignment) {
+          circuit::LitVec Assumptions;
+          for (unsigned I = 0; I < Inputs.size(); ++I)
+            Assumptions.push_back(
+                Inputs[I].withPolarity((Assignment >> I) & 1));
+          ASSERT_EQ(S.solve(Assumptions), SatResult::Sat);
+          llvm::APInt X(Width, 0), Y(Width, 0), Actual(Width, 0);
+          for (unsigned I = 0; I < Width; ++I) {
+            ASSERT_NE(S.modelValue(A[I]), SatValue::Unknown);
+            ASSERT_NE(S.modelValue(B[I]), SatValue::Unknown);
+            ASSERT_NE(S.modelValue(Product[I]), SatValue::Unknown);
+            if (S.modelValue(A[I]) == SatValue::True)
+              X.setBit(I);
+            if (S.modelValue(B[I]) == SatValue::True)
+              Y.setBit(I);
+            if (S.modelValue(Product[I]) == SatValue::True)
+              Actual.setBit(I);
+          }
+          EXPECT_EQ(Actual, X * Y) << Assignment;
+        }
+      }
 }
 } // namespace

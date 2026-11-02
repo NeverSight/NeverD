@@ -9,15 +9,15 @@
 #ifndef NEVERD_LIB_LIFT_X86_X86FPMASKCOMPARESTATE_H
 #define NEVERD_LIB_LIFT_X86_X86FPMASKCOMPARESTATE_H
 
-#include "X86LiftDetail.h"
+#include "X86FPEncoding.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 namespace neverd {
 /// Distinguish scalar CMP from string CMPSD before trusting decoded operands.
-inline bool hasLegacyFPMaskCompareOpcode(const cs_insn *Insn) {
+inline bool hasLegacyFPMaskCompareOpcode(const cs_insn *Insn, Arch Target) {
   if (!Insn || !Insn->size || Insn->size > 15)
     return false;
   unsigned I = 0;
@@ -28,6 +28,9 @@ inline bool hasLegacyFPMaskCompareOpcode(const cs_insn *Insn) {
           (B & 0xf0) == 0x40))
       break;
   }
+  if (Target == Arch::X64 && I + 2 < Insn->size && Insn->bytes[I] == 0xd5 &&
+      (Insn->bytes[I + 1] & 0x80))
+    return Insn->bytes[I + 2] == 0xc2;
   return I + 1 < Insn->size && Insn->bytes[I] == 0x0f &&
          Insn->bytes[I + 1] == 0xc2;
 }
@@ -65,91 +68,27 @@ inline bool liftFPMaskCompareState(X86Lifter &L, X86Lifter::LiftState &S,
                 (X86.sse_cc != X86_SSE_CC_INVALID &&
                  unsigned(X86.sse_cc) != Predicate + 1))
     return Refuse();
-  const bool Mode64 = L.targetArch() == Arch::X64;
   const unsigned PP = Scalar ? (Double ? 3 : 2) : (Double ? 1 : 0);
-  const uint8_t Prefix = PP == 1 ? 0x66 : PP == 2 ? 0xf3 : PP == 3 ? 0xf2 : 0;
-  unsigned Offset = 0, Width = 16;
-  uint8_t Segment = 0, Rex = 0;
-  bool Address = false, Mandatory = false;
-  while (Offset < Insn->size) {
-    const auto Byte = Insn->bytes[Offset];
-    if (Byte == 0x26 || Byte == 0x2e || Byte == 0x36 || Byte == 0x3e ||
-        Byte == 0x64 || Byte == 0x65) {
-      if (Segment || Rex)
-        return Refuse();
-      Segment = Byte;
-    } else if (Byte == 0x67) {
-      if (Address || Rex)
-        return Refuse();
-      Address = true;
-    } else if (!Vex && Prefix && Byte == Prefix) {
-      if (Mandatory || Rex)
-        return Refuse();
-      Mandatory = true;
-    } else if (!Vex && Mode64 && (Byte & 0xf0) == 0x40) {
-      if (Rex)
-        return Refuse();
-      Rex = Byte;
-    } else
-      break;
-    ++Offset;
-  }
-  bool R = Rex & 4, B = Rex & 1, X = Rex & 2;
-  if (Vex) {
-    if (Offset + 3 >= Insn->size)
-      return Refuse();
-    uint8_t P1;
-    if (Insn->bytes[Offset] == 0xc5) {
-      P1 = Insn->bytes[Offset + 1];
-      R = !(P1 & 0x80);
-      B = X = false;
-      Offset += 2;
-    } else if (Insn->bytes[Offset] == 0xc4) {
-      if (Offset + 4 >= Insn->size)
-        return Refuse();
-      const auto P0 = Insn->bytes[Offset + 1];
-      if ((P0 & 31) != 1 || (!Mode64 && (P0 & 0xe0) != 0xe0))
-        return Refuse();
-      R = !(P0 & 0x80);
-      B = !(P0 & 0x20);
-      X = !(P0 & 0x40);
-      P1 = Insn->bytes[Offset + 2];
-      Offset += 3;
-    } else
-      return Refuse();
-    if ((P1 & 3) != PP || (Scalar && (P1 & 4)) || (!Mode64 && R))
-      return Refuse();
-    Width = P1 & 4 ? 32 : 16;
-    const unsigned Left = (~P1 >> 3) & 15;
-    if ((!Mode64 && Left >= 8) || X86.operands[1].type != X86_OP_REG ||
-        X86.operands[1].size != Width ||
-        X86.operands[1].reg !=
-            (Width == 32 ? X86_REG_YMM0 : X86_REG_XMM0) + Left)
-      return Refuse();
-  } else {
-    if (Mandatory != bool(Prefix) || Offset + 2 >= Insn->size ||
-        Insn->bytes[Offset++] != 0x0f)
-      return Refuse();
-  }
-  if (Offset + 1 >= Insn->size || Insn->bytes[Offset] != 0xc2 ||
-      X86.encoding.modrm_offset != Offset + 1 ||
-      X86.modrm != Insn->bytes[Offset + 1])
+  FPEncodingInfo E;
+  if (!parseFPEncoding(Insn, X86, L.targetArch(), Vex, 1, PP, E) ||
+      E.Opcode != 0xc2 || (Scalar && E.L))
     return Refuse();
+  const unsigned Width = E.L ? 32 : 16;
   const unsigned Base = Width == 32 ? X86_REG_YMM0 : X86_REG_XMM0;
   if (X86.operands[0].size != Width ||
-      X86.operands[0].reg != Base + ((X86.modrm >> 3) & 7) + (R ? 8 : 0))
+      X86.operands[0].reg != Base + E.vectorRegIndex() ||
+      (Vex &&
+       (X86.operands[1].type != X86_OP_REG || X86.operands[1].size != Width ||
+        X86.operands[1].reg != Base + E.vvvvIndex())))
     return Refuse();
   const unsigned Element = Double ? 8 : 4, Bytes = Scalar ? Element : Width;
   const auto &RHS = X86.operands[SourceIndex];
-  const bool Memory = (X86.modrm >> 6) != 3;
+  const bool Memory = (E.ModRM >> 6) != 3;
   if (Memory ? RHS.type != X86_OP_MEM || RHS.size != Bytes
              : RHS.type != X86_OP_REG || RHS.size != Width ||
-                   RHS.reg != Base + (X86.modrm & 7) + (B ? 8 : 0))
+                   RHS.reg != Base + E.vectorRMIndex())
     return Refuse();
-  if (!validateCanonicalScalarConversionTail(
-          Insn, X86, Offset + 2, Segment, Mode64,
-          Mode64 ? (Address ? 4 : 8) : (Address ? 2 : 4), B ? 8 : 0, X ? 8 : 0,
-          RHS, 1))
+  if (!validateFPEncodingTail(Insn, X86, E, RHS, 1))
     return Refuse();
   const auto Slice = [&](NdVar Input) {
     if (Input.Size == Bytes)

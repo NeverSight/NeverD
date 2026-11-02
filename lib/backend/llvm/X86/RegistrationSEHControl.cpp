@@ -4,9 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/X86RegistrationSEHControl.h"
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHControl.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 
 namespace neverd {
 

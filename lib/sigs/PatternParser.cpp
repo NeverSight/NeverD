@@ -6,6 +6,11 @@
 
 #include "neverd/sigs/PatternParser.h"
 
+#include "CodeLayoutContext.h"
+#include "LocalDataReference.h"
+#include "RuntimePointerContext.h"
+#include "VTableContext.h"
+
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -22,6 +27,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <utility>
 
 #if defined(__SSE2__)
 #include <emmintrin.h>
@@ -197,6 +203,11 @@ struct DraftModule {
   uint32_t ReferenceCount = 0;
   uint16_t CRC16 = 0;
   uint8_t CRCLen = 0;
+  bool RequireReferences = false;
+  bool RequireCaller = false;
+  bool IsVTable = false;
+  bool IsLoadConfig = false;
+  bool IsCodeLayout = false;
 };
 
 /// Where the modules of a chunk are written: each module's bytes, then its
@@ -347,6 +358,9 @@ llvm::Error appendPattern(llvm::StringRef Pat, ChunkWriter &Writer,
   return llvm::Error::success();
 }
 
+StoredModule storedModule(const DraftModule &Draft, const uint8_t *Bytes,
+                          const PatternNames &Names);
+
 /// Parse the pattern line \p Line into \p Writer.  The names the module adds
 /// refer to \p Line's text.  On failure the writer may hold part of the line,
 /// and the caller discards it.
@@ -398,18 +412,42 @@ llvm::Expected<DraftModule> parsePatternLine(llvm::StringRef Line,
   // with, is no name.
   auto CannotBeName = [](llvm::StringRef Field) {
     return Field.starts_with(PublicNamePrefix) ||
-           Field.starts_with(ReferencePrefix) ||
-           Field.starts_with(UnstatedByte);
+           Field.starts_with(DataReferencePrefix) ||
+           Field.starts_with(LocalDataReferencePrefix) ||
+           Field.starts_with(ReferencePrefix) || Field == RequiredReferences ||
+           Field == RequiredCaller || Field == VTableContext ||
+           Field == LoadConfigContext || Field.starts_with(UnstatedByte);
   };
 
   // Remaining tokens form :offset/name pairs, then ^offset/name references,
   // followed by at most one tail.
   bool SawTail = false;
+  bool SawDataReference = false;
   for (size_t I = OpeningFields; I < Tokens.size(); ++I) {
-    if (Tokens[I].starts_with(ReferencePrefix)) {
+    if (Tokens[I] == CollisionEvidenceOnly)
+      return patternError("collision evidence is not a matchable signature");
+    if (Tokens[I] == RequiredReferences || Tokens[I] == RequiredCaller ||
+        Tokens[I] == VTableContext || Tokens[I] == LoadConfigContext ||
+        Tokens[I] == CodeLayoutContext) {
+      if (I != OpeningFields)
+        return patternError(
+            "context requirement must immediately follow total length");
+      Mod.RequireReferences = Tokens[I] == RequiredReferences;
+      Mod.RequireCaller = Tokens[I] == RequiredCaller;
+      Mod.IsVTable = Tokens[I] == VTableContext;
+      Mod.IsLoadConfig = Tokens[I] == LoadConfigContext;
+      Mod.IsCodeLayout = Tokens[I] == CodeLayoutContext;
+      continue;
+    }
+    if (Tokens[I].starts_with(ReferencePrefix) ||
+        Tokens[I].starts_with(DataReferencePrefix) ||
+        Tokens[I].starts_with(LocalDataReferencePrefix)) {
       if (SawTail)
         return patternError("reference follows the tail pattern");
-      auto OffStr = Tokens[I].drop_front(ReferencePrefix.size());
+      const bool IsLocal = Tokens[I].starts_with(LocalDataReferencePrefix);
+      const bool IsData = IsLocal || Tokens[I].starts_with(DataReferencePrefix);
+      auto OffStr = Tokens[I].drop_front(IsData ? DataReferencePrefix.size()
+                                                : ReferencePrefix.size());
       unsigned Off;
       if (OffStr.empty() || OffStr.getAsInteger(Radix, Off))
         return patternError("invalid reference offset: " + Tokens[I]);
@@ -419,7 +457,13 @@ llvm::Expected<DraftModule> parsePatternLine(llvm::StringRef Line,
         return patternError("reference name is missing after offset: " +
                             Tokens[I]);
 
-      Writer.Names.Names.push_back({Off, Tokens[++I]});
+      if (IsData && !Mod.RequireReferences && !Mod.RequireCaller &&
+          !Mod.IsLoadConfig && !Mod.IsCodeLayout)
+        return patternError("data references require a contextual record");
+      if (IsLocal && (Mod.IsLoadConfig || !localDataAnchor(Tokens[I + 1])))
+        return patternError("invalid source-local data anchor");
+      SawDataReference |= IsData;
+      Writer.Names.Names.push_back({Off, Tokens[++I], IsData, IsLocal});
       ++Mod.ReferenceCount;
       continue;
     }
@@ -456,6 +500,32 @@ llvm::Expected<DraftModule> parsePatternLine(llvm::StringRef Line,
 
   if (Mod.PublicNameCount == 0)
     return patternError("no public names found");
+  if (SawDataReference && !Mod.IsLoadConfig) {
+    llvm::SmallVector<std::pair<uint32_t, unsigned>, 8> Sites;
+    for (const StoredName &Ref :
+         llvm::ArrayRef(Writer.Names.Names)
+             .slice(Mod.Names + Mod.PublicNameCount, Mod.ReferenceCount))
+      Sites.emplace_back(Ref.Offset, unsigned(Ref.IsData) + Ref.IsLocalData);
+    llvm::sort(Sites);
+    for (size_t I = 1; I < Sites.size(); ++I)
+      if (Sites[I].first == Sites[I - 1].first &&
+          Sites[I].second != Sites[I - 1].second)
+        return patternError("reference site mixes function and data kinds");
+  }
+  if (Mod.RequireReferences &&
+      (Mod.ReferenceCount == 0 ||
+       uint64_t(Mod.LeadingCount) + Mod.CRCLen + Mod.TailCount < Mod.TotalLen))
+    return patternError(
+        "!refs requires references and whole-function coverage");
+
+  if (Mod.RequireCaller &&
+      (uint64_t(Mod.LeadingCount) + Mod.CRCLen + Mod.TailCount < Mod.TotalLen ||
+       llvm::any_of(
+           llvm::ArrayRef(Writer.Names.Names)
+               .slice(Mod.Names, Mod.PublicNameCount),
+           [](const StoredName &Name) { return Name.Offset != 0; })))
+    return patternError(
+        "!caller requires a complete body with public names at its start");
 
   // The stated bits follow the bytes.
   const size_t Count = size_t{Mod.LeadingCount} + Mod.TailCount;
@@ -469,6 +539,18 @@ llvm::Expected<DraftModule> parsePatternLine(llvm::StringRef Line,
     Stated[I] = static_cast<uint8_t>(Writer.Bits[I / WordBytes] >>
                                      (I % WordBytes * CHAR_BIT));
   Writer.Used = Mod.Bytes + Count + StatedBytes;
+  if (Mod.IsVTable &&
+      !isValidVTableContext(storedModule(Mod, Writer.Bytes, Writer.Names)))
+    return patternError("!vtable requires one primary table name and complete "
+                        "wildcard code-pointer slots");
+  if (Mod.IsLoadConfig && !isValidRuntimePointerContext(
+                              storedModule(Mod, Writer.Bytes, Writer.Names)))
+    return patternError(
+        "!loadcfg requires source-owned pointer/default pairs at known fields");
+  if (Mod.IsCodeLayout &&
+      !isValidCodeLayoutContext(storedModule(Mod, Writer.Bytes, Writer.Names)))
+    return patternError("!layout requires complete literal source members, "
+                        "canonical imports and shared data operands");
   return Mod;
 }
 
@@ -501,6 +583,11 @@ StoredModule storedModule(const DraftModule &Draft, const uint8_t *Bytes,
   Module.ReferenceCount = Draft.ReferenceCount;
   Module.CRC16 = Draft.CRC16;
   Module.CRCLen = Draft.CRCLen;
+  Module.RequireReferences = Draft.RequireReferences;
+  Module.RequireCaller = Draft.RequireCaller;
+  Module.IsVTable = Draft.IsVTable;
+  Module.IsLoadConfig = Draft.IsLoadConfig;
+  Module.IsCodeLayout = Draft.IsCodeLayout;
   return Module;
 }
 
@@ -519,11 +606,17 @@ PatternModule PatternParser::toPatternModule(const StoredModule &Module) {
   Result.LeadingBytes = Pattern(0, Module.LeadingCount);
   Result.CRC16 = Module.CRC16;
   Result.CRCLen = Module.CRCLen;
+  Result.RequireReferences = Module.RequireReferences;
+  Result.RequireCaller = Module.RequireCaller;
+  Result.IsVTable = Module.IsVTable;
+  Result.IsLoadConfig = Module.IsLoadConfig;
+  Result.IsCodeLayout = Module.IsCodeLayout;
   Result.TotalLen = Module.TotalLen;
   for (const StoredName &Name : Module.publicNames())
     Result.PublicNames.push_back({Name.Offset, std::string(Name.Name)});
   for (const StoredName &Name : Module.references())
-    Result.References.push_back({Name.Offset, std::string(Name.Name)});
+    Result.References.push_back(
+        {Name.Offset, std::string(Name.Name), Name.IsData, Name.IsLocalData});
   Result.TailBytes = Pattern(Module.LeadingCount, Module.TailCount);
   return Result;
 }

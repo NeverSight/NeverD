@@ -7,8 +7,11 @@
 #include "LanguageEHTestsDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/loader/ELF/ELFImageMetadata.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/SourceUnwind.h"
+
+#include "llvm/BinaryFormat/ELF.h"
 
 #include <limits>
 
@@ -456,109 +459,143 @@ TEST(ItaniumLSDA, DecodesExceptionSpecificationLists) {
 //===----------------------------------------------------------------------===//
 
 TEST(ItaniumEHDriver, NormalizesFrameSectionIntoExceptionMetadata) {
-  BinaryImage Img = makeImage();
-  const va_t FuncVA = kTextVA + 0x100;
-  const va_t SectionVA = kDataVA;
-  const va_t PersonalityVA = kTextVA + 0x800;
-  const va_t LSDAVA = kDataVA + 0x400;
+  for (bool PublishExtents : {false, true}) {
+    SCOPED_TRACE(PublishExtents);
+    BinaryImage Img = makeImage();
+    const va_t FuncVA = kTextVA + 0x100;
+    const va_t SectionVA = kDataVA;
+    const va_t PersonalityVA = kTextVA + 0x800;
+    const va_t LSDAVA = kDataVA + 0x400;
 
-  Symbol Personality;
-  Personality.Name = "__gxx_personality_v0";
-  Personality.Addr = PersonalityVA;
-  Personality.IsFunc = true;
-  Img.Symbols.push_back(std::move(Personality));
+    FrameBytes Frame = buildSimpleFrame(SectionVA, FuncVA, 0x80, "zPLR",
+                                        PersonalityVA, LSDAVA);
+    writeData(Img, SectionVA, Frame.Bytes);
 
-  FrameBytes Frame =
-      buildSimpleFrame(SectionVA, FuncVA, 0x80, "zPLR", PersonalityVA, LSDAVA);
-  writeData(Img, SectionVA, Frame.Bytes);
+    Section EhFrame;
+    EhFrame.Name = ".eh_frame";
+    EhFrame.VA = SectionVA;
+    EhFrame.Size = Frame.Bytes.size();
+    EhFrame.Data = Frame.Bytes;
+    Img.Sections.push_back(std::move(EhFrame));
 
-  Section EhFrame;
-  EhFrame.Name = ".eh_frame";
-  EhFrame.VA = SectionVA;
-  EhFrame.Size = Frame.Bytes.size();
-  EhFrame.Data = Frame.Bytes;
-  Img.Sections.push_back(std::move(EhFrame));
+    LSDABytes Table = buildCatchLSDA(LSDAVA, FuncVA, /*TypeInfoVA=*/0);
+    writeData(Img, LSDAVA, Table.Bytes);
+    if (PublishExtents)
+      recordFrameExtents(Img);
+    EXPECT_TRUE(Img.ExceptionMetadata.Functions.empty());
+    EXPECT_TRUE(Img.ExceptionMetadata.CIEs.empty());
 
-  LSDABytes Table = buildCatchLSDA(LSDAVA, FuncVA, /*TypeInfoVA=*/0);
-  writeData(Img, LSDAVA, Table.Bytes);
+    // Discovery can supply the personality name only after the frame extents
+    // have bounded its heuristic scans. Language recovery must see that name.
+    Symbol Personality;
+    Personality.Name = "__gxx_personality_v0";
+    Personality.Addr = PersonalityVA;
+    Personality.IsFunc = true;
+    Img.Symbols.push_back(std::move(Personality));
 
-  parseItaniumExceptions(Img);
+    parseItaniumExceptions(Img);
 
-  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
-  const ExceptionFunction &F = Img.ExceptionMetadata.Functions[0];
-  EXPECT_EQ(F.Encoding, ExceptionEncoding::DwarfFDE);
-  EXPECT_EQ(F.model(), ExceptionModel::Itanium);
-  EXPECT_EQ(F.Personality, ExceptionPersonality::GxxPersonalityV0);
-  EXPECT_EQ(F.PersonalityName, "__gxx_personality_v0");
-  EXPECT_EQ(F.CodeRange.Begin, FuncVA);
-  EXPECT_EQ(F.CodeRange.End, FuncVA + 0x80);
-  ASSERT_TRUE(F.Dwarf.has_value());
-  ASSERT_TRUE(F.Itanium.has_value());
-  EXPECT_EQ(F.Itanium->CallSites.size(), 3u);
-  EXPECT_TRUE(Img.ExceptionMetadata.hasModel(ExceptionModel::Itanium));
-  EXPECT_FALSE(F.canRegenerateLanguageMetadata());
+    ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+    const ExceptionFunction &F = Img.ExceptionMetadata.Functions[0];
+    EXPECT_EQ(F.Encoding, ExceptionEncoding::DwarfFDE);
+    EXPECT_EQ(F.model(), ExceptionModel::Itanium);
+    EXPECT_EQ(F.Personality, ExceptionPersonality::GxxPersonalityV0);
+    EXPECT_EQ(F.PersonalityName, "__gxx_personality_v0");
+    EXPECT_EQ(F.CodeRange.Begin, FuncVA);
+    EXPECT_EQ(F.CodeRange.End, FuncVA + 0x80);
+    ASSERT_TRUE(F.Dwarf.has_value());
+    ASSERT_TRUE(F.Itanium.has_value());
+    EXPECT_EQ(F.Itanium->CallSites.size(), 3u);
+    EXPECT_TRUE(Img.ExceptionMetadata.hasModel(ExceptionModel::Itanium));
+    EXPECT_FALSE(F.canRegenerateLanguageMetadata());
 
-  // The FDE proves both the entry and the extent, which is stronger evidence
-  // than any heuristic scan produces.
-  const ExceptionFunction *Found =
-      Img.ExceptionMetadata.findFunction(FuncVA + 0x10);
-  ASSERT_NE(Found, nullptr);
-  EXPECT_EQ(Found->CodeRange.Begin, FuncVA);
+    // The FDE proves both the entry and the extent, which is stronger evidence
+    // than any heuristic scan produces.
+    const ExceptionFunction *Found =
+        Img.ExceptionMetadata.findFunction(FuncVA + 0x10);
+    ASSERT_NE(Found, nullptr);
+    EXPECT_EQ(Found->CodeRange.Begin, FuncVA);
+  }
 }
 
 TEST(ItaniumEHDriver, IncompleteFrameSectionsRemainStructuralAtEveryEntry) {
-  for (Arch A : {Arch::X86, Arch::X64, Arch::AArch64})
-    for (unsigned Damage : {0u, 1u, 2u})
-      for (bool BadFirst : {false, true}) {
-        SCOPED_TRACE(static_cast<unsigned>(A));
-        SCOPED_TRACE(Damage);
-        SCOPED_TRACE(BadFirst);
-        BinaryImage Img = makeImage();
-        Img.Arch = A;
-        Img.Bits = A == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
-        std::vector<uint8_t> Bytes;
-        for (unsigned I = 0; I < 2; ++I) {
-          const bool Bad = (I == 0) == BadFirst;
-          auto Frame = buildSimpleFrame(kDataVA + Bytes.size(),
-                                        kTextVA + 0x100 + I * 0x100, 0x80,
-                                        Bad && Damage == 0   ? "zRX"
-                                        : Bad && Damage == 1 ? "zRL"
-                                                             : "zR",
-                                        0, Bad && Damage == 1 ? 0xdead000 : 0,
-                                        Bad && Damage == 1 ? 0x9b : 0x1b);
-          Frame.Bytes.resize(Frame.Bytes.size() - sizeof(uint32_t));
-          Bytes.insert(Bytes.end(), Frame.Bytes.begin(), Frame.Bytes.end());
+  for (bool PublishExtents : {false, true})
+    for (Arch A : {Arch::X86, Arch::X64, Arch::AArch64})
+      for (unsigned Damage : {0u, 1u, 2u, 3u, 4u})
+        for (bool BadFirst : {false, true}) {
+          SCOPED_TRACE(PublishExtents);
+          SCOPED_TRACE(static_cast<unsigned>(A));
+          SCOPED_TRACE(Damage);
+          SCOPED_TRACE(BadFirst);
+          BinaryImage Img = makeImage();
+          Img.Arch = A;
+          Img.Bits = A == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+          std::vector<uint8_t> Bytes;
+          for (unsigned I = 0; I < 2; ++I) {
+            const bool Bad = (I == 0) == BadFirst;
+            auto Frame = buildSimpleFrame(kDataVA + Bytes.size(),
+                                          kTextVA + 0x100 + I * 0x100, 0x80,
+                                          Bad && Damage == 0   ? "zRX"
+                                          : Bad && Damage == 1 ? "zRL"
+                                                               : "zR",
+                                          0, Bad && Damage == 1 ? 0xdead000 : 0,
+                                          Bad && Damage == 1 ? 0x9b : 0x1b);
+            // Truncate the FDE's final def_cfa_offset ULEB or replace the
+            // CIE's last padding byte with an operand-less advance_loc1.
+            // Neither changes the header's extent, but full recovery must
+            // report the malformed program.
+            if (Bad && Damage == 3) {
+              uint8_t &Last =
+                  Frame.Bytes[Frame.Bytes.size() - sizeof(uint32_t) - 1];
+              ASSERT_EQ(Last, 16u);
+              Last = 0x80;
+            }
+            if (Bad && Damage == 4) {
+              ASSERT_EQ(Frame.Bytes[Frame.FDEOffset - 1], 0u);
+              Frame.Bytes[Frame.FDEOffset - 1] = 0x02;
+            }
+            Frame.Bytes.resize(Frame.Bytes.size() - sizeof(uint32_t));
+            Bytes.insert(Bytes.end(), Frame.Bytes.begin(), Frame.Bytes.end());
+          }
+          if (Damage == 2) {
+            ByteBuilder Truncated;
+            Truncated.u32(0x1000);
+            Truncated.u32(0);
+            Bytes.insert(Bytes.end(), Truncated.data().begin(),
+                         Truncated.data().end());
+          } else
+            Bytes.resize(Bytes.size() + sizeof(uint32_t));
+          Section Frames;
+          Frames.Name = ".eh_frame";
+          Frames.VA = kDataVA;
+          Frames.Size = Bytes.size();
+          Frames.Data = Bytes;
+          writeData(Img, kDataVA, Bytes);
+          Img.Sections.push_back(std::move(Frames));
+          if (PublishExtents) {
+            recordFrameExtents(Img);
+            // CFI validity does not change a frame's encoded code extent.
+            ASSERT_EQ(Img.KnownCodeRanges.size(), 2u);
+            EXPECT_EQ(Img.KnownCodeRanges[0],
+                      std::make_pair(kTextVA + 0x100, kTextVA + 0x180));
+            EXPECT_EQ(Img.KnownCodeRanges[1],
+                      std::make_pair(kTextVA + 0x200, kTextVA + 0x280));
+          }
+          parseItaniumExceptions(Img);
+          ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
+          const auto Status = Damage >= 2 ? ExceptionParseStatus::Malformed
+                                          : ExceptionParseStatus::Partial;
+          EXPECT_EQ(Img.ExceptionMetadata.ParseStatus, Status);
+          for (const auto &F : Img.ExceptionMetadata.Functions) {
+            ASSERT_TRUE(F.Dwarf);
+            EXPECT_EQ(F.Dwarf->LSDAVA, 0u);
+            EXPECT_EQ(F.ParseStatus, Status);
+            ASSERT_TRUE(F.DecodeProvenance);
+            EXPECT_EQ(F.DecodeProvenance->Structural.ParseStatus, Status);
+            EXPECT_FALSE(isPlainSourceUnwind(F));
+            EXPECT_FALSE(F.DecodeProvenance->Structural.Diagnostics.empty());
+          }
         }
-        if (Damage == 2) {
-          ByteBuilder Truncated;
-          Truncated.u32(0x1000);
-          Truncated.u32(0);
-          Bytes.insert(Bytes.end(), Truncated.data().begin(),
-                       Truncated.data().end());
-        } else
-          Bytes.resize(Bytes.size() + sizeof(uint32_t));
-        Section Frames;
-        Frames.Name = ".eh_frame";
-        Frames.VA = kDataVA;
-        Frames.Size = Bytes.size();
-        Frames.Data = Bytes;
-        writeData(Img, kDataVA, Bytes);
-        Img.Sections.push_back(std::move(Frames));
-        parseItaniumExceptions(Img);
-        ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
-        const auto Status = Damage == 2 ? ExceptionParseStatus::Malformed
-                                        : ExceptionParseStatus::Partial;
-        EXPECT_EQ(Img.ExceptionMetadata.ParseStatus, Status);
-        for (const auto &F : Img.ExceptionMetadata.Functions) {
-          ASSERT_TRUE(F.Dwarf);
-          EXPECT_EQ(F.Dwarf->LSDAVA, 0u);
-          EXPECT_EQ(F.ParseStatus, Status);
-          ASSERT_TRUE(F.DecodeProvenance);
-          EXPECT_EQ(F.DecodeProvenance->Structural.ParseStatus, Status);
-          EXPECT_FALSE(isPlainSourceUnwind(F));
-          EXPECT_FALSE(F.DecodeProvenance->Structural.Diagnostics.empty());
-        }
-      }
 }
 
 TEST(ItaniumEHDriver, InvalidRangeRetainsItsIdentifiableFrameEntry) {
@@ -837,8 +874,115 @@ TEST(ItaniumEHDriver, ExtentsFirstStillDropTheEntryInsideAPaddedFunction) {
   EXPECT_EQ(functionAt(Img, StubVA + 4), nullptr);
 }
 
+TEST(ItaniumEHDriver, IndexedExtensionExtentsRequireCompletePrograms) {
+  for (unsigned Damage : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Damage);
+    const va_t FuncVA = kTextVA + 0x100;
+    const va_t ExtraFuncVA = kTextVA + 0x200;
+    const va_t ExtraVA = kDataVA + 0x200;
+    const va_t HeaderVA = kDataVA + 0x600;
+    BinaryImage Img = makeImage();
+    FrameBytes Primary = buildSimpleFrame(kDataVA, FuncVA, 0x80, "zR", 0, 0);
+    writeData(Img, kDataVA, Primary.Bytes);
+    Section Frames;
+    Frames.Name = ".eh_frame";
+    Frames.VA = kDataVA;
+    Frames.Size = Primary.Bytes.size();
+    Frames.Data = Primary.Bytes;
+    Img.Sections.push_back(std::move(Frames));
+
+    // This CIE/FDE pair lives outside the section. The runtime index may
+    // extend discovery only after its full program has been validated.
+    FrameBytes Extra = buildSimpleFrame(ExtraVA, ExtraFuncVA, 0x40, "zR", 0, 0);
+    if (Damage == 1) {
+      uint8_t &Last = Extra.Bytes[Extra.Bytes.size() - sizeof(uint32_t) - 1];
+      ASSERT_EQ(Last, 16u);
+      Last = 0x80; // truncated def_cfa_offset ULEB
+    }
+    if (Damage == 2) {
+      ASSERT_EQ(Extra.Bytes[Extra.FDEOffset - 1], 0u);
+      Extra.Bytes[Extra.FDEOffset - 1] = 0x02; // operand-less advance_loc1
+    }
+    writeData(Img, ExtraVA, Extra.Bytes);
+
+    ByteBuilder Header;
+    Header.u8(1);    // version
+    Header.u8(0x00); // absolute frame pointer
+    Header.u8(0x03); // udata4 count
+    Header.u8(0x00); // absolute search-table pointers
+    Header.u64(kDataVA);
+    Header.u32(2);
+    Header.u64(FuncVA);
+    Header.u64(kDataVA + Primary.FDEOffset);
+    Header.u64(ExtraFuncVA);
+    Header.u64(ExtraVA + Extra.FDEOffset);
+    writeData(Img, HeaderVA, Header.data());
+    Img.ELFMetadata.emplace();
+    Img.ELFMetadata->ProgramHeaders.push_back({llvm::ELF::PT_GNU_EH_FRAME, 0, 0,
+                                               HeaderVA, Header.size(),
+                                               Header.size(), 1});
+
+    recordFrameExtents(Img);
+    const size_t Expected = Damage ? 1 : 2;
+    ASSERT_EQ(Img.KnownCodeRanges.size(), Expected);
+    EXPECT_EQ(Img.KnownCodeRanges.front(),
+              std::make_pair(FuncVA, FuncVA + 0x80));
+    if (!Damage)
+      EXPECT_EQ(Img.KnownCodeRanges.back(),
+                std::make_pair(ExtraFuncVA, ExtraFuncVA + 0x40));
+    parseItaniumExceptions(Img);
+    EXPECT_EQ(Img.ExceptionMetadata.Functions.size(), Expected);
+    EXPECT_EQ(Img.ExceptionMetadata.ParseStatus,
+              Damage ? ExceptionParseStatus::Malformed
+                     : ExceptionParseStatus::Complete);
+  }
+}
+
+TEST(ItaniumEHDriver, RelocatableExtentsDoNotDecodeUnlinkedFrames) {
+  const va_t FuncVA = kTextVA + 0x100;
+  BinaryImage Img = makeX64FrameImage(FuncVA, 0x80);
+  Img.IsRelocatable = true;
+  recordFrameExtents(Img);
+  EXPECT_TRUE(Img.KnownCodeRanges.empty());
+  EXPECT_TRUE(Img.ExceptionMetadata.Functions.empty());
+
+  // No linked extents were requested. The later read must use the bytes
+  // after relocation, rather than retain an unlinked frame's guessed address.
+  const va_t LinkedVA = FuncVA + 0x100;
+  FrameBytes Linked = buildSimpleFrame(kDataVA, LinkedVA, 0x40, "zR", 0, 0);
+  Img.Sections.front().Data = Linked.Bytes;
+  Img.Sections.front().Size = Linked.Bytes.size();
+  writeData(Img, kDataVA, Linked.Bytes);
+  parseItaniumExceptions(Img);
+
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+  const ExceptionFunction &F = Img.ExceptionMetadata.Functions.front();
+  EXPECT_EQ(F.CodeRange.Begin, LinkedVA);
+  EXPECT_EQ(F.CodeRange.End, LinkedVA + 0x40);
+}
+
+TEST(ItaniumEHDriver, StandaloneReadsObserveChangedFrameBytes) {
+  const va_t FuncVA = kTextVA + 0x100;
+  BinaryImage Img = makeX64FrameImage(FuncVA, 0x80);
+  recordFrameExtents(Img);
+
+  // Extent discovery must not retain a partial decode for exception recovery.
+  // The full reader must observe the image's current frame bytes.
+  FrameBytes Changed = buildSimpleFrame(kDataVA, FuncVA, 0x40, "zR", 0, 0);
+  Img.Sections.front().Data = Changed.Bytes;
+  Img.Sections.front().Size = Changed.Bytes.size();
+  writeData(Img, kDataVA, Changed.Bytes);
+  parseItaniumExceptions(Img);
+
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+  const ExceptionFunction &F = Img.ExceptionMetadata.Functions.front();
+  EXPECT_EQ(F.CodeRange.Begin, FuncVA);
+  EXPECT_EQ(F.CodeRange.End, FuncVA + 0x40);
+}
+
 TEST(ItaniumEHDriver, IgnoresAnImageWithoutAFrameSection) {
   BinaryImage Img = makeImage();
+  recordFrameExtents(Img);
   parseItaniumExceptions(Img);
   EXPECT_TRUE(Img.ExceptionMetadata.Functions.empty());
   EXPECT_FALSE(Img.ExceptionMetadata.hasModel(ExceptionModel::Itanium));

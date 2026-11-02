@@ -460,6 +460,10 @@ TEST(PersonalitySignatures, NamesAStrippedRoutineFromAWholeFunctionMatch) {
   ASSERT_EQ(DB.matches().size(), 1u);
   EXPECT_EQ(DB.matches().front().Address, kPersonalityVA);
   EXPECT_EQ(DB.matches().front().LibraryName, "test-eh");
+  EXPECT_EQ(DB.buildNameMap().at(kPersonalityVA), "__gxx_personality_v0");
+  ASSERT_NE(DB.nameDecision(kPersonalityVA), nullptr);
+  EXPECT_EQ(DB.nameDecision(kPersonalityVA)->Evidence,
+            sigs::SignatureNameEvidence::ExceptionPersonality);
 
   // The routine is in the symbol table now, and that is what the image-wide
   // detection reads -- so an image that could say nothing about itself can.

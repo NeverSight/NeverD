@@ -57,6 +57,8 @@ public:
   /// The innermost visible or enclosing brace block at a display position.
   QString blockAt(int position) const;
   QSet<QString> foldedBlocks() const;
+  /// Generated layout and complete exception details, expanded on demand.
+  QSet<QString> defaultDetailBlocks() const;
   void setFoldedBlocks(const QSet<QString> &ids);
   /// Brace topology, unaffected by renamed identifiers or added comments.
   QString blockStructure() const { return blockStructure_; }

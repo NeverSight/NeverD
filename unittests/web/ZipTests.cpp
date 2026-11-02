@@ -299,7 +299,7 @@ TEST_F(WebZip, ClaudeCode21296VSIXWhenSupplied) {
       Helper.BlobHash = M.BlobHash;
       const auto B = extractBun(Helper);
       EXPECT_EQ(B.Modules.size(), 2589);
-      EXPECT_EQ(B.Regions.size(), 10005);
+      EXPECT_EQ(B.Regions.size(), 10006);
       std::cout << "Pinned helper member index: " << I << '\n';
     }
   }

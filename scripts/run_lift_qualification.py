@@ -41,7 +41,13 @@ def identities(document: dict) -> tuple[str, ...]:
     counts = Counter(case.get("baseline") for case in cases)
     if dict(counts) != {"failed": 62, "skipped": 46}:
         raise ValueError("qualification must retain all 62 failures and 46 skips")
-    return tuple(names)
+    # Keep the historical identity and outcome; a fixture rename must be explicit.
+    current = [case.get("current_name", case["name"]) for case in cases]
+    if (any(not isinstance(n, str) or not re.fullmatch(
+            r"[A-Za-z0-9_]+\.[A-Za-z0-9_]+", n) for n in current)
+            or len(set(current)) != len(names)):
+        raise ValueError("invalid or duplicate current qualification identity")
+    return tuple(current)
 
 
 def audit(document: ET.Element, expected: tuple[str, ...], exit_code: int) -> dict:

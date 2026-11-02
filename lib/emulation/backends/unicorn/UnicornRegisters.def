@@ -12,5 +12,5 @@
 
 #define NEVERD_X64_REGISTER(Name, DecoderID, BackendID)                        \
   NEVERD_UNICORN_REGISTER(Name, BackendID)
-#include "neverd/emulation/X64Registers.def"
+#include "neverd/emulation/arch/x86_64/X64Registers.def"
 #undef NEVERD_X64_REGISTER

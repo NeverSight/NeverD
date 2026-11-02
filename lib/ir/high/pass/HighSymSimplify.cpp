@@ -479,6 +479,7 @@ private:
   std::unordered_map<const HighExpr *, uint32_t> Widths;
   /// Engine variable node to the HighIR it stands for, for the way back.
   std::unordered_map<uint32_t, ExprPtr> Sources;
+  std::unordered_map<uint32_t, ExprPtr> DefinitionViews;
 };
 
 std::optional<sym::SymRef> Translator::operandAt(const ExprPtr &E,
@@ -618,6 +619,26 @@ sym::SymRef Translator::in(const ExprPtr &E) {
     case ExprKind::Var:
       if (ExprPtr Definition = definitionFor(Current)) {
         Result = in(Definition);
+        // Reuse a still-available local when emitting its exact compound
+        // value. Expanding that value for proof must not force repeated source
+        // copies that hide a profitable rewrite. Definitions already enforce
+        // width, alias, mutation and control-flow availability.
+        if (Ctx.op(Result) != sym::SymOp::Const &&
+            Ctx.op(Result) != sym::SymOp::Var)
+          DefinitionViews.try_emplace(Result.index(), Current);
+        if (Ctx.op(Result) == sym::SymOp::ZExt ||
+            Ctx.op(Result) == sym::SymOp::SExt) {
+          const auto Inner = Ctx.operand(Result, 0);
+          if (Ctx.width(Inner) % 8 == 0 && Ctx.op(Inner) != sym::SymOp::Const &&
+              Ctx.op(Inner) != sym::SymOp::Var) {
+            auto View = std::make_shared<HighExpr>();
+            View->Kind = ExprKind::Cast;
+            View->Type = View->CastTo =
+                NdType::makeInt(Ctx.width(Inner) / 8, false);
+            View->Operands = {Current};
+            DefinitionViews.try_emplace(Inner.index(), std::move(View));
+          }
+        }
         break;
       }
       // The pass runs after source renaming. Distinct SSA versions can now
@@ -814,13 +835,30 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       continue;
     }
 
+    if (auto Alias = DefinitionViews.find(Index);
+        Alias != DefinitionViews.end()) {
+      Built.emplace(Index, Alias->second);
+      continue;
+    }
+
+    // A proved low-bit lookup can expose a sub-byte extract. Lower only
+    // its zero extension as one masked native-word operation: materializing
+    // the fragment as a byte would give a later sign extension wrong semantics.
+    sym::SymRef UnsignedFragment;
+    if (Ctx.op(Item.Ref) == sym::SymOp::ZExt) {
+      const auto Child = Ctx.operand(Item.Ref, 0);
+      if (Ctx.op(Child) == sym::SymOp::Extract && Ctx.width(Child) < 8)
+        UnsignedFragment = Child;
+    }
+
     if (!Item.ChildrenReady) {
       if (!Active.insert(Index).second) {
         Built.emplace(Index, nullptr);
         continue;
       }
       Work.push_back({Item.Ref, true});
-      llvm::ArrayRef<sym::SymRef> Operands = Ctx.operands(Item.Ref);
+      llvm::ArrayRef<sym::SymRef> Operands =
+          Ctx.operands(UnsignedFragment ? UnsignedFragment : Item.Ref);
       for (auto It = Operands.rbegin(); It != Operands.rend(); ++It)
         if (Built.find(It->index()) == Built.end())
           Work.push_back({*It, false});
@@ -1000,6 +1038,29 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
     case sym::SymOp::ZExt:
     case sym::SymOp::SExt: {
+      if (UnsignedFragment) {
+        const auto Source = Ctx.operand(UnsignedFragment, 0);
+        ExprPtr Operand = get(Source);
+        if (!Operand)
+          break;
+        const uint16_t SourceBytes = Ctx.width(Source) / 8;
+        const auto Low = Ctx.node(UnsignedFragment).Aux;
+        if (Low)
+          Operand = HighExpr::makeBinop(
+              NdOp::INT_RIGHT, Operand,
+              HighExpr::makeConst(Low, SourceBytes,
+                                  ConstantAddressProvenance::Scalar));
+        Operand = HighExpr::makeBinop(
+            NdOp::INT_AND, Operand,
+            HighExpr::makeConst(
+                (uint64_t(1) << Ctx.width(UnsignedFragment)) - 1, SourceBytes,
+                ConstantAddressProvenance::Scalar));
+        Result = std::make_shared<HighExpr>();
+        Result->Kind = ExprKind::Cast;
+        Result->Type = Result->CastTo = NdType::makeInt(ByteSize, false);
+        Result->Operands = {std::move(Operand)};
+        break;
+      }
       ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
       if (Operand) {
         Result = HighExpr::makeUnary(Ctx.op(Item.Ref) == sym::SymOp::ZExt
@@ -1388,10 +1449,16 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
     uint64_t Weight;
   };
   auto Classify = [&](const HighStmt &S) {
+    // Removing a dead frame write retains its address as an empty block.
+    // Such an anchor preserves scalar facts unless it is a control-flow
+    // entry. Expressions, child scopes and effects still form boundaries.
+    bool EmptyAnchor = S.Kind == StmtKind::Block;
+    if (EmptyAnchor)
+      forEachExpr(S, [&](const ExprPtr &) { EmptyAnchor = false; });
     const bool Straight =
-        (S.Kind == StmtKind::Assign || S.Kind == StmtKind::ExprStmt ||
-         S.Kind == StmtKind::Return || S.Kind == StmtKind::Nop ||
-         S.Kind == StmtKind::Store) &&
+        (EmptyAnchor || S.Kind == StmtKind::Assign ||
+         S.Kind == StmtKind::ExprStmt || S.Kind == StmtKind::Return ||
+         S.Kind == StmtKind::Nop || S.Kind == StmtKind::Store) &&
         S.Body.empty() && S.ElseBody.empty() && S.Cases.empty() &&
         S.DefaultBody.empty() && S.EHClauses.empty() &&
         S.EHClauseBodies.empty() && !S.IsPhiCopy &&

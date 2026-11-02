@@ -120,10 +120,10 @@ neverd::sdk::parseSourceCallType(Session &S, const SourceCallEdit &Edit,
   Hint.AnalystFixedCount =
       Function.Variadic ? static_cast<int>(Function.Params.size()) : -1;
   Hint.Signature.ReturnType = Function.Return
-                                  ? decompilerTypeOf(*Library, *Function.Return)
+                                  ? sourceCallTypeOf(*Library, *Function.Return)
                                   : NdType::makeVoid();
   for (const auto &P : Function.Params) {
-    const auto Type = P.Type ? decompilerTypeOf(*Library, *P.Type) : nullptr;
+    const auto Type = P.Type ? sourceCallTypeOf(*Library, *P.Type) : nullptr;
     Hint.Signature.Parameters.push_back({P.Name, Type});
   }
   for (const auto &Text : Edit.VariadicTypes) {
@@ -144,7 +144,7 @@ neverd::sdk::parseSourceCallType(Session &S, const SourceCallEdit &Edit,
     }
     Hint.Signature.Parameters.push_back(
         {"",
-         decompilerTypeOf(*Library, *Actual.Function->Params.front().Type)});
+         sourceCallTypeOf(*Library, *Actual.Function->Params.front().Type)});
   }
   if (!assignAnalystCallABI(Hint, S.Img.Arch, S.Img.abiFormat(), Error))
     return {};

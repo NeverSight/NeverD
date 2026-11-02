@@ -1695,3 +1695,62 @@ int main(void) {
 }
 
 } // namespace
+
+TEST(LLVMCBranches, UnconditionalCyclesRetainTheirControlFlow) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+define i32 @cycle(i32 %choice) {
+entry:
+  switch i32 %choice, label %done [i32 0, label %self
+                                  i32 1, label %left
+                                  i32 2, label %right]
+self:
+  %prior = phi i64 [0, %entry], [%next, %self]
+  %next = add i64 %prior, 1
+  br label %self
+left:
+  br label %right
+right:
+  br label %left
+done:
+  ret i32 7
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, {}));
+  Source += R"(
+#if defined(__unix__)
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+static void still_running(int signal_number) { _Exit(0); }
+#endif
+int main(void) {
+  if (cycle(3) != 7) return 1;
+#if defined(__unix__)
+  /* Every entry to either cycle must keep running until the observer fires. */
+  for (int choice = 0; choice != 3; ++choice) {
+    pid_t child = fork();
+    if (child < 0) return 2;
+    if (!child) {
+      signal(SIGALRM, still_running);
+      alarm(1);
+      (void)cycle(choice);
+      _Exit(3);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) return 4;
+  }
+#endif
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}

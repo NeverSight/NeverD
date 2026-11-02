@@ -8,7 +8,7 @@
 #include "COFFRegistrationSEHException.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationSEHException.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHException.h"
 
 namespace neverd::coff_registration {
 

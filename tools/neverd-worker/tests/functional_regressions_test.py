@@ -41,6 +41,23 @@ def run(executable):
                     assert addresses(page)[0] == base + (11999 if descending else 12001) * 16, page
             for descending, cursor in ((False, base + 19999 * 16), (True, base)):
                 assert not ok(client, "functions", {"from": hex(cursor), "descending": descending})["items"]
+            for descending in (False, True):
+                target = base + 12000 * 16
+                found = ok(client, "functions", {"seek_address": hex(target),
+                           "sort": "address", "descending": descending, "limit": 97})
+                selected = found["selected_index"] - found["offset"]
+                assert addresses(found)[selected] == target, found
+                assert found["offset"] % 97 == 0, found
+            absent = client.call("functions", {"seek_address": hex(base + 1)})
+            assert absent["error"]["code"] == "not_found", absent
+            invalid = client.call("functions", {"seek_address": hex(base), "from": hex(base)})
+            assert invalid["error"]["code"] == "invalid_request", invalid
+            segment = ok(client, "segments", {"seek_address": hex(base + 17), "limit": 2})
+            assert segment["selected_address"] == hex(base), segment
+            assert addresses(segment)[segment["selected_index"] - segment["offset"]] == base, segment
+            region = ok(client, "regions", {"seek_address": hex(base + 17), "limit": 2})
+            assert region["selected_address"] == hex(base), region
+            assert region["items"][region["selected_index"] - region["offset"]]["start"] == hex(base), region
 
         binary = Path(folder) / "strings-sort.bin"
         binary.write_bytes(b"fixture")
@@ -57,6 +74,13 @@ def run(executable):
                                        row["length"] if sort == "length" else row[sort].lower())
                     assert len(result) == 600
                     assert [key(row) for row in result] == sorted(map(key, result), reverse=descending), (sort, descending)
+                    target = base + 523
+                    found = ok(client, "strings", {"seek_address": hex(target),
+                               "sort": sort, "descending": descending, "limit": 97})
+                    selected = found["selected_index"] - found["offset"]
+                    assert addresses(found)[selected] == target, (sort, descending, found)
+            absent = client.call("strings", {"seek_address": hex(base + 700)})
+            assert absent["error"]["code"] == "not_found", absent
             page = ok(client, "search", {"kind": "bytes", "pattern": "00 01", "limit": 7})
             assert not page["complete"] and len(page["items"]) == 7, page
             assert page["next_address"] == page["items"][-1]["address"], page

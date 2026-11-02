@@ -95,6 +95,12 @@ LLVMCWriter::scalarExpressionText(const llvm::Value *V, bool ForceExpression,
                 kLLVMCScalarExpressionsLLVMCWriterScalarExpressionTextRenderDepthLimit ||
         Work == 0 || !Value->getType()->isIntegerTy())
       return std::nullopt;
+    // Missing machine state is an observed expression, never a declared C
+    // leaf. Let valueStr retain its trap or availability guard, including
+    // when this value occurs inside a larger scalar expression.
+    if (llvm_source_unknown::isValue(Value) ||
+        DeferredUnknownFlags.count(Value))
+      return std::nullopt;
     --Work;
     const unsigned Bits = Value->getType()->getIntegerBitWidth();
     if (Bits != 1 && Bits != 8 && Bits != 16 && Bits != 32 && Bits != 64)

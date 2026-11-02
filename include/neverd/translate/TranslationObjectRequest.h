@@ -19,7 +19,7 @@
 #include "neverd/translate/TranslationBlockLowerer.h"
 #include "neverd/translate/TranslationObjectCompiler.h"
 #include "neverd/translate/TranslationTargetMachine.h"
-#include "neverd/translate/X86TranslationBlockBuilder.h"
+#include "neverd/translate/X86/X86TranslationBlockBuilder.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"

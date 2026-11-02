@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <vector>
 
 namespace neverd {
@@ -98,7 +99,7 @@ public:
       uint8_t Offset = 0;
       size_t WildcardChild = kNoNode;
       std::vector<Edge> ExactChildren;
-      std::vector<size_t> Candidates;
+      llvm::ArrayRef<size_t> Candidates;
 
       bool isLeaf() const { return !Candidates.empty(); }
     };
@@ -114,6 +115,56 @@ public:
     /// Full pattern verifications scheduled for one input prefix.  This is a
     /// deterministic performance counter; it does not perform a match.
     size_t candidateCount(const uint8_t *Data, size_t Available) const;
+
+    /// !caller records never enter the byte decision tree. Lookup names from
+    /// an established caller instead, then verify only those complete bodies.
+    /// Existing !refs bodies participate too, so callers can reuse explicitly
+    /// contextual records without duplicating them. Ordinary nominal byte
+    /// claims do not acquire incoming support merely by being loaded.
+    /// Numeric indices retain the same copy/move lifetime as byte candidates.
+    struct CallerEntry {
+      size_t Module = 0;
+      size_t PublicName = 0;
+      size_t NameHash = 0;
+    };
+    bool hasCallerModules() const {
+      return CallerStorage && !CallerStorage->empty();
+    }
+    llvm::ArrayRef<size_t> vtableModules() const {
+      return VTableStorage ? llvm::ArrayRef(*VTableStorage)
+                           : llvm::ArrayRef<size_t>();
+    }
+    llvm::ArrayRef<size_t> loadConfigModules() const {
+      return LoadConfigStorage ? llvm::ArrayRef(*LoadConfigStorage)
+                               : llvm::ArrayRef<size_t>();
+    }
+    bool hasCodeLayouts() const {
+      return CodeLayoutStorage && !CodeLayoutStorage->empty();
+    }
+    llvm::ArrayRef<CallerEntry>
+    codeLayoutModules(llvm::ArrayRef<StoredModule> Modules,
+                      std::string_view Name) const;
+    bool hasDataContext() const { return DataContext; }
+    llvm::ArrayRef<size_t> dataAnchorModules() const {
+      return DataAnchorStorage ? llvm::ArrayRef(*DataAnchorStorage)
+                               : llvm::ArrayRef<size_t>();
+    }
+    llvm::ArrayRef<CallerEntry>
+    callerModules(llvm::ArrayRef<StoredModule> Modules,
+                  std::string_view Name) const;
+
+  private:
+    std::shared_ptr<const std::vector<CallerEntry>> CodeLayoutStorage;
+    std::shared_ptr<const std::vector<size_t>> CodeLayoutNameLengths;
+    std::shared_ptr<const std::vector<size_t>> VTableStorage;
+    std::shared_ptr<const std::vector<size_t>> LoadConfigStorage;
+    bool DataContext = false;
+    std::shared_ptr<const std::vector<size_t>> DataAnchorStorage;
+    std::shared_ptr<const std::vector<CallerEntry>> CallerStorage;
+    /// Leaves view one immutable permutation instead of allocating per leaf.
+    /// Copies retain its lifetime; rebuilding an index replaces only its own
+    /// storage, so copies and moved indexes keep valid views.
+    std::shared_ptr<const std::vector<size_t>> CandidateStorage;
   };
 
   static void scanRegion(const uint8_t *Data, size_t Size,
@@ -142,6 +193,17 @@ public:
     size_t Module = 0;
   };
 
+  /// Deterministic work counters for one scan, summed across worker blocks.
+  /// A CRC request may reuse a value computed for another candidate at the
+  /// same input address. CRCBytes counts only bytes actually checksummed.
+  struct ScanStatistics {
+    uint64_t Entries = 0;
+    uint64_t Candidates = 0;
+    uint64_t CRCRequests = 0;
+    uint64_t CRCComputations = 0;
+    uint64_t CRCBytes = 0;
+  };
+
   /// The modules of \p Modules that match at each of \p FuncEntries, in the
   /// order \ref scanAtAddresses reports them, with the entries checked on
   /// the worker threads.
@@ -150,6 +212,15 @@ public:
                                           llvm::ArrayRef<uint64_t> FuncEntries,
                                           llvm::ArrayRef<StoredModule> Modules,
                                           const HashIndex &Index);
+
+  /// As above, resetting and filling \p Statistics for this call. The overload
+  /// without counters avoids recording work in the matching loop.
+  static std::vector<Hit> findAtAddresses(const uint8_t *ImageBase,
+                                          size_t ImageSize, uint64_t BaseVA,
+                                          llvm::ArrayRef<uint64_t> FuncEntries,
+                                          llvm::ArrayRef<StoredModule> Modules,
+                                          const HashIndex &Index,
+                                          ScanStatistics &Statistics);
 };
 
 } // namespace sigs

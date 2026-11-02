@@ -12,8 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/med/MedSyscallConvention.h"
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/ARMRegs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 
 namespace neverd {
 

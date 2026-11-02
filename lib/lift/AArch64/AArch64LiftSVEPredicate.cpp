@@ -7,16 +7,18 @@
 /// \file
 /// Predicate generation and manipulation (PTRUE/PFALSE/PFIRST/
 /// PNEXT/PSEL/PUNPK), vector-length arithmetic (RDVL/ADDVL/CNTB/
-/// INCB/DECB/SQINCB/...), element ops (SEL/SPLICE/CPY/INDEX/
-/// MOVPRFX), the WHILExx predicates and the BRK* predicate
-/// breaks.
+/// INCB/DECB/SQINCB/...), element ops (SEL/SPLICE/CPY/INDEX), the WHILExx
+/// predicates and the BRK* predicate breaks.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "AArch64LiftDetail.h"
 
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64SVEPredicate.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
+#include "neverd/support/BinaryEncoding.h"
 
 namespace neverd {
 
@@ -67,9 +69,9 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     if (Multiplier.type != AARCH64_OP_IMM || Multiplier.imm == 1)
       return Count;
     NdVar Scaled = S.makeTemp(Count.Size);
-    S.emit(NdOp::INT_MULT, Scaled,
-           {Count,
-            NdVar::cst(static_cast<uint64_t>(Multiplier.imm), Count.Size)});
+    S.emit(
+        NdOp::INT_MULT, Scaled,
+        {Count, NdVar::cst(static_cast<uint64_t>(Multiplier.imm), Count.Size)});
     return Scaled;
   };
 
@@ -77,17 +79,23 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   // ========================================================================
   // SVE / SVE2 — predicate and control operations
   // ========================================================================
-  case AARCH64_INS_PTRUE:
-  case AARCH64_INS_PTRUES: {
-    if (ARM64.op_count >= 1) {
-      NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      uint16_t ElemSize = sveElementSize(ARM64.operands[0].vas);
-      if (ElemSize != 0)
-        S.emitIntrinsic(Intrinsic::A64_SvePtrue, Dst,
-                        {NdVar::cst(31, 4), NdVar::cst(ElemSize, 1)});
-    }
+  case AARCH64_INS_PTRUE: {
+    const auto Operands =
+        aarch64_sve::decodePtrue(readLE<uint32_t>(Insn->bytes));
+    if (!Operands)
+      throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
+    S.emitIntrinsic(
+        Intrinsic::A64_SvePtrue,
+        NdVar::reg(a64reg::P(Operands->Predicate), a64reg::PSize),
+        {NdVar::cst(Operands->Pattern, aarch64_sve::kPatternOperandBytes),
+         NdVar::cst(Operands->ElementBytes,
+                    aarch64_sve::kElementOperandBytes)});
     break;
   }
+  case AARCH64_INS_PTRUES:
+    // PTRUES also writes NZCV; the value-only predicate contract cannot
+    // publish those flag semantics.
+    throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
   case AARCH64_INS_PFALSE: {
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
@@ -132,8 +140,7 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_RDVL:
   case AARCH64_INS_ADDPL:
   case AARCH64_INS_ADDSPL:
-  case AARCH64_INS_ADDSVL:
-  case AARCH64_INS_ADDPT: {
+  case AARCH64_INS_ADDSVL: {
     if (ARM64.op_count >= 2) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
       NdVar Src = L.operandRead(S, ARM64.operands[1]);
@@ -152,8 +159,7 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   case AARCH64_INS_CNTW: {
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Dst,
-                      {NdVar::cst(31, 4)});
+      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Dst, {NdVar::cst(31, 4)});
     }
     break;
   }
@@ -171,11 +177,9 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
       NdVar Count = S.makeTemp(Dst.Size);
-      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count,
-                      {NdVar::cst(31, 4)});
+      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count, {NdVar::cst(31, 4)});
       Count = scaleSVECount(Count);
-      S.emit(NdOp::INT_ADD, Dst,
-             {NdVar::reg(Dst.Offset, Dst.Size), Count});
+      S.emit(NdOp::INT_ADD, Dst, {NdVar::reg(Dst.Offset, Dst.Size), Count});
     }
     break;
   }
@@ -194,11 +198,9 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     if (ARM64.op_count >= 1) {
       NdVar Dst = L.operandWrite(ARM64.operands[0]);
       NdVar Count = S.makeTemp(Dst.Size);
-      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count,
-                      {NdVar::cst(31, 4)});
+      S.emitIntrinsic(sveCountIntrinsic(Insn->id), Count, {NdVar::cst(31, 4)});
       Count = scaleSVECount(Count);
-      S.emit(NdOp::INT_SUB, Dst,
-             {NdVar::reg(Dst.Offset, Dst.Size), Count});
+      S.emit(NdOp::INT_SUB, Dst, {NdVar::reg(Dst.Offset, Dst.Size), Count});
     }
     break;
   }
@@ -310,14 +312,6 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Src = L.operandRead(S, ARM64.operands[ARM64.op_count - 1]);
       S.emit(NdOp::COPY, Dst, {Src});
     }
-    break;
-  }
-  case AARCH64_INS_MOVPRFX: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar Src = L.operandRead(S, ARM64.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
     break;
   }
   case AARCH64_INS_MOVT: {

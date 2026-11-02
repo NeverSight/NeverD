@@ -12,6 +12,8 @@
 #include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/symbolic/SymParse.h"
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <random>
 
@@ -340,7 +342,7 @@ TEST(SymMBAQuadratic, SmallSelectorsUseAffordableExactConstructions) {
     llvm::SmallVector<SymRef, 3> Atoms{C.mkVar("a", Width), C.mkVar("b", Width),
                                        C.mkVar("c", Width)};
     BitwiseSynthesisLimits Limits;
-    // A three-input ANF needs 24 units; the optimal table needs 65,536.
+    // A three-input ANF needs 24 units, below the complete recipe bound.
     Limits.MaxWork = 24;
     for (unsigned Bits = 0; Bits != 256; ++Bits) {
       SCOPED_TRACE(Bits);
@@ -366,6 +368,61 @@ TEST(SymMBAQuadratic, SmallSelectorsUseAffordableExactConstructions) {
       const auto Before = C.numNodes();
       EXPECT_FALSE(synthesizeBitwise(C, Relation, Atoms, Limits));
       EXPECT_EQ(C.numNodes(), Before);
+    }
+  }
+}
+
+TEST(SymMBAQuadratic, PreparedRecipesAreCompleteAndOptimal) {
+  // Independent enumeration by increasing printed size, rather than the
+  // generator's iterative relaxation and traversal order.
+  std::array<unsigned, 256> Minimum;
+  Minimum.fill(100);
+  for (unsigned Bits : {0u, 255u, 170u, 204u, 240u})
+    Minimum[Bits] = 1;
+  for (unsigned Cost = 2; Cost <= 10; ++Cost) {
+    for (unsigned A = 0; A != 256; ++A)
+      if (Minimum[A] + 1 == Cost)
+        Minimum[A ^ 255] = std::min(Minimum[A ^ 255], Cost);
+    for (unsigned A = 0; A != 256; ++A)
+      for (unsigned B = 0; B != 256; ++B)
+        if (Minimum[A] + Minimum[B] + 1 == Cost) {
+          Minimum[A & B] = std::min(Minimum[A & B], Cost);
+          Minimum[A | B] = std::min(Minimum[A | B], Cost);
+          Minimum[A ^ B] = std::min(Minimum[A ^ B], Cost);
+        }
+  }
+  for (unsigned Width : {1u, 8u, 64u, 65u, 257u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 3> Atoms{C.mkVar("a", Width), C.mkVar("b", Width),
+                                       C.mkVar("c", Width)};
+    BitwiseSynthesisLimits Limits;
+    Limits.MaxWork = 49;
+    for (unsigned Bits = 0; Bits != 256; ++Bits) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Bits);
+      auto Result = synthesizeBitwise(C, table(3, Bits), Atoms, Limits);
+      ASSERT_TRUE(Result);
+      ASSERT_LE(Minimum[Bits], 10u);
+      EXPECT_EQ(C.readabilityCost(*Result), Minimum[Bits]);
+      for (unsigned Seed = 0; Seed != 32; ++Seed) {
+        llvm::SmallVector<llvm::APInt, 3> Values;
+        for (unsigned I = 0; I != 3; ++I) {
+          llvm::APInt Value(Width, (Seed + 1) * (37 + 71 * I));
+          if (Seed & (1u << I))
+            Value.flipAllBits();
+          Values.push_back(Value);
+        }
+        llvm::APInt Expected(Width, 0);
+        for (unsigned K = 0; K != 8; ++K) {
+          if (!(Bits & (1u << K)))
+            continue;
+          llvm::APInt Lane = llvm::APInt::getAllOnes(Width);
+          for (unsigned I = 0; I != 3; ++I)
+            Lane &= K & (1u << I) ? Values[I] : ~Values[I];
+          Expected |= Lane;
+        }
+        ASSERT_EQ(C.eval(*Result, Values), Expected);
+      }
     }
   }
 }

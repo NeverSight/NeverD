@@ -1,0 +1,29 @@
+//===- AArch64CPAC.def - Checked pointer C syntax --------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// TEXT(Name, Text) owns C syntax for both checked-pointer projections.
+/// Raw encodings permit compilation by assemblers predating CPA mnemonics;
+/// execution still requires the architectural feature and control state.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_CPA_C_TEXT
+#define NEVERD_A64_CPA_C_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_CPA_C_TEXT(kAArch64CPACTemporary, "__checked_pointer")
+NEVERD_A64_CPA_C_TEXT(kAArch64CPACBinary,
+                      "({{ uint64_t {0}; __asm__ volatile(\"mov x16, %1\\n\\t"
+                      "mov x17, %2\\n\\t{1}\\n\\tmov %0, x16\" : \"=r\"({0}) : "
+                      "\"r\"((uint64_t)({2})), \"r\"((uint64_t)({3})) : "
+                      "\"x16\", \"x17\"); {0}; })")
+NEVERD_A64_CPA_C_TEXT(
+    kAArch64CPACTernary,
+    "({{ uint64_t {0}; __asm__ volatile(\"mov x16, %1\\n\\t"
+    "mov x17, %2\\n\\tmov x15, %3\\n\\t{1}\\n\\tmov %0, x16\" : \"=r\"({0}) : "
+    "\"r\"((uint64_t)({2})), \"r\"((uint64_t)({3})), \"r\"((uint64_t)({4})) : "
+    "\"x16\", \"x17\", \"x15\"); {0}; })")
+
+#undef NEVERD_A64_CPA_C_TEXT

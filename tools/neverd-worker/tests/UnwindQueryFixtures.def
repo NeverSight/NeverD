@@ -1,0 +1,90 @@
+//===- UnwindQueryFixtures.def - Unwind transport oracles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent input addresses and engine/worker JSON. The mock does not
+/// calculate signing semantics; loader and C ABI tests own that coverage.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_TEST_TEXT
+#define NEVERD_UNWIND_TEST_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_UNWIND_TEST_CASE
+#define NEVERD_UNWIND_TEST_CASE(Address, Source, Expected)
+#endif
+#ifndef NEVERD_UNWIND_TEST_INVALID
+#define NEVERD_UNWIND_TEST_INVALID(Payload, Code)
+#endif
+
+NEVERD_UNWIND_TEST_TEXT(kInputName, "unwind-query.bin")
+NEVERD_UNWIND_TEST_TEXT(kDirectoryPrefix, "neverd-unwind-query-")
+NEVERD_UNWIND_TEST_TEXT(kInputText, "mock unwind query input")
+NEVERD_UNWIND_TEST_TEXT(kOperation, "unwind_frame")
+NEVERD_UNWIND_TEST_TEXT(kAddressField, "address")
+NEVERD_UNWIND_TEST_TEXT(kNull, "null")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0x0",
+    R"json({"begin":"0x0","end":"0x4","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0x0","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":null}})json",
+    R"json({"begin":"0x0","end":"0x4","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0x0","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":null}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff800012340004",
+    R"json({"begin":"0XFFFF800012340000","end":"0XFFFF800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0XFFFF800012340004","dwarf_state_at_pc":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0X0"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0X0"}}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff800012340008",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340008","dwarf_state_at_pc":{"status":"unknown","diagnostic":"runtime register 34"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340008","dwarf_state_at_pc":{"status":"unknown","diagnostic":"runtime register 34"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff80001234000c",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff80001234000c","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff80001234000c","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff800012340010",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340010","dwarf_state_at_pc":{"status":"unsupported","diagnostic":"unavailable source"},"compact_recipe":null}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340010","dwarf_state_at_pc":{"status":"unsupported","diagnostic":"unavailable source"},"compact_recipe":null}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff800012340014",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340014","dwarf_state_at_pc":{"status":"malformed","diagnostic":"unavailable source"},"compact_recipe":null}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340014","dwarf_state_at_pc":{"status":"malformed","diagnostic":"unavailable source"},"compact_recipe":null}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff800012340018",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340018","dwarf_state_at_pc":{"status":"resource_limit","diagnostic":"unavailable source"},"compact_recipe":null}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340018","dwarf_state_at_pc":{"status":"resource_limit","diagnostic":"unavailable source"},"compact_recipe":null}})json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff80001234001c",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff80001234001c","dwarf_state_at_pc":{"status":"out_of_range","diagnostic":"unavailable source"},"compact_recipe":null}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff80001234001c","dwarf_state_at_pc":{"status":"out_of_range","diagnostic":"unavailable source"},"compact_recipe":null}})json")
+
+NEVERD_UNWIND_TEST_CASE("0xffff800012340020", R"json(null)json",
+                        R"json(null)json")
+
+NEVERD_UNWIND_TEST_CASE(
+    "0xffff800012340024",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false})json")
+
+NEVERD_UNWIND_TEST_INVALID(R"json({})json", "invalid_request")
+
+NEVERD_UNWIND_TEST_INVALID(R"json({"address":0})json", "invalid_request")
+
+NEVERD_UNWIND_TEST_INVALID(R"json({"address":"0x10000000000000000"})json",
+                           "invalid_address")
+
+NEVERD_UNWIND_TEST_INVALID(R"json({"address":"-1"})json", "invalid_address")
+
+NEVERD_UNWIND_TEST_INVALID(R"json({"address":"0x0","function":"0x0"})json",
+                           "invalid_request")
+
+#undef NEVERD_UNWIND_TEST_TEXT
+#undef NEVERD_UNWIND_TEST_CASE
+#undef NEVERD_UNWIND_TEST_INVALID

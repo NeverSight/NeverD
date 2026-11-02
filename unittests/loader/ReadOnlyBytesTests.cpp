@@ -12,8 +12,10 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
+#include "neverd/object/ELFLayout.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <cstdint>
@@ -48,6 +50,156 @@ BinaryImage codeImage() {
   Image.Sections.push_back(std::move(Section));
   Image.BaseRelocations.push_back({OperandVA, 3});
   return Image;
+}
+
+TEST(ImmutableImageScalar, ELFRelroRangeKeepsScalarsButNotRelocatedPointers) {
+  auto Image = codeImage();
+  Image.Format = BinaryFormat::ELF;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.BaseRelocations.clear();
+  Image.Segments.front().Flags =
+      SegmentFlags::Readable | SegmentFlags::Writable;
+  Image.Sections.front().Flags = Image.Segments.front().Flags;
+  Image.Sections.front().Name = ".data.rel.ro";
+  EXPECT_FALSE(readImmutableImageScalar(Image, ReadVA, 1));
+  Image.ELFMetadata.emplace();
+  Image.ELFMetadata->Type = llvm::ELF::ET_DYN;
+  const uint64_t Extent = 0x410000 - ReadVA;
+  Image.ELFMetadata->ProgramHeaders.push_back(
+      {llvm::ELF::PT_GNU_RELRO, 0, 0, ReadVA, Extent, Extent, 1});
+  EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
+  Image.BaseRelocations.push_back({ReadVA - 3, 10});
+  EXPECT_FALSE(readImmutableImageScalar(Image, ReadVA, 1));
+  Image.BaseRelocations.clear();
+  Image.Sections.front().Name = ".data.rel.ro.local";
+  EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
+  for (const char *Name :
+       {".data", ".data.rel.rotten", ".data.rel.ro_mutable", ".data.rel.ro2"}) {
+    SCOPED_TRACE(Name);
+    Image.Sections.front().Name = Name;
+    EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
+  }
+  Image.Sections.front().Name = ".data.rel.ro";
+  Image.Sections.push_back(Image.Sections.front());
+  EXPECT_FALSE(readImmutableImageScalar(Image, ReadVA, 1));
+}
+
+TEST(ImmutableImageScalar, NamesAndSectionFlagsCannotProtectWritableMappings) {
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+      for (const char *Name :
+           {"__DATA_CONST", ".data.rel.ro", ".data.rel.ro.local", ".rdata"})
+        for (bool WritableSection : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(static_cast<unsigned>(Architecture));
+          SCOPED_TRACE(Name);
+          SCOPED_TRACE(WritableSection);
+          auto Image = codeImage();
+          Image.Format = Format;
+          Image.Arch = Architecture;
+          Image.Bits = Architecture == Arch::X86 || Architecture == Arch::ARM
+                           ? Bitness::Bits32
+                           : Bitness::Bits64;
+          Image.BaseRelocations.clear();
+          auto &Segment = Image.Segments.front();
+          Segment.Name = Name;
+          Segment.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+          auto &Section = Image.Sections.front();
+          Section.Name = Section.SegmentName = Name;
+          Section.Flags =
+              WritableSection ? Segment.Flags : SegmentFlags::Readable;
+          EXPECT_FALSE(Image.readOnlyAfterRelocations(ReadVA, 1));
+          EXPECT_FALSE(readImmutableImageScalar(Image, ReadVA, 1));
+          EXPECT_TRUE(isRuntimeWritableAddress(Image, ReadVA));
+          EXPECT_TRUE(classifyPointerRelocationAddress(Image, ReadVA).Writable);
+          Segment.ReadOnlyAfterRelocations = true;
+          EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
+          EXPECT_FALSE(isRuntimeWritableAddress(Image, ReadVA));
+          Segment.ReadOnlyAfterRelocations = false;
+          Segment.Flags = SegmentFlags::Readable;
+          EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
+          EXPECT_FALSE(isRuntimeWritableAddress(Image, ReadVA));
+          EXPECT_TRUE(isRuntimeWritableAddress(Image, TextVA - 1));
+        }
+}
+
+TEST(ImmutableImageScalar, RelroProofRequiresCompleteNativeRange) {
+  auto Image = codeImage();
+  Image.Format = BinaryFormat::ELF;
+  const va_t Address = TextVA + kPageSize4K - 8;
+  Image.Segments.front().Size = 2 * kPageSize4K;
+  Image.BaseRelocations.clear();
+  Image.Segments.front().Flags =
+      SegmentFlags::Readable | SegmentFlags::Writable;
+  Image.Sections.front().Flags = Image.Segments.front().Flags;
+  Image.ELFMetadata.emplace();
+  Image.ELFMetadata->Type = llvm::ELF::ET_DYN;
+  Image.ELFMetadata->ProgramHeaders.push_back(
+      {llvm::ELF::PT_GNU_RELRO, 0, 0, Address, 8, 8, 1});
+  EXPECT_TRUE(Image.readOnlyAfterRelocations(Address, 8));
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address - 1, 1));
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, 9));
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address + 8, 1));
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, 0));
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, UINT64_MAX));
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::MachO}) {
+    Image.Format = Format;
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, 8));
+  }
+  Image.Format = BinaryFormat::ELF;
+  Image.IsRelocatable = true;
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, 8));
+  Image.IsRelocatable = false;
+  Image.ELFMetadata->ProgramHeaders.back().MemorySize = UINT64_MAX;
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, 8));
+  Image.Segments.front().Flags = SegmentFlags::Readable;
+  Image.Segments.front().Size = UINT64_MAX;
+  EXPECT_FALSE(Image.readOnlyAfterRelocations(Address, 1));
+}
+
+TEST(ImmutableImageScalar, RelroKeepsPartialPagesAndStaticStartupWritable) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    BinaryImage Image;
+    Image.Format = BinaryFormat::ELF;
+    Image.Arch = Architecture;
+    Segment Data;
+    Data.VA = 0x10000;
+    const uint64_t Page = maximumELFProtectionPageSize(Architecture);
+    ASSERT_NE(Page, 0u);
+    Data.Size = 2 * Page;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Image.Segments.push_back(Data);
+    Image.ELFMetadata.emplace();
+    auto &Metadata = *Image.ELFMetadata;
+    Metadata.Type = llvm::ELF::ET_DYN;
+    Metadata.ProgramHeaders.push_back(
+        {llvm::ELF::PT_GNU_RELRO, 0, 0, Data.VA + 3, Page + 4, Page + 4, 1});
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Data.VA + 2, 1));
+    EXPECT_TRUE(Image.readOnlyAfterRelocations(Data.VA + 3, 4));
+    EXPECT_TRUE(Image.readOnlyAfterRelocations(Data.VA + Page - 1, 1));
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Data.VA + Page - 1, 2));
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Data.VA + Page, 1));
+    EXPECT_TRUE(isRuntimeWritableAddress(Image, Data.VA + Page));
+    Metadata.ProgramHeaders.back().MemorySize = Page - 4;
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Data.VA + 3, 1));
+    Metadata.ProgramHeaders.back().MemorySize = Page - 3;
+    EXPECT_TRUE(Image.readOnlyAfterRelocations(Data.VA + 3, 1));
+
+    // Neither an executable nor static PIE promises to call a dynamic
+    // loader. The kernel maps PT_LOAD but does not apply GNU_RELRO itself.
+    Image.Entry = 0x8000;
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Data.VA + 3, 1));
+    Metadata.Type = llvm::ELF::ET_EXEC;
+    EXPECT_FALSE(Image.readOnlyAfterRelocations(Data.VA + 3, 1));
+    Metadata.Interpreter = "/lib/ld.so";
+    EXPECT_TRUE(Image.readOnlyAfterRelocations(Data.VA + 3, 1));
+    Metadata.Interpreter.clear();
+    Image.Segments.front().ReadOnlyAfterRelocations = true;
+    EXPECT_TRUE(Image.readOnlyAfterRelocations(Data.VA + 3, 1));
+  }
 }
 
 TEST(ImmutablePE32Code, IndexedAndOrdinaryReadersKeepEveryFixupBoundary) {
@@ -287,6 +439,72 @@ TEST(ImmutablePE32Code, OversizedScopedIndexesKeepOrdinaryRefusals) {
       }
     }
   }
+}
+
+TEST(ImmutableScalar, ScalarBitsDoNotGrantPointerIdentity) {
+  auto Image = codeImage();
+  Image.BaseRelocations.clear();
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  for (uint32_t Size : {1, 2, 4, 8}) {
+    writeLE<uint64_t>(Image.Segments.front().Data.data() + 0x40,
+                      UINT64_C(0xfedcba9876543210));
+    EXPECT_EQ(readImmutableImageScalar(Image, TextVA + 0x40, Size),
+              UINT64_C(0xfedcba9876543210) & (UINT64_MAX >> ((8 - Size) * 8)));
+  }
+  writeLE<uint64_t>(Image.Segments.front().Data.data() + 0x40, TextVA);
+  EXPECT_FALSE(readImmutableImageScalar(Image, TextVA + 0x40, 8));
+  EXPECT_EQ(readImmutableImageScalar(Image, TextVA + 0x40, 4), TextVA);
+  EXPECT_FALSE(readImmutableImageScalar(Image, TextVA + 0x40, 0));
+  EXPECT_FALSE(readImmutableImageScalar(Image, TextVA + 0x40, 9));
+  Image.BaseRelocations.push_back({TextVA + 0x42, 3});
+  EXPECT_FALSE(readImmutableImageScalar(Image, TextVA + 0x40, 4));
+}
+
+TEST(ImmutableScalar, BudgetChargesTheInventoryBeforeARead) {
+  auto Image = codeImage();
+  Image.BaseRelocations.clear();
+  size_t Remaining = 10000;
+  ASSERT_EQ(readImmutableImageScalar(Image, ReadVA, 1, &Remaining), 0xb8u);
+  const size_t Required = 10000 - Remaining;
+  ASSERT_GT(Required, 0u);
+  for (size_t Budget : {size_t{0}, Required - 1, Required}) {
+    Remaining = Budget;
+    EXPECT_EQ(
+        readImmutableImageScalar(Image, ReadVA, 1, &Remaining).has_value(),
+        Budget == Required);
+    EXPECT_EQ(Remaining, Budget == Required ? 0 : Budget);
+  }
+  // An unrelated fixup still contributes to the cold-query work. The failed
+  // reservation must leave room for the caller's independent arithmetic.
+  Image.BaseRelocations.push_back({ReadVA + 0x40, 3});
+  Remaining = Required;
+  EXPECT_FALSE(readImmutableImageScalar(Image, ReadVA, 1, &Remaining));
+  EXPECT_EQ(Remaining, Required);
+  ++Remaining;
+  EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1, &Remaining), 0xb8u);
+  EXPECT_EQ(Remaining, 0u);
+}
+
+TEST(ImmutableScalar, WideOperandFixupsCannotSupplyStableBytes) {
+  for (bool CodeOperand : {false, true})
+    for (uint8_t Width : {8, 16, UINT8_MAX}) {
+      auto Image = codeImage();
+      Image.BaseRelocations.clear();
+      RelocatedAddressField Field;
+      Field.Width = Width;
+      auto &Operands = CodeOperand ? Image.CodeAddressRelocOperands
+                                   : Image.DataAddressRelocOperands;
+      // The field starts more than one pointer width before the read but its
+      // final byte still changes that byte when relocated. Malformed wide
+      // metadata is not permission to freeze the file's initial contents.
+      Operands.emplace(ReadVA - (Width - 1), Field);
+      EXPECT_FALSE(readImmutableCodeBytes(Image, ReadVA, 1));
+      EXPECT_FALSE(readImmutableImageScalar(Image, ReadVA, 1));
+      Operands.clear();
+      Operands.emplace(ReadVA - Width, Field);
+      EXPECT_EQ(readImmutableImageScalar(Image, ReadVA, 1), 0xb8u);
+    }
 }
 
 TEST(ImmutablePE32Code, IndexedQueriesChargeColdAndRepeatedWork) {

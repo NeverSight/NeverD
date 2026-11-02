@@ -41,7 +41,8 @@ LowFunc build(std::vector<uint8_t> Bytes, std::set<va_t> Entries,
   return Builder.build(Image, Dec, 0x1000, "tail_metadata");
 }
 
-void expectDirectTarget(const LowFunc &Function, va_t Target) {
+void expectDirectTarget(const LowFunc &Function, va_t Target,
+                        bool Synthetic = false) {
   auto Error = validateLowInstructionBoundaries(
       Function, LowInstructionBoundaryRequirement::Required);
   EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
@@ -55,6 +56,7 @@ void expectDirectTarget(const LowFunc &Function, va_t Target) {
         for (uint64_t I = Boundary.FirstOp;
              I < Boundary.FirstOp + Boundary.OpCount; ++I) {
           const auto &Op = Block.Ops[I];
+          EXPECT_EQ(Op.Seq < 0, Synthetic);
           if (Op.Opcode == NdOp::CALL) {
             ASSERT_EQ(Op.NumInputs, 1u);
             EXPECT_TRUE(Op.Inputs[0].isConst());
@@ -72,21 +74,21 @@ void expectDirectTarget(const LowFunc &Function, va_t Target) {
 TEST(DirectTailCallMetadata, FallthroughEntryPublishesItsTarget) {
   for (auto Architecture : {Arch::X86, Arch::X64})
     expectDirectTarget(build({0x90, 0xc3}, {0x1000, 0x1001}, Architecture),
-                       0x1001);
+                       0x1001, true);
   expectDirectTarget(build({0x1f, 0x20, 0x03, 0xd5, 0xc0, 0x03, 0x5f, 0xd6},
                            {0x1000, 0x1004}, Arch::AArch64),
-                     0x1004);
+                     0x1004, true);
 }
 
 TEST(DirectTailCallMetadata, ConditionalEntryPublishesItsTarget) {
   for (auto Architecture : {Arch::X86, Arch::X64})
     expectDirectTarget(
-        build({0x75, 0x01, 0xc3, 0xc3}, {0x1000, 0x1003}, Architecture),
-        0x1003);
+        build({0x75, 0x01, 0xc3, 0xc3}, {0x1000, 0x1003}, Architecture), 0x1003,
+        true);
   expectDirectTarget(build({0x41, 0x00, 0x00, 0x54, 0xc0, 0x03, 0x5f, 0xd6,
                             0xc0, 0x03, 0x5f, 0xd6},
                            {0x1000, 0x1008}, Arch::AArch64),
-                     0x1008);
+                     0x1008, true);
 }
 
 TEST(DirectTailCallMetadata, ExistingDirectJumpKeepsItsTarget) {

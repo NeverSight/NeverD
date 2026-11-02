@@ -1,0 +1,51 @@
+//===- AArch64StructureMemoryC.def - Structure C syntax --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Evaluate every operand once before binding consecutive native registers.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_STRUCTURE_C_TEXT
+#error "Define NEVERD_A64_STRUCTURE_C_TEXT before including this file"
+#endif
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCOpen, "{{\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCClose, "}\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCExpressionOpen, "({{\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCExpressionClose, "{0}; })")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCScalar,
+                            "const uint64_t {0} = (uint64_t)({1});\n")
+NEVERD_A64_STRUCTURE_C_TEXT(
+    kStructureCData,
+    "const unsigned __int128 {0} = (unsigned __int128)({1});\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCBaseRegister,
+                            "register uint64_t {0} __asm__(\"x16\") = {1};\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCIndexRegister,
+                            "register uint64_t {0} __asm__(\"x15\") = {1};\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCVectorRegister,
+                            "register int64_t __attribute__((vector_size(16))) "
+                            "{0} __asm__(\"v{1}\"){2};\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCInitializer, " = {0}")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCOutput, "\"{0}\"({1})")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCComma, ", ")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCVectorOut, "=&w")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCVectorInOut, "+w")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCVectorIn, "w")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCBaseOut, "+r")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCIndexIn, "r")
+NEVERD_A64_STRUCTURE_C_TEXT(
+    kStructureCAsm,
+    "__asm__ volatile(\".inst %c{0}\" : {1} : {2}, \"i\"({3}) : \"memory\");\n")
+NEVERD_A64_STRUCTURE_C_TEXT(
+    kStructureCSPAsm,
+    "__asm__ volatile(\"mov x14, sp\\n\\tmov sp, x16\\n\\t.inst %c{0}\\n\\t"
+    "mov x16, sp\\n\\tmov sp, x14\" : {1} : {2}, \"i\"({3}) "
+    ": \"x14\", \"memory\");\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCValueName, "__structure_value")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCInputName, "__structure_input")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCBaseName, "__structure_base")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCIndexName, "__structure_index")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCAssignment, "{0} = {1};\n")
+NEVERD_A64_STRUCTURE_C_TEXT(kStructureCField, "{0}.field_{1}")
+#undef NEVERD_A64_STRUCTURE_C_TEXT

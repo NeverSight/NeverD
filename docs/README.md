@@ -28,6 +28,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [HTML source profile](web-html-profile.md) | Bounded C++ script inventory, captured local references and original inline-source anchors |
 | [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
 | [Desktop workbench](gui.md) | Classic disassembler layout, worker separation, project databases, localization and MCP connections |
+| [Analysis image sections](analysis-sections.md) | Add materialized code/data through the C ABI, worker, CLI and workbench; native views and project persistence |
 | [Library recognition](library-recognition.md) | Evidence-backed STL, ATL/MFC, COM and libc identities, profiles and reversible C folds |
 | [Desktop qualification](gui-qualification.md) | Supported workflows, verification evidence and platform release requirements |
 | [Interpreter source recovery](interpreter-recovery.md) | Experimental x64 interpreter specialization, control contexts, source routes, local evidence, and explicit refusal boundaries; nested loop proof proposals; explicit discovery budgets and versioned C API; exact native-to-LLVM proof API |

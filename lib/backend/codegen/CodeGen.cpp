@@ -17,7 +17,10 @@
 
 #define DEBUG_TYPE "neverd-codegen"
 #include "neverd/ArchSupport.h"
-#include "neverd/backend/llvm/LLVMX86StackEffects.h"
+#include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
+#include "neverd/backend/llvm/X86/LLVMX86StackEffects.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/object/SectionNames.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -48,6 +51,33 @@
 #include <tuple>
 
 namespace neverd {
+
+static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
+  for (const auto *Name : {
+           "llvm.x86.rsm.context",
+           "llvm.x86.enclu.transfer.at.context",
+           "llvm.x86.vmrun.context",
+           "llvm.x86.vmcall.kvm",
+           "llvm.x86.vmmcall.kvm",
+           "llvm.x86.vmcall.kvm32",
+           "llvm.x86.vmmcall.kvm32",
+           "llvm.x86.hyperv.call",
+           "llvm.x86.hle.context",
+           "llvm.x86.vmgexit.sev",
+#define NEVERD_X86_SNP(Id, Name, ...) "llvm.x86." #Name ".context",
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+       }) {
+    const auto *Function = Mod.getFunction(Name);
+    if (Function && !Function->use_empty() && !Function->getIntrinsicID()) {
+      llvm::WithColor::error()
+          << "native x86 execution requires an LLVM SDK with " << Name
+          << " support\n";
+      return false;
+    }
+  }
+  return true;
+}
 
 /// Reapply the frame requirement after optimization, including inlining into
 /// a function that originally had no stack-writing architectural operations.
@@ -101,6 +131,9 @@ static std::set<std::string> scanIntrinsicPatterns(llvm::Module &Mod) {
   for (auto &Fn : Mod)
     for (auto &BB : Fn)
       for (auto &Inst : BB) {
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst))
+          if (Call->getOperandBundle(kAArch64PAuthCallBundle))
+            Seen.insert(kAArch64PAuthLLVMIntrinsicPattern);
         if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst)) {
           if (auto *Callee = CI->getCalledFunction())
             Seen.insert(Callee->getName().str());
@@ -142,6 +175,31 @@ detectTargetFeatures(llvm::Module &Mod, Arch TheArch) {
   default:
     return {"", ""};
   }
+}
+
+static bool supportsAArch64ReturnUnwind(const llvm::Module &Module,
+                                        const llvm::Triple &Triple) {
+  if (!Triple.isArm64e() || !Triple.isOSBinFormatMachO())
+    return true;
+  for (const auto &Function : Module) {
+    // The configured LLVM fork gives ptrauth-returns priority over explicit
+    // scope/key attributes and selects the Darwin non-leaf IB convention.
+    if (Function.isDeclaration() ||
+        Function.hasFnAttribute(kReturnSigningArm64eAttribute))
+      continue;
+    const auto Scope = Function.getFnAttribute(kReturnSigningScopeAttribute)
+                           .getValueAsString();
+    if (Scope != kReturnSigningAll && Scope != kReturnSigningNonLeaf)
+      continue;
+    if (Function.getFnAttribute(kReturnSigningKeyAttribute)
+            .getValueAsString() == kReturnSigningBKey)
+      continue;
+    // Mach-O omits the B-key CIE augmentation; arm64e's implicit return ABI
+    // cannot describe an A-key override, even with valid PAC/CFI instructions.
+    llvm::WithColor::error() << kReturnSigningArm64eUnwindUnsupported;
+    return false;
+  }
+  return true;
 }
 
 static bool isARMv7KTriple(const llvm::Triple &Triple) {
@@ -303,6 +361,16 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                llvm::StringRef TargetTriple) {
   CodegenResult Result;
   ensureTargets();
+  if (!supportsX86NativeExtensions(Mod))
+    return Result;
+  if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
+    llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
+    return Result;
+  }
+  if (Mod.getModuleFlag(kArm64eAnalysisModuleFlag)) {
+    llvm::WithColor::error() << kArm64eRebuildUnsupported;
+    return Result;
+  }
 
   if (!archCodegenSupported(TargetArch)) {
     llvm::WithColor::error()
@@ -320,6 +388,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   llvm::Triple TT(TargetTriple.empty() ? llvm::StringRef(TripleStr)
                                        : TargetTriple);
   if (!tripleMatchesTarget(TT, TargetArch, ObjectFormat))
+    return Result;
+  if (!supportsAArch64ReturnUnwind(Mod, TT))
     return Result;
   Mod.setTargetTriple(TT);
 
@@ -366,6 +436,13 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   }
 
   PM.run(Mod);
+
+  // LLVM can report a recoverable inline-assembly or allocation error and
+  // still emit a parseable, incomplete object. Such bytes are not a successful
+  // compilation. Keep the caller's diagnostic handler and original message.
+  if (const auto *Handler = Mod.getContext().getDiagHandlerPtr();
+      Handler && Handler->HasErrors)
+    return Result;
 
   Result.ObjectData.assign(ObjBuf.begin(), ObjBuf.end());
   LLVM_DEBUG(llvm::dbgs() << "codegen: compiled " << Result.ObjectData.size()
@@ -517,6 +594,20 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
+  if (!supportsX86NativeExtensions(Mod)) {
+    Result.ImageValid = false;
+    return Result;
+  }
+  if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
+    llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
+    Result.ImageValid = false;
+    return Result;
+  }
+  if (Mod.getModuleFlag(kArm64eAnalysisModuleFlag)) {
+    llvm::WithColor::error() << kArm64eRebuildUnsupported;
+    Result.ImageValid = false;
+    return Result;
+  }
 
   if (!archCodegenSupported(TargetArch)) {
     llvm::WithColor::error()
@@ -540,6 +631,10 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::WithColor::error()
         << "codegen: target triple '" << TripleName
         << "' does not match the requested architecture and object format\n";
+    Result.ImageValid = false;
+    return Result;
+  }
+  if (!supportsAArch64ReturnUnwind(Mod, TT)) {
     Result.ImageValid = false;
     return Result;
   }

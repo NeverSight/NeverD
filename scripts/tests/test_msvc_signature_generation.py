@@ -19,6 +19,7 @@ from pathlib import Path
 from scripts.signatures.build_msvc_signatures import (
     Asset,
     BuildError,
+    Shape,
     fold,
     main,
     parse_line,
@@ -33,6 +34,17 @@ class ParseLineTests(unittest.TestCase):
         assert line is not None
         self.assertEqual(line.key, "4883EC28 00 0000 0010 4883C428C3")
         self.assertEqual(line.names, (":0000 ?Run@Task@@QEAAXXZ",))
+
+    def test_context_requirement_is_preserved_but_is_not_a_byte_key(self) -> None:
+        text = "E8........C3 00 0000 0006 !refs :0000 wrapper ^0001 callee"
+        line = parse_line(text)
+        self.assertTrue(line.require_references)
+        self.assertEqual(line.key, "E8........C3 00 0000 0006")
+        self.assertEqual(line.with_refs(line.refs).text, text)
+        ordinary = text.replace(" !refs", "")
+        folded = fold([ordinary, text])
+        self.assertEqual(len(folded.lines), 1)
+        self.assertTrue(folded.lines[0].require_references)
 
     def test_every_public_name_is_kept_in_order(self) -> None:
         line = parse_line("AABB 00 0000 0020 :0000 first :0010 second")
@@ -304,6 +316,45 @@ class OpeningTests(unittest.TestCase):
         short = f"{lead}.. 04 1A2B 002A :0000 ?f@@YAXXZ 4883C4205FC3"
         longer = f"{lead}.. 04 1A2B 0040 :0000 ?g@@YAXXZ 4883C4205FC3CCCC48895C24"
         self.assertEqual(self._settle(short, longer), [longer])
+
+    def test_wildcard_tail_covers_another_records_opaque_crc_span(self) -> None:
+        lead = self.PROLOGUE * 2
+        loose = f"{lead} 00 0000 002C :0000 loose {'..' * 8}AABBCCDD"
+        precise = f"{lead} 08 1234 002C :0000 precise AABBCCDD"
+        self.assertEqual(self._settle(loose, precise), [precise])
+        shape = Shape.of(parse_line(loose).key)
+        self.assertFalse(shape.covered_by(Shape.of(parse_line(
+            precise.replace('AABBCCDD', 'AABBCCDE')).key)))
+        fixed_in_crc = loose.replace('..' * 8, '01' + '..' * 7)
+        self.assertFalse(Shape.of(parse_line(fixed_in_crc).key).covered_by(
+            Shape.of(parse_line(precise).key)))
+        self.assertFalse(Shape.of(parse_line(precise).key).covered_by(shape))
+
+    def test_byte_assertions_keep_their_offsets_across_leading_tail_splits(self) -> None:
+        whole = Shape.of('AABBCCDD 00 0000 0004')
+        split = Shape.of('AABB 00 0000 0004 CCDD')
+        self.assertTrue(whole.covered_by(split))
+        self.assertTrue(split.covered_by(whole))
+        self.assertFalse(split.covered_by(Shape.of('AABB 00 0000 0004 CCEE')))
+        self.assertFalse(whole.covered_by(Shape.of('AABB 00 0000 0002')))
+        self.assertFalse(Shape.of('AABB 02 1234 0004').covered_by(
+            Shape.of('AA 02 1234 0004 DD')))
+
+    def test_thumb_return_padding_needs_the_explicit_machine_and_return(self) -> None:
+        for end in ('BDE8F88F', '7047'):
+            body = '2DE9F84F0DF1200B' + end
+            size = len(body) // 2
+            short = Shape.of(f'{body} 00 0000 {size:04X}')
+            for pad in ('0000', '00BF', '000000BF'):
+                padded = Shape.of(f'{body}{pad} 00 0000 {size + len(pad) // 2:04X}')
+                self.assertTrue(padded.padding_collision_with(short, machine='arm'))
+                self.assertFalse(padded.padding_collision_with(short, machine='x64'))
+                self.assertFalse(padded.padding_collision_with(short, machine='arm64'))
+            changed = Shape.of(f'{body}0120 00 0000 {size + 2:04X}')
+            self.assertFalse(changed.padding_collision_with(short, machine='arm'))
+        short = Shape.of('BDE8F80F 00 0000 0004')
+        self.assertFalse(Shape.of('BDE8F80F0000 00 0000 0006').padding_collision_with(
+            short, machine='arm'))
 
 
 class SplitTests(unittest.TestCase):

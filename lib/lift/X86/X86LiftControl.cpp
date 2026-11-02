@@ -12,7 +12,7 @@
 
 #include "X86LiftAPXValidation.h"
 
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -1539,14 +1539,74 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // --- RETF / IRET ---
+  // --- RETF / IRET (far and interrupt returns) ---
   case X86_INS_RETF:
   case X86_INS_RETFQ:
   case X86_INS_IRET:
   case X86_INS_IRETD:
   case X86_INS_IRETQ: {
-    uint16_t PtrSize = (TargetArch == Arch::X64) ? 8 : 4;
-    S.emit(NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, PtrSize)});
+    // Far and interrupt returns leave the ordinary call/return domain: they
+    // pop an architectural frame off the stack and transfer control to it,
+    // possibly changing privilege, segments and flags.  They are terminal,
+    // non-returning transfers, not ABI returns.  Project them faithfully as a
+    // terminal state-transfer intrinsic that names every stack cell the
+    // transfer reads; control never resumes in the caller.  This records the
+    // observed transfer; it does not reconstruct the privilege, segment or
+    // flag transition and grants no source ABI or memory contract.
+    const bool Interrupt = InsnId == X86_INS_IRET ||
+                           InsnId == X86_INS_IRETD || InsnId == X86_INS_IRETQ;
+    // Width of each popped stack field, selected by the operand-size attribute.
+    uint16_t Field;
+    switch (InsnId) {
+    case X86_INS_RETFQ:
+    case X86_INS_IRETQ:
+      Field = 8;
+      break;
+    case X86_INS_IRETD:
+      Field = 4;
+      break;
+    case X86_INS_IRET:
+      Field = 2;
+      break;
+    default: // RETF: 16-bit with a 66H operand-size override, else 32-bit.
+      Field = X86.prefix[2] == 0x66 ? 2 : 4;
+      break;
+    }
+    const uint16_t PtrSize = stackPointerSize(TargetArch);
+    NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
+    // Read the architectural return frame without consuming RSP: the transfer
+    // is terminal, so the popped stack pointer is itself part of the named
+    // state rather than this function's continuation.
+    auto PopField = [&](uint16_t Index) {
+      NdVar Addr = Rsp;
+      if (Index != 0) {
+        Addr = S.makeTemp(PtrSize);
+        S.emit(NdOp::INT_ADD, Addr,
+               {Rsp, NdVar::scalar(uint64_t(Index) * Field, PtrSize)});
+      }
+      NdVar Val = S.makeTemp(Field);
+      S.emit(NdOp::LOAD, Val, {Addr});
+      return Val;
+    };
+    NdVar NewIp = PopField(0);
+    NdVar NewCs = PopField(1);
+    if (!Interrupt) {
+      // RETF[Q]: transfer to the popped CS:IP.
+      S.emitVoidIntrinsic(Intrinsic::Retf, {NewIp, NewCs});
+      break;
+    }
+    NdVar NewFlags = PopField(2);
+    if (TargetArch == Arch::X64) {
+      // IRET begun in 64-bit mode always pops SS:SP, independently of its
+      // operand size or the target CPL (Intel SDM, IA-32e-MODE).
+      NdVar NewSp = PopField(3);
+      NdVar NewSs = PopField(4);
+      S.emitVoidIntrinsic(Intrinsic::Iret,
+                          {NewIp, NewCs, NewFlags, NewSp, NewSs});
+    } else {
+      // Legacy IRET's stack switch depends on the target privilege level.
+      S.emitVoidIntrinsic(Intrinsic::Iret, {NewIp, NewCs, NewFlags});
+    }
     break;
   }
 

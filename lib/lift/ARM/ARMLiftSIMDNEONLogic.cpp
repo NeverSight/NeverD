@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -24,8 +24,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                       const cs_arm &ARM) {
+bool liftSIMDNEONLogic(ARMLifter &L, ARMLifter::LiftState &S,
+                       const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // NEON data processing — binary ops
   case ARM_INS_VAND:

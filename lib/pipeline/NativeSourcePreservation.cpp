@@ -1,5 +1,6 @@
 #include "NativeSourcePreservation.h"
 
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 
 namespace neverd {
@@ -17,6 +18,15 @@ bool hasNativeScalarIntrinsicEvidence(const MedOp &Operation,
        Operation.Output.Size != 4 && Operation.Output.Size != 8))
     return false;
   return true;
+}
+
+bool hasNativeReadOnlyMemoryIntrinsicEvidence(const MedOp &Operation,
+                                              Arch Architecture) {
+  return Architecture == Arch::AArch64 &&
+         aarch64AddressLoadMedShapeIsValid(Operation) &&
+         !aarch64AddressMemoryInstruction(
+              Operation.Inputs[kAddressMemoryWordOperand + 1].ConstVal)
+              ->stackBase();
 }
 
 bool certifiesPrivateNativeSourceFrame(const LowFunc &Function,

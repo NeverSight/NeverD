@@ -14,7 +14,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowNoReturn.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 

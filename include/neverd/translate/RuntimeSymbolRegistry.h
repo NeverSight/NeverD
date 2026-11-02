@@ -95,6 +95,8 @@ class RuntimeSymbolRegistryV1 {
 public:
   /// Construct the production registry from runtimeABIHelperBindingsV1().
   static llvm::Expected<RuntimeSymbolRegistryV1> create();
+  static llvm::Expected<RuntimeSymbolRegistryV1>
+  create(TranslationRuntimeProfileV1 Profile);
 
   /// Construct from a borrowed binding table, primarily for validation tests
   /// and explicitly provisioned hosts.  Bindings are consumed only during the
@@ -103,6 +105,9 @@ public:
   /// implementations.  Production linking should use create().
   static llvm::Expected<RuntimeSymbolRegistryV1>
   create(llvm::ArrayRef<RuntimeABIHelperBindingV1> Bindings);
+  static llvm::Expected<RuntimeSymbolRegistryV1>
+  create(TranslationRuntimeProfileV1 Profile,
+         llvm::ArrayRef<RuntimeABIHelperBindingV1> Bindings);
 
   /// Entries remain valid until this registry is moved from or destroyed.
   llvm::ArrayRef<RuntimeSymbolEntryV1> entries() const { return Entries; }
@@ -120,14 +125,18 @@ public:
   llvm::Expected<llvm::orc::ExecutorAddr> lookup(llvm::StringRef Name) const;
 
   llvm::StringRef identity() const { return Identity; }
+  TranslationRuntimeProfileV1 profile() const { return Profile; }
 
 private:
   RuntimeSymbolRegistryV1(std::vector<RuntimeSymbolEntryV1> Entries,
-                          std::string Identity)
-      : Entries(std::move(Entries)), Identity(std::move(Identity)) {}
+                          std::string Identity,
+                          TranslationRuntimeProfileV1 Profile)
+      : Entries(std::move(Entries)), Identity(std::move(Identity)),
+        Profile(Profile) {}
 
   std::vector<RuntimeSymbolEntryV1> Entries;
   std::string Identity;
+  TranslationRuntimeProfileV1 Profile;
 };
 
 } // namespace neverd::translate

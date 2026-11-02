@@ -18,6 +18,10 @@
 
 namespace neverd::symbolic::detail::limits {
 
+/// Residual recovery reuses the small exact Boolean recipes without building
+/// the four-input exhaustive table.
+inline constexpr unsigned kMaxResidualSynthesisAtoms = 3;
+
 inline constexpr std::size_t kMaxLinearTailTerms = 128;
 inline constexpr std::size_t kMaxLinearTailNodes = 32;
 inline constexpr unsigned kMinLinearTailSummands = 2;
@@ -39,10 +43,61 @@ inline constexpr unsigned kMaxCubicCofactorSearchAtoms = 3;
 inline constexpr unsigned kMinQuadraticRowAtoms = 4;
 inline constexpr unsigned kMaxQuadraticRowAtoms = 8;
 inline constexpr std::size_t kMaxQuadraticRowTerms = 8;
-inline constexpr std::size_t kMinCompletedRegionCacheWork = 256;
+inline constexpr unsigned kMBAAbstractionInlineEntries = 16;
+// Dense tables need spare buckets before their load factor triggers growth.
+inline constexpr unsigned kMBAAbstractionInlineBuckets =
+    2 * kMBAAbstractionInlineEntries;
+inline constexpr std::size_t kMinCompletedRegionCacheWork = 64;
+inline constexpr std::size_t kCompletedMemoEntryBytes = 256;
+inline constexpr std::size_t kCompletedMemoStorageDivisor = 8;
+inline constexpr std::size_t kMinArithmeticMemoTerms = 3;
+inline constexpr std::size_t kMinArithmeticPartitionTerms = 3;
+inline constexpr std::size_t kMinArithmeticCommonFactors = 3;
+inline constexpr std::size_t kMinArithmeticCommonProductOperands = 4;
+inline constexpr std::size_t kMinFlatArithmeticSumTerms = 8;
+inline constexpr std::size_t kMinUnitProductOperands = 3;
+inline constexpr std::size_t kMaxUnitProductCoordinates = 64;
+inline constexpr std::size_t kMaxBooleanBoundaryNodes = 128;
+inline constexpr unsigned kMinCanonicalAffineAtoms = 4;
+inline constexpr unsigned kMinProductCofactorDegree = 4;
+inline constexpr unsigned kMaxPartitionCubeAxes = 3;
+inline constexpr unsigned kMinCompressedCommonFactors = 3;
+inline constexpr std::size_t kMinParityMemoCapacity = 8;
 inline constexpr unsigned kMinQuadraticCongruenceAtoms = 4;
 inline constexpr unsigned kMinPackedPolynomialAtoms = 4;
 inline constexpr unsigned kMinPackedPolynomialWidth = 8;
+
+inline constexpr std::size_t kMinResidueProductFactors = 4;
+inline constexpr unsigned kMinResidueShiftedFactors = 2;
+inline constexpr std::size_t kMaxResidueProductFactors = 512;
+inline constexpr std::size_t kMaxResidueBaseTerms = 16;
+inline constexpr std::size_t kMaxResidueProductSummands = 128;
+inline constexpr unsigned kMaxAffineResidueDepth = 8;
+inline constexpr unsigned kMinAffineResidueScaledFactors = 1;
+inline constexpr std::size_t kMaxAffineResidueEdges = 64;
+inline constexpr unsigned kMaxAffineResidueTableBits = 8;
+/// Keep optional multiple-residual recovery from starving the surrounding DAG.
+inline constexpr std::size_t kMaxMultipleResidueWork = 49152;
+/// Direct decision proofs still spend the caller's existing cumulative budget.
+inline constexpr std::size_t kMaxResidueDecisionWork = 49152;
+inline constexpr std::size_t kMaxResidueDecisionNodes = 4096;
+inline constexpr unsigned kMaxResidueDecisionDepth = 64;
+inline constexpr unsigned kMaxResidueDecisionInputs = 3;
+inline constexpr unsigned kResidueDecisionPriorityBits = 4;
+inline constexpr unsigned kMinResidueDecisionPairingBits = 6;
+inline constexpr unsigned kMinResidueDecisionWidePairingBits = 6;
+// Admission probe for partial blocks; every matched pair still needs a proof.
+inline constexpr std::size_t kResidueDecisionPartialPairingDivisor = 2;
+inline constexpr unsigned kResidueDecisionPolynomialFirstBits = 6;
+inline constexpr std::size_t kResidueDecisionPolynomialFirstNodes = 512;
+inline constexpr std::size_t kResidueDecisionMinMapBuckets = 64;
+inline constexpr unsigned kMaxResidueDecisionSynthesisInputs = 6;
+inline constexpr unsigned kMaxUnconditionedResidueDecisionBits = 3;
+inline constexpr std::size_t kMaxResidueDecisionPolynomialTerms = 256;
+inline constexpr unsigned kMaxResiduePrefixBits = 16;
+inline constexpr unsigned kMaxResiduePrefixHintDepth = 2;
+inline constexpr unsigned kMaxResiduePrefixHintNodes = 16;
+inline constexpr std::size_t kMaxResidueWitnessWork = 1024;
 
 // lib/symbolic/mba/SymBitwise.cpp
 /// The most inputs the exhaustive search will ever tabulate.
@@ -111,7 +166,7 @@ inline constexpr int kMaxProjectedBitWindowOperands = 32;
 inline constexpr int kSymMBATryFastComplementarySumCtxNumOperandsALimit = 8;
 
 // lib/symbolic/mba/SymMBAArithmetic.cpp
-inline constexpr int kSymMBAArithmeticNormalizeCtxNumOperandsRLimit = 6;
+inline constexpr int kSymMBAArithmeticNormalizeCtxNumOperandsRLimit = 2;
 inline constexpr int
     kSymMBAArithmeticReduceDistributionProofCtxNumOperandsBeforeLimit = 6;
 inline constexpr int

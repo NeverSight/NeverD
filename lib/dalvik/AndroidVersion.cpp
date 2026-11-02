@@ -6,35 +6,11 @@
 /// \file
 /// API 28 scalar Build.VERSION values over a supplied property snapshot.
 //===----------------------------------------------------------------------===//
+#include "neverd/dalvik/AndroidProperties.h"
 #include "neverd/dalvik/Limits.h"
 #include "neverd/dalvik/Runtime.h"
 
-#include <charconv>
-
 namespace neverd::mobile::dalvik {
-namespace {
-int64_t propertyInteger(std::string_view text) {
-  // Android base ParseInt selects hexadecimal only from the original prefix,
-  // then accepts leading C whitespace/signs but no trailing characters.
-  const bool hex = text.starts_with("0x") || text.starts_with("0X");
-  while (!text.empty() && std::string_view(" \t\n\r\f\v").find(text[0]) !=
-                              std::string_view::npos)
-    text.remove_prefix(1);
-  bool negative = !text.empty() && text[0] == '-';
-  if (!text.empty() && (text[0] == '+' || text[0] == '-'))
-    text.remove_prefix(1);
-  if (hex)
-    text.remove_prefix(2);
-  uint64_t magnitude = 0;
-  auto [end, error] = std::from_chars(text.data(), text.data() + text.size(),
-                                      magnitude, hex ? 16 : 10);
-  if (error != std::errc() || end != text.data() + text.size() ||
-      magnitude > uint64_t(0x7fffffff) + negative)
-    return 0;
-  return negative ? -int64_t(magnitude) : int64_t(magnitude);
-}
-} // namespace
-
 void Program::addAndroidVersion(
     const std::map<std::string, std::string> &properties) {
   Class version;
@@ -61,7 +37,7 @@ void Program::addAndroidVersion(
       // Refuse unadmitted encodings rather than guessing ART replacement.
       (void)javaStringBytes(std::get<std::string>(value.value));
     } else {
-      value.value = propertyInteger(text);
+      value.value = int64_t(androidPropertyInt(text, 0));
     }
     platform_values.emplace(field.reference, std::move(value));
     version.fields.push_back(std::move(field));

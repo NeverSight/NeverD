@@ -104,6 +104,28 @@ void expectSameBytes(const BinaryImage &Full, const BinaryImage &Stripped,
   }
 }
 
+void expectUnnamedRelocationSymbols(const BinaryImage &Full,
+                                    const BinaryImage &Stripped) {
+  for (const auto &R : Stripped.Relocations) {
+    if (!R.ELF)
+      continue;
+    const auto Original = llvm::find_if(Full.Relocations, [&](const auto &F) {
+      return F.ELF && F.ELF->TableFileOffset == R.ELF->TableFileOffset &&
+             F.ELF->Ordinal == R.ELF->Ordinal;
+    });
+    ASSERT_NE(Original, Full.Relocations.end());
+    ASSERT_EQ(Original->ELF->Symbol.has_value(), R.ELF->Symbol.has_value());
+    if (!R.ELF->Symbol)
+      continue;
+    const auto &A = *Original->ELF->Symbol, &B = *R.ELF->Symbol;
+    EXPECT_EQ(std::tie(A.NameOffset, A.SectionIndex, A.Info, A.Binding, A.Type,
+                       A.Other, A.Value, A.Size),
+              std::tie(B.NameOffset, B.SectionIndex, B.Info, B.Binding, B.Type,
+                       B.Other, B.Value, B.Size));
+    EXPECT_FALSE(B.Name);
+  }
+}
+
 /// \p Bytes loaded from a file of their own.
 llvm::Expected<BinaryImage> loadBytes(const std::string &Bytes) {
   llvm::SmallString<128> Path;
@@ -249,6 +271,70 @@ TEST(ELFWithoutSections, ReportsATableOutsideTheFile) {
   // No name can be read, but the relocated bytes are still the same.
   EXPECT_TRUE(imports(Stripped).empty());
   expectSameBytes(*FullOr, Stripped, Edited);
+  expectUnnamedRelocationSymbols(*FullOr, Stripped);
+}
+
+TEST(ELFWithoutSections, ReportsAnUnterminatedDynamicStringTable) {
+  unsigned Checked = 0;
+  for (const char *Name :
+       {"test_pic_library_i386.so", "test_elf_pointer_reloc_x64"}) {
+    SCOPED_TRACE(Name);
+    const auto Path = fixture(Name);
+    if (!std::filesystem::exists(Path))
+      continue;
+    auto FullOr = loadBinary(Path);
+    ASSERT_TRUE(static_cast<bool>(FullOr))
+        << llvm::toString(FullOr.takeError());
+    auto Original = llvm::MemoryBuffer::getFile(Path.string());
+    ASSERT_TRUE(static_cast<bool>(Original));
+    const auto FindStrings = [&]<typename Header, typename Section>() {
+      Header H;
+      std::memcpy(&H, (*Original)->getBufferStart(), sizeof(H));
+      for (unsigned I = 0; I < H.e_shnum; ++I) {
+        Section S;
+        std::memcpy(&S,
+                    (*Original)->getBufferStart() + H.e_shoff + I * sizeof(S),
+                    sizeof(S));
+        if (S.sh_type != llvm::ELF::SHT_DYNSYM)
+          continue;
+        Section Strings;
+        std::memcpy(&Strings,
+                    (*Original)->getBufferStart() + H.e_shoff +
+                        S.sh_link * sizeof(Strings),
+                    sizeof(Strings));
+        return uint64_t(Strings.sh_offset) + Strings.sh_size - 1;
+      }
+      return uint64_t(0);
+    };
+    const uint64_t Last =
+        (*Original)->getBuffer()[llvm::ELF::EI_CLASS] == llvm::ELF::ELFCLASS64
+            ? FindStrings.template
+              operator()<llvm::ELF::Elf64_Ehdr, llvm::ELF::Elf64_Shdr>()
+            : FindStrings.template
+              operator()<llvm::ELF::Elf32_Ehdr, llvm::ELF::Elf32_Shdr>();
+    ASSERT_GT(Last, 0u);
+    ASSERT_LT(Last, (*Original)->getBufferSize());
+    FileRanges Edited;
+    auto Bytes = withoutSectionHeaders(Path, Edited);
+    ASSERT_TRUE(Bytes);
+    (*Bytes)[Last] = 'x';
+    Edited.push_back({Last, Last + 1});
+    auto StrippedOr = loadBytes(*Bytes);
+    ASSERT_TRUE(static_cast<bool>(StrippedOr))
+        << llvm::toString(StrippedOr.takeError());
+    EXPECT_TRUE(imports(*StrippedOr).empty());
+    EXPECT_TRUE(
+        llvm::any_of(StrippedOr->LoadDiagnostics, [](const LoadDiagnostic &D) {
+          return D.Code == "elf.dynamic_table_invalid" &&
+                 D.Message.find(".dynstr") != std::string::npos &&
+                 D.Message.find("not null terminated") != std::string::npos;
+        }));
+    expectSameBytes(*FullOr, *StrippedOr, Edited);
+    expectUnnamedRelocationSymbols(*FullOr, *StrippedOr);
+    ++Checked;
+  }
+  if (Checked == 0)
+    GTEST_SKIP() << "the fixtures link with ld.lld";
 }
 
 } // namespace

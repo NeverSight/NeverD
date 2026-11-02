@@ -268,7 +268,7 @@ TEST_P(MMIOAtomic, OriginalInstructionResultsMatchRAMAcrossAllAtomicFamilies) {
         Compare(Instruction, Width, false, CAS, Match);                        \
     }                                                                          \
   } while (false);
-#include "X64AtomicCases.def"
+#include "x86_64/X64AtomicCases.def"
 #undef NEVERD_ATOMIC_CASE
 #define NEVERD_WIDE_ATOMIC_CASE(Name, Width, Locked, ...)                      \
   do {                                                                         \
@@ -277,7 +277,7 @@ TEST_P(MMIOAtomic, OriginalInstructionResultsMatchRAMAcrossAllAtomicFamilies) {
     for (bool Match : {true, false})                                           \
       Compare(Encoding, Width, true, true, Match);                             \
   } while (false);
-#include "X64WideAtomicCases.def"
+#include "x86_64/X64WideAtomicCases.def"
 #undef NEVERD_WIDE_ATOMIC_CASE
 #define NEVERD_MMIO_X64_UPDATE(Name, Width, ...)                               \
   do {                                                                         \
@@ -309,7 +309,7 @@ TEST_P(MMIOAtomic, OriginalInstructionResultsMatchRAMAcrossAllAtomicFamilies) {
     for (bool Match : {true, false})                                           \
       Compare(bytes(Word), Width, Count == 2, CAS, Match);                     \
   } while (false);
-#include "AArch64AtomicCases.def"
+#include "aarch64/AArch64AtomicCases.def"
 #undef NEVERD_ATOMIC_CASE
   }
 }

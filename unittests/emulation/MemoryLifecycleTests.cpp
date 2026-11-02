@@ -622,10 +622,32 @@ TEST_P(SharedCPU, ChecksExternalMappingsAtAttachmentAndBeforeExecution) {
   llvm::consumeError(Attach.takeError());
   EXPECT_NE(llvm::toString(First->bindAddressSpace(Bad)), "");
   ASSERT_EQ(llvm::toString(program(FirstX64, FirstARM)), "");
+  ASSERT_EQ(llvm::toString(steps(*First, 1)), "");
+  EXPECT_EQ((*First->readRegister(resultRegister()))[0], Value);
+  ASSERT_EQ(
+      llvm::toString(First->writeRegister(resultRegister(), {Updated, 0})), "");
   ASSERT_EQ(llvm::toString(A->map(Invalid, PageSize, Read | Execute)), "");
-  EXPECT_NE(llvm::toString(First->run(Code, Timeout)), "");
-  EXPECT_EQ((*First->readRegister(resultRegister()))[0], 0u);
+  // A peer can add an inadmissible mapping after a successful run. Repeated
+  // failures on that unchanged mapping must never authorize execution.
+  for (unsigned Attempt = 0; Attempt < 2; ++Attempt) {
+    EXPECT_NE(llvm::toString(First->run(Code, Timeout)), "");
+    EXPECT_EQ((*First->readRegister(resultRegister()))[0], Updated);
+  }
   ASSERT_EQ(llvm::toString(A->unmap(Invalid, PageSize)), "");
+  ASSERT_EQ(llvm::toString(steps(*First, 1)), "");
+  EXPECT_EQ((*First->readRegister(resultRegister()))[0], Value);
+  // Bind a valid space one epoch behind A, then let a peer add an invalid
+  // page. Its epoch now matches A's successful run, but its mappings do not.
+  ASSERT_EQ(llvm::toString(B->protect(Alias, PageSize, Read | Write)), "");
+  ASSERT_EQ(B->mappingGeneration() + 1, A->mappingGeneration());
+  ASSERT_EQ(llvm::toString(First->bindAddressSpace(B)), "");
+  ASSERT_EQ(llvm::toString(B->map(Invalid, PageSize, Read | Execute)), "");
+  ASSERT_EQ(B->mappingGeneration(), A->mappingGeneration());
+  ASSERT_EQ(
+      llvm::toString(First->writeRegister(resultRegister(), {Updated, 0})), "");
+  EXPECT_NE(llvm::toString(First->run(Code, Timeout)), "");
+  EXPECT_EQ((*First->readRegister(resultRegister()))[0], Updated);
+  ASSERT_EQ(llvm::toString(B->unmap(Invalid, PageSize)), "");
   ASSERT_EQ(llvm::toString(steps(*First, 1)), "");
   EXPECT_EQ((*First->readRegister(resultRegister()))[0], Value);
 }

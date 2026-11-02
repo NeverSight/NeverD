@@ -38,17 +38,22 @@
 #include "neverd/backend/c/MsvcCallee.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64CPA.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/ImportCallee.h"
-#include "neverd/ir/med/I386PicAddress.h"
+#include "neverd/ir/med/IndirectCallSlot.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
+#include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/SymbolDecoration.h"
+#include "neverd/loader/SymbolSpelling.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -168,7 +173,7 @@ std::optional<MedVar> returnRegisterAt(const MedFunc &Func,
 struct CallAddress {
   std::optional<va_t> Target, Slot;
 };
-CallAddress callAddressOf(const MedOp &Call,
+CallAddress callAddressOf(const MedFunc &Func, const MedOp &Call,
                           const std::map<ValueKey, const MedOp *> &Defs) {
   CallAddress Address;
   if (Call.NumInputs < 1)
@@ -176,14 +181,11 @@ CallAddress callAddressOf(const MedOp &Call,
   const MedVar &Callee = Call.Inputs[0];
   if (Call.Opcode == NdOp::CALL && Callee.isConst())
     Address.Target = static_cast<va_t>(Callee.ConstVal);
-  else if (Call.Opcode == NdOp::INDIR_CALL && Callee.isConst())
-    Address.Slot = static_cast<va_t>(Callee.ConstVal);
   else if (Call.Opcode == NdOp::INDIR_CALL)
-    if (const auto Def = Defs.find(keyOf(Callee)); Def != Defs.end())
-      if (const MedOp &Load = *Def->second; Load.Opcode == NdOp::LOAD &&
-                                            Load.NumInputs >= 1 &&
-                                            Load.Inputs[0].isConst())
-        Address.Slot = static_cast<va_t>(Load.Inputs[0].ConstVal);
+    Address.Slot = indirectCallSlot(Func, Call, [&](const MedVar &Value) {
+      const auto Definition = Defs.find(keyOf(Value));
+      return Definition == Defs.end() ? nullptr : Definition->second;
+    });
   return Address;
 }
 
@@ -269,7 +271,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   // A call's callee is known once every definition is: an indirect call may
   // load its slot in a later block.
   for (const MedOp *Call : Calls) {
-    const CallAddress Address = callAddressOf(*Call, Facts.Defs);
+    const CallAddress Address = callAddressOf(Func, *Call, Facts.Defs);
     std::optional<va_t> Callee = Address.Target;
     if (const std::optional<va_t> Own =
             ownRoutineOf(Img, ArgumentSources, Address))
@@ -354,8 +356,8 @@ private:
 
   /// Whether \p Func's declaration says it returns nothing, as the C
   /// writers read it: a bound source signature, else debug information, else
-  /// the MSVC rule that a destructor returns nothing.  None when nothing
-  /// declares it.
+  /// the target ABI/runtime prototype of an unpatched definition. None when
+  /// nothing declares it.
   std::optional<bool> declaredNoValue(const MedFunc &Func) const {
     if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
       return Func.SourceTypeHint->ReturnType->Kind == NdTypeKind::Void;
@@ -365,23 +367,38 @@ private:
         return Debug->ReturnType->Kind == NdTypeKind::Void;
     if (isMsvcDestructorName(Func.Name))
       return true;
+    // The program's prototype of a definition is resolveFunction's, which
+    // refuses one an alias the linker folded with it contradicts (KeClearEvent
+    // and KeResetEvent): the name alone does not choose between them.
+    if (!Img.functionHasBytePatch(Func.Entry))
+      return namedNoValue(Func.Name, /*ByProgramPrototype=*/false);
     return std::nullopt;
   }
 
   /// Whether a routine called \p Name returns nothing by its prototype, the
-  /// libc tables' or one the program's types declare, or as an MSVC
-  /// destructor.  None when none knows it.
-  std::optional<bool> namedNoValue(llvm::StringRef Name) const {
+  /// libc tables' or, with \p ByProgramPrototype, one the program's types
+  /// declare, or as an MSVC destructor.  None when none knows it.
+  std::optional<bool> namedNoValue(llvm::StringRef Name,
+                                   bool ByProgramPrototype = true) const {
     if (Name.empty())
       return std::nullopt;
     if (isMsvcDestructorName(Name))
+      return true;
+    // The generic and AArch64 ELF C++ ABIs declare these as void. ARM32
+    // and Apple ARM64 instead have a machine `this` result; leave those to
+    // their own contracts. A substring such as D1 in a normal name is not
+    // a destructor: require a complete mangling parse.
+    if (Img.Format == BinaryFormat::ELF &&
+        (Img.Arch == Arch::AArch64 || Img.Arch == Arch::X64 ||
+         Img.Arch == Arch::X86) &&
+        isItaniumConstructorOrDestructor(Name))
       return true;
     const std::string CName =
         cNameOfStatedName(Name, Img.Format, Img.Arch).str();
     if (const std::optional<bool> Returns =
             libc::libcReturnsValue(CName, libc::libcVariantOf(Img)))
       return !*Returns;
-    if (Dbg)
+    if (Dbg && ByProgramPrototype)
       if (const std::optional<FunctionSym> Declared =
               Dbg->resolvePrototype(CName);
           Declared && Declared->ReturnType)
@@ -411,7 +428,7 @@ private:
       return true;
     if (Call.NumInputs < 1)
       return false;
-    const CallAddress Address = callAddressOf(Call, F.Defs);
+    const CallAddress Address = callAddressOf(*F.Func, Call, F.Defs);
     std::optional<va_t> Target = Address.Target, Slot = Address.Slot;
     // A call through the stub or slot of an import the loader starts at
     // this image's own routine calls that routine, as the C prints it.
@@ -420,10 +437,11 @@ private:
       Target = Own;
       Slot.reset();
     }
-    // A callee's declaration decides, then a prototype of its name, then
-    // what this pass settled for it.  One this pass does not decompile is
-    // declared as the C writers read it, by the debug information or a
-    // prototype of its name: the call they print returns nothing then.
+    // A callee's declaration decides, then what its name says, then what
+    // this pass settled for it; the program's prototype of a definition is
+    // its declaration's.  One this pass does not decompile is declared as the
+    // C writers read it, by the debug information or a prototype of its
+    // name: the call they print returns nothing then.
     if (Target) {
       if (const auto Declaration = Declared.find(*Target);
           Declaration != Declared.end())
@@ -432,8 +450,10 @@ private:
         if (const auto Debug = Dbg->resolveFunction(*Target);
             Debug && Debug->Addr == *Target && Debug->ReturnType)
           return Debug->ReturnType->Kind == NdTypeKind::Void;
-      if (const auto Name = Names.find(*Target); Name != Names.end())
-        if (const std::optional<bool> None = namedNoValue(Name->second))
+      if (const auto Name = Names.find(*Target);
+          Name != Names.end() && !Img.functionHasBytePatch(*Target))
+        if (const std::optional<bool> None =
+                namedNoValue(Name->second, /*ByProgramPrototype=*/false))
           return *None;
       if (const auto Known = NoValue.find(*Target); Known != NoValue.end())
         return Known->second;
@@ -617,6 +637,47 @@ private:
                                : Intrinsic::None;
       if (intrinsicReturnsSystemCallResult(Id)) {
         Paths.push_back(ReturnedValue::SystemCallResult);
+        return;
+      }
+      if (isAArch64PAuthIntrinsic(Id) || aarch64CPAOperation(Id) ||
+          isAArch64PAuthLoadIntrinsic(Id) ||
+          isAArch64WritebackMemoryIntrinsic(Id) ||
+          isAArch64AddressMemoryIntrinsic(Id)) {
+        Paths.push_back(Img.Arch == Arch::AArch64 &&
+                                (aarch64PAuthMedShapeIsValid(Op) ||
+                                 aarch64CPAMedShapeIsValid(Op) ||
+                                 aarch64PAuthLoadMedShapeIsValid(Op) ||
+                                 aarch64WritebackMemoryMedShapeIsValid(Op) ||
+                                 aarch64AddressLoadMedShapeIsValid(Op))
+                            ? ReturnedValue::Other
+                            : ReturnedValue::Undefined);
+        return;
+      }
+      if (isX86DescriptorStateIntrinsic(Id)) {
+        Paths.push_back(Op.Output.Size &&
+                                x86DescriptorStateMedShapeIsValid(Op, Img.Arch)
+                            ? ReturnedValue::Other
+                            : ReturnedValue::Undefined);
+        return;
+      }
+      // A real system-instruction completion remains a value even when the
+      // instruction also owns memory or processor effects. Use the same
+      // shape contracts as lowering; an invented output on a void effect
+      // must not acquire a return value here.
+      if (Op.Output.Size &&
+          ((Id == Intrinsic::X86AMXState &&
+            x86AmxShapeIsValid(x86AmxMedShape(Op, Img.Arch))) ||
+           x86SgxShapeIsValid(Id, x86SgxMedShape(Op, Img.Arch)) ||
+           (isX86BoundedLeafIntrinsic(Id) &&
+            x86BoundedLeafShapeIsValid(Id,
+                                       x86BoundedLeafMedShape(Op, Img.Arch))) ||
+           x86SystemStateShapeIsValid(Id,
+                                      x86SystemStateMedShape(Op, Img.Arch)) ||
+           x86VirtualizationShapeIsValid(
+               Id, x86VirtualizationMedShape(Op, Img.Arch)) ||
+           (Img.Arch == Arch::X64 &&
+            intrinsicX86MsrAccessShapeIsValid(Id, x86MsrAccessMedShape(Op))))) {
+        Paths.push_back(ReturnedValue::Other);
         return;
       }
       Paths.push_back(Id != Intrinsic::None && Id != Intrinsic::DebugService &&

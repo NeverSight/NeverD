@@ -13,6 +13,65 @@
 namespace {
 using namespace neverd::symbolic;
 
+TEST(SymMBAArithmetic, LiteralComplementUsesACompleteAffineReading) {
+  for (unsigned Width : {1u, 8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    SymRef X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    for (SymRef Atom : {X, C.mkUDiv(X, Y)}) {
+      for (const llvm::APInt &Constant :
+           {llvm::APInt(Width, 1), llvm::APInt::getAllOnes(Width),
+            llvm::APInt::getSignedMinValue(Width)}) {
+        SymRef Input = C.mkAdd(C.mkConst(Constant), C.mkNot(Atom));
+        MBAOptions Opts;
+        detail::WorkBudget Budget(64);
+        detail::SolveReport Report;
+        SymRef Result = detail::solveArithmetic(C, Input, Opts, Budget, Report);
+        ASSERT_NE(Result, Input);
+        EXPECT_EQ(Report.Evidence, MBAEvidence::Derivation);
+        EXPECT_EQ(Report.Outcome, MBAOutcome::Rewritten);
+        EXPECT_EQ(Report.NumAtoms, 1u);
+        EXPECT_FALSE(Report.BudgetExhausted);
+        EXPECT_LT(C.readabilityCost(Result), C.readabilityCost(Input));
+        for (uint64_t I = 0; I < 256; ++I) {
+          auto A = llvm::APInt(Width, I, false, true);
+          auto B = llvm::APInt(Width, I * 37, false, true);
+          if (I & 1)
+            A = ~A;
+          if (I & 2)
+            B = ~B;
+          std::array<llvm::APInt, 2> Values{A, B};
+          const llvm::APInt Value = Atom == X ? A
+                                    : B.isZero()
+                                        ? llvm::APInt::getAllOnes(Width)
+                                        : A.udiv(B);
+          EXPECT_EQ(C.eval(Input, Values), Constant + ~Value);
+          EXPECT_EQ(C.eval(Result, Values), Constant + ~Value);
+        }
+        for (size_t Work : {size_t(0), size_t(1), Budget.used() - 1}) {
+          detail::WorkBudget Short(Work);
+          detail::SolveReport Refused;
+          EXPECT_EQ(detail::solveArithmetic(C, Input, Opts, Short, Refused),
+                    Input);
+          EXPECT_TRUE(Refused.BudgetExhausted);
+          EXPECT_LE(Short.used(), Work);
+        }
+        detail::WorkBudget NoBytes(64), KeepComplement(64);
+        detail::SolveReport NoBytesReport, KeepReport;
+        Opts.MaxTableBytes = 0;
+        EXPECT_EQ(
+            detail::solveArithmetic(C, Input, Opts, NoBytes, NoBytesReport),
+            Input);
+        EXPECT_TRUE(NoBytesReport.BudgetExhausted);
+        Opts.MaxTableBytes = MBAOptions{}.MaxTableBytes;
+        EXPECT_EQ(detail::solveArithmetic(C, Input, Opts, KeepComplement,
+                                          KeepReport, false),
+                  Input);
+      }
+    }
+  }
+}
+
 TEST(SymMBAArithmetic, CancelsDistributedProducts) {
   for (uint32_t Width : {8u, 16u, 32u, 64u, 128u, 257u}) {
     SCOPED_TRACE(Width);

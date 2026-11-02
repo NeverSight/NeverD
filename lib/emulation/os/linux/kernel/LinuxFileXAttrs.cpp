@@ -32,12 +32,12 @@ llvm::Expected<std::optional<uint64_t>> LinuxFiles::extendedAttribute(
     const std::optional<LinuxKernelOptions> &Kernel, ProcessResult &Result) {
   if (!Options)
     return unsupported(Result, FileInputsMissing);
-  const auto Order =
-      Kernel && Kernel->GKI ? gkiXAttrNameFirst(*Kernel->GKI) : std::nullopt;
+  const auto Order = Kernel ? xattrQueryImport(*Kernel) : std::nullopt;
   if (!Order)
     return unsupported(Result, XAttrKernel);
   const auto &[Target, Name, Value, Size, A4, A5] = Event.Arguments;
-  if (*Order) {
+  const bool NameFirst = *Order == LinuxXAttrQueryImport::NameBeforeTarget;
+  if (NameFirst) {
     auto Error = attributeNameError(Name);
     if (!Error)
       return Error.takeError();
@@ -73,7 +73,7 @@ llvm::Expected<std::optional<uint64_t>> LinuxFiles::extendedAttribute(
       break;
     }
   }
-  if (!*Order) {
+  if (!NameFirst) {
     auto Error = attributeNameError(Name);
     if (!Error)
       return Error.takeError();

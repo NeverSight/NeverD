@@ -9,12 +9,12 @@
 #include "WindowsRegistrationFramePrivate.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
-#include "neverd/backend/llvm/X86RegistrationSEHControl.h"
-#include "neverd/backend/llvm/X86RegistrationSEHException.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHControl.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHException.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 #include "neverd/backend/llvm/X86RegistrationSEHThread.h"
-#include "neverd/ir/med/X86RegistrationSEHLocalUnwind.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
 
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"

@@ -47,6 +47,7 @@ NEVERD_ANDROID_KERNEL_SERVICE("mmap64", Mmap)
 NEVERD_ANDROID_KERNEL_SERVICE("mprotect", Mprotect)
 NEVERD_ANDROID_KERNEL_SERVICE("munmap", Munmap)
 NEVERD_ANDROID_KERNEL_SERVICE("madvise", Madvise)
+NEVERD_ANDROID_KERNEL_SERVICE("prctl", Prctl)
 NEVERD_ANDROID_KERNEL_SERVICE("mincore", Mincore)
 NEVERD_ANDROID_KERNEL_SERVICE("write", Write)
 NEVERD_ANDROID_KERNEL_SERVICE("writev", WriteV)
@@ -63,4 +64,17 @@ NEVERD_ANDROID_KERNEL_SERVICE("epoll_create", EpollCreate)
 NEVERD_ANDROID_KERNEL_SERVICE("epoll_create1", EpollCreate1)
 NEVERD_ANDROID_KERNEL_SERVICE("epoll_ctl", EpollCtl)
 NEVERD_ANDROID_KERNEL_SERVICE("epoll_wait", EpollWait)
+NEVERD_ANDROID_KERNEL_SERVICE("unlink", Unlink)
+NEVERD_ANDROID_KERNEL_SERVICE("unlinkat", UnlinkAt)
+NEVERD_ANDROID_KERNEL_SERVICE("rename", Rename)
+NEVERD_ANDROID_KERNEL_SERVICE("renameat", RenameAt)
+#endif
+
+#ifdef NEVERD_ANDROID_PATH_STATUS
+// LP64 pathname wrappers only adapt arguments. The Linux owner retains path
+// lookup, explicit metadata, user-copy and unsupported-object decisions.
+NEVERD_ANDROID_PATH_STATUS("stat", 0)
+NEVERD_ANDROID_PATH_STATUS("stat64", 0)
+NEVERD_ANDROID_PATH_STATUS("lstat", linux_model::AtSymlinkNoFollow)
+NEVERD_ANDROID_PATH_STATUS("lstat64", linux_model::AtSymlinkNoFollow)
 #endif

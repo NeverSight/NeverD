@@ -1,0 +1,178 @@
+name: Portable x87 generated execution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Qualification binds an exact commit; a newer dev push must not cancel it.
+concurrency:
+  group: x87-portable-generated-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  generated:
+    name: Native ${{ matrix.arch }} generated execution
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      SCCACHE_GHA_ENABLED: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            prebuilt: 'ON'
+            original_target: NeverDX87OriginalReplay
+            original_argument: '--original-driver build-x87-portable/bin/NeverDX87OriginalReplay'
+            translation_argument: ''
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            # The pinned package set has no Linux AArch64 archive. Build the
+            # exact repository LLVM revision instead of substituting LLVM.
+            prebuilt: 'OFF'
+            original_target: ''
+            original_argument: ''
+            translation_argument: '--translation-record build-x87-portable/translation-evidence/record.json'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.16.0
+        with:
+          version: v0.16.0
+      - name: Initialize the exact LLVM and Capstone revisions
+        run: git submodule update --init --depth 1 third_party/llvm-project third_party/capstone
+      - name: Install the LLVM 23 host compiler
+        run: |
+          test "$(uname -m)" = '${{ matrix.arch }}'
+          curl --fail --silent --show-error --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/llvm-signing-key.asc
+          gpg --show-keys --with-colons /tmp/llvm-signing-key.asc | grep '^fpr:.*6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          sudo install -m 0644 /tmp/llvm-signing-key.asc /usr/share/keyrings/neverd-llvm.asc
+          echo 'deb [signed-by=/usr/share/keyrings/neverd-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main' | sudo tee /etc/apt/sources.list.d/neverd-llvm.list
+          sudo apt-get update
+          sudo apt-get install --yes clang-23 lld-23 ninja-build
+          echo /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+      - name: Verify strict observation and result auditing
+        run: python -m unittest scripts.tests.test_check_x87_portable_generated scripts.tests.test_check_x87_translation scripts.tests.test_check_x87_cross_host scripts.tests.test_benchmark_x87_portable -v
+      - name: Configure the focused generated execution owners
+        run: |
+          cmake -S . -B build-x87-portable -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DNEVERD_LLVM_PREBUILT=${{ matrix.prebuilt }} \
+            -DNEVERD_BUILD_GUI=OFF -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
+            -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_DRIVER_EMULATION=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF -DNEVERD_ENABLE_BINARY_CORPUS_TESTS=OFF
+      - name: Build with current verified NeverSight fork snapshots
+        run: >-
+          python scripts/build.py build-x87-portable --parallel 4 --target
+          NeverDX87PortableGeneratedTests NeverDX87PortableEmissionTests
+          NeverDX87PortablePreparationTests NeverDX87PortableExecutionTests
+          NeverDX87TranslationRuntimeTests NeverDX87TranslationTests
+          NeverDTranslationContractTests
+          NeverDX87CapabilityTests NeverDX87CapabilitiesPublicTests
+          NeverDX87ArithmeticTests NeverDX87PortableContextTests
+          NeverDX87PortableEmulatorTests NeverDX87ArithmeticReplay
+          NeverDX87PortableBenchmark
+          ${{ matrix.original_target }}
+      - name: Check preparation, runtimes and legacy translation regressions
+        run: >-
+          ctest --test-dir build-x87-portable --output-on-failure -j 4
+          -L '^(NeverDX87PortableEmissionTests|NeverDX87PortablePreparationTests|NeverDX87PortableExecutionTests|NeverDX87TranslationRuntimeTests|NeverDTranslationContractTests|NeverDX87ArithmeticTests|NeverDX87PortableContextTests|NeverDX87PortableEmulatorTests|NeverDX87CapabilityTests|NeverDX87CapabilitiesPublicTests)$'
+      - name: Check portable object control-flow boundaries
+        run: >-
+          ctest --test-dir build-x87-portable --output-on-failure -j 4
+          -R '^X87Translation\.'
+      - name: Freeze actual native-host generated program execution
+        run: >-
+          python scripts/check_x87_portable_generated.py
+          --driver build-x87-portable/bin/NeverDX87PortableGeneratedTests
+          --runtime build-x87-portable/bin/libneverd_x87_runtime_v1.so
+          --compiler /usr/lib/llvm-23/bin/clang
+          --build-dir build-x87-portable
+          --output-dir build-x87-portable/evidence
+      - name: Freeze generated FNOP and MMX reset state transitions
+        run: >-
+          python scripts/check_x87_portable_generated.py --profile resets
+          --driver build-x87-portable/bin/NeverDX87PortableGeneratedTests
+          --runtime build-x87-portable/bin/libneverd_x87_runtime_v1.so
+          --compiler /usr/lib/llvm-23/bin/clang
+          --build-dir build-x87-portable
+          --output-dir build-x87-portable/reset-evidence
+      - name: Freeze native AArch64 translation objects and sessions
+        if: ${{ matrix.arch == 'aarch64' }}
+        run: >-
+          python scripts/check_x87_translation.py
+          --driver build-x87-portable/bin/NeverDX87TranslationTests
+          --build-dir build-x87-portable
+          --output-dir build-x87-portable/translation-evidence
+      - name: Record seeded arithmetic for cross-host comparison
+        run: >-
+          python scripts/check_x87_cross_host.py record
+          --portable-driver build-x87-portable/bin/NeverDX87ArithmeticReplay
+          ${{ matrix.original_argument }}
+          --build-dir build-x87-portable
+          --output-dir build-x87-portable/arithmetic-evidence
+      - name: Measure exact execution, refusals and state transport
+        run: >-
+          python scripts/benchmark_x87_portable.py
+          --generated-record build-x87-portable/evidence/record.json
+          ${{ matrix.translation_argument }}
+          --driver build-x87-portable/bin/NeverDX87PortableBenchmark
+          --output-dir build-x87-portable/performance-evidence
+      - name: Retain failures and successful artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: x87-portable-generated-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            build-x87-portable/evidence/
+            build-x87-portable/reset-evidence/
+            build-x87-portable/translation-evidence/
+            build-x87-portable/arithmetic-evidence/
+            build-x87-portable/performance-evidence/
+            build-x87-portable/Testing/Temporary/
+            build-x87-portable/neverd-build-receipt.json
+            build-x87-portable/neverd-dependency-inputs.json
+            build-x87-portable/CMakeCache.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  compare:
+    name: Audit native cross-host state and arithmetic agreement
+    needs: generated
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: x87-portable-generated-x86_64-${{ github.sha }}
+          path: cross-host/x86_64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: x87-portable-generated-aarch64-${{ github.sha }}
+          path: cross-host/aarch64
+      - name: Compare frozen native observations
+        run: >-
+          python scripts/check_x87_cross_host.py compare
+          --x64 cross-host/x86_64 --arm64 cross-host/aarch64
+          --output-dir cross-host/comparison
+      - name: Retain cross-host failures and comparison
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: x87-cross-host-comparison-${{ github.sha }}
+          path: cross-host/comparison/
+          if-no-files-found: error
+          retention-days: 30

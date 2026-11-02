@@ -1,0 +1,26 @@
+//===- HighSourceRangeFixtures.def - Integer range oracles -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent carrier widths and interval endpoints for source range tests.
+//===----------------------------------------------------------------------===//
+
+#ifndef SOURCE_RANGE_VALUE
+#define SOURCE_RANGE_VALUE(Type, Name, Value)
+#endif
+#ifndef SOURCE_RANGE_CARRIER
+#define SOURCE_RANGE_CARRIER(Bytes, High)
+#endif
+
+SOURCE_RANGE_VALUE(uint64_t, kSmallRangeEndpoints, 16)
+SOURCE_RANGE_VALUE(uint16_t, kRangeWordBytes, 4)
+SOURCE_RANGE_VALUE(uint64_t, kKnownSelectedUpper, 2)
+SOURCE_RANGE_CARRIER(1, 0x80ULL)
+SOURCE_RANGE_CARRIER(2, 0x8000ULL)
+SOURCE_RANGE_CARRIER(4, 0x80000000ULL)
+SOURCE_RANGE_CARRIER(8, 0x8000000000000000ULL)
+
+#undef SOURCE_RANGE_CARRIER
+#undef SOURCE_RANGE_VALUE

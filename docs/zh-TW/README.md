@@ -1,6 +1,6 @@
 **語言**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 32288410e4352dcbe779ee091bfc8728b8d4e783203704b4d3a6d09f0421c96a -->
+<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
 
 [← NeverD 專案](project.md)
 
@@ -26,6 +26,7 @@
 | [HTML 原始碼設定（英文）](../web-html-profile.md) | 有界 C++ 指令碼清單、擷取的本機參照與原始行內原始碼錨點 |
 | [測試](testing.md) | 測試套件、產生的 fixture、Unicorn 往返與增量命令 |
 | [桌面工作台 (英文)](../gui.md) | 經典反組譯器版面、獨立工作行程、專案資料庫、在地化與 MCP 連線 |
+| [分析映像區段（英文）](../analysis-sections.md) | 透過 C ABI、工作處理序、CLI 與工作台加入已具體化的程式碼與資料；原生檢視及專案持久化 |
 | [函式庫識別（英文）](../library-recognition.md) | 以證據支持的 STL、ATL/MFC、COM 與 libc 身分、設定及可還原的 C 原始碼摺疊 |
 | [桌面驗收紀錄 (英文)](../gui-qualification.md) | 已量測的 GUI 證據、封裝邊界與尚未完成的平台驗收 |
 | [直譯器原始碼還原](interpreter-recovery.md) | 實驗性 x64 直譯器特化、HighC/LLVMC 輸出、執行前提、證據與限制; 巢狀迴圈證明候選; 明確的探索預算與版本化 C API; 精確的原生到 LLVM 證明 API |

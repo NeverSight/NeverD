@@ -80,7 +80,7 @@ void LLVMSourceMap::refreshExpressionOrigins() {
       }
       for (const auto &Origin : Origins)
         if (Origin != O.Occurrence)
-          Added.push_back({O.Function, Origin, Parent});
+          Added.push_back({O.Function, Origin, Parent, true});
     }
   }
   std::set<std::tuple<va_t, sigs::LibraryOccurrence, llvm::Value *>> Seen;

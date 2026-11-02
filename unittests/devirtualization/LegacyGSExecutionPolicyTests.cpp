@@ -19,7 +19,7 @@ namespace {
 TEST(LegacyGSExecutionPolicy, RemainsUnmodeled) {
   const X64BranchModel Models[] = {
 #define NEVERD_X64_BRANCH_MODEL(Name, Mode) X64BranchModel::Name,
-#include "neverd/emulation/X64BranchModels.def"
+#include "neverd/emulation/arch/x86_64/X64BranchModels.def"
 #undef NEVERD_X64_BRANCH_MODEL
   };
   for (const auto Model : Models) {

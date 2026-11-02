@@ -4,6 +4,7 @@
    drawn for it, and CodeFont is the code font in which text fields type. */
 QMainWindow, QDialog { background: ${Window}; }
 QDialog#commandPalette { border: 1px solid ${MenuSeparator}; }
+QFrame#patchEditor { background: ${Window}; border: 1px solid ${Border}; }
 QMenuBar { background: ${MenuBar}; color: ${MenuBarText}; border: none; padding: 0 2px; }
 QMenuBar::item { background: transparent; padding: 4px 8px; border-radius: 3px; }
 QMenuBar::item:selected, QMenuBar::item:pressed { background: ${MenuBarSelection}; }
@@ -11,18 +12,21 @@ QMenuBar::item:selected, QMenuBar::item:pressed { background: ${MenuBarSelection
 QWidget#titleBar QMenuBar { background: transparent; color: ${TitleBarText}; }
 QWidget#titleBar[active="false"] QMenuBar { color: ${TitleBarInactiveText}; }
 QMenu { background: ${Menu}; color: ${MenuText}; border: 1px solid ${MenuSeparator}; padding: 4px; }
-QMenu::item { padding: 4px 24px 4px 26px; border-radius: 3px; }
+/* Qt already reserves the widest icon/check column. The remaining leading
+   padding gives its 16px content an 8px gap to the label, not a second column. */
+QMenu::item { padding: 4px 24px 4px 8px; border-radius: 3px; }
 QMenu::item:selected { background: ${MenuSelection}; color: ${HighlightedText}; }
 QMenu::item:disabled { color: ${DisabledText}; }
 QMenu::separator { height: 1px; background: ${MenuSeparator}; margin: 4px 6px; }
-QMenu::icon { padding-left: 6px; }
-QMenu::indicator { width: 14px; height: 14px; left: 6px; }
+QMenu::icon { left: 3px; border: 1px solid transparent; border-radius: 3px; }
+QMenu::indicator { width: 16px; height: 16px; left: 4px; }
 QMenu::indicator:checked { image: url(:/neverd/icons/menu_check-${Mode}.svg); }
 /* A toggle with an icon shows it boxed while on, as VS Code shows an active
    input option. */
-QMenu::icon:checked { background: ${OptionActiveBackground}; border: 1px solid ${OptionActiveBorder}; border-radius: 3px; }
+QMenu::icon:checked { background: ${OptionActiveBackground}; border-color: ${OptionActiveBorder}; }
 QMenu::right-arrow { image: url(:/neverd/icons/chevron_right-${Mode}.svg); width: 10px; height: 10px; }
 QToolBar { background: ${ToolBar}; border: none; spacing: 1px; padding: 2px 4px; }
+QToolBar#focusToolbar { background: transparent; padding: 0; }
 QToolBar::separator { background: ${Separator}; width: 1px; margin: 3px 4px; }
 QToolBar::handle:horizontal { image: url(:/neverd/icons/grip_vertical-${Mode}.svg); width: 6px; margin: 0 2px; }
 QToolBar::handle:vertical { image: url(:/neverd/icons/grip_horizontal-${Mode}.svg); height: 6px; margin: 2px 0; }
@@ -30,11 +34,35 @@ QToolButton { background: transparent; color: ${WindowText}; border: 1px solid t
 QToolButton:hover { background: ${ToolBarHover}; }
 QToolButton:pressed, QToolButton:checked { background: ${Highlight}; color: ${HighlightedText}; }
 QToolButton::menu-indicator { image: none; width: 0; }
+/* A button with a list beside its command, as Back lists its stops, opens the
+   list from a narrow chevron, flat as the button; a disabled one shows none. */
+QToolButton[popupMode="1"] { padding-right: 10px; }
+QToolButton::menu-button { background: transparent; border: none; border-radius: 3px; width: 10px; }
+QToolButton::menu-button:hover { background: ${ToolBarHover}; }
+QToolButton::menu-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); width: 8px; height: 8px; }
+QToolButton::menu-arrow:disabled { image: none; }
+/* Arrow buttons point with the chevrons the other controls draw. */
+QToolButton::up-arrow { image: url(:/neverd/icons/chevron_up-${Mode}.svg); }
+QToolButton::down-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); }
+QToolButton::left-arrow { image: url(:/neverd/icons/chevron_left-${Mode}.svg); }
+QToolButton::right-arrow { image: url(:/neverd/icons/chevron_right-${Mode}.svg); }
+/* A toggle whose glyph shows its state, as a disclosure's chevron points or a
+   padlock closes, takes no fill for it, not even while pressed. */
+QToolButton[glyphToggle="true"]:checked, QToolButton[glyphToggle="true"]:pressed { background: transparent; color: ${WindowText}; }
+QToolButton[glyphToggle="true"]:hover { background: ${ToolBarHover}; }
 QStatusBar { background: ${StatusBar}; color: ${StatusBarText}; min-height: 22px; border-top: 1px solid ${StatusBarBorder}; }
 QStatusBar QLabel { color: ${StatusBarText}; padding: 0 8px; }
 QStatusBar::item { border: none; }
+/* While a file opens into the empty workbench, a card over its main view
+   reports the step, on the surface of menus and the command palette. */
+QFrame#loadProgressCard { background: ${Menu}; border: 1px solid ${Border}; border-radius: 6px; }
+QFrame#loadProgressCard QLabel { background: transparent; color: ${MenuText}; }
+QFrame#loadProgressCard QLabel#loadProgressTitle { font-weight: 600; }
+QFrame#loadProgressCard QLabel#loadProgressStep, QFrame#loadProgressCard QLabel#loadProgressElapsed { color: ${SecondaryText}; }
 QTreeView, QListView, QTableView { background: ${Base}; alternate-background-color: ${AlternateBase}; color: ${Text}; border: none; selection-background-color: ${Highlight}; selection-color: ${HighlightedText}; outline: none; }
-QTreeView::item, QListView::item { padding: 1px 2px; }
+/* Items keep Qt's own text margin: horizontal padding applies only to the
+   items the style sheet paints, so hovered and selected text would shift. */
+QTreeView::item, QListView::item { padding: 1px 0; }
 QTreeView::item:hover, QListView::item:hover { background: ${Hover}; }
 QTreeView::item:selected, QListView::item:selected { background: ${Highlight}; color: ${HighlightedText}; }
 /* Branches open and close with the chevrons the other controls draw. */
@@ -49,6 +77,9 @@ QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit { background: 
 QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus { border: 1px solid ${Focus}; }
 QPlainTextEdit[readOnly="true"], QTextEdit[readOnly="true"] { background: ${Base}; border: none; }
 QLineEdit, QAbstractSpinBox, QPlainTextEdit[readOnly="false"], QTextEdit[readOnly="false"] { font: ${CodeFont}; }
+/* A list's filter keeps clear of the scroll bar above it, whose slider is
+   nearly the field's gray, and lines up with the status line below. */
+QLineEdit#chooserFilter { margin: 4px 6px 0 6px; }
 /* A combo box's list drops below it and reads as a menu, as in Visual Studio Code. */
 QComboBox { padding-right: 20px; combobox-popup: 0; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 20px; border: none; }
@@ -71,6 +102,8 @@ QPushButton:hover { background: ${ToolBarHover}; }
 QPushButton:default { background: ${ButtonPrimary}; color: ${ButtonPrimaryText}; border: 1px solid ${ButtonPrimary}; }
 QPushButton:default:hover { background: ${ButtonPrimaryHover}; }
 QPushButton:disabled { color: ${DisabledText}; }
+/* A primary button fades while it cannot act, as Visual Studio Code's does. */
+QPushButton:default:disabled { background: ${ButtonPrimaryDisabled}; border: 1px solid transparent; color: ${ButtonPrimaryDisabledText}; }
 QDialogButtonBox { dialogbuttonbox-buttons-have-icons: 0; }
 QCheckBox, QRadioButton, QLabel, QGroupBox { color: ${WindowText}; }
 QLabel[placeholder="true"] { color: ${PlaceholderText}; background: ${Base}; }
@@ -95,17 +128,19 @@ QScrollBar::handle:hover { background: ${ScrollbarSliderHover}; }
 QScrollBar::handle:pressed { background: ${ScrollbarSliderActive}; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+/* Where two scroll bars meet, the view shows through as it does along them. */
+QAbstractScrollArea::corner { background: transparent; border: none; }
 QTabBar { background: ${TabBar}; }
 QTabBar::tab { background: ${TabInactive}; color: ${TabInactiveText}; padding: 5px 10px; border: none; border-right: 1px solid ${TabBar}; border-top: 1px solid transparent; }
 QTabBar::tab:selected { background: ${TabActive}; color: ${TabActiveText}; border-top: 1px solid ${TabActiveBorder}; }
 QTabBar::tab:hover:!selected { color: ${TabActiveText}; }
-QTabBar::close-button { image: url(:/neverd/icons/close_small.svg); subcontrol-position: right; border-radius: 3px; padding: 1px; margin-left: 4px; }
+/* Qt positions the close button at the tab edge, outside the text padding.
+   Leave room on its outer side without shrinking the glyph or click target. */
+QTabBar::close-button { image: url(:/neverd/icons/close_small.svg); subcontrol-position: right; border-radius: 3px; padding: 1px; margin-right: 4px; }
 QTabBar::close-button:hover { background: ${ToolBarHover}; }
 /* The arrows that scroll a tab bar too narrow for its tabs. */
 QTabBar QToolButton { background: ${TabBar}; border: none; border-radius: 0; }
 QTabBar QToolButton:hover { background: ${ToolBarHover}; }
-QTabBar QToolButton::left-arrow { image: url(:/neverd/icons/chevron_left-${Mode}.svg); }
-QTabBar QToolButton::right-arrow { image: url(:/neverd/icons/chevron_right-${Mode}.svg); }
 QTabWidget::pane { border: none; }
 QToolTip { background: ${ToolTipBase}; color: ${ToolTipText}; border: 1px solid ${MenuSeparator}; padding: 4px 6px; }
 QProgressBar { background: ${Input}; border: none; border-radius: 2px; max-height: 4px; min-height: 4px; }

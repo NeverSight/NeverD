@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../unwind/COFFUnwindDetail.h"
 #include "COFFExceptionDetail.h"
 
 #include "neverd/loader/COFF/COFFException.h"
@@ -15,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -652,13 +654,22 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
                                              uint32_t BeginRVA, uint32_t EndRVA,
                                              uint32_t UnwindInfoRVA) {
   ExceptionFunction F;
+  unwind_detail::decodeX64ExceptionFunctionInto(
+      Img, ImageBase, RuntimeFunctionRVA, BeginRVA, EndRVA, UnwindInfoRVA, F);
+  return F;
+}
+
+void unwind_detail::decodeX64ExceptionFunctionInto(
+    const BinaryImage &Img, va_t ImageBase, uint32_t RuntimeFunctionRVA,
+    uint32_t BeginRVA, uint32_t EndRVA, uint32_t UnwindInfoRVA,
+    ExceptionFunction &F) {
   F.RuntimeFunctionRVA = RuntimeFunctionRVA;
   F.UnwindInfoRVA = UnwindInfoRVA;
   auto Range = checkedImageRange(ImageBase, BeginRVA, EndRVA);
   if (!Range) {
     diagnose(F, ExceptionParseStatus::Malformed,
              "invalid x64 runtime-function range");
-    return F;
+    return;
   }
   F.CodeRange = *Range;
   const Segment *BeginSegment = Img.getSegmentFor(F.CodeRange.Begin);
@@ -673,13 +684,13 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
 
   if (UnwindInfoRVA == 0 || !addRVA(ImageBase, UnwindInfoRVA, F.UnwindInfoVA)) {
     diagnose(F, ExceptionParseStatus::Malformed, "invalid x64 unwind-info RVA");
-    return F;
+    return;
   }
   const uint8_t *Header = nullptr;
   if (!readBytes(Img, F.UnwindInfoVA, 4, Header)) {
     diagnose(F, ExceptionParseStatus::Malformed,
              "truncated x64 unwind-info header");
-    return F;
+    return;
   }
 
   F.UnwindVersion = Header[0] & 0x07;
@@ -696,7 +707,7 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
         F.PrologueSize > F.CodeRange.size()) {
       diagnose(F, ExceptionParseStatus::Malformed,
                "invalid x64 v1/v2 flags or prologue extent");
-      return F;
+      return;
     }
     uint8_t Count = Header[2];
     uint64_t CodeBytes = uint64_t(Count) * 2;
@@ -704,22 +715,22 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
         CodeBytes > std::numeric_limits<size_t>::max()) {
       diagnose(F, ExceptionParseStatus::Malformed,
                "x64 unwind-code size overflows");
-      return F;
+      return;
     }
     const uint8_t *Codes = nullptr;
     if (CodeBytes != 0 && !readBytes(Img, F.UnwindInfoVA + 4,
                                      static_cast<size_t>(CodeBytes), Codes)) {
       diagnose(F, ExceptionParseStatus::Malformed,
                "truncated x64 unwind-code array");
-      return F;
+      return;
     }
     if (!decodeV1V2Operations(F, Codes, Count))
-      return F;
+      return;
     uint64_t TrailingOffset = alignUp(4 + CodeBytes, 4);
     if (TrailingOffset > InvalidVA - F.UnwindInfoVA) {
       diagnose(F, ExceptionParseStatus::Malformed,
                "x64 trailing-data offset overflows");
-      return F;
+      return;
     }
     TrailingDataVA = F.UnwindInfoVA + TrailingOffset;
   } else if (F.UnwindVersion == 3) {
@@ -729,12 +740,12 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
     F.FrameRegister = 0;
     F.FrameOffset = 0;
     if (!decodeV3(F, Img, F.UnwindInfoVA, Header, TrailingDataVA))
-      return F;
+      return;
   } else {
     F.Encoding = ExceptionEncoding::Unknown;
     diagnose(F, ExceptionParseStatus::Partial,
              "unsupported x64 unwind-info version");
-    return F;
+    return;
   }
 
   parseTrailingData(F, Img, ImageBase, TrailingDataVA);
@@ -748,7 +759,50 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
             Img.readVA(F.UnwindInfoVA, static_cast<size_t>(NativeSize)))
       F.NativeUnwindBytes.assign(Native, Native + NativeSize);
   }
-  return F;
+  return;
+}
+
+std::vector<BinaryImage::COFFPDataRecord>
+x64RuntimeFunctionRecords(const BinaryImage &Img) {
+  std::map<uint32_t, BinaryImage::COFFPDataRecord> Records;
+  if (Img.Format != BinaryFormat::COFF || Img.Arch != Arch::X64)
+    return {};
+  const auto Add = [&](uint32_t RVA) {
+    if (!RVA || RVA > InvalidVA - Img.Base)
+      return;
+    const auto *Bytes = Img.readVA(Img.Base + RVA, 12);
+    if (!Bytes)
+      return;
+    const auto Begin = readLE<uint32_t>(Bytes);
+    const auto End = readLE<uint32_t>(Bytes + 4);
+    const auto Unwind = readLE<uint32_t>(Bytes + 8);
+    if (Begin >= End || End > InvalidVA - Img.Base ||
+        Unwind > InvalidVA - Img.Base ||
+        !Img.isCodeRange(Img.Base + Begin, End - Begin) ||
+        !Img.readVA(Img.Base + Unwind, 4))
+      return;
+    Records.try_emplace(RVA,
+                        BinaryImage::COFFPDataRecord{Begin, End, Unwind, RVA});
+  };
+  for (const auto &Row : Img.COFFPDataRecords)
+    Add(Row.RecordRVA);
+  for (const auto &F : Img.ExceptionMetadata.Functions) {
+    if (F.Encoding != ExceptionEncoding::X64UnwindV1 &&
+        F.Encoding != ExceptionEncoding::X64UnwindV2 &&
+        F.Encoding != ExceptionEncoding::X64UnwindV3)
+      continue;
+    Add(F.RuntimeFunctionRVA);
+    if (F.ChainedPrimaryRange && F.NativeUnwindBytes.size() >= 12) {
+      const auto Offset = F.NativeUnwindBytes.size() - 12;
+      if (Offset <= UINT32_MAX - F.UnwindInfoRVA)
+        Add(F.UnwindInfoRVA + static_cast<uint32_t>(Offset));
+    }
+  }
+  std::vector<BinaryImage::COFFPDataRecord> Result;
+  Result.reserve(Records.size());
+  for (const auto &[Address, Record] : Records)
+    Result.push_back(Record);
+  return Result;
 }
 
 } // namespace neverd::coff_loader

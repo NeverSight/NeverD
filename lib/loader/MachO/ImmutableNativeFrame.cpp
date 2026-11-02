@@ -19,6 +19,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <iterator>
 namespace neverd {
 void AuthenticatedSourceFrameLoads::beginRound(
     const std::map<va_t, ImmutableNativeCallTarget> &Known) {
@@ -64,7 +65,7 @@ AuthenticatedSourceFrameLoads::load(const LowBlock &Block, size_t Index) {
 namespace {
 bool sameOperation(const LowOp &A, const LowOp &B) {
   if (A.Opcode != B.Opcode || A.Addr != B.Addr || A.Seq != B.Seq ||
-      A.NumInputs != B.NumInputs || A.NumInputs > 6 ||
+      A.NumInputs != B.NumInputs || A.NumInputs > std::size(A.Inputs) ||
       A.MemoryOrdering != B.MemoryOrdering ||
       A.MemoryAddressSpace != B.MemoryAddressSpace || A.Output != B.Output)
     return false;

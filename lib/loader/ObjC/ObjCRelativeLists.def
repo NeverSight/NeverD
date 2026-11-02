@@ -1,0 +1,46 @@
+//===- ObjCRelativeLists.def - Shared-cache list references -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Layout of Apple's relative_list_list_t and relative_list_list_entry_t in
+/// objc-runtime-new.h. Entries carry an Objective-C image index and a signed
+/// displacement from the entry itself. VALUE and TEXT own reader contracts.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_OBJC_RELATIVE_LIST_VALUE
+#define NEVERD_OBJC_RELATIVE_LIST_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_OBJC_RELATIVE_LIST_TEXT
+#define NEVERD_OBJC_RELATIVE_LIST_TEXT(Name, Text)
+#endif
+
+NEVERD_OBJC_RELATIVE_LIST_VALUE(uint64_t, kArrayTag, 1)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(size_t, kHeaderBytes, 8)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(size_t, kCountOffset, 4)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(size_t, kEntryBytes, 8)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(unsigned, kImageIndexBits, 16)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(uint64_t, kImageIndexMask, 0xffff)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(unsigned, kDisplacementBits, 48)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(unsigned, kArrayAlignment, 8)
+NEVERD_OBJC_RELATIVE_LIST_VALUE(unsigned, kListAlignment, 4)
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kMalformedList,
+                               "Invalid Objective-C relative list references")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(
+    kMissingCache,
+    "Relative Objective-C lists require a shared-cache address space")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kExternalImplementation,
+                               "external_implementation")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kSupportedMethod, "supported")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(
+    kExternalImplementationDiagnostic,
+    "Method IMP belongs to executable cache storage outside this image")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kCacheOriginJSON, "cache_origin")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kImageIndexJSON, "objc_image_index")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kImageAddressJSON, "image_address")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kConditionJSON, "condition")
+NEVERD_OBJC_RELATIVE_LIST_TEXT(kImageLoadedJSON, "image_loaded")
+
+#undef NEVERD_OBJC_RELATIVE_LIST_VALUE
+#undef NEVERD_OBJC_RELATIVE_LIST_TEXT

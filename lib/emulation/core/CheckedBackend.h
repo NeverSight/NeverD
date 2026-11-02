@@ -12,6 +12,7 @@
 #include <atomic>
 #include <capstone/capstone.h>
 #include <chrono>
+#include <memory>
 #include <vector>
 namespace neverd::emulation {
 /// Shared pre-effect fault, observer, memory and bounded execution semantics.
@@ -135,6 +136,10 @@ protected:
 private:
   struct InstructionCache;
   std::unique_ptr<InstructionCache> CachedInstructions;
+  // Address and device admission are fixed by this backend's contract. Only
+  // a successful check on the same live space and mapping epoch is reusable.
+  std::weak_ptr<AddressSpace> ValidatedMappingSpace;
+  uint64_t ValidatedMappingGeneration = 0;
   llvm::Error runImpl(uint64_t PC, bool &Started, bool &BackendFailed);
   // Bytes and permissions are refreshed on every step; cached detail owns
   // its complete instruction and is reused only after matching those bytes.

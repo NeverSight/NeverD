@@ -216,6 +216,176 @@ TEST_P(AndroidLog, DirectOptionsRejectMalformedAndOversizedSnapshots) {
     llvm::consumeError(R.takeError());
   }
 }
+TEST_P(AndroidLog, EventWritesShareExactOrderedResultsAndPreserveErrno) {
+  Options.Android->EntrySymbol = "log_event_write";
+  Options.Android->Libraries["liblog.so"] = {"__android_log_bwrite"};
+  const std::vector<uint8_t> Payload{0xf9, 0xff, 0xff, 0xff, 0xc7, 0xc7, 0xc7};
+  Options.Android->EventLogWrites = {
+      {{Payload, 7}, {Payload, -11}, {Payload, 0}}};
+  for (unsigned Dynamic : {0u, 1u}) {
+    Options.Android->Arguments = {Output, Output + 4096, 3, 3, Dynamic};
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    ASSERT_EQ(R->Stop, ProcessStopReason::Returned) << R->Diagnostic;
+    EXPECT_EQ(R->ReturnValue, 0u);
+    EXPECT_EQ(R->EventLogWritesConsumed, 3u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    const uint64_t Returns[] = {7, uint64_t(-11), 0};
+    for (unsigned I = 0; I != 3; ++I) {
+      integer(Expected, 16 * I, Returns[I], 8);
+      integer(Expected, 16 * I + 8, 73, 8);
+    }
+    ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+    EXPECT_EQ(R->MemorySnapshots[0].Bytes, Expected);
+  }
+}
+
+TEST_P(AndroidLog, EventWriteUnknownExhaustedAndMismatchDoNotConsume) {
+  Options.Android->EntrySymbol = "log_event_write";
+  Options.Android->Arguments = {Output, Output + 4096, 1, 2, 0};
+  const std::vector<uint8_t> Payload{0xf9, 0xff, 0xff, 0xff, 0xc7};
+  for (unsigned Mode = 0; Mode != 5; ++Mode) {
+    Options.Android->EventLogWrites.reset();
+    if (Mode)
+      Options.Android->EventLogWrites.emplace();
+    if (Mode >= 2)
+      Options.Android->EventLogWrites->push_back({Payload, -11});
+    if (Mode == 3)
+      Options.Android->EventLogWrites->front().Payload[0] = 7;
+    if (Mode == 4)
+      Options.Android->EventLogWrites->front().Payload.back() = 0;
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(R->Diagnostic.find(Mode == 0   ? "not supplied"
+                                 : Mode <= 2 ? "exhausted"
+                                             : "does not match"),
+              std::string::npos);
+    if (!Mode)
+      EXPECT_FALSE(R->EventLogWritesConsumed);
+    else
+      EXPECT_EQ(R->EventLogWritesConsumed, Mode == 2 ? 1u : 0u);
+  }
+}
+
+TEST_P(AndroidLog, EventWritePayloadLimitsAndFaultsAreExplicit) {
+  Options.Android->EntrySymbol = "log_event_write";
+  for (uint64_t Size :
+       {uint64_t(0), uint64_t(4064), uint64_t(4065), UINT64_MAX}) {
+    std::vector<uint8_t> Payload{0xf9, 0xff, 0xff, 0xff};
+    Payload.resize(4 + std::min<uint64_t>(Size, 4064), 0xc7);
+    Options.Android->EventLogWrites = {{{Payload, int32_t(Payload.size())}}};
+    Options.Android->Arguments = {Output, Size ? Output + 32768 - 4064 : 0,
+                                  Size, 1, 0};
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::Returned) << R->Diagnostic;
+    EXPECT_EQ(R->EventLogWritesConsumed, 1u);
+  }
+  Options.Android->Arguments = {Output, 1, 1, 1, 0};
+  auto R = emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  EXPECT_EQ(R->Stop, ProcessStopReason::RuntimeFailure);
+  EXPECT_EQ(R->EventLogWritesConsumed, 0u);
+}
+
+TEST_P(AndroidLog, EventWriteDirectInputsUseSharedAdmission) {
+  for (unsigned Mode = 0; Mode != 4; ++Mode) {
+    Options.Android->EventLogWrites = {{{{0, 0, 0, 0}, 0}}};
+    auto &Writes = *Options.Android->EventLogWrites;
+    if (Mode == 0)
+      Writes.front().Payload.resize(3);
+    if (Mode == 1)
+      Writes.front().Payload.resize(4069);
+    if (Mode == 2)
+      Writes.resize(4097, Writes.front());
+    if (Mode == 3)
+      Writes.assign(258, NativeEventLogWrite{std::vector<uint8_t>(4068), 0});
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_FALSE(bool(R)) << Mode;
+    EXPECT_NE(llvm::toString(R.takeError()).find("Android event log"),
+              std::string::npos);
+  }
+  Options.Android->EventLogWrites = std::vector<NativeEventLogWrite>(
+      4096, NativeEventLogWrite{{0, 0, 0, 0}, 0});
+  Options.Android->EntrySymbol = "log_event_write";
+  Options.Android->Arguments = {Output, 0, 0, 0, 0};
+  auto R = emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+  EXPECT_EQ(R->Stop, ProcessStopReason::Returned) << R->Diagnostic;
+  EXPECT_EQ(R->EventLogWritesConsumed, 0u);
+}
+
+TEST(AndroidLogOptions, EventWriteSchemaPreservesAbsenceBytesAndSignedResults) {
+  auto Parse = [](const std::string &Items) {
+    return processOptionsFromJSON(
+        "{\"android\":{\"event_log_writes\":" + Items + "}}");
+  };
+  auto Absent = processOptionsFromJSON(R"({"android":{}})");
+  ASSERT_TRUE(bool(Absent));
+  EXPECT_FALSE(Absent->Android->EventLogWrites);
+  auto Empty = Parse("[]");
+  ASSERT_TRUE(bool(Empty));
+  ASSERT_TRUE(Empty->Android->EventLogWrites);
+  EXPECT_TRUE(Empty->Android->EventLogWrites->empty());
+  for (int64_t Result :
+       {int64_t(INT32_MIN), int64_t(-11), int64_t(0), int64_t(INT32_MAX)}) {
+    auto Good = Parse("[{\"payload\":\"008000ff\",\"result\":" +
+                      std::to_string(Result) + "}]");
+    ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+    ASSERT_EQ(Good->Android->EventLogWrites->size(), 1u);
+    EXPECT_EQ(Good->Android->EventLogWrites->front().Result, Result);
+    EXPECT_EQ(Good->Android->EventLogWrites->front().Payload,
+              (std::vector<uint8_t>{0, 128, 0, 255}));
+  }
+  for (const char *Bad :
+       {"null", "true", "{}", "[{}]", "[1]", R"([{"payload":"00000000"}])",
+        R"([{"result":0}])", R"([{"payload":"00000000","result":0,"extra":1}])",
+        R"([{"payload":"000000","result":0}])",
+        R"([{"payload":"0000000z","result":0}])",
+        R"([{"payload":"000000000","result":0}])",
+        R"([{"payload":"00000000","result":2147483648}])",
+        R"([{"payload":"00000000","result":-2147483649}])",
+        R"([{"payload":"00000000","result":false}])",
+        R"([{"payload":"00000000","result":1.5}])"}) {
+    auto R = Parse(Bad);
+    EXPECT_FALSE(bool(R)) << Bad;
+    llvm::consumeError(R.takeError());
+  }
+  auto Long =
+      Parse("[{\"payload\":\"" + std::string(8138, '0') + "\",\"result\":0}]");
+  EXPECT_FALSE(bool(Long));
+  llvm::consumeError(Long.takeError());
+}
+
+TEST(AndroidLogOptions, EventWriteSchemaBoundsCountAndAggregateBytes) {
+  for (auto [Count, Size, Accepted] :
+       {std::tuple{2048u, 4u, true}, std::tuple{4096u, 4u, false},
+        std::tuple{4097u, 4u, false}, std::tuple{257u, 4068u, true},
+        std::tuple{258u, 4068u, false}}) {
+    const auto Entry =
+        "{\"payload\":\"" + std::string(Size * 2, '0') + "\",\"result\":0}";
+    std::string Input = "{\"android\":{\"event_log_writes\":[";
+    for (unsigned I = 0; I != Count; ++I) {
+      if (I)
+        Input += ',';
+      Input += Entry;
+    }
+    Input += "]}}";
+    auto Result = processOptionsFromJSON(Input);
+    const bool Valid = bool(Result);
+    const auto Diagnostic =
+        Valid ? std::string() : llvm::toString(Result.takeError());
+    EXPECT_EQ(Valid, Accepted) << Count << " x " << Size << ": " << Diagnostic;
+    if (Count == 4096)
+      EXPECT_NE(Diagnostic.find("64 KiB"), std::string::npos);
+  }
+}
+
 TEST(AndroidLogOptions, StrictFieldsBoundsOrderAndAbsentVersusEmpty) {
   auto Empty = processOptionsFromJSON(R"({"android":{"log_records":[]}})");
   ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());

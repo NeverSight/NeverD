@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <stdexcept>
 
 using namespace neverd;
 
@@ -757,6 +758,47 @@ TEST(X86_32_FunctionDiscovery, KeepsAnExportThatEndsAtANoReturnImport) {
          ".text";
 }
 
+TEST(X86_32_FunctionDiscovery, ImportScanIncludesFinalCompleteVeneer) {
+  for (bool Is64 : {false, true}) {
+    for (bool PIC : {false, true}) {
+      if (Is64 && PIC)
+        continue;
+      for (size_t Offset : {size_t(0), size_t(1), size_t(128)}) {
+        SCOPED_TRACE(Is64);
+        SCOPED_TRACE(PIC);
+        SCOPED_TRACE(Offset);
+        const va_t Target = 0x402000;
+        std::vector<uint8_t> Bytes(Offset + 6, 0xFF);
+        Bytes[Offset] = 0xFF;
+        Bytes[Offset + 1] = PIC ? 0xA3 : 0x25;
+        const uint32_t Field =
+            static_cast<uint32_t>(Is64  ? Target - (0x401000 + Offset + 6)
+                                  : PIC ? Target - 0x403000
+                                        : Target);
+        writeLE(Bytes.data() + Offset + 2, Field);
+        auto Image = makePeText(std::move(Bytes));
+        Image.KnownCodeRanges.clear();
+        Image.Arch = Is64 ? Arch::X64 : Arch::X86;
+        Image.Bits = Is64 ? Bitness::Bits64 : Bitness::Bits32;
+        Image.DynInfo.PltGotAddr = PIC ? 0x403000 : 0;
+        Import Imported;
+        Imported.IATAddr = Target;
+        Imported.Name = "imported";
+        Image.Imports.push_back(Imported);
+        auto Truncated = Image;
+        Truncated.Segments[0].Data.pop_back();
+
+        scanImportThunks(Image);
+        EXPECT_TRUE(Image.isImportStubAt(0x401000 + Offset));
+        ASSERT_EQ(Image.Symbols.size(), 1u);
+        EXPECT_EQ(Image.Symbols[0].Addr, 0x401000 + Offset);
+        scanImportThunks(Truncated);
+        EXPECT_TRUE(Truncated.Symbols.empty());
+      }
+    }
+  }
+}
+
 TEST(X86_32_FunctionDiscovery, DecompileIncludesImportStubs) {
   std::vector<uint8_t> Bytes(0x20, 0xCC);
   // jmp dword ptr [0x402000]
@@ -828,16 +870,11 @@ static MedFunc makeWideChainMed() {
   return Med;
 }
 
-TEST(X86_32_FunctionDiscovery, LargeSkippedSSAMedIREmitsGotoSkeleton) {
+TEST(X86_32_FunctionDiscovery, LargeIncompleteMutableMedIRFailsExplicitly) {
   MedFunc Med = makeWideChainMed();
   Med.SkippedSSA = true;
   MedToHighConverter Conv;
-  HighFunc HF = Conv.convert(Med, Arch::X86);
-  ASSERT_FALSE(HF.Body.empty());
-  const bool HasGoto =
-      std::any_of(HF.Body.begin(), HF.Body.end(),
-                  [](const HighStmt &S) { return S.Kind == StmtKind::Goto; });
-  EXPECT_TRUE(HasGoto);
+  EXPECT_THROW(Conv.convert(Med, Arch::X86), std::runtime_error);
 }
 
 TEST(X86_32_FunctionDiscovery, LargeSSAMedIRIsLoweredBlockByBlock) {
@@ -918,9 +955,11 @@ TEST(X86_32_FunctionDiscovery, LiftsMmxPunpckldq) {
   ASSERT_TRUE(Dec.init(Arch::X86));
   CFGBuilder CFG;
   auto LF = CFG.build(Img, Dec, 0x401000, "mmx_punpck");
-  EXPECT_TRUE(LF.hasCompleteInstructionLift())
-      << "unsupported=" << LF.UnsupportedInstructionAddresses.size()
-      << " decode_fail=" << LF.DecodeFailureAddresses.size();
+  // PUNPCKLDQ lifts. EMMS empties the x87 tags, a state i386 has no owner
+  // for, so it alone is refused rather than lifted as a NOP
+  // (X86LegacyAdmission.StateInstructionsCannotBecomeNopsWithoutOwnership).
+  EXPECT_TRUE(LF.DecodeFailureAddresses.empty());
+  EXPECT_EQ(LF.UnsupportedInstructionAddresses, std::vector<va_t>{0x401003});
 }
 
 TEST(X86_32_FunctionDiscovery, LiftsMmxPunpckldqFromMemory) {
@@ -934,11 +973,9 @@ TEST(X86_32_FunctionDiscovery, LiftsMmxPunpckldqFromMemory) {
   ASSERT_TRUE(Dec.init(Arch::X86));
   CFGBuilder CFG;
   auto LF = CFG.build(Img, Dec, 0x401000, "mmx_punpck_mem");
-  EXPECT_TRUE(LF.hasCompleteInstructionLift())
-      << "unsupported=" << LF.UnsupportedInstructionAddresses.size()
-      << (LF.UnsupportedInstructionAddresses.empty()
-              ? ""
-              : " at " + std::to_string(LF.UnsupportedInstructionAddresses[0]));
+  // As above, only the EMMS is refused.
+  EXPECT_TRUE(LF.DecodeFailureAddresses.empty());
+  EXPECT_EQ(LF.UnsupportedInstructionAddresses, std::vector<va_t>{0x401007});
 }
 
 TEST(X86_32_FunctionDiscovery,
@@ -1201,6 +1238,50 @@ TEST(X86_32_FunctionDiscovery, SwitchTableAmongCodeBelongsToItsFunction) {
   EXPECT_EQ(std::set<va_t>(Switch.JumpTables.front().Targets.begin(),
                            Switch.JumpTables.front().Targets.end()),
             (std::set<va_t>{0x401012, 0x401019, 0x401020}));
+}
+
+TEST(X86_32_FunctionDiscovery, DataSegmentDispatchKeepsIndependentCallbacks) {
+  for (bool IndependentCase : {false, true}) {
+    SCOPED_TRACE(IndependentCase);
+    BinaryImage Img = makeSwitchTableAmongCode();
+    constexpr va_t Table = 0x404000;
+    std::vector<uint8_t> Bytes(12);
+    for (unsigned I = 0; I != 3; ++I) {
+      const va_t OldSlot = 0x40102E + I * 4;
+      const uint32_t Target = readLE<uint32_t>(Img.readVA(OldSlot, 4));
+      writeLE<uint32_t>(Bytes.data() + I * 4, Target);
+      Img.CodePtrRelocSlots.erase(OldSlot);
+    }
+    std::fill_n(Img.Segments[0].Data.begin() + 0x2E, 12, 0xCC);
+    Img.DataInCode.erase(0x40102E);
+    Img.RelCodeTableAnchors.erase(0x40102E);
+    Img.DataAddressRelocOperands.erase(0x40100E);
+    writeLE<uint32_t>(Img.Segments[0].Data.data() + 0x0E, Table);
+    addPeSection(Img, ".rdata.switch", Table, std::move(Bytes),
+                 SegmentFlags::Readable);
+    recordAbsolutePointerRelocations(Img, {{0x40100E, Table, InvalidVA},
+                                           {Table, 0x401012, InvalidVA},
+                                           {Table + 4, 0x401019, InvalidVA},
+                                           {Table + 8, 0x401020, InvalidVA}});
+    if (IndependentCase) {
+      addPeSection(Img, ".rdata.callback", 0x405000, {0x19, 0x10, 0x40, 0x00},
+                   SegmentFlags::Readable);
+      recordAbsolutePointerRelocations(Img, {{0x405000, 0x401019, InvalidVA}});
+    }
+    coff_loader::recordIndexedTableBasesInCode(Img);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Img));
+    const auto Functions = FuncDetector().detect(Img, Dec);
+    EXPECT_TRUE(hasEntry(Functions, 0x401000));
+    EXPECT_TRUE(hasEntry(Functions, 0x401040))
+        << "an ordinary relocated data read is not a jump dispatch";
+    if (IndependentCase)
+      EXPECT_TRUE(hasEntry(Functions, 0x401019))
+          << "a separate callback slot supplies independent entry evidence";
+    else
+      for (va_t Case : {0x401012u, 0x401019u, 0x401020u})
+        EXPECT_FALSE(hasEntry(Functions, Case)) << std::hex << Case;
+  }
 }
 
 TEST(X86_32_FunctionDiscovery, SwitchCasesStayLabelsPastAnEntryBeforeTheTable) {

@@ -116,14 +116,17 @@ SourceParameterPiece source_placement::stackPiece(int64_t EntryOffset,
 
 std::optional<SourceParameterPlacement>
 neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                              llvm::ArrayRef<TypeRef> ParamTypes) {
+                              llvm::ArrayRef<TypeRef> ParamTypes,
+                              bool Variadic) {
+  if (Variadic && (A != Arch::AArch64 || F != BinaryFormat::COFF))
+    return std::nullopt;
   const TargetRegInfo &TRI = getTargetRegInfo(A);
   switch (A) {
   case Arch::X64:
     return F == BinaryFormat::COFF ? placeWin64(TRI, ReturnType, ParamTypes)
                                    : placeSysV(TRI, F, ReturnType, ParamTypes);
   case Arch::AArch64:
-    return placeAAPCS64(TRI, F, ReturnType, ParamTypes);
+    return placeAAPCS64(TRI, F, ReturnType, ParamTypes, Variadic);
   case Arch::X86:
     return placeI386(TRI, F, ReturnType, ParamTypes);
   default:

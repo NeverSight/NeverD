@@ -6,6 +6,7 @@
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "Session.h"
+#include "ShortcutHint.h"
 #include "ShrinkableRow.h"
 #include "Theme.h"
 #include "TypeSourceHighlighter.h"
@@ -298,6 +299,7 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
     button->setIcon(icon(QString::fromLatin1(iconName)));
     button->setToolTip(QStringLiteral("%1 (%2)").arg(
         text, commandKey(command).toString(QKeySequence::NativeText)));
+    setShortcutHint(*button, commandKey(command));
     button->setAutoRaise(true);
     connect(button, &QToolButton::clicked, this,
             [this, command] { run(command); });
@@ -378,8 +380,10 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   auto *headingLayout = new QHBoxLayout(headingRow);
   headingLayout->setContentsMargins(0, 0, 0, 0);
   back_ = new QToolButton(headingRow);
+  back_->setObjectName(QStringLiteral("localTypesBack"));
   back_->setIcon(icon(QStringLiteral("back")));
   back_->setToolTip(tr("Back to the type shown before (Esc)"));
+  back_->setAccessibleName(back_->toolTip());
   back_->setAutoRaise(true);
   heading_ = new QLabel(headingRow);
   heading_->setObjectName(QStringLiteral("localTypesHeading"));
@@ -591,6 +595,7 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
               auto *action = menu.addAction(button->icon(), text, this,
                                             [this, command] { run(command); });
               action->setShortcut(commandKey(command));
+              action->setShortcutVisibleInContextMenu(true);
               action->setEnabled(button->isEnabled());
             };
             item(TypesCommand::Add, tr("Add types…"), add_);
@@ -1298,7 +1303,9 @@ void LocalTypesView::addMembers(QTreeWidgetItem *parent,
       item->setForeground(TypeColumn,
                           theme.color(ColorRole::ListingLibraryName));
       item->setToolTip(TypeColumn,
-                       tr("Double-click or Ctrl+click to open %1").arg(refers));
+                       tr("Double-click or %2click to open %1")
+                           .arg(refers, QKeySequence(Qt::CTRL).toString(
+                                            QKeySequence::NativeText)));
     }
   }
 }
@@ -1518,6 +1525,13 @@ bool LocalTypesView::eventFilter(QObject *object, QEvent *event) {
       (event->type() == QEvent::ShortcutOverride ||
        event->type() == QEvent::KeyPress)) {
     const auto *pressed = static_cast<QKeyEvent *>(event);
+    if (pressed->key() == Qt::Key_Escape &&
+        pressed->modifiers() == Qt::NoModifier && !history_.isEmpty()) {
+      event->accept();
+      if (event->type() == QEvent::KeyPress)
+        back();
+      return true;
+    }
     if (const auto command =
             commandFor(QKeySequence(pressed->keyCombination()))) {
       event->accept();
@@ -1569,7 +1583,10 @@ bool LocalTypesView::eventFilter(QObject *object, QEvent *event) {
       QToolTip::showText(help->globalPos(),
                          cards_.value(type) +
                              QStringLiteral("<br><i>%1</i>")
-                                 .arg(tr("Ctrl+click to open").toHtmlEscaped()),
+                                 .arg(tr("%1click to open")
+                                          .arg(QKeySequence(Qt::CTRL).toString(
+                                              QKeySequence::NativeText))
+                                          .toHtmlEscaped()),
                          source_->viewport());
       return true;
     }

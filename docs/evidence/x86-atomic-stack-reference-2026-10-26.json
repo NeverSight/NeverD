@@ -1,0 +1,158 @@
+{
+  "scope": "Long-mode RAO-INT and CMPccXADD stack-reference provenance; APX and legacy/VEX encodings",
+  "sources": {
+    "neverd_code": "7f5a070aa2b16afab60e0588ca6b1f39068358c0",
+    "neverd_integrated_dev": "bc83f6e62052db2869ae24b57cca30a9a4a0481f",
+    "llvm": "27f8b5df109973ba5459f8276ffad3032b7be32e",
+    "neverc": "3569d84cac43ab8cb4cf915d6458f790147ac0bc",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "capstone_gitlink": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+    "production_sdk": "r6 (unchanged)"
+  },
+  "oracles": {
+    "neverc_sha256": "a93ea0ed407e102896377990f2ac6811ac75628e89a6422f8cf81c7f12b086d8",
+    "neverd_x64_sha256": "061d558f481564e4c8ba8ade2585a8fe03b6c9532c7e2461298d0911c44e0c96",
+    "neverd_i386_sha256": "985cacf7a865657d1e58c18f9b8f48b1ca623a6985cefbbc9a48c7d556e7668b"
+  },
+  "ctest": {
+    "native": {
+      "registered": 642,
+      "passed": 639,
+      "failed": 0,
+      "skipped": [
+        "MedSEHEstablisherFrame.PublicNestedSEHUsesOneSlotInMedAndHighC",
+        "MedCxxContinuationFrame.PublicNestedCatchKeepsOneParameterAndResumeEdges",
+        "MedCxxContinuationFrame.ClangInteriorStateMarkersKeepThePrologueFrame"
+      ],
+      "report_sha256": "840ba537b3eca046207b1238b9574fc29087d5f1edb560d115369ef48ebee501"
+    },
+    "pinned": {
+      "registered": 642,
+      "passed": 639,
+      "failed": 0,
+      "skipped": [
+        "MedSEHEstablisherFrame.PublicNestedSEHUsesOneSlotInMedAndHighC",
+        "MedCxxContinuationFrame.PublicNestedCatchKeepsOneParameterAndResumeEdges",
+        "MedCxxContinuationFrame.ClangInteriorStateMarkersKeepThePrologueFrame"
+      ],
+      "report_sha256": "25dfdff881b21dee2cf1a8e73c2f7556c179e9d84b025c2b27290f2b6c781700"
+    }
+  },
+  "sdk_qualifications": {
+    "native": {
+      "apx": {
+        "export_inventory": {
+          "files": 2947,
+          "sha256": "a5a4b0868e3861f2dbd7c9502e88b170d119d9e4027a84f6e11535f186e99e2a"
+        },
+        "wrappers": 480,
+        "ordinary_programs": 37,
+        "ordinary_controlled_completions": 213120,
+        "realigned_frame_programs": 40,
+        "realigned_frame_controlled_completions": 230400,
+        "production_pipeline_objects": 588,
+        "production_pipeline_controlled_completions": 4116
+      },
+      "legacy": {
+        "export_inventory": {
+          "files": 3682,
+          "sha256": "1c81e88c91041f0a42c78165589ef6111c55d6c942b255d143d9a7bc267d599b"
+        },
+        "wrappers": 480,
+        "ordinary_programs": 37,
+        "ordinary_controlled_completions": 213120,
+        "realigned_frame_programs": 40,
+        "realigned_frame_controlled_completions": 230400,
+        "production_pipeline_objects": 588,
+        "production_pipeline_controlled_completions": 4116
+      },
+      "i386": {
+        "objects": 741,
+        "controlled_completions": 36000
+      }
+    },
+    "pinned": {
+      "apx": {
+        "export_inventory": {
+          "files": 2947,
+          "sha256": "91ffaef205045125bb947000065f9b80d982a902b0f3748fa8f98c1ce6176f0e"
+        },
+        "wrappers": 480,
+        "ordinary_programs": 37,
+        "ordinary_controlled_completions": 213120,
+        "realigned_frame_programs": 40,
+        "realigned_frame_controlled_completions": 230400,
+        "production_pipeline_objects": 588,
+        "production_pipeline_controlled_completions": 4116
+      },
+      "legacy": {
+        "export_inventory": {
+          "files": 3682,
+          "sha256": "64e173e619a18cace83803f4889ec098a6cf9aec2334440615e2235c83cc9ca2"
+        },
+        "wrappers": 480,
+        "ordinary_programs": 37,
+        "ordinary_controlled_completions": 213120,
+        "realigned_frame_programs": 40,
+        "realigned_frame_controlled_completions": 230400,
+        "production_pipeline_objects": 588,
+        "production_pipeline_controlled_completions": 4116
+      },
+      "i386": {
+        "objects": 741,
+        "controlled_completions": 36000
+      }
+    }
+  },
+  "local_artifact_root": "/mnt/data/neverd-x86-atomic-stack",
+  "artifact_reports": {
+    "d-native-apx-wrappers/qualification.json": "4b8b5f1c2ee52899a32395fa0031aedf3fe91c8e3068e57ce5b64d64e0f10dfe",
+    "d-native-apx-frames/qualification.json": "6c789e83d4f61c6da36fa76e5922892078a8379a601b510c25fe1851a9e60fa0",
+    "d-native-legacy-wrappers/qualification.json": "4b8b5f1c2ee52899a32395fa0031aedf3fe91c8e3068e57ce5b64d64e0f10dfe",
+    "d-native-legacy-frames/qualification.json": "6c789e83d4f61c6da36fa76e5922892078a8379a601b510c25fe1851a9e60fa0",
+    "d-native-i386/qualification.json": "0a3187c15c7cb7fcfc8b129e3aa67d8b36b434eadecf7dd2044822014f603e28",
+    "d-pinned-apx-wrappers-only/qualification.json": "ef8020b6b511c80af5a97d1908b614e9184549659e99717fbe96f285ce7d1533",
+    "d-pinned-apx-frames/qualification.json": "6c789e83d4f61c6da36fa76e5922892078a8379a601b510c25fe1851a9e60fa0",
+    "d-pinned-legacy-wrappers-only/qualification.json": "ef8020b6b511c80af5a97d1908b614e9184549659e99717fbe96f285ce7d1533",
+    "d-pinned-legacy-frames/qualification.json": "6c789e83d4f61c6da36fa76e5922892078a8379a601b510c25fe1851a9e60fa0",
+    "d-pinned-i386/qualification.json": "0a3187c15c7cb7fcfc8b129e3aa67d8b36b434eadecf7dd2044822014f603e28",
+    "pinned-production-qualification.json": "9f6947791801dca2b73fb42a164d6fd8e2d237c07064a9b782fe1ef614106b64",
+    "pinned-export-comparison.json": "adaf93ae27b1f03eb24d8cbc0ce09138e9ac0179a9f13006242e59be26ff4603",
+    "native-final-export-comparison.json": "38652693b94e5e28d780c6a36588cd9dd46d930d179c25e8fdb7eed4d7970cf2",
+    "toolchains.json": "055a639cf5e01d88acabc32670a5c7c8615669210e2fc71d473855b5e839df8a",
+    "toolchains-folded-entry-recheck.json": "d0ade7f4bf4abf224bf06245932def162bf8ece0afefc6859f1670e9ea2382bb"
+  },
+  "physical_atomicity_qualified": false,
+  "hardware_faults_qualified": false,
+  "cache_coherence_qualified": false,
+  "all_x86_instruction_gaps_closed": false,
+  "llvm_release_and_production_pin_updated": false,
+  "pipeline_c_qualification": {
+    "apx": {
+      "identical_c_sources": 1176,
+      "identical_case_records": 588,
+      "c_compilations": 4704,
+      "c_controlled_completions": 32928,
+      "reuse_requires_exact_source_and_metadata": true
+    },
+    "legacy": {
+      "identical_c_sources": 1176,
+      "identical_case_records": 588,
+      "c_compilations": 4704,
+      "c_controlled_completions": 32928,
+      "reuse_requires_exact_source_and_metadata": true
+    }
+  },
+  "standalone_toolchains": {
+    "families": 2,
+    "compiler_routes": [
+      "NeverC",
+      "LLVM",
+      "NeverC IR to LLVM"
+    ],
+    "objects": 36,
+    "functions": 82080,
+    "controlled_completions": 984960,
+    "assembly_roundtrips": 72
+  }
+}

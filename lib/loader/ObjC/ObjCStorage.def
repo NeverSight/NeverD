@@ -1,0 +1,83 @@
+//===- ObjCStorage.def - Objective-C storage metadata contracts ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Storage record layouts, bounded analysis policy and reference vocabulary.
+/// VALUE declares an unsigned constant; TEXT a string; REFERENCE maps kinds
+/// to their public JSON spelling. Undefined consumers expand to nothing.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_OBJC_STORAGE_VALUE
+#define NEVERD_OBJC_STORAGE_VALUE(Name, Value)
+#endif
+#ifndef NEVERD_OBJC_STORAGE_TEXT
+#define NEVERD_OBJC_STORAGE_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_OBJC_STORAGE_REFERENCE
+#define NEVERD_OBJC_STORAGE_REFERENCE(Kind, Text)
+#endif
+
+NEVERD_OBJC_STORAGE_VALUE(kWordBytes, 4)
+NEVERD_OBJC_STORAGE_VALUE(kPointerBytes, 8)
+NEVERD_OBJC_STORAGE_VALUE(kInstanceStartOffset, 4)
+NEVERD_OBJC_STORAGE_VALUE(kInstanceSizeOffset, 8)
+NEVERD_OBJC_STORAGE_VALUE(kIvarsOffset, 48)
+NEVERD_OBJC_STORAGE_VALUE(kListHeaderBytes, 8)
+NEVERD_OBJC_STORAGE_VALUE(kIvarBytes, 32)
+NEVERD_OBJC_STORAGE_VALUE(kIvarNameOffset, 8)
+NEVERD_OBJC_STORAGE_VALUE(kIvarTypeOffset, 16)
+NEVERD_OBJC_STORAGE_VALUE(kIvarAlignmentOffset, 24)
+NEVERD_OBJC_STORAGE_VALUE(kIvarSizeOffset, 28)
+NEVERD_OBJC_STORAGE_VALUE(kMaxInstanceBytes, 1U << 24)
+NEVERD_OBJC_STORAGE_VALUE(kMaxAlignmentShift, 16)
+NEVERD_OBJC_STORAGE_VALUE(kClassBitsOffset, 32)
+NEVERD_OBJC_STORAGE_VALUE(kSwiftBitsMask, 3)
+NEVERD_OBJC_STORAGE_VALUE(kSwiftStableBits, 2)
+NEVERD_OBJC_STORAGE_VALUE(kMetaClassFlag, 1)
+
+NEVERD_OBJC_STORAGE_TEXT(kUnresolved, "unresolved")
+NEVERD_OBJC_STORAGE_TEXT(kRecovered, "recovered")
+NEVERD_OBJC_STORAGE_TEXT(kRuntime, "runtime")
+NEVERD_OBJC_STORAGE_TEXT(kMetadataOnly, "metadata_only")
+NEVERD_OBJC_STORAGE_TEXT(kClassPrefix, "_OBJC_CLASS_$_")
+NEVERD_OBJC_STORAGE_TEXT(kMetaclassPrefix, "_OBJC_METACLASS_$_")
+NEVERD_OBJC_STORAGE_TEXT(kSelectorReferences, "__objc_selrefs")
+NEVERD_OBJC_STORAGE_TEXT(kClassReferences, "__objc_classrefs")
+NEVERD_OBJC_STORAGE_TEXT(kSuperclassReferences, "__objc_superrefs")
+NEVERD_OBJC_STORAGE_TEXT(kProtocolReferences, "__objc_protorefs")
+NEVERD_OBJC_STORAGE_TEXT(kConflictingIdentity,
+                         "Conflicting Objective-C source reference identities")
+NEVERD_OBJC_STORAGE_TEXT(
+    kImportedReferenceLimit,
+    "Objective-C imported references exceed the record limit")
+NEVERD_OBJC_STORAGE_TEXT(kIncompleteLayout,
+                         "Objective-C instance storage layout is incomplete")
+NEVERD_OBJC_STORAGE_TEXT(
+    kProtocolIdentityLimit,
+    "Objective-C protocol identities exceed the record limit")
+NEVERD_OBJC_STORAGE_TEXT(kIncompleteSection,
+                         "Objective-C runtime reference section is incomplete")
+NEVERD_OBJC_STORAGE_TEXT(
+    kUnresolvedProtocol,
+    "Objective-C protocol reference identity is unresolved")
+NEVERD_OBJC_STORAGE_TEXT(kUnresolvedReference,
+                         "Objective-C runtime reference slot is unresolved")
+
+NEVERD_OBJC_STORAGE_TEXT(kReferencesJSON, "metadata_references")
+NEVERD_OBJC_STORAGE_TEXT(kKindJSON, "kind")
+NEVERD_OBJC_STORAGE_TEXT(kAddressJSON, "address")
+NEVERD_OBJC_STORAGE_TEXT(kSizeJSON, "size")
+NEVERD_OBJC_STORAGE_TEXT(kNameJSON, "name")
+NEVERD_OBJC_STORAGE_TEXT(kClassNameJSON, "class_name")
+NEVERD_OBJC_STORAGE_TEXT(kViewJSON, "view")
+NEVERD_OBJC_STORAGE_REFERENCE(Selector, "selector")
+NEVERD_OBJC_STORAGE_REFERENCE(Class, "class")
+NEVERD_OBJC_STORAGE_REFERENCE(Metaclass, "metaclass")
+NEVERD_OBJC_STORAGE_REFERENCE(IvarOffset, "ivar_offset")
+NEVERD_OBJC_STORAGE_REFERENCE(Protocol, "protocol")
+
+#undef NEVERD_OBJC_STORAGE_VALUE
+#undef NEVERD_OBJC_STORAGE_TEXT
+#undef NEVERD_OBJC_STORAGE_REFERENCE

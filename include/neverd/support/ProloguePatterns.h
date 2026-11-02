@@ -422,6 +422,11 @@ inline bool isPrologueAt(const uint8_t *Data, size_t Len, Arch A) {
   if (A == Arch::X64 || A == Arch::X86) {
     if (Len < 1)
       return false;
+    // 0x40-0x4F are REX prefixes only in 64-bit mode. IA-32 decodes them as
+    // INC/DEC, which begin no function: such a byte after an int3 is more
+    // often an operand's 0xCC, as in `mov [0x4040cc], eax`.
+    if (A == Arch::X86 && (Data[0] & 0xF0) == 0x40)
+      return false;
     return isStrictPrologueByteX86(Data[0]);
   }
   if (A == Arch::AArch64) {

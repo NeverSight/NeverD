@@ -1,0 +1,38 @@
+//===- ReturnAddressSigningFixtures.def - Unified query oracles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent compact words, ranges and damaged frame-section bytes.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_RA_FIXTURE_VALUE
+#define NEVERD_RA_FIXTURE_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_RA_FIXTURE_CASE
+#define NEVERD_RA_FIXTURE_CASE(Encoding, Offset)
+#endif
+#ifndef NEVERD_RA_FIXTURE_BYTES
+#define NEVERD_RA_FIXTURE_BYTES(Name, ...)
+#endif
+
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kOrdinaryCompact, 0x04000000)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kPCCompact, 0x05001000)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kZeroPCCompact, 0x05000000)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kReservedCompact, 0x05000020)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kArm64eSubtype, 2)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kArm64eX1Subtype, 12)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kArm64eVersionedSubtype, 0x80000002)
+NEVERD_RA_FIXTURE_VALUE(uint64_t, kShortRange, 0x20)
+NEVERD_RA_FIXTURE_VALUE(uint64_t, kPartialInstruction, 2)
+NEVERD_RA_FIXTURE_VALUE(uint32_t, kStaleOffset, 8)
+NEVERD_RA_FIXTURE_VALUE(va_t, kLastAlignedAddress, 0xfffffffffffffffc)
+NEVERD_RA_FIXTURE_CASE(0x05000000, 0)
+NEVERD_RA_FIXTURE_CASE(0x05001000, 4)
+NEVERD_RA_FIXTURE_CASE(0x0500f000, 60)
+NEVERD_RA_FIXTURE_BYTES(kTruncatedRecord, 0xff, 0xff, 0xff, 0x7f)
+
+#undef NEVERD_RA_FIXTURE_VALUE
+#undef NEVERD_RA_FIXTURE_CASE
+#undef NEVERD_RA_FIXTURE_BYTES

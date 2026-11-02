@@ -10,7 +10,7 @@
 #include "RegistrationRoots.h"
 
 #include "neverd/Limits.h"
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
 
 #include "llvm/ADT/STLExtras.h"
 

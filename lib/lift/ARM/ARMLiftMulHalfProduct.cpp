@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -21,8 +21,8 @@
 
 namespace neverd {
 
-bool liftMulHalfProduct(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                        const cs_arm &ARM) {
+bool liftMulHalfProduct(ARMLifter &L, ARMLifter::LiftState &S,
+                        const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // SMUL{BB|BT|TB|TT}: extract halves then multiply
   case ARM_INS_SMULBB:

@@ -6,6 +6,10 @@ extern int snprintf(char *, size_t, const char *, ...);
 extern int vsnprintf(char *, size_t, const char *, va_list);
 extern int sprintf(char *, const char *, ...);
 extern int vsprintf(char *, const char *, va_list);
+extern int __snprintf_chk(char *, size_t, int, size_t, const char *, ...);
+extern int __vsnprintf_chk(char *, size_t, int, size_t, const char *, va_list);
+extern int __sprintf_chk(char *, int, size_t, const char *, ...);
+extern int __vsprintf_chk(char *, int, size_t, const char *, va_list);
 extern int *__errno(void);
 extern void *dlopen(const char *, int);
 extern void *dlsym(void *, const char *);
@@ -35,6 +39,21 @@ __attribute__((noinline)) static int unbounded(char *out, const char *format,
   return first == second ? first : -99;
 }
 
+__attribute__((noinline)) static int checked_copy(char *out, u64 mode,
+                                                  const char *format, ...) {
+  va_list original, copy;
+  __builtin_va_start(original, format);
+  __builtin_va_copy(copy, original);
+  int first = mode == 5 ? __vsnprintf_chk(out, 240, 7, 240, format, original)
+                        : __vsprintf_chk(out, 7, 240, format, original);
+  int second = mode == 5
+                   ? __vsnprintf_chk(out + 256, 240, -1, 240, format, copy)
+                   : __vsprintf_chk(out + 256, -1, 240, format, copy);
+  __builtin_va_end(copy);
+  __builtin_va_end(original);
+  return first == second ? first : -99;
+}
+
 u64 format_integers(char *out, u64 mode) {
   const char *format = "%+08d|%#018lx|%-7.3s|%hhd/%hhu/%hd/%hu|%lld/%llu|"
                        "%zu/%td/%jd|%c/%%|%p";
@@ -50,8 +69,14 @@ u64 format_integers(char *out, u64 mode) {
     result = bounded(out, 240, format, VALUES);
   else if (mode == 2)
     result = sprintf(out, format, VALUES);
-  else
+  else if (mode == 3)
     result = unbounded(out, format, VALUES);
+  else if (mode == 4)
+    result = __snprintf_chk(out, 240, 7, 240, format, VALUES);
+  else if (mode == 6)
+    result = __sprintf_chk(out, -1, 240, format, VALUES);
+  else
+    result = checked_copy(out, mode, format, VALUES);
 #undef VALUES
   return *__errno() == 77 ? (unsigned)result : 999;
 }
@@ -140,4 +165,92 @@ u64 format_explicit_va(char *out, const struct saved_args *saved,
   va_list args;
   __builtin_memcpy(&args, saved, sizeof(args));
   return (unsigned)vsnprintf(out, 64, format, args);
+}
+
+__attribute__((noinline)) static int checked_va(char *out, u64 mode, size_t n,
+                                                size_t object_size,
+                                                const char *format, ...) {
+  va_list args;
+  __builtin_va_start(args, format);
+  int result = mode == 1
+                   ? __vsnprintf_chk(out, n, -1, object_size, format, args)
+                   : __vsprintf_chk(out, 7, object_size, format, args);
+  __builtin_va_end(args);
+  return result;
+}
+
+u64 format_fortify_supplied(char *out, u64 mode, size_t n, size_t object_size,
+                            const char *format, u64 first, u64 second,
+                            u64 third) {
+  *__errno() = 77;
+  int result;
+  if (mode == 0)
+    result =
+        __snprintf_chk(out, n, 7, object_size, format, first, second, third);
+  else if (mode == 2)
+    result = __sprintf_chk(out, -1, object_size, format, first, second, third);
+  else
+    result =
+        checked_va(out, mode, n, object_size, format, first, second, third);
+  return *__errno() == 77 ? (unsigned)result : 999;
+}
+
+u64 format_fortify_explicit_va(char *out, u64 mode, size_t n,
+                               size_t object_size, const char *format,
+                               const struct saved_args *saved) {
+  va_list args;
+  __builtin_memcpy(&args, saved, sizeof(args));
+  return (unsigned)(mode == 1
+                        ? __vsnprintf_chk(out, n, 7, object_size, format, args)
+                        : __vsprintf_chk(out, -1, object_size, format, args));
+}
+
+__attribute__((noinline)) static int
+checked_dynamic_va(void *call, char *out, u64 mode, size_t object_size,
+                   const char *format, ...) {
+  va_list args;
+  __builtin_va_start(args, format);
+  int result;
+  if (mode == 1) {
+    int (*bounded_call)(char *, size_t, int, size_t, const char *, va_list) =
+        call;
+    result = bounded_call(out, 64, 7, object_size, format, args);
+  } else {
+    int (*unbounded_call)(char *, int, size_t, const char *, va_list) = call;
+    result = unbounded_call(out, -1, object_size, format, args);
+  }
+  __builtin_va_end(args);
+  return result;
+}
+
+u64 format_fortify_dynamic(char *out, u64 mode, u64 closed,
+                           size_t object_size) {
+  const char *names[] = {"__snprintf_chk", "__vsnprintf_chk", "__sprintf_chk",
+                         "__vsprintf_chk"};
+  if (mode >= 4)
+    return 100;
+  void *handle = dlopen("libformat-model.so", 2);
+  if (!handle)
+    return 99;
+  void *call = dlsym(handle, names[mode]);
+  if (!call)
+    return 98;
+  if (closed && dlclose(handle))
+    return 97;
+  int result;
+  if (mode == 0) {
+    int (*bounded_call)(char *, size_t, int, size_t, const char *, ...) = call;
+    result = bounded_call(out, 64, 7, object_size, "%s=%#lx", "symbol",
+                          0x10000000aUL);
+  } else if (mode == 2) {
+    int (*unbounded_call)(char *, int, size_t, const char *, ...) = call;
+    result = unbounded_call(out, -1, object_size, "%s=%#lx", "symbol",
+                            0x10000000aUL);
+  } else {
+    result = checked_dynamic_va(call, out, mode, object_size, "%s=%#lx",
+                                "symbol", 0x10000000aUL);
+  }
+  if (!closed && dlclose(handle))
+    return 96;
+  return (unsigned)result;
 }

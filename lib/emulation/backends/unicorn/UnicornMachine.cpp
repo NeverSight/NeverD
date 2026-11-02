@@ -7,6 +7,7 @@
 #include "../../arch/x86_64/X64Exception.h"
 #include "../../arch/x86_64/X64Machine.h"
 #include "../../core/ExecutionDiagnostics.h"
+#include "../../core/ExecutionLimits.h"
 #include "../MachineFactories.h"
 #include "UnicornArchitecture.h"
 #include "UnicornMemory.h"
@@ -154,7 +155,8 @@ private:
     InstructionBytes Bytes{};
     bool Valid = false;
   };
-  std::array<Instruction, 2048> Instructions{};
+  std::array<Instruction, execution_limits::UnicornInstructionCacheEntries>
+      Instructions{};
   std::weak_ptr<AddressSpace> InstructionSpace;
   uint64_t InstructionGeneration = 0, InstructionTransport = 0;
   bool InstructionsActive = false;
@@ -491,7 +493,7 @@ private:
 #define NEVERD_X64_REGISTER(Name, Decoder, Backend)                            \
   case X64Register::Name:                                                      \
     return Backend;
-#include "neverd/emulation/X64Registers.def"
+#include "neverd/emulation/arch/x86_64/X64Registers.def"
 #undef NEVERD_X64_REGISTER
     default:
       return UC_X86_REG_INVALID;
@@ -500,7 +502,7 @@ private:
 };
 /// Borrow a complete register packet for one transport call. IDs and storage
 /// pointers come from the same inventory; architectural width normalization
-/// and publication remain owned by captureAArch64State.
+/// remains owned by the shared AArch64 state helpers.
 class AArch64RegisterPacket {
 public:
   explicit AArch64RegisterPacket(AArch64MachineState &State) {
@@ -555,11 +557,18 @@ public:
   llvm::Error step(AArch64MachineState &State,
                    MachineRunControl Control) override {
     Control = Control.forNativeStep();
-    if (auto E = CPU.synchronize())
+    if (auto E = CPU.synchronize()) {
+      UserSpace.reset();
       return E;
-    const bool UserReady = UserSpace.lock() == CPU.Memory.addressSpace() &&
+    }
+    const auto PreviousSpace = UserSpace.lock();
+    const bool UserReady = PreviousSpace &&
+                           PreviousSpace == CPU.Memory.addressSpace() &&
                            UserGeneration == CPU.Memory.mappingGeneration() &&
                            UserTransportBase == CPU.Memory.transportPhysical(0);
+    const bool RegistersReady = UserReady &&
+                                LastCapture.Registers == State.Registers &&
+                                LastCapture.Vectors == State.Vectors;
     // A failed step may leave the engine in a partially installed state.
     // Reuse EL0 only after a complete, successful capture on this mapping.
     UserSpace.reset();
@@ -600,8 +609,12 @@ public:
                            &Control))
         return E;
     }
-    if (auto E = AArch64RegisterPacket(State).write(CPU.Engine))
-      return E;
+    // Only an identical, fully captured packet on the same established EL0
+    // mapping can reuse engine registers. Callbacks, thread switches and other
+    // input changes still install the entire packet before guest entry.
+    if (!RegistersReady)
+      if (auto E = AArch64RegisterPacket(State).write(CPU.Engine))
+        return E;
     if (auto E = CPU.run(State.reg(AArch64Register::PC), 1, &Control, true))
       return E;
     // The engine may write only a narrow register or fail after a prefix.
@@ -609,16 +622,9 @@ public:
     AArch64MachineState Captured;
     if (auto E = AArch64RegisterPacket(Captured).read(CPU.Engine))
       return E;
-    auto Next = State;
-    if (auto E = captureAArch64State(
-            Next,
-            [&](AArch64Register Register) -> llvm::Expected<uint64_t> {
-              return Captured.reg(Register);
-            },
-            [&](unsigned Index) -> llvm::Expected<RegisterValue> {
-              return Captured.Vectors[Index];
-            }))
-      return E;
+    auto Next = Captured;
+    Next.UserMode = State.UserMode;
+    normalizeAArch64State(Next);
     uint64_t Mode = 0;
     if (CPU.UserMode) {
       if (auto E = check(uc_reg_read(CPU.Engine, UC_ARM64_REG_PSTATE, &Mode)))
@@ -631,12 +637,14 @@ public:
       UserSpace = CPU.Memory.addressSpace();
       UserGeneration = CPU.Memory.mappingGeneration();
       UserTransportBase = CPU.Memory.transportPhysical(0);
+      LastCapture = Captured;
     }
     State = Next;
     return llvm::Error::success();
   }
 
 private:
+  AArch64MachineState LastCapture;
   std::weak_ptr<AddressSpace> UserSpace;
   uint64_t UserGeneration = 0, UserTransportBase = 0;
 };

@@ -12,6 +12,7 @@
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
+#include "neverd/support/Limits.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -109,6 +110,9 @@ void registerLoaderRunFunctions(BinaryImage &Img) {
 }
 
 ImportThunkCandidates::ImportThunkCandidates(const BinaryImage &Img) {
+  Entries.reserve(Img.Symbols.size() + Img.COFFPDataRecords.size());
+  Bodies.reserve(Img.KnownCodeRanges.size() + Img.Symbols.size() +
+                 Img.COFFPDataRecords.size());
   // One ELF FDE can cover a whole PLT, including several callable veneers.
   // Only a wholly contained range has that loader-owned role. Stated function
   // symbols still own their bodies, even when they overlap such a range.
@@ -132,7 +136,7 @@ ImportThunkCandidates::ImportThunkCandidates(const BinaryImage &Img) {
     if (!Sym.IsFunc)
       continue;
     const va_t Start = normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode);
-    Entries.insert(Start);
+    Entries.push_back(Start);
     if (Sym.Size && Sym.Size < InvalidVA - Start &&
         (Sym.Origin != NameOrigin::Synthesized ||
          !IsPLT(Start, Start + Sym.Size)))
@@ -142,9 +146,11 @@ ImportThunkCandidates::ImportThunkCandidates(const BinaryImage &Img) {
   for (const auto &Record : Img.COFFPDataRecords)
     if (Record.BeginRVA < Record.EndRVA &&
         Record.EndRVA < InvalidVA - Img.Base) {
-      Entries.insert(Img.Base + Record.BeginRVA);
+      Entries.push_back(Img.Base + Record.BeginRVA);
       Add(Img.Base + Record.BeginRVA, Img.Base + Record.EndRVA);
     }
+  llvm::sort(Entries);
+  Entries.erase(std::unique(Entries.begin(), Entries.end()), Entries.end());
   llvm::sort(Bodies);
   size_t Count = 0;
   for (const auto &Range : Bodies) {
@@ -160,7 +166,7 @@ ImportThunkCandidates::ImportThunkCandidates(const BinaryImage &Img) {
 bool ImportThunkCandidates::allows(va_t Start, uint64_t Size) const {
   if (!Size || Size >= InvalidVA - Start)
     return false;
-  if (Entries.count(Start))
+  if (std::binary_search(Entries.begin(), Entries.end(), Start))
     return true;
   const auto Next = std::lower_bound(
       Bodies.begin(), Bodies.end(), Start + Size,
@@ -377,6 +383,10 @@ void recordRelocatedLiteralTargets(BinaryImage &Img) {
       Objects.push_back(Addr);
     }
   }
+  // With no proved literal, neither publication nor relocation reclassification
+  // can change the image. Avoid building their image-wide code indices.
+  if (Objects.empty())
+    return;
   // Existing code metadata, including a function's exclusive end, has priority
   // over this proof. Reuse the shared rules used for debug data objects.
   recordDataInCode(Img, Objects);
@@ -386,7 +396,23 @@ void recordRelocatedLiteralTargets(BinaryImage &Img) {
   });
 }
 
-void scanPaddingBoundaries(BinaryImage &Img) {
+static const void *findLoadByte(const uint8_t *Data, int Byte, size_t Size,
+                                const LoadProgress &Progress) {
+  if (!Progress)
+    return std::memchr(Data, Byte, Size);
+  for (size_t Done = 0; Done < Size;) {
+    Progress.check();
+    const size_t Count =
+        std::min(limits::support::kLoadByteCheckpointBytes, Size - Done);
+    if (const void *Found = std::memchr(Data + Done, Byte, Count))
+      return Found;
+    Done += Count;
+  }
+  return nullptr;
+}
+
+void scanPaddingBoundaries(BinaryImage &Img, const LoadProgress &Progress) {
+  Progress.check();
   // LC_FUNCTION_STARTS lists every function a linked Mach-O image lays out,
   // so a byte between two of its starts belongs to the function before it.
   // Padding there begins no function: an `int3` byte inside an instruction
@@ -409,6 +435,7 @@ void scanPaddingBoundaries(BinaryImage &Img) {
 
   [[maybe_unused]] size_t Added = 0;
   for (const auto &Seg : Img.Segments) {
+    Progress.check();
     if (!Seg.isExecutable() || Seg.Data.size() < 4)
       continue;
     const uint8_t *D = Seg.Data.data();
@@ -427,16 +454,23 @@ void scanPaddingBoundaries(BinaryImage &Img) {
     // A boundary is a byte that is no padding right after one that is, past
     // the padding the segment may open with.
     size_t First = 0;
-    while (First < N && D[First] == PadByte)
+    while (First < N && D[First] == PadByte) {
+      if (First % limits::support::kLoadByteCheckpointBytes == 0)
+        Progress.check();
       ++First;
+    }
     if (Alignment == 1) {
       for (size_t From = First; From < N;) {
-        const void *Pad = std::memchr(D + From, PadByte, N - From);
+        Progress.check();
+        const void *Pad = findLoadByte(D + From, PadByte, N - From, Progress);
         if (!Pad)
           break;
         size_t I = static_cast<size_t>(static_cast<const uint8_t *>(Pad) - D);
-        while (I < N && D[I] == PadByte)
+        while (I < N && D[I] == PadByte) {
+          if (I % limits::support::kLoadByteCheckpointBytes == 0)
+            Progress.check();
           ++I;
+        }
         if (I >= N)
           break;
         Consider(I);
@@ -447,15 +481,18 @@ void scanPaddingBoundaries(BinaryImage &Img) {
     // Only a boundary a prologue can begin at is looked at.
     const size_t Skew = static_cast<size_t>((Seg.VA + First + 1) % Alignment);
     for (size_t I = First + 1 + (Skew ? Alignment - Skew : 0); I < N;
-         I += Alignment)
+         I += Alignment) {
+      Progress.check();
       if (D[I - 1] == PadByte && D[I] != PadByte)
         Consider(I);
+    }
   }
   LLVM_DEBUG(llvm::dbgs() << "func-discovery: padding scan added " << Added
                           << " functions\n");
 }
 
-void scanX86HotpatchEntries(BinaryImage &Img) {
+void scanX86HotpatchEntries(BinaryImage &Img, const LoadProgress &Progress) {
+  Progress.check();
   if (Img.Arch != Arch::X86 || Img.Format != BinaryFormat::COFF ||
       Img.IsRelocatable)
     return;
@@ -464,13 +501,15 @@ void scanX86HotpatchEntries(BinaryImage &Img) {
 
   [[maybe_unused]] size_t Added = 0;
   for (const auto &Seg : Img.Segments) {
+    Progress.check();
     if (!Seg.isExecutable())
       continue;
     const uint8_t *D = Seg.Data.data();
     const size_t N = Seg.Data.size();
     // Every entry begins with 8B, so only those bytes are examined.
     for (size_t Off = 0; Off < N; ++Off) {
-      const void *Hit = std::memchr(D + Off, 0x8B, N - Off);
+      Progress.check();
+      const void *Hit = findLoadByte(D + Off, 0x8B, N - Off, Progress);
       if (!Hit)
         break;
       Off = static_cast<size_t>(static_cast<const uint8_t *>(Hit) - D);
@@ -492,7 +531,8 @@ void scanX86HotpatchEntries(BinaryImage &Img) {
                           << " functions\n");
 }
 
-void scanDataFuncPointers(BinaryImage &Img) {
+void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
+  Progress.check();
   const size_t PtrSize = Img.getPointerSize();
   if (PtrSize == 0)
     return;
@@ -583,7 +623,12 @@ void scanDataFuncPointers(BinaryImage &Img) {
     if (Misalignment != 0)
       Cur += PtrSize - Misalignment;
     std::optional<va_t> OwnerEnd;
+    Progress.check();
     for (; Cur <= End && End - Cur >= PtrSize; Cur += PtrSize) {
+      // Pointer scans can visit millions of slots. Poll by covered bytes,
+      // preserving every semantic visit without calling the host per pointer.
+      if (Cur % limits::support::kLoadByteCheckpointBytes == 0)
+        Progress.check();
       if (!OwnerEnd || !OwnerPerRange)
         OwnerEnd = Img.mappedObjectOwnerEnd(Cur);
       if (!OwnerEnd || *OwnerEnd < Cur || PtrSize > *OwnerEnd - Cur)
@@ -591,6 +636,12 @@ void scanDataFuncPointers(BinaryImage &Img) {
       const size_t I = static_cast<size_t>(Cur - Seg->VA);
       uint64_t Val = normalizeCodeAddress(
           readPtr(Seg->Data.data() + I, Img.is64Bit()), Img.Arch, Img.Mode);
+      // Only an authenticated JMP reader supplies case-label evidence.
+      // A CALL through the same slot independently requires a function entry.
+      if (Img.CodePtrRelocSlots.count(Cur) &&
+          Img.JumpDispatchTableSources.count(Cur) &&
+          !Img.CallDispatchRelocSlots.count(Cur))
+        continue;
       if (const auto Guess = Guesses.find(Val);
           Guess != Guesses.end() && Img.CodePtrRelocSlots.count(Cur)) {
         Img.Symbols[Guess->second].IsBoundaryGuess = false;
@@ -622,6 +673,7 @@ void scanDataFuncPointers(BinaryImage &Img) {
         !Sec.isWritable() && !Img.isCodeAddress(Sec.VA))
       ScanRange(Img.getSegmentFor(Sec.VA), Sec.VA, Sec.Size);
   for (const Segment &Seg : Img.Segments) {
+    Progress.check();
     if (section_names::isDebugSectionName(Seg.Name) || Seg.Name == "__DWARF" ||
         Img.segmentHasReadableSectionMetadata(Seg) || !Seg.isReadable() ||
         Seg.isExecutable() || Seg.isWritable())

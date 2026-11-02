@@ -18,6 +18,8 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <filesystem>
+#include <optional>
 #include <system_error>
 
 namespace neverd::support::atomic_output {
@@ -37,12 +39,14 @@ struct CommitOperations {
   llvm::function_ref<void(llvm::StringRef)> UnregisterSignalCleanup;
 };
 
-/// Platform-neutral seam for the strict Windows replacement operation.  The
-/// callback must perform exactly one replace-if-exists namespace mutation and
-/// must never move the destination aside on failure.
+/// Platform-neutral seam for strict Windows publication. The callback selects
+/// replacement or exclusive creation, performs exactly one namespace mutation,
+/// and must never move the destination aside on failure.
 struct ReplaceOperations {
   llvm::function_ref<std::error_code(llvm::StringRef, llvm::StringRef)> Replace;
 };
+
+enum class OutputMode { ReplaceExisting, CreateNew };
 
 llvm::Error commitTemporaryOutput(llvm::StringRef TemporaryPath,
                                   llvm::StringRef OutputPath,
@@ -55,10 +59,17 @@ replaceTemporaryOutputWithoutMoveAside(llvm::StringRef TemporaryPath,
 
 /// Close and atomically publish Temporary.  On Windows this retains the
 /// candidate's native handle across close and issues one FileRenameInfo
-/// replace-if-exists request, so a locked destination fails without being
-/// moved aside.  Success is the namespace linearization point.
-llvm::Error closeAndCommitTemporaryOutput(llvm::sys::fs::TempFile &Temporary,
-                                          llvm::StringRef OutputPath);
+/// rename request, so a locked destination fails without being moved aside.
+/// CreateNew refuses existing destinations, using a no-replace rename on
+/// Windows and an exclusive hard link on POSIX. Success is the namespace
+/// linearization point; cleanup errors after POSIX publication are reported.
+/// Optional permissions are applied after retiring delete-on-close and before
+/// closing the candidate, since Windows refuses path metadata edits while the
+/// file is delete-pending.
+llvm::Error closeAndCommitTemporaryOutput(
+    llvm::sys::fs::TempFile &Temporary, llvm::StringRef OutputPath,
+    OutputMode Mode = OutputMode::ReplaceExisting,
+    std::optional<std::filesystem::perms> Permissions = std::nullopt);
 
 /// Close and remove Temporary while preserving useful close/remove context.
 llvm::Error discardTemporaryOutput(llvm::sys::fs::TempFile &Temporary);

@@ -1,0 +1,113 @@
+//===- MatchSteps.def - How two functions or blocks were paired -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// NEVERD_DIFF_FUNCTION_STEP(Id, Name, Confidence, Description): one way the
+// comparison pairs two functions or retains candidates. Global matching steps
+// appear in the order the passes try them; InlinedTailCall and StackRoles only
+// retain ambiguity. Name is the stable spelling saved comparisons and the C API
+// use; Confidence is the step's prior, a heuristic weight rather than a
+// probability.
+//
+// NEVERD_DIFF_BLOCK_STEP(Id, Name, Confidence, Description): one way two
+// basic blocks of a matched pair were paired, in the order they are tried.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_DIFF_FUNCTION_STEP
+#define NEVERD_DIFF_FUNCTION_STEP(Id, Name, Confidence, Description)
+#endif
+#ifndef NEVERD_DIFF_BLOCK_STEP
+#define NEVERD_DIFF_BLOCK_STEP(Id, Name, Confidence, Description)
+#endif
+
+NEVERD_DIFF_FUNCTION_STEP(Manual, "manual", 1.00,
+                          "An analyst paired the two functions")
+NEVERD_DIFF_FUNCTION_STEP(ImportName, "import_name", 1.00,
+                          "The same imported symbol")
+NEVERD_DIFF_FUNCTION_STEP(SymbolName, "symbol_name", 0.99,
+                          "The same name from symbols, debug information or "
+                          "a library signature")
+NEVERD_DIFF_FUNCTION_STEP(ExactBytes, "exact_bytes", 1.00,
+                          "Byte-identical bodies")
+NEVERD_DIFF_FUNCTION_STEP(NormalizedBody, "normalized_body", 0.99,
+                          "Identical instructions once addresses are "
+                          "replaced by what they refer to")
+NEVERD_DIFF_FUNCTION_STEP(MnemonicsAndGraph, "mnemonics_graph", 0.95,
+                          "The same mnemonic sequence and flow-graph MD index")
+NEVERD_DIFF_FUNCTION_STEP(GraphNeighborhood, "graph_neighborhood", 0.92,
+                          "The same flow-graph MD index for the function, "
+                          "its callers and its callees")
+NEVERD_DIFF_FUNCTION_STEP(GraphTopDown, "graph_top_down", 0.88,
+                          "The same flow-graph MD index, levels from the "
+                          "entry")
+NEVERD_DIFF_FUNCTION_STEP(GraphBottomUp, "graph_bottom_up", 0.86,
+                          "The same flow-graph MD index, levels from the "
+                          "exits")
+NEVERD_DIFF_FUNCTION_STEP(PrimeProduct, "prime_product", 0.82,
+                          "The same multiset of mnemonics")
+NEVERD_DIFF_FUNCTION_STEP(StringReferences, "string_references", 0.85,
+                          "The same set of referenced strings")
+NEVERD_DIFF_FUNCTION_STEP(ImportCalls, "import_calls", 0.80,
+                          "The same set of called imports")
+NEVERD_DIFF_FUNCTION_STEP(Constants, "constants", 0.78,
+                          "The same set of scalar constants")
+NEVERD_DIFF_FUNCTION_STEP(CallGraphPosition, "call_graph_position", 0.70,
+                          "The same position in the call graph and the same "
+                          "flow-graph size")
+NEVERD_DIFF_FUNCTION_STEP(CallSite, "call_site", 0.80,
+                          "Called from the same call site of matched callers")
+NEVERD_DIFF_FUNCTION_STEP(Neighborhood, "neighborhood", 0.75,
+                          "Corresponding observed caller or callee roles of "
+                          "matched functions")
+NEVERD_DIFF_FUNCTION_STEP(Similarity, "similarity", 0.60,
+                          "The most similar remaining body by a clear margin")
+NEVERD_DIFF_FUNCTION_STEP(DataReference, "data_reference", 0.80,
+                          "The same data-reference roles in independently "
+                          "matched functions")
+NEVERD_DIFF_FUNCTION_STEP(AddressSite, "address_site", 0.80,
+                          "The same address-taking operand of independently "
+                          "matched functions")
+NEVERD_DIFF_FUNCTION_STEP(
+    InlinedTailCall, "inlined_tail_call", 0.60,
+    "A similar body also contains an unmatched tail "
+    "caller's prelude; whole-function identity is ambiguous")
+NEVERD_DIFF_FUNCTION_STEP(StackRoles, "stack_roles", 0.80,
+                          "The same fixed-frame address-use roles; conflicting "
+                          "body alternatives require review")
+NEVERD_DIFF_FUNCTION_STEP(Initializer, "initializer_context", 0.80,
+                          "The same initialized function-pointer position "
+                          "among independently matched targets")
+NEVERD_DIFF_FUNCTION_STEP(DataInitializer, "data_initializer", 0.80,
+                          "The same initialized function-pointer position "
+                          "between independently paired data-address uses")
+NEVERD_DIFF_FUNCTION_STEP(BlockCallSite, "block_call_site", 0.80,
+                          "The same call position in unique complete blocks "
+                          "of independently matched callers")
+
+NEVERD_DIFF_BLOCK_STEP(BlockEntry, "entry", 0.90, "Both function entries")
+NEVERD_DIFF_BLOCK_STEP(BlockBytes, "bytes", 1.00, "Byte-identical blocks")
+NEVERD_DIFF_BLOCK_STEP(BlockBody, "normalized_body", 0.98,
+                       "Identical normalized instructions")
+NEVERD_DIFF_BLOCK_STEP(BlockPrime, "prime_product", 0.90,
+                       "The same multiset of mnemonics")
+NEVERD_DIFF_BLOCK_STEP(BlockCalls, "calls", 0.90,
+                       "Calls to the same matched functions")
+NEVERD_DIFF_BLOCK_STEP(BlockReferences, "references", 0.88,
+                       "The same strings, imports and data")
+NEVERD_DIFF_BLOCK_STEP(BlockTopDown, "graph_top_down", 0.80,
+                       "The same position in the flow graph from the entry")
+NEVERD_DIFF_BLOCK_STEP(BlockBottomUp, "graph_bottom_up", 0.78,
+                       "The same position in the flow graph from the exits")
+NEVERD_DIFF_BLOCK_STEP(BlockExit, "exit", 0.70, "The only exits of both")
+NEVERD_DIFF_BLOCK_STEP(BlockEdge, "edge", 0.75,
+                       "The only remaining successor or predecessor of a "
+                       "matched block along the same kind of edge")
+NEVERD_DIFF_BLOCK_STEP(BlockOrder, "order", 0.55,
+                       "The same place between matched blocks with "
+                       "similar instructions")
+
+#undef NEVERD_DIFF_FUNCTION_STEP
+#undef NEVERD_DIFF_BLOCK_STEP

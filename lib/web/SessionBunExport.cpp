@@ -103,6 +103,7 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
                            {"encoding_id", M.Encoding},
                            {"loader_id", M.Loader},
                            {"format_id", M.Format},
+                           {"side_id", M.Side},
                            {"storage_sha256", R.BlobHash},
                            {"original_offset", std::to_string(R.Offset)}};
     Maps += M.SourceMap != NoBunIndex;
@@ -186,6 +187,8 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
       {"module_count", E.Modules.size()},
       {"region_count", E.Regions.size()},
       {"entry_point_index", E.EntryPoint},
+      {"startup_count", E.StartupCount},
+      {"flags", E.Flags},
       {"source_count", Sources},
       {"source_bytes", std::to_string(SourceBytes)},
       {"unavailable_source_count", Unavailable},
@@ -204,6 +207,23 @@ std::string Session::exportBun(std::string_view ExpectedRevision,
       {"verification", "all_exported_files_reread_sha256_matches"},
       {"original_source_restoration", "not_claimed"}};
   auto Manifest = Summary;
+  llvm::json::Array PrelinkedFiles;
+  for (auto Index : E.PrelinkedModuleFiles)
+    PrelinkedFiles.emplace_back(Index);
+  Manifest["prelinked_module_files"] =
+      E.Flags & (1 << 11) ? llvm::json::Value(std::move(PrelinkedFiles))
+                          : llvm::json::Value(nullptr);
+  llvm::json::Array RuntimeOptions;
+  if (E.RuntimeOptions)
+    for (auto Byte : *E.RuntimeOptions)
+      RuntimeOptions.emplace_back(Byte);
+  Manifest["runtime_options_bytes"] =
+      E.RuntimeOptions ? llvm::json::Value(std::move(RuntimeOptions))
+                       : llvm::json::Value(nullptr);
+  Manifest["compile_exec_argv_file"] =
+      E.CompileArguments == NoBunIndex
+          ? llvm::json::Value(nullptr)
+          : llvm::json::Value(filename('r', E.CompileArguments, ".bin"));
   const std::string Index =
       "<!doctype html><meta charset=\"utf-8\"><meta "
       "http-equiv=\"Content-Security-Policy\" "

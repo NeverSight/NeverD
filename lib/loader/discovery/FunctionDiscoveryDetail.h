@@ -36,7 +36,7 @@ public:
   bool allows(va_t Start, uint64_t Size) const;
 
 private:
-  std::set<va_t> Entries;
+  std::vector<va_t> Entries;
   std::vector<std::pair<va_t, va_t>> Bodies;
 };
 

@@ -8,7 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 
 #include "llvm/IR/GlobalVariable.h"
 #ifdef LLVM_NEVERD_X86_CXX_FUNCTION_RECEIPTS

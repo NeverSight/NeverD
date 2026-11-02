@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ir/high/HighIRPrint.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -179,9 +180,15 @@ void Pipeline::dumpHighIR(const std::vector<HighFunc> &Funcs,
     OS << "func " << HF.Name << " @ 0x" << llvm::utohexstr(HF.Entry) << "\n";
     if (HF.AnalysisOnly)
       OS << "  analysis-only: tentative recovery; not binary-output evidence\n";
+    if (HF.ReturnProtection)
+      OS << "  return-protection PAC key="
+         << (HF.ReturnProtection->BKey ? "IB" : "IA") << " modifier=entry-SP "
+         << (HF.ReturnProtection->Leaf ? "leaf" : "non-leaf") << "\n";
     dumpExceptionSummary(HF.ExceptionMetadata, OS, "  ");
-    for (auto &Stmt : HF.Body)
-      OS << "  " << Stmt.str(1) << "\n";
+    for (const auto &Stmt : HF.Body)
+      printHighStatementRows(
+          Stmt, 1,
+          [&](llvm::StringRef Row, const HighStmt *) { OS << "  " << Row; });
     OS << "\n";
   }
 }

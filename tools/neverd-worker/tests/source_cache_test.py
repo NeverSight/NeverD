@@ -53,14 +53,15 @@ def run(executable):
         high = source(llvm_client, B)
         assert high["fixture_prepared_view"] == "source", high
         reused(source(llvm_client, representation="llvmc"), llvm)
-        # Opening a native graph prepares only its analysis. Source for the
-        # same entry then uses the retained pipeline instead of preparing again.
+        # Opening a native graph prepares only its control-flow graphs. Source
+        # for the same entry then continues the retained pipeline instead of
+        # preparing again.
         graph_client = clients.enter_context(Client(executable))
         ok(graph_client, "open", {"path": str(binary), "analysis": False,
                                    "read_only": True})
         ok(graph_client, "cfg", {"address": A})
         graph_source = source(graph_client)
-        assert graph_source["fixture_prepared_view"] == "low", graph_source
+        assert graph_source["fixture_prepared_view"] == "cfg", graph_source
         assert graph_source["fixture_prepares"] == 1, graph_source
         reused(source(graph_client), graph_source)
         first = source(client)
@@ -249,6 +250,21 @@ def run(executable):
         assert rebuilt["fixture_prepares"] > large["fixture_prepares"], rebuilt
         assert rebuilt["fixture_pages"] > large["fixture_pages"], rebuilt
         assert rebuilt["text"] == large["text"]
+
+        # A large document still fits the existing byte allowance when the
+        # original is kept in wire form rather than a second parsed DOM.
+        # Every later page must reuse it; SDK counters make this independent
+        # of machine speed and encoded-page eviction.
+        huge_file = root / "pseudocode-large.bin"
+        huge_file.write_bytes(b"large source cache fixture")
+        huge = clients.enter_context(Client(executable))
+        ok(huge, "open", {"path": str(huge_file), "analysis": False})
+        head = source(huge, representation="llvmc")
+        assert head["total_lines"] == 20008, head
+        tail = source(huge, representation="llvmc", offset=20000, limit=16)
+        assert tail["complete"] and "code line 19999" in tail["text"], tail
+        assert tail["fixture_pages"] == head["fixture_pages"], (head, tail)
+        assert source(huge, representation="llvmc") == head
 
         # Switching pipelines can fail after discarding the preceding IR.
         # A graph request for A must really prepare A again; B then retries

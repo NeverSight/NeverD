@@ -16,7 +16,14 @@ enum class ListingRole : std::uint8_t {
 };
 
 /// Operand text dialect of an engine architecture.
-enum class OperandDialect : std::uint8_t { X86, AArch64, ARM, Generic };
+enum class OperandDialect : std::uint8_t {
+  X86,
+  AArch64,
+  ARM,
+  SBF,
+  EVM,
+  Generic
+};
 OperandDialect operandDialect(std::string_view architecture);
 
 struct TextSpan {
@@ -130,6 +137,8 @@ struct OperandFacts {
   /// The variables of the function's frame and the frame register, when its
   /// prologue sets one up.
   std::string_view frameRegister;
+  /// Frame base minus this instruction's proven frame-register coordinate.
+  std::int64_t frameDepth = 0;
   const FrameNamer *frame = nullptr;
   /// The stack register and its distance below the frame's base at this
   /// instruction, when known: operands through it name frame variables too.
@@ -186,17 +195,22 @@ StyledText formatOperands(std::string_view operands, const OperandFacts &facts,
 /// Whether formatted operands of \p dialect show the user's number formats.
 bool showsNumberFormats(OperandDialect dialect);
 /// Which operands of \p operands, an instruction's operand text, a number
-/// format changes: the plain numbers, by operand index.
+/// format changes: the plain numbers, by operand index. \p mnemonic tells an
+/// SBF call target or byte-swap width, numbers that are no constants.
 std::vector<bool> formattableOperands(std::string_view operands,
-                                      OperandDialect dialect);
+                                      OperandDialect dialect,
+                                      std::string_view mnemonic = {});
 /// Which operands a structure offset changes: the plain numbers and the
 /// memory operands that add a displacement to a base register, by index.
 std::vector<bool> structOperands(std::string_view operands,
-                                 OperandDialect dialect);
+                                 OperandDialect dialect,
+                                 std::string_view mnemonic = {});
 /// The number operand \p index of \p operands is, as written, a negative
-/// one with its sign; none when it is no plain number.
+/// one with its sign; none when it is no plain number of \p dialect.
 std::optional<std::int64_t> operandNumber(std::string_view operands,
-                                          std::size_t index);
+                                          std::size_t index,
+                                          OperandDialect dialect,
+                                          std::string_view mnemonic = {});
 
 /// Classify one identifier of operand text for \p dialect.
 bool isRegisterName(OperandDialect dialect, std::string_view name);

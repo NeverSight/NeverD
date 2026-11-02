@@ -141,7 +141,7 @@ WindowsX64ExecutionPolicy::inspectUncached(llvm::ArrayRef<uint8_t> Bytes,
 #define NEVERD_X64_REGISTER(Name, DecoderID, BackendID)                        \
   case DecoderID:                                                              \
     return std::optional<Action>{{*Kind, X64Register::Name}};
-#include "neverd/emulation/X64Registers.def"
+#include "neverd/emulation/arch/x86_64/X64Registers.def"
 #undef NEVERD_X64_REGISTER
       default:
         return failure(policy::Destination);

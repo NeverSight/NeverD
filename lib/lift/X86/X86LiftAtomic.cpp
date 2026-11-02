@@ -11,8 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86LiftAPXValidation.h"
+#include "X86NativeMemory.h"
 
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -30,6 +32,7 @@ struct ApxAtomicEncoding {
   ApxAtomicKind Kind = ApxAtomicKind::Rao;
   uint8_t Width = 0;
   uint8_t Condition = 0;
+  uint8_t SegmentPrefix = 0;
   Intrinsic Id = Intrinsic::None;
 };
 
@@ -91,10 +94,11 @@ bool apxAtomicRegisterOperand(const cs_x86_op &Operand, unsigned Number,
              static_cast<int>(Number);
 }
 
-bool validateApxAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
-                             size_t EvexOffset, uint8_t SegmentPrefix,
-                             bool Address32, uint8_t P0, uint8_t P1,
-                             uint8_t ModRM, unsigned Width) {
+bool validateAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
+                          size_t ModRMOffset, uint8_t SegmentPrefix,
+                          unsigned AddressWidth, unsigned BaseExtension,
+                          unsigned IndexExtension, uint8_t ModRM,
+                          unsigned Width, bool Mode64) {
   const cs_x86_op &Operand = X86.operands[0];
   if (Operand.type != X86_OP_MEM || Operand.size != Width ||
       Operand.access != (CS_AC_READ | CS_AC_WRITE) ||
@@ -105,19 +109,30 @@ bool validateApxAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
   const uint8_t RM = ModRM & 7;
   if (Mod == 3)
     return false;
-  const unsigned AddressWidth = Address32 ? 4 : 8;
-  const unsigned BaseExtension = ((~P0 & 0x20) >> 2) | ((P0 & 0x08) << 1);
-  const unsigned IndexExtension = ((~P0 & 0x40) >> 3) | ((~P1 & 0x04) << 2);
-  size_t Cursor = EvexOffset + 6;
+  size_t Cursor = ModRMOffset + 1;
   uint8_t DisplacementSize = 0;
   x86_reg ExpectedSpecialBase = X86_REG_INVALID;
+  x86_reg ExpectedSpecialIndex = X86_REG_INVALID;
   int ExpectedBase = -1;
   int ExpectedIndex = -1;
   int ExpectedScale = 1;
   bool HasSIB = false;
   uint8_t SIB = 0;
 
-  if (RM == 4) {
+  if (AddressWidth == 2) {
+    constexpr x86_reg Bases[] = {X86_REG_BX, X86_REG_BX, X86_REG_BP,
+                                 X86_REG_BP, X86_REG_SI, X86_REG_DI,
+                                 X86_REG_BP, X86_REG_BX};
+    constexpr x86_reg Indices[] = {
+        X86_REG_SI,      X86_REG_DI,      X86_REG_SI,      X86_REG_DI,
+        X86_REG_INVALID, X86_REG_INVALID, X86_REG_INVALID, X86_REG_INVALID};
+    if (Mod == 0 && RM == 6)
+      DisplacementSize = 2;
+    else {
+      ExpectedSpecialBase = Bases[RM];
+      ExpectedSpecialIndex = Indices[RM];
+    }
+  } else if (RM == 4) {
     if (Cursor >= Insn->size)
       return false;
     HasSIB = true;
@@ -132,7 +147,8 @@ bool validateApxAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
     else
       ExpectedBase = static_cast<int>(BaseLow + BaseExtension);
   } else if (Mod == 0 && RM == 5) {
-    ExpectedSpecialBase = Address32 ? X86_REG_EIP : X86_REG_RIP;
+    if (Mode64)
+      ExpectedSpecialBase = AddressWidth == 4 ? X86_REG_EIP : X86_REG_RIP;
     DisplacementSize = 4;
   } else {
     ExpectedBase = static_cast<int>(RM + BaseExtension);
@@ -140,7 +156,7 @@ bool validateApxAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
   if (Mod == 1)
     DisplacementSize = 1;
   else if (Mod == 2)
-    DisplacementSize = 4;
+    DisplacementSize = AddressWidth == 2 ? 2 : 4;
 
   int64_t Displacement = 0;
   const size_t DisplacementOffset = Cursor;
@@ -148,6 +164,13 @@ bool validateApxAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
     if (Cursor >= Insn->size)
       return false;
     Displacement = static_cast<int8_t>(Insn->bytes[Cursor++]);
+  } else if (DisplacementSize == 2) {
+    if (Insn->size - Cursor < 2)
+      return false;
+    const uint16_t Raw =
+        Insn->bytes[Cursor] | (uint16_t(Insn->bytes[Cursor + 1]) << 8);
+    Displacement = Mod == 0 ? int64_t(Raw) : int64_t(static_cast<int16_t>(Raw));
+    Cursor += 2;
   } else if (DisplacementSize == 4) {
     if (Insn->size - Cursor < 4)
       return false;
@@ -183,6 +206,8 @@ bool validateApxAtomicMemory(const cs_insn *Insn, const cs_x86 &X86,
                                AddressWidth) != ExpectedBase) {
     return false;
   }
+  if (ExpectedSpecialIndex != X86_REG_INVALID)
+    return Operand.mem.index == ExpectedSpecialIndex;
   if (ExpectedIndex < 0)
     return Operand.mem.index == X86_REG_INVALID;
   return apxAtomicGprIndex(static_cast<x86_reg>(Operand.mem.index),
@@ -283,10 +308,138 @@ std::optional<ApxAtomicEncoding> decodeApxAtomicEncoding(const cs_insn *Insn,
     Result.Id = Intrinsic::ApxCmpccXadd;
   }
 
-  if (!validateApxAtomicMemory(Insn, X86, EvexOffset, SegmentPrefix, Address32,
-                               P0, P1, ModRM, Width))
+  if (!validateAtomicMemory(
+          Insn, X86, EvexOffset + 5, SegmentPrefix, Address32 ? 4 : 8,
+          ((~P0 & 0x20) >> 2) | ((P0 & 0x08) << 1),
+          ((~P0 & 0x40) >> 3) | ((~P1 & 0x04) << 2), ModRM, Width, true))
+    return std::nullopt;
+  if (!x86NativeSibAddressIsValid(Arch::X64, X86, X86.operands[0]))
     return std::nullopt;
   return Result;
+}
+
+std::optional<ApxAtomicEncoding>
+decodeLegacyAtomicEncoding(const cs_insn *Insn, const cs_x86 &X86, Arch A) {
+  if (!Insn || !Insn->detail || Insn->size < 4 || Insn->size > 15 ||
+      (A != Arch::X86 && A != Arch::X64))
+    return std::nullopt;
+  const bool Mode64 = A == Arch::X64;
+  size_t Offset = 0;
+  uint8_t Segment = 0, Mandatory = 0, Rex = 0;
+  bool AddressOverride = false, Lock = false;
+  unsigned Segments = 0, Addresses = 0, MandatoryCount = 0;
+  while (Offset < Insn->size) {
+    const auto P = Insn->bytes[Offset];
+    if (Mode64 && P >= 0x40 && P <= 0x4f) {
+      Rex = P;
+      ++Offset;
+      continue;
+    }
+    if (apxvalidation::isSegmentPrefix(P)) {
+      Segment = P;
+      ++Segments;
+    } else if (P == 0x67) {
+      AddressOverride = true;
+      ++Addresses;
+    } else if (P == 0x66 || P == 0xf2 || P == 0xf3) {
+      Mandatory = P;
+      ++MandatoryCount;
+    } else if (P == 0xf0)
+      Lock = true;
+    else
+      break;
+    Rex = 0;
+    ++Offset;
+  }
+  if (Offset >= Insn->size || Lock || Segments > 1 || Addresses > 1)
+    return std::nullopt;
+  const bool Compare = Insn->bytes[Offset] == 0xc4;
+  size_t ModRMOffset;
+  unsigned Width, Source, Add = 0, BaseExtension, IndexExtension;
+  ApxAtomicEncoding Result;
+  if (Compare) {
+    if (!Mode64 || MandatoryCount || Rex || Insn->size - Offset < 5)
+      return std::nullopt;
+    const auto P0 = Insn->bytes[Offset + 1], P1 = Insn->bytes[Offset + 2];
+    const auto Opcode = Insn->bytes[Offset + 3];
+    if ((P0 & 0x1f) != 2 || (P1 & 7) != 1 || Opcode < 0xe0 || Opcode > 0xef)
+      return std::nullopt;
+    ModRMOffset = Offset + 4;
+    Width = P1 & 0x80 ? 8 : 4;
+    Source = (~P0 & 0x80) >> 4;
+    Add = (~P1 & 0x78) >> 3;
+    BaseExtension = (~P0 & 0x20) >> 2;
+    IndexExtension = (~P0 & 0x40) >> 3;
+    Result.Kind = ApxAtomicKind::CmpccXadd;
+    Result.Id = Intrinsic::X86LegacyCmpccXadd;
+    Result.Condition = Opcode - 0xe0;
+    constexpr uint64_t Flags = X86_EFLAGS_MODIFY_OF | X86_EFLAGS_MODIFY_SF |
+                               X86_EFLAGS_MODIFY_ZF | X86_EFLAGS_MODIFY_AF |
+                               X86_EFLAGS_MODIFY_PF | X86_EFLAGS_MODIFY_CF;
+    if (Insn->id != X86_INS_CMPOXADD + Result.Condition || X86.op_count != 3 ||
+        X86.eflags != Flags || Insn->detail->regs_write_count != 1 ||
+        Insn->detail->regs_write[0] != X86_REG_EFLAGS ||
+        !apxAtomicRegisterOperand(X86.operands[2], Add, Width, CS_AC_READ))
+      return std::nullopt;
+  } else {
+    if (MandatoryCount > 1 || Insn->size - Offset < 4 ||
+        Insn->bytes[Offset] != 0x0f || Insn->bytes[Offset + 1] != 0x38 ||
+        Insn->bytes[Offset + 2] != 0xfc)
+      return std::nullopt;
+    ModRMOffset = Offset + 3;
+    Width = Rex & 8 ? 8 : 4;
+    Source = Rex & 4 ? 8 : 0;
+    BaseExtension = Rex & 1 ? 8 : 0;
+    IndexExtension = Rex & 2 ? 8 : 0;
+    const unsigned Expected = Mandatory == 0x66   ? X86_INS_AAND
+                              : Mandatory == 0xf2 ? X86_INS_AOR
+                              : Mandatory == 0xf3 ? X86_INS_AXOR
+                                                  : X86_INS_AADD;
+    Result.Id = Mandatory == 0x66   ? Intrinsic::X86LegacyRaoAnd
+                : Mandatory == 0xf2 ? Intrinsic::X86LegacyRaoOr
+                : Mandatory == 0xf3 ? Intrinsic::X86LegacyRaoXor
+                                    : Intrinsic::X86LegacyRaoAdd;
+    if (Insn->id != Expected || X86.op_count != 2 || X86.eflags ||
+        Insn->detail->regs_write_count)
+      return std::nullopt;
+  }
+  Result.Width = Width;
+  const auto ModRM = Insn->bytes[ModRMOffset];
+  Source |= (ModRM >> 3) & 7;
+  const unsigned AddressWidth =
+      Mode64 ? (AddressOverride ? 4 : 8) : (AddressOverride ? 2 : 4);
+  if (Insn->detail->regs_read_count || X86.rex != Rex ||
+      X86.addr_size != AddressWidth ||
+      X86.prefix[0] != (Mandatory == 0x66 ? 0 : Mandatory) ||
+      X86.prefix[1] != Segment ||
+      X86.prefix[2] != (Mandatory == 0x66 ? 0x66 : 0) ||
+      X86.prefix[3] != (AddressOverride ? 0x67 : 0) || X86.modrm != ModRM ||
+      X86.encoding.modrm_offset != ModRMOffset || X86.encoding.imm_offset ||
+      X86.encoding.imm_size ||
+      !apxAtomicRegisterOperand(X86.operands[1], Source, Width,
+                                Compare ? CS_AC_READ | CS_AC_WRITE
+                                        : CS_AC_READ))
+    return std::nullopt;
+  for (unsigned I = 0; I != 4; ++I)
+    if (X86.opcode[I] != (I < 3 ? Insn->bytes[Offset + I] : 0))
+      return std::nullopt;
+  if (!validateAtomicMemory(Insn, X86, ModRMOffset, Segment, AddressWidth,
+                            BaseExtension, IndexExtension, ModRM, Width,
+                            Mode64))
+    return std::nullopt;
+  Result.SegmentPrefix = x86NativeI386Segment(A, Segment, X86.operands[0]);
+  if (!Result.SegmentPrefix &&
+      !x86NativeSibAddressIsValid(A, X86, X86.operands[0]))
+    return std::nullopt;
+  return Result;
+}
+
+std::optional<ApxAtomicEncoding>
+decodeAtomicEncoding(const cs_insn *Insn, const cs_x86 &X86, Arch A) {
+  if (A == Arch::X64)
+    if (auto Encoding = decodeApxAtomicEncoding(Insn, X86))
+      return Encoding;
+  return decodeLegacyAtomicEncoding(Insn, X86, A);
 }
 
 } // namespace
@@ -300,18 +453,22 @@ bool X86Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
   case X86_INS_AAND:
   case X86_INS_AOR:
   case X86_INS_AXOR: {
-    if (TargetArch != Arch::X64)
+    if (TargetArch != Arch::X64 && TargetArch != Arch::X86)
       return false;
     const std::optional<ApxAtomicEncoding> Encoding =
-        decodeApxAtomicEncoding(Insn, X86);
+        decodeAtomicEncoding(Insn, X86, TargetArch);
     if (!Encoding || Encoding->Kind != ApxAtomicKind::Rao)
       return false;
     const cs_x86_op &Memory = X86.operands[0];
-    NdVar Address = S.computeEA(Memory);
+    NdVar Address = S.computeEA(Memory, true, Encoding->SegmentPrefix != 0);
     NdVar Source = operandRead(S, X86.operands[1]);
     S.emitIntrinsic(Encoding->Id, {}, {Address, Source},
                     NdMemoryOrdering::Relaxed,
                     LiftState::memoryAddressSpace(Memory));
+    if (Encoding->SegmentPrefix)
+      S.Ops.back().addInput(NdVar::scalar(Encoding->SegmentPrefix, 1));
+    else if (x86NativeAddressIsStack(TargetArch, X86, Memory))
+      S.Ops.back().addInput(NdVar::scalar(X86AtomicStackReference, 1));
     break;
   }
 
@@ -334,7 +491,7 @@ bool X86Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     if (TargetArch != Arch::X64)
       return false;
     const std::optional<ApxAtomicEncoding> Encoding =
-        decodeApxAtomicEncoding(Insn, X86);
+        decodeAtomicEncoding(Insn, X86, TargetArch);
     if (!Encoding || Encoding->Kind != ApxAtomicKind::CmpccXadd)
       return false;
     const cs_x86_op &Memory = X86.operands[0];
@@ -347,10 +504,12 @@ bool X86Lifter::liftAtomic(LiftState &S, const cs_insn *Insn,
     // output is committed only on success, so all register/flag writes below
     // remain fault-atomic even on a false condition or read-only mapping.
     S.emitIntrinsic(
-        Intrinsic::ApxCmpccXadd, Old,
+        Encoding->Id, Old,
         {Address, Add, Compare, NdVar::scalar(Encoding->Condition, 1)},
         NdMemoryOrdering::SequentiallyConsistent,
         LiftState::memoryAddressSpace(Memory));
+    if (x86NativeAddressIsStack(TargetArch, X86, Memory))
+      S.Ops.back().addInput(NdVar::scalar(X86AtomicStackReference, 1));
     NdVar Difference = S.makeTemp(Encoding->Width);
     S.emit(NdOp::INT_SUB, Difference, {Old, Compare});
     emitFlagsArith(S, Difference, Old, Compare, true);

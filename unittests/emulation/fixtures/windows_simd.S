@@ -35,6 +35,6 @@ ContinueEntry:
                          Opcode, ModRM)                                      \
   NEVERD_WINDOWS_SIMD_LEAF(Register##Name, Prefix, Escape, Opcode, ModRM)      \
   NEVERD_WINDOWS_SIMD_LEAF(Memory##Name, Prefix, Escape, Opcode, MemoryOperand)
-#include "../X64SIMDExceptionCases.def"
+#include "../x86_64/X64SIMDExceptionCases.def"
 #undef NEVERD_SIMD_CASE
 #undef NEVERD_WINDOWS_SIMD_LEAF

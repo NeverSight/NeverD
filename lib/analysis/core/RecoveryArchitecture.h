@@ -31,6 +31,13 @@ void seedRuntimeMemoryState(symbolic::SymContext &Ctx,
                             symbolic::SymState &State,
                             const SpecializationOptions &Options);
 
+/// A retained native store's ordinary-memory evaluation. Operand positions
+/// remain identical; only the opcode and constant input 0 change. The common
+/// executor must apply its full store alias/provenance checks while retaining
+/// the native operation in the residual and emitted source.
+std::optional<LowOp>
+retainedStoreEvaluation(const LowOp &Op, const SpecializationOptions &Options);
+
 /// Architecture-owned control values are separate from guest registers and
 /// instruction-local temporaries. Node projection may forget correlations but
 /// must retain the complete declared architectural domain.

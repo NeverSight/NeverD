@@ -39,6 +39,7 @@
           "neverd_disasm_json_ex",
           "neverd_disasm_text",
           "neverd_dwarf_reference_json",
+          "neverd_dyld_cache_images_json",
           "neverd_entrypoints_json",
           "neverd_enum_value_json",
           "neverd_evm_set_hardfork",
@@ -58,6 +59,8 @@
           "neverd_func_size",
           "neverd_func_type_json",
           "neverd_function_chunks_json",
+          "neverd_function_disasm_json",
+          "neverd_function_presentation_json",
           "neverd_functions_json",
           "neverd_functions_load",
           "neverd_functions_save",
@@ -91,6 +94,7 @@
           "neverd_local_types_json",
           "neverd_local_types_source",
           "neverd_map_reference_json",
+          "neverd_metadata_items_json",
           "neverd_name_check",
           "neverd_operand_format_set",
           "neverd_operand_formats_json",
@@ -175,6 +179,7 @@
           "neverd_session_debug_info_path",
           "neverd_session_destroy",
           "neverd_session_discover_functions",
+          "neverd_session_discover_functions_cancellable",
           "neverd_session_discover_functions_step",
           "neverd_session_entry_addr",
           "neverd_session_export_count",
@@ -189,6 +194,7 @@
           "neverd_session_is_64bit",
           "neverd_session_is_loaded",
           "neverd_session_load",
+          "neverd_session_load_cancellable",
           "neverd_session_load_diagnostics_json",
           "neverd_session_load_dwarf",
           "neverd_session_load_map",
@@ -228,6 +234,7 @@
           "neverd_set_opaque_predicate",
           "neverd_set_text_section",
           "neverd_set_value_launder",
+          "neverd_sha256_hex",
           "neverd_sig_compute_crc16",
           "neverd_sig_match_count",
           "neverd_sig_matches_json",
@@ -259,6 +266,7 @@
           "neverd_unwind_frame_json",
           "neverd_version",
           "neverd_version_number",
+          "neverd_visit_metadata_items",
           "neverd_warm_functions_json",
           "neverd_xrefs_from_json",
           "neverd_xrefs_scan",
@@ -411,6 +419,58 @@
           "neverd_module_set_prepare",
           "neverd_module_set_prepare_eager",
           "neverd_module_set_revise_unprepared_json"
+        ]
+      },
+      {
+        "owner": "binary-diff",
+        "reason": "Structural comparison, bounded scalar validation and offline snapshot associations are qualified separately in docs/binary-diff.md, docs/binary-diff-lineage.md and docs/testing.md; these declarations do not extend the focused semantic capability claims in this ledger or establish release ancestry or patch presence.",
+        "names": [
+          "neverd_comparison_cancel",
+          "neverd_comparison_create",
+          "neverd_comparison_dataflow_json",
+          "neverd_comparison_destroy",
+          "neverd_comparison_export_json",
+          "neverd_comparison_flow_regions_json",
+          "neverd_comparison_function_json",
+          "neverd_comparison_function_page_json",
+          "neverd_comparison_functions_json",
+          "neverd_comparison_graph_json",
+          "neverd_comparison_impact_json",
+          "neverd_comparison_last_error",
+          "neverd_comparison_observations_json",
+          "neverd_comparison_override_json",
+          "neverd_comparison_override_json_with_progress",
+          "neverd_comparison_owned_scalar_validation_json",
+          "neverd_comparison_redo",
+          "neverd_comparison_redo_with_progress",
+          "neverd_comparison_region_page_json",
+          "neverd_comparison_regions_json",
+          "neverd_comparison_restore_json",
+          "neverd_comparison_restore_json_with_progress",
+          "neverd_comparison_review_record_json",
+          "neverd_comparison_reviews_json",
+          "neverd_comparison_run",
+          "neverd_comparison_run_owned",
+          "neverd_comparison_scalar_validation_json",
+          "neverd_comparison_slice_json",
+          "neverd_comparison_source_difference_json",
+          "neverd_comparison_source_page_json",
+          "neverd_comparison_status_json",
+          "neverd_comparison_summary_json",
+          "neverd_comparison_undo",
+          "neverd_comparison_undo_with_progress",
+          "neverd_comparison_validate_inputs",
+          "neverd_lineage_cancel",
+          "neverd_lineage_create",
+          "neverd_lineage_destroy",
+          "neverd_lineage_edit_releases_json",
+          "neverd_lineage_export_json",
+          "neverd_lineage_last_error",
+          "neverd_lineage_load_json",
+          "neverd_lineage_query_json",
+          "neverd_lineage_report_json",
+          "neverd_lineage_status_json",
+          "neverd_lineage_summary_json"
         ]
       }
     ],
@@ -1475,6 +1535,7 @@
           "neverd types --fit",
           "neverd types --func",
           "neverd types --header-pragmas",
+          "neverd types --import-prototype",
           "neverd types --json",
           "neverd types --keep-going",
           "neverd types --lang",
@@ -1483,6 +1544,7 @@
           "neverd types --limit",
           "neverd types --match",
           "neverd types --member",
+          "neverd types --merge-prototypes",
           "neverd types --no-offsets",
           "neverd types --o",
           "neverd types --origin",
@@ -1548,6 +1610,101 @@
           "neverd modules --module",
           "neverd modules --symbol"
         ]
+      },
+      {
+        "owner": "binary-diff",
+        "reason": "Structural comparison, bounded scalar validation and offline snapshot associations are qualified separately in docs/binary-diff.md, docs/binary-diff-lineage.md and docs/testing.md; these declarations do not extend the focused semantic capability claims in this ledger or establish release ancestry or patch presence.",
+        "names": [
+          "neverd diff --ambiguous-with",
+          "neverd diff --argument-access-call",
+          "neverd diff --changes-context",
+          "neverd diff --changes-function",
+          "neverd diff --changes-max-observations",
+          "neverd diff --changes-max-rows",
+          "neverd diff --changes-max-work",
+          "neverd diff --changes-side",
+          "neverd diff --dataflow",
+          "neverd diff --dataflow-profile",
+          "neverd diff --effect-max-records",
+          "neverd diff --effect-max-work",
+          "neverd diff --flow-fragments",
+          "neverd diff --flow-function",
+          "neverd diff --flow-kind",
+          "neverd diff --flow-region",
+          "neverd diff --flow-region-anchor",
+          "neverd diff --flow-region-coordinates",
+          "neverd diff --flow-regions",
+          "neverd diff --flow-side",
+          "neverd diff --ignore-names",
+          "neverd diff --impact-depth",
+          "neverd diff --impact-direction",
+          "neverd diff --impact-function",
+          "neverd diff --impact-kind",
+          "neverd diff --impact-max-functions",
+          "neverd diff --impact-max-sites",
+          "neverd diff --impact-max-work",
+          "neverd diff --impact-side",
+          "neverd diff --impact-witness",
+          "neverd diff --limit",
+          "neverd diff --list",
+          "neverd diff --list-descending",
+          "neverd diff --list-search",
+          "neverd diff --list-side",
+          "neverd diff --list-sort",
+          "neverd diff --min-similarity",
+          "neverd diff --offset",
+          "neverd diff --options",
+          "neverd diff --overrides",
+          "neverd diff --profile",
+          "neverd diff --region",
+          "neverd diff --region-anchor",
+          "neverd diff --region-calls",
+          "neverd diff --region-kind",
+          "neverd diff --regions",
+          "neverd diff --reopen",
+          "neverd diff --review-case",
+          "neverd diff --review-function",
+          "neverd diff --review-latest",
+          "neverd diff --review-record",
+          "neverd diff --review-side",
+          "neverd diff --save",
+          "neverd diff --slice-data-only",
+          "neverd diff --slice-direction",
+          "neverd diff --slice-node",
+          "neverd diff --source-difference",
+          "neverd diff --source-function",
+          "neverd diff --source-include-prelude",
+          "neverd diff --source-max-bytes",
+          "neverd diff --source-max-instructions",
+          "neverd diff --source-max-work",
+          "neverd diff --source-representation",
+          "neverd diff --source-side",
+          "neverd diff --structural",
+          "neverd diff --timeout-ms",
+          "neverd diff --validate-function",
+          "neverd diff --validation-max-instructions",
+          "neverd diff --validation-max-work",
+          "neverd diff --validation-side",
+          "neverd lineage",
+          "neverd lineage --address",
+          "neverd lineage --export-report",
+          "neverd lineage --history",
+          "neverd lineage --index",
+          "neverd lineage --json",
+          "neverd lineage --limit",
+          "neverd lineage --list",
+          "neverd lineage --offset",
+          "neverd lineage --options",
+          "neverd lineage --query",
+          "neverd lineage --release",
+          "neverd lineage --release-edit",
+          "neverd lineage --reopen",
+          "neverd lineage --report",
+          "neverd lineage --save",
+          "neverd lineage --search",
+          "neverd lineage --snapshot",
+          "neverd lineage --source"
+        ]
       }
     ],
     "json": [
@@ -1567,12 +1724,15 @@
           "neverd_disasm_json",
           "neverd_disasm_json_ex",
           "neverd_dwarf_reference_json",
+          "neverd_dyld_cache_images_json",
           "neverd_entrypoints_json",
           "neverd_enum_value_json",
           "neverd_exports_json",
           "neverd_func_attributes_json",
           "neverd_func_type_json",
           "neverd_function_chunks_json",
+          "neverd_function_disasm_json",
+          "neverd_function_presentation_json",
           "neverd_functions_json",
           "neverd_headers_json",
           "neverd_identify_json",
@@ -1585,6 +1745,7 @@
           "neverd_local_types_fit_json",
           "neverd_local_types_json",
           "neverd_map_reference_json",
+          "neverd_metadata_items_json",
           "neverd_operand_formats_json",
           "neverd_pdb_reference_json",
           "neverd_plugins_list_json",
@@ -1756,6 +1917,43 @@
           "neverd_module_set_lookup_symbol_json",
           "neverd_module_set_revise_unprepared_json"
         ]
+      },
+      {
+        "owner": "binary-diff",
+        "reason": "Structural comparison, bounded scalar validation and offline snapshot associations are qualified separately in docs/binary-diff.md, docs/binary-diff-lineage.md and docs/testing.md; these declarations do not extend the focused semantic capability claims in this ledger or establish release ancestry or patch presence.",
+        "names": [
+          "neverd_comparison_dataflow_json",
+          "neverd_comparison_export_json",
+          "neverd_comparison_flow_regions_json",
+          "neverd_comparison_function_json",
+          "neverd_comparison_function_page_json",
+          "neverd_comparison_functions_json",
+          "neverd_comparison_graph_json",
+          "neverd_comparison_impact_json",
+          "neverd_comparison_observations_json",
+          "neverd_comparison_override_json",
+          "neverd_comparison_override_json_with_progress",
+          "neverd_comparison_owned_scalar_validation_json",
+          "neverd_comparison_region_page_json",
+          "neverd_comparison_regions_json",
+          "neverd_comparison_restore_json",
+          "neverd_comparison_restore_json_with_progress",
+          "neverd_comparison_review_record_json",
+          "neverd_comparison_reviews_json",
+          "neverd_comparison_scalar_validation_json",
+          "neverd_comparison_slice_json",
+          "neverd_comparison_source_difference_json",
+          "neverd_comparison_source_page_json",
+          "neverd_comparison_status_json",
+          "neverd_comparison_summary_json",
+          "neverd_lineage_edit_releases_json",
+          "neverd_lineage_export_json",
+          "neverd_lineage_load_json",
+          "neverd_lineage_query_json",
+          "neverd_lineage_report_json",
+          "neverd_lineage_status_json",
+          "neverd_lineage_summary_json"
+        ]
       }
     ],
     "python": [
@@ -1848,11 +2046,29 @@
           "Session.strings",
           "Session.symbol_count",
           "Session.symbols",
+          "Session.unwind_frame",
           "Session.version",
           "Session.xrefs_from",
           "Session.xrefs_to",
           "SimplifyResult.saved",
           "SynthesisResult.saved"
+        ]
+      },
+      {
+        "owner": "binary-diff",
+        "reason": "Structural comparison, bounded scalar validation and offline snapshot associations are qualified separately in docs/binary-diff.md, docs/binary-diff-lineage.md and docs/testing.md; these declarations do not extend the focused semantic capability claims in this ledger or establish release ancestry or patch presence.",
+        "names": [
+          "Lineage.cancel",
+          "Lineage.close",
+          "Lineage.edit_releases",
+          "Lineage.export",
+          "Lineage.load",
+          "Lineage.load_reports",
+          "Lineage.pages",
+          "Lineage.query",
+          "Lineage.report",
+          "Lineage.status",
+          "Lineage.summary"
         ]
       }
     ]
@@ -1872,8 +2088,8 @@
         "tools/neverd-worker/PROTOCOL.md"
       ],
       "limitations": [
-        "native LowIR and MedIR pages expose exact retained instruction anchors, not complete contributing-instruction provenance",
-        "synthetic operations and structural rows have no instruction address; C, HighIR, LLVM IR, and VM mappings are explicitly unsupported",
+        "native LowIR, MedIR and HighIR pages expose retained instruction anchors, not complete contributing-instruction provenance",
+        "synthetic and structural rows have no guessed address; surviving HighIR expressions retain their identity, C and LLVMC use canonical statement anchors, and VM instruction mappings remain unsupported",
         "object identifiers are scoped to the analysis revision and rendered pages are bounded to 2048 lines and 2 MiB"
       ],
       "tests": [
@@ -2112,6 +2328,154 @@
         ],
         "json": [
           "neverd_lowir_concolic_json_v1"
+        ]
+      }
+    },
+    {
+      "id": "rewrite.interactive-byte-overlay",
+      "kind": "rewrite",
+      "status": "experimental",
+      "owner": "patch/PatchOverlay and patch/PatchActions",
+      "targets": [
+        "file-backed byte ranges",
+        "x86/x64/ARM/Thumb/AArch64 instruction edits"
+      ],
+      "docs": [
+        "docs/source-patching.md",
+        "docs/gui.md",
+        "docs/testing.md"
+      ],
+      "limitations": [
+        "Explicit analyst edits do not prove semantic equivalence or authorize execution of the modified image.",
+        "Byte overlays preserve immutable input identity and refuse relocations, zero-fill and ambiguous aliases; instruction actions require supported encodings and complete boundaries.",
+        "Signed PE and Mach-O export requires explicit unsigned-export consent. A source replacement requires exporting and reopening an active byte overlay first.",
+        "Source context and preview APIs expose checked locations and isolated previews; they do not certify whole-function publication or extend LLVM semantic rewrite claims."
+      ],
+      "tests": [
+        {
+          "target": "NeverDBytePatchTests",
+          "source": "unittests/patch/BytePatchTests.cpp",
+          "filter": "BytePatch.OverlapAndPartialRevertReplayMatchesAByteOracle",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ],
+          "runner": "gtest"
+        },
+        {
+          "target": "NeverDBytePatchTests",
+          "source": "unittests/patch/BytePatchTests.cpp",
+          "filter": "BytePatch.RejectsRelocationsZeroFillAndAliasesAtomically",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ],
+          "runner": "gtest"
+        },
+        {
+          "target": "NeverDBytePatchTests",
+          "source": "unittests/patch/BytePatchTests.cpp",
+          "filter": "PatchAssembler.PCRelativeTargetsAndUnresolvedSymbols",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ],
+          "runner": "gtest"
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_byte_patch_integration.py",
+          "filter": "BytePatchIntegrationTests.test_snapshot_distinguishes_unloaded_and_empty_sessions",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_byte_patch_integration.py",
+          "filter": "BytePatchIntegrationTests.test_snapshots_own_rows_across_edits_reloads_and_session_destruction",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_byte_patch_integration.py",
+          "filter": "BytePatchIntegrationTests.test_range_snapshots_keep_file_order_with_reverse_virtual_addresses",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_assemble_json",
+          "neverd_byte_patch_apply",
+          "neverd_byte_patch_context_json",
+          "neverd_byte_patch_preview",
+          "neverd_byte_patch_range_snapshot_free_v1",
+          "neverd_byte_patch_ranges_json",
+          "neverd_byte_patch_ranges_snapshot_v1",
+          "neverd_byte_patch_revert",
+          "neverd_byte_patch_snapshot_free_v1",
+          "neverd_byte_patch_source_preview_json",
+          "neverd_byte_patch_source_target_json",
+          "neverd_byte_patches_export",
+          "neverd_byte_patches_json",
+          "neverd_byte_patches_load",
+          "neverd_byte_patches_save",
+          "neverd_byte_patches_snapshot_v1",
+          "neverd_source_patch_context_json"
+        ],
+        "python": [
+          "Session.apply_byte_patch",
+          "Session.assemble",
+          "Session.byte_patch_ranges",
+          "Session.byte_patches",
+          "Session.export_byte_patches",
+          "Session.load_byte_patches",
+          "Session.preview_byte_patch",
+          "Session.revert_byte_patch",
+          "Session.save_byte_patches"
+        ],
+        "cli": [
+          "neverd patch-bytes",
+          "neverd patch-bytes --address",
+          "neverd patch-bytes --allow-overlap",
+          "neverd patch-bytes --allow-unsigned",
+          "neverd patch-bytes --apply",
+          "neverd patch-bytes --assemble",
+          "neverd patch-bytes --att",
+          "neverd patch-bytes --bytes",
+          "neverd patch-bytes --export",
+          "neverd patch-bytes --fill-nops",
+          "neverd patch-bytes --kind",
+          "neverd patch-bytes --o",
+          "neverd patch-bytes --revert",
+          "neverd patch-bytes --size",
+          "neverd patch-bytes --symbols",
+          "neverd patch-bytes --value"
+        ],
+        "json": [
+          "neverd_assemble_json",
+          "neverd_byte_patch_context_json",
+          "neverd_byte_patch_ranges_json",
+          "neverd_byte_patch_source_preview_json",
+          "neverd_byte_patch_source_target_json",
+          "neverd_byte_patches_json",
+          "neverd_source_patch_context_json"
         ]
       }
     },
@@ -2741,7 +3105,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersDifferentFullWidthRegistersAndAddImmediate",
           "platforms": [
             "darwin",
@@ -2752,7 +3116,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersSubtractAndSignedBorrowFlags",
           "platforms": [
             "darwin",
@@ -2763,7 +3127,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.MatchesIndependentLogicalOperationAndFlagTruthVectors",
           "platforms": [
             "darwin",
@@ -2774,7 +3138,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.HandlesLogicalIdiomAndSignExtendedImmediateForms",
           "platforms": [
             "darwin",
@@ -2785,7 +3149,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.PublishesCanonicalCompareAndTestRegisterForms",
           "platforms": [
             "darwin",
@@ -2796,7 +3160,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.PublishesCanonicalCompareAndTestImmediateForms",
           "platforms": [
             "darwin",
@@ -2807,7 +3171,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsReservedAndNonCanonicalCompareTestEncodings",
           "platforms": [
             "darwin",
@@ -2818,7 +3182,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.MatchesCompareFlagsWithoutWritingEitherOperand",
           "platforms": [
             "darwin",
@@ -2829,7 +3193,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.MatchesTestFlagsWithoutWritingOperandsOrAuxiliaryFlag",
           "platforms": [
             "darwin",
@@ -2840,7 +3204,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsCompareAndTestLowIRDataflowDriftBeforeLowering",
           "platforms": [
             "darwin",
@@ -2851,7 +3215,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsNonCanonicalWidthMemoryAndPrefixScalarForms",
           "platforms": [
             "darwin",
@@ -2862,7 +3226,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsSemanticallyRedundantREXExtensionBits",
           "platforms": [
             "darwin",
@@ -2873,7 +3237,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.AcceptsNecessaryREXExtensionBits",
           "platforms": [
             "darwin",
@@ -2884,7 +3248,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsUndeclaredGuestOpcodeEvenWhenItsLowIRIsLowerable",
           "platforms": [
             "darwin",
@@ -2895,7 +3259,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersReturnImmediateStackAdjustment",
           "platforms": [
             "darwin",
@@ -2906,7 +3270,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersCanonicalZeroFlagBranchesToASelectedGuestPC",
           "platforms": [
             "darwin",
@@ -2917,7 +3281,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersCanonicalSingleFlagBranchesToASelectedGuestPC",
           "platforms": [
             "darwin",
@@ -2928,7 +3292,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersCanonicalShortJBEFromCarryOrZero",
           "platforms": [
             "darwin",
@@ -2939,7 +3303,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersCanonicalShortJAFromClearCarryAndZero",
           "platforms": [
             "darwin",
@@ -2950,7 +3314,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersEveryCanonicalUnsignedMultiFlagBranchEncoding",
           "platforms": [
             "darwin",
@@ -2961,7 +3325,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.LowersCanonicalSignedMultiFlagBranchesToASelectedGuestPC",
           "platforms": [
             "darwin",
@@ -2972,7 +3336,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsMultiFlagPredicatesThatDisagreeWithGuestBytes",
           "platforms": [
             "darwin",
@@ -2983,7 +3347,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsPrefixedAndUnpublishedControlFormsWithoutExpandingTheSlice",
           "platforms": [
             "darwin",
@@ -2994,7 +3358,7 @@
         {
           "runner": "gtest",
           "target": "NeverDTranslationContractTests",
-          "source": "unittests/translate/X86TranslationBlockLowererTests.cpp",
+          "source": "unittests/translate/x86/X86TranslationBlockLowererTests.cpp",
           "filter": "X86TranslationBlockLowerer.RejectsCountedAndLoopConditionalBranchEncodings",
           "platforms": [
             "darwin",
@@ -4983,7 +5347,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.WideLayoutIgnoresAbsentComponentsAndAlignmentPadding",
           "platforms": [
             "darwin",
@@ -5039,7 +5403,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64MachineProbeTests.cpp",
+          "source": "unittests/emulation/x86_64/X64MachineProbeTests.cpp",
           "filter": "X64MachineProbe.DiagnosticIdentifiesStepFieldAndBothValues",
           "platforms": [
             "darwin",
@@ -5050,7 +5414,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.CompactedInitialExtensionsPreserveTheCompleteFPState",
           "platforms": [
             "darwin",
@@ -5061,7 +5425,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.CompactedOffsetsFollowLayoutRatherThanPresentBits",
           "platforms": [
             "darwin",
@@ -5072,7 +5436,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.EveryNonInitialExtensionByteRejectsWithoutPublication",
           "platforms": [
             "darwin",
@@ -5083,7 +5447,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.TruncatedAndUnknownExtensionsCannotPublishState",
           "platforms": [
             "darwin",
@@ -5094,7 +5458,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.AbsentExtensionsIgnoreStaleBytes",
           "platforms": [
             "darwin",
@@ -5114,7 +5478,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.StandardInitSSEStillLoadsMXCSR",
           "platforms": [
             "darwin",
@@ -5125,7 +5489,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "X64Xsave.StandardInitSSERejectsReservedMXCSRWithoutPublication",
           "platforms": [
             "darwin",
@@ -5136,7 +5500,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64XsaveTests.cpp",
+          "source": "unittests/emulation/x86_64/X64XsaveTests.cpp",
           "filter": "*/X64XsaveHost.ActualRestoreDistinguishesStandardAndCompactedMXCSR/*",
           "platforms": [
             "darwin",
@@ -5156,7 +5520,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64IntegerTests",
-          "source": "unittests/emulation/X64IntegerTests.cpp",
+          "source": "unittests/emulation/x86_64/X64IntegerTests.cpp",
           "filter": "*/X64Integer.MultiplyPreservesWidthsAndDefinedFlags/*",
           "platforms": [
             "darwin",
@@ -5167,7 +5531,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64IntegerTests",
-          "source": "unittests/emulation/X64IntegerTests.cpp",
+          "source": "unittests/emulation/x86_64/X64IntegerTests.cpp",
           "filter": "*/X64Integer.SignExtensionKeepsFlagsAndUntouchedRegisterBits/*",
           "platforms": [
             "darwin",
@@ -5178,7 +5542,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64IntegerTests",
-          "source": "unittests/emulation/X64IntegerTests.cpp",
+          "source": "unittests/emulation/x86_64/X64IntegerTests.cpp",
           "filter": "*/X64Integer.ReadObserverStopsBeforeImplicitRegisterEffects/*",
           "platforms": [
             "darwin",
@@ -5189,7 +5553,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64IntegerTests",
-          "source": "unittests/emulation/X64IntegerTests.cpp",
+          "source": "unittests/emulation/x86_64/X64IntegerTests.cpp",
           "filter": "*/X64Integer.MissingSourcePagePreservesBothProductHalves/*",
           "platforms": [
             "darwin",
@@ -5254,7 +5618,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64StateTests",
-          "source": "unittests/emulation/AArch64StateTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64StateTests.cpp",
           "filter": "*/AArch64CompleteState.EveryScalarAndVectorFailureRetainsCompleteInput/*",
           "platforms": [
             "darwin",
@@ -5265,7 +5629,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64FPTests",
-          "source": "unittests/emulation/AArch64FPStateTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64FPStateTests.cpp",
           "filter": "*/AArch64FPTransport.OriginalInstructionsConsumeAllVectorLanesAndHostChanges/*",
           "platforms": [
             "darwin",
@@ -5276,7 +5640,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64FPTests",
-          "source": "unittests/emulation/AArch64SIMDTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64SIMDTests.cpp",
           "filter": "*/AArch64SIMD.ScalarFloatingResultsRoundingAndStatusMatchIEEEBits/*",
           "platforms": [
             "darwin",
@@ -5287,7 +5651,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64FPTests",
-          "source": "unittests/emulation/AArch64SIMDTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64SIMDTests.cpp",
           "filter": "*/AArch64SIMD.UnsupportedFPStateCannotBeInstalledOrTruncated/*",
           "platforms": [
             "darwin",
@@ -5298,7 +5662,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64FPTests",
-          "source": "unittests/emulation/AArch64SIMDTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64SIMDTests.cpp",
           "filter": "*/AArch64SIMD.ScalableVectorsCannotEnterTheFixedWidthProfile/*",
           "platforms": [
             "darwin",
@@ -5309,7 +5673,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64FPTests",
-          "source": "unittests/emulation/AArch64SIMDTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64SIMDTests.cpp",
           "filter": "*/AArch64SIMD.PairVectorAddressWrapCannotAliasLowerPages/*",
           "platforms": [
             "darwin",
@@ -5320,7 +5684,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64MemoryTests",
-          "source": "unittests/emulation/AArch64VectorMemoryTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64VectorMemoryTests.cpp",
           "filter": "*/AArch64VectorMemory.ExecutesEveryCrossingWithOrderedFullWidthObservers/*",
           "platforms": [
             "darwin",
@@ -5331,7 +5695,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64MemoryTests",
-          "source": "unittests/emulation/AArch64VectorMemoryTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64VectorMemoryTests.cpp",
           "filter": "*/AArch64VectorMemory.StopAtEveryObserverRetainsRAMVectorsAndWriteback/*",
           "platforms": [
             "darwin",
@@ -5351,7 +5715,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64FPStateTests.cpp",
+          "source": "unittests/emulation/x86_64/X64FPStateTests.cpp",
           "filter": "*/X64FPTransport.PreservesAllPhysicalLanesAndControlAcrossEveryTOP/*",
           "platforms": [
             "darwin",
@@ -5362,7 +5726,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64FPStateTests.cpp",
+          "source": "unittests/emulation/x86_64/X64FPStateTests.cpp",
           "filter": "*/X64FPContext.CapturesFullPhysicalStateAndRestoresAfterExecution/*",
           "platforms": [
             "darwin",
@@ -5373,7 +5737,7 @@
         {
           "runner": "gtest",
           "target": "NeverDRAMTransactionTests",
-          "source": "unittests/emulation/X64AtomicTests.cpp",
+          "source": "unittests/emulation/x86_64/X64AtomicTests.cpp",
           "filter": "*/X64Atomic.ObserverExceptionDiscardsTheCompletedNativeWrite/*",
           "platforms": [
             "darwin",
@@ -5384,7 +5748,7 @@
         {
           "runner": "gtest",
           "target": "NeverDRAMTransactionTests",
-          "source": "unittests/emulation/X64AtomicTests.cpp",
+          "source": "unittests/emulation/x86_64/X64AtomicTests.cpp",
           "filter": "*/X64Atomic.ExactRAMAndRegisterResultsMatchIndependentHostExecution/*",
           "platforms": [
             "darwin",
@@ -5417,7 +5781,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64ExceptionTests",
-          "source": "unittests/emulation/X64ExceptionTests.cpp",
+          "source": "unittests/emulation/x86_64/X64ExceptionTests.cpp",
           "filter": "*/X64ExceptionTransport.ReportsExactNativeFaultAndOriginalContext/*",
           "platforms": [
             "darwin",
@@ -5428,7 +5792,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64ExceptionTests",
-          "source": "unittests/emulation/X64DivisionTests.cpp",
+          "source": "unittests/emulation/x86_64/X64DivisionTests.cpp",
           "filter": "*/X64Division.RecoverableDivideRequiresConsumptionAndExplicitContinuation/*",
           "platforms": [
             "darwin",
@@ -5439,7 +5803,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64CrossPageTests.cpp",
+          "source": "unittests/emulation/x86_64/X64CrossPageTests.cpp",
           "filter": "*/X64CrossPage.ExecutesEveryCrossingWithoutAssumingContiguousBacking/*",
           "platforms": [
             "darwin",
@@ -5450,7 +5814,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64CrossPageTests.cpp",
+          "source": "unittests/emulation/x86_64/X64CrossPageTests.cpp",
           "filter": "*/X64CrossPage.RecoverableSecondPageFaultCanBeConsumedAndRetried/*",
           "platforms": [
             "darwin",
@@ -5461,7 +5825,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64CrossPageTests.cpp",
+          "source": "unittests/emulation/x86_64/X64CrossPageTests.cpp",
           "filter": "*/X64CrossPageCopy.FaultAfterOneElementPreservesRestartStateAndBacking/*",
           "platforms": [
             "darwin",
@@ -5472,7 +5836,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64CrossPageTests.cpp",
+          "source": "unittests/emulation/x86_64/X64CrossPageTests.cpp",
           "filter": "*/X64CrossPageDevice.MixedRAMAndDevicePagesRejectWithoutCallbacksOrEffects/*",
           "platforms": [
             "darwin",
@@ -5483,7 +5847,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64CrossPageTests.cpp",
+          "source": "unittests/emulation/x86_64/X64CrossPageTests.cpp",
           "filter": "X64CrossPageOracle.NativeFaultCannotCommitAnyPrefixStore",
           "platforms": [
             "linux"
@@ -5492,7 +5856,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64CrossPageTests.cpp",
+          "source": "unittests/emulation/x86_64/X64CrossPageTests.cpp",
           "filter": "X64CrossPageOracle.NativeRepeatFaultPreservesCompletedElements",
           "platforms": [
             "linux"
@@ -5649,7 +6013,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64DataTests.cpp",
+          "source": "unittests/emulation/x86_64/X64DataTests.cpp",
           "filter": "*/X64Data.EveryXmmRegisterSurvivesNativeExecutionAndContextRestore/*",
           "platforms": [
             "darwin",
@@ -5660,7 +6024,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64DataTests.cpp",
+          "source": "unittests/emulation/x86_64/X64DataTests.cpp",
           "filter": "*/X64Device.PreparedStringReadCommitsOnlyAfterWriteObserverAdmitsIt/*",
           "platforms": [
             "darwin",
@@ -5693,7 +6057,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64StateTests",
-          "source": "unittests/emulation/AArch64MachineProbeTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64MachineProbeTests.cpp",
           "filter": "AArch64MachineProbe.EveryScalarCorruptionRejectsNativeInitialization",
           "platforms": [
             "darwin",
@@ -5704,7 +6068,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64StateTests",
-          "source": "unittests/emulation/AArch64MachineProbeTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64MachineProbeTests.cpp",
           "filter": "AArch64MachineProbe.EveryVectorCorruptionRejectsNativeInitialization",
           "platforms": [
             "darwin",
@@ -5715,7 +6079,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64StateTests",
-          "source": "unittests/emulation/AArch64MachineProbeTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64MachineProbeTests.cpp",
           "filter": "AArch64MachineProbe.NopSupportDoesNotProveFloatingPointExecution",
           "platforms": [
             "darwin",
@@ -5726,7 +6090,7 @@
         {
           "runner": "gtest",
           "target": "NeverDAArch64FPTests",
-          "source": "unittests/emulation/AArch64ProbeExecutionTests.cpp",
+          "source": "unittests/emulation/aarch64/AArch64ProbeExecutionTests.cpp",
           "filter": "*/AArch64ProbeExecution.OriginalProgramChecksCompleteStateAndOneDeadline/*",
           "platforms": [
             "darwin",
@@ -5793,7 +6157,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64MachineProbeTests.cpp",
+          "source": "unittests/emulation/x86_64/X64MachineProbeTests.cpp",
           "filter": "X64MachineProbe.EveryScalarCorruptionRejectsNativeInitialization",
           "platforms": [
             "darwin",
@@ -5804,7 +6168,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64MachineProbeTests.cpp",
+          "source": "unittests/emulation/x86_64/X64MachineProbeTests.cpp",
           "filter": "X64MachineProbe.EveryPhysicalFPWordCorruptionRejectsInitialization",
           "platforms": [
             "darwin",
@@ -5815,7 +6179,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64ProbeExecutionTests.cpp",
+          "source": "unittests/emulation/x86_64/X64ProbeExecutionTests.cpp",
           "filter": "*/X64ProbeExecution.OriginalProgramChecksFullStateAndOneDeadline/*",
           "platforms": [
             "linux",
@@ -5825,7 +6189,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64ProbeExecutionTests.cpp",
+          "source": "unittests/emulation/x86_64/X64ProbeExecutionTests.cpp",
           "filter": "*/X64ProbeExecution.ExistingGuestMappingAndRAMSurviveInitialization/*",
           "platforms": [
             "linux",
@@ -5857,7 +6221,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64FPStateTests.cpp",
+          "source": "unittests/emulation/x86_64/X64FPStateTests.cpp",
           "filter": "X64FPState.StandardAndCompactedXsavePreserveEveryPhysicalTOP",
           "platforms": [
             "darwin",
@@ -5868,7 +6232,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64FPStateTests.cpp",
+          "source": "unittests/emulation/x86_64/X64FPStateTests.cpp",
           "filter": "X64FPState.MalformedXsaveHeadersCannotPublishPartialState",
           "platforms": [
             "darwin",
@@ -6004,7 +6368,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64FPTests",
-          "source": "unittests/emulation/X64FPStateTests.cpp",
+          "source": "unittests/emulation/x86_64/X64FPStateTests.cpp",
           "filter": "*/X64FPTransport.LogicalCPUSwitchingRestoresPhysicalFPAndTLS/*",
           "platforms": [
             "darwin",
@@ -6015,7 +6379,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.MemoryResultsAndEffectiveAddressesMatchHost/*",
           "platforms": [
             "darwin",
@@ -6026,7 +6390,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.RegisterResultsMatchHostAndPreserveUntouchedBits/*",
           "platforms": [
             "darwin",
@@ -6037,7 +6401,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.NarrowIndicesIgnoreUpperRegisterBits/*",
           "platforms": [
             "darwin",
@@ -6048,7 +6412,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.ReadAndResultStopsRetainOriginalRAMAndCPU/*",
           "platforms": [
             "darwin",
@@ -6059,7 +6423,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.ResultObserverExceptionDiscardsNativeEffects/*",
           "platforms": [
             "darwin",
@@ -6070,7 +6434,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.ProtectionChecksUseTheAdjustedWordRatherThanTheBitBase/*",
           "platforms": [
             "darwin",
@@ -6081,7 +6445,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.MissingNegativeOffsetWordRaisesAReadFault/*",
           "platforms": [
             "darwin",
@@ -6092,7 +6456,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.ReadOnlyWordCanPrecedeAnUnmappedBase/*",
           "platforms": [
             "darwin",
@@ -6103,7 +6467,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.CrossPageResultsAndStopsMatchHostWithIndependentBacking/*",
           "platforms": [
             "darwin",
@@ -6114,7 +6478,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.CrossPageFaultPreservesBothAllocationsAndCPU/*",
           "platforms": [
             "darwin",
@@ -6125,7 +6489,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.RejectedLockFormsHaveNoEffectsOrObservations/*",
           "platforms": [
             "darwin",
@@ -6136,7 +6500,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.DeviceOperandsRejectBeforeCallbacks/*",
           "platforms": [
             "darwin",
@@ -6147,7 +6511,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64BitStringTests.cpp",
+          "source": "unittests/emulation/x86_64/X64BitStringTests.cpp",
           "filter": "*/X64BitString.AddressSizeWrappingPrecedesFSAndGSBases/*",
           "platforms": [
             "darwin",
@@ -6158,7 +6522,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.TransfersMatchHostAcrossWidthsCountsAndDirection/*",
           "platforms": [
             "darwin",
@@ -6169,7 +6533,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.DirectionInstructionsPreserveOtherFlagsAndRegisters/*",
           "platforms": [
             "darwin",
@@ -6180,7 +6544,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.ZeroCountAddressSizeMatchesHostWithoutMemory/*",
           "platforms": [
             "darwin",
@@ -6191,7 +6555,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.AmbiguousZeroCountUpperHalvesRejectBeforeEffects/*",
           "platforms": [
             "darwin",
@@ -6202,7 +6566,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.NarrowAddressesNormalizeOnlyParticipatingRegisters/*",
           "platforms": [
             "darwin",
@@ -6213,7 +6577,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.SourceSegmentsFollowAddressTruncationAndNeverBiasDestination/*",
           "platforms": [
             "darwin",
@@ -6224,7 +6588,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.NarrowRepeatedAddressesWrapAtEachElementBoundary/*",
           "platforms": [
             "darwin",
@@ -6235,7 +6599,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.UnusedPointersAreNeverValidatedOrObserved/*",
           "platforms": [
             "darwin",
@@ -6246,7 +6610,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.CrossPageElementsAndCancellationMatchHost/*",
           "platforms": [
             "darwin",
@@ -6257,7 +6621,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.LaterPageFaultHasNoPartialElementAndCanResume/*",
           "platforms": [
             "darwin",
@@ -6268,7 +6632,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.RepeatedStopsRetainEarlierElementsAndResumeExactlyOnce/*",
           "platforms": [
             "darwin",
@@ -6279,7 +6643,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.RepeatedFaultRetainsCompletedElements/*",
           "platforms": [
             "darwin",
@@ -6290,7 +6654,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.ObserverExceptionsLeaveTheCurrentElementUntouched/*",
           "platforms": [
             "darwin",
@@ -6301,7 +6665,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.UnsupportedRepeatAndLockPrefixesFailBeforeEffects/*",
           "platforms": [
             "darwin",
@@ -6312,7 +6676,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringTransferTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringTransferTests.cpp",
           "filter": "*/X64StringTransfer.UnmodeledDeviceLoadsAndStoresRejectBeforeCallbacks/*",
           "platforms": [
             "darwin",
@@ -6323,7 +6687,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.AllArithmeticFlagsMatchIndependentHostInstructions/*",
           "platforms": [
             "darwin",
@@ -6334,7 +6698,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.ConditionalRepeatsMatchHostAndStopAtFirstResult/*",
           "platforms": [
             "darwin",
@@ -6345,7 +6709,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.ZeroCountDoesNotReadPointersOrChangeFlags/*",
           "platforms": [
             "darwin",
@@ -6356,7 +6720,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.NarrowSourceWrapsBeforeSegmentBaseAndScanIgnoresSI/*",
           "platforms": [
             "darwin",
@@ -6367,7 +6731,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.EarlyTerminationNeverTouchesTheNextUnmappedPage/*",
           "platforms": [
             "darwin",
@@ -6378,7 +6742,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.CompleteOperandsAreValidatedBeforeAnyReadObserver/*",
           "platforms": [
             "darwin",
@@ -6389,7 +6753,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.LaterFaultRestoresEntryFlagsAndKeepsCompletedElements/*",
           "platforms": [
             "darwin",
@@ -6400,7 +6764,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.StopsRetainLastComparisonAndResumeFromSavedContext/*",
           "platforms": [
             "darwin",
@@ -6411,7 +6775,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.ObserverFailureDoesNotPublishCurrentComparison/*",
           "platforms": [
             "darwin",
@@ -6422,7 +6786,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.LockedStringsRejectAndScalarSSEPreservesStringOperands/*",
           "platforms": [
             "darwin",
@@ -6433,7 +6797,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.CrossPageReadOnlyOperandsMatchHostThroughAliases/*",
           "platforms": [
             "darwin",
@@ -6444,7 +6808,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.AddressSizeWrappingRetainsConditionalRepeatProgress/*",
           "platforms": [
             "darwin",
@@ -6455,7 +6819,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.AResumedFaultUsesTheNewEntryFlags/*",
           "platforms": [
             "darwin",
@@ -6466,7 +6830,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.AmbiguousInactiveUpperHalvesRejectBeforeEffects/*",
           "platforms": [
             "darwin",
@@ -6477,7 +6841,7 @@
         {
           "runner": "gtest",
           "target": "NeverDX64MemoryUpdateTests",
-          "source": "unittests/emulation/X64StringComparisonTests.cpp",
+          "source": "unittests/emulation/x86_64/X64StringComparisonTests.cpp",
           "filter": "*/X64StringComparison.DeviceOperandsRejectBeforeCallbacksOrObservations/*",
           "platforms": [
             "darwin",
@@ -13068,7 +13432,8 @@
       ],
       "docs": [
         "docs/interpreter-recovery.md",
-        "docs/testing.md"
+        "docs/testing.md",
+        "docs/x64-continuation-source.md"
       ],
       "limitations": [
         "Fixed mapped bytes and permissions; immutable reads require mapping evidence.",
@@ -13080,7 +13445,9 @@
         "PE recovery requires a full image-wide relocation and exception metadata load. Structurally incomplete directories refuse recovery; reached exception handlers require the explicit normal-execution profile. Source recovery does not certify binary replacement.",
         "External-store frame separation is an explicit unchecked caller precondition for machine-state recovery with entry-frame bounds; native proof APIs reject this domain.",
         "Register-case partitioning uses one existing context field per non-entry native cursor and mode, with complete fresh edge proofs and shared budgets. Unknown domains remain conservative; no guest read or caller assumption is added.",
-        "After ordinary producer, guard, register and frame refinements stall on unresolved control, a bounded lazy walk of observed predecessors can nominate one existing demanded register/frame carrier as a context field. Fresh graphs must prove every complete constant or exact frame displacement; partial carriers, later unknown predecessors and missing immutable-read evidence remain unresolved. Successful attempts add no scan; discovery, refinement, node and context budgets remain shared."
+        "After ordinary producer, guard, register and frame refinements stall on unresolved control, a bounded lazy walk of observed predecessors can nominate one existing demanded register/frame carrier as a context field. Fresh graphs must prove every complete constant or exact frame displacement; partial carriers, later unknown predecessors and missing immutable-read evidence remain unresolved. Successful attempts add no scan; discovery, refinement, node and context budgets remain shared.",
+        "The explicit x64 continuation export selects linked x64 ELF/PE instruction regions and emits architectural state C plus a required manifest. It does not establish ordinary source ABI validation, whole-function recovery or environment-owned native behavior. Callers supply the documented state and memory environment; unsupported instructions and exhausted selection budgets refuse publication.",
+        "The v10 devirtualization C interfaces and --vm-source-abi accept an explicit checked machine wrapper declaration. They do not infer missing runtime state or convert the recovery report into a source/native equivalence certificate."
       ],
       "tests": [
         {
@@ -13480,7 +13847,7 @@
         {
           "runner": "gtest",
           "target": "NeverDLiftTests",
-          "source": "unittests/lift/core/X64MemoryCallTargetTests.cpp",
+          "source": "unittests/lift/x86_64/X64MemoryCallTargetTests.cpp",
           "filter": "X64MemoryCallTarget.ExplicitModeLoadsRipSlotWithoutChangingDefaultLift",
           "platforms": [
             "darwin",
@@ -14251,6 +14618,28 @@
             "linux",
             "windows"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.StrictRequestsAndBoundariesNeverPublishPartialSource",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX64ContinuationExportTests",
+          "source": "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp",
+          "filter": "X64ContinuationExportTest.CLIExportsTheSameSourceAndRequiresItsManifest",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
         }
       ],
       "public_surfaces": {
@@ -14270,7 +14659,12 @@
           "neverd_devirtualize_source_v7",
           "neverd_devirtualize_machine_source_v7",
           "neverd_devirtualize_source_v8",
-          "neverd_devirtualize_machine_source_v8"
+          "neverd_devirtualize_machine_source_v8",
+          "neverd_devirtualize_source_v9",
+          "neverd_devirtualize_machine_source_v9",
+          "neverd_devirtualize_source_v10",
+          "neverd_devirtualize_machine_source_v10",
+          "neverd_x64_continuation_source_v1"
         ],
         "python": [],
         "cli": [
@@ -14293,8 +14687,13 @@
           "neverd decompile --vm-entry-frame",
           "neverd decompile --vm-entry-alignment",
           "neverd decompile --vm-external-stores-disjoint-frame",
+          "neverd decompile --vm-prove-store-return-separation",
+          "neverd decompile --vm-prove-store-frame-separation",
           "neverd decompile --vm-max-symbolic-nodes",
-          "neverd decompile --vm-no-control-discovery"
+          "neverd decompile --vm-no-control-discovery",
+          "neverd decompile --vm-source-abi",
+          "neverd decompile --x64-continuation",
+          "neverd decompile --continuation-report"
         ],
         "json": []
       }
@@ -22787,6 +23186,139 @@
         ],
         "json": [
           "neverd_unpack_json"
+        ]
+      }
+    },
+    {
+      "id": "x87.scoped-semantic-inventory",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "ir",
+      "targets": [
+        "i386",
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/x87-semantics.md",
+        "docs/x87-capabilities.md",
+        "docs/testing.md"
+      ],
+      "limitations": [
+        "The shared static matrix separates encoding/lifting, numerical results, architectural state, native references and formal/translation support. It does not execute input code or probe the host. Test-source references are not passing evidence.",
+        "Owned context is x64-only. Typed paths retain their existing refusals and incomplete architectural-state projection. The complete portable context, arbitrary exception/fault delivery, checked x87 refinement and cross-architecture translation remain unqualified.",
+        "The explicit intel64-architectural-masked-v1 concrete slice uses raw owned state and integer/rational binary80 arithmetic, direct PC/RC rounding and extended exponents on ARM64. Its inventory-listed control, raw transport, integer conversion, finite comparison and register arithmetic forms refuse unimplemented instructions, stack faults, unmasked arithmetic controls and nonfinite/noncanonical numerical operands. Complete architectural state remains unqualified. LLVM, Unicorn, native x86 and Rosetta observations have separately recorded limitations."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDX87CapabilityTests",
+          "source": "unittests/lift/x86/X87CapabilitiesTests.cpp",
+          "filter": "X87Capabilities.InventoryCoversEveryAdmittedEncodingExactlyOnce",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87CapabilitiesPublicTests",
+          "source": "unittests/lift/x86/X87CapabilitiesPublicTests.cpp",
+          "filter": "X87CapabilitiesPublic.CLIAndCUseIdenticalInventory",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87ArithmeticTests",
+          "source": "unittests/lift/x86/X87ArithmeticTests.cpp",
+          "filter": "X87Arithmetic.DirectRoundingDistinguishesBothSidesOfBinary80Midpoints",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87PortableContextTests",
+          "source": "unittests/lift/x86/X87PortableContextTests.cpp",
+          "filter": "X87PortableContext.RefusalsLeaveAllStateOutputAndMemoryUntouched",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX87PortableEmulatorTests",
+          "source": "unittests/lift/x86/X87PortableEmulatorTests.cpp",
+          "filter": "X87PortableEmulator.LiftedInstructionsRetainBeyondBinary64Precision",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_x87_capabilities_json"
+        ],
+        "python": [
+          "Session.x87_capabilities"
+        ],
+        "cli": [
+          "neverd x87-capabilities"
+        ],
+        "json": [
+          "neverd_x87_capabilities_json"
+        ]
+      }
+    },
+    {
+      "id": "analysis.materialized-image-sections",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "sdk",
+      "targets": [
+        "x86",
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/analysis-sections.md",
+        "tools/neverd-worker/PROTOCOL.md"
+      ],
+      "limitations": [
+        "Adds caller-encoded bytes and function declarations to the analysis image only; no original-entry replacement, relocation, runnable-file export or behavioral-equivalence claim is supplied.",
+        "Addresses must be unused and bytes materialized; unsupported architectures and malformed additions fail explicitly. Persistence is bound to the original input SHA-256.",
+        "Windows Release CTest coverage uses the real C ABI, worker, CLI and Qt workbench as documented. These integration runners are not gtest or Python-unittest ledger evidence; no supported status or POSIX runtime qualification is claimed."
+      ],
+      "tests": [],
+      "public_surfaces": {
+        "c": [
+          "neverd_analysis_section_add",
+          "neverd_analysis_section_remove",
+          "neverd_analysis_sections_import_json",
+          "neverd_analysis_sections_json"
+        ],
+        "python": [],
+        "cli": [
+          "neverd analysis-sections",
+          "neverd analysis-sections --add",
+          "neverd analysis-sections --data",
+          "neverd analysis-sections --json",
+          "neverd analysis-sections --remove"
+        ],
+        "json": [
+          "neverd_analysis_sections_import_json",
+          "neverd_analysis_sections_json"
         ]
       }
     }

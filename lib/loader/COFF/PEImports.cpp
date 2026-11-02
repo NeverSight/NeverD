@@ -153,7 +153,7 @@ public:
         if (Value & ~(OrdinalFlag | uint64_t{0xffff}))
           return invalid("ordinal import contains reserved bits");
         Imp.Ordinal = Value & 0xffff;
-        Imp.Name = (kOrdinalPrefix + llvm::Twine(Imp.Ordinal)).str();
+        Imp.Name = ordinalImportName(Image.Arch, *Module, Imp.Ordinal);
       } else {
         if (!detail::validImportNameBits(Value))
           return invalid("import name thunk contains reserved bits");

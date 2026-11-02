@@ -19,6 +19,7 @@ NEVERD_LOAD_ROW(MachO, "macho", "Mach-O file ({0}). {1}")
 NEVERD_LOAD_ROW(FatMachO, "macho", "Fat Mach-O file, {0}. {1}")
 NEVERD_LOAD_ROW(EVM, "evm", "EVM bytecode")
 NEVERD_LOAD_ROW(Binary, "binary", "Binary file")
+NEVERD_LOAD_ROW(DyldCache, "dyld-cache", "Apple arm64e dyld shared cache")
 #undef NEVERD_LOAD_ROW
 #endif
 

@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 63d86e1a94d8b33e055360514902466c202d434ebb87823cd91181b98a556871 -->
+<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
 
 [← Documentation Index](README.md)
 
@@ -185,7 +185,7 @@ Gli artefatti qualificano esattamente i commit sorgente e harness elencati sotto
 
 La qualificazione Windows ARM64 usa una DLL C Unicorn ARM64 nativa, compilata realmente dal sottomodulo fissato con LLVM-MinGW verificato, una libreria di importazione MSVC e una sostituzione esplicita del target CMake. La copia di build isolata autentica tre correzioni dell'host: coppia di salti senza SEH, callback ARM64 di commit delle pagine con sincronizzazione della cache istruzioni e maschere immediate a 64 bit per Windows LLP64. Sorgenti e revisione del sottomodulo restano invariati. Questo qualifica l'host della matrice CPU, senza dimostrare il supporto JIT MSVC ARM64 predefinito. I cinque controlli di ripristino dell'host restano separati dalle prove dei processi patchati nativi e delle eccezioni C++.
 
-Scegliere un compilatore compatibile con `NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE` (Clang 22.1.6 verificato). La compilazione integrata corregge solo una copia LLVM nel percorso di build, senza modificare sottomodulo o cache condivisa. Il difetto PLT x64 dei pacchetti r3/r4 può rifiutare una patch IR; gli oggetti nativi evitano questo percorso MC. `NEVERD_TEST_REQUIRE_FIXED_LLVM=1` richiede la produzione PLT esatta e corretta.
+Scegliere un compilatore compatibile con `NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE` (Clang 22.1.6 verificato). La compilazione integrata compila direttamente la revisione registrata del fork LLVM NeverSight. Le correzioni di rilocazione restano nel fork; NeverD non applica patch ai sorgenti LLVM. Il difetto PLT x64 dei pacchetti r3/r4 può rifiutare una patch IR; gli oggetti nativi evitano questo percorso MC. `NEVERD_TEST_REQUIRE_FIXED_LLVM=1` richiede la produzione PLT esatta e corretta.
 
 `NeverDSourcePatchTests` contiene casi nativi C/API/oggetti/eccezioni; `NeverDSourcePatchMatrixTests` verifica tutte le combinazioni con Unicorn. `SourcePatchPE` esegue sette scenari C++ con `NEVERD_TEST_WINDOWS_CRT_LIB`, `NEVERD_TEST_WINDOWS_UCRT_LIB` e `NEVERD_TEST_WINDOWS_SDK_LIB`. Su host non Windows richiede anche `NEVERD_TEST_WINDOWS_RUNNER`. `NEVERD_TEST_REQUIRE_WINDOWS_RUNTIME=1` considera un errore gli input mancanti. Il workflow Windows dedicato richiede esecuzione nativa e rifiuta casi saltati.
 
@@ -203,7 +203,7 @@ ctest --test-dir build-source -L \
   --output-on-failure --parallel 4
 ```
 
-La copia LLVM corregge anche i riferimenti dati GOT Mach-O x64: la tabella catch tipizzata di Clang è relativa alla fine della parola di rilocazione di quattro byte. r3/r4 la sposta di quattro byte; la verifica prima della pubblicazione rifiuta il risultato. Sul Mac, x64 usa Rosetta 2 e ARM64 viene eseguito direttamente.
+Il fork LLVM corregge anche i riferimenti dati GOT Mach-O x64: la tabella catch tipizzata di Clang è relativa alla fine della parola di rilocazione di quattro byte. r3/r4 la sposta di quattro byte; la verifica prima della pubblicazione rifiuta il risultato. Sul Mac, x64 usa Rosetta 2 e ARM64 viene eseguito direttamente.
 
 La verifica nativa Windows x64 [2ed7e78fc](https://github.com/NeverSight/NeverD/actions/runs/38307461805) ha superato tutti i 16 test mirati PE/oggetti/trampoline e i 143 test della matrice dei target CPU, senza casi saltati. Il test FH3 ha eseguito sette scenari C++; la matrice usa Unicorn. Questa esecuzione ha usato Clang 22.1.6 con MSVC e Windows SDK nativi e LLVM integrato.
 
@@ -259,3 +259,10 @@ Le [verifiche di compatibilità Apple](https://github.com/gmh5225/test_mac_intel
 Le correzioni Mach-O autenticano le funzioni Thumb selezionate indipendentemente dal riepilogo ARM/Thumb misto dell'immagine, normalizzano i puntatori di esportazione Thumb comprovati e gli indirizzi di codice di unwinding ARM32 senza modificare puntatori ai dati o lunghezze degli intervalli. La build con sorgenti LLVM integrati ha superato localmente tutti i 283 controlli della matrice CPU e i 258 controlli dei contratti di eccezione, senza errori né casi saltati. Le prove Mach-O legacy usano un linker open source documentato e riservano spazio per l'unwinding; i386 dispone di un ingresso di avvio correttamente allineato e di un segmento page zero di 64 KiB.
 
 Questi risultati attestano l'esecuzione C negli emulatori e livelli di compatibilità indicati. Wine non è Microsoft Windows, Darling non è macOS e l'esecuzione ARMv7k nella HLE iOS non qualifica watchOS, WatchKit o dispositivi Apple. Non viene dedotta alcuna copertura di vecchi SDK Apple o hardware nativo a 32 bit; queste prove non qualificano neppure l'unwinding delle eccezioni C++. Le precedenti evidenze native e di compatibilità restano separate. NeverC non è stato compilato né modificato.
+
+<!-- i18n-section: interactive-byte-patches -->
+## Responsabilità delle patch interattive
+
+`lib/patch` gestisce la verifica dei byte, la codifica LLVM MC, la copia immutabile dell’ingresso, le modifiche normalizzate e l’esportazione esclusiva. L’SDK verifica i bersagli tramite il C esatto, le occorrenze LowIR canoniche e gli operandi decodificati; un’ancora di navigazione non basta. Il worker integra il file facoltativo `patches.json` in annulla e ripeti, invalidando poi l’analisi. Le firme leggono i byte originali; le funzioni modificate perdono gli effetti di libreria dedotti dall’identità. GUI, CLI e Python usano le stesse API. La sostituzione completa usa ancora `neverd_patch_source`, dopo l’esportazione e la riapertura delle modifiche ai byte.
+
+[GUI](../gui.md) · `neverd patch-bytes` · `Session.byte_patches` · `Session.apply_byte_patch` · `Session.export_byte_patches`

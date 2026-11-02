@@ -53,10 +53,10 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationCxxThrow.cpp
   COFF/COFFRegistrationIRProof.cpp
   CodeGen.cpp
-  CodeGenAArch64.cpp
-  CodeGenARM.cpp
+  AArch64/CodeGenAArch64.cpp
+  ARM/CodeGenARM.cpp
   CodeGenSymbolize.cpp
-  CodeGenX86.cpp
+  X86/CodeGenX86.cpp
   CompiledImage.cpp
   X86/CompiledSEHStateWrites.cpp
   DwarfEHFrame.cpp

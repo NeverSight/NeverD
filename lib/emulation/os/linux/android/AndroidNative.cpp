@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "../../../runtime/RuntimeValues.h"
+#include "AndroidDlfcn.h"
 #include "AndroidInternal.h"
 #include "AndroidLog.h"
 #include "AndroidObservation.h"
@@ -27,10 +28,14 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     return std::move(E);
   if (auto E = validateCalendar(Native))
     return std::move(E);
+  if (auto E = validateDladdrObservations(Native.DladdrObservations))
+    return std::move(E);
   if (Native.ResolverQueries)
     if (auto E = validateResolverQueries(*Native.ResolverQueries))
       return std::move(E);
   if (auto E = validateLogRecords(Native.LogRecords))
+    return std::move(E);
+  if (auto E = validateEventLogWrites(Native.EventLogWrites))
     return std::move(E);
   if (!Native.ThreadLimit ||
       Native.ThreadLimit > thread_model::MaximumIdentities ||
@@ -56,6 +61,21 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     return Budget.takeError();
   std::shared_ptr<ExecutionBudget> Resources(std::move(*Budget));
   uint64_t ReportSize = Native.TraceLimit * 8;
+  const uint64_t CPUStateBytes =
+      sizeof(uint64_t) +
+      architectureRegisters(GuestArchitecture::AArch64).size() *
+          sizeof(RegisterValue);
+  if (Native.ObserveCPUState) {
+    if (CPUStateBytes > Options.OutputLimit - ReportSize)
+      return failure(diagnostic::SnapshotLimits);
+    ReportSize += CPUStateBytes;
+  }
+  if (Native.ObserveThreadCPUStates) {
+    const uint64_t Bytes = Native.ThreadLimit * (CPUStateBytes + sizeof(bool));
+    if (Bytes > Options.OutputLimit - ReportSize)
+      return failure(diagnostic::SnapshotLimits);
+    ReportSize += Bytes;
+  }
   if (Native.ThreadLimit > 1) {
     const uint64_t ThreadBytes = Native.ThreadLimit * thread_model::ReportBytes;
     if (ThreadBytes > Options.OutputLimit - ReportSize)
@@ -63,6 +83,13 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     ReportSize += ThreadBytes;
   }
   for (const auto &Read : Native.ReadMemory) {
+    if (Native.ObserveMemoryOnFailure || Native.ObserveMemoryAtStop) {
+      constexpr uint64_t DiagnosticBytes =
+          ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes;
+      if (DiagnosticBytes > Options.OutputLimit - ReportSize)
+        return failure(diagnostic::SnapshotLimits);
+      ReportSize += DiagnosticBytes;
+    }
     if (!Read.Size || Read.Size > Options.OutputLimit - ReportSize ||
         Read.Address > UINT64_MAX - Read.Size)
       return failure(diagnostic::SnapshotLimits);
@@ -79,6 +106,9 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   if (Native.LogRecords)
     for (const auto &Record : *Native.LogRecords)
       CatalogBytes += 28 + Record.Payload.size();
+  if (Native.EventLogWrites)
+    for (const auto &Write : *Native.EventLogWrites)
+      CatalogBytes += Write.Payload.size() + sizeof(Write.Result);
   if (Native.Libraries.size() >
       ::neverd::limits::emulation::kAndroidNativeRunNativeLibrariesSizeLimit)
     return failure(diagnostic::LibraryCount);
@@ -181,6 +211,8 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
                        Backend->Reason};
   Result.Entry = Result.PC = Linked->Entry;
   Result.InitializersEnabled = Native.Initialize;
+  if (Native.EventLogWrites)
+    Result.EventLogWritesConsumed = 0;
   uint64_t TraceThreadID = linux_model::ThreadID;
   auto Observe = [&](uint64_t PC, uint32_t) {
     if (!Native.TraceLimit || Result.TraceTruncated)
@@ -215,8 +247,7 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   }
   linux_model::LinuxServices Kernel(CPU, Layout, Linked->InitialBreak, Options,
                                     Result);
-  GuestThreads Threads(CPU, *Calls, Options, Result, Kernel.clock(),
-                       Kernel.priority(), Kernel.signals());
+  GuestThreads Threads(CPU, *Calls, Options, Result, Kernel);
   if (auto E = Threads.initialize(StackBase))
     return std::move(E);
   if (auto E = Kernel.initializeProc())
@@ -227,6 +258,7 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   if (auto E = LibC.initializeDex())
     return std::move(E);
   size_t NextConstructor = 0;
+  uint64_t EntryReturnSP = 0;
   bool MainCall = false;
   auto Prepare = [&]() -> llvm::Error {
     std::vector<uint64_t> Arguments;
@@ -243,7 +275,7 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
                                     Arguments);
     if (!Frame)
       return Frame.takeError();
-    Threads.setReturnSP(Frame->ReturnStackPointer);
+    EntryReturnSP = Frame->ReturnStackPointer;
     return CPU.writeRegister(CPURegister::AArch64PC, {Result.PC, 0});
   };
   if (auto E = Prepare())
@@ -461,18 +493,20 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
         RuntimeFailure(Value.takeError());
         break;
       }
-      if (Threads.enabled()) {
+      const bool Entry = Threads.isEntry();
+      // A child start routine's return is implicit pthread_exit(value). Its
+      // stack is not a caller frame to resume; FinishThread owns completion.
+      if (Threads.enabled() && Entry) {
         auto SP = CPU.readRegister(Calls->info().StackPointer);
         if (!SP) {
           RuntimeFailure(SP.takeError());
           break;
         }
-        if ((*SP)[0] != Threads.returnSP()) {
+        if ((*SP)[0] != EntryReturnSP) {
           RuntimeFailure(failure(diagnostic::ThreadStack));
           break;
         }
       }
-      const bool Entry = Threads.isEntry();
       if (Entry)
         Result.ReturnValue = (*Value)[0];
       if (!Threads.enabled() || (Entry && !Native.DrainThreads)) {
@@ -623,10 +657,31 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   Result.Events = Resources->events();
   Threads.report();
   LibC.reportJNIState();
-  // A terminal CPU fault can prohibit model memory access. Preserve that
-  // original failure; memory snapshots are produced only at resumable stops.
-  if (Result.Stop != ProcessStopReason::CPUFailure &&
-      Result.Stop != ProcessStopReason::RuntimeFailure) {
+  // Guest/model reads can be prohibited after a terminal fault. Explicit
+  // forensic snapshots use the existing stopped-RAM owner, without executing
+  // device callbacks, changing permissions or replacing the original stop.
+  const bool Failed = Result.Stop == ProcessStopReason::CPUFailure ||
+                      Result.Stop == ProcessStopReason::RuntimeFailure;
+  if (Native.ObserveMemoryAtStop || (Failed && Native.ObserveMemoryOnFailure)) {
+    constexpr size_t DiagnosticBytes =
+        ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes;
+    const llvm::StringRef Suffix(diagnostic::SnapshotDiagnosticTruncated);
+    static_assert(DiagnosticBytes >
+                  sizeof(diagnostic::SnapshotDiagnosticTruncated));
+    for (const auto &Read : Native.ReadMemory) {
+      NativeMemorySnapshot Snapshot{Read.Address,
+                                    std::vector<uint8_t>(Read.Size)};
+      if (auto E = CPU.snapshotBacking(Read.Address, Snapshot.Bytes)) {
+        Snapshot.Bytes.clear();
+        Snapshot.Diagnostic = llvm::toString(std::move(E));
+        if (Snapshot.Diagnostic.size() > DiagnosticBytes) {
+          Snapshot.Diagnostic.resize(DiagnosticBytes - Suffix.size());
+          Snapshot.Diagnostic += Suffix.str();
+        }
+      }
+      Result.MemorySnapshots.push_back(std::move(Snapshot));
+    }
+  } else if (!Failed) {
     for (const auto &Read : Native.ReadMemory) {
       auto Access = CPU.canAccess(Read.Address, Read.Size,
                                   emulation::Read | UserAccessible);
@@ -647,6 +702,17 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       Result.MemorySnapshots.push_back(std::move(Snapshot));
     }
   }
+  if (Native.ObserveCPUState) {
+    auto &State = Result.CPUState.emplace();
+    State.ThreadID = Threads.id();
+    auto Registers = CPU.readRegisters();
+    if (Registers)
+      State.Registers = std::move(*Registers);
+    else
+      State.Diagnostic = llvm::toString(Registers.takeError());
+  }
+  if (Native.ObserveThreadCPUStates)
+    Result.ThreadCPUStates = Threads.observeCPUStates();
   return Result;
 }
 } // namespace neverd::emulation::android_model

@@ -144,13 +144,15 @@ llvm::Error validateExternalExits(const SpecializationResult &Result,
           Boundary.FirstOp + Boundary.OpCount == Block.Ops.size() &&
           Block.Succs.empty() && !Boundary.Immediate &&
           lowUndefinedOperationDigest(Span) == Exit.ResidualOperationDigest &&
-          (TrapExit ? (Span.back().Opcode == NdOp::INTRINSIC &&
-                       Boundary.Control == LowInstructionControl::Terminator)
-                    : (Span.back().Opcode == NdOp::INDIR_BR &&
-                       Boundary.Control == LowInstructionControl::Branch &&
-                       Boundary.ControlFlags ==
-                           (LowInstructionControlFlag::Branch |
-                            LowInstructionControlFlag::Indirect)));
+          (TrapExit
+               ? (Span.back().Opcode == NdOp::INTRINSIC &&
+                  Boundary.Control == LowInstructionControl::Terminator &&
+                  Boundary.ControlFlags == Exit.Original.Origin.ControlFlags)
+               : (Span.back().Opcode == NdOp::INDIR_BR &&
+                  Boundary.Control == LowInstructionControl::Branch &&
+                  Boundary.ControlFlags ==
+                      (LowInstructionControlFlag::Branch |
+                       LowInstructionControlFlag::Indirect)));
       if (!ShapeOk)
         return Invalid("external exit differs from its terminal residual span");
       if (!Exit.MachineExit)

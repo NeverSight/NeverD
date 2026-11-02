@@ -8,7 +8,7 @@
 #include "COFFRegistrationSEHJump.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 namespace neverd::coff_registration {
 namespace {

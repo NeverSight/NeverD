@@ -15,7 +15,7 @@
 #ifndef NEVERD_LOADER_LANGUAGEEHDWARF_H
 #define NEVERD_LOADER_LANGUAGEEHDWARF_H
 
-#include "neverd/Common.h"
+#include "neverd/loader/ExceptionCommon.h"
 
 #include <cstdint>
 #include <string>
@@ -52,6 +52,8 @@ enum class CFIOpKind : uint8_t {
   /// AArch64 return-address signing with the PC as a diversifier.
   NegateRAStateWithPC,
   Opaque,
+  /// Absolute AArch64 signing state; RAState and Offset own its operands.
+  SetRAState,
 };
 
 const char *getCFIOpKindName(CFIOpKind Kind);
@@ -68,7 +70,12 @@ struct CFIInstruction {
   uint64_t Register2 = 0;
   int64_t Offset = 0;
   std::vector<uint8_t> Expression;
+  /// Exact undecoded bytes for Opaque, or both original LEB operands for a
+  /// reserved SetRAState value whose signing semantics are unsupported.
   std::vector<uint8_t> OperandBytes;
+  /// SetRAState operand. Offset is its signed, code-alignment-scaled byte
+  /// displacement only for state 2; states 0/1 ignore their encoded offset.
+  uint64_t RAState = 0;
 };
 
 /// A decoded Common Information Entry.  The pointer encodings are retained
@@ -99,10 +106,18 @@ struct DwarfCIE {
   /// 'S': frames described by this CIE are signal frames, so the return
   /// address is the precise interrupted PC rather than a post-call address.
   bool IsSignalFrame = false;
-  /// 'B'/'G': AArch64 pointer authentication and MTE tagged frames.
+  /// Compatibility spelling: 'B' selects the B signing key. Its absence
+  /// selects A outside the arm64e ABI; neither presence nor absence proves
+  /// that an RA is signed.
   bool HasPointerAuth = false;
+  /// The image's arm64e ABI selects IB even without an explicit 'B'. Keep
+  /// this separate from the encoded augmentation so rewriters preserve bytes.
+  bool UsesArm64eReturnAddressABI = false;
+  /// 'N': non-HINT PAuth_LR recipe, meaningful only for SP+PC signing.
+  bool UsesNonHintPAuthLR = false;
   bool HasMTETaggedFrame = false;
   std::vector<CFIInstruction> InitialInstructions;
+  ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
 };
 
 /// A decoded Frame Description Entry paired with its resolved CIE.
@@ -118,6 +133,7 @@ struct DwarfFDE {
   /// Zero when the CIE declared no LSDA encoding or the FDE omitted it.
   va_t LSDAVA = 0;
   std::vector<CFIInstruction> Instructions;
+  ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
 };
 
 } // namespace neverd

@@ -36,9 +36,9 @@ std::error_code clearTemporaryDeleteDispositionOnWindows(HANDLE Handle) {
   return llvm::mapWindowsError(::GetLastError());
 }
 
-std::error_code
-replaceTemporaryOutputHandleOnWindows(HANDLE TemporaryHandle,
-                                      llvm::StringRef OutputPath) {
+std::error_code renameTemporaryOutputHandleOnWindows(HANDLE TemporaryHandle,
+                                                     llvm::StringRef OutputPath,
+                                                     bool ReplaceExisting) {
   llvm::SmallVector<wchar_t, 128> WideOutput;
   if (std::error_code Error =
           llvm::sys::windows::widenPath(OutputPath, WideOutput))
@@ -56,7 +56,7 @@ replaceTemporaryOutputHandleOnWindows(HANDLE TemporaryHandle,
 
   std::vector<char> RenameBuffer(RenameHeaderBytes + FileNameBytes);
   auto &Rename = *reinterpret_cast<FILE_RENAME_INFO *>(RenameBuffer.data());
-  Rename.ReplaceIfExists = TRUE;
+  Rename.ReplaceIfExists = ReplaceExisting;
   Rename.RootDirectory = nullptr;
   Rename.FileNameLength = static_cast<DWORD>(FileNameBytes);
   std::copy(WideOutput.begin(), WideOutput.end(), Rename.FileName);
@@ -137,8 +137,9 @@ llvm::Error commitTemporaryOutput(llvm::StringRef TemporaryPath,
   return llvm::Error::success();
 }
 
-llvm::Error closeAndCommitTemporaryOutput(llvm::sys::fs::TempFile &Temporary,
-                                          llvm::StringRef OutputPath) {
+llvm::Error closeAndCommitTemporaryOutput(
+    llvm::sys::fs::TempFile &Temporary, llvm::StringRef OutputPath,
+    OutputMode Mode, std::optional<std::filesystem::perms> Permissions) {
   const std::string TemporaryPath = Temporary.TmpName;
 #ifdef _WIN32
   llvm::ScopedFileHandle RenameHandle;
@@ -179,6 +180,19 @@ llvm::Error closeAndCommitTemporaryOutput(llvm::sys::fs::TempFile &Temporary,
       Temporary.RemoveOnClose = true;
     }
 #endif
+    if (Permissions) {
+      std::error_code Error;
+      std::filesystem::permissions(std::filesystem::u8path(TemporaryPath),
+                                   *Permissions, Error);
+      if (Error) {
+#ifdef _WIN32
+        RenameHandle = INVALID_HANDLE_VALUE;
+#endif
+        return llvm::createStringError(
+            Error, "cannot set temporary output permissions for %s",
+            TemporaryPath.c_str());
+      }
+    }
     const int Descriptor = std::exchange(Temporary.FD, -1);
     llvm::Error CloseError =
         Descriptor == -1
@@ -204,14 +218,19 @@ llvm::Error closeAndCommitTemporaryOutput(llvm::sys::fs::TempFile &Temporary,
                     llvm::StringRef To) -> std::error_code {
 #ifdef _WIN32
     auto Replace = [&](llvm::StringRef, llvm::StringRef TargetPath) {
-      std::error_code Error =
-          replaceTemporaryOutputHandleOnWindows(RenameHandle, TargetPath);
+      std::error_code Error = renameTemporaryOutputHandleOnWindows(
+          RenameHandle, TargetPath, Mode == OutputMode::ReplaceExisting);
       RenameHandle = INVALID_HANDLE_VALUE;
       return Error;
     };
     const ReplaceOperations ReplaceOps{Replace};
     return replaceTemporaryOutputWithoutMoveAside(From, To, ReplaceOps);
 #else
+    if (Mode == OutputMode::CreateNew) {
+      if (auto Error = llvm::sys::fs::create_hard_link(From, To))
+        return Error;
+      return llvm::sys::fs::remove(From);
+    }
     return llvm::sys::fs::rename(From, To);
 #endif
   };

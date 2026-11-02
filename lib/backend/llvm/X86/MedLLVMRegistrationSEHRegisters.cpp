@@ -10,7 +10,7 @@
 
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Constants.h"

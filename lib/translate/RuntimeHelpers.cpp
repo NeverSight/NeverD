@@ -5,7 +5,9 @@
 #include "neverd/translate/GuestMemoryRuntime.h"
 #include "neverd/translate/RuntimeGuestState.h"
 #include "neverd/translate/TranslationIRVerifier.h"
+#include "neverd/translate/X86/RuntimeX87Helpers.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -23,6 +25,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <vector>
 
 namespace neverd::translate {
 namespace {
@@ -327,7 +330,42 @@ findRuntimeABIHelperBindingV1(llvm::StringRef Name) {
   return nullptr;
 }
 
+llvm::ArrayRef<RuntimeABIHelperBindingV1>
+runtimeABIHelperBindingsV1(TranslationRuntimeProfileV1 Profile) {
+  if (Profile == TranslationRuntimeProfileV1::ScalarInteger)
+    return runtimeABIHelperBindingsV1();
+  if (Profile != TranslationRuntimeProfileV1::PortableX87)
+    return {};
+  static const std::vector<RuntimeABIHelperBindingV1> Bindings = [] {
+    const auto Scalar = runtimeABIHelperBindingsV1();
+    std::vector<RuntimeABIHelperBindingV1> Result(Scalar.begin(), Scalar.end());
+    Result.push_back({kRuntimeX87StepNameV1, RuntimeABIHelperClassV1::X87Step,
+                      nullptr, nullptr, &nvd_rt_x87_v1_step});
+    return Result;
+  }();
+  return Bindings;
+}
+
+const RuntimeABIHelperBindingV1 *
+findRuntimeABIHelperBindingV1(llvm::StringRef Name,
+                              TranslationRuntimeProfileV1 Profile) {
+  for (const auto &Binding : runtimeABIHelperBindingsV1(Profile))
+    if (Binding.Name == Name)
+      return &Binding;
+  return nullptr;
+}
+
 llvm::Error verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module) {
+  return verifyRuntimeABIHelperProtocolV1(
+      Module, TranslationRuntimeProfileV1::ScalarInteger);
+}
+
+llvm::Error
+verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module,
+                                 TranslationRuntimeProfileV1 Profile) {
+  if (Profile != TranslationRuntimeProfileV1::ScalarInteger &&
+      Profile != TranslationRuntimeProfileV1::PortableX87)
+    return invalid("unknown runtime helper protocol profile");
   llvm::SmallPtrSet<const llvm::LoadInst *, 16> AuthorizedResultLoads;
   const llvm::DataLayout &Layout = Module.getDataLayout();
 
@@ -349,7 +387,7 @@ llvm::Error verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module) {
         if (!Callee)
           continue;
         const RuntimeABIHelperBindingV1 *Binding =
-            findRuntimeABIHelperBindingV1(Callee->getName());
+            findRuntimeABIHelperBindingV1(Callee->getName(), Profile);
         if (!Binding)
           continue;
 
@@ -360,6 +398,42 @@ llvm::Error verifyRuntimeABIHelperProtocolV1(const llvm::Module &Module) {
           return protocolFailure(
               &Function,
               "runtime helper is not a direct i32 call on the runtime frame");
+
+        if (Binding->Class == RuntimeABIHelperClassV1::X87Step) {
+          const auto *Return = llvm::dyn_cast_or_null<llvm::ReturnInst>(
+              nextProtocolInstruction(*Call));
+          const auto *Selector =
+              Call->arg_size() == 6
+                  ? llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(2))
+                  : nullptr;
+          const auto *PC =
+              Call->arg_size() == 6
+                  ? llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(3))
+                  : nullptr;
+          const auto *NextPC =
+              Call->arg_size() == 6
+                  ? llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(4))
+                  : nullptr;
+          if (!Return || Return->getReturnValue() != Call ||
+              !Call->hasOneUse() || Call->arg_size() != 6 ||
+              Call->getArgOperand(1) != Function.getArg(0) || !Selector ||
+              !Selector->getType()->isIntegerTy(32) ||
+              !isRuntimeX87InstructionV1(Selector->getZExtValue()) || !PC ||
+              !PC->getType()->isIntegerTy(64) || !NextPC ||
+              !NextPC->getType()->isIntegerTy(64) ||
+              NextPC->getZExtValue() <= PC->getZExtValue())
+            return protocolFailure(
+                &Function, "x87 helper must return its exact terminal status "
+                           "on canonical state and instruction operands");
+          const auto Spec = x87ContextInstruction(Selector->getZExtValue());
+          const auto *DP =
+              llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(5));
+          if (Spec->MemoryBytes == 0 && (!DP || !DP->isZero()))
+            return protocolFailure(
+                &Function,
+                "register x87 helper requires the canonical zero data address");
+          continue;
+        }
 
         const auto *Compare = llvm::dyn_cast_or_null<llvm::ICmpInst>(
             nextProtocolInstruction(*Call));
@@ -444,6 +518,34 @@ llvm::Error verifyRuntimeTranslationIRV1(
     const llvm::Module &Module, const llvm::Triple &ExpectedHostTriple,
     const llvm::DataLayout &ExpectedHostDataLayout, uint64_t StateSize,
     llvm::ArrayRef<TranslationIRMemorySlot> StateSlots) {
+  return verifyRuntimeTranslationIRV1(
+      Module, ExpectedHostTriple, ExpectedHostDataLayout, StateSize, StateSlots,
+      TranslationRuntimeProfileV1::ScalarInteger);
+}
+
+llvm::Error verifyRuntimeTranslationIRV1(
+    const llvm::Module &Module, const llvm::Triple &ExpectedHostTriple,
+    const llvm::DataLayout &ExpectedHostDataLayout, uint64_t StateSize,
+    llvm::ArrayRef<TranslationIRMemorySlot> StateSlots,
+    TranslationRuntimeProfileV1 Profile) {
+  if (Profile != TranslationRuntimeProfileV1::ScalarInteger &&
+      Profile != TranslationRuntimeProfileV1::PortableX87)
+    return invalid("unknown runtime translation profile");
+  if (Profile == TranslationRuntimeProfileV1::PortableX87) {
+    if (StateSize != kRuntimeGuestStateX86_64X87SizeV1)
+      return invalid("portable x87 state extent does not match its profile");
+    const auto IntegerSlots = runtimeGuestStateX86_64MemorySlotsV1();
+    for (const auto &Slot : StateSlots) {
+      const bool Found = llvm::any_of(IntegerSlots, [&](const auto &Allowed) {
+        return Slot.Region == Allowed.Region && Slot.Offset == Allowed.Offset &&
+               Slot.Size == Allowed.Size && Slot.Access == Allowed.Access &&
+               Slot.Alignment == Allowed.Alignment;
+      });
+      if (!Found)
+        return invalid(
+            "portable x87 direct state access is outside integer slots");
+    }
+  }
   llvm::SmallVector<TranslationIRMemorySlot, 32> Slots;
   Slots.reserve(StateSlots.size() + runtimeABIMemorySlotsV1().size());
   for (const TranslationIRMemorySlot &Slot : StateSlots) {
@@ -455,12 +557,12 @@ llvm::Error verifyRuntimeTranslationIRV1(
                runtimeABIMemorySlotsV1().end());
 
   const std::vector<TranslationRuntimeHelper> Helpers =
-      createRuntimeABIHelperPolicyV1(Module.getContext());
+      createRuntimeABIHelperPolicyV1(Module.getContext(), Profile);
   if (llvm::Error Error = verifyTranslationIR(
           Module, ExpectedHostTriple, ExpectedHostDataLayout, StateSize,
           kRuntimeControlBlockSizeV1, Slots, Helpers))
     return Error;
-  return verifyRuntimeABIHelperProtocolV1(Module);
+  return verifyRuntimeABIHelperProtocolV1(Module, Profile);
 }
 
 } // namespace neverd::translate

@@ -17,6 +17,8 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequenc
 
 from .abi import (
     EventType,
+    UNWIND_FRAME_QUERY,
+    VirtualAddress,
     LLVMOptimizationLevel,
     NeverDOptimizeLLVMOptions,
     NeverDOptimizeLLVMResult,
@@ -28,6 +30,8 @@ from .abi import (
     NeverDSourcePatchBindingV1,
     NeverDSourcePatchDependencyV1,
     NeverDSourcePatchOptionsV1,
+    NeverDBytePatchOptionsV1,
+    NeverDAssembleOptionsV1,
     NeverDSimplifyOptions,
     NeverDSimplifyResult,
     NeverDSynthesizeOptions,
@@ -904,7 +908,23 @@ class Session:
         return self._owned_string("neverd_last_error") or ""
 
     def _json(self, name: str, operation: str, *arguments: object) -> object:
-        return _decode_json(operation, self._owned_string(name, *arguments))
+        value = self._owned_string(name, *arguments)
+        if value is None:
+            raise NeverDError(
+                self.last_error or f"NeverD returned no {operation} result"
+            )
+        return _decode_json(operation, value)
+
+    def x87_capabilities(self) -> object:
+        """Return the static x87 inventory without probing or loading a binary.
+
+        Numerical support, complete state and native-reference observations
+        remain separate. Test source references are not passing evidence.
+        """
+        value = self._owned_string("neverd_x87_capabilities_json")
+        if value is None:
+            raise NeverDError(self.last_error)
+        return _decode_json("x87 capabilities", value)
 
     def cpu_capabilities(
         self, configuration: str | None = None, *, probe_host: bool = False
@@ -1008,6 +1028,20 @@ class Session:
     @property
     def relocations(self) -> object:
         return self._json("neverd_relocs_json", "relocations")
+
+    def unwind_frame(self, address: int) -> object:
+        """Return the complete unwind frame at the exact virtual address.
+
+        JSON null becomes None. AArch64 DWARF state describes this exact PC;
+        the independent compact recipe describes the completed prologue.
+        Neither source authenticates a live return address. No PC bias or
+        function-entry substitution is applied, and native statuses are kept.
+        """
+        return self._json(
+            UNWIND_FRAME_QUERY,
+            UNWIND_FRAME_QUERY,
+            _unsigned(UNWIND_FRAME_QUERY, address, ctypes.sizeof(VirtualAddress) * 8),
+        )
 
     @property
     def headers(self) -> object:
@@ -1778,6 +1812,86 @@ class Session:
             "patch from C",
         )
         return self.patch_result
+
+    @property
+    def byte_patches(self) -> object:
+        """Canonical overlay runs, with immutable original and current bytes."""
+        return self._json("neverd_byte_patches_json", "read byte patches")
+
+    @property
+    def byte_patch_ranges(self) -> object:
+        """Changed address/size ranges without transferring the byte payloads."""
+        return self._json("neverd_byte_patch_ranges_json", "read byte patch ranges")
+
+    def preview_byte_patch(self, address: int, *, kind: str = "bytes",
+                           data: bytes | str = b"", text: str = "",
+                           value: int = 0, size: int = 0,
+                           fill_nops: bool = True, allow_overlap: bool = False,
+                           dialect: str = "intel", symbols: Mapping[str, int] | None = None) -> object:
+        return self._byte_patch(False, address, kind, data, text, value, size,
+                                fill_nops, allow_overlap, dialect, None, symbols)
+
+    def apply_byte_patch(self, address: int, *, kind: str = "bytes",
+                         data: bytes | str = b"", text: str = "",
+                         value: int = 0, size: int = 0,
+                         fill_nops: bool = True, allow_overlap: bool = False,
+                         dialect: str = "intel", expected: bytes | str | None = None,
+                         symbols: Mapping[str, int] | None = None) -> object:
+        """Apply in memory. Call save_byte_patches() to persist the overlay."""
+        return self._byte_patch(True, address, kind, data, text, value, size,
+                                fill_nops, allow_overlap, dialect, expected, symbols)
+
+    def _byte_patch(self, apply: bool, address: int, kind: str,
+                    data: bytes | str, text: str, value: int, size: int,
+                    fill_nops: bool, allow_overlap: bool, dialect: str,
+                    expected: bytes | str | None, symbols: Mapping[str, int] | None) -> object:
+        if dialect not in ("intel", "att"):
+            raise ValueError("dialect must be intel or att")
+        options = NeverDBytePatchOptionsV1()
+        options.struct_size = ctypes.sizeof(options)
+        options.address = _unsigned("address", address, 64)
+        options.kind = _utf8_argument("kind", kind, allow_empty=False)
+        options.bytes = _utf8_argument("data", data.hex() if isinstance(data, bytes) else data, allow_empty=True)
+        options.text = _utf8_argument("text", text, allow_empty=True)
+        options.value = _unsigned("value", value, 64)
+        options.size = _unsigned("size", size, 64)
+        options.fill_nops = int(fill_nops)
+        options.allow_overlap = int(allow_overlap)
+        options.dialect = int(dialect == "att")
+        options.symbols = json.dumps(dict(symbols or {})).encode("utf-8")
+        if expected is not None:
+            options.expected = _utf8_argument("expected", expected.hex() if isinstance(expected, bytes) else expected, allow_empty=True)
+        return self._json("neverd_byte_patch_apply" if apply else "neverd_byte_patch_preview",
+                          "apply byte patch" if apply else "preview byte patch", ctypes.byref(options))
+
+    def revert_byte_patch(self, address: int, size: int = 0) -> None:
+        """Restore a range, or the containing run when size is zero."""
+        self._require_zero(self._call("neverd_byte_patch_revert", _unsigned("address", address, 64),
+                                     _unsigned("size", size, 64)), "revert byte patch")
+
+    def save_byte_patches(self) -> None:
+        self._require_zero(self._call("neverd_byte_patches_save"), "save byte patches")
+
+    def load_byte_patches(self) -> None:
+        self._require_zero(self._call("neverd_byte_patches_load"), "load byte patches")
+
+    def export_byte_patches(self, output_path: os.PathLike[str] | str, *, allow_unsigned: bool = False) -> None:
+        self._require_zero(self._call("neverd_byte_patches_export",
+                           _utf8_argument("output path", os.fspath(output_path), allow_empty=False),
+                           int(allow_unsigned)), "export byte patches")
+
+    def assemble(self, pc: int, text: str, *, dialect: str = "intel", mode: str = "image",
+                 symbols: Mapping[str, int] | None = None) -> object:
+        if dialect not in ("intel", "att") or mode not in ("image", "arm", "thumb"):
+            raise ValueError("unknown assembly dialect or mode")
+        options = NeverDAssembleOptionsV1()
+        options.struct_size = ctypes.sizeof(options)
+        options.pc = _unsigned("pc", pc, 64)
+        options.dialect = int(dialect == "att")
+        options.mode = ("image", "arm", "thumb").index(mode)
+        options.symbols = json.dumps(dict(symbols or {})).encode("utf-8")
+        options.text = _utf8_argument("text", text, allow_empty=False)
+        return self._json("neverd_assemble_json", "assemble", ctypes.byref(options))
 
     @property
     def source_patch_report(self) -> object:

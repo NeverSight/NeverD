@@ -4,8 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
-#include "neverd/ir/med/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/MathExtras.h"

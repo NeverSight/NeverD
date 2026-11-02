@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 63d86e1a94d8b33e055360514902466c202d434ebb87823cd91181b98a556871 -->
+<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
 
 [← Documentation Index](README.md)
 
@@ -185,7 +185,7 @@ report = session.patch_source(
 
 Windows ARM64 验收使用原生 ARM64 Unicorn C DLL：以固定子模块和已验证的 LLVM-MinGW 工具链真实构建，生成 MSVC 导入库并显式覆盖 CMake 目标。隔离的构建副本认证三项主机修正：非 SEH 跳转函数对、带指令缓存同步的 ARM64 页面提交回调，以及适配 Windows LLP64 的 64 位立即数掩码。子模块源码及版本不变。这证明 CPU 矩阵测试主机可用，不代表默认 MSVC ARM64 JIT 已受支持。五项主机恢复检查与补丁进程的原生执行、C++ 异常证据分开记录。
 
-通过 `NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE` 指定兼容的源码编译器（已验证 Clang 22.1.6）。集成构建只修正构建目录中的 LLVM 副本，不改子模块或共享预编译缓存。r3/r4 预编译版的 x64 PLT 问题可能导致 IR patch 被拒绝；原生对象避开该 MC 路径。`NEVERD_TEST_REQUIRE_FIXED_LLVM=1` 要求编译器生成精确且已修正的 PLT 引用。
+通过 `NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE` 指定兼容的源码编译器（已验证 Clang 22.1.6）。集成构建直接编译所记录的 NeverSight LLVM fork，重定位修正在 fork 中维护；NeverD 不再应用 LLVM 源码补丁。r3/r4 预编译版的 x64 PLT 问题可能导致 IR patch 被拒绝；原生对象避开该 MC 路径。`NEVERD_TEST_REQUIRE_FIXED_LLVM=1` 要求编译器生成精确且已修正的 PLT 引用。
 
 `NeverDSourcePatchTests` 包含原生 C/API/对象/异常用例；`NeverDSourcePatchMatrixTests` 使用 Unicorn 检查所有目标组合。配置 `NEVERD_TEST_WINDOWS_CRT_LIB`、`NEVERD_TEST_WINDOWS_UCRT_LIB` 和 `NEVERD_TEST_WINDOWS_SDK_LIB` 后，`SourcePatchPE` 执行七种 C++ 场景。非 Windows 宿主还需要 `NEVERD_TEST_WINDOWS_RUNNER`。`NEVERD_TEST_REQUIRE_WINDOWS_RUNTIME=1` 使缺少运行输入成为失败。Windows 专项工作流要求原生执行且拒绝跳过用例。
 
@@ -203,7 +203,7 @@ ctest --test-dir build-source -L \
   --output-on-failure --parallel 4
 ```
 
-LLVM 构建副本还修正了 Mach-O x64 的 GOT 数据引用：Clang 的类型捕获表以四字节重定位字段末尾为基准。r3/r4 预编译版会偏移四字节；发布前检查会拒绝未修正的结果。开发 Mac 的 x64 Mach-O 用例通过 Rosetta 2 执行，ARM64 用例直接执行。
+LLVM fork 还修正了 Mach-O x64 的 GOT 数据引用：Clang 的类型捕获表以四字节重定位字段末尾为基准。r3/r4 预编译版会偏移四字节；发布前检查会拒绝未修正的结果。开发 Mac 的 x64 Mach-O 用例通过 Rosetta 2 执行，ARM64 用例直接执行。
 
 Windows x64 原生验收 [2ed7e78fc](https://github.com/NeverSight/NeverD/actions/runs/38307461805) 的 16 个 PE/对象/trampoline 专项用例和 143 个 CPU 目标矩阵用例全部通过，无跳过。FH3 用例执行了七种 C++ 运行场景；目标矩阵使用 Unicorn。该轮使用 Clang 22.1.6、原生 MSVC、Windows SDK 和集成 LLVM。
 
@@ -259,3 +259,10 @@ ELF ARM 与 Thumb 使用独立配置。源码编译器明确接收 `-marm` 或 `
 Mach-O 修复按所选函数认证 Thumb 模式，避免被镜像整体的 ARM/Thumb 混合模式覆盖；仅规范化有证据的 Thumb 导出指针，并统一 ARM32 展开代码地址，不改变数据指针或范围长度。集成 LLVM 源码构建在本机通过全部 283 项 CPU 矩阵检查和 258 项异常契约检查，零失败、零跳过。旧 Mach-O 测试程序使用已记录的开源链接器并预留展开元数据容量；i386 使用正确对齐的启动入口和 64 KiB 页零段。
 
 这些结果证明指定模拟器和兼容层下的 C 代码执行。Wine 不等于 Microsoft Windows，Darling 不等于 macOS；iOS HLE 中的 ARMv7k 执行不能证明 watchOS、WatchKit 或 Apple 实机支持。不能据此推断旧 Apple SDK 或原生 32 位硬件覆盖，这些测试也不认证 C++ 异常展开。既有原生与兼容模式证据继续分开记录。NeverC 未构建、未修改。
+
+<!-- i18n-section: interactive-byte-patches -->
+## 交互式补丁的职责
+
+`lib/patch` 负责字节准入、LLVM MC 编码、不可变输入快照、规范化覆盖记录及独占导出。SDK 根据实际输出的 C、规范 LowIR 来源和解码操作数证明源码目标；导航锚点本身不能授权修改。worker 将可选的 `patches.json` 纳入普通撤销重做，修改后使分析失效。签名名称读取原字节；被修改函数不再采用由身份推导的库语义。GUI、CLI 和 Python 共用这些 API。整函数替换仍使用 `neverd_patch_source`，已有字节补丁时必须先导出并重新打开。
+
+[GUI](../gui.md) · `neverd patch-bytes` · `Session.byte_patches` · `Session.apply_byte_patch` · `Session.export_byte_patches`

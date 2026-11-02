@@ -4,7 +4,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
@@ -30,22 +30,46 @@ struct MaskTestCase {
 };
 
 constexpr std::array<MaskTestCase, 8> kMaskTestCases = {{
-    {"byte", {0x62, 0x92, 0x1d, 0x42, 0x26, 0xcd},
-     {0x62, 0xf2, 0x1d, 0x42, 0x26, 0x08}, 1, false},
-    {"word", {0x62, 0x92, 0x9d, 0x42, 0x26, 0xcd},
-     {0x62, 0xf2, 0x9d, 0x42, 0x26, 0x08}, 2, false},
-    {"dword", {0x62, 0x92, 0x1d, 0x42, 0x27, 0xcd},
-     {0x62, 0xf2, 0x1d, 0x42, 0x27, 0x08}, 4, false},
-    {"qword", {0x62, 0x92, 0x9d, 0x42, 0x27, 0xcd},
-     {0x62, 0xf2, 0x9d, 0x42, 0x27, 0x08}, 8, false},
-    {"not-byte", {0x62, 0x92, 0x1e, 0x42, 0x26, 0xcd},
-     {0x62, 0xf2, 0x1e, 0x42, 0x26, 0x08}, 1, true},
-    {"not-word", {0x62, 0x92, 0x9e, 0x42, 0x26, 0xcd},
-     {0x62, 0xf2, 0x9e, 0x42, 0x26, 0x08}, 2, true},
-    {"not-dword", {0x62, 0x92, 0x1e, 0x42, 0x27, 0xcd},
-     {0x62, 0xf2, 0x1e, 0x42, 0x27, 0x08}, 4, true},
-    {"not-qword", {0x62, 0x92, 0x9e, 0x42, 0x27, 0xcd},
-     {0x62, 0xf2, 0x9e, 0x42, 0x27, 0x08}, 8, true},
+    {"byte",
+     {0x62, 0x92, 0x1d, 0x42, 0x26, 0xcd},
+     {0x62, 0xf2, 0x1d, 0x42, 0x26, 0x08},
+     1,
+     false},
+    {"word",
+     {0x62, 0x92, 0x9d, 0x42, 0x26, 0xcd},
+     {0x62, 0xf2, 0x9d, 0x42, 0x26, 0x08},
+     2,
+     false},
+    {"dword",
+     {0x62, 0x92, 0x1d, 0x42, 0x27, 0xcd},
+     {0x62, 0xf2, 0x1d, 0x42, 0x27, 0x08},
+     4,
+     false},
+    {"qword",
+     {0x62, 0x92, 0x9d, 0x42, 0x27, 0xcd},
+     {0x62, 0xf2, 0x9d, 0x42, 0x27, 0x08},
+     8,
+     false},
+    {"not-byte",
+     {0x62, 0x92, 0x1e, 0x42, 0x26, 0xcd},
+     {0x62, 0xf2, 0x1e, 0x42, 0x26, 0x08},
+     1,
+     true},
+    {"not-word",
+     {0x62, 0x92, 0x9e, 0x42, 0x26, 0xcd},
+     {0x62, 0xf2, 0x9e, 0x42, 0x26, 0x08},
+     2,
+     true},
+    {"not-dword",
+     {0x62, 0x92, 0x1e, 0x42, 0x27, 0xcd},
+     {0x62, 0xf2, 0x1e, 0x42, 0x27, 0x08},
+     4,
+     true},
+    {"not-qword",
+     {0x62, 0x92, 0x9e, 0x42, 0x27, 0xcd},
+     {0x62, 0xf2, 0x9e, 0x42, 0x27, 0x08},
+     8,
+     true},
 }};
 
 struct BroadcastCase {
@@ -138,8 +162,9 @@ bool isMaskOperand(const cs_x86_op &Operand) {
 }
 
 std::array<uint8_t, 6> withVectorSize(std::array<uint8_t, 6> Bytes,
-                                     uint16_t VectorSize) {
-  const uint8_t Length = VectorSize == 16 ? 0 : (VectorSize == 32 ? 0x20 : 0x40);
+                                      uint16_t VectorSize) {
+  const uint8_t Length =
+      VectorSize == 16 ? 0 : (VectorSize == 32 ? 0x20 : 0x40);
   Bytes[3] = static_cast<uint8_t>((Bytes[3] & ~0x60) | Length);
   return Bytes;
 }
@@ -161,8 +186,7 @@ x86_avx_bcast broadcastForLaneCount(unsigned LaneCount) {
 
 uint64_t relevantMask(uint16_t VectorSize, uint16_t ElementSize) {
   const unsigned LaneCount = VectorSize / ElementSize;
-  return LaneCount == 64 ? UINT64_MAX
-                         : ((UINT64_C(1) << LaneCount) - 1);
+  return LaneCount == 64 ? UINT64_MAX : ((UINT64_C(1) << LaneCount) - 1);
 }
 
 uint64_t laneValue(const std::vector<uint8_t> &Bytes, unsigned Lane,
@@ -179,17 +203,15 @@ void setLane(std::vector<uint8_t> &Bytes, unsigned Lane, uint16_t ElementSize,
 }
 
 uint64_t expectedMask(const std::vector<uint8_t> &First,
-                      const std::vector<uint8_t> &Second,
-                      uint16_t ElementSize, bool Negated,
-                      uint64_t WriteMask) {
+                      const std::vector<uint8_t> &Second, uint16_t ElementSize,
+                      bool Negated, uint64_t WriteMask) {
   if (First.size() != Second.size() || First.size() % ElementSize != 0)
     return 0;
   uint64_t Result = 0;
   const unsigned LaneCount = First.size() / ElementSize;
   for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
-    const bool IsZero =
-        (laneValue(First, Lane, ElementSize) &
-         laneValue(Second, Lane, ElementSize)) == 0;
+    const bool IsZero = (laneValue(First, Lane, ElementSize) &
+                         laneValue(Second, Lane, ElementSize)) == 0;
     if (IsZero == Negated)
       Result |= UINT64_C(1) << Lane;
   }
@@ -216,8 +238,7 @@ TEST(X86EVEXMaskTestMemory,
       ASSERT_TRUE(isMaskOperand(X86.operands[0]));
       ASSERT_TRUE(isMaskOperand(X86.operands[1]));
       const uint16_t MaskSize = static_cast<uint16_t>(
-          std::max(1u,
-                   (VectorSize / Case.ElementSize + 7u) / 8u));
+          std::max(1u, (VectorSize / Case.ElementSize + 7u) / 8u));
       EXPECT_EQ(X86.operands[0].size, MaskSize);
       EXPECT_EQ(X86.operands[1].size, MaskSize);
       EXPECT_EQ(X86.operands[2].size, VectorSize);
@@ -242,8 +263,7 @@ TEST(X86EVEXMaskTestMemory,
       const cs_x86 &X86 = Insn.Raw->detail->x86;
       ASSERT_EQ(X86.op_count, 4u);
       const uint16_t MaskSize = static_cast<uint16_t>(
-          std::max(1u,
-                   (VectorSize / Case.ElementSize + 7u) / 8u));
+          std::max(1u, (VectorSize / Case.ElementSize + 7u) / 8u));
       EXPECT_EQ(X86.operands[0].size, MaskSize);
       EXPECT_EQ(X86.operands[1].size, MaskSize);
       EXPECT_EQ(X86.operands[2].size, VectorSize);
@@ -255,8 +275,7 @@ TEST(X86EVEXMaskTestMemory,
   }
 }
 
-TEST(X86EVEXMaskTestMemory,
-     RegisterFamilyProducesExactZeroMaskedKBits) {
+TEST(X86EVEXMaskTestMemory, RegisterFamilyProducesExactZeroMaskedKBits) {
   constexpr uint64_t WriteMask = UINT64_C(0xd6b5a39c7e4d291b);
   for (const MaskTestCase &Case : kMaskTestCases) {
     for (uint16_t VectorSize : kVectorSizes) {
@@ -363,8 +382,7 @@ TEST(X86EVEXMaskTestMemory,
       EXPECT_TRUE(Suppressed.getLoadRecords().empty());
 
       const unsigned LaneCount = VectorSize / Case.ElementSize;
-      const uint64_t WriteMask =
-          UINT64_C(3) | (UINT64_C(1) << (LaneCount - 1));
+      const uint64_t WriteMask = UINT64_C(3) | (UINT64_C(1) << (LaneCount - 1));
       BinaryImage Image = emptyImage();
       addReadableValue(Image, kMemoryAddress, 1, Case.ElementSize);
       NdOpEmulator Active(Image);
@@ -398,11 +416,11 @@ TEST(X86EVEXMaskTestMemory, RawDetailMismatchFailsClosedAtomically) {
         X86.operands[2].reg = X86_REG_ZMM27;
         return true;
       });
-  expectMutatedLiftFailsClosed(
-      kMaskTestCases[2].RegisterBytes, [](cs_insn &Insn, cs_x86 &) {
-        Insn.bytes[3] ^= 0x20;
-        return true;
-      });
+  expectMutatedLiftFailsClosed(kMaskTestCases[2].RegisterBytes,
+                               [](cs_insn &Insn, cs_x86 &) {
+                                 Insn.bytes[3] ^= 0x20;
+                                 return true;
+                               });
   expectMutatedLiftFailsClosed(
       kMaskTestCases[3].MemoryBytes, [](cs_insn &, cs_x86 &X86) {
         if (X86.op_count != 4 || X86.operands[3].type != X86_OP_MEM)

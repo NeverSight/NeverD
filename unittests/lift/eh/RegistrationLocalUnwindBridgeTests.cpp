@@ -10,7 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
-#include "neverd/backend/llvm/X86RegistrationLocalUnwind.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLocalUnwind.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"

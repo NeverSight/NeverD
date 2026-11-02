@@ -32,6 +32,8 @@ namespace limits {
 /// gracefully by the Segment bounds checks.  The cap is far larger than any
 /// real .bss, so legitimate binaries are unaffected.
 constexpr uint64_t kMaxSegmentZeroFill = 1ull << 30; // 1 GiB
+/// Bound optional target metadata inspection; larger records remain unknown.
+inline constexpr size_t kMaxImageProfileMetadataBytes = 64 * 1024;
 
 /// Work for proving that PE initialization leaves mapped header bytes intact.
 /// Counts section-owner queries and visited import/configuration/fixup bytes.
@@ -54,6 +56,38 @@ constexpr uint64_t kMaxObjectExternStatedReach = 0x10000;
 //===----------------------------------------------------------------------===//
 // Jump-table resolution
 //===----------------------------------------------------------------------===//
+
+/// Total scalar-operation and operand-byte work for exact constant branches
+/// in one CFG build, including revalidation after new paths are discovered.
+/// Exhaustion preserves the original indirect transfers.
+constexpr size_t kMaxScalarBranchEvidenceWork = 262144;
+
+/// Complete scalar dataflow covers shared by computed targets and stack
+/// offsets. Larger sets or Cartesian products lose their numeric fact.
+constexpr size_t kMaxScalarValueSet = 32;
+constexpr size_t kMaxScalarValueProduct = 256;
+/// Total computed-target work, including revalidation after CFG discovery.
+constexpr size_t kMaxComputedBranchEvidenceWork = 2000000;
+
+/// Optional symbolic fallback for unresolved straight-block scalar targets.
+/// Ordinary constant propagation runs first; these local caps also bound DAG
+/// construction before the shared per-function work account is charged.
+constexpr size_t kMaxScalarBranchSymbolicOperations = 256;
+constexpr size_t kMaxScalarBranchSymbolicNodes = 4096;
+constexpr unsigned kMaxScalarBranchSymbolicAtoms = 4;
+constexpr unsigned kMaxScalarBranchOptimalSynthesisAtoms = 2;
+constexpr size_t kMaxScalarBranchSymbolicRewriteWork = 8192;
+constexpr size_t kMaxScalarBranchSymbolicTableBytes = 65536;
+
+/// Finite scalar dispatch covers, including conservative child products.
+/// Larger domains and exhausted work preserve the original indirect branch.
+inline constexpr size_t kMaxScalarBranchFiniteValues = 64;
+inline constexpr size_t kMaxScalarBranchFiniteProducts = 4096;
+inline constexpr unsigned kMaxScalarBranchFiniteDepth = 64;
+
+/// Total register-byte, operand and graph work for bounded SGX/SMX leaf
+/// proofs, including revalidation after CFG discovery adds incoming edges.
+constexpr size_t kMaxX86BoundedLeafEvidenceWork = 262144;
 
 /// Hard upper bound on jump-table entries.  Tables exceeding this are
 /// almost certainly false positives.
@@ -188,6 +222,10 @@ constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 167772160;
 /// PAGE) needs about 320 million units; its proof runs in well under a second,
 /// the units being conservative container-work prepayments.
 constexpr uint32_t kMaxJumpTableCandidateEvidenceWork = 536870912;
+/// Bound exact scalar-state exploration independently of the caller budget.
+/// Covers finite lookup loops without allowing an unbounded induction to
+/// consume the complete multi-candidate account.
+constexpr uint32_t kMaxJumpTableScalarStateWork = 16777216;
 static_assert(kMaxJumpTableCandidateEvidenceWork >=
               kMaxJumpTableMaskFixedPointEvidenceWork);
 
@@ -421,6 +459,12 @@ constexpr uint64_t kMaxOverlapDistance = 0x10000;
 /// the ABI clobber set.
 constexpr int kMaxCallEffectCalleeDepth = 4;
 constexpr size_t kMaxCallEffectExtraLifts = 256;
+/// On-demand CFG register proofs admit only small, metadata-bounded callees.
+/// The query may not recursively start another CFG register proof.
+constexpr size_t kMaxCFGCallRegisterProofFunctions = 32;
+constexpr uint64_t kMaxCFGCallRegisterProofBytes = 4096;
+/// Scalar exit facts inspect only bounded, complete, call-free callee bodies.
+constexpr size_t kMaxCallExitConstantOps = 4096;
 /// All-path predecessor stack-store evidence for one call argument setup.
 /// Exhaustion supplies no partial proof.
 constexpr size_t kMaxCallSetupStackProofWork = 4096;
@@ -454,6 +498,9 @@ constexpr uint64_t kMaxNoReturnScreenBytes = 0x4000;
 /// Revisits of one block before a callee's incoming-stack-read summary widens
 /// a still-changing stack offset (a pointer stepped around a loop) to unknown.
 constexpr unsigned kMaxStackOffsetJoinVisits = 8;
+/// Optional finite scalar offsets for one incoming-stack summary. The cover
+/// is built lazily once; exhaustion keeps variable offsets unknown.
+constexpr size_t kMaxIncomingStackScalarWork = 65536;
 
 /// `--func` may attach out-of-line catch/unwind pdata, but a malformed or
 /// merged runtime-function range must not import that owner's entire EH
@@ -567,6 +614,12 @@ constexpr size_t kMaxEmbeddedDataLen = 4096;
 /// ARM32 NEON pool fell back to ~2 MB of overlapping copies).  The cap is
 /// therefore generous and only guards against an abnormally huge segment.
 constexpr size_t kMaxSingleGlobalEmbedLen = 1u << 20; // 1 MiB
+
+/// Bytes of alignment padding one embedded run of read-only segments may
+/// cross between two of them.  No other segment may map the padding: one
+/// there (a `.data` between two constant pools) is another object, whose
+/// addresses the run would otherwise claim.
+constexpr uint64_t kMaxRodataRunPaddingBytes = 16;
 
 /// Maximum text bytes of one page of a paged code view (source or IR): a
 /// page that would pass it ends early and the next page starts at the line
@@ -716,6 +769,11 @@ constexpr size_t kMinParallelVerify = 512;
 /// the batch (heaviest-first when weighted).
 constexpr size_t kMinParallelIRWorkItems = 32;
 
+/// Minimum function definitions before HighC writes them on worker threads,
+/// each with a copy of the writer the unit's declarations prepared.  Below
+/// this the copies cost more than the definitions take to write.
+constexpr size_t kMinParallelCFunctionDefinitions = 32;
+
 //===----------------------------------------------------------------------===//
 // C output formatting
 //===----------------------------------------------------------------------===//
@@ -776,6 +834,10 @@ constexpr unsigned kMaxCPointerNesting = 16;
 
 /// Largest fixed integer vector represented by a C compiler vector type.
 constexpr unsigned kMaxCIntegerVectorBytes = 64;
+
+/// Largest scalar C integer carrier used for packed architectural operands:
+/// the complete group of four 512-bit source registers.
+constexpr unsigned kMaxCSourceIntegerBytes = 4 * kMaxCIntegerVectorBytes;
 
 /// HighC dead-store / store-forward expression walks.
 constexpr unsigned kMaxHighCMemoryWalkDepth = 128;

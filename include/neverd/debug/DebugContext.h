@@ -17,6 +17,7 @@
 #include "neverd/Common.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/support/LoadProgress.h"
 
 #include <cstdint>
 #include <map>
@@ -26,20 +27,6 @@
 #include <vector>
 
 namespace neverd {
-
-/// Optional load-time progress.  Image parse and PDB publics must not look
-/// idle.
-struct LoadProgress {
-  using Fn = void (*)(void *User, const char *Phase, unsigned long long Done,
-                      unsigned long long Total, const char *Detail);
-  Fn Callback = nullptr;
-  void *User = nullptr;
-  void report(const char *Phase, unsigned long long Done,
-              unsigned long long Total, const char *Detail = "") const {
-    if (Callback)
-      Callback(User, Phase, Done, Total, Detail ? Detail : "");
-  }
-};
 
 struct SourceLoc {
   std::string File;
@@ -65,6 +52,8 @@ struct FunctionSym {
   SourceLoc DeclLoc;
   TypeRef ReturnType;
   std::vector<std::pair<std::string, TypeRef>> Params;
+  /// Params names only the fixed prefix of a variadic declaration.
+  bool IsVariadic = false;
   DebugCallConv CallConv = DebugCallConv::Unknown;
   /// The function follows the platform's C calling convention, as C, C++,
   /// Objective-C and Rust code does.  False for a language with conventions
@@ -85,6 +74,17 @@ struct FunctionSym {
   /// that prototype as the library declares it, in C.  Empty otherwise.
   std::string PrototypeLibrary;
   std::string PrototypeDeclaration;
+  /// The same declaration with portable scalar spellings, retaining source
+  /// qualifiers for C output that does not include the target platform SDK.
+  /// Its outer cdecl/stdcall is carried by CallConv, not the spelling.
+  std::string PortablePrototypeDeclaration;
+  /// Parallel source cast types from that same declaration graph. These
+  /// preserve nested callback pointees/qualifiers that machine types omit;
+  /// they carry no additional argument-placement or register-state evidence.
+  std::vector<std::string> PortableParameterTypes;
+  /// The prototype comes from a selected platform header library, including
+  /// Windows SDK/WDK headers that are rendered without a host header include.
+  bool PrototypeFromHeader = false;
   /// The library is a C library's headers (glibc's, bionic's, musl's,
   /// libSystem's), which a unit's C includes: a definition of the name in
   /// the image is a copy of the routine they declare, not that routine.

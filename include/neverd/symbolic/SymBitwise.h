@@ -146,6 +146,8 @@ public:
   }
 
 private:
+  friend TruthTable atomTruthTable(unsigned Index, unsigned NumVars);
+
   explicit TruthTable(llvm::APInt B) : Bits(std::move(B)) {}
 
   static unsigned entryCount(unsigned NumVars) {

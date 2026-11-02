@@ -11,7 +11,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
-#include "neverd/ir/med/X86RegistrationCall.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"

@@ -6,6 +6,9 @@ on:
     branches: [dev, codex/native-source-patching]
     paths:
       - '.github/workflows/source-patch-windows.yml'
+      - 'scripts/run_gtest_qualification.py'
+      - 'scripts/run_lift_qualification.py'
+      - 'scripts/tests/test_run_gtest_qualification.py'
       - 'scripts/check_source_patch_pe_runtime.py'
       - 'scripts/check_source_patch_cpp_runtime.py'
       - 'scripts/check_source_patch_hosted_pe_runtime.py'
@@ -43,6 +46,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/source-patch-windows.yml'
+      - 'scripts/run_gtest_qualification.py'
+      - 'scripts/run_lift_qualification.py'
+      - 'scripts/tests/test_run_gtest_qualification.py'
       - 'scripts/check_source_patch_pe_runtime.py'
       - 'scripts/check_source_patch_cpp_runtime.py'
       - 'scripts/check_source_patch_hosted_pe_runtime.py'
@@ -159,17 +165,18 @@ jobs:
       - name: Execute PE under Windows and the four-architecture matrix
         shell: pwsh
         run: |
+          python -m unittest scripts.tests.test_run_gtest_qualification scripts.tests.test_run_lift_qualification -v
+          if ($LASTEXITCODE -ne 0) { throw 'Qualification auditor tests failed' }
+          # Discover and reconcile exact names, retaining the qualified inventory floor.
           # This Clang qualification does not install the optional NeverC producer.
-          & build-source-windows/bin/NeverDSourcePatchTests.exe '--gtest_filter=SourcePatchPE.*:SourcePatchObject.*:SourcePatchAArch64Object.*:SourcePatchTrampoline.*-SourcePatchObject.NeverCEntryTableCannotLoseItsLoadTimeRelocations' '--gtest_output=xml:build-source-windows/native-pe.xml'
+          python scripts/run_gtest_qualification.py --binary build-source-windows/bin/NeverDSourcePatchTests.exe --filter 'SourcePatchPE.*:SourcePatchObject.*:SourcePatchAArch64Object.*:SourcePatchTrampoline.*-SourcePatchObject.NeverCEntryTableCannotLoseItsLoadTimeRelocations' --min-tests 20 --output build-source-windows/native-pe.xml
           if ($LASTEXITCODE -ne 0) { throw 'PE source patch tests failed' }
-          & build-source-windows/bin/NeverDSourcePatchMatrixTests.exe '--gtest_filter=-NeverCProfiles/*' '--gtest_output=xml:build-source-windows/target-matrix.xml'
+          python scripts/run_gtest_qualification.py --binary build-source-windows/bin/NeverDSourcePatchMatrixTests.exe --filter=-NeverCProfiles/* --min-tests 285 --output build-source-windows/target-matrix.xml
           if ($LASTEXITCODE -ne 0) { throw 'Source target matrix failed' }
-          & build-source-windows/bin/NeverDSourcePatchDynCodeTests.exe '--gtest_output=xml:build-source-windows/dyncode-evidence.xml'
+          python scripts/run_gtest_qualification.py --binary build-source-windows/bin/NeverDSourcePatchDynCodeTests.exe --min-tests 3 --output build-source-windows/dyncode-evidence.xml
           if ($LASTEXITCODE -ne 0) { throw 'DynCode artifact evidence tests failed' }
-          & build-source-windows/bin/NeverDNativeExceptionRewriteContractTests.exe '--gtest_filter=ELFSourceSymbols.*:ELFSourceRelocations.*:ReplacementNativeCode.*' '--gtest_output=xml:build-source-windows/elf-reference-contracts.xml'
+          python scripts/run_gtest_qualification.py --binary build-source-windows/bin/NeverDNativeExceptionRewriteContractTests.exe --filter 'ELFSourceSymbols.*:ELFSourceRelocations.*:ReplacementNativeCode.*' --min-tests 17 --output build-source-windows/elf-reference-contracts.xml
           if ($LASTEXITCODE -ne 0) { throw 'ELF source reference contracts failed' }
-          python -c "import pathlib,xml.etree.ElementTree as E; paths=[pathlib.Path('build-source-windows')/n for n in ('native-pe.xml','target-matrix.xml')]; suites=[E.parse(p).getroot() for p in paths]; assert [int(s.attrib.get('tests','0')) for s in suites]==[20,154], 'Qualification inventory changed'; assert all(all(int(s.attrib.get(k,'0'))==0 for k in ('failures','errors','disabled')) for s in suites); assert all(c.find('skipped') is None for s in suites for c in s.iter('testcase')), 'Qualification cannot pass with skipped cases'"
-          if ($LASTEXITCODE -ne 0) { throw 'Incomplete native qualification' }
 
       - name: Prepare all PE process fixtures and execute x86 and x64
         shell: pwsh

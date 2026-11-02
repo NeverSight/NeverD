@@ -13,6 +13,7 @@
 #include "neverd/emulation/Limits.h"
 
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 
@@ -85,10 +86,18 @@ uint16_t networkAddressFamily(llvm::ArrayRef<uint8_t> Address) {
   return 0;
 }
 llvm::Error validateNetworkOptions(const LinuxNetworkOptions &Options) {
-  if (Options.Connections.size() + Options.DatagramConnections.size() >
-      ::neverd::limits::emulation::
-          kLinuxNetworkValidateNetworkOptionsConnectionsSizeOptionsDatagramConnectionsSizeLimit)
+  using ::neverd::limits::emulation::kMaxNetworkConnections;
+  const auto Streams = Options.Connections.size();
+  const auto Datagrams = Options.DatagramConnections.size();
+  if (Streams > kMaxNetworkConnections ||
+      Datagrams > kMaxNetworkConnections - Streams)
     return failure("offline network has too many connection attempts");
+  if (const auto &F = Options.TCPConnectFailures) {
+    if (!F->Count || !F->Error || !connectError(F->Error))
+      return failure("invalid offline TCP connection failure contract");
+    // Counted failures retain only a uint32_t cursor, not connection entries.
+    // The explicit count and the execution budget bound their consumption.
+  }
   uint64_t Bytes = 0;
   for (const auto &C : Options.Connections) {
     if (!networkAddressFamily(C.Peer) || !connectError(C.ConnectErrno) ||
@@ -296,6 +305,15 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       Socket->Datagram = &C;
       return Reply(0);
     }
+    if (NextConnection == Network->Connections.size() &&
+        Network->TCPConnectFailures) {
+      const auto &F = *Network->TCPConnectFailures;
+      if (TCPConnectFailuresConsumed == F.Count)
+        return unsupported(Result, "TCP connection failure contract exhausted");
+      ++TCPConnectFailuresConsumed;
+      Socket->Failed = true;
+      return Reply(uint64_t(0) - F.Error);
+    }
     if (NextConnection == Network->Connections.size() ||
         Network->Connections[NextConnection].Peer != Peer)
       return unsupported(Result,
@@ -306,6 +324,7 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       return Reply(uint64_t(0) - C.ConnectErrno);
     }
     Socket->Connection = &C;
+    Socket->ConnectionIndex = NextConnection - 1;
     return Reply(0);
   }
   if (Kind == ServiceKind::ReceiveFrom)
@@ -396,9 +415,20 @@ LinuxFiles::transferSocket(OpenSocket &Socket, bool Send, uint64_t Address,
     std::vector<uint8_t> Actual(Transfer);
     if (auto E = CPU.read(Address, Actual))
       return std::move(E);
-    if (llvm::ArrayRef(Actual) != Expected)
-      return unsupported(Result,
-                         "outgoing TCP bytes differ from the offline contract");
+    const auto Difference =
+        std::mismatch(Actual.begin(), Actual.end(), Expected.begin());
+    if (Difference.first != Actual.end()) {
+      const auto Offset = Difference.first - Actual.begin();
+      const auto Reason =
+          llvm::formatv(
+              "outgoing TCP bytes differ from the offline contract at "
+              "stream offset {0} (buffer offset {1}): expected {2:x2}, "
+              "actual {3:x2} (connection index {4})",
+              Position + Offset, Offset, *Difference.second, *Difference.first,
+              Socket.ConnectionIndex)
+              .str();
+      return unsupported(Result, Reason.c_str());
+    }
   } else if (auto E = CPU.write(Address, Expected))
     return std::move(E);
   Position += Transfer;

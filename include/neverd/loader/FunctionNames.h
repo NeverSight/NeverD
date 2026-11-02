@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Batch function naming preserves the origin of the selected image evidence.
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LOADER_FUNCTIONNAMES_H
 #define NEVERD_LOADER_FUNCTIONNAMES_H
@@ -16,16 +19,36 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace neverd {
+
+struct FunctionNameEvidence {
+  std::string Name;
+  NameOrigin Origin = NameOrigin::Synthesized;
+};
+
+/// Undo only the display numbering recorded for this function. A producer's
+/// literal helper_0 is evidence; a suffix added to distinguish two helper
+/// symbols in the listing is not. The returned view borrows Img or Name.
+inline llvm::StringRef functionNameBeforeNumbering(const BinaryImage &Img,
+                                                   va_t Addr,
+                                                   llvm::StringRef Name) {
+  const auto It = Img.SharedFunctionNames.find(Addr);
+  if (It != Img.SharedFunctionNames.end() && It->second.second == Name)
+    return It->second.first;
+  return Name;
+}
 
 /// BinaryImage::getFunctionNameAt() for each of \p Addrs, from one pass over
 /// the exports and symbols rather than one per address: the first export
 /// there when it has a name, else the symbol of the highest functionNameRank
 /// (the first of equal rank), as the function is listed.
-inline std::map<va_t, std::string>
-functionNamesAt(const BinaryImage &Img, const std::set<va_t> &Addrs) {
+inline std::map<va_t, FunctionNameEvidence>
+functionNameEvidenceAt(const BinaryImage &Img, const std::set<va_t> &Addrs) {
+  if (Addrs.empty())
+    return {};
   std::map<va_t, const Export *> FirstExports;
   for (const Export &Exp : Img.Exports)
     if (Addrs.count(Exp.Addr))
@@ -39,18 +62,51 @@ functionNamesAt(const BinaryImage &Img, const std::set<va_t> &Addrs) {
                          BinaryImage::functionNameRank(*It->second))
       It->second = &Sym;
   }
-  std::map<va_t, std::string> Names;
+  std::map<va_t, FunctionNameEvidence> Names;
   for (va_t Addr : Addrs) {
     const auto Exp = FirstExports.find(Addr);
     const auto Sym = BestSymbols.find(Addr);
     if (Exp != FirstExports.end() && !Exp->second->Name.empty())
-      Names.emplace(Addr, Exp->second->Name);
+      Names.emplace(
+          Addr, FunctionNameEvidence{Exp->second->Name, NameOrigin::Stated});
     else if (Sym != BestSymbols.end())
-      Names.emplace(Addr, Img.functionListName(Addr, Sym->second->Name));
+      Names.emplace(Addr, FunctionNameEvidence{
+                              Img.functionListName(Addr, Sym->second->Name),
+                              Sym->second->Origin});
     else
-      Names.emplace(Addr, (kAutoFuncPrefix + llvm::utohexstr(Addr)).str());
+      Names.emplace(Addr, FunctionNameEvidence{
+                              (kAutoFuncPrefix + llvm::utohexstr(Addr)).str(),
+                              NameOrigin::Synthesized});
   }
   return Names;
+}
+
+inline std::map<va_t, std::string>
+functionNamesAt(const BinaryImage &Img, const std::set<va_t> &Addrs) {
+  std::map<va_t, std::string> Names;
+  for (auto &[Addr, Evidence] : functionNameEvidenceAt(Img, Addrs))
+    Names.emplace(Addr, std::move(Evidence.Name));
+  return Names;
+}
+
+/// A recovered entry does not itself supply a name. Preserve the image naming
+/// producer's origin, including its generated fallback; only an additional
+/// name supplied by recovery is analysis evidence. A stated sub_<va> remains
+/// stated, regardless of its resemblance to the fallback spelling.
+inline std::map<va_t, NameOrigin>
+recoveredFunctionNameOrigins(const BinaryImage &Img,
+                             const std::map<va_t, llvm::StringRef> &Recovered) {
+  std::set<va_t> Addrs;
+  for (const auto &[Addr, Name] : Recovered)
+    Addrs.insert(Addr);
+  std::map<va_t, NameOrigin> Origins;
+  for (const auto &[Addr, Evidence] : functionNameEvidenceAt(Img, Addrs)) {
+    const auto Name = Recovered.at(Addr);
+    Origins.emplace(Addr, Name.empty()            ? NameOrigin::Synthesized
+                          : Name == Evidence.Name ? Evidence.Origin
+                                                  : NameOrigin::Analysis);
+  }
+  return Origins;
 }
 
 /// BinaryImage::statedFunctionNamesAt() for every address that has any,

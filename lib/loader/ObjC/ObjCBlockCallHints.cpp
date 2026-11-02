@@ -5,7 +5,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"

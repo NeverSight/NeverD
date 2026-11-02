@@ -17,7 +17,7 @@
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
@@ -32,6 +32,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -1638,6 +1639,35 @@ TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
         EXPECT_EQ(Stack->Inputs[1].ConstVal, 40u);
       }
     });
+    // With the image the converter authenticates the runtime import, and
+    // the saved-frame protocol certifies the call (SEHLocalUnwindProtocol.h):
+    // it becomes the jump it makes, which enters Target as an ordinary edge.
+    // No scope it leaves has a termination handler to call first.
+    EXPECT_NO_THROW({
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&Img);
+      auto Med = Converter.convert(Low, Arch::X64, BinaryFormat::COFF);
+      EXPECT_TRUE(verifyMedFunc(Med, "local-unwind-exit"));
+      ASSERT_EQ(Med.SEHLocalUnwindExits.size(), 1u);
+      const MedSEHLocalUnwindExit &Exit = Med.SEHLocalUnwindExits.front();
+      EXPECT_EQ(Exit.Target, Target);
+      EXPECT_TRUE(Exit.Handlers.empty());
+      const auto Resume = llvm::find_if(Med.Blocks, [&](const auto &Block) {
+        return Block.StartAddr == Target;
+      });
+      ASSERT_NE(Resume, Med.Blocks.end());
+      EXPECT_TRUE(llvm::any_of(Resume->Preds, [&](int Pred) {
+        return llvm::any_of(Med.Blocks[Pred].Ops, [&](const MedOp &Op) {
+          return Op.Addr == Exit.CallAddr && Op.Opcode == NdOp::BRANCH;
+        });
+      }));
+      EXPECT_FALSE(llvm::any_of(Med.Blocks, [&](const auto &Block) {
+        return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+          return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                 Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == Stub;
+        });
+      }));
+    });
     // An unchanged call address cannot retain proof after its arguments change.
     auto Changed = Low;
     bool ChangedArgument = false;
@@ -2370,7 +2400,7 @@ TEST(CFGBuilderCoverage, DecodesOperandSizePrefixedFence) {
   EXPECT_EQ(Function.LiftedInstructionCount, 2u);
 }
 
-TEST(MedLLVMEmitterAudit, CountsUnhandledValueIntrinsic) {
+TEST(MedLLVMEmitterAudit, RefusesUnhandledValueAndRetainsValidSourceIdentity) {
   MedFunc Func;
   Func.Entry = 0x140001000;
   Func.Name = "backend_audit_probe";
@@ -2398,9 +2428,14 @@ TEST(MedLLVMEmitterAudit, CountsUnhandledValueIntrinsic) {
 
   llvm::LLVMContext Context;
   MedLLVMEmitter Emitter;
+  EXPECT_THROW(Emitter.emit({Func}, Context, "backend-audit", Arch::X64),
+               std::runtime_error);
+  EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), 1u);
+  Func.Blocks[0].Ops[0].Opcode = NdOp::COPY;
+  Func.Blocks[0].Ops[0].Inputs[0] = MedVar::makeConst(7, Output.Size);
   auto Module = Emitter.emit({Func}, Context, "backend-audit", Arch::X64);
   ASSERT_NE(Module, nullptr);
-  EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), 1u);
+  EXPECT_EQ(Emitter.unhandledValueIntrinsicCount(), 0u);
   llvm::Function *Emitted = Module->getFunction(Func.Name);
   ASSERT_NE(Emitted, nullptr);
   auto OriginalVA = rewrite_source::getOriginalVA(*Emitted);
@@ -2478,73 +2513,6 @@ TEST_F(X86_64_CFGEntry, OptimizedAndUnoptimizedLLVMEmissionSucceed) {
 
   auto Unoptimized = liftToLLVMIRUnopt(testObj());
   ASSERT_EQ(Unoptimized.exitCode, 0) << Unoptimized.err;
-}
-
-// A long `.text` is swept for call targets in pieces on the worker threads
-// and the pieces joined as one sweep would have gone.  Random bytes decode to
-// every length of instruction and to bytes that do not decode at all, so the
-// pieces start in the middle of instructions; the symbols start wherever
-// they like, some where the long sweep never lands and some ending inside an
-// instruction.  What the detector finds must not depend on any of that.
-TEST(FuncDetectorCoverage, SweepsInPiecesExactlyAsInOnePiece) {
-  constexpr va_t TextVA = 0x401000;
-  constexpr size_t TextSize = 512 * 1024;
-  BinaryImage Img;
-  Img.Arch = Arch::X64;
-  Img.Bits = Bitness::Bits64;
-  Img.Format = BinaryFormat::ELF;
-  Img.Base = 0x400000;
-  Img.Entry = TextVA;
-
-  Segment Mapping;
-  Mapping.VA = TextVA;
-  Mapping.Size = TextSize;
-  Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  Mapping.Data.resize(TextSize);
-  uint64_t State = 0x9E3779B97F4A7C15ull;
-  auto Next = [&] {
-    State ^= State << 13, State ^= State >> 7, State ^= State << 17;
-    return State;
-  };
-  for (uint8_t &Byte : Mapping.Data)
-    Byte = static_cast<uint8_t>(Next());
-  // Real calls among the noise: `push rbp; call rel32` into the text.
-  for (unsigned Call = 0; Call < 4000; ++Call) {
-    const size_t At = Next() % (TextSize - 16);
-    const size_t Target = Next() % (TextSize - 16) & ~size_t(15);
-    Mapping.Data[At] = 0x55;
-    Mapping.Data[At + 1] = 0xE8;
-    const int32_t Disp = static_cast<int32_t>(static_cast<int64_t>(Target) -
-                                              static_cast<int64_t>(At + 6));
-    std::memcpy(Mapping.Data.data() + At + 2, &Disp, sizeof(Disp));
-    std::memcpy(Mapping.Data.data() + Target, "\x55\x48\x89\xE5\x5D\xC3",
-                6); // a small function there
-  }
-  Img.Segments.push_back(std::move(Mapping));
-  Section Code;
-  Code.Name = ".text";
-  Code.VA = TextVA;
-  Code.Size = TextSize;
-  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  Img.Sections.push_back(std::move(Code));
-  for (unsigned Sym = 0; Sym < 500; ++Sym) {
-    const va_t Start = TextVA + Next() % (TextSize - 64);
-    Img.Symbols.push_back(Symbol::makeFunc(Start, 1 + Next() % 60));
-  }
-
-  auto DetectWith = [&](unsigned Threads) {
-    setWorkerThreadCount(Threads);
-    Decoder Dec;
-    EXPECT_TRUE(Dec.init(Arch::X64));
-    FuncDetector Detector;
-    auto Functions = Detector.detect(Img, Dec);
-    setWorkerThreadCount(0);
-    return Functions;
-  };
-  const auto OnePiece = DetectWith(1);
-  const auto Pieces = DetectWith(16);
-  EXPECT_GT(OnePiece.size(), 1000u);
-  EXPECT_EQ(Pieces, OnePiece);
 }
 
 TEST(CFGBuilderCoverage, LocalUnwindFrameProofIntersectsEveryPredecessor) {

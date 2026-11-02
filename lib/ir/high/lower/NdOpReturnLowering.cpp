@@ -645,6 +645,21 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       Func.ReturnType->Size < RetVal->Type->Size)
     RetVal = sourceBitSlice(RetVal, 0, Func.ReturnType->Size);
 
+  if (Med.FPReturnViaX87 && RetVal && RetVal->Type && Func.ReturnType &&
+      RetVal->Type->Kind == NdTypeKind::Float &&
+      Func.ReturnType->Kind == NdTypeKind::Float &&
+      RetVal->Type->Size != Func.ReturnType->Size) {
+    // An IEEE value extended into the x87 carrier and immediately returned
+    // at its declared precision is still that value, not eighty raw bits.
+    if (RetVal->Kind == ExprKind::UnaryOp &&
+        RetVal->Op == NdOp::FLOAT_FLOAT2FLOAT && RetVal->Operands.size() == 1 &&
+        equalSourceTypes(RetVal->Operands[0]->Type, Func.ReturnType))
+      RetVal = RetVal->Operands[0];
+    else {
+      RetVal = HighExpr::makeUnary(NdOp::FLOAT_FLOAT2FLOAT, RetVal);
+      RetVal->Type = Func.ReturnType;
+    }
+  }
   S.RetVal = RetVal;
   Func.Body.push_back(std::move(S));
 }

@@ -13,8 +13,8 @@
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/loader/ExceptionInfo.h"
 

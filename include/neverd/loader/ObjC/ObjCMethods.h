@@ -1,3 +1,12 @@
+//===- ObjCMethods.h - Objective-C metadata declarations -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Static declarations and source hints, independent of runtime dispatch.
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_LOADER_OBJC_OBJCMETHODS_H
 #define NEVERD_LOADER_OBJC_OBJCMETHODS_H
 
@@ -7,6 +16,13 @@
 
 namespace neverd {
 struct BinaryImage;
+
+/// A preoptimized list applies when this Objective-C image is loaded. Static
+/// cache discovery retains the condition; it does not assert process state.
+struct ObjCCacheListOrigin {
+  uint32_t ImageIndex = 0;
+  va_t ImageAddress = 0;
+};
 
 struct ObjCIvar {
   std::string Name;
@@ -54,6 +70,7 @@ struct ObjCMethod {
   std::string TypeEncoding;
   std::string Status;
   bool IsClassMethod = false;
+  std::optional<ObjCCacheListOrigin> CacheOrigin;
   /// Validated declaration ABI, independent of runtime override order.
   /// Colliding declarations may retain this hint for their separate IMP
   /// bodies; it never selects a winner for Objective-C message dispatch.
@@ -62,9 +79,8 @@ struct ObjCMethod {
 };
 
 inline bool objcMethodHasSourceBody(const ObjCMethod &Method) {
-  return Method.TypeHint &&
-         (Method.Status == "supported" ||
-          Method.Status == "ambiguous_dispatch");
+  return Method.TypeHint && (Method.Status == "supported" ||
+                             Method.Status == "ambiguous_dispatch");
 }
 
 /// A protocol describes a call contract, never an executable implementation.
@@ -75,6 +91,7 @@ struct ObjCProtocolMethod {
   std::string Status;
   bool IsClassMethod = false;
   bool IsOptional = false;
+  std::optional<ObjCCacheListOrigin> CacheOrigin;
   std::optional<SourceFunctionTypeHint> TypeHint;
 };
 
@@ -103,6 +120,7 @@ struct ObjCProperty {
   bool IsClassProperty = false;
   bool ReadOnly = false;
   bool IsOptional = false;
+  std::optional<ObjCCacheListOrigin> CacheOrigin;
   std::string Status = "invalid_metadata";
   std::optional<SourceFunctionTypeHint> GetterTypeHint;
   std::optional<SourceFunctionTypeHint> SetterTypeHint;
@@ -119,4 +137,4 @@ void parseObjCMethods(BinaryImage &Img);
 void parseObjCStorage(BinaryImage &Img);
 
 } // namespace neverd
-#endif
+#endif // NEVERD_LOADER_OBJC_OBJCMETHODS_H

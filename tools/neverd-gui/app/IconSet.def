@@ -61,6 +61,8 @@ NEVERD_ICON_COLOR("#BABABA", "chrome grip, light theme")
 NEVERD_ICON_COLOR("#3B3B3B", "menu check, light theme")
 
 // File.
+NEVERD_ICON("compare", Navigation,
+            "two instruction columns joined by corresponding rows")
 NEVERD_ICON("open", File, "an open folder")
 NEVERD_ICON("folder", File, "a closed folder")
 NEVERD_ICON("folder_new", File, "a folder with a plus")
@@ -182,6 +184,7 @@ NEVERD_ICON("comment_repeatable", Edit, "a comment with a repeat badge")
 NEVERD_ICON("bookmark", Edit, "a flag")
 NEVERD_ICON("pin", Edit, "a push pin")
 NEVERD_ICON("lock", Edit, "a padlock")
+NEVERD_ICON("lock_open", Edit, "a padlock with its shackle raised open")
 
 // Analysis.
 NEVERD_ICON("analyze", Analysis, "a gear with a play mark")
@@ -248,6 +251,12 @@ NEVERD_ICON("start_new", Glyph, "a page with a plus")
 NEVERD_ICON("start_go", Glyph, "a window with a side pane")
 NEVERD_ICON("start_previous", Glyph, "a clock with an arrow turning back")
 NEVERD_ICON("start_drop", Glyph, "an arrow down into a tray")
+
+NEVERD_ICON("patch", Transform, "two byte tiles and a pencil")
+NEVERD_ICON("patch_nop", Transform, "byte tiles with a pause")
+NEVERD_ICON("patch_assemble", Transform, "code brackets with a pencil")
+NEVERD_ICON("patch_revert", Transform, "an arrow returning to a byte")
+NEVERD_ICON("patched_bytes", Transform, "a list of changed byte tiles")
 
 // The NeverD logo (docs/assets/neverd-logo-dark.svg), as the window icon.
 NEVERD_ICON("app", Brand, "the NeverD logo")

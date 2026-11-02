@@ -34,7 +34,8 @@ class Inventory {
   uint64_t NameUnits = 0;
 
   void step(uint64_t Count = 1) {
-    if (Count > MaxJavaScriptModuleSteps - Result.Steps)
+    if (Count >
+        sourceWorkLimit(Source, MaxJavaScriptModuleSteps) - Result.Steps)
       throw Error("source_module_budget_exceeded");
     Result.Steps += Count;
   }

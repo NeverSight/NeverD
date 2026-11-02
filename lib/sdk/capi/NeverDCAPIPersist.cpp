@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "BytecodeOperands.h"
 #include "JSONText.h"
 #include "LoadOptions.h"
 #include "SessionImpl.h"
@@ -21,6 +22,7 @@
 #include "neverd/ir/low/PlatformEvidence.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/LoadCandidate.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/loader/Raw/ISAIdentify.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/FilePath.h"
@@ -37,6 +39,7 @@
 #include <cmath>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <vector>
@@ -49,7 +52,8 @@ using namespace neverd::sdk;
 // ===--------------------------------------------------------------------===//
 
 static std::filesystem::path annotationPath(const Session *S) {
-  return project_files::path(S->FilePath, project_files::File::Annotations);
+  return project_files::path(S->projectInputPath(),
+                             project_files::File::Annotations);
 }
 
 static std::optional<va_t>
@@ -122,7 +126,7 @@ int neverd_annotations_save(neverd_session_t Sess) {
     S->setError("no binary loaded");
     return 1;
   }
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return 1;
@@ -174,19 +178,18 @@ int neverd_annotations_load(neverd_session_t Sess) {
   auto *Arr = Parsed->getAsArray();
   if (!Arr)
     return 1;
-  S->Annotations.clear();
+  std::map<va_t, std::string> Annotations;
   for (const auto &Item : *Arr) {
     auto *Obj = Item.getAsObject();
-    if (!Obj)
-      continue;
-    const llvm::json::Value *AddrVal = Obj->get("addr");
-    auto Text = Obj->getString("text");
-    if (!AddrVal || !Text)
-      continue;
-    std::optional<va_t> Addr = parsePersistedAddress(*AddrVal);
-    if (Addr)
-      S->Annotations[*Addr] = Text->str();
+    const auto *AddrVal = Obj ? Obj->get("addr") : nullptr;
+    const auto Text = Obj ? Obj->getString("text") : std::nullopt;
+    const auto Addr = AddrVal ? parsePersistedAddress(*AddrVal) : std::nullopt;
+    if (!Addr || !Text || !Annotations.emplace(*Addr, Text->str()).second) {
+      S->setError("annotations sidecar has an invalid or duplicate row");
+      return 1;
+    }
   }
+  S->Annotations = std::move(Annotations);
   return 0;
 }
 
@@ -368,13 +371,13 @@ int neverd_renames_save(neverd_session_t Sess) {
     return -1;
   if (!S->Loaded)
     return -1;
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
   }
   const auto Path =
-      project_files::path(S->FilePath, project_files::File::Renames);
+      project_files::path(S->projectInputPath(), project_files::File::Renames);
   llvm::json::Array Arr;
   for (const auto &[Addr, NewName] : S->Renames) {
     llvm::json::Object Obj;
@@ -395,7 +398,7 @@ int neverd_renames_load(neverd_session_t Sess) {
   if (!S->Loaded)
     return -1;
   const auto Path =
-      project_files::path(S->FilePath, project_files::File::Renames);
+      project_files::path(S->projectInputPath(), project_files::File::Renames);
   auto Reset = [&] {
     for (auto &F : S->Functions) {
       if (S->Renames.find(F.Entry) == S->Renames.end())
@@ -435,22 +438,23 @@ int neverd_renames_load(neverd_session_t Sess) {
   auto *Arr = Parsed->getAsArray();
   if (!Arr)
     return -1;
-  Reset();
+  std::map<va_t, std::string> Renames;
   for (const auto &V : *Arr) {
     auto *Obj = V.getAsObject();
-    if (!Obj)
-      continue;
-    const llvm::json::Value *AddrVal = Obj->get("addr");
-    auto Renamed = Obj->getString("renamed");
-    if (!AddrVal || !Renamed)
-      continue;
-    std::optional<va_t> Addr = parsePersistedAddress(*AddrVal);
-    if (!Addr)
-      continue;
-    S->Renames[*Addr] = Renamed->str();
+    const auto *AddrVal = Obj ? Obj->get("addr") : nullptr;
+    const auto Renamed = Obj ? Obj->getString("renamed") : std::nullopt;
+    const auto Addr = AddrVal ? parsePersistedAddress(*AddrVal) : std::nullopt;
+    if (!Addr || !Renamed || !Renames.emplace(*Addr, Renamed->str()).second) {
+      S->setError("renames sidecar has an invalid or duplicate row");
+      return -1;
+    }
+  }
+  Reset();
+  S->Renames = std::move(Renames);
+  for (const auto &[Addr, Renamed] : S->Renames) {
     for (auto &F : S->Functions) {
-      if (F.Entry == *Addr) {
-        F.Name = Renamed->str();
+      if (F.Entry == Addr) {
+        F.Name = Renamed;
         F.Origin = NameOrigin::User;
         break;
       }
@@ -465,7 +469,8 @@ int neverd_renames_load(neverd_session_t Sess) {
 // ===--------------------------------------------------------------------===//
 
 static std::filesystem::path functionsPath(const Session *S) {
-  return project_files::path(S->FilePath, project_files::File::Functions);
+  return project_files::path(S->projectInputPath(),
+                             project_files::File::Functions);
 }
 
 /// \p Color as "#RRGGBB".
@@ -674,7 +679,7 @@ int neverd_functions_save(neverd_session_t Sess) {
     return -1;
   if (!S->Loaded)
     return -1;
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
@@ -947,7 +952,7 @@ uint64_t sizedItemBytes(llvm::StringRef Kind) {
 }
 
 std::filesystem::path itemsPath(const Session *S) {
-  return project_files::path(S->FilePath, project_files::File::Items);
+  return project_files::path(S->projectInputPath(), project_files::File::Items);
 }
 
 #define NEVERD_OPERAND_BASE(Id, Spelling)                                      \
@@ -955,7 +960,8 @@ std::filesystem::path itemsPath(const Session *S) {
 #include "neverd/OperandFormats.def"
 
 std::filesystem::path operandsPath(const Session *S) {
-  return project_files::path(S->FilePath, project_files::File::Operands);
+  return project_files::path(S->projectInputPath(),
+                             project_files::File::Operands);
 }
 
 bool isOperandBase(llvm::StringRef Base) {
@@ -1396,26 +1402,27 @@ int neverd_operand_format_set(neverd_session_t Sess, neverd_va_t Addr,
       return -1;
     }
     if (Format->Base == "enum") {
+      // An enumerator stands for an immediate the decoder types, as the
+      // operand the client counted spells it.
       const auto *Seg = S->Img.getSegmentFor(Addr);
       Decoder Dec;
       DecodedInsn Insn{};
-      if (!Seg || (S->Img.Arch != Arch::X64 && S->Img.Arch != Arch::X86) ||
-          Addr - Seg->VA >= Seg->Data.size() || !Dec.init(S->Img) ||
-          !Dec.selectMode(S->Img, Addr) ||
-          !Dec.decodeOne(
-              Seg->Data.data() + (Addr - Seg->VA),
-              std::min<size_t>(16, Seg->Data.size() - (Addr - Seg->VA)), Addr,
-              Insn) ||
-          !Insn.Raw || !Insn.Raw->detail) {
-        S->setError("Select an actual decoded x86 immediate operand");
-        return -1;
-      }
-      const auto Facts = describeNativeOperands(Dec, Insn, S->Img.Arch, false);
-      auto Selected = std::find_if(
-          Facts.Immediates.begin(), Facts.Immediates.end(),
-          [&](const auto &I) { return I.Operand == unsigned(Operand); });
-      if (Selected == Facts.Immediates.end()) {
-        S->setError("Select an actual decoded x86 immediate operand");
+      std::optional<NativeImmediate> Selected;
+      std::string Unselected = "Select an actual decoded immediate operand";
+      if (S->Img.Arch == Arch::SBF || S->Img.Arch == Arch::EVM)
+        Selected = bytecodeImmediateAt(*S, Addr, unsigned(Operand), Unselected);
+      else if (Seg && Addr - Seg->VA < Seg->Data.size() && Dec.init(S->Img) &&
+               Dec.selectMode(S->Img, Addr) &&
+               Dec.decodeOne(
+                   Seg->Data.data() + (Addr - Seg->VA),
+                   std::min<size_t>(16, Seg->Data.size() - (Addr - Seg->VA)),
+                   Addr, Insn) &&
+               Insn.Raw && Insn.Raw->detail)
+        Selected = nativeImmediateAt(
+            describeNativeOperands(Dec, Insn, S->Img.Arch, false), Insn,
+            S->Img.Arch, unsigned(Operand));
+      if (!Selected) {
+        S->setError(Unselected);
         return -1;
       }
       const auto Value = "0x" + llvm::utohexstr(Selected->Value);
@@ -1471,7 +1478,7 @@ int neverd_operand_formats_save(neverd_session_t Sess) {
     return -1;
   if (!S->Loaded)
     return -1;
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
@@ -1565,7 +1572,7 @@ int neverd_items_save(neverd_session_t Sess) {
     return -1;
   if (!S->Loaded)
     return -1;
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
@@ -1682,6 +1689,17 @@ neverd::sdk::parseLoadOptions(llvm::StringRef Text) {
     return loadOptionsError("load options are not a JSON object");
   const auto Loader = Object->getString("loader");
   LoaderChoice Choice;
+  using namespace macho_loader::cache_load;
+  if (Object->get(kImageKey) || Loader == kLoader) {
+    const auto Image = Object->getString(kImageKey);
+    if ((Object->get(kLoaderKey) && !Loader) || !Image || Image->empty() ||
+        Image->contains('\0') ||
+        (Loader && *Loader != AutomaticLoaderName && *Loader != kLoader))
+      return loadOptionsError(kChoiceInvalid);
+    Choice.Format = BinaryFormat::MachO;
+    Choice.MachOSharedCacheImage = Image->str();
+    return Choice;
+  }
   if (!Loader || *Loader == AutomaticLoaderName)
     return Choice;
   if (*Loader == getLoadRowLoader(LoadRow::EVM)) {
@@ -1689,8 +1707,7 @@ neverd::sdk::parseLoadOptions(llvm::StringRef Text) {
     return Choice;
   }
   if (*Loader != getLoadRowLoader(LoadRow::Binary))
-    return loadOptionsError("unknown loader " + *Loader +
-                            "; the loaders are auto, evm and binary");
+    return loadOptionsError(llvm::formatv(kUnknownLoader, *Loader));
   Choice.Format = BinaryFormat::Raw;
   RawLoadOptions &Options = Choice.Raw;
   // No processor, or auto, has the load read it from the bytes.
@@ -1738,6 +1755,12 @@ neverd::sdk::parseLoadOptions(llvm::StringRef Text) {
 
 std::string neverd::sdk::loadOptionsJson(const LoaderChoice &Choice) {
   llvm::json::Object Object;
+  if (!Choice.MachOSharedCacheImage.empty()) {
+    Object[macho_loader::cache_load::kLoaderKey] =
+        macho_loader::cache_load::kLoader;
+    Object[macho_loader::cache_load::kImageKey] = Choice.MachOSharedCacheImage;
+    return jsonToString(llvm::json::Value(std::move(Object)));
+  }
   switch (Choice.Format) {
   case BinaryFormat::EVM:
     Object["loader"] = getLoadRowLoader(LoadRow::EVM);
@@ -1791,6 +1814,22 @@ neverd::sdk::readLoadOptionsSidecar(const std::filesystem::path &Input) {
     return loadOptionsError("load options sidecar: " +
                             llvm::toString(Options.takeError()));
   return Options;
+}
+
+llvm::Expected<LoaderChoice>
+neverd::sdk::sessionLoadOptions(const Session *S,
+                                const std::filesystem::path &Input) {
+  if (S && S->RequestedLoad)
+    return *S->RequestedLoad;
+  if (S && S->Loaded && S->Img.MachOSharedCache) {
+    // Reanalysis must retain this session's image even if another window
+    // saved a different selection in the cache's root load-options file.
+    std::error_code Error;
+    if (Input == S->FilePath ||
+        std::filesystem::equivalent(Input, S->SanitizeSourcePath, Error))
+      return S->LoadedChoice;
+  }
+  return readLoadOptionsSidecar(Input);
 }
 
 llvm::Error
@@ -1902,6 +1941,23 @@ int neverd_load_options_save(neverd_session_t Sess) {
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
+  }
+  std::unique_ptr<ProjectWriteLock> ImageLock;
+  if (S->Img.MachOSharedCache) {
+    // Saving the root selection also records this image's input identity.
+    // Both writers must be owned before publishing either project file.
+    ImageLock = std::make_unique<ProjectWriteLock>(S->FilePath,
+                                                   S->projectNamespaceSuffix());
+    if (!*ImageLock) {
+      S->setError(
+          std::string(macho_loader::cache_load::kProjectWriterUnavailable) +
+          ImageLock->error());
+      return -1;
+    }
+    if (auto Error = project_files::prepare(S->FilePath)) {
+      S->setError(Error.message());
+      return -1;
+    }
   }
   const auto Path = loadOptionsPath(S->FilePath);
   // A file read as its header or contents say needs no sidecar.

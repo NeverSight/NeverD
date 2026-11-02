@@ -18,6 +18,13 @@
 
 namespace neverd::limits::ir {
 
+#define NEVERD_A64_SVE_STATE_LIMIT(Name, Value)                                \
+  inline constexpr size_t Name = Value;
+#include "neverd/ir/med/AArch64/AArch64SVEState.def"
+
+/// Shared HighIR text printing, including structured statement children.
+inline constexpr unsigned kMaxHighIRPrintNesting = 200;
+
 /// Maximum workers in statement-region symbolic simplification.
 inline constexpr unsigned kMaxHighSymbolicWorkers = 4u;
 
@@ -76,6 +83,10 @@ inline constexpr unsigned kNdTypesNdTypeStrBudget = 4096;
 // lib/ir/RegisterFlow.cpp
 inline constexpr size_t kRegisterFlowQueryRegisterFlowBudget = 1000000;
 
+// lib/ir/low/CallRegisterUnread.cpp
+/// Whole-query ceiling for conservative callee input-observation proofs.
+inline constexpr size_t kCallRegisterUnreadWork = 1000000;
+
 // lib/ir/SourceParameterPlacement.cpp
 /// More scalars than any value a convention passes in registers holds: a
 /// value with more is placed by its size alone or not at all.
@@ -87,6 +98,28 @@ inline constexpr int64_t kSourceStackFrameMaxFrame = 1 << 20;
 // lib/ir/SourceVariableFlow.cpp
 inline constexpr size_t kSourceVariableFlowMaxNodes = 20000;
 inline constexpr size_t kSourceVariableFlowMaxWork = 2000000;
+// Shared per-function budget for source-only proofs of unwritten frame bytes.
+inline constexpr size_t kUnwrittenSourceFrameReadWork = 262144;
+// Shared per-function budget for source-only scratch spill overwrite proofs.
+inline constexpr size_t kSourceEntrySpillWork = 262144;
+// Per-function budget for proving that a call receives the slot of an
+// undefined scratch store before anything reads it
+// (markUndefinedScratchStores).
+inline constexpr size_t kUndefinedScratchEscapeWork = 262144;
+// Bounded scalar/CPUID leaf summaries and total source expansion per function.
+inline constexpr size_t kSourceRegisterLeafOps = 256;
+inline constexpr size_t kSourceRegisterCallOps = 4096;
+// Shared per-function budget for implicit CALL return-slot observations.
+inline constexpr size_t kSourceCallReturnReadWork = 262144;
+// Per-function work for complete noncapturing frame/pointee use proofs.
+inline constexpr size_t kSourceFrameBorrowWork = 262144;
+// A direct borrow chain also consumes native stack while composing summaries;
+// the work budget alone permits many thousands of tiny relay functions.
+inline constexpr unsigned kSourceFrameBorrowCallDepth = 32;
+/// Closed internal-call return proofs are bounded independently of general
+/// CFG discovery. Larger groups retain the ordinary conservative admission.
+inline constexpr size_t kOwnInteriorReturnProofFunctions = 32;
+inline constexpr uint64_t kOwnInteriorReturnProofBytes = 4096;
 
 // lib/ir/high/HighSourceFlow.cpp
 inline constexpr size_t kHighSourceFlowMaxDiagnostics = 4096;
@@ -112,6 +145,8 @@ inline constexpr size_t kHighDeadStoreElimNarrowSourceConcatLocalsBudget =
 inline constexpr size_t kHighDeadStoreElimBudget = 200000;
 inline constexpr size_t kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget =
     100000;
+inline constexpr size_t
+    kHighDeadStoreElimElimUndefinedEntryScratchStoresBudget = 100000;
 
 // lib/ir/high/pass/HighDemandedBytes.cpp
 inline constexpr size_t kHighDemandedBytesVisitBudget = 2000000;
@@ -136,6 +171,10 @@ inline constexpr size_t kHighFrameStoreForwardingFrameWalkBudget = 100000;
 
 // lib/ir/high/pass/HighPrivateFrameCopies.cpp
 inline constexpr size_t kHighPrivateFrameCopiesBudget = 1000000;
+
+// lib/ir/high/structure/HighCommonContinuations.cpp
+/// Bound exact terminal-continuation comparison before retaining both copies.
+inline constexpr size_t kHighCommonContinuationBudget = 100000;
 
 // lib/ir/high/pass/HighSharedExpressions.cpp
 /// A statement prints this many nodes at least before a repeated value is
@@ -194,7 +233,7 @@ inline constexpr size_t kHighLoopRecoveryBudget = 1000000;
 /// blocks, and copying it once per clause stays well within this.
 inline constexpr unsigned kItaniumHandlersMaxPadStatements = 4096;
 
-// lib/ir/high/structure/X86RegistrationFilter.cpp
+// lib/ir/high/structure/X86/X86RegistrationFilter.cpp
 inline constexpr size_t kX86RegistrationFilterRegistrationFilterValueBudget =
     256;
 
@@ -205,7 +244,7 @@ inline constexpr size_t kX86RegistrationFilterRegistrationFilterValueBudget =
 inline constexpr size_t kCFGBuilderMaxScratchDecodeAttempts = 1024;
 inline constexpr unsigned kCFGBuilderMaxLookaheadInstructions = 32;
 
-// lib/ir/low/CFGBuilderX86Fpu.cpp
+// lib/ir/low/X86/CFGBuilderX86Fpu.cpp
 inline constexpr size_t kCFGBuilderX86FpuMaxPendingGraphs = 32;
 inline constexpr size_t kCFGBuilderX86FpuMaxPendingBytes = 1024 * 1024;
 inline constexpr size_t kCFGBuilderX86FpuMaxRefusals = size_t(1) << 18;
@@ -292,6 +331,11 @@ inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 128;
 // lib/ir/low/jumptable/ResolverDefinitionCache.h
 inline constexpr size_t kResolverDefinitionCacheCapacity = 4096;
 
+// lib/ir/low/jumptable/ResolverExactDefinitions.h
+// Bound the query-local index to at most 2 MiB of position storage. Larger
+// prefixes keep the original metered scan; this never limits proof coverage.
+inline constexpr size_t kResolverExactDefinitionIndexMaxOps = 65536;
+
 // lib/ir/low/jumptable/ResolverMemoryDefinitionCache.h
 inline constexpr size_t kResolverMemoryDefinitionCacheCapacity = 1024;
 
@@ -320,15 +364,24 @@ inline constexpr unsigned kMedImmutableTableScansMaxEvaluationDepth = 64;
 inline constexpr unsigned kMedImmutableTableScansMaxScanIterations = 4096;
 inline constexpr unsigned kMedImmutableTableScansMaxFoldRounds = 4;
 
+// lib/ir/med/pass/MedSSA.cpp
+// COPY and constant-step definitions one termination handler register value
+// is traced through before it has no stable form.
+inline constexpr unsigned kMedSSASEHFuncletRegisterChainLimit = 32;
+
 // lib/ir/med/pass/MedMutableSource.cpp
-inline constexpr size_t kMedMutableSourceMaxBlocks = 4096;
+// Block count, storage matrix size and propagation work have independent
+// ceilings. The matrix bounds the three packed liveness sets per block.
+inline constexpr size_t kMedMutableSourceMaxBlocks = 65536;
 inline constexpr size_t kMedMutableSourceMaxValues = 4096;
 inline constexpr size_t kMedMutableSourceMaxOperations = 8 * 1024 * 1024;
-inline constexpr size_t kMedMutableSourceMaxBlockValues = 4 * 1024 * 1024;
+inline constexpr size_t kMedMutableSourceMaxBlockValues = 16 * 1024 * 1024;
 inline constexpr size_t kMedMutableSourceMaxPropagationWords = 16 * 1024 * 1024;
 
 // lib/ir/med/pass/MedStackAlignment.cpp
 inline constexpr size_t kMedStackAlignmentMaxProofSteps = 1 << 16;
+// Bound leaf admission before building a scalar definition index.
+inline constexpr size_t kMedIntegerReturnRangeMaxOps = 4096;
 
 // include/neverd/ir/high/HighSwiftErrorProjection.h
 inline constexpr int
@@ -341,7 +394,7 @@ inline constexpr int kImportedMemoryCopyReadRecordOpsSizeLimit = 32;
 // include/neverd/ir/low/SourceFrameEffects.h
 inline constexpr int kSourceFrameEffectsMatchABIValueIdentitySizeLimit = 256;
 
-// include/neverd/ir/med/I386PicAddress.h
+// include/neverd/ir/med/X86/I386PicAddress.h
 inline constexpr int kI386PicAddressFoldI386PicAddressVisitDepthLimit = 16;
 
 // lib/ir/NdTypes.cpp
@@ -371,11 +424,15 @@ inline constexpr int kSourceABIValidateSourceABIHintParametersSizeLimit =
 inline constexpr int kSourceABIAssignDarwinSourceABIHintParametersSizeLimit =
     ::neverd::limits::ir::kMaxSourceABIParameters;
 
+// lib/ir/low/LowScalarConstant.cpp
+inline constexpr size_t kConstantRegisterCallOperations = 20000;
+
 // lib/ir/SourceCallABI.cpp
 inline constexpr int
     kSourceCallABINeverdAssignAnalystCallABISignatureParametersSizeLimit = 32;
-inline constexpr int
-    kSourceCallABINeverdSourceCallVariadicStateDefinedWorkLimit = 20000;
+// Vector counts share the exact register-call constant query and its budget.
+inline constexpr uint16_t kSourceCallStackWriteBytes = 16;
+inline constexpr int64_t kSourceCallStackAddressMagnitude = int64_t{1} << 30;
 inline constexpr int
     kSourceCallABINeverdSourceCallStackArgumentsDefinedWorkLimit = 20000;
 inline constexpr int
@@ -446,7 +503,7 @@ inline constexpr int
     kCallArgCollectionMedToHighConverterCollectCallArgsInlineUniqueLoadVarsDepthLimit =
         8;
 
-// lib/ir/high/lower/CallArgCollectionWin64.cpp
+// lib/ir/high/lower/X86/CallArgCollectionWin64.cpp
 inline constexpr int
     kCallArgCollectionWin64ResolvePassThroughParamsIsConstLikeDepthLimit = 8;
 inline constexpr int
@@ -473,6 +530,7 @@ inline constexpr int kHighDemandedBytesShiftAmountsDepthLimit = 4;
 
 // lib/ir/high/pass/HighExprSimplify.cpp
 inline constexpr int kHighExprSimplifyZeroOrOneDepthLimit = 8;
+inline constexpr unsigned kHighExprSimplifyZeroTestViewDepthLimit = 16;
 inline constexpr int kHighExprSimplifySameIntegerValuePeelPeelDepthLimit = 4;
 
 // lib/ir/high/pass/HighFlowOracle.cpp
@@ -497,6 +555,11 @@ inline constexpr int
 inline constexpr int kHighSymSimplifyStatementRegionsStatementCountLimit = 1024;
 inline constexpr int
     kHighSymSimplifyStatementRegionsFinishTotalWeightMinArgument1 = 4096;
+
+// lib/ir/high/pass/HighPointerTypeInference.cpp
+inline constexpr size_t kHighPointerTypeMaxOperations = 2000000;
+inline constexpr size_t kHighPointerTypeMaxStateEntries = 1000000;
+inline constexpr unsigned kHighPointerTypeMaxExpressionDepth = 64;
 
 // lib/ir/high/pass/HighTypeInference.cpp
 inline constexpr int
@@ -551,7 +614,7 @@ inline constexpr int
     kCFGBuilderBuildOnceRelocationFreeProofStillMatchesOccurrenceArithmeticProofSizeLimit =
         32;
 
-// lib/ir/low/CFGBuilderX86Fpu.cpp
+// lib/ir/low/X86/CFGBuilderX86Fpu.cpp
 inline constexpr int
     kCFGBuilderX86FpuCFGBuilderWaitForX87CallGraphWaitersForTestingSeconds = 5;
 inline constexpr int kCFGBuilderX86FpuPrepareCallsBytesLimit = 4096;
@@ -579,6 +642,9 @@ inline constexpr int
 
 // lib/ir/low/SourceFrameAnalysis.cpp
 inline constexpr size_t kSourceFrameAnalysisRemaining = 262144;
+inline constexpr size_t kSourceFrameStorageObservationPointers = 8;
+inline constexpr size_t kSourceFrameTextBytes = 1024;
+inline constexpr size_t kSourceFrameTextObservations = 32;
 inline constexpr int kSourceFrameAnalysisTransferWriteOutputBytesLimit = 256;
 inline constexpr int kSourceFrameAnalysisFrameGraphCountLimit = 16384;
 inline constexpr int
@@ -757,14 +823,14 @@ inline constexpr int
 inline constexpr int kMedCallingConvFPDetectFPParamsShiftAmountsDepthLimit = 4;
 inline constexpr int kMedCallingConvFPDetectFPParamsConstantBitsDepthLimit = 16;
 
-// lib/ir/med/abi/MedCallingConvX86.cpp
+// lib/ir/med/abi/X86/MedCallingConvX86.cpp
 inline constexpr int
     kMedCallingConvX86DetectCdeclStackParamsTraceOffDepthLimit = 4096;
 
 // lib/ir/med/abi/MedVariadic.cpp
 inline constexpr int kMedVariadicEntrySpDeltaDepth0Default = 64;
 
-// lib/ir/med/abi/MedVariadicDarwin.cpp
+// lib/ir/med/abi/AArch64/MedVariadicDarwin.cpp
 inline constexpr int
     kMedVariadicDarwinHasDarwinVariadicPrologueThruCopyDepthLimit = 32;
 inline constexpr int
@@ -795,7 +861,6 @@ inline constexpr int kMedTypePassScalarFPLoadElemSizeDepthLimit = 16;
 inline constexpr int kMedTypePassX87ReturnElemSizeDepthLimit = 16;
 inline constexpr int kMedTypePassIsReturnRegRestoreDepthLimit = 8;
 inline constexpr int kMedTypePassIntRetEffWidthRecDepthLimit = 8;
-inline constexpr int kMedTypePassDefinedLowBytesRecDepthLimit = 16;
 inline constexpr int kMedTypePassInferReturnTypeStepsLimit = 16;
 
 // include/neverd/ir/med/MedSwitchNorm.h
@@ -810,10 +875,6 @@ inline constexpr int kCallArgCollectionAttachProducingLoadFromWindowsPeelLimit =
 
 // lib/ir/high/lower/MedToHigh.cpp
 inline constexpr int kMedToHighMedToHighConverterReduceLateGotosRoundLimit = 8;
-
-// lib/ir/high/lower/NdOpCallIndLowering.cpp
-inline constexpr int
-    kNdOpCallIndLoweringMedToHighConverterResolveCallIndTargetHopLimit = 4;
 
 // lib/ir/high/pass/HighDCE.cpp
 inline constexpr int kHighDCEPreDCEPreIterLimit = 8;

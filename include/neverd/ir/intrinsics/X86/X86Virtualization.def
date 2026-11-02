@@ -1,0 +1,27 @@
+//===- X86Virtualization.def - VMX/SVM instruction inventory -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// NEVERD_X86_VIRTUALIZATION(Id, Mnemonic, Result, Arguments, MemoryArgument,
+//                           MemoryBytes, PhysicalAddress). No include guard.
+
+NEVERD_X86_VIRTUALIZATION(VmxRead, "vmread", Read, 1, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxReadMemory, "vmread", Flags, 2, 1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxWrite, "vmwrite", Flags, 2, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxWriteMemory, "vmwrite", Flags, 2, 1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxOn, "vmxon", Flags, 1, 0, 8, false)
+NEVERD_X86_VIRTUALIZATION(VmxOff, "vmxoff", Flags, 0, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxClear, "vmclear", Flags, 1, 0, 8, false)
+NEVERD_X86_VIRTUALIZATION(VmxPtrLoad, "vmptrld", Flags, 1, 0, 8, false)
+NEVERD_X86_VIRTUALIZATION(VmxPtrStore, "vmptrst", Flags, 1, 0, 8, false)
+NEVERD_X86_VIRTUALIZATION(VmxInvalidateEpt, "invept", Flags, 2, 1, 16, false)
+NEVERD_X86_VIRTUALIZATION(VmxInvalidateVpid, "invvpid", Flags, 2, 1, 16, false)
+NEVERD_X86_VIRTUALIZATION(VmxLaunch, "vmlaunch", Flags, 0, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxResume, "vmresume", Flags, 0, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(VmxFunction, "vmfunc", None, 2, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(SvmLoad, "vmload", None, 1, -1, 0, true)
+NEVERD_X86_VIRTUALIZATION(SvmSave, "vmsave", None, 1, -1, 0, true)
+NEVERD_X86_VIRTUALIZATION(SvmStgi, "stgi", None, 0, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(SvmClgi, "clgi", None, 0, -1, 0, false)
+NEVERD_X86_VIRTUALIZATION(SvmInvalidate, "invlpga", None, 2, -1, 0, true)

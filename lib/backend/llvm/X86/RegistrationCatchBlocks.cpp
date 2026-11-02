@@ -3,8 +3,8 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
-#include "neverd/backend/llvm/X86RegistrationCatch.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 
 namespace neverd {
 std::optional<std::map<int, X86RegistrationCatchIdentity>>

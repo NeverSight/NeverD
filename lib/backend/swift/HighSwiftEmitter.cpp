@@ -4,9 +4,11 @@
 
 #include "neverd/backend/Limits.h"
 #include "neverd/ir/Limits.h"
-#include "neverd/ir/X87Constant.h"
-#include "neverd/ir/X87Context.h"
-#include "neverd/ir/high/X86FPStateShape.h"
+#include "neverd/ir/X86/X87Constant.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/X86/X87GuardedValue.h"
+#include "neverd/ir/X86/X87Value.h"
+#include "neverd/ir/high/X86/X86FPStateShape.h"
 
 #include <algorithm>
 #include <cctype>
@@ -561,7 +563,9 @@ class Writer {
   }
 
   std::string call(const ExprPtr &E, unsigned Depth, bool Statement = false) {
-    if (E && (isX87ConstantControlIntrinsic(E->IntrinsicId) ||
+    if (E && (isX87GuardedValueIntrinsic(E->IntrinsicId) ||
+              x87ValueInfo(E->IntrinsicId) ||
+              isX87ConstantControlIntrinsic(E->IntrinsicId) ||
               isX87ContextIntrinsic(E->IntrinsicId)))
       throw Unsupported("Swift x87 constant/control completion is unsupported");
     if (E && E->IntrinsicId == Intrinsic::CetRdSsp)
@@ -1450,6 +1454,10 @@ HighSwiftEmitter::emit(const HighFunc &Function,
                        const std::vector<std::string> &ReservedNames) const {
   SwiftEmissionResult Result;
   try {
+    if (Function.ReturnProtection)
+      throw Unsupported(
+          "Swift source cannot express the recovered PAC return-protection "
+          "attribute; use the C/C++ projection.");
     Writer SourceWriter(Function, Signature, Callees, ReservedNames);
     Result.Source = SourceWriter.emit();
     Result.MemberSource = SourceWriter.memberSource();

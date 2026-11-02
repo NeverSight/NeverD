@@ -52,12 +52,24 @@ add_neverd_component_library(NeverDBackendLLVM
   AArch64/MedLLVMAArch64ValueEmitter.cpp
   ARM/MedLLVMARMSideeffect.cpp
   ARM/MedLLVMARMValueEmitter.cpp
+  COFF/MedLLVMPEImageBase.cpp
   X86/MedLLVMX86CryptoEmitter.cpp
   X86/MedLLVMX86GlobalData.cpp
   X86/MedLLVMX86ShuffleEmitter.cpp
   X86/MedLLVMX86Sideeffect.cpp
   X86/MedLLVMX86SimdEmitter.cpp
   X86/MedLLVMX86ValueEmitter.cpp
+  X86/MedLLVMX86Hle.cpp
+  X86/MedLLVMX86Virtualization.cpp
+  X86/MedLLVMX86SystemState.cpp
+  X86/MedLLVMX86CompressExpand.cpp
+  X86/MedLLVMX86FourSource.cpp
+  X86/MedLLVMX86NativeMemory.cpp
+  X86/MedLLVMX86APXAtomic.cpp
+  X86/MedLLVMX86RepState.cpp
+  X86/MedLLVMX86Sgx.cpp
+  X86/MedLLVMX86BoundedLeaf.cpp
+  X86/MedLLVMX86AmxState.cpp
   X86/X87ImportCall.cpp
   data/MedLLVMConstClass.cpp
   data/MedLLVMConstUse.cpp
@@ -113,6 +125,7 @@ add_neverd_component_library(NeverDBackendLLVM
   emit/MedLLVMFuncBody.cpp
   emit/MedLLVMIntrinsic.cpp
   emit/MedLLVMOpEmitter.cpp
+  X86/MedLLVMPortableX87.cpp
   emit/MedLLVMReturn.cpp
   emit/MedLLVMSwitch.cpp
   emit/MedLLVMSwitchIndex.cpp
@@ -123,6 +136,8 @@ add_neverd_component_library(NeverDBackendLLVM
 
   LINK_COMPONENTS
   LLVMFloatConvertLowering
+  LLVMCallContract
+  LLVMSourceTypeHints
   IR
   IRLow
   WindowsEHMetadata

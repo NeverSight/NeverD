@@ -9,6 +9,7 @@
 #include "../../../lib/sdk/capi/SourceSwiftWitnessFrameProjection.h"
 #include "../core/CFunctionParameterCallFixture.h"
 #include "../core/ImmutableNativeCallFixture.h"
+#include "../core/MappedSectionFlags.h"
 #include "../core/RuntimeFunctionAddressFixture.h"
 #include "../core/SwiftWitnessFrameFixture.h"
 #include "gtest/gtest.h"
@@ -16,7 +17,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/loader/Swift/SwiftValueWitnessCalls.h"
@@ -2048,6 +2049,79 @@ TEST(ObjCSourceInputs, AdjacentLoadInliningPreservesSingleEntryReadProof) {
   }
 }
 
+TEST(ObjCSourceInputs, OriginalMemoryInputsKeepRuntimeOffsetSnapshot) {
+  for (unsigned Width : {4U, 8U}) {
+    EntryInputFixture F(Arch::AArch64, Width);
+    auto Offset = HighExpr::makeUnary(NdOp::INT_ZEXT, F.Load);
+    Offset->Type = NdType::makeInt(8, false);
+    auto Read = HighExpr::makeCall({}, 0,
+                                   {Offset, HighExpr::makeConst(0x4000, 8),
+                                    HighExpr::makeConst(0xf8606900U, 4)});
+    Read->IntrinsicId = Intrinsic::A64_Load64RegisterOffset;
+    Read->Type = NdType::makeInt(8, false);
+    F.Callee.Body[0].Val = Read;
+    ASSERT_TRUE(aarch64AddressMemoryHighShapeIsValid(*Read));
+    const auto Type = entryScalarLoadInput(F.Callee, 0);
+    ASSERT_TRUE(Type);
+    EXPECT_EQ(Type->Size, Width);
+    const auto Projected = F.project();
+    ASSERT_EQ(Projected.Body.size(), 2U);
+    EXPECT_EQ(Projected.Body[1].RetVal->SourceCallHint, F.Hint);
+    EXPECT_EQ(F.Callee.Body[0].Val, Read);
+    const auto Bound = bindObjCSourceReferences(Projected, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    ASSERT_TRUE(Bound.Function.Body[0].Val->SourceCallHint);
+    EXPECT_EQ(Bound.Function.Body[0].Val->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeIvarOffset);
+    EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+  }
+}
+
+TEST(ObjCSourceInputs, OriginalMemoryEntryReadRejectsUnprovedOrdering) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    EntryInputFixture F;
+    auto Offset = HighExpr::makeUnary(NdOp::INT_ZEXT, F.Load);
+    Offset->Type = NdType::makeInt(8, false);
+    auto Read = HighExpr::makeCall({}, 0,
+                                   {Offset, HighExpr::makeConst(0x4000, 8),
+                                    HighExpr::makeConst(0xf8606900U, 4)});
+    Read->IntrinsicId = Intrinsic::A64_Load64RegisterOffset;
+    Read->Type = NdType::makeInt(8, false);
+    F.Callee.Body[0].Val = Read;
+    switch (Mutation) {
+    case 0:
+      F.Callee.SourceTypeHint->Architecture = Arch::X64;
+      break;
+    case 1:
+      Read->Operands[1] = Offset; // Two reads; no unique entry occurrence.
+      break;
+    case 2:
+      Read->Operands[1] = HighExpr::makeLoad(HighExpr::makeConst(0x5000, 8),
+                                             NdType::makeInt(8));
+      break;
+    case 3:
+      Read->Operands[1] = HighExpr::makeCall("effect", 0x3000, {});
+      Read->Operands[1]->Type = NdType::makeInt(8);
+      break;
+    case 4:
+      Read->Operands[2]->Type = NdType::makeInt(8);
+      break;
+    case 5:
+      Read->Operands[2]->ConstVal = 0xf8606be0U; // SP base.
+      break;
+    case 6:
+      Read->MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 7:
+      Read->IntrinsicOutputs = {F.Pointer->Var};
+      break;
+    }
+    EXPECT_FALSE(entryScalarLoadInput(F.Callee, 0));
+    EXPECT_EQ(F.project().Body.size(), 1U);
+  }
+}
+
 TEST(ObjCSourceInputs, AdjacentLoadInliningKeepsEntryReadRejections) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Case : {0U, 1U, 2U}) {
@@ -3355,7 +3429,7 @@ TEST(ObjCSourceBindings, SwiftWitnessUndefRequiresExactDescriptorContract) {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range          ? "_$sSnyxGSXsMc"
+        : Range ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     const auto Module =
         MainActor ? "/usr/lib/swift/libswift_Concurrency.dylib"
@@ -3401,7 +3475,7 @@ struct GenericWitnessFixture : SwiftWitnessAccessorFixture {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range          ? "_$sSnyxGSXsMc"
+        : Range ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     Image.ImportStorageSlots.erase(ConformanceSlot);
     Image.ImportPtrSlots[ConformanceSlot] = Descriptor;
@@ -7870,8 +7944,8 @@ TEST(ObjCSourceBindings,
         Word(0x60, 0x42);
         break; // Anonymous outer context.
       case 11:
-        F.Image.Sections[3].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[3],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 12:
         F.Image.RelDataPtrRelocSlots.insert(0x40c8);
@@ -8047,8 +8121,8 @@ TEST(ObjCSourceBindings,
         F.Image.RelDataPtrRelocSlots.insert(F.TypeReference + 8);
         break;
       case 14:
-        F.Image.Sections[3].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[3],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 15:
         F.Image.Segments[1].Data[F.Cache - 0x2000] = 1;
@@ -8898,6 +8972,155 @@ TEST(ObjCSourceBindings, ReadOnlyTablesBindEveryBoundedScalarLoadOccurrence) {
 }
 
 namespace {
+Fixture
+originalReadonlyTableFixture(uint32_t Word = 0xf8605900U,
+                             Intrinsic Id = Intrinsic::A64_Load64RegisterOffset,
+                             uint16_t Width = 8, uint16_t IndexBytes = 4) {
+  auto F = readonlyTableFixture(Width);
+  F.Image.Arch = Arch::AArch64;
+  auto &Load = F.Function.Body[0].Body[0].RetVal;
+  const auto &Address = Load->Operands[0];
+  const auto &WideIndex = Address->Operands[1]->Operands[0];
+  auto Original =
+      HighExpr::makeCall({}, 0,
+                         {Address->Operands[0],
+                          IndexBytes == 8 ? WideIndex : WideIndex->Operands[0],
+                          HighExpr::makeConst(Word, 4)});
+  Original->IntrinsicId = Id;
+  Original->Type = NdType::makeInt(Width, false);
+  Load = std::move(Original);
+  return F;
+}
+} // namespace
+
+TEST(ObjCSourceBindings, OriginalReadOnlyTablesRetainRawInstructionAndIndex) {
+  struct Case {
+    uint32_t Word;
+    Intrinsic Id;
+    uint16_t Width;
+    uint16_t IndexBytes;
+  };
+  const Case Cases[] = {
+      {0x38604900, Intrinsic::A64_LoadRegisterOffset, 1, 4},
+      {0x78605900, Intrinsic::A64_LoadRegisterOffset, 2, 4},
+      {0xb860d900, Intrinsic::A64_LoadRegisterOffset, 4, 4},
+      {0xf8605900, Intrinsic::A64_Load64RegisterOffset, 8, 4},
+      {0xf8607900, Intrinsic::A64_Load64RegisterOffset, 8, 8},
+      {0xfc605900, Intrinsic::A64_VectorLoadRegisterOffset, 8, 4},
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Word);
+    auto F = originalReadonlyTableFixture(C.Word, C.Id, C.Width, C.IndexBytes);
+    const auto Original = F.Function.Body[0].Body[0].RetVal;
+    ASSERT_TRUE(aarch64AddressMemoryHighShapeIsValid(*Original));
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    ASSERT_EQ(Bound.BorrowedBytes.size(), 1U);
+    EXPECT_EQ(Bound.BorrowedBytes.begin()->first, 0x1040U);
+    EXPECT_EQ(Bound.BorrowedBytes.begin()->second, C.Width * 3U);
+    const auto &Load = Bound.Function.Body[0].Body[0].RetVal;
+    EXPECT_TRUE(aarch64AddressMemoryHighShapeIsValid(*Load));
+    EXPECT_EQ(Load->IntrinsicId, C.Id);
+    EXPECT_EQ(Load->Operands[2]->ConstVal, C.Word);
+    EXPECT_EQ(Load->Operands[1]->Type->Size, C.IndexBytes);
+    EXPECT_EQ(Load->Operands[1]->Kind, Original->Operands[1]->Kind);
+    EXPECT_EQ(Load->Operands[1]->Op, Original->Operands[1]->Op);
+    const auto &Helper = Load->Operands[0];
+    ASSERT_TRUE(Helper->SourceCallHint);
+    const auto Allowed = readOnlyScalarSourceHelpers(Bound.Function, F.Image);
+    ASSERT_EQ(Allowed.size(), 1U);
+    EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+    EXPECT_EQ(Original->Operands[0]->Kind, ExprKind::Const);
+  }
+}
+
+TEST(ObjCSourceBindings, OriginalReadOnlyTablesRejectInvalidAccessOrDomain) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = originalReadonlyTableFixture();
+    auto &Branch = F.Function.Body[0];
+    auto &Load = Branch.Body[0].RetVal;
+    switch (Mutation) {
+    case 0:
+      F.Image.Arch = Arch::X64;
+      break;
+    case 1:
+      Branch.Cond = HighExpr::makeConst(1, 1);
+      break;
+    case 2:
+      Load->Operands[2] = HighExpr::makeConst(0xf8605900U, 8);
+      break;
+    case 3:
+      Load->Operands[2] = HighExpr::makeConst(0xf8605be0U, 4); // SP base.
+      break;
+    case 4:
+      Load->MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 5:
+      Load->Operands[1] = HighExpr::makeConst(0xffffffffU, 4);
+      break;
+    case 6:
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
+      break;
+    case 7:
+      F.Function.Body.push_back(Branch.Body[0]); // An unguarded occurrence.
+      break;
+    }
+    EXPECT_TRUE(readOnlyScalarLoadPlans(F.Function, F.Image).empty());
+    EXPECT_TRUE(
+        bindObjCSourceReferences(F.Function, F.Image).BorrowedBytes.empty());
+  }
+}
+
+TEST(ObjCSourceBindings,
+     OriginalReadOnlyTableIndexProofDoesNotCoverImmediateAccess) {
+  // These original loads use +16 and -16 encoded byte offsets. A zero raw
+  // index cannot prove that an access starts at the table base.
+  for (uint32_t Word : {0xf9400900U, 0xf85f0100U}) {
+    auto F =
+        originalReadonlyTableFixture(Word, Intrinsic::A64_LoadImmediate, 8, 8);
+    auto &Load = F.Function.Body[0].Body[0].RetVal;
+    Load->Operands[1] = HighExpr::makeConst(0, 8);
+    ASSERT_TRUE(aarch64AddressMemoryHighShapeIsValid(*Load));
+    EXPECT_TRUE(readOnlyScalarLoadPlans(F.Function, F.Image).empty());
+    EXPECT_TRUE(
+        bindObjCSourceReferences(F.Function, F.Image).BorrowedBytes.empty());
+  }
+}
+
+TEST(ObjCSourceBindings, OriginalReadOnlyTablePublicationRechecksUses) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = originalReadonlyTableFixture();
+    auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_EQ(Bound.BorrowedBytes.size(), 1U);
+    auto &Branch = Bound.Function.Body[0];
+    auto Load = Branch.Body[0].RetVal;
+    ASSERT_EQ(readOnlyScalarSourceHelpers(Bound.Function, F.Image).size(), 1U);
+    switch (Mutation) {
+    case 0:
+      Branch.Cond = HighExpr::makeConst(1, 1);
+      break;
+    case 1:
+      Load->Operands[2] =
+          HighExpr::makeConst(0xb8605900U, 4); // Access width changed.
+      break;
+    case 2:
+      F.Image.DataPtrRelocSlots.insert(0x1048);
+      break;
+    case 3:
+      HighStmt Escape;
+      Escape.Kind = StmtKind::Return;
+      Escape.RetVal = Load->Operands[0];
+      Bound.Function.Body.push_back(Escape);
+      break;
+    }
+    EXPECT_TRUE(readOnlyScalarSourceHelpers(Bound.Function, F.Image).empty());
+  }
+}
+
+namespace {
 Fixture countdownByteTableFixture() {
   Fixture F;
   F.Image.ObjCSourceReferences.clear();
@@ -9078,8 +9301,8 @@ TEST(ObjCSourceBindings, CountdownByteTableRejectsUnboundedOrEscapingWalks) {
       F.Function.Body.insert(F.Function.Body.begin(), Overwrite);
     }
     if (Mutation == 5)
-      F.Image.Sections[0].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
     if (Mutation == 6)
       F.Image.Sections[0].FileSz = 0x100;
     if (Mutation == 7)
@@ -9149,8 +9372,8 @@ TEST(ObjCSourceBindings, ReadOnlyTablesRejectUnprovenRangesStorageAndUses) {
       if (Mutation == 1)
         Branch.Cond->Op = NdOp::INT_SLESS;
       if (Mutation == 2)
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
       if (Mutation == 3)
         F.Image.Sections.push_back(F.Image.Sections[0]);
       if (Mutation == 4)
@@ -9530,8 +9753,8 @@ TEST(ObjCSourceBindings, TaggedCStringWordsRejectUnprovenAddressOccurrences) {
       F.Image.Sections[0].Type = llvm::MachO::S_REGULAR;
       break;
     case 12:
-      F.Image.Sections[0].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 13:
       F.Image.DataPtrRelocSlots.insert(0x1080);
@@ -9737,8 +9960,8 @@ TEST(ObjCSourceBindings,
       if (Case == 4)
         F.Image.Sections[0].FileSz = 0x4f;
       if (Case == 5)
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
       F.Function.ReturnType = NdType::makeInt(16, Case == 6);
       auto Load = HighExpr::makeLoad(HighExpr::makeConst(0x1040, 8),
                                      F.Function.ReturnType);
@@ -9780,8 +10003,8 @@ TEST(ObjCSourceBindings, ImmutableScalarsRejectUnprovedStorageAndAddressUses) {
                                        7);
       switch (Case) {
       case 0:
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 1:
         F.Image.Segments[0].Flags =
@@ -10172,8 +10395,8 @@ TEST(ObjCSourceBindings,
         F.Image.Segments[0].Data[0x44] = 0xff;
         break;
       case 6:
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 7:
         F.Image.Segments[0].Flags =
@@ -10795,6 +11018,14 @@ TEST(ObjCSourceBindings, ImmutablePointerLoadsRejectIncompleteAndStaleProofs) {
         llvm::support::endian::write32le(I.Raw.data() + 8,
                                          llvm::MachO::CPU_SUBTYPE_ARM64E);
       },
+      [](auto &I) { I.MachOCPUSubtype = 0x8200000c; },
+      [](auto &I) {
+        I.Raw.resize(32);
+        llvm::support::endian::write32le(I.Raw.data(),
+                                         llvm::MachO::MH_MAGIC_64);
+        llvm::support::endian::write32le(I.Raw.data() + 8, 0x8200000c);
+      },
+      [](auto &I) { I.MachOAuthenticatedPointers[0x2000] = {}; },
   };
   for (size_t Index = 0; Index < Mutations.size(); ++Index) {
     SCOPED_TRACE(Index);
@@ -11387,6 +11618,14 @@ TEST(ObjCSourceBindings, ConstantStringsRejectUnprovedRecordsAndContents) {
         llvm::support::endian::write32le(I.Raw.data() + 8,
                                          llvm::MachO::CPU_SUBTYPE_ARM64E);
       },
+      [](auto &I) { I.MachOCPUSubtype = 0x8200000c; },
+      [](auto &I) {
+        I.Raw.resize(32);
+        llvm::support::endian::write32le(I.Raw.data(),
+                                         llvm::MachO::MH_MAGIC_64);
+        llvm::support::endian::write32le(I.Raw.data() + 8, 0x8200000c);
+      },
+      [](auto &I) { I.MachOAuthenticatedPointers[0x2000] = {}; },
       [](auto &I) { I.DyldBindSlots.clear(); },
       [](auto &I) { I.DyldBindSlots.at(0x2000).Name = "_otherClass"; },
       [](auto &I) { I.DyldBindSlots.at(0x2000).Addend = 1; },
@@ -13400,7 +13639,8 @@ TEST(ObjCSourceBindings, SwiftScalarStorageRejectsAmbiguousOrMutableImage) {
       I.Symbols.push_back({I.Symbols[0].Name, 0x1050, 0, false});
       break;
     case 16:
-      I.Sections[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(I, I.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 17:
       I.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;

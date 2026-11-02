@@ -10,6 +10,8 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/NeverDGoogleTest.cmake")
+neverd_configure_googletest()
 
 enable_testing()
 include(GoogleTest)
@@ -55,9 +57,18 @@ else()
   set(NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE "")
 endif()
 
+add_subdirectory(patch)
+
 add_neverd_unittest(NeverDTestProcessTests
   TestProcessTests.cpp
 )
+
+if(TARGET NeverDProjectDatabase)
+  add_neverd_unittest(NeverDProjectDatabaseTests
+    ProjectDatabaseTests.cpp
+    LINK_LIBS NeverDProjectDatabase neverd_project_sqlite ZLIB::ZLIB LLVMSupport)
+  target_include_directories(NeverDProjectDatabaseTests PRIVATE ${LLVM_INCLUDE_DIRS})
+endif()
 
 add_neverd_unittest(NeverDSupportThreadTests
   SupportThreadTests.cpp
@@ -67,6 +78,15 @@ target_include_directories(NeverDSupportThreadTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
 add_subdirectory(acceleration)
+add_subdirectory(digest)
+
+add_neverd_unittest(NeverDExportTableTests
+  ExportTableTests.cpp
+  "${CMAKE_SOURCE_DIR}/tools/neverd/ExportTable.cpp"
+  LINK_LIBS neverd_tool_json LLVMSupport
+)
+target_include_directories(NeverDExportTableTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/tools/neverd" ${LLVM_INCLUDE_DIRS})
 
 add_neverd_unittest(NeverDLowUndefinedDigestTests
   LowUndefinedDigestTests.cpp
@@ -94,6 +114,36 @@ add_neverd_unittest(NeverDGraphCyclesTests
 )
 target_include_directories(NeverDGraphCyclesTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
+
+add_neverd_unittest(NeverDBinaryDiffTests
+  BinaryDiffTests.cpp
+  BinaryDiffCallAlignmentTests.cpp
+  BinaryDiffLineageTests.cpp
+  BinaryDiffDataFlowTests.cpp
+  BinaryDiffArgumentAccessTests.cpp
+  BinaryDiffLLVMDataFlowTests.cpp
+  BinaryDiffParameterViewTests.cpp
+  BinaryDiffProgressTests.cpp
+  BinaryDiffBranchProgressTests.cpp
+  BinaryDiffModularProgressTests.cpp
+  BinaryDiffInvariantBoundProgressTests.cpp
+  BinaryDiffParameterBoundProgressTests.cpp
+  BinaryDiffFlowBindingTests.cpp
+  BinaryDiffFlowRegionsTests.cpp
+  BinaryDiffFlowFragmentsTests.cpp
+  BinaryDiffImpactTests.cpp
+  BinaryDiffCallEffectTests.cpp
+  BinaryDiffObservationTests.cpp
+  BinaryDiffReviewTests.cpp
+  BinaryDiffScalarValidationTests.cpp
+  BinaryDiffSourceAlignmentTests.cpp
+  LINK_COMPONENTS Diff
+  LINK_LIBS LLVMAsmParser
+)
+add_neverd_unittest(NeverDBinaryDiffFlowPipelineTests
+  BinaryDiffDataFlowPipelineTests.cpp
+  LINK_COMPONENTS Diff Pipeline
+)
 
 add_neverd_unittest(NeverDSourceVariableFlowTests
   SourceVariableFlowTests.cpp
@@ -123,6 +173,7 @@ add_neverd_unittest(NeverDLLVMVariableEditsTests
 add_neverd_unittest(NeverDPipelineOutcomeTests
   PipelineOutcomeTests.cpp
   CalleeSignatureMemoTests.cpp
+  PipelineSourceStackAccessesTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
 add_neverd_unittest(NeverDAnalysisRecoveryTests
@@ -154,11 +205,16 @@ add_neverd_unittest(NeverDSourcePatchLayoutTests
   SourcePatchLayoutTests.cpp
   LINK_COMPONENTS CodeGen
 )
+add_neverd_unittest(NeverDCodegenDiagnosticTests
+  backend/CodegenDiagnosticTests.cpp
+  LINK_COMPONENTS CodeGen
+)
 add_neverd_unittest(NeverDItaniumHandlerTests
   lift/eh/ItaniumHandlerBodiesTests.cpp
-  LINK_COMPONENTS BackendC
+  LINK_COMPONENTS BackendC Types
 )
 add_neverd_unittest(NeverDSourceAnchorTests
+  lift/core/HighIRSourceMapTests.cpp
   lift/core/CSourceAnchorTests.cpp
   lift/core/CSourceDefinitionTests.cpp
   LINK_COMPONENTS Pipeline BackendC
@@ -191,12 +247,24 @@ add_neverd_unittest(NeverDLocalTypesDebugContextTests
   LocalTypesDebugContextTests.cpp
   "${CMAKE_SOURCE_DIR}/lib/sdk/capi/LocalTypesDebugContext.cpp"
   "${CMAKE_SOURCE_DIR}/lib/ir/NdTypes.cpp"
-  LINK_COMPONENTS Types Loader
+  LINK_COMPONENTS IR Types Loader
 )
 target_include_directories(NeverDLocalTypesDebugContextTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/sdk/capi")
 
 if(TARGET neverd_shared)
+  if(Python3_EXECUTABLE)
+    set(_neverd_project_input_worker_args)
+    if(TARGET neverd-worker)
+      list(APPEND _neverd_project_input_worker_args --worker $<TARGET_FILE:neverd-worker>)
+    endif()
+    add_test(NAME NeverDBinaryDiffProjectInputs
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/project_inputs_test.py"
+        --neverd $<TARGET_FILE:neverd> --library $<TARGET_FILE:neverd_shared>
+        ${_neverd_project_input_worker_args})
+    set_tests_properties(NeverDBinaryDiffProjectInputs PROPERTIES
+      TIMEOUT 120 LABELS "NeverDBinaryDiff")
+  endif()
   add_neverd_unittest(NeverDSourcePatchDynCodeTests
     SourcePatchDynCodeTests.cpp
     LINK_COMPONENTS CodeGen
@@ -229,10 +297,146 @@ if(TARGET neverd_shared)
     NEVERD_MOBILE_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/scripts/tests/fixtures/mobile")
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/ObjCRuntimeTestProperties.cmake")
+  if(Python3_EXECUTABLE AND NEVERD_TEST_CLANG_EXECUTABLE)
+    add_test(NAME NeverDCalleeSourceCLI
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/callee_source_cli_test.py"
+        --neverd $<TARGET_FILE:neverd>
+        --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}")
+    set_tests_properties(NeverDCalleeSourceCLI PROPERTIES
+      TIMEOUT 180 LABELS "NeverDCalleeSourceCLI")
+    if(APPLE)
+      add_test(NAME NeverDArm64eSourceCallSDK
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/arm64e_source_calls_test.py"
+          --library $<TARGET_FILE:neverd_shared>
+          --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}"
+          --artifacts "${CMAKE_CURRENT_BINARY_DIR}/arm64e-source-call-sdk")
+      set_tests_properties(NeverDArm64eSourceCallSDK PROPERTIES
+        TIMEOUT 120 LABELS "NeverDSourceCallABI")
+    endif()
+    add_test(NAME NeverDBinaryDiffCLI
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/cli_test.py"
+        --neverd $<TARGET_FILE:neverd> --library $<TARGET_FILE:neverd_shared>
+        --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}"
+        --fixture "${CMAKE_CURRENT_SOURCE_DIR}/diff/patch_fixture.c")
+    set_tests_properties(NeverDBinaryDiffCLI PROPERTIES
+      TIMEOUT 120 LABELS "NeverDBinaryDiff")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+      set(_neverd_diff_effect_worker)
+      if(TARGET neverd-worker)
+        list(APPEND _neverd_diff_effect_worker --worker $<TARGET_FILE:neverd-worker>)
+      endif()
+      add_test(NAME NeverDBinaryDiffCallEffects
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/call_effects_test.py"
+          --neverd $<TARGET_FILE:neverd> --library $<TARGET_FILE:neverd_shared>
+          --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}" ${_neverd_diff_effect_worker})
+      set_tests_properties(NeverDBinaryDiffCallEffects PROPERTIES
+        TIMEOUT 120 LABELS "NeverDBinaryDiff")
+      add_test(NAME NeverDBinaryDiffScalarValidation
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/scalar_validation_test.py"
+          --neverd $<TARGET_FILE:neverd> --library $<TARGET_FILE:neverd_shared>
+          --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}" ${_neverd_diff_effect_worker})
+      set_tests_properties(NeverDBinaryDiffScalarValidation PROPERTIES
+        TIMEOUT 120 LABELS "NeverDBinaryDiff")
+    endif()
+    find_program(NEVERD_DIFF_TEST_GCC NAMES x86_64-linux-gnu-gcc gcc)
+    set(NEVERD_DIFF_GCC_ARGS)
+    if(NEVERD_DIFF_TEST_GCC)
+      list(APPEND NEVERD_DIFF_GCC_ARGS --gcc "${NEVERD_DIFF_TEST_GCC}")
+    endif()
+    add_test(NAME NeverDBinaryDiffCompilerRegions
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/compiler_regions_test.py"
+        --neverd $<TARGET_FILE:neverd> --clang "${NEVERD_TEST_CLANG_EXECUTABLE}"
+        ${NEVERD_DIFF_GCC_ARGS}
+        --fixture "${CMAKE_CURRENT_SOURCE_DIR}/diff/compiler_regions_fixture.c"
+        --artifacts "${CMAKE_CURRENT_BINARY_DIR}/bindiff-compiler-regions")
+    set_tests_properties(NeverDBinaryDiffCompilerRegions PROPERTIES
+      TIMEOUT 300 LABELS "NeverDBinaryDiff")
+  endif()
+  add_neverd_unittest(NeverDBinaryDiffSDKTests
+    BinaryDiffSDKTests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDBinaryDiffSDKTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
+  add_neverd_unittest(NeverDBinaryDiffLineageSDKTests
+    BinaryDiffLineageSDKTests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDBinaryDiffLineageSDKTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
+  add_neverd_unittest(NeverDDyldCacheCAPITests
+    DyldCacheCAPITests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDDyldCacheCAPITests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
   add_neverd_unittest(NeverDSessionCAPITests
     SessionCAPITests.cpp
+    TypeConversionCAPITests.cpp
     LINK_LIBS neverd_shared
   )
+  # As for shared-backed tools, macOS must resolve LLVM from the SDK alone.
+  # The Types archive brings a second LLVM transitively; dyld can then coalesce
+  # pass-manager methods without their AnalysisKeys and crash SDK optimization.
+  # Other platforms retain the archive for their different export boundaries.
+  if(NOT APPLE)
+    target_link_libraries(NeverDSessionCAPITests PRIVATE NeverDTypes)
+  endif()
+  add_neverd_unittest(NeverDSessionSignatureProfileTests
+    SessionSignatureProfileTests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDSessionSignatureProfileTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
+  add_neverd_unittest(NeverDUnwindFrameCAPITests
+    UnwindFrameCAPITests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDUnwindFrameCAPITests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
+  if(TARGET neverd)
+    add_neverd_unittest(NeverDUnwindFrameCLITests
+      UnwindFrameCLITests.cpp
+      LINK_LIBS neverd_shared LLVMSupport
+    )
+    target_include_directories(NeverDUnwindFrameCLITests PRIVATE
+      "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
+    target_compile_definitions(NeverDUnwindFrameCLITests PRIVATE
+      NEVERD_TEST_CLI="$<TARGET_FILE:neverd>")
+    add_dependencies(NeverDUnwindFrameCLITests neverd)
+  endif()
+  if(APPLE AND Python3_EXECUTABLE AND TARGET neverd AND TARGET neverd-worker)
+    # This public-consumer check uses only already-built tools and shared C ABI.
+    # Test budgets live beside its independent fixture expectations.
+    set(_neverd_linked_query_def
+      "${CMAKE_CURRENT_SOURCE_DIR}/lift/language/LinkedUnwindQueryFixtures.def")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${_neverd_linked_query_def}")
+    file(STRINGS "${_neverd_linked_query_def}" _neverd_linked_query_limits
+      REGEX "^NEVERD_LINKED_QUERY_LIMIT\\(")
+    foreach(_neverd_linked_query_limit IN LISTS _neverd_linked_query_limits)
+      if(_neverd_linked_query_limit MATCHES
+          "^NEVERD_LINKED_QUERY_LIMIT\\(([A-Za-z0-9_]+),[ \t]*([0-9]+)\\)$")
+        set(_neverd_linked_query_${CMAKE_MATCH_1} "${CMAKE_MATCH_2}")
+      endif()
+    endforeach()
+    add_test(NAME NeverDLinkedUnwindQuery
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/lift/language/linked_unwind_query_test.py"
+        --source-root "${CMAKE_SOURCE_DIR}"
+        --neverd $<TARGET_FILE:neverd> --library $<TARGET_FILE:neverd_shared>
+        --worker $<TARGET_FILE:neverd-worker>
+        --artifacts "${CMAKE_CURRENT_BINARY_DIR}/linked-unwind-query")
+    set_tests_properties(NeverDLinkedUnwindQuery PROPERTIES
+      SKIP_RETURN_CODE "${_neverd_linked_query_kSkipReturnCode}"
+      TIMEOUT "${_neverd_linked_query_kCTestTimeout}")
+  endif()
+  add_neverd_unittest(NeverDFunctionDisasmCAPITests
+    FunctionDisasmCAPITests.cpp
+    LINK_LIBS neverd_shared LLVMSupport
+  )
+  target_include_directories(NeverDFunctionDisasmCAPITests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
   add_neverd_unittest(NeverDSearchCAPITests
     SearchCAPITests.cpp
     LINK_LIBS neverd_shared LLVMSupport

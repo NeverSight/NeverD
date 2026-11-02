@@ -81,10 +81,58 @@ static cl::opt<std::string> Machine("machine", cl::desc(MachineHelp),
                                     cl::init(""));
 static cl::opt<bool> References(
     "references",
-    cl::desc("State the routines each COFF, ELF or Mach-O function branches to "
-             "directly as ^offset name references, which matching checks "
+    cl::desc("State direct branch targets and canonical COFF import pointers "
+             "as ^offset name references, which matching checks "
              "against the image; loaders older than the references reject "
              "such lines"),
+    cl::init(false));
+static cl::opt<bool>
+    Contextual("contextual",
+               cl::desc("Require verified references for referenced functions, "
+                        "including short functions; emits whole-function "
+                        "NeverD !refs patterns and implies --references"),
+               cl::init(false));
+static cl::opt<bool> CallerContext(
+    "caller-context",
+    cl::desc("Emit whole-function patterns with !caller; only a verified "
+             "caller may request them by name; implies --references"),
+    cl::init(false));
+static cl::opt<bool> CollisionEvidence(
+    "collision-evidence",
+    cl::desc("Emit complete offline collision evidence, including short and "
+             "unreferenced functions; !evidence records cannot be loaded as "
+             "signatures and imply --references"),
+    cl::init(false));
+static cl::opt<bool> CodeLayoutEvidence(
+    "code-layout-evidence",
+    cl::desc("Emit offline complete non-COMDAT COFF x64 code contributions"));
+static cl::opt<bool> VTableEvidence(
+    "vtable-evidence",
+    cl::desc(
+        "Emit offline JSONL primary x64 COFF table declarations, including "
+        "incomplete counterclaims; this is not a signature pack"),
+    cl::init(false));
+static cl::opt<bool>
+    RuntimePointerEvidence("runtime-pointer-evidence",
+                           cl::desc("Emit offline JSONL load-configuration and "
+                                    "selected source definitions"),
+                           cl::init(false));
+static cl::list<std::string>
+    EvidenceSymbols("evidence-symbol",
+                    cl::desc("Exact pointer or function definition to audit"));
+static cl::opt<bool> DataReferences(
+    "data-references",
+    cl::desc("Include typed external-data operands in contextual or collision "
+             "evidence output; requires a complete contextual output mode"),
+    cl::init(false));
+static cl::list<std::string> LocalDataAnchors(
+    "local-data-anchor",
+    cl::desc("Typed function anchoring same-object static data operands; "
+             "repeat as needed; requires --data-references"));
+static cl::opt<bool> LocalDataLayout(
+    "local-data-layout",
+    cl::desc("Include checked address deltas within one non-COMDAT data "
+             "section; requires --local-data-anchor"),
     cl::init(false));
 static cl::opt<bool>
     Verify("verify",
@@ -178,8 +226,43 @@ int main(int Argc, char *Argv[]) {
                               "NeverD Signature Maker\n\n"
                               "  Generate .pat files from static libraries.\n");
 
+  if (unsigned(Contextual) + unsigned(CallerContext) +
+          unsigned(CollisionEvidence) + unsigned(VTableEvidence) +
+          unsigned(RuntimePointerEvidence) + unsigned(CodeLayoutEvidence) >
+      1) {
+    WithColor::error()
+        << "--contextual, --caller-context, --collision-evidence and "
+           "--vtable-evidence, --runtime-pointer-evidence and "
+           "--code-layout-evidence "
+           "are separate outputs\n";
+    return 1;
+  }
+  if ((VTableEvidence || RuntimePointerEvidence || CodeLayoutEvidence) &&
+      (References || DataReferences || Verify)) {
+    WithColor::error()
+        << "metadata evidence is a separate offline output mode\n";
+    return 1;
+  }
+  if (!EvidenceSymbols.empty() && !RuntimePointerEvidence) {
+    WithColor::error()
+        << "--evidence-symbol requires --runtime-pointer-evidence\n";
+    return 1;
+  }
   if (Verify)
     return verifyPatterns();
+  if (!LocalDataAnchors.empty() && !DataReferences) {
+    WithColor::error() << "--local-data-anchor requires --data-references\n";
+    return 1;
+  }
+  if (LocalDataLayout && LocalDataAnchors.empty()) {
+    WithColor::error() << "--local-data-layout requires --local-data-anchor\n";
+    return 1;
+  }
+  if (DataReferences && !Contextual && !CallerContext && !CollisionEvidence) {
+    WithColor::error() << "--data-references requires --contextual, "
+                          "--caller-context or --collision-evidence\n";
+    return 1;
+  }
 
   if (OutputFile.empty()) {
     WithColor::error() << "no output file; pass -o <file.pat>\n";
@@ -207,7 +290,15 @@ int main(int Argc, char *Argv[]) {
   Opts.LeadingLen = LeadingLen;
   Opts.MinFuncSize = MinFuncSize;
   Opts.TailLen = TailLen;
-  Opts.EmitReferences = References;
+  Opts.EmitReferences =
+      References || Contextual || CallerContext || CollisionEvidence;
+  Opts.RequireReferences = Contextual;
+  Opts.RequireCaller = CallerContext;
+  Opts.CollisionEvidence = CollisionEvidence;
+  Opts.EmitDataReferences = DataReferences;
+  Opts.LocalDataAnchors.assign(LocalDataAnchors.begin(),
+                               LocalDataAnchors.end());
+  Opts.EmitLocalDataLayout = LocalDataLayout;
 
   auto ForMachine = [&](const ObjectFile &Obj) {
     return !Required || isObjectForMachine(Obj, *Required);
@@ -226,6 +317,10 @@ int main(int Argc, char *Argv[]) {
   }
 
   InputStats Stats;
+  VTableEvidenceStats Tables;
+  RuntimePointerEvidenceStats Pointers;
+  CodeLayoutEvidenceStats Layouts;
+  bool EvidenceFailed = false;
   for (const std::string &Path : Inputs)
     if (!forEachObject(Path, Stats, [&](const ObjectFile &Obj) {
           if (!ForMachine(Obj)) {
@@ -233,9 +328,42 @@ int main(int Argc, char *Argv[]) {
             return;
           }
           ++Stats.Objects;
-          Stats.Patterns += generatePatterns(Obj, Opts, OS);
+          if (CodeLayoutEvidence) {
+            auto Result = generateCodeLayoutEvidence(Obj, OS);
+            if (!Result) {
+              WithColor::error() << toString(Result.takeError()) << "\n";
+              EvidenceFailed = true;
+            } else {
+              Layouts.Complete += Result->Complete;
+              Layouts.Incomplete += Result->Incomplete;
+            }
+          } else if (RuntimePointerEvidence) {
+            auto Result =
+                generateRuntimePointerEvidence(Obj, EvidenceSymbols, OS);
+            if (!Result) {
+              WithColor::error() << toString(Result.takeError()) << "\n";
+              EvidenceFailed = true;
+            } else {
+              Pointers.Complete += Result->Complete;
+              Pointers.Incomplete += Result->Incomplete;
+            }
+          } else if (VTableEvidence) {
+            auto Result = generateVTableEvidence(Obj, OS);
+            if (!Result) {
+              WithColor::error() << toString(Result.takeError()) << "\n";
+              EvidenceFailed = true;
+            } else {
+              Tables.Complete += Result->Complete;
+              Tables.Incomplete += Result->Incomplete;
+            }
+          } else {
+            Stats.Patterns += generatePatterns(Obj, Opts, OS);
+          }
         }))
       return 1;
+
+  if (EvidenceFailed)
+    return 1;
 
   for (const auto &[Mach, Type] : Stats.Patterns.UnsupportedCOFFRelocations)
     WithColor::warning() << "functions with COFF relocation type "
@@ -264,8 +392,18 @@ int main(int Argc, char *Argv[]) {
                          << " Mach-O objects were left out: their linker "
                             "optimization hints cannot be read\n";
 
-  outs() << "Generated " << Stats.Patterns.Functions << " signatures → "
-         << OutputFile << " (" << Stats.Objects << " objects";
+  if (CodeLayoutEvidence)
+    outs() << "Generated " << Layouts.Complete << " complete and "
+           << Layouts.Incomplete << " incomplete code layouts → ";
+  else if (RuntimePointerEvidence)
+    outs() << "Generated " << Pointers.Complete << " complete and "
+           << Pointers.Incomplete << " incomplete runtime declarations → ";
+  else if (VTableEvidence)
+    outs() << "Generated " << Tables.Complete << " complete and "
+           << Tables.Incomplete << " incomplete table declarations → ";
+  else
+    outs() << "Generated " << Stats.Patterns.Functions << " signatures → ";
+  outs() << OutputFile << " (" << Stats.Objects << " objects";
   if (Stats.OtherMachine)
     outs() << ", " << Stats.OtherMachine << " for another machine skipped";
   if (Stats.NotObjects)

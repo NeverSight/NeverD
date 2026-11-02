@@ -37,6 +37,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -45,8 +46,27 @@ struct BinaryImage;
 
 namespace sigs {
 
+struct SignatureSelectionStats {
+  size_t AvailableFiles = 0;
+  size_t SelectedFiles = 0;
+};
+
+/// Independent evidence for a name admitted to semantic consumers. Byte
+/// agreement, reference confirmation and database uniqueness are candidates,
+/// not identity evidence: unrelated source functions can compile identically.
+enum class SignatureNameEvidence { ImageSymbol, ExceptionPersonality };
+
+struct SignatureNameDecision {
+  std::string Name;
+  SignatureNameEvidence Evidence = SignatureNameEvidence::ImageSymbol;
+};
+
 class SignatureDB {
 public:
+  /// Present after a successful automatic load; manual changes clear it.
+  const std::optional<SignatureSelectionStats> &automaticSelection() const {
+    return AutoSelection;
+  }
   /// Load pattern files through \p NewCache from now on, or, when it is
   /// none, parse every one.  A file the cache holds as it is now is mapped
   /// rather than parsed, and one it does not is kept there once it is
@@ -58,7 +78,7 @@ public:
   /// Replace the current database with all pattern files from a directory.
   llvm::Error loadDirectory(const std::filesystem::path &Dir);
 
-  /// The pattern files of a directory, sorted by name.
+  /// The .pat and .npat files of a directory, sorted by name.
   static llvm::Expected<std::vector<std::filesystem::path>>
   listDirectory(const std::filesystem::path &Dir);
 
@@ -74,14 +94,21 @@ public:
 
   /// The pattern files among \p Files that fit \p Img.
   ///
+  /// Loader-owned platform, runtime and execution-domain evidence excludes
+  /// incompatible reviewed bundled packs before their files are opened.
+  /// Unknown/custom libraries, unknown dimensions and conflicting evidence
+  /// retain coverage. Mixed WDK and common compiler helper packs are not
+  /// assigned a kernel/user restriction. Explicit loadFiles bypasses selection.
+  ///
   /// A file of library `vs<year>` (see \ref libraryName) holds one Visual
   /// Studio release's runtime libraries.  A PE file links the static runtime
   /// libraries of its linker's release, and other releases state some of the
   /// same bytes under other names, so when the image's Rich header names the
   /// release of its linker, only that release's file is kept.  Every file that
-  /// belongs to no release, such as `winsdk.pat`, is kept.  When the image has
+  /// belongs to no release and fits the platform is kept. When the image has
   /// no Rich header, when the header was altered after linking, or when
-  /// \p Files hold no file for a release it names, every file is kept.
+  /// \p Files hold no file for a release it names, all platform-compatible
+  /// files are kept.
   static std::vector<std::filesystem::path>
   selectForImage(const BinaryImage &Img,
                  std::vector<std::filesystem::path> Files);
@@ -114,6 +141,10 @@ public:
     return FeaturePacks;
   }
   uint64_t featureGeneration() const { return FeatureGeneration; }
+  /// Freeze admitted identities, match observations and semantic feature
+  /// policy for isolated analysis. Pattern storage and matching indexes are
+  /// deliberately absent: the snapshot cannot rescan or borrow mapped files.
+  SignatureDB snapshotForAnalysis() const;
   /// Byte features share the existing matching and reference/ambiguity engine.
   /// The caller independently authenticates each candidate's identity first.
   using FeatureIdentityVerifier = std::function<std::string(
@@ -144,7 +175,12 @@ public:
   ///
   /// What the references confirm and contradict names routines the bytes
   /// alone could not, and those are what the references of their callers are
-  /// checked against in turn: the check repeats until it names nothing new.
+  /// checked against in turn. A contradicted pattern cannot confirm a caller,
+  /// and withdrawing evidence rechecks callers even if their target remains
+  /// ambiguous. Provisional rejections can be withdrawn too. The check repeats
+  /// within a bounded number of rounds; unresolved addresses and their
+  /// dependent callers remain unnamed if propagation does not converge within
+  /// that budget.
   void apply(const BinaryImage &Img, const std::vector<uint64_t> &FuncEntries);
 
   /// Name the personality routines \p Img installs but cannot name itself,
@@ -177,7 +213,7 @@ public:
   /// \returns how many routines were named.
   size_t identifyPersonalityRoutines(BinaryImage &Img);
 
-  /// Get all signature matches found so far.
+  /// Get all surviving byte candidates, including those not admitted as names.
   const std::vector<SigMatch> &matches() const { return Matches; }
 
   /// Clear all loaded signatures and matches.
@@ -189,18 +225,34 @@ public:
   /// Get the number of loaded signature files.
   size_t fileCount() const { return LoadedFiles.size(); }
 
-  /// Lookup a match by address. Returns nullptr if not found.
+  /// Lookup a byte candidate by address. This does not establish its identity.
+  /// Returns nullptr if not found.
   const SigMatch *findMatch(uint64_t Addr) const;
 
-  /// Build a map from address to function name for quick lookup.
+  /// Independently admitted identity, or nullptr when only candidates exist.
+  /// Valid until matches are cleared, reapplied or personalities are
+  /// identified.
+  const SignatureNameDecision *nameDecision(uint64_t Addr) const;
+
+  /// Names permitted for automatic renaming, type lookup and semantic analysis.
+  /// Ordinary byte candidates require the same exact linkage spelling in the
+  /// image's stated function symbols/exports. An alias is not certified by a
+  /// different alias's evidence. The dedicated exception-personality pass may
+  /// admit a name through its existing metadata and whole-function checks.
+  std::unordered_map<uint64_t, std::string> buildNameMap() const;
+
+  /// Preferred candidate names for inspection, never for semantic identity.
   ///
   /// Each match gives the routine at its address a set of names: its name
   /// and its aliases. Matches whose sets share a name agree, and the address
   /// takes the preferred shared name (preferredAliasOrder). An address the
   /// matches name differently gets no name, unless the matches whose
   /// references were all confirmed agree on one: the bytes alone could not
-  /// tell the routines apart, but what they call could.
-  std::unordered_map<uint64_t, std::string> buildNameMap() const;
+  /// tell the routines apart, but what they call could. Caller-confirmed
+  /// rows state exactly the names frozen callers requested at one target.
+  /// Those candidate aliases take precedence over unresolved byte alternatives;
+  /// they do not bypass the independent identity gate of buildNameMap().
+  std::unordered_map<uint64_t, std::string> buildCandidateNameMap() const;
 
 private:
   struct SigSource {
@@ -218,6 +270,7 @@ private:
   std::vector<StoredModule> Modules;
   std::vector<SigSource> LoadedFiles;
   std::vector<SigMatch> Matches;
+  std::unordered_map<uint64_t, SignatureNameDecision> NameDecisions;
   std::map<std::string, LibraryFeaturePack> FeaturePacks;
   uint64_t FeatureGeneration = 0;
   std::optional<SignatureCache> Cache;
@@ -232,6 +285,7 @@ private:
   std::vector<size_t> MatchModules;
 
   void clearMatches();
+  void admitStatedNames(const BinaryImage &Img);
 
   /// What the matches settle for one address: the name shown, and every name
   /// the agreeing matches give the routine, sorted.  Both view the matches'
@@ -244,8 +298,6 @@ private:
     }
     bool operator==(const SettledRoutine &) const = default;
   };
-  /// The routines the matches settle; see \ref buildNameMap.
-  std::unordered_map<uint64_t, SettledRoutine> settleRoutines() const;
   /// What \p Proposals, the matches at one address, settle there.
   static std::optional<SettledRoutine>
   settle(llvm::ArrayRef<const SigMatch *> Proposals);
@@ -253,12 +305,60 @@ private:
   /// Drop the matches their references contradict and record the ones they
   /// confirm; see \ref apply.  \p Hits are the modules that matched at each
   /// of \p Entries, the addresses the matches were looked for at.
+  struct DataBinding {
+    std::string_view Name;
+    uint64_t Parent;
+    bool MultipleParents = false;
+    bool IsLocalData = false;
+  };
+  using DataBindings = std::unordered_map<uint64_t, DataBinding>;
+  struct DeferredCaller {
+    uint64_t Parent;
+    uint64_t DataTarget;
+  };
+  void appendModuleMatches(uint64_t Address, size_t Module);
+  void applyCodeAddressPairs(const BinaryImage &Img,
+                             llvm::ArrayRef<uint64_t> Entries,
+                             llvm::ArrayRef<SignatureMatcher::Hit> Hits);
+  void applyRuntimePointerContext(const BinaryImage &Img,
+                                  llvm::ArrayRef<uint64_t> Entries);
+  void applyVTableContext(const BinaryImage &Img,
+                          llvm::ArrayRef<uint64_t> Entries);
+  void applyDataContext(const BinaryImage &Img,
+                        llvm::ArrayRef<uint64_t> Entries,
+                        llvm::ArrayRef<SignatureMatcher::Hit> Hits,
+                        llvm::ArrayRef<DeferredCaller> DeferredCallers);
+  void
+  applyCallerContext(const BinaryImage &Img, llvm::ArrayRef<uint64_t> Entries,
+                     size_t FirstParent = 0, const DataBindings *Data = nullptr,
+                     llvm::ArrayRef<uint64_t> Revisit = {},
+                     std::vector<DeferredCaller> *DeferredCallers = nullptr);
+  void applyCodeLayoutContext(const BinaryImage &Img,
+                              llvm::ArrayRef<uint64_t> Entries);
+  void applyCallerContextRound(
+      const BinaryImage &Img, llvm::ArrayRef<uint64_t> Entries,
+      std::unordered_map<uint64_t, std::string> &Names,
+      std::vector<std::pair<uint64_t, size_t>> &FrozenCandidates,
+      size_t FrozenMatches, size_t FirstParent, const DataBindings *Data,
+      llvm::ArrayRef<uint64_t> Revisit,
+      std::vector<DeferredCaller> *DeferredCallers,
+      std::optional<std::unordered_map<uint64_t, uint32_t>> &FrozenBodies);
+  /// A present FrozenMatches validates only later incoming candidates against
+  /// the frozen prefix, including an empty original set. Their outcomes cannot
+  /// change anchors or feed another
+  /// candidate: the same resolver performs one validation pass. FirstChecked
+  /// skips earlier validated incoming rows without making them evidence.
   void checkReferences(const BinaryImage &Img, llvm::ArrayRef<uint64_t> Entries,
-                       std::vector<SignatureMatcher::Hit> Hits);
+                       std::vector<SignatureMatcher::Hit> Hits,
+                       std::optional<size_t> FrozenMatches = std::nullopt,
+                       size_t FirstChecked = 0,
+                       const DataBindings *Data = nullptr);
 
   /// Add \p Mods, the modules of \p Src, in place of those of a source with
   /// the same path or after every other source.
   void commitSource(SigSource Src, std::vector<StoredModule> Mods);
+
+  std::optional<SignatureSelectionStats> AutoSelection;
 
   /// The library a module was loaded from, by its index in \ref Modules.
   const std::string &libraryNameOf(size_t ModuleIndex) const;

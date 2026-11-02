@@ -12,7 +12,7 @@
 
 #include "AArch64LiftDetail.h"
 
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
 
 namespace neverd {
 

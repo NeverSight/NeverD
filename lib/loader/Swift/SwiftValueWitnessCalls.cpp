@@ -5,6 +5,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 
@@ -197,7 +198,9 @@ class Tracer {
       // proof independent of any inferred call signature or escape summary.
       if (Operation.Opcode == NdOp::CALL ||
           Operation.Opcode == NdOp::INDIR_CALL ||
-          Operation.Opcode == NdOp::INTRINSIC ||
+          (Operation.Opcode == NdOp::INTRINSIC &&
+           !(Image.Arch == Arch::AArch64 &&
+             lowAArch64AddressLoadShapeIsValid(Operation))) ||
           Operation.Opcode == NdOp::ATOMIC_XCHG ||
           Operation.Opcode == NdOp::ATOMIC_ADD ||
           Operation.Opcode == NdOp::ATOMIC_CMPXCHG)
@@ -234,7 +237,9 @@ class Tracer {
       for (size_t Earlier = 0; Earlier < Index; ++Earlier) {
         const auto &Prior = Block.Ops[Earlier];
         if (Prior.Opcode == NdOp::CALL || Prior.Opcode == NdOp::INDIR_CALL ||
-            Prior.Opcode == NdOp::INTRINSIC)
+            (Prior.Opcode == NdOp::INTRINSIC &&
+             !(Image.Arch == Arch::AArch64 &&
+               lowAArch64AddressLoadShapeIsValid(Prior))))
           return std::nullopt;
         if (Prior.Opcode != NdOp::STORE)
           continue;

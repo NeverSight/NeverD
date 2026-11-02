@@ -22,8 +22,8 @@ jobs:
           lscpu > build-rep-fault-probe/cpu.txt
           uname -a > build-rep-fault-probe/kernel.txt
           clang++ --version > build-rep-fault-probe/compiler.txt
-          sha256sum scripts/diagnostics/RepFaultProbe.* unittests/emulation/X64StringTransferCases.def unittests/emulation/X64StringComparisonCases.def > build-rep-fault-probe/hashes.txt
-          clang++ -O2 -std=c++20 -Wall -Wextra -Werror -I unittests/emulation scripts/diagnostics/RepFaultProbe.cpp -o build-rep-fault-probe/probe
+          sha256sum scripts/diagnostics/RepFaultProbe.* unittests/emulation/x86_64/X64StringTransferCases.def unittests/emulation/x86_64/X64StringComparisonCases.def > build-rep-fault-probe/hashes.txt
+          clang++ -O2 -std=c++20 -Wall -Wextra -Werror -I unittests/emulation/x86_64 scripts/diagnostics/RepFaultProbe.cpp -o build-rep-fault-probe/probe
           sha256sum build-rep-fault-probe/probe >> build-rep-fault-probe/hashes.txt
           for trial in 1 2 3; do
             build-rep-fault-probe/probe > "build-rep-fault-probe/observations-$trial.txt"

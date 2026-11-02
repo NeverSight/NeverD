@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -24,8 +24,8 @@
 
 namespace neverd {
 
-bool liftSIMDNEONArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                       const cs_arm &ARM) {
+bool liftSIMDNEONArith(ARMLifter &L, ARMLifter::LiftState &S,
+                       const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // NEON widening add: per-lane sign/zero extend then add
   case ARM_INS_VADDL: {
@@ -181,9 +181,8 @@ bool liftSIMDNEONArith(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Ins
         S.emit(NdOp::INT_ADD, Sum, {AL, BL});
         if (IsRound) {
           NdVar Sum1 = S.makeTemp(WideLaneSz);
-          S.emit(
-              NdOp::INT_ADD, Sum1,
-              {Sum, NdVar::cst(1ULL << (NarrowLaneSz * 8 - 1), WideLaneSz)});
+          S.emit(NdOp::INT_ADD, Sum1,
+                 {Sum, NdVar::cst(1ULL << (NarrowLaneSz * 8 - 1), WideLaneSz)});
           Sum = Sum1;
         }
         NdVar Hi = S.makeTemp(NarrowLaneSz);

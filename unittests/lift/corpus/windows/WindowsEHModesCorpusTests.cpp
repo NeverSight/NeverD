@@ -89,7 +89,8 @@ selectUnique(ArrayRef<WindowsEHArtifactExpectation> Expectations,
 }
 
 Expected<std::string> decompileToSource(const std::filesystem::path &Input,
-                                        unsigned TimeoutSeconds = 120) {
+                                        unsigned TimeoutSeconds = 120,
+                                        ArrayRef<StringRef> Options = {}) {
   SmallString<128> OutputPath;
   if (std::error_code EC = sys::fs::createTemporaryFile(
           "neverd-windows-eh-mode", "c", OutputPath))
@@ -112,8 +113,10 @@ Expected<std::string> decompileToSource(const std::filesystem::path &Input,
   const std::string OutputString = OutputPath.str().str();
   SmallVector<StringRef, 10> Args{
       NEVERD_BINARY,       "decompile", "--no-debug", "--no-opt",
-      "--language=source", "-o",        OutputString, InputString,
+      "--language=source", "-o",        OutputString,
   };
+  Args.append(Options.begin(), Options.end());
+  Args.push_back(InputString);
   std::optional<StringRef> Redirects[] = {std::nullopt, StdoutPath.str(),
                                           StderrPath.str()};
   std::string ProgramError;
@@ -654,6 +657,142 @@ TEST(WindowsEHModesCorpus,
     EXPECT_EQ(OutputEligibleCatchAllRecords, TestCase.OutputEligible ? 1u : 0u)
         << "ARM64 output boundary did not match the pinned source shape\n"
         << RecordDiagnostics;
+  }
+}
+
+/// The definition of the function at \p Entry in \p Output, from its
+/// `neverd.entry` comment through its closing brace, or empty.
+std::string definitionOf(StringRef Output, StringRef Entry) {
+  const size_t Start = Output.find(("/* neverd.entry: " + Entry + " */").str());
+  if (Start == StringRef::npos)
+    return {};
+  const size_t Open = Output.find(") {\n", Start);
+  if (Open == StringRef::npos)
+    return {};
+  int Depth = 0;
+  for (size_t I = Open + 2; I < Output.size(); ++I) {
+    if (Output[I] == '{')
+      ++Depth;
+    else if (Output[I] == '}' && --Depth == 0)
+      return Output.slice(Start, I + 1).str();
+  }
+  return {};
+}
+
+size_t occurrencesIn(StringRef Text, StringRef Needle) {
+  size_t Count = 0;
+  for (size_t At = Text.find(Needle); At != StringRef::npos;
+       At = Text.find(Needle, At + 1))
+    ++Count;
+  return Count;
+}
+
+// xcpt4u.c's eret:
+//   __try { __try { foo1(Status); } __except (Status filter) {
+//       *Counter += 1; return; } } __finally { *Counter += 1; }
+// The return calls _local_unwind, which runs the finally handler once and
+// resumes at the epilogue; MSVC also copies the finally after the try for the
+// normal path. Each path must add one per source increment it passes: the
+// arm's own, then the finally's, which only the clause may run on that path.
+TEST(WindowsEHModesCorpus, LocalUnwindReturnRunsTheFinallyOnceInTheClause) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "x86_64", "fh4", true, "o0"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  auto OutputOrErr =
+      decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                        (*ExpectationOrErr)->Path);
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << toString(OutputOrErr.takeError());
+  const std::string Eret = definitionOf(*OutputOrErr, "0x1400011E0");
+  ASSERT_FALSE(Eret.empty());
+  // No runtime call or code address stands for the jump.
+  EXPECT_EQ(Eret.find("_local_unwind"), std::string::npos) << Eret;
+  EXPECT_EQ(Eret.find("0x140001230"), std::string::npos) << Eret;
+  // Nor does the handler run as an explicit call: the clause runs it.
+  EXPECT_EQ(Eret.find("sub_1400069E9("), std::string::npos) << Eret;
+  const size_t Except = Eret.find("} __except (");
+  const size_t Finally = Eret.find("} __finally {");
+  const size_t Guard = Eret.find("if (AbnormalTermination())", Finally);
+  ASSERT_NE(Except, std::string::npos) << Eret;
+  ASSERT_NE(Finally, std::string::npos) << Eret;
+  ASSERT_NE(Guard, std::string::npos) << Eret;
+  const size_t After = Eret.find("\n    }\n", Guard);
+  ASSERT_NE(After, std::string::npos) << Eret;
+  // The arm leaves both tries by a jump, an abnormal termination in C.
+  const StringRef Arm = StringRef(Eret).slice(Except, Finally);
+  EXPECT_TRUE(Arm.contains("goto ") || Arm.contains("return")) << Eret;
+  // Three increments, one each: the arm's, the clause's for the arm's
+  // return, and the normal path's copy after the try.
+  const StringRef Clause = StringRef(Eret).slice(Finally, After);
+  const StringRef Normal = StringRef(Eret).substr(After);
+  EXPECT_EQ(occurrencesIn(Arm, " + 1;"), 1u) << Eret;
+  EXPECT_EQ(occurrencesIn(Clause, " + 1;"), 1u) << Eret;
+  EXPECT_EQ(occurrencesIn(Normal, " + 1;"), 1u) << Eret;
+}
+
+// A single-function view gathers the handlers the protocol reads, so the
+// exit reads the same there as in the whole unit.
+TEST(WindowsEHModesCorpus, LocalUnwindExitAgreesAloneAndInTheWholeUnit) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "x86_64", "fh4", true, "o0"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  const std::filesystem::path Input =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+      (*ExpectationOrErr)->Path;
+  auto WholeOrErr = decompileToSource(Input);
+  ASSERT_TRUE(static_cast<bool>(WholeOrErr))
+      << toString(WholeOrErr.takeError());
+  const std::array<StringRef, 1> Alone{"--func=0x1400011E0"};
+  auto AloneOrErr = decompileToSource(Input, 120, Alone);
+  ASSERT_TRUE(static_cast<bool>(AloneOrErr))
+      << toString(AloneOrErr.takeError());
+  const std::string Whole = definitionOf(*WholeOrErr, "0x1400011E0");
+  ASSERT_FALSE(Whole.empty());
+  EXPECT_EQ(Whole.find("_local_unwind"), std::string::npos) << Whole;
+  EXPECT_EQ(definitionOf(*AloneOrErr, "0x1400011E0"), Whole);
+}
+
+// xcpt4's O2 loop exits: `return` out of two nested `__try/__finally` and
+// `continue` out of the inner one, both local unwinds. The inner and outer
+// finally scopes each have two ranges, and the outer one's first range holds
+// the loop head. With every exit a jump, the copied `return 1` tail the
+// first exit jumped to runs no more; left in place until dead-code
+// elimination, its addresses past both ranges split the outer region.
+TEST(WindowsEHModesCorpus, LocalUnwindExitsKeepTheirLoopRegionsStructured) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "x86_64", "fh4", true, "o2"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  auto OutputOrErr =
+      decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                        (*ExpectationOrErr)->Path);
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << toString(OutputOrErr.takeError());
+  for (const auto &[Entry, Regions] :
+       {std::pair<StringRef, StringRef>{"0x1400037D0",
+                                        "=4, fallback_regions=0"},
+        {"0x140003870", "=6, fallback_regions=0"}}) {
+    const size_t Start =
+        OutputOrErr->find(("/* neverd.entry: " + Entry + " */").str());
+    ASSERT_NE(Start, std::string::npos) << Entry.str();
+    const StringRef Function =
+        StringRef(*OutputOrErr)
+            .slice(Start, OutputOrErr->find("/* neverd.entry: ", Start + 1));
+    EXPECT_TRUE(
+        Function.contains(("highir.structured_regions" + Regions).str()))
+        << Function.str();
+    EXPECT_FALSE(Function.contains("_local_unwind")) << Function.str();
   }
 }
 

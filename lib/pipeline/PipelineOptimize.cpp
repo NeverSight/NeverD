@@ -356,77 +356,6 @@ bool canonicalizePrivateFrameAccesses(llvm::Module &Mod) {
   return Changed;
 }
 
-/// After SROA, bare negative inttoptr addresses (e.g.
-/// `inttoptr (i32 -4 to ptr)`) can appear for stack slots that were
-/// previously frame-relative.  Rewrite them to `frame_base + disp`.
-static bool fixLiftedStackPointers(llvm::Module &Mod) {
-  bool Changed = false;
-  for (llvm::Function &F : Mod) {
-    if (F.isDeclaration() || F.hasOptNone())
-      continue;
-
-    llvm::Value *FrameBase = nullptr;
-    for (llvm::BasicBlock &BB : F) {
-      if (!BB.getName().starts_with(kFrameSetupBlock))
-        continue;
-      for (llvm::Instruction &I : BB) {
-        if (auto *Trunc = llvm::dyn_cast<llvm::TruncInst>(&I)) {
-          if (auto *PTI =
-                  llvm::dyn_cast<llvm::PtrToIntInst>(Trunc->getOperand(0)))
-            if (PTI->getName() == kRspInitValue)
-              FrameBase = Trunc;
-        }
-        if (!FrameBase) {
-          if (auto *PTI = llvm::dyn_cast<llvm::PtrToIntInst>(&I))
-            if (PTI->getName() == kRspInitValue)
-              FrameBase = PTI;
-        }
-      }
-    }
-    if (!FrameBase)
-      continue;
-
-    llvm::LLVMContext &Ctx = F.getContext();
-    for (llvm::BasicBlock &BB : F) {
-      for (llvm::Instruction &I : BB) {
-        auto FixIntToPtr = [&](llvm::Instruction *User, unsigned OpNo) -> bool {
-          llvm::Value *PtrOp = User->getOperand(OpNo);
-          llvm::Value *Addr = PtrOp;
-          if (auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(PtrOp)) {
-            if (CE->getOpcode() != llvm::Instruction::IntToPtr)
-              return false;
-            Addr = CE->getOperand(0);
-          }
-          auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Addr);
-          if (!CI)
-            return false;
-          int64_t Disp = CI->getSExtValue();
-          if (Disp >= 0)
-            return false;
-
-          llvm::IRBuilder<> FixB(User);
-          llvm::Value *Base = FrameBase;
-          if (Base->getType() != CI->getType())
-            Base = FixB.CreateIntCast(Base, CI->getType(), true, "sp_cast");
-          llvm::Value *Off = llvm::ConstantInt::get(
-              CI->getType(), static_cast<uint64_t>(Disp), true);
-          llvm::Value *PtrInt = FixB.CreateAdd(Base, Off);
-          llvm::Value *Fixed = FixB.CreateIntToPtr(
-              PtrInt, llvm::PointerType::get(Ctx, 0), "stackptr");
-          User->setOperand(OpNo, Fixed);
-          return true;
-        };
-
-        if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&I))
-          Changed |= FixIntToPtr(LI, llvm::LoadInst::getPointerOperandIndex());
-        else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&I))
-          Changed |= FixIntToPtr(SI, llvm::StoreInst::getPointerOperandIndex());
-      }
-    }
-  }
-  return Changed;
-}
-
 void Pipeline::promoteScaffoldingAllocas(llvm::Module &Mod) {
   llvm::LoopAnalysisManager LAM;
   llvm::FunctionAnalysisManager FAM;
@@ -446,8 +375,7 @@ void Pipeline::promoteScaffoldingAllocas(llvm::Module &Mod) {
   // mem2reg only: promotes the per-temp allocas the emitter spills SSA values
   // through (their addresses are never taken) and leaves the address-taken
   // frame alloca in memory.  No SROA / InstCombine / SimplifyCFG, so no
-  // value-changing transform runs and fixLiftedStackPointers (an SROA cleanup)
-  // is unneeded.
+  // value-changing transform runs.
   llvm::FunctionPassManager FPM;
   FPM.addPass(llvm::PromotePass());
   llvm::ModulePassManager MPM;
@@ -620,7 +548,8 @@ runOptimizationPipeline(llvm::Module &Mod,
     }
   }
 
-  Result->Changed |= fixLiftedStackPointers(Mod);
+  // Absolute integer addresses retain their bits. Only the pre-optimization
+  // private-frame proof above may recover an allocation-relative pointer.
   // Both Deep extension points intentionally contribute semantic work to the
   // same sink.  A function definition is nevertheless one visited function,
   // independent of how many extension points observe it.

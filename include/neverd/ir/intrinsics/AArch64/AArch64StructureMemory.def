@@ -1,0 +1,101 @@
+//===- AArch64StructureMemory.def - NEON memory contracts -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Baseline AdvSIMD multiple, lane and replicate encodings. A retained native
+/// instruction owns element order, AddressIncrement and post-index AddressAdd.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_STRUCTURE_VALUE
+#define NEVERD_A64_STRUCTURE_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_STRUCTURE_TEXT
+#define NEVERD_A64_STRUCTURE_TEXT(Name, Value)
+#endif
+#ifndef NEVERD_A64_STRUCTURE_LAYOUT
+#define NEVERD_A64_STRUCTURE_LAYOUT(Opcode, Members, Repeat)
+#endif
+#ifndef NEVERD_A64_STRUCTURE_OPERATION
+#define NEVERD_A64_STRUCTURE_OPERATION(Id, Count, Load, Lane)
+#endif
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureMultipleMask, 0xbf200000U)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureMultiple, 0x0c000000U)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureSingleMask, 0xbf000000U)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureSingle, 0x0d000000U)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureQBit, 1U << 30)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureLoadBit, 1U << 22)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructurePostBit, 1U << 23)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureCountBit, 1U << 21)
+NEVERD_A64_STRUCTURE_VALUE(uint32_t, kStructureLaneBit, 1U << 12)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureSizeShift, 10)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureSizeMask, 3U)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureOpcodeShift, 12)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureOpcodeMask, 15U)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureSingleOpcodeShift, 13)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureSingleOpcodeMask, 7U)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureIndexShift, 16)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureIndexOperand, 2)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureDataOperand, 3)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureScratchVector, 20)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureScratchIndex, 15)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureNarrowBytes, 8)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureByteScale, 0)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureHalfScale, 1)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureWordScale, 2)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureReplicateScale, 3)
+NEVERD_A64_STRUCTURE_VALUE(unsigned, kStructureMaxVectors, 4)
+NEVERD_A64_STRUCTURE_LAYOUT(0x0, 4, 1)
+NEVERD_A64_STRUCTURE_LAYOUT(0x2, 1, 4)
+NEVERD_A64_STRUCTURE_LAYOUT(0x4, 3, 1)
+NEVERD_A64_STRUCTURE_LAYOUT(0x6, 1, 3)
+NEVERD_A64_STRUCTURE_LAYOUT(0x7, 1, 1)
+NEVERD_A64_STRUCTURE_LAYOUT(0x8, 2, 1)
+NEVERD_A64_STRUCTURE_LAYOUT(0xa, 1, 2)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLoad1, 1, true, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLoad2, 2, true, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLoad3, 3, true, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLoad4, 4, true, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLaneLoad1, 1, true, true)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLaneLoad2, 2, true, true)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLaneLoad3, 3, true, true)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureLaneLoad4, 4, true, true)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureStore1, 1, false, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureStore2, 2, false, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureStore3, 3, false, false)
+NEVERD_A64_STRUCTURE_OPERATION(A64_StructureStore4, 4, false, false)
+NEVERD_A64_STRUCTURE_TEXT(kStructureLoadAsm,
+                          "// neverd.structure.load\n\t.inst ${0:c}")
+NEVERD_A64_STRUCTURE_TEXT(kStructureLaneLoadAsm,
+                          "// neverd.structure.lane.load\n\t.inst ${0:c}")
+NEVERD_A64_STRUCTURE_TEXT(kStructureStoreAsm,
+                          "// neverd.structure.store\n\t.inst ${0:c}")
+NEVERD_A64_STRUCTURE_TEXT(
+    kStructureLoadSPAsm,
+    "// neverd.structure.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${0:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_STRUCTURE_TEXT(
+    kStructureLaneLoadSPAsm,
+    "// neverd.structure.lane.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${0:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_STRUCTURE_TEXT(
+    kStructureStoreSPAsm,
+    "// neverd.structure.store.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${0:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_STRUCTURE_TEXT(kStructureSPConstraintEnd, "i,~{x14},~{memory}")
+NEVERD_A64_STRUCTURE_TEXT(kStructureAsmImmediate, "${0:c}")
+NEVERD_A64_STRUCTURE_TEXT(kStructureAsmOperand, "${{{0}:c}")
+NEVERD_A64_STRUCTURE_TEXT(kStructureVectorOutputConstraint, "=&{{v{0}},")
+NEVERD_A64_STRUCTURE_TEXT(kStructureBaseOutputConstraint, "={{x16},")
+NEVERD_A64_STRUCTURE_TEXT(kStructureTiedConstraint, "{0},")
+NEVERD_A64_STRUCTURE_TEXT(kStructureIndexConstraint, "{{x15},")
+NEVERD_A64_STRUCTURE_TEXT(kStructureVectorInputConstraint, "{{v{0}},")
+NEVERD_A64_STRUCTURE_TEXT(kStructureConstraintEnd, "i,~{memory}")
+NEVERD_A64_STRUCTURE_TEXT(kStructureAsmPrefix, "// neverd.structure.")
+NEVERD_A64_STRUCTURE_TEXT(kStructureInvalidIdentity,
+                          "validated structure instruction has an intrinsic")
+#undef NEVERD_A64_STRUCTURE_VALUE
+#undef NEVERD_A64_STRUCTURE_TEXT
+#undef NEVERD_A64_STRUCTURE_LAYOUT
+#undef NEVERD_A64_STRUCTURE_OPERATION

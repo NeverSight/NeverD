@@ -9,11 +9,14 @@ entry point is a third, which analysis sizes by its code rather than by its
 record.  The first two are exported, the second under two names, as a
 linker that folds identical functions exports them.
 """
+import argparse
+import json
 from pathlib import Path
 import struct
-import sys
+import subprocess
 import tempfile
 from transport_test import Client
+from constant_branch_test import verify_function_views
 
 BASE = 0x140000000
 PADDED, SPLIT, ENTRY, COLD = 0x1000, 0x1010, 0x1020, 0x1100
@@ -107,12 +110,50 @@ def lines(client, address, after):
     return listed["payload"]["lines"]
 
 
-def run(worker):
+def cli_parts(cli, worker, path, entries):
+    def call(operation, *arguments):
+        result = subprocess.run([cli, operation, str(path), "--no-debug", "--json", *arguments],
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert result.returncode == 0, (operation, result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    # The CLI selects an existing function and decodes its linear bytes. It
+    # must retain the same independent entries and references as the worker;
+    # a cold part's address must never become another callable identity.
+    for _ in range(2):
+        functions = call("funcs")
+        assert {int(row["addr"], 16) for row in functions} == entries, functions
+        for name in ("Split", "SplitAlias", hex(BASE + SPLIT)):
+            instructions = call("disasm", "--func", name)
+            assert instructions and int(instructions[0]["addr"], 16) == BASE + SPLIT, instructions
+            assert instructions[0]["mnemonic"] == "jmp", instructions
+            assert instructions[0]["bytes"] == "e9eb000000", instructions
+        refs = call("xrefs", "--addr", hex(BASE + TEXT))
+        assert any(int(row["from"], 16) == BASE + COLD and
+                   int(row["to"], 16) == BASE + TEXT for row in refs), refs
+
+    # A CLI function rename persists through the shared SDK store. A new
+    # worker still displays its cold part under that same owner and name.
+    call("rename", "--func", "Split", "--to", "RenamedSplit")
+    functions = call("funcs")
+    assert {int(row["addr"], 16) for row in functions} == entries, functions
+    assert next(row["name"] for row in functions if int(row["addr"], 16) == BASE + SPLIT) == "RenamedSplit", functions
+    with Client(worker) as client:
+        opened = client.call("open", {"path": str(path), "analysis": False, "warm": False})
+        assert opened["status"] == "ok", opened
+        cold = lines(client, COLD, 16)
+        assert any("START OF FUNCTION CHUNK FOR RenamedSplit" in row["text"] for row in cold), cold
+        body = [row for row in cold if row["kind"] == "insn" and
+                BASE + COLD <= int(row["address"], 16) < BASE + COLD + COLD_SIZE]
+        assert len(body) == 3 and all(row["function_address"] == hex(BASE + SPLIT) for row in body), body
+
+
+def run(worker, cli=None):
     with tempfile.TemporaryDirectory(prefix="neverd-pe-parts-") as directory:
         path = Path(directory) / "parts.exe"
         path.write_bytes(image())
         with Client(worker) as client:
-            assert client.call("open", {"path": str(path)})["status"] == "ok"
+            assert client.call("open", {"path": str(path), "analysis": False, "warm": False})["status"] == "ok"
             listed = client.call("functions", {"limit": 10})["payload"]["items"]
             entries = {int(item["address"], 16) for item in listed}
             assert {BASE + PADDED, BASE + SPLIT} <= entries, listed
@@ -140,10 +181,38 @@ def run(worker):
             texts = [" ".join(line["text"].split()) for line in cold]
             assert "; START OF FUNCTION CHUNK FOR Split" in texts, texts
             assert "; END OF FUNCTION CHUNK FOR Split" in texts, texts
+            assert sum("END OF FUNCTION CHUNK FOR Split" in text for text in texts) == 1, texts
+            assert not any(text.endswith(" endp") for text in texts), texts
             assert any(text.startswith("loc_140001100:") for text in texts), texts
             body = [line for line in cold if line["kind"] == "insn"
                     and BASE + COLD <= int(line["address"], 16) < BASE + COLD + COLD_SIZE]
             assert len(body) == 3 and all(line["function_address"] == hex(BASE + SPLIT) for line in body), body
+            resolved = client.call("resolve", {"query": hex(BASE + COLD + 7)})
+            assert resolved["payload"]["function_address"] == hex(BASE + SPLIT), resolved
+
+            # Reading a cold part must select its owner's recovered CFG, not
+            # register the part as a transient independent function. Alternate
+            # both ranges as a listing refresh/prefetch does, and force the
+            # inventory check that would otherwise invalidate every page.
+            generation = None
+            for _ in range(4):
+                for rva in (SPLIT, COLD, PADDED):
+                    page = client.call("listing", {
+                        "address": hex(BASE + rva), "before": 0, "after": 12})
+                    assert page["status"] == "ok", page
+                    metadata = client.call("metadata")["payload"]
+                    assert metadata["function_count"] == len(entries), metadata
+                    current = page["payload"]["generation"]
+                    if generation is not None:
+                        assert current == generation, (generation, current)
+                    generation = current
+                    inventory = client.call("functions", {"limit": 10})["payload"]["items"]
+                    assert {int(item["address"], 16) for item in inventory} == entries, inventory
+                    assert not any("control-flow recovery failed" in row["text"]
+                                   for row in page["payload"]["lines"]), page
+
+            verify_function_views(client, BASE + COLD, BASE + SPLIT)
+            verify_function_views(client, BASE + COLD + 7, BASE + SPLIT)
 
             # The part's reference to the string is its function's: the
             # string lists it, and so do its references.
@@ -151,8 +220,15 @@ def run(worker):
             assert any(item["from"] == hex(BASE + COLD) for item in refs), refs
             strings = client.call("string_references", {"filter": "ColdPath"})["payload"]["items"]
             assert any(item["address"] == hex(BASE + COLD) for item in strings), strings
+        if cli:
+            cli_parts(cli, worker, path, entries)
+            print("CLI/worker cold-chunk entries, instructions, references and function rename persistence passed")
     print("x64 PE padding, chained chunks and exported names list as IDA lists them")
 
 
 if __name__ == "__main__":
-    run(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("worker")
+    parser.add_argument("--cli")
+    args = parser.parse_args()
+    run(args.worker, args.cli)

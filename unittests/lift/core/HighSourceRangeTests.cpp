@@ -1,11 +1,24 @@
+//===- HighSourceRangeTests.cpp - Source integer range contracts --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Check source bounds against independently enumerated integer outcomes.
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/ir/high/HighSourceFlow.h"
 
 #include <algorithm>
+#include <cstdint>
 
 using namespace neverd;
 namespace {
+#define SOURCE_RANGE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "HighSourceRangeFixtures.def"
+
 ExprPtr input(unsigned Id = 0, uint16_t Bytes = 4) {
   MedVar V;
   V.Kind = MedVar::Param;
@@ -40,6 +53,67 @@ HighStmt write(ExprPtr Dst, ExprPtr Value) {
   S.Dst = std::move(Dst);
   S.Val = std::move(Value);
   return S;
+}
+
+ExprPtr selectedInteger(ExprPtr Condition, uint64_t Maximum, uint16_t Bytes) {
+  auto Select = HighExpr::makeBinop(NdOp::SELECT, std::move(Condition),
+                                    HighExpr::makeConst(Maximum, Bytes));
+  Select->Operands.push_back(
+      HighExpr::makeConst(Maximum ? Maximum - 1 : 0, Bytes));
+  Select->Type = NdType::makeInt(Bytes, false);
+  return Select;
+}
+
+TEST(HighSourceRanges, SelectedIntervalsCoverEveryOrAndXorOutcome) {
+  struct Carrier {
+    uint16_t Bytes;
+    uint64_t High;
+  };
+  const Carrier Carriers[] = {
+#define SOURCE_RANGE_CARRIER(Bytes, High) {Bytes, High},
+#include "HighSourceRangeFixtures.def"
+  };
+  for (const auto &Carrier : Carriers) {
+    const auto Check = [&](uint64_t Left, uint64_t Right) {
+      for (auto Op : {NdOp::INT_OR, NdOp::INT_XOR}) {
+        auto L =
+            selectedInteger(compare(NdOp::INT_EQUAL, input(0, Carrier.Bytes),
+                                    HighExpr::makeConst(0, Carrier.Bytes)),
+                            Left, Carrier.Bytes);
+        auto R =
+            selectedInteger(compare(NdOp::INT_EQUAL, input(1, Carrier.Bytes),
+                                    HighExpr::makeConst(0, Carrier.Bytes)),
+                            Right, Carrier.Bytes);
+        auto Value = HighExpr::makeBinop(Op, L, R);
+        HighFunc Function;
+        Function.Body = {result(Value)};
+        const auto Bounds = highSourceUnsignedUpperBounds(
+            Function, {{&Function.Body.front(), Value}});
+        ASSERT_EQ(Bounds.size(), 1);
+        ASSERT_TRUE(Bounds.front());
+        for (uint64_t A : {Left, Left ? Left - 1 : 0})
+          for (uint64_t B : {Right, Right ? Right - 1 : 0})
+            EXPECT_GE(*Bounds.front(), Op == NdOp::INT_OR ? A | B : A ^ B);
+      }
+    };
+    for (uint64_t Left = 0; Left < kSmallRangeEndpoints; ++Left)
+      for (uint64_t Right = 0; Right < kSmallRangeEndpoints; ++Right)
+        Check(Left, Right);
+    Check(Carrier.High, Carrier.High);
+  }
+}
+
+TEST(HighSourceRanges, UnknownSelectedArmsSupplyNoBound) {
+  auto Value = selectedInteger(compare(NdOp::INT_EQUAL, input(),
+                                       HighExpr::makeConst(0, kRangeWordBytes)),
+                               kKnownSelectedUpper, kRangeWordBytes);
+  Value->Operands.back() = HighExpr::makeUndef(kRangeWordBytes);
+  HighFunc Function;
+  Function.Body = {result(Value)};
+  const auto Bounds = highSourceUnsignedUpperBounds(
+      Function, {{&Function.Body.front(), Value}});
+  ASSERT_EQ(Bounds.size(), 1);
+  EXPECT_FALSE(Bounds.front());
 }
 
 TEST(HighSourceRanges, UnsignedGuardBoundsAgreeWithEveryByteInput) {
@@ -115,18 +189,16 @@ TEST(HighSourceRanges, CompoundPredicatesPreserveEveryShortCircuitArm) {
 
 TEST(HighSourceRanges, PureOpaquePredicatePreservesIndependentGuard) {
   auto Index = input(0, 8);
-  auto OutOfRange = compare(NdOp::INT_LESS, HighExpr::makeConst(9, 8),
-                            Index);
-  auto Opaque = HighExpr::makeBinop(
-      NdOp::INT_DIV, Index, HighExpr::makeConst(2, 8));
-  auto Other = compare(NdOp::INT_EQUAL, Opaque,
-                       HighExpr::makeConst(0, 8));
+  auto OutOfRange = compare(NdOp::INT_LESS, HighExpr::makeConst(9, 8), Index);
+  auto Opaque =
+      HighExpr::makeBinop(NdOp::INT_DIV, Index, HighExpr::makeConst(2, 8));
+  auto Other = compare(NdOp::INT_EQUAL, Opaque, HighExpr::makeConst(0, 8));
   auto Guard = compare(NdOp::BOOL_OR, OutOfRange, Other);
   HighFunc F;
-  F.Body = {branch(Guard, {result(HighExpr::makeConst(0, 8))},
-                   {result(Index)})};
-  auto Bounds = highSourceUnsignedUpperBounds(
-      F, {{&F.Body[0].ElseBody[0], Index}});
+  F.Body = {
+      branch(Guard, {result(HighExpr::makeConst(0, 8))}, {result(Index)})};
+  auto Bounds =
+      highSourceUnsignedUpperBounds(F, {{&F.Body[0].ElseBody[0], Index}});
   ASSERT_EQ(Bounds.size(), 1U);
   EXPECT_EQ(Bounds[0], 9U);
 

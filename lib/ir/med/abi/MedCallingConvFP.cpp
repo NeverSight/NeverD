@@ -8,7 +8,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/intrinsics/X86VectorLaneReads.h"
+#include "neverd/ir/intrinsics/X86/X86VectorLaneReads.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 

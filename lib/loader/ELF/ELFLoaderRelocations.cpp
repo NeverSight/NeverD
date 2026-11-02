@@ -112,19 +112,16 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       continue;
 
     const Elf_Shdr *SymSH = getShdr<ELFT>(Sections, SH.sh_link);
+    if (SymSH && SymSH->sh_type != SHT_SYMTAB && SymSH->sh_type != SHT_DYNSYM)
+      SymSH = nullptr;
     // strip also removes the relocations --emit-relocs keeps in a linked
     // image, which name .symtab's symbols.
     if (SymSH && SymSH->sh_type == SHT_SYMTAB && !IsRelocatable &&
         !Img.ReadsStaticSymbols)
       continue;
     llvm::StringRef StrTab;
-    if (SymSH) {
-      auto TabOr = ELF.getStringTableForSymtab(*SymSH, Sections);
-      if (TabOr)
-        StrTab = *TabOr;
-      else
-        llvm::consumeError(TabOr.takeError());
-    }
+    if (SymSH)
+      StrTab = getLinkedStringTable<ELFT>(ELF, Sections, *SymSH);
 
     llvm::StringRef SecName = getSectionName<ELFT>(ShStrTab, SH);
     uint64_t Ordinal = 0;
@@ -144,7 +141,7 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         RE.SectionName = SecName.str();
 
       bool Undefined = false;
-      if (SymSH && SymIdx > 0 && !StrTab.empty()) {
+      if (SymSH && SymIdx > 0) {
         auto SymsOr = ELF.symbols(SymSH);
         if (!SymsOr) {
           llvm::consumeError(SymsOr.takeError());
@@ -162,12 +159,14 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
               Sym.st_value,
               Sym.st_size,
               std::nullopt};
-          auto SymNameOr = Sym.getName(StrTab);
-          if (SymNameOr)
-            RE.SymbolName = SymNameOr->str();
-          else
-            llvm::consumeError(SymNameOr.takeError());
-          RE.ELF->Symbol->Name = RE.SymbolName;
+          if (!StrTab.empty()) {
+            auto SymNameOr = Sym.getName(StrTab);
+            if (SymNameOr) {
+              RE.SymbolName = SymNameOr->str();
+              RE.ELF->Symbol->Name = RE.SymbolName;
+            } else
+              llvm::consumeError(SymNameOr.takeError());
+          }
           Undefined = Sym.st_shndx == SHN_UNDEF;
         }
       }
@@ -788,14 +787,9 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         if (!OwnerSeg || !OwnerSeg->isReadable())
           return;
         va_t OwnerBegin = OwnerSeg->VA;
-        bool OwnerWritable = OwnerSeg->isWritable();
+        const bool OwnerWritable = isRuntimeWritableAddress(Img, TargetOwnerVA);
         if (const Section *OwnerSec = Img.getSectionFor(TargetOwnerVA)) {
           OwnerBegin = OwnerSec->VA;
-          OwnerWritable =
-              OwnerSec->isWritable() &&
-              !section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) &&
-              !section_names::isReadOnlyAfterRelocSectionName(
-                  OwnerSec->SegmentName);
         }
         const bool OwnerIsCode = Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
         const RelocatedAddressField Field{EncodedValue, TargetVA,

@@ -7,11 +7,11 @@
 #ifndef NEVERD_LIB_LIFT_X86_X86FPARITHSTATE_H
 #define NEVERD_LIB_LIFT_X86_X86FPARITHSTATE_H
 
-#include "X86LiftDetail.h"
+#include "X86FPEncoding.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 namespace neverd {
 struct FPArithStateSpec {
@@ -180,106 +180,34 @@ inline bool liftFPArithState(X86Lifter &L, X86Lifter::LiftState &S,
     if (X86.operands[Index].avx_bcast != X86_AVX_BCAST_INVALID ||
         X86.operands[Index].avx_zero_opmask)
       return Refuse();
-  const bool Mode64 = L.targetArch() == Arch::X64;
   const unsigned PP = Fma             ? 1
                       : Spec.Topology ? (Spec.Double ? 1 : 3)
                       : Spec.Scalar   ? (Spec.Double ? 3 : 2)
                                       : (Spec.Double ? 1 : 0);
-  const uint8_t MandatoryByte = PP == 1   ? 0x66
-                                : PP == 2 ? 0xf3
-                                : PP == 3 ? 0xf2
-                                          : 0;
-  unsigned Offset = 0;
-  uint8_t Segment = 0, Rex = 0;
-  bool Address = false, Mandatory = false;
-  while (Offset < Insn->size) {
-    const auto Byte = Insn->bytes[Offset];
-    if (Byte == 0x26 || Byte == 0x2e || Byte == 0x36 || Byte == 0x3e ||
-        Byte == 0x64 || Byte == 0x65) {
-      if (Segment || Rex)
-        return Refuse();
-      Segment = Byte;
-    } else if (Byte == 0x67) {
-      if (Address || Rex)
-        return Refuse();
-      Address = true;
-    } else if (!Spec.Vex && MandatoryByte && Byte == MandatoryByte) {
-      if (Mandatory || Rex)
-        return Refuse();
-      Mandatory = true;
-    } else if (!Spec.Vex && Mode64 && (Byte & 0xf0) == 0x40) {
-      if (Rex)
-        return Refuse();
-      Rex = Byte;
-    } else
-      break;
-    ++Offset;
-  }
-  bool R = (Rex & 4) != 0, B = (Rex & 1) != 0, X = (Rex & 2) != 0;
-  unsigned Width = 16;
-  if (Spec.Vex) {
-    if (Offset + 3 >= Insn->size)
-      return Refuse();
-    uint8_t P1 = 0;
-    if (Insn->bytes[Offset] == 0xc5) {
-      if (Fma)
-        return Refuse();
-      P1 = Insn->bytes[Offset + 1];
-      R = (P1 & 0x80) == 0;
-      B = X = false;
-      Offset += 2;
-    } else if (Insn->bytes[Offset] == 0xc4) {
-      if (Offset + 4 >= Insn->size)
-        return Refuse();
-      const auto P0 = Insn->bytes[Offset + 1];
-      if ((P0 & 0x1f) != (Fma ? 2 : 1) || (!Mode64 && (P0 & 0xe0) != 0xe0))
-        return Refuse();
-      R = (P0 & 0x80) == 0;
-      B = (P0 & 0x20) == 0;
-      X = (P0 & 0x40) == 0;
-      P1 = Insn->bytes[Offset + 2];
-      Offset += 3;
-    } else
-      return Refuse();
-    if ((P1 & 3) != PP || (Fma && ((P1 & 0x80) != 0) != Spec.Double) ||
-        (Spec.Scalar && (P1 & 4)) || (!HasVvvv && (P1 & 0x78) != 0x78) ||
-        (!Mode64 && R))
-      return Refuse();
-    Width = (P1 & 4) ? 32 : 16;
-    const unsigned Left = (~P1 >> 3) & 15;
-    if (HasVvvv &&
-        ((!Mode64 && Left >= 8) || X86.operands[1].type != X86_OP_REG ||
-         X86.operands[1].size != Width ||
-         X86.operands[1].reg !=
-             (Width == 32 ? X86_REG_YMM0 : X86_REG_XMM0) + Left))
-      return Refuse();
-  } else {
-    if (Mandatory != (MandatoryByte != 0) || Offset + 2 >= Insn->size ||
-        Insn->bytes[Offset] != 0x0f)
-      return Refuse();
-    ++Offset;
-  }
-  if (Offset + 1 >= Insn->size || Insn->bytes[Offset] != Spec.Opcode ||
-      X86.encoding.modrm_offset != Offset + 1 ||
-      Insn->bytes[Offset + 1] != X86.modrm)
+  FPEncodingInfo E;
+  if (!parseFPEncoding(Insn, X86, L.targetArch(), Spec.Vex, Fma ? 2 : 1, PP,
+                       E) ||
+      E.Opcode != Spec.Opcode || (Fma && E.W != Spec.Double) ||
+      (Spec.Scalar && E.L) || (!HasVvvv && !E.unusedVvvv()))
     return Refuse();
+  const unsigned Width = E.L ? 32 : 16;
   const unsigned Base = Width == 32 ? X86_REG_YMM0 : X86_REG_XMM0;
   if (X86.operands[0].size != Width ||
-      X86.operands[0].reg != Base + ((X86.modrm >> 3) & 7) + (R ? 8 : 0))
+      X86.operands[0].reg != Base + E.vectorRegIndex() ||
+      (HasVvvv &&
+       (X86.operands[1].type != X86_OP_REG || X86.operands[1].size != Width ||
+        X86.operands[1].reg != Base + E.vvvvIndex())))
     return Refuse();
   const unsigned Element = Spec.Double ? 8 : 4;
   const unsigned Bytes = Spec.Scalar ? Element : Width;
   const auto &RHSOperand = X86.operands[SourceIndex];
-  if ((X86.modrm >> 6) == 3) {
+  if ((E.ModRM >> 6) == 3) {
     if (RHSOperand.type != X86_OP_REG || RHSOperand.size != Width ||
-        RHSOperand.reg != Base + (X86.modrm & 7) + (B ? 8 : 0))
+        RHSOperand.reg != Base + E.vectorRMIndex())
       return Refuse();
   } else if (RHSOperand.type != X86_OP_MEM || RHSOperand.size != Bytes)
     return Refuse();
-  if (!validateCanonicalScalarConversionTail(
-          Insn, X86, Offset + 2, Segment, Mode64,
-          Mode64 ? (Address ? 4 : 8) : (Address ? 2 : 4), B ? 8 : 0, X ? 8 : 0,
-          RHSOperand))
+  if (!validateFPEncodingTail(Insn, X86, E, RHSOperand))
     return Refuse();
   const bool Memory = RHSOperand.type == X86_OP_MEM;
   const unsigned LeftIndex = Spec.Vex ? 1 : 0;

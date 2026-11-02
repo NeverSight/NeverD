@@ -342,6 +342,10 @@ public:
     }
     if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && A->isConst()) {
       const auto Slot = A->ConstVal;
+      // The image's own headers describe the image that runs, not this
+      // file: a read of them stays a read (BinaryImage::imageBaseOffset).
+      if (Image.imageBaseOffset(Slot))
+        return std::nullopt;
       if (pointer(*A) && A->AddressOwnerVA != InvalidVA) {
         const auto *Owner = Image.getSectionFor(A->AddressOwnerVA);
         if (!Owner || Image.getSectionFor(Slot) != Owner)
@@ -353,19 +357,9 @@ public:
         if (auto Target = readImmutableImageCodePointer(Image, Slot))
           return address(*Target, true);
       }
-      auto Bytes = readImmutableImageBytes(Image, Slot, Size);
-      if (!Bytes)
-        return std::nullopt;
-      uint64_t Bits = 0;
-      for (unsigned I = 0; I < Size; ++I)
-        Bits |= uint64_t{(*Bytes)[I]} << (I * 8);
-      // Exact bytes alone cannot distinguish an address from an integer with
-      // the same bits. Only the pointer readers above may publish an address;
-      // retaining this LOAD preserves the backend's relocation proof.
-      if (Size == Image.getPointerSize() &&
-          Image.isPotentiallyRelocatableAddress(Bits))
-        return std::nullopt;
-      return literal(Bits, Size);
+      if (auto Bits = readImmutableImageScalar(Image, Slot, Size))
+        return literal(*Bits, Size);
+      return std::nullopt;
     }
     auto B = Op.NumInputs >= 2 ? value(Op.Inputs[1], Bindings, Depth + 1)
                                : std::nullopt;

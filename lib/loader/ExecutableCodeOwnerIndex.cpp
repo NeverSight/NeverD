@@ -7,6 +7,7 @@
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 
 #include "neverd/loader/BinaryImageModel.h"
+#include "neverd/support/SortedSearch.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -229,7 +230,7 @@ va_t BinaryImage::getFunctionMetadataEnd(
 }
 
 bool ExecutableCodeOwnerIndex::isImportStubAt(va_t Addr) const {
-  return std::binary_search(ImportStubs.begin(), ImportStubs.end(), Addr) ||
+  return sorted::contains64(ImportStubs.data(), ImportStubs.size(), Addr) ||
          contains(ImportRanges, Addr);
 }
 
@@ -237,11 +238,11 @@ bool ExecutableCodeOwnerIndex::hasFunctionSymbolAt(
     va_t Addr, bool IncludeBoundaryGuesses) const {
   const auto &Starts =
       IncludeBoundaryGuesses ? FunctionStarts : NonGuessedFunctionStarts;
-  return std::binary_search(Starts.begin(), Starts.end(), Addr);
+  return sorted::contains64(Starts.data(), Starts.size(), Addr);
 }
 
 bool ExecutableCodeOwnerIndex::hasKnownOrTypedOwnerAt(va_t Addr) const {
-  return std::binary_search(FunctionStarts.begin(), FunctionStarts.end(),
+  return sorted::contains64(FunctionStarts.data(), FunctionStarts.size(),
                             Addr) ||
          contains(CodeRanges, Addr);
 }
@@ -250,7 +251,13 @@ bool BinaryImage::hasExecutableCodeOwnerAt(
     va_t Addr, const ExecutableCodeOwnerIndex *Index) const {
   const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
   const Segment *Seg = getSegmentFor(Normalized);
-  if (!Seg || !Seg->isExecutable())
+  if (!Seg)
+    return false;
+  // COFF's code-content declaration is structural analysis provenance, not
+  // permission to execute the original mapping. Keep the page flags intact.
+  if (Format == BinaryFormat::COFF && isCodeAddress(Normalized))
+    return true;
+  if (!Seg->isExecutable())
     return false;
   if (const ARMCodeRegion *Region = armMappingRegionAt(Normalized);
       Region && Region->Kind == ARMCodeRegionKind::Data)

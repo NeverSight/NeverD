@@ -221,6 +221,18 @@ void encodedBudget() {
     Refused = true;
   }
   require(Refused, "Escaping bypassed the output bound");
+  const Json Values = {nullptr,      false,         -0.0,
+                       "\\\"\n中文", Json::array(), Json{{"nested", 42}}};
+  require(serializeJson(Values) == Values.dump(),
+          "Bounded JSON changed ordinary codec output");
+  Refused = false;
+  try {
+    (void)serializeJson(Json(std::string(1, '\xff')));
+  } catch (const Json::type_error &) {
+    Refused = true;
+  }
+  require(Refused,
+          "Bounded output replaced invalid UTF-8 instead of rejecting it");
 }
 
 void stdioFraming() {

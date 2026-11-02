@@ -1,0 +1,149 @@
+//===- AArch64PAuth.def - Pointer authentication contracts -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Baseline pointer authentication shared by lifting, classification and
+/// emission. Define the macros needed by a consumer; other rows are ignored.
+/// Instruction names are Capstone suffixes, Ids are NeverD intrinsics, keys
+/// use LLVM's IA/IB/DA/DB numbering and transfer kinds are NdOp suffixes.
+/// HINT modifiers are Zero, SP or X16; strip HINTs have no modifier.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_PAUTH_VALUE
+#define NEVERD_A64_PAUTH_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_PAUTH_TEXT
+#define NEVERD_A64_PAUTH_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_A64_PAUTH_OPERATION
+#define NEVERD_A64_PAUTH_OPERATION(Id, Insn, Mnemonic, Key, Strip, Authenticate)
+#endif
+#ifndef NEVERD_A64_PAUTH_ZERO
+#define NEVERD_A64_PAUTH_ZERO(Insn, Id)
+#endif
+#ifndef NEVERD_A64_PAUTH_HINT
+#define NEVERD_A64_PAUTH_HINT(Insn, Word, Id, Pointer, Modifier)
+#endif
+#ifndef NEVERD_A64_PAUTH_STRIP_HINT
+#define NEVERD_A64_PAUTH_STRIP_HINT(Insn, Word, Id, Pointer)
+#endif
+#ifndef NEVERD_A64_PAUTH_BRANCH
+#define NEVERD_A64_PAUTH_BRANCH(Insn, Mask, Word, Key, Zero, Kind)
+#endif
+#ifndef NEVERD_A64_PAUTH_UNSUPPORTED
+#define NEVERD_A64_PAUTH_UNSUPPORTED(Insn)
+#endif
+#ifndef NEVERD_A64_PAUTH_UNSUPPORTED_HINT
+#define NEVERD_A64_PAUTH_UNSUPPORTED_HINT(Insn, Word)
+#endif
+#ifndef NEVERD_A64_PAUTH_BUILTIN
+#define NEVERD_A64_PAUTH_BUILTIN(Id, Name)
+#endif
+
+NEVERD_A64_PAUTH_VALUE(unsigned, kAArch64PAuthKeyIA, 0)
+NEVERD_A64_PAUTH_VALUE(unsigned, kAArch64PAuthKeyIB, 1)
+NEVERD_A64_PAUTH_VALUE(unsigned, kAArch64PAuthKeyDA, 2)
+NEVERD_A64_PAUTH_VALUE(unsigned, kAArch64PAuthKeyDB, 3)
+NEVERD_A64_PAUTH_VALUE(unsigned, kAArch64PAuthPointerBytes, sizeof(uint64_t))
+NEVERD_A64_PAUTH_VALUE(unsigned, kAArch64PAuthKeyBytes, sizeof(uint32_t))
+
+// Module ABI requirement and observable authentication-use marker.
+NEVERD_A64_PAUTH_TEXT(kArm64eAnalysisModuleFlag, "neverd.arm64e-analysis")
+NEVERD_A64_PAUTH_TEXT(kAArch64AuthenticatedTargetUseAsm,
+                      "// neverd authenticated target")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthMalformedOperation,
+                      "malformed AArch64 pointer authentication")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthMalformedBranch,
+                      "malformed AArch64 authenticated branch")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthRequiresAArch64,
+                      "pointer authentication requires AArch64")
+NEVERD_A64_PAUTH_TEXT(kArm64eRebuildUnsupported,
+                      "codegen: arm64e image rebuilding requires "
+                      "ABI-aware signing and fixups\n")
+NEVERD_A64_PAUTH_TEXT(kArm64eSourceReplacementUnsupported,
+                      "arm64e source replacement requires "
+                      "ABI-aware signing and fixups")
+
+// Tied LLVM operands: $0 is both the result and the original pointer.
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthLLVMOperands, " $0, $2")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthLLVMStripOperands, " $0")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthLLVMConstraints, "=r,0,r")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthLLVMStripConstraints, "=r,0")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthTargetUseConstraints, "r")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthResultName, "pauth")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthTargetName, "authenticated.target")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthCallBundle, "ptrauth")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthMalformedCall,
+                      "malformed or unsupported AArch64 authenticated call")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthIntrinsicPattern, "aarch64.pauth")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthLLVMIntrinsicPattern, "ptrauth")
+NEVERD_A64_PAUTH_TEXT(kAArch64PAuthTargetFeature, ",+pauth")
+
+NEVERD_A64_PAUTH_OPERATION(Pacia, PACIA, "pacia", IA, false, false)
+NEVERD_A64_PAUTH_OPERATION(Pacib, PACIB, "pacib", IB, false, false)
+NEVERD_A64_PAUTH_OPERATION(Pacda, PACDA, "pacda", DA, false, false)
+NEVERD_A64_PAUTH_OPERATION(Pacdb, PACDB, "pacdb", DB, false, false)
+NEVERD_A64_PAUTH_OPERATION(Autia, AUTIA, "autia", IA, false, true)
+NEVERD_A64_PAUTH_OPERATION(Autib, AUTIB, "autib", IB, false, true)
+NEVERD_A64_PAUTH_OPERATION(Autda, AUTDA, "autda", DA, false, true)
+NEVERD_A64_PAUTH_OPERATION(Autdb, AUTDB, "autdb", DB, false, true)
+NEVERD_A64_PAUTH_OPERATION(Xpaci, XPACI, "xpaci", IA, true, false)
+NEVERD_A64_PAUTH_OPERATION(Xpacd, XPACD, "xpacd", DA, true, false)
+
+NEVERD_A64_PAUTH_ZERO(PACIZA, Pacia)
+NEVERD_A64_PAUTH_ZERO(PACIZB, Pacib)
+NEVERD_A64_PAUTH_ZERO(PACDZA, Pacda)
+NEVERD_A64_PAUTH_ZERO(PACDZB, Pacdb)
+NEVERD_A64_PAUTH_ZERO(AUTIZA, Autia)
+NEVERD_A64_PAUTH_ZERO(AUTIZB, Autib)
+NEVERD_A64_PAUTH_ZERO(AUTDZA, Autda)
+NEVERD_A64_PAUTH_ZERO(AUTDZB, Autdb)
+
+NEVERD_A64_PAUTH_HINT(PACIA1716, 0xd503211f, Pacia, X17, X16)
+NEVERD_A64_PAUTH_HINT(PACIB1716, 0xd503215f, Pacib, X17, X16)
+NEVERD_A64_PAUTH_HINT(AUTIA1716, 0xd503219f, Autia, X17, X16)
+NEVERD_A64_PAUTH_HINT(AUTIB1716, 0xd50321df, Autib, X17, X16)
+NEVERD_A64_PAUTH_HINT(PACIAZ, 0xd503231f, Pacia, X30, Zero)
+NEVERD_A64_PAUTH_HINT(PACIASP, 0xd503233f, Pacia, X30, SP)
+NEVERD_A64_PAUTH_HINT(PACIBZ, 0xd503235f, Pacib, X30, Zero)
+NEVERD_A64_PAUTH_HINT(PACIBSP, 0xd503237f, Pacib, X30, SP)
+NEVERD_A64_PAUTH_HINT(AUTIAZ, 0xd503239f, Autia, X30, Zero)
+NEVERD_A64_PAUTH_HINT(AUTIASP, 0xd50323bf, Autia, X30, SP)
+NEVERD_A64_PAUTH_HINT(AUTIBZ, 0xd50323df, Autib, X30, Zero)
+NEVERD_A64_PAUTH_HINT(AUTIBSP, 0xd50323ff, Autib, X30, SP)
+// Stripping is not an authentication-disabled compatible HINT.
+NEVERD_A64_PAUTH_STRIP_HINT(XPACLRI, 0xd50320ff, Xpaci, X30)
+
+// Return instructions implicitly consume LR/SP. Calls retain fallthrough.
+NEVERD_A64_PAUTH_BRANCH(BRAA, 0xfffffc00, 0xd71f0800, IA, false, INDIR_BR)
+NEVERD_A64_PAUTH_BRANCH(BRAB, 0xfffffc00, 0xd71f0c00, IB, false, INDIR_BR)
+NEVERD_A64_PAUTH_BRANCH(BRAAZ, 0xfffffc1f, 0xd61f081f, IA, true, INDIR_BR)
+NEVERD_A64_PAUTH_BRANCH(BRABZ, 0xfffffc1f, 0xd61f0c1f, IB, true, INDIR_BR)
+NEVERD_A64_PAUTH_BRANCH(BLRAA, 0xfffffc00, 0xd73f0800, IA, false, INDIR_CALL)
+NEVERD_A64_PAUTH_BRANCH(BLRAB, 0xfffffc00, 0xd73f0c00, IB, false, INDIR_CALL)
+NEVERD_A64_PAUTH_BRANCH(BLRAAZ, 0xfffffc1f, 0xd63f081f, IA, true, INDIR_CALL)
+NEVERD_A64_PAUTH_BRANCH(BLRABZ, 0xfffffc1f, 0xd63f0c1f, IB, true, INDIR_CALL)
+NEVERD_A64_PAUTH_BRANCH(RETAA, 0xffffffff, 0xd65f0bff, IA, false, RETURN)
+NEVERD_A64_PAUTH_BRANCH(RETAB, 0xffffffff, 0xd65f0fff, IB, false, RETURN)
+
+// Exception-level state requires separate modelling.
+NEVERD_A64_PAUTH_UNSUPPORTED(ERETAA)
+NEVERD_A64_PAUTH_UNSUPPORTED(ERETAB)
+
+NEVERD_A64_PAUTH_BUILTIN(A64_Pacga, "__builtin_ptrauth_sign_generic_data")
+NEVERD_A64_PAUTH_BUILTIN(A64_AuthBranch, "__builtin_ptrauth_auth")
+
+#undef NEVERD_A64_PAUTH_VALUE
+#undef NEVERD_A64_PAUTH_TEXT
+#undef NEVERD_A64_PAUTH_OPERATION
+#undef NEVERD_A64_PAUTH_ZERO
+#undef NEVERD_A64_PAUTH_HINT
+#undef NEVERD_A64_PAUTH_STRIP_HINT
+#undef NEVERD_A64_PAUTH_BRANCH
+#undef NEVERD_A64_PAUTH_UNSUPPORTED
+#undef NEVERD_A64_PAUTH_UNSUPPORTED_HINT
+#undef NEVERD_A64_PAUTH_BUILTIN

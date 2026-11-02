@@ -24,8 +24,9 @@ struct Z3SolverOptions {
   bool BuildModel = true;
 };
 
-/// An incremental QF_BV session over one Symbolic context. The translation
-/// preserves the original DAG and never invokes Symbolic's rewrite builders.
+/// An incremental QF_BV session over one Symbolic context. Translation reads
+/// the original DAG without invoking Symbolic's rewrite builders. Scaled
+/// products may use an exact low-bit quotient, then restore the full word.
 /// Assertions persist; assumptions apply to one check. Malformed expressions
 /// invalidate the session, while a timed-out check may be retried.
 ///

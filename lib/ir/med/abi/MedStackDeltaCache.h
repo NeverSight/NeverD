@@ -27,8 +27,9 @@ namespace neverd {
 /// identity. Other queries use the existing depth-bounded worker unchanged.
 class MedStackDeltaCache {
 public:
-  MedStackDeltaCache(const MedFunc &Func, const TargetRegInfo &TRI)
-      : Func(Func), TRI(TRI), Definitions(Func) {}
+  MedStackDeltaCache(const MedFunc &Func, const TargetRegInfo &TRI,
+                     BinaryFormat Format = BinaryFormat::Unknown)
+      : Func(Func), TRI(TRI), Format(Format), Definitions(Func) {}
   MedStackDeltaCache(const MedStackDeltaCache &) = delete;
   MedStackDeltaCache &operator=(const MedStackDeltaCache &) = delete;
 
@@ -46,6 +47,7 @@ public:
 private:
   const MedFunc &Func;
   const TargetRegInfo &TRI;
+  BinaryFormat Format;
   MedDefSiteIndex Definitions;
   llvm::DenseMap<std::tuple<int, int, int, uint64_t>, std::optional<int64_t>>
       Answers;

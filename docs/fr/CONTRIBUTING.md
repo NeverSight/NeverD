@@ -1,6 +1,6 @@
 **Langues**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: 0e93112bfc87bdf7cfa9e280f8b7a9155214ae36187f32d8dd473c6f17fd92d3 -->
+<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
 
 # Contribuer à NeverD
 
@@ -159,8 +159,17 @@ oneTBB conserve ses workers entre lots, vérifie leurs piles de 8 MiB et ne comp
 `tbbmalloc` ou son proxy. Les appelants à grande pile réutilisent leur marge, les autres
 reçoivent un coordinateur natif. Les hôtes qui forkent après la première utilisation ou
 déchargent dynamiquement le SDK doivent utiliser les threads natifs (`NEVERD_ENABLE_TBB=OFF`) :
-ces cycles de vie ne sont pas pris en charge par l’ordonnanceur persistant. Celui-ci ne finalise
-pas l’ordonnanceur TBB partagé de l’hôte. Distribuez sa DLL/bibliothèque partagée avec le build activé.
+ces cycles de vie ne sont pas pris en charge par l’ordonnanceur persistant. oneTBB est lié
+statiquement au noyau partagé, et ses symboles restent privés à ce noyau. Les appels aux
+composants depuis la CLI et les requêtes au worker de la GUI utilisent le même ordonnanceur ;
+aucune DLL ni bibliothèque partagée TBB n’est distribuée. Les cibles liées à `neverd_shared`
+sélectionnent automatiquement l’ordonnanceur partagé. Les clients qui accèdent au SDK par
+une autre cible et lient également des archives de composants doivent appliquer
+`neverd_use_shared_task_scheduler` à leur cible finale. Les outils de composants autonomes
+conservent leur propre environnement d’exécution.
+Cette intégration restreinte évite plusieurs ordonnanceurs NeverD dans un même processus ;
+le projet amont considère toujours les [compilations statiques de oneTBB](https://uxlfoundation.github.io/oneTBB/main/intro/static_linking.html)
+comme non prises en charge et déconseille leur usage général.
 
 Voir la [validation des accélérations](../testing.md#acceleration-libraries) pour les tests natifs, comparaisons et limites de compatibilité.
 
@@ -184,6 +193,11 @@ prend uniquement en charge macOS arm64. Les Mac Intel et les builds universels
 doivent employer la compilation LLVM locale par défaut. Les options avancées,
 comme `NEVERD_LLVM_PREBUILT_TAG`, l’URL du miroir, le répertoire de cache et une
 somme explicite, sont documentées dans `cmake/NeverDLLVMPrebuilt.cmake`.
+
+Les corrections LLVM appartiennent au [fork LLVM NeverSight](https://github.com/NeverSight/llvm-project).
+Commitez-les et fusionnez-les dans ce fork, puis mettez à jour la révision du sous-module LLVM de NeverD.
+La compilation intégrée compile directement ces sources ; n’ajoutez ni fichiers de correctifs LLVM ni copies modifiées dans le dossier de compilation de NeverD.
+Les paquets précompilés doivent être reconstruits depuis le fork corrigé pour valider le même comportement.
 
 <!-- i18n-section: workflow -->
 ## Flux des branches et pull requests

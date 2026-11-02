@@ -25,9 +25,9 @@
 #ifndef NEVERD_LOADER_LANGUAGEEH_H
 #define NEVERD_LOADER_LANGUAGEEH_H
 
+#include "neverd/loader/ARM/LanguageEHARM.h"
 #include "neverd/loader/ExceptionCommon.h"
 #include "neverd/loader/ExceptionModel.h"
-#include "neverd/loader/LanguageEHARM.h"
 #include "neverd/loader/LanguageEHCompact.h"
 #include "neverd/loader/LanguageEHDelphi.h"
 #include "neverd/loader/LanguageEHDwarf.h"

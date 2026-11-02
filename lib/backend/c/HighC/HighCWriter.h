@@ -14,6 +14,7 @@
 #ifndef NEVERD_LIB_BACKEND_C_HIGHC_HIGHCWRITER_H
 #define NEVERD_LIB_BACKEND_C_HIGHC_HIGHCWRITER_H
 
+#include "../../AArch64OriginalMemory.h"
 #include "../CIdentifier.h"
 #include "../CSourceRecorder.h"
 #include "../DebugParamBinding.h"
@@ -66,6 +67,12 @@ public:
   explicit RedirectableStream(llvm::raw_ostream &Target) : Target(&Target) {
     SetUnbuffered();
   }
+  /// A copy, the stream of a writer copied for another thread, discards its
+  /// output until redirect() gives it a target of its own.
+  RedirectableStream(const RedirectableStream &) : Target(nullptr) {
+    SetUnbuffered();
+  }
+  RedirectableStream &operator=(const RedirectableStream &) = delete;
   /// Send output to \p Next; returns the previous target.
   llvm::raw_ostream *redirect(llvm::raw_ostream *Next) {
     flush();
@@ -75,9 +82,10 @@ public:
 
 private:
   void write_impl(const char *Ptr, size_t Size) override {
-    Target->write(Ptr, Size);
+    if (Target)
+      Target->write(Ptr, Size);
   }
-  uint64_t current_pos() const override { return Target->tell(); }
+  uint64_t current_pos() const override { return Target ? Target->tell() : 0; }
   llvm::raw_ostream *Target;
 };
 
@@ -114,6 +122,14 @@ bool printsTruthValue(const HighExpr &E);
 /// import (HighCWriter::isImageDataAddress).
 bool isImageDataAt(const BinaryImage &Img, va_t Addr);
 
+/// The undefined data symbol of a relocatable object whose storage holds
+/// \p Addr (BinaryImage::objectExternDataAt), and the offset of \p Addr into
+/// it, where C reaches it through the symbol's declaration.  The object a C
+/// library header declares stays the header's at its own address
+/// (LibCDataObjects.def).
+std::optional<std::pair<const BinaryImage::ObjectExternData *, uint64_t>>
+declaredObjectExternAt(const BinaryImage &Img, va_t Addr);
+
 class HighCWriter {
 public:
   static llvm::StringRef
@@ -124,20 +140,26 @@ public:
   static std::optional<std::string> sourceValue(llvm::StringRef Text,
                                                 const TypeRef &Carrier,
                                                 const TypeRef &Source);
-  HighCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
+  HighCWriter(llvm::raw_ostream &Stream, const CEmitterOptions &Opts,
               DebugContext *Dbg, bool GuardAnalysisOnlyFunctions = true,
               const std::unordered_set<std::string_view> *SharedNames = nullptr,
               CSourceRecorder *Recorder = nullptr,
               const HighCImageDataObjects *SharedDataObjects = nullptr,
-              const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr)
-      : Out(OS), OS(Out), Opts(Opts), Dbg(Dbg),
+              const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
+              const PreparedPortableX87Function *PortableInterface = nullptr)
+      : OS(Stream), Opts(Opts), Dbg(Dbg),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SharedImageFunctionNames(SharedNames), SourceRecorder(Recorder),
         SharedDataObjects(SharedDataObjects),
-        SharedFunctionSymbols(SharedFunctionSymbols) {}
+        SharedFunctionSymbols(SharedFunctionSymbols),
+        PortableInterface(PortableInterface) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
+  /// Writes the definitions of \p Funcs, once writeAll has written the
+  /// unit's declarations, on worker threads and in order; false, writing
+  /// nothing, where they must follow one serial pass.
+  bool writeFunctionsInParallel(const std::vector<HighFunc> &Funcs);
   /// Records the functions and objects the text names in the source map
   /// (HighCSourceNames.cpp).
   void recordSourceNames(const std::vector<HighFunc> &Funcs);
@@ -198,6 +220,10 @@ public:
   floatToIntegerConversion(const HighExpr &E) const;
   void collectImageObjects(const std::vector<HighFunc> &Funcs);
   void writeImageObjects();
+  std::map<std::pair<const HighFunc *, const HighExpr *>, std::string>
+      OriginalMemoryBases;
+  std::map<va_t, std::pair<AArch64OriginalMemoryStorage, std::string>>
+      OriginalMemoryObjects;
   std::optional<va_t> constAddress(const HighExpr &E) const;
   std::optional<uint64_t> foldReadonlyScalar(va_t Addr, uint16_t Size) const;
   std::optional<std::string> imageObjectName(va_t Addr) const;
@@ -337,6 +363,7 @@ public:
   bool cxxThrowUsesRuntimeCall(const HighExpr &ThrowCall) const;
   TypeRef cxxScalarThrowType(const HighExpr &ThrowCall) const;
   void writeCExceptionRegion(const HighStmt &Stmt, int Indent);
+  std::string sehFilterName(const HighEHClause &Clause);
   void writeUnstructuredSEHRegion(const HighStmt &Stmt, int Indent);
   /// The blocks the exception runtime enters for except clauses \p Entries of
   /// an unstructured region: each runs its handler's entry copies, then jumps
@@ -496,8 +523,10 @@ public:
                          SourceVariable *>
       RecordedSourceVariables;
   std::map<std::pair<va_t, std::string>, unsigned> SourceLocalClasses;
-  std::string debugNameForDisplacement(va_t Entry, int64_t Disp) const;
-  TypeRef debugTypeForDisplacement(va_t Entry, int64_t Disp) const;
+  std::string debugNameForDisplacement(const HighFunc &Function,
+                                       int64_t Disp) const;
+  TypeRef debugTypeForDisplacement(const HighFunc &Function,
+                                   int64_t Disp) const;
   TypeRef declaredParamType(const MedVar &V) const;
   /// The type \p Func's definition declares its HighIR parameter \p Index
   /// with, which its prototype and every use of the parameter share.
@@ -621,6 +650,8 @@ public:
   static bool pointsToVoid(const TypeRef &Ty);
   /// Pointer object used as an `INDIR_CALL` base, without `(uintptr_t)`.
   std::string pointerObjectStr(const HighExpr &E);
+  /// An unavailable value retains its pointer type as well as its failure.
+  std::string unknownValueText(const HighExpr &E, llvm::StringRef Kind);
   /// The failure an unknown value prints at its use, or empty when \p E
   /// names a value the function defines.
   std::string unknownVarUse(const HighExpr &E, const std::string &Name,
@@ -628,8 +659,13 @@ public:
   /// Pointer-sized Load chain used as a callee: `*(void **)p` / `**(void
   /// ***)p`. A loaded vtable slot `Load(Load(obj)+imm)` is
   /// `*(void **)((uintptr_t)(*(void **)(obj)) + imm)`, not integer soup.
+  TypeRef indirectCallFunctionType(const HighExpr &Call) const;
+  TypeRef fixedCalleeFunctionType(const FunctionSym &Callee) const;
+  std::string authenticatedCalleeStr(const HighExpr &E,
+                                     llvm::StringRef FunctionPointerType);
   std::string indirectCalleeStr(const HighExpr &E,
-                                const TypeRef &ReturnType = nullptr);
+                                const TypeRef &ReturnType = nullptr,
+                                const TypeRef &FunctionType = nullptr);
   const HighExpr *unwrapIntegerView(const HighExpr *E) const;
   /// The instruction a call \p E of an intrinsic that keeps its operand was
   /// lifted from (`brk #0x3E8`, intrinsicInstructionText); empty for any
@@ -639,6 +675,8 @@ public:
   /// leaves out the operand of the instruction it stands for; empty when its
   /// C spells the instruction itself.
   std::string intrinsicInstructionComment(const HighExpr &E) const;
+  /// Original instruction and unresolved-target note for an analysis exit.
+  std::string analysisDispatchComment(const HighExpr &Call) const;
   /// \p Call as a statement, with the instruction it stands for beside it.
   std::string callStatementText(const HighExpr &Call);
   /// Whether every byte of \p E from \p Bytes up is zero, as far as its
@@ -668,7 +706,15 @@ public:
   /// none for an indirect call whose callee is unknown, which names its own
   /// instruction: debug information gives the caller there.
   std::optional<FunctionSym> debugFunctionCalled(const HighExpr &E) const;
+  /// Synthetic source bodies have their own interface, even when their
+  /// address marker coincides with a real native debug declaration at zero.
+  std::optional<FunctionSym> debugFunction(const HighFunc &Function) const;
   std::optional<FunctionSym> debugCallee(const HighExpr &E) const;
+  /// The native debug declaration of \p Function, resolved once per
+  /// output: the statement tests ask for the current function's on every
+  /// line, and resolving it reads names, declarations and prototypes.
+  const std::optional<FunctionSym> &
+  resolvedFunction(const HighFunc &Function) const;
   /// The pointer type a local is declared with where a typed call's pointer
   /// result declares it (collectCallResultNames, emitLocalDecls), whatever
   /// the type of its machine value; null for any other value or name.
@@ -678,6 +724,12 @@ public:
   /// record an MSVC call returns through a hidden pointer; null where C
   /// cannot spell it.
   TypeRef callResultType(const HighExpr &Call) const;
+  /// A lifted integer carrier of a different width from its C declaration.
+  /// Both expression conversion and local storage must keep these bits.
+  static TypeRef integerCallResultCarrier(const HighExpr &Call,
+                                          const TypeRef &Declared);
+  bool debugCallReturnIsDeclared(const HighExpr &Call,
+                                 const FunctionSym &Function) const;
   TypeRef callResultPointerTypeNamed(const std::string &Name) const;
   /// The pointer type of the member \p Value reads, where it prints as a
   /// typed record's member (`Format->lpDecimalSep`); null otherwise.
@@ -687,6 +739,11 @@ public:
   /// record's pointer member, or an object of the image declared as a
   /// pointer.  An integer it is stored to takes it as the address it is.
   TypeRef printedPointerType(const HighExpr &Value) const;
+  /// An unchanged local pointer behind full-width machine bit views, where
+  /// the destination has the same declared pointer type. Never replay its
+  /// definition: a captured pointer may outlive a reassignment of its source.
+  std::optional<std::string> implicitPointerConversion(const HighExpr &Value,
+                                                       const TypeRef &To);
   /// Whether \p Text, as \p Value printed, is a pointer in C: a local the
   /// text declares one, a typed record's pointer member or a pointer object,
   /// as the value or as the definition it is forwarded from.  An integer it
@@ -744,6 +801,8 @@ public:
   /// or prints as a literal already.
   std::string stringArgumentNote(const HighExpr &Arg);
   void collectUnknownOnlyNames(const HighFunc &Func);
+  void collectDeferredUnknowns(const HighFunc &Func);
+  bool writeDeferredUnknownCopy(const HighStmt &Stmt, int Indent);
   void collectCtorSourceNames(const HighFunc &Func);
   bool isUnknownCallOperand(const HighExpr *Op) const;
   bool isCtorSourceExpr(const HighExpr *Op) const;
@@ -758,6 +817,8 @@ public:
   /// Peel zext/trunc around a named scalar or field load for x86 intrinsic
   /// snippets. Keep wraps on add/sub/mul.
   std::string intrinsicOperandStr(const HighExpr &E);
+  const HighExpr &intrinsicOperandExpr(const HighExpr &E) const;
+  std::vector<std::string> x86NativeMemoryArguments(const HighExpr &E);
   /// Cast / zext / `SUBBYTES` 0 of a Var/Phi. Not add/sub/mul, Call, or Load.
   bool isIntegerViewOfScalar(const HighExpr &E) const;
   /// Where \p Bits come from, under views that keep at least the bytes of
@@ -959,6 +1020,9 @@ public:
   /// x64 catch funclets receive the parent frame in rdx (`Param` id 1). After
   /// attach that param is not the parent's rdx argument.
   bool isCatchFuncletParentFrame(const MedVar &V) const;
+  /// Itanium landing pads and SEH scope bodies run in the printed function;
+  /// attached MSVC C++ funclets have their own parameters and return ABI.
+  bool exceptionClausesUseFunctionFrame() const;
   bool isRegistrationEstablisherFrame(const MedVar &V) const;
   const HighExpr *parentFrameStoredValue(const HighStmt &Stmt) const;
   std::optional<std::string> copyForwardSource(const HighExpr &E) const;
@@ -1031,8 +1095,9 @@ public:
   std::string renderBinOpOperands(const HighExpr &E, int ParentPrec);
 
   //--- State ---
-  RedirectableStream Out;
-  llvm::raw_ostream &OS;
+  /// Every member is a value or a pointer into what the writer only reads:
+  /// writeFunctionsInParallel copies a prepared writer for each thread.
+  RedirectableStream OS;
   /// Declarations skipped because copy forwarding or liveness predicted the
   /// name would not be printed.  Emitted if the rendered body names it anyway.
   /// The C text is built only then: a name that is never printed may carry a
@@ -1057,6 +1122,21 @@ public:
   std::unordered_map<const HighExpr *, std::pair<std::string, int>>
       UnsignedCarrierTexts;
   CEmitterOptions Opts;
+  std::optional<va_t> sourceBodyOrigin(const HighFunc &Function) const {
+    if (!Opts.SourceBodyOrigins || Function.Entry)
+      return std::nullopt;
+    const auto At = Opts.SourceBodyOrigins->find(Function.Name);
+    return At == Opts.SourceBodyOrigins->end()
+               ? std::nullopt
+               : std::optional<va_t>(At->second);
+  }
+  /// Only native function declarations and frames have this context. Callees
+  /// and image types retain the output's shared debug context.
+  DebugContext *functionDebugContext(const HighFunc &Function) const {
+    if (Function.Entry)
+      return Dbg;
+    return sourceBodyOrigin(Function) ? nullptr : Dbg;
+  }
   DebugContext *Dbg;
   bool GuardAnalysisOnlyFunctions;
   /// When false, emit recovered locals and statements without a C wrapper.
@@ -1119,10 +1199,13 @@ public:
   /// slot's own name, or the function pointer a call through it declares.
   std::set<va_t> ImportDataSlotReads;
   std::map<va_t, std::string> ImportDataSlotNames;
+  std::map<va_t, TypeRef> ImportDataSlotTypes;
   std::map<std::string, std::string> ExternalSourceIdentifiers;
   /// The identifiers functionIdentifier() spelled for functions no map
   /// names, and the symbols they stand for (recordSourceNames()).
   mutable std::map<std::string, std::string> ReferencedFunctionSymbols;
+  /// resolvedFunction()'s answers.
+  mutable std::map<va_t, std::optional<FunctionSym>> ResolvedFunctions;
   std::set<va_t> GotoTargets;
   /// How many gotos target each address in the current function.
   std::map<va_t, unsigned> GotoTargetUses;
@@ -1151,6 +1234,8 @@ public:
       X87ContextHelperNames;
   std::map<std::pair<Intrinsic, unsigned>, std::string> X86FPStateHelpers;
   bool UsesX87Extended = false;
+  /// Checked addition of the dynamic frame's outgoing call storage.
+  std::string StackAllocationSizeHelper;
   /// The bytes a plain access of the C memory type \p Type copies inline: 0
   /// for its whole object, the value's bytes for a bit-precise integer
   /// narrower than its storage on a little-endian target, none when only
@@ -1168,10 +1253,15 @@ public:
   std::set<Intrinsic> LinuxSyscallHelpers;
   /// A Windows x86 function renders an <intrin.h>-only intrinsic.
   bool NeedsMsvcIntrinsics = false;
+  bool NeedsX86SystemRegisterDispatch = false;
+  bool NeedsX86ScalarSystemDispatch = false;
+  bool NeedsX86DescriptorStateDispatch = false;
+  bool NeedsX86VirtualizationDispatch = false;
+  bool NeedsX86SystemStateDispatch = false;
   /// A non-Windows x86 function renders an <x86intrin.h>-only intrinsic.
   bool NeedsGnuX86Intrinsics = false;
   /// A CPUID GCC or Clang compiles, which <cpuid.h> spells.
-  bool NeedsGnuCpuid = false;
+  bool NeedsCpuid = false;
   bool NeedsFEnvAccess = false;
   std::set<std::string> CIntrinsicNames;
   bool NeedsObjCRuntime = false;
@@ -1237,6 +1327,8 @@ public:
   HighCAnalysisState Analysis;
   bool InferredVoid = false;
   TypeRef FuncReturnType;
+  const PreparedPortableX87Function *PortableInterface = nullptr;
+  std::string renderPortableX87Call(const HighExpr &Expr);
   const HighFunc *CurrentFunc = nullptr;
   /// The parameter bindings and emitted types of the function last asked
   /// about.
@@ -1245,6 +1337,9 @@ public:
   mutable std::vector<DebugParamBinding> ParamBindings;
   mutable std::vector<TypeRef> EmittedParamTypes;
   mutable std::vector<std::string> ParamDebugNames;
+  /// Whether an original or debug parameter can supply a record declaration.
+  /// Completion fills record fields, so unnamed/incomplete records count too.
+  mutable bool HasRecordParamTypes = false;
   /// The convention's rules placed the cached function's debug parameters
   /// by where they arrive, rather than by position.
   mutable bool ParamsPlaced = false;
@@ -1444,8 +1539,11 @@ public:
   std::set<std::string> HiddenCxxCtorIdentifiers;
   std::set<std::string> CatchAliasTemps;
   /// Destinations whose only assignments are Undef / unknown copies of those.
-  /// Assigns are hidden; stores of the name print `0`.
+  /// Assigns are hidden; observable uses diagnose missing state.
   std::set<std::string> UnknownOnlyNames;
+  /// Availability of mixed known/unknown integer PHIs and their copies.
+  std::map<std::string, std::string> DeferredUnknownFlags;
+  bool ReadingDeferredPayload = false;
   /// Names that appear as assign destinations in this function.
   std::set<std::string> AssignedNames;
   /// Temps assigned a pointer/string/frame address (copy/string ctor src).
@@ -1557,7 +1655,10 @@ public:
   /// writer's own.  Until then none, as before they were shared.
   const HighCImageDataObjects *SharedDataObjects;
   HighCImageDataObjects OwnDataObjects;
-  const HighCImageDataObjects *DataObjects = &OwnDataObjects;
+  bool ReadsSharedDataObjects = false;
+  const HighCImageDataObjects &dataObjects() const {
+    return ReadsSharedDataObjects ? *SharedDataObjects : OwnDataObjects;
+  }
   /// The image object a call argument prints as when it is a string: the
   /// array's address, or a load of a pointer to one.  The expression is the
   /// one that prints the object's name.
@@ -1603,9 +1704,21 @@ public:
   /// writer's own, read at the first address it asks about.
   const HighCImageFunctionSymbols *SharedFunctionSymbols;
   std::optional<HighCImageFunctionSymbols> OwnFunctionSymbols;
-  /// Functions the code takes the address of, by entry: the C name the
-  /// address prints as.
-  std::map<va_t, std::string> FunctionAddressNames;
+  /// Keep the source identity until declarations have allocated their final
+  /// C identifiers. An earlier spelling can later belong to an image object.
+  struct FunctionAddressTarget {
+    std::string Symbol;
+    const HighFunc *Definition = nullptr;
+  };
+  std::map<va_t, FunctionAddressTarget> FunctionAddressNames;
+  /// Address-only symbols without a callable signature use a byte alias of
+  /// the linker identity. Taking an address cannot invent a return type.
+  std::map<std::string, std::string> FunctionAddressAliases;
+  std::string
+  functionAddressIdentifier(const FunctionAddressTarget &Target) const;
+  /// Linker function names cannot also name definitions of reconstructed data.
+  std::optional<std::set<std::string>> ImageFunctionLinkNames;
+  bool imageFunctionOwnsLinkIdentifier(llvm::StringRef Name);
   /// The symbols of those functions this output does not define, declared as
   /// the functions it calls are.
   std::set<std::string> AddressTakenFunctions;
@@ -1641,8 +1754,38 @@ public:
     /// The bytes are a C library header's object (ImageObject::Header),
     /// reached through its address: the unit defines none of its own.
     bool Header = false;
+    /// The bytes are the image's own PE headers, the linker's `__ImageBase`
+    /// (addImageBaseBacking): the unit declares them and defines none.
+    bool External = false;
   };
   std::vector<ImageBacking> ImageBackings;
+  /// The walk found the unit printing an address in the image's own PE
+  /// headers (BinaryImage::imageBaseOffset), and the identifier it declares
+  /// `__ImageBase` by, empty while it reaches none.
+  bool ReachesImageBase = false;
+  std::string ImageBaseIdentifier;
+  /// The undefined data symbols of a relocatable object whose storage the
+  /// unit prints an address in, by their extern address
+  /// (declaredObjectExternAt).  Each is an external backing the unit
+  /// declares by the symbol and defines nothing of.
+  std::set<va_t> ReachedObjectExterns;
+  /// Note that the unit prints \p Addr, which may lie in such storage.
+  void noteObjectExternAddress(va_t Addr);
+  /// Add an external backing for each reached symbol, and declare them.
+  void addObjectExternBackings();
+  void writeObjectExternDeclarations();
+  /// The identifier the unit declares data symbol \p Symbol another module
+  /// defines by, shared with the GOT slots that bind it (DataSymbolBinding).
+  std::string externalDataIdentifier(const std::string &Symbol);
+  /// Note that the unit prints \p Addr through `__ImageBase`.
+  void noteImageBaseAddress(va_t Addr);
+  /// Whether \p E is an address in the image's headers by its provenance.
+  bool isImageBaseConstant(const HighExpr &E) const;
+  /// Add the `__ImageBase` backing once the walk has found the unit
+  /// reaching it, among the image's own backings.
+  void addImageBaseBacking();
+  /// Declare `__ImageBase` for a unit that reaches it.
+  void writeImageBaseDeclaration();
   /// The symbol the object a backing is named after has in its comment, as
   /// the backing's `neverd.image` line names it; empty for a name the
   /// emitter made.

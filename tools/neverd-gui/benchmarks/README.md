@@ -9,6 +9,70 @@ Keep machine-local reports, raw traces and timing summaries in ignored
 `build-bench/` or `results/` directories. Commit reusable harnesses and regression
 tests; do not upload local measurement reports to the repository.
 
+## Deep-link forwarding
+
+`deep_links.py` compares fully analyzed, disposable NeverD and IDA instances
+of the same input on the same display. It alternates tools, discards warmups,
+validates every reply and records raw samples plus median, p95 and p99.
+Use an actual **Copy link** result from IDA and an isolated NeverD configuration:
+
+```sh
+python3 tools/neverd-gui/benchmarks/deep_links.py \
+  --neverd /path/to/neverd-gui --hcli /path/to/hcli \
+  --neverd-endpoint /private/runtime/neverd-instances/PID-1 \
+  --ida-endpoint /tmp/ida_ipc_PID --input /path/to/fixture \
+  --address 0x401110 --address 0x401108 \
+  --copied-uri 'ida:///fixture/functions?rva=0x1110&view=disasm' \
+  --source-revision COMMIT --output build-bench/deep-links.json
+```
+
+The current harness uses Unix domain sockets. It measures direct IPC (fresh
+connection, compact JSON without a newline) and complete CLI processes using
+both normal forwarding and `--no-launch`. It does not install handlers, launch
+missing instances, or time painted frames, cold caches, analysis or decompilation.
+NeverD's `get_info` returns more metadata than IDA's; report that case separately.
+Keep other builds and tests idle during measurement and record display/backend,
+tool versions and host conditions with the local report. Use native platform
+tests separately for Windows named pipes and macOS LaunchServices delivery.
+
+To include the production GUI's disassembly painting, use the Linux/Xvfb runner:
+
+```sh
+python3 tools/neverd-gui/benchmarks/gui_links.py \
+  --gui /path/to/neverd-gui --worker /path/to/neverd-worker \
+  --engine /path/to/actual/libneverd.so --ida /path/to/ida \
+  --input /path/to/fixture --source-revision COMMIT --samples 3 \
+  --output build-bench/gui-links.json
+```
+
+Use the actual library selected by the worker's dynamic loader for `--engine`;
+this records identity and does not select a library. The runner needs Xvfb and
+an activated IDA with IDAPython/PySide6. Each pair opens fresh copies of the same
+input with temporary settings on one private xcb display. IDA uses a temporary
+`IDAUSR` with a copy of its existing license/configuration, removed afterward.
+The installed desktop handlers and user databases are untouched.
+
+Interaction report schema 2 adds `link_addresses` and `link_functions`: eight
+passes over up to 24 functions already visited by the jump phases. Sampling
+waits for completed discovery and reads the current function catalog;
+open-time loader guesses are not benchmark targets. Pseudocode samples require
+the requested document to complete and remain current through its paint. A
+cancelled previous request or a painted error page is not successful source.
+Both tools run the same address and URI sequence. NeverD measures parsing and its normal
+`MainWindow::openLink`; IDA measures `open_ida_link` through IDAPython. Each sample
+checks the destination cursor and ends on the event-loop turn after the actual
+disassembly viewport paints. Both request a viewport update even if the target
+is already displayed. IDA's observer uses Python/PySide6; NeverD's uses C++.
+The runner rejects missed targets, active background analysis, changed inputs
+or build artifacts, and retains the raw per-process reports and logs.
+
+These are warmed navigation API and Qt painting measurements. They exclude
+typing, dialog interaction, CLI startup, IPC forwarding, hardware presentation
+and cold analysis/decompilation. Xvfb results do not qualify native display
+performance on Linux, Windows or macOS. Record Qt versions and viewport sizes
+alongside the result; repeat with representative inputs before making broader
+claims.
+
 ## Large-function pseudocode latency
 
 Measure fixed function entries in fresh worker processes, retaining the first
@@ -119,15 +183,25 @@ Other system activity is not controlled. Native runs require a real desktop
 session. Explicit offscreen/software runs remain separate diagnostics and must
 not establish native display performance.
 
-Schema 3 GUI milestones begin at `main()` entry, after dynamic loading. They
+Schema 4 GUI milestones begin at `main()` entry, after dynamic loading. They
 separate application and docking setup, service construction, window
 creation, the first window paint, worker hello, metadata of the opened file,
-the first paint of its disassembly listing (`useful_frame_ms`) and the end of
-that event-loop pass, when the backing store has been flushed
+the first paint of its current disassembly listing (`useful_frame_ms`) and the
+end of that event-loop pass, when the backing store has been flushed
 (`useful_frame_flushed_ms`). Without an input file the report ends after the
 first paint. Neither timestamp independently measures hardware presentation.
+Rows retained during a pending refresh or jump do not qualify this milestone.
 The runner's separate process wall time includes dynamic loading, report
 writing and shutdown.
+
+After recording those milestones, schema 4 also records the opened input path,
+current and top listing addresses as lossless hexadecimal strings, navigation
+and row freshness, loaded text, and viewport dimensions. The runner rejects a
+different input, stale or empty listing, and unfinished navigation. Loaded text
+can include prefetched rows outside the viewport; it is not an inventory of
+painted instructions. Use the recorded location and content to check the work
+delivered before comparing another tool's first useful frame. Schema 3 reports
+lack this evidence and are not accepted by the current runner.
 
 The opt-in `--startup-benchmark <report.json>` GUI flag is available in production
 builds. `--startup-benchmark-timeout <milliseconds>` defaults to 30000; input and
@@ -137,7 +211,7 @@ unsupported representations cannot be reported as successful useful frames.
 The in-process deadline is observed when the GUI event loop runs; the runner's
 additional hard process deadline covers blocked GUI initialization.
 Schema 1 and 2 reports measured the earlier Qt Quick workbench; keep them as
-historical evidence rather than comparing them quantitatively with schema 3.
+historical evidence rather than comparing them quantitatively with schema 4.
 
 ### Constructor measurements
 
@@ -171,6 +245,8 @@ over content the worker has not served yet and then once more:
   without a frame before the next one counts as missed);
 - jumps to up to 24 functions spread over the function list, until the
   listing has painted the jump's lines;
+- address and function deep links over the same functions, eight passes each,
+  including URL parsing and the target listing's painted frame;
 - control-flow graphs of the same functions, until the complete graph painted;
 - pseudocode of the same functions, until the decompiled text painted.
 
@@ -189,8 +265,8 @@ anything from it but its own output; both need a local installation.
 workbench side drives the real worker as the GUI does when it opens a file:
 open, the first page of the function list and of the listing (browsable),
 then the reference index, which an explicit cross-reference query finishes
-on demand (analysis complete), then the first page of each sampled
-function's pseudocode, which F5 decompiles on demand. The IDA side runs IDA
+on demand (analysis complete), then every page of each sampled function's C.
+The worker's first-page latency is also recorded. The IDA side runs IDA
 as a library (idalib) in the Python that has its `idapro` package: one
 process loads the file without analysis (browsable), another opens it with
 auto-analysis and waits for it (analysis complete), then decompiles the same
@@ -204,6 +280,21 @@ python3 tools/neverd-gui/benchmarks/ida_compare_bench.py \
   --samples 3 --decompile 100 --output build-bench/vs-ida.json \
   --markdown build-bench/vs-ida.md /path/to/binary...
 ```
+
+Pass `--warm` to finish the worker's background warming before the F5 requests;
+without it, background warming is disabled. The `ready_ms` measurement includes
+any requested warming, and each raw sample records its terminal warm state.
+`full` means the bounded cache filled before every function was prepared.
+The JSON retains each entry's complete-source byte count and SHA-256, failures,
+and IDA kernel version. Source equality between NeverD builds checks
+reproducibility; it does not prove semantic equivalence to the input binary.
+Sample order alternates between the two tools.
+
+Use `--entries-file /path/to/entries.txt` with one input binary to replay a
+fixed inventory (one hexadecimal address per line). Missing entries remain
+reported for each tool; they are not removed by the common-function sampling.
+Keep builds and tests outside the timing window. Run the harness checks with
+`python3 -m unittest discover -s tools/neverd-gui/benchmarks/tests`.
 
 `gui_vs_ida_bench.py` times both windows from launch on a private X server
 (Xvfb, through Qt's xcb plugin), with default preferences: the workbench

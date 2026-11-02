@@ -58,7 +58,11 @@ Statuses are `ok`, `error`, `cancelled`, and `budget_exceeded`. Error responses
 include `error:{code,message}`. While a request loads an image, the worker may
 first send responses with the same `request_id` and `status:"progress"`, whose
 payload is `{phase,done,total,detail}`; they are not the request's result, and
-a client keeps waiting for one of the final statuses. Display messages are diagnostics; use stable
+a client keeps waiting for one of the final statuses. Step boundaries and changes
+of phase/detail are sent immediately. Intermediate values for the same step are
+coalesced to a 50 ms display interval; the SDK still checks cancellation at every
+checkpoint. Progress is not an event log, and consumers must not require every
+intermediate value. Display messages are diagnostics; use stable
 `code` values for localization. A successful empty page differs from errors,
 unsupported representations and analysis failures. Every VA is a `0x`-prefixed
 lowercase hexadecimal string, including VAs above 2^53. Revisions and project IDs are opaque
@@ -71,6 +75,18 @@ unsupported after successful analysis. This lets clients refresh recovered
 function lists once when a lazy query completes analysis. Ordinary edit
 revisions do not imply a new analysis. Administrative replies may omit this
 additive field.
+
+Native executor replies also carry the published `background` object and
+`background_sequence`, a decimal uint64 string that increases on every state
+publication within one worker process. Heartbeats carry the same sequence.
+A client must validate request correlation and project/revision before using a
+reply's state, and apply it after installing the reply (opening resets the
+client's session). Discard older or duplicate sequences, including a heartbeat
+written after a newer reply. Cached responses must not republish their snapshots.
+Reset the accepted sequence on session/transport retirement. Older workers can
+omit these additive fields; once a sequenced snapshot has been accepted, an
+unsequenced heartbeat cannot supersede it. Administrative and web replies do
+not publish native executor snapshots.
 
 Session calls run serially on an execution thread; a separate input loop admits
 requests and cancellation while the synchronous engine runs. The queue holds at
@@ -106,6 +122,328 @@ cooperative cancellation could stop it). Never show “stopped” from the initi
 cancel acknowledgement. `shutdown` cancels queued requests, acknowledges
 `{stopped,requires_restart}`, waits for an active call, and exits. EOF follows the
 same drain policy. A parent can terminate and restart an unresponsive worker.
+
+## Native binary comparison
+
+`comparison_regions` and `comparison_region_page` serve bounded transformation
+hypothesis, anchor and original instruction pages when `options.regions` was
+requested. They preserve the accepted function mapping and expose their own
+analysis state and abstention counts. The same evidence is saved in `.nddiff`.
+`comparison_regions` accepts `all_anchors:true` to inspect unclassified anchors
+from a partial analysis. `comparison_region_page` accepts the global `anchor`
+index, with optional `region_id` to require membership in a hypothesis.
+
+When the linked engine exports the comparison C ABI, `hello.capabilities` includes
+`comparison_start` and the related operations documented in
+[Structural binary comparison](../../docs/binary-diff.md#shared-api-and-worker).
+The worker holds independent comparison inputs and a published snapshot; neither
+start nor mapping edits replace the native project's Session or revision.
+Comparison replies carry `comparison_revision`, and the payload's optional
+`expected_comparison_revision` rejects obsolete reads and edits. Failed starts
+preserve the previous comparison. File stamp changes invalidate interactive reads;
+explicit validation/reopening also re-reads and checks content identity.
+`comparison_start.options.profile` defaults to `native-same-isa-v1`; the SDK
+selects qualified x86/x64 or 64-bit AArch64 inputs with matching ISA and ABI.
+Explicit `native-x86-v1` and `native-aarch64-v1` restrict admission. The worker
+does not infer a profile from filenames. AArch64 Mach-O subtype/ABI bits remain
+part of input identity. This structural profile does not extend the separate
+x86 scalar-validation or import-effect qualification.
+
+`comparison_source_page` is advertised when the SDK exposes the optional source
+page API. It accepts `side`, `address`, `representation` (`c`, `llvmc`, `source`,
+`cpp`, `rust`, `go`), `offset`, `limit` (1–2048), `max_native_instructions`
+(default 4096; zero removes this extra allowance), `timeout_ms` and `refresh`.
+It returns `neverd.bindiff.source.page` version 1, with input revision/hash,
+availability, stop state and the ordinary source page in `document`. Rows add
+`comparison_anchors` bound to the captured native function. Existing completed
+native alignment supplies optional `listing_row` and `native_change` navigation;
+source-to-source alignment and semantic validation are not performed. Synthetic
+or unmapped lines stay unmapped. The page uses the comparison's owned sources,
+requires current input stamps and accepts `expected_comparison_revision`.
+Cancellation discards the page, but function analysis and rendering are
+indivisible steps; `hard_deadline` is false. Failed or unsupported source views
+leave the native comparison intact. Older SDKs retain ordinary comparison
+operations without advertising this capability.
+
+`comparison_source_difference` is independently advertised when its optional SDK
+entry point is present. It accepts the source-page fields plus `max_work`,
+`max_source_bytes` and `include_prelude`. It requires an accepted function pair,
+collects both complete renderings, and pages a cached exact textual alignment.
+The `neverd.bindiff.source.difference` version 1 result exposes availability,
+computation state, input identities, source coordinates, original anchors and
+textual row kinds. Missing sides are null. Adjacent insertions/deletions may be
+paired as `changed` for display; they do not prove statement correspondence.
+Default additional allowances are 50,000,000 work units and 64 MiB of text plus
+serialized row evidence across both inputs; zero removes the selected allowance.
+Declarations are excluded unless `include_prelude:true`. Stop/limit results have
+no classified rows and remain cached until refresh or changed options. Mapping
+edits invalidate the cache. The operation uses the same input-stamp and expected
+revision checks and cooperative cancellation contract as source inspection.
+
+`comparison_dataflow` pages retained SSA collections (`side`, `kind` of
+`functions`, `nodes` or `blocks`, `address` for a graph, `offset`, `limit`).
+`comparison_dataflow` additionally accepts `kind:"accesses"` with a function
+`address` and `call` node ID under `med-ssa-v2`. It returns paged reads/writes
+whose SSA address expression equals a recovered argument, including zero-based
+`argument`, `access_bytes` and a same-width COPY/PHI `return_operand_path`.
+`observation_profile` is `med-ssa-argument-accesses-v1`. `inspection_complete`,
+`state`, `work` and original `gaps` distinguish observation scope from memory or
+callee-effect proof. Execution order is unassessed. Optional `max_records`,
+`max_work`, `timeout_ms` and `refresh` govern the function index, shared across
+call selections and pages. This dataflow operation supports cancellation; stopped
+pages are retained until an explicit refresh. No automatic pairing is changed.
+
+`comparison_slice` accepts `side`, `address`, `seeds` (node IDs), `direction`
+(`backward`/`forward`), `control`, `timeout_ms`, `offset`, `limit`, and optional
+`refresh`. Both require `dataflow:true` or a bounded settings object at start.
+The settings object accepts `profile:"med-ssa-v2"` (default) or
+`profile:"llvm-ssa-v1"` (optimized machine integer SSA), or
+`profile:"llvm-parameter-ssa-v1"` (eligible native low-bit parameter views), or
+`profile:"llvm-progress-ssa-v1"` (parameter views and independently proved
+return progress). Schema 5 adds `progress` with `kind`, `source_contract`,
+`observed_contract` and `loop_count`; full reports also contain `loops` witnesses
+with block/counter/update/compare IDs. Metadata pages omit that array and node
+rows include only their block's `progress_loop` or null. Proof rows share retained
+storage limits. Unproved loops remain available with their original attributes;
+progress does not establish equal iteration counts or results. Fresh restore
+binds the original contract and proof to the actual source projection.
+
+`profile:"llvm-progress-ssa-v2"` also proves single-entry multi-block loop
+components. Schema 6 adds a `header` block ID to witnesses; `block` is the latch.
+Only latch-node rows carry that bounded witness. The recipes use
+`llvm-progress-neighborhoods-v2` / `llvm-progress-fragments-v2`. Header PHIs must
+receive the exact update from the latch edge with no internal reset. The update
+is computed in the header or latch; after cutting proved backedges the complete
+CFG must be acyclic. Nested/irreducible or bypass cycles remain unproven.
+Published v1 proofs and schema 5 encodings are unchanged.
+
+`profile:"llvm-progress-ssa-v3"` extends the same proof to nested components.
+Each layer must meet the single-entry/backedge recurrence rules, with original
+entry edges retained during residual analysis. Every residual cycle must be
+discharged before any progress is published. Schema 7 witnesses use the same
+explicit header/latch/counter/update/compare fields and remain sorted by latch;
+paged node rows expose only their own latch witness. Recipes use
+`llvm-progress-neighborhoods-v3` / `llvm-progress-fragments-v3`. Repeated SCC
+analysis and witness ordering share the existing work/cancellation limits;
+there is no separate depth cap. v1/v2 contracts and encodings are unchanged.
+
+`profile:"llvm-progress-ssa-v4"` proves groups of guarded continuations of a
+common counter, including several direct backedges and compiler-merged latches.
+Every update must advance in a common signed/unsigned nowrap direction; every
+recurrence arm and guard must qualify before the group is admitted. An
+unconditional latch can carry one common update or one PHI selecting the exact
+guarded updates. Residual cycles still leave all progress unproven.
+Schema 8 publishes distinct `loop_count`, `backedge_count`, and `guard_count`.
+Witness `block` is the guard's block; new `latch` is the physical backedge source.
+Node rows expose their own guard witness, sorted by guard block. Totals are
+complete even on page size one and are independently recomputed on restore.
+Recipes use `llvm-progress-neighborhoods-v4` / `llvm-progress-fragments-v4`.
+The shared proof owner retains existing resource/cancellation allowances and
+all published v1/v2/v3 contracts. Complex, irreducible, duplicate-edge or
+missing-nowrap recurrences remain explicit unproven cases.
+
+`profile:"llvm-progress-ssa-v5"` adds fixed modular counter cycles and one
+affine guard observation. The preferred nowrap proof retains its common-domain
+rules. Modular fallback requires identical nonzero width-normalized steps,
+literal bounds or two affine observations of the same counter, and common
+exits covering every residue class of the step.
+All residual cycles still require proof; no iteration limit or native argument
+attributes are invented. Schema 9 retains the three counts and witness IDs,
+adding `proof:"nowrap"` or `proof:"modular"`. Each guard-block node page exposes
+its own witness; replay recomputes the canonical proof kind before fresh source
+authentication. Recipes are `llvm-progress-neighborhoods-v5` and
+`llvm-progress-fragments-v5`. All v1-v4 contracts and encodings remain exact.
+
+`profile:"llvm-progress-ssa-v6"` also admits shared parameter-relative EQ/NE
+exit guards. Every recurrence arm uses the same nonzero modular delta; every
+guard compares an affine counter observation with the same parameter, directly
+or as P+K, K+P or P-K. The core reuses common-exit residue coverage in coordinates
+relative to that parameter. Mixed absolute/relative domains, different parameter
+identities and freeze/reset barriers refuse. Schema 10 accepts the additional
+canonical `proof:"parameter_modular"`, with unchanged witness fields and counts.
+The preferred nowrap and v5 modular bases remain distinct. This establishes
+finite execution or undefined behavior, not an iteration count or normal return.
+Recipes are `llvm-progress-neighborhoods-v6` and `llvm-progress-fragments-v6`.
+Earlier schemas never accept the new marker. Replay independently rederives
+the proof and binds the original parameter identities to fresh native evidence.
+
+`profile:"llvm-progress-ssa-v7"` additionally admits shared pure input-derived
+expression bounds. Every dependency must end in parameters, constants or typed
+undef/poison leaves; PHIs, freeze and cyclic definitions remain barriers.
+Supported arithmetic, casts, selects and finite integer intrinsics reuse the
+core finite-operation model. Guards must share the same basis node, optionally
+with affine constant offsets, and cover every modular counter cycle. Legacy
+proofs for every candidate are attempted before allocating the expression cache.
+Schema 11 adds canonical `proof:"invariant_modular"`; earlier schemas reject it.
+Recipes are `llvm-progress-neighborhoods-v7` and `llvm-progress-fragments-v7`.
+Pages and slices expose the same witness fields/counts. Restore rederives the
+basis and authenticates the full expression against fresh native SSA, even if
+a changed expression would still prove progress. This proves finite execution
+or undefined behavior, not normal return or whole-function equivalence.
+
+Fresh binding can authenticate a complete same-block PHI renumbering while
+retaining saved node IDs. Ordinary instruction order, source observations,
+ordered inputs and all proof metadata must still agree exactly; this does not
+weaken edited-report rejection.
+
+Schema 4 retains source/view bits, argument attributes, optional native site
+and elided truncation counts. Parameter rows consume the shared retained-item
+allowance; public node counts and coverage still count operations. Metadata
+pages expose parameter counts, and each node page exposes only its referenced
+parameter rows with input and parameter positions. Reopen binds all source
+records to fresh extraction, including snapshot-local MedIR indices.
+LLVM dependency schema 3
+adds typed `semantics` and plural `origins:[{address,sequence}]`; operands have an
+eighth exact type/attribute field. Its region profile is `llvm-neighborhoods-v1`.
+Optimized region nodes return `originals` for every distinct native address and
+leave singular `original` null. Unsupported effects/types/metadata remain
+unavailable with reasons. Med-only change associations report
+`availability:"unsupported_profile"` explicitly. Saved settings select the same
+profile on fresh reopen, including early-cancelled reports.
+Unavailable records, graph origins, effect gaps and actual slice stop states are
+retained. Neither operation validates behavior or vulnerability elimination.
+`comparison_restore` is included in `comparison_cancellable_operations` only
+when the linked SDK exports `neverd_comparison_restore_json_with_progress`.
+Its `restore:*` progress covers chunked file reads, JSON parsing, validation and
+measurement. A stop/failure retains the previous result and edit history without
+advancing `comparison_revision`. Older engines keep synchronous restoration and
+do not advertise cooperative cancellation for that operation. Reading settings
+and the JSON DOM parser are indivisible checkpoints, not hard deadlines.
+
+Successful standalone restoration and `comparison_start` with `restore_path`
+return `restore_completed:true`. The payload's `state` still describes the saved
+computation; a historical `cancelled` state is not a stop of the new restore.
+`job.restore_state` describes the latter, and SDK status exposes
+`previous_result_retained` for an admitted restore. A successful standalone
+commit advances the revision even if cancellation arrives afterward; the
+terminal reply then reports `completed_before_cancellation:true`. A replacement
+handle remains disposable until the old session is swapped. Saved timeout
+settings do not become a deadline for restore validation.
+
+`comparison_override`, `comparison_undo` and `comparison_redo` are individually
+advertised as cancellable when the SDK exports their optional `*_with_progress`
+entry points. `edit:prepare`, `edit:mapping`, `edit:measure` and `edit:publish`
+report staging, correspondence changes, affected-function remeasurement and the
+last checkpoint before commit. Confirmation and undo do not remeasure functions.
+An acknowledged stop returns `error.code:"cancelled"`, retains both history
+branches and cached views, and leaves `comparison_revision` unchanged. SDK status
+and `job.edit_state` distinguish the edit outcome from the retained comparison's
+historical state; `previous_result_retained` describes an admitted stopped edit.
+Successful edits return `edit_completed:true` and advance the revision, even if
+a cancellation arrives after commit or the saved comparison's state was already
+`cancelled`. Old engines keep synchronous editing. Copies, sorting and final
+publication are indivisible checkpoints, not hard cancellation deadlines.
+
+Restart with `restore_path` reuses the saved comparison settings before fresh
+projection. Input load/discovery/filter settings must still match the snapshot.
+
+`comparison_flow_regions` requires `flow_regions:true` or a bounded settings
+object at start (implicitly requests dependency extraction when `dataflow` is
+omitted). Query fields are `offset`, `limit`, optional `kind` relationship filter,
+`region_id` to page that hypothesis's anchors, or `all_anchors:true` for every
+retained anchor. With a global `anchor` index it returns paired nodes and original
+instruction records; `coordinates:"phi_blocks"` pages verified PHI context pairs.
+An optional `region_id` checks anchor membership. Conflicting selectors fail.
+Replies expose scope, abstention/limit counters and open dependency boundaries.
+These finite correspondences neither certify behavior nor hide native deltas.
+The optional start setting `flow_regions:{"fragments":true}` selects
+`med-fragments-v1` or `llvm-fragments-v1`. Anchors expose `depth` and
+`frontier_count`; `coordinates:"frontier"` pages their external definition
+bindings with `view:"frontier"` and `boundary_only:true`. Producers in those
+rows have not been compared. They share a consistent mapping with internal
+nodes but are excluded from matched-node counts, origin admission and coverage.
+Original bytes remain inspectable. Legacy anchors reject frontier coordinates.
+The mode defaults off; saved settings retain it even on early cancellation.
+
+`comparison_impact` accepts `side`, nonempty address-string `seeds`, `direction`
+(`callers`/`callees`), `kind` (`functions`/`entrypoints`/`sites`/`boundaries`/
+`frontier`/`path`/`effects`), optional `witness` for path rows, `max_depth`,
+`max_functions`, `max_sites`, `max_work`, `timeout_ms`, `offset`, `limit` and
+`refresh`. It independently indexes native admitted call/tail/import relations
+and retains shortest witnesses and global unresolved scope. One exact query
+shares its cached result across page kinds. Input hash, native and comparison
+revisions bind every page. These are possible call paths; data effects, aliases,
+parameter/return binding, external callers and path feasibility remain unmodeled.
+No SSA opt-in is required for paths. Stale input/revision checks still apply.
+The `effects` page has an independent cache recipe and accepts
+`max_effect_records`/`max_effect_work`. It joins each indexed transfer in a
+reached caller to an exact native import and unique SSA call, then uses Safety's
+applicability-checked contract. Missing SSA, unknown/ambiguous calls and unsupported
+signatures remain rows. Contract facets, zero-based argument roles, original
+bytes/node IDs, fallible release and SSA gaps accompany the evidence. This requires
+`dataflow` at comparison start to qualify contracts. `effect_review` records
+inspection state/work/scope and the catalog-resolution assumption independently
+of native traversal coverage. It does not propagate data across calls, prove
+successful release or assess security. Existing cooperative cancellation covers
+fresh native and effect stages under one deadline; refresh retries a stopped query.
+
+`comparison_observations` accepts `side`, accepted function `address`, `context`,
+`max_rows`, `max_observations`, `max_work`, `timeout_ms`, `refresh`, `offset` and
+`limit`. It returns the shared `neverd.bindiff.observations` schema, original
+instruction anchors, local SSA facts, heuristic priorities and explicit scope.
+SSA extraction is optional; missing or ambiguous evidence retains native rows.
+Direct synthetic operands remain labeled synthetic and bind through native
+anchor nodes. Context/page changes reuse one cached calculation; mapping edits
+or restore invalidate it. It reports no security inference or fix assessment.
+
+`comparison_reviews` pages independently recorded analyst history using `case`,
+optional `side`/`address`, `latest`, `offset` and `limit`. It returns newest-first
+records, global `head`, current pair binding and an explicit manual/unvalidated
+source. `comparison_review_record` accepts `primary`, `secondary`, `case`,
+`author`, `note`, optional `reference`, `assessment` and required `expected_head`.
+The current pair must be accepted; stale heads fail atomically. Successful append
+returns the updated summary and advances `comparison_revision`, without changing
+matching or its undo stack. Save/export persists the schema-3 journal. These
+bounded text operations do not claim cooperative cancellation or authentication.
+
+For an active operation in the advertised `comparison_cancellable_operations`,
+including `comparison_observations` and `comparison_scalar_validation`,
+`cancel` returns `requires_restart:false` and
+`stopped:false` while its cooperative request is pending. Only the target's
+terminal reply reports `calculation_stopped:true`. An interrupted comparison has
+`completed_before_cancellation:false`, `partial_result_retained:true` and payload
+`state:"cancelled"`. Cancellation before or during input loading instead fails with
+`error.code:"cancelled"` and no new partial result. The previous comparison and
+its mapping revision remain usable. Current engines forward load stages as
+`primary:load:<stage>` / `secondary:load:<stage>` (including `read`, `hash`,
+`copy`, `parse`, `load-discovery`, `debug`, `ready`); `done`/`total` belong to that
+stage, not to the entire comparison. Older engines without the additive
+cancellable-load entry point finish their synchronous load before stopping. The payload's `job` object
+separates `cancel_requested`, `computation_stopped` and
+`partial_result_retained`. Loading and native discovery cooperate with the stop
+probe; file I/O, allocations and individual metadata/parser helpers can still
+delay acknowledgement. There is no hard wall-clock deadline.
+The preceding legacy cancellation contract still applies to other operations.
+
+`comparison_scalar_validation` accepts `side`, an accepted function `address`,
+optional `max_native_instructions`, `max_work` and `timeout_ms`. It retains no
+proof cache: every request performs fresh selected-function machine-ABI lifting
+and checks the bounded `lifted-scalar-returns-v1` domain. Initial `comparison_start`
+transfers its private input sessions to the C API comparison, which owns them
+until replacement/close. The owned query avoids complete input decoding on each
+request; it reports `input_source_binding:owned_sessions`, `inputs_bound` and
+`inputs_revalidated:false`. Existing source-path change checks still reject stale
+worker requests. Fresh reopen captures the inputs again. `status` is `proved`,
+`unsupported`, `unproved`, `budget_exceeded` or
+`cancelled`; `state` independently distinguishes cancellation, timeout and
+resource limits. `proved` covers only lifted integer returns and defined
+termination for defined input bitvectors at matching GPR locations. It admits
+only absent exception records or complete source-bound canonical unwind-only
+metadata; personality routines, handlers and incomplete records are unsupported.
+This does not establish native unwind behavior. It assumes
+lift correctness and proves neither complete native state nor security;
+`unproved` is not an inequivalence verdict. Reports contain input revisions,
+native entries, lift audits/model hashes, argument bindings and finite limits.
+Saved comparisons never contain a trusted proof. Cancellation/deadline polling
+covers model/proof work; a bounded native pipeline job and
+LLVM copy/verification steps can delay observation of the stop.
+
+Interactive clients use `comparison_summary`, `comparison_functions` and
+`comparison_function_page`; `comparison_export` is subject to transport limits,
+so large results should be written with `comparison_save`. CFG summary/viewport
+operations use the existing layout and bounded spatial indexes, with optional
+node/edge comparison evidence. A `comparison_cfg_focus` request identifies a
+block by its start address and returns its geometry for counterpart navigation.
 
 ## Operations
 
@@ -160,7 +498,12 @@ of the function through the same pointer, or with `parameter` and
 `function` those the function makes through its parameter of that position
 (as `function_type` lists it), from the register it arrives in.  `text` matches type names and their
 typedefs as an editor's quick open does, `Type.member` and `.member` member
-paths too.  It returns the SDK's `{accesses,target?,candidates,total}`; an
+paths too.  It returns the SDK's `{accesses,target?,candidates,total}`, with
+`syntax` when the listing writes operands otherwise than x86 listings
+(`[rcx+_T.Size]`): `"arm"` for the ARM family's `[x0, #_T.Size]`, `"sbf"` for
+`[r1 + _T.Size]`, `"evm"` for PUSH data.  The engine follows no SBF pointer, so
+an SBF displacement is judged by the instruction's own access, which `target`
+lists with its base register; an
 instruction that reaches no memory through a pointer is a
 `local_types_failed` error.  It is listed in `capabilities` with
 `operand_struct` when the engine has it.
@@ -293,6 +636,15 @@ ignores case in any script, by the engine's Unicode simple case folding
 (`neverd_fold_case`; only ASCII letters fold with an engine without it), so
 "ПРИВЕТ" finds "привет"; the rows keep their original text.
 
+`functions`, `strings`, `names`, `imports`, `exports`, `segments` and `regions`
+also accept `seek_address:"0x..."`. The worker locates the address in the complete
+filtered, sorted order and returns the containing page instead of the requested
+offset, adding `selected_index` (global row index) and `selected_address` (the
+canonical row address). Segment and region queries locate the containing range;
+the other tables require an exact row address. Missing rows return `not_found`.
+Selection cannot be combined with a `from` cursor and requires a positive limit.
+Filtering, preview limits, sort direction and ordinary page bounds still apply.
+
 Metadata also includes `loader_diagnostics:[{code,message}]`. An older engine
 without the additive query exposes an empty array. The `open` reply includes
 these messages in `warnings`; they describe the currently loaded image without
@@ -310,13 +662,14 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `metadata` | Returns `path,architecture,format,bitness,file_size` (decimal string), `sha256` (the input's, in lowercase hexadecimal, empty when it cannot be read), `base_address,entry_address,function_count,segment_count,section_count,import_count,export_count,symbol_count,language,analyzed,analysis_state,read_only,dirty`. `function_count` is null before EVM/SBF analysis where a quick list is unavailable. `language` is `neverd_headers_json`'s: `{runtime,version?,secondary:[],evidence:[],pseudocode:[]}`, the runtime that built the image (`c`, `c++-itanium`, `c++-msvc`, `rust`, `go`, `objective-c`, `swift`, `delphi`, `ada`, `d` or `unknown`) and the languages its pseudocode reads in (`c`, and `rust` or `go` for an image with that language's code). |
 | `functions` | Standard page in address order, filtered by display name, engine name, the name demangled or hex address and optionally sorted by `{sort:field,descending}`. Items carry `{name,address,size,library,thunk,exported}` under the workbench display name (see Listing below) plus `engine_name` when that differs, and may add `display_name,linkage_name,name_origin,display_origin,linkage_origin,recognition_state,library_annotations` from the shared session identity. A function the workbench names, such as a PLT entry `__ZN10QByteArrayC1EPKcx`, shows its name demangled (`neverd_demangle`) as `display_name`. The order is cached per filter, sort and listing generation; a table beyond one million functions is refused explicitly. Optional `from` is an exclusive address cursor for adjacent-function navigation, requires address order, and combines with `descending`; offsets and totals are relative to the portion after that cursor. The cache key includes direction. |
 | `resolve` | `{query:"0x..."}` or exact symbol name. Returns `{address,function_address:hex|null,name,comment,import}`. Optional display/linkage/evidence fields share the function-list identity. For an interior VA, containing function discovery uses engine sizes. An unmapped numeric VA remains an exact navigation address. An import's name, as its symbol or as C calls it (`c_name` from the engine), resolves to its thunk where it has one and otherwise to its slot; `import` says whether the address is an import's slot or thunk. |
+| `unwind_frame` | `{address:"0x..."}` only. Requires a loaded image and an engine exporting `neverd_unwind_frame_json`; advertised when that optional export exists. Returns the complete public C ABI frame object or `null` when no frame contains the exact requested address. It does not resolve the address to a function entry, subtract a return-address bias, analyze code or change revision. AArch64 frames may add `return_address:{query_pc,dwarf_state_at_pc,compact_recipe}`. `dwarf_state_at_pc` describes the exact PC; `compact_recipe` describes the completed prologue and never establishes the state at that PC. Source `null`, all typed statuses, diagnostics and a present `signing_pc:"0x0"` are preserved. An older engine may return a legacy frame without `return_address`. All address fields use the protocol's lowercase hexadecimal spelling. The listing's function-entry `__unwind` markers remain boundary annotations, not state queries. |
 | `disasm` | `{address,limit:128}`; limit 1–512 instructions. Returns `{items,address,next_address:hex|null,complete}`. Rows `{address,size,bytes,mnemonic,operands,comment}` may include backend decode status. `next_address` is computed from the last decoded instruction's size, with overflow checks. A full page's successor is a continuation candidate; an empty following page means decoding ended. |
 | `bytes` | `{address,size:256,text_encoding?}`; size 1–65536. Returns `{address,encoding:"hex",data,bytes_read,requested_size,mapping_status,next_address}`. Status is `mapped`, `partial`, or `unmapped_or_unmaterialized`; reading stops at the first unmapped byte. The legacy C ABI cannot distinguish BSS from unmapped bytes. Initial v1 carries bounded hex data in JSON, not separate binary attachments. With `text_encoding` (a `string_encodings` name) the reply adds `cells`, one per byte read, from the engine's `neverd_decode_text_json`: a character's text at its first byte, `""` at its later bytes, and `null` where no character is shown. The bytes decode from the first one, so a character cut by the range's ends shows as `null`. An unknown name is `unsupported_encoding`; an engine without the decoder returns `unsupported`. |
 | `analyze` | Computes the synchronous full-image pipeline once, publishes a new revision, invalidates adapter caches, and returns metadata. The listing then reads the jump tables the pipeline recovered (`neverd_switches_json`): a table is named `jpt_<dispatch>` and, in the form the engine verified, laid out a slot per line; its load and dispatch are commented, and every target is referred to from the dispatch (`j`) and the table (`o`). No function-level incremental analysis or cooperative cancellation is claimed. |
-| `signatures_load` | `{path,mode:"file"}` loads one `.pat` or library feature `.json`; `mode:"auto"` selects from a signature tree including `features/rules`. Returns `{loaded:true,byte_matches}` and advances the analysis revision. Invalid packs preserve the previous evidence and revision. Available on read-only images; it does not write annotations or the binary. |
-| `decompile` | `{address,representation:"c",offset:0,limit:512}`; representation `c/llvmc/low/med/high/llvm/source/cpp/rust/go`, line limit 1–2048. Triggers analysis when needed. Returns `{address,representation,text,offset,total_lines,next_offset,complete,mapping_status,provenance_complete,rows,project_id,revision}`. Native Low/Med/C/LLVMC use the optional bounded C ABI page API when present; other views retain one legacy function representation up to 32 MiB. C pages may also carry `byte_offset,function_identity,library_regions,prelude,recognition_budget_exhausted`. `cpp`, `rust` and `go` spell the HighC page in that language, for an image whose `language.pseudocode` lists it (otherwise `unavailable` with the engine's reason), and `source` in the function's own (C++, Rust, Go or C); they come only from the page API and add `dialect` (`c/cpp/rust/go`, what the page reads in), `unread` (why a declaration is shown as C) and `source_names` (`{begin_byte,end_byte,identifier,symbol,address?}` for each source name on the page, such as `core::fmt::write`, which splitting the text into identifiers would not find whole). A wire code page is capped at 2 MiB. See source mapping below. |
-| `cfg` | `{address}`. Triggers analysis, returns `{name?,entry?,nodes,edges,complete:true}`. Nodes have `{id:string,start,end,insn_count,disasm:[string],address:start,label:start,lines:disasm}`; edges `{from:string,to:string|null,type}`. More than 500 nodes or 2000 edges returns `budget_exceeded`, with no partial graph. |
-| `cfg_summary` | `{address,metrics?}`. Builds one immutable graph snapshot on the executor; returns counts, bounds and an opaque `layout_revision`, without node/edge arrays. Up to 20000 nodes / 100000 edges. Optional `metrics:{char_width,line_height,padding,...}` size each node to its formatted listing rows; the layered layout routes edges around nodes. See viewport contract below. |
+| `signatures_load` | `{path,mode:"file"}` loads one `.pat` or library feature `.json`; `mode:"auto"` selects from a signature tree including `features/rules`. Returns `{loaded:true,byte_matches}` and advances the analysis revision. `byte_matches` counts candidates, not renamed functions; library classification requires the SDK's admitted `auto_name`. Invalid packs preserve the previous evidence and revision. Available on read-only images; it does not write annotations or the binary. |
+| `decompile` | `{address,representation:"c",offset:0,limit:512}`; representation `c/llvmc/low/med/high/llvm/source/cpp/rust/go`, line limit 1–2048. Triggers analysis when needed. A known native chunk selects its recovered owner before analysis; `address` in the result is that entry. Explicit entries retain their identity, and unowned addresses retain the ordinary entry request. Returns `{address,representation,text,offset,total_lines,next_offset,complete,mapping_status,provenance_complete,rows,project_id,revision}`. Native Low/Med/High/LLVM/C/LLVMC use the optional bounded C ABI page API when present; other views retain one legacy function representation up to 32 MiB. C pages may also carry `byte_offset,function_identity,library_regions,prelude,recognition_budget_exhausted`. `cpp`, `rust` and `go` spell the HighC page in that language, for an image whose `language.pseudocode` lists it (otherwise `unavailable` with the engine's reason), and `source` in the function's own (C++, Rust, Go or C); they come only from the page API and add `dialect` (`c/cpp/rust/go`, what the page reads in), `unread` (why a declaration is shown as C) and `source_names` (`{begin_byte,end_byte,identifier,symbol,address?}` for each source name on the page, such as `core::fmt::write`, which splitting the text into identifiers would not find whole). A wire code page is capped at 2 MiB. See source mapping below. |
+| `cfg` | `{address}`. Uses the same function-owner selection as `decompile`. Triggers analysis, returns `{name?,entry?,nodes,edges,complete:true}`. Nodes have `{id:string,start,end,insn_count,disasm:[string],address:start,label:start,lines:disasm}`; edges `{from:string,to:string|null,type}`. More than 500 nodes or 2000 edges returns `budget_exceeded`, with no partial graph. |
+| `cfg_summary` | `{address,metrics?}`. Uses the same function-owner selection as `decompile`; layout keys and returned `address` use that entry. Builds one immutable graph snapshot on the executor; returns counts, bounds and an opaque `layout_revision`, without node/edge arrays. Up to 20000 nodes / 100000 edges. Optional `metrics:{char_width,line_height,padding,...}` size each node to its formatted listing rows; the layered layout routes edges around nodes. See viewport contract below. |
 | `cfg_viewport` | `{address,layout_revision,x,y,width,height,scale:1,node_offset:0,edge_offset:0}`. Queries the current snapshot's spatial indexes; returns at most 256 nodes and 512 edges. No engine call or relayout per pan. A missing/mismatched snapshot returns `stale_layout`. |
 | `xrefs` | `{address,direction:"to",offset,limit:128}`, limit 1–512. Direct references from each instruction's own lift, without whole-program analysis: rows `{address,from,to,kind,type,text,function,function_address?}` where `kind` is call/jump/cjump/read/write/offset and `type` its classic letter (p/j/r/w/o). "to" reads the parallel reference index, finishing it first when the background build has not; "from" decodes the one instruction. Engines without `neverd_code_refs_json` return `unsupported`. `{source:"ir"}` selects the previous IR-constant references instead: it triggers analysis, preserves engine `from/to,func,block/opcode` and adds `{address,function,kind:"IR constant reference"}`; EVM/SBF return `unsupported` there. |
 | `call_paths` | `{waypoints:[...],exclude?,max_depth?,shortest_only?,data_refs?,max_paths?,max_listed?}`: the engine's `neverd_call_paths_json` over the graph that functions' direct references make, without analysis. A waypoint or exclusion is a `0x` address, or a name: one the listing shows, such as a synthesized `main`, resolves to its address first, and the engine resolves its own function and import names. Returns the engine's `{segments,unconnected,nodes,max_depth,data_refs}` with addresses as the protocol spells them and functions under the names the workbench shows. A malformed request or unknown waypoint is `invalid_request`; an engine without the query, `unsupported`. Listed in `capabilities` when the engine has it. |
@@ -325,7 +678,7 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `string_encodings` | Available before opening a file. Returns `{items:[{name,spelling,unit,default,legacy?}]}`, the engine's string encodings; `legacy:true` marks a code page (GBK, Big5, Shift-JIS, Windows-1252, ...). Engines without `neverd_string_encodings_json` return `unsupported`. |
 | `string_options` | Available before opening a file. `{encodings?:[name],preferred?:name\|null,min_length?:1-1024}` replaces the options the listing and `strings` search with, increments revision and invalidates both. C strings that are not UTF-8 are read in every code page among the encodings; `preferred` names the code page that reads them first and so wins where others read them as text too, and is searched whether or not the encodings name it. Without it, a code page wins that reads a string in the scripts it is made for and that no code page for another script contests. `min_length` counts display columns, a wide East Asian character two. An unknown name is `unsupported_encoding` and a preferred encoding that is not a code page `invalid_request`. Without fields it only reads. Returns `{encodings,preferred,min_length}`. The options outlive the open file. |
 | `string_references` | `{offset,limit:128,filter?,sort:"address",descending:false}`, limit 1–512; sort `address`, `text`, `function` or `type`. Every instruction that refers to a string under `string_options`, from the engine's `neverd_string_refs_json` (listed once per string options and function list): rows `{address,string_address,text,type,encoding,kind,disasm,function,function_address?,via?}`. A reference into a string reads its text from the first character that starts at or after that byte, when at least `min_length` columns remain; `string_address` is the referenced byte. An instruction that reads a relocated slot holding such an address refers to the string through it, and `via` names the slot. `disasm` is the instruction as the listing shows it. The filter matches the text, the function name or the address, ignoring case in any script; each query's filtered and sorted rows are kept for its pages. An engine without the query returns `unsupported`. Returns `{items,total,offset,next_offset,complete}`. |
-| `listing` | `{address,sub:0,before:0,after:100,opcode_bytes:0}`; before/after 0–2000 lines, opcode bytes 0–12. The classic text listing of the whole image around an address: rows `{item,address,sub,cls,kind,prefix,text,spans,target?,flow?,function?,function_address?}` with `[byte_offset,byte_length,role,address?]` spans into the UTF-8 text (roles from `ListingRoles.def`, address classes `cls` from `AddressClasses.def`). Returns `{lines,anchor,at_start,at_end,generation}`. No analysis is started; functions decode lazily and the `generation` changes when labels or names can change. |
+| `listing` | `{address,sub:0,before:0,after:100,opcode_bytes:0}`; before/after 0–2000 lines, opcode bytes 0–12. The classic text listing of the whole image around an address: rows `{item,item_size,address,sub,cls,kind,prefix,text,spans,target?,flow?,function?,function_address?}` with `[byte_offset,byte_length,role,address?]` spans into the UTF-8 text (roles from `ListingRoles.def`, address classes `cls` from `AddressClasses.def`). Returns `{lines,anchor,at_start,at_end,generation}`. `item_size` is the authoritative item byte extent, encoded as a hexadecimal string; clients must not infer an extent from neighboring displayed rows. No analysis is started; functions decode lazily and the `generation` changes when labels or names can change. |
 | `overview` | `{buckets:1024}`, 1–16384. The address space as equal linear buckets, each the dominant address class digit: `{buckets:string,total,regions:[{name,start,end,initialized_end,linear,exec}],generation}`. |
 | `names` | Standard page by name, sortable: every function (kind `function`, `library` or `thunk`), data and string label and import slot as `{name,address,kind}`. |
 | `regions` | Standard page by name, sortable: sections or segments as `{name,address,start,end,size,initialized_end,flags,alignment,class}`. |
@@ -342,11 +695,11 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `function_attributes` | `{address}`. Capability present with `function_edit`. Returns the SDK's `neverd_func_attributes_json`: what the Edit function dialog shows of the function that starts at the address, each attribute the user's statement, else analysis' answer, `type` the user's C declaration or null, and `stated` the user's statements. Reads only. |
 | `function_edit` | `{address,attributes}`. Capability present only with an engine that keeps function edits. `attributes` states one key of `include/neverd/sdk/FunctionAttributes.def` or more: `noreturn`, `library`, `static` (true or false), `color` (`#RRGGBB`) and `type`, the function's C declaration as IDA's Y sets it, which the engine reads against the local types and refuses when it does not read or bind; null hands a key back to analysis. Commits the row (the project folder's `functions.json`) plus one history command and increments revision; a `type` drops only the decompiled text. Returns `{address,row,saved:true}`. Requires clean annotations and the writer lock. |
 | `function_type` | `{address,declaration?}` or `{address,parameter,type}`. Capability present when the engine gives functions declarations. Returns the SDK's `neverd_func_type_json`: the declaration the user edits (the stated one, else the signature the decompiler prints) with its parameters' `name`, `type` and `location` (`rcx`, `stack+0x28`); with `declaration`, that one read instead, its `problems` by line and column; with `parameter` and `type`, the declaration Convert to struct * would state, an `invalid_request` when the function's declaration or the type does not read. Reads only: state a declaration with `function_edit`. |
-| `item_define` | `{address,action,size?}`. Capability present only with an engine that keeps data items. `action:"code"` decodes native file-backed executable bytes from the exact address up to a basic block boundary or existing code, without creating a function. Calls fall through; branches, returns and unmodelled flow end the block. At most 256 instructions; invalid or truncated bytes, ambiguous modes, and overlaps with another typed item fail atomically. Stores one validated `kind:"code"` row per instruction, with its actual size. `"data"` makes the item a value of `size` 1, 2, 4 or 8 bytes, or without a size the next of byte, word, dword and qword after the current one; `"string"` makes the string that starts there an item, read with the `string_options` encodings; `"undefine"` shows the item's bytes as undefined bytes. Data/string/undefine are refused on automatic function instructions; manually defined code can be replaced or undefined. Commits the items (the project folder's `items.json`) plus one history command, invalidates caches and increments revision. Returns `{address,kind,size,saved}`; code's size is the entire converted block. `saved:false` for already defined code or undefined bytes. Requires clean annotations and the writer lock. |
-| `operand_format` | `{address,operand?:0-7,action}`. Capability present only with an engine that keeps operand formats. The address must start an instruction whose listing shows formats (x86 so far; other dialects are `unsupported`). A format changes an operand that is a plain number: `operand` when it is one, otherwise (or without `operand`) the instruction's last number; an instruction without one is `invalid_request`. `action` is a base of `include/neverd/OperandFormats.def` (`number`, `hex`, `decimal`, `binary`, `char`, `offset`, `struct`; `number` also clears both flags), or `negate`/`invert` to toggle the sign change or the bitwise complement. `struct` (capability `operand_struct`) shows a structure offset, as IDA's T does, and takes `type`, a structure or union of the local types, and `delta?`, how many bytes into it the register points: it also changes a displacement from a base register, which it takes first when `operand` names none, and the listing shows `[rcx+_KTHREAD.Process]` or `[rcx+(_KAPC.Type-10h)]`, the number again where the type has no member; a structure offset changes neither sign nor bits. A type the program lacks is `invalid_request`. Commits the formats (the project folder's `operands.json`) plus one history command; listing lines show the change without the listing being built again. Increments revision and returns `{address,operand,format:{base,negate,invert,type?,delta?},saved}` with the operand that took the format, `saved:false` when nothing changed. Requires clean annotations and the writer lock. |
+| `item_define` | `{address,action,size?}`. Capability present only with an engine that keeps data items. `action:"code"` decodes native file-backed executable bytes from the exact address up to a basic block boundary or existing code, without creating a function. Calls fall through; branches, returns and unmodelled flow end the block. At most 256 instructions; invalid or truncated bytes, ambiguous modes, and overlaps with another typed item fail atomically. Stores one validated `kind:"code"` row per instruction, with its actual size. `"data"` makes the item a value of `size` 1, 2, 4 or 8 bytes, or without a size the next of byte, word, dword and qword after the current one; `"string"` makes the string that starts there an item, read with the `string_options` encodings; `"undefine"` shows the item's bytes as undefined bytes. Data/string edits are refused on automatic function instructions. Undefine hides an automatic or manually defined instruction without deleting its function; undo restores the prior item, and the override survives reopen. Manually defined code can also be replaced. Commits the items (the project folder's `items.json`) plus one history command, invalidates caches and increments revision. Returns `{address,kind,size,saved}`; code's size is the entire converted block. `saved:false` for already defined code or undefined bytes. Requires clean annotations and the writer lock. |
+| `operand_format` | `{address,operand?:0-7,action}`. Capability present only with an engine that keeps operand formats. The address must start an instruction whose listing shows formats (x86, ARM, Thumb, AArch64, SBF and EVM; other dialects are `unsupported`). Operands count by the commas outside brackets, braces and parentheses of the decoder's text; an ARM-family number is a `#` immediate, which keeps its `#`; an SBF number is an immediate other than a call target or a byte swap's width, counted in its operation's width; an EVM number is PUSH data, counted in the PUSH's width up to 256 bits, of which an enumerator or structure offset names at most 64. A format changes an operand that is a plain number: `operand` when it is one, otherwise (or without `operand`) the instruction's last number; an instruction without one is `invalid_request`. `action` is a base of `include/neverd/OperandFormats.def` (`number`, `hex`, `decimal`, `binary`, `char`, `offset`, `struct`; `number` also clears both flags), or `negate`/`invert` to toggle the sign change or the bitwise complement. `struct` (capability `operand_struct`) shows a structure offset, as IDA's T does, and takes `type`, a structure or union of the local types, and `delta?`, how many bytes into it the register points: it also changes a displacement from a base register, which it takes first when `operand` names none, and the listing shows `[rcx+_KTHREAD.Process]` or `[rcx+(_KAPC.Type-10h)]` (`[x0, #_KTHREAD.Process]` on ARM, `[r1 + _KTHREAD.Process]` on SBF), the number again where the type has no member; a structure offset changes neither sign nor bits. A type the program lacks is `invalid_request`. Commits the formats (the project folder's `operands.json`) plus one history command; listing lines show the change without the listing being built again. Increments revision and returns `{address,operand,format:{base,negate,invert,type?,delta?},saved}` with the operand that took the format, `saved:false` when nothing changed. Requires clean annotations and the writer lock. |
 | `reload` | Explicitly reloads the sidecars, discards staged annotations, clears dirty state, invalidates caches and increments revision. Returns metadata. |
-| `history` | Standard `offset/limit` page. Returns `{schema_version:1,items,total,cursor,offset,next_offset,complete,can_undo,can_redo,available,blocked_reason,source_sha256}`. Items contain `{kind:"annotation"|"rename"|"function"|"item"|"operand"|"code"|"types",address,before,after,index,applied}`; a `types` item's address is the declaration's place in `types.json`. Hashing is lazy and runs on the Session execution thread; the existing dashboard API can require VM analysis. |
-| `undo` / `redo` | No payload. Annotation changes/cursor movement remain dirty until Save. Rename, function, item, operand, code and types history changes require clean annotations and commit immediately. Return the history listing plus `{dirty,saved,address}`. All operations require the writer lock. |
+| `history` | Standard `offset/limit` page. Returns `{schema_version:1,items,total,cursor,offset,next_offset,complete,can_undo,can_redo,available,blocked_reason,source_sha256}`. Items contain `{kind:"annotation"|"rename"|"function"|"item"|"operand"|"code"|"types"|"patch",address,before,after,index,applied}`; a `types` item's address is the declaration's place in `types.json`. Hashing is lazy and runs on the Session execution thread; the existing dashboard API can require VM analysis. |
+| `undo` / `redo` | No payload. Annotation changes/cursor movement remain dirty until Save. Rename, function, item, operand, code, types and patch history changes require clean annotations and commit immediately. Return the history listing plus `{dirty,saved,address}`. All operations require the writer lock. |
 | `history_reset` | Explicitly starts empty history from the current sidecars, preserving comments/renames. Requires clean annotations and the writer lock, then reloads their state. It never resolves a pending recovery journal or maps comments to a changed binary. |
 | `contributions` | Available before opening a file. Returns `{schema_version:1,registry_revision:string,revision:string,items,complete:true}`. Each item has `{id,title,kind,namespace,version,query}` and optional table `columns`. The payload revision belongs to the registry, independently of the envelope's image revision. |
 | `contribution_register` | `{path}`. Validates a local manifest completely before adding or replacing its namespace; returns the new contributions listing. Registration never executes a query or loads scripts/QML. |
@@ -377,6 +730,7 @@ Heartbeat retains its native fields and adds
 
 | Operation | Payload fields after `schema_version` |
 |---|---|
+| `x87_capabilities` | Empty object; returns the C API's static x87 mode/ABI/state/consumer/backend matrix unchanged. Available before loading a binary; does not probe the host, execute code or change the project revision. Advertised only when the linked engine exports `neverd_x87_capabilities_json`; older engines return `unsupported`. Numerical and architectural-state support, profile requirements, unsupported reasons and test-source references retain their distinct meanings. Test-source references do not establish a passing run or a proof. |
 | `web_capabilities` | None; returns actual compiled capabilities, including unavailable status |
 | `web_import_preview` | `path`, optional `options` object using the C API import schema |
 | `web_import_commit` | `preview_token` |
@@ -538,6 +892,25 @@ rewrite/safety admission keep their original analysis.
 
 ## IR and C source mapping
 
+`code_edit_prepare` is an optional read with the same fields as a local-name
+`code_edit`. It prepares and validates the target without saving, incrementing
+revision or writing history; the GUI can run it while the name dialog is open.
+A successful local-name commit adds `local_names_only:true` to its response.
+Other code edits continue through full invalidation.
+
+`analysis_update_names` accepts an owner `analysis_snapshot` only in an existing
+readonly replica created by `analysis_restore`. Every input, option and
+non-name state must match the restored snapshot. The worker also checks input
+stamps, committed user tables, loaded type declarations and library choices
+before replacing display-name state. A pending recovery transaction also
+refuses reuse.
+Success returns `{updated:true}` and advances the replica's local revision;
+retained source is redecorated without rerunning the pipeline. This operation
+never writes sidecars or history. A changed snapshot or racing sidecar is
+`stale_snapshot`; a changed input is `input_changed`. The GUI uses the capability
+only for an idle replica after a confirmed local-name commit and otherwise
+keeps the existing fresh-process restore path.
+
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,
 `address` and `original`; a local target has `kind:"local"`, `original` and
@@ -559,7 +932,7 @@ packing. An older page API that rejects `source` as an unsupported representatio
 may supply its HighC page instead, reported as `representation:"source",dialect:"c"`.
 
 A worker linked to an engine exporting the additive `neverd_ir_view_json`
-operation uses its native Low/Med/C/LLVMC pages directly. The symbol is resolved from the
+operation uses its native Low/Med/High/LLVM/C/LLVMC pages directly. The symbol is resolved from the
 already loaded engine; older matching engines remain usable with
 `mapping_status:"unavailable_engine_api"`. Native mapped pages contain
 `mapping_status:"instruction_anchors"`, `provenance_complete:false`, and rows
@@ -577,13 +950,14 @@ IR rows for an instruction address. It does not claim a complete set of all
 instructions contributing to an expression after propagation or transformation.
 
 Headers, block labels and successor rows are `unmapped`; PHIs and synthetic Med
-operations are `synthetic`. Those rows have empty address arrays. High and
-LLVM mappings are `unsupported_representation`; VM mappings are
-`unsupported_architecture`. Their text remains available through the existing
+operations are `synthetic`. Those rows have empty address arrays. HighIR
+statement rows use the same surviving-expression index as C emission and must
+match canonical LowIR occurrences. Braces, labels and handler metadata remain
+unmapped. VM mappings are `unsupported_architecture`. Their text remains available through the existing
 backend, with empty mapping rows. No source address is guessed from textual line
 numbers, names, or the location of another representation's row.
 
-The mapped native renderer is shared with the legacy Low/Med text APIs, so its
+The mapped native renderer is shared with the legacy Low/Med/High text APIs, so its
 paged text remains byte-for-byte equivalent. Physical line counts come from that
 same emission, including embedded newlines in display names. Page extraction
 formats the function on the executor to count lines but retains only the bounded
@@ -704,7 +1078,11 @@ The most recent 128 commands are retained (also bounded by serialized size), and
 a new edit removes the discarded redo branch.
 
 Before changing durable files the worker writes and flushes a journal containing
-the known before/after sidecar and history states. Each target is then replaced
+the known before/after sidecar and history states. Ordinary commits replace only
+tables whose normalized rows changed; unchanged files retain their bytes and
+timestamps. Every table and the history still participate in the external-edit
+check, and every target state's write budget is checked before publication.
+Encoded text is reused for checking and writing. Each changed target is replaced
 atomically and flushed; the journal is removed after history publication. On a
 writable reopen, recovery only completes this known transaction if the input
 hash matches and every current file matches its before or after state. A third
@@ -764,7 +1142,8 @@ analysis remain separate work. JSON DOM overhead may exceed serialized length.
 
 ## Declarative contribution manifests
 
-An explicit GUI import can register a JSON file such as:
+The GUI's **Analysis queries → Import queries…** action can register a JSON
+file such as:
 
 ```json
 {
@@ -801,6 +1180,11 @@ strings as code. Registry changes have their own monotonic revision. Registry
 contents last for one worker lifetime; the GUI may remember explicitly imported
 manifest paths and import them again after restart. Registration does not
 authorize file writes or autonomous query execution.
+
+Analysis queries are distinct from executable plugins. The CLI exposes these
+analysis categories through its existing commands and can reuse saved argument
+files; see [Analysis queries from the CLI](../../docs/gui.md#analysis-queries-from-the-cli).
+Those argument files and these JSON manifests are different formats.
 
 ## Building and tests
 
@@ -875,3 +1259,189 @@ discarding what it holds) or `unavailable` (an engine or image whose
 decompiles keep no such state, such as one that is not x86-64), and
 `prepared` counts the functions it holds. Every revision change starts the preparation over, since
 the engine may have dropped it.
+
+
+### Interactive byte and source patches
+
+These operations appear in `hello.capabilities` only when the linked SDK
+exports their implementation. Byte overlays, source proofs and whole-function
+replacement are advertised independently.
+
+| Operation | Request and result |
+|---|---|
+| `patch_context` | `address`; current bytes/instruction, applicable action names, and `revert_ranges:[{address,size}]` for canonical changed runs intersecting that instruction (or the addressed byte when no instruction is available). Pass these ranges to `patch_revert` to restore operand-only changes too. |
+| `patch_preview` | A patch request below; returns `address`, `file_off`, `size`, `original`, `current`/`hex`, `covers`, `decoded`, `covers_truncated`, `decoded_truncated` and `warnings` without mutation. Instruction arrays are bounded for display; validation still checks the complete range. |
+| `patch_apply` | The same request, optionally `expected` original hex; applies and journals one edit, persists `patches.json` and invalidates analysis. Requires the writer and no staged unsaved annotations. |
+| `patch_revert` | `address` and optional `size` (zero restores the containing changed run), or `ranges:[{address,size}]`; restores immutable input bytes. A batch is one history command. |
+| `patches` | Optional `offset`, `limit`, or `ranges_only`; returns canonical changed runs, their original/current bytes and kind, with ordinary page metadata. `ranges_only:true` returns all `{address,size}` ranges without byte payloads; current SDKs encode only these ranges, while older SDKs retain the full-row compatibility path. |
+| `patch_export` | `path` and optional `allow_unsigned`; exclusively publishes a new binary by replaying the overlay. Never overwrites an existing destination. |
+| `patch_source_target` | `function`, `representation` (`c`/`llvmc`), zero-based `line`, and `literal` (zero-based integer index, or -1 for a statement); returns only proven actions and the exact `source_anchor`. |
+| `patch_source_preview` | A proven source patch request; returns `before` and `after` C, or `after_error`, using an isolated session. |
+| `source_patch_context` | Function `address`; compilable HighC `source`, replacement `symbol` and explicit original `bindings`. Requires an empty byte overlay. |
+| `source_patch` | `address`, C `source`, `symbol`, output `path`, `compiler` (`clang`/`neverc`/`gcc`), optional `compiler_path`, `timeout_seconds` and `bindings`; returns the source publisher's receipt and produced `path`. |
+
+A patch request contains `address` and `kind`: `bytes`, `assemble`, `nop`,
+`fill_nops`, `branch_always`, `branch_never`, `branch_invert`, `skip_call`,
+`skip_call_value` or `constant`. `bytes` holds hex pairs; `text` holds one
+assembly instruction; `value` is an unsigned address-form string; `size` is a
+byte count. Assembly accepts `dialect` (`intel`/`att`), `fill_nops` (default true),
+`allow_overlap` (default false), and a `symbols` object of signed integer
+bindings. Referenced frame-variable names receive the listing's explicit
+frame displacements; ambiguous or unresolved names are never guessed.
+
+A source edit also supplies `function`, `representation`, `line`, `literal`
+and the returned `source_anchor`. Preview and apply repeat the source proof;
+changed text or bytes refuse the edit. Source navigation addresses alone are
+insufficient. Literal proof currently requires a direct x86 MOV scalar value,
+possibly reaching a return through local copies and zero extensions. Arithmetic,
+partial writes, casts, predecessor merges and multiple literals remain refused.
+
+Whole-function `bindings` are `{symbol,kind,address,size}` rows, with kind
+`function`, `data`, `const` or `original`. The last kind explicitly names the
+saved original function body. A whole-function rewrite uses the existing
+source publisher and produces a new file; export and reopen any byte overlay
+before requesting it. Neither source preview nor successful publication adds
+an in-memory byte patch.
+
+Overlay admission rejects relocation fields, loader-rewritten or zero-fill
+bytes, ambiguous mappings and load headers. Signed PE/Mach-O export requires
+explicit unsigned consent. History stores the full durable overlay, while
+history listing responses expose `changed_rows` and `details_omitted` instead
+of repeating potentially large byte payloads. Patch history items and undo/redo
+responses expose the virtual program address of the first changed run;
+durable history retains its canonical file-offset key for replay.
+
+Analysis sections: `analysis_sections` queries active additions;
+`analysis_section_add` accepts a schema/name/address/permissions/functions
+description and either a byte-file path or `data_hex`; `analysis_section_remove`
+accepts a name. Successful edits invalidate analysis, publish a revision and
+remain unsaved until `save`. Analysis snapshots carry unsaved additions into
+read-only replicas. The shared SDK validates every mutation transactionally.
+
+## Offline version comparison graphs
+
+Optional `lineage_load`, `lineage_summary`, `lineage_status`, `lineage_query`,
+`lineage_save`, `lineage_save_report` and `lineage_close` capabilities use the
+additive native lineage API. `lineage_cancellable_operations` advertises the
+load/query/save operations with cooperative cancellation and retained old data.
+`lineage_edit_releases` is advertised independently when the optional native
+release editor is available, and then also appears in that cancellation list.
+An older engine continues to advertise its existing graph operations.
+
+- `lineage_load`: `reports` is an array of local report paths; `path` reopens a
+  collection. `append: true` retains a loaded collection and excludes `path`.
+  Optional `versions` replaces metadata; `version_updates` merges per-snapshot
+  edits while preserving other labels (duplicates still fail shared validation).
+  `options` contains shared admission settings. Invalid JSON in a reopened file
+  retains error code `invalid_json`; the error response's `payload` identifies
+  `source: "lineage_file"` and `path`. File-read failures remain `load_failed`.
+- `lineage_query`: `query` is the [shared page request](../../docs/binary-diff-lineage.md#queries-and-limits).
+  An absent revision is filled; explicit stale revisions remain errors.
+- `lineage_edit_releases`: `edit` contains the shared `revision`, `upsert`,
+  `remove` and `parent_updates` transaction; `options` supplies native admission
+  settings. An omitted edit revision is filled from the current graph. The
+  optional `expected_lineage_revision` remains a separate outer guard. Success
+  returns the bounded summary of the newly committed collection. Scalar edits
+  to existing records may omit `parents` to preserve the complete parent set;
+  bounded `parent_updates` add/remove links without fetching that set over IPC.
+  Cycles, unknown references and contradictory ancestor dates fail atomically.
+- `lineage_save`: `path` publishes a whole collection locally.
+  `lineage_save_report` also requires `report`, preserving its exact bytes.
+- `lineage_summary` and `lineage_status` separate `operation_state`,
+  `loaded_revision` and historical report completeness. `lineage_close` releases
+  the collection without touching comparison/project sessions.
+
+Release edits upgrade a saved collection to document schema version 2, including
+when its last release is later removed. Existing load/append/metadata/save paths
+retain that envelope and its release records. Summary/page protocol versions
+remain 1; `document_schema_version` identifies the saved document version.
+`releases`, `release_parents` and `release_children` query rows are bounded and
+contain relation counts instead of embedded parent arrays. The `focus` selector
+on `releases` locates the page containing an ID after a timeline reorder. See
+[release contracts](../../docs/binary-diff-lineage.md#declared-releases-and-timelines)
+for the canonical UTC timestamp, edit and ordering rules. Dates and ancestry
+are analyst declarations, not inferred patch-presence or backport evidence.
+
+Every operation optionally accepts `expected_lineage_revision`; stale requests
+fail before mutation. Unknown payload fields are refused. Sources and bundles
+are read/written locally with explicit aggregate admission, including files over
+32 MiB. Full documents never cross the 8 MiB IPC frame. Failed or stopped
+replacement retains the prior collection; no partial new graph is published.
+Save closes its temporary file, checks cancellation, then renames once. A late
+cancel cannot relabel publication as stopped.
+
+## Listing analysis facts
+
+The listing consumes the shared `neverd_stack_frame_json` for automatic x64
+SP/FP coordinates as well as analyst policies. `frame_before` is the frame
+pointer's coordinate before an instruction; null means unknown. These facts
+come from the owning recovered LowIR function, including its distant chunks.
+  Coordinates never authorize execution or rewrite the original machine lift.
+
+`neverd_function_presentation_json` supplies a lightweight prototype and pure
+forwarder target without invoking decompilation. The PE DLL platform contract
+also feeds the ordinary decompiler debug context. User declarations and names
+keep their precedence; adjusted-argument wrappers are not pure forwarders.
+
+`neverd_metadata_items_json` publishes checked loader data objects in address
+order, currently AMD64 PE `RUNTIME_FUNCTION` records and embedded chain rows.
+The worker shows their RVA fields as links and merges their references into the
+ordinary index. Reference rows add `provenance:"metadata"` and
+`metadata_role:"range_begin"|"range_end"|"unwind_info"`; the source is the
+actual field address. A range-end reference does not create a function.
+Recovered instruction overlays retain these independent metadata references.
+User-defined items override automatic structure presentation.
+
+The worker prefers the optional `neverd_visit_metadata_items` C API to copy
+borrowed typed records directly, without JSON serialization or parsing. Its
+fallback uses metadata pages and the shared bounded JSON reader. Both SDK
+paths project the same loader facts. The worker keeps sorted record and
+boundary arrays; function discovery reuses this image metadata, while
+image/listing invalidation discards it.
+
+A proved forwarding entry reads its transfer instruction without preparing
+its callee's LowIR or stack frame. A direct jump outside a known function
+extent can establish this presentation even before the target is listed, if
+the instruction fits inside that extent and the ordinary independent-entry
+candidate check accepts the target. The query does not register the target.
+Plain DLL presentation can use the shared platform entry declaration without
+initializing compiler header types; explicit debug/type inputs retain their
+existing prototype resolution route.
+
+An empty GUI listing first requests its viewport. `listing` accepts optional
+`complete_anchor_item:true` to retain the selected item's instruction/data
+line together with its header, up to the ordinary page-line limit, even when
+`after` is smaller. Nonboolean values are refused. Ordinary prefetch then fills
+the surrounding context. A query with `before:0` does not decode a preceding
+function just to compute its start flag.
+
+Repeated gap bytes are grouped for display only, retaining their exact item
+extent and unexplored class. Groups stop at named/user items, reference targets
+and metadata boundaries, and each scan is bounded. Pure forwarding entries show
+their transfer instruction separately from trailing padding even when an
+original unwind record covers the larger span. Original unwind data stays
+unchanged.
+
+Browsing caches bind to the loaded input SHA-256, effective load/debug/signature
+inputs, user edits and type files, plus the linked engine and worker build
+identity. Windows uses the loaded files' volume/file identity, change time,
+write time and size; other platforms use their byte hashes. A changed or
+replaced runtime invalidates the local cache without hashing a large DLL on
+every Windows open. Input bytes always use their full SHA-256.
+They store function catalog, metadata, recovered instruction pages and stack
+frame query results. Initial function-table, navigation-overview and bounded
+viewport documents can be reused before reconstructing the live listing. These
+initial documents are produced from the untouched loader catalog, require the
+same function inventory and exact query parameters, and do not carry an old
+index's generation/progress into the new session. Later queries and discovery
+use live indexes. Caches do not restore executable engine objects or replace
+user state. An `open` payload can set `browse_cache:false` to bypass reuse and
+writes. `metadata.browse_cache` reports `enabled`, `hits`, `misses`, `writes`,
+`invalid`, `pending` and `diagnostic`. Writes run between requests or on clean
+shutdown, and read-only workers never write them. Malformed or incompatible
+entries fall back to the ordinary query; failed lifts are not cached as complete
+results. Cache budgets live in the worker's `ResourceLimits.h`. Removing this
+directory merely makes the next browsing requests cold; it is not needed to
+replay edits, and is not part of exported project state. The SDK still loads and
+validates the input on every open, and background discovery/reference indexing
+continues to use its normal live state.

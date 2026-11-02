@@ -70,6 +70,8 @@ Usage:
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 import argparse
 import bisect
 import fnmatch
@@ -111,6 +113,15 @@ RESERVED_LIBRARY = re.compile(r"vs[0-9]{4}|winsdk")
 # larger than this is written as parts, which the loader reads as one library:
 # <name>.pat, then <name>.part2.pat, <name>.part3.pat, ...
 MAX_FILE_BYTES = 50_000_000
+
+# Native constraints use a separate extension so old directory readers skip
+# them while retaining all ordinary patterns.
+PATTERN_SUFFIXES = (".pat", ".npat")
+
+
+def pattern_files(directory: Path) -> list[Path]:
+    return sorted(path for path in directory.iterdir()
+                  if path.is_file() and path.suffix in PATTERN_SUFFIXES)
 
 # Lines whose first bytes are relocated are not searched for routines that
 # state them; see settle_directory.
@@ -256,15 +267,52 @@ class PatternLine:
     key: str
     names: tuple[str, ...]
     refs: tuple[tuple[int, str], ...] = ()
+    require_references: bool = False
+    require_caller: bool = False
+    data_sites: frozenset[int] = frozenset()
+    is_vtable: bool = False
+    load_config_fields: tuple[tuple[int, str, str], ...] = ()
+    local_sites: frozenset[int] = frozenset()
+    is_code_layout: bool = False
 
-    def with_refs(self, refs: tuple[tuple[int, str], ...]) -> "PatternLine":
+    def reference_kind(self, offset: int) -> int:
+        return 2 if offset in self.local_sites else int(offset in self.data_sites)
+
+    @property
+    def is_load_config(self) -> bool:
+        return bool(self.load_config_fields)
+
+    def with_refs(self, refs: tuple[tuple[int, str], ...],
+                  require: bool | None = None,
+                  data_sites: frozenset[int] | None = None,
+                  local_sites: frozenset[int] | None = None) -> "PatternLine":
         """This line stating only `refs`."""
 
+        if self.is_vtable or self.is_load_config or self.is_code_layout:
+            if refs != self.refs or require not in (None, False) or data_sites or local_sites:
+                raise BuildError("metadata fields cannot be refined as function references")
+            return self
         tokens = self.key.split()
         head, tail = tokens[:4], tokens[4:]
-        stated = [f"^{offset:04X} {name}" for offset, name in refs]
-        text = " ".join([*head, *self.names, *stated, *tail])
-        return PatternLine(text, self.key, self.names, refs)
+        if data_sites is None:
+            data_sites = self.data_sites.intersection(offset for offset, _ in refs)
+        if local_sites is None:
+            local_sites = self.local_sites.intersection(offset for offset, _ in refs)
+        if not local_sites <= data_sites:
+            raise BuildError("local references must retain their data kind")
+        stated = reference_fields(refs, data_sites, local_sites)
+        required = self.require_references if require is None else require
+        constraint = ["!refs"] if required else ["!caller"] if self.require_caller else []
+        text = " ".join([*head, *constraint, *self.names, *stated, *tail])
+        return PatternLine(text, self.key, self.names, refs, required, self.require_caller,
+                           data_sites, local_sites=local_sites)
+
+
+def reference_fields(refs: tuple[tuple[int, str], ...], data_sites: frozenset[int],
+                     local_sites: frozenset[int] = frozenset()) -> list[str]:
+    """Keep function and external-data sites distinct across text round trips."""
+    return [f"{'%' if offset in local_sites else '&' if offset in data_sites else '^'}{offset:04X} {name}"
+            for offset, name in refs]
 
 
 def alias_order(name: str) -> tuple:
@@ -298,12 +346,16 @@ def aliases_of(lines: list[PatternLine]) -> PatternLine:
     name any of them gives it.
     """
 
+    if any(line.is_vtable or line.is_load_config or line.is_code_layout for line in lines):
+        raise BuildError("table declarations cannot be folded into function aliases")
     names = tuple(sorted({name for line in lines for name in line.names}, key=alias_order))
     merged = common_refs(lines)
     tokens = merged.key.split()
-    stated = [f"^{offset:04X} {name}" for offset, name in merged.refs]
-    text = " ".join([*tokens[:4], *names, *stated, *tokens[4:]])
-    return PatternLine(text, merged.key, names, merged.refs)
+    stated = reference_fields(merged.refs, merged.data_sites, merged.local_sites)
+    constraint = ["!refs"] if merged.require_references else ["!caller"] if merged.require_caller else []
+    text = " ".join([*tokens[:4], *constraint, *names, *stated, *tokens[4:]])
+    return PatternLine(text, merged.key, names, merged.refs, merged.require_references,
+                       merged.require_caller, merged.data_sites, local_sites=merged.local_sites)
 
 
 def ref_table(refs: tuple[tuple[int, str], ...]) -> dict[int, set[str]]:
@@ -329,7 +381,9 @@ def distinguished(lines: list[PatternLine]) -> bool:
     for first in range(len(tables)):
         for second in range(first + 1, len(tables)):
             a, b = tables[first], tables[second]
-            if not any(offset in b and not names & b[offset] for offset, names in a.items()):
+            if not any(offset in b and
+                       lines[first].reference_kind(offset) == lines[second].reference_kind(offset) and
+                       not names & b[offset] for offset, names in a.items()):
                 return False
     return True
 
@@ -345,11 +399,18 @@ def common_refs(lines: list[PatternLine]) -> PatternLine:
     """
 
     first = lines[0]
-    if all(line.refs == first.refs for line in lines[1:]):
+    required = any(line.require_references for line in lines)
+    if all(line.refs == first.refs and line.data_sites == first.data_sites
+           and line.local_sites == first.local_sites
+           and line.require_references == required
+           for line in lines):
         return first
     offsets = set.intersection(*(set(ref_table(line.refs)) for line in lines))
+    offsets = {offset for offset in offsets
+               if len({line.reference_kind(offset) for line in lines}) == 1}
     refs = {(offset, name) for line in lines for offset, name in line.refs if offset in offsets}
-    return first.with_refs(tuple(sorted(refs)))
+    return first.with_refs(tuple(sorted(refs)), required, first.data_sites & offsets,
+                           first.local_sites & offsets)
 
 
 @dataclass(frozen=True)
@@ -376,28 +437,87 @@ class Shape:
                 return self.lead[:index]
         return self.lead
 
+    def fully_verified(self) -> bool:
+        """Whether the matcher verifies a complete nonempty function body."""
+        if not self.total:
+            return False
+        leading = len(self.lead) // 2
+        if leading >= self.total:
+            return self.crc_len == 0
+        end = leading + self.crc_len
+        return end <= self.total and end + len(self.tail) // 2 >= self.total
+
     def covered_by(self, other: "Shape") -> bool:
         """Whether a routine at least as long states every byte this line states.
 
         NeverD's matcher compares a line only as far as its own length and
         accepts anything where the line has a wildcard, so such a routine
         matches this line wherever it is linked.  Only what the other line
-        states can be compared: a byte it leaves to a relocation, or covers by
-        a CRC of a different span, counts as a difference, so the check errs
-        toward keeping a line.
+        states can be compared. A wildcard also covers an opaque CRC byte;
+        fixed bytes need explicit matching bytes, and a required CRC needs
+        the same span and checksum. Different encodings of the leading/tail
+        split do not change the offsets at which those assertions apply.
         """
 
         if other.total < self.total:
             return False
-        lead_bytes = min(len(self.lead), 2 * self.total)
-        if not _states(self.lead[:lead_bytes], other.lead):
+        if self.crc_len and (len(self.lead) != len(other.lead) or
+                             self.crc_len != other.crc_len or self.crc != other.crc):
             return False
-        if len(self.lead) >= 2 * self.total:
-            # The whole routine fits in the leading pattern.
+        if len(self.lead) == len(other.lead) and self.crc_len == other.crc_len:
+            return (_states(self.lead[:2 * self.total], other.lead) and
+                    _states(self.tail[:max(0, 2 * self.total - len(self.lead) - 2 * self.crc_len)],
+                            other.tail))
+
+        def states(pattern: str, start: int) -> bool:
+            for index in range(0, min(len(pattern), 2 * self.total - start), 2):
+                byte = pattern[index:index + 2]
+                if byte == "..":
+                    continue
+                offset = start + index
+                if offset < len(other.lead):
+                    actual = other.lead[offset:offset + 2]
+                else:
+                    offset -= len(other.lead) + 2 * other.crc_len
+                    actual = other.tail[offset:offset + 2] if offset >= 0 else ""
+                if actual != byte:
+                    return False
             return True
-        if other.crc_len != self.crc_len or (self.crc_len and other.crc != self.crc):
+
+        return states(self.lead, 0) and states(self.tail, len(self.lead) + 2 * self.crc_len)
+
+    def padding_collision_with(self, other: "Shape", *, machine: str = "x86") -> bool:
+        """A shorter complete body can acquire this line's return padding.
+
+        COFF section lengths can include x86 INT3/NOP alignment after RET,
+        or halfword zero/NOP padding after a Thumb return.
+        Such bytes cannot distinguish an otherwise identical shorter routine
+        followed by that alignment in a linked image. This conservative
+        collision check only handles these explicit machine/return forms;
+        it refuses to use the common byte suffix as nominal identity.
+        CRC assertions must agree at the same offsets; the return and added
+        padding must remain literal bytes outside those opaque spans.
+        """
+        if other.total >= self.total or \
+                not self.fully_verified() or not other.fully_verified():
             return False
-        return _states(self.tail, other.tail)
+        prefix = Shape(self.lead, self.crc_len, self.crc, other.total, self.tail)
+        if not prefix.fully_verified() or not prefix.covered_by(other):
+            return False
+        # CRC bytes retain their own proof above. Mark them opaque here so
+        # they cannot masquerade as the visible return or alignment suffix.
+        own = (self.lead + ".." * self.crc_len + self.tail)[:2 * self.total].upper()
+        short = (other.lead + ".." * other.crc_len + other.tail)[:2 * other.total].upper()
+        if machine in {"x86", "x64"}:
+            return short.endswith("C3") and all(
+                own[index:index + 2] in {"90", "CC"}
+                for index in range(len(short), len(own), 2))
+        if machine == "arm" and other.total % 2 == 0 and self.total % 2 == 0:
+            returns = short.endswith("7047") or re.search(r"BDE8[0-9A-F]{2}[89A-F][0-9A-F]$", short)
+            return bool(returns) and all(
+                own[index:index + 4] in {"0000", "00BF"}
+                for index in range(len(short), len(own), 4))
+        return False
 
 
 def _states(pattern: str, other: str) -> bool:
@@ -413,7 +533,7 @@ def _states(pattern: str, other: str) -> bool:
     return True
 
 
-def parse_line(text: str) -> PatternLine | None:
+def parse_line(text: str, *, evidence: bool = False) -> PatternLine | None:
     """Split a line into its byte assertions and its names.
 
     The key is everything but the names, so two lines with equal keys make
@@ -424,27 +544,89 @@ def parse_line(text: str) -> PatternLine | None:
     if not stripped or stripped.startswith((";", "#")) or stripped == "---":
         return None
     tokens = stripped.split()
+    raw_evidence = len(tokens) > 4 and tokens[4] == "!evidence"
+    if raw_evidence and not evidence:
+        raise BuildError("collision evidence is not a candidate pattern")
     if len(tokens) < 6:
         raise BuildError(f"malformed pattern line: {stripped[:120]}")
     names: list[str] = []
     refs: list[tuple[int, str]] = []
+    kinds: dict[int, int] = {}
     rest = tokens[:4]
     index = 4
+    required = tokens[index] == "!refs"
+    caller = tokens[index] == "!caller"
+    vtable = tokens[index] == "!vtable"
+    load_config = tokens[index] == "!loadcfg"
+    code_layout = tokens[index] == "!layout"
+    config_pairs = defaultdict(dict)
+    if required or caller or vtable or load_config or code_layout or raw_evidence:
+        index += 1
     while index < len(tokens):
         token = tokens[index]
         if token.startswith(":") and index + 1 < len(tokens):
             names.append(f"{token} {tokens[index + 1]}")
             index += 2
             continue
-        if token.startswith("^") and index + 1 < len(tokens):
-            refs.append((int(token[1:], 16), tokens[index + 1]))
+        if token.startswith(("^", "&", "%")) and index + 1 < len(tokens):
+            offset, kind = int(token[1:], 16), {"^": 0, "&": 1, "%": 2}[token[0]]
+            if kind == 2 and (not (required or caller or evidence) or not re.fullmatch(
+                    r"[0-9A-F]{8}(?:[+-](?!00000000:)[0-9A-F]{8})?:[^\s\x00-\x20\x7f]+",
+                    tokens[index + 1])):
+                raise BuildError("invalid source-local data anchor")
+            if offset in kinds and kinds[offset] != kind and not load_config:
+                raise BuildError("reference site mixes function and data kinds")
+            if load_config:
+                if kind in config_pairs[offset]:
+                    raise BuildError("duplicate load-configuration field kind")
+                config_pairs[offset][kind] = tokens[index + 1]
+            kinds[offset] = kind
+            refs.append((offset, tokens[index + 1]))
             index += 2
             continue
         rest.append(token)
         index += 1
     if not names:
         raise BuildError(f"pattern line names nothing: {stripped[:120]}")
-    return PatternLine(stripped, " ".join(rest), tuple(names), tuple(sorted(refs)))
+    if caller:
+        shape = Shape.of(" ".join(rest))
+        if any(int(n.split()[0][1:], 16) != 0 for n in names) or \
+                not shape.fully_verified():
+            raise BuildError("!caller requires a complete body with public names at its start")
+    if vtable:
+        # A table is metadata, not an all-wildcard function. Every pointer
+        # field must be represented, with alternatives only at the same slot.
+        shape = Shape.of(" ".join(rest))
+        if len(names) != 1 or not re.fullmatch(r":0+ \?\?_7.+@@6B@", names[0]) or \
+                not shape.total or shape.total % 8 or shape.crc_len or int(shape.crc, 16) or \
+                len(shape.lead + shape.tail) != 2 * shape.total or len(rest) > 5 or set(shape.lead + shape.tail) != {"."} or \
+                any(kinds.values()) or set(kinds) != set(range(0, shape.total, 8)):
+            raise BuildError("invalid complete primary x64 table declaration")
+    if load_config:
+        shape = Shape.of(" ".join(rest))
+        if names != [":0000 _load_config_used"] or not config_pairs or \
+                shape.crc_len or int(shape.crc, 16) or len(rest) > 5 or \
+                len(shape.lead + shape.tail) != 2 * shape.total or \
+                set(shape.lead + shape.tail) != {"."} or \
+                any(offset < 0 or offset % 8 or offset + 8 > shape.total or
+                    set(pair) != {False, True} for offset, pair in config_pairs.items()):
+            raise BuildError("invalid load-configuration pointer/default pairs")
+    if code_layout:
+        shape = Shape.of(" ".join(rest))
+        if not shape.fully_verified() or shape.crc_len or int(shape.crc, 16) or \
+                len(shape.lead + shape.tail) != 2 * shape.total or \
+                len(set(int(n.split()[0][1:], 16) for n in names)) < 2 or \
+                len({n.split()[1] for n in names}) != len(names) or \
+                any(kind == 2 for kind in kinds.values()):
+            raise BuildError("invalid complete source code layout")
+        # Canonical operand and budget validation belongs to the native reader.
+        # Dedicated layout publication requires neverd-sigmaker --verify.
+    normalized = " ".join([*tokens[:4], *tokens[5:]]) if raw_evidence else stripped
+    return PatternLine(normalized, " ".join(rest), tuple(names), tuple(sorted(refs)), required, caller,
+                       frozenset(offset for offset, is_data in kinds.items() if is_data), vtable,
+                       tuple(sorted((offset, pair[True], pair[False])
+                                    for offset, pair in config_pairs.items())),
+                       frozenset(offset for offset, kind in kinds.items() if kind == 2), code_layout)
 
 
 @dataclass
@@ -472,7 +654,7 @@ class FoldResult:
         return [line.text for line in self.lines]
 
 
-def fold(lines: list[str]) -> FoldResult:
+def fold(lines: list[str], *, evidence: bool = False) -> FoldResult:
     """Fold identical lines and drop every ambiguous byte claim.
 
     Lines with the same key whose sets of names share a name are one
@@ -487,10 +669,16 @@ def fold(lines: list[str]) -> FoldResult:
     """
 
     copies: dict[str, dict[tuple[str, ...], list[PatternLine]]] = {}
+    callers: dict[str, PatternLine] = {}
     seen = 0
     for raw in lines:
-        parsed = parse_line(raw)
+        parsed = parse_line(raw, evidence=evidence)
         if parsed is None:
+            continue
+        if parsed.is_vtable or parsed.is_load_config or parsed.is_code_layout:
+            raise BuildError("metadata declarations require their dedicated selector")
+        if parsed.require_caller:
+            callers[parsed.text] = parsed
             continue
         seen += 1
         copies.setdefault(parsed.key, {}).setdefault(parsed.names, []).append(parsed)
@@ -499,6 +687,11 @@ def fold(lines: list[str]) -> FoldResult:
     for key, by_names in copies.items():
         variants = {names: common_refs(lines) for names, lines in by_names.items()}
         result.evidence.extend(variants.values())
+        if any(line.require_references and not line.refs for line in variants.values()):
+            result.ambiguous_keys.add(key)
+            result.conflicting_groups += 1
+            result.conflicting_lines += len(variants)
+            continue
         if len(variants) > 1 and shared_names(list(variants)):
             result.lines.append(
                 aliases_of([line for lines in by_names.values() for line in lines]))
@@ -517,6 +710,8 @@ def fold(lines: list[str]) -> FoldResult:
             continue
         (line,) = variants.values()
         result.lines.append(line)
+    result.lines.extend(callers.values())
+    result.evidence.extend(callers.values())
     result.lines.sort(key=lambda line: line.text)
     result.duplicates = seen - sum(len(v) for v in copies.values())
     return result
@@ -529,6 +724,22 @@ def another_routine(names: tuple[str, ...], other: tuple[str, ...]) -> bool:
 
 
 def settle_directory(results: dict[Path, FoldResult]) -> None:
+    """Settle byte claims; named caller queries do not assert byte uniqueness."""
+
+    callers = {path: [line for line in result.lines if line.require_caller]
+               for path, result in results.items()}
+    evidence = {path: result.evidence for path, result in results.items()}
+    for result in results.values():
+        result.lines = [line for line in result.lines if not line.require_caller]
+        result.evidence = [line for line in result.evidence if not line.require_caller]
+    _settle_byte_claims(results)
+    for path, result in results.items():
+        result.lines.extend(callers[path])
+        result.lines.sort(key=lambda line: line.text)
+        result.evidence = evidence[path]
+
+
+def _settle_byte_claims(results: dict[Path, FoldResult]) -> None:
     """Drop lines whose bytes another file of the same directory contradicts.
 
     The loader applies every file of a directory together.  A line one file

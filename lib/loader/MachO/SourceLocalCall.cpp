@@ -4,7 +4,7 @@
 #include "MachOLocalFunction.h"
 
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"

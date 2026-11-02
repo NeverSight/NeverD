@@ -1,0 +1,22 @@
+//===- ResolverGuardedBoundFixtures.def - Guarded range inputs -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent query budgets and bounds, including an envelope larger than a
+/// finite-mask query can represent. VALUE owns type, name and test input.
+//===----------------------------------------------------------------------===//
+
+#ifndef RESOLVER_GUARDED_BOUND_VALUE
+#error "Define RESOLVER_GUARDED_BOUND_VALUE before including this file"
+#endif
+
+RESOLVER_GUARDED_BOUND_VALUE(size_t, kGuardedBoundBudget, 1000000)
+RESOLVER_GUARDED_BOUND_VALUE(uint64_t, kGuardedBoundEnvelope, 4)
+RESOLVER_GUARDED_BOUND_VALUE(uint64_t, kGuardedBoundLargeEnvelope, 128)
+RESOLVER_GUARDED_BOUND_VALUE(unsigned, kGuardedBoundStraightLine, 7)
+RESOLVER_GUARDED_BOUND_VALUE(unsigned, kGuardedBoundNarrowGuard, 6)
+RESOLVER_GUARDED_BOUND_VALUE(unsigned, kGuardedBoundWordBytes, 4)
+
+#undef RESOLVER_GUARDED_BOUND_VALUE

@@ -16,6 +16,7 @@ struct Timezone {
 };
 extern I64 time(I64 *);
 extern int clock_gettime(int, struct Timespec *);
+extern int nanosleep(const struct Timespec *, struct Timespec *);
 extern int gettimeofday(struct Timeval *, struct Timezone *);
 extern int clock_getres(int, struct Timespec *);
 extern int *__errno(void);
@@ -98,4 +99,27 @@ U64 time_dynamic(U64 *Out, U64 Closed) {
   if (!Closed)
     dlclose(Handle);
   return 0;
+}
+
+U64 raw_clock_sequence(volatile U64 *Out) {
+  void *Handle = dlopen("libclock-model.so", 2);
+  int (*Clock)(int, struct Timespec *) = dlsym(Handle, "clock_gettime");
+  if (!Handle || !Clock)
+    return 1;
+  *__errno() = 73;
+  for (U64 Phase = 0; Phase != 2; ++Phase) {
+    volatile U64 *Now = Out + Phase * 8;
+    if (clock_gettime(4, (void *)Now) ||
+        raw(113, 0x1234567800000004UL, (U64)(Now + 2)) ||
+        Clock(4, (void *)(Now + 4)) || clock_gettime(1, (void *)(Now + 6)))
+      return 2;
+    if (!Phase) {
+      struct Timespec Request = {1, 7};
+      if (nanosleep(&Request, &Request) || Request.Seconds != 1 ||
+          Request.Nanoseconds != 7)
+        return 3;
+    }
+  }
+  Out[16] = *__errno();
+  return (U64)(I64)dlclose(Handle);
 }

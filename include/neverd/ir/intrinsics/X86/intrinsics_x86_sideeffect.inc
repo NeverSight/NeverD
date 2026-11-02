@@ -1,0 +1,311 @@
+// x86/x64 side-effect intrinsics — included by Intrinsics.cpp.
+// Macro: SIDEEFFECT(IntrinsicId)
+//
+// These intrinsics have observable side effects and must not be
+// eliminated as dead even when their result is unused.
+
+// barriers / fences
+SIDEEFFECT(Intrinsic::Mfence);
+SIDEEFFECT(Intrinsic::Lfence);
+SIDEEFFECT(Intrinsic::Sfence);
+// hints
+SIDEEFFECT(Intrinsic::Pause);
+SIDEEFFECT(Intrinsic::Nop);
+// cache
+SIDEEFFECT(Intrinsic::Clflush);
+SIDEEFFECT(Intrinsic::Clflushopt);
+SIDEEFFECT(Intrinsic::Clwb);
+SIDEEFFECT(Intrinsic::Prefetch);
+// traps
+SIDEEFFECT(Intrinsic::Int3);
+SIDEEFFECT(Intrinsic::Int1);
+SIDEEFFECT(Intrinsic::IntN);
+// far / interrupt / syscall returns (terminal architectural control transfers)
+SIDEEFFECT(Intrinsic::Retf);
+SIDEEFFECT(Intrinsic::Iret);
+SIDEEFFECT(Intrinsic::Sysretq);
+SIDEEFFECT(Intrinsic::Sysexitq);
+SIDEEFFECT(Intrinsic::X86Sysenter);
+SIDEEFFECT(Intrinsic::Into);
+SIDEEFFECT(Intrinsic::Ud2);
+SIDEEFFECT(Intrinsic::Hlt);
+// privileged
+SIDEEFFECT(Intrinsic::Cli);
+SIDEEFFECT(Intrinsic::Sti);
+SIDEEFFECT(Intrinsic::Pushf);
+SIDEEFFECT(Intrinsic::Popf);
+SIDEEFFECT(Intrinsic::Invlpg);
+SIDEEFFECT(Intrinsic::Lgdt);
+SIDEEFFECT(Intrinsic::Lidt);
+SIDEEFFECT(Intrinsic::Sgdt);
+SIDEEFFECT(Intrinsic::Sidt);
+SIDEEFFECT(Intrinsic::Lldt);
+SIDEEFFECT(Intrinsic::Ltr);
+SIDEEFFECT(Intrinsic::Lmsw);
+SIDEEFFECT(Intrinsic::Sldt);
+SIDEEFFECT(Intrinsic::Str);
+SIDEEFFECT(Intrinsic::Smsw);
+SIDEEFFECT(Intrinsic::Xabort);
+SIDEEFFECT(Intrinsic::Xbegin);
+SIDEEFFECT(Intrinsic::Bound);
+SIDEEFFECT(Intrinsic::Wbinvd);
+SIDEEFFECT(Intrinsic::Swapgs);
+SIDEEFFECT(Intrinsic::Verr);
+SIDEEFFECT(Intrinsic::Verw);
+SIDEEFFECT(Intrinsic::Monitor);
+SIDEEFFECT(Intrinsic::Mwait);
+SIDEEFFECT(Intrinsic::Monitorx);
+SIDEEFFECT(Intrinsic::Mwaitx);
+SIDEEFFECT(Intrinsic::Xsetbv);
+SIDEEFFECT(Intrinsic::Rdrand);
+SIDEEFFECT(Intrinsic::Rdseed);
+SIDEEFFECT(Intrinsic::ReadSegment);
+SIDEEFFECT(Intrinsic::WriteSegment);
+SIDEEFFECT(Intrinsic::Wrmsr);
+SIDEEFFECT(Intrinsic::Wrpkru);
+SIDEEFFECT(Intrinsic::Fxsave);
+SIDEEFFECT(Intrinsic::Fxrstor);
+SIDEEFFECT(Intrinsic::Ldmxcsr);
+SIDEEFFECT(Intrinsic::Stmxcsr);
+SIDEEFFECT(Intrinsic::Out);
+SIDEEFFECT(Intrinsic::Outsb);
+SIDEEFFECT(Intrinsic::Outsw);
+SIDEEFFECT(Intrinsic::Outsd);
+SIDEEFFECT(Intrinsic::Insb);
+SIDEEFFECT(Intrinsic::Insw);
+SIDEEFFECT(Intrinsic::Insd);
+SIDEEFFECT(Intrinsic::Vmcall);
+SIDEEFFECT(Intrinsic::Vmmcall);
+SIDEEFFECT(Intrinsic::X87Fninit);
+SIDEEFFECT(Intrinsic::X87Fnclex);
+SIDEEFFECT(Intrinsic::X87Fprem);
+SIDEEFFECT(Intrinsic::X87Fprem1);
+SIDEEFFECT(Intrinsic::X87ReadStatus);
+// Retain reserved legacy helpers until validation can reject them too.
+#define NEVERD_X87_VALUE_HELPER(ID, Name, Asm, Operands, PopsST1,              \
+                                SamplesStatus)                                 \
+  SIDEEFFECT(Intrinsic::ID);
+#include "neverd/ir/intrinsics/X86/X87ValueInstructions.def"
+SIDEEFFECT(Intrinsic::X87Wait);
+SIDEEFFECT(Intrinsic::X87ReadControl);
+SIDEEFFECT(Intrinsic::X87ContextBegin);
+SIDEEFFECT(Intrinsic::X87ContextRefresh);
+SIDEEFFECT(Intrinsic::X87ContextExport);
+SIDEEFFECT(Intrinsic::X87ContextStep);
+SIDEEFFECT(Intrinsic::X87ContextMMXRead);
+SIDEEFFECT(Intrinsic::X87ContextMMXWrite);
+SIDEEFFECT(Intrinsic::X87ContextMMXEnter);
+SIDEEFFECT(Intrinsic::X87WriteControl);
+SIDEEFFECT(Intrinsic::X87LoadConstant);
+SIDEEFFECT(Intrinsic::X87LoadPackedBCD);
+SIDEEFFECT(Intrinsic::X87StorePackedBCD);
+SIDEEFFECT(Intrinsic::X87FptanPair);
+SIDEEFFECT(Intrinsic::X87FsincosPair);
+SIDEEFFECT(Intrinsic::X87FxtractPair);
+SIDEEFFECT(Intrinsic::X87Ffree);
+SIDEEFFECT(Intrinsic::X87Fincstp);
+SIDEEFFECT(Intrinsic::X87Fdecstp);
+SIDEEFFECT(Intrinsic::X87Ffreep);
+SIDEEFFECT(Intrinsic::X64Syscall);
+SIDEEFFECT(Intrinsic::X64WindowsSyscall);
+// string ops (side-effect)
+SIDEEFFECT(Intrinsic::Movsb);
+SIDEEFFECT(Intrinsic::Movsw);
+SIDEEFFECT(Intrinsic::Movsd);
+SIDEEFFECT(Intrinsic::Movsq);
+SIDEEFFECT(Intrinsic::Stosb);
+SIDEEFFECT(Intrinsic::Stosw);
+SIDEEFFECT(Intrinsic::Stosd);
+SIDEEFFECT(Intrinsic::Stosq);
+SIDEEFFECT(Intrinsic::Lodsb);
+SIDEEFFECT(Intrinsic::Lodsw);
+SIDEEFFECT(Intrinsic::Lodsd);
+SIDEEFFECT(Intrinsic::Lodsq);
+SIDEEFFECT(Intrinsic::Cmpsb);
+SIDEEFFECT(Intrinsic::Cmpsw);
+SIDEEFFECT(Intrinsic::Cmpsd_str);
+SIDEEFFECT(Intrinsic::Cmpsq);
+SIDEEFFECT(Intrinsic::Scasb);
+SIDEEFFECT(Intrinsic::Scasw);
+SIDEEFFECT(Intrinsic::Scasd);
+SIDEEFFECT(Intrinsic::Scasq);
+SIDEEFFECT(Intrinsic::MaskedStoreB);
+// Legacy MPX / HLE / generic SHA identities retain effects, never implicit
+// NOPs.
+SIDEEFFECT(Intrinsic::BndMk);
+SIDEEFFECT(Intrinsic::BndMov);
+SIDEEFFECT(Intrinsic::BndCl);
+SIDEEFFECT(Intrinsic::BndCu);
+SIDEEFFECT(Intrinsic::BndCn);
+SIDEEFFECT(Intrinsic::BndLdx);
+SIDEEFFECT(Intrinsic::BndStx);
+SIDEEFFECT(Intrinsic::Xacquire);
+SIDEEFFECT(Intrinsic::Xrelease);
+SIDEEFFECT(Intrinsic::ShaGeneric);
+
+// Operand-carrying cache/state memory effects.
+SIDEEFFECT(Intrinsic::PrefetchT0);
+SIDEEFFECT(Intrinsic::PrefetchT1);
+SIDEEFFECT(Intrinsic::PrefetchT2);
+SIDEEFFECT(Intrinsic::PrefetchNta);
+SIDEEFFECT(Intrinsic::PrefetchW);
+SIDEEFFECT(Intrinsic::PrefetchWT1);
+SIDEEFFECT(Intrinsic::Xsave);
+SIDEEFFECT(Intrinsic::Xsavec);
+SIDEEFFECT(Intrinsic::Xsaves);
+SIDEEFFECT(Intrinsic::Xsaveopt);
+SIDEEFFECT(Intrinsic::Xrstor);
+SIDEEFFECT(Intrinsic::Xrstors);
+SIDEEFFECT(Intrinsic::Xsave64);
+SIDEEFFECT(Intrinsic::Xsavec64);
+SIDEEFFECT(Intrinsic::Xsaves64);
+SIDEEFFECT(Intrinsic::Xsaveopt64);
+SIDEEFFECT(Intrinsic::Xrstor64);
+SIDEEFFECT(Intrinsic::Xrstors64);
+SIDEEFFECT(Intrinsic::Fxsave64Mem);
+SIDEEFFECT(Intrinsic::Fxrstor64Mem);
+SIDEEFFECT(Intrinsic::X87Fldenv);
+SIDEEFFECT(Intrinsic::X87Fnstenv);
+SIDEEFFECT(Intrinsic::X87Frstor);
+SIDEEFFECT(Intrinsic::X87Fnsave);
+SIDEEFFECT(Intrinsic::MaskedStoreW);
+SIDEEFFECT(Intrinsic::MaskedStoreD);
+SIDEEFFECT(Intrinsic::MaskedStoreQ);
+SIDEEFFECT(Intrinsic::RequireAligned);
+SIDEEFFECT(Intrinsic::AMXLoadConfig);
+SIDEEFFECT(Intrinsic::AMXStoreConfig);
+SIDEEFFECT(Intrinsic::AMXTileLoad);
+SIDEEFFECT(Intrinsic::AMXTileStore);
+SIDEEFFECT(Intrinsic::AMXTileZero);
+SIDEEFFECT(Intrinsic::AMXClearStartRow);
+SIDEEFFECT(Intrinsic::AMXTileCompute);
+SIDEEFFECT(Intrinsic::AMXTileRow);
+SIDEEFFECT(Intrinsic::F16CConvert);
+SIDEEFFECT(Intrinsic::X86ApproxFloat);
+SIDEEFFECT(Intrinsic::X86FPClass);
+SIDEEFFECT(Intrinsic::X86FourFMA);
+SIDEEFFECT(Intrinsic::EVEXCompressStore);
+SIDEEFFECT(Intrinsic::EVEXExpandLoad);
+SIDEEFFECT(Intrinsic::ApxRaoAdd);
+SIDEEFFECT(Intrinsic::ApxRaoAnd);
+SIDEEFFECT(Intrinsic::ApxRaoOr);
+SIDEEFFECT(Intrinsic::ApxRaoXor);
+SIDEEFFECT(Intrinsic::ApxCmpccXadd);
+SIDEEFFECT(Intrinsic::X86Invalidate);
+SIDEEFFECT(Intrinsic::X86RequireDivPrecondition);
+SIDEEFFECT(Intrinsic::X86SEHRegisterRead);
+SIDEEFFECT(Intrinsic::X86SEHRegisterWrite);
+SIDEEFFECT(Intrinsic::X86MsrAccess);
+SIDEEFFECT(Intrinsic::X86FPArith);
+SIDEEFFECT(Intrinsic::X86FPFmaState);
+SIDEEFFECT(Intrinsic::X86FPFmaMemoryState);
+SIDEEFFECT(Intrinsic::X86ReadMXCSR);
+SIDEEFFECT(Intrinsic::X86WriteMXCSR);
+SIDEEFFECT(Intrinsic::X86FPAddState);
+SIDEEFFECT(Intrinsic::X86FPSubState);
+SIDEEFFECT(Intrinsic::X86FPMulState);
+SIDEEFFECT(Intrinsic::X86FPDivState);
+SIDEEFFECT(Intrinsic::X86FPCvtToIntState);
+SIDEEFFECT(Intrinsic::X86FPTruncToIntState);
+SIDEEFFECT(Intrinsic::X86FPConvert);
+SIDEEFFECT(Intrinsic::X86FPRoundTransform);
+SIDEEFFECT(Intrinsic::X86FPRoundState);
+SIDEEFFECT(Intrinsic::X86FPRoundMemoryState);
+SIDEEFFECT(Intrinsic::X86FPApprox12State);
+SIDEEFFECT(Intrinsic::X86FPApprox12MemoryState);
+SIDEEFFECT(Intrinsic::X86FPArithState);
+SIDEEFFECT(Intrinsic::X86FPArithMemoryState);
+SIDEEFFECT(Intrinsic::X86FPScalarConvertState);
+SIDEEFFECT(Intrinsic::X86FPScalarConvertMemoryState);
+SIDEEFFECT(Intrinsic::X86FPPackedConvertState);
+SIDEEFFECT(Intrinsic::X86FPPackedConvertMemoryState);
+SIDEEFFECT(Intrinsic::X86FPExtract);
+SIDEEFFECT(Intrinsic::X86FPRange);
+SIDEEFFECT(Intrinsic::X86FPFixup);
+SIDEEFFECT(Intrinsic::X86FPScale);
+SIDEEFFECT(Intrinsic::X86VP4DPWSSD);
+SIDEEFFECT(Intrinsic::X86VP4DPWSSDS);
+SIDEEFFECT(Intrinsic::X86FPCompare);
+// Control/debug register moves are ordered processor-state accesses.
+SIDEEFFECT(Intrinsic::ReadCr0);
+SIDEEFFECT(Intrinsic::ReadCr2);
+SIDEEFFECT(Intrinsic::ReadCr3);
+SIDEEFFECT(Intrinsic::ReadCr4);
+SIDEEFFECT(Intrinsic::ReadCr8);
+SIDEEFFECT(Intrinsic::WriteCr0);
+SIDEEFFECT(Intrinsic::WriteCr2);
+SIDEEFFECT(Intrinsic::WriteCr3);
+SIDEEFFECT(Intrinsic::WriteCr4);
+SIDEEFFECT(Intrinsic::WriteCr8);
+SIDEEFFECT(Intrinsic::ReadDr);
+SIDEEFFECT(Intrinsic::WriteDr);
+SIDEEFFECT(Intrinsic::DebugService);
+
+SIDEEFFECT(Intrinsic::X86F16CState);
+SIDEEFFECT(Intrinsic::X86F16CReadState);
+SIDEEFFECT(Intrinsic::X86F16CStoreState);
+SIDEEFFECT(Intrinsic::X86FPComiState);
+SIDEEFFECT(Intrinsic::X86FPComiMemoryState);
+
+SIDEEFFECT(Intrinsic::X86FPMaskCompareState);
+SIDEEFFECT(Intrinsic::X86FPMaskCompareMemoryState);
+
+#define NEVERD_X86_VIRTUALIZATION(Id, Mnemonic, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/X86/X86Virtualization.def"
+#undef NEVERD_X86_VIRTUALIZATION
+
+#define NEVERD_X86_SYSTEM_STATE(Id, Mnemonic, ...) SIDEEFFECT(Intrinsic::Id);
+#define NEVERD_X86_EXISTING_SYSTEM_STATE NEVERD_X86_SYSTEM_STATE
+#define NEVERD_X86_APPENDED_SYSTEM_STATE NEVERD_X86_SYSTEM_STATE
+#include "neverd/ir/intrinsics/X86/X86SystemState.def"
+#undef NEVERD_X86_APPENDED_SYSTEM_STATE
+#undef NEVERD_X86_EXISTING_SYSTEM_STATE
+#undef NEVERD_X86_SYSTEM_STATE
+
+SIDEEFFECT(Intrinsic::X86Encls);
+SIDEEFFECT(Intrinsic::X86Enclv);
+
+SIDEEFFECT(Intrinsic::X86AMXState);
+
+// Legacy descriptor-table operand sizes.
+SIDEEFFECT(Intrinsic::X86Lgdt16);
+SIDEEFFECT(Intrinsic::X86Lidt16);
+SIDEEFFECT(Intrinsic::X86Sgdt16);
+SIDEEFFECT(Intrinsic::X86Sidt16);
+
+#define NEVERD_X86_REP_STATE(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/X86/X86RepState.def"
+#undef NEVERD_X86_REP_STATE
+
+// Bounded leaf state and unresolved decoder markers.
+SIDEEFFECT(Intrinsic::X86EncluPending);
+SIDEEFFECT(Intrinsic::X86GetsecPending);
+SIDEEFFECT(Intrinsic::X86EncluBounded);
+SIDEEFFECT(Intrinsic::X86GetsecBounded);
+
+SIDEEFFECT(Intrinsic::X86FourSourceMemory);
+
+SIDEEFFECT(Intrinsic::X86LegacyRaoAdd);
+SIDEEFFECT(Intrinsic::X86LegacyRaoAnd);
+SIDEEFFECT(Intrinsic::X86LegacyRaoOr);
+SIDEEFFECT(Intrinsic::X86LegacyRaoXor);
+SIDEEFFECT(Intrinsic::X86LegacyCmpccXadd);
+SIDEEFFECT(Intrinsic::X87Fldenv16);
+SIDEEFFECT(Intrinsic::X87Fnstenv16);
+SIDEEFFECT(Intrinsic::X87Frstor16);
+SIDEEFFECT(Intrinsic::X87Fnsave16);
+SIDEEFFECT(Intrinsic::X86SvmRunContext);
+SIDEEFFECT(Intrinsic::X86KvmVmcall);
+SIDEEFFECT(Intrinsic::X86KvmVmmcall);
+
+SIDEEFFECT(Intrinsic::X86HyperVCall);
+
+#define NEVERD_X86_SNP(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+SIDEEFFECT(Intrinsic::X86SevVmgexit);
+
+SIDEEFFECT(Intrinsic::X86HleState);
+
+SIDEEFFECT(Intrinsic::X86SmmReturnContext);
+SIDEEFFECT(Intrinsic::X86SgxTransferAtContext);

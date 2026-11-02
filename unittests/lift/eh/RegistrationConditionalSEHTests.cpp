@@ -15,8 +15,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/support/BinaryEncoding.h"
 

@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 32288410e4352dcbe779ee091bfc8728b8d4e783203704b4d3a6d09f0421c96a -->
+<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -26,6 +26,7 @@
 | [HTML ソースプロファイル（英語）](../web-html-profile.md) | 有界な C++ スクリプト一覧、取得したローカル参照と元のインラインソース位置 |
 | [テスト](testing.md) | テストスイート、生成 fixture、Unicorn ラウンドトリップ、増分コマンド |
 | [デスクトップワークベンチ (英語)](../gui.md) | 従来の逆アセンブラ風レイアウト、独立ワーカー、プロジェクトデータベース、多言語対応、MCP 接続 |
+| [解析イメージのセクション（英語）](../analysis-sections.md) | C ABI、ワーカー、CLI、ワークベンチによるコードとデータの追加、ネイティブ表示とプロジェクトへの保存 |
 | [ライブラリ認識（英語）](../library-recognition.md) | 証拠に基づく STL、ATL/MFC、COM、libc の識別、プロファイル、元に戻せる C コードの折りたたみ |
 | [デスクトップ検証記録 (英語)](../gui-qualification.md) | GUI の実測証拠、パッケージの境界、残るプラットフォーム検証 |
 | [インタープリターのソース復元](interpreter-recovery.md) | 実験的な x64 インタープリター特化、HighC/LLVMC 出力、実行前提、証拠と制限; 入れ子ループの証明候補; 明示的な探索予算とバージョン付き C API; 正確なネイティブから LLVM への証明 API |

@@ -55,6 +55,19 @@ NEVERD_PATTERN_FIELD(Length)
 NEVERD_PATTERN_STRING(UnstatedByte, "..")
 NEVERD_PATTERN_STRING(PublicNamePrefix, ":")
 NEVERD_PATTERN_STRING(ReferencePrefix, "^")
+NEVERD_PATTERN_STRING(DataReferencePrefix, "&")
+NEVERD_PATTERN_STRING(LocalDataReferencePrefix, "%")
+NEVERD_PATTERN_CHAR(LocalDataAnchorSeparator, ':')
+NEVERD_PATTERN_VALUE(LocalDataAnchorOffsetDigits, 8)
+NEVERD_PATTERN_VALUE(LocalDataDeltaDigits, 8)
+// Optional NeverD constraint immediately after the four opening fields.
+// Such a line must cover the whole routine and have at least one reference.
+NEVERD_PATTERN_STRING(RequiredReferences, "!refs")
+NEVERD_PATTERN_STRING(RequiredCaller, "!caller")
+NEVERD_PATTERN_STRING(VTableContext, "!vtable")
+NEVERD_PATTERN_STRING(LoadConfigContext, "!loadcfg")
+NEVERD_PATTERN_STRING(CodeLayoutContext, "!layout")
+NEVERD_PATTERN_STRING(CollisionEvidenceOnly, "!evidence")
 
 // A reference's offset is where its branch starts, except that an ARM-state
 // branch is stated one byte past its instruction: at an odd offset, which no

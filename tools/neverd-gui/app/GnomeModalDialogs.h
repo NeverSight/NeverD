@@ -14,8 +14,8 @@ bool onGnome();
 
 /// Before the application object exists: a Wayland compositor is not told
 /// which dialogs are modal (xdg-dialog-v1), so it places them over their
-/// parent as plain child windows.  Dialogs are Qt's own: the platform's file
-/// and color dialogs are other toolkits' windows, which GNOME attaches.
+/// parent as plain child windows. WindowFrame selects non-native dialogs
+/// on every desktop.
 void prepareModalDialogs();
 
 /// Once the application exists: under X11, modal dialogs take the utility

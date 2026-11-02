@@ -1,0 +1,29 @@
+//===- MedCachedCallTargetFixtures.def - Import observation fixtures -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Independent import identities and addresses. Define CACHED_CALL_STRING or
+/// CACHED_CALL_INTEGER to select one table; each macro is undefined afterward.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef CACHED_CALL_STRING
+CACHED_CALL_STRING(kObservationFunction, "observed_indirect_call")
+CACHED_CALL_STRING(kObservedImport, "observed_import")
+#undef CACHED_CALL_STRING
+#endif
+
+#ifdef CACHED_CALL_INTEGER
+CACHED_CALL_INTEGER(kObservationEntry, 0x1000)
+CACHED_CALL_INTEGER(kObservationSuccessor, 0x1100)
+CACHED_CALL_INTEGER(kObservationBlockStride, 0x100)
+CACHED_CALL_INTEGER(kObservationSlotBase, 0x3000)
+CACHED_CALL_INTEGER(kObservationSlotOffset, 8)
+CACHED_CALL_INTEGER(kReplacementCallable, 0x4000)
+CACHED_CALL_INTEGER(kObservationFrameBytes, 64)
+CACHED_CALL_INTEGER(kObservationSpillOffset, 16)
+#undef CACHED_CALL_INTEGER
+#endif

@@ -4,7 +4,7 @@
 #include "ObjCUnwindSource.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/sdk/Limits.h"
 

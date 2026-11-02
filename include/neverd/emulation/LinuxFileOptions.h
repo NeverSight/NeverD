@@ -6,6 +6,7 @@
 #ifndef NEVERD_EMULATION_LINUXFILEOPTIONS_H
 #define NEVERD_EMULATION_LINUXFILEOPTIONS_H
 
+#include "neverd/emulation/Limits.h"
 #include "neverd/emulation/LinuxDeviceOptions.h"
 #include "neverd/emulation/LinuxTimeOptions.h"
 
@@ -42,6 +43,46 @@ struct LinuxDirectoryCreationOptions {
   std::map<std::string, LinuxFileMetadata> Parents;
   uint32_t Umask = 0022;
   uint32_t Limit = 64;
+};
+
+/// Each future object reserves its own maximum byte extent. A retired object
+/// keeps its charged reservation; a later creation never reuses its identity.
+struct LinuxFileCreationReservation {
+  uint64_t WriteLimit = 0;
+  uint32_t Count = 1;
+};
+
+/// Separate bounded grants for regular-file creation at exact paths. Counts
+/// default to one and their sum cannot exceed MaxFiles. Parents require the
+/// explicit noatime tmpfs provider; every generation has a distinct identity.
+struct LinuxFileCreationOptions {
+  static constexpr uint32_t MaxFiles =
+      limits::emulation::kMaxLinuxFileCreations;
+  std::map<std::string, LinuxFileCreationReservation> Files;
+};
+
+/// Separate opt-in for bounded same-directory regular-file renames. Parents
+/// refer to the explicit noatime tmpfs directory provider. Only a single-link
+/// tracked file moving to an absent name is admitted; no host path is used.
+struct LinuxFileRenameOptions {
+  static constexpr uint32_t MaxParents =
+      limits::emulation::kMaxLinuxFileRenameParents;
+  static constexpr uint32_t MaxOperations =
+      limits::emulation::kMaxLinuxFileRenames;
+  std::set<std::string> Parents;
+  uint32_t Limit = MaxOperations;
+};
+
+/// Separate opt-in for removing closed, single-link tracked regular files.
+/// Parents require explicit persistent directories and noatime tmpfs metadata.
+/// Open file/parent descriptors and captured mappings remain unmodeled.
+struct LinuxFileUnlinkOptions {
+  static constexpr uint32_t MaxParents =
+      limits::emulation::kMaxLinuxFileUnlinkParents;
+  static constexpr uint32_t MaxOperations =
+      limits::emulation::kMaxLinuxFileUnlinks;
+  std::set<std::string> Parents;
+  uint32_t Limit = MaxOperations;
 };
 
 /// Explicit identity for the bounded live proc view. Unknown status fields
@@ -104,6 +145,9 @@ struct LinuxFileOptions {
   /// Optional bounded entry/exit observations at the common ioctl boundary.
   /// Capture failures never supply guest bytes or change service semantics.
   std::optional<LinuxIoctlTraceOptions> IoctlTrace;
+  std::optional<LinuxFileCreationOptions> FileCreations;
+  std::optional<LinuxFileRenameOptions> FileRenames;
+  std::optional<LinuxFileUnlinkOptions> FileUnlinks;
 };
 } // namespace neverd::emulation
 #endif

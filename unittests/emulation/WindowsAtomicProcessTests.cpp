@@ -22,7 +22,7 @@ namespace {
 #define NEVERD_ATOMIC_RESULT_VALUE NEVERD_ATOMIC_VALUE
 #define NEVERD_ATOMIC_ORACLE_TEXT(Name, Value) constexpr char Name[] = Value;
 #define NEVERD_ATOMIC_RESULT_TEXT NEVERD_ATOMIC_ORACLE_TEXT
-#include "AArch64AtomicCases.def"
+#include "aarch64/AArch64AtomicCases.def"
 #include "fixtures/AArch64AtomicOracle.def"
 #include "fixtures/WindowsAtomicResults.def"
 #undef NEVERD_ATOMIC_VALUE

@@ -7,6 +7,7 @@
 /// SafeSEH proves source entry identity without proving EH behavior.
 //===----------------------------------------------------------------------===//
 
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -139,8 +140,8 @@ TEST(SafeSEHReference, RequiresImmutableCompleteImageEvidence) {
           Image.Segments[1].Flags | SegmentFlags::Writable;
       break;
     case 9:
-      Image.Sections[1].Flags =
-          Image.Sections[1].Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Image.Sections[1],
+                            Image.Sections[1].Flags | SegmentFlags::Writable);
       break;
     case 10:
       Image.Segments.push_back(Image.Segments[1]);

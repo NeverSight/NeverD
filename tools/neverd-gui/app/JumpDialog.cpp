@@ -1,14 +1,18 @@
 #include "JumpDialog.h"
 
+#include "../Config.h"
 #include "../ResourceLimits.h"
 #include "Address.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
+#include "ListingView.h"
+#include "Resolve.h"
 #include "SecondaryTextDelegate.h"
 #include "Session.h"
 #include "Theme.h"
 
 #include <QDialogButtonBox>
+#include <QFontInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -16,6 +20,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QSettings>
+#include <QSplitter>
 #include <QVBoxLayout>
 
 namespace neverd::gui {
@@ -36,13 +41,16 @@ void JumpDialog::remember(const QString &text) {
   settings.setValue(HistoryKey, history);
 }
 
-JumpDialog::JumpDialog(Session &session, QWidget *parent)
+JumpDialog::JumpDialog(Session &session, const AddressSpace &space,
+                       std::optional<Address> here, QWidget *parent)
     : QDialog(parent), session_(session), input_(new QLineEdit(this)),
-      matches_(new QListWidget(this)), hint_(new QLabel(this)) {
+      matches_(new QListWidget(this)), hint_(new QLabel(this)),
+      preview_(new ListingView(session, space, this)), here_(here) {
   setWindowTitle(tr("Jump anywhere"));
   setWindowIcon(icon(QStringLiteral("jump")));
   activateOnReturn(*matches_);
-  resize(620, 420);
+  resize(::neverd::limits::gui_config::kJumpDialogWidth,
+         ::neverd::limits::gui_config::kJumpDialogHeight);
   auto *layout = new QVBoxLayout(this);
   input_->setPlaceholderText(
       tr("Address, name or expression (0x401000, main, sub_401000+10)"));
@@ -52,9 +60,19 @@ JumpDialog::JumpDialog(Session &session, QWidget *parent)
   matches_->setUniformItemSizes(true);
   // Names read in the list's font; their addresses line up at the right.
   QFont addresses = Theme::instance().codeFont();
-  addresses.setPointSize(matches_->font().pointSize());
+  addresses.setPointSizeF(QFontInfo(matches_->font()).pointSizeF());
   matches_->setItemDelegate(new SecondaryTextDelegate(addresses, matches_));
-  layout->addWidget(matches_, 1);
+  // The preview shows where Enter goes while the typing stays in the field.
+  preview_->setObjectName(QStringLiteral("jumpPreview"));
+  preview_->setFocusPolicy(Qt::NoFocus);
+  auto *split = new QSplitter(Qt::Horizontal, this);
+  split->addWidget(matches_);
+  split->addWidget(preview_);
+  split->setStretchFactor(1, 1);
+  split->setSizes({::neverd::limits::gui_config::kJumpDialogListWidth,
+                   ::neverd::limits::gui_config::kJumpDialogWidth -
+                       ::neverd::limits::gui_config::kJumpDialogListWidth});
+  layout->addWidget(split, 1);
   layout->addWidget(hint_);
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -62,13 +80,29 @@ JumpDialog::JumpDialog(Session &session, QWidget *parent)
   connect(buttons, &QDialogButtonBox::accepted, this, &JumpDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   connect(matches_, &QListWidget::itemActivated, this, [this] { accept(); });
+  connect(matches_, &QListWidget::currentRowChanged, this, [this](int row) {
+    if (row >= 0)
+      updatePreview();
+  });
   debounce_.setSingleShot(true);
   debounce_.setInterval(::neverd::limits::gui::kJumpDialogSearchDebounceMs);
   connect(&debounce_, &QTimer::timeout, this, &JumpDialog::search);
   connect(input_, &QLineEdit::textChanged, this, [this] {
-    matches_->clearSelection();
-    debounce_.start();
+    // Retire the previous text's replies before the debounce fires.
+    ++serial_;
+    debounce_.stop();
+    matches_->clear();
+    hint_->clear();
+    if (input_->text().trimmed().isEmpty())
+      showRecent();
+    else
+      debounce_.start();
   });
+  showRecent();
+}
+
+void JumpDialog::showRecent() {
+  matches_->clear();
   // Recent jumps while nothing is typed.
   for (const auto &text : QSettings().value(HistoryKey).toStringList()) {
     auto *item =
@@ -81,6 +115,7 @@ JumpDialog::JumpDialog(Session &session, QWidget *parent)
 void JumpDialog::search() {
   const QString text = input_->text().trimmed();
   const quint64 serial = ++serial_;
+  updatePreview();
   if (text.isEmpty() || !session_.loaded())
     return;
   session_.read(
@@ -89,7 +124,7 @@ void JumpDialog::search() {
        {"limit", ::neverd::limits::gui::kJumpDialogMaxMatches},
        {"sort", "name"}},
       this,
-      [this, serial, text](const QJsonObject &payload) {
+      [this, serial](const QJsonObject &payload) {
         if (serial != serial_)
           return;
         matches_->clear();
@@ -114,8 +149,33 @@ void JumpDialog::search() {
         hint_->setText(
             tr("%n matches", "", int(payload.value("total").toInt())));
       },
-      [this](const QString &, const QString &message) {
-        hint_->setText(message);
+      [this, serial](const QString &, const QString &message) {
+        if (serial == serial_)
+          hint_->setText(message);
+      });
+}
+
+void JumpDialog::updatePreview() {
+  const quint64 serial = ++previewSerial_;
+  const auto *item = matches_->currentItem();
+  const QString text = item && item->isSelected()
+                           ? item->data(AddressRole).toString()
+                           : input_->text().trimmed();
+  if (text.isEmpty() || !session_.loaded()) {
+    preview_->clear();
+    return;
+  }
+  // The expression resolves as Enter resolves it; text that names nothing
+  // yet shows nothing rather than an older place.
+  resolveExpression(
+      session_, this, text, here_,
+      [this, serial](std::optional<Address> value, const QString &) {
+        if (serial != previewSerial_)
+          return;
+        if (value)
+          preview_->jumpTo(*value);
+        else
+          preview_->clear();
       });
 }
 

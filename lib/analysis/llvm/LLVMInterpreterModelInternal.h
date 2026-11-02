@@ -26,6 +26,7 @@ namespace neverd::analysis::llvm_model {
 struct Failure {
   std::string Message;
   bool Budget = false;
+  bool Cancelled = false;
 };
 [[noreturn]] inline void fail(const llvm::Twine &Message) {
   throw Failure{Message.str()};
@@ -66,6 +67,8 @@ class Builder {
   const llvm::Function &F;
   const LLVMInterpreterModelLimits &Limits;
   std::vector<LLVMScalarArgument> *ScalarArguments;
+  const LLVMScalarModelOptions *ScalarOptions;
+  uint64_t UntilStopPoll = 0;
   InterpreterMachineStateModel Result;
   std::map<const llvm::Value *, NdVar> Values;
   std::map<const llvm::BasicBlock *, int> Blocks;
@@ -117,9 +120,10 @@ class Builder {
 public:
   Builder(const llvm::Function &Function,
           const LLVMInterpreterModelLimits &Limits, unsigned StateBytes,
-          std::vector<LLVMScalarArgument> *ScalarArguments = nullptr)
+          std::vector<LLVMScalarArgument> *ScalarArguments = nullptr,
+          const LLVMScalarModelOptions *ScalarOptions = nullptr)
       : F(Function), Limits(Limits), ScalarArguments(ScalarArguments),
-        StateBytes(StateBytes) {}
+        ScalarOptions(ScalarOptions), StateBytes(StateBytes) {}
   InterpreterMachineStateModel build();
   /// Valid only after successful build(). Identities describe this exact input
   /// function; consumers cannot use them as guest-memory or alias facts.

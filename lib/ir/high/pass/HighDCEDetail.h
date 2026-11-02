@@ -67,7 +67,15 @@ void eliminateLoopAliases(std::vector<HighStmt> &Stmts);
 
 void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts);
 void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture);
+/// Drop each private frame store of a scratch register's incoming value,
+/// which \p Format's convention leaves undefined (an alignment `push rax`).
+void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
+                                     BinaryFormat Format);
 void forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture);
+/// The same forwarding; writebacks are proven across joins only when
+/// \p AcrossJoins is set. \returns whether that proof changed \p Func.
+bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
+                              bool AcrossJoins);
 /// Forward scalar copies through nonescaping private slots on the shared
 /// source-flow graph. Calls must already carry complete source ABI bindings.
 /// Every reaching context must agree; cycles and exhausted budgets do nothing.
@@ -106,6 +114,7 @@ void eliminateUnusedValues(HighFunc &Func);
 //===----------------------------------------------------------------------===//
 
 void renameVars(std::vector<HighStmt> &Stmts);
+void renameVars(HighFunc &Func);
 void postRenameCleanup(HighFunc &Func);
 void postRenameCleanup(std::vector<HighStmt> &Stmts);
 

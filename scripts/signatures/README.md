@@ -44,7 +44,10 @@ a Mach-O linker optimization hint names. The name on a line is the
 linkage name the library's symbol table spells, byte for byte:
 `?Close@CFile@@UEAAXXZ`, `_ZNSt6thread4joinEv`, x86 `_memcpy`, Mach-O
 `_deflate`. It is never demangled, sanitized, prefixed, or truncated. One
-public name sits at offset 0 of each line.
+or more public names sit at offset 0 of each line. COFF function symbols at
+the same section and offset retain their source-proven aliases together;
+equal code at different addresses is not alias evidence. References to any
+of a function's own aliases are recursion, not external constraints.
 
 ## Why the exception-runtime databases exist
 
@@ -191,6 +194,85 @@ request shows what would change without changing it.
 
 ## MSVC and Windows SDK signatures
 
+For incremental additions, `supplement_patterns.py` compares candidate patterns
+with **unpruned** sigmaker outputs for every available library/version in the
+same format and architecture, then with the existing packs. Supply the loader's
+library stem for each input; repeat `--evidence` when several assets belong to
+one stem. Keep full archive/file hashes and generation commands with the raw
+inputs. For example:
+
+```sh
+python3 scripts/signatures/supplement_patterns.py \
+  --candidate vs2022=candidates/vs2022.pat \
+  --evidence vs2022=raw/vs2022.pat \
+  --evidence vs2019=raw/vs2019.pat \
+  --evidence winsdk=raw/winsdk.pat \
+  --existing signatures/pe/x86/64 --output supplement/
+```
+
+The example's evidence list must be expanded to the full collected source set.
+Supplying only retained `.pat` packs loses the counterexamples discarded during
+their original build and can reintroduce known ambiguities. The supplement
+retains source-proven aliases and reference distinctions, checks covering
+patterns, skips claims already owned by an existing pack, and writes new
+numbered parts plus input/output hashes. It never replaces an existing part.
+Verify the output with `neverd-sigmaker --verify`, then evaluate ordinary
+`sigs --auto --no-debug` recognition, candidate errors and performance before
+updating the submodule. Source-corpus collision checks do not establish
+universal uniqueness or replace held-out program evaluation.
+
+To constrain existing records after collecting additional raw source collisions:
+
+```sh
+python3 scripts/signatures/refine_colliding_patterns.py \
+  --existing signatures/pe/x86/64 --machine x64 \
+  --evidence raw/templates-release.pat --evidence raw/templates-debug.pat \
+  --output refined/ --report refinement.json
+```
+
+Supply unpruned `!evidence` records and a fresh output directory. The report must
+be a new file outside that directory. Complete conflicting records move to
+mandatory-reference or incoming-only native records with the same library stem;
+incomplete conflicting records are omitted. Existing mandatory-reference claims
+become incoming-only queries when a new source defeats their complete context. Existing
+mandatory fields can be reduced only with an exact unpruned source witness and
+a sufficient import/RTTI clause that also distinguishes loaded required rivals.
+The report labels these changes `reduced`; call-only constraints remain intact.
+Same-library cohorts with
+identical typed references, incoming queries and metadata remain intact. The
+tool never invents names or aliases. It writes pattern files only: update the
+affected source manifests with the report and qualified output hashes before publication. Verify native
+parsing, report lost/gained correct candidates as well as errors, and measure
+the changed packs with the same consumer and input entries on both sides.
+Proposed single-site clauses preserve alternatives and are audited against all
+raw rivals and the existing byte cohort. An independently sufficient import/RTTI
+clause may be retained, preferring fewer alternatives and the earliest source
+field. Call-only conditions keep all original sites because the callee name may
+itself be an ambiguous byte claim. Each old record still contributes at most
+one global pattern, bounding byte-index work.
+The whole loaded cohort is constrained together, preventing a newly unique
+unqualified survivor. Separate complete incoming declarations
+retain only outgoing fields shared across raw source versions; a pruned clause
+does not supply omitted calls. Jointly necessary sites remain in a full clause.
+
+For primary x64 COFF table context, generate separate unpruned declarations:
+
+```sh
+neverd-sigmaker runtime.lib --machine x64 --vtable-evidence -o runtime.tables.jsonl
+python3 scripts/signatures/supplement_vtable_context.py \
+  --candidate runtime.tables.jsonl --evidence runtime.tables.jsonl \
+  --existing signatures/pe/x86/64/runtime.npat \
+  --name '??_7Widget@@6B@' --output runtime.part2.npat
+```
+
+Repeat `--evidence` for every collected source version and `--existing` for all
+packs in the intended selected profile. Incomplete declarations veto publication
+of their type; raw weak bindings preserve both source names. The selector keeps
+existing metadata, rejects conflicting layouts, requires an existing complete
+strong queried body, and writes input/output hashes. `!vtable` records never
+participate in function folding or metadata refinement. Verify, evaluate and
+measure the supplement under the same identity and performance rules above.
+
 `build_msvc_signatures.py` builds `pe/<x86|arm>/<32|64>/vs<year>.pat` and
 `winsdk.pat` from the library archives that the signatures repository's
 `msvc-libraries.yml` workflow collects on GitHub-hosted Windows images and
@@ -244,6 +326,29 @@ are bytes that two files name differently. Without this, a debug-CRT wrapper
 that is unique among the SDK's libraries would still name the byte-identical
 template instantiations that `vs2026.pat` had dropped as ambiguous.
 
+On COFF x86/x64, `--references` also retains import-pointer relocations in
+unprefixed `FF 15` calls and `FF 25` jumps. The reference names `__imp_<export>`
+at the four-byte address field (absolute on x86, RIP-relative on x64). The
+consumer confirms an exact export spelling at the addressed, mapped IAT slot;
+missing, ordinal-only, differently spelled or duplicate slot metadata remains
+unknown. It never scans that data slot as code. Prefixed forms are unsupported,
+including a prefix-looking byte immediately before the opcode when no decoded
+boundary proves otherwise. This evidence can resolve candidates; it cannot
+authorize a caller's automatic name or type.
+
+For complete native outputs, `--data-references` can accompany `--contextual`,
+`--caller-context` or `--collision-evidence`. It emits `&offset name` for
+supported zero-addend x64 COFF external-data operands, including the exact
+REL32_N bias of immediate instructions. Static/local symbols are excluded.
+These fields require independently frozen full-function anchors and mapped
+readable nonexecuting storage. They cannot become code references, bootstrap
+other data candidates or authorize automatic names. The native parser rejects
+mixed kinds at one field and ordinary records containing data references;
+cache format 4 retains the kind without growing packed name records. See
+[signature quality](../../docs/signature-quality.md) for evidence and collision
+requirements. Existing ordinary generation is unchanged unless this option is
+explicitly selected with a complete contextual mode.
+
 Each line also names, as `^offset name`, the routines its function branches
 to directly (`neverd-sigmaker --references`), in COFF and ELF objects alike:
 the rel32 field of an x86 or x64 `call` or `jmp`, the ARM64 `B`/`BL` or
@@ -292,3 +397,46 @@ it was built from, with their archive digests and toolset or SDK versions, and
 the NeverD revision and release tag that produced it. A Homebrew asset also
 records its formula and each bottle's tag and SHA-256, by which Homebrew's
 registry serves the bottle.
+
+### Source runtime pointer defaults
+
+`neverd-sigmaker --runtime-pointer-evidence --evidence-symbol NAME` emits offline
+JSONL configuration, pointer and actual function definitions for x64 COFF. Repeat
+`--evidence-symbol` for every selected pointer and proposed default function, and
+include all unpruned source versions as evidence. Undefined declarations do not
+establish a function type; unsupported definitions remain incomplete counterclaims.
+
+`supplement_runtime_pointers.py` joins these declarations and requires existing
+complete caller bodies. `--pointer` selects source variables; `--updated-dir`
+receives copied packs with proved outgoing references added to their existing
+records. `--output` receives only missing `!loadcfg` metadata. Review those copies
+and run `neverd-sigmaker --verify` before publication. Conflicting or incomplete
+source declarations veto selection. Ordinary caller strength limits are unchanged.
+Runtime matching uses loader-recorded immutable relocated slots and validates every
+body wildcard against independently bound storage. These are candidates, not
+source identity or a prediction of a pointer's value after the OS loads an image.
+
+
+### Complete source code contributions
+
+`neverd-sigmaker --code-layout-evidence --machine x64 LIBRARY -o source.jsonl`
+collects complete non-COMDAT COFF code contributions and explicit refusals.
+The source must own every function offset and canonical import/data relocation;
+no target program or evaluation names participate. COMDAT fragments cannot
+establish fixed relative positions across functions.
+
+```sh
+python3 scripts/signatures/supplement_code_layouts.py \
+  --evidence source.jsonl --existing signatures/pe/x86/64 \
+  --producer build-signatures/bin/neverd-sigmaker \
+  --output library.npat --report layout-selection.json
+```
+
+The selector removes exact duplicates and preserves different nominal claims.
+Native validation is mandatory and completes before output replacement. Retain
+input archives, evidence, generator identity and the report hashes for review.
+Qualify the selected tree on held-out images and measure matching, loading and
+memory. Layouts use the name index, add no global byte-index records and retain
+the independent automatic-name gate. See
+[signature quality](../../docs/signature-quality.md) for the complete runtime
+requirements and frozen-evidence policy.

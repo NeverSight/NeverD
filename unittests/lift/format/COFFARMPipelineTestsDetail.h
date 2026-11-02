@@ -87,6 +87,9 @@ inline void expectNoOddFunctionAddresses(llvm::StringRef Output) {
   }
 }
 
+inline size_t findIdentifier(llvm::StringRef Text, llvm::StringRef Name,
+                             size_t From);
+
 inline void expectLeafCallResultStored(llvm::StringRef Body) {
   size_t Call = Body.find("pe_leaf(");
   ASSERT_NE(Call, llvm::StringRef::npos) << Body.str();
@@ -188,8 +191,19 @@ inline void expectLeafCallResultStored(llvm::StringRef Body) {
       break;
     }
   }
+  // Private-frame forwarding replaces the reload of a slot written after the
+  // call, before any other call, with the result, and drops the unread
+  // store: the result must then reach the return directly.
+  for (llvm::StringRef Tail = Body.drop_front(CallEnd + 1);
+       !Stored && !Tail.empty();) {
+    auto [Line, Remaining] = Tail.split('\n');
+    Tail = Remaining;
+    Line = Line.trim();
+    Stored = Line.starts_with("return ") &&
+             findIdentifier(Line, LHS, 0) != llvm::StringRef::npos;
+  }
   EXPECT_TRUE(Stored) << "pe_leaf result " << LHS.str()
-                      << " is not stored after the call:\n"
+                      << " is neither stored nor returned after the call:\n"
                       << Body.str();
 }
 

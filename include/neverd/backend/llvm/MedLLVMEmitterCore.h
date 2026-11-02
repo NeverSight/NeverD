@@ -39,6 +39,7 @@
 #ifndef NEVERD_BACKEND_LLVM_MEDLLVMEMITTERCORE_H
 #define NEVERD_BACKEND_LLVM_MEDLLVMEMITTERCORE_H
 #include "neverd/backend/llvm/MedLLVMEmitterState.h"
+#include "neverd/ir/OperationLimits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedDispatchSlots.h"
 #include "neverd/ir/med/MedIR.h"
@@ -51,6 +52,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -63,6 +65,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -77,10 +80,22 @@ class MedLLVMEmitterTestPeer;
 class RelocatedFunctionEntryVerifier;
 class MedLLVMProvenanceTestPeer;
 class LLVMSourceMap;
+class PreparedPortableX87Function;
 
 class MedLLVMEmitter {
 public:
   void setSourceMap(LLVMSourceMap *Map) { SourceMap = Map; }
+  /// Retain unrecovered machine values through source optimization. The
+  /// opaque markers are for analysis output, not executable reconstruction.
+  void setPreserveUnknownSourceValues(bool Enabled) {
+    PreserveUnknownSourceValues = Enabled;
+  }
+  /// An inspection/source module may depend on the original loaded image.
+  /// Its data stays external, including loader-relocated and runtime-written
+  /// pointer cells. Standalone reconstruction keeps the default mirror mode.
+  void setOriginalImageStorageForSource(bool Enabled) {
+    OriginalImageStorageForSource = Enabled;
+  }
   void setAnalystSourceProjection(bool Enabled) {
     AnalystSourceProjection = Enabled;
   }
@@ -88,6 +103,11 @@ public:
       std::map<std::string, std::pair<llvm::FunctionType *, unsigned>>;
   void setSourceTargetSignatures(const SourceTargetSignatures *Signatures) {
     AnalystTargets = Signatures;
+  }
+  /// Source-only declarations recovered by the shared call-ABI owner. They
+  /// keep omitted direct callees' parameter types without emitting bodies.
+  void setSourceCalleeDeclarations(llvm::ArrayRef<MedFunc> Declarations) {
+    SourceCalleeDeclarations = Declarations;
   }
   /// Debug information to name the image's data by where the image's own
   /// symbols do not: publics a single function's load leaves unread.  Its
@@ -133,12 +153,53 @@ public:
        bool MergeableGlobals = false,
        const std::vector<char> *BodyMask = nullptr);
 
+  /// Emit only a privately prepared portable leaf with its exact alternate C
+  /// ABI. Source image/debug settings on this emitter are not inherited.
+  llvm::Expected<std::unique_ptr<llvm::Module>>
+  emitPortableX87(const PreparedPortableX87Function &Prepared,
+                  llvm::LLVMContext &Context, llvm::StringRef OutputTriple);
+
   uint64_t unhandledValueIntrinsicCount() const {
     return UnhandledValueIntrinsicCount;
   }
 
+  /// A function whose body refused a stale code or data address, by its
+  /// index in the last emit()'s functions, with the error it wrote: that
+  /// emit() returned no module.  A body the module writes whose contract its
+  /// LLVM cannot keep, as an original SP memory operation with an image, is
+  /// named the same way before any module, and emit() throws the first one's
+  /// reason.  The same functions emitted with these bodies masked off leave
+  /// them declared only.
+  struct RefusedBody {
+    size_t Index = 0;
+    std::string Reason;
+  };
+  const std::vector<RefusedBody> &refusedBodies() const {
+    return RefusedBodies;
+  }
+  /// Whether the caller accounts for each body its BodyMask leaves out:
+  /// another module of the same unit writes it, or the unit notes it left
+  /// out.  Only then does emit() leave such a body's contract to that module
+  /// or note; filtering alone hides no requirement.
+  void setMaskedBodiesOwnedElsewhere(bool Owned) {
+    MaskedBodiesOwnedElsewhere = Owned;
+  }
+
 private:
+  llvm::ArrayRef<MedFunc> SourceCalleeDeclarations;
+  const MedFunc *PortableBody = nullptr;
+  const PreparedPortableX87Function *PortableInterface = nullptr;
+  std::string PortableOutputTriple;
+  llvm::Function *declarePortableX87Function(const MedFunc &Function);
+  llvm::Value *emitPortableX87Intrinsic(const MedOp &Op,
+                                        llvm::IRBuilder<> &Builder);
   bool AnalystSourceProjection = false;
+  bool PreserveUnknownSourceValues = false;
+  bool OriginalImageStorageForSource = false;
+  bool usesOriginalImageStorage() const;
+
+  std::pair<llvm::GlobalVariable *, uint64_t>
+  originalImageStorage(uint64_t OwnerVA);
   const SourceTargetSignatures *AnalystTargets = nullptr;
   friend class MedLLVMEmitterTestPeer;
   friend class MedLLVMProvenanceTestPeer;
@@ -153,6 +214,8 @@ private:
     uint64_t ClosedScalarNodes = 0;
     uint64_t IndexedBaseProofs = 0;
     uint64_t IndexConstraintNodes = 0;
+    uint64_t IndexedBaseNodes = 0;
+    uint64_t FragmentReloadProofs = 0;
     uint64_t FrameSlotNodes = 0;
     uint64_t FrameSlotEvaluatedNodes = 0;
     uint64_t FrameSlotCacheHits = 0;
@@ -264,6 +327,24 @@ private:
   llvm::Value *widenToI128(llvm::Value *V, llvm::IRBuilder<> &Builder);
 
   llvm::Value *emitIntrinsic(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86AmxState(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86CompressExpand(const MedOp &Op, Intrinsic Id,
+                                     llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86FourSource(const MedOp &Op, llvm::IRBuilder<> &B);
+  bool tryEmitX86NativeMemoryFunction(const MedFunc &Function);
+  llvm::Value *emitX86APXAtomic(const MedOp &Op, Intrinsic Id,
+                                llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86RepState(const MedOp &Op, Intrinsic Id,
+                               llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86BoundedLeaf(const MedOp &Op, Intrinsic Id,
+                                  llvm::IRBuilder<> &B);
+  llvm::Value *emitX86Sgx(const MedOp &Op, Intrinsic Id,
+                          llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86SystemState(const MedOp &Op, Intrinsic Id,
+                                  llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86Hle(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86Virtualization(const MedOp &Op, Intrinsic Id,
+                                     llvm::IRBuilder<> &Builder);
   llvm::Value *emitSEHRegisterIntrinsic(const MedOp &Op,
                                         llvm::IRBuilder<> &Builder);
   llvm::Value *emitFloatOp(const MedOp &Op, llvm::IRBuilder<> &Builder);
@@ -326,14 +407,13 @@ private:
                             llvm::IRBuilder<> &Builder);
   void emitX86MemPtrAsm(const char *Mn, const MedOp &Op,
                         llvm::IRBuilder<> &Builder);
-  /// IN acc, port — read an I/O port into the accumulator (value-producing).
-  llvm::Value *emitX86PortIn(const MedOp &Op, llvm::IRBuilder<> &Builder);
-  /// OUT port, acc — write the accumulator to an I/O port (side-effect).
-  void emitX86PortOut(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  /// Ordered RDMSR/WRMSR and scalar port I/O through the shared native plan.
+  llvm::Value *emitX86ScalarSystem(const MedOp &Op, Intrinsic IC,
+                                   llvm::IRBuilder<> &Builder);
   /// SLDT/STR/SMSW with a register destination — store a system register into
   /// a GPR (value-producing).
-  llvm::Value *emitX86SysRegStore(const MedOp &Op, Intrinsic IC,
-                                  llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX86DescriptorState(const MedOp &Op, Intrinsic IC,
+                                      llvm::IRBuilder<> &Builder);
 
   // AArch64 side-effect dispatch and helpers
   bool emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
@@ -360,6 +440,9 @@ private:
                               llvm::IRBuilder<> &Builder);
   llvm::Value *emitCpuidValue(const MedOp &Op, llvm::IRBuilder<> &Builder);
   llvm::Value *emitXgetbvValue(const MedOp &Op, llvm::IRBuilder<> &Builder);
+  /// The x87 control word the unit holds now, read with the owned FNSTCW
+  /// contract that X87ReadControl lowers to.
+  llvm::Value *emitX87ControlRead(llvm::IRBuilder<> &Builder);
   llvm::Value *emitRepString(const MedOp &Op, Intrinsic IC,
                              llvm::IRBuilder<> &Builder);
 
@@ -644,8 +727,18 @@ private:
   /// Resolve a relocation-authenticated data address through the section/run
   /// that owns the relocation symbol. Target and owner differ for one-past
   /// pointers, and Target==0 may still name a mapped .bss in ET_REL input.
+  /// WholeOwner forbids suffix/compact copies when an original instruction
+  /// retains a displacement that must execute inside the same storage run.
   llvm::Constant *tryResolveOwnedGlobalData(uint64_t Addr, uint64_t OwnerVA,
-                                            uint16_t DataSizeHint = 0);
+                                            uint16_t DataSizeHint = 0,
+                                            bool WholeOwner = false);
+  /// \p Addr in the image's own PE headers, or one past them for the header
+  /// owner, as `@__ImageBase + offset` (BinaryImage::imageBaseOffset).  The
+  /// module declares the linker's symbol and never copies a header byte.
+  /// Null for any other address or owner, and when another module identity
+  /// holds the name, which refuses the emission.
+  llvm::Constant *tryResolveImageHeaderData(uint64_t Addr,
+                                            uint64_t OwnerVA = InvalidVA);
 
   /// True when tryResolveGlobalData has a concrete address-local route for
   /// \p Addr. Loader relocation evidence identifies pointer intent, but it does
@@ -722,6 +815,7 @@ private:
   /// pointer entry is relocated to its recompiled target rather than emitted as
   /// a stale VA.
   bool segHasPtrRelocSlots(const Segment *S) const;
+  bool isInCodePointerTableAddress(uint64_t VA) const;
 
   /// True when the loader recorded a relocated code- or data-pointer slot in
   /// segment \p S, import storage aside.  In code such a slot lies only inside
@@ -1631,6 +1725,10 @@ private:
   /// The function entry at \p Address: a lifted function, or a declaration
   /// of the image function symbol that starts there.
   llvm::Function *resolveImageFunctionEntry(va_t Address);
+  /// Last eligible symbol at each entry/end, in original symbol order. Built
+  /// lazily once per emission; declarations and pointer mirrors share it.
+  std::pair<const Symbol *, const Symbol *>
+  imageFunctionSymbolsAt(va_t Address);
 
   llvm::Function *materializeImageFunctionDeclaration(va_t Entry,
                                                       llvm::StringRef Name);
@@ -1719,14 +1817,19 @@ private:
                                 bool FailClosed = false,
                                 bool *SawAmbiguousPhi = nullptr) const;
 
-  /// Pure recursive implementation behind collectIndexedGlobalBase. Diagnostic
-  /// policy is replayed by the wrapper so a speculative cached query cannot
-  /// suppress a later strict query for the same value.
+  /// One recursive decomposition memoizes shared expression nodes, including
+  /// negative results. Diagnostic policy is still owned by the outer wrapper.
+  struct IndexedGlobalBaseContext;
   bool collectIndexedGlobalBaseImpl(const MedVar &V, uint64_t &Base,
                                     bool &HaveBase,
                                     std::vector<MedVar> &IdxTerms, int Depth,
                                     bool *SawAmbiguousPhi,
-                                    const PhiNode **AmbiguousPhi) const;
+                                    const PhiNode **AmbiguousPhi,
+                                    IndexedGlobalBaseContext &Context) const;
+  bool collectIndexedGlobalBaseUncached(
+      const MedVar &V, uint64_t &Base, bool &HaveBase,
+      std::vector<MedVar> &IdxTerms, int Depth, bool *SawAmbiguousPhi,
+      const PhiNode **AmbiguousPhi, IndexedGlobalBaseContext &Context) const;
 
   /// Return the unique occurrence-local data owner for p Value reachable in
   /// the address-forming portion of p V. Conflicting owners set p Conflict;
@@ -1894,6 +1997,11 @@ private:
     std::vector<MedVar> IdxTerms;
     bool SawAmbiguousPhi = false;
     const PhiNode *AmbiguousPhi = nullptr;
+  };
+
+  struct IndexedGlobalBaseContext {
+    using Key = std::tuple<AddressProvenanceVarKey, int, uint64_t, bool>;
+    std::map<Key, IndexedGlobalBaseProof> Proofs;
   };
 
   /// Exact value identity used by the provenance caches. Constants include
@@ -2281,6 +2389,10 @@ private:
 
   llvm::Function *CurFunc = nullptr;
   const MedFunc *CurMedFunc = nullptr;
+  llvm::SmallPtrSet<const MedOp *, 8> AArch64ReturnProtectionOps;
+  llvm::SmallPtrSet<const PhiNode *, 8> AArch64ReturnProtectionPhis;
+  llvm::DenseMap<const MedOp *, const MedOp *> AArch64AuthenticatedCalls;
+  llvm::SmallPtrSet<const MedOp *, 8> AArch64CallAuthentications;
   LLVMSourceMap *SourceMap = nullptr;
   const DebugContext *Dbg = nullptr;
   const std::set<va_t> *PrototypeArgumentCallees = nullptr;
@@ -2383,6 +2495,8 @@ private:
   /// including declarations, empty bodies, and BodyMask-omitted members.
   std::set<va_t> CxxContinuationFunctionEntries;
   std::optional<size_t> ActiveCxxContinuationPlan;
+  std::vector<RefusedBody> RefusedBodies;
+  bool MaskedBodiesOwnedElsewhere = false;
   // Sticky hard failure: a relocation-proven executable pointer must never
   // degrade to an embedded original VA.  emit() discards the module when set.
   bool FatalCodePointerResolution = false;
@@ -2407,9 +2521,19 @@ private:
   // buildCodePtrSegmentGlobal); reused across every access into that segment.
   std::map<uint64_t, llvm::Constant *> CodePtrTableGlobals;
   std::shared_ptr<RelocatedFunctionEntryVerifier> RelocatedEntryProofs;
+  bool ImageFunctionSymbolsIndexed = false;
+  std::map<va_t, const Symbol *> ImageFunctionEntrySymbols;
+  std::map<va_t, const Symbol *> ImageFunctionEndSymbols;
   // Relocation-free intervals used only by finite direct loads/stores. They
   // never enter GlobalDataCache, whose address-valued uses need a whole run.
-  std::map<uint64_t, llvm::GlobalVariable *> DirectDataByteGlobals;
+  struct DirectDataBytes {
+    llvm::GlobalVariable *Global = nullptr;
+    uint64_t Size = 0;
+    // Unobserved leading bytes preserve the original address residue when a
+    // demanded interval grows backwards past an already emitted atomic load.
+    uint64_t Prefix = 0;
+  };
+  std::map<uint64_t, DirectDataBytes> DirectDataByteGlobals;
   // External data declarations used while an imported pointer slot has proven
   // symbolic identity but no call has yet proven function type.  A later
   // direct call or native exception lowering promotes the placeholder to its
@@ -2459,12 +2583,13 @@ private:
   void propagateToSubRegs(uint64_t RegOff, uint16_t WriteSize, llvm::Value *Val,
                           llvm::IRBuilder<> &Builder);
 
-  llvm::Value *PendingIntrinsicOutputs[4] = {};
+  llvm::Value *PendingIntrinsicOutputs[kIntrinsicOperationOutputs] = {};
   unsigned PendingIntrinsicCount = 0;
-  /// Status sampled inside an FPREM/FPREM1 asm call. Only the immediately
-  /// following synthetic X87ReadStatus in the same LLVM block may consume it.
-  llvm::Value *PendingX87FpremStatus = nullptr;
-  llvm::BasicBlock *PendingX87FpremBlock = nullptr;
+  /// Status sampled inside an FPREM/FPREM1 or BCD asm call. Only the
+  /// immediately following synthetic X87ReadStatus in the same LLVM block may
+  /// consume it.
+  llvm::Value *PendingX87Status = nullptr;
+  llvm::BasicBlock *PendingX87StatusBlock = nullptr;
 };
 
 } // namespace neverd

@@ -20,6 +20,8 @@ namespace {
 using Clock = std::chrono::steady_clock;
 llvm::ExitOnError Checked("neverd-cpu-bench: ");
 constexpr uint64_t Code = 0x10000, Data = 0x20000;
+constexpr uint64_t PageSize = 4096;
+constexpr unsigned WideLoopAdds = 4096, WideLoopIterations = 16;
 
 void require(bool Condition, const char *Message) {
   if (!Condition) {
@@ -59,26 +61,47 @@ constexpr uint32_t TLSCall[] = {
 constexpr uint32_t Switching[] = {0x91000400,
                                   0xd503201f}; // add x0, x0, #1; stop
 
+// A repeated working set larger than the small-loop instruction cache. Its
+// arithmetic oracle is independent of transport cache capacity and layout.
+std::vector<uint32_t> wideLoop() {
+  std::vector<uint32_t> Words(WideLoopAdds + 5, 0x91000400); // add x0, x0, #1
+  Words[0] = 0xd2800000;                                     // mov x0, #0
+  Words[1] = 0xd2800001 | (WideLoopIterations << 5); // mov x1, #iterations
+  Words[WideLoopAdds + 2] = 0xf1000421;              // subs x1, x1, #1
+  const uint32_t Displacement = uint32_t(-int32_t(WideLoopAdds + 1));
+  Words[WideLoopAdds + 3] = 0x54000001 | ((Displacement & 0x7ffff) << 5);
+  Words.back() = 0xd503201f; // observer stop marker
+  return Words;
+}
+
 struct Program {
   const char *Name;
   llvm::ArrayRef<uint32_t> Words;
   uint64_t Expected, Instructions;
 };
 
-std::unique_ptr<ExecutionBackend> create(ExecutionBackendKind Kind) {
-  return std::move(
-      Checked(createExecutionBackend(Kind, ExecutionContract::CheckedAArch64,
-                                     16 * 4096, GuestArchitecture::AArch64))
-          .CPU);
+std::unique_ptr<ExecutionBackend> create(ExecutionBackendKind Kind,
+                                         bool UserMode) {
+  return std::move(Checked(createExecutionBackend(
+                               Kind,
+                               UserMode ? ExecutionContract::CheckedUserAArch64
+                                        : ExecutionContract::CheckedAArch64,
+                               16 * PageSize, GuestArchitecture::AArch64))
+                       .CPU);
 }
 
 class Workload {
 public:
   const Program P;
   std::unique_ptr<ExecutionBackend> CPU;
-  Workload(ExecutionBackendKind Kind, Program P) : P(P), CPU(create(Kind)) {
-    Checked(CPU->map(Code, 4096, Read | Write | Execute));
-    Checked(CPU->map(Data, 4096, Read | Write));
+  Workload(ExecutionBackendKind Kind, bool UserMode, Program P)
+      : P(P), CPU(create(Kind, UserMode)) {
+    const unsigned User = UserMode ? UserAccessible : 0;
+    const uint64_t CodeBytes =
+        (P.Words.size() * 4 + PageSize - 1) & ~(PageSize - 1);
+    require(CodeBytes <= Data - Code, "benchmark code overlaps data");
+    Checked(CPU->map(Code, CodeBytes, Read | Write | Execute | User));
+    Checked(CPU->map(Data, PageSize, Read | Write | User));
     std::vector<uint8_t> Bytes(P.Words.size() * 4);
     for (size_t I = 0; I < P.Words.size(); ++I)
       llvm::support::endian::write32le(Bytes.data() + I * 4, P.Words[I]);
@@ -119,13 +142,13 @@ private:
   uint64_t end() const { return Code + P.Words.size() * 4 - 4; }
 };
 
-void report(ExecutionBackendKind Kind, const char *Name, unsigned Index,
-            bool Warmup, uint64_t Instructions, Clock::time_point Start,
-            Clock::time_point End) {
+void report(ExecutionBackendKind Kind, bool UserMode, const char *Name,
+            unsigned Index, bool Warmup, uint64_t Instructions,
+            Clock::time_point Start, Clock::time_point End) {
   llvm::outs() << llvm::json::Value(llvm::json::Object{
                       {"schema_version", 1},
                       {"architecture", "aarch64"},
-                      {"contract", "checked"},
+                      {"contract", UserMode ? "checked-user" : "checked"},
                       {"backend", executionBackendName(Kind)},
                       {"workload", Name},
                       {"sample", Index},
@@ -151,15 +174,22 @@ unsigned number(std::string_view Text) {
 
 int main(int Argc, char **Argv) {
   auto Kind = ExecutionBackendKind::HVF;
+  bool UserMode = false;
+  bool Wide = false;
   unsigned Samples = 7, Warmup = 1;
   for (int I = 1; I < Argc; ++I) {
     const std::string_view Arg = Argv[I];
     if (Arg == "--help") {
       llvm::outs() << "neverd-cpu-bench [--backend hvf|unicorn] [--samples N] "
-                      "[--warmup N]\nChecked ARM64 workloads; native HVF "
+                      "[--warmup N] [--contract checked|checked-user]\n"
+                      "[--wide-loop]\nChecked ARM64 workloads; native HVF "
                       "requires an ARM64 macOS host. JSON lines include "
                       "warmups. No native-entry instrumentation.\n";
       return 0;
+    }
+    if (Arg == "--wide-loop") {
+      Wide = true;
+      continue;
     }
     require(I + 1 < Argc, "missing option value");
     const std::string_view Value = Argv[++I];
@@ -171,6 +201,10 @@ int main(int Argc, char **Argv) {
       Samples = number(Value);
     } else if (Arg == "--warmup") {
       Warmup = number(Value);
+    } else if (Arg == "--contract") {
+      require(Value == "checked" || Value == "checked-user",
+              "unknown contract");
+      UserMode = Value == "checked-user";
     } else {
       require(false, "unknown option");
     }
@@ -178,26 +212,32 @@ int main(int Argc, char **Argv) {
   require(Samples != 0, "at least one measured sample is required");
   for (unsigned I = 0; I < Samples + Warmup; ++I) {
     const auto Start = Clock::now();
-    auto CPU = create(Kind);
+    auto CPU = create(Kind, UserMode);
     const auto End = Clock::now();
-    report(Kind, "initialization", I, I < Warmup, 0, Start, End);
+    report(Kind, UserMode, "initialization", I, I < Warmup, 0, Start, End);
   }
-  for (auto P : {Program{"integer", IntegerLoop, 1000, 3002},
-                 Program{"branch", Branch, 1000, 5503},
-                 Program{"memory", Memory, 1000, 5002},
-                 Program{"tls_call", TLSCall, 3000, 7003}}) {
-    Workload W(Kind, P);
+  const auto WideLoop = Wide ? wideLoop() : std::vector<uint32_t>{};
+  for (auto P :
+       {Program{"integer", IntegerLoop, 1000, 3002},
+        Program{"branch", Branch, 1000, 5503},
+        Program{"memory", Memory, 1000, 5002},
+        Program{"tls_call", TLSCall, 3000, 7003},
+        Program{"wide_loop", WideLoop, WideLoopAdds * WideLoopIterations,
+                2 + WideLoopIterations * (WideLoopAdds + 2)}}) {
+    if (P.Words.empty())
+      continue; // The optional wide loop is absent from the default inventory.
+    Workload W(Kind, UserMode, P);
     for (unsigned I = 0; I < Samples + Warmup; ++I) {
       W.prepare();
       const auto Start = Clock::now();
       W.execute();
       const auto End = Clock::now();
       W.verify(P.Expected);
-      report(Kind, P.Name, I, I < Warmup, P.Instructions, Start, End);
+      report(Kind, UserMode, P.Name, I, I < Warmup, P.Instructions, Start, End);
     }
   }
-  Workload A(Kind, {"switch", Switching, 0, 1});
-  Workload B(Kind, {"switch", Switching, 0, 1});
+  Workload A(Kind, UserMode, {"switch", Switching, 0, 1});
+  Workload B(Kind, UserMode, {"switch", Switching, 0, 1});
   for (unsigned I = 0; I < Samples + Warmup; ++I) {
     Checked(A.CPU->setReg(AArch64Register::X0, 7));
     Checked(B.CPU->setReg(AArch64Register::X0, 101));
@@ -211,6 +251,7 @@ int main(int Argc, char **Argv) {
       B.execute();
       B.verify(101 + N);
     }
-    report(Kind, "two_cpu_switch", I, I < Warmup, 512, Start, Clock::now());
+    report(Kind, UserMode, "two_cpu_switch", I, I < Warmup, 512, Start,
+           Clock::now());
   }
 }

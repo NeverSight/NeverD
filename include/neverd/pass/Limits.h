@@ -32,7 +32,11 @@ inline constexpr int kByteMemoryForwardingPassAddressSizeLimit = 65536;
 inline constexpr int kSymSimplifyPredicatesEnterDepthLimit = 128;
 
 // lib/pass/ir/simplify/common/SymSimplifyTranslator.cpp
-inline constexpr unsigned kSymSimplifyTranslatorSafeMaskedAddRemaining = 64;
+inline constexpr unsigned kSymSimplifyTranslatorSafeMaskedArithmeticRemaining =
+    64;
+inline constexpr unsigned kSymSimplifyTranslatorSafeMaskedArithmeticDepth = 8;
+inline constexpr unsigned kSymSimplifyTranslatorSafeMaskedArithmeticMaxWidth =
+    512;
 inline constexpr unsigned kSymSimplifyTranslatorSafeMaskedOrRemaining = 64;
 
 // lib/pass/ir/simplify/common/SymSimplifyFinite.cpp

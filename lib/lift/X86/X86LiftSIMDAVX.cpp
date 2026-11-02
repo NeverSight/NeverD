@@ -15,7 +15,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -64,9 +64,9 @@ bool matchesEvexAddressRegister(x86_reg Register, unsigned Index,
   if (Index >= 32)
     return false;
   const RegInfo Info = mapCapstoneReg(Register);
-  const uint64_t ExpectedOffset =
-      Index < 16 ? static_cast<uint64_t>(Index) * 8
-                 : x86reg::extendedGeneralReg(Index - 16);
+  const uint64_t ExpectedOffset = Index < 16
+                                      ? static_cast<uint64_t>(Index) * 8
+                                      : x86reg::extendedGeneralReg(Index - 16);
   return Info.Offset == ExpectedOffset && Info.Size == AddressSize;
 }
 
@@ -101,11 +101,13 @@ uint8_t evexVSIBOpcode(unsigned InsnId) {
   }
 }
 
-bool validateCanonicalEvexVSIB(
-    X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
-    const cs_x86 &X86, unsigned InsnId, const cs_x86_op &MemoryOperand,
-    const cs_x86_op &MaskOperand, const cs_x86_op &ValueOperand,
-    uint16_t IndexElementBytes, uint16_t ValueElementBytes) {
+bool validateCanonicalEvexVSIB(X86Lifter &L, X86Lifter::LiftState &S,
+                               const cs_insn *Insn, const cs_x86 &X86,
+                               unsigned InsnId, const cs_x86_op &MemoryOperand,
+                               const cs_x86_op &MaskOperand,
+                               const cs_x86_op &ValueOperand,
+                               uint16_t IndexElementBytes,
+                               uint16_t ValueElementBytes) {
   CanonicalEvexEncodingInfo Encoding;
   const uint8_t Opcode = evexVSIBOpcode(InsnId);
   if (Opcode == 0 ||
@@ -132,9 +134,9 @@ bool validateCanonicalEvexVSIB(
   const RegInfo ValueInfo =
       mapCapstoneReg(static_cast<x86_reg>(ValueOperand.reg));
   if (!isVectorRegister(IndexInfo) || !isVectorRegister(ValueInfo) ||
-      IndexInfo.Size != std::max<uint16_t>(
-                            16, (MemoryOperand.size / ValueElementBytes) *
-                                    IndexElementBytes) ||
+      IndexInfo.Size !=
+          std::max<uint16_t>(16, (MemoryOperand.size / ValueElementBytes) *
+                                     IndexElementBytes) ||
       ValueInfo.Size != std::max<uint16_t>(16, MemoryOperand.size) ||
       ValueOperand.size != ValueInfo.Size)
     return false;
@@ -143,7 +145,7 @@ bool validateCanonicalEvexVSIB(
   const uint8_t ExpectedLength =
       VectorBytes == 16 ? 0 : (VectorBytes == 32 ? 0x20 : 0x40);
   if ((Encoding.P2 & 0x60) != ExpectedLength ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
+      Encoding.regIndex() !=
           (ValueInfo.Offset - x86reg::XMM0) / x86reg::VectorRegStride)
     return false;
 
@@ -154,12 +156,10 @@ bool validateCanonicalEvexVSIB(
   const unsigned Mod = Encoding.ModRM >> 6;
   const unsigned BaseLow = SIB & 7;
   const unsigned IndexLow = (SIB >> 3) & 7;
-  const unsigned BaseExtension =
-      ((Encoding.P0 & 0x20) == 0 ? 8 : 0) |
-      ((Encoding.P0 & 0x08) != 0 ? 16 : 0);
-  const unsigned VectorIndex =
-      IndexLow | ((Encoding.P0 & 0x40) == 0 ? 8 : 0) |
-      ((Encoding.P2 & 0x08) == 0 ? 16 : 0);
+  const unsigned BaseExtension = ((Encoding.P0 & 0x20) == 0 ? 8 : 0) |
+                                 ((Encoding.P0 & 0x08) != 0 ? 16 : 0);
+  const unsigned VectorIndex = IndexLow | ((Encoding.P0 & 0x40) == 0 ? 8 : 0) |
+                               ((Encoding.P2 & 0x08) == 0 ? 16 : 0);
   const int ExpectedScale = 1 << (SIB >> 6);
   uint8_t DisplacementSize = 0;
   int ExpectedBase = -1;
@@ -187,9 +187,9 @@ bool validateCanonicalEvexVSIB(
     RawDisplacement = static_cast<int32_t>(Raw);
     Cursor += 4;
   }
-  const int64_t Displacement =
-      DisplacementSize == 1 ? RawDisplacement * ValueElementBytes
-                            : RawDisplacement;
+  const int64_t Displacement = DisplacementSize == 1
+                                   ? RawDisplacement * ValueElementBytes
+                                   : RawDisplacement;
   if (Cursor != Insn->size || X86.sib != SIB ||
       X86.sib_base != MemoryOperand.mem.base ||
       X86.sib_index != MemoryOperand.mem.index ||
@@ -292,8 +292,8 @@ bool liftEVEXVectorGatherScatter(X86Lifter &L, X86Lifter::LiftState &S,
   const cs_x86_op &MaskOperand = X86.operands[1];
   const cs_x86_op &ValueOperand = X86.operands[Scatter ? 2 : 0];
   if (!validateCanonicalEvexVSIB(L, S, Insn, X86, InsnId, MemoryOperand,
-                                MaskOperand, ValueOperand, IndexElementBytes,
-                                ValueElementBytes))
+                                 MaskOperand, ValueOperand, IndexElementBytes,
+                                 ValueElementBytes))
     return false;
   if (MemoryOperand.type != X86_OP_MEM || MaskOperand.type != X86_OP_REG ||
       ValueOperand.type != X86_OP_REG ||

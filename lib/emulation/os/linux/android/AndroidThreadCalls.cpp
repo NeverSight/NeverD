@@ -101,7 +101,6 @@ BionicResult GuestThreads::create(const NativeCallEvent &Call) {
         Calls.prepareCall(CPU, MappingBase + Guard, Size, ReturnPC, {A[3]});
     if (!Frame)
       return Frame.takeError();
-    Child.ReturnSP = Frame->ReturnStackPointer;
     if (auto E = CPU.writeRegister(CPURegister::AArch64TPIDR_EL0,
                                    {Child.Report.TLS, 0}))
       return E;

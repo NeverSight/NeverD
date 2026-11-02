@@ -1,0 +1,85 @@
+//===- AArch64RawSPFlowFixtures.def - Raw SP sequence oracles ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent native sequences, their source bridges and qualification names.
+//===----------------------------------------------------------------------===//
+
+#ifndef RAW_SP_FLOW_VALUE
+#define RAW_SP_FLOW_VALUE(Type, Name, Value)
+#endif
+#ifndef RAW_SP_FLOW_TEXT
+#define RAW_SP_FLOW_TEXT(Name, Text)
+#endif
+
+RAW_SP_FLOW_VALUE(unsigned, kFlowFamilyCount, 20)
+RAW_SP_FLOW_VALUE(unsigned, kFlowAutomaticWords, 1871)
+RAW_SP_FLOW_VALUE(uint32_t, kFlowAuthWord, 0xf8a02fecU)
+RAW_SP_FLOW_VALUE(uint32_t, kFlowGeneralAuthWord, 0xf8a03c62U)
+RAW_SP_FLOW_VALUE(unsigned, kFlowAlignment, 16)
+RAW_SP_FLOW_VALUE(uint32_t, kFlowSecondWord, 0xf94003eaU)
+RAW_SP_FLOW_VALUE(uint32_t, kFlowSecondGPRWord, 0xf940020aU)
+RAW_SP_FLOW_TEXT(kFlowName, "raw_sp_flow_")
+RAW_SP_FLOW_TEXT(kFlowSPBefore, "mov x12, sp\\n\\tmov sp, x9\\n\\t")
+RAW_SP_FLOW_TEXT(kFlowSPAfter, "mov x9, sp\\n\\tmov sp, x12")
+RAW_SP_FLOW_TEXT(kFlowGPRBefore, "mov x16, x9\\n\\t")
+RAW_SP_FLOW_TEXT(kFlowGPRAfter, "mov x9, x16")
+RAW_SP_FLOW_TEXT(kFlowModuleArtifact, "module.ll")
+RAW_SP_FLOW_TEXT(kFlowHighIRArtifact, "high.ir")
+RAW_SP_FLOW_TEXT(kFlowDumpFunction, "\n{0}\n")
+RAW_SP_FLOW_TEXT(kFlowArtifactEnvironment, "NEVERD_ARM64E_SP_FLOW_ARTIFACT_DIR")
+RAW_SP_FLOW_TEXT(kFlowArtifactProperty, "sp_flow_artifact_dir")
+RAW_SP_FLOW_TEXT(kFlowPrelude, "#include <stdint.h>\n")
+RAW_SP_FLOW_TEXT(kFlowDeclaration, "extern unsigned __int128 {0}(uint64_t);\n")
+RAW_SP_FLOW_TEXT(kFlowNative, R"c(
+static unsigned __int128 native_flow_{0}(uint64_t input) {{
+  register uint64_t base __asm__("x9") = input;
+  register uint64_t value __asm__("x10");
+  register uint64_t index __asm__("x15") = {2};
+  __asm__ volatile(
+      "mov x17, xzr\n\t"
+      "movi v15.16b, #0\n\t"
+      "movi v17.16b, #0\n\t"
+      "movi v20.16b, #0\n\t"
+      "movi v21.16b, #0\n\t"
+      "movi v22.16b, #0\n\t"
+      "movi v23.16b, #0\n\t"
+      "{3}"
+      ".inst {1}\n\t"
+      ".inst {4}\n\t"
+      "{5}"
+      : "+r"(base), "=&r"(value), "+r"(index)
+      :
+      : "x12", "x16", "x17", "v15", "v17", "v20", "v21", "v22", "v23", "memory");
+  return ((unsigned __int128)base << 64) | value;
+}
+)c")
+RAW_SP_FLOW_TEXT(kFlowEntry, "{{{0}, native_flow_{1}},\n")
+RAW_SP_FLOW_TEXT(kFlowTail, R"c(
+static const struct {{
+  unsigned __int128 (*projected)(uint64_t);
+  unsigned __int128 (*original)(uint64_t);
+} flow_cases[] = {{{0}};
+int main(void) {{
+  for (unsigned c = 0; c < sizeof(flow_cases) / sizeof(flow_cases[0]); ++c) {{
+    _Alignas(16) unsigned char actual[2048], expected[2048];
+    for (unsigned i = 0; i < sizeof(actual); ++i)
+      actual[i] = expected[i] = (unsigned char)(i * 37 + c * 19 + 11);
+    uint64_t a = (uintptr_t)(actual + 1024), b = (uintptr_t)(expected + 1024);
+    unsigned __int128 got = flow_cases[c].projected(a);
+    unsigned __int128 want = flow_cases[c].original(b);
+    if ((uint64_t)got != (uint64_t)want ||
+        (uint64_t)(got >> 64) - a != (uint64_t)(want >> 64) - b)
+      return 1;
+    for (unsigned i = 0; i < sizeof(actual); ++i)
+      if (actual[i] != expected[i])
+        return 2;
+  }
+  return 0;
+}
+)c")
+
+#undef RAW_SP_FLOW_VALUE
+#undef RAW_SP_FLOW_TEXT

@@ -15,11 +15,13 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/DataSymbolMetadata.h"
+#include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/FuncDetector.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/object/SectionNames.h"
@@ -28,6 +30,7 @@
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -164,6 +167,13 @@ llvm::Function *MedLLVMEmitter::resolveLiftedFunctionEntry(va_t Address) const {
 }
 
 llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
+  // Address-of code in an original-image view keeps the image's byte layout.
+  // A newly compiled block label plus an old PC-relative displacement would
+  // point into unrelated storage. Direct calls still resolve function entries
+  // through their separate callable-identity path.
+  if (usesOriginalImageStorage() && Img->isCodeAddress(Address))
+    return tryResolveGlobalData(Address);
+
   if (ConflictingLiftedCodeBlocks.count(Address))
     return nullptr;
   if (llvm::Function *Function = resolveLiftedFunctionEntry(Address))
@@ -258,30 +268,28 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
   return Function;
 }
 
-namespace {
 /// The image function symbol starting at \p Address, and the one ending
 /// there (its exclusive end).
 std::pair<const Symbol *, const Symbol *>
-imageFunctionSymbolsAt(const BinaryImage &Img, va_t Address) {
-  const Symbol *Exact = nullptr;
-  const Symbol *Ending = nullptr;
-  for (const Symbol &Sym : Img.Symbols) {
-    if (!Sym.IsFunc)
-      continue;
-    const va_t Entry = normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode);
-    const bool IsExact = Entry == Address;
-    const bool IsEnding =
-        Sym.Size != 0 && Entry <= Address && Address - Entry == Sym.Size;
-    if ((!IsExact && !IsEnding) || !Img.isFunctionEntryCandidateAt(Sym.Addr))
-      continue;
-    if (IsExact)
-      Exact = &Sym;
-    if (IsEnding)
-      Ending = &Sym;
+MedLLVMEmitter::imageFunctionSymbolsAt(va_t Address) {
+  if (!ImageFunctionSymbolsIndexed) {
+    for (const Symbol &Sym : Img->Symbols) {
+      if (!Sym.IsFunc || !Img->isFunctionEntryCandidateAt(Sym.Addr))
+        continue;
+      const va_t Entry = normalizeCodeAddress(Sym.Addr, Img->Arch, Img->Mode);
+      ImageFunctionEntrySymbols[Entry] = &Sym;
+      if (Sym.Size && Sym.Size <= InvalidVA - Entry)
+        ImageFunctionEndSymbols[Entry + Sym.Size] = &Sym;
+    }
+    ImageFunctionSymbolsIndexed = true;
   }
-  return {Exact, Ending};
+  const auto Exact = ImageFunctionEntrySymbols.find(Address);
+  const auto Ending = ImageFunctionEndSymbols.find(Address);
+  return {Exact == ImageFunctionEntrySymbols.end() ? nullptr : Exact->second,
+          Ending == ImageFunctionEndSymbols.end() ? nullptr : Ending->second};
 }
 
+namespace {
 /// Whether runtime ownership or unwind metadata proves a function entry
 /// without a symbol naming it.
 bool isImageFunctionEntry(const BinaryImage &Img, va_t Address) {
@@ -354,7 +362,7 @@ llvm::Function *MedLLVMEmitter::resolveImageFunctionEntry(va_t Address) {
     return nullptr;
   if (!Img->isFunctionEntryCandidateAt(Address))
     return nullptr;
-  if (const Symbol *Exact = imageFunctionSymbolsAt(*Img, Address).first)
+  if (const Symbol *Exact = imageFunctionSymbolsAt(Address).first)
     return materializeImageFunctionDeclaration(Address, Exact->Name);
   return (isImageFunctionEntry(*Img, Address) ||
           verifyRelocatedImageFunctionEntry(Address))
@@ -367,7 +375,7 @@ llvm::Constant *MedLLVMEmitter::resolveImageFunctionAddress(va_t Address) {
     return Lifted;
   if (!Img || !Mod || !Ctx)
     return nullptr;
-  const auto [Exact, Ending] = imageFunctionSymbolsAt(*Img, Address);
+  const auto [Exact, Ending] = imageFunctionSymbolsAt(Address);
   // Adjacent functions share an address with the previous function's end.
   // Independent entry evidence owns that address before the end fallback.
   if (!Exact && (isImageFunctionEntry(*Img, Address) ||
@@ -399,7 +407,7 @@ llvm::Constant *MedLLVMEmitter::resolveDeclaredFunctionInterior(va_t Address) {
   const va_t Owner = imageFunctionEntryContaining(*Img, Address);
   if (Owner == InvalidVA || resolveLiftedFunctionEntry(Owner))
     return nullptr;
-  const Symbol *Named = imageFunctionSymbolsAt(*Img, Owner).first;
+  const Symbol *Named = imageFunctionSymbolsAt(Owner).first;
   llvm::Function *Function = materializeImageFunctionDeclaration(
       Owner,
       Named ? Named->Name : (kAutoFuncPrefix + llvm::utohexstr(Owner)).str());
@@ -410,11 +418,27 @@ llvm::Constant *MedLLVMEmitter::resolveDeclaredFunctionInterior(va_t Address) {
       llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Address - Owner));
 }
 
+bool MedLLVMEmitter::isInCodePointerTableAddress(uint64_t VA) const {
+  if (!Img || !Img->hasExecutableCodeOwnerAt(VA))
+    return false;
+  // Storage identity belongs to this exact object/slot, not every address
+  // sharing the executable segment containing one pointer table.
+  return (Img->DataInCode.count(VA) || Img->CodePtrRelocSlots.count(VA) ||
+          Img->DataPtrRelocSlots.count(VA)) &&
+         segHasPtrRelocSlots(Img->getSegmentFor(VA));
+}
+
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     uint64_t SlotVA, uint64_t &OutSegVA,
     std::optional<uint64_t> InCodeObjectAddr) {
-  if (!Img)
+  // A failed pointer proof already makes the complete module inadmissible.
+  // Do not retry a large mirror on every subsequent use of the same run.
+  if (!Img || FatalCodePointerResolution || FatalDataPointerResolution)
     return nullptr;
+  if (auto [Storage, Base] = originalImageStorage(SlotVA); Storage) {
+    OutSegVA = Base;
+    return Storage;
+  }
   ensureImportStorageSnapshot();
   const unsigned PtrSz = Img->getPointerSize();
   if (PtrSz == 0)
@@ -533,6 +557,22 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
   }
   OutSegVA = RunStart;
+
+  // dyld owns signing these bytes with the process keys and, when requested,
+  // the storage address. Preserve original storage as an external dependency;
+  // neither copying the disk recipe nor embedding the raw target is valid.
+  if (Img->hasMachOAuthenticatedPointerIn(RunStart, RunEnd - RunStart)) {
+    if (const auto It = SegmentDataGlobals.find(RunStart);
+        It != SegmentDataGlobals.end())
+      return It->second;
+    auto *Type =
+        llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), RunEnd - RunStart);
+    auto *Global = new llvm::GlobalVariable(
+        *Mod, Type, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+        (kNdDataPrefix + llvm::utohexstr(RunStart)).str());
+    SegmentDataGlobals[RunStart] = Global;
+    return Global;
+  }
 
   // Mirror a segment/run that holds code- OR data-pointer slots (a
   // `.data.rel.ro` dispatch table or a `const char*[]` string-pointer table);
@@ -717,6 +757,10 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
                      ? (!Img->isCodeAddress(TargetVA) ||
                         !Img->readVA(TargetVA, 1))
                      : !resolveImageFunctionAddress(TargetVA)) {
+        // Missing or masked code is not evidence of data. Only the loader's
+        // data-pointer role can authorize data materialization; a code slot
+        // must retain a lifted callable/block identity, including its static
+        // fallback when runtime storage can later replace the pointer.
         if (!FatalCodePointerResolution)
           llvm::WithColor::error()
               << "med_llvm_emitter: relocation-proven code pointer at 0x"
@@ -907,12 +951,13 @@ MedLLVMEmitter::importedSymbolIdentity(llvm::StringRef ImportName) {
     return nullptr;
   }
   if (!Symbol) {
-    // Only the symbol's address is known here; C reaches it through an
-    // opaque alias until a call proves its type.
+    // Only the symbol's address is known here. Keep its import origin so C
+    // can use an established runtime prototype, or an opaque alias if none
+    // describes it. This does not invent a machine-level call signature.
     auto *Placeholder = new llvm::GlobalVariable(
         *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
         llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
-    data_symbol::mark(*Placeholder);
+    data_symbol::markImport(*Placeholder);
     ImportedSymbolPlaceholders[Name] = Placeholder;
     Symbol = Placeholder;
   }
@@ -1150,7 +1195,15 @@ const JumpTable *
 MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
                                  bool RequireTerminalExclusive,
                                  uint64_t *SharedEvidence) const {
-  if (!CurMedFunc || !Img || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
+  const auto Original =
+      TargetArch == Arch::AArch64 && aarch64AddressLoadMedShapeIsValid(Load) &&
+              Load.Output.Size == kAddressMemoryPointerBytes
+          ? aarch64AddressMemoryInstruction(
+                Load.Inputs[kAddressMemoryWordOperand + 1].ConstVal)
+          : std::nullopt;
+  if (!CurMedFunc || !Img ||
+      (Original && (!Original->hasRegisterIndex() || Original->isVector())) ||
+      ((Load.Opcode != NdOp::LOAD || Load.NumInputs < 1) && !Original) ||
       Load.Output.isConst() || Load.Output.Size == 0 ||
       Load.MemoryOrdering != NdMemoryOrdering::None ||
       Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -1294,9 +1347,27 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
       uint64_t Base = 0;
       bool HaveBase = false;
       std::vector<MedVar> IndexTerms;
-      bool Decomposed = collectIndexedGlobalBase(Load.Inputs[0], Base, HaveBase,
-                                                 IndexTerms) &&
-                        HaveBase;
+      bool Decomposed = false;
+      if (Original) {
+        if (Original->stackBase() || Original->isVector() || JT.IsRelative ||
+            !JT.HasBaseAddr || JT.PreScaledIndex || JT.TwoLevelIndex ||
+            !JT.HasDispatchSlotMap || JT.SlotIndices.empty() ||
+            (uint64_t{1} << Original->indexShift()) != JT.EntrySize)
+          continue;
+        const auto Address =
+            traceTableBaseConst(Load.Inputs[kAddressMemoryBaseOperand + 1]);
+        const uint32_t Last =
+            *std::max_element(JT.SlotIndices.begin(), JT.SlotIndices.end());
+        if (!Address || *Address != JT.BaseAddr ||
+            !Original->controlIndependentAddressRange(*Address, Last))
+          continue;
+        Base = *Address;
+        HaveBase = Decomposed = true;
+        IndexTerms.push_back(Load.Inputs[kAddressMemoryIndexOperand + 1]);
+      } else
+        Decomposed = collectIndexedGlobalBase(Load.Inputs[0], Base, HaveBase,
+                                              IndexTerms) &&
+                     HaveBase;
       if (!Decomposed) {
         Base = 0;
         HaveBase = false;
@@ -1841,7 +1912,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     // Redirect only into a segment that holds pointer slots; also gate out
     // frame-derived "indices" that would be stack-pointer arithmetic.
     uint64_t SegVA = 0;
-    if (auto *G = buildCodePtrSegmentGlobal(Base, SegVA)) {
+    if (auto *G = buildCodePtrSegmentGlobal(Base, SegVA, Base)) {
       bool FrameIdx = false;
       for (const auto &T : IdxTerms)
         if (varIsFrameDerived(T)) {
@@ -2726,7 +2797,8 @@ bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(
     case NdOp::ATOMIC_CMPXCHG:
       continue;
     case NdOp::INTRINSIC:
-      if (atomicIntrinsicAddressInput(*Def))
+      if (atomicIntrinsicAddressInput(*Def) ||
+          aarch64PAuthMedShapeIsValid(*Def))
         continue;
       break;
     default:
@@ -2769,6 +2841,8 @@ bool MedLLVMEmitter::codeIdentityOccurrenceMayRelocate(
 llvm::Value *
 MedLLVMEmitter::tryResolveCodeIdentityOperand(const MedVar &V,
                                               llvm::IRBuilder<> &Builder) {
+  if (usesOriginalImageStorage())
+    return getVar(V, Builder);
   if (!codeIdentityOccurrenceMayRelocate(V))
     return nullptr;
   return tryResolveCodeAddressValue(V, /*RequireCodeRole=*/false, Builder);
@@ -2784,6 +2858,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     rejectEscapingAddressFragment(V, "an observable code-address value");
     return nullptr;
   }
+  // Live image code values already use runtime addresses. They can select
+  // among several actual entry points without proving that all paths name
+  // one rebuilt function or block; retain that value and its normal uses.
+  if (usesOriginalImageStorage() && !V.isConst())
+    return getVar(V, Builder);
   // Most observable integer values are pure runtime scalars. Avoid running the
   // richer identity/convergence proof unless the complete structural graph
   // contains either an explicit code occurrence or, at a final sink, an exact
@@ -3215,9 +3294,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       return Finish({finishValueMerge(std::move(Combined)), Complete});
     }
 
-    // Calls and atomic old-value results do not inherit provenance from their
-    // address/argument/value operands. Their runtime result may be a function
-    // pointer, but it has no explicit stale image VA to rewrite.
+    // Calls, atomic old values and pointer authentication do not inherit a
+    // static identity from all their operands. PAC keys/modifiers are scalar;
+    // treating a zero modifier as a null target rejects valid arm64e calls.
+    // Retain the produced runtime value so resolving its input cannot erase
+    // the signing/authentication operation.
     switch (Def->Opcode) {
     case NdOp::CALL:
     case NdOp::INDIR_CALL:
@@ -3228,7 +3309,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
           completeProof({.SawRuntimeValue = true,
                          .AllCallableLeaves = Current.Size == PointerSize}));
     case NdOp::INTRINSIC:
-      if (atomicIntrinsicAddressInput(*Def))
+      if (atomicIntrinsicAddressInput(*Def) ||
+          aarch64PAuthMedShapeIsValid(*Def))
         return Finish(
             completeProof({.SawRuntimeValue = true,
                            .AllCallableLeaves = Current.Size == PointerSize}));
@@ -3335,6 +3417,26 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
             sizeToType(V.Size > 0 ? V.Size
                                   : static_cast<uint16_t>(PointerSize)),
             "literal");
+    // A relocated pointer table the linker placed among the code (MinGW's
+    // CRT tables live in .text) is likewise data at a code address. The
+    // value's identity is the mirrored slot run, not a lifted function: a
+    // table base has no callable identity to lose.
+    if (!RequireCodeRole && isInCodePointerTableAddress(*Proof.CommonTarget)) {
+      uint64_t TableSegVA = 0;
+      if (llvm::Constant *Table = buildCodePtrSegmentGlobal(
+              *Proof.CommonTarget, TableSegVA, *Proof.CommonTarget)) {
+        llvm::Type *I8Ty = llvm::Type::getInt8Ty(*Ctx);
+        llvm::Constant *Offset = llvm::ConstantInt::get(
+            llvm::Type::getInt64Ty(*Ctx), *Proof.CommonTarget - TableSegVA);
+        llvm::Constant *TableAddr =
+            llvm::ConstantExpr::getGetElementPtr(I8Ty, Table, Offset);
+        return Builder.CreatePtrToInt(
+            TableAddr,
+            sizeToType(V.Size > 0 ? V.Size
+                                  : static_cast<uint16_t>(PointerSize)),
+            "code.table.value");
+      }
+    }
   }
 
   if (Proof.AllFunctionEntries && Proof.SawFunctionIdentity &&
@@ -3371,6 +3473,20 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       !Proof.SawUnsafeCodeDependency &&
       !(RequireCodeRole && (Proof.SawExplicit || Proof.SawCodeDependency)))
     return nullptr;
+
+  // The memory-address owner already proves scalar offsets and preserves
+  // every runtime addend. Reuse it for escaping table addresses as well.
+  if (!RequireCodeRole) {
+    uint64_t Base = 0;
+    bool HaveBase = false;
+    std::vector<MedVar> Terms;
+    if (collectIndexedGlobalBase(V, Base, HaveBase, Terms) && HaveBase &&
+        !Terms.empty() && isInCodePointerTableAddress(Base))
+      if (llvm::Value *Address = tryResolveCodePtrTablePtr(V, Builder))
+        return Builder.CreatePtrToInt(
+            Address, sizeToType(V.Size > 0 ? V.Size : PointerSize),
+            "code.table.value");
+  }
 
   // An explicit code-address origin exists, but its value graph cannot be
   // emitted as one function identity.  The raw original VA is never a sound
@@ -3436,6 +3552,12 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
       FatalCodePointerResolution = true;
       return nullptr;
     }
+    if (usesOriginalImageStorage() &&
+        (V.Size == 0 || V.Size == Img->getPointerSize()))
+      if (llvm::Constant *Slot =
+              tryResolveGlobalData(SlotVA, Img->getPointerSize()))
+        return Builder.CreateLoad(sizeToType(Img->getPointerSize()), Slot,
+                                  "icall.image.target");
     const bool IsImportStorage =
         EffectiveImportStorageSlots.count(SlotVA) != 0 ||
         ExternalFunctionPointerSlots.count(SlotVA) != 0;
@@ -3501,6 +3623,14 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
     const PointerTableLoadRoleSummary SlotRoles =
         classifyPointerTableLoadRoles(V, /*RequirePointerWidth=*/false);
     if (SlotRoles.Recognized) {
+      // The source view reads the provider's live image, not a private table
+      // whose code slots need rebasing to rebuilt functions. Preserve the
+      // actual runtime call through that cell; do not infer a static target
+      // or relax the reconstruction proof for ordinary mirrors.
+      if (usesOriginalImageStorage() && SlotRoles.Load &&
+          SlotRoles.ValueAdjustment == 0 &&
+          SlotRoles.Load->Output.Size == Img->getPointerSize())
+        return getVar(V, Builder);
       if (SlotRoles.Load &&
           SlotRoles.Load->Output.Size != Img->getPointerSize()) {
         if (!FatalCodePointerResolution && !FatalDataPointerResolution)

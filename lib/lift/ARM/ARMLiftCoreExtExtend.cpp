@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -25,8 +25,8 @@
 
 namespace neverd {
 
-bool liftCoreExtExtend(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                       const cs_arm &ARM) {
+bool liftCoreExtExtend(ARMLifter &L, ARMLifter::LiftState &S,
+                       const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // SXTAB: Rd = Rn + SignExtend(Byte(Rm)); SXTAH: Rd = Rn +
   // SignExtend(Half(Rm))

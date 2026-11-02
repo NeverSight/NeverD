@@ -13,8 +13,10 @@
 
 #include "../SymPrintShape.h"
 
+#include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -29,7 +31,9 @@ namespace neverd::symbolic {
 //===----------------------------------------------------------------------===//
 
 size_t SymContext::dagSize(SymRef R) const {
-  llvm::DenseSet<uint32_t> Seen;
+  llvm::SmallDenseSet<uint32_t,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Seen;
   llvm::SmallVector<SymRef, 32> Work{R};
   while (!Work.empty()) {
     SymRef Cur = Work.pop_back_val();
@@ -98,7 +102,9 @@ SymReadability SymContext::readability(SymRef R) const {
 
 void SymContext::collectVars(SymRef R,
                              llvm::SmallVectorImpl<uint32_t> &Out) const {
-  llvm::DenseSet<uint32_t> Seen;
+  llvm::SmallDenseSet<uint32_t,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Seen;
   llvm::SmallVector<SymRef, 32> Work{R};
   while (!Work.empty()) {
     SymRef Cur = Work.pop_back_val();
@@ -135,7 +141,9 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
   // Rebuild bottom-up over a topological order.  Going through the builders
   // means the result is canonical, so a substitution that makes two subterms
   // equal has that equality recognised immediately.
-  std::unordered_map<uint32_t, SymRef> Done;
+  llvm::SmallDenseMap<uint32_t, SymRef,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Done;
 
   llvm::SmallVector<std::pair<SymRef, bool>, 32> Work;
   for (SymRef R : OwnedRoots)
@@ -147,7 +155,7 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
 
     auto Hit = Map.find(Cur.index());
     if (Hit != Map.end()) {
-      Done.emplace(Cur.index(), Hit->second);
+      Done.try_emplace(Cur.index(), Hit->second);
       continue;
     }
 
@@ -162,21 +170,21 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
     llvm::SmallVector<SymRef, 8> NewOps;
     bool Changed = false;
     for (SymRef C : operands(Cur)) {
-      SymRef NC = Done.at(C.index());
+      SymRef NC = Done.find(C.index())->second;
       Changed |= (NC != C);
       NewOps.push_back(NC);
     }
     if (!Changed) {
-      Done.emplace(Cur.index(), Cur);
+      Done.try_emplace(Cur.index(), Cur);
       continue;
     }
-    Done.emplace(Cur.index(), rebuild(Cur, NewOps));
+    Done.try_emplace(Cur.index(), rebuild(Cur, NewOps));
   }
 
   std::vector<SymRef> Results;
   Results.reserve(OwnedRoots.size());
   for (SymRef R : OwnedRoots)
-    Results.push_back(Done.at(R.index()));
+    Results.push_back(Done.find(R.index())->second);
   return Results;
 }
 
@@ -193,6 +201,12 @@ SymRef SymContext::substituteVar(SymRef R, uint32_t VarIdx, SymRef Val) {
 }
 
 SymRef SymContext::rebuild(SymRef Orig, llvm::ArrayRef<SymRef> NewOps) {
+  // Flat sums and products have already collected their terms and factors.
+  // Other builders can defer work (for example, merged masks), even when
+  // their edges are unchanged.
+  if ((op(Orig) == SymOp::Add || op(Orig) == SymOp::Mul) &&
+      NewOps == operands(Orig))
+    return Orig;
   // Copied rather than referenced: every builder below can intern, which grows
   // the node vector and would invalidate a reference into it.
   const SymNode N = Nodes[Orig.index()];

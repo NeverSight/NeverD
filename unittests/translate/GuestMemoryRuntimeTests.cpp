@@ -981,6 +981,280 @@ TEST(GuestMemoryRuntime, CrossRegionStoresPreflightBeforeAnyByteChanges) {
   expectValidControl(Runtime->snapshotControlBlock());
 }
 
+void expectValidExactSpanControl(const RuntimeControlBlockV1 &Control) {
+  llvm::Error Error = validateRuntimeControlBlockExactSpanV1(Control);
+  EXPECT_FALSE(static_cast<bool>(Error)) << llvm::toString(std::move(Error));
+}
+
+void expectWideControl(const RuntimeControlBlockV1 &Control) {
+  llvm::Error ScalarError = validateRuntimeControlBlockV1(Control);
+  EXPECT_TRUE(static_cast<bool>(ScalarError));
+  llvm::consumeError(std::move(ScalarError));
+  expectValidExactSpanControl(Control);
+}
+
+TEST(GuestMemoryRuntime, Binary80AccessesAreOneExactTransactionalSpan) {
+  const std::array<uint8_t, 10> Value{0x11, 0x22, 0x33, 0x44, 0x55,
+                                      0x66, 0x77, 0x88, 0x99, 0xaa};
+  const auto RW = MemoryPermission::Read | MemoryPermission::Write;
+  auto Runtime = createRuntime(stateWithMemory({
+      {0x1000, RW, 7, std::vector<uint8_t>(10, 0x5a)},
+      {0x100a, RW, 8, std::vector<uint8_t>(2, 0xa5)},
+  }));
+  EXPECT_EQ(Runtime->storeBytes(0x1001, Value).Status,
+            GuestMemoryAccessStatus::Completed);
+  std::array<uint8_t, 10> Loaded{};
+  EXPECT_EQ(Runtime->loadBytes(0x1001, Loaded).Status,
+            GuestMemoryAccessStatus::Completed);
+  EXPECT_EQ(Loaded, Value);
+  const auto Snapshot = Runtime->snapshotMemoryRegions();
+  EXPECT_EQ(Snapshot[0].Bytes.front(), 0x5a);
+  EXPECT_EQ(Snapshot[1].Bytes.back(), 0xa5);
+  EXPECT_EQ(Snapshot[0].Generation, 7u);
+  EXPECT_EQ(Snapshot[1].Generation, 8u);
+  expectValidControl(Runtime->snapshotControlBlock());
+  expectValidExactSpanControl(Runtime->snapshotControlBlock());
+}
+
+TEST(GuestMemoryRuntime, Binary80FinalByteFaultCannotPublishAPrefix) {
+  const std::array<uint8_t, 10> Value{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  const auto RW = MemoryPermission::Read | MemoryPermission::Write;
+  for (const bool Gap : {false, true}) {
+    auto Runtime = createRuntime(stateWithMemory({
+        {0x2000, RW | MemoryPermission::Execute, 19,
+         std::vector<uint8_t>(9, 0x5a)},
+        {Gap ? 0x200au : 0x2009u, MemoryPermission::Read, 20, {0xa5}},
+    }));
+    const auto Before = Runtime->snapshotMemoryRegions();
+    const auto Failed = Runtime->storeBytes(0x2000, Value);
+    expectFault(Failed, Gap ? RuntimeMemoryFaultKindV1::CrossRegion
+                            : RuntimeMemoryFaultKindV1::PermissionDenied);
+    ASSERT_TRUE(Failed.Fault);
+    EXPECT_EQ(Failed.Fault->AccessSize, 10u);
+    EXPECT_EQ(Failed.Fault->Exit.AccessWidthBits, 80u);
+    const auto After = Runtime->snapshotMemoryRegions();
+    for (unsigned I = 0; I != Before.size(); ++I) {
+      EXPECT_EQ(Before[I].Bytes, After[I].Bytes);
+      EXPECT_EQ(Before[I].Generation, After[I].Generation);
+    }
+    expectWideControl(Runtime->snapshotControlBlock());
+  }
+  auto Runtime = createRuntime(stateWithMemory({
+      {0x3000, RW, 0, std::vector<uint8_t>(9, 0x5a)},
+      {0x3009, MemoryPermission::Write, 0, {0xa5}},
+  }));
+  auto Output = Value;
+  expectFault(Runtime->loadBytes(0x3000, Output),
+              RuntimeMemoryFaultKindV1::PermissionDenied);
+  EXPECT_EQ(Output, Value);
+  expectWideControl(Runtime->snapshotControlBlock());
+}
+
+TEST(GuestMemoryRuntime, Binary80StoresDoNotRequireReadPermission) {
+  const std::array<uint8_t, 10> Value{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  auto Runtime = createRuntime(stateWithMemory({
+      {0x4000, MemoryPermission::Write, 0, std::vector<uint8_t>(8, 0x5a)},
+      {0x4008, MemoryPermission::Write, 0, std::vector<uint8_t>(2, 0xa5)},
+  }));
+  EXPECT_EQ(Runtime->storeBytes(0x4000, Value).Status,
+            GuestMemoryAccessStatus::Completed);
+  const auto Snapshot = Runtime->snapshotMemoryRegions();
+  auto Bytes = Snapshot[0].Bytes;
+  Bytes.insert(Bytes.end(), Snapshot[1].Bytes.begin(), Snapshot[1].Bytes.end());
+  EXPECT_EQ(Bytes, std::vector<uint8_t>(Value.begin(), Value.end()));
+  auto Output = Value;
+  expectFault(Runtime->loadBytes(0x4000, Output),
+              RuntimeMemoryFaultKindV1::PermissionDenied);
+  EXPECT_EQ(Output, Value);
+  expectWideControl(Runtime->snapshotControlBlock());
+}
+
+TEST(GuestMemoryRuntime, Binary80ExecutableStoreCompletionRetainsItsExit) {
+  const std::array<uint8_t, 10> Value{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  for (const auto Policy : {CodeInvalidationPolicy::RejectExecutableWrites,
+                            CodeInvalidationPolicy::InvalidateOnExecutableWrite,
+                            CodeInvalidationPolicy::ValidateBeforeDispatch}) {
+    const auto RW = MemoryPermission::Read | MemoryPermission::Write;
+    auto Runtime = createRuntime(stateWithMemory({
+                                     {0x5000, RW | MemoryPermission::Execute,
+                                      27, std::vector<uint8_t>(9, 0x5a)},
+                                     {0x5009, RW, 31, {0xa5}},
+                                 }),
+                                 Policy);
+    const auto Stored = Runtime->storeBytes(0x5000, Value);
+    if (Policy == CodeInvalidationPolicy::RejectExecutableWrites) {
+      expectFault(Stored, RuntimeMemoryFaultKindV1::ExecutableWriteRejected);
+      EXPECT_EQ(Runtime->snapshotMemoryRegions()[0].Bytes,
+                std::vector<uint8_t>(9, 0x5a));
+      EXPECT_EQ(Runtime->snapshotMemoryRegions()[1].Bytes[0], 0xa5);
+      EXPECT_EQ(Runtime->generationForAddress(0x5000), 27u);
+      expectWideControl(Runtime->snapshotControlBlock());
+    } else {
+      if (Policy == CodeInvalidationPolicy::InvalidateOnExecutableWrite) {
+        ASSERT_EQ(Stored.Status, GuestMemoryAccessStatus::SelfModification);
+        ASSERT_TRUE(Stored.SelfModification);
+        EXPECT_EQ(Stored.SelfModification->Size, 10u);
+        EXPECT_EQ(Stored.SelfModification->OldGeneration, 27u);
+        EXPECT_EQ(Stored.SelfModification->NewGeneration, 28u);
+        EXPECT_EQ(Runtime->snapshotControlBlock().Exit.Kind,
+                  RuntimeABIExitKindV1::SelfModification);
+        expectWideControl(Runtime->snapshotControlBlock());
+      } else {
+        EXPECT_EQ(Stored.Status, GuestMemoryAccessStatus::Completed);
+        EXPECT_EQ(Stored.Value, 28u);
+        // A completed store is not dispatch-generation authentication.
+        EXPECT_EQ(Runtime->validateExecutableGeneration(0x5000, 28).Status,
+                  GuestMemoryAccessStatus::Completed);
+        const auto Dispatch = Runtime->snapshotControlBlock(0x5000, 28);
+        expectValidControl(Dispatch);
+        expectValidExactSpanControl(Dispatch);
+      }
+      std::array<uint8_t, 10> Loaded{};
+      EXPECT_EQ(Runtime->loadBytes(0x5000, Loaded).Status,
+                GuestMemoryAccessStatus::Completed);
+      EXPECT_EQ(Loaded, Value);
+      EXPECT_EQ(Runtime->generationForAddress(0x5000), 28u);
+      EXPECT_EQ(Runtime->generationForAddress(0x5009), 31u);
+    }
+  }
+}
+
+TEST(GuestMemoryRuntime, ExactSpanBoundsAndAlignmentRemainFailureAtomic) {
+  auto Runtime = createRuntime(stateWithMemory({
+      {0x6000, MemoryPermission::Read | MemoryPermission::Write, 0,
+       std::vector<uint8_t>(16, 0x5a)},
+  }));
+  std::array<uint8_t, 10> Output{};
+  Output.fill(0xa5);
+  const auto Before = Output;
+  expectFault(Runtime->loadBytes(0x6000, {}),
+              RuntimeMemoryFaultKindV1::InvalidAccessWidth);
+  expectFault(Runtime->storeBytes(0x6000, {}),
+              RuntimeMemoryFaultKindV1::InvalidAccessWidth);
+  expectFault(Runtime->loadBytes(0x6001, Output, 4),
+              RuntimeMemoryFaultKindV1::Misaligned);
+  expectFault(Runtime->storeBytes(0x6000, Output, 3),
+              RuntimeMemoryFaultKindV1::InvalidAlignment);
+  expectFault(Runtime->loadBytes(UINT64_MAX - 8, Output),
+              RuntimeMemoryFaultKindV1::AddressOverflow);
+  expectFault(Runtime->storeBytes(UINT64_MAX - 8, Output),
+              RuntimeMemoryFaultKindV1::AddressOverflow);
+  EXPECT_EQ(Output, Before);
+  EXPECT_EQ(Runtime->snapshotMemoryRegions()[0].Bytes,
+            std::vector<uint8_t>(16, 0x5a));
+  expectWideControl(Runtime->snapshotControlBlock());
+}
+
+TEST(GuestMemoryRuntime, Binary80GenerationOverflowIsAtomicAndLossless) {
+  const auto RWX = MemoryPermission::Read | MemoryPermission::Write |
+                   MemoryPermission::Execute;
+  auto Runtime = createRuntime(stateWithMemory({
+      {0x7000, RWX, UINT64_MAX, std::vector<uint8_t>(10, 0x5a)},
+  }));
+  const std::array<uint8_t, 10> Value{};
+  const auto Result = Runtime->storeBytes(0x7000, Value, 16);
+  expectFault(Result, RuntimeMemoryFaultKindV1::ExecutableGenerationOverflow);
+  ASSERT_TRUE(Result.Fault);
+  EXPECT_EQ(Result.Fault->AccessSize, Value.size());
+  EXPECT_EQ(Result.Fault->Exit.AccessWidthBits, 80u);
+  EXPECT_EQ(Result.Fault->ObservedGeneration, UINT64_MAX);
+  const auto Control = Runtime->snapshotControlBlock();
+  expectWideControl(Control);
+  const auto Details = llvm::cantFail(unpackRuntimeMemoryFaultDetailsV1(
+      Control.Exit.Fault, {Control.Exit.Detail0, Control.Exit.Detail1}));
+  EXPECT_EQ(Details.Access, RuntimeMemoryAccessKindV1::Write);
+  EXPECT_EQ(Details.RequiredAlignment, 16u);
+  EXPECT_EQ(Details.ExpectedGeneration, 0u);
+  EXPECT_EQ(Details.ObservedGeneration, UINT64_MAX);
+  const auto Snapshot = Runtime->snapshotMemoryRegions();
+  EXPECT_EQ(Snapshot[0].Bytes, std::vector<uint8_t>(10, 0x5a));
+  EXPECT_EQ(Snapshot[0].Generation, UINT64_MAX);
+}
+
+TEST(GuestMemoryRuntime, ExactSpanProtocolRetainsAllOtherControlInvariants) {
+  auto Runtime = createRuntime(stateWithMemory({
+      {0x8000, MemoryPermission::Read, 0, std::vector<uint8_t>(10, 0x5a)},
+  }));
+  const std::array<uint8_t, 10> Value{};
+  expectFault(Runtime->storeBytes(0x8000, Value),
+              RuntimeMemoryFaultKindV1::PermissionDenied);
+  const auto Valid = Runtime->snapshotControlBlock();
+  expectWideControl(Valid);
+  auto Reject = [](const RuntimeControlBlockV1 &Control) {
+    llvm::Error Error = validateRuntimeControlBlockExactSpanV1(Control);
+    EXPECT_TRUE(static_cast<bool>(Error));
+    llvm::consumeError(std::move(Error));
+  };
+  auto Invalid = Valid;
+  Invalid.Exit.Size = kMemoryFaultMaxAccessBytes + 1;
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.Exit.Size = 0;
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.Exit.Detail0 |= 1u << 8;
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.Reserved1 = 1;
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.ScalarResult = 1;
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.ObservedGeneration = 1;
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.Exit.Fault = RuntimeMemoryFaultKindV1::ExecutableWriteRejected;
+  Invalid.CodeInvalidation =
+      static_cast<uint32_t>(CodeInvalidationPolicy::RejectExecutableWrites);
+  Invalid.Exit.Detail0 = static_cast<uint64_t>(RuntimeMemoryAccessKindV1::Read);
+  Reject(Invalid);
+  Invalid = Valid;
+  Invalid.Exit.Fault = RuntimeMemoryFaultKindV1::InvalidAccessWidth;
+  Reject(Invalid);
+  Invalid.Exit.Size = 0;
+  expectValidControl(Invalid);
+  expectValidExactSpanControl(Invalid);
+
+  auto DispatchRuntime = createRuntime(
+      stateWithMemory({{0x9000, MemoryPermission::Execute, 7, {0x90}}}),
+      CodeInvalidationPolicy::ValidateBeforeDispatch);
+  expectFault(DispatchRuntime->validateExecutableGeneration(0x9000, 6),
+              RuntimeMemoryFaultKindV1::ExecutableGenerationMismatch);
+  Invalid = DispatchRuntime->snapshotControlBlock();
+  expectValidControl(Invalid);
+  expectValidExactSpanControl(Invalid);
+  Invalid.Exit.Size = Value.size();
+  Reject(Invalid);
+}
+
+TEST(GuestMemoryRuntime, StorePreflightCannotPublishOrAuthorizeAStaleWrite) {
+  auto Runtime = createRuntime(stateWithMemory({
+      {0xa000, MemoryPermission::Write | MemoryPermission::Execute,
+       UINT64_MAX - 1, std::vector<uint8_t>(10, 0x5a)},
+  }));
+  EXPECT_EQ(Runtime->validateStoreBytes(0xa000, 10).Status,
+            GuestMemoryAccessStatus::Completed);
+  auto Snapshot = Runtime->snapshotMemoryRegions();
+  EXPECT_EQ(Snapshot[0].Bytes, std::vector<uint8_t>(10, 0x5a));
+  EXPECT_EQ(Snapshot[0].Generation, UINT64_MAX - 1);
+  const std::array<uint8_t, 10> Value{};
+  EXPECT_EQ(Runtime->storeBytes(0xa000, Value).Status,
+            GuestMemoryAccessStatus::SelfModification);
+  expectFault(Runtime->storeBytes(0xa000, Value),
+              RuntimeMemoryFaultKindV1::ExecutableGenerationOverflow);
+  expectWideControl(Runtime->snapshotControlBlock());
+  Snapshot = Runtime->snapshotMemoryRegions();
+  EXPECT_EQ(Snapshot[0].Bytes, std::vector<uint8_t>(10, 0));
+  EXPECT_EQ(Snapshot[0].Generation, UINT64_MAX);
+  expectFault(
+      Runtime->validateStoreBytes(0xa000, kMemoryFaultMaxAccessBytes + 1),
+      RuntimeMemoryFaultKindV1::InvalidAccessWidth);
+  EXPECT_EQ(Runtime->snapshotControlBlock().Exit.Size, 0u);
+  expectValidControl(Runtime->snapshotControlBlock());
+  expectValidExactSpanControl(Runtime->snapshotControlBlock());
+}
+
 TEST(GuestMemoryRuntime,
      StoresAcrossMultipleExecutableOwnersFailClosedForEveryPolicy) {
   const GuestState State = stateWithMemory({

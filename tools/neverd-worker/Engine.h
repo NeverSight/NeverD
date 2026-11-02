@@ -15,6 +15,8 @@
 #include <vector>
 
 namespace neverd::worker {
+class ComparisonService;
+class LineageService;
 class ProjectLock;
 class ProjectHistory;
 class Contributions;
@@ -40,6 +42,11 @@ public:
   void setLoadProgressSink(LoadProgressSink Sink) {
     loadProgress_ = std::move(Sink);
   }
+  /// The active request owns this thread-safe cancellation probe.
+  void setCancellationProbe(std::function<bool()> Probe) {
+    cancelled_ = std::move(Probe);
+  }
+  static bool comparesBinaries();
   std::string revision() const { return std::to_string(revision_); }
   std::string projectId() const { return projectId_; }
   bool analyzed() const { return analyzed_; }
@@ -49,6 +56,13 @@ public:
   /// {state, done, total, generation} for heartbeats; null before a load.
   Json backgroundState() const;
   static std::string version();
+  /// Whether the engine exposes its static x87 support matrix, independently
+  /// of binary loading, host probing or execution.
+  static bool reportsX87Capabilities();
+  /// Whether versioned machine-source recovery is available for source views.
+  static bool recoversInterpreterSource();
+  /// Whether the engine can query unwind metadata at an exact address.
+  static bool reportsUnwindFrames();
   /// Whether the engine keeps function edits (function_create/_delete).
   static bool keepsFunctionEdits();
   /// Whether the engine keeps what the user states of a function
@@ -56,6 +70,9 @@ public:
   static bool statesFunctionAttributes();
   /// Whether the engine keeps the user's data items.
   static bool keepsDataItems();
+  static bool keepsBytePatches();
+  static bool keepsSourcePatches();
+  static bool provesSourcePatches();
   /// Whether the engine keeps how the user shows operands' numbers.
   static bool keepsOperandFormats();
   /// Whether the engine lists the ways it can load a file (identify).
@@ -100,6 +117,9 @@ public:
 private:
   Json executeImpl(const std::string &operation, const Json &payload,
                    EncodedPayload *encoded);
+  std::unique_ptr<ComparisonService> comparison_;
+  std::unique_ptr<LineageService> lineage_;
+  std::function<bool()> cancelled_;
   neverd_session_t session_ = nullptr;
   std::unique_ptr<ProjectLock> lock_;
   std::unique_ptr<ProjectHistory> history_;
@@ -133,7 +153,12 @@ private:
   /// A read-only replica is checked against the owner's loaded input and
   /// committed sidecars before any expensive operation is admitted.
   Json analysisSnapshot();
+  Json browseCacheIdentity();
   Json restoreAnalysis(const Json &snapshot);
+  Json updateAnalysisNames(const Json &snapshot);
+  Json restoredSnapshot_;
+  Json restoredDebugInputs_ = Json::array();
+  void localNamesChanged();
   Json userState() const;
   Json codeEdits_ = Json::array();
   void reloadCodeEdits();
@@ -142,7 +167,11 @@ private:
   std::string inputHash() const;
   bool analyzed_ = false;
   bool dirty_ = false;
+  /// An analysis-section edit no save has written yet. Project files synced
+  /// from elsewhere replace the comments, not these edits.
+  bool sectionsDirty_ = false;
   bool readOnly_ = false;
+  bool browseCacheEnabled_ = true;
   /// Whether idle time analyzes the open file: function discovery and the
   /// reference index.  A cross-reference request still builds the index.
   bool backgroundAnalysis_ = true;
@@ -176,6 +205,10 @@ private:
   /// another function may replace the restricted pipeline while this survives.
   struct NamedView {
     std::string key;
+    std::string sourceKey;
+    // Retain the exact undecorated document in wire form. A second parsed
+    // row tree can exceed the cache budget before the displayed one does.
+    std::string original;
     Json value;
     std::vector<std::size_t> lines;
     // Decide once after decoration. Older engines may return unsorted rows
@@ -219,7 +252,7 @@ private:
   LoadProgressSink loadProgress_;
   void invalidate();
   /// Read every user-edit sidecar into the Session; false when one fails.
-  bool reloadUserState();
+  bool reloadUserState(bool bytePatchesChanged = false);
   /// Whether the local types file holds other declarations than the
   /// Session's: git, another tool or a person changed it.
   bool localTypesChanged();
@@ -257,6 +290,12 @@ private:
   bool reloadDataItems();
   /// The user's data items as rows; none from an older engine.
   Json dataItemRows() const;
+  Json bytePatchRows() const;
+  /// A committed patch command already proves invalidation is necessary;
+  /// ordinary reloads must discover changes from the before/after inventories.
+  bool reloadBytePatches(bool knownChanged = false);
+  Json patchOperation(const std::string &Operation, const Json &Payload,
+                      EncodedPayload *Encoded = nullptr);
   /// Read the operand formats sidecar: true when it loaded or the engine
   /// keeps no operand formats.  Changed formats show in the listing.
   bool reloadOperandFormats();
@@ -271,6 +310,10 @@ private:
   /// A comment changed.  The listing reads comments as it formats lines, so
   /// only views that keep formatted text drop it.
   void commentsChanged();
+  /// A known entry's index, or the index of its bounded recovered owner.
+  int functionIndex(std::uint64_t address);
+  /// A known entry, its recovered owner, or the still-unowned address.
+  std::uint64_t functionEntry(std::uint64_t address);
   /// The control flow graph of the function at \p address, in the engine's
   /// cfg JSON shape.
   Json functionGraph(std::uint64_t address);
@@ -293,6 +336,10 @@ private:
   Listing &listing();
   ProjectHistory &history();
   Json metadata() const;
+  void loadAnalysisSections(neverd_session_t session,
+                            const std::filesystem::path &path);
+  void saveAnalysisSections();
+  void changedAnalysisSections();
   std::string error() const;
   Json backendJson(const char *owned, bool checkError = false) const;
 };

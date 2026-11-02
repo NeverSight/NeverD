@@ -10,27 +10,36 @@
 //===----------------------------------------------------------------------===//
 
 #include "ImportSlots.h"
+#include "InstructionFlow.h"
 #include "JSONText.h"
 #include "LibraryPresentation.h"
 #include "SessionImpl.h"
+#include "UnwindSigningJSON.h"
 
 #include "neverd/backend/c/dialect/SourceDialect.h"
 #include "neverd/evm/bytecode/EVMBytecode.h"
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/ExceptionCommon.h"
 #include "neverd/loader/ExceptionEncoding.h"
 #include "neverd/loader/ExceptionFunction.h"
+#include "neverd/loader/FunctionNames.h"
+#include "neverd/loader/ImageProfile.h"
 #include "neverd/loader/InputDigest.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/ProjectFiles.h"
+#include "neverd/support/SHA256.h"
 #include "neverd/support/StringScan.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/CRC.h"
 #include "llvm/Support/ConvertUTF.h"
@@ -40,8 +49,10 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <set>
+#include <utility>
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -284,6 +295,9 @@ const char *neverd_unwind_frame_json(neverd_session_t Sess,
                          {"language_data", F->hasLanguageTable()}};
   if (!F->PersonalityName.empty())
     Obj["personality"] = jsonSafeText(F->PersonalityName);
+  if (S->Img.Arch == Arch::AArch64)
+    Obj[unwind_json::kReturnAddress] =
+        unwindSigningJSON(queryAArch64UnwindSigning(S->Img, *F, Address));
   return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
 }
 
@@ -304,15 +318,20 @@ const char *neverd_exports_json(neverd_session_t Sess) {
   if (!S->Loaded)
     return dupStr(std::string("[]"));
 
-  llvm::json::Array Arr;
-  for (const auto &Exp : S->Img.Exports) {
-    llvm::json::Object Obj;
-    Obj["name"] = jsonSafeText(Exp.Name);
-    Obj["ordinal"] = static_cast<int64_t>(Exp.Ordinal);
-    Obj["addr"] = vaHex(Exp.Addr);
-    Arr.push_back(std::move(Obj));
-  }
-  return dupStr(jsonToString(llvm::json::Value(std::move(Arr))));
+  // Stream in the sorted key order a json::Object prints.
+  std::string Buf;
+  llvm::raw_string_ostream OS(Buf);
+  llvm::json::OStream J(OS);
+  J.array([&] {
+    for (const auto &Exp : S->Img.Exports)
+      J.object([&] {
+        J.attribute("addr", vaHex(Exp.Addr));
+        J.attribute("name", jsonSafeText(Exp.Name));
+        J.attribute("ordinal", static_cast<int64_t>(Exp.Ordinal));
+      });
+  });
+  OS.flush();
+  return dupStr(Buf);
 }
 
 const char *neverd_segments_json(neverd_session_t Sess) {
@@ -599,6 +618,14 @@ const char *neverd_sections_json(neverd_session_t Sess) {
     Obj["size"] = static_cast<int64_t>(Sec.Size);
     Obj["file_off"] = static_cast<int64_t>(Sec.FileOff);
     Obj["file_sz"] = static_cast<int64_t>(Sec.FileSz);
+    // Analysis sections own initialized bytes without original-file backing.
+    // Keep file_sz zero and state their materialization independently.
+    if (std::any_of(S->AnalysisSections.begin(), S->AnalysisSections.end(),
+                    [&](const auto &Record) {
+                      return Record.getAsObject()->getString("name") ==
+                             Sec.Name;
+                    }))
+      Obj["materialized_sz"] = static_cast<int64_t>(Sec.Data.size());
     std::string Flags;
     Flags += Sec.isReadable() ? 'R' : '-';
     Flags += Sec.isWritable() ? 'W' : '-';
@@ -693,7 +720,10 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   if (!S->Loaded)
     return dupStr("{}");
-  (void)S->synchronizeFunctions();
+  // SBF function recovery includes optional Solana analysis. Header admission
+  // must remain observable even when that later stage fails or is not run.
+  if (S->Img.Arch != Arch::SBF)
+    (void)S->synchronizeFunctions();
 
   llvm::json::Object Root;
   Root["entry"] = vaHex(S->Img.Entry);
@@ -701,14 +731,49 @@ const char *neverd_headers_json(neverd_session_t Sess) {
   Root["arch"] = getArchName(S->Img.Arch);
   Root["instruction_mode"] = getInstructionModeName(S->Img.Mode);
   Root["format"] = S->Img.getFormatName();
+  const ImageProfile Profile = identifyImageProfile(S->Img);
+  llvm::json::Object Target;
+  Target["system"] = imageSystemName(Profile.System);
+  Target["domain"] = imageDomainName(Profile.Domain);
+  Target["runtime"] = imageRuntimeName(Profile.Runtime);
+  Target["conflicting_evidence"] = Profile.ConflictingEvidence;
+  llvm::json::Array TargetEvidence, Years;
+  for (llvm::StringRef Reason : Profile.Evidence)
+    TargetEvidence.push_back(Reason);
+  for (unsigned Year : Profile.VisualStudioYears)
+    Years.push_back(Year);
+  Target["evidence"] = std::move(TargetEvidence);
+  Target["visual_studio_years"] = std::move(Years);
+  Root["target_profile"] = std::move(Target);
+  if (const auto &Selection = S->SigDB.automaticSelection()) {
+    llvm::json::Object Statistics;
+    Statistics["available_files"] = int64_t(Selection->AvailableFiles);
+    Statistics["selected_files"] = int64_t(Selection->SelectedFiles);
+    Statistics["skipped_files"] =
+        int64_t(Selection->AvailableFiles - Selection->SelectedFiles);
+    Root["signature_selection"] = std::move(Statistics);
+  }
   Root["bits"] = S->Img.is64Bit() ? 64 : 32;
   Root["file_path"] = jsonSafeText(pathToUTF8(S->FilePath));
+  if (S->Img.MachOSharedCache) {
+    using namespace macho_loader::cache_load;
+    auto Cache = sharedCacheIdentity(S->Img);
+    Cache[kAuthCountKey] = int64_t(S->Img.MachOAuthenticatedPointers.size());
+    Cache[kResolvedCountKey] =
+        int64_t(S->Img.MachOResolvedChainedPointerSlots.size());
+    Cache[kSymbolCountKey] =
+        int64_t(S->Img.MachOSharedCacheSymbolPointers.size());
+    Root[kCacheKey] = std::move(Cache);
+  }
 
   Root["file_size"] = static_cast<int64_t>(S->inputFileSize());
 
   Root["segment_count"] = static_cast<int64_t>(S->Img.Segments.size());
   Root["section_count"] = static_cast<int64_t>(S->Img.Sections.size());
   Root["func_count"] = static_cast<int64_t>(S->Functions.size());
+  if (S->Img.Arch == Arch::SBF)
+    Root["func_count_status"] =
+        S->SBFFunctionsSynchronized ? "recovered" : "image_inventory";
   Root["symbol_count"] = static_cast<int64_t>(S->Img.Symbols.size());
   Root["import_count"] = static_cast<int64_t>(S->Img.Imports.size());
   Root["export_count"] = static_cast<int64_t>(S->Img.Exports.size());
@@ -845,32 +910,236 @@ const char *neverd_entrypoints_json(neverd_session_t Sess) {
   const auto &Img = S->Img;
   const auto &DI = Img.DynInfo;
 
-  llvm::json::Array Arr;
-
-  auto addEntry = [&](const char *Type, neverd::va_t Addr,
-                      const std::string &Name, bool AllowZero = false) {
+  llvm::SmallVector<std::pair<const char *, va_t>> Entries;
+  std::set<va_t> Addrs;
+  const auto AddEntry = [&](const char *Type, va_t Addr,
+                            bool AllowZero = false) {
     if (!Addr && !AllowZero)
       return;
+    Entries.emplace_back(Type, Addr);
+    Addrs.insert(Addr);
+  };
+
+  AddEntry("entry", Img.Entry, hasMainEntryPoint(Img));
+  AddEntry("init", DI.InitAddr);
+  AddEntry("fini", DI.FiniAddr);
+  for (va_t Addr : DI.PreinitArray)
+    AddEntry("preinit_array", Addr);
+  for (va_t Addr : DI.InitArray)
+    AddEntry("init_array", Addr);
+  for (va_t Addr : DI.FiniArray)
+    AddEntry("fini_array", Addr);
+  if (Entries.empty())
+    return dupStr("[]");
+
+  // Resolve names together, while retaining entry kinds, order and repeats.
+  const auto Names = functionNamesAt(Img, Addrs);
+  llvm::json::Array Arr;
+  for (const auto &[Type, Addr] : Entries) {
     llvm::json::Object O;
     O["type"] = Type;
     O["addr"] = vaHex(Addr);
-    O["name"] = jsonSafeText(Name);
+    O["name"] = jsonSafeText(Names.at(Addr));
+    if (Addr == Img.Entry && Img.Format == BinaryFormat::COFF &&
+        (Img.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL))
+      O["suggested_name"] = "DllEntryPoint";
     Arr.push_back(std::move(O));
-  };
-
-  addEntry("entry", Img.Entry, Img.getFunctionNameAt(Img.Entry),
-           hasMainEntryPoint(Img));
-  addEntry("init", DI.InitAddr, Img.getFunctionNameAt(DI.InitAddr));
-  addEntry("fini", DI.FiniAddr, Img.getFunctionNameAt(DI.FiniAddr));
-
-  for (va_t Addr : DI.PreinitArray)
-    addEntry("preinit_array", Addr, Img.getFunctionNameAt(Addr));
-  for (va_t Addr : DI.InitArray)
-    addEntry("init_array", Addr, Img.getFunctionNameAt(Addr));
-  for (va_t Addr : DI.FiniArray)
-    addEntry("fini_array", Addr, Img.getFunctionNameAt(Addr));
-
+  }
   return dupStr(jsonToString(llvm::json::Value(std::move(Arr))));
+}
+
+namespace {
+struct MetadataPage {
+  int Count = 0;
+  va_t NextAddress = 0;
+};
+
+/// One owning record/field projection for native and JSON consumers.
+template <typename Visitor>
+MetadataPage visitMetadataItems(const Session &S, va_t FirstAddress,
+                                int MaxItems, Visitor &&Visit) {
+  const auto Records = coff_loader::x64RuntimeFunctionRecords(S.Img);
+  const size_t Limit = std::clamp(MaxItems, 1, kMaxDataSlotsPerQuery);
+  auto At = std::lower_bound(Records.begin(), Records.end(), FirstAddress,
+                             [&](const auto &Row, va_t Address) {
+                               return S.Img.Base + Row.RecordRVA < Address;
+                             });
+  MetadataPage Page;
+  while (At != Records.end() && size_t(Page.Count) < Limit) {
+    const neverd_metadata_field_v1 Fields[] = {
+        {sizeof(neverd_metadata_field_v1), 0, 4, S.Img.Base + At->BeginRVA,
+         "BeginAddress", "range_begin"},
+        {sizeof(neverd_metadata_field_v1), 4, 4, S.Img.Base + At->EndRVA,
+         "EndAddress", "range_end"},
+        {sizeof(neverd_metadata_field_v1), 8, 4, S.Img.Base + At->UnwindInfoRVA,
+         "UnwindInfoAddress", "unwind_info"}};
+    const neverd_metadata_item_v1 Item{sizeof(neverd_metadata_item_v1),
+                                       S.Img.Base + At->RecordRVA,
+                                       12,
+                                       "RUNTIME_FUNCTION",
+                                       Fields,
+                                       std::size(Fields)};
+    ++At;
+    ++Page.Count;
+    if (!Visit(Item))
+      break;
+  }
+  if (At != Records.end())
+    Page.NextAddress = S.Img.Base + At->RecordRVA;
+  return Page;
+}
+} // namespace
+
+int neverd_visit_metadata_items(neverd_session_t Sess, neverd_va_t FirstAddress,
+                                int MaxItems,
+                                neverd_metadata_visitor_fn Visitor,
+                                void *UserData, neverd_va_t *NextAddress) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return -1;
+  S->clearError();
+  if (!S->Loaded || !Visitor || !NextAddress) {
+    S->setError(!S->Loaded ? "no binary loaded"
+                           : "metadata visitor and cursor are required");
+    return -1;
+  }
+  try {
+    const auto Page =
+        visitMetadataItems(*S, FirstAddress, MaxItems, [&](const auto &Item) {
+          return Visitor(UserData, &Item);
+        });
+    *NextAddress = Page.NextAddress;
+    return Page.Count;
+  } catch (const std::exception &E) {
+    S->setError(E.what());
+    return -1;
+  }
+}
+
+const char *neverd_metadata_items_json(neverd_session_t Sess,
+                                       neverd_va_t FirstAddress, int MaxItems) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  if (!S->Loaded) {
+    S->setError("no binary loaded");
+    return nullptr;
+  }
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  llvm::json::OStream J(OS);
+  J.object([&] {
+    MetadataPage Page;
+    J.attributeArray("items", [&] {
+      Page =
+          visitMetadataItems(*S, FirstAddress, MaxItems, [&](const auto &Item) {
+            J.object([&] {
+              J.attribute("address", vaHex(Item.address));
+              J.attributeArray("fields", [&] {
+                for (const auto &Field :
+                     llvm::ArrayRef(Item.fields, Item.field_count))
+                  J.object([&] {
+                    J.attribute("name", Field.name);
+                    J.attribute("offset", Field.offset);
+                    J.attribute("role", Field.role);
+                    J.attribute("size", Field.size);
+                    J.attribute("target", vaHex(Field.target));
+                  });
+              });
+              J.attribute("size", Item.size);
+              J.attribute("type", Item.type);
+            });
+            return true;
+          });
+    });
+    J.attribute("next_address",
+                !Page.NextAddress ? llvm::json::Value(nullptr)
+                                  : llvm::json::Value(vaHex(Page.NextAddress)));
+  });
+  return dupStr(Text);
+}
+
+const char *neverd_function_presentation_json(neverd_session_t Sess,
+                                              neverd_va_t Entry) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  if (!S->Loaded) {
+    S->setError("no binary loaded");
+    return nullptr;
+  }
+  const auto Function = std::lower_bound(
+      S->Functions.begin(), S->Functions.end(), Entry,
+      [](const auto &F, va_t Address) { return F.Entry < Address; });
+  if (Function == S->Functions.end() || Function->Entry != Entry) {
+    S->setError("no function starts at " + vaHex(Entry));
+    return nullptr;
+  }
+  llvm::json::Object Row{{"entry", vaHex(Entry)}, {"thunk", false}};
+  const auto &Img = S->Img;
+  if (Entry == Img.Entry && Img.Format == BinaryFormat::COFF &&
+      (Img.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL))
+    Row["suggested_name"] = "DllEntryPoint";
+  // Inspect only an unconditional transfer, not an adjusted-argument wrapper.
+  // No target is made into a function by this presentation query. An EVM or
+  // SBF function has no native instruction to decode.
+  InstructionFlowScratch Scratch;
+  if (Img.Arch != Arch::EVM && Img.Arch != Arch::SBF)
+    decodeNativeRange(
+        Img, S->Dec, Entry, 0, 1, [&](const auto &I, const auto *, int) {
+          const auto Flow = Scratch.summarize(Img, S->Dec, I);
+          const auto Target = std::lower_bound(
+              S->Functions.begin(), S->Functions.end(), Flow.Target,
+              [](const auto &Function, va_t Address) {
+                return Function.Entry < Address;
+              });
+          const bool ListedTarget =
+              Target != S->Functions.end() && Target->Entry == Flow.Target;
+          const bool OutsideRange =
+              Function->Size >= I.Size &&
+              (Flow.Target < Entry || Flow.Target - Entry >= Function->Size);
+          if (Flow.Kind == "jump" && Flow.Target != InvalidVA &&
+              Flow.Target != Entry && (ListedTarget || OutsideRange) &&
+              Img.isFunctionEntryCandidateAt(Flow.Target)) {
+            Row["thunk"] = true;
+            Row["thunk_target"] = vaHex(Flow.Target);
+          }
+          return false;
+        });
+  if (const auto User = S->FunctionAttributeEdits.find(Entry);
+      User != S->FunctionAttributeEdits.end() && User->second.Type) {
+    Row["prototype"] = *User->second.Type;
+  } else {
+    // A nameless DLL routine has no catalog prototype to resolve. The
+    // platform entry text is already owned here; showing it does not require
+    // importing all compiler headers. Explicit type inputs retain the full
+    // resolution route and its existing precedence.
+    const auto EntryDeclaration = S->platformEntryDeclaration();
+    const bool PlatformOnly =
+        !EntryDeclaration.empty() && !S->Dbg && !S->LocalTypes &&
+        S->TypeDeclarations.empty() && S->TypeLibraryChoice.Added.empty() &&
+        S->TypeLibraryChoice.Removed.empty() && S->SigDB.matches().empty() &&
+        Function->LinkageOrigin < NameOrigin::Stated;
+    if (PlatformOnly) {
+      if (Entry == Img.Entry) {
+        Row["prototype"] = EntryDeclaration;
+        Row["prototype_name"] = "DllEntryPoint";
+      }
+    } else if (auto *Debug = S->decompileDebug()) {
+      if (const auto Function = Debug->resolveFunction(Entry);
+          Function && Function->Addr == Entry &&
+          !Function->PrototypeDeclaration.empty()) {
+        Row["prototype"] = Function->PrototypeDeclaration;
+        Row["prototype_name"] = Function->Name;
+        if (Entry == Img.Entry && !S->LocalTypeEntryDeclaration.empty())
+          Row["prototype_name"] = "DllEntryPoint";
+      }
+    }
+  }
+  S->clearError();
+  return dupStr(jsonToString(std::move(Row)));
 }
 
 const char *neverd_project_json(neverd_session_t Sess) {
@@ -882,10 +1151,10 @@ const char *neverd_project_json(neverd_session_t Sess) {
   }
   llvm::json::Object Input = projectInput(*S);
   std::optional<llvm::json::Object> Recorded = recordedInput(*S);
-  const bool Matches =
-      !Recorded || Recorded->getString("sha256") == Input.getString("sha256");
+  const bool Matches = !Recorded || matchesProjectInput(*Recorded, Input);
   return dupStr(jsonToString(llvm::json::Object{
-      {"folder", jsonSafeText(pathToUTF8(project_files::folder(S->FilePath)))},
+      {"folder",
+       jsonSafeText(pathToUTF8(project_files::folder(S->projectInputPath())))},
       {"input", std::move(Input)},
       {"recorded", Recorded ? llvm::json::Value(std::move(*Recorded))
                             : llvm::json::Value(nullptr)},
@@ -903,6 +1172,12 @@ int neverd_project_record(neverd_session_t Sess) {
 const char *neverd_session_input_sha256(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   return dupStr(S->Loaded ? inputSha256(*S) : std::string());
+}
+
+const char *neverd_sha256_hex(const unsigned char *Data, size_t Size) {
+  if (!Data && Size)
+    return nullptr;
+  return dupStr(llvm::toHex(neverd::sha256({Data, Size}), true));
 }
 
 const char *neverd_dashboard_json(neverd_session_t Sess) {

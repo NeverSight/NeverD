@@ -22,7 +22,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/HighIR.h"
-#include "neverd/ir/intrinsics/X86VectorLaneReads.h"
+#include "neverd/ir/intrinsics/X86/X86VectorLaneReads.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/bit.h"

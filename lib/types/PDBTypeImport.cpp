@@ -6,6 +6,7 @@
 
 #include "neverd/types/PDBTypeImport.h"
 
+#include "neverd/types/CodeViewCallingConvention.h"
 #include "neverd/types/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -184,7 +185,6 @@ private:
                                               cv::TypeIndex Arguments);
   /// The members of the field list \p List, its continuations included.
   FieldCollector fields(cv::TypeIndex List);
-  CallingConvention convention(cv::CallingConvention Convention) const;
 
   llvm::pdb::TpiStream &Tpi;
   cv::LazyRandomTypeCollection &Types;
@@ -197,6 +197,7 @@ private:
   llvm::DenseMap<uint32_t, RecordLayout> Layouts;
   /// Records, named or in place, whose nesting did not flatten back.
   unsigned Mismatches = 0;
+  unsigned UnsupportedFunctionTypes = 0;
 };
 
 std::optional<cv::TypeIndex> Importer::definition(cv::TypeIndex Index) {
@@ -235,29 +236,6 @@ std::optional<cv::TypeIndex> Importer::definition(cv::TypeIndex Index) {
   if (auto Found = ByName.find(Name); Found != ByName.end())
     return Found->second;
   return std::nullopt;
-}
-
-CallingConvention Importer::convention(cv::CallingConvention Convention) const {
-  switch (Convention) {
-  case cv::CallingConvention::NearC:
-  case cv::CallingConvention::FarC:
-    // A 64-bit target has one C convention, its own.
-    return Library.dataModel() == DataModel::ILP32
-               ? CallingConvention::Cdecl
-               : CallingConvention::Unspecified;
-  case cv::CallingConvention::NearFast:
-  case cv::CallingConvention::FarFast:
-    return CallingConvention::Fastcall;
-  case cv::CallingConvention::NearStdCall:
-  case cv::CallingConvention::FarStdCall:
-    return CallingConvention::Stdcall;
-  case cv::CallingConvention::ThisCall:
-    return CallingConvention::Thiscall;
-  case cv::CallingConvention::NearVector:
-    return CallingConvention::Vectorcall;
-  default:
-    return CallingConvention::Unspecified;
-  }
 }
 
 uint64_t Importer::sizeOf(cv::TypeIndex Index) {
@@ -505,15 +483,19 @@ TypeExprRef Importer::exprUncached(cv::TypeIndex Index) {
     auto Record = deserialize<cv::ProcedureRecord>(Type);
     if (!Record)
       break;
-    return makeFunction(function(Record->getReturnType(), Record->getCallConv(),
-                                 Record->getArgumentList()));
+    if (auto Function = function(Record->getReturnType(), Record->getCallConv(),
+                                 Record->getArgumentList()))
+      return makeFunction(std::move(Function));
+    break;
   }
   case cv::LF_MFUNCTION: {
     auto Record = deserialize<cv::MemberFunctionRecord>(Type);
     if (!Record)
       break;
-    return makeFunction(function(Record->getReturnType(), Record->getCallConv(),
-                                 Record->getArgumentList()));
+    if (auto Function = function(Record->getReturnType(), Record->getCallConv(),
+                                 Record->getArgumentList()))
+      return makeFunction(std::move(Function));
+    break;
   }
   default:
     break;
@@ -639,8 +621,14 @@ std::shared_ptr<const EnumDef> Importer::enumeration(cv::TypeIndex Definition) {
 std::shared_ptr<const FunctionDef>
 Importer::function(cv::TypeIndex Return, cv::CallingConvention Convention,
                    cv::TypeIndex Arguments) {
+  const auto SourceConvention =
+      codeViewCallingConvention(Convention, pointerBytes(Library.dataModel()));
+  if (!SourceConvention) {
+    ++UnsupportedFunctionTypes;
+    return nullptr;
+  }
   auto Result = std::make_shared<FunctionDef>();
-  Result->Convention = convention(Convention);
+  Result->Convention = *SourceConvention;
   Result->Return = expr(Return);
   if (Arguments.isSimple() || Arguments.isNoneType())
     return Result;
@@ -762,6 +750,7 @@ PDBTypeImportStats Importer::run() {
     }
     Library.define(std::move(Local));
   }
+  Stats.UnsupportedFunctionTypes = UnsupportedFunctionTypes;
   return Stats;
 }
 

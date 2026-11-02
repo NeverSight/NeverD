@@ -13,6 +13,13 @@
 
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthLoad.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64SVEVector.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/X86/X86Unsupported.h"
+
 #include <stdexcept>
 #include <string>
 
@@ -23,7 +30,14 @@ std::string MultiOutputRender::operator()(
     const std::vector<ExprPtr> &Operands,
     std::function<std::string(const HighExpr &)> ExprFn,
     std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive) const {
-  if (IID == Intrinsic::RawEnvironmentRequirementV1)
+  if (isAArch64WritebackMemoryIntrinsic(IID) && TheArch != Arch::AArch64)
+    throw std::invalid_argument(kWritebackMalformed);
+  if (isAArch64ExceptionReturnIntrinsic(IID))
+    throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
+  if (const char *Reason = x86NonlocalControlTransferReason(IID))
+    throw std::invalid_argument(Reason);
+  if (IID == Intrinsic::RawEnvironmentRequirementV1 ||
+      IID == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64)
@@ -37,9 +51,22 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
                                 uint16_t ResultBytes, bool &HasCIntrinsics,
                                 bool GnuToolchain,
                                 llvm::ArrayRef<uint16_t> OperandBytes) {
-  if (Id == Intrinsic::RawEnvironmentRequirementV1)
+  if (isAArch64ExceptionReturnIntrinsic(Id))
+    throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
+  if (const char *Reason = x86NonlocalControlTransferReason(Id))
+    throw std::invalid_argument(Reason);
+  if (Id == Intrinsic::RawEnvironmentRequirementV1 ||
+      Id == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
+  if (aarch64_sve::vectorOperation(Id) && TheArch != Arch::AArch64)
+    throw std::invalid_argument(aarch64_sve::kMalformedVector);
+  if (isAArch64AddressMemoryIntrinsic(Id) && TheArch != Arch::AArch64)
+    throw std::invalid_argument(kAddressMemoryMalformed);
+  if (isAArch64WritebackMemoryIntrinsic(Id) && TheArch != Arch::AArch64)
+    throw std::invalid_argument(kWritebackMalformed);
+  if (isAArch64PAuthLoadIntrinsic(Id) && TheArch != Arch::AArch64)
+    throw std::invalid_argument(kPAuthLoadMalformed);
   std::string Result;
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64) {
     if (TheArch == Arch::AArch64 && GnuToolchain)
@@ -48,7 +75,10 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
         HasCIntrinsics = true;
         return Half;
       }
-    Result = renderARMIntrinsicCall(Id, Ops, ResultBytes, HasCIntrinsics);
+    Result = renderARMIntrinsicCall(Id, Ops, ResultBytes, HasCIntrinsics,
+                                    OperandBytes);
+    if (Result.empty() && aarch64_sve::vectorOperation(Id))
+      throw std::invalid_argument(aarch64_sve::kMalformedVector);
     if (Result.empty())
       Result = renderNeonVectorIntrinsic(Id, Ops, OperandBytes, ResultBytes,
                                          HasCIntrinsics);

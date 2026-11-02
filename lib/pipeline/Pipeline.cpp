@@ -14,6 +14,7 @@
 #include "PipelineCallAbiDetail.h"
 #include "PipelineHighIRDetail.h"
 #include "PipelineLowIRDetail.h"
+#include "PipelineSourceStackAccesses.h"
 
 #include "neverd/analysis/BinaryInterpreterSpecialization.h"
 #include "neverd/analysis/InterpreterMachineState.h"
@@ -43,6 +44,7 @@
 #include <cstdlib>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -62,6 +64,7 @@ public:
     CandidateCleanup,
     MedIR,
     NoReturnVerify,
+    MachineMedIR,
     HighIR,
     LLVMEmission
   };
@@ -88,6 +91,8 @@ private:
       return "med_ir";
     case Stage::NoReturnVerify:
       return "noreturn_verify";
+    case Stage::MachineMedIR:
+      return "machine_med_ir";
     case Stage::HighIR:
       return "high_ir";
     case Stage::LLVMEmission:
@@ -186,6 +191,14 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                              const PipelineOptions &Opts, DebugContext *Dbg) {
   PipelineResult Result;
   Result.SourceImage = &Img;
+  if (Opts.MedAnalysisOnly &&
+      (Opts.PatchMode || Opts.LiftMode || Opts.DeferHighIR || Opts.DeferMedIR ||
+       Opts.DumpHigh || Opts.DumpLlvm || Opts.SourceProjection ||
+       Opts.InterpreterSpecialization || Img.Arch == Arch::EVM ||
+       Img.Arch == Arch::SBF)) {
+    Result.Error = "MedIR analysis requires a native input and no output mode";
+    return Result;
+  }
   // Restricted runs of an image read the same callees for their signatures.
   if (Opts.AnalysisCache &&
       (!Opts.OnlyFunctionEntries.empty() || Opts.MaxFunctions != 0)) {
@@ -195,6 +208,17 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     Result.CalleeSignatureMemo = Memo;
   }
 
+  if (!analysis::interpreterMachineSourceABIInfo(Opts.InterpreterMachineABI)) {
+    Result.Error = "unknown interpreter machine source ABI";
+    return Result;
+  }
+  if (Opts.InterpreterMachineABI !=
+          analysis::InterpreterMachineSourceABIKind::ScalarV1 &&
+      (!Opts.InterpreterSpecialization ||
+       !Opts.InterpreterSpecialization->ExplicitMachineState)) {
+    Result.Error = "extended source ABI requires explicit machine recovery";
+    return Result;
+  }
   if (Opts.InterpreterSpecialization &&
       (Opts.PatchMode || Opts.OnlyFunctionEntries.size() != 1 ||
        Img.Arch != Arch::X64)) {
@@ -328,6 +352,12 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       Trace.finish(false);
       return Result;
     }
+    if (Opts.InterpreterSpecialization->X64CR4PGEState) {
+      Result.Error = "machine-state recovery requires a versioned CR4 PGE "
+                     "source interface";
+      Trace.finish(false);
+      return Result;
+    }
     if (Opts.InterpreterSpecialization->X64CR8State) {
       Result.Error =
           "machine-state recovery requires a versioned task-priority "
@@ -352,8 +382,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       return Result;
     }
     if (Opts.InterpreterSpecialization->ExplicitMachineState) {
-      auto Wrapped = analysis::wrapInterpreterMachineStateX64(
-          Recovery.Residual, Img.Format,
+      auto Wrapped = analysis::wrapInterpreterMachineSourceX64(
+          Recovery.Residual, Opts.InterpreterMachineABI, Img.Format,
           analysis::InterpreterMachineStateProfile::UserX64NoFaultV1,
           Opts.InterpreterSpecialization->EntryFrameAlignment,
           !Opts.PatchMode && !Opts.LiftMode && !Opts.DumpLlvm
@@ -482,6 +512,17 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   if (Opts.DumpLow && Opts.EmitDumpOutput)
     dumpLowIR(Result.LowFuncs);
 
+  // A native view of the control-flow graphs alone reads nothing after
+  // LowIR.  A deeper view of the same run takes the stages below then
+  // (resumeMedIR), which keep this order.
+  if (Opts.DeferMedIR && !Opts.DumpLow && !Opts.DumpMed && !Opts.DumpHigh &&
+      !Opts.PatchMode && !Opts.LiftMode && !Opts.InterpreterSpecialization) {
+    Result.MedIRDeferred = true;
+    Result.Success = true;
+    Trace.finish(true);
+    return Result;
+  }
+
   // Phase 2: LowIR -> MedIR (parallel).
   Trace.start(NativePipelineTrace::Stage::MedIR);
   buildMedIR(Img, Opts, Result);
@@ -502,7 +543,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     dumpMedIR(Result.MedFuncs);
 
   if (Result.MedIRVerifierFailures != 0 &&
-      (Opts.PatchMode || Opts.LiftMode || Opts.InterpreterSpecialization)) {
+      (Opts.usesMachineMedIR() || Opts.InterpreterSpecialization)) {
     Result.Error = "MedIR verification failed";
     Result.Success = false;
     Trace.finish(false);
@@ -512,16 +553,18 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // If only dumping intermediate IR (LowIR/MedIR), skip LLVM emission
   // entirely.  The dump flags are handled above; return early to avoid
   // hitting the LLVM PassManager (which may crash on certain LLVM builds).
-  if ((Opts.DumpLow || Opts.DumpMed) && !Opts.DumpHigh && !Opts.PatchMode &&
-      !Opts.LiftMode) {
+  if ((Opts.DumpLow || Opts.DumpMed) && !Opts.DumpHigh &&
+      !Opts.usesMachineMedIR()) {
     Result.Success = true;
     Trace.finish(true);
     return Result;
   }
 
-  // Patch/Lift mode: MedIR -> LLVM IR, skip HighIR.
-  if (Opts.PatchMode || Opts.LiftMode) {
-    Trace.start(NativePipelineTrace::Stage::LLVMEmission);
+  // Machine ABI preparation is shared by analysis and LLVM emission.
+  if (Opts.usesMachineMedIR()) {
+    Trace.start(Opts.MedAnalysisOnly
+                    ? NativePipelineTrace::Stage::MachineMedIR
+                    : NativePipelineTrace::Stage::LLVMEmission);
     Result.Success = runPatchLiftMode(Img, Ctx, Opts, Result, Dbg);
     Trace.finish(Result.Success);
     return Result;
@@ -531,16 +574,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // consume HighIR postpone only that projection, retaining those proofs.
   if (Opts.DeferHighIR && !Opts.DumpHigh) {
     Trace.start(NativePipelineTrace::Stage::HighIR);
-    try {
-      prepareSourceMedIR(Img, Result, Dbg);
-      Result.HighIRDeferred = true;
-      Result.Success = true;
-    } catch (const std::exception &Error) {
-      Result.Error =
-          std::string("source MedIR preparation failed: ") + Error.what();
-    } catch (...) {
-      Result.Error = "source MedIR preparation failed: unknown exception";
-    }
+    prepareDeferredSource(Img, Result, Dbg, sharedAnalysisCache(Img, Opts),
+                          refusalFailsRun(Opts));
     Trace.finish(Result.Success);
     return Result;
   }
@@ -563,6 +598,60 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   Result.Success = true;
   Trace.finish(true);
   return Result;
+}
+
+void Pipeline::prepareDeferredSource(const BinaryImage &Img,
+                                     PipelineResult &Result, DebugContext *Dbg,
+                                     PipelineAnalysisCache *Cache,
+                                     bool FailsRun) {
+  try {
+    prepareSourceMedIR(Img, Result, Dbg, Cache);
+    if (!refuseObservedCallReturnReads(Img, Result, FailsRun, Dbg))
+      throw std::runtime_error(Result.Error);
+    Result.HighIRDeferred = true;
+    Result.Success = true;
+  } catch (const std::exception &Error) {
+    Result.Success = false;
+    Result.Error =
+        std::string("source MedIR preparation failed: ") + Error.what();
+  } catch (...) {
+    Result.Success = false;
+    Result.Error = "source MedIR preparation failed: unknown exception";
+  }
+}
+
+bool Pipeline::resumeMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
+                           PipelineResult &Result, DebugContext *Dbg) {
+  if (!Result.Success || !Result.MedIRDeferred)
+    return Result.Success;
+  if (Result.SourceImage != &Img) {
+    Result.Success = false;
+    Result.Error = "deferred MedIR belongs to a different image";
+    return false;
+  }
+  Result.MedIRDeferred = false;
+  Result.Success = false;
+  // The stages run() takes after LowIR for a native source or analysis view.
+  NativePipelineTrace Trace;
+  Trace.start(NativePipelineTrace::Stage::MedIR);
+  buildMedIR(Img, Opts, Result);
+  if (!Result.Error.empty()) {
+    Trace.finish(false);
+    return false;
+  }
+  Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
+  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+                            importCallAddresses(Img));
+  recognizeLibraries(Img, Opts, Result, Dbg);
+  Trace.start(NativePipelineTrace::Stage::HighIR);
+  if (Opts.DeferHighIR)
+    prepareDeferredSource(Img, Result, Dbg, sharedAnalysisCache(Img, Opts),
+                          refusalFailsRun(Opts));
+  else
+    Result.Success = pipeline_detail::runHighIRStage(
+        Result, [&] { buildHighIR(Img, Opts, Result, Dbg); });
+  Trace.finish(Result.Success);
+  return Result.Success;
 }
 
 } // namespace neverd

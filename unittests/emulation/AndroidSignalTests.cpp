@@ -484,6 +484,94 @@ TEST_P(AndroidSignals, IgnoredAndBlockedSignalsDoNotShortenSleep) {
   }
 }
 
+TEST_P(AndroidSignals, SecondSleepRoundsRemainingAfterNestedAndMutableFrames) {
+  for (uint64_t Op : {4, 5}) {
+    for (uint64_t Mode : {0, 1, 5, 6, 11, 12, 16, 17, 18, 19, 20}) {
+      SCOPED_TRACE(testing::Message() << Op << ":" << Mode);
+      const auto R = sleep(Op, Mode);
+      ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+      EXPECT_EQ(R.ReturnValue, 0u);
+      const uint64_t Requested = Op == 4 ? 3 : 0xffffffff;
+      const uint64_t Expected = Mode == 12 ? 88
+                                : Mode == 5 || Mode == 20
+                                    ? (Op == 4 ? 0 : 0x80000000)
+                                    : Requested - (Mode == 17 || Mode == 19);
+      EXPECT_EQ(word(R, 0), Mode == 11 || Mode == 16 ? 2u : 1u);
+      EXPECT_EQ(word(R, 1), Mode == 11 || Mode == 16 ? 55u : 73u);
+      EXPECT_EQ(word(R, 2), uint64_t(0) - 4);
+      EXPECT_EQ(word(R, 8), Expected);
+      EXPECT_EQ(word(R, 9), Mode == 5 || Mode == 12 || Mode == 18 || Mode == 20
+                                ? 55u
+                            : Mode == 6 ? 22u
+                                        : 4u);
+      EXPECT_EQ(word(R, 10), Mode == 17 || Mode == 18 || Mode == 19
+                                 ? 1000000000u
+                             : Mode == 11 ? 3000u
+                                          : 1000u);
+      EXPECT_EQ(word(R, 11), 1u);
+      EXPECT_EQ(word(R, 21), 77u);
+      EXPECT_EQ(word(R, 34), 119u);
+      EXPECT_EQ(word(R, 35), 119u);
+      if (Mode == 11) {
+        EXPECT_EQ(word(R, 7), 1u);
+        EXPECT_EQ(word(R, 12), 4u);
+      }
+      const auto Call = std::find_if(
+          R.NativeCalls.begin(), R.NativeCalls.end(), [&](const auto &C) {
+            return C.ThreadID == 1001 && C.Name == "sleep" &&
+                   C.Arguments[0] == Requested;
+          });
+      ASSERT_NE(Call, R.NativeCalls.end());
+      if (Mode == 12)
+        EXPECT_FALSE(Call->Result);
+      else
+        EXPECT_EQ(Call->Result, Expected);
+    }
+  }
+}
+
+TEST_P(AndroidSignals, SecondSleepIgnoresBlockedSignalsAndKeepsTermination) {
+  for (uint64_t Op : {4, 5}) {
+    for (uint64_t Mode : {7, 8, 9, 13}) {
+      SCOPED_TRACE(testing::Message() << Op << ":" << Mode);
+      const auto R = sleep(Op, Mode);
+      ASSERT_EQ(R.Stop, Mode == 9 ? ProcessStopReason::Signaled
+                                  : ProcessStopReason::Returned)
+          << R.Diagnostic;
+      EXPECT_EQ(word(R, 0), Mode == 7 ? 1u : 0u);
+      EXPECT_EQ(word(R, 8), Mode == 9 || Op == 4 ? 0u : 0x80000000u);
+      EXPECT_EQ(word(R, 9), Mode == 9 ? 0u : 73u);
+      EXPECT_EQ(word(R, 10), Mode == 9 ? 0
+                             : Op == 4 ? 3000000000ULL
+                                       : 2147483647000000000ULL);
+      EXPECT_EQ(word(R, 11), Mode == 9 ? 0u : 1u);
+      EXPECT_EQ(word(R, 34), 119u);
+      EXPECT_EQ(word(R, 35), 119u);
+      if (Mode == 9) {
+        EXPECT_EQ(R.TerminationSignal, 15u);
+        for (const auto &Call : R.NativeCalls)
+          if (Call.Name == "sleep")
+            EXPECT_FALSE(Call.Result);
+      }
+    }
+  }
+}
+
+TEST_P(AndroidSignals, SecondSleepDeadlineWinsBeforePendingHandler) {
+  Options.InstructionQuantum = 2048;
+  const auto R = sleep(4, 14);
+  ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+  EXPECT_EQ(R.ReturnValue, 0u);
+  EXPECT_EQ(word(R, 0), 1u);
+  EXPECT_EQ(word(R, 1), 73u);
+  EXPECT_EQ(word(R, 2), 0u);
+  EXPECT_EQ(word(R, 8), 0u);
+  EXPECT_EQ(word(R, 9), 55u);
+  EXPECT_EQ(word(R, 10), 1000000000u);
+  EXPECT_EQ(word(R, 34), 119u);
+  EXPECT_EQ(word(R, 35), 119u);
+}
+
 TEST_P(AndroidSignals, TerminationAndUnsupportedWaitsDoNotFabricateCompletion) {
   for (uint64_t Mode : {4, 9, 10}) {
     SCOPED_TRACE(Mode);

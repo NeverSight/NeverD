@@ -1,6 +1,7 @@
 //===- TranslationJITLinkerTests.cpp - Sealed linker tests ---------------===//
 
 #include "TranslationJITLinkerInternal.h"
+#include "TranslationLinkGraphVerifierInternal.h"
 #include "gtest/gtest.h"
 
 #include "neverd/translate/GuestMemoryRuntime.h"
@@ -12,12 +13,20 @@
 #include "neverd/translate/TranslationObjectRequest.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ExecutionEngine/JITLink/JITLink.h"
+#include "llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h"
+#include "llvm/ExecutionEngine/Orc/SymbolStringPool.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MemoryBufferRef.h"
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <memory>
 #include <optional>
+#include <set>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -137,6 +146,147 @@ void expectInvocationError(llvm::Expected<uint32_t> Result,
   if (Unhandled)
     ADD_FAILURE() << llvm::toString(std::move(Unhandled));
   EXPECT_TRUE(SawTypedError);
+}
+
+// Exercise LLVM's actual dead stripping on every host and stop before any
+// allocation, relocation, or execution of the AArch64 object.
+class PruneOnlyLinkContext final : public llvm::jitlink::JITLinkContext {
+public:
+  PruneOnlyLinkContext(llvm::jitlink::JITLinkMemoryManager &MemoryManager,
+                       llvm::jitlink::LinkGraphPassFunction Check,
+                       std::string &Failure)
+      : JITLinkContext(nullptr), MemoryManager(MemoryManager),
+        Check(std::move(Check)), Failure(Failure) {}
+
+  llvm::jitlink::JITLinkMemoryManager &getMemoryManager() override {
+    return MemoryManager;
+  }
+  void notifyFailed(llvm::Error Error) override {
+    Failure = llvm::toString(std::move(Error));
+  }
+  void lookup(const LookupMap &,
+              std::unique_ptr<llvm::jitlink::JITLinkAsyncLookupContinuation>
+                  Continuation) override {
+    ADD_FAILURE() << "prune-only test reached symbol lookup";
+    Continuation->run(llvm::make_error<llvm::StringError>(
+        "unexpected lookup", llvm::inconvertibleErrorCode()));
+  }
+  llvm::Error notifyResolved(llvm::jitlink::LinkGraph &) override {
+    ADD_FAILURE() << "prune-only test reached allocation";
+    return llvm::make_error<llvm::StringError>("unexpected allocation",
+                                               llvm::inconvertibleErrorCode());
+  }
+  void notifyFinalized(
+      llvm::jitlink::JITLinkMemoryManager::FinalizedAlloc Allocation) override {
+    ADD_FAILURE() << "prune-only test reached finalization";
+    llvm::consumeError(MemoryManager.deallocate(std::move(Allocation)));
+  }
+  bool shouldAddDefaultTargetPasses(const llvm::Triple &) const override {
+    return false;
+  }
+  llvm::Error
+  modifyPassConfig(llvm::jitlink::LinkGraph &,
+                   llvm::jitlink::PassConfiguration &Config) override {
+    Config.PrePrunePasses.push_back(detail::markAuditedTranslationBlocksLiveV1);
+    Config.PostPrunePasses.push_back(std::move(Check));
+    return llvm::Error::success();
+  }
+
+private:
+  llvm::jitlink::JITLinkMemoryManager &MemoryManager;
+  llvm::jitlink::LinkGraphPassFunction Check;
+  std::string &Failure;
+};
+
+TEST(TranslationJITLinker, PruningRetainsAuditedSymbolFreeELFBlocks) {
+  for (LLVMOptimizationLevel Level :
+       {LLVMOptimizationLevel::O0, LLVMOptimizationLevel::O2}) {
+    SCOPED_TRACE(static_cast<unsigned>(Level));
+    TranslationOptions Options = aarch64AOTOptions("aarch64-unknown-linux-gnu");
+    Options.LLVMLevel = Level;
+    GuestState State = fixtureState();
+    auto Object = compileTranslationObjectRequestV1({State, EntryPC, Options});
+    ASSERT_TRUE(static_cast<bool>(Object))
+        << llvm::toString(Object.takeError());
+    const auto &Artifact = Object->artifact();
+    const llvm::StringRef Bytes(
+        reinterpret_cast<const char *>(Artifact.bytes().data()),
+        Artifact.bytes().size());
+    auto Graph = llvm::jitlink::createLinkGraphFromObject(
+        llvm::MemoryBufferRef(Bytes, "prune-regression"),
+        std::make_shared<llvm::orc::SymbolStringPool>());
+    ASSERT_TRUE(static_cast<bool>(Graph)) << llvm::toString(Graph.takeError());
+    auto Audit = detail::auditTranslationLinkGraphPrePruneV1(
+        **Graph, Artifact.bytes(), Artifact.hostTarget(),
+        Artifact.blockSymbols(), Artifact.runtimeSymbols(),
+        Artifact.runtimeRegistryIdentity(), Artifact.runtimeProfile());
+    ASSERT_TRUE(static_cast<bool>(Audit)) << llvm::toString(Audit.takeError());
+
+    std::set<const llvm::jitlink::Block *> SymbolBlocks;
+    std::set<const llvm::jitlink::Symbol *> OriginalSymbols;
+    for (const auto *Symbol : (*Graph)->defined_symbols()) {
+      SymbolBlocks.insert(&Symbol->getBlock());
+      OriginalSymbols.insert(Symbol);
+    }
+    std::map<const llvm::jitlink::Block *, std::vector<char>> OriginalBlocks;
+    unsigned SymbolFreeBlocks = 0;
+    for (const auto *Block : (*Graph)->blocks()) {
+      OriginalBlocks.emplace(Block,
+                             std::vector<char>(Block->getContent().begin(),
+                                               Block->getContent().end()));
+      if (!SymbolBlocks.contains(Block)) {
+        ++SymbolFreeBlocks;
+        EXPECT_EQ(Block->getSection().getMemLifetime(),
+                  llvm::orc::MemLifetime::NoAlloc);
+      }
+    }
+    ASSERT_GT(SymbolFreeBlocks, 0U);
+    auto MemoryManager = llvm::jitlink::InProcessMemoryManager::Create();
+    ASSERT_TRUE(static_cast<bool>(MemoryManager))
+        << llvm::toString(MemoryManager.takeError());
+    bool ReachedPostPrune = false;
+    std::string Failure;
+    auto Check = [&](llvm::jitlink::LinkGraph &Pruned) -> llvm::Error {
+      ReachedPostPrune = true;
+      size_t RemainingBlocks = 0;
+      for (const auto *Block : Pruned.blocks()) {
+        ++RemainingBlocks;
+        auto Original = OriginalBlocks.find(Block);
+        EXPECT_NE(Original, OriginalBlocks.end());
+        if (Original != OriginalBlocks.end())
+          EXPECT_EQ(std::vector<char>(Block->getContent().begin(),
+                                      Block->getContent().end()),
+                    Original->second);
+      }
+      EXPECT_EQ(RemainingBlocks, OriginalBlocks.size());
+      size_t Roots = 0;
+      size_t RemainingOriginalSymbols = 0;
+      for (const auto *Symbol : Pruned.defined_symbols()) {
+        EXPECT_TRUE(Symbol->isLive());
+        if (OriginalSymbols.contains(Symbol)) {
+          ++RemainingOriginalSymbols;
+          continue;
+        }
+        ++Roots;
+        EXPECT_TRUE(OriginalBlocks.contains(&Symbol->getBlock()));
+        EXPECT_FALSE(SymbolBlocks.contains(&Symbol->getBlock()));
+        EXPECT_FALSE(Symbol->hasName());
+        EXPECT_FALSE(Symbol->isCallable());
+        EXPECT_EQ(Symbol->getScope(), llvm::jitlink::Scope::Local);
+        EXPECT_EQ(Symbol->getOffset(), 0U);
+        EXPECT_EQ(Symbol->getSize(), 0U);
+      }
+      EXPECT_EQ(RemainingOriginalSymbols, OriginalSymbols.size());
+      EXPECT_EQ(Roots, SymbolFreeBlocks);
+      return llvm::make_error<llvm::StringError>(
+          "stopped after prune", llvm::inconvertibleErrorCode());
+    };
+    llvm::jitlink::link(std::move(*Graph),
+                        std::make_unique<PruneOnlyLinkContext>(**MemoryManager,
+                                                               Check, Failure));
+    EXPECT_TRUE(ReachedPostPrune);
+    EXPECT_EQ(Failure, "stopped after prune");
+  }
 }
 
 TEST(TranslationJITLinker, RejectsAOTArtifactBeforeGraphCreation) {

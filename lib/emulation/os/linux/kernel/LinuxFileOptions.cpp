@@ -20,6 +20,19 @@ bool isDeclaredDirectory(const LinuxFileOptions &Options,
           llvm::is_contained(Options.Directories, Path));
 }
 llvm::Error validateFileOptions(const LinuxFileOptions &Options) {
+  uint32_t Creations = 0;
+  if (Options.FileCreations) {
+    if (Options.FileCreations->Files.empty() || !Options.DirectoryCreation)
+      return failure(
+          "file creations require bounded explicit tmpfs reservations");
+    for (const auto &[Path, Reservation] : Options.FileCreations->Files) {
+      if (!Reservation.Count ||
+          Reservation.Count > LinuxFileCreationOptions::MaxFiles - Creations)
+        return failure(
+            "file creation count exceeds the object reservation bound");
+      Creations += Reservation.Count;
+    }
+  }
   if (Options.WorkingDirectory &&
       !isDeclaredDirectory(Options, *Options.WorkingDirectory))
     return failure("Linux working directory requires a declared directory");
@@ -50,7 +63,8 @@ llvm::Error validateFileOptions(const LinuxFileOptions &Options) {
   if (Options.DescriptorLimit < 3 ||
       Options.DescriptorLimit > FileDescriptorLimit ||
       Options.Directories.size() + Options.Files.size() +
-              Options.SymbolicLinks.size() + Options.Devices.size() >
+              Options.SymbolicLinks.size() + Options.Devices.size() +
+              Creations >
           FileCountLimit ||
       Options.Files.size() > FileCountLimit ||
       Options.SymbolicLinks.size() > FileCountLimit - Options.Files.size() ||
@@ -170,11 +184,38 @@ llvm::Error validateFileOptions(const LinuxFileOptions &Options) {
         !isNormalizedTimespec(Metadata.ChangeTime))
       return failure(FileMetadataOption);
   }
+  if (Options.FileCreations) {
+    for (const auto &[Path, Reservation] : Options.FileCreations->Files) {
+      if (Path == "/" || Path.size() >= FilePathLimit ||
+          !isCanonicalFilePath(Path) || Options.Devices.contains(Path) ||
+          Options.SymbolicLinks.contains(Path) ||
+          llvm::is_contained(Options.Directories, Path))
+        return failure("invalid file creation pathname");
+      const std::string Prefix = Path + '/';
+      auto Child = Paths.lower_bound(Prefix);
+      if (Child != Paths.end() && llvm::StringRef(*Child).starts_with(Prefix))
+        return failure("file creation pathname is an implicit directory");
+      const auto Slash = Path.rfind('/');
+      const auto Parent = Slash ? Path.substr(0, Slash) : std::string("/");
+      if (!Options.DirectoryCreation->Parents.contains(Parent) ||
+          !llvm::is_contained(Options.Directories, Parent))
+        return failure("file creation parent requires persistent directory and "
+                       "explicit tmpfs metadata");
+      // The original object and its replacement consume separate byte and
+      // object reservations, even when their pathnames have the same spelling.
+      const uint64_t Cost = Path.size() + 1;
+      const uint64_t Available = (FileByteLimit - Total) / Reservation.Count;
+      if (Cost > Available || Reservation.WriteLimit > Available - Cost)
+        return failure(
+            "file creation write reservation exceeds file byte budget");
+      Total += (Cost + Reservation.WriteLimit) * Reservation.Count;
+    }
+  }
   if (Options.DirectoryCreation) {
     const auto &C = *Options.DirectoryCreation;
     if (C.Parents.empty() || C.Parents.size() > FileCountLimit || !C.Limit ||
-        C.Limit > FileCountLimit || (C.Umask & ~0777u) ||
-        C.Limit + Paths.size() > FileCountLimit ||
+        C.Limit > FileCountLimit || (C.Umask & ~uint32_t(FileRWXModeBits)) ||
+        C.Limit + Paths.size() + Creations > FileCountLimit ||
         uint64_t(C.Limit) * FilePathLimit > FileByteLimit - Total)
       return failure("invalid directory creation bounds or umask");
     std::set<uint64_t> Inodes;
@@ -211,11 +252,35 @@ llvm::Error validateFileOptions(const LinuxFileOptions &Options) {
         Add(P, true);
       if (Options.DynamicProc || Options.DynamicProcFDs)
         Add("/proc", true);
-      if (M.Size != (Entries.size() + 2) * 20 ||
+      if (M.Size != (Entries.size() + 2) * TmpfsDirectoryEntryBytes ||
           M.LinkCount != Directories.size() + 2)
         return failure(
             "directory metadata disagrees with the closed namespace");
     }
+  }
+  if (Options.FileRenames) {
+    const auto &R = *Options.FileRenames;
+    if (R.Parents.empty() ||
+        R.Parents.size() > LinuxFileRenameOptions::MaxParents || !R.Limit ||
+        R.Limit > LinuxFileRenameOptions::MaxOperations ||
+        !Options.DirectoryCreation)
+      return failure("file renames require bounded explicit directory parents");
+    for (const auto &Path : R.Parents)
+      if (!Options.DirectoryCreation->Parents.contains(Path))
+        return failure("file rename parent has no explicit tmpfs metadata");
+  }
+  if (Options.FileUnlinks) {
+    const auto &U = *Options.FileUnlinks;
+    if (U.Parents.empty() ||
+        U.Parents.size() > LinuxFileUnlinkOptions::MaxParents || !U.Limit ||
+        U.Limit > LinuxFileUnlinkOptions::MaxOperations ||
+        !Options.DirectoryCreation)
+      return failure("file unlinks require bounded explicit directory parents");
+    for (const auto &Path : U.Parents)
+      if (!Options.DirectoryCreation->Parents.contains(Path) ||
+          !llvm::is_contained(Options.Directories, Path))
+        return failure("file unlink parent requires persistent directory and "
+                       "explicit tmpfs metadata");
   }
   for (const auto &Path : Options.TrackWriteMetadata) {
     auto I = Options.Metadata.find(Path);

@@ -4,7 +4,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
@@ -83,8 +83,7 @@ uint8_t lengthBits(unsigned VectorSize) {
 uint8_t maskBits(MaskMode Mode) {
   return Mode == MaskMode::None
              ? 0
-             : static_cast<uint8_t>(0x03 |
-                                    (Mode == MaskMode::Zero ? 0x80 : 0));
+             : static_cast<uint8_t>(0x03 | (Mode == MaskMode::Zero ? 0x80 : 0));
 }
 
 std::vector<uint8_t> broadcastEncoding(const LaneFamily &Family,
@@ -93,8 +92,7 @@ std::vector<uint8_t> broadcastEncoding(const LaneFamily &Family,
   return {0x62,
           0xf2,
           static_cast<uint8_t>(Family.W ? 0xfd : 0x7d),
-          static_cast<uint8_t>(0x08 | lengthBits(VectorSize) |
-                               maskBits(Mask)),
+          static_cast<uint8_t>(0x08 | lengthBits(VectorSize) | maskBits(Mask)),
           Family.Opcode,
           static_cast<uint8_t>(Memory ? 0x08 : 0xca)};
 }
@@ -105,8 +103,7 @@ std::vector<uint8_t> insertEncoding(const LaneFamily &Family,
   return {0x62,
           0xf3,
           static_cast<uint8_t>(Family.W ? 0xed : 0x6d),
-          static_cast<uint8_t>(0x08 | lengthBits(VectorSize) |
-                               maskBits(Mask)),
+          static_cast<uint8_t>(0x08 | lengthBits(VectorSize) | maskBits(Mask)),
           Family.Opcode,
           static_cast<uint8_t>(Memory ? 0x08 : 0xcb),
           Immediate};
@@ -118,8 +115,7 @@ std::vector<uint8_t> extractEncoding(const LaneFamily &Family,
   return {0x62,
           0xf3,
           static_cast<uint8_t>(Family.W ? 0xfd : 0x7d),
-          static_cast<uint8_t>(0x08 | lengthBits(SourceSize) |
-                               maskBits(Mask)),
+          static_cast<uint8_t>(0x08 | lengthBits(SourceSize) | maskBits(Mask)),
           Family.Opcode,
           static_cast<uint8_t>(Memory ? 0x10 : 0xd1),
           Immediate};
@@ -140,15 +136,14 @@ uint64_t laneMask(unsigned LaneCount) {
   return Result;
 }
 
-void applyMask(std::vector<uint8_t> &Expected,
-               const std::vector<uint8_t> &Raw,
+void applyMask(std::vector<uint8_t> &Expected, const std::vector<uint8_t> &Raw,
                const std::vector<uint8_t> &Old, unsigned ActiveSize,
                unsigned ElementSize, MaskMode Mode, uint64_t Mask) {
   Expected.assign(64, 0);
   for (unsigned Offset = 0; Offset < ActiveSize; Offset += ElementSize) {
     const unsigned Lane = Offset / ElementSize;
-    const bool Active = Mode == MaskMode::None ||
-                        (Mask & (UINT64_C(1) << Lane)) != 0;
+    const bool Active =
+        Mode == MaskMode::None || (Mask & (UINT64_C(1) << Lane)) != 0;
     const std::vector<uint8_t> *Source =
         Active ? &Raw : (Mode == MaskMode::Merge ? &Old : nullptr);
     if (Source)
@@ -249,9 +244,8 @@ runMemorySourceCase(const std::vector<uint8_t> &Bytes, unsigned ExpectedId,
   return Emulator.getRegisterBytes(x86reg::vectorReg(1));
 }
 
-std::optional<std::vector<uint8_t>> readMemoryBytes(NdOpEmulator &Emulator,
-                                                    uint64_t Address,
-                                                    size_t Size) {
+std::optional<std::vector<uint8_t>>
+readMemoryBytes(NdOpEmulator &Emulator, uint64_t Address, size_t Size) {
   std::vector<uint8_t> Result(Size);
   size_t Offset = 0;
   uint64_t Temp = UINT64_C(0x7e000000);
@@ -296,14 +290,14 @@ TEST(X86EVEXLaneMove, RegisterBroadcastsRepeatTuplesAndApplyWritemask) {
         Raw[Byte] = Source[Byte % Family.LaneSize];
       const uint64_t Mask = laneMask(Size / Family.ElementSize);
       for (MaskMode Mode : {MaskMode::None, MaskMode::Merge, MaskMode::Zero}) {
-        SCOPED_TRACE(std::string(Family.Name) + ", size=" +
-                     std::to_string(Size) + ", mask=" +
-                     std::to_string(static_cast<unsigned>(Mode)));
+        SCOPED_TRACE(std::string(Family.Name) +
+                     ", size=" + std::to_string(Size) +
+                     ", mask=" + std::to_string(static_cast<unsigned>(Mode)));
         std::vector<uint8_t> Expected;
         applyMask(Expected, Raw, Old, Size, Family.ElementSize, Mode, Mask);
-        const auto Result = runRegisterCase(
-            broadcastEncoding(Family, Size, Mode, false), Family.Id, Old,
-            Source, Unused, Mask);
+        const auto Result =
+            runRegisterCase(broadcastEncoding(Family, Size, Mode, false),
+                            Family.Id, Old, Source, Unused, Mask);
         ASSERT_TRUE(Result);
         EXPECT_EQ(*Result, Expected);
       }
@@ -318,9 +312,9 @@ TEST(X86EVEXLaneMove, RegisterInsertsHonorLaneImmediateAndWritemask) {
   constexpr uint8_t Immediate = 0xfe;
 
   for (const LaneFamily &Family : kInserts) {
-    const std::array<unsigned, 2> Sizes =
-        Family.LaneSize == 16 ? std::array<unsigned, 2>{32, 64}
-                              : std::array<unsigned, 2>{64, 0};
+    const std::array<unsigned, 2> Sizes = Family.LaneSize == 16
+                                              ? std::array<unsigned, 2>{32, 64}
+                                              : std::array<unsigned, 2>{64, 0};
     for (unsigned Size : Sizes) {
       if (Size == 0)
         continue;
@@ -330,9 +324,9 @@ TEST(X86EVEXLaneMove, RegisterInsertsHonorLaneImmediateAndWritemask) {
                   Raw.begin() + LaneIndex * Family.LaneSize);
       const uint64_t Mask = laneMask(Size / Family.ElementSize);
       for (MaskMode Mode : {MaskMode::None, MaskMode::Merge, MaskMode::Zero}) {
-        SCOPED_TRACE(std::string(Family.Name) + ", size=" +
-                     std::to_string(Size) + ", mask=" +
-                     std::to_string(static_cast<unsigned>(Mode)));
+        SCOPED_TRACE(std::string(Family.Name) +
+                     ", size=" + std::to_string(Size) +
+                     ", mask=" + std::to_string(static_cast<unsigned>(Mode)));
         std::vector<uint8_t> Expected;
         applyMask(Expected, Raw, Old, Size, Family.ElementSize, Mode, Mask);
         const auto Result = runRegisterCase(
@@ -352,24 +346,24 @@ TEST(X86EVEXLaneMove, RegisterExtractsHonorLaneImmediateAndWritemask) {
   constexpr uint8_t Immediate = 0xfd;
 
   for (const LaneFamily &Family : kExtracts) {
-    const std::array<unsigned, 2> Sizes =
-        Family.LaneSize == 16 ? std::array<unsigned, 2>{32, 64}
-                              : std::array<unsigned, 2>{64, 0};
+    const std::array<unsigned, 2> Sizes = Family.LaneSize == 16
+                                              ? std::array<unsigned, 2>{32, 64}
+                                              : std::array<unsigned, 2>{64, 0};
     for (unsigned Size : Sizes) {
       if (Size == 0)
         continue;
       std::vector<uint8_t> Raw(64, 0);
       const unsigned LaneIndex = Immediate & (Size / Family.LaneSize - 1);
-      std::copy_n(Source.begin() + LaneIndex * Family.LaneSize,
-                  Family.LaneSize, Raw.begin());
+      std::copy_n(Source.begin() + LaneIndex * Family.LaneSize, Family.LaneSize,
+                  Raw.begin());
       const uint64_t Mask = laneMask(Family.LaneSize / Family.ElementSize);
       for (MaskMode Mode : {MaskMode::None, MaskMode::Merge, MaskMode::Zero}) {
-        SCOPED_TRACE(std::string(Family.Name) + ", source size=" +
-                     std::to_string(Size) + ", mask=" +
-                     std::to_string(static_cast<unsigned>(Mode)));
+        SCOPED_TRACE(std::string(Family.Name) +
+                     ", source size=" + std::to_string(Size) +
+                     ", mask=" + std::to_string(static_cast<unsigned>(Mode)));
         std::vector<uint8_t> Expected;
-        applyMask(Expected, Raw, Old, Family.LaneSize, Family.ElementSize,
-                  Mode, Mask);
+        applyMask(Expected, Raw, Old, Family.LaneSize, Family.ElementSize, Mode,
+                  Mask);
         const auto Result = runRegisterCase(
             extractEncoding(Family, Size, Mode, Immediate, false), Family.Id,
             Old, Source, Unused, Mask);
@@ -397,8 +391,7 @@ TEST(X86EVEXLaneMove, HighRegisterExtensionBitsAreHonored) {
   Emulator.setRegister(x86reg::K7, Mask);
 
   const auto Broadcast =
-      liftX64({0x62, 0x02, 0x7d, 0xcf, 0x19, 0xfd},
-              X86_INS_VBROADCASTF32X2);
+      liftX64({0x62, 0x02, 0x7d, 0xcf, 0x19, 0xfd}, X86_INS_VBROADCASTF32X2);
   ASSERT_TRUE(Broadcast);
   ASSERT_EQ(Emulator.run(*Broadcast), Broadcast->size());
   std::vector<uint8_t> BroadcastRaw(64);
@@ -410,8 +403,7 @@ TEST(X86EVEXLaneMove, HighRegisterExtensionBitsAreHonored) {
 
   Emulator.setRegisterBytes(x86reg::vectorReg(31), Old);
   const auto Insert =
-      liftX64({0x62, 0x03, 0x0d, 0xc7, 0x18, 0xfd, 0x03},
-              X86_INS_VINSERTF32X4);
+      liftX64({0x62, 0x03, 0x0d, 0xc7, 0x18, 0xfd, 0x03}, X86_INS_VINSERTF32X4);
   ASSERT_TRUE(Insert);
   ASSERT_EQ(Emulator.run(*Insert), Insert->size());
   std::vector<uint8_t> InsertRaw = Source30;
@@ -420,9 +412,8 @@ TEST(X86EVEXLaneMove, HighRegisterExtensionBitsAreHonored) {
   EXPECT_EQ(Emulator.getRegisterBytes(x86reg::vectorReg(31)), Expected);
 
   Emulator.setRegisterBytes(x86reg::vectorReg(29), Old);
-  const auto Extract =
-      liftX64({0x62, 0x03, 0x7d, 0xcf, 0x19, 0xf5, 0x03},
-              X86_INS_VEXTRACTF32X4);
+  const auto Extract = liftX64({0x62, 0x03, 0x7d, 0xcf, 0x19, 0xf5, 0x03},
+                               X86_INS_VEXTRACTF32X4);
   ASSERT_TRUE(Extract);
   ASSERT_EQ(Emulator.run(*Extract), Extract->size());
   std::vector<uint8_t> ExtractRaw(64, 0);
@@ -443,9 +434,9 @@ TEST(X86EVEXLaneMove, UnmaskedMemoryFormsUseExactTupleWidth) {
     std::vector<uint8_t> Expected(64);
     for (size_t Byte = 0; Byte < Expected.size(); ++Byte)
       Expected[Byte] = Memory[Byte % Family.LaneSize];
-    const auto Result = runMemorySourceCase(
-        broadcastEncoding(Family, 64, MaskMode::None, true), Family.Id, Image,
-        MemoryAddress, Old, Base);
+    const auto Result =
+        runMemorySourceCase(broadcastEncoding(Family, 64, MaskMode::None, true),
+                            Family.Id, Image, MemoryAddress, Old, Base);
     ASSERT_TRUE(Result);
     EXPECT_EQ(*Result, Expected);
   }
@@ -490,8 +481,7 @@ TEST(X86EVEXLaneMove, UnmaskedMemoryFormsUseExactTupleWidth) {
   }
 
   // A normal tuple load still faults before any destination update.
-  BinaryImage Partial =
-      makeMemoryImage(UINT64_C(0x5000), pattern(8, 0xd7));
+  BinaryImage Partial = makeMemoryImage(UINT64_C(0x5000), pattern(8, 0xd7));
   const auto FaultOps =
       liftX64(broadcastEncoding(kAllBroadcasts[1], 64, MaskMode::None, true),
               kAllBroadcasts[1].Id);

@@ -14,7 +14,7 @@
 #include "neverd/debug/CompressedSections.h"
 #include "neverd/debug/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/FilePath.h"
 
 #define DEBUG_TYPE "neverd-dwarf-loader"

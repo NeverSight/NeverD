@@ -1,0 +1,47 @@
+//===- AArch64SVEState.def - Scalable state admission policy --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Fail-loud boundaries for local SVE state. Budgets are exported by the IR
+/// limits owner. No row authorizes a scalable parameter, result or call ABI.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_STATE_TEXT
+#define NEVERD_A64_SVE_STATE_TEXT(Name, Value)
+#endif
+#ifndef NEVERD_A64_SVE_STATE_SCALAR
+#define NEVERD_A64_SVE_STATE_SCALAR(Id)
+#endif
+#ifndef NEVERD_A64_SVE_STATE_LIMIT
+#define NEVERD_A64_SVE_STATE_LIMIT(Name, Value)
+#endif
+
+NEVERD_A64_SVE_STATE_SCALAR(A64_SveCntb)
+NEVERD_A64_SVE_STATE_SCALAR(A64_SveCnth)
+NEVERD_A64_SVE_STATE_SCALAR(A64_SveCntw)
+NEVERD_A64_SVE_STATE_SCALAR(A64_SveCntd)
+
+NEVERD_A64_SVE_STATE_LIMIT(kSVEStateMaxBlocks, 4096)
+NEVERD_A64_SVE_STATE_LIMIT(kSVEStateMaxValues, 16384)
+NEVERD_A64_SVE_STATE_LIMIT(kSVEStateMaxBits, 67108864)
+NEVERD_A64_SVE_STATE_LIMIT(kSVEStateMaxWork, 4000000)
+NEVERD_A64_SVE_STATE_TEXT(kStateMalformed,
+                          "SVE state has inconsistent SSA or control flow")
+NEVERD_A64_SVE_STATE_TEXT(kStateUnknown,
+                          "SVE state requires a complete local definition")
+NEVERD_A64_SVE_STATE_TEXT(kStateTransport,
+                          "SVE state requires whole COPY/PHI transport")
+NEVERD_A64_SVE_STATE_TEXT(kStateCall,
+                          "SVE state has no supported call-preservation ABI")
+NEVERD_A64_SVE_STATE_TEXT(kStateABI,
+                          "SVE state has no supported parameter or result ABI")
+NEVERD_A64_SVE_STATE_TEXT(kStateAlias,
+                          "mixed V/Z state requires an explicit alias bridge")
+NEVERD_A64_SVE_STATE_TEXT(kStateLimit,
+                          "SVE state proof exceeded its resource limit")
+
+#undef NEVERD_A64_SVE_STATE_SCALAR
+#undef NEVERD_A64_SVE_STATE_TEXT
+#undef NEVERD_A64_SVE_STATE_LIMIT

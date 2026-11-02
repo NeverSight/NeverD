@@ -10,7 +10,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 
 #include <set>
 

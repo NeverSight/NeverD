@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate include/neverd/ir/intrinsics/AArch64SystemOperands.def.
+"""Generate include/neverd/ir/intrinsics/AArch64/AArch64SystemOperands.def.
 
 An AArch64 MRS, MSR or SYS names its operation by an encoding: the system
 register `mrs x0, cntvct_el0` reads is op0 3, op1 3, CRn 14, CRm 0, op2 2,
@@ -21,7 +21,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = (ROOT / "third_party" / "capstone" / "arch" / "AArch64" /
           "AArch64GenSystemOperands.inc")
-OUTPUT = (ROOT / "include" / "neverd" / "ir" / "intrinsics" /
+OUTPUT = (ROOT / "include" / "neverd" / "ir" / "intrinsics" / "AArch64" /
           "AArch64SystemOperands.def")
 
 

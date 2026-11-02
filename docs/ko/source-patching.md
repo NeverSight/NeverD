@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](../ar/source-patching.md)
 
-<!-- i18n-source: 63d86e1a94d8b33e055360514902466c202d434ebb87823cd91181b98a556871 -->
+<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
 
 [← Documentation Index](README.md)
 
@@ -185,7 +185,7 @@ report = session.patch_source(
 
 Windows ARM64 검증은 고정 서브모듈과 검증된 LLVM-MinGW 도구 체인으로 실제 빌드한 네이티브 ARM64 Unicorn C DLL, MSVC 임포트 라이브러리, 명시적 CMake 대상 재정의를 사용합니다. 격리된 빌드 복사본은 비 SEH 점프 함수 쌍, 명령 캐시 동기화를 포함한 ARM64 페이지 커밋 콜백, Windows LLP64용 64비트 즉시값 마스크라는 세 호스트 수정을 인증합니다. 서브모듈 소스와 리비전은 그대로입니다. 이는 CPU 행렬의 테스트 호스트를 검증하며 기본 MSVC ARM64 JIT 지원을 입증하지 않습니다. 다섯 호스트 복구 검사는 패치 프로세스의 네이티브 실행 및 C++ 예외 증거와 별도로 기록합니다.
 
-`NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE`로 호환 컴파일러를 선택하세요(Clang 22.1.6 검증). 통합 빌드는 빌드 디렉터리의 LLVM 복사본만 수정하고 서브모듈과 공유 사전 빌드 캐시는 유지합니다. r3/r4의 x64 PLT 버그는 IR 패치를 거부하게 할 수 있습니다. 네이티브 오브젝트는 해당 MC 경로를 거치지 않습니다. `NEVERD_TEST_REQUIRE_FIXED_LLVM=1`은 수정된 정확한 PLT 생성을 요구합니다.
+`NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE`로 호환 컴파일러를 선택하세요(Clang 22.1.6 검증). 통합 빌드는 기록된 NeverSight LLVM fork를 직접 컴파일합니다. 재배치 수정은 fork에서 관리하며 NeverD는 LLVM 소스 패치를 적용하지 않습니다. r3/r4의 x64 PLT 버그는 IR 패치를 거부하게 할 수 있습니다. 네이티브 오브젝트는 해당 MC 경로를 거치지 않습니다. `NEVERD_TEST_REQUIRE_FIXED_LLVM=1`은 수정된 정확한 PLT 생성을 요구합니다.
 
 `NeverDSourcePatchTests`는 네이티브 C/API/오브젝트/예외를, `NeverDSourcePatchMatrixTests`는 Unicorn으로 모든 조합을 검사합니다. `NEVERD_TEST_WINDOWS_CRT_LIB`, `NEVERD_TEST_WINDOWS_UCRT_LIB`, `NEVERD_TEST_WINDOWS_SDK_LIB`를 설정하면 `SourcePatchPE`가 C++ 시나리오 7개를 실행합니다. Windows 이외 호스트에는 `NEVERD_TEST_WINDOWS_RUNNER`도 필요합니다. `NEVERD_TEST_REQUIRE_WINDOWS_RUNTIME=1`은 입력 누락을 실패로 처리합니다. Windows 전용 워크플로는 네이티브 실행을 요구하고 건너뛴 사례를 거부합니다.
 
@@ -203,7 +203,7 @@ ctest --test-dir build-source -L \
   --output-on-failure --parallel 4
 ```
 
-LLVM 빌드 복사본은 Mach-O x64 GOT 데이터 참조도 수정합니다. Clang의 타입 catch 테이블은 4바이트 재배치 필드 끝을 기준으로 합니다. r3/r4는 4바이트 어긋나며 출력 전 검증에서 수정되지 않은 결과를 거부합니다. 개발 Mac의 x64 Mach-O 사례는 Rosetta 2로, ARM64 사례는 직접 실행합니다.
+LLVM fork는 Mach-O x64 GOT 데이터 참조도 수정합니다. Clang의 타입 catch 테이블은 4바이트 재배치 필드 끝을 기준으로 합니다. r3/r4는 4바이트 어긋나며 출력 전 검증에서 수정되지 않은 결과를 거부합니다. 개발 Mac의 x64 Mach-O 사례는 Rosetta 2로, ARM64 사례는 직접 실행합니다.
 
 Windows x64 네이티브 검증 [2ed7e78fc](https://github.com/NeverSight/NeverD/actions/runs/38307461805)에서 PE/객체/trampoline 전용 테스트 16개와 CPU 대상 행렬 테스트 143개가 건너뛰기 없이 모두 통과했습니다. FH3 테스트는 C++ 실행 시나리오 7가지를 검증했으며 대상 행렬은 Unicorn을 사용합니다. 이 실행은 Clang 22.1.6, 네이티브 MSVC 및 Windows SDK, 통합 LLVM을 사용했습니다.
 
@@ -259,3 +259,10 @@ ELF ARM과 Thumb는 별도 프로필입니다. 소스 생성기에 `-marm` 또�
 Mach-O 수정은 이미지 전체의 ARM/Thumb 혼합 정보와 별개로 선택된 Thumb 함수를 인증하고, 증거가 있는 Thumb 내보내기 포인터와 ARM32 언와인드 코드 주소를 정규화합니다. 데이터 포인터나 범위 길이는 바꾸지 않습니다. 통합 LLVM 소스 빌드는 로컬에서 CPU 매트릭스 검사 283개와 예외 계약 검사 258개를 모두 통과했으며 실패나 건너뛰기가 없습니다. 구형 Mach-O 테스트는 기록된 오픈 소스 링커와 예약된 언와인드 공간을 사용합니다. i386에는 올바르게 정렬된 시작 진입점과 64 KiB 페이지 제로 세그먼트가 있습니다.
 
 이 결과는 명시한 에뮬레이터와 호환 계층에서의 C 코드 실행을 입증합니다. Wine은 Microsoft Windows가 아니며 Darling은 macOS가 아닙니다. iOS HLE 안의 ARMv7k 실행은 watchOS, WatchKit 또는 Apple 실기기 검증이 아닙니다. 구형 Apple SDK나 네이티브 32비트 하드웨어 지원을 추론하지 않으며 C++ 예외 언와인드 검증으로도 간주하지 않습니다. 기존 네이티브 및 호환 모드 증거는 계속 분리해 기록합니다. NeverC는 빌드하거나 변경하지 않았습니다.
+
+<!-- i18n-section: interactive-byte-patches -->
+## 대화형 패치의 책임
+
+`lib/patch`는 바이트 변경 검증, LLVM MC 인코딩, 불변 입력 스냅샷, 정규화된 변경 기록과 배타적 내보내기를 담당합니다. SDK는 실제 C 출력, 정규 LowIR 출처와 디코딩된 피연산자로 소스 대상을 증명하며 탐색 앵커만으로 편집을 허용하지 않습니다. worker는 선택적 `patches.json`을 실행 취소와 다시 실행에 통합하고 변경 후 분석을 무효화합니다. 시그니처 이름은 원본 바이트를 읽고 수정된 함수에는 식별 결과로 추론한 라이브러리 효과를 적용하지 않습니다. GUI, CLI와 Python은 같은 API를 사용합니다. 전체 함수 교체는 계속 `neverd_patch_source`를 사용하며 바이트 변경은 먼저 내보내고 다시 열어야 합니다.
+
+[GUI](../gui.md) · `neverd patch-bytes` · `Session.byte_patches` · `Session.apply_byte_patch` · `Session.export_byte_patches`

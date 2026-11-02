@@ -37,6 +37,10 @@ inline constexpr size_t kTypeFitMaxShifts = 4096;
 inline constexpr int kCTypeParserExpandDepthLimit = 16;
 inline constexpr int kCTypeParserPassingDepthLimit = 16;
 
+// lib/types/TypeImport.cpp
+/// Nesting of inline type expressions. Named recursion uses a worklist.
+inline constexpr unsigned kPrototypeTypeImportMaxDepth = 64;
+
 // lib/types/CTypeRender.cpp
 inline constexpr int kCTypeRenderTypedefRecordDepthLimit = 16;
 

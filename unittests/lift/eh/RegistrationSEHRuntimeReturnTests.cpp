@@ -9,10 +9,10 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationCallResult.h"
-#include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
+#include "neverd/ir/med/X86/X86RegistrationCallResult.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
 
 #include <algorithm>
 

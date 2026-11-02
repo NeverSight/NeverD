@@ -12,11 +12,11 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/X87Constant.h"
+#include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/SEHFrameProof.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 using namespace neverd;
@@ -280,5 +280,35 @@ TEST(X64CRTFrame, ControlFPRequiresAnAuthenticatedReturningInvocation) {
       ASSERT_EQ(Proof.Calls.size(), 1u);
       EXPECT_EQ(Proof.Calls.begin()->first.first, F.UnwindCall);
     }
+  }
+}
+
+TEST(X64CRTFrame, ControlFPProviderIdentityDoesNotBorrowPE32Contracts) {
+  struct Case {
+    const char *Module;
+    bool Accepted;
+  };
+  const Case Cases[] = {{"UCRTBASE.DLL", true},
+                        {"ucrtbased.dll", true},
+                        {"api-ms-win-crt-runtime-l1-1-0.dll", true},
+                        {"api-ms-win-crt-math-l1-1-0.dll", true},
+                        {"msvcrt.dll", false},
+                        {"msvcrtd.dll", false},
+                        {"msvcr100.dll", false},
+                        {"api-ms-win-crt-stdio-l1-1-0.dll", false}};
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Module);
+    ControlFixture F(96, 0);
+    F.Image.Imports[0].Module = C.Module;
+    const auto Caller = F.lift();
+    ASSERT_TRUE(Caller.hasCompleteLiftCoverage());
+    const auto Proof = F.prove(Caller);
+    if (!C.Accepted) {
+      EXPECT_TRUE(Proof.Calls.empty());
+      continue;
+    }
+    ASSERT_EQ(Proof.Calls.size(), 1u);
+    EXPECT_EQ(Proof.Calls.begin()->first.first, F.UnwindCall);
+    EXPECT_TRUE(Proof.UsesRuntimeMemory);
   }
 }

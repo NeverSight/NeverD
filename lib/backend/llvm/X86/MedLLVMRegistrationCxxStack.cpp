@@ -9,9 +9,9 @@
 #include "../eh/MedLLVMEHHelpers.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationCatchStack.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatchStack.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 
 #include "llvm/Support/Errc.h"
 

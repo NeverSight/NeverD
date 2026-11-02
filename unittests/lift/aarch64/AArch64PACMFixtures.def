@@ -1,0 +1,132 @@
+//===- AArch64PACMFixtures.def - Independent PACM programs ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Original A64 words assembled independently with LLVM MC. Consumer rows
+/// record byte register offsets and the original signing PC (base + 4).
+/// Flow rows record prefix count and whether incoming executed edges differ.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PACM_CONSUMER
+#define NEVERD_PACM_CONSUMER(Word, Id, Pointer, Mod1, Mod2, PC, Return)
+#endif
+#ifndef NEVERD_PACM_FLOW
+#define NEVERD_PACM_FLOW(Name, Count, Mixed, ...)
+#endif
+#ifndef NEVERD_PACM_MODE_CASE
+#define NEVERD_PACM_MODE_CASE(Name, Zero, One, Two, ...)
+#endif
+#ifndef NEVERD_PACM_UNRESOLVED
+#define NEVERD_PACM_UNRESOLVED(Offset, ...)
+#endif
+#ifndef NEVERD_PACM_RETURN_CASE
+#define NEVERD_PACM_RETURN_CASE(Name, Value, ...)
+#endif
+#ifndef NEVERD_PACM_SHAPE_ID
+#define NEVERD_PACM_SHAPE_ID(Id)
+#endif
+#ifndef NEVERD_PACM_VALUE
+#define NEVERD_PACM_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_PACM_TEXT
+#define NEVERD_PACM_TEXT(Name, Text)
+#endif
+
+NEVERD_PACM_VALUE(uint32_t, kPACM, 0xd50324ff)
+NEVERD_PACM_VALUE(uint32_t, kReturn, 0xd65f03c0)
+NEVERD_PACM_VALUE(va_t, kBase, 0x1000)
+NEVERD_PACM_VALUE(unsigned, kWordBytes, 4)
+NEVERD_PACM_VALUE(unsigned, kIntrinsicIdBytes, 2)
+NEVERD_PACM_VALUE(unsigned, kInvalidModeBytes, 4)
+NEVERD_PACM_TEXT(kShapeName, "pacm_shape")
+NEVERD_PACM_TEXT(kPrefixLLVM, ".inst 0xd50324ff\n2:\n.inst ")
+NEVERD_PACM_TEXT(kPrefixC, ".inst 0xd50324ff\\n2:\\n.inst ")
+NEVERD_PACM_TEXT(kTrap, "brk #0xc470")
+NEVERD_PACM_TEXT(kCaptureArgs,
+                 "#include <stdint.h>\nuint64_t capture(uint64_t __pointer, "
+                 "uint64_t __pointer_, uint64_t __pointer__, "
+                 "uint64_t __pointer___) { ")
+
+NEVERD_PACM_SHAPE_ID(Pacia)
+NEVERD_PACM_SHAPE_ID(Autia)
+NEVERD_PACM_SHAPE_ID(Xpaci)
+NEVERD_PACM_SHAPE_ID(A64_Pacga)
+NEVERD_PACM_SHAPE_ID(A64_AuthBranch)
+NEVERD_PACM_SHAPE_ID(A64_Pacia2)
+NEVERD_PACM_SHAPE_ID(A64_Autib2)
+NEVERD_PACM_SHAPE_ID(A64_AuthReturnIA2)
+NEVERD_PACM_SHAPE_ID(A64_PaciaM)
+NEVERD_PACM_SHAPE_ID(A64_PacibM)
+NEVERD_PACM_SHAPE_ID(A64_AutiaM)
+NEVERD_PACM_SHAPE_ID(A64_AutibM)
+NEVERD_PACM_SHAPE_ID(A64_AuthReturnIAM)
+NEVERD_PACM_SHAPE_ID(A64_AuthReturnIBM)
+
+NEVERD_PACM_CONSUMER(0xd503233f, A64_PaciaM, 240, 248, 0x1004, true, false)
+NEVERD_PACM_CONSUMER(0xd503237f, A64_PacibM, 240, 248, 0x1004, true, false)
+NEVERD_PACM_CONSUMER(0xd50323bf, A64_AutiaM, 240, 248, 128, false, false)
+NEVERD_PACM_CONSUMER(0xd50323ff, A64_AutibM, 240, 248, 128, false, false)
+NEVERD_PACM_CONSUMER(0xd65f0bff, A64_AuthReturnIAM, 240, 248, 128, false, true)
+NEVERD_PACM_CONSUMER(0xd65f0fff, A64_AuthReturnIBM, 240, 248, 128, false, true)
+NEVERD_PACM_CONSUMER(0xd503211f, A64_PaciaM, 136, 128, 120, false, false)
+NEVERD_PACM_CONSUMER(0xd503215f, A64_PacibM, 136, 128, 120, false, false)
+NEVERD_PACM_CONSUMER(0xd503219f, A64_AutiaM, 136, 128, 120, false, false)
+NEVERD_PACM_CONSUMER(0xd50321df, A64_AutibM, 136, 128, 120, false, false)
+
+// PACM; NOP consumes the mode before AUTIA1716.
+NEVERD_PACM_FLOW(NopConsumesPrefix, 0, false, 0xd50324ff, 0xd503201f,
+                 0xd503219f, 0xd65f03c0)
+// A second PACM restores the prefix; only the first AUTIA consumes it.
+NEVERD_PACM_FLOW(RepeatedPrefix, 1, false, 0xd50324ff, 0xd50324ff, 0xd503219f,
+                 0xd503219f, 0xd65f03c0)
+// B itself consumes PACM, even when its destination is the next instruction.
+NEVERD_PACM_FLOW(BranchConsumesPrefix, 0, false, 0xd50324ff, 0x14000001,
+                 0xd503219f, 0xd65f03c0)
+// CBNZ x0, auth; PACM; auth: the taken edge bypasses PACM.
+NEVERD_PACM_FLOW(BranchSkipsPrefix, 1, true, 0xb5000040, 0xd50324ff, 0xd503219f,
+                 0xd65f03c0)
+// Inverse condition, with a result copy after the consumer.
+NEVERD_PACM_FLOW(InverseBranchSkipsPrefix, 1, true, 0xb4000040, 0xd50324ff,
+                 0xd503219f, 0xaa1103e0, 0xd65f03c0)
+// A consumer on a loop backedge receives zero from the CBNZ instruction.
+NEVERD_PACM_FLOW(LoopConsumesPrefix, 1, true, 0xd50324ff, 0xd503219f,
+                 0xb5ffffe0, 0xd65f03c0)
+// ADR is not a prefix consumer; its original bytes still clear PACM.
+NEVERD_PACM_FLOW(AddressConsumesPrefix, 0, false, 0xd50324ff, 0x10000000,
+                 0xd503219f, 0xd65f03c0)
+// An unconditional edge can skip PACM entirely.
+NEVERD_PACM_FLOW(UnexecutedPrefix, 0, false, 0x14000002, 0xd50324ff, 0xd503219f,
+                 0xd65f03c0)
+
+// Replace only the authentication result with its observed incoming mode.
+// This executes CFG/SSA selection independently of PAuth hardware support.
+NEVERD_PACM_MODE_CASE(observe_cbnz, 1, 0, 0, 0xb5000040, 0xd50324ff, 0xd503219f,
+                      0xaa1103e0, 0xd65f03c0)
+NEVERD_PACM_MODE_CASE(observe_cbz, 0, 1, 1, 0xb4000040, 0xd50324ff, 0xd503219f,
+                      0xaa1103e0, 0xd65f03c0)
+NEVERD_PACM_MODE_CASE(observe_loop, 0, 1, 0, 0xb40000e0, 0xd50324ff, 0xd503219f,
+                      0xaa1103e1, 0xf1000400, 0x54ffffa1, 0xaa0103e0,
+                      0xd65f03c0)
+
+#undef NEVERD_PACM_MODE_CASE
+// PACM at the end of available code has no modeled executed successor.
+NEVERD_PACM_UNRESOLVED(0, 0xd50324ff)
+// Entry at AUTIA1716 also has a PACM fallthrough predecessor. Its implicit
+// machine-entry edge is not an ordinary incoming SSA predecessor.
+NEVERD_PACM_UNRESOLVED(4, 0xd50324ff, 0xd503219f, 0xb5ffffc0, 0xd65f03c0)
+
+#undef NEVERD_PACM_UNRESOLVED
+// PACM; PACI*SP; MOV x0,#7; ADR x16,signing-PC; PACM; RETA*.
+NEVERD_PACM_RETURN_CASE(prefixed_return_a, 7, 0xd50324ff, 0xd503233f,
+                        0xd28000e0, 0x10ffffd0, 0xd50324ff, 0xd65f0bff)
+NEVERD_PACM_RETURN_CASE(prefixed_return_b, 7, 0xd50324ff, 0xd503237f,
+                        0xd28000e0, 0x10ffffd0, 0xd50324ff, 0xd65f0fff)
+
+#undef NEVERD_PACM_RETURN_CASE
+#undef NEVERD_PACM_SHAPE_ID
+#undef NEVERD_PACM_CONSUMER
+#undef NEVERD_PACM_FLOW
+#undef NEVERD_PACM_VALUE
+#undef NEVERD_PACM_TEXT

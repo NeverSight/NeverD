@@ -1,5 +1,17 @@
+//===- StartupMetrics.cpp - GUI startup observations ---------------------===//
+//
+//                         NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Record startup milestones and the listing delivered by the workbench.
+//===----------------------------------------------------------------------===//
+
 #include "StartupMetrics.h"
 
+#include "Address.h"
+#include "DisassemblyView.h"
+#include "ListingView.h"
 #include "MainWindow.h"
 #include "Session.h"
 
@@ -12,7 +24,7 @@
 
 namespace neverd::gui {
 namespace {
-constexpr int ReportSchema = 3;
+constexpr int ReportSchema = 4;
 } // namespace
 
 StartupMetrics::StartupMetrics(Session &session, const QElapsedTimer &clock,
@@ -100,6 +112,22 @@ void StartupMetrics::finish(bool success, const QString &reason) {
     report["device_pixel_ratio"] = window_->devicePixelRatioF();
     report["width"] = window_->width();
     report["height"] = window_->height();
+    if (openingFile_ && success) {
+      const auto *listing = window_->disassembly()->listing();
+      const auto current = listing->currentAddress();
+      const auto top = listing->topItem();
+      // Collect evidence after recording the paint/flush milestones.
+      report["input_path"] = session_.filePath();
+      report["listing"] = QJsonObject{
+          {"current_address", current ? hexAddress(*current) : QString()},
+          {"top_address", top ? hexAddress(*top) : QString()},
+          {"rows_current", listing->searchReady()},
+          {"jump_pending", listing->jumpPending()},
+          {"current_text", listing->currentLineText()},
+          {"loaded_text", listing->searchText()},
+          {"viewport_width", listing->viewport()->width()},
+          {"viewport_height", listing->viewport()->height()}};
+    }
   }
   QSaveFile file(output_);
   const auto bytes = QJsonDocument(report).toJson();

@@ -1,0 +1,64 @@
+//===- CompactUnwindARM64.def - ARM64 compact unwind layout ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// ARM64 compact-unwind fields from LLVM's published
+/// libunwind/include/mach-o/compact_unwind_encoding.h. MODE(Name, Value,
+/// PayloadMask) owns the reserved-bit policy shared by readers and writers;
+/// VALUE(Type, Name, Value) and TEXT(Name, Text) expose layout and diagnostics.
+/// Undefined NEVERD_COMPACT_ARM64_* macros ignore their rows.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_COMPACT_ARM64_VALUE
+#define NEVERD_COMPACT_ARM64_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_COMPACT_ARM64_MODE
+#define NEVERD_COMPACT_ARM64_MODE(Name, Value, PayloadMask)
+#endif
+#ifndef NEVERD_COMPACT_ARM64_TEXT
+#define NEVERD_COMPACT_ARM64_TEXT(Name, Text)
+#endif
+
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FramelessStackSizeMask, 0x00fff000u)
+NEVERD_COMPACT_ARM64_VALUE(unsigned, kARM64FramelessStackSizeShift, 12)
+NEVERD_COMPACT_ARM64_VALUE(unsigned, kARM64StackSizeScale, 16)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameX19X20Pair, 0x00000001u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameX21X22Pair, 0x00000002u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameX23X24Pair, 0x00000004u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameX25X26Pair, 0x00000008u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameX27X28Pair, 0x00000010u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameD8D9Pair, 0x00000100u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameD10D11Pair, 0x00000200u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameD12D13Pair, 0x00000400u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64FrameD14D15Pair, 0x00000800u)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64RegisterPairsMask,
+                           kARM64FrameX19X20Pair | kARM64FrameX21X22Pair |
+                               kARM64FrameX23X24Pair | kARM64FrameX25X26Pair |
+                               kARM64FrameX27X28Pair | kARM64FrameD8D9Pair |
+                               kARM64FrameD10D11Pair | kARM64FrameD12D13Pair |
+                               kARM64FrameD14D15Pair)
+NEVERD_COMPACT_ARM64_VALUE(uint32_t, kARM64PAuthLROffsetMask, 0x00fff000u)
+NEVERD_COMPACT_ARM64_VALUE(unsigned, kARM64PAuthLROffsetShift, 12)
+NEVERD_COMPACT_ARM64_VALUE(unsigned, kARM64InstructionBytes, 4)
+
+NEVERD_COMPACT_ARM64_MODE(kARM64ModeNone, 0x00000000u, 0)
+NEVERD_COMPACT_ARM64_MODE(kARM64ModeFrameless, 0x02000000u,
+                          kARM64FramelessStackSizeMask |
+                              kARM64RegisterPairsMask)
+NEVERD_COMPACT_ARM64_MODE(kARM64ModeDwarf, 0x03000000u, kDwarfSectionOffsetMask)
+NEVERD_COMPACT_ARM64_MODE(kARM64ModeFrame, 0x04000000u, kARM64RegisterPairsMask)
+NEVERD_COMPACT_ARM64_MODE(kARM64ModeFramePAuthLR, 0x05000000u,
+                          kARM64PAuthLROffsetMask | kARM64RegisterPairsMask)
+
+NEVERD_COMPACT_ARM64_TEXT(
+    kARM64PAuthLRInvalidSigningRange,
+    "compact unwind signing instruction is unaligned or outside its code range")
+NEVERD_COMPACT_ARM64_TEXT(
+    kCompactUnwindCodeRangeOverflow,
+    "__unwind_info code range overflows the image address")
+
+#undef NEVERD_COMPACT_ARM64_VALUE
+#undef NEVERD_COMPACT_ARM64_MODE
+#undef NEVERD_COMPACT_ARM64_TEXT

@@ -18,8 +18,10 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/ir/med/I386PicAddress.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/med/MedScalarSelection.h"
+#include "neverd/ir/med/X86/I386PicAddress.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RelocationProvenance.h"
 #include "neverd/support/Diagnostic.h"
@@ -2260,13 +2262,13 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value,
     const auto OwnerEnd = Img->mappedObjectOwnerEnd(VA);
     if (!Seg || !Seg->isReadable() || !Seg->isWritable() ||
         Seg->isExecutable() || Img->isCodeAddress(VA) ||
-        isReadOnlyAfterReloc(Seg) || Seg->Size > InvalidVA - Seg->VA ||
+        Img->readOnlyAfterRelocations(VA, Width) ||
+        Seg->Size > InvalidVA - Seg->VA ||
         !rangeInBounds(VA - Seg->VA, Width, Seg->Size) ||
         !rangeInBounds(VA - Seg->VA, Width, Seg->Data.size()) ||
         LayoutOwner == InvalidVA || !OwnerEnd || *OwnerEnd < VA + Width ||
         (OwnerVA != InvalidVA && OwnerVA != LayoutOwner) ||
-        (Sec && (!Sec->isWritable() || Sec->isExecutable() ||
-                 section_names::isReadOnlyAfterRelocSectionName(Sec->Name))))
+        (Sec && Sec->isExecutable()))
       return false;
     auto overlaps = [&](va_t Start, uint64_t Size) {
       return Size && (Start <= VA ? VA - Start < Size : Start - VA < Width);
@@ -4999,16 +5001,8 @@ bool MedLLVMEmitter::selectPreservesPointerValues(const MedOp &Op) const {
 
 bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
                                       MedVar &ArmT, MedVar &ArmF) const {
-  if (Or.Opcode != NdOp::INT_OR || Or.NumInputs < 2)
+  if (Or.Opcode != NdOp::INT_OR)
     return false;
-  const MedOp *A = lookupDef(Or.Inputs[0]);
-  const MedOp *B = lookupDef(Or.Inputs[1]);
-  if (!A || !B || A->Opcode != NdOp::INT_AND || B->Opcode != NdOp::INT_AND ||
-      A->NumInputs < 2 || B->NumInputs < 2)
-    return false;
-  auto sameVar = [](const MedVar &Left, const MedVar &Right) {
-    return sameIndexValue(Left, Right);
-  };
   std::function<bool(const MedVar &, int)> isBooleanValue = [&](const MedVar &V,
                                                                 int Depth) {
     if (Depth >
@@ -5041,54 +5035,15 @@ bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
       return false;
     }
   };
-  // Every operation in the blend must execute at one exact width. The emitter
-  // zero-extends narrower AND operands before applying the mask; an i32
-  // `-cond` therefore is not an all-ones mask for an i64 pointer.
-  uint16_t BlendSize = Or.Output.Size;
-  if (BlendSize == 0 || Or.Inputs[0].Size != BlendSize ||
-      Or.Inputs[1].Size != BlendSize || A->Output.Size != BlendSize ||
-      B->Output.Size != BlendSize)
+  const auto Selection = matchMaskedScalarSelection(
+      Or, [&](const MedVar &V) { return lookupDef(V); }, sameIndexValue,
+      [&](const MedVar &V) { return isBooleanValue(V, 0); });
+  if (!Selection)
     return false;
-
-  auto maskCond = [&](const MedVar &Mask,
-                      bool &Positive) -> std::optional<MedVar> {
-    if (Mask.Size != BlendSize)
-      return std::nullopt;
-    const MedOp *Def = lookupDef(Mask);
-    Positive = true;
-    if (Def && Def->Opcode == NdOp::INT_NOT && Def->NumInputs >= 1) {
-      if (Def->Output.Size != BlendSize || Def->Inputs[0].Size != BlendSize)
-        return std::nullopt;
-      Positive = false;
-      Def = lookupDef(Def->Inputs[0]);
-    }
-    if (!Def || Def->Opcode != NdOp::INT_NEG2 || Def->NumInputs < 1 ||
-        Def->Output.Size != BlendSize || Def->Inputs[0].Size != BlendSize)
-      return std::nullopt;
-    Def = lookupDef(Def->Inputs[0]);
-    if (!Def || Def->Opcode != NdOp::INT_ZEXT || Def->NumInputs < 1 ||
-        Def->Output.Size != BlendSize || !isBooleanValue(Def->Inputs[0], 0))
-      return std::nullopt;
-    return Def->Inputs[0];
-  };
-  for (int Ai = 0; Ai < 2; ++Ai)
-    for (int Bi = 0; Bi < 2; ++Bi) {
-      bool APositive = false;
-      bool BPositive = false;
-      auto ACond = maskCond(A->Inputs[Ai], APositive);
-      auto BCond = maskCond(B->Inputs[Bi], BPositive);
-      const MedVar &AValue = A->Inputs[1 - Ai];
-      const MedVar &BValue = B->Inputs[1 - Bi];
-      if (AValue.Size != BlendSize || BValue.Size != BlendSize)
-        continue;
-      if (ACond && BCond && sameVar(*ACond, *BCond) && APositive != BPositive) {
-        Cond = *ACond;
-        ArmT = APositive ? AValue : BValue;
-        ArmF = APositive ? BValue : AValue;
-        return true;
-      }
-    }
-  return false;
+  Cond = Selection->Condition;
+  ArmT = Selection->TrueValue;
+  ArmF = Selection->FalseValue;
+  return true;
 }
 
 void MedLLVMEmitter::failAmbiguousDataPointerPhi(const PhiNode &Phi) const {
@@ -5123,6 +5078,8 @@ std::optional<uint64_t> MedLLVMEmitter::traceSSAConst(const MedVar &V) const {
     const MedOp *Def = lookupDef(Cur);
     if (!Def)
       return std::nullopt;
+    if (auto Address = x86RepConstantAddressOutput(*Def, Cur, TargetArch))
+      return Address;
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1) {
       if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
           Def->Output.Size < Def->Inputs[0].Size)
@@ -5256,6 +5213,12 @@ MedLLVMEmitter::traceTableBaseConst(const MedVar &V, int Depth, bool *SawLoad,
     return std::nullopt;
   }
   case NdOp::LOAD: {
+    // Source image storage belongs to the live, relocated image. Its contents
+    // are runtime values, even when the file has read-only section flags.
+    // Folding a pointer from file bytes would both erase runtime updates and
+    // make the address resolvers rebase an already-relocated pointer again.
+    if (OriginalImageStorageForSource && Img && !Img->IsRelocatable)
+      return std::nullopt;
     // FS/GS operands are segment-relative numeric offsets, not flat image
     // addresses.  Never inspect the backing image for a non-default load even
     // when its offset happens to equal a literal-pool or relocation slot VA.
@@ -7047,6 +7010,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
                                               std::vector<MedVar> &IdxTerms,
                                               int Depth, bool FailClosed,
                                               bool *SawAmbiguousPhi) const {
+  IndexedGlobalBaseContext Context;
   const bool CleanTopLevel =
       Depth == 0 && Base == 0 && !HaveBase && IdxTerms.empty();
   auto replayDiagnostic = [&](bool SawAmbiguous, const PhiNode *AmbiguousPhi) {
@@ -7075,9 +7039,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
     ++AddressProvenanceWork.IndexedBaseProofs;
     bool LocalSawAmbiguous = false;
     const PhiNode *LocalAmbiguousPhi = nullptr;
-    const bool Proven =
-        collectIndexedGlobalBaseImpl(V, Base, HaveBase, IdxTerms, Depth,
-                                     &LocalSawAmbiguous, &LocalAmbiguousPhi);
+    const bool Proven = collectIndexedGlobalBaseImpl(
+        V, Base, HaveBase, IdxTerms, Depth, &LocalSawAmbiguous,
+        &LocalAmbiguousPhi, Context);
     IndexedGlobalBaseProof Proof;
     Proof.Proven = Proven;
     Proof.Base = Base;
@@ -7094,9 +7058,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBase(const MedVar &V, uint64_t &Base,
     ++AddressProvenanceWork.IndexedBaseProofs;
   bool LocalSawAmbiguous = false;
   const PhiNode *LocalAmbiguousPhi = nullptr;
-  const bool Proven =
-      collectIndexedGlobalBaseImpl(V, Base, HaveBase, IdxTerms, Depth,
-                                   &LocalSawAmbiguous, &LocalAmbiguousPhi);
+  const bool Proven = collectIndexedGlobalBaseImpl(V, Base, HaveBase, IdxTerms,
+                                                   Depth, &LocalSawAmbiguous,
+                                                   &LocalAmbiguousPhi, Context);
   replayDiagnostic(LocalSawAmbiguous, LocalAmbiguousPhi);
   return Proven;
 }
@@ -7188,7 +7152,39 @@ MedLLVMEmitter::uniqueDataAddressOwner(const MedVar &V, uint64_t Value,
 bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     const MedVar &V, uint64_t &Base, bool &HaveBase,
     std::vector<MedVar> &IdxTerms, int Depth, bool *SawAmbiguousPhi,
-    const PhiNode **AmbiguousPhi) const {
+    const PhiNode **AmbiguousPhi, IndexedGlobalBaseContext &Context) const {
+  const auto Key =
+      std::make_tuple(addressProvenanceVarKey(V), Depth, Base, HaveBase);
+  auto replay = [&](const IndexedGlobalBaseProof &Proof) {
+    Base = Proof.Base;
+    HaveBase = Proof.HaveBase;
+    IdxTerms.insert(IdxTerms.end(), Proof.IdxTerms.begin(),
+                    Proof.IdxTerms.end());
+    if (SawAmbiguousPhi && Proof.SawAmbiguousPhi)
+      *SawAmbiguousPhi = true;
+    if (AmbiguousPhi && !*AmbiguousPhi)
+      *AmbiguousPhi = Proof.AmbiguousPhi;
+    return Proof.Proven;
+  };
+  if (auto It = Context.Proofs.find(Key); It != Context.Proofs.end())
+    return replay(It->second);
+  ++AddressProvenanceWork.IndexedBaseNodes;
+  IndexedGlobalBaseProof Proof;
+  Proof.Base = Base;
+  Proof.HaveBase = HaveBase;
+  Proof.Proven = collectIndexedGlobalBaseUncached(
+      V, Proof.Base, Proof.HaveBase, Proof.IdxTerms, Depth,
+      &Proof.SawAmbiguousPhi, &Proof.AmbiguousPhi, Context);
+  // Depth and incoming base are part of the key: a bounded/cyclic refusal or
+  // an owner conflict cannot masquerade as a shallower, clean-base proof.
+  auto [It, Inserted] = Context.Proofs.emplace(Key, std::move(Proof));
+  return replay(It->second);
+}
+
+bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
+    const MedVar &V, uint64_t &Base, bool &HaveBase,
+    std::vector<MedVar> &IdxTerms, int Depth, bool *SawAmbiguousPhi,
+    const PhiNode **AmbiguousPhi, IndexedGlobalBaseContext &Context) const {
   if (!CurMedFunc ||
       Depth >
           ::neverd::limits::backend::
@@ -7212,6 +7208,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     // all-arms audit, while the caller still rejects mixed/multiple bases.
     const bool LoaderOwnedPointerTable =
         Seg && !Seg->isExecutable() && segHasPtrRelocSlots(Seg);
+    // A table grants data identity only to its own object/slots, never
+    // to every address sharing the executable mapping.
+    const bool ExecutableTableDomain = isInCodePointerTableAddress(V.ConstVal);
     bool HasOwnedBytes = false;
     if (Owner && Seg) {
       const Section *OwnerSec = Img->getSectionFor(*Owner);
@@ -7220,9 +7219,13 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
       HasOwnedBytes = Size <= InvalidVA - Begin && V.ConstVal >= Begin &&
                       V.ConstVal <= Begin + Size;
     }
-    if (!Seg || Img->hasExecutableCodeOwnerAt(Owner.value_or(V.ConstVal)) ||
+    if (!Seg ||
+        (Img->hasExecutableCodeOwnerAt(Owner.value_or(V.ConstVal)) &&
+         !ExecutableTableDomain) ||
         (Seg->isWritable() && !LoaderOwnedPointerTable) ||
-        !(Owner ? HasOwnedBytes : hasObjectDataProvenance(V.ConstVal)) ||
+        !(Owner ? HasOwnedBytes
+                : (hasObjectDataProvenance(V.ConstVal) ||
+                   ExecutableTableDomain)) ||
         (HaveBase && Base != V.ConstVal))
       return false;
     Base = V.ConstVal;
@@ -7249,7 +7252,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     if (auto Forwarded = pointerPreservingInput(*Def))
       return collectIndexedGlobalBaseImpl(*Forwarded, Base, HaveBase, IdxTerms,
                                           Depth + 1, SawAmbiguousPhi,
-                                          AmbiguousPhi);
+                                          AmbiguousPhi, Context);
   // A non-recursive control-flow PHI can transport one table base just like a
   // COPY, but only after proving every feasible incoming edge.  Direct PHI
   // constants are emitted as raw original-image integers (the edge-copy path
@@ -7288,7 +7291,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
         std::vector<MedVar> ArmTerms;
         if (collectIndexedGlobalBaseImpl(Arg, ArmBase, HaveArmBase, ArmTerms,
                                          Depth + 1, SawAmbiguousPhi,
-                                         AmbiguousPhi) &&
+                                         AmbiguousPhi, Context) &&
             HaveArmBase)
           Candidate = traceValueVA(Arg);
       }
@@ -7414,7 +7417,8 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     if (!KC || Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
         Def->Output.Size < Def->Inputs[0].Size ||
         !collectIndexedGlobalBaseImpl(Def->Inputs[0], Base, HaveBase, IdxTerms,
-                                      Depth + 1, SawAmbiguousPhi, AmbiguousPhi))
+                                      Depth + 1, SawAmbiguousPhi, AmbiguousPhi,
+                                      Context))
       return false;
     uint16_t KSz = Def->Inputs[1].Size ? Def->Inputs[1].Size : 8;
     IdxTerms.push_back(MedVar::makeConst(uint64_t(0) - *KC, KSz));
@@ -7441,9 +7445,11 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
     if (OwnerConflict || (*C == 0 && !Owner))
       return false;
     if (!Owner)
-      return hasObjectDataProvenance(*C);
+      return hasObjectDataProvenance(*C) || isInCodePointerTableAddress(*C);
     const Segment *Seg = Img ? Img->getSegmentFor(*Owner) : nullptr;
-    if (!Seg || !Seg->isReadable() || Img->hasExecutableCodeOwnerAt(*Owner))
+    if (!Seg || !Seg->isReadable() ||
+        (Img->hasExecutableCodeOwnerAt(*Owner) &&
+         !isInCodePointerTableAddress(*C)))
       return false;
     const Section *OwnerSec = Img->getSectionFor(*Owner);
     const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;
@@ -7480,7 +7486,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
   // (including a constant offset) becomes an index addend.
   if (!CA &&
       collectIndexedGlobalBaseImpl(A, Base, HaveBase, IdxTerms, Depth + 1,
-                                   SawAmbiguousPhi, AmbiguousPhi)) {
+                                   SawAmbiguousPhi, AmbiguousPhi, Context)) {
     if (Def->Output.Size == 0 || A.Size == 0 || Def->Output.Size < A.Size)
       return false;
     IdxTerms.push_back(B);
@@ -7488,7 +7494,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseImpl(
   }
   if (!CB &&
       collectIndexedGlobalBaseImpl(B, Base, HaveBase, IdxTerms, Depth + 1,
-                                   SawAmbiguousPhi, AmbiguousPhi)) {
+                                   SawAmbiguousPhi, AmbiguousPhi, Context)) {
     if (Def->Output.Size == 0 || B.Size == 0 || Def->Output.Size < B.Size)
       return false;
     IdxTerms.push_back(A);

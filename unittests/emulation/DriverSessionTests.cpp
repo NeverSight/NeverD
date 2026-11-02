@@ -23,6 +23,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -751,12 +752,24 @@ TEST_F(DriverImageValidation, RejectsInvalidLoadConfigurationSize) {
 }
 
 TEST(DriverImage, MapsVirtualZeroFillAndOriginalPermissions) {
+  auto Buffer = llvm::MemoryBuffer::getFile(fixture("success").string());
+  ASSERT_TRUE(bool(Buffer));
+  auto Object =
+      llvm::object::COFFObjectFile::create((*Buffer)->getMemBufferRef());
+  ASSERT_TRUE(bool(Object)) << llvm::toString(Object.takeError());
   auto Image = loadDriverImage(fixture("success"), 64 * 1024 * 1024);
   ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
   EXPECT_EQ(Image->Base, 0x180000000ULL);
   ASSERT_FALSE(Image->Regions.empty());
   EXPECT_EQ(Image->Regions.front().Address, Image->Base);
   EXPECT_EQ(Image->Regions.front().Permissions, 1u);
+  ASSERT_EQ(Image->Regions.size(),
+            size_t((*Object)->getCOFFHeader()->NumberOfSections) + 1);
+  const auto HeaderSize = (*Object)->getPE32PlusHeader()->SizeOfHeaders;
+  ASSERT_GE(Image->Regions.front().Bytes.size(), HeaderSize);
+  EXPECT_EQ(std::memcmp(Image->Regions.front().Bytes.data(),
+                        (*Buffer)->getBufferStart(), HeaderSize),
+            0);
   bool HasExecutable = false;
   bool HasWritableZeroFill = false;
   for (const auto &Region : Image->Regions) {

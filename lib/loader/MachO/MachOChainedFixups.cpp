@@ -4,9 +4,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachOArm64eFixups.h"
 #include "MachODyldFixups.h"
 
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -18,6 +20,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <string>
@@ -32,20 +35,13 @@ using namespace llvm::MachO;
 
 namespace {
 
-struct ChainedImportRecord {
-  std::string Name;
-  std::string Module;
-  std::string DisplayModule;
-  int64_t Addend = 0;
-  bool WeakImport = false;
-  bool Valid = false;
-};
+using detail::Arm64eImportRecord;
 
 /// Decode the import table without deduplicating it: chained pointer records
 /// refer to this table by ordinal, so even two equal names must retain distinct
 /// indices and addends.  A malformed entry remains an invalid element rather
 /// than shifting every ordinal after it.
-std::optional<std::vector<ChainedImportRecord>>
+std::optional<std::vector<Arm64eImportRecord>>
 decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
                      const ChainedFixupsInfo &Info, const BinaryImage &Img) {
   const uint64_t DataOff = Info.DataOff;
@@ -58,7 +54,7 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
   dyld_chained_fixups_header Hdr{};
   std::memcpy(&Hdr, BasePtr + DataOff, sizeof(Hdr));
   if (Hdr.imports_count == 0)
-    return std::vector<ChainedImportRecord>{};
+    return std::vector<Arm64eImportRecord>{};
   if (Hdr.imports_offset == 0 || Hdr.symbols_offset == 0 ||
       Hdr.symbols_format != 0 || Hdr.imports_offset >= DataSize ||
       Hdr.symbols_offset >= DataSize)
@@ -91,7 +87,7 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
   if (!rangeInBounds(ImportsAbs, ImportsSize, DataEnd))
     return std::nullopt;
 
-  std::vector<ChainedImportRecord> Records(Hdr.imports_count);
+  std::vector<Arm64eImportRecord> Records(Hdr.imports_count);
 
   for (uint32_t I = 0; I < Hdr.imports_count; ++I) {
     uint32_t NameOff = 0;
@@ -180,21 +176,111 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
         DylibName.empty() ? kExternModule.str() : std::move(DylibName);
     Records[I].Addend = Addend;
     Records[I].WeakImport = WeakImport;
+    Records[I].LibraryOrdinal = LibOrdinal;
     Records[I].Valid = true;
   }
   return Records;
 }
 
-void joinImportSlot(BinaryImage &Img, llvm::StringRef Name,
-                    llvm::StringRef Module, va_t SlotVA) {
-  for (Import &Imp : Img.Imports)
-    if (Imp.Name == Name) {
-      if (Imp.Module.empty() && !Module.empty())
-        Imp.Module = Module.str();
-      if (Imp.IATAddr == 0)
-        Imp.IATAddr = SlotVA;
-      return;
+/// Decode a whole segment before publishing any of its fixups. Authenticated
+/// slots keep a signing recipe and their original bytes; only unauthenticated
+/// slots are materialized as preferred-base runtime pointer values.
+bool parseArm64eSegment(
+    const dyld_chained_starts_in_segment &Seg,
+    const arm64e::ChainFormat &Format, const uint8_t *Bytes, va_t Base,
+    uint32_t SegmentIndex,
+    const std::optional<std::vector<Arm64eImportRecord>> &Imports,
+    BinaryImage &Img) {
+  const auto fail = [&]() {
+    Img.MachOChainedFixupsError = arm64e::kMalformedChainedFixups;
+    return false;
+  };
+  const size_t StartOffset =
+      offsetof(dyld_chained_starts_in_segment, page_start);
+  if (!Imports || (Format.Segmented && Img.IsRelocatable) ||
+      (Seg.page_size != arm64e::kSmallPageBytes &&
+       Seg.page_size != arm64e::kLargePageBytes) ||
+      Seg.size < StartOffset ||
+      uint64_t(Seg.page_count) * sizeof(uint16_t) > Seg.size - StartOffset ||
+      Seg.segment_offset > InvalidVA - Base)
+    return fail();
+  const va_t SegmentVA = Base + Seg.segment_offset;
+  const Segment *Owner = Img.getSegmentFor(SegmentVA);
+  if (!Owner || Owner->VA != SegmentVA ||
+      (!Img.IsRelocatable && (SegmentIndex >= Img.Segments.size() ||
+                              &Img.Segments[SegmentIndex] != Owner)) ||
+      (Seg.page_count &&
+       uint64_t(Seg.page_count - 1) * Seg.page_size >= Owner->Size))
+    return fail();
+  const size_t StartCount = (Seg.size - StartOffset) / sizeof(uint16_t);
+  const auto startAt = [&](size_t Index) {
+    return readLE<uint16_t>(Bytes + StartOffset + Index * sizeof(uint16_t));
+  };
+  std::vector<detail::Arm64eFixup> Pending;
+  std::set<va_t> Slots;
+  for (unsigned Page = 0; Page < Seg.page_count; ++Page) {
+    const uint16_t Start = startAt(Page);
+    if (Start == DYLD_CHAINED_PTR_START_NONE)
+      continue;
+    const uint64_t PageOffset = uint64_t(Page) * Seg.page_size;
+    if (PageOffset > InvalidVA - Base - Seg.segment_offset)
+      return fail();
+    const va_t PageVA = Base + Seg.segment_offset + PageOffset;
+    std::vector<uint16_t> Starts;
+    if (Start & DYLD_CHAINED_PTR_START_MULTI) {
+      size_t Index = Start & ~DYLD_CHAINED_PTR_START_MULTI;
+      if (Index < Seg.page_count)
+        return fail();
+      for (;;) {
+        if (Index >= StartCount)
+          return fail();
+        const uint16_t Value = startAt(Index++);
+        Starts.push_back(Value & ~DYLD_CHAINED_PTR_START_LAST);
+        if (Value & DYLD_CHAINED_PTR_START_LAST)
+          break;
+      }
+    } else {
+      Starts.push_back(Start);
     }
+    for (uint32_t At : Starts) {
+      for (;;) {
+        if (At % Format.Stride || At > Seg.page_size - sizeof(uint64_t) ||
+            At > InvalidVA - PageVA ||
+            Pending.size() >=
+                limits::loader::
+                    kMachOChainedFixupsParseChainedFixupsRebasesGuardLimit)
+          return fail();
+        const va_t Slot = PageVA + At;
+        if (!rangeInBounds(Slot - SegmentVA, sizeof(uint64_t), Owner->Size))
+          return fail();
+        const uint8_t *Storage = Img.readVA(Slot, sizeof(uint64_t));
+        const auto NextSlot = Slots.lower_bound(Slot);
+        if ((NextSlot != Slots.end() && *NextSlot - Slot < sizeof(uint64_t)) ||
+            (NextSlot != Slots.begin() &&
+             Slot - *std::prev(NextSlot) < sizeof(uint64_t)))
+          return fail();
+        if (!Storage || !Slots.insert(Slot).second ||
+            Img.MachOAuthenticatedPointers.count(Slot) ||
+            Img.MachOResolvedChainedPointerSlots.count(Slot))
+          return fail();
+        const uint64_t Raw = readLE<uint64_t>(Storage);
+        auto F =
+            detail::decodeArm64eFixup(Raw, Format, Slot, Base, *Imports, Img);
+        if (!F)
+          return fail();
+        const uint32_t Next = F->Next;
+        Pending.push_back(std::move(*F));
+        if (!Next)
+          break;
+        const unsigned Delta = Next * Format.Stride;
+        if (Delta > Seg.page_size - At)
+          return fail();
+        At += Delta;
+      }
+    }
+  }
+  detail::publishArm64eFixups(Pending, Img);
+  return true;
 }
 
 } // namespace
@@ -210,7 +296,7 @@ void parseChainedFixupsImports(const uint8_t *BasePtr, size_t FileSize,
   for (const auto &Imp : Img.Imports)
     SeenNames.insert(Imp.Name);
 
-  for (const ChainedImportRecord &Record : *Records) {
+  for (const Arm64eImportRecord &Record : *Records) {
     if (!Record.Valid || !SeenNames.insert(Record.Name).second)
       continue;
 
@@ -236,55 +322,87 @@ void parseChainedFixupsImports(const uint8_t *BasePtr, size_t FileSize,
 void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
                                const ChainedFixupsInfo &Info, va_t TextVMAddr,
                                BinaryImage &Img) {
-  if (!BasePtr)
-    return;
+  const auto malformedArm64e = [&]() {
+    if (Img.isArm64e())
+      Img.MachOChainedFixupsError = arm64e::kMalformedChainedFixups;
+  };
   uint32_t DataOff = Info.DataOff;
   uint32_t DataSize = Info.DataSize;
-  if (DataOff == 0 || DataSize < sizeof(dyld_chained_fixups_header) ||
-      !rangeInBounds(DataOff, DataSize, FileSize))
+  if (!DataOff && !DataSize && !Img.MachOHasChainedFixups)
     return;
+  if (!BasePtr || DataOff == 0 ||
+      DataSize < sizeof(dyld_chained_fixups_header) ||
+      !rangeInBounds(DataOff, DataSize, FileSize) ||
+      (Img.isArm64e() && Img.MachOChainedFixupsAmbiguous)) {
+    malformedArm64e();
+    return;
+  }
   // The chained-fixups blob is self-contained within [DataOff, DataEnd); every
   // sub-structure offset below is validated against this bound before deref.
   const uint64_t DataEnd = static_cast<uint64_t>(DataOff) + DataSize;
 
-  const auto *Hdr =
-      reinterpret_cast<const dyld_chained_fixups_header *>(BasePtr + DataOff);
-  if (Hdr->starts_offset == 0)
+  dyld_chained_fixups_header Header{};
+  std::memcpy(&Header, BasePtr + DataOff, sizeof(Header));
+  const auto *Hdr = &Header;
+  if (Hdr->starts_offset == 0 || Hdr->fixups_version != 0) {
+    malformedArm64e();
     return;
+  }
   uint64_t StartsAbs = static_cast<uint64_t>(DataOff) + Hdr->starts_offset;
-  if (!rangeInBounds(StartsAbs, sizeof(uint32_t), DataEnd))
+  if (!rangeInBounds(StartsAbs, sizeof(uint32_t), DataEnd)) {
+    malformedArm64e();
     return;
-  const auto *Starts = reinterpret_cast<const dyld_chained_starts_in_image *>(
-      BasePtr + StartsAbs);
-  uint32_t SegCount = Starts->seg_count;
+  }
+  uint32_t SegCount = readLE<uint32_t>(BasePtr + StartsAbs);
   if (StartsAbs + sizeof(uint32_t) +
           static_cast<uint64_t>(SegCount) * sizeof(uint32_t) >
-      DataEnd)
+      DataEnd) {
+    malformedArm64e();
     return;
+  }
 
   auto ImportRecords = decodeChainedImports(BasePtr, FileSize, Info, Img);
 
   size_t NumRecorded = 0;
   for (uint32_t S = 0; S < SegCount; ++S) {
-    uint32_t SegInfoOff = Starts->seg_info_offset[S];
+    uint32_t SegInfoOff = readLE<uint32_t>(
+        BasePtr + StartsAbs + sizeof(uint32_t) * (uint64_t(S) + 1));
     if (SegInfoOff == 0)
       continue;
     uint64_t SegAbs = StartsAbs + SegInfoOff;
-    if (!rangeInBounds(SegAbs, sizeof(dyld_chained_starts_in_segment), DataEnd))
+    constexpr size_t SegmentHeaderSize =
+        offsetof(dyld_chained_starts_in_segment, page_start);
+    if (!rangeInBounds(SegAbs, SegmentHeaderSize, DataEnd)) {
+      malformedArm64e();
       continue;
-    const auto *Seg = reinterpret_cast<const dyld_chained_starts_in_segment *>(
-        BasePtr + SegAbs);
+    }
+    dyld_chained_starts_in_segment SegmentHeader{};
+    std::memcpy(&SegmentHeader, BasePtr + SegAbs, SegmentHeaderSize);
+    const auto *Seg = &SegmentHeader;
     if (Seg->size < offsetof(dyld_chained_starts_in_segment, page_start) ||
-        !rangeInBounds(SegAbs, Seg->size, DataEnd))
+        !rangeInBounds(SegAbs, Seg->size, DataEnd)) {
+      malformedArm64e();
       continue;
+    }
     uint64_t SegEnd = SegAbs + Seg->size;
     uint16_t PtrFormat = Seg->pointer_format;
-    // Only the 64-bit pointer formats carry the rebase/bind bitfields decoded
-    // below; arm64e (authenticated) and the 32-bit formats are skipped (they
-    // never appear for the plain data-pointer tables we care about here).
-    if (PtrFormat != DYLD_CHAINED_PTR_64 &&
-        PtrFormat != DYLD_CHAINED_PTR_64_OFFSET)
+    if (const auto Format = arm64e::chainFormat(PtrFormat)) {
+      if (!parseArm64eSegment(*Seg, *Format, BasePtr + SegAbs, TextVMAddr, S,
+                              ImportRecords, Img))
+        return;
       continue;
+    }
+    // Other layouts require their own bitfield interpretation.
+    if (PtrFormat != DYLD_CHAINED_PTR_64 &&
+        PtrFormat != DYLD_CHAINED_PTR_64_OFFSET) {
+      if (Img.isArm64e()) {
+        Img.MachOChainedFixupsError =
+            std::string(arm64e::kUnsupportedChainFormatPrefix) +
+            std::to_string(PtrFormat);
+        return;
+      }
+      continue;
+    }
     uint32_t PageSize = Seg->page_size ? Seg->page_size : 0x1000;
     uint16_t PageCount = Seg->page_count;
     uint64_t PageStartArr =
@@ -295,7 +413,8 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
       continue;
     uint64_t SegVMOff = Seg->segment_offset;
     for (uint16_t P = 0; P < PageCount; ++P) {
-      uint16_t Start = Seg->page_start[P];
+      uint16_t Start = readLE<uint16_t>(BasePtr + PageStartArr +
+                                        uint64_t(P) * sizeof(uint16_t));
       if (Start == DYLD_CHAINED_PTR_START_NONE)
         continue;
       // Pages with multiple chain starts (overlapping fixups) are rare for the
@@ -325,18 +444,18 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
           std::memcpy(&B, &Raw, sizeof(B));
           Next = B.next;
           if (ImportRecords && B.ordinal < ImportRecords->size()) {
-            const ChainedImportRecord &Record = (*ImportRecords)[B.ordinal];
+            const Arm64eImportRecord &Record = (*ImportRecords)[B.ordinal];
             int64_t EffectiveAddend = 0;
             const int64_t PointerAddend = static_cast<int64_t>(B.addend);
             if (Record.Valid && !llvm::AddOverflow(Record.Addend, PointerAddend,
                                                    EffectiveAddend)) {
               if (Img.isValidImportStorageSlot(ChainVA, Record.Name)) {
                 detail::clearLocalPointerClassification(Img, ChainVA);
-                if (Img.recordDyldBindSlot(ChainVA, Record.Name,
-                                           EffectiveAddend, Record.Module,
-                                           Record.WeakImport)) {
-                  joinImportSlot(Img, Record.Name, Record.DisplayModule,
-                                 ChainVA);
+                if (Img.recordDyldBindSlot(
+                        ChainVA, Record.Name, EffectiveAddend, Record.Module,
+                        Record.WeakImport, Record.LibraryOrdinal)) {
+                  detail::joinImportSlot(Img, Record.Name, Record.DisplayModule,
+                                         ChainVA);
                   ++NumRecorded;
                 }
               }

@@ -8,8 +8,8 @@
 
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/backend/llvm/X86RegistrationLocalUnwind.h"
-#include "neverd/ir/med/X86RegistrationSEHLocalUnwind.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLocalUnwind.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
 
 #include "llvm/IR/Module.h"
 

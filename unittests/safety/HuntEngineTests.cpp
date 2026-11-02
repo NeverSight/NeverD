@@ -16,6 +16,7 @@
 #include "neverd/safety/SinkScanner.h"
 
 #include <fstream>
+#include <iterator>
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -6595,7 +6596,8 @@ TEST(HuntEngine, OversizedLowInputCountFailsClosed) {
   B.F.Blocks[0].Ops.back().Addr = StrcpyVA;
   LowFunc LF = readThenTerminateStrcpyLow(ReadVA, StrcpyVA, SourceVA);
   ASSERT_LT(1u, LF.Blocks[0].Ops.size());
-  LF.Blocks[0].Ops[1].NumInputs = 7;
+  LF.Blocks[0].Ops[1].NumInputs =
+      static_cast<uint8_t>(std::size(LF.Blocks[0].Ops[1].Inputs) + 1);
 
   auto Fnd = hunt(B.F, /*StackRegs=*/false, &LF, Arch::X64);
   ASSERT_TRUE(Fnd.has_value());

@@ -1,0 +1,42 @@
+//===- AArch64CPA.def - Checked pointer arithmetic contracts ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// CPA(Id, Insn, Mnemonic, Sources, Mask, Encoding, MachineAsm) describes
+/// scalar FEAT_CPA. MachineAsm uses x16 as destination/first input, x17 as
+/// second input and x15 as third input. VALUE and TEXT expose shared constants.
+/// Encodings follow Arm's A64 ISA and LLVM's armv9.5a-cpa assembler tests.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_CPA
+#define NEVERD_A64_CPA(Id, Insn, Mnemonic, Sources, Mask, Encoding, MachineAsm)
+#endif
+#ifndef NEVERD_A64_CPA_VALUE
+#define NEVERD_A64_CPA_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_CPA_TEXT
+#define NEVERD_A64_CPA_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_CPA(A64_Addpt, ADDPT, "addpt", 2, 0xffe0e000, 0x9a002000,
+               ".inst 0x9a112210")
+NEVERD_A64_CPA(A64_Subpt, SUBPT, "subpt", 2, 0xffe0e000, 0xda002000,
+               ".inst 0xda112210")
+NEVERD_A64_CPA(A64_Maddpt, MADDPT, "maddpt", 3, 0xffe08000, 0x9b600000,
+               ".inst 0x9b713e10")
+NEVERD_A64_CPA(A64_Msubpt, MSUBPT, "msubpt", 3, 0xffe08000, 0x9b608000,
+               ".inst 0x9b71be10")
+
+NEVERD_A64_CPA_VALUE(unsigned, kAArch64CPAPointerBytes, sizeof(uint64_t))
+NEVERD_A64_CPA_VALUE(unsigned, kAArch64CPAMaxShift, 7)
+NEVERD_A64_CPA_TEXT(kAArch64CPAConstraints, "={x16},0,{x17}")
+NEVERD_A64_CPA_TEXT(kAArch64CPAMultiplyConstraints, "={x16},0,{x17},{x15}")
+NEVERD_A64_CPA_TEXT(kAArch64CPAResultName, "checked.pointer")
+NEVERD_A64_CPA_TEXT(kAArch64CPAMalformedOperation,
+                    "malformed AArch64 checked pointer arithmetic")
+
+#undef NEVERD_A64_CPA
+#undef NEVERD_A64_CPA_VALUE
+#undef NEVERD_A64_CPA_TEXT

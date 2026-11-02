@@ -54,12 +54,20 @@ namespace neverd::sdk {
 TypeRef decompilerTypeOf(const types::TypeLibrary &Library,
                          const types::TypeExpr &Type);
 
+/// A call-site value keeps a complete natural C record layout. Packed,
+/// overlapping, bitfield and incomplete records remain unavailable. Pointer
+/// pointees retain the ordinary display representation and need no value ABI.
+TypeRef sourceCallTypeOf(const types::TypeLibrary &Library,
+                         const types::TypeExpr &Type);
+
 /// \p Function's signature, named \p Name, as the decompiler's types
-/// describe it.  None for a variadic one, whose calls pass more than it
-/// declares, or one with a type the decompiler cannot describe.
-std::optional<FunctionSym> signatureOf(const types::TypeLibrary &Library,
-                                       const types::FunctionDef &Function,
-                                       llvm::StringRef Name);
+/// describe it. Variadic declarations retain their fixed prefix and ellipsis.
+/// A prototype speller keeps scalar C conversions consistent with its
+/// declaration. None for a type the decompiler cannot describe.
+std::optional<FunctionSym>
+signatureOf(const types::TypeLibrary &Library,
+            const types::FunctionDef &Function, llvm::StringRef Name,
+            const types::TypeSpeller *PrototypeSpeller = nullptr);
 
 /// Whether \p A and \p B take and return alike: as many parameters, each
 /// of the same class and size, and returns of the same class and size, as
@@ -93,7 +101,8 @@ public:
       std::vector<types::HeaderLibrary> Headers = {},
       std::unordered_map<uint64_t, std::string> Recognized = {},
       std::string EntryType = {},
-      std::optional<va_t> ProgramMain = std::nullopt);
+      std::optional<va_t> ProgramMain = std::nullopt,
+      std::string EntryDeclaration = {});
   /// Takes back the members and enumerators it gave the debug information's
   /// types, and gives back those they held, so that the context made after
   /// a change to the library gives them anew.
@@ -188,8 +197,7 @@ public:
 
   /// The signature the library gives \p Name: its return type and named
   /// parameters, the library that declares it and the declaration.  None
-  /// for a name without a prototype, a variadic one, whose calls pass more
-  /// than it declares, or one with a type the decompiler cannot describe.
+  /// for a name without a prototype or a type the decompiler cannot describe.
   std::optional<FunctionSym>
   resolvePrototype(llvm::StringRef Name) const override;
 
@@ -206,6 +214,7 @@ public:
   /// the library's, or an enumerator of one the decompiler displays, which
   /// stands for that enumeration.  What the debug information gave types of
   /// the name, members or enumerators, must agree with the library too.
+  /// A pointer request obtains only a record's tag, without completing it.
   CRecordDefinitions definitions(const std::vector<TypeRef> &Records) const;
   /// The copy of the library this context reads, which its definitions
   /// render.
@@ -253,6 +262,7 @@ private:
   std::unordered_map<uint64_t, std::string> Recognized;
   /// The type of the image's entry point, a pointer to a function.
   std::string EntryType;
+  std::string EntryDeclaration;
   /// The function type EntryType points to, as a signature.
   std::optional<FunctionSym> entrySignature() const;
   std::optional<va_t> ProgramMain;
@@ -265,6 +275,7 @@ private:
   /// of the libraries joined again.
   mutable std::map<types::BuiltinSpelling, std::unique_ptr<types::TypeSpeller>>
       Spellers;
+  mutable std::unique_ptr<types::TypeSpeller> PortablePrototypeSpeller;
   /// What renders the records a unit embeds: spelling the library's names
   /// for each unit would name every type again.
   mutable std::unique_ptr<types::EmbeddedCRenderer> CRenderer;
@@ -289,6 +300,7 @@ private:
     std::vector<std::string> Names;
     std::vector<uint16_t> Offsets;
     std::vector<TypeRef> Types;
+    uint16_t Alignment;
   };
   mutable std::vector<Named> Completed;
   mutable llvm::DenseSet<const NdType *> CompletedRecords;

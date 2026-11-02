@@ -395,13 +395,8 @@ recoverBytecode(llvm::ArrayRef<uint8_t> Code, llvm::StringRef RequestJSON,
         Converter.setStatementObserver([&](const MedOp &Op, const HighStmt &S) {
           if (Op.Opcode == NdOp::CALL)
             return;
-          HighSources.push_back({Med.Entry,
-                                 {Op.Addr, Op.OriginSeq},
-                                 {},
-                                 S.Kind == StmtKind::Store
-                                     ? HighSourceKind::Store
-                                     : HighSourceKind::Statement,
-                                 S.Kind});
+          HighSources.push_back(
+              observeHighStatement(Med.Entry, {Op.Addr, Op.OriginSeq}, S));
         });
         Converter.setExpressionObserver([&](const MedOp &Op, const ExprPtr &E) {
           if (Op.Opcode == NdOp::CALL && E && E->Kind == ExprKind::Call)

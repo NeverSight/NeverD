@@ -1,0 +1,26 @@
+//===- AArch64SVEPredicateC.def - SVE predicate C names --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// ACLE spellings for whole and patterned predicate construction.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_PREDICATE_C
+#define NEVERD_A64_SVE_PREDICATE_C(Bytes, All, Pattern)
+#endif
+#ifndef NEVERD_A64_SVE_PREDICATE_C_TEXT
+#define NEVERD_A64_SVE_PREDICATE_C_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_SVE_PREDICATE_C(1, "svptrue_b8", "svptrue_pat_b8")
+NEVERD_A64_SVE_PREDICATE_C(2, "svptrue_b16", "svptrue_pat_b16")
+NEVERD_A64_SVE_PREDICATE_C(4, "svptrue_b32", "svptrue_pat_b32")
+NEVERD_A64_SVE_PREDICATE_C(8, "svptrue_b64", "svptrue_pat_b64")
+NEVERD_A64_SVE_PREDICATE_C_TEXT(kPtrueAllFormat, "{0}()")
+NEVERD_A64_SVE_PREDICATE_C_TEXT(kPtruePatternFormat,
+                                "{0}((enum svpattern)({1}))")
+
+#undef NEVERD_A64_SVE_PREDICATE_C
+#undef NEVERD_A64_SVE_PREDICATE_C_TEXT

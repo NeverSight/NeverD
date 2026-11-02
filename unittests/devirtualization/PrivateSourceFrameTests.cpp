@@ -7,7 +7,7 @@
 #include "../../lib/pipeline/NativeSourcePreservation.h"
 #include "gtest/gtest.h"
 
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 
 using namespace neverd;

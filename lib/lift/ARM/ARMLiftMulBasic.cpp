@@ -13,7 +13,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -30,7 +30,7 @@ bool liftMulBasic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     S.emit(NdOp::INT_MULT, Dst, {A, B});
     if (ARM.update_flags)
@@ -68,7 +68,7 @@ bool liftMulBasic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     S.emit(NdOp::INT_SDIV, Dst, {A, B});
     break;
@@ -78,7 +78,7 @@ bool liftMulBasic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     S.emit(NdOp::INT_DIV, Dst, {A, B});
     break;

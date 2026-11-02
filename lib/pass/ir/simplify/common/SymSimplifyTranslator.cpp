@@ -147,22 +147,42 @@ MaskedAddBounds maskedAddBounds(const llvm::Value *V, unsigned Depth,
   return Result;
 }
 
-bool safeMaskedAdd(const llvm::Instruction &I) {
-  if (I.getOpcode() != llvm::Instruction::Add || !I.getType()->isIntegerTy() ||
-      I.getType()->getIntegerBitWidth() > 512 ||
+bool safeMaskedArithmetic(const llvm::Instruction &I) {
+  const bool Product = I.getOpcode() == llvm::Instruction::Mul;
+  if ((!Product && I.getOpcode() != llvm::Instruction::Add) ||
+      !I.getType()->isIntegerTy() ||
+      I.getType()->getIntegerBitWidth() >
+          ::neverd::limits::pass::
+              kSymSimplifyTranslatorSafeMaskedArithmeticMaxWidth ||
       (!I.hasNoUnsignedWrap() && !I.hasNoSignedWrap()))
     return false;
-  unsigned Remaining =
-      ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedAddRemaining;
-  auto Left = maskedAddBounds(I.getOperand(0), 8, Remaining);
-  auto Right = maskedAddBounds(I.getOperand(1), 8, Remaining);
+  unsigned Remaining = ::neverd::limits::pass::
+      kSymSimplifyTranslatorSafeMaskedArithmeticRemaining;
+  const unsigned Depth =
+      ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedArithmeticDepth;
+  auto Left = maskedAddBounds(I.getOperand(0), Depth, Remaining);
+  auto Right = maskedAddBounds(I.getOperand(1), Depth, Remaining);
   bool Overflow;
   if (I.hasNoUnsignedWrap()) {
-    (void)Left.UnsignedMax.uadd_ov(Right.UnsignedMax, Overflow);
+    if (Product)
+      (void)Left.UnsignedMax.umul_ov(Right.UnsignedMax, Overflow);
+    else
+      (void)Left.UnsignedMax.uadd_ov(Right.UnsignedMax, Overflow);
     if (Overflow)
       return false;
   }
   if (I.hasNoSignedWrap()) {
+    if (Product) {
+      // Signed multiplication reaches its extrema at interval corners.
+      // Check all four: two negative endpoints can overflow positively.
+      for (const auto *L : {&Left.SignedMin, &Left.SignedMax})
+        for (const auto *R : {&Right.SignedMin, &Right.SignedMax}) {
+          (void)L->smul_ov(*R, Overflow);
+          if (Overflow)
+            return false;
+        }
+      return true;
+    }
     (void)Left.SignedMin.sadd_ov(Right.SignedMin, Overflow);
     if (Overflow)
       return false;
@@ -231,9 +251,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   // This catches poison-generating flags added to LLVM after this switch was
   // written.  The per-opcode checks below remain deliberate documentation of
   // the exact language subset accepted today.
-  const bool SafeAdd = safeMaskedAdd(I);
+  const bool SafeArithmetic = safeMaskedArithmetic(I);
   const bool SafeOr = safeMaskedOr(I);
-  if ((I.hasPoisonGeneratingFlags() && !SafeAdd && !SafeOr &&
+  if ((I.hasPoisonGeneratingFlags() && !SafeArithmetic && !SafeOr &&
        !splitWordAssembly(I) && !safeWidenedShift(I)) ||
       I.hasPoisonGeneratingAttributes() || I.hasPoisonGeneratingMetadata())
     return false;
@@ -249,9 +269,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
 
   switch (tagOf(I)) {
   case OpTag::Add:
-    return !HasNoWrap() || SafeAdd;
-  case OpTag::Sub:
   case OpTag::Mul:
+    return !HasNoWrap() || SafeArithmetic;
+  case OpTag::Sub:
     return !HasNoWrap();
   case OpTag::And:
   case OpTag::Xor:

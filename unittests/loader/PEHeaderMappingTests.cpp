@@ -56,12 +56,17 @@ TEST(PEHeaderMapping, OriginalHeadersAreReadableInFullAndRestrictedImages) {
           EXPECT_EQ(Image->Raw.empty(), Restricted);
           EXPECT_TRUE(coff_loader::hasCheckedPEHeaderMapping(
               *Image, Image->Sections.size() - 1));
+          EXPECT_EQ(COFFLoader::hasExpectedPEMappingInventory(
+                        *Image, Headers.NumSections),
+                    !Restricted);
           const auto *Data = Image->readVA(Base, Size);
           ASSERT_NE(Data, nullptr);
           EXPECT_EQ(std::memcmp(Data, Bytes.data(), Size), 0);
           EXPECT_EQ(Image->readVA(Base + Size, 1), nullptr);
           const auto *Owner = Image->getSectionFor(Base);
           ASSERT_NE(Owner, nullptr);
+          EXPECT_TRUE(Owner->IsImageHeader);
+          EXPECT_FALSE(Image->Sections.front().IsImageHeader);
           EXPECT_TRUE(Owner->isReadable());
           EXPECT_FALSE(Owner->isWritable());
           EXPECT_FALSE(Owner->isExecutable());
@@ -180,6 +185,104 @@ TEST(PEHeaderMapping, HeaderIdentityRequiresBothRegionsAndNativeCount) {
     }
 }
 
+TEST(PEHeaderMapping, InventoryRejectsMissingDuplicateOrChangedHeaderIdentity) {
+  for (const auto [Is64, Machine] :
+       {std::pair{false, uint16_t(IMAGE_FILE_MACHINE_I386)},
+        {true, uint16_t(IMAGE_FILE_MACHINE_AMD64)},
+        {true, uint16_t(IMAGE_FILE_MACHINE_ARM64)}})
+    for (unsigned Mutation = 0; Mutation != 24; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Machine << ':' << Mutation);
+      auto Bytes = test::peHeaderImage(Is64, Machine);
+      auto Image = load(Bytes, false);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const size_t Count = Image->Sections.size() - 1;
+      ASSERT_TRUE(COFFLoader::hasExpectedPEMappingInventory(*Image, Count));
+      EXPECT_FALSE(
+          COFFLoader::hasExpectedPEMappingInventory(*Image, Count + 1));
+      EXPECT_FALSE(COFFLoader::hasExpectedPEMappingInventory(*Image, 0));
+      auto &Segment = Image->Segments.back();
+      auto &Section = Image->Sections.back();
+      switch (Mutation) {
+      case 0:
+        Image->Segments.pop_back();
+        break;
+      case 1:
+        Image->Sections.pop_back();
+        break;
+      case 2:
+        Image->Segments.pop_back();
+        Image->Sections.pop_back();
+        break;
+      case 3:
+        Image->Segments.push_back(Segment);
+        Image->Sections.push_back(Section);
+        break;
+      case 4:
+        Segment.Data.back() ^= 1;
+        break;
+      case 5:
+        Section.Data.back() ^= 1;
+        break;
+      case 6:
+        Segment.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+        break;
+      case 7:
+        Section.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        break;
+      case 8:
+        Section.IsImageHeader = false;
+        break;
+      case 9:
+        Image->Sections.front().IsImageHeader = true;
+        break;
+      case 10:
+        std::swap(Image->Segments.front(), Segment);
+        std::swap(Image->Sections.front(), Section);
+        break;
+      case 11:
+        Segment.FileOff = 1;
+        break;
+      case 12:
+        ++Section.VA;
+        break;
+      case 13:
+        Section.Type = IMAGE_SCN_CNT_INITIALIZED_DATA;
+        break;
+      case 14:
+        Segment.ReadOnlyAfterRelocations = true;
+        break;
+      case 15:
+        Section.Alignment = 1;
+        break;
+      case 16:
+        Image->Raw[sizeof(dos_header)] ^= 1;
+        break;
+      case 17:
+        Section.SegmentName = "other";
+        break;
+      case 18:
+        Segment.Name = ".data";
+        break;
+      case 19:
+        --Section.FileSz;
+        break;
+      case 20:
+        ++Segment.Size;
+        break;
+      case 21:
+        Image->Raw.clear();
+        break;
+      case 22:
+        Image->Format = BinaryFormat::ELF;
+        break;
+      case 23:
+        Image->IsRelocatable = true;
+        break;
+      }
+      EXPECT_FALSE(COFFLoader::hasExpectedPEMappingInventory(*Image, Count));
+    }
+}
+
 TEST(PEHeaderMapping, AmbiguousOrMalformedHeadersPublishNoHeaderRegion) {
   for (bool Is64 : {false, true})
     for (bool Restricted : {false, true})
@@ -272,6 +375,9 @@ TEST(PEHeaderMapping, AmbiguousOrMalformedHeadersPublishNoHeaderRegion) {
         EXPECT_TRUE(llvm::none_of(Image->Sections, [](const auto &Section) {
           return Section.Name == "<PE headers>";
         }));
+        if (!Restricted)
+          EXPECT_TRUE(COFFLoader::hasExpectedPEMappingInventory(
+              *Image, Headers.NumSections));
         EXPECT_TRUE(llvm::any_of(Image->LoadDiagnostics, [](const auto &D) {
           return D.Code == "pe.headers_unmapped";
         }));

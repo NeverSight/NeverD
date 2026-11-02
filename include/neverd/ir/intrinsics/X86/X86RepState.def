@@ -1,0 +1,15 @@
+//===- X86RepState.def - Explicit REP completion inventory ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// NEVERD_X86_REP_STATE(Id, Name, WordResults, Compare, Source, Port).
+// Intentionally no include guard. Append entries to preserve intrinsic IDs.
+
+NEVERD_X86_REP_STATE(X86RepMovsState, "movs", 3, false, true, false)
+NEVERD_X86_REP_STATE(X86RepStosState, "stos", 2, false, false, false)
+NEVERD_X86_REP_STATE(X86RepLodsState, "lods", 3, false, true, false)
+NEVERD_X86_REP_STATE(X86RepCmpsState, "cmps", 3, true, true, false)
+NEVERD_X86_REP_STATE(X86RepScasState, "scas", 2, true, false, false)
+NEVERD_X86_REP_STATE(X86RepInsState, "ins", 2, false, false, true)
+NEVERD_X86_REP_STATE(X86RepOutsState, "outs", 2, false, true, true)

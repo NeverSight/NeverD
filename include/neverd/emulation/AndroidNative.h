@@ -10,6 +10,7 @@
 #include "neverd/dalvik/RuntimeSnapshot.h"
 #include "neverd/emulation/AndroidResolverOptions.h"
 #include "neverd/emulation/ProcessCall.h"
+#include "neverd/emulation/Registers.h"
 
 #include <array>
 #include <cstdint>
@@ -33,13 +34,17 @@ struct NativeMemoryRegion {
 struct NativeMemoryRead {
   uint64_t Address = 0, Size = 0;
   /// Require a readable mapping before guest execution. False permits memory
-  /// allocated during the call; the complete range must be readable at the
-  /// final resumable stop. Neither setting creates or preserves mappings.
+  /// allocated during the call. Ordinary final reads require the complete
+  /// range to remain readable; diagnostic RAM snapshots report failures per
+  /// range instead. Neither setting creates or preserves mappings.
   bool RequireMappedAtEntry = true;
 };
 struct NativeMemorySnapshot {
   uint64_t Address;
   std::vector<uint8_t> Bytes;
+  /// Nonempty only when an opted-in diagnostic snapshot could not read RAM.
+  /// Bytes is then empty; the process's original stop remains unchanged.
+  std::string Diagnostic;
 };
 
 /// Resolve a read from the stopped register state at each observation. Register
@@ -80,11 +85,42 @@ struct NativeExecutionObservation {
   std::array<uint64_t, 31> Registers{};
   std::vector<NativeMemorySnapshot> Memory;
 };
+/// Complete modeled registers observed from a CPU or saved thread context.
+/// Memory and backend-private state are not captured.
+/// A failed read leaves Registers absent and records its separate diagnostic.
+struct NativeCPUState {
+  uint64_t ThreadID = 0;
+  std::optional<std::vector<RegisterSnapshot>> Registers;
+  std::string Diagnostic;
+};
+/// A thread that has not completed at the final stop. Current reads the CPU;
+/// other entries observe the scheduler's saved context without restoring it.
+/// Completed/retired threads have no retained final context and are omitted.
+struct NativeThreadCPUState {
+  NativeCPUState State;
+  bool Current = false;
+};
 
 /// One visible logd v4 entry. Payload is opaque; no host log is consulted.
 struct NativeLogRecord {
   uint32_t ID = 0, PID = 0, TID = 0, Seconds = 0, Nanoseconds = 0, UID = 0;
   std::vector<uint8_t> Payload;
+};
+
+/// One ordered, exact LOG_ID_EVENTS write and its supplied liblog int result.
+/// Payload includes the little-endian int32 tag. No logd state is inferred.
+struct NativeEventLogWrite {
+  std::vector<uint8_t> Payload;
+  int32_t Result = 0;
+};
+
+/// One explicit successful LP64 dladdr observation. Address matches exactly;
+/// image membership and symbol selection are supplied, never inferred.
+struct NativeDladdrObservation {
+  uint64_t Address = 0, ImageBase = 0;
+  std::string ImageName;
+  std::optional<std::string> SymbolName;
+  uint64_t SymbolAddress = 0;
 };
 
 /// Android 9 / API 28, little-endian AArch64. Function
@@ -117,6 +153,10 @@ struct AndroidNativeOptions {
   /// IDs 0..5, at most 4096 entries and 1 MiB including v4 headers. This does
   /// not infer permissions, logd sockets, live producers or persistent logs.
   std::optional<std::vector<NativeLogRecord>> LogRecords;
+  /// Finite write-result transcript, independent of the visible read snapshot.
+  /// Missing, exhausted or mismatching writes stop before consuming an entry.
+  /// At most 4096 entries / 1 MiB, each with 4..4068 exact payload bytes.
+  std::optional<std::vector<NativeEventLogWrite>> EventLogWrites;
   std::vector<NativeMemoryRegion> Memory;
   std::vector<NativeMemoryRead> ReadMemory;
   /// Constructors normally execute before the call, sharing its budget.
@@ -125,6 +165,20 @@ struct AndroidNativeOptions {
   /// Retain this many admitted instruction PCs. Zero disables tracing.
   uint64_t TraceLimit = 0;
   std::optional<NativeExecutionObservationOptions> ObserveExecution;
+  /// Read the final current-thread architectural registers without executing
+  /// or switching contexts. Failure never replaces the original stop reason.
+  bool ObserveCPUState = false;
+  /// Observe all unfinished threads, including waiting saved contexts. Each
+  /// capture failure has its own diagnostic and preserves the workload stop.
+  bool ObserveThreadCPUStates = false;
+  /// Also snapshot ReadMemory from stopped RAM backing after CPU/runtime
+  /// failures. Ignores guest read permissions, never reads devices or resumes
+  /// execution, and records per-region errors without replacing the stop.
+  bool ObserveMemoryOnFailure = false;
+  /// Snapshot ReadMemory from stopped RAM backing at every final stop. Each
+  /// unreadable range retains its diagnostic without replacing the original
+  /// stop or preventing later captures. Entry mapping requirements still apply.
+  bool ObserveMemoryAtStop = false;
   /// Concrete analysis choice for bytes returned by malloc and the new tail
   /// of realloc. Zero preserves the default. This is not a claim about an
   /// Android allocator or proof that reading uninitialized bytes is valid.
@@ -169,6 +223,17 @@ struct AndroidNativeOptions {
   /// scope or unload them. Absent means unknown (unsupported); empty means
   /// explicitly no providers. No namespace or dependency order is inferred.
   std::optional<std::vector<std::string>> DefaultScope;
+  /// Immutable positive query observations. Absent, empty and unmatched
+  /// queries remain unsupported; negative linker outcomes are not modeled.
+  /// Names become borrowed read-only guest strings with stable identities.
+  /// This does not populate Libraries, resolve ELF symbols, or load host files.
+  std::optional<std::vector<NativeDladdrObservation>> DladdrObservations;
+  /// Guest address of the complete, NUL-terminated LP64 environ pointer
+  /// vector used by getenv. Absent means unknown; zero supplies a null
+  /// environment. The vector and strings remain live guest memory, including
+  /// duplicate names and mutable values. No host environment is inherited.
+  /// This does not expose a writable environ global or environment mutators.
+  std::optional<uint64_t> EnvironmentVector;
 };
 
 /// Model-owned identity and placement, not a public pthread_internal_t layout.

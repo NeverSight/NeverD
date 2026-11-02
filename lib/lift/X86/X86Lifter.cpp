@@ -10,21 +10,33 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "X86BitTestUndefined.h"
+#include "X86CompatibilityReturnUndefined.h"
+#include "X86DivisionUndefined.h"
 #include "X86DoubleShiftUndefined.h"
 #include "X86LegacyVectorMoveAudit.h"
+#include "X86LiftADX.h"
+#include "X86LiftBEXTR.h"
+#include "X86LiftBMI2.h"
+#include "X86LiftBMILogic.h"
+#include "X86LiftBitCount.h"
 #include "X86LiftDetail.h"
+#include "X86LiftTBM.h"
+#include "X86MultiplyUndefined.h"
 #include "X86NativeStateAudit.h"
 #include "X86OpaqueStateAudit.h"
+#include "X86RegisterMoveUndefined.h"
 #include "X86ShiftUndefined.h"
 #include "X86XaddAudit.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/intrinsics/X86Interrupts.h"
+#include "neverd/ir/intrinsics/X86/X86Interrupts.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/SHA256.h"
@@ -49,13 +61,14 @@ X86Lifter::X86Lifter(Arch A) : TargetArch(A) {}
 // ===----------------------------------------------------------------------===//
 
 NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp,
-                                      bool ForMemoryAccess) {
+                                      bool ForMemoryAccess,
+                                      bool SegmentOffset) {
   const uint16_t ArithmeticSize =
       AddressSize == 2 || AddressSize == 4 || AddressSize == 8 ? AddressSize
                                                                : uint16_t{8};
   const bool SegmentRelative =
-      ForMemoryAccess &&
-      memoryAddressSpace(MemOp) != NdMemoryAddressSpace::Default;
+      SegmentOffset || (ForMemoryAccess && memoryAddressSpace(MemOp) !=
+                                               NdMemoryAddressSpace::Default);
   const bool HasIndex = !isNoSibIndex(MemOp.mem.index, AddressSize);
   NdVar EA = makeTemp(ArithmeticSize);
   bool First = true;
@@ -90,6 +103,21 @@ NdVar X86Lifter::LiftState::computeEA(const cs_x86_op &MemOp,
       emit(NdOp::SUBBYTES, Converted, {V, NdVar::scalar(0, ArithmeticSize)});
     return Converted;
   };
+  if (ArithmeticSize < 8 && !SegmentRelative &&
+      MemOp.mem.base == X86_REG_INVALID && !HasIndex &&
+      !RelocatedDisplacement && !HasAmbiguousI386GOTOFFDisplacement) {
+    // An absolute displacement supplies the entire effective address, even
+    // when its encoding is narrower than a process pointer. Wrap it first,
+    // then publish the complete address at the normalized carrier width.
+    // A narrow Address constant followed by ZEXT would instead claim that an
+    // incomplete relocation fragment was being extended into a pointer.
+    NdVar Absolute =
+        AtAddressWidth(NdVar::address(uint64_t(MemOp.mem.disp), 8));
+    Absolute.Size = 8;
+    NdVar Complete = makeTemp(8);
+    emit(NdOp::COPY, Complete, {Absolute});
+    return Complete;
+  }
   auto Acc = [&](NdVar V) {
     // An FS/GS memory operand consumes this number as an offset inside the
     // selected segment address space.  Even when its bits equal an image VA,
@@ -476,6 +504,41 @@ bool isLegacyEncodingPrefix(uint8_t Byte, bool Is64Bit) {
   }
 }
 
+// HLE belongs to the memory operation. Capstone can retain LOCK in prefix[0]
+// while dropping F2/F3 there, so inspect the original prefixes before any
+// ordinary atomic/move lowering can erase the transactional boundary.
+bool hasHardwareLockElisionPrefix(const cs_insn *Insn, bool Is64Bit) {
+  if (Insn->size > x86::kMaxInstructionLen)
+    return false;
+  bool Locked = false;
+  uint8_t Repeat = 0;
+  size_t Offset = 0;
+  while (Offset < Insn->size &&
+         isLegacyEncodingPrefix(Insn->bytes[Offset], Is64Bit)) {
+    const uint8_t Prefix = Insn->bytes[Offset++];
+    Locked |= Prefix == 0xf0;
+    if (Prefix == 0xf2 || Prefix == 0xf3)
+      Repeat = Prefix;
+  }
+  if (!Repeat || Offset == Insn->size)
+    return false;
+  if (Locked)
+    return true;
+  // XCHG is implicitly locked. XRELEASE also permits the ModRM
+  // register/immediate MOV stores; a MOV load or XACQUIRE MOV is not HLE.
+  if (Is64Bit && Insn->bytes[Offset] == 0xd5) {
+    if (Offset + 2 >= Insn->size || (Insn->bytes[Offset + 1] & 0x80) != 0)
+      return false;
+    Offset += 2;
+  }
+  if (Offset + 1 >= Insn->size || (Insn->bytes[Offset + 1] & 0xc0) == 0xc0)
+    return false;
+  const uint8_t Opcode = Insn->bytes[Offset];
+  return Opcode == 0x86 || Opcode == 0x87 ||
+         (Repeat == 0xf3 && (Opcode == 0x88 || Opcode == 0x89 ||
+                             Opcode == 0xc6 || Opcode == 0xc7));
+}
+
 // VEX.128 and EVEX.128 register destinations clear every modeled vector bit
 // above bit 127. Capstone exposes the decoded operands but not the encoded
 // vector length, so read L/LL directly from the prefix bytes. Legacy prefixes
@@ -522,15 +585,49 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
                : X86.addr_size != 2 && X86.addr_size != 4))
     return false;
   size_t OpcodeOffset = 0;
+  bool Bnd = false;
   while (OpcodeOffset < Insn->size &&
          isLegacyEncodingPrefix(Insn->bytes[OpcodeOffset], Is64Bit)) {
     const uint8_t Prefix = Insn->bytes[OpcodeOffset++];
-    if (Prefix == 0xf0 || Prefix == 0xf2 || Prefix == 0xf3)
+    if (Prefix == 0xf0 || Prefix == 0xf3 || (Prefix == 0xf2 && Bnd))
       return false;
+    Bnd |= Prefix == 0xf2;
   }
   if (OpcodeOffset == Insn->size || hasVexOrEvexEncoding(Insn, Is64Bit) ||
       (Is64Bit && Insn->bytes[OpcodeOffset] == 0xd5))
     return false;
+
+  if (Bnd) {
+    // F2 on these original transfers preserves bounds; it adds no arbitrary
+    // output. Do not admit F2 arithmetic, HLE memory or repeated prefixes.
+    if (x86MpxBranchEffect({Insn->bytes, Insn->size}, TargetArch) !=
+        X86MpxBranch::Preserve)
+      return false;
+    switch (Insn->id) {
+    case X86_INS_CALL:
+    case X86_INS_RET:
+    case X86_INS_JMP:
+    case X86_INS_JE:
+    case X86_INS_JNE:
+    case X86_INS_JA:
+    case X86_INS_JAE:
+    case X86_INS_JB:
+    case X86_INS_JBE:
+    case X86_INS_JG:
+    case X86_INS_JGE:
+    case X86_INS_JL:
+    case X86_INS_JLE:
+    case X86_INS_JS:
+    case X86_INS_JNS:
+    case X86_INS_JO:
+    case X86_INS_JNO:
+    case X86_INS_JP:
+    case X86_INS_JNP:
+      break;
+    default:
+      return false;
+    }
+  }
 
   const uint64_t GeneralRegisterEnd = Is64Bit ? x86reg::RIP : x86reg::R8;
   auto GeneralRegister = [&](x86_reg Reg, unsigned Size) {
@@ -817,10 +914,38 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   LastScalarOperandOccurrence.reset();
   auto *Detail = Insn ? Insn->detail : nullptr;
   if (!Detail)
-    return;
+    throw UnliftedInstruction(Insn ? Insn->address : InvalidVA,
+                              "missing x86 instruction detail", nullptr);
+
+  if (hasHardwareLockElisionPrefix(Insn, TargetArch == Arch::X64))
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
+
+  // These instructions leave the ordinary call/return domain and have no
+  // faithful ordinary-C projection yet. Refuse before publishing any
+  // operations, including when permissive lifting was asked for: a NOP or
+  // generic SYSCALL loses the architectural continuation.  The architectural
+  // returns are the exception: far and interrupt returns (liftControl) and the
+  // syscall returns SYSRET/SYSRETQ and SYSEXIT/SYSEXITQ (liftExt /
+  // liftLegacyExt) lift to explicit terminal state-transfer intrinsics that
+  // name their frame/register inputs. SYSENTER has an opaque terminal effect;
+  // only an explicit MSR environment can reconstruct its continuation. RSM
+  // still requires the complete SMRAM save state. XBEGIN keeps its abort
+  // continuation as a second exit of its own instruction (liftTransactions).
+  switch (Insn->id) {
+  case X86_INS_RSM:
+  case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
+  default:
+    break;
+  }
 
   auto &X86 = Detail->x86;
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
+  // Each decoded instruction is one publication transaction. A refused
+  // handler may already have computed an address or emitted a partial result.
+  llvm::scope_exit Rollback([&] { Ops.resize(S.OpsStart); });
   LowInstructionUndefinedEffects EffectsDraft;
   S.UndefinedEffects = UndefinedEffects ? &EffectsDraft : nullptr;
   S.LoadMemoryCallTarget = LoadMemoryCallTarget;
@@ -962,43 +1087,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   GetPcArmedThisInsn = GetPcPending && Insn->address == GetPcValue;
   GetPcPending = false;
 
-  // Track CQO/CDQ/CWD → IDIV/DIV pattern.
-  unsigned Id = Insn->id;
-  if (Id == X86_INS_CQO) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 8;
-  } else if (Id == X86_INS_CDQ) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 4;
-  } else if (Id == X86_INS_CWD) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 2;
-  } else if (Id != X86_INS_IDIV && Id != X86_INS_DIV) {
-    // Check for XOR RDX,RDX (zero) pattern before invalidating.
-    bool SetZero = false;
-    if (Id == X86_INS_XOR && X86.op_count == 2 &&
-        X86.operands[0].type == X86_OP_REG &&
-        X86.operands[1].type == X86_OP_REG) {
-      auto R0 = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-      auto R1 = mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
-      if (R0.Offset == x86reg::RDX && R1.Offset == x86reg::RDX) {
-        LastRdxState = RdxState::Zero;
-        // On x86-64, writing a 32-bit register implicitly zeros the upper 32
-        // bits, so XOR EDX,EDX effectively zeros all of RDX.
-        LastRdxSize = (TargetArch == Arch::X64 && R0.Size == 4) ? 8 : R0.Size;
-        SetZero = true;
-      }
-    }
-    if (!SetZero) {
-      for (uint8_t I = 0; I < X86.op_count; ++I) {
-        if (X86.operands[I].type == X86_OP_REG) {
-          auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[I].reg));
-          if (RI.Offset == x86reg::RDX)
-            LastRdxState = RdxState::Unknown;
-        }
-      }
-    }
-  }
+  const unsigned Id = Insn->id;
 
   bool Handled = liftCore(S, Insn, X86) || liftControl(S, Insn, X86) ||
                  liftAtomic(S, Insn, X86) || liftString(S, Insn, X86) ||
@@ -1006,13 +1095,14 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                  liftSIMD(S, Insn, X86) || liftSIMDAVX(S, Insn, X86) ||
                  liftSIMDLegacy(S, Insn, X86);
 
-  if (!Handled) {
-    if (Strict)
-      throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
-    S.emit(NdOp::NOP, {}, {});
-    LLVM_DEBUG(llvm::dbgs()
-               << "Unlifted instruction: " << Insn->mnemonic << " "
-               << Insn->op_str << " @ 0x" << llvm::utohexstr(S.Addr) << "\n");
+  if (!Handled || Ops.size() == S.OpsStart) {
+    if (UndefinedEffects) {
+      UndefinedEffects->Coverage = LowUndefinedCoverage::Unsupported;
+      UndefinedEffects->Diagnostic =
+          Handled ? "instruction produced no semantic operations"
+                  : "instruction has no semantic lifter";
+    }
+    throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
   }
 
   // A decoder can know a register that the architectural state model has not
@@ -1031,16 +1121,11 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
       HasUnmappedRegister = IsUnmappedRegister(Ops[I].Inputs[Input]);
   }
   if (HasUnmappedRegister) {
-    Ops.resize(S.OpsStart);
-    if (Strict)
-      throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
-    S.emit(NdOp::NOP, {}, {});
     if (UndefinedEffects) {
       UndefinedEffects->Coverage = LowUndefinedCoverage::Unsupported;
-      UndefinedEffects->OpCount = Ops.size() - S.OpsStart;
       UndefinedEffects->Diagnostic = "instruction uses an unmapped register";
     }
-    return;
+    throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
   }
 
   if (ExactGOTPC) {
@@ -1194,7 +1279,12 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
       Ops.size() > S.OpsStart &&
       (hasAuditedLegacyIntegerForm(Insn, TargetArch) ||
        nativestateaudit::swapgsForm(Insn, TargetArch) ||
-       nativestateaudit::cpuQueryForm(Insn, TargetArch)) &&
+       nativestateaudit::cpuQueryForm(Insn, TargetArch) ||
+       readprefetchaudit::form(Insn, TargetArch) ||
+       (Insn->id == X86_INS_MOVNTDQ &&
+        vectormoveaudit::form(Insn, TargetArch)) ||
+       (Insn->id == X86_INS_SFENCE &&
+        nativestateaudit::memoryFenceForm(Insn, TargetArch))) &&
       opaqueaudit::hasLegacyIntegerBankAudit(Insn->id)) {
     PreservedDraft.Audit = LowPreservedStateAudit::LegacyIntegerV1;
     PreservedDraft.StateSet = LowPreservedStateSet::LegacyIntegerOpaqueV1;
@@ -1237,19 +1327,58 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
             ? doubleshiftundefined::matches(
                   X86, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
+        : tbm::isInstruction(Id)
+            ? tbm::matches(llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                           EffectsDraft)
+        : Id == X86_INS_BEXTR
+            ? bextr::matches(Insn,
+                             llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                             EffectsDraft)
+        : bitcount::isInstruction(Id)
+            ? bitcount::matches(
+                  Insn, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : bmilogic::isInstruction(Id)
+            ? bmilogic::matches(
+                  Insn, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : ((Id == X86_INS_SYSRET &&
+            nativestateaudit::sysretForm(Insn, TargetArch)) ||
+           (Id == X86_INS_SYSEXIT &&
+            nativestateaudit::fastSystemForm(Insn, TargetArch)))
+            ? compatibilityreturn::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : registermoveundefined::form(Insn, TargetArch)
+            ? registermoveundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : multiplyundefined::form(Insn, TargetArch)
+            ? multiplyundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : divisionundefined::form(Insn, TargetArch)
+            ? divisionundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
         : Logic ? HasLogicEffect
                 : EffectsDraft.Effects.empty();
-    if (!Handled) {
-      EffectsDraft.Coverage = LowUndefinedCoverage::Unsupported;
-      EffectsDraft.Effects.clear();
-      EffectsDraft.Diagnostic = "instruction has no semantic lifter";
-    } else if (!Strict) {
+    if (!Strict) {
       EffectsDraft.Diagnostic =
           "undefined-output coverage requires strict lifting";
     } else if (EffectsDraft.OpCount == 0 ||
                (!hasAuditedLegacyIntegerForm(Insn, TargetArch) &&
                 !vectormoveaudit::form(Insn, TargetArch) &&
-                !nativestateaudit::form(Insn, TargetArch))) {
+                !nativestateaudit::form(Insn, TargetArch) &&
+                !registermoveundefined::form(Insn, TargetArch) &&
+                !divisionundefined::form(Insn, TargetArch) &&
+                !multiplyundefined::form(Insn, TargetArch) &&
+                !tbm::form(Insn, TargetArch) &&
+                !bextr::form(Insn, TargetArch) &&
+                !bitcount::form(Insn, TargetArch) &&
+                !bmilogic::form(Insn, TargetArch) &&
+                !bmi2::form(Insn, TargetArch) &&
+                !adx::form(Insn, TargetArch))) {
       EffectsDraft.Diagnostic =
           "instruction form has no complete undefined-output audit";
     } else if (!HasExpectedEffects) {
@@ -1264,6 +1393,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   }
   if (PreservedState)
     *PreservedState = std::move(PreservedDraft);
+  Rollback.release();
 }
 
 // ===----------------------------------------------------------------------===//
@@ -1300,6 +1430,7 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   switch (I->id) {
   case X86_INS_RET:
   case X86_INS_RETF:
+  case X86_INS_RETFQ:
   case X86_INS_JMP:
   case X86_INS_JMPABS:
   case X86_INS_UD0:
@@ -1308,6 +1439,15 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   case X86_INS_IRET:
   case X86_INS_IRETD:
   case X86_INS_IRETQ:
+  case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
+  case X86_INS_SYSRET:
+  case X86_INS_SYSRETQ:
+  case X86_INS_SYSEXIT:
+  case X86_INS_SYSEXITQ:
+  case X86_INS_SYSENTER:
+  case X86_INS_SKINIT:
     return true;
   case X86_INS_INT:
     // Windows `int 29h` is __fastfail: it never returns (MedNoReturn agrees).
@@ -1324,11 +1464,6 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
 bool X86Lifter::isReturn(const cs_insn *I) {
   switch (I->id) {
   case X86_INS_RET:
-  case X86_INS_RETF:
-  case X86_INS_RETFQ:
-  case X86_INS_IRET:
-  case X86_INS_IRETD:
-  case X86_INS_IRETQ:
     return true;
   default:
     return false;

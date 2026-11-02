@@ -16,7 +16,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "unittests/emulation/fixtures"
 DEFINITION = FIXTURES / "AArch64ExclusiveOracle.def"
-CASES = FIXTURES.parent / "AArch64ExclusiveCases.def"
+CASES = FIXTURES.parent / "aarch64" / "AArch64ExclusiveCases.def"
 
 
 def validate_observations(data: bytes, cases: list[str]) -> list[dict]:

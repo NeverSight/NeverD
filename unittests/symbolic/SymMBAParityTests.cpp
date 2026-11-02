@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/symbolic/mba/SymMBADetail.h"
 #include "SymMBATestsDetail.h"
 
 #include "neverd/symbolic/SymBitwise.h"
@@ -125,7 +126,9 @@ TEST(SymMBAParity, NeverPeelsAnArmUsedInALargerMonomial) {
 }
 
 TEST(SymMBAParity, SharesTheANFWorkLimitBeforeConstructingAKernel) {
-  for (size_t Work : {0u, 64u, 65535u, 65536u}) {
+  // 64 ANF entries, six terms, four support bits, 72 projection operations,
+  // 49 recipe operations and 512 bounded memo slots share this allowance.
+  for (size_t Work : {0u, 64u, 195u, 706u}) {
     SymContext Ctx;
     auto Atoms = variables(Ctx, 4, 32);
     BitwiseSynthesisLimits Limits;
@@ -139,8 +142,10 @@ TEST(SymMBAParity, SharesTheANFWorkLimitBeforeConstructingAKernel) {
   auto Atoms = variables(Ctx, 4, 32);
   BitwiseSynthesisLimits Limits;
   Limits.MaxCost = 7;
-  Limits.MaxWork = 1u << 17;
-  EXPECT_TRUE(synthesizeBitwise(Ctx, kernelTable(4), Atoms, Limits));
+  Limits.MaxWork = 707;
+  auto Result = synthesizeBitwise(Ctx, kernelTable(4), Atoms, Limits);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(*Result, expectedKernel(Ctx, Atoms));
 }
 
 TEST(SymMBAParity, UnavailableANFIsNotZeroWithAnUnlimitedCostLimit) {
@@ -247,6 +252,44 @@ TEST(SymMBAParity, RefusesAnUnrepresentableTruthTableWithoutExpansion) {
   EXPECT_EQ(Result.Expr, Input);
   EXPECT_LE(Result.Work, Opts.MaxWork);
   EXPECT_EQ(Ctx.numNodes(), Before);
+}
+
+TEST(SymMBAParity, CompletedValuationsReuseStableSlotsAndFallBackLocally) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    for (size_t Capacity : {size_t(1), size_t(8), size_t(64)}) {
+      SymContext C;
+      detail::WorkBudget Budget(16384);
+      Budget.MemoOwner = &C;
+      Budget.MemoCapacity = Capacity;
+      const auto Scale = C.mkConst(llvm::APInt(Width, 1).shl(Width - 8));
+      for (unsigned I = 0; I != 7; ++I) {
+        auto X = C.mkVar("x" + std::to_string(I), Width);
+        auto Make = [&](unsigned Power) {
+          llvm::SmallVector<SymRef, 32> F(Power, X);
+          F.append(Power, C.mkNot(X));
+          F.push_back(Scale);
+          return C.mkMul(F);
+        };
+        const auto Input = Make(8), Near = Make(7);
+        size_t Storage = MBAOptions{}.MaxTableBytes;
+        EXPECT_EQ(detail::foldProductValuations(C, Input, Budget, Storage),
+                  C.mkZero(Width));
+        const size_t Start = Budget.used();
+        Storage = MBAOptions{}.MaxTableBytes;
+        EXPECT_EQ(detail::foldProductValuations(C, Input, Budget, Storage),
+                  C.mkZero(Width));
+        if (Capacity == 64 && I < 6)
+          EXPECT_EQ(Budget.used() - Start, 1u);
+        Storage = MBAOptions{}.MaxTableBytes;
+        EXPECT_EQ(detail::foldProductValuations(C, Near, Budget, Storage),
+                  Near);
+        llvm::SmallVector<llvm::APInt, 8> Values(C.numVars(),
+                                                 llvm::APInt(Width, 2));
+        EXPECT_EQ(C.eval(Near, Values), llvm::APInt::getSignMask(Width));
+      }
+      EXPECT_FALSE(Budget.exhausted());
+    }
+  }
 }
 
 } // namespace

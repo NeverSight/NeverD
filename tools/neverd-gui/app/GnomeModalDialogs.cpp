@@ -48,10 +48,6 @@ bool onGnome() {
 void prepareModalDialogs() {
   if (!onGnome())
     return;
-  // GTK's file chooser, which Qt's GTK platform theme shows for a file
-  // dialog, is a modal dialog of another toolkit: GNOME attaches it, so
-  // moving it moved the workbench.  Qt's own dialogs are kept free-standing.
-  QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   QByteArray disabled = qgetenv(DisabledWaylandInterfaces);
   if (disabled.split(',').contains(DialogInterface))
     return;

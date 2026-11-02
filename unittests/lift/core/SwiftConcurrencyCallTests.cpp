@@ -4,8 +4,8 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/AArch64Regs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 
 using namespace neverd;
@@ -82,11 +82,9 @@ TEST(ObjCCallHints, SwiftMainActorSharedKeepsObjectAndMetatypeContext) {
     for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
       auto Wrong = Image;
       if (Mutation == 0)
-        Wrong.DyldBindSlots[Slot].Module =
-            "/tmp/libswift_Concurrency.dylib";
+        Wrong.DyldBindSlots[Slot].Module = "/tmp/libswift_Concurrency.dylib";
       if (Mutation == 1)
-        Wrong.DyldBindSlots[Slot].Module =
-            "/usr/lib/swift/libswiftCore.dylib";
+        Wrong.DyldBindSlots[Slot].Module = "/usr/lib/swift/libswiftCore.dylib";
       if (Mutation == 2)
         Wrong.DyldBindSlots[Slot].WeakImport = true;
       if (Mutation == 3)

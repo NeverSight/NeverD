@@ -16,13 +16,17 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <limits>
 #include <set>
 
 namespace neverd::sdk {
 namespace {
+#define LOCAL_TYPE_SOURCE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "LocalTypesSourceValues.def"
 
 /// Whether emitted C takes the type \p Name from the headers it includes
 /// (CHeaderNames.def) rather than declaring it.
@@ -64,7 +68,11 @@ displayedEnumerators(const types::EnumDef &Enum, unsigned Bytes) {
 
 class Converter {
 public:
-  explicit Converter(const types::TypeLibrary &Library) : Library(Library) {}
+  explicit Converter(const types::TypeLibrary &Library,
+                     const types::TypeSpeller *PrototypeSpeller = nullptr,
+                     bool CompleteValues = false, bool BorrowRecords = false)
+      : Library(Library), PrototypeSpeller(PrototypeSpeller),
+        CompleteValues(CompleteValues), BorrowRecords(BorrowRecords) {}
 
   TypeRef convert(const types::TypeExpr &Type, unsigned Depth) {
     if (Depth > kMaxLocalTypeConversionDepth)
@@ -76,7 +84,11 @@ public:
       // A pointer's own value is all a decompiled signature needs: what it
       // points to only names it, so a pointee it cannot describe is void.
       TypeRef Pointee =
-          Type.Element ? convert(*Type.Element, Depth + 1) : NdType::makeVoid();
+          Type.Element
+              ? (CompleteValues ? Converter(Library, PrototypeSpeller)
+                                      .convert(*Type.Element, Depth + 1)
+                                : convert(*Type.Element, Depth + 1))
+              : NdType::makeVoid();
       if (!Pointee)
         Pointee = NdType::makeVoid();
       TypeRef Pointer = NdType::makePtr(Pointee);
@@ -132,6 +144,12 @@ private:
       Integer->SourceName = "bool";
     else if (Builtin == types::Builtin::HResult)
       Integer->SourceName = "HRESULT";
+    // Equal machine widths do not imply compatible C pointer types. Use
+    // the prototype's scalar spelling for its call conversions as well,
+    // without adding the source object's const/volatile to machine values.
+    if (PrototypeSpeller && Integer->SourceName.empty())
+      Integer->SourceName =
+          PrototypeSpeller->spell(*types::makeBuiltin(Builtin));
     return Integer;
   }
 
@@ -158,6 +176,10 @@ private:
       return Type->Function ? function(*Type->Function, Depth) : nullptr;
     case types::TypeKind::Struct:
     case types::TypeKind::Union:
+      if (BorrowRecords || ActiveRecords.contains(Name))
+        return NdType::makeNamedRecord(Name.str(), 0);
+      if (CompleteValues && Type->Kind == types::TypeKind::Union)
+        return nullptr;
       if (!Type->Record)
         return nullptr;
       if (auto Done = Records.find(Name); Done != Records.end())
@@ -186,22 +208,21 @@ private:
     return Named;
   }
 
-  /// A function type, as a pointer to it is spelled: scalars, and pointers
-  /// opaque, as the C a callback's signature takes; void where a part of it
+  /// A function type, as a pointer to it is spelled: scalars and pointers
+  /// retain their declared pointees; void where a part of it
   /// is neither, or for a variadic one, whose calls pass more.
   TypeRef function(const types::FunctionDef &Function, unsigned Depth) {
     if (Function.Variadic)
       return NdType::makeVoid();
+    // A callback needs borrowed record identities, not member reconstruction
+    // or recursive ownership through a record's own callback fields.
+    Converter Borrowed(Library, PrototypeSpeller, false, true);
     const auto scalar = [&](const types::TypeExpr *Type) -> TypeRef {
-      TypeRef Converted = Type ? convert(*Type, Depth + 1) : nullptr;
+      TypeRef Converted = Type ? Borrowed.convert(*Type, Depth + 1) : nullptr;
       if (!Converted)
         return nullptr;
-      if (Converted->Kind == NdTypeKind::Ptr) {
-        TypeRef Opaque = NdType::makePtr(NdType::makeVoid());
-        Opaque->Size = Converted->Size;
-        return Opaque;
-      }
-      return Converted->Kind == NdTypeKind::Int ||
+      return Converted->Kind == NdTypeKind::Ptr ||
+                     Converted->Kind == NdTypeKind::Int ||
                      Converted->Kind == NdTypeKind::Float
                  ? Converted
                  : nullptr;
@@ -221,7 +242,8 @@ private:
         return NdType::makeVoid();
       Params.push_back(std::move(Converted));
     }
-    return NdType::makeFunc(std::move(Return), std::move(Params));
+    return NdType::makeFunc(std::move(Return), std::move(Params),
+                            Function.Convention);
   }
 
   /// A record by its name, its members named for display where they lie, as
@@ -237,10 +259,21 @@ private:
     // does: no constructor sends a small one through memory.
     Named->Passing = NdRecordPassing::ByValue;
     const uint32_t Alignment = Library.alignOf(Record);
-    if (Alignment <= std::numeric_limits<uint16_t>::max())
+    if (Alignment <= std::numeric_limits<uint16_t>::max()) {
       Named->Alignment = static_cast<uint16_t>(Alignment);
+      Named->FieldDisplayAlignment = static_cast<uint16_t>(Alignment);
+    }
     if (!Name.empty())
       Records[Name] = Named;
+    // A recursive member refers to this identity, not ownership of the
+    // record currently being built. A later member access may complete that
+    // borrow from the library without a shared_ptr cycle.
+    if (!Name.empty())
+      ActiveRecords.insert(Name);
+    const llvm::scope_exit Leave([&] {
+      if (!Name.empty())
+        ActiveRecords.erase(Name);
+    });
     if (Record.Defined) {
       members(*Named, Record, 0, Depth);
       unsigned Budget = 256;
@@ -255,6 +288,32 @@ private:
       }
       if (!Complete)
         Named->ScalarLeaves.clear();
+    }
+    if (CompleteValues) {
+      if (!Record.Defined)
+        return nullptr;
+      std::vector<TypeRef> Fields;
+      std::vector<uint16_t> Offsets;
+      for (const auto &Field : Record.Members) {
+        if (!Field.Type || Field.isBitfield() ||
+            Field.BitOffset % kSourceValueByteBits ||
+            Field.BitOffset / kSourceValueByteBits > Record.Size)
+          return nullptr;
+        Fields.push_back(convert(*Field.Type, Depth + 1));
+        Offsets.push_back(
+            static_cast<uint16_t>(Field.BitOffset / kSourceValueByteBits));
+      }
+      const auto Natural = NdType::makeStruct(std::move(Fields));
+      if (!Natural || Natural->Size != Record.Size ||
+          Natural->Alignment != Alignment || Natural->FieldOffsets != Offsets)
+        return nullptr;
+      Named->Fields = Natural->Fields;
+      Named->FieldOffsets = Natural->FieldOffsets;
+      Named->FieldDisplayNames.clear();
+      Named->FieldDisplayOffsets = Natural->FieldOffsets;
+      Named->FieldDisplayTypes = Natural->Fields;
+      for (const auto &Field : Record.Members)
+        Named->FieldDisplayNames.push_back(Field.Name);
     }
     return Named;
   }
@@ -329,7 +388,11 @@ private:
   }
 
   const types::TypeLibrary &Library;
+  const types::TypeSpeller *PrototypeSpeller;
+  bool CompleteValues;
+  bool BorrowRecords;
   llvm::StringMap<TypeRef> Records;
+  llvm::StringSet<> ActiveRecords;
 };
 
 /// Whether every member \p Record names for display is one \p Def has
@@ -357,14 +420,19 @@ TypeRef decompilerTypeOf(const types::TypeLibrary &Library,
   return Converter(Library).convert(Type, 0);
 }
 
-std::optional<FunctionSym> signatureOf(const types::TypeLibrary &Library,
-                                       const types::FunctionDef &Function,
-                                       llvm::StringRef Name) {
-  if (Function.Variadic)
-    return std::nullopt;
-  Converter Convert(Library);
+TypeRef sourceCallTypeOf(const types::TypeLibrary &Library,
+                         const types::TypeExpr &Type) {
+  return Converter(Library, nullptr, true).convert(Type, 0);
+}
+
+std::optional<FunctionSym>
+signatureOf(const types::TypeLibrary &Library,
+            const types::FunctionDef &Function, llvm::StringRef Name,
+            const types::TypeSpeller *PrototypeSpeller) {
+  Converter Convert(Library, PrototypeSpeller);
   FunctionSym Declared;
   Declared.Name = Name.str();
+  Declared.IsVariadic = Function.Variadic;
   Declared.NoReturn = Function.NoReturn;
   Declared.ReturnType = Function.Return ? Convert.convert(*Function.Return, 0)
                                         : NdType::makeVoid();
@@ -412,7 +480,7 @@ std::pair<NdTypeKind, uint16_t> passing(const TypeRef &Type) {
 } // namespace
 
 bool passesAlike(const FunctionSym &A, const FunctionSym &B) {
-  if (A.Params.size() != B.Params.size() ||
+  if (A.IsVariadic != B.IsVariadic || A.Params.size() != B.Params.size() ||
       passing(A.ReturnType) != passing(B.ReturnType))
     return false;
   for (size_t I = 0; I < A.Params.size(); ++I)
@@ -450,11 +518,12 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     std::map<va_t, std::string> Declarations, const BinaryImage *Image,
     std::vector<types::HeaderLibrary> Headers,
     std::unordered_map<uint64_t, std::string> Recognized, std::string EntryType,
-    std::optional<va_t> ProgramMain)
+    std::optional<va_t> ProgramMain, std::string EntryDeclaration)
     : Inner(Inner), Types(std::move(Types)),
       Declarations(std::move(Declarations)), Image(Image),
       Headers(std::move(Headers)), Recognized(std::move(Recognized)),
-      EntryType(std::move(EntryType)), ProgramMain(ProgramMain) {}
+      EntryType(std::move(EntryType)),
+      EntryDeclaration(std::move(EntryDeclaration)), ProgramMain(ProgramMain) {}
 
 LocalTypesDebugContext::~LocalTypesDebugContext() {
   std::lock_guard<std::mutex> Guard(Mutex);
@@ -462,6 +531,7 @@ LocalTypesDebugContext::~LocalTypesDebugContext() {
     Type.Type->FieldDisplayNames = std::move(Type.Names);
     Type.Type->FieldDisplayOffsets = std::move(Type.Offsets);
     Type.Type->FieldDisplayTypes = std::move(Type.Types);
+    Type.Type->FieldDisplayAlignment = Type.Alignment;
   }
 }
 
@@ -480,6 +550,7 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
   std::vector<std::string> Names;
   std::vector<uint16_t> Offsets;
   std::vector<TypeRef> Members;
+  uint16_t Alignment = Type->FieldDisplayAlignment;
   const types::LocalType *Local = nullptr;
   if (Type->IsEnum) {
     Local = Types->find(Type->SourceName);
@@ -511,17 +582,26 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
     Names = From->FieldDisplayNames;
     Offsets = From->FieldDisplayOffsets;
     Members = From->FieldDisplayTypes;
+    Alignment = From->FieldDisplayAlignment;
   }
   CompletedRecords.insert(Type.get());
   Read.insert(Local->Name);
-  if (Names == Type->FieldDisplayNames && Offsets == Type->FieldDisplayOffsets)
+  // A bounded conversion can retain every name and offset while leaving
+  // member types incomplete. The matching library must complete those too;
+  // otherwise a scalar access may name an entire union or structure in C.
+  if (Names == Type->FieldDisplayNames &&
+      Offsets == Type->FieldDisplayOffsets &&
+      Members == Type->FieldDisplayTypes &&
+      Alignment == Type->FieldDisplayAlignment)
     return true;
   Completed.push_back({Type, std::move(Type->FieldDisplayNames),
                        std::move(Type->FieldDisplayOffsets),
-                       std::move(Type->FieldDisplayTypes)});
+                       std::move(Type->FieldDisplayTypes),
+                       Type->FieldDisplayAlignment});
   Type->FieldDisplayNames = std::move(Names);
   Type->FieldDisplayOffsets = std::move(Offsets);
   Type->FieldDisplayTypes = std::move(Members);
+  Type->FieldDisplayAlignment = Alignment;
   return true;
 }
 
@@ -645,7 +725,9 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
             Enumerators.try_emplace(Name, Local);
   CRecordDefinitions Result;
   std::vector<const types::LocalType *> Roots;
-  for (const TypeRef &Record : Records) {
+  for (const TypeRef &Requested : Records) {
+    const bool Declaration = Requested && Requested->Kind == NdTypeKind::Ptr;
+    const TypeRef &Record = Declaration ? Requested->Pointee : Requested;
     if (!Record || Record->Kind != NdTypeKind::Struct ||
         Record->SourceName.empty() || RenamedInC->contains(Record->SourceName))
       continue;
@@ -668,6 +750,11 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
     if (Local->Kind == types::TypeKind::Struct ||
         Local->Kind == types::TypeKind::Union)
       Result.Tags[Record->SourceName] = Local->Kind == types::TypeKind::Union;
+    if (Declaration) {
+      Read.insert(Local->Name);
+      Result.DeclaredTypes.push_back(Local->Name);
+      continue;
+    }
     if (Record->IsEnum || (Spelled && Local->Kind == types::TypeKind::Enum)) {
       if (Local->Kind == types::TypeKind::Enum && AllAgree(*Record, *Local))
         Roots.push_back(Local);
@@ -704,7 +791,8 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
       Result.Enumerations.push_back(Name);
   }
   Result.Types = Embedded.Types;
-  Result.DeclaredTypes = Embedded.DeclaredTypes;
+  Result.HeaderTypes = Embedded.HeaderTypes;
+  llvm::append_range(Result.DeclaredTypes, Embedded.DeclaredTypes);
   Result.HeaderTypedefs = Embedded.HeaderTypedefs;
   return Result;
 }
@@ -736,13 +824,21 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   const auto Function = Types->prototypes().find(Name);
   if (Function == Types->prototypes().end() || !Function->second)
     return Signature;
-  Signature = signatureOf(*Types, *Function->second, Name);
+  types::RenderOptions PortableOptions;
+  PortableOptions.Lang = types::Language::C;
+  PortableOptions.Spelling = types::BuiltinSpelling::Portable;
+  PortableOptions.PrototypeIntegerIdentity = true;
+  auto &Portable = PortablePrototypeSpeller;
+  if (!Portable)
+    Portable = std::make_unique<types::TypeSpeller>(*Types, PortableOptions);
+  Signature = signatureOf(*Types, *Function->second, Name, Portable.get());
   if (!Signature)
     return Signature;
   const std::optional<types::HeaderLibrary> Header =
       prototypeHeader(Name, Function->second.get());
   Signature->PrototypeLibrary = Header ? types::headerLibraryName(*Header).str()
                                        : UserPrototypeLibrary.str();
+  Signature->PrototypeFromHeader = Header.has_value();
   Signature->PrototypeFromCLibrary =
       Header && types::headerLibrarySystem(*Header).has_value();
   types::RenderOptions Options;
@@ -756,21 +852,51 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   Signature->PrototypeDeclaration =
       (Function->second->NoReturn ? "_Noreturn " : "") +
       Speller->spell(*types::makeFunction(Function->second), Name.str());
+  auto PortableFunction = Function->second;
+  if (PortableFunction->Convention == types::CallingConvention::Cdecl ||
+      PortableFunction->Convention == types::CallingConvention::Stdcall) {
+    auto Unspecified = std::make_shared<types::FunctionDef>(*PortableFunction);
+    Unspecified->Convention = types::CallingConvention::Unspecified;
+    PortableFunction = std::move(Unspecified);
+  }
+  Signature->PortablePrototypeDeclaration =
+      (PortableFunction->NoReturn ? "_Noreturn " : "") +
+      Portable->spell(*types::makeFunction(PortableFunction), Name.str());
+  for (const auto &Parameter : PortableFunction->Params)
+    Signature->PortableParameterTypes.push_back(
+        Portable->spell(*Parameter.Type));
   return Signature;
 }
 
 std::optional<FunctionSym> LocalTypesDebugContext::entrySignature() const {
+  if (!EntryDeclaration.empty()) {
+    const auto Read = types::parseFunctionDeclaration(EntryDeclaration, *Types);
+    if (!Read.ok())
+      return std::nullopt;
+    auto Signature = signatureOf(*Types, *Read.Function, Read.Name);
+    if (Signature)
+      Signature->PrototypeDeclaration = EntryDeclaration;
+    return Signature;
+  }
   // A typedef of a pointer to a function, as UEFI's EFI_IMAGE_ENTRY_POINT.
   const types::LocalType *Type = Types->find(EntryType);
   if (!Type || Type->Kind != types::TypeKind::Typedef || !Type->Target ||
       Type->Target->Kind != types::TypeExprKind::Pointer ||
-      !Type->Target->Element ||
-      Type->Target->Element->Kind != types::TypeExprKind::Function ||
-      !Type->Target->Element->Function)
+      !Type->Target->Element)
     return std::nullopt;
-  const types::FunctionDef &Function = *Type->Target->Element->Function;
+  const auto &Pointee = *Type->Target->Element;
+  const types::FunctionDef *Function = Pointee.Function.get();
+  if (Pointee.Kind == types::TypeExprKind::Named) {
+    const types::LocalType *Named = Types->resolve(Pointee.Name);
+    Function = Named && Named->Kind == types::TypeKind::Function
+                   ? Named->Function.get()
+                   : nullptr;
+  } else if (Pointee.Kind != types::TypeExprKind::Function)
+    Function = nullptr;
+  if (!Function)
+    return std::nullopt;
   std::optional<FunctionSym> Signature =
-      signatureOf(*Types, Function, std::string());
+      signatureOf(*Types, *Function, std::string());
   if (!Signature)
     return Signature;
   for (const types::HeaderLibrary Library : Headers)
@@ -883,7 +1009,8 @@ LocalTypesDebugContext::resolveFunction(va_t Addr) const {
         return Function;
   // The image's entry point, as its kind's specification types it: a UEFI
   // application's (ImageHandle, SystemTable).
-  if (!Known && Image && Addr == Image->Entry && !EntryType.empty())
+  if (!Known && Image && Addr == Image->Entry &&
+      (!EntryType.empty() || !EntryDeclaration.empty()))
     Known = entrySignature();
   // The program's main, as its C runtime calls it, under that name where
   // nothing else names it.
@@ -911,8 +1038,13 @@ LocalTypesDebugContext::resolveFunction(va_t Addr) const {
   Typed.ParamEntryLocations.clear();
   Typed.PrototypeLibrary = std::move(Known->PrototypeLibrary);
   Typed.PrototypeDeclaration = std::move(Known->PrototypeDeclaration);
+  Typed.PortablePrototypeDeclaration =
+      std::move(Known->PortablePrototypeDeclaration);
+  Typed.PortableParameterTypes = std::move(Known->PortableParameterTypes);
+  Typed.PrototypeFromHeader = Known->PrototypeFromHeader;
   Typed.PrototypeFromCLibrary = Known->PrototypeFromCLibrary;
   Typed.NoReturn = Known->NoReturn;
+  Typed.IsVariadic = Known->IsVariadic;
   if (Main && (Typed.Name.empty() || isSynthesizedFuncName(Typed.Name)))
     Typed.Name = "main";
   return Typed;

@@ -31,6 +31,7 @@
 #include <QLocalServer>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <functional>
 #include <optional>
 
@@ -80,10 +81,18 @@ public:
   static std::optional<QJsonObject> request(
       const QString &server, const QJsonObject &request,
       int timeoutMs = ::neverd::limits::gui::kInstanceServerRequestTimeoutMs);
+  /// Probe servers concurrently under one deadline. A true stop result
+  /// ends probing after that reply; unresponsive entries remain empty. Each
+  /// wave gets a share of the budget so stalled peers cannot starve the queue.
+  static QList<std::optional<QJsonObject>> requestMany(
+      const QStringList &servers, const QJsonObject &request,
+      int timeoutMs = ::neverd::limits::gui::kInstanceServerRequestTimeoutMs,
+      std::function<bool(int, const QJsonObject &)> stop = {});
 
 private:
+  struct RequestBuffer;
   void accept();
-  void read(QLocalSocket *socket);
+  void read(QLocalSocket *socket, RequestBuffer &request);
   void answer(QLocalSocket *socket, const QByteArray &text);
   static void reply(QLocalSocket *socket, const QJsonObject &reply);
 

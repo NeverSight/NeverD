@@ -94,6 +94,11 @@ private:
   /// and the pointer's own with the instructions they are at.
   QJsonArray accesses_;
   QJsonObject target_;
+  /// How the listing writes the operand: as x86 listings do
+  /// (`[rcx+_T.Size]`), as the ARM family (`[x0, #_T.Size]`), SBF
+  /// (`[r1 + _T.Size]`) or EVM PUSH data do.
+  enum class Syntax { X86, Arm, Sbf, Evm };
+  Syntax syntax_ = Syntax::X86;
   bool answered_ = false;
   QString type_;
   qint64 delta_ = 0;

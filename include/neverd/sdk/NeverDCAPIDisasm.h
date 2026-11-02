@@ -44,6 +44,56 @@ NEVERD_API neverd_va_t neverd_func_entry(neverd_session_t Sess, int Idx);
 NEVERD_API int neverd_func_size(neverd_session_t Sess, int Idx);
 NEVERD_API const char *neverd_func_name(neverd_session_t Sess, int Idx);
 
+/// Lightweight function presentation without decompilation: {entry,
+/// suggested_name?,prototype?,thunk,thunk_target?}. A thunk forwards through
+/// a direct unconditional branch with no parameter or stack transformation.
+/// User/stated names take precedence over suggestions. NULL on failure.
+NEVERD_API const char *neverd_function_presentation_json(neverd_session_t Sess,
+                                                         neverd_va_t Entry);
+
+/// Format-owned data records in ascending address order, from FirstAddress:
+/// {items:[{address,size,type,fields:[{offset,size,name,role,target}]}],
+/// next_address:hex|null}. Currently publishes checked x64 PE RUNTIME_FUNCTION
+/// rows, including chain records. Boundary references do not establish entries.
+/// MaxItems is clamped to the data-slot query limit. No analysis is started.
+NEVERD_API const char *neverd_metadata_items_json(neverd_session_t Sess,
+                                                  neverd_va_t FirstAddress,
+                                                  int MaxItems);
+
+/// Borrowed native view of the same checked metadata facts. All pointers,
+/// including strings, are valid only for the duration of the visitor call.
+typedef struct neverd_metadata_field_v1 {
+  size_t struct_size;
+  unsigned long long offset;
+  unsigned long long size;
+  neverd_va_t target;
+  const char *name;
+  const char *role;
+} neverd_metadata_field_v1;
+
+typedef struct neverd_metadata_item_v1 {
+  size_t struct_size;
+  neverd_va_t address;
+  unsigned long long size;
+  const char *type;
+  const neverd_metadata_field_v1 *fields;
+  size_t field_count;
+} neverd_metadata_item_v1;
+
+/// Return nonzero to continue or zero to stop after this item. The visitor
+/// must not throw, block or reenter this session. It may copy borrowed facts.
+typedef int (*neverd_metadata_visitor_fn)(void *user_data,
+                                          const neverd_metadata_item_v1 *item);
+
+/// Visit at most MaxItems records in address order without JSON conversion.
+/// Returns the number visited, or -1 with neverd_last_error on failure.
+/// NextAddress receives the first unvisited record, or zero at the end,
+/// including when the visitor stops early. No target code or analysis runs.
+NEVERD_API int
+neverd_visit_metadata_items(neverd_session_t Sess, neverd_va_t FirstAddress,
+                            int MaxItems, neverd_metadata_visitor_fn Visitor,
+                            void *UserData, neverd_va_t *NextAddress);
+
 // ===--------------------------------------------------------------------===//
 // Function lookup helpers
 // ===--------------------------------------------------------------------===//
@@ -105,6 +155,22 @@ enum {
 NEVERD_API const char *neverd_disasm_json_ex(neverd_session_t Sess,
                                              neverd_va_t Addr, int MaxInsns,
                                              unsigned Options);
+
+/// Native instructions recovered for one function, in address order, starting
+/// at FirstAddress. Uses the same CFG and recovery checks as the decompiler;
+/// skipped bytes are absent, even inside a sized function. Prepares the low
+/// function view on demand. Options select the same additive fields as raw
+/// disassembly; recovered direct branch targets replace instruction-local
+/// indirect targets. Raw neverd_disasm_json[_ex] remains a linear decode.
+/// Returns {"instructions":[...],"next_address":"0x..."|null,
+/// "lift_complete":bool}. Completeness describes reachable instruction lifting,
+/// not proof that every indirect target is known. MaxInsns is clamped to
+/// 1..4096. NULL with an error for non-native images or unavailable analysis.
+NEVERD_API const char *neverd_function_disasm_json(neverd_session_t Sess,
+                                                   neverd_va_t Entry,
+                                                   neverd_va_t FirstAddress,
+                                                   int MaxInsns,
+                                                   unsigned Options);
 
 /// Direct references of up to \p MaxFunctions native functions whose entries
 /// are at or above \p FirstEntry, in ascending entry order, from the same
@@ -181,7 +247,9 @@ NEVERD_API int neverd_prepare_function(neverd_session_t Sess,
 /// Prepare the requested view with the same entry and recovery checks.
 /// Native "low", "med", "llvm" and "llvmc" postpone HighIR construction,
 /// preserving shared CFG/ABI/exception analysis. A later source or "high" view
-/// completes HighIR on demand.
+/// completes HighIR on demand. Native "cfg" prepares the control-flow graphs
+/// alone (neverd_cfg_json); any other view of the function continues that
+/// analysis on demand.
 /// Other valid representations keep ordinary preparation; unknown names fail.
 /// Returns 1 on success or 0 with neverd_last_error on failure.
 NEVERD_API int neverd_prepare_function_view(neverd_session_t Sess,
@@ -276,16 +344,16 @@ NEVERD_API const char *neverd_ir_high(neverd_session_t Sess,
 NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
                                       neverd_va_t FuncEntry);
 
-/// Return a schema_version=1 page of native Low/Med IR with instruction
-/// anchors, or C/LLVMC with optional library regions. Representation is
-/// "low", "med", "c", "llvmc", "cpp", "rust", "go" or "source"; dialects
-/// spell the HighC page in that language and "source" in the function's own
-/// (C++, Rust, Go or C), adding dialect, unread and source_names (where each
-/// source name such as core::fmt::write is). Every C, LLVMC and dialect page
-/// lists identifier_symbols: the functions the emitted C names by another
-/// identifier than their symbol (fini for _fini, dotted_fn for dotted.fn),
-/// each as identifier, symbol and address. Dialects are offered for
-/// an image with that language's code (neverd_headers_json's
+/// Return a schema_version=1 page of native Low/Med/High/LLVM IR with
+/// instruction anchors, or C/LLVMC with optional library regions.
+/// Representation is "low", "med", "high", "llvm", "c", "llvmc", "cpp", "rust",
+/// "go" or "source"; dialects spell the HighC page in that language and
+/// "source" in the function's own (C++, Rust, Go or C), adding dialect, unread
+/// and source_names (where each source name such as core::fmt::write is). Every
+/// C, LLVMC and dialect page lists identifier_symbols: the functions the
+/// emitted C names by another identifier than their symbol (fini for _fini,
+/// dotted_fn for dotted.fn), each as identifier, symbol and address. Dialects
+/// are offered for an image with that language's code (neverd_headers_json's
 /// language.pseudocode); for another the page is mapping_status
 /// "unsupported_representation" with the reason. Offset is an absolute
 /// zero-based rendered line and Limit is 1..2048. Text is byte-for-byte the

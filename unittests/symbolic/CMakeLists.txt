@@ -2,6 +2,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymConcreteTests.cpp
   SymDispatchTests.cpp
   SymExecTests.cpp
+  SymCallEffectTests.cpp
   SymMemoryKnowledgeTests.cpp
   SymLoadOriginBindingTests.cpp
   SymMBARewriteCacheTests.cpp
@@ -17,11 +18,14 @@ add_neverd_unittest(NeverDSymbolicTests
   SymExploreCLIContractTests.cpp
   SymExploreTests.cpp
   SymExprTests.cpp
+  SymExprBooleanEqualityTests.cpp
   SymExprCancellationTests.cpp
   SymLowWordProjectionTests.cpp
   SymExprCompareTests.cpp
+  SymExprConditionalEqualityTests.cpp
   SymExprComplementTests.cpp
   SymExprExtensionTests.cpp
+  SymExprExtensionEqualityTests.cpp
   SymExprMaskTests.cpp
   SymKnownBitsTests.cpp
   SymMBAAffineResidualTests.cpp
@@ -40,6 +44,16 @@ add_neverd_unittest(NeverDSymbolicTests
   SymMBACubicTests.cpp
   SymMBAHigherProductTests.cpp
   SymMBAResidualBudgetTests.cpp
+  SymMBAResidueTests.cpp
+  SymMBAAffineResidueTests.cpp
+  SymMBAPrefixResidueTests.cpp
+  SymMBAWidePairTests.cpp
+  SymMBAWitnessTests.cpp
+  SymMBAResidueCacheTests.cpp
+  SymMBAResiduePowerTests.cpp
+  SymMBAResidueCoordinateTests.cpp
+  SymMBALinearAdmissionTests.cpp
+  SymMBALazyPolynomialTests.cpp
   SymMBAComplementBoundaryTests.cpp
   SymMBAConstantRegionTests.cpp
   SymMBAMeasureTests.cpp
@@ -64,7 +78,7 @@ add_neverd_unittest(NeverDSymbolicTests
   SymSynthTests.cpp
   SymSynthAffineTests.cpp
   SymSynthQuadraticTests.cpp
-  SymX87Tests.cpp
+  x86/SymX87Tests.cpp
 
   LINK_COMPONENTS Symbolic Solver
 )
@@ -108,6 +122,16 @@ add_neverd_unittest(NeverDSymMBAQuadraticTests
   SymMBACubicTests.cpp
   SymMBAHigherProductTests.cpp
   SymMBAResidualBudgetTests.cpp
+  SymMBAResidueTests.cpp
+  SymMBAAffineResidueTests.cpp
+  SymMBAPrefixResidueTests.cpp
+  SymMBAWidePairTests.cpp
+  SymMBAWitnessTests.cpp
+  SymMBAResidueCacheTests.cpp
+  SymMBAResiduePowerTests.cpp
+  SymMBAResidueCoordinateTests.cpp
+  SymMBALinearAdmissionTests.cpp
+  SymMBALazyPolynomialTests.cpp
   LINK_COMPONENTS Symbolic Solver
 )
 
@@ -115,7 +139,25 @@ add_neverd_unittest(NeverDSymbolicIntegerIntrinsicTests
   SymIntegerIntrinsicTests.cpp
   SymExecTests.cpp
   SymStorePreservationTests.cpp
-  SymX87Tests.cpp
+  x86/SymX87Tests.cpp
+  LINK_COMPONENTS Symbolic Solver
+)
+
+add_neverd_unittest(NeverDSymbolicCallEffectTests
+  SymCallEffectTests.cpp
+  SymExploreTests.cpp
+  LINK_COMPONENTS Symbolic Solver
+)
+
+add_neverd_unittest(NeverDSymbolicPredicateTests
+  SymExprTests.cpp
+  SymExprBooleanEqualityTests.cpp
+  SymExprCompareTests.cpp
+  SymExprExtensionTests.cpp
+  SymExprExtensionEqualityTests.cpp
+  SymExprConditionalEqualityTests.cpp
+  SymKnownBitsTests.cpp
+  SymLowWordProjectionTests.cpp
   LINK_COMPONENTS Symbolic Solver
 )
 

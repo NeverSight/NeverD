@@ -24,6 +24,8 @@ public:
   llvm::Error bindAddressSpace(std::shared_ptr<AddressSpace>) override;
 
 private:
+  llvm::Expected<RegisterValue> readContextRegister(const BackendContext &,
+                                                    CPURegister) const override;
   CheckedAArch64Backend(bool UserMode)
       : CheckedBackend(aarch64::InstructionBytes, aarch64::InstructionBytes,
                        UserMode) {}

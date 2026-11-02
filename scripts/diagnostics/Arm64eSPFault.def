@@ -1,0 +1,41 @@
+//===- Arm64eSPFault.def - Native SP exception oracle --------*- C -*-===//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent native exception class, guarded bytes and observation syntax.
+//===----------------------------------------------------------------------===//
+
+#define SP_TEST_MEMORY_BYTES 66064
+#define SP_TEST_ALIGNMENT 16
+#define SP_TEST_BASE_OFFSET 264
+#ifndef SP_TEST_CASES
+#define SP_TEST_CASES immediate_cases
+#endif
+#ifndef SP_TEST_CASE_COUNT
+#if defined(SP_TEST_REGISTER_MEMORY)
+#define SP_TEST_CASE_COUNT 184
+#else
+#define SP_TEST_CASE_COUNT 177
+#endif
+#endif
+#define SP_TEST_CASE_COUNT_ERROR                                               \
+  "SP oracle requires the complete memory inventory"
+#define SP_TEST_LOW 0xfedcba9876543210ULL
+#define SP_TEST_HIGH 0x123456789abcdef0ULL
+#define SP_TEST_SEED_MULTIPLIER 13
+#define SP_TEST_SEED_HIGH_MULTIPLIER 7
+#define SP_TEST_SEED_HIGH_SHIFT 8
+#define SP_TEST_SEED_ADDEND 129
+#define SP_TEST_ESR_SHIFT 26
+#define SP_TEST_SP_ALIGNMENT_EC 0x26
+#define SP_TEST_UNARMED 90
+#define SP_TEST_ALTSTACK_ERROR 91
+#define SP_TEST_HANDLER_ERROR 92
+#define SP_TEST_MISSING_TRAP 93
+#define SP_TEST_WRONG_SP 94
+#define SP_TEST_WRONG_ESR 95
+#define SP_TEST_CHANGED_MEMORY 96
+#define SP_TEST_REPORT                                                         \
+  "{\"raw_sp_faults\":%u,\"same_sp\":true,\"sp_alignment_esr\":true,"          \
+  "\"memory_unchanged\":true,\"stack_abi_qualified\":false}\n"

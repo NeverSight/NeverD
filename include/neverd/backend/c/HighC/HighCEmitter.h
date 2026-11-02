@@ -15,6 +15,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/high/HighIR.h"
 
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
@@ -44,7 +45,11 @@ HighCImageDataObjects collectImageDataObjects(const BinaryImage &Image);
 using HighCImageFunctionSymbols = std::unordered_map<va_t, const Symbol *>;
 HighCImageFunctionSymbols collectImageFunctionSymbols(const BinaryImage &Image);
 
+class PreparedPortableX87Function;
+
 class HighCEmitter {
+  const HighFunc *PortableBody = nullptr;
+  const PreparedPortableX87Function *PortableInterface = nullptr;
   const BinaryImage *PreparedImage = nullptr;
   std::unordered_set<std::string_view> PreparedImageFunctionNames;
   HighCImageDataObjects PreparedDataObjects;
@@ -58,6 +63,12 @@ public:
 
   bool emit(const std::vector<HighFunc> &Funcs, llvm::raw_ostream &OS,
             const CEmitterOptions &Opts = {}, DebugContext *Dbg = nullptr);
+
+  /// Emit an isolated prepared portable leaf. Source/debug state on this
+  /// emitter is not part of the alternate explicit C interface.
+  llvm::Expected<std::string>
+  emitPortableX87(const PreparedPortableX87Function &Prepared,
+                  llvm::StringRef OutputTriple);
 
   bool emitToFile(const std::vector<HighFunc> &Funcs, const std::string &Path,
                   const CEmitterOptions &Opts = {},

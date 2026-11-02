@@ -11,6 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ir/high/HighIRPrint.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/high/HighIR.h"
@@ -69,8 +71,7 @@ static const char *binopSymbol(NdOp Op) {
   }
 }
 
-static const char *
-memoryAddressSpaceQualifier(NdMemoryAddressSpace AddressSpace) {
+const char *memoryAddressSpaceQualifier(NdMemoryAddressSpace AddressSpace) {
   switch (AddressSpace) {
   case NdMemoryAddressSpace::Default:
     return "";
@@ -148,6 +149,15 @@ std::string HighExpr::str() const {
       S += Operands[I]->str();
     }
     S += ")";
+    if (!IntrinsicOutputs.empty()) {
+      S += " -> (";
+      for (size_t I = 0; I < IntrinsicOutputs.size(); ++I) {
+        if (I)
+          S += ", ";
+        S += IntrinsicOutputs[I].display();
+      }
+      S += ")";
+    }
     return S;
   }
   case ExprKind::Cast:
@@ -191,6 +201,8 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
     return false;
   if (MemoryAddressSpace != Other.MemoryAddressSpace)
     return false;
+  if (SourceReturnSlotOffset != Other.SourceReturnSlotOffset)
+    return false;
   if ((Kind == ExprKind::Record || Kind == ExprKind::Field ||
        (Type && Type->Kind == NdTypeKind::Struct)) &&
       !equalSourceTypes(Type, Other.Type))
@@ -215,9 +227,13 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
   case ExprKind::Call:
     if (CallTarget != Other.CallTarget || CallAddr != Other.CallAddr ||
         SourceCallHint != Other.SourceCallHint ||
+        ((FloatingCallSignature || Other.FloatingCallSignature) &&
+         (!FloatingCallSignature || !Other.FloatingCallSignature ||
+          *FloatingCallSignature != *Other.FloatingCallSignature)) ||
         IsIndirectCall != Other.IsIndirectCall ||
         IndirectParamIdx != Other.IndirectParamIdx ||
         IntrinsicId != Other.IntrinsicId ||
+        IntrinsicOutputs != Other.IntrinsicOutputs ||
         DoesNotReturn != Other.DoesNotReturn)
       return false;
     break;
@@ -261,122 +277,13 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
 //===----------------------------------------------------------------------===//
 
 std::string HighStmt::str(int Indent) const {
-  std::string Pad(Indent * 2, ' ');
-  switch (Kind) {
-  case StmtKind::Assign:
-    return Pad + (Dst ? Dst->str() : "?") + " = " + (Val ? Val->str() : "?") +
-           ";";
-  case StmtKind::Store:
-    return Pad + memoryAddressSpaceQualifier(MemoryAddressSpace) + "*" +
-           (StoreAddr ? StoreAddr->str() : "?") + " = " +
-           (StoreVal ? StoreVal->str() : "?") + ";";
-  case StmtKind::Return:
-    return Pad + "return " + (RetVal ? RetVal->str() : "") + ";";
-  case StmtKind::Call:
-    return Pad + (CallExpr ? CallExpr->str() : "?()") + ";";
-  case StmtKind::If: {
-    std::string S = Pad + "if (" + (Cond ? Cond->str() : "?") + ") {{\n";
-    for (auto &ST : Body)
-      S += ST.str(Indent + 1) + "\n";
-    S += Pad + "}";
-    return S;
-  }
-  case StmtKind::IfElse: {
-    std::string S = Pad + "if (" + (Cond ? Cond->str() : "?") + ") {{\n";
-    for (auto &ST : Body)
-      S += ST.str(Indent + 1) + "\n";
-    S += Pad + "} else {\n";
-    for (auto &ST : ElseBody)
-      S += ST.str(Indent + 1) + "\n";
-    S += Pad + "}";
-    return S;
-  }
-  case StmtKind::While: {
-    std::string S = Pad + "while (" + (Cond ? Cond->str() : "?") + ") {{\n";
-    for (auto &ST : Body)
-      S += ST.str(Indent + 1) + "\n";
-    S += Pad + "}";
-    return S;
-  }
-  case StmtKind::Goto:
-    return Pad + "goto 0x" + llvm::utohexstr(GotoTarget) + ";";
-  case StmtKind::Switch: {
-    std::string S =
-        Pad + "switch (" + (SwitchExpr ? SwitchExpr->str() : "?") + ") {{\n";
-    for (auto &C : Cases) {
-      S += Pad + "  case " + std::to_string(C.Value) + ":\n";
-      for (auto &ST : C.Body)
-        S += ST.str(Indent + 2) + "\n";
-    }
-    if (!DefaultBody.empty()) {
-      S += Pad + "  default:\n";
-      for (auto &ST : DefaultBody)
-        S += ST.str(Indent + 2) + "\n";
-    }
-    S += Pad + "}";
-    return S;
-  }
-  case StmtKind::Break:
-    return Pad + "break;";
-  case StmtKind::Continue:
-    return Pad + "continue;";
-  case StmtKind::SEHTry:
-  case StmtKind::CxxTry:
-  case StmtKind::ItaniumTry: {
-    const char *Opener = Kind == StmtKind::SEHTry   ? "__try"
-                         : Kind == StmtKind::CxxTry ? "cxx.try"
-                                                    : "itanium.try";
-    std::string S = Pad + Opener + " [0x" + llvm::utohexstr(EHRange.Begin) +
-                    ", 0x" + llvm::utohexstr(EHRange.End) + ") {\n";
-    for (const HighStmt &ST : Body)
-      S += ST.str(Indent + 1) + "\n";
-    S += Pad + "}";
-    for (const HighEHClause &Clause : EHClauses) {
-      S += "\n" + Pad + "handler 0x" +
-           llvm::utohexstr(Clause.HandlerVA ? Clause.HandlerVA
-                                            : Clause.FilterOrActionVA) +
-           ";";
-      if (Clause.Kind == HighEHClauseKind::CxxCleanup)
-        S += " state=" + std::to_string(Clause.State) +
-             " kind=" + getCxxUnwindActionKindName(Clause.UnwindActionKind) +
-             " object_offset=" + std::to_string(Clause.UnwindObjectOffset) +
-             ";";
-      if (Clause.Kind == HighEHClauseKind::ItaniumCatch)
-        S += " catch " +
-             (Clause.TypeName.empty()
-                  ? (Clause.TypeDescriptorVA
-                         ? "typeinfo@0x" +
-                               llvm::utohexstr(Clause.TypeDescriptorVA)
-                         : std::string("..."))
-                  : Clause.TypeName) +
-             " filter=" + std::to_string(Clause.TypeFilter) + ";";
-      if (Clause.Kind == HighEHClauseKind::ItaniumSpec) {
-        S += " spec(";
-        for (size_t I = 0; I < Clause.SpecTypeNames.size(); ++I)
-          S += (I ? ", " : "") + Clause.SpecTypeNames[I];
-        S += ") filter=" + std::to_string(Clause.TypeFilter) + ";";
-      }
-      for (size_t I = 1; I < Clause.LandingPadVAs.size(); ++I)
-        S += " pad 0x" + llvm::utohexstr(Clause.LandingPadVAs[I]) + ";";
-    }
-    return S;
-  }
-  case StmtKind::Nop:
-    return "";
-  case StmtKind::Block: {
-    if (Body.empty())
-      return Pad + "{}";
-    std::string S = Pad + "{\n";
-    for (const HighStmt &ST : Body)
-      S += ST.str(Indent + 1) + "\n";
-    S += Pad + "}";
-    return S;
-  }
-  case StmtKind::ExprStmt:
-    return Pad + (Val ? Val->str() : "?") + ";";
-  default:
-    return Pad + "/* ? */";
-  }
+  std::string Text;
+  printHighStatementRows(
+      *this, Indent,
+      [&](llvm::StringRef Row, const HighStmt *) { Text += Row.str(); });
+  if (!Text.empty())
+    Text.pop_back();
+  return Text;
 }
 
 } // namespace neverd

@@ -1,0 +1,45 @@
+//===- X87ValueInstructions.def - x87 value and stack contracts -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared by LLVM emission and the C helpers. The x87 value instructions
+/// no C operator or freestanding builtin computes
+/// exactly: a HighC helper runs each one on the x87 stack, as the machine
+/// did.  The helper, of the given name, takes and returns the 80 bits of its
+/// operands.  A one-operand instruction reads st(0); a
+/// two-operand one also reads st(1).  An instruction that pops st(1) leaves
+/// its result in st(0). Legacy single-result FPTAN/FXTRACT IDs are reserved
+/// for diagnostics and refused at publication; decoded push instructions use
+/// the guarded native pair contract instead.
+/// Status producers sample the status word before any compiler-generated
+/// floating-point spill and hand it to the following synthetic status read.
+///
+//===----------------------------------------------------------------------===//
+
+// NEVERD_X87_VALUE_HELPER(Intrinsic, Name, Asm, Operands, PopsST1,
+// SamplesStatus)
+#ifndef NEVERD_X87_VALUE_HELPER
+#define NEVERD_X87_VALUE_HELPER(Intrinsic, Name, Asm, Operands, PopsST1,       \
+                                SamplesStatus)
+#endif
+
+NEVERD_X87_VALUE_HELPER(X87Fsin, "neverd_x87_fsin", "fsin", 1, false, true)
+NEVERD_X87_VALUE_HELPER(X87Fcos, "neverd_x87_fcos", "fcos", 1, false, true)
+NEVERD_X87_VALUE_HELPER(X87F2xm1, "neverd_x87_f2xm1", "f2xm1", 1, false, true)
+NEVERD_X87_VALUE_HELPER(X87Fptan, "neverd_x87_fptan", "fptan\\n\\tfstp %%st(0)",
+                        1, false, false)
+NEVERD_X87_VALUE_HELPER(X87Fxtractsig, "neverd_x87_fxtract_significand",
+                        "fxtract\\n\\tfstp %%st(1)", 1, false, false)
+NEVERD_X87_VALUE_HELPER(X87Fxtractexp, "neverd_x87_fxtract_exponent",
+                        "fxtract\\n\\tfstp %%st(0)", 1, false, false)
+NEVERD_X87_VALUE_HELPER(X87Fscale, "neverd_x87_fscale", "fscale", 2, false,
+                        true)
+NEVERD_X87_VALUE_HELPER(X87Fpatan, "neverd_x87_fpatan", "fpatan", 2, true, true)
+NEVERD_X87_VALUE_HELPER(X87Fyl2x, "neverd_x87_fyl2x", "fyl2x", 2, true, true)
+NEVERD_X87_VALUE_HELPER(X87Fyl2xp1, "neverd_x87_fyl2xp1", "fyl2xp1", 2, true,
+                        true)
+
+#undef NEVERD_X87_VALUE_HELPER

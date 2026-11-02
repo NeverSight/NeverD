@@ -9,7 +9,7 @@
 
 #include "X86FPStateAccuracyFixture.h"
 
-#include "neverd/ir/high/X86FPStateShape.h"
+#include "neverd/ir/high/X86/X86FPStateShape.h"
 
 namespace {
 struct MaskCompareForm {

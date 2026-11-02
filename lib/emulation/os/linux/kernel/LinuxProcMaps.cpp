@@ -56,7 +56,7 @@ void LinuxMemory::retireProcMappings(uint64_t Address, uint64_t Size) {
 }
 
 llvm::Expected<std::vector<LinuxMemory::ProcMapping>>
-LinuxMemory::procMappings() const {
+LinuxMemory::procMappings(bool IncludeMMIOBoundaries) const {
   auto Ranges = Space.mappings();
   if (!Ranges)
     return Ranges.takeError();
@@ -64,7 +64,7 @@ LinuxMemory::procMappings() const {
   for (const auto &Range : *Ranges) {
     // This is the OS-owned user address space. PROT_NONE thread guards may
     // clear every access bit, but remain real VMAs and count towards VmSize.
-    if (Range.Device)
+    if (Range.Device && !IncludeMMIOBoundaries)
       return failure("proc maps cannot describe an unmodeled MMIO VMA");
     const auto End = Range.Address + Range.Size;
     std::vector<uint64_t> Cuts{Range.Address, End};
@@ -75,6 +75,22 @@ LinuxMemory::procMappings() const {
     for (const auto &M : ProcMappings) {
       Cut(M.Address);
       Cut(M.Address + M.Size);
+    }
+    auto Name = std::upper_bound(
+        AnonymousVMANames.begin(), AnonymousVMANames.end(), Range.Address,
+        [](uint64_t At, const auto &N) { return At < N.End; });
+    for (auto I = Name; I != AnonymousVMANames.end() && I->Begin < End; ++I) {
+      Cut(I->Begin);
+      Cut(I->End);
+    }
+    auto Owner = std::upper_bound(
+        AnonymousAllocationRanges.begin(), AnonymousAllocationRanges.end(),
+        Range.Address,
+        [](uint64_t At, const auto &R) { return At < R.second; });
+    for (; Owner != AnonymousAllocationRanges.end() && Owner->first < End;
+         ++Owner) {
+      Cut(Owner->first);
+      Cut(Owner->second);
     }
     for (const auto &A : ReadOnlyDeviceRanges) {
       Cut(A.Begin);
@@ -95,6 +111,11 @@ LinuxMemory::procMappings() const {
       M.Address = Cuts[I - 1];
       M.Size = Cuts[I] - M.Address;
       M.Permissions = Range.Permissions;
+      M.IsMMIO = Range.Device;
+      while (Name != AnonymousVMANames.end() && Name->End <= M.Address)
+        ++Name;
+      if (Name != AnonymousVMANames.end() && Name->Begin <= M.Address)
+        M.AnonymousName = Name->Name;
       bool Labeled = false;
       for (const auto &Label : ProcMappings) {
         if (M.Address < Label.Address ||

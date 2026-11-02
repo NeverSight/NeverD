@@ -16,6 +16,8 @@
 #include "../ResourceLimits.h"
 #include "NeverDSanitizerPublicationCLI.h"
 
+#include "neverd/sdk/Limits.h"
+
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -385,8 +387,10 @@ bool configureSBF(neverd_session_t Sess) {
 /// with imports and library code that byte signatures name left declared.
 const char *decompileWithCallees(neverd_session_t Sess, uint64_t Root,
                                  std::string &Out) {
-  const std::string Options = "{\"root\":\"0x" + utohexstr(Root) +
-                              "\",\"max_depth\":64,\"max_listed\":100000}";
+  const std::string Options =
+      "{\"root\":\"0x" + utohexstr(Root) +
+      "\",\"max_depth\":" + std::to_string(sdk::kMaxCallPathDepth) +
+      ",\"max_listed\":" + std::to_string(sdk::kMaxCallGraphListed) + "}";
   const char *Tree = neverd_call_tree_json(Sess, Options.c_str());
   if (!Tree)
     return "the callees cannot be listed";
@@ -401,6 +405,8 @@ const char *decompileWithCallees(neverd_session_t Sess, uint64_t Root,
   }
   if (!Reply->getBoolean("complete").value_or(false))
     return "the callees exceed the listing limit";
+  if (Reply->getBoolean("depth_limited").value_or(false))
+    return "the callees exceed the call-depth limit";
   std::vector<neverd_va_t> Entries;
   for (const json::Value &Value : *Order) {
     uint64_t Entry = 0;
@@ -420,6 +426,21 @@ const char *decompileWithCallees(neverd_session_t Sess, uint64_t Root,
   Out = Source;
   neverd_free_string(Source);
   return nullptr;
+}
+
+/// The note a whole unit's head gives \p Entry when the pipeline refused it
+/// (`/* neverd.not-decompiled: NAME at 0xENTRY: REASON */`), without its
+/// comment markers.
+std::optional<std::string> refusalNote(StringRef Unit, uint64_t Entry) {
+  const std::string At = " at 0x" + utohexstr(Entry) + ": ";
+  for (StringRef Rest = Unit;
+       Rest.consume_front("/* neverd.not-decompiled: ");) {
+    auto [Note, After] = Rest.split('\n');
+    if (Note.consume_back(" */") && Note.contains(At))
+      return Note.str();
+    Rest = After;
+  }
+  return std::nullopt;
 }
 
 /// The address the image exports \p Name at: a routine the function list
@@ -661,6 +682,9 @@ int runLift(neverd_session_t Sess) {
 }
 
 int runDecompile(neverd_session_t Sess) {
+  if (X64Continuation.getNumOccurrences() ||
+      ContinuationReport.getNumOccurrences())
+    return runX64Continuation(Sess);
   const bool LLVMSourceTransforms = SourceLLVMControlFlow.getNumOccurrences() ||
                                     SourceLLVMLevel.getNumOccurrences() ||
                                     SourceLLVMPasses.getNumOccurrences();
@@ -791,9 +815,10 @@ int runDecompile(neverd_session_t Sess) {
     return 1;
   }
   if (!Devirtualize &&
-      (VMMachineState || !VMControlRegisters.empty() ||
-       !VMControlFrameSlots.empty() || !VMRecoveryReport.empty() ||
-       VMMaxNodes.getNumOccurrences() || VMMaxContexts.getNumOccurrences() ||
+      (VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
+       !VMControlRegisters.empty() || !VMControlFrameSlots.empty() ||
+       !VMRecoveryReport.empty() || VMMaxNodes.getNumOccurrences() ||
+       VMMaxContexts.getNumOccurrences() ||
        VMMaxOperations.getNumOccurrences() ||
        VMMaxRefinements.getNumOccurrences() ||
        VMMaxFields.getNumOccurrences() || VMMaxQueries.getNumOccurrences() ||
@@ -805,6 +830,8 @@ int runDecompile(neverd_session_t Sess) {
        VMEntryFrame.getNumOccurrences() ||
        VMEntryAlignment.getNumOccurrences() ||
        VMExternalStoresDisjointFrame.getNumOccurrences() ||
+       VMProveStoreReturnSeparation.getNumOccurrences() ||
+       VMProveStoreFrameSeparation.getNumOccurrences() ||
        VMMaxSymbolicNodes.getNumOccurrences() ||
        VMNoControlDiscovery.getNumOccurrences())) {
     WithColor::error() << "VM recovery options require --devirtualize\n";
@@ -813,6 +840,21 @@ int runDecompile(neverd_session_t Sess) {
   if (Devirtualize && (!VMMaxNodes || !VMMaxContexts || !VMMaxOperations)) {
     WithColor::error() << "VM recovery budgets must be positive\n";
     return 1;
+  }
+  uint32_t MachineSourceABI = NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1;
+  if (VMMachineSourceABI.getNumOccurrences()) {
+    if (!VMMachineState) {
+      WithColor::error() << "--vm-source-abi requires --vm-machine-state\n";
+      return 1;
+    }
+    if (VMMachineSourceABI == "queries")
+      MachineSourceABI = NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1;
+    else if (VMMachineSourceABI == "xmm")
+      MachineSourceABI = NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2;
+    else if (VMMachineSourceABI != "scalar") {
+      WithColor::error() << "--vm-source-abi expects scalar, queries or xmm\n";
+      return 1;
+    }
   }
   uint32_t MaxRefinements = 0, MaxFields = 0, MaxQueries = 0,
            ChainTransfers = 0, MaxSymbolicNodes = 0, MaxEvaluations = 0,
@@ -932,6 +974,12 @@ int runDecompile(neverd_session_t Sess) {
       if (const char *Error = decompileWithCallees(Sess, Entry, Text)) {
         WithColor::error() << "decompile failed: " << Error << ": "
                            << takeLastError(Sess) << "\n";
+        return 1;
+      }
+      // The unit names a refused callee and leaves it out. The function asked
+      // for fails the request, as --func alone does.
+      if (const std::optional<std::string> Refused = refusalNote(Text, Entry)) {
+        WithColor::error() << "decompile failed: " << *Refused << "\n";
         return 1;
       }
       if (OutputFile.empty()) {
@@ -1083,7 +1131,16 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v8 ChainRecovery{};
+      neverd_devirtualize_options_v10 SourceRecovery{};
+      SourceRecovery.machine_source_abi = MachineSourceABI;
+      auto &ProofRecovery = SourceRecovery.base;
+      if (VMProveStoreReturnSeparation)
+        ProofRecovery.flags |=
+            NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION;
+      if (VMProveStoreFrameSeparation)
+        ProofRecovery.flags |=
+            NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION;
+      auto &ChainRecovery = ProofRecovery.base;
       ChainRecovery.max_chained_visits_per_destination = ChainVisits;
       auto &ExtendedRecovery = ChainRecovery.base;
       ExtendedRecovery.max_node_evaluations = MaxEvaluations;
@@ -1098,7 +1155,7 @@ int runDecompile(neverd_session_t Sess) {
       ExtendedRecovery.base.base.entry_frame_residue = EntryResidue;
       auto &Recovery = ExtendedRecovery.base.base.base;
       auto &Base = Recovery.base.base.base;
-      Base.struct_size = sizeof(ChainRecovery);
+      Base.struct_size = sizeof(SourceRecovery);
       Recovery.base.base.max_control_refinements = MaxRefinements;
       Recovery.base.max_control_fields = MaxFields;
       Recovery.base.max_solver_queries = MaxQueries;
@@ -1120,10 +1177,10 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v8(
-                                    Sess, Entry, &ChainRecovery, &Report)
-                              : neverd_devirtualize_source_v8(
-                                    Sess, Entry, &ChainRecovery, &Report);
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v10(
+                                    Sess, Entry, &SourceRecovery, &Report)
+                              : neverd_devirtualize_source_v10(
+                                    Sess, Entry, &SourceRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;
         raw_fd_ostream OS(VMRecoveryReport, EC);

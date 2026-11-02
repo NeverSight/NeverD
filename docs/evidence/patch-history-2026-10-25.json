@@ -1,0 +1,782 @@
+{
+  "schema_version": 1,
+  "local_date": "2026-10-25",
+  "utc_date": "2026-10-26",
+  "scope": "PR Review; worker patch command differences and ProjectHistory normalization/publication. Core patch semantics and C ABI are unchanged.",
+  "baseline_commit": "e4bac38ad97853d86c75cd67d8a107c86c1f1357",
+  "source_sha256": {
+    "tools/neverd-worker/EnginePatch.cpp": "2d80e8c560150dc3efdeadb46c6d52dba949abd263e88f90a301a12cfd31c3a3",
+    "tools/neverd-worker/ProjectHistory.cpp": "91406fdc8f41229bae8fa223ecb32380e4ac7ee885f98c6be422b8b19f3f271b",
+    "tools/neverd-worker/ProjectHistory.h": "0fb2206b96243b4a04cad5fc099f952ebc78cff6decfbdc66ce6d09bc1fd7a2e"
+  },
+  "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+  "candidate_worker_sha256": "3d729715f7cf56d0fbe0926947fb7c90e213634225f47f35c096a20bf1edfd31",
+  "baseline_worker_sha256": "84417ceaac6b0a9db0fd8504289f4ffdc79eba1d37449420d5a038ed38c78a4d",
+  "dependency_inputs": {
+    "purpose": "configure_inputs",
+    "schema": 1,
+    "sources": {
+      "neverd_highway": {
+        "selection": "disabled",
+        "used": false
+      },
+      "neverd_mimalloc": {
+        "branch": "main3",
+        "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+        "repository": "https://github.com/NeverSight/mimalloc.git",
+        "selection": "managed",
+        "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3",
+        "used": true
+      },
+      "neverd_simdjson": {
+        "branch": "master",
+        "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+        "repository": "https://github.com/NeverSight/simdjson.git",
+        "selection": "managed",
+        "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d",
+        "used": true
+      },
+      "neverd_simdutf": {
+        "selection": "disabled",
+        "used": false
+      },
+      "neverd_tbb": {
+        "selection": "disabled",
+        "used": false
+      }
+    }
+  },
+  "method": "Release standalone worker, Clang 23, mimalloc. Same frozen SDK and exact matching worker build configuration in both variants. Four sequential uninstrumented A/B/B/A runs, 15 samples/case/process, 30 pooled per variant. Every edit reads back 0x91 before undo; setup/undo/export checks excluded from wall timing. No own build or tests overlapped the timing campaign; other work was active on this shared host.",
+  "operation": "worker_single_byte_commit",
+  "pooled_results": [
+    {
+      "adjacent_rows": 1,
+      "baseline": {
+        "sample_count": 30,
+        "median_ms": 20.089953,
+        "p95_ms": 23.190079
+      },
+      "candidate": {
+        "sample_count": 30,
+        "median_ms": 6.097307,
+        "p95_ms": 6.329947
+      },
+      "median_speedup": 3.2948895307387347
+    },
+    {
+      "adjacent_rows": 64,
+      "baseline": {
+        "sample_count": 30,
+        "median_ms": 22.019483,
+        "p95_ms": 24.797469
+      },
+      "candidate": {
+        "sample_count": 30,
+        "median_ms": 7.5125385,
+        "p95_ms": 8.404331
+      },
+      "median_speedup": 2.931030969092538
+    },
+    {
+      "adjacent_rows": 2048,
+      "baseline": {
+        "sample_count": 30,
+        "median_ms": 89.9849095,
+        "p95_ms": 107.455894
+      },
+      "candidate": {
+        "sample_count": 30,
+        "median_ms": 55.777884,
+        "p95_ms": 63.322214
+      },
+      "median_speedup": 1.613272197633026
+    },
+    {
+      "adjacent_rows": 8192,
+      "baseline": {
+        "sample_count": 30,
+        "median_ms": 280.0823315,
+        "p95_ms": 355.238363
+      },
+      "candidate": {
+        "sample_count": 30,
+        "median_ms": 179.4041275,
+        "p95_ms": 230.811336
+      },
+      "median_speedup": 1.561181090998032
+    }
+  ],
+  "runs": [
+    {
+      "label": "baseline-a",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-26T04:35:51Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        21.353515625,
+        20.7470703125,
+        13.45263671875
+      ],
+      "library": "/mnt/data/neverd-patch-history/baseline/bin/libneverd.so",
+      "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+      "worker": "/mnt/data/neverd-patch-history/baseline/bin/neverd-worker",
+      "worker_sha256": "84417ceaac6b0a9db0fd8504289f4ffdc79eba1d37449420d5a038ed38c78a4d",
+      "samples": 15,
+      "results": [
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1,
+          "wall": {
+            "median_ms": 20.356586,
+            "p95_ms": 24.365527,
+            "samples_ms": [
+              18.061855,
+              20.12288,
+              20.356586,
+              20.057026,
+              20.982447,
+              22.950723,
+              20.954033,
+              20.473465,
+              19.96388,
+              19.971589,
+              22.349325,
+              23.190079,
+              24.365527,
+              18.95056,
+              19.278433
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 22.366648,
+            "p95_ms": 26.824182,
+            "samples_ms": [
+              22.366648,
+              22.50565,
+              21.313067,
+              22.037934,
+              24.797469,
+              21.988348,
+              22.501586,
+              21.780488,
+              22.001032,
+              22.561351,
+              26.824182,
+              21.997261,
+              23.636621,
+              22.601967,
+              20.810464
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 79.7319,
+            "p95_ms": 115.924692,
+            "samples_ms": [
+              115.924692,
+              72.860245,
+              74.285886,
+              76.869989,
+              93.379955,
+              79.114474,
+              71.919694,
+              79.7319,
+              79.369009,
+              85.72447,
+              95.934642,
+              107.455894,
+              79.156555,
+              83.29607,
+              94.645167
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 8192,
+          "wall": {
+            "median_ms": 288.134855,
+            "p95_ms": 350.640162,
+            "samples_ms": [
+              292.888287,
+              261.6565,
+              342.299685,
+              350.640162,
+              236.332264,
+              288.134855,
+              239.057397,
+              301.083094,
+              247.911296,
+              223.943588,
+              331.485333,
+              343.015926,
+              209.340386,
+              272.029808,
+              307.596041
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "candidate-a",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-26T04:36:05Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        20.60400390625,
+        20.6064453125,
+        13.48583984375
+      ],
+      "library": "/mnt/data/neverd-patch-history/candidate/bin/libneverd.so",
+      "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+      "worker": "/mnt/data/neverd-patch-history/candidate/bin/neverd-worker",
+      "worker_sha256": "3d729715f7cf56d0fbe0926947fb7c90e213634225f47f35c096a20bf1edfd31",
+      "samples": 15,
+      "results": [
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1,
+          "wall": {
+            "median_ms": 6.17245,
+            "p95_ms": 6.390095,
+            "samples_ms": [
+              6.390095,
+              6.25812,
+              6.253025,
+              6.133386,
+              5.865823,
+              6.17245,
+              6.166757,
+              6.139948,
+              6.192121,
+              5.996294,
+              6.232246,
+              6.067428,
+              6.133321,
+              6.329947,
+              6.205194
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 7.238433,
+            "p95_ms": 8.324131,
+            "samples_ms": [
+              8.324131,
+              8.001633,
+              7.600289,
+              6.62162,
+              7.158463,
+              6.986474,
+              7.821019,
+              7.129101,
+              7.255833,
+              6.891562,
+              7.146873,
+              7.248841,
+              7.062999,
+              7.377261,
+              7.238433
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 52.356492,
+            "p95_ms": 68.979542,
+            "samples_ms": [
+              68.979542,
+              63.322214,
+              38.064554,
+              51.825805,
+              59.887014,
+              63.134564,
+              47.45127,
+              52.356492,
+              47.560847,
+              55.707268,
+              57.604944,
+              48.240109,
+              43.01514,
+              42.298075,
+              55.8485
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 8192,
+          "wall": {
+            "median_ms": 194.086972,
+            "p95_ms": 230.811336,
+            "samples_ms": [
+              194.086972,
+              184.625838,
+              174.182417,
+              135.311829,
+              131.127816,
+              204.018358,
+              151.493135,
+              227.916892,
+              230.811336,
+              228.104956,
+              195.905092,
+              217.36713,
+              216.529352,
+              145.631341,
+              129.193748
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "candidate-b",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-26T04:36:13Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        19.66162109375,
+        20.40478515625,
+        13.4970703125
+      ],
+      "library": "/mnt/data/neverd-patch-history/candidate/bin/libneverd.so",
+      "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+      "worker": "/mnt/data/neverd-patch-history/candidate/bin/neverd-worker",
+      "worker_sha256": "3d729715f7cf56d0fbe0926947fb7c90e213634225f47f35c096a20bf1edfd31",
+      "samples": 15,
+      "results": [
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1,
+          "wall": {
+            "median_ms": 5.941104,
+            "p95_ms": 6.252942,
+            "samples_ms": [
+              5.229516,
+              5.861128,
+              5.939711,
+              6.248578,
+              5.91564,
+              6.004025,
+              5.99958,
+              6.021955,
+              5.74191,
+              5.794114,
+              5.983528,
+              6.127186,
+              6.252942,
+              5.941104,
+              5.834921
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 7.705865,
+            "p95_ms": 9.681667,
+            "samples_ms": [
+              7.994853,
+              9.681667,
+              7.946134,
+              7.533923,
+              7.379292,
+              8.404331,
+              7.491154,
+              7.786941,
+              7.430717,
+              7.84148,
+              7.479838,
+              7.661976,
+              7.705865,
+              7.629107,
+              7.778938
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 56.601431,
+            "p95_ms": 62.725371,
+            "samples_ms": [
+              57.958837,
+              56.601431,
+              53.188189,
+              38.197378,
+              50.877804,
+              61.53646,
+              60.488324,
+              55.153924,
+              54.498775,
+              56.525846,
+              58.494787,
+              61.498614,
+              62.725371,
+              43.036676,
+              58.741332
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 8192,
+          "wall": {
+            "median_ms": 158.065621,
+            "p95_ms": 290.42703,
+            "samples_ms": [
+              290.42703,
+              203.616561,
+              228.689423,
+              172.991443,
+              148.002148,
+              208.775618,
+              158.065621,
+              225.249697,
+              133.195199,
+              139.789116,
+              222.305308,
+              140.176828,
+              125.642343,
+              146.980363,
+              136.468257
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "label": "baseline-b",
+      "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "machine": "x86_64",
+      "processor": "",
+      "timestamp_utc": "2026-10-26T04:36:22Z",
+      "benchmark_sha256": "1ff46318f6cf7c883a9f864e7496bfe32971f68008c9468a74574abcbd52f1ff",
+      "cpu_count": 20,
+      "load_average": [
+        18.71044921875,
+        20.1767578125,
+        13.4970703125
+      ],
+      "library": "/mnt/data/neverd-patch-history/baseline/bin/libneverd.so",
+      "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+      "worker": "/mnt/data/neverd-patch-history/baseline/bin/neverd-worker",
+      "worker_sha256": "84417ceaac6b0a9db0fd8504289f4ffdc79eba1d37449420d5a038ed38c78a4d",
+      "samples": 15,
+      "results": [
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 1,
+          "wall": {
+            "median_ms": 19.991079,
+            "p95_ms": 21.478328,
+            "samples_ms": [
+              18.806787,
+              18.624855,
+              19.806837,
+              20.473634,
+              19.955846,
+              19.991079,
+              20.41673,
+              21.478328,
+              19.95016,
+              20.3185,
+              19.779701,
+              20.040947,
+              19.431116,
+              20.796912,
+              20.190293
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 64,
+          "wall": {
+            "median_ms": 21.849755,
+            "p95_ms": 23.145625,
+            "samples_ms": [
+              21.050027,
+              21.793345,
+              21.545812,
+              21.103864,
+              22.562889,
+              21.6764,
+              21.849755,
+              22.730579,
+              21.445486,
+              21.828399,
+              21.916988,
+              22.585785,
+              23.145625,
+              22.189023,
+              22.116967
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 2048,
+          "wall": {
+            "median_ms": 91.361085,
+            "p95_ms": 97.685365,
+            "samples_ms": [
+              87.781462,
+              89.499505,
+              97.281737,
+              94.300552,
+              91.361085,
+              90.470314,
+              72.996222,
+              78.661803,
+              94.393568,
+              92.724434,
+              95.271622,
+              97.685365,
+              91.22306,
+              92.226878,
+              82.69951
+            ]
+          }
+        },
+        {
+          "operation": "worker_single_byte_commit",
+          "adjacent_rows": 8192,
+          "wall": {
+            "median_ms": 256.622512,
+            "p95_ms": 390.639084,
+            "samples_ms": [
+              390.639084,
+              345.287425,
+              208.092657,
+              198.216951,
+              229.192199,
+              319.738605,
+              355.238363,
+              218.740879,
+              319.554261,
+              349.24787,
+              256.622512,
+              223.4415,
+              218.660351,
+              322.910149,
+              254.493409
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "memory_summary": [
+    {
+      "adjacent_rows": 64,
+      "baseline_peak_rss_median_kib": 73740,
+      "candidate_peak_rss_median_kib": 71800
+    },
+    {
+      "adjacent_rows": 8192,
+      "baseline_peak_rss_median_kib": 195436,
+      "candidate_peak_rss_median_kib": 183420
+    }
+  ],
+  "memory_runs": [
+    {
+      "variant": "baseline",
+      "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+      "worker_sha256": "84417ceaac6b0a9db0fd8504289f4ffdc79eba1d37449420d5a038ed38c78a4d",
+      "scope": "Linux /proc VmHWM after three checked commits and undos; includes worker startup, input load and whole durable state, not isolated allocations or a timing comparison.",
+      "observations": [
+        {
+          "VmHWM": 73776,
+          "VmRSS": 73776,
+          "adjacent_rows": 64,
+          "attempt": 0
+        },
+        {
+          "VmHWM": 73740,
+          "VmRSS": 73740,
+          "adjacent_rows": 64,
+          "attempt": 1
+        },
+        {
+          "VmHWM": 73716,
+          "VmRSS": 73716,
+          "adjacent_rows": 64,
+          "attempt": 2
+        },
+        {
+          "VmHWM": 195384,
+          "VmRSS": 194520,
+          "adjacent_rows": 8192,
+          "attempt": 0
+        },
+        {
+          "VmHWM": 195656,
+          "VmRSS": 194588,
+          "adjacent_rows": 8192,
+          "attempt": 1
+        },
+        {
+          "VmHWM": 195436,
+          "VmRSS": 194508,
+          "adjacent_rows": 8192,
+          "attempt": 2
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "library_sha256": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+      "worker_sha256": "3d729715f7cf56d0fbe0926947fb7c90e213634225f47f35c096a20bf1edfd31",
+      "scope": "Linux /proc VmHWM after three checked commits and undos; includes worker startup, input load and whole durable state, not isolated allocations or a timing comparison.",
+      "observations": [
+        {
+          "VmHWM": 71772,
+          "VmRSS": 71772,
+          "adjacent_rows": 64,
+          "attempt": 0
+        },
+        {
+          "VmHWM": 71800,
+          "VmRSS": 71800,
+          "adjacent_rows": 64,
+          "attempt": 1
+        },
+        {
+          "VmHWM": 71892,
+          "VmRSS": 71892,
+          "adjacent_rows": 64,
+          "attempt": 2
+        },
+        {
+          "VmHWM": 183420,
+          "VmRSS": 182484,
+          "adjacent_rows": 8192,
+          "attempt": 0
+        },
+        {
+          "VmHWM": 183468,
+          "VmRSS": 182408,
+          "adjacent_rows": 8192,
+          "attempt": 1
+        },
+        {
+          "VmHWM": 183360,
+          "VmRSS": 182412,
+          "adjacent_rows": 8192,
+          "attempt": 2
+        }
+      ]
+    }
+  ],
+  "memory_driver": "import importlib.util,json,os,sys\nfrom pathlib import Path\nroot=Path.cwd()\na=Path('/mnt/data/neverd-patch-history')\nos.environ['TMPDIR']=str(a/'tmp')\nspec=importlib.util.spec_from_file_location('bench',root/'tools/neverd-bench/patch-scaling.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nbase=m.Client\nobservations=[]\nclass Client(base):\n def close(self):\n  status=Path(f'/proc/{self.process.pid}/status').read_text()\n  rss={k:int(v.strip().split()[0]) for line in status.splitlines() if ':' in line for k,v in [line.split(':',1)] if k in ['VmHWM','VmRSS']}\n  observations.append(rss)\n  super().close()\nm.Client=Client\nvariant=sys.argv[1]\nlib=a/variant/'bin/libneverd.so'\nos.environ['LD_LIBRARY_PATH']=str(lib.parent)\nhost=m.HostAPI(m.ctypes.CDLL(str(lib)))\nfor count in [64,8192]:\n for attempt in range(3):\n  m.worker_edit_case(host,str(lib.parent/'neverd-worker'),lib,count,3)\n  observations[-1].update(adjacent_rows=count,attempt=attempt)\nprint(json.dumps({'variant':variant,'library_sha256':m.digest(lib),'worker_sha256':m.digest(lib.parent/'neverd-worker'),'scope':'Linux /proc VmHWM after three checked commits and undos; includes worker startup, input load and whole durable state, not isolated allocations or a timing comparison.','observations':observations},indent=2))\n",
+  "write_counts": {
+    "baseline": {
+      "atomic_replacements": 10,
+      "fsync_calls": 20
+    },
+    "candidate": {
+      "atomic_replacements": 3,
+      "fsync_calls": 6
+    }
+  },
+  "write_trace_method": "strace -f -yy of one checked commit after warmup, between BEGIN_CHECKED_COMMIT / END_CHECKED_COMMIT markers; each rename is an atomic replacement, each file and parent directory retains fsync. Trace run is separate from timing.",
+  "limits": [
+    "Synthetic established raw-x64 overlays on Linux/NVMe; not GUI painting, assembly, reanalysis, cold snapshots or other platforms.",
+    "The shared host has concurrent builds; absolute timings and especially tails vary. These are within-campaign comparisons, not ratios chained with earlier campaigns.",
+    "Memory observations are whole-worker Linux VmHWM after three checked edit/undo pairs, three independent processes per size; includes SDK and input load. Not a platform-independent allocation metric.",
+    "Every commit still reads and validates complete sidecars/history and publishes complete recovery/history snapshots. Cost remains proportional to total state; this is not an absolute performance ceiling.",
+    "Crash tests inject failures at complete-file write boundaries and verify recoverable states; they are not physical power-loss tests."
+  ],
+  "validation": {
+    "focused_final_groups": 13,
+    "full_worker_inventory": 56,
+    "full_worker_passed": 54,
+    "full_worker_failed": 1,
+    "full_worker_skipped": 1,
+    "existing_failure": "NeverDWorkerSourceVariableTypes: qword_401000 variable id missing from LLVMC metadata. Reproduced at the exact same source line with the frozen baseline worker and the same SDK.",
+    "optional_skip": "NeverDWorkerListingStability requires a user-owned native input/address near distant function chunks; not supplied.",
+    "history_guards": [
+      "unchanged files retain bytes/timestamps",
+      "two changed tables: failure before/after each journal/table/history write (eight boundaries)",
+      "foreign table/history recovery refusal",
+      "same-session retry with newer staged state/history",
+      "numeric normalization and duplicate detection",
+      "oversized history rejected before publication"
+    ],
+    "old_version_regression": "Modified byte_patch_test.py fails against baseline because patching rewrites unchanged annotations.",
+    "delivered_checks": [
+      {
+        "name": "delivery-worker",
+        "command": [
+          "ctest",
+          "--test-dir",
+          "build-gui",
+          "--output-on-failure",
+          "-R",
+          "^NeverDWorker(History|Patch|NativePatch|SourceBytePatch|HistoryContributions|FunctionalRegressions|AnalysisSnapshot|LocalTypes|CodeEdits|GitCollaboration|SourceVariableEdits|FunctionEdits|DataPresentation)$"
+        ],
+        "exit_code": 0,
+        "seconds": 15.243361154000013
+      },
+      {
+        "name": "delivery-x11",
+        "command": [
+          "xvfb-run",
+          "-a",
+          "-s",
+          "-screen 0 2560x1600x24",
+          "build-gui/bin/neverd-gui-patch-tests"
+        ],
+        "exit_code": 0,
+        "seconds": 38.12956751099955
+      },
+      {
+        "name": "delivery-wayland",
+        "command": [
+          "python3",
+          "tools/neverd-gui/tests/run_wayland_docking.py",
+          "build-gui/bin/neverd-gui-patch-tests"
+        ],
+        "exit_code": 0,
+        "seconds": 38.66442375599945
+      }
+    ],
+    "delivered_x11_cases": 78,
+    "delivered_wayland_cases": 78
+  },
+  "production_commit": "456eef9398",
+  "review_commit_before_evidence": "16f98db939f0fd2e9507fc1a9ee23980b672e710",
+  "delivery_binary_sha256": {
+    "libneverd.so": "a0650ccf5c6c5772707bf0f90f6e31b284e71b786781621d073d0ad2e73443f9",
+    "neverd-worker": "54d4190a7349cba310a168e879f4d7038fe9d9714de41945a3046dd14252d5ac",
+    "neverd-gui": "29058b98957b2eace2abea03a4a0c7aaac90d05f4b1d52c684390f6ebe686f03",
+    "neverd-gui-patch-tests": "85f18c3b314e89f22c879c50908ad6f9780cc3fadf9e39b91f6a54c772609d2d"
+  },
+  "delivery_note": "Only the original workspace worker targets were rebuilt; the existing GUI and SDK were preserved and validated together. Standalone measurements use Clang 23, whereas the existing GUI workspace uses its GCC Release worker configuration."
+}

@@ -28,16 +28,16 @@ namespace {
 #undef NEVERD_WHP_HOST_TEXT
 #undef NEVERD_WHP_HOST_VALUE
 #define NEVERD_FP_VALUE(Name, Value) constexpr uint64_t Name = Value;
-#include "X64FPCases.def"
+#include "x86_64/X64FPCases.def"
 #undef NEVERD_FP_VALUE
 constexpr RegisterValue Payloads[] = {
 #define NEVERD_FP_PAYLOAD(Low, High) {Low, High},
-#include "X64FPCases.def"
+#include "x86_64/X64FPCases.def"
 #undef NEVERD_FP_PAYLOAD
 };
 namespace xsavecase {
 #define NEVERD_XSAVE_VALUE(Name, Value) constexpr uint64_t Name = Value;
-#include "X64XsaveCases.def"
+#include "x86_64/X64XsaveCases.def"
 #undef NEVERD_XSAVE_VALUE
 } // namespace xsavecase
 struct InvalidSize {

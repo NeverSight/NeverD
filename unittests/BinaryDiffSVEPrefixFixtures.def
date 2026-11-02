@@ -1,0 +1,33 @@
+//===- BinaryDiffSVEPrefixFixtures.def - Unsupported prefix probes -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent MOVPRFX words differ in inactive-lane policy. Their following
+/// ADD is not a compatible consumer, so neither body is semantically complete.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SVE_COMPARE_VALUE
+#define NEVERD_SVE_COMPARE_VALUE(Type, Name, Value)
+#endif
+
+NEVERD_SVE_COMPARE_VALUE(uint32_t, kSetup, 0xd28000e3)
+NEVERD_SVE_COMPARE_VALUE(uint32_t, kMerging, 0x04912020)
+NEVERD_SVE_COMPARE_VALUE(uint32_t, kZeroing, 0x04902020)
+NEVERD_SVE_COMPARE_VALUE(uint32_t, kIncompatibleNext, 0x91000c00)
+NEVERD_SVE_COMPARE_VALUE(uint32_t, kReturn, 0xd65f03c0)
+NEVERD_SVE_COMPARE_VALUE(uint64_t, kPrimaryBase, 0x1000)
+NEVERD_SVE_COMPARE_VALUE(uint64_t, kSecondaryBase, 0x8000)
+NEVERD_SVE_COMPARE_VALUE(const char *, kProcessor, "aarch64")
+NEVERD_SVE_COMPARE_VALUE(
+    const char *, kOptions,
+    R"({"discover":false,"overrides":[{"kind":"match","primary":"0x1000","secondary":"0x8000"}]})")
+NEVERD_SVE_COMPARE_VALUE(const char *, kEvidence, "evidence")
+NEVERD_SVE_COMPARE_VALUE(const char *, kNormalizedUnchanged,
+                         "normalized_unchanged")
+NEVERD_SVE_COMPARE_VALUE(const char *, kMatches, "matches")
+NEVERD_SVE_COMPARE_VALUE(const char *, kAnalysisComplete, "analysis_complete")
+
+#undef NEVERD_SVE_COMPARE_VALUE

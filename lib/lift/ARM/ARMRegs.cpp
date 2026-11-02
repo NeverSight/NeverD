@@ -9,7 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/lift/ARMRegs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 
 namespace neverd {
 

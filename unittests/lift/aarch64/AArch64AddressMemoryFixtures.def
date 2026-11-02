@@ -1,0 +1,492 @@
+//===- AArch64AddressMemoryFixtures.def - Independent memory words -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent LLVM MC words, including original and fixed-register loads.
+/// CASE owns raw word, destination, base, index and expected emitted word.
+//===----------------------------------------------------------------------===//
+
+#ifndef MEMORY_CASE
+#define MEMORY_CASE(Word, Dst, Base, Index, Scratch, IndexBytes)
+#endif
+#ifndef MEMORY_FAMILY_CASE
+#define MEMORY_FAMILY_CASE(Word, Scratch, Load, Access, Result, Signed,        \
+                           IndexBytes, Shift, Expected)
+#endif
+#ifndef MEMORY_ABI_CASE
+#define MEMORY_ABI_CASE(Word, Scratch, Access, SignedIndex)
+#endif
+#ifndef MEMORY_SPECIAL_CASE
+#define MEMORY_SPECIAL_CASE(Word, Load, Access, Destination, Base, Index)
+#endif
+#ifndef MEMORY_VALUE
+#define MEMORY_VALUE(Type, Name, Value)
+#endif
+#ifndef MEMORY_TEXT
+#define MEMORY_TEXT(Name, Text)
+#endif
+
+MEMORY_CASE(0xf8626820, 0, 1, 2, 0xf86f6a11, 8)
+MEMORY_CASE(0xf8627820, 0, 1, 2, 0xf86f7a11, 8)
+MEMORY_CASE(0xf8626821, 1, 1, 2, 0xf86f6a11, 8)
+MEMORY_CASE(0xf8627822, 2, 1, 2, 0xf86f7a11, 8)
+MEMORY_CASE(0xf8616820, 0, 1, 1, 0xf86f6a11, 8)
+MEMORY_CASE(0xf87f6820, 0, 1, 31, 0xf86f6a11, 8)
+MEMORY_CASE(0xf862683f, 31, 1, 2, 0xf86f6a11, 8)
+MEMORY_CASE(0xf8626be0, 0, 31, 2, 0xf86f6bf1, 8)
+MEMORY_CASE(0xf8624820, 0, 1, 2, 0xf86f4a11, 4)
+MEMORY_CASE(0xf8625820, 0, 1, 2, 0xf86f5a11, 4)
+MEMORY_CASE(0xf862c820, 0, 1, 2, 0xf86fca11, 4)
+MEMORY_CASE(0xf862d820, 0, 1, 2, 0xf86fda11, 4)
+MEMORY_CASE(0xf862e820, 0, 1, 2, 0xf86fea11, 8)
+MEMORY_CASE(0xf862f820, 0, 1, 2, 0xf86ffa11, 8)
+MEMORY_FAMILY_CASE(0x38626820, 0x386f6a11, true, 1, 4, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38627820, 0x386f7a11, true, 1, 4, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38624820, 0x386f4a11, true, 1, 4, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38625820, 0x386f5a11, true, 1, 4, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3862c820, 0x386fca11, true, 1, 4, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3862d820, 0x386fda11, true, 1, 4, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3862e820, 0x386fea11, true, 1, 4, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3862f820, 0x386ffa11, true, 1, 4, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38e26820, 0x38ef6a11, true, 1, 4, true, 8, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e27820, 0x38ef7a11, true, 1, 4, true, 8, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e24820, 0x38ef4a11, true, 1, 4, true, 4, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e25820, 0x38ef5a11, true, 1, 4, true, 4, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e2c820, 0x38efca11, true, 1, 4, true, 4, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e2d820, 0x38efda11, true, 1, 4, true, 4, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e2e820, 0x38efea11, true, 1, 4, true, 8, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38e2f820, 0x38effa11, true, 1, 4, true, 8, 0,
+                   0x00000000fffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a26820, 0x38af6a11, true, 1, 8, true, 8, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a27820, 0x38af7a11, true, 1, 8, true, 8, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a24820, 0x38af4a11, true, 1, 8, true, 4, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a25820, 0x38af5a11, true, 1, 8, true, 4, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a2c820, 0x38afca11, true, 1, 8, true, 4, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a2d820, 0x38afda11, true, 1, 8, true, 4, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a2e820, 0x38afea11, true, 1, 8, true, 8, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x38a2f820, 0x38affa11, true, 1, 8, true, 8, 0,
+                   0xfffffffffffffff0ULL)
+MEMORY_FAMILY_CASE(0x78626820, 0x786f6a11, true, 2, 4, false, 8, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78627820, 0x786f7a11, true, 2, 4, false, 8, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78624820, 0x786f4a11, true, 2, 4, false, 4, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78625820, 0x786f5a11, true, 2, 4, false, 4, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7862c820, 0x786fca11, true, 2, 4, false, 4, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7862d820, 0x786fda11, true, 2, 4, false, 4, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7862e820, 0x786fea11, true, 2, 4, false, 8, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7862f820, 0x786ffa11, true, 2, 4, false, 8, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78e26820, 0x78ef6a11, true, 2, 4, true, 8, 0,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e27820, 0x78ef7a11, true, 2, 4, true, 8, 1,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e24820, 0x78ef4a11, true, 2, 4, true, 4, 0,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e25820, 0x78ef5a11, true, 2, 4, true, 4, 1,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e2c820, 0x78efca11, true, 2, 4, true, 4, 0,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e2d820, 0x78efda11, true, 2, 4, true, 4, 1,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e2e820, 0x78efea11, true, 2, 4, true, 8, 0,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78e2f820, 0x78effa11, true, 2, 4, true, 8, 1,
+                   0x00000000ffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a26820, 0x78af6a11, true, 2, 8, true, 8, 0,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a27820, 0x78af7a11, true, 2, 8, true, 8, 1,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a24820, 0x78af4a11, true, 2, 8, true, 4, 0,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a25820, 0x78af5a11, true, 2, 8, true, 4, 1,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a2c820, 0x78afca11, true, 2, 8, true, 4, 0,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a2d820, 0x78afda11, true, 2, 8, true, 4, 1,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a2e820, 0x78afea11, true, 2, 8, true, 8, 0,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0x78a2f820, 0x78affa11, true, 2, 8, true, 8, 1,
+                   0xffffffffffffdef0ULL)
+MEMORY_FAMILY_CASE(0xb8626820, 0xb86f6a11, true, 4, 4, false, 8, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8627820, 0xb86f7a11, true, 4, 4, false, 8, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8624820, 0xb86f4a11, true, 4, 4, false, 4, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8625820, 0xb86f5a11, true, 4, 4, false, 4, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb862c820, 0xb86fca11, true, 4, 4, false, 4, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb862d820, 0xb86fda11, true, 4, 4, false, 4, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb862e820, 0xb86fea11, true, 4, 4, false, 8, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb862f820, 0xb86ffa11, true, 4, 4, false, 8, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a26820, 0xb8af6a11, true, 4, 8, true, 8, 0,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a27820, 0xb8af7a11, true, 4, 8, true, 8, 2,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a24820, 0xb8af4a11, true, 4, 8, true, 4, 0,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a25820, 0xb8af5a11, true, 4, 8, true, 4, 2,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a2c820, 0xb8afca11, true, 4, 8, true, 4, 0,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a2d820, 0xb8afda11, true, 4, 8, true, 4, 2,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a2e820, 0xb8afea11, true, 4, 8, true, 8, 0,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8a2f820, 0xb8affa11, true, 4, 8, true, 8, 2,
+                   0xffffffff9abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8626820, 0xf86f6a11, true, 8, 8, false, 8, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8627820, 0xf86f7a11, true, 8, 8, false, 8, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8624820, 0xf86f4a11, true, 8, 8, false, 4, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8625820, 0xf86f5a11, true, 8, 8, false, 4, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf862c820, 0xf86fca11, true, 8, 8, false, 4, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf862d820, 0xf86fda11, true, 8, 8, false, 4, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf862e820, 0xf86fea11, true, 8, 8, false, 8, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf862f820, 0xf86ffa11, true, 8, 8, false, 8, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0x38226820, 0x382f6a11, false, 1, 0, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38227820, 0x382f7a11, false, 1, 0, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38224820, 0x382f4a11, false, 1, 0, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x38225820, 0x382f5a11, false, 1, 0, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3822c820, 0x382fca11, false, 1, 0, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3822d820, 0x382fda11, false, 1, 0, false, 4, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3822e820, 0x382fea11, false, 1, 0, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x3822f820, 0x382ffa11, false, 1, 0, false, 8, 0,
+                   0x00000000000000f0ULL)
+MEMORY_FAMILY_CASE(0x78226820, 0x782f6a11, false, 2, 0, false, 8, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78227820, 0x782f7a11, false, 2, 0, false, 8, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78224820, 0x782f4a11, false, 2, 0, false, 4, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x78225820, 0x782f5a11, false, 2, 0, false, 4, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7822c820, 0x782fca11, false, 2, 0, false, 4, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7822d820, 0x782fda11, false, 2, 0, false, 4, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7822e820, 0x782fea11, false, 2, 0, false, 8, 0,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0x7822f820, 0x782ffa11, false, 2, 0, false, 8, 1,
+                   0x000000000000def0ULL)
+MEMORY_FAMILY_CASE(0xb8226820, 0xb82f6a11, false, 4, 0, false, 8, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8227820, 0xb82f7a11, false, 4, 0, false, 8, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8224820, 0xb82f4a11, false, 4, 0, false, 4, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb8225820, 0xb82f5a11, false, 4, 0, false, 4, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb822c820, 0xb82fca11, false, 4, 0, false, 4, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb822d820, 0xb82fda11, false, 4, 0, false, 4, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb822e820, 0xb82fea11, false, 4, 0, false, 8, 0,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xb822f820, 0xb82ffa11, false, 4, 0, false, 8, 2,
+                   0x000000009abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8226820, 0xf82f6a11, false, 8, 0, false, 8, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8227820, 0xf82f7a11, false, 8, 0, false, 8, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8224820, 0xf82f4a11, false, 8, 0, false, 4, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf8225820, 0xf82f5a11, false, 8, 0, false, 4, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf822c820, 0xf82fca11, false, 8, 0, false, 4, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf822d820, 0xf82fda11, false, 8, 0, false, 4, 3,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf822e820, 0xf82fea11, false, 8, 0, false, 8, 0,
+                   0x123456789abcdef0ULL)
+MEMORY_FAMILY_CASE(0xf822f820, 0xf82ffa11, false, 8, 0, false, 8, 3,
+                   0x123456789abcdef0ULL)
+
+MEMORY_ABI_CASE(0x38615801, 0x386f5a11, 1, false)
+MEMORY_ABI_CASE(0x3861d801, 0x386fda11, 1, true)
+MEMORY_ABI_CASE(0x38e15801, 0x38ef5a11, 1, false)
+MEMORY_ABI_CASE(0x38e1d801, 0x38efda11, 1, true)
+MEMORY_ABI_CASE(0x38a15801, 0x38af5a11, 1, false)
+MEMORY_ABI_CASE(0x38a1d801, 0x38afda11, 1, true)
+MEMORY_ABI_CASE(0x78615801, 0x786f5a11, 2, false)
+MEMORY_ABI_CASE(0x7861d801, 0x786fda11, 2, true)
+MEMORY_ABI_CASE(0x78e15801, 0x78ef5a11, 2, false)
+MEMORY_ABI_CASE(0x78e1d801, 0x78efda11, 2, true)
+MEMORY_ABI_CASE(0x78a15801, 0x78af5a11, 2, false)
+MEMORY_ABI_CASE(0x78a1d801, 0x78afda11, 2, true)
+MEMORY_ABI_CASE(0xb8615801, 0xb86f5a11, 4, false)
+MEMORY_ABI_CASE(0xb861d801, 0xb86fda11, 4, true)
+MEMORY_ABI_CASE(0xb8a15801, 0xb8af5a11, 4, false)
+MEMORY_ABI_CASE(0xb8a1d801, 0xb8afda11, 4, true)
+MEMORY_ABI_CASE(0xf8615801, 0xf86f5a11, 8, false)
+MEMORY_ABI_CASE(0xf861d801, 0xf86fda11, 8, true)
+
+MEMORY_SPECIAL_CASE(0x3862dbe0, true, 1, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x387fd820, true, 1, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x3862d83f, true, 1, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x3861d821, true, 1, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x38e2dbe0, true, 1, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x38ffd820, true, 1, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x38e2d83f, true, 1, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x38e1d821, true, 1, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x38a2dbe0, true, 1, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x38bfd820, true, 1, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x38a2d83f, true, 1, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x38a1d821, true, 1, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x7862dbe0, true, 2, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x787fd820, true, 2, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x7862d83f, true, 2, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x7861d821, true, 2, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x78e2dbe0, true, 2, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x78ffd820, true, 2, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x78e2d83f, true, 2, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x78e1d821, true, 2, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x78a2dbe0, true, 2, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x78bfd820, true, 2, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x78a2d83f, true, 2, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x78a1d821, true, 2, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0xb862dbe0, true, 4, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0xb87fd820, true, 4, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0xb862d83f, true, 4, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0xb861d821, true, 4, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0xb8a2dbe0, true, 4, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0xb8bfd820, true, 4, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0xb8a2d83f, true, 4, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0xb8a1d821, true, 4, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0xf862dbe0, true, 8, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0xf87fd820, true, 8, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0xf862d83f, true, 8, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0xf861d821, true, 8, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x3822dbe0, false, 1, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x383fd820, false, 1, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x3822d83f, false, 1, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x3821d821, false, 1, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0x7822dbe0, false, 2, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0x783fd820, false, 2, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0x7822d83f, false, 2, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0x7821d821, false, 2, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0xb822dbe0, false, 4, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0xb83fd820, false, 4, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0xb822d83f, false, 4, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0xb821d821, false, 4, 1, 1, 1)
+MEMORY_SPECIAL_CASE(0xf822dbe0, false, 8, 0, 31, 2)
+MEMORY_SPECIAL_CASE(0xf83fd820, false, 8, 0, 1, 31)
+MEMORY_SPECIAL_CASE(0xf822d83f, false, 8, 31, 1, 2)
+MEMORY_SPECIAL_CASE(0xf821d821, false, 8, 1, 1, 1)
+
+MEMORY_VALUE(uint64_t, kRangeNarrowMaximum, 0xffffffffULL)
+MEMORY_VALUE(uint64_t, kRangePositiveMaximum, 0x7fffffffULL)
+MEMORY_VALUE(uint64_t, kRangeExhaustiveMaximum, 255)
+MEMORY_VALUE(uint64_t, kRangeTailBase, 0x003ffffffffffff0ULL)
+MEMORY_VALUE(uint64_t, kRangeWrapBase, 0xfffffffffffffff8ULL)
+MEMORY_VALUE(uint64_t, kRangeFullMaximum, 0xffffffffffffffffULL)
+MEMORY_VALUE(unsigned, kScalarFamilyCombinations, 104)
+MEMORY_VALUE(uint32_t, kMoveAliasToReturn, 0xaa0103e0)
+MEMORY_VALUE(uint32_t, kFixtureSignedIndexBit, 0x8000)
+MEMORY_VALUE(uint32_t, kFirst, 0xf8626820)
+MEMORY_VALUE(uint32_t, kScaled, 0xf8627820)
+MEMORY_VALUE(uint32_t, kAliasedIndex, 0xf8627822)
+MEMORY_VALUE(uint32_t, kScaledZeroIndex, 0xf87f7820)
+MEMORY_VALUE(uint32_t, kStackBase, 0xf8626be0)
+MEMORY_VALUE(uint32_t, kZeroIndex, 0xf87f6820)
+MEMORY_VALUE(uint32_t, kABIFirst, 0xf8616800)
+MEMORY_VALUE(uint32_t, kABIScaled, 0xf8617800)
+MEMORY_VALUE(uint32_t, kReturn, 0xd65f03c0)
+MEMORY_VALUE(uint32_t, kNotLoad, 0xf8226820)
+MEMORY_VALUE(uint32_t, kWordLoad, 0xb8626820)
+MEMORY_VALUE(uint32_t, kInvalidIndex, 0xf8622820)
+MEMORY_VALUE(uint32_t, kImmediate, 0xf9400420)
+MEMORY_VALUE(uint64_t, kOversized, 0x1f8626820ULL)
+MEMORY_VALUE(uint64_t, kWrappedId, 65536)
+MEMORY_VALUE(unsigned, kScalarBytes, 8)
+MEMORY_VALUE(unsigned, kWordBytes, 4)
+MEMORY_VALUE(unsigned, kIdBytes, 2)
+MEMORY_VALUE(unsigned, kZeroRegister, 31)
+MEMORY_VALUE(va_t, kEntry, 0x1000)
+MEMORY_VALUE(va_t, kStorageBase, 0x2000)
+MEMORY_VALUE(unsigned, kStorageFunctionCount, 3)
+MEMORY_VALUE(uint32_t, kStorageMoveZeroWord, 0xd2800000)
+MEMORY_VALUE(uint64_t, kTagHealingBase, 0x0100000000001000ULL)
+MEMORY_VALUE(uint64_t, kTagHealingIndex, 0xff00000000000000ULL)
+MEMORY_VALUE(uint64_t, kPoisonHealingBase, 0x0040000000001000ULL)
+MEMORY_VALUE(uint64_t, kPoisonHealingIndex, 0xffc0000000000000ULL)
+MEMORY_VALUE(uint64_t, kAccessBoundary, 0x003ffffffffffffcULL)
+MEMORY_VALUE(uint32_t, kNarrowUnsigned, 0xf8624820)
+MEMORY_VALUE(uint32_t, kNarrowSigned, 0xf862d820)
+MEMORY_VALUE(uint64_t, kNarrowHighGarbage, 0x1234567800000000ULL)
+MEMORY_VALUE(uint64_t, kNarrowNegative, 0x12345678ffffffffULL)
+MEMORY_VALUE(uint32_t, kPrefetch, 0xf8a26820)
+MEMORY_VALUE(uint32_t, kReservedLoad, 0xb8e26820)
+MEMORY_VALUE(uint32_t, kVectorLoad, 0xfc626820)
+MEMORY_VALUE(uint64_t, kLoadedValue, 0x123456789abcdef0ULL)
+MEMORY_VALUE(unsigned, kTimeoutSeconds, 30)
+MEMORY_VALUE(uint16_t, kPublishedWideAddressLoad, 1500)
+MEMORY_VALUE(uint16_t, kPublishedAddressLoad, 1501)
+MEMORY_VALUE(uint16_t, kPublishedAddressStore, 1502)
+MEMORY_VALUE(uint16_t, kPublishedFourSourceMemory, 1503)
+MEMORY_TEXT(kName, "original_memory_load")
+MEMORY_TEXT(kStorageOtherName, "original_memory_other")
+MEMORY_TEXT(kStorageTargetName, "original_memory_target")
+MEMORY_TEXT(kStorageTableName, "original_memory_table")
+MEMORY_TEXT(kStorageTextName, ".text")
+MEMORY_TEXT(kOriginalStoragePrefix, "neverd_original_memory_")
+MEMORY_TEXT(kStorageIdentityHarness,
+            "\nint main(void) {{ {2}(); return (uint64_t){0}() != "
+            "(uint64_t)(uintptr_t)&{1}; }\n")
+MEMORY_TEXT(kObject, "original-memory.o")
+MEMORY_TEXT(kTempPrefix, "neverd-original-memory")
+MEMORY_TEXT(kSourceExtension, "c")
+MEMORY_TEXT(kOutputExtension, "out")
+MEMORY_TEXT(kErrorExtension, "err")
+MEMORY_TEXT(kClang, "clang")
+MEMORY_TEXT(kTargetFlag, "-target")
+MEMORY_TEXT(kTarget, "arm64-apple-macos")
+MEMORY_TEXT(kFreestanding, "-ffreestanding")
+MEMORY_TEXT(kNoSystemHeaders, "-nostdlibinc")
+MEMORY_TEXT(kInclude, "-I")
+MEMORY_TEXT(kLanguage, "-std=gnu11")
+MEMORY_TEXT(kStrictWall, "-Wall")
+MEMORY_TEXT(kStrictExtra, "-Wextra")
+MEMORY_TEXT(kStrictError, "-Werror")
+MEMORY_TEXT(kStrictUnusedParameter, "-Wno-unused-parameter")
+MEMORY_TEXT(kStrictAliasing, "-fno-strict-aliasing")
+MEMORY_TEXT(kOutputFlag, "-o")
+MEMORY_TEXT(kCompileOnly, "-c")
+MEMORY_TEXT(kO0, "-O0")
+MEMORY_TEXT(kO2, "-O2")
+MEMORY_TEXT(kMissingCompiler, "clang is required for original-memory execution")
+MEMORY_TEXT(kMissingNative, "native AArch64 execution is unavailable")
+MEMORY_TEXT(kBaseExpression,
+            "__memory_base + __memory_value + __memory_base_input")
+MEMORY_TEXT(kIndexExpression,
+            "__memory_index + __memory_value + __memory_index_input")
+MEMORY_TEXT(kResultName, "result")
+MEMORY_TEXT(kCaptureSource,
+            "#include <stdint.h>\nuint64_t capture(uint64_t __memory_base, "
+            "uint64_t __memory_index, uint64_t __memory_value, "
+            "uint64_t __memory_base_input, uint64_t __memory_index_input) "
+            "{{ return {0}; }\n")
+MEMORY_TEXT(kBaseCall, "get_base()")
+MEMORY_TEXT(kIndexCall, "get_index()")
+MEMORY_TEXT(
+    kInputCallsSource,
+    "#include <stdint.h>\nstatic uint64_t data = 71; static int calls; "
+    "__attribute__((noinline)) static uint64_t get_base(void) "
+    "{{ ++calls; return (uint64_t)(uintptr_t)&data; } "
+    "__attribute__((noinline)) static uint64_t get_index(void) "
+    "{{ ++calls; __asm__ volatile(\"mov x16, #0\" ::: \"x16\"); return 0; } "
+    "int main(void) {{ uint64_t result = {0}; "
+    "return result != 71 || calls != 2 || data != 71; }\n")
+MEMORY_TEXT(
+    kNativeHarness,
+    "\nint main(void) {{ uint64_t data[] = {{ 11, 23, 37, 53, 71, 89, 107 }; "
+    "for (int i = -3; i <= 3; ++i) {{ "
+    "uint64_t offset = (uint64_t)(int64_t)(i * {1}); "
+    "uint64_t got = {0}((uint64_t)(uintptr_t)&data[3], offset); "
+    "if (got != data[3 + i]) return 1; } "
+    "return data[0] != 11 || data[6] != 107; }\n")
+
+MEMORY_TEXT(kBarrierHarness, "\nint main(void) {{ uint64_t value = 7; "
+                             "__auto_type base = _Generic(&{0}, "
+                             "uint64_t (*)(void *, int64_t): (void *)&value, "
+                             "uint64_t (*)(void *, uint64_t): (void *)&value, "
+                             "default: (uint64_t)(uintptr_t)&value); "
+                             "uint64_t result = {0}(base, 0); "
+                             "return result != 11 || value != 23; }\n")
+
+MEMORY_TEXT(kPointerHarness,
+            "\nint main(void) {{ uint64_t data = 71; "
+            "uint64_t slot = (uint64_t)(uintptr_t)&data; "
+            "void *result = {0}((uint64_t)(uintptr_t)&slot, 0); "
+            "return result != &data || data != 71; }\n")
+
+MEMORY_TEXT(
+    kFamilyNativeHarness,
+    "\nstatic uint64_t reference(uint64_t base, uint64_t index, uint64_t data) "
+    "{{ "
+    "register uint64_t b __asm__(\"x16\") = base; "
+    "register uint64_t i __asm__(\"x15\") = index; "
+    "register uint64_t v __asm__(\"x17\") = data; "
+    "__asm__ volatile(\".inst %c3\" : \"+r\"(v) : \"r\"(b), \"r\"(i), "
+    "\"i\"({1}) : \"memory\"); "
+    "return v; } "
+    "int main(void) {{ "
+    "for (int n = -3; n <= 3; ++n) {{ "
+    "uint8_t actual[64], expected[64]; "
+    "for (unsigned j = 0; j < 64; ++j) actual[j] = expected[j] = (uint8_t)(j * "
+    "37 + 129); "
+    "int offset = n * {2}; "
+    "uint64_t index = {3} ? (uint64_t)(int64_t)offset : "
+    "(uint64_t)(unsigned)(offset + 3 * {2}); "
+    "int center = {3} ? 24 : 0; "
+    "if ({4}) index = (index & 0xffffffffULL) | 0x1234567800000000ULL; "
+    "uint64_t want = reference((uint64_t)(uintptr_t)(expected + center), "
+    "index, 0xfedcba9876543281ULL); "
+    "uint64_t got = {0}((uint64_t)(uintptr_t)(actual + center), index{5}); "
+    "if ({6} && got != want) return 1; "
+    "for (unsigned j = 0; j < 64; ++j) if (actual[j] != expected[j]) return 2; "
+    "} return 0; }\n")
+MEMORY_TEXT(kStoreNativeArgument, ", 0xfedcba9876543281ULL")
+MEMORY_TEXT(kEmptyNativeArgument, "")
+
+MEMORY_TEXT(kObjectExtension, "o")
+MEMORY_TEXT(kNativeUnsignedType, "uint{0}_t")
+MEMORY_TEXT(kNativeObjectDataParameter, ", {0}")
+MEMORY_TEXT(kNativeObjectDeclaration,
+            "#include <stdint.h>\nextern uint64_t {0}(uint64_t, {1}{2});\n")
+
+#undef MEMORY_TEXT
+#undef MEMORY_VALUE
+#undef MEMORY_SPECIAL_CASE
+#undef MEMORY_ABI_CASE
+#undef MEMORY_FAMILY_CASE
+#undef MEMORY_CASE

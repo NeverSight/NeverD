@@ -14,7 +14,12 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
+#include "neverd/ir/med/AArch64/AArch64ReturnProtection.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/support/BinaryLoading.h"
+
+#include "llvm/Support/Program.h"
 
 #include <set>
 
@@ -96,6 +101,50 @@ protected:
              {"-target", Triple, "-c", Source.string(), "-o", Object.string()});
     EXPECT_TRUE(Built.ok()) << Built.err;
     return Object;
+  }
+
+  fs::path readonlyFixture(unsigned Variant) {
+    const fs::path Source =
+        tmpFile("readonly" + std::to_string(Variant) + ".s");
+    const fs::path Object =
+        tmpFile("readonly" + std::to_string(Variant) + ".o");
+    const fs::path Binary = tmpFile("readonly" + std::to_string(Variant));
+    std::ofstream Out(Source);
+    Out << ".text\n.globl jt_joined_guard\n.type jt_joined_guard,@function\n"
+           "jt_joined_guard:\n  paciasp\n  mov x9,#0\n  mov x11,#7\n"
+           "  adr x10,records\n  b search\n"
+           "greater:\n  add x9,x12,#1\n  mov x12,x11\n"
+           "smaller:\n  mov x11,x12\n  cmp x12,x9\n  b.eq found\n"
+           "search:\n  add x12,x9,x11\n  lsr x12,x12,#1\n"
+           "  add x13,x10,x12,lsl#1\n  ldrb w14,[x13]\n"
+           "  cmp w0,w14\n  b.hi greater\n  b smaller\n"
+           "found:\n  add x13,x10,x9,lsl#1\n  ldrb w8,[x13,#1]\n";
+    if (Variant == 2)
+      Out << "  mov w8,w1\n";
+    Out << "  adr x9,table\n  adr x10,zero\n"
+           "  ldrb w11,[x9,x8]\n  add x10,x10,x11,lsl#2\n  br x10\n"
+           "zero:\n  mov w0,#0\n  b done\n"
+           "one:\n  mov w0,#1\n  b done\n"
+           "two:\n  mov w0,#2\n"
+           "done:\n  autiasp\n  ret\n"
+           ".size jt_joined_guard,.-jt_joined_guard\n"
+           ".section .rodata,\"a\",@progbits\ntable:\n"
+           "  .byte (zero-zero)/4,(one-zero)/4,(two-zero)/4\n"
+           "  .byte (done-zero)/4\n";
+    Out << (Variant == 1 ? ".section .data,\"aw\",@progbits\n"
+                         : ".section .rodata,\"a\",@progbits\n");
+    Out << "records:\n  .byte 10,0,20,1,30,2,40,0,50,1,60,2,70,0,80,"
+        << (Variant == 3 ? 255 : 1) << "\n";
+    Out.close();
+    const auto Assembled =
+        exec(NEVERD_TEST_CLANG, {"-target", "aarch64-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    EXPECT_TRUE(Assembled.ok()) << Assembled.err;
+    const auto Linked =
+        exec("ld.lld",
+             {"-e", "jt_joined_guard", Object.string(), "-o", Binary.string()});
+    EXPECT_TRUE(Linked.ok()) << Linked.err;
+    return Binary;
   }
 
   static neverd::LowFunc build(const neverd::BinaryImage &Image,
@@ -517,6 +566,39 @@ TEST_F(JumpTableJoinedGuard, UnrelatedRelocationsLeaveBoundaryProofBudget) {
   EXPECT_EQ(Low.JumpTables.front().Targets,
             Baseline.JumpTables.front().Targets);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JumpTableJoinedGuard,
+       ReadonlyBinarySearchProvesTheSelectorAndReturnProtection) {
+  if (!llvm::sys::findProgramByName("ld.lld"))
+    GTEST_SKIP() << "the linked fixture needs ld.lld";
+  auto Image = neverd::loadBinary(readonlyFixture(0));
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  neverd::CFGBuilder Builder;
+  const auto Low = build(*Image, Builder);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 3u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  neverd::LowToMedConverter Converter;
+  Converter.setBinaryImage(&*Image);
+  auto Med = Converter.convert(Low, Image->Arch, Image->abiFormat());
+  neverd::markSourceStackAccesses(Med, Image->Arch, Image->abiFormat());
+  EXPECT_TRUE(neverd::findAArch64ReturnProtection(Med, Image->abiFormat()));
+}
+
+TEST_F(JumpTableJoinedGuard,
+       ReadonlySearchRejectsMutableUnknownAndPoisonedSelectors) {
+  if (!llvm::sys::findProgramByName("ld.lld"))
+    GTEST_SKIP() << "the linked fixture needs ld.lld";
+  for (unsigned Variant : {1u, 2u, 3u}) {
+    SCOPED_TRACE(Variant);
+    auto Image = neverd::loadBinary(readonlyFixture(Variant));
+    ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+    neverd::CFGBuilder Builder;
+    const auto Low = build(*Image, Builder);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
 }
 
 TEST_F(JumpTableJoinedGuard, SeparateGuardsRecoverExactlyTheDenseCases) {

@@ -12,8 +12,8 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/RegistrationImageProof.h"
-#include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 namespace neverd::coff_registration {
 

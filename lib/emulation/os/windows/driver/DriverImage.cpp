@@ -17,8 +17,8 @@
 
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/GuestMemory.h"
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/PEProgramExports.h"
-#include "neverd/loader/Loader.h"
 #include "neverd/object/PELayout.h"
 
 #include "llvm/BinaryFormat/COFF.h"
@@ -968,7 +968,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
     return invalid(image::InputChangedWhileLoading);
   if (Loaded->Base != Base ||
       Loaded->Entry != Base + Header->AddressOfEntryPoint ||
-      Loaded->Arch != Arch::X64 || Loaded->Segments.size() != Sections.size() ||
+      Loaded->Arch != Arch::X64 ||
+      !COFFLoader::hasExpectedPEMappingInventory(*Loaded, Sections.size()) ||
       Loaded->Imports.size() != Imports->size())
     return invalid(image::LoaderMetadataDisagreesWithValidatedExecutionImage);
   if (Loaded->DynInfo.SecurityCookieRVA != Cookie->RVA)

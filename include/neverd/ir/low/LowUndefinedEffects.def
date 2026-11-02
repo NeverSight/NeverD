@@ -1,0 +1,20 @@
+//===- LowUndefinedEffects.def - Exact operation identity -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// V1 retains six stored input slots. Extended operations use a distinct V2
+/// domain, including every additional slot even when it is not an operand.
+//===----------------------------------------------------------------------===//
+#ifndef NEVERD_LOW_UNDEFINED_VALUE
+#define NEVERD_LOW_UNDEFINED_VALUE(Name, Value)
+#endif
+#ifndef NEVERD_LOW_UNDEFINED_TEXT
+#define NEVERD_LOW_UNDEFINED_TEXT(Name, Value)
+#endif
+NEVERD_LOW_UNDEFINED_VALUE(kLowUndefinedV1InputSlots, 6)
+NEVERD_LOW_UNDEFINED_TEXT(kLowUndefinedV1Domain, "neverd-low-undefined-ops-v1")
+NEVERD_LOW_UNDEFINED_TEXT(kLowUndefinedV2Domain, "neverd-low-undefined-ops-v2")
+#undef NEVERD_LOW_UNDEFINED_VALUE
+#undef NEVERD_LOW_UNDEFINED_TEXT

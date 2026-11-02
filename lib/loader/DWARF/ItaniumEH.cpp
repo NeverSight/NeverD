@@ -6,6 +6,8 @@
 
 #include "neverd/loader/DWARF/ItaniumEH.h"
 
+#include "EHFrameDetail.h"
+
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/ELF/ELFImageMetadata.h"
@@ -349,7 +351,10 @@ void recordFrameExtents(BinaryImage &Img) {
   if (Img.IsRelocatable || !findFrameSection(Img, Sec) || Sec.Size == 0)
     return;
   const auto Bases = computeBases(Img);
-  ParseResult Frames = parseEHFrame(Img, Sec, Bases);
+  // Discovery uses the encoded extents, even when a frame's CFI is malformed.
+  // Decode the programs later, when exception recovery consumes their rules.
+  // Indexed extension records retain the full validation their admission needs.
+  ParseResult Frames = detail::parseFrameHeaders(Img, Sec, Bases);
   appendIndexedELFFrames(Img, Sec, Bases, Frames);
   std::vector<std::pair<va_t, va_t>> Ranges;
   Ranges.reserve(Frames.FDEs.size());
@@ -461,6 +466,11 @@ void parseItaniumExceptions(BinaryImage &Img) {
       FrameRanges.emplace_back(Range->Begin, Range->End);
   }
   std::sort(FrameRanges.begin(), FrameRanges.end());
+  // These attributable ranges already prove how many ordinary records will
+  // be materialized. Avoid repeatedly growing and moving the much larger
+  // normalized records. Identifiable malformed ranges still get records below
+  // and can grow the vector beyond this reservation.
+  Out.Functions.reserve(Out.Functions.size() + FrameRanges.size());
   // Frames whose function starts at the landing pad before them.
   llvm::DenseSet<va_t> PaddedFrameStarts;
   // Most frames share a few CIEs, and naming a personality scans the image's

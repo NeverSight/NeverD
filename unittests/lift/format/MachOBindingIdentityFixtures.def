@@ -1,0 +1,83 @@
+//===- MachOBindingIdentityFixtures.def - dyld lookup identities -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent byte encodings and expected lookup scopes. VALUE, TEXT, BYTES,
+/// SCOPE and ORDINAL expand test data, not production helpers.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_BINDING_VALUE
+#define NEVERD_BINDING_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_BINDING_TEXT
+#define NEVERD_BINDING_TEXT(Name, Value)
+#endif
+#ifndef NEVERD_BINDING_BYTES
+#define NEVERD_BINDING_BYTES(Name, ...)
+#endif
+#ifndef NEVERD_BINDING_SCOPE
+#define NEVERD_BINDING_SCOPE(Name, Ordinal, Opcode)
+#endif
+#ifndef NEVERD_BINDING_ORDINAL
+#define NEVERD_BINDING_ORDINAL(Value)
+#endif
+
+NEVERD_BINDING_VALUE(va_t, kStorage, 0x1000)
+NEVERD_BINDING_VALUE(size_t, kStorageBytes, 0x1000)
+NEVERD_BINDING_VALUE(size_t, kStreamOffset, 0x100)
+NEVERD_BINDING_VALUE(uint32_t, kArm64eSubtype, 0x80000002)
+NEVERD_BINDING_VALUE(uint32_t, kArm64Subtype, 0)
+NEVERD_BINDING_VALUE(uint32_t, kArm64ex1Subtype, 0x8000000c)
+NEVERD_BINDING_VALUE(size_t, kPointerBytes, 8)
+NEVERD_BINDING_VALUE(size_t, kBlobBytes, 0x200)
+NEVERD_BINDING_VALUE(uint32_t, kStartsOffset, 0x20)
+NEVERD_BINDING_VALUE(uint32_t, kSegmentStartOffset, 8)
+NEVERD_BINDING_VALUE(uint32_t, kImportsOffset, 0x80)
+NEVERD_BINDING_VALUE(uint32_t, kSymbolsOffset, 0xc0)
+NEVERD_BINDING_VALUE(uint32_t, kLibrary8Mask, 0xff)
+NEVERD_BINDING_VALUE(uint32_t, kLibrary16Mask, 0xffff)
+NEVERD_BINDING_VALUE(uint32_t, kLast8BitPositive, 240)
+NEVERD_BINDING_VALUE(uint64_t, kGenericBind, 0x8000000000000000)
+NEVERD_BINDING_VALUE(uint64_t, kArm64eBind, 0x4000000000000000)
+NEVERD_BINDING_VALUE(uint64_t, kAuthenticatedBind, 0xc000000000000000)
+NEVERD_BINDING_VALUE(uint64_t, kAuthenticatedRebase, 0x8000000000001080)
+NEVERD_BINDING_VALUE(va_t, kLocalTarget, kStorage + 0x80)
+NEVERD_BINDING_VALUE(int64_t, kLargeClassicOrdinal, 0x100000001)
+NEVERD_BINDING_VALUE(size_t, kThreadedOrdinalOffset, 2)
+NEVERD_BINDING_VALUE(size_t, kClassicSymbolOffset, 1)
+NEVERD_BINDING_VALUE(size_t, kLazyOffsetOperand, 12)
+NEVERD_BINDING_VALUE(uint8_t, kFirstLibraryOpcode, 0x11)
+NEVERD_BINDING_VALUE(uint8_t, kSecondLibraryOpcode, 0x12)
+NEVERD_BINDING_VALUE(uint16_t, kArm64ePointerFormat, 1)
+NEVERD_BINDING_VALUE(uint16_t, kGenericPointerFormat, 2)
+NEVERD_BINDING_VALUE(uint8_t, kOrdinalULEBOpcode, 0x20)
+NEVERD_BINDING_TEXT(kLibrary, "/usr/lib/libBindingIdentity.dylib")
+NEVERD_BINDING_TEXT(kSymbol, "_binding")
+NEVERD_BINDING_BYTES(kClassicStream, 0x30, 0x40, '_', 'b', 'i', 'n', 'd', 'i',
+                     'n', 'g', 0, 0x51, 0x70, 0, 0x90, 0)
+NEVERD_BINDING_BYTES(kLazyStream, 0x30, 0x40, '_', 'b', 'i', 'n', 'd', 'i', 'n',
+                     'g', 0, 0x70, 0, 0x90, 0)
+NEVERD_BINDING_BYTES(kThreadedStream, 0xd0, 1, 0x30, 0x40, '_', 'b', 'i', 'n',
+                     'd', 'i', 'n', 'g', 0, 0x51, 0x90, 0x70, 0, 0xd1, 0)
+NEVERD_BINDING_BYTES(kLargeClassicOrdinalULEB, 0x81, 0x80, 0x80, 0x80, 0x10)
+NEVERD_BINDING_BYTES(kArm64ePointerFormats, 1, 7, 9, 10, 12)
+NEVERD_BINDING_BYTES(kGenericPointerFormats, 2, 6)
+NEVERD_BINDING_BYTES(kImportFormats, 1, 2, 3)
+NEVERD_BINDING_SCOPE("self", 0, 0x30)
+NEVERD_BINDING_SCOPE("main executable", -1, 0x3f)
+NEVERD_BINDING_SCOPE("flat lookup", -2, 0x3e)
+NEVERD_BINDING_SCOPE("weak lookup", -3, 0x3d)
+NEVERD_BINDING_ORDINAL(1)
+NEVERD_BINDING_ORDINAL(128)
+NEVERD_BINDING_ORDINAL(240)
+NEVERD_BINDING_ORDINAL(32768)
+NEVERD_BINDING_ORDINAL(65520)
+
+#undef NEVERD_BINDING_VALUE
+#undef NEVERD_BINDING_TEXT
+#undef NEVERD_BINDING_BYTES
+#undef NEVERD_BINDING_SCOPE
+#undef NEVERD_BINDING_ORDINAL

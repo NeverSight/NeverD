@@ -8,7 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
 
 #include <algorithm>

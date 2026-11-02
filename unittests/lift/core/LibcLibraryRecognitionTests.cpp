@@ -98,6 +98,11 @@ TEST(LibcLibraryRecognition, StrippedPublishedFunctionsAndLookalikes) {
     Options.NoOpt = Route == 2;
     auto Result = Pipeline().run(Image, Context, Options);
     ASSERT_TRUE(Result.Success) << Result.Error;
+    std::map<va_t, std::string> Whole;
+    for (const auto &R : Result.LibraryRecognitions)
+      if (R.Scope == LibraryFeatureScope::WholeFunction)
+        Whole.emplace(R.Function, R.Rule);
+    EXPECT_EQ(Whole, Expected);
     if (Route) {
       ASSERT_TRUE(Result.LLVMSources);
       for (const auto &F : Result.MedFuncs) {
@@ -124,6 +129,7 @@ TEST(LibcLibraryRecognition, StrippedPublishedFunctionsAndLookalikes) {
     else
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, EmitOptions));
     unsigned Calls = 0, MappedCalls = 0;
+    std::map<va_t, std::string> MappedCallees;
     for (const auto &Region : SourceMap.Regions) {
       const auto &R = Result.LibraryRecognitions[Region.Recognition];
       if (R.Scope != LibraryFeatureScope::CallSite)
@@ -135,6 +141,8 @@ TEST(LibcLibraryRecognition, StrippedPublishedFunctionsAndLookalikes) {
       EXPECT_EQ(Region.Mapped, !Expected.contains(R.Function))
           << R.Rule << " @ " << R.Function;
       ASSERT_TRUE(R.Callee);
+      if (Region.Mapped)
+        MappedCallees.emplace(*R.Callee, R.Rule);
       EXPECT_TRUE(Expected.contains(*R.Callee));
       EXPECT_NE(R.Function, *R.Callee);
       ASSERT_EQ(R.Occurrences.size(), 1u);
@@ -150,7 +158,8 @@ TEST(LibcLibraryRecognition, StrippedPublishedFunctionsAndLookalikes) {
                                 O.Inputs[0].ConstVal == *R.Callee;
       EXPECT_TRUE(OriginalCall);
     }
-    EXPECT_GE(Calls, 5u);
-    EXPECT_GE(MappedCalls, 4u);
+    EXPECT_GE(Calls, Expected.size());
+    EXPECT_GE(MappedCalls, Expected.size());
+    EXPECT_EQ(MappedCallees, Expected);
   }
 }

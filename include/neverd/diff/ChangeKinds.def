@@ -1,0 +1,42 @@
+//===- ChangeKinds.def - What changed between matched code ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+//
+// NEVERD_DIFF_CHANGE(Id, Bit, Letter, Name, Description): one independent
+// kind of change between two matched functions.  Bit is the flag's position
+// in a change mask and Letter its column mark, both stable in saved
+// comparisons; Name is the spelling the C API and saved comparisons use.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_DIFF_CHANGE
+#error "Define NEVERD_DIFF_CHANGE before including ChangeKinds.def"
+#endif
+
+NEVERD_DIFF_CHANGE(Bytes, 0, 'B', "bytes", "Raw bytes differ")
+NEVERD_DIFF_CHANGE(Relocation, 1, 'R', "relocation",
+                   "Instructions moved: only addresses and the bytes that "
+                   "encode them differ")
+NEVERD_DIFF_CHANGE(Constants, 2, 'K', "constants",
+                   "A scalar immediate or displacement changed")
+NEVERD_DIFF_CHANGE(Operands, 3, 'O', "operands",
+                   "Registers, memory operands or what an address refers to "
+                   "changed")
+NEVERD_DIFF_CHANGE(Instructions, 4, 'I', "instructions",
+                   "Instructions were replaced, added or removed")
+NEVERD_DIFF_CHANGE(Blocks, 5, 'G', "blocks",
+                   "Basic blocks were added or removed")
+NEVERD_DIFF_CHANGE(Edges, 6, 'E', "edges",
+                   "Control-flow edges were added, removed or redirected")
+NEVERD_DIFF_CHANGE(BranchInversion, 7, 'J', "branch_inversion",
+                   "A conditional branch tests the opposite condition")
+NEVERD_DIFF_CHANGE(Calls, 8, 'C', "calls",
+                   "Calls reach other functions, or were added or removed")
+NEVERD_DIFF_CHANGE(Loops, 9, 'L', "loops", "The number of loops changed")
+NEVERD_DIFF_CHANGE(Entry, 10, 'N', "entry", "The entry block changed")
+NEVERD_DIFF_CHANGE(References, 11, 'S', "references",
+                   "Referenced strings, imports or data changed")
+
+#undef NEVERD_DIFF_CHANGE

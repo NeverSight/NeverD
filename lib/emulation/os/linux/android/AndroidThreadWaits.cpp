@@ -68,11 +68,12 @@ void GuestThreads::wakeMutex(uint64_t Address) {
   }
 }
 
-bool GuestThreads::waitKernel() {
+bool GuestThreads::waitKernel(const std::optional<SleepContinuation> &Sleep) {
   auto &T = current();
   if (T.Kernel.Pending) {
     assert(!T.Waiting);
     T.Waiting = Wait{std::move(T.Kernel.Pending), std::nullopt};
+    T.Waiting->Sleep = Sleep;
     return true;
   }
   return false;
@@ -169,7 +170,7 @@ BionicResult GuestThreads::resumeWait(Bionic &LibC) {
                           if (!R)
                             return R.takeError();
                           if (Pending.Source == WaitSource::NativeCall)
-                            return LibC.kernelResult(*R);
+                            return LibC.kernelResult(*R, Pending.Sleep);
                           if (!*R)
                             return std::optional<BionicValue>();
                           return value(**R);
@@ -255,8 +256,9 @@ GuestThreads::interruptWait(const LinuxSignalAction &Action) {
     if (auto E =
             linux_model::returnService(CPU, *Pending.Request, **Interrupted))
       return std::move(E);
-    current().SignalReturns.push_back(
-        {*Pending.Request, Pending.Event, Signals.frameDepth(id())});
+    current().SignalReturns.push_back({*Pending.Request, Pending.Event,
+                                       Signals.frameDepth(id()),
+                                       Pending.Sleep});
     current().Waiting.reset();
   }
   return true;
@@ -279,7 +281,7 @@ llvm::Error GuestThreads::resumeSignal(Bionic &LibC) {
   auto Raw = CPU.readRegister(CPURegister::AArch64X0);
   if (!Raw)
     return Raw.takeError();
-  auto Adapted = LibC.kernelResult((*Raw)[0]);
+  auto Adapted = LibC.kernelResult((*Raw)[0], Pending.Sleep);
   if (!Adapted)
     return Adapted.takeError();
   assert(*Adapted && std::holds_alternative<uint64_t>(**Adapted));

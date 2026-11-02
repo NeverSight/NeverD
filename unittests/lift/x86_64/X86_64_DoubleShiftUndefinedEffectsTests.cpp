@@ -7,7 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/symbolic/SymExec.h"
 
 #include <algorithm>

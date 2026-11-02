@@ -7,6 +7,8 @@
 #define NEVERD_EMULATION_OS_LINUX_LINUXTIME_H
 #include "LinuxKernel.h"
 
+#include <variant>
+
 namespace neverd::emulation::linux_model {
 #define NEVERD_LINUX_CLOCK(Name, ID) inline constexpr int32_t Name = ID;
 #include "../LinuxValues.def"
@@ -61,11 +63,14 @@ sleepService(ExecutionBackend &CPU, const ProcessServiceEvent &Event,
              const MemoryLayout &Layout, LinuxClock &Clock,
              ThreadContext *Thread, ProcessResult &Result);
 /// Admit a copied or scalar duration through the same virtual sleep policy.
+/// A modeled libc automatic retains a value instead of inventing guest heap
+/// storage. Both destinations receive the same kernel-owned remainder.
+using SleepRemainder = std::variant<uint64_t, std::shared_ptr<LinuxTimespec>>;
 std::optional<uint64_t> sleepRelative(ExecutionBackend &CPU,
                                       const MemoryLayout &Layout,
                                       const LinuxTimespec &Duration,
                                       LinuxClock &Clock, ThreadContext *Thread,
                                       ProcessResult &Result,
-                                      uint64_t Remaining = 0);
+                                      SleepRemainder Remaining = uint64_t(0));
 } // namespace neverd::emulation::linux_model
 #endif

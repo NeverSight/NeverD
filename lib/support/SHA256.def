@@ -6,16 +6,23 @@
 ///
 /// \file
 /// The constants of SHA-256 (FIPS 180-4) and of the code that computes it
-/// with the x86 SHA extensions.  Define the macros a consumer reads before
-/// including this file; the others expand to nothing.
+/// with the x86 and ARM64 SHA extensions. Define the macros a consumer reads
+/// before including this file; the others expand to nothing.
 ///
 ///   NEVERD_SHA256_INITIAL_STATE(Value)       a word of the initial hash value
 ///   NEVERD_SHA256_ROUND_CONSTANT(Value)      a round constant, in round order
 ///   NEVERD_SHA256_SIZE(Name, Value)          a size in bytes
 ///   NEVERD_SHA256_BYTE(Name, Value)          a byte the padding writes
 ///   NEVERD_SHA256_LANES(Name, Value)         an SSE lane-selection immediate
-///   NEVERD_SHA256_TARGET_FEATURES(Features)  the target features that code
-///                                            is compiled for
+///   NEVERD_SHA256_X86_FEATURE(Name, Leaf, Subleaf, Register, Bit)
+///       an x86 compiler feature and its CPUID admission bit
+///   NEVERD_SHA256_X86_FIRST_FEATURE(...)     first entry, for joining names;
+///                                            defaults to X86_FEATURE
+///   NEVERD_SHA256_ARM_FEATURES(Features, Target) LLVM features and compiler
+///                                               target for ARM64 compression
+///   NEVERD_SHA256_DARWIN_FEATURE(Name)          Darwin SHA-256 capability key
+///   NEVERD_SHA256_LINUX_FEATURES(Features)       required Linux HWCAP flags
+///   NEVERD_SHA256_WINDOWS_FEATURE(Feature)      Windows ARM64 capability
 ///
 //===----------------------------------------------------------------------===//
 
@@ -34,8 +41,24 @@
 #ifndef NEVERD_SHA256_LANES
 #define NEVERD_SHA256_LANES(Name, Value)
 #endif
-#ifndef NEVERD_SHA256_TARGET_FEATURES
-#define NEVERD_SHA256_TARGET_FEATURES(Features)
+#ifndef NEVERD_SHA256_X86_FEATURE
+#define NEVERD_SHA256_X86_FEATURE(Name, Leaf, Subleaf, Register, Bit)
+#endif
+#ifndef NEVERD_SHA256_X86_FIRST_FEATURE
+#define NEVERD_SHA256_X86_FIRST_FEATURE(Name, Leaf, Subleaf, Register, Bit)    \
+  NEVERD_SHA256_X86_FEATURE(Name, Leaf, Subleaf, Register, Bit)
+#endif
+#ifndef NEVERD_SHA256_ARM_FEATURES
+#define NEVERD_SHA256_ARM_FEATURES(Features, Target)
+#endif
+#ifndef NEVERD_SHA256_DARWIN_FEATURE
+#define NEVERD_SHA256_DARWIN_FEATURE(Name)
+#endif
+#ifndef NEVERD_SHA256_LINUX_FEATURES
+#define NEVERD_SHA256_LINUX_FEATURES(Features)
+#endif
+#ifndef NEVERD_SHA256_WINDOWS_FEATURE
+#define NEVERD_SHA256_WINDOWS_FEATURE(Feature)
 #endif
 
 // FIPS 180-4, 5.3.3: the initial hash value H(0), words A to H.
@@ -118,6 +141,7 @@ NEVERD_SHA256_ROUND_CONSTANT(0xC67178F2)
 // padded to whole blocks by a one bit, zeros, and its length in bits as a
 // 64-bit big-endian integer.
 NEVERD_SHA256_SIZE(BlockBytes, 64)
+NEVERD_SHA256_SIZE(RegisterBytes, 16)
 NEVERD_SHA256_BYTE(MessageEnd, 0x80)
 
 // The SHA extensions keep the state in two registers, as the words ABEF and
@@ -130,11 +154,27 @@ NEVERD_SHA256_LANES(UpperHalf, 0xF0) // pblendw: 16-bit lanes 4 to 7
 
 // The instructions compress() uses: the SHA extensions, pshufb (SSSE3), and
 // pblendw (SSE4.1).  sha256() checks that the processor reports each one.
-NEVERD_SHA256_TARGET_FEATURES("sha,sse4.1,ssse3")
+// CPUID.07H.00H:EBX[29], CPUID.01H:ECX[19,9]. The first entry also
+// rejects CPUs without SHA before querying the older vector features.
+NEVERD_SHA256_X86_FIRST_FEATURE("sha", 7, 0, EBX, 29)
+NEVERD_SHA256_X86_FEATURE("sse4.1", 1, 0, ECX, 19)
+NEVERD_SHA256_X86_FEATURE("ssse3", 1, 0, ECX, 9)
+
+// SHA2 implies Advanced SIMD. Query the kernel's Linux HWCAP or Darwin sysctl
+// capability or Windows's processor-feature query.
+NEVERD_SHA256_ARM_FEATURES("sha2", "+sha2")
+NEVERD_SHA256_DARWIN_FEATURE("hw.optional.arm.FEAT_SHA256")
+NEVERD_SHA256_LINUX_FEATURES(HWCAP_ASIMD | HWCAP_SHA2)
+NEVERD_SHA256_WINDOWS_FEATURE(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE)
 
 #undef NEVERD_SHA256_INITIAL_STATE
 #undef NEVERD_SHA256_ROUND_CONSTANT
 #undef NEVERD_SHA256_SIZE
 #undef NEVERD_SHA256_BYTE
 #undef NEVERD_SHA256_LANES
-#undef NEVERD_SHA256_TARGET_FEATURES
+#undef NEVERD_SHA256_X86_FEATURE
+#undef NEVERD_SHA256_X86_FIRST_FEATURE
+#undef NEVERD_SHA256_ARM_FEATURES
+#undef NEVERD_SHA256_DARWIN_FEATURE
+#undef NEVERD_SHA256_LINUX_FEATURES
+#undef NEVERD_SHA256_WINDOWS_FEATURE

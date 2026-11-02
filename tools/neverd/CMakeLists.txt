@@ -54,18 +54,24 @@ add_neverd_tool(neverd
   NeverDCLIFunctions.cpp
   NeverDSymbolDownload.cpp
   NeverDTranslateOutput.cpp
+  ExportTable.cpp
   cmd/NeverDCmdInfo.cpp
   cmd/NeverDCmdTables.cpp
+  cmd/NeverDCmdAnalysisSections.cpp
   cmd/NeverDCmdTypes.cpp
   cmd/NeverDCmdTypeFit.cpp
   cmd/NeverDCmdStrings.cpp
   cmd/NeverDCmdPaths.cpp
   cmd/NeverDCmdXrefs.cpp
   cmd/NeverDCmdDisasm.cpp
+  cmd/NeverDCmdBytePatch.cpp
   cmd/NeverDCmdMarkup.cpp
   cmd/NeverDCmdSearch.cpp
   cmd/NeverDCmdExport.cpp
+  cmd/NeverDCmdDiff.cpp
+  cmd/NeverDCmdLineage.cpp
   cmd/NeverDCmdPipeline.cpp
+  cmd/NeverDCmdContinuation.cpp
   cmd/NeverDCmdSimplify.cpp
   cmd/NeverDCmdProject.cpp
   cmd/NeverDCmdOptimizeIR.cpp
@@ -103,7 +109,9 @@ add_neverd_tool(neverd
   LINK_LIBS
   neverd_shared
   NeverDMobile
+  neverd_tool_json
 )
+neverd_stage_json_notice(neverd)
 
 # Symbol downloads go through the system's HTTP client: WinHTTP on Windows,
 # and elsewhere libcurl, loaded only when a download is asked for.
@@ -160,4 +168,18 @@ endif()
 
 if(COMMAND neverd_sign_hypervisor)
   neverd_sign_hypervisor(neverd)
+endif()
+
+if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    set(_neverd_sections_worker)
+    if(TARGET neverd-worker OR NEVERD_BUILD_WORKER OR NEVERD_BUILD_GUI)
+      set(_neverd_sections_worker "$<TARGET_FILE:neverd-worker>")
+    endif()
+    add_test(NAME NeverDAnalysisSectionsCLI
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_sections_test.py"
+              "$<TARGET_FILE:neverd>" ${_neverd_sections_worker})
+    set_tests_properties(NeverDAnalysisSectionsCLI PROPERTIES TIMEOUT 90 LABELS "CLI;AnalysisSections")
+  endif()
 endif()

@@ -14,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -32,8 +32,8 @@ namespace {
 // 0/1 boolean, which is only accidentally correct when callers read lane 0 in
 // scenarios where the wide result happens to coincide.  This helper performs
 // the comparison lane-by-lane and writes an explicit all-ones/all-zeros mask.
-void emitPerLaneCmpMask(ARMLifter::LiftState &S, NdVar Dst, NdVar A,
-                        NdVar B, NdOp CmpOp, unsigned LaneSz) {
+void emitPerLaneCmpMask(ARMLifter::LiftState &S, NdVar Dst, NdVar A, NdVar B,
+                        NdOp CmpOp, unsigned LaneSz) {
   if (LaneSz == 0 || Dst.Size <= LaneSz) {
     // Unknown lane size or scalar width: fall back to a full-width compare so
     // we never regress relative to the previous behaviour.
@@ -66,8 +66,8 @@ void emitPerLaneCmpMask(ARMLifter::LiftState &S, NdVar Dst, NdVar A,
 }
 } // namespace
 
-bool liftSIMDNEONCompare(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                         const cs_arm &ARM) {
+bool liftSIMDNEONCompare(ARMLifter &L, ARMLifter::LiftState &S,
+                         const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   case ARM_INS_VABD:
   case ARM_INS_VABDL:
@@ -118,9 +118,8 @@ bool liftSIMDNEONCompare(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *I
         S.emit(NdOp::SELECT, Abs, {Lt, DiffNeg, DiffPos});
         if (IsAccum) {
           NdVar Old = S.makeTemp(OutSz);
-          S.emit(
-              NdOp::SUBBYTES, Old,
-              {NdVar::reg(Dst.Offset, Dst.Size), NdVar::cst(I * OutSz, 4)});
+          S.emit(NdOp::SUBBYTES, Old,
+                 {NdVar::reg(Dst.Offset, Dst.Size), NdVar::cst(I * OutSz, 4)});
           NdVar Sum = S.makeTemp(OutSz);
           S.emit(NdOp::INT_ADD, Sum, {Old, Abs});
           Abs = Sum;
@@ -148,8 +147,7 @@ bool liftSIMDNEONCompare(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *I
       NdVar AbsDiff = S.makeTemp(Dst.Size);
       S.emit(NdOp::SELECT, AbsDiff, {GE, DiffPos, DiffNeg});
       if (IsAccum)
-        S.emit(NdOp::INT_ADD, Dst,
-               {NdVar::reg(Dst.Offset, Dst.Size), AbsDiff});
+        S.emit(NdOp::INT_ADD, Dst, {NdVar::reg(Dst.Offset, Dst.Size), AbsDiff});
       else
         S.emit(NdOp::COPY, Dst, {AbsDiff});
     }
@@ -275,8 +273,8 @@ bool liftSIMDNEONCompare(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *I
     NdVar Anded = S.makeTemp(A.Size);
     S.emit(NdOp::INT_AND, Anded, {A, B});
     auto LI = getNeonLaneInfo(ARM.vector_data, Insn->mnemonic);
-    emitPerLaneCmpMask(S, Dst, Anded, NdVar::cst(0, A.Size),
-                       NdOp::INT_NOTEQUAL, LI.LaneSz);
+    emitPerLaneCmpMask(S, Dst, Anded, NdVar::cst(0, A.Size), NdOp::INT_NOTEQUAL,
+                       LI.LaneSz);
     break;
   }
 

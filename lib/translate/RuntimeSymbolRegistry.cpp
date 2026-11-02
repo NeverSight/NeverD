@@ -6,6 +6,8 @@
 
 #include "neverd/translate/RuntimeSymbolRegistry.h"
 
+#include "neverd/translate/X86/RuntimeX87Helpers.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -81,6 +83,8 @@ llvm::Error failure(RuntimeSymbolRegistryErrorCode Reason,
 
 bool isCanonicalRuntimeName(llvm::StringRef Name) {
   constexpr llvm::StringLiteral Prefix("nvd_rt_v1_");
+  if (Name == kRuntimeX87StepNameV1)
+    return true;
   if (!Name.starts_with(Prefix) || Name.size() == Prefix.size())
     return false;
   return llvm::all_of(Name, [](char C) {
@@ -114,6 +118,21 @@ classForSignature(const RuntimeABIHelperSignatureV1 &Signature) {
       TranslationRuntimeParameterKind::ScalarInteger,
       TranslationRuntimeParameterKind::ScalarInteger};
 
+  static constexpr RuntimeABIValueKind X87Parameters[] = {
+      RuntimeABIValueKind::RuntimePointer,
+      RuntimeABIValueKind::StatePointer,
+      RuntimeABIValueKind::I32,
+      RuntimeABIValueKind::I64,
+      RuntimeABIValueKind::I64,
+      RuntimeABIValueKind::I64};
+  static constexpr TranslationRuntimeParameterKind X87VerifierParameters[] = {
+      TranslationRuntimeParameterKind::RuntimePointer,
+      TranslationRuntimeParameterKind::StatePointer,
+      TranslationRuntimeParameterKind::ScalarInteger,
+      TranslationRuntimeParameterKind::ScalarInteger,
+      TranslationRuntimeParameterKind::ScalarInteger,
+      TranslationRuntimeParameterKind::ScalarInteger};
+
   if (Signature.Result != RuntimeABIValueKind::I32 ||
       Signature.Parameters.size() != Signature.VerifierParameters.size())
     return failure(RuntimeSymbolRegistryErrorCode::InvalidABISignature,
@@ -124,6 +143,10 @@ classForSignature(const RuntimeABIHelperSignatureV1 &Signature) {
   if (hasExactShape(Signature.Parameters, StoreParameters) &&
       hasExactShape(Signature.VerifierParameters, StoreVerifierParameters))
     return RuntimeABIHelperClassV1::Store;
+  if (Signature.Name == kRuntimeX87StepNameV1 &&
+      hasExactShape(Signature.Parameters, X87Parameters) &&
+      hasExactShape(Signature.VerifierParameters, X87VerifierParameters))
+    return RuntimeABIHelperClassV1::X87Step;
   return failure(RuntimeSymbolRegistryErrorCode::InvalidABISignature,
                  Signature.Name);
 }
@@ -141,11 +164,13 @@ llvm::Expected<llvm::orc::ExecutorAddr>
 addressForBinding(const RuntimeABIHelperBindingV1 &Binding) {
   const bool HasLoad = Binding.Load != nullptr;
   const bool HasStore = Binding.Store != nullptr;
-  if (!HasLoad && !HasStore)
+  const bool HasX87 = Binding.X87Step != nullptr;
+  if (!HasLoad && !HasStore && !HasX87)
     return failure(RuntimeSymbolRegistryErrorCode::NullAddress, Binding.Name);
-  if (HasLoad == HasStore ||
+  if (unsigned(HasLoad) + unsigned(HasStore) + unsigned(HasX87) != 1 ||
       (Binding.Class == RuntimeABIHelperClassV1::Load && !HasLoad) ||
-      (Binding.Class == RuntimeABIHelperClassV1::Store && !HasStore))
+      (Binding.Class == RuntimeABIHelperClassV1::Store && !HasStore) ||
+      (Binding.Class == RuntimeABIHelperClassV1::X87Step && !HasX87))
     return failure(RuntimeSymbolRegistryErrorCode::InvalidFunctionPointers,
                    Binding.Name);
 
@@ -156,6 +181,9 @@ addressForBinding(const RuntimeABIHelperBindingV1 &Binding) {
     break;
   case RuntimeABIHelperClassV1::Store:
     Address = llvm::orc::ExecutorAddr::fromPtr(Binding.Store);
+    break;
+  case RuntimeABIHelperClassV1::X87Step:
+    Address = llvm::orc::ExecutorAddr::fromPtr(Binding.X87Step);
     break;
   }
   if (Address.isNull())
@@ -181,13 +209,25 @@ void appendString(llvm::SmallVectorImpl<uint8_t> &Bytes,
 
 std::string
 registryIdentity(llvm::ArrayRef<RuntimeSymbolEntryV1> Entries,
-                 llvm::ArrayRef<RuntimeABIHelperSignatureV1> Signatures) {
+                 llvm::ArrayRef<RuntimeABIHelperSignatureV1> Signatures,
+                 TranslationRuntimeProfileV1 Profile) {
   llvm::SmallVector<uint8_t, 256> Shape;
   appendString(Shape, "NeverD.RuntimeSymbolRegistry");
   appendU16(Shape, kRuntimeSymbolRegistryVersionV1);
   appendU32(Shape, kRuntimeABIMagicV1);
   appendU16(Shape, kRuntimeABIVersionV1);
   appendU16(Shape, kRuntimeControlBlockSizeV1);
+  if (Profile == TranslationRuntimeProfileV1::PortableX87) {
+    appendString(Shape, "neverd.translation.portable-x87.v1");
+    Shape.push_back(static_cast<uint8_t>(Profile));
+    Shape.push_back(static_cast<uint8_t>(RuntimeControlProtocolV1::ExactSpan));
+    appendU16(Shape, kRuntimeGuestStateX86_64X87SizeV1);
+    appendU32(Shape, kPortableX87StateMagicV1);
+    appendU16(Shape, kPortableX87StateVersionV1);
+    appendU16(Shape, kPortableX87StateSizeV1);
+    appendU16(Shape, kRuntimeX87LastStepSizeV1);
+    appendU16(Shape, kRuntimeX87HelperProtocolVersionV1);
+  }
   appendU32(Shape, static_cast<uint32_t>(Entries.size()));
 
   for (const RuntimeSymbolEntryV1 &Entry : Entries) {
@@ -215,13 +255,27 @@ registryIdentity(llvm::ArrayRef<RuntimeSymbolEntryV1> Entries,
 } // namespace
 
 llvm::Expected<RuntimeSymbolRegistryV1> RuntimeSymbolRegistryV1::create() {
-  return create(runtimeABIHelperBindingsV1());
+  return create(TranslationRuntimeProfileV1::ScalarInteger);
+}
+
+llvm::Expected<RuntimeSymbolRegistryV1>
+RuntimeSymbolRegistryV1::create(TranslationRuntimeProfileV1 Profile) {
+  return create(Profile, runtimeABIHelperBindingsV1(Profile));
 }
 
 llvm::Expected<RuntimeSymbolRegistryV1> RuntimeSymbolRegistryV1::create(
     llvm::ArrayRef<RuntimeABIHelperBindingV1> Bindings) {
+  return create(TranslationRuntimeProfileV1::ScalarInteger, Bindings);
+}
+
+llvm::Expected<RuntimeSymbolRegistryV1> RuntimeSymbolRegistryV1::create(
+    TranslationRuntimeProfileV1 Profile,
+    llvm::ArrayRef<RuntimeABIHelperBindingV1> Bindings) {
+  if (Profile != TranslationRuntimeProfileV1::ScalarInteger &&
+      Profile != TranslationRuntimeProfileV1::PortableX87)
+    return failure(RuntimeSymbolRegistryErrorCode::InvalidABISignature);
   const llvm::ArrayRef<RuntimeABIHelperSignatureV1> Signatures =
-      runtimeABIHelperSignaturesV1();
+      runtimeABIHelperSignaturesV1(Profile);
 
   llvm::StringSet<> SignatureNames;
   for (const RuntimeABIHelperSignatureV1 &Signature : Signatures) {
@@ -276,8 +330,9 @@ llvm::Expected<RuntimeSymbolRegistryV1> RuntimeSymbolRegistryV1::create(
       [](const RuntimeSymbolEntryV1 &Left, const RuntimeSymbolEntryV1 &Right) {
         return Left.name() < Right.name();
       });
-  std::string Identity = registryIdentity(Entries, Signatures);
-  return RuntimeSymbolRegistryV1(std::move(Entries), std::move(Identity));
+  std::string Identity = registryIdentity(Entries, Signatures, Profile);
+  return RuntimeSymbolRegistryV1(std::move(Entries), std::move(Identity),
+                                 Profile);
 }
 
 std::vector<llvm::StringRef> RuntimeSymbolRegistryV1::names() const {

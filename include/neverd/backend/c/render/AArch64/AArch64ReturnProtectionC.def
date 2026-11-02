@@ -1,0 +1,23 @@
+//===- AArch64ReturnProtectionC.def - Signed frame C policy ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Shared C target-attribute spelling and unsupported-target diagnostics.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_RETURN_C_TEXT
+#error "Define NEVERD_A64_RETURN_C_TEXT before including this file"
+#endif
+
+NEVERD_A64_RETURN_C_TEXT(kReturnProtectionCTarget, "branch-protection=pac-ret")
+NEVERD_A64_RETURN_C_TEXT(kReturnProtectionCLeaf, "+leaf")
+NEVERD_A64_RETURN_C_TEXT(kReturnProtectionCBKey, "+b-key")
+NEVERD_A64_RETURN_C_TEXT(kReturnProtectionCAttribute,
+                         "__attribute__((target(\"{0}\")))\n")
+NEVERD_A64_RETURN_C_TEXT(
+    kReturnProtectionCRequiresAArch64,
+    "AArch64 return protection requires AArch64 source emission")
+
+#undef NEVERD_A64_RETURN_C_TEXT

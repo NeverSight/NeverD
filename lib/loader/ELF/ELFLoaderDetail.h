@@ -18,9 +18,11 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjectExterns.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
@@ -56,6 +58,26 @@ getShdr(llvm::ArrayRef<typename ELFT::Shdr> Sections, uint32_t Idx) {
   if (Idx >= Sections.size())
     return nullptr;
   return &Sections[Idx];
+}
+
+/// Read a linked string table from either original or reconstructed headers.
+/// LLVM's string-table error diagnostics require an original section index;
+/// reconstructed headers have none. Invalid names do not discard numeric
+/// symbol values or the relocations that use them.
+template <typename ELFT>
+inline llvm::StringRef
+getLinkedStringTable(const llvm::object::ELFFile<ELFT> &ELF,
+                     llvm::ArrayRef<typename ELFT::Shdr> Sections,
+                     const typename ELFT::Shdr &SH) {
+  const auto *Strings = getShdr<ELFT>(Sections, SH.sh_link);
+  if (!Strings || Strings->sh_type != llvm::ELF::SHT_STRTAB ||
+      Strings->sh_size == 0 ||
+      !rangeInBounds(Strings->sh_offset, Strings->sh_size, ELF.getBufSize()))
+    return {};
+  const llvm::StringRef Text(
+      reinterpret_cast<const char *>(ELF.base() + Strings->sh_offset),
+      Strings->sh_size);
+  return Text.back() == '\0' ? Text : llvm::StringRef{};
 }
 
 /// Address section \p Idx is loaded at.  A relocatable object carries no

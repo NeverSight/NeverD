@@ -7,9 +7,9 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
-#include "neverd/backend/llvm/X86RegistrationEntry.h"
+#include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/med/X86RegistrationEntry.h"
+#include "neverd/ir/med/X86/X86RegistrationEntry.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"

@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "WindowsProcess.h"
 
-#include "neverd/loader/Loader.h"
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/object/PELayout.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -609,7 +609,7 @@ llvm::Expected<Image> readImage(const std::filesystem::path &Path,
       Decoded->Arch != (Out.Architecture == GuestArchitecture::X64
                             ? Arch::X64
                             : Arch::AArch64) ||
-      Decoded->Segments.size() != Out.Regions.size() ||
+      !COFFLoader::hasExpectedPEMappingInventory(*Decoded, R.Sections.size()) ||
       std::count_if(Decoded->Imports.begin(), Decoded->Imports.end(),
                     [](const auto &I) { return !I.IsDelayImport; }) !=
           Out.Imports.size())

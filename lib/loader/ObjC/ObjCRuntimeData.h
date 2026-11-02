@@ -1,8 +1,18 @@
+//===- ObjCRuntimeData.h - Bounded Objective-C runtime records --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Separate analysis-only metadata traversal from plain runtime value proofs.
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_LOADER_OBJC_OBJCRUNTIMEDATA_H
 #define NEVERD_LOADER_OBJC_OBJCRUNTIMEDATA_H
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Endian.h"
@@ -12,28 +22,39 @@
 
 namespace neverd::objc {
 
+enum class PointerView { PlainRuntimeValue, MetadataTarget };
+
 /// A bounded view of file-backed runtime records after Mach-O fixups.
 class RuntimeData {
   const BinaryImage &Image;
+  PointerView View;
 
 public:
-  explicit RuntimeData(const BinaryImage &Image) : Image(Image) {}
+  explicit RuntimeData(const BinaryImage &Image,
+                       PointerView View = PointerView::PlainRuntimeValue)
+      : Image(Image), View(View) {}
 
   bool supportsPlainObjectPointers() const {
-    if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+    if (View != PointerView::PlainRuntimeValue ||
+        Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
         Image.Bits != Bitness::Bits64 ||
         (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
         Image.MachOChainedFixupsAmbiguous)
       return false;
     // Plain C object storage cannot reproduce authenticated arm64e isa fields.
+    if (Image.MachOSharedCache || Image.isArm64e() ||
+        !Image.MachOAuthenticatedPointers.empty())
+      return false;
     return Image.Arch != Arch::AArch64 || Image.Raw.size() < 32 ||
            llvm::support::endian::read32le(Image.Raw.data()) !=
                llvm::MachO::MH_MAGIC_64 ||
-           (llvm::support::endian::read32le(Image.Raw.data() + 8) &
-            0x00ffffff) != llvm::MachO::CPU_SUBTYPE_ARM64E;
+           !macho_loader::arm64e::isSubtype(
+               llvm::support::endian::read32le(Image.Raw.data() + 8));
   }
 
   const uint8_t *bytes(va_t VA, uint64_t Size) const {
+    if (View == PointerView::MetadataTarget && Image.MachOSharedCache)
+      return macho_loader::readMetadataBytes(Image, VA, Size);
     const auto *Section = Image.getSectionFor(VA);
     const auto *Segment = Image.getSegmentFor(VA);
     if (!Section || !Segment || !Section->isReadable() ||
@@ -105,6 +126,11 @@ public:
     const auto *Data = bytes(VA, 8);
     if (!Data)
       return std::nullopt;
+    if (View == PointerView::MetadataTarget)
+      return macho_loader::readMetadataPointerTarget(Image, VA);
+    if (Image.MachOChainedFixupsAmbiguous ||
+        Image.hasMachOAuthenticatedPointerIn(VA, 8))
+      return std::nullopt;
     const auto Value = llvm::support::endian::read64le(Data);
     if (Value && Image.MachOHasChainedFixups &&
         !Image.MachOResolvedChainedPointerSlots.count(VA))
@@ -160,4 +186,4 @@ public:
 
 } // namespace neverd::objc
 
-#endif
+#endif // NEVERD_LOADER_OBJC_OBJCRUNTIMEDATA_H

@@ -10,7 +10,10 @@
 #include "X64MachineFlags.h"
 
 #include "neverd/analysis/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/lift/X86/X86Regs.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/symbolic/SymState.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -78,6 +81,11 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
   const auto Invalid = [](const char *Message) {
     return llvm::createStringError(llvm::errc::invalid_argument, "%s", Message);
   };
+  if (Options.UndefinedModel != SpecializationUndefinedModel::SelectedLowIR &&
+      (Options.UndefinedModel != SpecializationUndefinedModel::FreshScalarV1 ||
+       Options.X64MachineExits.empty()))
+    return Invalid(
+        "architectural choices require a supported raw-region model");
   const auto Exhausted = [] {
     return llvm::createStringError(
         std::make_error_code(std::errc::value_too_large),
@@ -94,7 +102,7 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
        {Options.X64CodeRegions.size(), Options.X64ImportBindings.size(),
         Options.X64TerminalImports.size(), Options.X64MachineExits.size(),
         Options.ControlRegisters.size(), Options.ControlFrameSlots.size(),
-        Options.EntryConstants.size(),
+        Options.EntryConstants.size(), Options.EntryFrameExcludedObjects.size(),
         Options.EntryFrameBounds
             ? Options.EntryFrameBounds->ExcludedAddressRanges.size()
             : size_t{0}}) {
@@ -155,6 +163,32 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
        !Options.X64TerminalImports.empty()))
     return Invalid("machine regions exclude ordinary return-slot and terminal "
                    "import contracts");
+  if (!Options.EntryFrameExcludedObjects.empty() &&
+      (!Options.EntryFrameBounds ||
+       Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End))
+    return Invalid("entry objects require nonempty entry frame bounds");
+  for (size_t I = 0; I < Options.EntryFrameExcludedObjects.size(); ++I) {
+    const auto &Object = Options.EntryFrameExcludedObjects[I];
+    const auto &Register = Object.Register;
+    if (Register.Bytes != 8 || !x86reg::isGeneralRegOffset(Register.Offset) ||
+        Register.Offset == Options.FrameBaseRegister->Offset ||
+        Object.Begin >= Object.End)
+      return Invalid("entry object requires a complete non-frame GPR and "
+                     "nonempty relative bounds");
+    for (size_t J = 0; J < I; ++J)
+      if (Options.EntryFrameExcludedObjects[J].Register.Offset ==
+          Register.Offset)
+        return Invalid("duplicate entry object register");
+    for (const auto &Constant : Options.EntryConstants) {
+      const auto &Location = Constant.Location;
+      if (Location.isReg() && Location.Size &&
+          ((Location.Offset <= Register.Offset &&
+            Register.Offset - Location.Offset < Location.Size) ||
+           (Register.Offset <= Location.Offset &&
+            Location.Offset - Register.Offset < Register.Bytes)))
+        return Invalid("entry object overlaps an entry constant binding");
+    }
+  }
   for (size_t I = 0; I < Options.X64MachineExits.size(); ++I) {
     const auto &E = Options.X64MachineExits[I];
     if (E.Version != 1 || E.Address == InvalidVA ||
@@ -227,7 +261,8 @@ bool runtimeFlagsIntrinsic(
     return Op.NumInputs == 1 && Op.Output.isTemp() && Op.Output.Size == 8;
   if (Id == Intrinsic::Popf)
     return Op.NumInputs == 2 && Op.Output.Size == 0 && Op.Inputs[1].Size == 8;
-  return Profile && detail::x64InterruptFlagValue(Op, *Profile).has_value();
+  return Profile && (detail::x64InterruptFlagValue(Op, *Profile).has_value() ||
+                     detail::x64AccessCheckFlagValue(Op, *Profile).has_value());
 }
 
 namespace {
@@ -239,23 +274,23 @@ std::array<NdVar, 2> cpuQuerySelectors() {
 }
 
 bool runtimeReadBundle(const SpecializationInstruction &I, NdVar Sample,
-                       uint8_t Encoding, size_t Count) {
+                       uint8_t Encoding, size_t Count,
+                       std::optional<uint8_t> Third = std::nullopt) {
   const auto &B = I.Origin;
-  if (I.NativeBytes.size() != 2 || I.NativeBytes[0] != 0x0f ||
-      I.NativeBytes[1] != Encoding || B.Size != 2 ||
-      B.Mode != InstructionMode::Default || B.FirstOp != 0 ||
+  const unsigned Size = Third ? 3 : 2;
+  if (I.NativeBytes.size() != Size || I.NativeBytes[0] != 0x0f ||
+      I.NativeBytes[1] != Encoding || (Third && I.NativeBytes[2] != *Third) ||
+      B.Size != Size || B.Mode != InstructionMode::Default || B.FirstOp != 0 ||
       B.OpCount != Count || B.Control != LowInstructionControl::None ||
       B.ControlFlags != LowInstructionControlFlag::None || B.Immediate ||
       B.TargetMode != LowInstructionTargetMode::Preserve ||
-      B.Address > InvalidVA - 2 ||
-      I.Fallthrough != SpecializationCursor{B.Address + 2, B.Mode} ||
+      B.Address > InvalidVA - Size ||
+      I.Fallthrough != SpecializationCursor{B.Address + Size, B.Mode} ||
       I.IsNativeCall || I.TerminalImport ||
       I.NativeStackControl != SpecializationNativeStackControl::None ||
       I.ProfileProjection != InterpreterProfileProjection::None ||
       I.Ops.size() != Count ||
-      I.UndefinedEffects.Coverage != (Encoding == 0xa2
-                                          ? LowUndefinedCoverage::Complete
-                                          : LowUndefinedCoverage::Missing) ||
+      I.UndefinedEffects.Coverage != LowUndefinedCoverage::Complete ||
       I.UndefinedEffects.OpCount != Count ||
       !I.UndefinedEffects.Effects.empty() ||
       I.UndefinedEffects.OperationDigest !=
@@ -335,7 +370,7 @@ runtimeReadOutputs(const SpecializationInstruction &I, NdVar Sample,
 std::optional<RuntimeRegisterRead>
 lowerRuntimeMsrRead(const SpecializationInstruction &I, NdVar Sample,
                     std::optional<InterpreterMachineStateProfile> Profile) {
-  if (Profile != InterpreterMachineStateProfile::KernelX64NoFaultV1 ||
+  if (!Profile || !isKernelX64MachineStateProfile(*Profile) ||
       !runtimeReadBundle(I, Sample, 0x32, 6))
     return std::nullopt;
   const NdVar Value = I.Ops[0].Output;
@@ -395,6 +430,24 @@ lowerRuntimeMsrRead(const SpecializationInstruction &I, NdVar Sample,
 }
 
 } // namespace
+
+std::optional<llvm::ArrayRef<uint64_t>>
+runtimeTimestampRegisters(const SpecializationInstruction &I, NdVar Scratch) {
+  static constexpr uint64_t Counter[]{x86reg::RAX, x86reg::RDX};
+  static constexpr uint64_t Auxiliary[]{x86reg::RAX, x86reg::RDX, x86reg::RCX};
+  const bool Aux = I.NativeBytes.size() == 3;
+  const llvm::ArrayRef<uint64_t> Registers =
+      Aux ? llvm::ArrayRef<uint64_t>(Auxiliary)
+          : llvm::ArrayRef<uint64_t>(Counter);
+  if (!runtimeReadBundle(I, Scratch, Aux ? 0x01 : 0x31,
+                         1 + 2 * Registers.size(),
+                         Aux ? std::optional<uint8_t>(0xf9) : std::nullopt) ||
+      !runtimeReadOutputCarriers(I.Ops,
+                                 Aux ? Intrinsic::Rdtscp : Intrinsic::Rdtsc,
+                                 Registers, {}, true, Scratch))
+    return std::nullopt;
+  return Registers;
+}
 
 // Intel SDM Vol.2B, RDTSC: the low/high words go to EAX/EDX and both
 // upper halves clear. The existing multi-output bundle keeps the runtime read;
@@ -486,31 +539,57 @@ describeCPUQuery(llvm::ArrayRef<LowOp> Operations) {
   return Query;
 }
 
-// A retained trap has exact semantics even though its exception-state outputs
-// have no undefined-effect audit. It may only be collected, never executed in
-// this nonfaulting proof. Do not turn its Missing sidecar into Complete.
+llvm::ArrayRef<uint64_t> cpuQueryResultRegisters() { return CPUQueryRegisters; }
+
+// A retained trap keeps its exact lift and undefined-output audit. Neither
+// supplies an exception continuation: this nonfaulting proof may collect an
+// unreachable trap but cannot execute one or change its coverage grade.
 bool isRetainedNativeTrap(const SpecializationInstruction &Insn) {
   if (Insn.Origin.Control != LowInstructionControl::Terminator ||
       Insn.Origin.Immediate || Insn.IsNativeCall ||
       Insn.NativeStackControl != SpecializationNativeStackControl::None ||
       Insn.ProfileProjection != InterpreterProfileProjection::None ||
-      Insn.Ops.size() != 1 || !Insn.UndefinedEffects.Effects.empty() ||
-      Insn.UndefinedEffects.Coverage != LowUndefinedCoverage::Missing ||
+      Insn.TerminalImport || Insn.NativeBytes.empty() ||
+      Insn.NativeBytes.size() > x86::kMaxInstructionLen ||
+      Insn.NativeBytes.size() != Insn.Origin.Size || Insn.Ops.size() != 1 ||
+      !Insn.UndefinedEffects.Effects.empty() ||
+      Insn.UndefinedEffects.OpCount != Insn.Ops.size() ||
+      Insn.PreservedState != LowInstructionPreservedState{} ||
       Insn.UndefinedEffects.OperationDigest !=
           lowUndefinedOperationDigest(Insn.Ops))
     return false;
-  const auto &Op = Insn.Ops.front();
-  if (Op.Opcode != NdOp::INTRINSIC || Op.Output.Size || Op.NumInputs != 1 ||
-      !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 2 ||
-      Op.MemoryOrdering != NdMemoryOrdering::None ||
-      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+  Decoder Decode;
+  Decode.init(Arch::X64);
+  Decode.setStrict(true);
+  DecodedInsn Native{};
+  if (!Decode.decodeOneForLift(Insn.NativeBytes.data(), Insn.NativeBytes.size(),
+                               Insn.Origin.Address, Native) ||
+      Native.Size != Insn.NativeBytes.size())
     return false;
   auto Flags = LowInstructionControlFlag::Terminator;
-  if (Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Int3))
+  if (Decode.isResumableTrap(Native))
     Flags |= LowInstructionControlFlag::Resumable;
-  else if (Op.Inputs[0].Offset != static_cast<uint64_t>(Intrinsic::Ud2))
+  else if (Native.Id != X86_INS_UD2)
     return false;
-  return Insn.Origin.ControlFlags == Flags;
+  if (Insn.Origin.ControlFlags != Flags)
+    return false;
+  // Use the decoder's trap classification and exact lift, including INT1 and
+  // both INT3 spellings. A self-consistent sidecar cannot authenticate bytes
+  // which describe a different operation or exception. The lift owns whether
+  // undefined-output coverage is Complete or Missing; neither supplies an
+  // exception continuation or permits executing a feasible trap in this proof.
+  std::vector<LowOp> Expected;
+  LowInstructionUndefinedEffects Effects;
+  try {
+    Decode.liftToLow(Native, Expected, {}, {}, &Effects);
+  } catch (const UnliftedInstruction &) {
+    return false;
+  }
+  return lowUndefinedOperationDigest(Expected) ==
+             Insn.UndefinedEffects.OperationDigest &&
+         Effects.Coverage == Insn.UndefinedEffects.Coverage &&
+         Effects.OpCount == Insn.UndefinedEffects.OpCount &&
+         Effects.Effects.empty();
 }
 
 // Intel SDM: disabled shadow stacks make RDSSPD/RDSSPQ a NOP, including no
@@ -524,6 +603,15 @@ bool isCetDisabledProjection(const SpecializationInstruction &Insn) {
       Insn.ProfileProjection ==
       InterpreterProfileProjection::CetDisabledIncrementShadowStackTrapV1;
   if ((!Read && !Trap) || Insn.IsNativeCall ||
+      Insn.Origin.Address == InvalidVA ||
+      Insn.Origin.Size > InvalidVA - Insn.Origin.Address ||
+      Insn.NativeBytes.size() != Insn.Origin.Size || Insn.Origin.FirstOp ||
+      Insn.Origin.OpCount != Insn.Ops.size() ||
+      Insn.UndefinedEffects.OpCount != Insn.Ops.size() ||
+      Insn.Fallthrough.Address != Insn.Origin.Address + Insn.Origin.Size ||
+      Insn.Fallthrough.Mode != Insn.Origin.Mode ||
+      Insn.Origin.Mode != InstructionMode::Default ||
+      Insn.Origin.TargetMode != LowInstructionTargetMode::Preserve ||
       Insn.NativeStackControl != SpecializationNativeStackControl::None ||
       Insn.Origin.Control != (Trap ? LowInstructionControl::Terminator
                                    : LowInstructionControl::None) ||

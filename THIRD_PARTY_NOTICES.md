@@ -1,5 +1,22 @@
 # Third-Party Notices
 
+## Desktop fonts
+
+The desktop embeds unmodified Noto Sans, Noto Sans Arabic, Noto Sans Symbols 2,
+the Noto Sans CJK collection and JetBrains Mono NL under the SIL Open Font
+License 1.1. [Source revisions, hashes and original license notices](tools/neverd-gui/resources/fonts/README.md)
+are kept with the font resources. The notices also ship beside the executable
+under `licenses/fonts` and in installed desktop packages.
+
+## SQLite
+
+The SDK and desktop share a native NDDB reader built with the unchanged SQLite
+3.54.1 amalgamation. Its archive is pinned by SHA-256. Source provenance and the
+public-domain dedication are preserved in
+[`LICENSES/sqlite/SOURCE.md`](LICENSES/sqlite/SOURCE.md), installed under
+`share/neverd/licenses/sqlite`. Loadable extensions are disabled. The GUI writer
+continues to use Qt SQL's driver and Qt's distributed notices.
+
 ## Capstone
 
 NeverD links the Capstone fork at the exact submodule revision recorded by its
@@ -84,7 +101,7 @@ support libraries from Meta Hermes at revision
 invoke JavaScript tools. Primitive Number formatting also uses the embedded
 support/dtoa library. The archive is pinned by SHA-256
 `6c615757374850ccb99991c4536aaf86ac0973661b1ae18aac45d2ca85143153`.
-See the [upstream source](https://github.com/facebook/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc)
+See the [upstream source](https://github.com/meta/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc)
 and preserved [license set](LICENSES/hermes).
 
 Hermes is Copyright (c) Meta Platforms, Inc. and affiliates, under the MIT
@@ -245,8 +262,20 @@ encodings. Generated on 2026-10-06.
 
 ## Windows type libraries
 
+Local builds may use Microsoft's SDK/WDK declarations as the primary ARM64
+libraries. `scripts/generate_microsoft_windows_types.py` uses the official
+NuGet packages and hashes in `scripts/WDKDriverFixtures.def`. The original
+headers, generated declarations and Microsoft licenses remain outside this
+repository, in the selected local directory. They retain Microsoft's terms;
+they are not ReactOS or MIT-licensed headers. The build records their hashes
+and copies their notices beside the local SDK. The bundled compatibility
+libraries below supply only declarations absent from the official inputs,
+without replacing official types or prototypes. See
+[local Microsoft type libraries](docs/microsoft-windows-types.md).
+
 `lib/types/headers/WindowsKernelX64.h` and `WindowsKernelX86.h` hold the
-types and prototypes that `<ntifs.h>`, `<ntddk.h>` and `<wdm.h>` declare for
+types and prototypes that `<ntifs.h>`, `<ntddk.h>`, `<wdm.h>` and the NDIS,
+storage, USB, HID, filter and NETIO provider headers declare for
 x64 and x86 drivers of Windows 10 2004, and `lib/types/headers/WindowsUserX64.h`,
 `WindowsUserX86.h` and `WindowsUserARM64.h` those that `<windows.h>`, the
 headers of the libraries programs most often call and phnt's native API
@@ -283,6 +312,22 @@ from them as from mingw-w64's headers. phnt's `ntintsafe.h` and
 `ntstrsafe.h`, which are Microsoft's, are left out;
 `scripts/windows_types` holds the few macros and types phnt takes from
 Microsoft's SDK that mingw-w64 lacks. Generated on 2026-10-17.
+
+The filter provider declarations also read ReactOS's public-domain
+[`sdk/include/ddk/fltkernel.h`](https://github.com/reactos/reactos/blob/b6224c3165811265422dacd5ed0de36b1c2311c9/sdk/include/ddk/fltkernel.h)
+at commit `b6224c3165811265422dacd5ed0de36b1c2311c9`. Its original notice is
+preserved in [LICENSES/reactos-ddk.txt](LICENSES/reactos-ddk.txt); generation
+verifies the input's SHA-256. The kernel libraries also use phnt's
+`SYSTEM_INFORMATION_CLASS` enumeration under its MIT license. Provider
+libraries regenerated on 2026-10-22.
+
+`WindowsKernelARM64.h` also reads the public-domain core DDK templates under
+ReactOS `sdk/include/xdk` at that revision, plus its public-domain driver
+annotation headers. `scripts/windows_types/reactos-arm64.sha256` records all
+inputs. Generation uses ReactOS's GPL header-preprocessing tool locally;
+the tool's implementation is not embedded or redistributed in NeverD.
+The generated declarations retain their DDK notices in
+[LICENSES/reactos-ddk.txt](LICENSES/reactos-ddk.txt).
 
 ## Linux type libraries
 
@@ -480,20 +525,21 @@ executed by this implementation.
 
 ## zlib
 
-Offline package gzip admission links the installed native zlib library when
-available, using only its in-process stream decoder and checksum validation.
-No zlib executable or upstream implementation source is copied into the web
-component. Gzip capability is unavailable when this dependency is omitted;
-plain tar and original SRI verification remain independent.
+LLVM, the shared NDDB reader, mobile ZIP extraction and offline package gzip
+admission use the unchanged, hash-pinned zlib 1.3.2 source archive. The common
+CMake provider builds a static library with the selected target toolchain;
+system zlib discovery does not replace it. Standalone Qt desktop builds use
+that same provider for NeverD's reader. No zlib executable is invoked.
 
-Mobile ZIP extraction links zlib for DEFLATE and CRC-32. CMake uses an installed
-library when available, or builds the unchanged, hash-pinned zlib 1.3.2 source
-archive as a static dependency. Its copyright and license remain in the source
-distribution. See the [zlib license](https://zlib.net/zlib_license.html) and
-[source releases](https://zlib.net/fossils/).
-The Windows Web product includes the unchanged 1.3.2 notice under
-`share/neverd/licenses/zlib`; its exact source archive and hash are recorded
-in the product dependency manifest.
+The upstream copyright and license remain in the source distribution and are
+installed under `share/neverd/licenses/zlib`. See the
+[zlib license](https://zlib.net/zlib_license.html) and
+[source releases](https://zlib.net/fossils/). The Windows Web product also
+records the exact source archive and hash in its dependency manifest.
+
+A prebuilt Qt SDK may itself depend on a shared zlib. Desktop deployment keeps
+that dependency alongside Qt; statically linking NeverD's copy does not alter
+the independently built Qt libraries.
 
 The test fixture `unittests/lift/aarch64/test_jumptable_inflate_gcc_a64.s` is
 the AArch64 assembly GCC 15.2.0 produces for `inflate()` from the unchanged
@@ -506,8 +552,8 @@ test object and is not shipped.
 The following files incorporate publicly released x86 approximation reference
 implementations:
 
-- `lib/ir/low/X86ApproxReference.c`
-- `lib/ir/low/X86ApproxReference28.c`
+- `lib/ir/low/X86/X86ApproxReference.c`
+- `lib/ir/low/X86/X86ApproxReference28.c`
 
 Copyright (c) 2015, Intel Corporation
 
@@ -557,3 +603,18 @@ retained under [Highway](LICENSES/highway/SOURCE.md),
 [simdutf](LICENSES/simdutf/SOURCE.md), [simdjson](LICENSES/simdjson/SOURCE.md)
 and [oneTBB](LICENSES/oneTBB/SOURCE.md). Enabled dependencies' notices are
 installed under `share/neverd/licenses` and staged with the SDK/CLI.
+
+## Android error string catalog
+
+The error-number/text catalog in `AndroidErrorStrings.def` is transcribed from
+Android NDK 26.2.11394342, ARM64 `libc.a(strerror.o)`, `__sys_error_strings`.
+It was converted into a macro catalog on 2026-10-22. The complete original
+[sysroot notices](LICENSES/android-bionic/NOTICE) are retained.
+The guest memory layout and model implementation are authored for NeverD.
+
+## 3DNow verification guest bootstrap
+
+The owned-context QEMU guest adapts three NeverC bootstrap/linker fixture files
+at `880d1e96ff48f41c5069c6d8f9839eaa8f37d64a` (Copyright (C) 2026 NeverC
+contributors, AGPL-3.0-only). [Source and modifications](unittests/fixtures/x86/3dnow-context/README.md)
+are retained beside the fixtures. They are test inputs, not a runtime dependency.

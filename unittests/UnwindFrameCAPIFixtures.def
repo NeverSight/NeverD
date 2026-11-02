@@ -1,0 +1,80 @@
+//===- UnwindFrameCAPIFixtures.def - Signing query oracles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent Mach-O storage, compact words and public JSON expectations.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_RA_CAPI_VALUE
+#define NEVERD_RA_CAPI_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_RA_CAPI_TEXT
+#define NEVERD_RA_CAPI_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_RA_CAPI_WORDS
+#define NEVERD_RA_CAPI_WORDS(Name, ...)
+#endif
+
+NEVERD_RA_CAPI_VALUE(uint64_t, kImageBase, 0x100000000)
+NEVERD_RA_CAPI_VALUE(size_t, kFileBytes, 0x2000)
+NEVERD_RA_CAPI_VALUE(uint32_t, kLoadCommandCount, 2)
+NEVERD_RA_CAPI_VALUE(uint32_t, kCodeOffset, 0x400)
+NEVERD_RA_CAPI_VALUE(uint32_t, kFrameOffset, 0x800)
+NEVERD_RA_CAPI_VALUE(uint32_t, kCompactOffset, 0x1000)
+NEVERD_RA_CAPI_VALUE(uint32_t, kEncodingOffset, 64)
+NEVERD_RA_CAPI_VALUE(uint32_t, kRangeFieldOffset, 16)
+NEVERD_RA_CAPI_VALUE(uint32_t, kSignedCompact, 0x05001000)
+NEVERD_RA_CAPI_VALUE(uint32_t, kOrdinaryCompact, 0x04000000)
+NEVERD_RA_CAPI_VALUE(uint32_t, kAArch64DwarfMode, 0x03000000)
+NEVERD_RA_CAPI_VALUE(uint32_t, kX64DwarfMode, 0x04000000)
+NEVERD_RA_CAPI_VALUE(uint64_t, kShortDwarfRange, 0x20)
+NEVERD_RA_CAPI_VALUE(size_t, kRememberDepthOverflow, 65)
+NEVERD_RA_CAPI_VALUE(uint8_t, kRememberState, 0x0a)
+NEVERD_RA_CAPI_VALUE(unsigned, kPathCapacity, 128)
+NEVERD_RA_CAPI_TEXT(kDirectoryPrefix, "neverd-unwind-frame-capi")
+NEVERD_RA_CAPI_TEXT(kImageFile, "frame.macho")
+NEVERD_RA_CAPI_TEXT(kUnwindSection, "__unwind_info")
+NEVERD_RA_CAPI_TEXT(kJSONNull, "null")
+NEVERD_RA_CAPI_TEXT(kJSONEmpty, "")
+NEVERD_RA_CAPI_TEXT(kBegin, "begin")
+NEVERD_RA_CAPI_TEXT(kEnd, "end")
+NEVERD_RA_CAPI_TEXT(kEncoding, "encoding")
+NEVERD_RA_CAPI_TEXT(kLanguageData, "language_data")
+NEVERD_RA_CAPI_TEXT(kPersonality, "personality")
+NEVERD_RA_CAPI_TEXT(kReturnAddress, "return_address")
+NEVERD_RA_CAPI_TEXT(kQueryPC, "query_pc")
+NEVERD_RA_CAPI_TEXT(kDwarfState, "dwarf_state_at_pc")
+NEVERD_RA_CAPI_TEXT(kCompactRecipe, "compact_recipe")
+NEVERD_RA_CAPI_TEXT(kStatus, "status")
+NEVERD_RA_CAPI_TEXT(kDiagnostic, "diagnostic")
+NEVERD_RA_CAPI_TEXT(kKind, "kind")
+NEVERD_RA_CAPI_TEXT(kKey, "key")
+NEVERD_RA_CAPI_TEXT(kRecipe, "recipe")
+NEVERD_RA_CAPI_TEXT(kSigningPC, "signing_pc")
+NEVERD_RA_CAPI_TEXT(kKnown, "known")
+NEVERD_RA_CAPI_TEXT(kUnknown, "unknown")
+NEVERD_RA_CAPI_TEXT(kUnsupported, "unsupported")
+NEVERD_RA_CAPI_TEXT(kMalformed, "malformed")
+NEVERD_RA_CAPI_TEXT(kOutOfRange, "out_of_range")
+NEVERD_RA_CAPI_TEXT(kResourceLimit, "resource_limit")
+NEVERD_RA_CAPI_TEXT(kSP, "sp")
+NEVERD_RA_CAPI_TEXT(kUnsigned, "unsigned")
+NEVERD_RA_CAPI_TEXT(kSPPC, "sp_and_pc")
+NEVERD_RA_CAPI_TEXT(kBKeyText, "b")
+NEVERD_RA_CAPI_TEXT(kNonHintText, "non_hint_pauth_lr")
+NEVERD_RA_CAPI_TEXT(kCompactEncodingName, "compact-unwind")
+NEVERD_RA_CAPI_TEXT(kEntryAddress, "0x100000400")
+NEVERD_RA_CAPI_TEXT(kSignedAddress, "0x100000404")
+NEVERD_RA_CAPI_TEXT(kUnsignedAddress, "0x100000408")
+NEVERD_RA_CAPI_TEXT(kEndAddress, "0x100000440")
+NEVERD_RA_CAPI_TEXT(kZeroAddress, "0x0")
+// One regular compact page, first-level entry plus sentinel, no LSDA or
+// personalities. The final word is varied by the individual source contract.
+NEVERD_RA_CAPI_WORDS(kCompactWords, 1, 28, 0, 28, 0, 28, 2, 0x400, 52, 52,
+                     0x440, 0, 52, 2, 0x00010008, 0x400, 0x05001000)
+
+#undef NEVERD_RA_CAPI_VALUE
+#undef NEVERD_RA_CAPI_TEXT
+#undef NEVERD_RA_CAPI_WORDS

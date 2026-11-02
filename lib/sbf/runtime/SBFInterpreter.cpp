@@ -209,89 +209,13 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
       } else {
         Registers[Instruction.Dst] = Source;
       }
-    } else if (Info.Op == Operation::Add || Info.Op == Operation::Sub ||
-               Info.Op == Operation::Mul || Info.Op == Operation::Or ||
-               Info.Op == Operation::And || Info.Op == Operation::Xor ||
-               Info.Op == Operation::LSh || Info.Op == Operation::RSh ||
-               Info.Op == Operation::ARSh || Info.Op == Operation::Neg) {
-      if (Info.Width == kWordBitWidth) {
-        const uint32_t Left = static_cast<uint32_t>(Registers[Instruction.Dst]);
-        const uint32_t Right = static_cast<uint32_t>(Source);
-        uint32_t Value = 0;
-        switch (Info.Op) {
-        case Operation::Add:
-          Value = Left + Right;
-          break;
-        case Operation::Sub:
-          Value = Traits.SwapOperands ? Right - Left : Left - Right;
-          break;
-        case Operation::Mul:
-          Value = Left * Right;
-          break;
-        case Operation::Or:
-          Value = Left | Right;
-          break;
-        case Operation::And:
-          Value = Left & Right;
-          break;
-        case Operation::Xor:
-          Value = Left ^ Right;
-          break;
-        case Operation::LSh:
-          Value = Left << (Right & (kWordBitWidth - 1));
-          break;
-        case Operation::RSh:
-          Value = Left >> (Right & (kWordBitWidth - 1));
-          break;
-        case Operation::ARSh:
-          Value = arithmeticShiftRight32(Left, Right);
-          break;
-        case Operation::Neg:
-          Value = uint32_t{0} - Left;
-          break;
-        default:
-          llvm_unreachable("covered ALU32 operation");
-        }
-        Registers[Instruction.Dst] = extendALU32Result(Value, Traits.Result);
-      } else {
-        const uint64_t Left = Registers[Instruction.Dst];
-        uint64_t Value = 0;
-        switch (Info.Op) {
-        case Operation::Add:
-          Value = Left + Source;
-          break;
-        case Operation::Sub:
-          Value = Traits.SwapOperands ? Source - Left : Left - Source;
-          break;
-        case Operation::Mul:
-          Value = Left * Source;
-          break;
-        case Operation::Or:
-          Value = Left | Source;
-          break;
-        case Operation::And:
-          Value = Left & Source;
-          break;
-        case Operation::Xor:
-          Value = Left ^ Source;
-          break;
-        case Operation::LSh:
-          Value = Left << (Source & (kDoubleWordBitWidth - 1));
-          break;
-        case Operation::RSh:
-          Value = Left >> (Source & (kDoubleWordBitWidth - 1));
-          break;
-        case Operation::ARSh:
-          Value = arithmeticShiftRight64(Left, Source);
-          break;
-        case Operation::Neg:
-          Value = uint64_t{0} - Left;
-          break;
-        default:
-          llvm_unreachable("covered ALU64 operation");
-        }
-        Registers[Instruction.Dst] = Value;
-      }
+    } else if (const auto Value = evaluateScalarALU(
+                   Info.Op, Info.Width, Registers[Instruction.Dst], Source,
+                   Traits.SwapOperands)) {
+      Registers[Instruction.Dst] =
+          Info.Width == kWordBitWidth
+              ? extendALU32Result(static_cast<uint32_t>(*Value), Traits.Result)
+              : *Value;
     } else if (Info.Op == Operation::UHighMul) {
       Registers[Instruction.Dst] =
           unsignedHighMultiply64(Registers[Instruction.Dst], Source);
@@ -377,88 +301,8 @@ llvm::Expected<ExecutionResult> executeRaw(const SBFProgram &Program,
     } else if (Info.Op == Operation::Jump) {
       NextPC = *Validation.BranchTarget;
     } else if (Info.isConditionalBranch()) {
-      const uint64_t Left64 = Registers[Instruction.Dst];
-      const uint64_t Right64 = Source;
-      bool Taken = false;
-      if (Info.Width == kWordBitWidth) {
-        const uint32_t Left = static_cast<uint32_t>(Left64);
-        const uint32_t Right = static_cast<uint32_t>(Right64);
-        switch (Info.Op) {
-        case Operation::Eq:
-          Taken = Left == Right;
-          break;
-        case Operation::Ne:
-          Taken = Left != Right;
-          break;
-        case Operation::UGt:
-          Taken = Left > Right;
-          break;
-        case Operation::UGe:
-          Taken = Left >= Right;
-          break;
-        case Operation::ULt:
-          Taken = Left < Right;
-          break;
-        case Operation::ULe:
-          Taken = Left <= Right;
-          break;
-        case Operation::SGt:
-          Taken = signed32(Left) > signed32(Right);
-          break;
-        case Operation::SGe:
-          Taken = signed32(Left) >= signed32(Right);
-          break;
-        case Operation::SLt:
-          Taken = signed32(Left) < signed32(Right);
-          break;
-        case Operation::SLe:
-          Taken = signed32(Left) <= signed32(Right);
-          break;
-        case Operation::Set:
-          Taken = (Left & Right) != 0;
-          break;
-        default:
-          llvm_unreachable("covered JMP32 operation");
-        }
-      } else {
-        switch (Info.Op) {
-        case Operation::Eq:
-          Taken = Left64 == Right64;
-          break;
-        case Operation::Ne:
-          Taken = Left64 != Right64;
-          break;
-        case Operation::UGt:
-          Taken = Left64 > Right64;
-          break;
-        case Operation::UGe:
-          Taken = Left64 >= Right64;
-          break;
-        case Operation::ULt:
-          Taken = Left64 < Right64;
-          break;
-        case Operation::ULe:
-          Taken = Left64 <= Right64;
-          break;
-        case Operation::SGt:
-          Taken = signed64(Left64) > signed64(Right64);
-          break;
-        case Operation::SGe:
-          Taken = signed64(Left64) >= signed64(Right64);
-          break;
-        case Operation::SLt:
-          Taken = signed64(Left64) < signed64(Right64);
-          break;
-        case Operation::SLe:
-          Taken = signed64(Left64) <= signed64(Right64);
-          break;
-        case Operation::Set:
-          Taken = (Left64 & Right64) != 0;
-          break;
-        default:
-          llvm_unreachable("covered JMP64 operation");
-        }
-      }
+      const bool Taken = evaluateBranchCondition(
+          Info.Op, Info.Width, Registers[Instruction.Dst], Source);
       if (Taken)
         NextPC = *Validation.BranchTarget;
     } else if (Info.Op == Operation::Call) {

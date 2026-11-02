@@ -110,9 +110,10 @@ void MicrosoftSymbols::offer(quint64 serial, const QJsonObject &reference) {
       return;
     prompt_ = nullptr;
     const auto path = prompt->choice().value("path").toString();
-    if (path.isEmpty())
+    if (path.isEmpty()) {
       cancel();
-    else
+      session_.declinePdb();
+    } else
       apply(path, serial);
   });
   prompt->open();

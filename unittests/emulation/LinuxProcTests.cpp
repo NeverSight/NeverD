@@ -77,6 +77,24 @@ protected:
                                uint64_t F = 0) {
     return llvm::cantFail(Kernel->handle(K, {0, 0, {A, B, C, D, E, F}, {}}));
   }
+  void enableVMANames() {
+    Options.LinuxKernel.emplace().AnonymousVMANames =
+        LinuxAnonymousVMANames::AndroidUserPointer;
+    reset();
+  }
+  std::optional<uint64_t> prctl(uint64_t Address, uint64_t Size, uint64_t Name,
+                                uint64_t Suboption = 0,
+                                uint64_t Option = 0x53564d41) {
+    const uint64_t Number = GetParam() == GuestArchitecture::X64 ? 157 : 167;
+    return llvm::cantFail(Kernel->handle(
+        {0, Number, {Option, Suboption, Address, Size, Name, 0}, {}}));
+  }
+  std::string maps() {
+    const auto FD = open("/proc/self/maps");
+    auto Text = read(FD);
+    EXPECT_EQ(call(ServiceKind::Close, FD), 0u);
+    return Text;
+  }
   void path(llvm::StringRef Name) {
     std::vector<uint8_t> V(Name.begin(), Name.end());
     V.push_back(0);
@@ -155,6 +173,165 @@ protected:
     EXPECT_EQ(bytes(Base + 256, 160), Expected);
   }
 };
+
+TEST_P(LinuxProc, PrctlRequiresExplicitContractAndDoesNotGuessOtherOperations) {
+  EXPECT_FALSE(prctl(Base, 4096, 0));
+  EXPECT_EQ(Report.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Report.Diagnostic.find("anonymous_vma_names"), std::string::npos);
+  enableVMANames();
+  EXPECT_FALSE(prctl(Base, 4096, 0, 0, 15));
+  EXPECT_EQ(Report.Diagnostic, "prctl operation is unmodeled");
+  EXPECT_EQ(prctl(Base + 1, 0, 0), uint64_t(-22));
+  EXPECT_EQ(prctl(Base, UINT64_MAX, 0), uint64_t(-22));
+  EXPECT_EQ(prctl(UINT64_MAX - 4095, 4096, 0), uint64_t(-22));
+  EXPECT_EQ(prctl(Base, 0, UINT64_MAX, UINT64_MAX), 0u);
+  EXPECT_EQ(prctl(Base, 1, 0, uint64_t(1) << 32), uint64_t(-22));
+  EXPECT_EQ(prctl(Base, 1, 0, 0, 0x7654321053564d41ULL), 0u);
+  EXPECT_EQ(prctl(0x800000000000ULL, 1, 0), uint64_t(-12));
+}
+
+TEST_P(LinuxProc, PrctlBorrowsNamesAndMergesByPointerIdentity) {
+  enableVMANames();
+  const uint64_t Target = 0x30000000, Name = Base + 4096;
+  ASSERT_EQ(call(ServiceKind::Mmap, Target, 12288, 3, 34, UINT64_MAX), Target);
+  llvm::cantFail(cpu().write(Name, {'a', 'l', 'p', 'h', 'a', 0}));
+  llvm::cantFail(cpu().write(Name + 256, {'a', 'l', 'p', 'h', 'a', 0}));
+  auto &Space = *cpu().addressSpace();
+  const auto Generation = Space.mappingGeneration();
+  const auto Allocated = Space.physicalMemory()->allocatedBytes();
+  const auto Mapped = Space.mappedBytes();
+  ASSERT_EQ(prctl(Target, 12288, Name), 0u);
+  EXPECT_NE(maps().find("[anon:alpha]"), std::string::npos);
+  llvm::cantFail(cpu().write(Name, {'b', 'e', 't', 'a', 0}));
+  auto Text = maps();
+  EXPECT_NE(Text.find("[anon:beta]"), std::string::npos);
+  EXPECT_NE(Text.find("30000000-30003000 rw-p"), std::string::npos);
+  ASSERT_EQ(prctl(Target + 4096, 1, Name + 256), 0u);
+  Text = maps();
+  EXPECT_NE(Text.find("30000000-30001000 rw-p"), std::string::npos);
+  EXPECT_NE(Text.find("30001000-30002000 rw-p"), std::string::npos);
+  EXPECT_NE(Text.find("30002000-30003000 rw-p"), std::string::npos);
+  EXPECT_NE(Text.find("[anon:alpha]"), std::string::npos);
+  // Equal contents at distinct guest addresses must still split the VMA.
+  llvm::cantFail(cpu().write(Name + 256, {'b', 'e', 't', 'a', 0}));
+  EXPECT_NE(maps().find("30001000-30002000"), std::string::npos);
+  ASSERT_EQ(prctl(Target + 4096, 4096, Name), 0u);
+  EXPECT_NE(maps().find("30000000-30003000 rw-p"), std::string::npos);
+  ASSERT_EQ(prctl(Target + 4096, 4096, 0), 0u);
+  EXPECT_NE(maps().find("30001000-30002000 rw-p"), std::string::npos);
+  ASSERT_EQ(prctl(Target, 12288, 0), 0u);
+  EXPECT_EQ(maps().find("[anon:"), std::string::npos);
+  llvm::cantFail(cpu().write(Name, {0}));
+  ASSERT_EQ(prctl(Target, 12288, Name), 0u);
+  EXPECT_NE(maps().find("[anon:]"), std::string::npos);
+  EXPECT_EQ(Space.mappingGeneration(), Generation);
+  EXPECT_EQ(Space.mappedBytes(), Mapped);
+  EXPECT_EQ(Space.physicalMemory()->allocatedBytes(), Allocated);
+  EXPECT_EQ(bytes(Target, 16), std::vector<uint8_t>(16, 0));
+}
+
+TEST_P(LinuxProc, PrctlNamesBothSidesOfHolesAndRetiresOnAddressReuse) {
+  enableVMANames();
+  const uint64_t Target = 0x30000000, Name = Base + 4096;
+  llvm::cantFail(cpu().write(Name, {'h', 'o', 'l', 'e', 0}));
+  ASSERT_EQ(call(ServiceKind::Mmap, Target, 12288, 3, 34, UINT64_MAX), Target);
+  ASSERT_EQ(call(ServiceKind::Munmap, Target + 4096, 4096), 0u);
+  ASSERT_EQ(prctl(Target - 4096, 20480, Name), uint64_t(-12));
+  auto Text = maps();
+  const auto First = Text.find("[anon:hole]");
+  ASSERT_NE(First, std::string::npos);
+  EXPECT_NE(Text.find("[anon:hole]", First + 1), std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Mprotect, Target + 8192, 4096, 1), 0u);
+  Text = maps();
+  EXPECT_NE(Text.find("30002000-30003000 r--p"), std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Munmap, Target, 12288), 0u);
+  ASSERT_EQ(call(ServiceKind::Mmap, Target, 12288, 3, 34, UINT64_MAX), Target);
+  Text = maps();
+  EXPECT_NE(Text.find("30000000-30003000 rw-p"), std::string::npos);
+  EXPECT_EQ(Text.find("[anon:hole]"), std::string::npos);
+}
+
+TEST_P(LinuxProc, PrctlReadsNamesLazilyAtPageBoundariesWithLegacyNameMax) {
+  enableVMANames();
+  const uint64_t Target = 0x30000000, Name = Base + 8190;
+  ASSERT_EQ(call(ServiceKind::Mmap, Target, 4096, 3, 34, UINT64_MAX), Target);
+  llvm::cantFail(cpu().write(Name, {'Z', 0}));
+  ASSERT_EQ(prctl(Target, 4096, Name), 0u);
+  EXPECT_NE(maps().find("[anon:Z]"), std::string::npos);
+  llvm::cantFail(cpu().write(Name, {'Z', 'Q'}));
+  EXPECT_NE(maps().find("[anon:ZQ<fault>]"), std::string::npos);
+  llvm::cantFail(
+      cpu().write(Base + 8192 - 255, std::vector<uint8_t>(255, 'x')));
+  ASSERT_EQ(prctl(Target, 4096, Base + 8192 - 255), 0u);
+  EXPECT_NE(maps().find("[anon:" + std::string(255, 'x') + "]"),
+            std::string::npos);
+  ASSERT_EQ(prctl(Target, 4096, UINT64_MAX), 0u);
+  EXPECT_NE(maps().find("[anon:<fault>]"), std::string::npos);
+  // An invalid pointer at prctl time is neither imported nor pinned.
+  ASSERT_EQ(prctl(Target, 4096, Base + 8192), 0u);
+  EXPECT_NE(maps().find("[anon:<fault>]"), std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Mmap, Base + 8192, 4096, 3, 34, UINT64_MAX),
+            Base + 8192);
+  llvm::cantFail(cpu().write(Base + 8192, {'n', '\n', '\\', 0}));
+  EXPECT_NE(maps().find("[anon:n\n\\]"), std::string::npos);
+  llvm::cantFail(cpu().write(Base + 8192, std::vector<uint8_t>(256, 'x')));
+  EXPECT_NE(maps().find("[anon:" + std::string(255, 'x') + "]"),
+            std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Mprotect, Base + 8192, 4096, 0), 0u);
+  EXPECT_NE(maps().find("[anon:<fault>]"), std::string::npos);
+}
+
+TEST_P(LinuxProc, PrctlNamesRespectProcBufferOwnershipAndRewind) {
+  enableVMANames();
+  const uint64_t Name = Base + 4096;
+  llvm::cantFail(cpu().write(Name, {'o', 'l', 'd', 0}));
+  ASSERT_EQ(prctl(Base, 8192, Name), 0u);
+  const auto FD = open("/proc/self/maps");
+  const auto Alias = *call(ServiceKind::Dup, FD);
+  auto Prefix = read(FD, 1);
+  llvm::cantFail(cpu().write(Name, {'n', 'e', 'w', 0}));
+  const auto Buffered = Prefix + read(Alias);
+  EXPECT_NE(Buffered.find("[anon:old]"), std::string::npos);
+  EXPECT_EQ(Buffered.find("[anon:new]"), std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Lseek, FD, 0), 0u);
+  EXPECT_NE(read(Alias).find("[anon:new]"), std::string::npos);
+}
+
+TEST_P(LinuxProc, PrctlKeepsHeapLabelsAndRefusesUnmodeledBackingBeforeEffects) {
+  enableVMANames();
+  const uint64_t Name = Base + 4096;
+  llvm::cantFail(cpu().write(Name, {'l', 'a', 'b', 'e', 'l', 0}));
+  ASSERT_EQ(call(ServiceKind::Brk, Base + 12288), Base + 12288);
+  ASSERT_EQ(prctl(Base + 8192, 4096, Name), 0u);
+  auto Text = maps();
+  EXPECT_NE(Text.find("[heap]"), std::string::npos);
+  EXPECT_EQ(Text.find("[anon:label]"), std::string::npos);
+  Options.LinuxFiles->DynamicProc->Mappings.push_back(
+      {Base + 4096, 4096, 0, 1, 0, false, "/fixture/backing"});
+  reset();
+  EXPECT_FALSE(prctl(Base, 8192, Name));
+  EXPECT_EQ(Report.Stop, ProcessStopReason::UnsupportedService);
+  Text = maps();
+  EXPECT_EQ(Text.find("[anon:"), std::string::npos);
+  EXPECT_NE(Text.find("/fixture/backing"), std::string::npos);
+}
+
+TEST_P(LinuxProc, PrctlRefusesDeviceVMAsBeforeRenamingAnAnonymousPrefix) {
+  auto &D = Options.LinuxFiles->Devices["/dev/example"];
+  D.ReadOnlyMappings.push_back({0, std::vector<uint8_t>(4096), {}});
+  enableVMANames();
+  const auto FD = open("/dev/example");
+  const uint64_t Target = 0x30000000, Name = Base + 4096;
+  llvm::cantFail(cpu().write(Name, {'a', 0}));
+  ASSERT_EQ(call(ServiceKind::Mmap, Target, 4096, 3, 34, UINT64_MAX), Target);
+  ASSERT_EQ(call(ServiceKind::Mmap, Target + 4096, 4096, 1, 1, FD, 0),
+            Target + 4096);
+  EXPECT_FALSE(prctl(Target, 8192, Name));
+  EXPECT_EQ(Report.Stop, ProcessStopReason::UnsupportedService);
+  const auto Text = maps();
+  EXPECT_EQ(Text.find("[anon:"), std::string::npos);
+  EXPECT_NE(Text.find("/dev/example"), std::string::npos);
+}
 
 TEST_P(LinuxProc, SparseWritesTruncationAndAliasesMaintainCompleteStat) {
   auto Writer = open("/data/value", 2);
@@ -241,6 +418,56 @@ TEST_P(LinuxProc, FDInfoUsesSharedOffsetsAndDescriptorLocalCloseOnExec) {
   EXPECT_EQ(call(ServiceKind::Read, Info, Base + 256, 100), uint64_t(-2));
   EXPECT_EQ(open("/data/value"), 3u);
   EXPECT_NE(read(Info).find("pos:\t0\n"), std::string::npos);
+}
+
+TEST_P(LinuxProc, RenameKeepsFDInfoInodeAcrossAReusedOriginalPath) {
+  auto &F = *Options.LinuxFiles;
+  LinuxFileMetadata Parent;
+  Parent.Device = 0x801;
+  Parent.Inode = 91;
+  Parent.Mode = 0040755;
+  Parent.UID = Parent.GID = 1000;
+  Parent.LinkCount = 2;
+  Parent.Size = 60;
+  Parent.BlockSize = 4096;
+  F.Directories = {"/data"};
+  F.DirectoryCreation.emplace().Parents["/data"] = Parent;
+  F.FileRenames.emplace().Parents.insert("/data");
+  reset();
+  ASSERT_EQ(open("/data/value", 2), 3u);
+  ASSERT_EQ(call(ServiceKind::Dup, 3), 4u);
+  ASSERT_EQ(open("/proc/self/fdinfo/3"), 5u);
+  ASSERT_EQ(open("/proc/self/fdinfo/4"), 6u);
+  EXPECT_EQ(read(3, 1), "a");
+  const std::string Flags =
+      GetParam() == GuestArchitecture::X64 ? "0100002" : "0400002";
+  const auto Expected =
+      "pos:\t1\nflags:\t" + Flags + "\nmnt_id:\t1\nino:\t42\n";
+  for (unsigned phase = 0; phase != 3; ++phase) {
+    SCOPED_TRACE(phase);
+    if (phase == 1) {
+      path("/data/value");
+      llvm::cantFail(cpu().write(Base + 128, {'/', 'd', 'a', 't', 'a', '/', 'm',
+                                              'o', 'v', 'e', 'd', 0}));
+      ASSERT_EQ(call(ServiceKind::Rename, Base, Base + 128), 0u);
+    }
+    if (phase == 2) {
+      path("/data/value");
+      ASSERT_EQ(call(ServiceKind::MkdirAt, uint64_t(-100), Base, 0755), 0u);
+    }
+    for (auto info : {5u, 6u}) {
+      ASSERT_EQ(call(ServiceKind::Lseek, info, 0), 0u);
+      EXPECT_EQ(read(info), Expected);
+    }
+  }
+  EXPECT_EQ(read(4, 1), "b");
+  ASSERT_EQ(call(ServiceKind::Fstat, 3, Base + 256), 0u);
+  EXPECT_EQ(llvm::support::endian::read64le(bytes(Base + 256, 16).data() + 8),
+            42u);
+  path("/data/value");
+  ASSERT_EQ(call(ServiceKind::FstatAt, uint64_t(-100), Base, Base + 256), 0u);
+  EXPECT_NE(llvm::support::endian::read64le(bytes(Base + 256, 16).data() + 8),
+            42u);
 }
 
 TEST_P(LinuxProc, MapsFollowProtectionUnmapAndRetireBackingIdentity) {

@@ -166,8 +166,15 @@ protected:
       S << ".type address_helper,%function\n";
     if (!X && !A64)
       S << ".thumb_func\n";
-    S << (T.MachO ? "_address_helper" : "address_helper") << ":\n"
-      << Ret << "\n";
+    S << (T.MachO ? "_address_helper" : "address_helper") << ":\n";
+    // The negative case must really clobber the base. A closed leaf that
+    // only returns can be proved to preserve volatile registers as well.
+    if (Variant == "call")
+      S << (X64   ? "movb $1,%r10b\n"
+            : X86 ? "movb $1,%dl\n"
+            : A64 ? "mov w10,#1\n"
+                  : "movs r3,#1\n");
+    S << Ret << "\n";
     return S.str();
   }
 

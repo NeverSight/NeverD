@@ -6,7 +6,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"
@@ -16,6 +16,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <deque>
+#include <iterator>
 #include <set>
 
 namespace neverd {
@@ -378,7 +379,8 @@ std::map<va_t, SourceCallTypeHint> buildCFunctionParameterCallHints(
           ++It;
       }
     for (const auto &Op : Block.Ops) {
-      if (Op.NumInputs > 6 || Op.Output.Offset > UINT64_MAX - Op.Output.Size ||
+      if (Op.NumInputs > std::size(Op.Inputs) ||
+          Op.Output.Offset > UINT64_MAX - Op.Output.Size ||
           Op.MemoryOrdering != NdMemoryOrdering::None ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return {};

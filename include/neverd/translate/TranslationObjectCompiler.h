@@ -200,9 +200,11 @@ public:
   static constexpr uint32_t CacheIdentityVersion = 1;
   /// Manual schema for the exact IR optimization and object-emission recipe.
   /// Bump whenever pass ordering, sealing, or target-machine policy changes.
-  static constexpr uint32_t PipelineSchemaVersion = 16;
+  static constexpr uint32_t PipelineSchemaVersion = 17;
 
   llvm::ArrayRef<uint8_t> bytes() const { return Bytes; }
+  TranslationRuntimeProfileV1 runtimeProfile() const { return RuntimeProfile; }
+  CodeInvalidationPolicy memoryPolicy() const { return MemoryPolicy; }
   const ResolvedHostTarget &hostTarget() const { return HostTarget; }
   const TranslationSemanticReportV1 &semanticReport() const {
     return SemanticReport;
@@ -250,14 +252,16 @@ private:
       std::vector<TranslationObjectSymbolV1> BlockSymbols,
       std::vector<TranslationObjectSymbolV1> RuntimeSymbols,
       std::string RuntimeRegistryIdentity, std::string RequestCacheKey,
-      std::string ArtifactCacheKey)
+      std::string ArtifactCacheKey, TranslationRuntimeProfileV1 RuntimeProfile,
+      CodeInvalidationPolicy MemoryPolicy)
       : Bytes(std::move(Bytes)), HostTarget(std::move(HostTarget)),
         SemanticReport(std::move(SemanticReport)),
         LLVMPipelineRan(LLVMPipelineRan), BlockSymbols(std::move(BlockSymbols)),
         RuntimeSymbols(std::move(RuntimeSymbols)),
         RuntimeRegistryIdentity(std::move(RuntimeRegistryIdentity)),
         RequestCacheKey(std::move(RequestCacheKey)),
-        ArtifactCacheKey(std::move(ArtifactCacheKey)) {}
+        ArtifactCacheKey(std::move(ArtifactCacheKey)),
+        RuntimeProfile(RuntimeProfile), MemoryPolicy(MemoryPolicy) {}
 
   std::vector<uint8_t> Bytes;
   ResolvedHostTarget HostTarget;
@@ -268,6 +272,8 @@ private:
   std::string RuntimeRegistryIdentity;
   std::string RequestCacheKey;
   std::string ArtifactCacheKey;
+  TranslationRuntimeProfileV1 RuntimeProfile;
+  CodeInvalidationPolicy MemoryPolicy;
 };
 
 /// Compile Module through a clone, verify the final IR, emit a relocatable

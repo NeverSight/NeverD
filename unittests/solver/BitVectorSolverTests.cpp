@@ -25,6 +25,7 @@
 #include "neverd/solver/CnfEncoder.h"
 #include "neverd/solver/SatTypes.h"
 #include "neverd/solver/SymSynthVerifier.h"
+#include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
 #include "neverd/symbolic/SymSynth.h"
 #include "neverd/symbolic/SymWideArithmetic.h"
@@ -1395,17 +1396,27 @@ TEST(EntailedConditions, EncodingAndQueryLimitsStillRefuse) {
   EXPECT_EQ(S.cloneEncoding(), nullptr);
 }
 
+// Keep these predicates above the builder's bounded constant scan so the
+// solver preparation, rather than construction, still observes the extension.
+constexpr unsigned UnfoldedEqualityWords =
+    ::neverd::limits::symbolic::kSymExprExtensionCompareMaxWords + 1;
+constexpr unsigned UnfoldedEqualityWidth = 64 * UnfoldedEqualityWords;
+// Two visits, three edges and three scans of each constant word.
+constexpr unsigned UnfoldedEqualityWork = 5 + 3 * UnfoldedEqualityWords;
+
 TEST(PermanentConjunctPreparation, ExactAndShortWordInspectionBudgets) {
   SymContext C;
   const auto X = C.mkVar("x", 1);
-  const auto Pred = C.mkEq(C.mkZExt(X, 128), C.mkOne(128));
+  const auto Pred = C.mkEq(C.mkZExt(X, UnfoldedEqualityWidth),
+                           C.mkOne(UnfoldedEqualityWidth));
   const auto Before = C.numNodes();
-  // Two node visits, three operand edges and three passes over two words.
-  auto Exact = detail::collectPermanentConjuncts(C, Pred, 11);
+  ASSERT_EQ(C.op(Pred), neverd::symbolic::SymOp::Eq);
+  auto Exact = detail::collectPermanentConjuncts(C, Pred, UnfoldedEqualityWork);
   ASSERT_TRUE(Exact);
   ASSERT_EQ(Exact->size(), 1U);
   EXPECT_EQ(Exact->front(), (detail::PermanentConjunct{X, true}));
-  EXPECT_FALSE(detail::collectPermanentConjuncts(C, Pred, 10));
+  EXPECT_FALSE(
+      detail::collectPermanentConjuncts(C, Pred, UnfoldedEqualityWork - 1));
   EXPECT_FALSE(detail::collectPermanentConjuncts(C, Pred, 0));
   EXPECT_EQ(C.numNodes(), Before);
 }
@@ -1413,29 +1424,36 @@ TEST(PermanentConjunctPreparation, ExactAndShortWordInspectionBudgets) {
 TEST(PermanentConjunctPreparation, ExhaustionDiscardsAlreadyCollectedFacts) {
   SymContext C;
   const auto A = C.mkVar("a", 1), X = C.mkVar("x", 1);
-  const auto Wrapped = C.mkEq(C.mkZExt(X, 128), C.mkOne(128));
+  const auto Wrapped = C.mkEq(C.mkZExt(X, UnfoldedEqualityWidth),
+                              C.mkOne(UnfoldedEqualityWidth));
   const auto Pred = C.mkAnd(A, Wrapped);
   // The conjunction adds a node, two edges and the other leaf's visit.
-  auto Exact = detail::collectPermanentConjuncts(C, Pred, 15);
+  auto Exact =
+      detail::collectPermanentConjuncts(C, Pred, UnfoldedEqualityWork + 4);
   ASSERT_TRUE(Exact);
   ASSERT_EQ(Exact->size(), 2U);
   EXPECT_EQ((*Exact)[0], (detail::PermanentConjunct{A, true}));
   EXPECT_EQ((*Exact)[1], (detail::PermanentConjunct{X, true}));
-  EXPECT_FALSE(detail::collectPermanentConjuncts(C, Pred, 14));
+  EXPECT_FALSE(
+      detail::collectPermanentConjuncts(C, Pred, UnfoldedEqualityWork + 3));
 }
 
 TEST(PermanentConjunctPreparation, RevisitedLeavesStillConsumeWork) {
   SymContext C;
   const auto X = C.mkVar("x", 1);
-  const auto One = C.mkEq(C.mkZExt(X, 128), C.mkOne(128));
-  const auto NotZero = C.mkEq(C.mkZExt(C.mkNot(X), 128), C.mkZero(128));
+  const auto One = C.mkEq(C.mkZExt(X, UnfoldedEqualityWidth),
+                          C.mkOne(UnfoldedEqualityWidth));
+  const auto NotZero = C.mkEq(C.mkZExt(C.mkNot(X), UnfoldedEqualityWidth),
+                              C.mkZero(UnfoldedEqualityWidth));
   const auto Pred = C.mkAnd(One, NotZero);
   // Both paths revisit x; the second path also traverses its complement.
-  auto Exact = detail::collectPermanentConjuncts(C, Pred, 27);
+  auto Exact =
+      detail::collectPermanentConjuncts(C, Pred, 2 * UnfoldedEqualityWork + 5);
   ASSERT_TRUE(Exact);
   ASSERT_EQ(Exact->size(), 1U);
   EXPECT_EQ(Exact->front(), (detail::PermanentConjunct{X, true}));
-  EXPECT_FALSE(detail::collectPermanentConjuncts(C, Pred, 26));
+  EXPECT_FALSE(
+      detail::collectPermanentConjuncts(C, Pred, 2 * UnfoldedEqualityWork + 4));
 }
 
 TEST(PermanentConjunctPreparation, WideCopiesRemainBoundedWithLargerRequests) {
@@ -1501,7 +1519,9 @@ TEST(PermanentConjunctPreparation,
      CollectedBitDoesNotBypassOriginalWidthLimit) {
   SymContext C;
   const auto X = C.mkVar("x", 1);
-  const auto Pred = C.mkEq(C.mkZExt(X, 1024), C.mkOne(1024));
+  const auto Pred = C.mkEq(C.mkZExt(X, UnfoldedEqualityWidth),
+                           C.mkOne(UnfoldedEqualityWidth));
+  ASSERT_EQ(C.op(Pred), neverd::symbolic::SymOp::Eq);
   const auto Facts = detail::collectPermanentConjuncts(C, Pred);
   ASSERT_TRUE(Facts);
   ASSERT_EQ(Facts->size(), 1U);
@@ -1510,6 +1530,22 @@ TEST(PermanentConjunctPreparation,
   EXPECT_FALSE(S.assertTrue(Pred));
   EXPECT_EQ(S.encodeError(), BlastError::WidthTooLarge);
   EXPECT_EQ(S.check(), SatResult::Unknown);
+}
+
+TEST(PermanentConjunctPreparation, FoldedEqualitiesUseCanonicalCostAndWidth) {
+  SymContext C;
+  const auto X = C.mkVar("x", 1);
+  const auto Pred = C.mkEq(C.mkZExt(X, 1024), C.mkOne(1024));
+  ASSERT_EQ(Pred, X);
+  const auto Facts = detail::collectPermanentConjuncts(C, Pred, 1);
+  ASSERT_TRUE(Facts);
+  ASSERT_EQ(Facts->size(), 1U);
+  EXPECT_EQ(Facts->front(), (detail::PermanentConjunct{X, true}));
+  EXPECT_FALSE(detail::collectPermanentConjuncts(C, Pred, 0));
+  BitVectorSolver S(C);
+  ASSERT_TRUE(S.assertTrue(Pred));
+  EXPECT_EQ(S.check(), SatResult::Sat);
+  EXPECT_EQ(S.check({C.mkNot(X)}), SatResult::Unsat);
 }
 
 TEST(PermanentConjunctPreparation, AlternativesRemainOpaque) {

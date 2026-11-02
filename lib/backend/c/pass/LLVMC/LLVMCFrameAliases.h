@@ -148,8 +148,9 @@ inline FrameAliases peelSyntheticFrames(const llvm::Value *V,
             Walk(Base, Adjusted, false, Seen);
         };
         if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Cur)) {
-          llvm::APInt Acc(64, 0);
-          if (GEP->accumulateConstantOffset(DL, Acc))
+          llvm::APInt Acc(DL.getIndexSizeInBits(GEP->getPointerAddressSpace()),
+                          0);
+          if (GEP->accumulateConstantOffset(DL, Acc) && Acc.isSignedIntN(64))
             return Adjust(GEP->getPointerOperand(), Acc.getSExtValue());
           if (GEP->getNumOperands() == 2)
             if (const auto *CI =

@@ -1,5 +1,4 @@
-//===- PEBrowseCompatibilityTests.cpp - Bounded PE browsing metadata
-//--------===//
+//===- PEBrowseCompatibilityTests.cpp - Bounded PE browsing metadata ------===//
 //
 // NeverD Decompiler
 //
@@ -196,6 +195,8 @@ TEST(PEBrowseCompatibility, NoncanonicalIATRetainsOnlyDescriptorIdentities) {
   for (const bool Wide : {false, true})
     for (const uint32_t RVA : {0x2181u, 0x1080u}) {
       Fixture F(Wide);
+      SCOPED_TRACE(::testing::Message()
+                   << "width=" << F.Width << " IAT RVA=" << RVA);
       F.put32(F.IData + 16, RVA);
       const size_t Offset = RVA == 0x1080 ? 0x280 : F.IData + 0x181;
       F.word(Offset, F.ordinal(1));
@@ -211,7 +212,14 @@ TEST(PEBrowseCompatibility, NoncanonicalIATRetainsOnlyDescriptorIdentities) {
       EXPECT_TRUE(Image->ImportStorageSlots.empty());
       EXPECT_TRUE(Image->ImportPtrSlots.empty());
       EXPECT_TRUE(Image->collectImportStorageSlots().Slots.empty());
-      EXPECT_TRUE(Image->LoadDiagnostics.empty());
+      if (RVA % F.Width) {
+        // Browsing can retain the descriptor identity without proving the
+        // aligned loader writes needed to initialize a mapped header page.
+        ASSERT_EQ(Image->LoadDiagnostics.size(), 1u);
+        EXPECT_EQ(Image->LoadDiagnostics[0].Code, "pe.headers_unmapped");
+      } else {
+        EXPECT_TRUE(Image->LoadDiagnostics.empty());
+      }
     }
 }
 
@@ -316,7 +324,10 @@ TEST(PEBrowseCompatibility, UnmappedIATAndInvalidEntryStillExposeActualCode) {
   ASSERT_NE(Image->readVA(0x774c1000, 3), nullptr);
   EXPECT_EQ(Image->readVA(0x774c1000, 3)[0], 0x31);
   EXPECT_EQ(Image->Raw, F.Bytes);
-  EXPECT_EQ(Image->LoadDiagnostics.size(), 2u);
+  ASSERT_EQ(Image->LoadDiagnostics.size(), 3u);
+  EXPECT_EQ(Image->LoadDiagnostics[0].Code, "pe.entry_out_of_range");
+  EXPECT_EQ(Image->LoadDiagnostics[1].Code, "pe.headers_unmapped");
+  EXPECT_EQ(Image->LoadDiagnostics[2].Code, "pe.import_descriptor_invalid");
 }
 
 TEST(PEBrowseCompatibility, BadDescriptorDoesNotRemoveAnIndependentValidOne) {
@@ -326,8 +337,9 @@ TEST(PEBrowseCompatibility, BadDescriptorDoesNotRemoveAnIndependentValidOne) {
   ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
   ASSERT_EQ(Image->Imports.size(), 1u);
   EXPECT_EQ(Image->Imports[0].Module, "example.dll");
-  ASSERT_EQ(Image->LoadDiagnostics.size(), 1u);
-  EXPECT_EQ(Image->LoadDiagnostics[0].Code, "pe.import_descriptor_invalid");
+  ASSERT_EQ(Image->LoadDiagnostics.size(), 2u);
+  EXPECT_EQ(Image->LoadDiagnostics[0].Code, "pe.headers_unmapped");
+  EXPECT_EQ(Image->LoadDiagnostics[1].Code, "pe.import_descriptor_invalid");
 }
 
 TEST(PEBrowseCompatibility, TruncatedTablesPublishNoPrefixBindings) {
@@ -397,7 +409,11 @@ TEST(PEBrowseCompatibility, IdenticalDescriptorsAreDeduplicated) {
   auto Image = load(F);
   ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
   EXPECT_EQ(Image->Imports.size(), 1u);
-  EXPECT_TRUE(Image->LoadDiagnostics.empty());
+  // Browsing deduplicates the identity, but repeated writes to its IAT slot
+  // cannot establish the separate header-initialization contract.
+  ASSERT_EQ(Image->LoadDiagnostics.size(), 1u);
+  EXPECT_EQ(Image->LoadDiagnostics[0].Code, "pe.headers_unmapped");
+  EXPECT_EQ(Image->readVA(F.Base, 1), nullptr);
 }
 
 TEST(PEBrowseCompatibility, DataAndUnmappedEntriesAreUnknown) {
@@ -418,8 +434,9 @@ TEST(PEBrowseCompatibility, IncompleteDelayDirectoriesDoNotUnderflow) {
     F.directory(DELAY_IMPORT_DESCRIPTOR, 0x2040, Size);
     auto Image = load(F);
     ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
-    ASSERT_EQ(Image->LoadDiagnostics.size(), 1u);
-    EXPECT_EQ(Image->LoadDiagnostics[0].Code,
+    ASSERT_EQ(Image->LoadDiagnostics.size(), 2u);
+    EXPECT_EQ(Image->LoadDiagnostics[0].Code, "pe.headers_unmapped");
+    EXPECT_EQ(Image->LoadDiagnostics[1].Code,
               "pe.delay_import_directory_invalid");
   }
 }
@@ -453,8 +470,10 @@ TEST(PEBrowseCompatibility, CAPIDiagnosticsDescribeOnlyTheLoadedImage) {
       llvm::json::parse(owned(neverd_session_load_diagnostics_json(Session)));
   ASSERT_TRUE(static_cast<bool>(JSON)) << llvm::toString(JSON.takeError());
   ASSERT_NE(JSON->getAsArray(), nullptr);
-  ASSERT_EQ(JSON->getAsArray()->size(), 1u);
+  ASSERT_EQ(JSON->getAsArray()->size(), 2u);
   EXPECT_EQ(JSON->getAsArray()->front().getAsObject()->getString("code"),
+            std::optional<llvm::StringRef>("pe.headers_unmapped"));
+  EXPECT_EQ(JSON->getAsArray()->back().getAsObject()->getString("code"),
             std::optional<llvm::StringRef>("pe.import_descriptor_invalid"));
   Fixture Good;
   InputFile Clean(Good.Bytes);

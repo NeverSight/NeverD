@@ -16,12 +16,16 @@ on:
       - 'third_party/oneTBB'
       - 'third_party/mimalloc'
       - 'cmake/NeverDMimalloc.cmake'
+      - 'cmake/NeverDGoogleTest.cmake'
       - 'scripts/build.py'
       - 'scripts/fork_dependencies.py'
       - 'scripts/tests/test_fork_dependencies.py'
       - 'include/neverd/support/ByteScan.h'
+      - 'include/neverd/support/SortedSearch.h'
+      - 'include/neverd/support/Limits.h'
       - 'include/neverd/support/Parallel.h'
       - 'lib/support/ByteScan.cpp'
+      - 'lib/support/SortedSearch.cpp'
       - 'lib/support/Unicode.cpp'
       - 'lib/support/Parallel.cpp'
       - 'tools/common/transport/**'
@@ -39,12 +43,16 @@ on:
       - 'third_party/oneTBB'
       - 'third_party/mimalloc'
       - 'cmake/NeverDMimalloc.cmake'
+      - 'cmake/NeverDGoogleTest.cmake'
       - 'scripts/build.py'
       - 'scripts/fork_dependencies.py'
       - 'scripts/tests/test_fork_dependencies.py'
       - 'include/neverd/support/ByteScan.h'
+      - 'include/neverd/support/SortedSearch.h'
+      - 'include/neverd/support/Limits.h'
       - 'include/neverd/support/Parallel.h'
       - 'lib/support/ByteScan.cpp'
+      - 'lib/support/SortedSearch.cpp'
       - 'lib/support/Unicode.cpp'
       - 'lib/support/Parallel.cpp'
       - 'tools/common/transport/**'
@@ -67,7 +75,10 @@ jobs:
       matrix:
         include:
           - {name: Linux x64, runner: ubuntu-24.04, cc: clang, cxx: clang++, arch: x64}
+          - {name: Linux x64 GCC, runner: ubuntu-24.04, cc: gcc, cxx: g++, arch: x64}
+          - {name: Linux ARM64, runner: ubuntu-24.04-arm, cc: clang, cxx: clang++, arch: arm64}
           - {name: macOS arm64, runner: macos-15, cc: clang, cxx: clang++, arch: arm64}
+          - {name: macOS x64, runner: macos-15-intel, cc: clang, cxx: clang++, arch: x64}
           - {name: Windows x64 MSVC, runner: windows-2025-vs2026, cc: cl, cxx: cl, arch: x64}
           - {name: Windows x64 clang-cl, runner: windows-2025-vs2026, cc: clang-cl, cxx: clang-cl, arch: x64}
           - {name: Windows ARM64, runner: windows-11-arm, cc: cl, cxx: cl, arch: arm64}
@@ -114,12 +125,16 @@ jobs:
               cmake -S unittests/acceleration -B "$build" -G Ninja \
                 -DCMAKE_BUILD_TYPE="$profile" -DNEVERD_TEST_EXPECT_MIMALLOC=ON \
                 "${options[@]}"
-              python scripts/build.py "$build" --parallel 3
+              python scripts/build.py "$build" --target all neverd-sorted-search-bench --parallel 3
               python unittests/acceleration/verify.py "$build/bin/NeverDAccelerationTests$suffix" "$build/evidence"
+              runtimes=0
+              if [ "$mode" = ON ]; then runtimes=1; fi
+              python unittests/acceleration/verify.py "$build/bin/NeverDSharedSchedulerTests$suffix" "$build/evidence/shared-scheduler" --minimum 2 --tbb-runtimes "$runtimes"
               cmake --install "$build" --prefix "$build/installed"
               python unittests/acceleration/verify.py "$build/installed/bin/NeverDAccelerationTests$suffix" "$build/installed-evidence"
-              if find "$build/installed" -iname '*tbbmalloc*' | grep -q .; then
-                echo 'Unexpected oneTBB allocator in installation' >&2
+              python unittests/acceleration/verify.py "$build/installed/bin/NeverDSharedSchedulerTests$suffix" "$build/installed-evidence/shared-scheduler" --minimum 2 --tbb-runtimes "$runtimes"
+              if find "$build/installed" -type f \( -iname '*tbb*.dll' -o -iname '*tbb*.so*' -o -iname '*tbb*.dylib' \) | grep -q .; then
+                echo 'Unexpected oneTBB shared runtime in installation' >&2
                 exit 1
               fi
             done
@@ -163,6 +178,7 @@ jobs:
             -DNEVERD_ENABLE_MIMALLOC=OFF -DNEVERD_TEST_EXPECT_MIMALLOC=OFF
           python scripts/build.py build-accel-system --parallel 3
           python unittests/acceleration/verify.py "build-accel-system/bin/NeverDAccelerationTests$suffix" build-accel-system/evidence
+          python unittests/acceleration/verify.py "build-accel-system/bin/NeverDSharedSchedulerTests$suffix" build-accel-system/evidence/shared-scheduler --minimum 2 --tbb-runtimes 1
           if [ "$RUNNER_OS" != Windows ]; then
             cmake -S unittests/acceleration -B build-accel-asan -G Ninja \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNEVERD_ENABLE_TBB=ON \
@@ -171,6 +187,7 @@ jobs:
               -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'
             python scripts/build.py build-accel-asan --parallel 3
             python unittests/acceleration/verify.py build-accel-asan/bin/NeverDAccelerationTests build-accel-asan/evidence
+            python unittests/acceleration/verify.py build-accel-asan/bin/NeverDSharedSchedulerTests build-accel-asan/evidence/shared-scheduler --minimum 2 --tbb-runtimes 1
           fi
       - name: Verify macOS allocator minimum size and libffi compatibility
         if: runner.os == 'macOS'

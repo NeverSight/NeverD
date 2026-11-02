@@ -94,7 +94,7 @@ Fixture makeFixture(unsigned FillerBlocks, const std::string &Variant) {
   if (Kind == "full")
     W.put({0x45, 0x31, 0xdb}); // xor r11d, r11d
   size_t CallSlot = 0;
-  if (Kind == "call") {
+  if (Kind.starts_with("call")) {
     W.put({0xe8});
     CallSlot = W.u32(0);
   }
@@ -125,7 +125,25 @@ Fixture makeFixture(unsigned FillerBlocks, const std::string &Variant) {
   W.branch(DefaultBranch, Default);
   const size_t FunctionEnd = W.Code.size();
   const size_t Helper = W.Code.size();
+  size_t NestedCall = 0;
+  if (Kind == "call")
+    W.put({0x41, 0xb3, 0x01}); // an actual partial write to the table base
+  if (Kind == "call-unknown")
+    W.put({0xff, 0xd0}); // an opaque callee may change the base
+  if (Kind == "call-transitive" || Kind == "call-transitive-clobber") {
+    W.put({0xe8});
+    NestedCall = W.u32(0);
+  }
   W.put({0xc3, 0xcc, 0xcc, 0xcc});
+  const size_t HelperEnd = W.Code.size();
+  const size_t Leaf = W.Code.size();
+  if (NestedCall) {
+    W.branch(NestedCall, Leaf);
+    if (Kind == "call-transitive-clobber")
+      W.put({0x45, 0x31, 0xdb}); // xor r11d,r11d, including the high half
+    W.put({0x31, 0xc0, 0xc3});   // modifies only the result and flags
+  }
+  const size_t LeafEnd = W.Code.size();
   if (CallSlot)
     W.branch(CallSlot, Helper);
   const size_t Table = W.Code.size();
@@ -158,9 +176,13 @@ Fixture makeFixture(unsigned FillerBlocks, const std::string &Variant) {
   Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Image.Sections.push_back(std::move(Sec));
   Image.Symbols.push_back(Symbol::makeFunc(Entry, FunctionEnd));
-  Image.Symbols.push_back(Symbol::makeFunc(Entry + Helper, 1));
+  Image.Symbols.push_back(Symbol::makeFunc(Entry + Helper, HelperEnd - Helper));
   Image.KnownCodeRanges.emplace_back(Entry, Entry + FunctionEnd);
-  Image.KnownCodeRanges.emplace_back(Entry + Helper, Entry + Helper + 1);
+  Image.KnownCodeRanges.emplace_back(Entry + Helper, Entry + HelperEnd);
+  if (NestedCall) {
+    Image.Symbols.push_back(Symbol::makeFunc(Entry + Leaf, LeafEnd - Leaf));
+    Image.KnownCodeRanges.emplace_back(Entry + Leaf, Entry + LeafEnd);
+  }
   Image.Symbols.front().Name = "table_base_fixture";
   return {std::move(Image), std::move(Targets), Branch};
 }
@@ -169,7 +191,7 @@ LowFunc recover(const Fixture &F, std::optional<size_t> Budget = std::nullopt) {
   Decoder D;
   EXPECT_TRUE(D.init(F.Image.Arch, F.Image.Mode));
   CFGBuilder Builder;
-  const std::set<va_t> Entries{Entry, F.Image.Symbols.back().Addr};
+  std::set<va_t> Entries{Entry};
   Builder.setKnownFuncEntries(&Entries);
   if (Budget)
     Builder.setMaskFixedPointEvidenceBudgetForTesting(*Budget);
@@ -196,12 +218,26 @@ TEST(COFFTableBase, UsesControlFlowInsteadOfLexicalDistance) {
 
 TEST(COFFTableBase, RejectsConflictingOrNonAddressDefinitions) {
   for (const std::string Variant :
-       {"divergent", "partial", "full", "call", "postload", "scalar"})
+       {"divergent", "partial", "full", "call", "call-unknown",
+        "call-transitive-clobber", "postload", "scalar"})
     for (bool Composite : {false, true}) {
       const std::string Kind = Composite ? "composite-" + Variant : Variant;
       SCOPED_TRACE(Kind);
       const auto F = makeFixture(32, Kind);
       EXPECT_TRUE(recover(F).JumpTables.empty());
+    }
+}
+
+TEST(COFFTableBase, DecodedCallTreeKeepsUntouchedVolatileBase) {
+  for (const std::string Variant : {"call-preserved", "call-transitive"})
+    for (bool Composite : {false, true}) {
+      const std::string Kind = Composite ? "composite-" + Variant : Variant;
+      SCOPED_TRACE(Kind);
+      const auto F = makeFixture(32, Kind);
+      expectExact(F, recover(F));
+      // An exhausted proof cannot borrow the facts of a previous build.
+      EXPECT_TRUE(recover(F, size_t{0}).JumpTables.empty());
+      expectExact(F, recover(F));
     }
 }
 

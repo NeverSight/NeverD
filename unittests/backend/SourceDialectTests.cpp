@@ -11,6 +11,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/dialect/SourceDialect.h"
 #include "neverd/loader/SymbolSpelling.h"
+#include "neverd/types/HeaderLibrary.h"
 #include "neverd/types/TypeLayout.h"
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
@@ -89,6 +90,23 @@ TEST(SourceDialect, CxxUsesQualifiedNamesAndExactLibraryAliases) {
   EXPECT_EQ(
       readableCxxTypeName("ATL::CStringT<wchar_t, ATL::StrTraitATL<wchar_t>>"),
       "ATL::CStringT<wchar_t, ATL::StrTraitATL<wchar_t>>");
+}
+
+TEST(SourceDialect, ReturnProtectionRemainsVisibleInEveryDialect) {
+  const char *C =
+      "__attribute__((target(\"branch-protection=pac-ret+leaf+b-key\")))\n"
+      "int protected_return(void) { return 7; }\n";
+  for (SourceDialect Dialect :
+       {SourceDialect::Cpp, SourceDialect::Rust, SourceDialect::Go}) {
+    const auto Text = spell(C, Dialect);
+    EXPECT_TRUE(Text.Unread.empty());
+    EXPECT_NE(Text.Text.find("branch-protection=pac-ret+leaf+b-key"),
+              std::string::npos)
+        << Text.Text;
+    EXPECT_EQ(Text.Text.find("target_feature(enable = \"branch-protection"),
+              std::string::npos)
+        << Text.Text;
+  }
 }
 
 TEST(SourceDialect, CxxOverloadsShareTheirName) {
@@ -171,6 +189,243 @@ TEST(SourceDialect, ReadsTheDeclarationsHighCWrites) {
         << Text.Text;
   }
   EXPECT_EQ(tokens(spell(C, SourceDialect::C).Text), tokens(C));
+}
+
+TEST(SourceDialect, ReadsPrototypeIntegerIdentityTypes) {
+  // Dump's std::filebuf::overflow uses the portable spelling of unsigned long
+  // for fwrite's result. Keep both its width and the keyword type's identity.
+  const char *C = R"(
+int32_t overflow(void) {
+    __typeof__(__builtin_choose_expr(sizeof(unsigned long) == 8, (unsigned long)0, (uint64_t)0)) v18 = 1;
+    __typeof__(__builtin_choose_expr(sizeof(long) == 4, (long)0, (int32_t)0)) narrow = -1;
+    __typeof__(__builtin_choose_expr(sizeof(long long) == 8, (long long)0, (int64_t)0)) wide = -1;
+    __typeof__(__builtin_choose_expr(sizeof(unsigned long long) == 8, (unsigned long long)0, (uint64_t)0)) other = 2;
+    return (int32_t)(v18 + narrow + wide + other);
+}
+)";
+  for (Arch A : {Arch::X86, Arch::ARM, Arch::X64, Arch::AArch64})
+    for (BinaryFormat F :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (SourceDialect D : {SourceDialect::C, SourceDialect::Cpp,
+                              SourceDialect::Rust, SourceDialect::Go}) {
+        SCOPED_TRACE(sourceDialectKey(D).str());
+        SourceDialectOptions Options;
+        Options.Dialect = D;
+        Options.TheArch = A;
+        Options.Format = F;
+        const auto Text = spellInDialect(C, Options);
+        ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+        EXPECT_EQ(Text.Text.find("shown as C"), std::string::npos);
+        if (D == SourceDialect::C)
+          EXPECT_EQ(tokens(Text.Text), tokens(C));
+        else if (D == SourceDialect::Rust) {
+          EXPECT_NE(Text.Text.find("v18: u64"), std::string::npos) << Text.Text;
+          EXPECT_NE(Text.Text.find("narrow: i32"), std::string::npos)
+              << Text.Text;
+          EXPECT_NE(Text.Text.find("wide: i64"), std::string::npos)
+              << Text.Text;
+          EXPECT_NE(Text.Text.find("other: u64"), std::string::npos)
+              << Text.Text;
+        } else if (D == SourceDialect::Go) {
+          EXPECT_NE(Text.Text.find("v18 uint64"), std::string::npos)
+              << Text.Text;
+          EXPECT_NE(Text.Text.find("narrow int32"), std::string::npos)
+              << Text.Text;
+          EXPECT_NE(Text.Text.find("wide int64"), std::string::npos)
+              << Text.Text;
+          EXPECT_NE(Text.Text.find("other uint64"), std::string::npos)
+              << Text.Text;
+        }
+      }
+}
+
+TEST(SourceDialect, DoesNotGuessUnknownTypeofExpressions) {
+  for (llvm::StringRef Type :
+       {"__typeof__(unknown())",
+        "__typeof__(__builtin_choose_expr(unknown(), (long)0, (int32_t)0))",
+        "__typeof__(__builtin_choose_expr(sizeof(long) == 8, (long)0, "
+        "unknown()))"}) {
+    const std::string C = ("void f(void) { " + Type + " v18; }\n").str();
+    const auto Text = spell(C, SourceDialect::Cpp);
+    EXPECT_FALSE(Text.Unread.empty()) << Text.Text;
+    EXPECT_NE(Text.Text.find("shown as C"), std::string::npos) << Text.Text;
+    EXPECT_NE(Text.Text.find(C), std::string::npos) << Text.Text;
+  }
+}
+
+TEST(SourceDialect, ReadsTargetHeaderTypesWithoutPrintingTheirDefinitions) {
+  const char *C = R"C(
+clock_t ticks(clock_t value) { return value + 1; }
+off_t offset(off_t value) { return value; }
+locale_t locale(locale_t value) { return value; }
+pthread_t thread(pthread_t value) { return value; }
+pid_t process(pid_t value) { return value; }
+wint_t wide(wint_t value) { return value; }
+void lock(pthread_mutex_t *mutex, pthread_cond_t *condition, mbstate_t *state) {}
+char *decimal(struct lconv *value) { return value->decimal_point; }
+static_assert(offsetof(struct timespec, tv_nsec) >= 0, "timespec.tv_nsec");
+)C";
+  struct Target {
+    types::HeaderLibrary Header;
+    Arch TheArch;
+    BinaryFormat Format;
+  };
+  for (const Target &Target :
+       {Target{types::HeaderLibrary::AndroidARM64, Arch::AArch64,
+               BinaryFormat::ELF},
+        Target{types::HeaderLibrary::AndroidARM, Arch::ARM, BinaryFormat::ELF},
+        Target{types::HeaderLibrary::LinuxX64, Arch::X64, BinaryFormat::ELF},
+        Target{types::HeaderLibrary::MacOSARM64, Arch::AArch64,
+               BinaryFormat::MachO}}) {
+    SCOPED_TRACE(types::headerLibraryName(Target.Header).str());
+    SourceDialectOptions Options;
+    Options.Types = types::headerLibrary(Target.Header);
+    ASSERT_NE(Options.Types, nullptr);
+    Options.TheArch = Target.TheArch;
+    Options.Format = Target.Format;
+    for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp}) {
+      Options.Dialect = Dialect;
+      const auto Text = spellInDialect(C, Options);
+      ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+      EXPECT_EQ(tokens(Text.Text), tokens(C));
+    }
+  }
+  SourceDialectOptions Windows;
+  Windows.Types = types::headerLibrary(types::HeaderLibrary::WindowsUserX64);
+  ASSERT_NE(Windows.Types, nullptr);
+  Windows.Format = BinaryFormat::COFF;
+  Windows.Dialect = SourceDialect::Cpp;
+  const auto View = spellInDialect(
+      "DWORD active(HANDLE value) { return value != 0; }", Windows);
+  EXPECT_TRUE(View.Unread.empty()) << View.Text;
+}
+
+TEST(SourceDialect, EmittedDefinitionsOverrideTargetHeaderTypes) {
+  types::TypeLibrary Library(types::DataModel::LP64);
+  types::ParseOptions Parse;
+  Parse.Origin = types::TypeOrigin::Header;
+  ASSERT_TRUE(
+      types::parseCTypes("struct Record { uint64_t value; };", Library, Parse)
+          .ok());
+  const char *C =
+      "struct Record { int16_t value; };\n"
+      "int16_t get(struct Record *record) { return record->value; }\n";
+  for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp,
+                                SourceDialect::Rust, SourceDialect::Go}) {
+    SourceDialectOptions Options;
+    Options.Types = &Library;
+    Options.Dialect = Dialect;
+    const auto Text = spellInDialect(C, Options);
+    ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+    if (Dialect == SourceDialect::C || Dialect == SourceDialect::Cpp)
+      EXPECT_EQ(tokens(Text.Text), tokens(C));
+    else
+      EXPECT_NE(Text.Text.find(Dialect == SourceDialect::Rust ? "value: i16"
+                                                              : "value int16"),
+                std::string::npos)
+          << Text.Text;
+  }
+  // A program's matching header type has its original debug origin. The
+  // emitter's proof, rather than that origin alone, supplies its declaration.
+  auto Type = *Library.find("Record");
+  Type.Origin = types::TypeOrigin::DWARF;
+  Library.define(std::move(Type));
+  SourceDialectOptions Options;
+  Options.Types = &Library;
+  Options.Dialect = SourceDialect::Cpp;
+  std::vector<std::string> Headers = {"Record"};
+  Options.HeaderTypes = Headers;
+  EXPECT_TRUE(
+      spellInDialect("uint64_t get(struct Record *p) { return p->value; }",
+                     Options)
+          .Unread.empty());
+}
+
+TEST(SourceDialect, ReadsUnevaluatedMemberTypeofCasts) {
+  const char *C = R"C(
+struct Record { uint16_t narrow; void *pointer; int32_t (*callback)(int32_t); };
+void store(struct Record *record, uintptr_t address, int64_t value) {
+    record->narrow = (__typeof__(record->narrow))(value);
+    record->pointer = (__typeof__(record->pointer))(address);
+    record->callback = (__typeof__(record->callback))(address);
+}
+)C";
+  for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp,
+                                SourceDialect::Rust, SourceDialect::Go}) {
+    const auto Text = spell(C, Dialect);
+    ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+    if (Dialect == SourceDialect::C || Dialect == SourceDialect::Cpp)
+      EXPECT_EQ(tokens(Text.Text), tokens(C));
+  }
+  for (const char *Query : {"unknown", "record->bits", "(record->bits)"}) {
+    const std::string Bad =
+        std::string("struct Record { unsigned bits : 1; }; void f(struct "
+                    "Record *record) { int value = (__typeof__(") +
+        Query + "))(0); }";
+    EXPECT_FALSE(spell(Bad, SourceDialect::Cpp).Unread.empty()) << Bad;
+  }
+}
+
+TEST(SourceDialect, ReadsAnonymousRecordCompoundLiterals) {
+  for (const char *C : {R"C(
+uint64_t bits(double value) {
+    return ((union { double value; uint64_t bits; }){ .value = value }).bits;
+}
+)C",
+                        R"C(
+unsigned __int128 bits(void) {
+    register int64_t __attribute__((vector_size(16))) vector __asm__("v17");
+    return ((union { unsigned __int128 Bits; int64_t Vector __attribute__((vector_size(16))); }){ .Vector = vector }).Bits;
+}
+)C"})
+    for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp}) {
+      const auto Text = spell(C, Dialect);
+      ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+      if (Dialect == SourceDialect::C)
+        EXPECT_EQ(tokens(Text.Text), tokens(C));
+      else
+        EXPECT_NE(Text.Text.find("decltype([] { union {"), std::string::npos)
+            << Text.Text;
+    }
+}
+
+TEST(SourceDialect, ReadsLLVMScalarTypeSpellings) {
+  const char *C = R"C(
+_Float16 half(_Float16 value) { return value; }
+__bf16 brain(__bf16 value) { return value; }
+__uint128_t wide(__uint128_t value) { return value; }
+__int128_t signed_wide(__int128_t value) { return value; }
+)C";
+  for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp}) {
+    const auto Text = spell(C, Dialect);
+    ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+    EXPECT_EQ(tokens(Text.Text), tokens(C));
+  }
+}
+
+TEST(SourceDialect, ReadsAutoTypeFromItsInitializer) {
+  const char *C = R"C(
+uint64_t copy(uint32_t value) {
+    __auto_type old = (uint64_t)value;
+    __auto_type address = &old;
+    return *address;
+}
+)C";
+  for (SourceDialect Dialect : {SourceDialect::C, SourceDialect::Cpp,
+                                SourceDialect::Rust, SourceDialect::Go}) {
+    const auto Text = spell(C, Dialect);
+    ASSERT_TRUE(Text.Unread.empty()) << Text.Text;
+    if (Dialect == SourceDialect::C || Dialect == SourceDialect::Cpp)
+      EXPECT_EQ(tokens(Text.Text), tokens(C));
+    else
+      EXPECT_NE(Text.Text.find(Dialect == SourceDialect::Rust ? "old: u64"
+                                                              : "old uint64"),
+                std::string::npos)
+          << Text.Text;
+  }
+  for (const char *Bad : {"void f(void) { __auto_type value; }",
+                          "void f(void) { __auto_type value = unknown(); }"})
+    EXPECT_FALSE(spell(Bad, SourceDialect::Cpp).Unread.empty()) << Bad;
 }
 
 TEST(SourceDialect, CxxSymbolsAreValidatedAndKeepOperatorsAndTemplates) {
@@ -710,6 +965,14 @@ int32_t byte_range(uint8_t a) {
 int64_t cast_chain(int32_t x) {
     return (int64_t)(uint32_t)((int32_t)x) + (int64_t)(int16_t)x;
 }
+
+int32_t typeof_once(int64_t value) {
+    uint16_t narrow = 0;
+    uint16_t *cursor = &narrow;
+    narrow = (__typeof__(*(cursor++)))(value);
+    if (cursor != &narrow) { return -100000; }
+    return narrow;
+}
 )C";
 
 /// The C side's checks: one line per call.
@@ -749,6 +1012,7 @@ int main(void) {
     printf("%lld\n", (long long)multiply_high(0xFFFFFFFFFFFFFFFFull, 3));
     printf("%lld\n", (long long)byte_range(255));
     printf("%lld\n", (long long)cast_chain(-70000));
+    printf("%lld\n", (long long)typeof_once(65537));
     return 0;
 }
 )C";
@@ -791,6 +1055,7 @@ fn main() {
         println!("{}", multiply_high(0xFFFFFFFFFFFFFFFF, 3) as i64);
         println!("{}", byte_range(255) as i64);
         println!("{}", cast_chain(-70000) as i64);
+        println!("{}", typeof_once(65537) as i64);
     }
 }
 )RS";
@@ -1061,6 +1326,37 @@ int main(void) {
     auto Result = run(Binary, {}, Dir);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
   }
+  llvm::sys::fs::remove_directories(Dir);
+}
+
+TEST(SourceDialect, CxxAnonymousRecordsCompileAndKeepTheirBits) {
+  const char *Source = R"C(#include <stdint.h>
+uint32_t calls;
+uint64_t bits(double value) {
+    return ((union { double value; uint64_t bits; }){ .value = (calls++, value) }).bits;
+}
+int main(void) { return bits(1.0) != 0x3FF0000000000000ULL || calls != 1; }
+)C";
+  const auto Cpp = spell(Source, SourceDialect::Cpp);
+  ASSERT_TRUE(Cpp.Unread.empty()) << Cpp.Text;
+  const std::string Clang = NEVERD_TEST_CLANG;
+  if (Clang.empty())
+    GTEST_SKIP() << "no clang: the anonymous record's C++ view is not executed";
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-anonymous", Dir));
+  llvm::SmallString<128> File(Dir), Binary(Dir);
+  llvm::sys::path::append(File, "source.cpp");
+  llvm::sys::path::append(Binary, "cpp.out");
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream OS(File, EC);
+    ASSERT_FALSE(EC);
+    OS << Cpp.Text;
+  }
+  auto Built = run(Clang, {"-std=gnu++20", "-O1", File, "-o", Binary}, Dir);
+  ASSERT_TRUE(bool(Built)) << llvm::toString(Built.takeError()) << Cpp.Text;
+  auto Result = run(Binary, {}, Dir);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError()) << Cpp.Text;
   llvm::sys::fs::remove_directories(Dir);
 }
 
@@ -1516,7 +1812,7 @@ TEST(SourceDialect, RustViewComputesWhatCComputes) {
   auto RustResult = run(RustBinary, {}, Dir);
   ASSERT_TRUE(bool(CResult)) << llvm::toString(CResult.takeError());
   ASSERT_TRUE(bool(RustResult)) << llvm::toString(RustResult.takeError());
-  EXPECT_EQ(std::count(CResult->begin(), CResult->end(), '\n'), 32);
+  EXPECT_EQ(std::count(CResult->begin(), CResult->end(), '\n'), 33);
   // C's Windows text-mode stdout uses CRLF; Rust's stdout writes LF. Keep
   // the scalar results exact while comparing the same logical line endings.
   EXPECT_EQ(normalizeLineEndings(*RustResult), normalizeLineEndings(*CResult))
@@ -1852,6 +2148,13 @@ int32_t loop_sum(int32_t n) {
     return s;
 }
 int64_t through_copy(int64_t v) { return *&(int64_t){v + 1} + v; }
+int32_t typeof_once(int64_t value) {
+    uint16_t narrow = 0;
+    uint16_t *cursor = &narrow;
+    narrow = (__typeof__(*(cursor++)))(value);
+    if (cursor != &narrow) { return -100000; }
+    return narrow;
+}
 )C";
   const char *Calls[] = {"promote(200, 100)",
                          "promote(255, 255)",
@@ -1865,7 +2168,8 @@ int64_t through_copy(int64_t v) { return *&(int64_t){v + 1} + v; }
                          "loop_sum(1)",
                          "loop_sum(8)",
                          "loop_sum(100)",
-                         "through_copy(20)"};
+                         "through_copy(20)",
+                         "typeof_once(65537)"};
   SourceDialectText Go = spell(C, SourceDialect::Go);
   ASSERT_TRUE(Go.Unread.empty()) << Go.Text;
   std::string CSource =
@@ -1907,7 +2211,7 @@ int64_t through_copy(int64_t v) { return *&(int64_t){v + 1} + v; }
   ASSERT_TRUE(bool(CResult)) << llvm::toString(CResult.takeError());
   ASSERT_TRUE(bool(GoResult)) << llvm::toString(GoResult.takeError());
   EXPECT_EQ(normalizeLineEndings(*CResult),
-            "300\n510\n44\n254\n0\n1\n-128\n128\n0\n1\n36\n5050\n41\n");
+            "300\n510\n44\n254\n0\n1\n-128\n128\n0\n1\n36\n5050\n41\n1\n");
   EXPECT_EQ(normalizeLineEndings(*GoResult), normalizeLineEndings(*CResult))
       << Go.Text;
   llvm::sys::fs::remove_directories(Dir);

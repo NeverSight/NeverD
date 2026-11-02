@@ -11,10 +11,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/lift/ARMLifter.h"
-
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -32,7 +31,7 @@ namespace neverd {
 // ===----------------------------------------------------------------------===//
 
 NdVar ARMLifter::emitImmShift(LiftState &S, NdVar Val, unsigned ShType,
-                                unsigned ShVal) {
+                              unsigned ShVal) {
   switch (ShType) {
   case ARM_SFT_LSL: {
     NdVar R = S.makeTemp(4);
@@ -62,7 +61,7 @@ NdVar ARMLifter::emitImmShift(LiftState &S, NdVar Val, unsigned ShType,
     // RRX = (Val >> 1) | (C << 31): rotate right through carry by one.  Was
     // dropped entirely (the operand passed through unshifted / as INT_LEFT).
     NdVar Lo = S.makeTemp(4), C32 = S.makeTemp(4), Hi = S.makeTemp(4),
-            R = S.makeTemp(4);
+          R = S.makeTemp(4);
     S.emit(NdOp::INT_RIGHT, Lo, {Val, NdVar::cst(1, 4)});
     S.emit(NdOp::INT_ZEXT, C32, {NdVar::reg(armreg::CFLAG, 1)});
     S.emit(NdOp::INT_LEFT, Hi, {C32, NdVar::cst(31, 4)});

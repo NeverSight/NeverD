@@ -1,10 +1,22 @@
+//===- AArch64_MemTests.cpp - Native memory pipeline checks --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Check AArch64 memory operands and ordering through the public pipeline.
+//===----------------------------------------------------------------------===//
+
 #include "NeverDLiftFixture.h"
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 
 using namespace neverd;
 
@@ -129,9 +141,30 @@ TEST_F(AArch64_Mem, LdaprHighCUsesAcquireAtomicLoadAndCompiles) {
   expectPairedClangSyntax(cFile, source);
 }
 
-TEST_F(AArch64_Mem, LdapurAndStllrKeepArchitecturalOrdering) {
+TEST_F(AArch64_Mem, LdapurRetainsRCpcWordsAndStllrKeepsReleaseOrdering) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;
+
+  // Independent encodings from test_mem_a64.c, with scratch Rn=x16/Rt=x17.
+  // LDAPUR's checked address and RCpc ordering cannot become a generic load.
+  const struct {
+    const char *Name;
+    uint32_t Word;
+  } Loads[] = {
+      {"test_ldapur_a64", 0xd9408211U},   {"test_ldapurb_a64", 0x19401211U},
+      {"test_ldapurh_a64", 0x59402211U},  {"test_ldapursb_a64", 0x199ff211U},
+      {"test_ldapursh_a64", 0x599fe211U}, {"test_ldapursw_a64", 0x999fc211U}};
+  for (const auto &Case : Loads) {
+    SCOPED_TRACE(Case.Name);
+    const auto F = functionIR(r.out, Case.Name);
+    ASSERT_FALSE(F.empty()) << r.out;
+    EXPECT_NE(F.find("asm sideeffect \".inst"), std::string::npos) << F;
+    EXPECT_NE(F.find("~{memory}"), std::string::npos) << F;
+    EXPECT_NE(F.find("i32 " + std::to_string(static_cast<int32_t>(Case.Word))),
+              std::string::npos)
+        << F;
+    EXPECT_EQ(F.find("load atomic"), std::string::npos) << F;
+  }
 
   const struct {
     const char *Name;
@@ -139,12 +172,6 @@ TEST_F(AArch64_Mem, LdapurAndStllrKeepArchitecturalOrdering) {
     const char *Ordering;
     unsigned Align;
   } Cases[] = {
-      {"test_ldapur_a64", "load atomic i64", "acquire", 8},
-      {"test_ldapurb_a64", "load atomic i8", "acquire", 1},
-      {"test_ldapurh_a64", "load atomic i16", "acquire", 2},
-      {"test_ldapursb_a64", "load atomic i8", "acquire", 1},
-      {"test_ldapursh_a64", "load atomic i16", "acquire", 2},
-      {"test_ldapursw_a64", "load atomic i32", "acquire", 4},
       {"test_stllr_a64", "store atomic i64", "release", 8},
       {"test_stllrb_a64", "store atomic i8", "release", 1},
       {"test_stllrh_a64", "store atomic i16", "release", 2},
@@ -162,31 +189,30 @@ TEST_F(AArch64_Mem, LdapurAndStllrKeepArchitecturalOrdering) {
   }
 }
 
-TEST_F(AArch64_Mem, StlurKeepsReleaseOrderingAtEveryAccessWidth) {
+TEST_F(AArch64_Mem, StlurKeepsReleaseWordsAtEveryAccessWidth) {
   auto r = liftToLLVMIR(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;
 
   const struct {
     const char *Name;
-    const char *Type;
-    unsigned Align;
-  } Cases[] = {{"test_stlur_a64", "i64", 8},
-               {"test_stlurb_a64", "i8", 1},
-               {"test_stlurh_a64", "i16", 2}};
+    uint32_t Word;
+  } Cases[] = {{"test_stlur_a64", 0xd9000211U},
+               {"test_stlurb_a64", 0x19000211U},
+               {"test_stlurh_a64", 0x59000211U}};
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Name);
     auto F = functionIR(r.out, Case.Name);
     ASSERT_FALSE(F.empty()) << r.out;
-    EXPECT_NE(F.find(std::string("store atomic ") + Case.Type),
+    EXPECT_NE(F.find("asm sideeffect \".inst"), std::string::npos) << F;
+    EXPECT_NE(F.find("~{memory}"), std::string::npos) << F;
+    EXPECT_NE(F.find("i32 " + std::to_string(static_cast<int32_t>(Case.Word))),
               std::string::npos)
         << F;
-    EXPECT_NE(F.find("release, align " + std::to_string(Case.Align)),
-              std::string::npos)
-        << F;
+    EXPECT_EQ(F.find("store atomic"), std::string::npos) << F;
   }
 }
 
-TEST_F(AArch64_Mem, StlurHighCUsesReleaseAtomicStoreAndCompiles) {
+TEST_F(AArch64_Mem, StlurHighCRetainsReleaseWordsAndCompiles) {
   auto r = decompileToHighC(testObj());
   ASSERT_EQ(r.exitCode, 0) << r.err;
 
@@ -199,12 +225,20 @@ TEST_F(AArch64_Mem, StlurHighCUsesReleaseAtomicStoreAndCompiles) {
   EXPECT_NE(source.find("__atomic_store_n"), std::string::npos) << source;
   EXPECT_NE(source.find("__ATOMIC_RELEASE"), std::string::npos) << source;
 
-  for (const char *Name :
-       {"test_stlur_a64", "test_stlurb_a64", "test_stlurh_a64"}) {
-    SCOPED_TRACE(Name);
-    auto F = functionC(source, Name);
+  const struct {
+    const char *Name;
+    uint32_t Word;
+  } Cases[] = {{"test_stlur_a64", 0xd9000211U},
+               {"test_stlurb_a64", 0x19000211U},
+               {"test_stlurh_a64", 0x59000211U}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto F = functionC(source, Case.Name);
     ASSERT_FALSE(F.empty()) << source;
-    EXPECT_NE(F.find("neverd_mem_store_release_"), std::string::npos) << F;
+    EXPECT_NE(F.find("__asm__ volatile(\".inst"), std::string::npos) << F;
+    EXPECT_NE(F.find("\"memory\""), std::string::npos) << F;
+    EXPECT_NE(F.find(std::to_string(Case.Word)), std::string::npos) << F;
+    EXPECT_EQ(F.find("neverd_mem_store_release_"), std::string::npos) << F;
   }
 
   expectPairedClangSyntax(cFile, source);
@@ -318,42 +352,41 @@ TEST_F(AArch64_Mem, StlurImmediateUsesEncodedSourceBaseAndSignedOffset) {
                       [](const LowOp &Op) { return Op.Opcode == NdOp::LOAD; }),
         0u);
 
-    const auto Store =
-        std::find_if(Ops.begin(), Ops.end(),
-                     [](const LowOp &Op) { return Op.Opcode == NdOp::STORE; });
+    const auto Store = std::find_if(Ops.begin(), Ops.end(),
+                                    lowAArch64AddressMemoryShapeIsValid);
     ASSERT_NE(Store, Ops.end());
-    ASSERT_EQ(Store->NumInputs, 2);
-    EXPECT_EQ(Store->MemoryOrdering, NdMemoryOrdering::Release);
+    ASSERT_EQ(Store->NumInputs, kAddressStoreOperandCount + 1);
+    EXPECT_TRUE(isAArch64AddressStoreIntrinsic(
+        static_cast<Intrinsic>(Store->Inputs[0].Offset)));
+    EXPECT_EQ(Store->Output.Size, 0u);
+    EXPECT_EQ(Store->Inputs[kAddressMemoryWordOperand + 1].Offset,
+              readLE<uint32_t>(Case.Bytes.data()));
+    EXPECT_TRUE(Store->Inputs[kAddressMemoryIndexOperand + 1].isConst());
+    EXPECT_EQ(Store->Inputs[kAddressMemoryIndexOperand + 1].Offset, 0u);
+    EXPECT_EQ(std::count_if(Ops.begin(), Ops.end(),
+                            [](const LowOp &Op) {
+                              return Op.Opcode == NdOp::STORE ||
+                                     Op.Opcode == NdOp::INT_ADD;
+                            }),
+              0u);
 
     const NdVar Source =
         NdVar::reg(a64reg::X0 + Case.SourceIndex * 8, Case.SourceSize);
+    const NdVar Data = Store->Inputs[kAddressMemoryDataOperand + 1];
     if (Case.SourceSize == Case.AccessSize) {
-      EXPECT_EQ(Store->Inputs[1], Source);
+      EXPECT_EQ(Data, Source);
     } else {
       const auto Truncate =
           std::find_if(Ops.begin(), Store, [&](const LowOp &Op) {
-            return Op.Opcode == NdOp::SUBBYTES &&
-                   Op.Output == Store->Inputs[1] && Op.NumInputs == 2 &&
-                   Op.Inputs[0] == Source && Op.Inputs[1].isConst() &&
-                   Op.Inputs[1].Offset == 0;
+            return Op.Opcode == NdOp::SUBBYTES && Op.Output == Data &&
+                   Op.NumInputs == 2 && Op.Inputs[0] == Source &&
+                   Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0;
           });
       ASSERT_NE(Truncate, Store);
       EXPECT_EQ(Truncate->Output.Size, Case.AccessSize);
     }
 
     const NdVar Base = NdVar::reg(a64reg::X0 + Case.BaseIndex * 8, 8);
-    const auto BaseCopy =
-        std::find_if(Ops.begin(), Store, [&](const LowOp &Op) {
-          return Op.Opcode == NdOp::COPY && Op.Output == Store->Inputs[0] &&
-                 Op.NumInputs == 1 && Op.Inputs[0] == Base;
-        });
-    ASSERT_NE(BaseCopy, Store);
-    const auto Address = std::find_if(Ops.begin(), Store, [&](const LowOp &Op) {
-      return Op.Opcode == NdOp::INT_ADD && Op.Output == Store->Inputs[0] &&
-             Op.NumInputs == 2 && Op.Inputs[0] == Store->Inputs[0] &&
-             Op.Inputs[1].isConst() &&
-             Op.Inputs[1].Offset == static_cast<uint64_t>(Case.Offset);
-    });
-    ASSERT_NE(Address, Store);
+    EXPECT_EQ(Store->Inputs[kAddressMemoryBaseOperand + 1], Base);
   }
 }

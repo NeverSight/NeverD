@@ -28,7 +28,7 @@ struct SystemRegister {
 constexpr SystemRegister SystemRegisters[] = {
 #define NEVERD_A64_SYSREG(Name, Encoding, Readable, Writable)                  \
   {Name, Encoding, Readable, Writable},
-#include "neverd/ir/intrinsics/AArch64SystemOperands.def"
+#include "neverd/ir/intrinsics/AArch64/AArch64SystemOperands.def"
 };
 
 struct SystemAlias {
@@ -41,7 +41,7 @@ struct SystemAlias {
 constexpr SystemAlias SystemAliases[] = {
 #define NEVERD_A64_SYS_ALIAS(Mnemonic, Name, Encoding, TakesRegister)          \
   {Mnemonic, Name, Encoding, TakesRegister},
-#include "neverd/ir/intrinsics/AArch64SystemOperands.def"
+#include "neverd/ir/intrinsics/AArch64/AArch64SystemOperands.def"
 };
 
 struct PStateField {
@@ -55,7 +55,7 @@ struct PStateField {
 constexpr PStateField PStateFields[] = {
 #define NEVERD_A64_PSTATE(Name, Op1, Op2, CRmHigh, ImmediateBits)              \
   {Name, Op1, Op2, CRmHigh, ImmediateBits},
-#include "neverd/ir/intrinsics/AArch64SystemOperands.def"
+#include "neverd/ir/intrinsics/AArch64/AArch64SystemOperands.def"
 };
 
 /// The fields of an op0:op1:CRn:CRm:op2 encoding.
@@ -131,7 +131,7 @@ std::string armBarrierOptionText(uint64_t CRm) {
 #define ARM_BARRIER_OPTION(CRM, NAME)                                          \
   case CRM:                                                                    \
     return NAME;
-#include "neverd/ir/intrinsics/ARMBarrierOptions.def"
+#include "neverd/ir/intrinsics/ARM/ARMBarrierOptions.def"
   default:
     return "#" + hexImmediate(CRm);
   }
@@ -142,7 +142,7 @@ std::optional<uint64_t> armBarrierOptionValue(llvm::StringRef Text) {
 #define ARM_BARRIER_OPTION(CRM, NAME)                                          \
   if (Text.equals_insensitive(NAME))                                           \
     return CRM;
-#include "neverd/ir/intrinsics/ARMBarrierOptions.def"
+#include "neverd/ir/intrinsics/ARM/ARMBarrierOptions.def"
   uint64_t Value = 0;
   if (Text.consume_front("#") && !Text.getAsInteger(0, Value) && Value <= 0xF)
     return Value;

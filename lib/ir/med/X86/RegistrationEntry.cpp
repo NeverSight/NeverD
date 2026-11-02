@@ -9,7 +9,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationEntry.h"
+#include "neverd/ir/med/X86/X86RegistrationEntry.h"
 
 namespace neverd {
 namespace {

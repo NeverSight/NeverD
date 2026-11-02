@@ -1,0 +1,83 @@
+//===- AArch64SVECPAFixtures.def - Independent CPA witnesses --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// CASE(Word, Id, Dst, Count, PredicateInputs, First, Second, Third,
+///      EmittedWord) records independent assembler operands and expected
+/// scratch-register words. Constants are not derived from production tables.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SVE_CPA_CASE
+#define NEVERD_SVE_CPA_CASE(Word, Id, Dst, Count, Predicates, First, Second,   \
+                            Third, Emitted)
+#endif
+#ifndef NEVERD_SVE_CPA_FIXTURE
+#define NEVERD_SVE_CPA_FIXTURE(Type, Name, Value)
+#endif
+#ifndef NEVERD_SVE_CPA_SETUP
+#define NEVERD_SVE_CPA_SETUP(Word)
+#endif
+
+// Independent llvm-mc 22.1.6 output: two predicates and four local Z values.
+NEVERD_SVE_CPA_SETUP(0x25d8e040)
+NEVERD_SVE_CPA_SETUP(0x25d8e047)
+NEVERD_SVE_CPA_SETUP(0x04e24020)
+NEVERD_SVE_CPA_SETUP(0x04e340e1)
+NEVERD_SVE_CPA_SETUP(0x04e341a2)
+NEVERD_SVE_CPA_SETUP(0x04e5417f)
+
+NEVERD_SVE_CPA_CASE(0x04e20820, A64_SveAddpt, 0, 2, 0, 1, 2, 0, 0x04e10800)
+NEVERD_SVE_CPA_CASE(0x04e10fff, A64_SveSubpt, 31, 2, 0, 31, 1, 0, 0x04e10c00)
+NEVERD_SVE_CPA_CASE(0x04c41fff, A64_SveAddptPred, 31, 3, 1, 7, 31, 31,
+                    0x04c40020)
+NEVERD_SVE_CPA_CASE(0x04c50020, A64_SveSubptPred, 0, 3, 1, 0, 0, 1, 0x04c50020)
+NEVERD_SVE_CPA_CASE(0x44c1d840, A64_SveMadpt, 0, 3, 0, 0, 1, 2, 0x44c1d840)
+NEVERD_SVE_CPA_CASE(0x44c2d020, A64_SveMlapt, 0, 3, 0, 0, 1, 2, 0x44c2d020)
+NEVERD_SVE_CPA_CASE(0x04ff0bff, A64_SveAddpt, 31, 2, 0, 31, 31, 0, 0x04e10800)
+NEVERD_SVE_CPA_CASE(0x04ff0fff, A64_SveSubpt, 31, 2, 0, 31, 31, 0, 0x04e10c00)
+NEVERD_SVE_CPA_CASE(0x04c40000, A64_SveAddptPred, 0, 3, 1, 0, 0, 0, 0x04c40020)
+NEVERD_SVE_CPA_CASE(0x04c51fff, A64_SveSubptPred, 31, 3, 1, 7, 31, 31,
+                    0x04c50020)
+NEVERD_SVE_CPA_CASE(0x44dfdbff, A64_SveMadpt, 31, 3, 0, 31, 31, 31, 0x44c1d840)
+NEVERD_SVE_CPA_CASE(0x44dfd3ff, A64_SveMlapt, 31, 3, 0, 31, 31, 31, 0x44c2d020)
+
+// LLVM llvmorg-22.1.6 test/MC/AArch64/SVE/armv9.5a-cpa.s.
+NEVERD_SVE_CPA_CASE(0x04e809b7, A64_SveAddpt, 23, 2, 0, 13, 8, 0, 0x04e10800)
+NEVERD_SVE_CPA_CASE(0x04e80db7, A64_SveSubpt, 23, 2, 0, 13, 8, 0, 0x04e10c00)
+NEVERD_SVE_CPA_CASE(0x04c40db7, A64_SveAddptPred, 23, 3, 1, 3, 23, 13,
+                    0x04c40020)
+NEVERD_SVE_CPA_CASE(0x04c50db7, A64_SveSubptPred, 23, 3, 1, 3, 23, 13,
+                    0x04c50020)
+NEVERD_SVE_CPA_CASE(0x44c1dbe0, A64_SveMadpt, 0, 3, 0, 0, 1, 31, 0x44c1d840)
+NEVERD_SVE_CPA_CASE(0x44dfd020, A64_SveMlapt, 0, 3, 0, 0, 1, 31, 0x44c2d020)
+
+NEVERD_SVE_CPA_FIXTURE(unsigned, kCPAInitialId, 20)
+NEVERD_SVE_CPA_FIXTURE(unsigned, kCPAResultId, 30)
+NEVERD_SVE_CPA_FIXTURE(unsigned, kCPAInstructionIndex, 4)
+NEVERD_SVE_CPA_FIXTURE(unsigned, kCPAFormCount, 6)
+NEVERD_SVE_CPA_FIXTURE(unsigned, kCPANeonBytes, 16)
+NEVERD_SVE_CPA_FIXTURE(unsigned, kCPAMaximumRegister, 31)
+NEVERD_SVE_CPA_FIXTURE(uint32_t, kCPALastFirst, 0x05e1a000)
+NEVERD_SVE_CPA_FIXTURE(uint32_t, kCPALastFinal, 0x05e1a3e0)
+NEVERD_SVE_CPA_FIXTURE(uint32_t, kCPAReturn, 0xd65f03c0)
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAFunction, "sve_checked_vectors")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAAsmFormat, ".inst {0:x8}")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPABinaryConstraints, "={z0},0,{z1}")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAMergingConstraints,
+                       "={z0},{p0},0,{z1}")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAMultiplyConstraints,
+                       "={z0},0,{z1},{z2}")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAStandaloneSource,
+                       "#include <arm_sve.h>\nsvuint8_t f(svbool_t p, "
+                       "svuint8_t __sve_checked_pointer, svuint8_t b, "
+                       "svuint8_t c) {{ return {0}; }\n")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAFirstArg, "__sve_checked_pointer")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPASecondArg, "b")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAThirdArg, "c")
+NEVERD_SVE_CPA_FIXTURE(const char *, kCPAPredicateArg, "p")
+
+#undef NEVERD_SVE_CPA_CASE
+#undef NEVERD_SVE_CPA_FIXTURE
+#undef NEVERD_SVE_CPA_SETUP

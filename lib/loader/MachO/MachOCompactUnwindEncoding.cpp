@@ -293,12 +293,53 @@ bool decodeARMFrameDRegisters(uint32_t Encoding, CompactUnwindEntry &Entry) {
 
 } // namespace
 
+std::optional<uint32_t> getARM64EncodingPayloadMask(uint32_t Encoding) {
+  switch (Encoding & kModeMask) {
+#define NEVERD_COMPACT_ARM64_MODE(Name, Value, PayloadMask)                    \
+  case Name:                                                                   \
+    return PayloadMask;
+#include "neverd/loader/MachO/CompactUnwindARM64.def"
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<uint32_t> returnAddressSigningOffset(Arch TargetArch,
+                                                   uint32_t Encoding) {
+  if (TargetArch != Arch::AArch64 ||
+      (Encoding & kModeMask) != kARM64ModeFramePAuthLR)
+    return std::nullopt;
+  return ((Encoding & kARM64PAuthLROffsetMask) >> kARM64PAuthLROffsetShift) *
+         kARM64InstructionBytes;
+}
+
+bool isValidEncodingRange(Arch TargetArch, uint32_t Encoding,
+                          const ExceptionAddressRange &CodeRange) {
+  if (!CodeRange.isValid())
+    return false;
+  if (TargetArch != Arch::AArch64)
+    return true;
+  const auto PayloadMask = getARM64EncodingPayloadMask(Encoding);
+  constexpr uint32_t SharedFields =
+      kIsNotFunctionStart | kHasLSDA | kPersonalityMask | kModeMask;
+  if (!PayloadMask || (Encoding & ~(SharedFields | *PayloadMask)) != 0)
+    return false;
+  const auto Offset = returnAddressSigningOffset(TargetArch, Encoding);
+  if (!Offset)
+    return true;
+  // Subtracting the validated endpoints keeps both the offset and the whole
+  // signing instruction bounded without first forming a wrapping address.
+  return CodeRange.Begin % kARM64InstructionBytes == 0 &&
+         rangeInBounds(*Offset, kARM64InstructionBytes, CodeRange.size());
+}
+
 bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
                     CompactUnwindEntry &Entry) {
   Entry.Kind = CompactUnwindKind::Unknown;
   Entry.StackSize = 0;
   Entry.HasStackSize = false;
   Entry.DwarfFDEOffset = 0;
+  Entry.ReturnAddressSigningOffset.reset();
   Entry.FrameOffset = 0;
   Entry.StackAdjustment = 0;
   Entry.HasStackAdjustment = false;
@@ -364,15 +405,26 @@ bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
       Entry.DwarfFDEOffset = Encoding & kDwarfSectionOffsetMask;
     }
     break;
-  case Arch::AArch64:
-    if (Mode == kARM64ModeFrame) {
+  case Arch::AArch64: {
+    const auto PayloadMask = getARM64EncodingPayloadMask(Encoding);
+    constexpr uint32_t SharedFields =
+        kIsNotFunctionStart | kHasLSDA | kPersonalityMask | kModeMask;
+    if (!PayloadMask || (Encoding & ~(SharedFields | *PayloadMask)) != 0) {
+      Valid = false;
+      break;
+    }
+    if (Mode == kARM64ModeFrame || Mode == kARM64ModeFramePAuthLR) {
       Entry.Kind = CompactUnwindKind::FramePointer;
+      Entry.ReturnAddressSigningOffset =
+          returnAddressSigningOffset(Arch, Encoding);
       decodeARM64Registers(Encoding, Entry);
       break;
     }
     if (Mode == kARM64ModeFrameless) {
       Entry.Kind = CompactUnwindKind::FramelessImmediate;
-      Entry.StackSize = ((Encoding & kARM64FramelessStackSizeMask) >> 12) * 16;
+      Entry.StackSize = ((Encoding & kARM64FramelessStackSizeMask) >>
+                         kARM64FramelessStackSizeShift) *
+                        kARM64StackSizeScale;
       Entry.HasStackSize = true;
       decodeARM64Registers(Encoding, Entry);
       break;
@@ -382,6 +434,7 @@ bool decodeEncoding(neverd::Arch Arch, uint32_t Encoding,
       Entry.DwarfFDEOffset = Encoding & kDwarfSectionOffsetMask;
     }
     break;
+  }
   case Arch::ARM:
     if (Mode == kARMModeFrame || Mode == kARMModeFrameD) {
       const uint32_t Payload = Encoding & kDwarfSectionOffsetMask;

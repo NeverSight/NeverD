@@ -3,11 +3,12 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/Swift/SwiftMetadata.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -369,7 +370,8 @@ class Proof {
         throw Unproven(
             "Swift self proof has a call, branch, or unmodeled native effect");
       default:
-        if (!Op.Output.Size || !Op.NumInputs || Op.NumInputs > 6)
+        if (!Op.Output.Size || !Op.NumInputs ||
+            Op.NumInputs > std::size(Op.Inputs))
           throw Unproven("Swift self proof has an unmodeled value operation");
         put(Op.Output, scalar(Op));
         break;

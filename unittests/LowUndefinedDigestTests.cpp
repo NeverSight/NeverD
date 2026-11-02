@@ -38,7 +38,7 @@ LowOp operation(unsigned Index) {
       static_cast<NdMemoryAddressSpace>((2 + 7 * Index) % 256);
   Op.Output = variable(7 * Index);
   Op.NumInputs = Index % 7;
-  for (unsigned Slot = 0; Slot != std::size(Op.Inputs); ++Slot)
+  for (unsigned Slot = 0; Slot != kLowUndefinedV1InputSlots; ++Slot)
     Op.Inputs[Slot] = variable(7 * Index + Slot + 1);
   Op.Addr = UINT64_C(0xefcdab8967452301) ^ (Index * UINT64_C(0x100010001));
   Op.Seq = -1 - static_cast<int>(Index * 17);
@@ -197,6 +197,44 @@ TEST(LowUndefinedDigest, IgnoresObjectPadding) {
     RightBytes[I] = 0x5a;
   }
   EXPECT_EQ(digest(Left), digest(Right));
+}
+
+TEST(LowUndefinedDigest, ExtendedSlotsUseIndependentV2Identities) {
+  const struct {
+    unsigned Count;
+    const char *Expected;
+  } Cases[] = {
+#define LOW_UNDEFINED_V2_CASE(Count, Expected) {Count, Expected},
+#include "LowUndefinedDigestFixtures.def"
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Count);
+    auto Ops = operations(Case.Count);
+    for (unsigned I = 0; I != Ops.size(); ++I)
+      for (unsigned N = kLowUndefinedV1InputSlots;
+           N != std::size(Ops[I].Inputs); ++N)
+        Ops[I].Inputs[N] = variable(7 * I + N + 1);
+    EXPECT_EQ(lowUndefinedOperationDigest(Ops), Case.Expected);
+    const auto Expected = lowUndefinedOperationDigest(Ops);
+    Ops.back().Inputs[std::size(Ops.back().Inputs) - 1].AddressOwnerVA ^= 1;
+    EXPECT_NE(lowUndefinedOperationDigest(Ops), Expected);
+  }
+}
+
+TEST(LowUndefinedDigest, DefaultExtensionsRetainV1AndStoredBitsSelectV2) {
+  auto Op = operation(0);
+  const auto Legacy = digest(Op);
+  for (unsigned N = kLowUndefinedV1InputSlots; N != std::size(Op.Inputs); ++N) {
+    SCOPED_TRACE(N);
+    Op.Inputs[N].Offset = 1;
+    EXPECT_NE(digest(Op), Legacy);
+    Op.Inputs[N] = NdVar{};
+    EXPECT_EQ(digest(Op), Legacy);
+  }
+  Op.NumInputs = kLowUndefinedV1InputSlots + 1;
+  EXPECT_NE(digest(Op), Legacy);
+  Op.NumInputs = 0;
+  EXPECT_EQ(digest(Op), Legacy);
 }
 
 } // namespace

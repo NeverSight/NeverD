@@ -1,0 +1,16 @@
+//===- HighCSourceCalls.def - Source call syntax ----------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef HIGH_C_SOURCE_CALL_TEXT
+#error "Define HIGH_C_SOURCE_CALL_TEXT before including this file"
+#endif
+
+HIGH_C_SOURCE_CALL_TEXT(kTypedSourceCallee, "(({0})(uintptr_t)({1}))")
+HIGH_C_SOURCE_CALL_TEXT(kUnsupportedAuthenticatedSourceCall,
+                        "An authenticated source call requires a complete C "
+                        "call-site prototype")
+
+#undef HIGH_C_SOURCE_CALL_TEXT

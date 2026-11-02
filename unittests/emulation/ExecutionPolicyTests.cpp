@@ -57,7 +57,7 @@ TEST(DriverBranchPolicy, RelativeExtentsFollowTheSelectedCPUModel) {
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());           \
     EXPECT_FALSE(*Result);                                                     \
   }
-#include "X64BranchCases.def"
+#include "x86_64/X64BranchCases.def"
 #undef NEVERD_BRANCH_POLICY
 }
 

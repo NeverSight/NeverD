@@ -1,0 +1,19 @@
+//===- SourcePatchPreparation.def - Callback diagnostics -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Diagnostics for original callback preparation contracts.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SOURCE_PATCH_PREPARATION_DIAGNOSTIC
+#define NEVERD_SOURCE_PATCH_PREPARATION_DIAGNOSTIC(Name, Value)
+#endif
+
+NEVERD_SOURCE_PATCH_PREPARATION_DIAGNOSTIC(
+    kARM64PAuthLRUnsupportedCallback,
+    "PAuth_LR original callbacks require signed return-address state and "
+    "signing PC preservation")
+
+#undef NEVERD_SOURCE_PATCH_PREPARATION_DIAGNOSTIC

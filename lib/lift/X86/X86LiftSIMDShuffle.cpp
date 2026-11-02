@@ -16,7 +16,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -153,10 +153,8 @@ bool hasCanonicalTablePermuteEncoding(const cs_insn *Insn, const cs_x86 &X86,
     return false;
   }
 
-  const unsigned EncodedDestination =
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM);
-  const unsigned EncodedSource1 =
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2);
+  const unsigned EncodedDestination = Encoding.regIndex();
+  const unsigned EncodedSource1 = Encoding.vvvvIndex();
   if (EncodedDestination != vectorRegisterIndex(Destination) ||
       EncodedSource1 != vectorRegisterIndex(Source1))
     return false;
@@ -177,8 +175,7 @@ bool hasCanonicalTablePermuteEncoding(const cs_insn *Insn, const cs_x86 &X86,
       return false;
   } else if (!isVectorRegisterOfSize(Source2, VectorSize) || Broadcast ||
              Source2.avx_bcast != X86_AVX_BCAST_INVALID ||
-             decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                 vectorRegisterIndex(Source2) ||
+             Encoding.rmIndex() != vectorRegisterIndex(Source2) ||
              !validateCanonicalEvexRegisterTail(Insn, X86, Encoding)) {
     return false;
   }
@@ -772,8 +769,7 @@ bool liftSIMDShuffle(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       Intrinsic IId =
           IsQword ? Intrinsic::MaskedStoreQ : Intrinsic::MaskedStoreD;
       S.emitIntrinsic(
-          IId, NdVar::reg(x86reg::RAX, 0), {AddrVn, MaskVn, DataVn},
-          NdMemoryOrdering::None,
+          IId, NdVar(), {AddrVn, MaskVn, DataVn}, NdMemoryOrdering::None,
           X86Lifter::LiftState::memoryAddressSpace(X86.operands[0]));
     } else {
       NdVar Dst = L.operandWrite(X86.operands[0]);

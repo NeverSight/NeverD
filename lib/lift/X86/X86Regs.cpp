@@ -9,7 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd {
 
@@ -18,8 +18,7 @@ RegInfo mapCapstoneReg(x86_reg Reg) {
   // Keep the alias narrow so a read never erases the x87 value's high 16 bits.
   if (Reg >= X86_REG_MM0 && Reg <= X86_REG_MM7)
     return {x86reg::ST0 +
-                static_cast<unsigned>(Reg - X86_REG_MM0) *
-                    x86reg::FPURegStride,
+                static_cast<unsigned>(Reg - X86_REG_MM0) * x86reg::FPURegStride,
             8};
   if (Reg >= X86_REG_XMM0 && Reg <= X86_REG_XMM31)
     return {x86reg::vectorReg(static_cast<unsigned>(Reg - X86_REG_XMM0)), 16};

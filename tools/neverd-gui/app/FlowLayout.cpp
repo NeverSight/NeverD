@@ -1,3 +1,12 @@
+//===- FlowLayout.cpp - Direction-aware wrapping controls ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Preserve each control's size while wrapping rows in the reading direction.
+//===----------------------------------------------------------------------===//
+
 #include "FlowLayout.h"
 
 #include <QStyle>
@@ -102,8 +111,12 @@ int FlowLayout::arrange(const QRect &rect, bool place) const {
       const int center = y + (row.height - 1) / 2;
       for (QLayoutItem *item : row.items) {
         const QSize hint = item->sizeHint();
-        item->setGeometry(
-            QRect(QPoint(left, center - (hint.height() - 1) / 2), hint));
+        const QRect logical(QPoint(left, center - (hint.height() - 1) / 2),
+                            hint);
+        const auto direction = parentWidget()
+                                   ? parentWidget()->layoutDirection()
+                                   : Qt::LeftToRight;
+        item->setGeometry(QStyle::visualRect(direction, area, logical));
         left += hint.width() + horizontalSpacing();
       }
     }

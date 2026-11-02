@@ -8,7 +8,7 @@
 #define NEVERD_BACKEND_LLVM_X86_WINDOWSREGISTRATIONFRAMEPRIVATE_H
 
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
-#include "neverd/backend/llvm/X86RegistrationCatchStack.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatchStack.h"
 
 #include <cstddef>
 #include <map>

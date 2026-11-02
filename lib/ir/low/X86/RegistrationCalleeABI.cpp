@@ -13,16 +13,35 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/ADT/StringSwitch.h"
 
 #include <deque>
 #include <set>
 
 namespace neverd::registration_abi {
+namespace {
+
+bool isCallerCleanupCRTImport(const Import &Imported) {
+  enum class Family { Unknown, Legacy, Math };
+  const auto Provider = llvm::StringSwitch<Family>(Imported.Name)
+#define NEVERD_REGISTRATION_CRT_CLEANUP(Name, Kind) .Case(Name, Family::Kind)
+#include "RegistrationRuntimeImports.def"
+                            .Default(Family::Unknown);
+  if (Provider == Family::Legacy)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module);
+  if (Provider == Family::Math)
+    return coff_loader::isX86MathCleanupProvider(Imported.Module);
+  return false;
+}
+
+} // namespace
 
 bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target) {
   return Image.Arch == Arch::X86 && Image.Bits == Bitness::Bits32 &&
@@ -152,7 +171,12 @@ bool isCheckedRegistrationSleepCall(const BinaryImage &Image, const LowOp &Op,
 
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
-  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  const auto *Named = Image.findImportAt(Target);
+  const auto *Import =
+      Named ? checkedRuntimeImportSlot(Image, Named->IATAddr) : nullptr;
+  // Cleanup is independent of the callee's memory, callback and FP effects.
+  if (Import && !Import->IsDelayImport && isCallerCleanupCRTImport(*Import))
+    return 0;
   if (!Import)
     return std::nullopt;
   // These are returning ESP facts only. Dispatch, allocation, memory writes,

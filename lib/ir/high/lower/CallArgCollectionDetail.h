@@ -85,6 +85,8 @@ struct CallArgScan {
   /// Positional arguments its incoming stack reads imply
   /// (MedOp::CalleeStackArgs), or -1 when they are unbounded.
   int CalleeStackArgs = -1;
+  /// A checked header variadic prefix is a minimum, not a stack upper bound.
+  bool HeaderVariadic = false;
   /// The call is a direct one to code of this image, whose recovered stack
   /// parameters are one per slot.  An import's prototype may instead take an
   /// argument wider than a slot whole.

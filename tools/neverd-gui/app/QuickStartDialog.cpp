@@ -621,11 +621,10 @@ QuickStartDialog::QuickStartDialog(FilePicker pickFile, QWidget *parent)
   setObjectName(QStringLiteral("quickStartDialog"));
   setWindowTitle(tr("Quick start"));
   setWindowIcon(icon(QStringLiteral("app")));
-  setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
-                 Qt::WindowCloseButtonHint | Qt::WindowMaximizeButtonHint);
+  setWindowFlags(Qt::Window | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                 Qt::WindowCloseButtonHint | Qt::WindowMinMaxButtonsHint);
   setAcceptDrops(true);
   setMinimumSize(::neverd::limits::gui_config::kQuickStartMinimumDialogSize);
-  setSizeGripEnabled(true);
   auto *layout = new QHBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);

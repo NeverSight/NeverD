@@ -9,7 +9,7 @@
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
-#include "neverd/support/ARMTrap.h"
+#include "neverd/support/ARM/ARMTrap.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <capstone/capstone.h>

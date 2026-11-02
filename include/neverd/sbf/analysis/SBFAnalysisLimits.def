@@ -55,6 +55,29 @@ SBF_ANALYSIS_LIMIT(CallGraphOutputEdgeBudget, 262'144)
 SBF_ANALYSIS_LIMIT(CallGraphOutputElementBudget, 524'288)
 SBF_ANALYSIS_LIMIT(CallGraphOutputByteBudget, 67'108'864)
 
+// Optional caller-context evidence solves complete callee CFGs. Repeated
+// callers can amplify bodies. Work exhaustion during specialization falls
+// back to completed generic summaries. Generic/output exhaustion fails the
+// query atomically. These do not alter execution/export budgets.
+SBF_ANALYSIS_LIMIT(CallXContextInstructionVisitBudget, 8'388'608)
+SBF_ANALYSIS_LIMIT(CallXContextOutputElementBudget, 524'288)
+// Includes live solver states and cached inputs/returns/evidence. Incomplete
+// specializations are discarded on exhaustion; generic analysis must complete.
+SBF_ANALYSIS_LIMIT(CallXContextRetainedByteBudget, 67'108'864)
+// Bound polyvariant summaries per entry. Additional inputs use an explicitly
+// marked all-unknown-input summary, never another caller's specialization.
+SBF_ANALYSIS_LIMIT(CallXContextSpecializationsPerEntry, 4)
+// A contextual join retains a small, complete set of value alternatives.
+// Overflow widens that value to unknown; it never truncates a target set.
+SBF_ANALYSIS_LIMIT(CallXContextValueAlternatives, 4)
+
+SBF_ANALYSIS_DIAGNOSTIC(CallXContextWorkBudgetDiagnostic,
+                        "SBF CALLX context instruction work budget exhausted")
+SBF_ANALYSIS_DIAGNOSTIC(CallXContextOutputBudgetDiagnostic,
+                        "SBF CALLX context evidence budget exhausted")
+SBF_ANALYSIS_DIAGNOSTIC(CallXContextMemoryBudgetDiagnostic,
+                        "SBF CALLX context retained-state budget exhausted")
+
 SBF_ANALYSIS_DIAGNOSTIC(CallGraphProvenanceBudgetDiagnostic,
                         "SBF call graph provenance work budget exhausted")
 SBF_ANALYSIS_DIAGNOSTIC(CallGraphInputBudgetDiagnostic,

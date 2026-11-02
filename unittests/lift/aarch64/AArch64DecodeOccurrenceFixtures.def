@@ -1,0 +1,46 @@
+//===- AArch64DecodeOccurrenceFixtures.def - Decode witnesses -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// CASE(Name, Word, Replacement) records independently assembled operands.
+/// VALUE(Type, Name, Value) owns the occurrence test inputs.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_AARCH64_DECODE_CASE
+#define NEVERD_AARCH64_DECODE_CASE(Name, Word, Replacement)
+#endif
+#ifndef NEVERD_AARCH64_DECODE_VALUE
+#define NEVERD_AARCH64_DECODE_VALUE(Type, Name, Value)
+#endif
+
+// LLVM 22.1.6 llvm-mc, -triple=aarch64 -mattr=+pauth,+cpa,+sve.
+NEVERD_AARCH64_DECODE_CASE("add x0, x1, #1", 0x91000420, 0x91001c83)
+NEVERD_AARCH64_DECODE_CASE("pacia x0, x1", 0xdac10020, 0xdac10083)
+NEVERD_AARCH64_DECODE_CASE("paciasp", 0xd503233f, 0xd503237f)
+NEVERD_AARCH64_DECODE_CASE("ldraa x0, [x1]", 0xf8200420, 0xf8201483)
+NEVERD_AARCH64_DECODE_CASE("ldrab x0, [x1]", 0xf8a00420, 0xf8a01483)
+NEVERD_AARCH64_DECODE_CASE("addpt x0, x1, x2", 0x9a022020, 0x9a052083)
+NEVERD_AARCH64_DECODE_CASE("subpt x0, x1, x2", 0xda022020, 0xda052083)
+NEVERD_AARCH64_DECODE_CASE("addpt z0.d, z1.d, z2.d", 0x04e20820, 0x04e50883)
+NEVERD_AARCH64_DECODE_CASE("braa x0, x1", 0xd71f0801, 0xd71f0864)
+NEVERD_AARCH64_DECODE_CASE("retaa", 0xd65f0bff, 0xd65f0fff)
+NEVERD_AARCH64_DECODE_CASE("nop", 0xd503201f, 0x91001c83)
+NEVERD_AARCH64_DECODE_CASE("bl #16", 0x94000004, 0x94000002)
+
+NEVERD_AARCH64_DECODE_VALUE(va_t, kEntry, 0x1000)
+NEVERD_AARCH64_DECODE_VALUE(unsigned, kWordBytes, 4)
+NEVERD_AARCH64_DECODE_VALUE(unsigned, kPairBytes, 8)
+NEVERD_AARCH64_DECODE_VALUE(uint32_t, kPrefix, 0x0420bc60)
+NEVERD_AARCH64_DECODE_VALUE(uint32_t, kFollower, 0x04c40020)
+NEVERD_AARCH64_DECODE_VALUE(uint32_t, kOtherFollower, 0x04c50020)
+NEVERD_AARCH64_DECODE_VALUE(uint32_t, kInvalidWord, 0xffffffff)
+NEVERD_AARCH64_DECODE_VALUE(uint32_t, kCall, 0x94000004)
+NEVERD_AARCH64_DECODE_VALUE(uint32_t, kOtherCall, 0x94000002)
+NEVERD_AARCH64_DECODE_VALUE(va_t, kCallTarget, 0x1010)
+// LLVM 22.1.6 llvm-mc, -triple=x86_64: andl %ecx, %eax.
+NEVERD_AARCH64_DECODE_VALUE(uint16_t, kX64And, 0xc821)
+
+#undef NEVERD_AARCH64_DECODE_CASE
+#undef NEVERD_AARCH64_DECODE_VALUE

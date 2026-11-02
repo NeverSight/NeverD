@@ -10,6 +10,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
+#include "neverd/libc/LibCNames.h"
+#include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
@@ -116,6 +118,65 @@ StackMove stackMove(const TargetRegInfo &Registers, llvm::ArrayRef<LowOp> Ops) {
 
 } // namespace
 
+llvm::SmallVector<InstructionRef, 2>
+InstructionFlowScratch::dataAccesses(const BinaryImage &Img, Decoder &Dec,
+                                     const DecodedInsn &DI) {
+  if ((Img.Arch == Arch::X86 || Img.Arch == Arch::X64) && Dec.detailEnabled() &&
+      Dec.textEnabled() && DI.Raw && DI.Raw->detail) {
+    // These scalar families have no implicit memory operand. Their ordinary
+    // register/immediate forms may materialize addresses, but cannot read or
+    // write one. Do not generalize this to string, stack or system families.
+    bool ExplicitMemoryOnly = false;
+    switch (DI.Id) {
+    case X86_INS_MOV:
+    case X86_INS_MOVABS:
+    case X86_INS_MOVSX:
+    case X86_INS_MOVSXD:
+    case X86_INS_MOVZX:
+    case X86_INS_ADD:
+    case X86_INS_ADC:
+    case X86_INS_SUB:
+    case X86_INS_SBB:
+    case X86_INS_AND:
+    case X86_INS_OR:
+    case X86_INS_XOR:
+    case X86_INS_CMP:
+    case X86_INS_TEST:
+    case X86_INS_INC:
+    case X86_INS_DEC:
+    case X86_INS_NEG:
+    case X86_INS_NOT:
+    case X86_INS_IMUL:
+    case X86_INS_MUL:
+    case X86_INS_IDIV:
+    case X86_INS_DIV:
+    case X86_INS_SHL:
+    case X86_INS_SHR:
+    case X86_INS_SAR:
+    case X86_INS_ROL:
+    case X86_INS_ROR:
+    case X86_INS_RCL:
+    case X86_INS_RCR:
+    case X86_INS_SHLD:
+    case X86_INS_SHRD:
+    case X86_INS_BSWAP:
+      ExplicitMemoryOnly = true;
+      break;
+    default:
+      break;
+    }
+    const auto &X86 = DI.Raw->detail->x86;
+    if (ExplicitMemoryOnly && X86.op_count &&
+        X86.op_count <= std::size(X86.operands) &&
+        llvm::all_of(llvm::ArrayRef(X86.operands, X86.op_count),
+                     [](const cs_x86_op &Op) {
+                       return Op.type == X86_OP_REG || Op.type == X86_OP_IMM;
+                     }))
+      return {};
+  }
+  return summarize(Img, Dec, DI).Refs;
+}
+
 /// The flow of \p DI, with its stack pointer move when \p StackRegisters is
 /// given.
 InstructionFlow summarizeInstructionFlow(const BinaryImage &Img, Decoder &Dec,
@@ -219,14 +280,19 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
       if (auto Target = ConstantInput(Op)) {
         Flow.Kind = "call";
         Flow.Target = *Target;
+        Flow.NoReturn = NoReturnTargets &&
+                        libc::isNoReturnTarget(Img, *Target, NoReturnTargets);
       } else {
         Flow.Kind = "icall";
       }
       break;
     case NdOp::INDIR_CALL:
       Flow.Kind = "icall";
-      if (auto Slot = ConstantInput(Op))
+      if (auto Slot = ConstantInput(Op)) {
         Flow.Refs.push_back({*Slot, "read"});
+        Flow.NoReturn = NoReturnTargets && libc::isNoReturnLoadedTarget(
+                                               Img, *Slot, NoReturnTargets);
+      }
       break;
     case NdOp::BRANCH:
     case NdOp::COND_BR:
@@ -269,6 +335,12 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
           Value && Value->Kind == Role::Address)
         Offsets.push_back(Value->Value);
   }
+  // A predicated call's unexecuted arm still reaches the next instruction.
+  // The lift carries that guard even when its last transfer is the call.
+  if (Flow.NoReturn && llvm::any_of(Ops, [](const LowOp &Op) {
+        return Op.Opcode == NdOp::COND_BR;
+      }))
+    Flow.NoReturn = false;
   if (va_t Address = Dec.pcRelCodeRefTarget(DI); Address != InvalidVA)
     Offsets.push_back(Address);
   // The next instruction's address, which a call pushes and a system call
@@ -347,7 +419,9 @@ namespace {
 /// instruction set, reads up to the first terminator instead.
 std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
                               InstructionFlowScratch &Scratch, va_t Entry,
-                              llvm::ArrayRef<va_t> Entries) {
+                              llvm::ArrayRef<va_t> Entries,
+                              const std::function<bool()> &Stop,
+                              FunctionDecodeStatus &Status) {
   const auto OtherEntry = [&](va_t Address) {
     return Address != Entry &&
            std::binary_search(Entries.begin(), Entries.end(), Address);
@@ -355,24 +429,41 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
   const bool FollowsJumps = Img.Arch != Arch::ARM && !Entries.empty();
   std::set<va_t> Body;
   std::vector<va_t> Pending{Entry};
-  while (!Pending.empty() && Body.size() < kMaxUnsizedInstructions) {
+  while (!Pending.empty() && Body.size() < kMaxUnsizedInstructions &&
+         !(Stop && Stop())) {
     const va_t Start = Pending.back();
     Pending.pop_back();
-    (void)decodeNativeRange(
+    bool Terminated = false;
+    const bool ModeKnown = decodeNativeRange(
         Img, Dec, Start, 0, kMaxUnsizedInstructions - Body.size(),
         [&](const DecodedInsn &DI, const uint8_t *, int) {
-          if (OtherEntry(DI.Addr) || !Body.insert(DI.Addr).second)
+          if ((Stop && Stop()) || OtherEntry(DI.Addr) ||
+              !Body.insert(DI.Addr).second) {
+            Terminated = true;
             return false;
+          }
+          Terminated = Dec.isFunctionTerminator(DI);
           if (FollowsJumps) {
             const InstructionFlow Flow = Scratch.summarize(Img, Dec, DI);
+            Status.Incomplete |=
+                Flow.Kind == UnliftedFlow || Flow.Kind == "ijump";
             if ((Flow.Kind == "jump" || Flow.Kind == "cjump") &&
                 Flow.Target != InvalidVA && !OtherEntry(Flow.Target) &&
                 !Body.count(Flow.Target))
               Pending.push_back(Flow.Target);
+            // A straight-line terminator can end only the current block:
+            // AArch64 B.cond shares B's decode classification. The ordinary
+            // lift's conditional flow still reaches the next instruction.
+            if (Flow.Kind == "cjump")
+              Terminated = false;
+            Terminated |= Flow.NoReturn;
           }
-          return !Dec.isFunctionTerminator(DI);
+          return !Terminated;
         });
+    Status.Incomplete |= !ModeKnown || !Terminated;
   }
+  Status.Incomplete |= !Pending.empty();
+  Status.Stopped = Stop && Stop();
   return {Body.begin(), Body.end()};
 }
 
@@ -383,7 +474,11 @@ bool decodeExtents(
     llvm::ArrayRef<va_t> Entries,
     llvm::function_ref<void(size_t Index, Decoder &, const DecodedInsn &,
                             InstructionFlowScratch &)>
-        Visit) {
+        Visit,
+    const std::function<bool()> &Stop = {},
+    std::vector<FunctionDecodeStatus> *Status = nullptr,
+    const libc::NoReturnTargetIndex *NoReturnTargets = nullptr) {
+  std::vector<FunctionDecodeStatus> Reports(Extents.size());
   // The parts of a function its unwind records keep apart from its body,
   // past other functions' code, are its code too: MSVC moves cold paths
   // there.
@@ -391,43 +486,66 @@ bool decodeExtents(
   for (const auto &Chunk : Img.ExceptionMetadata.outlyingChunks())
     Chunks[Chunk.Function].push_back(Chunk.Range);
   std::atomic<bool> DecoderFailed{false};
+  std::optional<libc::NoReturnTargetIndex> LocalNoReturnTargets;
+  if (!NoReturnTargets && llvm::any_of(Extents, [](const auto &Extent) {
+        return !Extent.second;
+      })) {
+    LocalNoReturnTargets.emplace(Img);
+    NoReturnTargets = &*LocalNoReturnTargets;
+  }
   parallelForEach(Extents.size(), [&](auto Claim, size_t Total) {
     Decoder Local;
     if (!Local.init(Img)) {
       DecoderFailed = true;
       return;
     }
-    InstructionFlowScratch Scratch;
-    for (size_t Index = Claim(); Index < Total; Index = Claim()) {
+    InstructionFlowScratch Scratch(NoReturnTargets);
+    for (size_t Index = Claim(); Index < Total && !(Stop && Stop());
+         Index = Claim()) {
       const auto [Entry, Size] = Extents[Index];
+      auto &Report = Reports[Index];
+      const auto ReadRange = [&](va_t Start, uint64_t Span, uint64_t Limit) {
+        uint64_t Bytes = 0;
+        const bool ModeKnown =
+            decodeNativeRange(Img, Local, Start, Span, Limit,
+                              [&](const DecodedInsn &DI, const uint8_t *, int) {
+                                if (Stop && Stop())
+                                  return false;
+                                ++Report.Instructions;
+                                Report.Bytes += DI.Size;
+                                Bytes += DI.Size;
+                                Visit(Index, Local, DI, Scratch);
+                                return true;
+                              });
+        Report.Incomplete |= !ModeKnown || (Span && Bytes != Span);
+        Report.Stopped |= Stop && Stop();
+      };
       if (Size > 0) {
-        (void)decodeNativeRange(
-            Img, Local, Entry, Size, Size,
-            [&](const DecodedInsn &DI, const uint8_t *, int) {
-              Visit(Index, Local, DI, Scratch);
-              return true;
-            });
+        ReadRange(Entry, Size, Size);
       } else {
         for (const va_t Address :
-             unsizedBody(Img, Local, Scratch, Entry, Entries))
-          (void)decodeNativeRange(
-              Img, Local, Address, 0, 1,
-              [&](const DecodedInsn &DI, const uint8_t *, int) {
-                Visit(Index, Local, DI, Scratch);
-                return true;
-              });
+             unsizedBody(Img, Local, Scratch, Entry, Entries, Stop, Report)) {
+          if (Stop && Stop())
+            break;
+          ReadRange(Address, 0, 1);
+        }
       }
       if (const auto It = Chunks.find(Entry); It != Chunks.end())
-        for (const ExceptionAddressRange &Range : It->second)
-          (void)decodeNativeRange(
-              Img, Local, Range.Begin, Range.End - Range.Begin,
-              Range.End - Range.Begin,
-              [&](const DecodedInsn &DI, const uint8_t *, int) {
-                Visit(Index, Local, DI, Scratch);
-                return true;
-              });
+        for (const ExceptionAddressRange &Range : It->second) {
+          if (Stop && Stop())
+            break;
+          ReadRange(Range.Begin, Range.End - Range.Begin,
+                    Range.End - Range.Begin);
+        }
     }
   });
+  if (Stop && Stop())
+    for (auto &Report : Reports) {
+      Report.Stopped = true;
+      Report.Incomplete = true;
+    }
+  if (Status)
+    *Status = std::move(Reports);
   return !DecoderFailed;
 }
 
@@ -441,12 +559,16 @@ bool decodeFunctions(
     const BinaryImage &Img, const FunctionPage &Page,
     llvm::function_ref<void(size_t Index, Decoder &, const DecodedInsn &,
                             InstructionFlowScratch &)>
-        Visit) {
+        Visit,
+    const std::function<bool()> &Stop,
+    std::vector<FunctionDecodeStatus> *Status,
+    const libc::NoReturnTargetIndex *NoReturnTargets) {
   std::vector<std::pair<va_t, uint64_t>> Extents;
   Extents.reserve(Page.Functions.size());
   for (const FuncInfo *F : Page.Functions)
     Extents.emplace_back(F->Entry, F->Size);
-  return decodeExtents(Img, Extents, Page.Entries, Visit);
+  return decodeExtents(Img, Extents, Page.Entries, Visit, Stop, Status,
+                       NoReturnTargets);
 }
 
 std::optional<DataAccessWidths>
@@ -454,6 +576,9 @@ collectDataAccessWidths(const BinaryImage &Img,
                         llvm::ArrayRef<FuncInfo> Functions) {
   std::vector<std::pair<va_t, unsigned>> Accesses;
   const auto Ordered = orderedFunctions(Functions);
+  std::optional<libc::NoReturnTargetIndex> NoReturnTargets;
+  if (llvm::any_of(Ordered, [](const FuncInfo *F) { return !F->Size; }))
+    NoReturnTargets.emplace(Img);
   for (std::optional<va_t> Cursor = va_t{0}; Cursor;) {
     const FunctionPage Page =
         pageFunctions(Ordered, *Cursor, FunctionPage::MaxFunctionsPerPage);
@@ -467,7 +592,8 @@ collectDataAccessWidths(const BinaryImage &Img,
           for (const InstructionRef &Ref : Scratch.summarize(Img, Dec, DI).Refs)
             if (isDataAccess(Ref))
               Slots[Index].emplace_back(Ref.To, Ref.Bytes);
-        });
+        },
+        {}, nullptr, NoReturnTargets ? &*NoReturnTargets : nullptr);
     if (!Decoded)
       return std::nullopt;
     for (const auto &Slot : Slots)
@@ -515,7 +641,7 @@ DataAccessScan::update(const BinaryImage &Img,
                      [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
                          InstructionFlowScratch &Scratch) {
                        for (const InstructionRef &Ref :
-                            Scratch.summarize(Img, Dec, DI).Refs)
+                            Scratch.dataAccesses(Img, Dec, DI))
                          if (isDataAccess(Ref))
                            Slots[Index].emplace_back(Ref.To, Ref.Bytes);
                      })) {

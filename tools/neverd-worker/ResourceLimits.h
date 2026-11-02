@@ -13,7 +13,10 @@
 #ifndef NEVERD_TOOLS_NEVERD_WORKER_RESOURCELIMITS_H
 #define NEVERD_TOOLS_NEVERD_WORKER_RESOURCELIMITS_H
 
+#include "../common/transport/ResourceLimits.h"
+
 #include "neverd/Limits.h"
+#include "neverd/patch/Limits.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/Limits.h"
 
@@ -21,6 +24,17 @@
 #include <cstdint>
 
 namespace neverd::limits::worker {
+/// Intermediate updates to one load step; boundaries are always sent.
+inline constexpr int kLoadProgressIntervalMs = 50;
+inline constexpr std::size_t kPatchHexBytes =
+    ::neverd::limits::patch::kMaxApplyBytes * 2;
+inline constexpr std::size_t kPatchStateBytes =
+    ::neverd::limits::transport::kJsonMaxJsonBytes / 2;
+inline constexpr std::size_t kPatchTextBytes =
+    ::neverd::limits::patch::kMaxAssemblyTextBytes;
+/// Smaller inventories cost less to encode with their envelope in one pass.
+/// Paired Clang/GCC requests cross over to streamed range rows at 32 entries.
+inline constexpr std::size_t kPatchMinEncodedRangeRows = 32;
 
 // tools/neverd-worker/Engine.cpp
 // The most source one declaration reads.
@@ -73,11 +87,23 @@ inline constexpr std::size_t kListingMaxXrefLines = 2;
 /// The strings one neverd_strings_page_json call reads.
 inline constexpr int kListingStringPageRows =
     ::neverd::sdk::kMaxStringRowsPerPage;
-inline constexpr std::size_t kListingMaxPageLines = 2000;
+inline constexpr std::size_t kListingMaxPageLines =
+    ::neverd::limits::transport::kListingMaxPageLines;
 inline constexpr std::size_t kListingMaxOpcodeBytes = 12;
 inline constexpr std::size_t kListingMaxDecodeChunk = 2048;
 inline constexpr std::size_t kListingFirstUnsizedChunk = 64;
 inline constexpr std::size_t kListingDecodeCacheFunctions = 512;
+/// Disposable, per-project browsing cache. Writes happen in idle time.
+inline constexpr std::size_t kBrowseCacheMaxEntryBytes = 32 * 1024 * 1024;
+inline constexpr std::size_t kBrowseCacheMaxBytes = 128 * 1024 * 1024;
+inline constexpr std::size_t kBrowseCacheMaxPendingEntries = 16;
+/// A temporary browse cache entry at least this old was left by a writer that
+/// stopped before publishing it. One atomic entry write ends well before this.
+inline constexpr std::int64_t kBrowseCacheStaleTemporarySeconds = 10 * 60;
+/// Nearby entries considered for an otherwise unowned navigation address.
+/// Only a recovered instruction, never proximity, establishes ownership.
+inline constexpr std::size_t kListingOwnerSearchFunctions = 16;
+inline constexpr std::uint64_t kListingOwnerSearchDistance = 0x10000;
 inline constexpr std::size_t kListingMaxStringDisplay = 400;
 inline constexpr std::size_t kListingMaxUnsizedInstructions =
     ::neverd::sdk::kMaxUnsizedInstructions;
@@ -85,6 +111,10 @@ inline constexpr std::uint64_t kListingMaxAlignment = 0x1000;
 // Classic listings name padding by the alignment of its end, up to this or the
 // smallest power of two longer than the padding.
 inline constexpr std::uint64_t kListingClassicAlignmentLimit = 0x20;
+/// Bound one repeat-run scan and keep its address-relative page identity
+/// stable.
+inline constexpr std::uint64_t kListingMaxRepeatBytes = 0x1000;
+inline constexpr std::uint64_t kListingMinRepeatBytes = 4;
 inline constexpr std::size_t kListingMaxOverviewBuckets = 16384;
 inline constexpr int kListingOverviewSamples = 4;
 inline constexpr int kListingStringScanMinimum =
@@ -291,6 +321,8 @@ inline constexpr int kEngineExecuteImplOpenLoaderStringFieldMax = 16;
 inline constexpr int kEngineExecuteImplOpenOptionsProcessorStringFieldMax = 32;
 inline constexpr int kEngineExecuteImplOpenOptionsPlatformStringFieldMax = 16;
 inline constexpr int kEngineExecuteImplOpenOptionsFieldStringFieldMax = 32;
+inline constexpr int kEngineExecuteImplAnalysisSectionAddPathStringFieldMax =
+    32768;
 inline constexpr int kEngineExecuteImplPdbLoadPdbInspectPathPathStringFieldMax =
     32768;
 inline constexpr int kEngineExecuteImplPdbLoadPdbInspectModeModeStringFieldMax =

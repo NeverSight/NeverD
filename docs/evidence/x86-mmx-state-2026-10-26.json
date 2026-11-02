@@ -1,0 +1,286 @@
+{
+  "scope": "Native FEMMS, legacy MMX text IR, MMX reset scheduling, NeverD state admission and C return contracts",
+  "sources": {
+    "neverd_code": "acf92edec4aa9148f89839e732a646d7ba472d22",
+    "neverd_integrated_dev": "85211ac969d572f571bb324a4c39b271b05532d5",
+    "llvm": "f963558944a686f2c6d2dfb8311011fb6749c530",
+    "neverc": "211be3b22fec81588952a25d6de95362258ad96f",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "capstone_gitlink": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+    "signatures_gitlink": "18d2bb2b85392cc5edc59515c1351955216db2b1",
+    "production_sdk": "neverd-llvm-v23.0.0-r6 (unchanged)",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6"
+  },
+  "ctest": {
+    "pinned": {
+      "registered": 277,
+      "passed": 274,
+      "failed": 0,
+      "skipped": [
+        "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+        "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+        "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior"
+      ],
+      "report": "pinned-qualified-final.xml",
+      "report_sha256": "fcbf73d5b7ae42b6300f32738dc0097ebf35035fcf4455e3ed71a36908359322"
+    },
+    "native": {
+      "registered": 277,
+      "passed": 277,
+      "failed": 0,
+      "skipped": [],
+      "report": "native-qualified-final.xml",
+      "report_sha256": "8ff90eb9a4e0d9340459372944664394ae6f37e5b9afa4d1fc646106aa9062e4"
+    }
+  },
+  "compiler_tests": {
+    "llvm_lit_passed": 26,
+    "llvm_report_sha256": "3ae3eac21ad5e2975a952fc7850e148b66efe72ddb14c164fcfa18f0fc7ba735",
+    "neverc": {
+      "registered": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": [],
+      "report": "neverc-ordered.xml",
+      "report_sha256": "d402371c058a8378aa5947056a51fb6e90df185c1acb55352e0c5d9dab3c84dd"
+    },
+    "neverc_frontend_compilations": 30
+  },
+  "native_completion": {
+    "objects": 12,
+    "functions_per_object": 2,
+    "controlled_completions": 432,
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "source_and_destination": "x86-64",
+    "routes": [
+      "NeverC",
+      "NeverC textual IR through full LLVM"
+    ],
+    "adversarial_femms_payloads": [
+      "0x0000000000000000",
+      "0xffffffffffffffff",
+      "0x0123456789abcdef"
+    ],
+    "checks": [
+      "Native opcode identity and boundary counts",
+      "Live MMX values and ordinary memory ordering",
+      "Realigned frame and dynamic allocation canaries",
+      "GPR return value, exact return stack and callee-saved registers",
+      "Win64 XMM6-XMM15 preservation",
+      "Empty x87 tags after final reset"
+    ],
+    "report_sha256": "6b2146dcca344a0048209a4db16c1b5106df9b65c02bd28da1e4ae790746ec99",
+    "artifact_inventory": {
+      "files": 20,
+      "bytes": 53631,
+      "sha256": "8689440cbff0cd25fb3db244d21a5399d6ccfb5367a3505a653d88c875a94807"
+    },
+    "programs": [
+      {
+        "route": "NeverC",
+        "optimization": "O0",
+        "triple": "x86_64-unknown-linux-gnu",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC IR to LLVM",
+        "optimization": "O0",
+        "triple": "x86_64-unknown-linux-gnu",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC",
+        "optimization": "O0",
+        "triple": "x86_64-pc-windows-msvc",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC IR to LLVM",
+        "optimization": "O0",
+        "triple": "x86_64-pc-windows-msvc",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC",
+        "optimization": "O0",
+        "triple": "x86_64-apple-darwin",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC IR to LLVM",
+        "optimization": "O0",
+        "triple": "x86_64-apple-darwin",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC",
+        "optimization": "O2",
+        "triple": "x86_64-unknown-linux-gnu",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC IR to LLVM",
+        "optimization": "O2",
+        "triple": "x86_64-unknown-linux-gnu",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC",
+        "optimization": "O2",
+        "triple": "x86_64-pc-windows-msvc",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC IR to LLVM",
+        "optimization": "O2",
+        "triple": "x86_64-pc-windows-msvc",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC",
+        "optimization": "O2",
+        "triple": "x86_64-apple-darwin",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      },
+      {
+        "route": "NeverC IR to LLVM",
+        "optimization": "O2",
+        "triple": "x86_64-apple-darwin",
+        "functions": 2,
+        "femms_boundaries": 3,
+        "controlled_completions": 36,
+        "x87_tags_empty_on_return": true
+      }
+    ]
+  },
+  "counterexamples": {
+    "mmx_post_reset_order": {
+      "before_failed_objects": 6,
+      "before_report_sha256": "73041e2fada3aa301c1d6ae7647eb2c66bc66ca7e3d2379aa44ec5d6161f957a",
+      "mechanism": "Machine scheduling crossed EMMS/FEMMS physical clobbers while values still used virtual registers; the final reset became followed by MMX arithmetic or extraction. Both backends now recognize the reset as a scheduling boundary."
+    },
+    "physical_emms_cleanup": {
+      "boundary_substitution": "FEMMS replaced with EMMS solely to execute on this host; this does not qualify FEMMS execution.",
+      "before_abridged_tag": 255,
+      "after_abridged_tag": 0,
+      "before_report_sha256": "ae6cc3b77feb8745345b941f2cd4f0b03fc37accbdc76d1931115c81fc6710ef",
+      "after_report_sha256": "71611fad26ef8d5e5b294c400db25ed95a60a602a962086b0a04a2852491d328"
+    },
+    "discarded_return_atomic_update": {
+      "before_report_sha256": "72b4a3cebb5f9d5102a72a5396416496f72650f5e3ee89fb1f6ca4c6e2282f39",
+      "regression": "LLVMCVoidAnalysis.NoValueContractsRetainMemoryEffects",
+      "mechanism": "No-value return cleanup did not use the shared observable-effect eligibility gate and removed an atomic update. It now shares the same gate as dead-frame value cleanup."
+    },
+    "x87_returning_calls": {
+      "before_report_sha256": "a82d2dca3cd1b01c40d1a7f66df47d9a5cf1f034f64f6dcb9d0acb91ed2a8c88",
+      "regressions": [
+        "X87ConvertFixture.ReturningCallRetainsCallerStateAndImportsCalleePush",
+        "X87ConvertFixture.WrapperWithoutLocalX87TransportsItsCalleeContext"
+      ],
+      "mechanism": "Preserving the LLVM signature bypassed the settled no-value contract and demanded an unknown GPR return carrier. Signature preservation now retains the independent semantic contract."
+    }
+  },
+  "admission": {
+    "instructions": [
+      "FNOP",
+      "EMMS",
+      "FEMMS"
+    ],
+    "source_modes": [
+      "i386",
+      "x86-64"
+    ],
+    "decode_routes": 3,
+    "strictness_modes": 2,
+    "prefixes": [
+      "none",
+      "67",
+      "2e",
+      "36",
+      "64",
+      "65"
+    ],
+    "refusal_route_combinations": 360,
+    "owned_x64_fnop_emms_controls": 4,
+    "rule": "Missing state ownership must refuse without modifying the caller-provided LowIR vector. Owned x64 FNOP/EMMS retain native context steps."
+  },
+  "tools": {
+    "neverc_binary_sha256": "51e3ee9440594463f37c03dd034a21c6dc22c0baaba5ce16a58ae9fc32cd1be8",
+    "llvm_llc_sha256": "8cd3a21dbae822d45edf8ee08e573f42db2a614c5361a281d387ec4624e5873c",
+    "completion_oracle_sha256": "ce0e74ebf56bb658023ba63b54d0b331ba1daed7cf2c883db88d8e0ee36f5acb"
+  },
+  "retained_x87_artifacts": {
+    "pinned": {
+      "files": 4711,
+      "bytes": 27470602,
+      "sha256": "e36ba1538c53faf1187dfd053e4f5d07dcf776a86d11c2590a3425ff7f7e2b03"
+    },
+    "native": {
+      "files": 4711,
+      "bytes": 27470602,
+      "sha256": "6bb793db466b2bedba93c05a5dfea5cbf38c7c2e8e708fb1462d47c189a2056f"
+    }
+  },
+  "artifact_root": "/mnt/data/neverd-x86-mmx-state",
+  "limitations": [
+    "The full instruction-completion goal is not complete; no LLVM release or production pin update was made.",
+    "Physical FEMMS/3DNow execution and FEMMS exception delivery are not qualified.",
+    "NeverD owned FEMMS payload invalidation and all 24 3DNow value/state operations remain unsupported.",
+    "The independent native completion oracle targets x86-64; i386 native FEMMS is covered by LLVM codegen tests.",
+    "Three pinned-SDK cases skip because that older SDK lacks the required native virtualization/descriptor interfaces."
+  ],
+  "publication_integration": {
+    "merge_commit": "8267b45636485b6b704fbed3855af9474a682fc4",
+    "additional_upstream": "df2f61c0f95a45909bde3923795223cafa9decfa",
+    "changed_paths": [
+      "docs/android-application-runtime.md",
+      "docs/testing.md",
+      "unittests/emulation/AndroidJNITests.cpp",
+      "unittests/emulation/LinuxClockTests.cpp",
+      "unittests/emulation/fixtures/android_jni.c"
+    ],
+    "qualified_production_and_test_inputs_unchanged": true,
+    "qualification_reference": "acf92edec4aa9148f89839e732a646d7ba472d22"
+  }
+}

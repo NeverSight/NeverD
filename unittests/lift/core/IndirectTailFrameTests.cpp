@@ -359,8 +359,10 @@ TEST_F(IndirectTailFrame, ExclusiveReleaseCallsItsVirtualSlotInEveryRoute) {
         << Source;
     // Both routes write the slot offset in its natural base.
     const std::string Slot = "0x20";
+    // The native raw-call wrapper may enclose the pointer cast. Check the
+    // loaded slot independently of that call wrapper's parentheses.
     EXPECT_NE(Source.find("(*(void **)((uintptr_t)(*(void **)(arg0)) + " +
-                          Slot + ")))("),
+                          Slot + "))"),
               std::string::npos)
         << Source;
     if (Route)
@@ -368,8 +370,8 @@ TEST_F(IndirectTailFrame, ExclusiveReleaseCallsItsVirtualSlotInEveryRoute) {
     // The early return hands back the object the caller passed.
     EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
     const auto Compiled =
-        exec(NEVERD_TEST_CLANG, {"-target", "aarch64-linux-gnu",
-                                 "-fsyntax-only", "-w", File.string()});
+        checkHighCClangSyntax(File, {"-target", "aarch64-linux-gnu",
+                                     "-ffreestanding", "-nostdlibinc"});
     EXPECT_TRUE(Compiled.ok()) << Compiled.err << "\n" << Source;
   }
 }

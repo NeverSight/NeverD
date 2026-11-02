@@ -17,6 +17,7 @@
 #include "neverd/loader/ExceptionCommon.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace neverd {
@@ -82,6 +83,11 @@ struct CompactUnwindEntry {
   bool HasStackSize = false;
   /// Section offset of the DWARF FDE for `DwarfFDE` entries.
   uint32_t DwarfFDEOffset = 0;
+  /// Byte offset from this recipe's CodeRange.Begin to the PACIBSPPC whose
+  /// address authenticates the saved return address. Present only for the
+  /// ARM64 PAuth_LR frame mode; zero names the first instruction and is not
+  /// equivalent to an absent signing rule.
+  std::optional<uint32_t> ReturnAddressSigningOffset;
   va_t PersonalityVA = 0;
   va_t LSDAVA = 0;
   bool HasLSDA = false;

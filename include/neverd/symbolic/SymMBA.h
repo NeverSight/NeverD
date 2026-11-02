@@ -237,6 +237,10 @@ struct MBAResult {
   size_t Work = 0;
 };
 
+namespace detail {
+class MBADeepSimplifier;
+}
+
 /// Caller-owned, bounded cache of context-local exact shortening derivations.
 /// The context must outlive this object and remain at the same address. No
 /// sampled equalities or path assumptions are retained. Capacity bounds the
@@ -254,8 +258,7 @@ public:
   uint64_t reusedRoots() const { return ReusedRoots; }
 
 private:
-  friend MBAResult simplifyMBADeep(SymContext &, SymRef, const MBAOptions &,
-                                   MBARewriteCache &);
+  friend class detail::MBADeepSimplifier;
   const SymContext *Owner;
   size_t Capacity;
   uint64_t ReusedRoots = 0;

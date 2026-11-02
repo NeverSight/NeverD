@@ -10,7 +10,7 @@
 #include "neverd/analysis/InterpreterMachineState.h"
 #include "neverd/analysis/LowIRRefinement.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 using namespace neverd;
 using namespace neverd::analysis;

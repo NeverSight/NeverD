@@ -8,9 +8,11 @@
 #define NEVERD_IR_MED_MEDSTACKALIGNMENT_H
 
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedIntegerReturnRange.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -49,6 +51,41 @@ std::vector<std::optional<int64_t>>
 entryStackOffsets(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
                   Arch Architecture, BinaryFormat Format,
                   StackEntryKind Entry = StackEntryKind::Call);
+
+/// Inclusive bounds on a pointer's signed displacement from entry SP. A
+/// dynamic allocation can have bounds without having an exact stack offset.
+struct EntryStackOffsetRange {
+  int64_t Min;
+  int64_t Max;
+};
+
+/// Bounded dynamic displacements and PHI alternatives rooted at entry SP.
+/// Unanchored cycles, unbounded arithmetic and offset overflow stay unknown.
+std::vector<std::optional<EntryStackOffsetRange>>
+entryStackOffsetRanges(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                       Arch Architecture, BinaryFormat Format,
+                       StackEntryKind Entry = StackEntryKind::Call,
+                       const MedCallReturnRanges *CallReturns = nullptr);
+
+/// The largest displacement from entry SP each of \p Values can have, where
+/// copies, bounded displacements, alignment masks and joins define it and no
+/// cycle among them can raise it. A dynamic allocation in a loop has such a
+/// bound without a lower one.
+std::vector<std::optional<int64_t>>
+entryStackOffsetUpperBounds(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                            Arch Architecture, BinaryFormat Format,
+                            StackEntryKind Entry = StackEntryKind::Call,
+                            const MedCallReturnRanges *CallReturns = nullptr);
+
+/// Displacements from entry SP modulo a power-of-two \p Alignment >= 2 smaller
+/// than the native address space. Masked dynamic sizes can retain a residue
+/// without bounds. Native-width wrapping preserves this residue; it does not
+/// establish an exact offset, a nonwrapping interval or a nonnegative size.
+std::vector<std::optional<uint64_t>>
+entryStackOffsetResidues(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                         Arch Architecture, BinaryFormat Format,
+                         uint64_t Alignment,
+                         StackEntryKind Entry = StackEntryKind::Call);
 
 /// Full-width SP definitions in the entry block that align an authenticated
 /// entry-stack offset. Each definition is a distinct frame origin; this does

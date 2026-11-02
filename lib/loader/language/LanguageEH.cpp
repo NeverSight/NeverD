@@ -12,6 +12,8 @@
 
 #include "neverd/loader/LanguageEH.h"
 
+#include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
+
 namespace neverd {
 
 const char *getCFIOpKindName(CFIOpKind Kind) {
@@ -58,6 +60,8 @@ const char *getCFIOpKindName(CFIOpKind Kind) {
     return "negate-ra-state-with-pc";
   case CFIOpKind::Opaque:
     return "opaque";
+  case CFIOpKind::SetRAState:
+    return dwarf_eh::aarch64::kSetRAStateName;
   }
   return "unknown";
 }

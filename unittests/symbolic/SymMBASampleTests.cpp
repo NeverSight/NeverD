@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <random>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -118,19 +119,22 @@ TEST(SymMBASample, VisitsZeroOnesOneThenTheFirstRandomPoint) {
 }
 
 TEST(SymMBASample, MatchesAPAcrossNarrowAndWideWidths) {
-  for (unsigned W : {1u, 8u, 32u, 64u, 65u, 128u, 257u}) {
-    SCOPED_TRACE(W);
-    SymContext Ctx;
-    SymRef Selector = Ctx.mkVar("selector", 64);
-    SymRef X = Ctx.mkVar("x", W), Y = Ctx.mkVar("y", W);
-    SymRef E = Ctx.mkXor(Ctx.mkMul(X, Y), Ctx.mkAdd(X, Y));
-    for (unsigned Sample : {0u, 1u, 2u, 3u, 6u})
-      expectAtSample(Ctx, E, Selector, Sample);
-    SymRef Other = Ctx.mkOr(X, Y);
-    for (unsigned Samples : {0u, 1u, 2u, 3u, 4u, 7u})
-      EXPECT_EQ(detail::agreeOnSamples(Ctx, E, Other, Samples),
-                referenceAgree(Ctx, E, Other, Samples));
-  }
+  for (unsigned Unused : {0u, 17u})
+    for (unsigned W : {1u, 8u, 32u, 64u, 65u, 128u, 257u}) {
+      SCOPED_TRACE(::testing::Message() << W << ":" << Unused);
+      SymContext Ctx;
+      for (unsigned I = 0; I < Unused; ++I)
+        Ctx.mkVar("unused_" + std::to_string(I), 257);
+      SymRef Selector = Ctx.mkVar("selector", 64);
+      SymRef X = Ctx.mkVar("x", W), Y = Ctx.mkVar("y", W);
+      SymRef E = Ctx.mkXor(Ctx.mkMul(X, Y), Ctx.mkAdd(X, Y));
+      for (unsigned Sample : {0u, 1u, 2u, 3u, 6u})
+        expectAtSample(Ctx, E, Selector, Sample);
+      SymRef Other = Ctx.mkOr(X, Y);
+      for (unsigned Samples : {0u, 1u, 2u, 3u, 4u, 7u})
+        EXPECT_EQ(detail::agreeOnSamples(Ctx, E, Other, Samples),
+                  referenceAgree(Ctx, E, Other, Samples));
+    }
 }
 
 TEST(SymMBASample, UnusedWideVariablesDoNotConsumeRandomWords) {
@@ -151,6 +155,206 @@ TEST(SymMBASample, UnusedWideVariablesDoNotConsumeRandomWords) {
   EXPECT_TRUE(detail::agreeOnSamples(Ctx, Hit, Ctx.mkFalse(), 3));
   EXPECT_FALSE(detail::agreeOnSamples(Ctx, Hit, Ctx.mkFalse(), 4));
   expectAtSample(Ctx, Ctx.mkXor(X, Ctx.mkZExt(Y, 64)), X, 6);
+}
+
+TEST(SymMBASample, CancelsOnlyIdenticalCompleteAddends) {
+  for (unsigned W : {8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(W);
+    SymContext Ctx;
+    SymRef X = Ctx.mkVar("x", W), Y = Ctx.mkVar("y", W);
+    SymRef Z = Ctx.mkVar("z", W);
+    llvm::SmallVector<SymRef, 256> Factors;
+    for (unsigned I = 0; I < 256; ++I)
+      Factors.push_back(Ctx.mkXor(Ctx.mkAdd(X, Ctx.mkConst(W, 2 * I)),
+                                  Ctx.mkAnd(Z, Ctx.mkConst(W, 252))));
+    SymRef Product = Ctx.mkMul(Factors);
+    SymRef Tail = Ctx.mkAdd(Ctx.mkXor(X, Y),
+                            Ctx.mkMul(Ctx.mkConst(W, 2), Ctx.mkAnd(X, Y)));
+    SymRef A = Ctx.mkAdd(Product, Tail);
+    SymRef B = Ctx.mkAdd({Product, X, Y});
+    SymRef Scaled = Ctx.mkMul(Ctx.mkConst(W, 3), Product);
+    for (unsigned Samples : {0u, 1u, 3u, 4u, 17u}) {
+      EXPECT_TRUE(referenceAgree(Ctx, A, B, Samples));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, A, B, Samples));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, B, A, Samples));
+      for (SymRef Other :
+           {Ctx.mkAdd({Product, X, Y, Z}), Ctx.mkAdd({Scaled, X, Y}),
+            Ctx.mkAdd({Product, X, Ctx.mkNot(Y)})}) {
+        EXPECT_EQ(detail::agreeOnSamples(Ctx, A, Other, Samples),
+                  referenceAgree(Ctx, A, Other, Samples));
+        EXPECT_EQ(detail::agreeOnSamples(Ctx, Other, A, Samples),
+                  referenceAgree(Ctx, Other, A, Samples));
+      }
+    }
+  }
+}
+
+TEST(SymMBASample, CanceledInputsKeepTheirOriginalRandomWords) {
+  for (unsigned CanceledWidth : {8u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(CanceledWidth);
+    SymContext Ctx;
+    Ctx.mkVar("unused_before", 257);
+    SymRef Canceled = Ctx.mkVar("canceled", CanceledWidth);
+    Ctx.mkVar("unused_between", 128);
+    SymRef X = Ctx.mkVar("x", 64), Y = Ctx.mkVar("y", 32);
+    SymRef Common = CanceledWidth < 64 ? Ctx.mkZExt(Canceled, 64)
+                                       : Ctx.mkExtract(Canceled, 0, 64);
+    const uint32_t Active[] = {Ctx.varId(Canceled), Ctx.varId(X), Ctx.varId(Y)};
+    const auto Values = referenceAssignments(Ctx, Active, 7);
+    SymRef Base = Ctx.mkAdd(Common, Ctx.mkConst(64, 5));
+    for (unsigned Sample : {0u, 1u, 2u, 3u, 6u}) {
+      SCOPED_TRACE(Sample);
+      SymRef Hit =
+          Ctx.mkAnd(Ctx.mkEq(X, Ctx.mkConst(Values[Sample][Ctx.varId(X)])),
+                    Ctx.mkEq(Y, Ctx.mkConst(Values[Sample][Ctx.varId(Y)])));
+      SymRef Other = Ctx.mkAdd(Base, Ctx.mkZExt(Hit, 64));
+      ASSERT_TRUE(referenceAgree(Ctx, Base, Other, Sample));
+      ASSERT_FALSE(referenceAgree(Ctx, Base, Other, Sample + 1));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, Base, Other, Sample));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, Other, Base, Sample));
+      EXPECT_FALSE(detail::agreeOnSamples(Ctx, Base, Other, Sample + 1));
+      EXPECT_FALSE(detail::agreeOnSamples(Ctx, Other, Base, Sample + 1));
+    }
+  }
+}
+
+TEST(SymMBASample, ChecksChangedFactorsBeforeLongCommonProducts) {
+  for (unsigned W : {8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(W);
+    SymContext Ctx;
+    SymRef X = Ctx.mkVar("x", W), Y = Ctx.mkVar("y", W);
+    SymRef Z = Ctx.mkVar("z", W);
+    llvm::SmallVector<SymRef, 128> Factors;
+    for (unsigned I = 0; I < 128; ++I)
+      Factors.push_back(
+          Ctx.mkOr(Ctx.mkXor(Ctx.mkAdd(X, Ctx.mkConst(W, 2 * I)), Z),
+                   Ctx.mkConst(W, 1)));
+    SymRef Common = Ctx.mkMul(Factors);
+    SymRef Tail = Ctx.mkAdd(Ctx.mkXor(X, Y),
+                            Ctx.mkMul(Ctx.mkConst(W, 2), Ctx.mkAnd(X, Y)));
+    SymRef A = Ctx.mkMul(Common, Tail);
+    SymRef B = Ctx.mkMul(Common, Ctx.mkAdd(X, Y));
+    SymRef Miss = Ctx.mkMul(Common, Ctx.mkAdd({X, Y, Ctx.mkConst(W, 1)}));
+    for (unsigned AddMode : {0u, 1u, 2u}) {
+      SymRef L = A, R = B, Wrong = Miss;
+      if (AddMode == 1) {
+        L = Ctx.mkAdd(A, Z);
+        R = Ctx.mkAdd(B, Z);
+        Wrong = Ctx.mkAdd(Miss, Z);
+      } else if (AddMode == 2) {
+        L = Ctx.mkAdd({A, Ctx.mkXor(Y, Z),
+                       Ctx.mkMul(Ctx.mkConst(W, 2), Ctx.mkAnd(Y, Z))});
+        R = Ctx.mkAdd({B, Y, Z});
+        Wrong = Ctx.mkAdd({Miss, Y, Z});
+      }
+      for (unsigned Samples : {0u, 1u, 3u, 4u, 17u}) {
+        EXPECT_TRUE(referenceAgree(Ctx, L, R, Samples));
+        EXPECT_TRUE(detail::agreeOnSamples(Ctx, L, R, Samples));
+        EXPECT_TRUE(detail::agreeOnSamples(Ctx, R, L, Samples));
+        EXPECT_EQ(detail::agreeOnSamples(Ctx, L, Wrong, Samples),
+                  referenceAgree(Ctx, L, Wrong, Samples));
+        EXPECT_EQ(detail::agreeOnSamples(Ctx, Wrong, L, Samples),
+                  referenceAgree(Ctx, Wrong, L, Samples));
+      }
+    }
+    SymRef Expanded = Ctx.mkAdd({Ctx.mkMul(Common, X), Common, Z});
+    SymRef Factored =
+        Ctx.mkAdd(Ctx.mkMul(Common, Ctx.mkAdd(X, Ctx.mkConst(W, 1))), Z);
+    EXPECT_TRUE(referenceAgree(Ctx, Expanded, Factored, 17));
+    EXPECT_TRUE(detail::agreeOnSamples(Ctx, Expanded, Factored, 17));
+    EXPECT_TRUE(detail::agreeOnSamples(Ctx, Factored, Expanded, 17));
+  }
+}
+
+TEST(SymMBASample, CommonFactorsRetainModularZerosAndMultiplicities) {
+  for (unsigned W : {8u, 32u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(W);
+    SymContext Ctx;
+    SymRef X = Ctx.mkVar("x", W), Y = Ctx.mkVar("y", W);
+    SymRef Common =
+        Ctx.mkMul(Ctx.mkConst(llvm::APInt::getOneBitSet(W, W - 1)), Y);
+    SymRef A = Ctx.mkMul(Common, Ctx.mkAdd(X, Ctx.mkConst(W, 2)));
+    SymRef B = Ctx.mkMul(Common, X);
+    SymRef Miss = Ctx.mkMul(Common, Ctx.mkAdd(X, Ctx.mkConst(W, 1)));
+    for (unsigned Samples : {0u, 1u, 2u, 3u, 4u, 17u}) {
+      EXPECT_TRUE(referenceAgree(Ctx, A, B, Samples));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, A, B, Samples));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, B, A, Samples));
+      EXPECT_EQ(detail::agreeOnSamples(Ctx, A, Miss, Samples),
+                referenceAgree(Ctx, A, Miss, Samples));
+      SymRef WrongSum = Ctx.mkAdd({B, Y, Ctx.mkConst(W, 1)});
+      EXPECT_EQ(detail::agreeOnSamples(Ctx, Ctx.mkAdd(A, Y), WrongSum, Samples),
+                referenceAgree(Ctx, Ctx.mkAdd(A, Y), WrongSum, Samples));
+      SymRef Repeated = Ctx.mkMul({X, X, Y});
+      SymRef Other = Ctx.mkMul({X, Y, Y});
+      EXPECT_EQ(detail::agreeOnSamples(Ctx, Repeated, Other, Samples),
+                referenceAgree(Ctx, Repeated, Other, Samples));
+      EXPECT_EQ(detail::agreeOnSamples(Ctx, Other, Repeated, Samples),
+                referenceAgree(Ctx, Other, Repeated, Samples));
+    }
+  }
+}
+
+TEST(SymMBASample, FactoredInputsKeepRandomWordsAndWideIntermediates) {
+  for (unsigned W : {8u, 64u, 65u, 128u, 257u}) {
+    SCOPED_TRACE(W);
+    SymContext Ctx;
+    Ctx.mkVar("unused_before", 257);
+    SymRef Canceled = Ctx.mkVar("canceled", W);
+    Ctx.mkVar("unused_between", 128);
+    SymRef CommonInput = Ctx.mkVar("common", 64);
+    SymRef X = Ctx.mkVar("x", 64), Y = Ctx.mkVar("y", 32);
+    SymRef Common =
+        Ctx.mkOr(Ctx.mkExtract(Ctx.mkUDiv(Ctx.mkZExt(CommonInput, 257),
+                                          Ctx.mkConst(257, 3)),
+                               0, 64),
+                 Ctx.mkConst(64, 1));
+    Common = Ctx.mkMul(Common, Ctx.mkOr(Ctx.mkZExt(Y, 64), Ctx.mkConst(64, 1)));
+    ASSERT_FALSE(SymEvalPlan(Ctx, Common).fitsU64());
+    SymRef CanceledTerm = Ctx.mkZExtOrTrunc(Canceled, 64);
+    const uint32_t Active[] = {Ctx.varId(Canceled), Ctx.varId(CommonInput),
+                               Ctx.varId(X), Ctx.varId(Y)};
+    const auto Values = referenceAssignments(Ctx, Active, 7);
+    SymRef Base = Ctx.mkAdd(Ctx.mkMul(Common, Ctx.mkAdd(X, Ctx.mkConst(64, 7))),
+                            CanceledTerm);
+    for (unsigned Sample : {0u, 1u, 2u, 3u, 6u}) {
+      SCOPED_TRACE(Sample);
+      SymRef Hit =
+          Ctx.mkAnd(Ctx.mkEq(X, Ctx.mkConst(Values[Sample][Ctx.varId(X)])),
+                    Ctx.mkEq(Y, Ctx.mkConst(Values[Sample][Ctx.varId(Y)])));
+      SymRef Other = Ctx.mkAdd(
+          Ctx.mkMul(Common,
+                    Ctx.mkAdd({X, Ctx.mkConst(64, 7), Ctx.mkZExt(Hit, 64)})),
+          CanceledTerm);
+      ASSERT_TRUE(referenceAgree(Ctx, Base, Other, Sample));
+      ASSERT_FALSE(referenceAgree(Ctx, Base, Other, Sample + 1));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, Base, Other, Sample));
+      EXPECT_TRUE(detail::agreeOnSamples(Ctx, Other, Base, Sample));
+      EXPECT_FALSE(detail::agreeOnSamples(Ctx, Base, Other, Sample + 1));
+      EXPECT_FALSE(detail::agreeOnSamples(Ctx, Other, Base, Sample + 1));
+    }
+  }
+}
+
+TEST(SymMBASample, ResidualPlansKeepInternalWideArithmetic) {
+  SymContext Ctx;
+  SymRef X = Ctx.mkVar("x", 8), Y = Ctx.mkVar("y", 8);
+  SymRef Product = Ctx.mkMul(X, Y);
+  SymRef Wide = Ctx.mkUDiv(Ctx.mkZExt(X, 257), Ctx.mkConst(257, 3));
+  SymRef Low = Ctx.mkExtract(Wide, 0, 8);
+  SymRef A = Ctx.mkAdd(Product, Low);
+  SymRef B = Ctx.mkAdd(Product, Ctx.mkUDiv(X, Ctx.mkConst(8, 3)));
+  SymRef Miss = Ctx.mkAdd(Product, X);
+  ASSERT_FALSE(SymEvalPlan(Ctx, Low).fitsU64());
+  for (unsigned Samples : {0u, 1u, 2u, 3u, 4u, 17u}) {
+    EXPECT_TRUE(referenceAgree(Ctx, A, B, Samples));
+    EXPECT_TRUE(detail::agreeOnSamples(Ctx, A, B, Samples));
+    EXPECT_TRUE(detail::agreeOnSamples(Ctx, B, A, Samples));
+    EXPECT_EQ(detail::agreeOnSamples(Ctx, A, Miss, Samples),
+              referenceAgree(Ctx, A, Miss, Samples));
+    EXPECT_EQ(detail::agreeOnSamples(Ctx, Miss, A, Samples),
+              referenceAgree(Ctx, Miss, A, Samples));
+  }
 }
 
 TEST(SymMBASample, ChecksInternalWidthsAndBothPlanOrientations) {

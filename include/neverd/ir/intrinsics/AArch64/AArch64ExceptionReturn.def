@@ -1,0 +1,25 @@
+//===- AArch64ExceptionReturn.def - Exception-return admission -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Expand INTRINSIC(Id, Insn) for the legacy IR ID and Capstone instruction,
+/// or TEXT(Name, Text) for its shared refusal diagnostic. ERETAA/ERETAB have
+/// no legacy IR ID and retain their existing PAuth decoder refusal.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_EXCEPTION_RETURN_INTRINSIC
+#define NEVERD_A64_EXCEPTION_RETURN_INTRINSIC(Id, Insn)
+#endif
+#ifndef NEVERD_A64_EXCEPTION_RETURN_TEXT
+#define NEVERD_A64_EXCEPTION_RETURN_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_EXCEPTION_RETURN_INTRINSIC(Eret, ERET)
+NEVERD_A64_EXCEPTION_RETURN_TEXT(
+    kAArch64ExceptionReturnUnsupported,
+    "AArch64 exception return requires an ELR/SPSR/PSTATE runtime contract")
+
+#undef NEVERD_A64_EXCEPTION_RETURN_INTRINSIC
+#undef NEVERD_A64_EXCEPTION_RETURN_TEXT

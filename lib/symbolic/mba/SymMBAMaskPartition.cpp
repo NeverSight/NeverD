@@ -86,6 +86,9 @@ bool isXorComplement(const SymContext &Ctx, SymRef A, SymRef B) {
         auto It = Negated.find(Term.index());
         if (It != Negated.end())
           Opposite = It->second;
+        else if (Ctx.isConst(Term) && Ctx.isConst(BTerms.front()) &&
+                 Ctx.constValue(Term) == ~Ctx.constValue(BTerms.front()))
+          Opposite = 0;
       }
       if (Opposite != BTerms.size()) {
         Match = Opposite;
@@ -117,6 +120,17 @@ SymRef minusTwoMinusOperand(const SymContext &Ctx, SymRef R) {
 bool isMaskComplement(const SymContext &Ctx, SymRef A, SymRef B) {
   if (detail::isBitwiseComplement(Ctx, A, B) || isXorComplement(Ctx, A, B))
     return true;
+  // Adding opposite offsets preserves a complement: (x-c) + (~x+c)=-1.
+  // Keep the whole words related instead of treating their masked uses as
+  // independent inputs. XOR builders may encode ~x by complementing a literal.
+  if (Ctx.op(A) == SymOp::Add && Ctx.numOperands(A) == 2 &&
+      Ctx.op(B) == SymOp::Add && Ctx.numOperands(B) == 2 &&
+      Ctx.isConst(Ctx.operand(A, 0)) && Ctx.isConst(Ctx.operand(B, 0)) &&
+      (Ctx.constValue(Ctx.operand(A, 0)) + Ctx.constValue(Ctx.operand(B, 0)))
+          .isZero() &&
+      (detail::isBitwiseComplement(Ctx, Ctx.operand(A, 1), Ctx.operand(B, 1)) ||
+       isXorComplement(Ctx, Ctx.operand(A, 1), Ctx.operand(B, 1))))
+    return true;
   for (unsigned Swap = 0; Swap < 2; ++Swap) {
     SymRef Negated = negatedOperand(Ctx, A);
     SymRef Offset = minusTwoMinusOperand(Ctx, B);
@@ -127,6 +141,23 @@ bool isMaskComplement(const SymContext &Ctx, SymRef A, SymRef B) {
     std::swap(A, B);
   }
   return false;
+}
+
+SymRef maskedDifferenceSource(const SymContext &Ctx, SymRef R, SymRef Mask) {
+  if (Ctx.op(R) != SymOp::Add || Ctx.numOperands(R) != 2)
+    return {};
+  for (unsigned I = 0; I != 2; ++I) {
+    if (Ctx.operand(R, I) != Mask)
+      continue;
+    auto Subtracted = negatedOperand(Ctx, Ctx.operand(R, 1 - I));
+    if (!Subtracted || Ctx.op(Subtracted) != SymOp::And ||
+        Ctx.numOperands(Subtracted) != 2)
+      continue;
+    for (unsigned J = 0; J != 2; ++J)
+      if (Ctx.operand(Subtracted, J) == Mask)
+        return Ctx.operand(Subtracted, 1 - J);
+  }
+  return {};
 }
 
 SymRef sharedPartitionFactor(SymContext &Ctx, SymRef A, SymRef B, SymOp Op) {
@@ -144,12 +175,6 @@ SymRef sharedPartitionFactor(SymContext &Ctx, SymRef A, SymRef B, SymOp Op) {
 
   // The outer operator may have flattened one mask. Rebuild only its
   // nonshared operands, then prove that the two residual masks complement.
-  const SymOp Dual = Op == SymOp::And ? SymOp::Or : SymOp::And;
-  auto ContainsDual = [&](llvm::ArrayRef<SymRef> Terms) {
-    return llvm::any_of(Terms, [&](SymRef R) { return Ctx.op(R) == Dual; });
-  };
-  if (!ContainsDual(AF) && !ContainsDual(BF))
-    return SymRef();
   llvm::SmallVector<SymRef, 8> Shared, Left, Right;
   size_t I = 0, J = 0;
   while (I < AF.size() && J < BF.size()) {
@@ -185,6 +210,37 @@ SymRef detail::foldPartitionedMaskSum(SymContext &Ctx, SymRef A, SymRef B,
   if (SymRef Factor = sharedPartitionFactor(Ctx, A, B, SymOp::Or))
     return Ctx.mkAdd(Ctx.mkConst(Offset - llvm::APInt(Ctx.width(A), 1)),
                      Factor);
+  if (Ctx.op(A) == SymOp::And)
+    std::swap(A, B);
+  if (Ctx.op(A) == SymOp::Or && Ctx.op(B) == SymOp::And &&
+      Ctx.numOperands(A) == 2 && Ctx.numOperands(B) == 2) {
+    for (unsigned I = 0; I != 2; ++I)
+      for (unsigned J = 0; J != 2; ++J) {
+        auto Mask = Ctx.operand(A, I), Word = Ctx.operand(A, 1 - I);
+        if (Ctx.operand(B, J) != Mask)
+          continue;
+        auto Masked = Ctx.operand(B, 1 - J);
+        bool Same = Word == Masked;
+        if (!Same && Ctx.isConst(Mask) && Ctx.op(Word) == SymOp::Add &&
+            Ctx.op(Masked) == SymOp::Add && Ctx.numOperands(Word) == 2 &&
+            Ctx.numOperands(Masked) == 2 &&
+            Ctx.operand(Word, 1) == Ctx.operand(Masked, 1) &&
+            Ctx.isConst(Ctx.operand(Word, 0)) &&
+            Ctx.isConst(Ctx.operand(Masked, 0))) {
+          auto Difference = Ctx.constValue(Ctx.operand(Word, 0)) -
+                            Ctx.constValue(Ctx.operand(Masked, 0));
+          Same =
+              Difference.countr_zero() >= Ctx.constValue(Mask).getActiveBits();
+        }
+        if (Same && Ctx.isConst(Mask))
+          return Ctx.mkAdd({Ctx.mkConst(Offset), Mask, Word});
+        auto Other = maskedDifferenceSource(Ctx, Masked, Mask);
+        // M-(M&Q)=M&~Q has no borrow. When Q=~P, the whole sum is
+        // (M|P)+(M&P)=M+P, including arbitrary masks and modular overflow.
+        if (Other && isMaskComplement(Ctx, Word, Other))
+          return Ctx.mkAdd({Ctx.mkConst(Offset), Mask, Word});
+      }
+  }
   return SymRef();
 }
 

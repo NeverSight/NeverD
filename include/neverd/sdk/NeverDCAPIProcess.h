@@ -22,7 +22,8 @@ enum {
 /// is neither required nor changed. Requires CPU or driver emulation enabled.
 /// OptionsJSON is NULL for defaults, or a NUL-terminated UTF-8 JSON object of
 /// at most NEVERD_PROCESS_OPTIONS_JSON_LIMIT bytes. Excluding the hex
-/// characters of validated Android DEX images, text is also bounded by
+/// characters of validated Android DEX images and Linux regular-file bytes,
+/// text is also bounded by
 /// NEVERD_PROCESS_OPTIONS_JSON_METADATA_LIMIT. Optional keys: backend,
 /// instruction_limit, event_limit, timeout_microseconds, memory_limit,
 /// stack_size, output_limit, instruction_quantum, arguments and environment.

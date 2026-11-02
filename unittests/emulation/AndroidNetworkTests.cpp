@@ -16,6 +16,7 @@
 
 #include <cstring>
 #include <tuple>
+#include <utility>
 namespace neverd::emulation {
 namespace {
 constexpr uint64_t Buffer = 0x20000000;
@@ -128,6 +129,41 @@ TEST_P(AndroidNetwork,
   returned(R);
   EXPECT_EQ(word(R, 0), UINT64_MAX);
   EXPECT_EQ(word(R, 1), 97u);
+}
+
+TEST_P(AndroidNetwork, TCPConnectFailuresShareRawNamedDynamicAndVariadicCalls) {
+  Options.Android->Libraries["libc.so"] = {"connect"};
+  using Case = std::pair<uint64_t, uint32_t>;
+  for (const auto &[Mode, Count] :
+       {Case{0, 4}, Case{0, 4097}, Case{0, UINT32_MAX}, Case{1, 4},
+        Case{2, 4}}) {
+    SCOPED_TRACE(Mode);
+    SCOPED_TRACE(Count);
+    Options.LinuxNetwork->TCPConnectFailures =
+        LinuxTCPConnectFailures{101, Count};
+    const auto R = run("network_connect_failures", Mode);
+    if (!Mode)
+      returned(R);
+    else {
+      EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
+      EXPECT_FALSE(R.ReturnValue);
+      EXPECT_NE(R.Diagnostic.find(Mode == 1 ? "failure contract exhausted"
+                                            : "closed before reuse"),
+                std::string::npos);
+      ASSERT_FALSE(R.NativeCalls.empty());
+      EXPECT_EQ(R.NativeCalls.back().Name, "connect");
+      EXPECT_FALSE(R.NativeCalls.back().Result);
+      EXPECT_EQ(word(R, 10), 0xa5a5a5a5a5a5a5a5ULL);
+    }
+    EXPECT_EQ(word(R, 0), 0u);
+    for (unsigned I = 0; I != (Mode == 2 ? 1u : 4u); ++I) {
+      EXPECT_EQ(word(R, 1 + 2 * I), I == 3 ? uint64_t(-101) : UINT64_MAX);
+      EXPECT_EQ(word(R, 2 + 2 * I), I == 3 ? 73u : 101u);
+    }
+    EXPECT_TRUE(std::all_of(R.MemorySnapshots[0].Bytes.begin() + 88,
+                            R.MemorySnapshots[0].Bytes.end(),
+                            [](uint8_t V) { return V == 0xa5; }));
+  }
 }
 
 TEST_P(AndroidNetwork, DatagramFallbackRetainsPacketsSourcesAndExplicitErrors) {
@@ -373,6 +409,63 @@ TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
   EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
   EXPECT_NE(R.Diagnostic.find("matching offline connection"),
             std::string::npos);
+}
+TEST_P(AndroidNetwork, OutgoingMismatchReportsStreamAndBufferOffsets) {
+  Options.Android->ObserveMemoryOnFailure = true;
+  auto &Bytes = Options.LinuxNetwork->Connections.front().ExpectedSend;
+  for (unsigned Raw : {0, 1}) {
+    for (unsigned Offset : {1, 3, 4}) {
+      SCOPED_TRACE(testing::Message() << "raw=" << Raw << " offset=" << Offset);
+      const auto Original = Bytes[Offset];
+      Bytes[Offset] = 0;
+      auto R = run("network_stream", Raw);
+      EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(
+          R.Diagnostic,
+          Offset == 1
+              ? "outgoing TCP bytes differ from the offline contract at "
+                "stream offset 1 (buffer offset 1): expected 0x00, actual "
+                "0xff (connection index 0)"
+          : Offset == 3
+              ? "outgoing TCP bytes differ from the offline contract at "
+                "stream offset 3 (buffer offset 1): expected 0x00, actual "
+                "0x13 (connection index 0)"
+              : "outgoing TCP bytes differ from the offline contract at "
+                "stream offset 4 (buffer offset 0): expected 0x00, actual "
+                "0x7f (connection index 0)");
+      if (Offset > 1)
+        EXPECT_EQ(word(R, 2), 2u);
+      if (Offset > 3)
+        EXPECT_EQ(word(R, 3), 2u);
+      Bytes[Offset] = Original;
+    }
+  }
+}
+TEST_P(AndroidNetwork, MismatchKeepsConnectionIdentityAcrossFDReuse) {
+  Options.Android->ObserveMemoryOnFailure = true;
+  auto Stream = Options.LinuxNetwork->Connections.front();
+  Stream.ExpectedSend = {0, 0};
+  auto Failure = Stream;
+  Failure.ConnectErrno = 111;
+  Failure.ExpectedSend.clear();
+  Failure.Receive.clear();
+  Failure.ReceiveEOF = false;
+  Options.LinuxNetwork->Connections = {Failure, Stream, Stream};
+  for (unsigned Mode : {0, 1, 2, 3}) {
+    SCOPED_TRACE(Mode);
+    auto R = run("network_stream_identity", Mode);
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(word(R, 0), 1u);
+    EXPECT_EQ(word(R, 1), 1u);
+    EXPECT_EQ(R.Diagnostic,
+              Mode < 2
+                  ? "outgoing TCP bytes differ from the offline contract at "
+                    "stream offset 1 (buffer offset 1): expected 0x00, actual "
+                    "0xff (connection index 1)"
+                  : "outgoing TCP bytes differ from the offline contract at "
+                    "stream offset 1 (buffer offset 1): expected 0x00, actual "
+                    "0xff (connection index 2)");
+  }
 }
 TEST_P(AndroidNetwork, DynamicResolverUsesTheSameOwner) {
   Options.Android->Libraries["liboffline.so"] = {"getaddrinfo", "freeaddrinfo"};

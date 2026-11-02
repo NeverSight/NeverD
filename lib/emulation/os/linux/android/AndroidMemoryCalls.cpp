@@ -42,7 +42,7 @@ BionicResult Bionic::copyMemory(const NativeCallEvent &Call) {
       Call.Name == symbol::Memcpy || Call.Name == symbol::MemcpyChk;
   if ((Call.Name == symbol::MemcpyChk || Call.Name == symbol::MemmoveChk) &&
       Size > A[3])
-    return failure("FORTIFY destination extent exceeded: " + Call.Name);
+    return failure(diagnostic::FortifyWritePrefix + Call.Name);
   if (auto E = access(A[0], Size, Write))
     return std::move(E);
   if (auto E = access(A[1], Size, Read))
@@ -63,7 +63,7 @@ BionicResult Bionic::setMemory(const NativeCallEvent &Call) {
   const auto &A = Call.Arguments;
   uint64_t Size = A[2];
   if (Call.Name == symbol::MemsetChk && Size > A[3])
-    return failure("FORTIFY destination extent exceeded: " + Call.Name);
+    return failure(diagnostic::FortifyWritePrefix + Call.Name);
   if (auto E = access(A[0], Size, Write))
     return std::move(E);
   std::vector<uint8_t> Bytes(Size, static_cast<uint8_t>(A[1]));

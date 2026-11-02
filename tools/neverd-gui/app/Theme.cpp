@@ -1,14 +1,26 @@
+//===- Theme.cpp - Workbench colors and bundled fonts ---------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Apply the owned palette and font families across desktop platforms.
+//===----------------------------------------------------------------------===//
+
 #include "Theme.h"
 
 #include "../Config.h"
+#include "Language.h"
 #include "WorkbenchStyle.h"
 
 #include <QApplication>
 #include <QFile>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QPalette>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QStringList>
 #include <QStyle>
 #include <algorithm>
 
@@ -67,6 +79,65 @@ constexpr char StyleSheetResource[] = ":/neverd/theme.qss";
 constexpr char ModePlaceholder[] = "Mode";
 constexpr char CodeFontPlaceholder[] = "CodeFont";
 
+QFont withWorkbenchMetrics(QFont font) {
+  // Horizontal grid fitting can give variable monospace fonts different
+  // advances for W and i. Keep fractional widths and vertical hinting.
+  font.setHintingPreference(QFont::PreferVerticalHinting);
+  return font;
+}
+
+void loadFonts() {
+  static const bool loaded = [] {
+    for (const auto *file :
+         {"NotoSans.ttf", "JetBrainsMonoNL-Regular.ttf", "NotoSansArabic.ttf",
+          "NotoSansSymbols2.ttf", "NotoSansCJK.ttc"})
+      if (QFontDatabase::addApplicationFont(QStringLiteral(":/neverd/fonts/") +
+                                            QLatin1String(file)) < 0)
+        qFatal("Cannot load bundled workbench font %s", file);
+    return true;
+  }();
+  Q_UNUSED(loaded);
+}
+
+QStringList configureFontFallbacks() {
+  loadFonts();
+  const QString language = currentLanguage();
+  const auto cjk = language == QLatin1String("ja")      ? "Noto Sans CJK JP"
+                   : language == QLatin1String("ko")    ? "Noto Sans CJK KR"
+                   : language == QLatin1String("zh-TW") ? "Noto Sans CJK TC"
+                                                        : "Noto Sans CJK SC";
+  // Punctuation and symbols can inherit the adjacent text's script. Keep
+  // their bundled fallbacks on every script, not just Common; otherwise an
+  // arrow after Cyrillic or Arabic can pick up a desktop font.
+  const QStringList symbols{QStringLiteral("Noto Sans Symbols 2"),
+                            QStringLiteral("JetBrains Mono NL"),
+                            QLatin1String(cjk)};
+  const auto fallback = [&](QChar::Script script, const char *family) {
+    QStringList families{QLatin1String(family)};
+    families.append(symbols);
+    families.removeDuplicates();
+    // Qt clears the font cache even when the fallback list is unchanged.
+    if (QFontDatabase::applicationFallbackFontFamilies(script) != families)
+      QFontDatabase::setApplicationFallbackFontFamilies(script, families);
+  };
+  fallback(QChar::Script_Han, cjk);
+  fallback(QChar::Script_Hiragana, "Noto Sans CJK JP");
+  fallback(QChar::Script_Katakana, "Noto Sans CJK JP");
+  fallback(QChar::Script_Hangul, "Noto Sans CJK KR");
+  fallback(QChar::Script_Arabic, "Noto Sans Arabic");
+  fallback(QChar::Script_Cyrillic, "Noto Sans");
+  fallback(QChar::Script_Greek, "Noto Sans");
+  if (QFontDatabase::applicationFallbackFontFamilies(QChar::Script_Common) !=
+      symbols)
+    QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Common,
+                                                      symbols);
+  // CoreText shaping can also use the font's own fallback list.
+  return {QStringLiteral("Noto Sans"), QLatin1String(cjk),
+          QStringLiteral("Noto Sans Arabic"),
+          QStringLiteral("Noto Sans Symbols 2"),
+          QStringLiteral("JetBrains Mono NL")};
+}
+
 struct PaletteRole {
   const char *name;
   QPalette::ColorRole role;
@@ -85,12 +156,16 @@ constexpr PaletteRole PaletteRoles[] = {
     {"ToolTipText", QPalette::ToolTipText},
     {"PlaceholderText", QPalette::PlaceholderText},
     {"Link", QPalette::Link},
+    {"LinkVisited", QPalette::LinkVisited},
+    {"BrightText", QPalette::BrightText},
+    {"Accent", QPalette::Accent},
     {"Light", QPalette::Light},
     {"Midlight", QPalette::Midlight},
     {"Mid", QPalette::Mid},
     {"Dark", QPalette::Dark},
     {"Shadow", QPalette::Shadow},
 };
+static_assert(std::size(PaletteRoles) == QPalette::NColorRoles - 1);
 } // namespace
 
 Theme &Theme::instance() {
@@ -99,19 +174,13 @@ Theme &Theme::instance() {
 }
 
 Theme::Theme() {
-  // Once the fixed font was asked for, Qt 6.8's GTK platform theme answers
-  // the next system font query after a theme change with the fixed font, and
-  // every window without a font of its own -- the dialogs' titles among them
-  // -- draws in the code font.  Keep the system font of now.
-  if (qGuiApp)
-    QGuiApplication::setFont(QGuiApplication::font());
   QSettings settings;
   mode_ = modeFromName(settings.value(ModeKey).toString());
   codeFont_ = defaultCodeFont();
   if (const auto saved = settings.value(FontKey).toString(); !saved.isEmpty()) {
     QFont font;
     if (font.fromString(saved))
-      codeFont_ = font;
+      codeFont_ = withWorkbenchMetrics(font);
   }
   loadColors();
 }
@@ -133,18 +202,20 @@ void Theme::setMode(Mode mode) {
 }
 
 QFont Theme::defaultCodeFont() {
-  QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-  if (QFontDatabase::hasFamily(QStringLiteral("Consolas")))
-    font.setFamily(QStringLiteral("Consolas"));
-  font.setPointSize(::neverd::limits::gui_config::kThemeDefaultCodePointSize);
+  loadFonts();
+  // A point has different logical-pixel sizes on Cocoa and other desktops.
+  // Use the platform's normal reading size for code too: Cocoa's FixedFont
+  // defaults to 10 pt even when its interface font is 13 pt.
+  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  font.setFamily(QStringLiteral("JetBrains Mono NL"));
   font.setStyleHint(QFont::Monospace, QFont::PreferAntialias);
   font.setFixedPitch(true);
-  return font;
+  return withWorkbenchMetrics(font);
 }
 
 void Theme::setCodeFont(const QFont &font) {
   const bool family = font.family() != codeFont_.family();
-  codeFont_ = font;
+  codeFont_ = withWorkbenchMetrics(font);
   QSettings().setValue(FontKey, font.toString());
   // Text fields take the family, but not the zoomed size, from the style
   // sheet.
@@ -156,16 +227,21 @@ void Theme::setCodeFont(const QFont &font) {
 
 void Theme::zoomCodeFont(int steps) {
   QFont font = codeFont_;
-  font.setPointSize(
-      std::clamp(font.pointSize() + steps,
-                 ::neverd::limits::gui_config::kThemeMinimumCodePointSize,
-                 ::neverd::limits::gui_config::kThemeMaximumCodePointSize));
+  const qreal points =
+      font.pointSizeF() > 0 ? font.pointSizeF() : QFontInfo(font).pointSizeF();
+  font.setPointSizeF(std::clamp<qreal>(
+      points + steps, ::neverd::limits::gui_config::kThemeMinimumCodePointSize,
+      ::neverd::limits::gui_config::kThemeMaximumCodePointSize));
   setCodeFont(font);
 }
 
 void Theme::resetCodeFontSize() {
   QFont font = codeFont_;
-  font.setPointSize(::neverd::limits::gui_config::kThemeDefaultCodePointSize);
+  const auto defaults = defaultCodeFont();
+  if (defaults.pixelSize() > 0)
+    font.setPixelSize(defaults.pixelSize());
+  else
+    font.setPointSizeF(defaults.pointSizeF());
   setCodeFont(font);
 }
 
@@ -187,12 +263,18 @@ void Theme::apply() {
     emit changed();
     return;
   }
+  // Qt's macOS default hides action icons even in application-painted menus.
+  // Apply after QApplication initializes the platform's defaults.
+  QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, false);
   // Under the application style sheet, the workbench style is the base of the
   // style sheet's style.
   if (QStyle *style = application->style();
       !qobject_cast<WorkbenchStyle *>(style) &&
       !style->findChild<WorkbenchStyle *>(Qt::FindDirectChildrenOnly))
     application->setStyle(new WorkbenchStyle);
+  QFont uiFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  uiFont.setFamilies(configureFontFallbacks());
+  application->setFont(withWorkbenchMetrics(uiFont));
   QPalette palette;
   for (const auto &entry : PaletteRoles)
     palette.setColor(entry.role,
@@ -216,14 +298,16 @@ void Theme::apply() {
       const QString name = match.captured(1);
       if (name == QLatin1String(ModePlaceholder))
         resolved += modeName(mode_);
-      else if (name == QLatin1String(CodeFontPlaceholder))
+      else if (name == QLatin1String(CodeFontPlaceholder)) {
         // Zooming the code views leaves text fields alone.
-        resolved +=
-            QStringLiteral("%1pt \"%2\"")
-                .arg(::neverd::limits::gui_config::kThemeDefaultCodePointSize)
-                .arg(codeFont_.family());
-      else if (const auto color = chrome_.constFind(name);
-               color != chrome_.cend())
+        const auto font = defaultCodeFont();
+        resolved += QStringLiteral("%1%2 \"%3\"")
+                        .arg(font.pixelSize() > 0 ? font.pixelSize()
+                                                  : font.pointSizeF())
+                        .arg(font.pixelSize() > 0 ? "px" : "pt")
+                        .arg(codeFont_.family());
+      } else if (const auto color = chrome_.constFind(name);
+                 color != chrome_.cend())
         // A translucent color keeps its alpha.
         resolved += color->alpha() == 255
                         ? color->name()

@@ -7,7 +7,7 @@
 /// Preserve the CRT's collided-unwind guard while using LLVM's virtual EBP.
 
 #include "neverd/backend/RewriteSourceIdentity.h"
-#include "neverd/backend/llvm/X86RegistrationLocalUnwind.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLocalUnwind.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/IRBuilder.h"

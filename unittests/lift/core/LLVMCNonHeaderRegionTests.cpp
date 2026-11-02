@@ -383,6 +383,108 @@ TEST(LLVMCInternalExitRegions, SharedDestinationRetainsDistinctExitValues) {
 )"));
 }
 
+TEST(LLVMCInternalExitRegions,
+     HeaderAndBodyExitsKeepDistinctUncoalescedValues) {
+  for (bool HeaderWork : {false, true}) {
+    for (bool Invert : {false, true}) {
+      SCOPED_TRACE(HeaderWork);
+      SCOPED_TRACE(Invert);
+      std::string IR = MultipleExits;
+      // Keep the header's exit value distinct from the carried value. PHI
+      // coalescing must not hide an incorrectly repeated header-edge copy.
+      replaceAll(IR, "[%v, %head], [%sum, %body]",
+                 "[%seed, %head], [%sum, %body]");
+      if (!HeaderWork)
+        replaceAll(IR, " call void @observe(i32 1, i32 %v)\n", "");
+      if (Invert) {
+        replaceAll(IR, "icmp ult i32 %i, %bound", "icmp uge i32 %i, %bound");
+        replaceAll(IR, "br i1 %more, label %body, label %exit",
+                   "br i1 %more, label %exit, label %body");
+      }
+      const auto C = emit(IR);
+      EXPECT_EQ(C.find("goto "), std::string::npos) << C;
+      std::string Body = R"(
+      uint32_t v=seed;
+      for (unsigned i=0;;++i) {
+        HEADER_OBSERVER
+        if (i==(n&7u)) { v=seed; break; }
+        v+=5u; expect(2,v);
+        if ((seed&1u) && i==1) break;
+      }
+      expect(3,v); expected=v;
+)";
+      replaceAll(Body, "HEADER_OBSERVER", HeaderWork ? "expect(1,v);" : "");
+      runOracle(IR, C, harness(Body));
+    }
+  }
+}
+
+TEST(LLVMCInternalExitRegions, FinalIterationReloadRetainsValueAndPointer) {
+  const std::string IR = R"(
+declare void @advance(ptr)
+define i32 @exercise(ptr %words, i32 %limit) {
+entry:
+ %other = getelementptr [4 x i32], ptr %words, i64 0, i64 1
+ %saved = getelementptr [4 x i32], ptr %words, i64 0, i64 2
+ br label %head
+head:
+ %i = phi i32 [0, %entry], [%next, %body]
+ %before = load i32, ptr %words
+ %ready = icmp ne i32 %before, 0
+ br i1 %ready, label %exit, label %body
+body:
+ call void @advance(ptr %words)
+ %next = add i32 %i, 1
+ %done = icmp uge i32 %next, %limit
+ br i1 %done, label %reload, label %head
+reload:
+ %after = load i32, ptr %words
+ br label %exit
+exit:
+ %value = phi i32 [%before, %head], [%after, %reload]
+ %destination = phi ptr [%words, %head], [%other, %reload]
+ store i32 %value, ptr %saved
+ %marked = xor i32 %value, 90
+ store i32 %marked, ptr %destination
+ ret i32 %value
+})";
+  const auto C = emit(IR);
+  EXPECT_EQ(C.find("goto "), std::string::npos) << C;
+  runOracle(IR, C, R"(
+#include <stdint.h>
+#include <string.h>
+uint32_t words[4];
+static uint32_t calls, arrival, payload;
+void advance(void *storage) {
+  uint32_t *p=storage;
+  ++calls;
+  if (calls==arrival) p[0]=payload;
+}
+extern uint32_t exercise(void *,uint32_t);
+int main(void) {
+  const uint32_t values[]={1,0x80000000u,UINT32_MAX};
+  for (unsigned limit=1;limit<=8;++limit)
+    for (arrival=0;arrival<=10;++arrival)
+      for (unsigned v=0;v<3;++v) {
+        payload=values[v]; calls=0;
+        words[0]=arrival==0?payload:0;
+        words[1]=0x12345678u; words[2]=0x87654321u; words[3]=0xabcdef01u;
+        uint32_t expected[4]; memcpy(expected,words,sizeof words);
+        unsigned count=0, destination=0;
+        while (!expected[0]) {
+          ++count;
+          if (count==arrival) expected[0]=payload;
+          if (count>=limit) { destination=1; break; }
+        }
+        uint32_t result=expected[0];
+        expected[2]=result; expected[destination]=result^90u;
+        if (exercise(words,limit)!=result || calls!=count ||
+            memcmp(words,expected,sizeof words)) return 1;
+      }
+  return 0;
+})");
+}
+
 TEST(LLVMCInternalExitRegions, EarlyContinuationRetainsCompleteFallback) {
   const std::string IR = R"(
 declare void @observe(i32, i32)

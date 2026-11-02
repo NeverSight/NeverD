@@ -6,7 +6,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
@@ -111,7 +111,7 @@ size_t bitCount(uint64_t Value) {
 
 void expectGenericRex2DecodeLiftAndEmulate();
 void expectPackedConvertControlAndMemoryForms();
-void expectExplicitMsrInvalidateAndHighCFailClosed();
+void expectExplicitMsrAndInvalidationContracts();
 
 void expectMemoryDetail(const std::vector<uint8_t> &Bytes, x86_reg Base,
                         x86_reg Index, int Scale, int64_t Displacement) {
@@ -3956,7 +3956,7 @@ TEST(X86APXEVEXExistingGpr,
 
   expectPackedConvertControlAndMemoryForms();
   expectGenericRex2DecodeLiftAndEmulate();
-  expectExplicitMsrInvalidateAndHighCFailClosed();
+  expectExplicitMsrAndInvalidationContracts();
 }
 
 TEST(X86APXEVEXExistingGpr,
@@ -5123,7 +5123,7 @@ void expectGenericRex2DecodeLiftAndEmulate() {
   }
 }
 
-void expectExplicitMsrInvalidateAndHighCFailClosed() {
+void expectExplicitMsrAndInvalidationContracts() {
   // Preserve the complete encoding family for every explicit-operand MSR
   // form.  The single opaque operation is intentionally the first effect:
   // feature/CPL/XCR0/bitmap/intercept checks and architectural faults belong
@@ -5220,6 +5220,22 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
          x86reg::R15,
          0,
          UINT32_C(0x1b01)},
+        {"rdmsr-vex-imm",
+         {0xc4, 0x07, 0x7b, 0xf6, 0xc7, 0x78, 0x56, 0x34, 0x92},
+         X86MsrAccessKind::RdmsrVexImmediate,
+         false,
+         true,
+         x86reg::R15,
+         0,
+         UINT32_C(0x92345678)},
+        {"wrmsrns-vex-imm",
+         {0xc4, 0x07, 0x7a, 0xf6, 0xc7, 0x78, 0x56, 0x34, 0x92},
+         X86MsrAccessKind::WrmsrnsVexImmediate,
+         true,
+         true,
+         x86reg::R15,
+         0,
+         UINT32_C(0x92345678)},
     };
 
     for (const MsrCase &Test : Cases) {
@@ -5241,6 +5257,14 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
       EXPECT_TRUE(intrinsicX86MsrAccessShapeIsValid(
           Intrinsic::X86MsrAccess, x86MsrAccessLowShape(Op, Arch::X64)));
       EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X86MsrAccess));
+      EXPECT_FALSE(intrinsicX86MsrAccessShapeIsValid(
+          Intrinsic::X86MsrAccess, x86MsrAccessLowShape(Op, Arch::X86)));
+      if (Test.Immediate) {
+        auto Bad = Op;
+        Bad.Inputs[2] = NdVar::reg(x86reg::RCX, 4);
+        EXPECT_FALSE(intrinsicX86MsrAccessShapeIsValid(
+            Intrinsic::X86MsrAccess, x86MsrAccessLowShape(Bad, Arch::X64)));
+      }
 
       if (Test.Immediate) {
         ASSERT_TRUE(Op.Inputs[2].isConst());
@@ -5388,14 +5412,12 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
     });
   }
 
-  // These effects have no faithful standalone-C helper.  Ensure the High C
-  // renderer stops rather than silently emitting an undeclared approximation.
+  // MSR and invalidation operations use owned assembly/intrinsic renderers;
+  // neither may fall back to an undeclared standalone-C helper.
   EXPECT_EQ(intrinsicCName(Intrinsic::X86MsrAccess), nullptr);
   EXPECT_EQ(intrinsicCName(Intrinsic::X86Invalidate), nullptr);
   EXPECT_EQ(intrinsicCName(Intrinsic::X86RequireDivPrecondition), nullptr);
-  EXPECT_STREQ(x86HighCIntrinsicFatalReason(Intrinsic::X86MsrAccess),
-               "x86 MSR access requires an authenticated architectural "
-               "execution environment");
+  EXPECT_EQ(x86HighCIntrinsicFatalReason(Intrinsic::X86MsrAccess), nullptr);
   // INVPCID is the one invalidation kind, and the MSVC/Clang `_invpcid`
   // intrinsic executes exactly that instruction.
   EXPECT_EQ(x86HighCIntrinsicFatalReason(Intrinsic::X86Invalidate), nullptr);

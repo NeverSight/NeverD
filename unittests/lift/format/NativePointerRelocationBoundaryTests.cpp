@@ -14,17 +14,30 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFLoader.h"
+#include "neverd/loader/CodePointerSources.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/object/ELFLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/BinaryLoading.h"
+#include "neverd/types/TypeParse.h"
+#include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -77,9 +90,42 @@ protected:
 };
 
 TEST_F(NativePointerRelocationBoundary,
-       PEHeaderImageBaseRetainsItsMirroredStorageIdentity) {
+       MarkedCodeCoordinatesRequireSupportedPointerWidths) {
+  for (const auto Bits :
+       {Bitness::Bits32, Bitness::Bits64, Bitness::Bits256, Bitness::Unknown}) {
+    SCOPED_TRACE(unsigned(Bits));
+    BinaryImage Image;
+    Image.Arch = Bits == Bitness::Bits64 ? Arch::X64 : Arch::X86;
+    Image.Bits = Bits;
+    Segment Table;
+    Table.Name = ".code_coordinates";
+    Table.VA = 0x2000;
+    Table.Size = Table.FileSz = 32;
+    Table.Data.resize(32);
+    Table.Flags = SegmentFlags::Readable;
+    const uint64_t Target = 0x1234567876543210;
+    for (unsigned I = 0; I < sizeof(Target); ++I)
+      Table.Data[I] = uint8_t(Target >> (I * 8));
+    Image.Segments.push_back(std::move(Table));
+    EXPECT_FALSE(normalizedRelocatedCodeTarget(Image, 0x2000));
+    Image.CodePtrRelocSlots.insert(0x2000);
+    const auto Coordinate = normalizedRelocatedCodeTarget(Image, 0x2000);
+    if (Bits == Bitness::Bits32)
+      EXPECT_EQ(Coordinate, uint32_t(Target));
+    else if (Bits == Bitness::Bits64)
+      EXPECT_EQ(Coordinate, Target);
+    else
+      EXPECT_FALSE(Coordinate);
+    Image.Segments[0].Size = Image.Segments[0].FileSz = 3;
+    Image.Segments[0].Data.resize(3);
+    EXPECT_FALSE(normalizedRelocatedCodeTarget(Image, 0x2000));
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       PEHeaderAddressesReachTheLinkerImageBase) {
   if (!hasCrossTargetClang())
-    GTEST_SKIP() << "header mirror code generation requires Clang";
+    GTEST_SKIP() << "header address code generation requires Clang";
   for (const auto [Is64, Machine] :
        {std::pair{false, uint16_t(llvm::COFF::IMAGE_FILE_MACHINE_I386)},
         {true, uint16_t(llvm::COFF::IMAGE_FILE_MACHINE_AMD64)},
@@ -99,8 +145,12 @@ TEST_F(NativePointerRelocationBoundary,
         (Is64 ? offsetof(llvm::object::pe32plus_header, ImageBase)
               : offsetof(llvm::object::pe32_header, ImageBase));
     auto Loaded = COFFLoader().loadBuffer(
-        llvm::MemoryBufferRef(Bytes, "header-mirror.exe"));
+        llvm::MemoryBufferRef(Bytes, "header-image-base.exe"));
     ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+    // The headers are mapped and their ImageBase field stays a relocated
+    // slot, which no module mirrors.
+    ASSERT_NE(Loaded->readVA(Base, 2), nullptr);
+    ASSERT_TRUE(Loaded->DataPtrRelocSlots.count(Base + BaseOffset));
     std::vector<MedFunc> Functions;
     for (bool LoadBase : {false, true}) {
       MedFunc F;
@@ -138,12 +188,23 @@ TEST_F(NativePointerRelocationBoundary,
     }
     llvm::LLVMContext Context;
     auto Module =
-        MedLLVMEmitter().emit(Functions, Context, "pe-header-mirror",
+        MedLLVMEmitter().emit(Functions, Context, "pe-header-image-base",
                               Loaded->Arch, {}, &*Loaded, BinaryFormat::COFF);
     ASSERT_NE(Module, nullptr);
     ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-    const fs::path IR = tmpFile("pe-header-mirror.ll");
-    const fs::path Object = tmpFile("pe-header-mirror.obj");
+    // Both functions reach the headers through the linker's symbol, which the
+    // module declares; no global copies a header byte.
+    const auto *ImageBase = Module->getNamedGlobal("__ImageBase");
+    ASSERT_NE(ImageBase, nullptr);
+    EXPECT_TRUE(ImageBase->isDeclaration());
+    for (const auto &Global : Module->globals())
+      if (Global.hasInitializer())
+        if (const auto *Data = llvm::dyn_cast<llvm::ConstantDataSequential>(
+                Global.getInitializer()))
+          EXPECT_FALSE(Data->getRawDataValues().starts_with("MZ"))
+              << Global.getName().str();
+    const fs::path IR = tmpFile("pe-header-image-base.ll");
+    const fs::path Object = tmpFile("pe-header-image-base.obj");
     std::error_code EC;
     llvm::raw_fd_ostream OS(IR.string(), EC);
     ASSERT_FALSE(EC);
@@ -157,22 +218,25 @@ TEST_F(NativePointerRelocationBoundary,
     if (Loaded->Arch != Arch::X64)
       continue;
     // This executes authored data-access functions only. The no-argument
-    // integer returns agree between the target and host ABIs. Check every
-    // original header byte except the field that must name this new storage.
-    const fs::path Harness = tmpFile("pe-header-mirror.c");
-    const fs::path Program = tmpFile("pe-header-mirror");
+    // integer returns agree between the target and host ABIs. The harness
+    // provides the running image's headers and, as a rebasing loader does,
+    // stores their own address in the ImageBase field.
+    const fs::path Harness = tmpFile("pe-header-image-base.c");
+    const fs::path Program = tmpFile("pe-header-image-base");
     std::ofstream C(Harness);
     C << "extern unsigned long long header_address(void), header_base(void);\n"
-         "static const unsigned char expected[] = {";
+         "unsigned char __ImageBase["
+      << Size << "] = {";
     for (size_t I = 0; I != Size; ++I)
       C << unsigned(static_cast<uint8_t>(Bytes[I])) << ',';
     C << "};\nint main(void) {\n"
-         "const unsigned char *p = (void *)header_address();\n"
-         "if (header_base() != (unsigned long long)p) return 1;\n"
-         "for (unsigned i=0; i<sizeof(expected); ++i)\n"
-         "if ((i<"
-      << BaseOffset << " || i>=" << BaseOffset + Width
-      << ") && p[i]!=expected[i]) return 2;\nreturn 0; }\n";
+         "unsigned long long self = (unsigned long long)__ImageBase;\n"
+         "__builtin_memcpy(__ImageBase + "
+      << BaseOffset
+      << ", &self, sizeof(self));\n"
+         "if (header_address() != self) return 1;\n"
+         "if (header_base() != self) return 2;\n"
+         "return 0; }\n";
     C.close();
     for (const char *Optimization : {"-O0", "-O2"}) {
       const auto Linked =
@@ -2164,8 +2228,17 @@ TEST_F(NativePointerRelocationBoundary,
     ASSERT_NE(Table, nullptr);
     ASSERT_TRUE(Table->isReadable());
     ASSERT_FALSE(Table->isExecutable());
-    if (Table->isWritable())
-      EXPECT_TRUE(section_names::isReadOnlyAfterRelocSectionName(Table->Name));
+    if (C.Format == BinaryFormat::ELF) {
+      // These fixtures are bare static PIEs: the kernel maps their writable
+      // table, but no dynamic loader applies the GNU_RELRO header.
+      ASSERT_TRUE(Img.ELFMetadata);
+      ASSERT_TRUE(Img.ELFMetadata->Interpreter.empty());
+      ASSERT_NE(Img.Entry, 0u);
+      EXPECT_FALSE(Img.readOnlyAfterRelocations(Table->VA, Table->Size));
+      EXPECT_TRUE(isRuntimeWritableAddress(Img, Table->VA));
+    } else {
+      EXPECT_TRUE(Img.readOnlyAfterRelocations(Table->VA, Table->Size));
+    }
 
     const va_t Slot0 = Table->VA;
     const va_t Slot1 = Slot0 + Img.getPointerSize();
@@ -2271,10 +2344,11 @@ TEST_F(NativePointerRelocationBoundary,
 
 TEST_F(NativePointerRelocationBoundary,
        BoundedMixedPointerTableWalkUsesOnlyRuntimeReachableSlots) {
-#if !defined(__APPLE__)
-  GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
-#else
   const fs::path Path = fixture("test_bounded_mixed_pointer_table_a64_macho");
+#if !defined(__APPLE__)
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "AArch64 Mach-O fixture requires an Apple toolchain or LLD";
+#endif
   ASSERT_TRUE(fs::exists(Path));
 
   auto ImgOrErr = loadBinary(Path);
@@ -2291,7 +2365,7 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_EQ(Img.CodePtrRelocSlots.count(Table->VA + 32), 1u);
   EXPECT_EQ(Img.DataPtrRelocSlots.count(Table->VA + 56), 1u);
 
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
   for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
     RunResult Native = exec(Path.string(), {});
     EXPECT_EQ(Native.exitCode, 0) << Native.err;
@@ -2312,19 +2386,19 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_NE(LLVM.out.find("getelementptr i8, ptr @__nd_codeptr_"),
             std::string::npos)
       << LLVM.out;
-#endif
 }
 
 TEST_F(NativePointerRelocationBoundary,
        ScalarSelectIndexCycleRemainsNumericTableOffset) {
-#if !defined(__APPLE__)
-  GTEST_SKIP() << "AArch64 Mach-O fixture is built only on Apple hosts";
-#else
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "cross-target Mach-O fixtures require Clang's GNU-style "
                     "driver";
 
   const fs::path Path = fixture("test_scalar_index_cycle_a64_macho");
+#if !defined(__APPLE__)
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "AArch64 Mach-O fixture requires an Apple toolchain or LLD";
+#endif
   ASSERT_TRUE(fs::exists(Path));
 
   auto ImgOrErr = loadBinary(Path);
@@ -2343,7 +2417,7 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_FALSE(Img.isCodeAddress(Tables->VA));
   EXPECT_TRUE(Img.hasObjectDataProvenance(Tables->VA));
 
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
   for (unsigned Attempt = 0; Attempt < 3; ++Attempt) {
     RunResult Native = exec(Path.string(), {});
     EXPECT_EQ(Native.exitCode, 0) << Native.err;
@@ -2356,7 +2430,6 @@ TEST_F(NativePointerRelocationBoundary,
   // the live numeric index cycle; both table reads contribute to the result.
   EXPECT_NE(Med.out.find("PHI X28."), std::string::npos) << Med.out;
   EXPECT_NE(Med.out.find("SELECT X28."), std::string::npos) << Med.out;
-  EXPECT_NE(Med.out.find("INT_LEFT"), std::string::npos) << Med.out;
 
   RunResult LLVM = liftToLLVMIRUnopt(Path);
   ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
@@ -2367,16 +2440,79 @@ TEST_F(NativePointerRelocationBoundary,
   EXPECT_NE(Probe.find("ptr @__nd_data_"), std::string_view::npos) << Probe;
 
   const fs::path LLVMPath = tmpFile("scalar_index_cycle_a64_macho.ll");
-  const fs::path IntrinsicShim =
-      tmpFile("scalar_index_cycle_a64_macho_intrinsics.s");
-  const fs::path RebuiltPath = tmpFile("scalar_index_cycle_a64_macho.rebuilt");
+  const fs::path LLVMObject = tmpFile("scalar_index_cycle_a64_macho.o");
   const size_t ModuleStart = LLVM.out.find("; ModuleID");
   ASSERT_NE(ModuleStart, std::string::npos) << LLVM.out;
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(
+      llvm::StringRef(LLVM.out).drop_front(ModuleStart), Diagnostic, Context);
+  ASSERT_NE(Module, nullptr) << Diagnostic.getMessage().str();
+  const auto *LiftedProbe = Module->getFunction("probe");
+  ASSERT_NE(LiftedProbe, nullptr);
+
+  // Register-offset loads own their scale instead of expanding it into a
+  // separate shift. Both indices must remain numeric recurrences: a table or
+  // frame address, argument, load or unknown value cannot initialize them.
+  llvm::SmallPtrSet<const llvm::Value *, 16> Seen;
+  const auto NumericIndex = [&](auto &&Self, const llvm::Value *Value) -> bool {
+    if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(Value))
+      return C->isZero() || C->isOne() || C->equalsInt(3);
+    if (!Seen.insert(Value).second)
+      return true;
+    const auto *I = llvm::dyn_cast<llvm::Instruction>(Value);
+    if (!I || !I->getType()->isIntegerTy())
+      return false;
+    switch (I->getOpcode()) {
+    case llvm::Instruction::PHI:
+    case llvm::Instruction::Select:
+    case llvm::Instruction::ICmp:
+    case llvm::Instruction::Add:
+    case llvm::Instruction::ZExt:
+    case llvm::Instruction::Trunc:
+      return llvm::all_of(I->operands(),
+                          [&](const auto &U) { return Self(Self, U.get()); });
+    default:
+      return false;
+    }
+  };
+  unsigned Loads = 0;
+  bool ZeroIndex = false, OneIndex = false;
+  for (const auto &Block : *LiftedProbe)
+    for (const auto &I : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (!Call)
+        continue;
+      const auto *Asm =
+          llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+      if (!Asm ||
+          Asm->getAsmString().find("neverd.address.load") == std::string::npos)
+        continue;
+      ++Loads;
+      ASSERT_EQ(Call->arg_size(), 3u);
+      const auto *Index = llvm::dyn_cast<llvm::PHINode>(Call->getArgOperand(1));
+      ASSERT_NE(Index, nullptr) << Probe;
+      EXPECT_TRUE(Index->getType()->isIntegerTy(64));
+      Seen.clear();
+      EXPECT_TRUE(NumericIndex(NumericIndex, Index)) << Probe;
+      for (const auto &Input : Index->incoming_values())
+        if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(Input.get())) {
+          ZeroIndex |= C->isZero();
+          OneIndex |= C->isOne();
+        }
+    }
+  EXPECT_EQ(Loads, 2u);
+  EXPECT_TRUE(ZeroIndex);
+  EXPECT_TRUE(OneIndex);
   {
     std::ofstream OS(LLVMPath);
     ASSERT_TRUE(OS) << LLVMPath;
     OS << std::string_view(LLVM.out).substr(ModuleStart);
   }
+#if defined(__APPLE__)
+  const fs::path IntrinsicShim =
+      tmpFile("scalar_index_cycle_a64_macho_intrinsics.s");
+  const fs::path RebuiltPath = tmpFile("scalar_index_cycle_a64_macho.rebuilt");
   {
     std::ofstream OS(IntrinsicShim);
     ASSERT_TRUE(OS) << IntrinsicShim;
@@ -2391,12 +2527,19 @@ TEST_F(NativePointerRelocationBoundary,
   ASSERT_EQ(SDK.exitCode, 0) << SDK.err;
   const auto Sysroot = llvm::StringRef(SDK.out).trim().str();
   ASSERT_FALSE(Sysroot.empty());
+#endif
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
+    RunResult Object =
+        exec(NEVERD_TEST_CLANG,
+             {Optimization, "-target", "arm64-apple-macos14", "-c",
+              LLVMPath.string(), "-o", LLVMObject.string()});
+    ASSERT_EQ(Object.exitCode, 0) << Object.err;
+#if defined(__APPLE__)
     RunResult Compile =
         exec(NEVERD_TEST_CLANG,
-             {Optimization, "-target", "arm64-apple-macos14", "-isysroot",
-              Sysroot, LLVMPath.string(), IntrinsicShim.string(), "-o",
+             {"-target", "arm64-apple-macos14", "-isysroot", Sysroot,
+              LLVMObject.string(), IntrinsicShim.string(), "-o",
               RebuiltPath.string()});
     ASSERT_EQ(Compile.exitCode, 0) << Compile.err;
 #if defined(__aarch64__)
@@ -2405,8 +2548,8 @@ TEST_F(NativePointerRelocationBoundary,
       EXPECT_EQ(Rebuilt.exitCode, 0) << Rebuilt.err;
     }
 #endif
-  }
 #endif
+  }
 }
 
 TEST_F(NativePointerRelocationBoundary,
@@ -2582,11 +2725,73 @@ int main(int argc, char **argv) {
 
   RunResult C = decompileToC(Exe);
   ASSERT_TRUE(C.ok()) << C.err;
+  {
+    std::ifstream Input(tmpFile("decompiled.c"));
+    const std::string Text((std::istreambuf_iterator<char>(Input)), {});
+    EXPECT_EQ(Text.find("neverd.not-decompiled:"), std::string::npos)
+        << "a compiling partial unit still omitted a runtime function";
+  }
   RunResult Syntax =
       exec(NEVERD_TEST_CLANG,
            {"--target=x86_64-w64-mingw32", "-fms-extensions", "-fsyntax-only",
             "-w", tmpFile("decompiled.c").string()});
   EXPECT_TRUE(Syntax.ok()) << Syntax.err;
+  for (const char *Level : {"-O0", "-O2"}) {
+    const auto Object = exec(
+        NEVERD_TEST_CLANG, {"--target=x86_64-w64-mingw32", "-fms-extensions",
+                            Level, "-c", "-w", tmpFile("decompiled.c").string(),
+                            "-o", tmpFile("mingw-c.obj").string()});
+    EXPECT_TRUE(Object.ok()) << Level << '\n' << Object.err;
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       CRTHeaderRecordReuseChecksTheActualRuntimeLayout) {
+  if (!hasCrossTargetClang() ||
+      !exec("x86_64-w64-mingw32-gcc", {"--version"}).ok())
+    GTEST_SKIP() << "needs Clang and the MinGW headers";
+  for (unsigned Variant = 0; Variant != 3; ++Variant) {
+    SCOPED_TRACE(Variant);
+    const bool UCRT = Variant == 1;
+    types::TypeLibrary Library(types::DataModel::LLP64);
+    std::string Declaration =
+        UCRT ? "struct _iobuf { void *_Placeholder; };"
+             : "struct _iobuf { char *_ptr; int _cnt; char *_base; "
+               "int _flag, _file, _charbuf, _bufsiz; char *_tmpfname; };";
+    if (Variant == 2)
+      Declaration.replace(Declaration.find("char *_ptr"),
+                          std::string("char *_ptr").size(),
+                          "unsigned long long _ptr");
+    ASSERT_TRUE(types::parseCTypes(Declaration, Library).ok());
+    types::RenderOptions Options;
+    Options.Asserts = true;
+    Options.Spelling = types::BuiltinSpelling::Portable;
+    const auto Rendered =
+        types::renderEmbeddedC(Library, {Library.find("_iobuf")}, Options);
+    const auto Source = tmpFile(UCRT ? "ucrt_record.c" : "msvcrt_record.c");
+    {
+      std::ofstream Out(Source);
+      ASSERT_TRUE(Out);
+      Out << "#include <stdio.h>\n"
+          << Rendered.Text << "\nstruct _iobuf object;\n";
+    }
+    for (const bool HeaderUCRT : {false, true}) {
+      SCOPED_TRACE(HeaderUCRT);
+      const auto Syntax =
+          exec(NEVERD_TEST_CLANG,
+               {"--target=x86_64-w64-mingw32", "-fsyntax-only",
+                HeaderUCRT ? "-D_UCRT" : "-U_UCRT", Source.string()});
+      if (HeaderUCRT == UCRT && Variant != 2)
+        EXPECT_TRUE(Syntax.ok()) << Syntax.err;
+      else {
+        EXPECT_FALSE(Syntax.ok());
+        EXPECT_EQ(Syntax.err.find("redefinition"), std::string::npos)
+            << Syntax.err;
+        EXPECT_NE(Syntax.err.find("static assertion failed"), std::string::npos)
+            << Syntax.err;
+      }
+    }
+  }
 }
 
 TEST_F(NativePointerRelocationBoundary,
@@ -2623,35 +2828,153 @@ counter:
   .quad 0
 )";
   }
-  const auto Linked =
+  for (bool Relro : {false, true}) {
+    SCOPED_TRACE(Relro);
+    const auto Linked =
+        exec(NEVERD_TEST_CLANG,
+             {"-nostdlib", "-pie", "-Wl,-e,neverd_test_start",
+              Relro ? "-Wl,-z,relro" : "-Wl,-z,norelro", "-Wl,-z,now",
+              Source.string(), "-o", Program.string()});
+    ASSERT_EQ(Linked.exitCode, 0) << Linked.err;
+    auto Img = loadBinary(Program);
+    ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+    ASSERT_GE(Img->Segments.size(), 2u);
+    for (const Segment &Seg : Img->Segments)
+      EXPECT_TRUE(llvm::StringRef(Seg.Name).starts_with(kLoadSegmentPrefix))
+          << Seg.Name;
+    const auto section = [&](llvm::StringRef Name) -> const Section * {
+      for (const Section &Sec : Img->Sections)
+        if (Sec.Name == Name)
+          return &Sec;
+      return nullptr;
+    };
+    const Section *Table = section(".data.rel.ro");
+    const Section *Dynamic = section(".dynamic");
+    const Section *Data = section(".data");
+    ASSERT_TRUE(Table && Dynamic && Data);
+    // The relocated constants and the dynamic table share the writable
+    // segment of .data.
+    ASSERT_EQ(Img->getSegmentFor(Table->VA), Img->getSegmentFor(Data->VA));
+    ASSERT_TRUE(Img->getSegmentFor(Data->VA)->isWritable());
+    EXPECT_EQ(Img->readOnlyAfterRelocations(Table->VA, 8), Relro);
+    EXPECT_EQ(isRuntimeWritableAddress(*Img, Table->VA), !Relro);
+    EXPECT_EQ(Img->readOnlyAfterRelocations(Dynamic->VA, 8), Relro);
+    EXPECT_FALSE(Img->readOnlyAfterRelocations(Data->VA, 8));
+    EXPECT_TRUE(Img->readOnlyAfterRelocations(Img->Entry, 1));
+  }
+#endif
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       RelroWithoutACompleteProtectedPageRetainsNativeWrites) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "executes a public x86-64 Linux loader fixture";
+#else
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "needs Clang";
+  const auto Source = tmpFile("relro_tail.c");
+  const auto Program = tmpFile("relro_tail");
+  std::ofstream(Source)
+      << "#include <stdint.h>\n"
+         "uint32_t shared_value "
+         "__attribute__((section(\".data.rel.ro\")))=17;\n"
+         "__attribute__((noinline)) uint32_t read_value(void) {\n"
+         "  return shared_value;\n}\n"
+         "int main(void) { shared_value=43; return read_value()!=43; }\n";
+  const auto Built =
       exec(NEVERD_TEST_CLANG,
-           {"-nostdlib", "-pie", "-Wl,-e,neverd_test_start", "-Wl,-z,relro",
-            "-Wl,-z,now", Source.string(), "-o", Program.string()});
-  ASSERT_EQ(Linked.exitCode, 0) << Linked.err;
-  auto Img = loadBinary(Program);
-  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
-  ASSERT_GE(Img->Segments.size(), 2u);
-  for (const Segment &Seg : Img->Segments)
-    EXPECT_TRUE(llvm::StringRef(Seg.Name).starts_with(kLoadSegmentPrefix))
-        << Seg.Name;
-  const auto section = [&](llvm::StringRef Name) -> const Section * {
-    for (const Section &Sec : Img->Sections)
-      if (Sec.Name == Name)
-        return &Sec;
-    return nullptr;
-  };
-  const Section *Table = section(".data.rel.ro");
-  const Section *Dynamic = section(".dynamic");
-  const Section *Data = section(".data");
-  ASSERT_TRUE(Table && Dynamic && Data);
-  // The relocated constants and the dynamic table share the writable
-  // segment of .data.
-  ASSERT_EQ(Img->getSegmentFor(Table->VA), Img->getSegmentFor(Data->VA));
-  ASSERT_TRUE(Img->getSegmentFor(Data->VA)->isWritable());
-  EXPECT_TRUE(Img->readOnlyAfterRelocations(Table->VA, 8));
-  EXPECT_TRUE(Img->readOnlyAfterRelocations(Dynamic->VA, 8));
-  EXPECT_FALSE(Img->readOnlyAfterRelocations(Data->VA, 8));
-  EXPECT_TRUE(Img->readOnlyAfterRelocations(Img->Entry, 1));
+           {"-O2", "-fno-pie", "-no-pie", "-Wl,-z,relro", "-Wl,-z,now",
+            Source.string(), "-o", Program.string()});
+  ASSERT_TRUE(Built.ok()) << Built.err;
+  auto Full = loadBinary(Program);
+  ASSERT_TRUE(static_cast<bool>(Full)) << llvm::toString(Full.takeError());
+  const auto Symbol =
+      std::find_if(Full->Symbols.begin(), Full->Symbols.end(),
+                   [](const auto &S) { return S.Name == "shared_value"; });
+  ASSERT_NE(Symbol, Full->Symbols.end());
+  const va_t Address = Symbol->Addr;
+  EXPECT_TRUE(Full->readOnlyAfterRelocations(Address, 4));
+  std::ifstream Input(Program, std::ios::binary);
+  ASSERT_TRUE(Input);
+  std::vector<uint8_t> Bytes((std::istreambuf_iterator<char>(Input)),
+                             std::istreambuf_iterator<char>());
+  Input.close();
+  ELFHeaderInfo Header;
+  ASSERT_TRUE(validateELFHeaderTables(Bytes.data(), Bytes.size(), Header));
+  unsigned Changed = 0;
+  for (unsigned I = 0; I < Header.PhNum; ++I) {
+    auto *At = Bytes.data() + Header.PhOff + uint64_t(I) * Header.PhEntSize;
+    auto Fields = readELFPhdr(At, Header.Is64);
+    if (Fields.Type != llvm::ELF::PT_GNU_RELRO)
+      continue;
+    ASSERT_GT(Fields.MemSz, 0u);
+    ASSERT_GT(Fields.FileSz, 0u);
+    ASSERT_EQ((Fields.VAddr + Fields.MemSz) % kPageSize4K, 0u);
+    --Fields.MemSz;
+    --Fields.FileSz;
+    writeELFPhdr(At, Header.Is64, Fields);
+    ++Changed;
+  }
+  ASSERT_EQ(Changed, 1u);
+  const auto PartialProgram = tmpFile("relro_partial");
+  ASSERT_TRUE(fs::copy_file(Program, PartialProgram));
+  {
+    std::ofstream Output(PartialProgram, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(Output);
+    Output.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  }
+  // The native loader accepts this image and leaves the partial tail writable.
+  EXPECT_TRUE(exec(PartialProgram.string(), {}).ok());
+  auto Partial = loadBinary(PartialProgram);
+  ASSERT_TRUE(static_cast<bool>(Partial))
+      << llvm::toString(Partial.takeError());
+  EXPECT_FALSE(Partial->readOnlyAfterRelocations(Address, 4));
+  EXPECT_TRUE(isRuntimeWritableAddress(*Partial, Address));
+
+  const auto StaticSource = tmpFile("static_relro.s");
+  const auto StaticProgram = tmpFile("static_relro");
+  std::ofstream(StaticSource) << R"asm(
+.text
+.globl _start, read_value
+.type read_value,@function
+read_value:
+  mov shared_value(%rip), %eax
+  ret
+.size read_value, .-read_value
+_start:
+  movl $43, shared_value(%rip)
+  call read_value
+  xor %edi,%edi
+  cmp $43,%eax
+  setne %dil
+  mov $60,%eax
+  syscall
+.section .data.rel.ro,"aw",@progbits
+.globl shared_value
+.type shared_value,@object
+shared_value: .long 17
+.size shared_value, 4
+.section .note.GNU-stack,"",@progbits
+)asm";
+  const auto StaticBuilt = exec(
+      NEVERD_TEST_CLANG, {"-nostdlib", "-static", "-Wl,-z,relro",
+                          StaticSource.string(), "-o", StaticProgram.string()});
+  ASSERT_TRUE(StaticBuilt.ok()) << StaticBuilt.err;
+  EXPECT_TRUE(exec(StaticProgram.string(), {}).ok());
+  auto Static = loadBinary(StaticProgram);
+  ASSERT_TRUE(static_cast<bool>(Static)) << llvm::toString(Static.takeError());
+  ASSERT_TRUE(Static->ELFMetadata);
+  EXPECT_TRUE(Static->ELFMetadata->Interpreter.empty());
+  ASSERT_TRUE(std::any_of(
+      Static->ELFMetadata->ProgramHeaders.begin(),
+      Static->ELFMetadata->ProgramHeaders.end(),
+      [](const auto &PH) { return PH.Type == llvm::ELF::PT_GNU_RELRO; }));
+  const auto StaticSymbol =
+      std::find_if(Static->Symbols.begin(), Static->Symbols.end(),
+                   [](const auto &S) { return S.Name == "shared_value"; });
+  ASSERT_NE(StaticSymbol, Static->Symbols.end());
+  EXPECT_FALSE(Static->readOnlyAfterRelocations(StaticSymbol->Addr, 4));
+  EXPECT_TRUE(isRuntimeWritableAddress(*Static, StaticSymbol->Addr));
 #endif
 }
 

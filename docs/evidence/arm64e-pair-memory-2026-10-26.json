@@ -1,0 +1,896 @@
+{
+  "scope": "Original non-SP GPR W/X, signed LDPSW and SIMD S/D/Q pair memory operations; offset, pre-index, post-index and non-temporal forms. Bounded Normal WB, nonoverflow scalar-bridge qualification; no full arm64e ABI or native Apple CPTA-on claim.",
+  "source_revision": "4a2bad88151f4c9e8c36d0f02fbf3064d7930897",
+  "feature_revision": "3205043e4ccc0e0b11f54b06db437fdb0ca31118",
+  "environment_revision": "fa594e43d0bfcbf9e46489f86bfc27ccc91744d9",
+  "environment_pull_request": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "llvm_dependency_policy": "Use the recorded NeverSight fork directly; accepted r6 prebuilt lag, no LLVM patches/overlays and no r7 release in this change.",
+  "independent_mc": {
+    "command": [
+      "llvm-mc",
+      "-triple=aarch64",
+      "-show-encoding",
+      "independent-pairs.s"
+    ],
+    "samples": 215,
+    "words": 430,
+    "version": "Homebrew LLVM version 22.1.6"
+  },
+  "independent_encoding_samples": 215,
+  "encoding_mode_families": 43,
+  "exhaustive_encoding_immediate_combinations": 5504,
+  "decoder_routes": [
+    "full",
+    "fast"
+  ],
+  "feature_tests": {
+    "registered": 10,
+    "passed": 10,
+    "failed": 0,
+    "report_sha256": "eb946120d3c3a919da2dcd9eb66c6e762bd17bf43a6acbe41cc618e8aa408c29",
+    "tests": [
+      "AArch64PairMemory.BothCProjectionsAndLLVMExecuteEveryFamily",
+      "AArch64PairMemory.ImageContextKeepsCompleteRuntimeResults",
+      "AArch64PairMemory.IndependentWordsAndAllImmediatesKeepOneInstruction",
+      "AArch64PairMemory.MalformedResultsAndSecondOperandsFailBeforeFiltering",
+      "AArch64PairMemory.TracerKeepsBothValuesBaseAndCompleteMemory",
+      "AArch64PairMemory.RegisterRolesRejectAmbiguityAndKeepLegalAliases",
+      "AArch64PairMemory.LLVMAdmissionChecksBothValuesBeforeFunctionSelection",
+      "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases",
+      "AArch64PairMemory.DiscardedResultsRetainPairEffects",
+      "AArch64PairMemory.NominalFrameFootprintsCoverBothTransfers"
+    ]
+  },
+  "export_sha256": {
+    "high.c": "7f9670eac1021d415d82d7100f1463858edef0ff6484705266544531ddcc9b50",
+    "llvm.c": "ff9c74e6df565be205e5d57730ba64554661d9bd60381deb4a2c988b062e4f45",
+    "llvm.o": "37be05cf1c0e9964e70cf7a8720b93c106809dba1498b24871a57ee479e7ffb4",
+    "harness.c": "9a09cd6f28089abbdd652b93e592756103a8eec729624ebd840435bb22030325"
+  },
+  "model_export_sha256": {
+    "high.c": "7f9670eac1021d415d82d7100f1463858edef0ff6484705266544531ddcc9b50",
+    "llvm.c": "ff9c74e6df565be205e5d57730ba64554661d9bd60381deb4a2c988b062e4f45",
+    "llvm.o": "37be05cf1c0e9964e70cf7a8720b93c106809dba1498b24871a57ee479e7ffb4",
+    "harness.c": "9a09cd6f28089abbdd652b93e592756103a8eec729624ebd840435bb22030325"
+  },
+  "model_inputs_equal_preintegration": true,
+  "model_only": true,
+  "neverd_output_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "generated_model_sample_calls": 8600,
+  "models": [
+    {
+      "profile": "pair",
+      "summary_sha256": "a11fa7c68abeff6a49a88e2b7c8d9936cce7cdb95955e61ab8bf0b52598c6cca",
+      "model_source_revision": "3205043e4ccc0e0b11f54b06db437fdb0ca31118",
+      "results": [
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both": 0,
+            "passed-cases": 79,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL1. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_pair_memory_output_qualified": true,
+          "route": "high-O0",
+          "model_returncode": 0,
+          "seconds": 5.355,
+          "guest_sha256": "4dc1427a6b862f3ed8723a193e030802d525aa4612a1fbe9b367bf73b286d4dd"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both": 0,
+            "passed-cases": 79,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL1. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_pair_memory_output_qualified": true,
+          "route": "high-O2",
+          "model_returncode": 0,
+          "seconds": 5.523,
+          "guest_sha256": "97775860a4eca3cb569daec99e5edfe5a0ebaa874adca75ec2a70d31842d7d23"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both": 0,
+            "passed-cases": 79,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL1. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_pair_memory_output_qualified": true,
+          "route": "llvm-c-O0",
+          "model_returncode": 0,
+          "seconds": 5.285,
+          "guest_sha256": "59728c361f6464952b38332bdea6d8db69aac464d056089da61204c09081826c"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both": 0,
+            "passed-cases": 79,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL1. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_pair_memory_output_qualified": true,
+          "route": "llvm-c-O2",
+          "model_returncode": 0,
+          "seconds": 4.423,
+          "guest_sha256": "5886b782380b181b434b26542eb4440aea71ab1b7606ad9600c3a1158610f05d"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both": 0,
+            "passed-cases": 79,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL1. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_pair_memory_output_qualified": true,
+          "route": "llvm-object",
+          "model_returncode": 0,
+          "seconds": 5.473,
+          "guest_sha256": "790dd36e4746441e19ee33bbbf38d6feceacd3dec1f8770345d558aff827abfb"
+        }
+      ]
+    },
+    {
+      "profile": "el0-pair",
+      "summary_sha256": "c10289f99240c3fa08837182449b5998859b40213a32e002efed93980a261458",
+      "model_source_revision": "3205043e4ccc0e0b11f54b06db437fdb0ca31118",
+      "results": [
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off-el0-origin": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on-el0-origin": 0,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only-el0-origin": 0,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both-el0-origin": 0,
+            "neverd-memory-both": 0,
+            "passed-cases": 83,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL0 with hardware SPSR and exact SVC-origin checks. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_el0_pair_memory_output_qualified": true,
+          "route": "high-O0",
+          "model_returncode": 0,
+          "seconds": 4.488,
+          "guest_sha256": "d3da8438a788e9b6d60e830698fa1d9e1e69beafa940d4fce3d1ff3d2795c908"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off-el0-origin": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on-el0-origin": 0,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only-el0-origin": 0,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both-el0-origin": 0,
+            "neverd-memory-both": 0,
+            "passed-cases": 83,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL0 with hardware SPSR and exact SVC-origin checks. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_el0_pair_memory_output_qualified": true,
+          "route": "high-O2",
+          "model_returncode": 0,
+          "seconds": 4.288,
+          "guest_sha256": "b156f525cd09d2206754244498c5be07d586425bf79be86f692c0c9d9e63692f"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off-el0-origin": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on-el0-origin": 0,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only-el0-origin": 0,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both-el0-origin": 0,
+            "neverd-memory-both": 0,
+            "passed-cases": 83,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL0 with hardware SPSR and exact SVC-origin checks. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_el0_pair_memory_output_qualified": true,
+          "route": "llvm-c-O0",
+          "model_returncode": 0,
+          "seconds": 4.442,
+          "guest_sha256": "5175ed7d601b1d8a9745f4789140f5d8e00d9e63754443f1fa7a46186b865807"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off-el0-origin": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on-el0-origin": 0,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only-el0-origin": 0,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both-el0-origin": 0,
+            "neverd-memory-both": 0,
+            "passed-cases": 83,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL0 with hardware SPSR and exact SVC-origin checks. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_el0_pair_memory_output_qualified": true,
+          "route": "llvm-c-O2",
+          "model_returncode": 0,
+          "seconds": 4.394,
+          "guest_sha256": "271214fe9b5dfb91b751d2ebfe7ac3b6279972241183a5a75af827580925f35c"
+        },
+        {
+          "passed": true,
+          "records": {
+            "current-el": 4,
+            "id-aa64pfr0-el1": 1225260573907812370,
+            "id-aa64isar3-el1": 2,
+            "normal-mair": 255,
+            "normal-tcr": 2157983008,
+            "normal-ttbr-matches": 1,
+            "normal-sctlr-masked": 4101,
+            "normal-pan": 0,
+            "normal-uao": 0,
+            "neverd-memory-samples": 215,
+            "sctlr2-el1-off": 0,
+            "neverd-memory-off-el0-origin": 0,
+            "neverd-memory-off": 0,
+            "sctlr2-el1-on": 512,
+            "neverd-memory-on-el0-origin": 0,
+            "neverd-memory-on": 0,
+            "sctlr2-el1-cpta0-only": 1024,
+            "neverd-memory-cpta0-only-el0-origin": 0,
+            "neverd-memory-cpta0-only": 0,
+            "sctlr2-el1-both": 1536,
+            "neverd-memory-both-el0-origin": 0,
+            "neverd-memory-both": 0,
+            "passed-cases": 83,
+            "failed-cases": 0,
+            "guest-complete": 1
+          },
+          "missing": [],
+          "failed_case_indices": [],
+          "model_only": true,
+          "native_apple_cpta_qualified": false,
+          "neverd_output_qualified": false,
+          "scope": "Actual NeverD explicit-IR GPR W/X, LDPSW and SIMD S/D/Q pair output: 215 independent LLVM MC samples, non-temporal/offset/pre-index/post-index forms and five signed imm7 boundaries; HighC and LLVMC at O0/O2 plus actual LLVM ELF, all four effective CPTA/CPTA0 settings at EL0 with hardware SPSR and exact SVC-origin checks. Both complete values, completed bases and every 4096-byte buffer are compared with independent original-register native instructions. Model-only nonoverflow Normal WB memory qualification. No automatic whole-image, image relocation, original SP/stack ABI, overflowing memory, tagging, foreign exception identity, native half/vector ABI or Apple CPA2 hardware qualification.",
+          "explicit_el0_pair_memory_output_qualified": true,
+          "route": "llvm-object",
+          "model_returncode": 0,
+          "seconds": 4.42,
+          "guest_sha256": "0e948ccbe6a6548acb24832b471784f3b2819e5cda8c68a056721eb760df27df"
+        }
+      ]
+    }
+  ],
+  "regressions": {
+    "registered": 628,
+    "passed": 600,
+    "skipped": 18,
+    "failed": 10,
+    "groups": [
+      {
+        "label": "arm64e",
+        "target": "NeverDArm64eAnalysisTests",
+        "command": [
+          "build-arm64e/bin/NeverDArm64eAnalysisTests",
+          "--gtest_output=json:regression-arm64e.json",
+          "--gtest_filter=*-AArch64PairMemory.*"
+        ],
+        "registered": 179,
+        "passed": 175,
+        "skipped": [
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "A64FastClassifyParity.OptionalRealBinaryWalk"
+        ],
+        "failures": [],
+        "report_sha256": "e6ae592f146afc2e06849115e6deb2a97a049ea57e8b57a4a24eeada754af790",
+        "binary_sha256": "786db32387784c010e1596a0394b6e6147d1a81cea73c67111089dfc1ad32312"
+      },
+      {
+        "label": "low",
+        "target": "NeverDLowInstructionBoundaryTests",
+        "command": [
+          "build-arm64e/bin/NeverDLowInstructionBoundaryTests",
+          "--gtest_output=json:regression-low.json"
+        ],
+        "registered": 87,
+        "passed": 87,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "2ab758bc0eddc329acdc18e0587dbf8b542d3dd599a9b1540eda3ab52a26a4a1",
+        "binary_sha256": "5c7a4e8d7a4f6fe06c5593e717cb34ce964c1b7f910fe539fff2d8173e204f3b"
+      },
+      {
+        "label": "stack",
+        "target": "NeverDSourceStackFrameTests",
+        "command": [
+          "build-arm64e/bin/NeverDSourceStackFrameTests",
+          "--gtest_output=json:regression-stack.json"
+        ],
+        "registered": 8,
+        "passed": 8,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "a622003f26a2229ada924942174ad283b2d07dfbdfbf08997fccecc9b33752ab",
+        "binary_sha256": "a91970a8418442359fe4a667d681ea4cd10846249ac0a893f3536e0da2fea95b"
+      },
+      {
+        "label": "cached",
+        "target": "NeverDMedCachedCallTargetTests",
+        "command": [
+          "build-arm64e/bin/NeverDMedCachedCallTargetTests",
+          "--gtest_output=json:regression-cached.json"
+        ],
+        "registered": 15,
+        "passed": 15,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "af4731fd87de7ec476f2cdfe7677a35f53aafc07700af59efeb7481bed7fa728",
+        "binary_sha256": "6b96b450b9b8fca099f272cda80e5f14e9adcd426e2ab17d45845b33f3359dfb"
+      },
+      {
+        "label": "aapcs",
+        "target": "NeverDAAPCS64CallContractTests",
+        "command": [
+          "build-arm64e/bin/NeverDAAPCS64CallContractTests",
+          "--gtest_output=json:regression-aapcs.json"
+        ],
+        "registered": 15,
+        "passed": 15,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "34b2f5c15fa5e999c60655c4314777af85f3ae2f6ab00652c8a9b580ca5c12d5",
+        "binary_sha256": "8464cdd043cfbf6b1099f09f2006fe6075be61e5a7733c4742ecf019364e89d3"
+      },
+      {
+        "label": "source-call",
+        "target": "NeverDSourceCallABITests",
+        "command": [
+          "build-arm64e/bin/NeverDSourceCallABITests",
+          "--gtest_output=json:regression-source-call.json"
+        ],
+        "registered": 12,
+        "passed": 12,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "7551e33e3f3f0432cf23cfcc8a659f1f09ef6e53b8f24cc89ff1c102f1b00f31",
+        "binary_sha256": "9e7d49ec3f162694eee84ac8c50488e422db55a191950faa0bc852b435bfe048"
+      },
+      {
+        "label": "return",
+        "target": "NeverDReturnContractTests",
+        "command": [
+          "build-arm64e/bin/NeverDReturnContractTests",
+          "--gtest_output=json:regression-return.json"
+        ],
+        "registered": 24,
+        "passed": 24,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "bc7a783f749da0c8a273670126202f36fe91c68df6c91146463982902816a16e",
+        "binary_sha256": "0a17147cb56bb8f231f033704b85f732efbf1d0d6a74893cf82413a0e6b55faf"
+      },
+      {
+        "label": "readonly",
+        "target": "NeverDReadOnlyBytesTests",
+        "command": [
+          "build-arm64e/bin/NeverDReadOnlyBytesTests",
+          "--gtest_output=json:regression-readonly.json"
+        ],
+        "registered": 5,
+        "passed": 5,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "785d0efc3845e49feade39b6e528ccc474b2640703737417e342cce12052f408",
+        "binary_sha256": "873289c9f20653cbf685ab367eb381d90960fed0055c9c876017119e7b145c3c"
+      },
+      {
+        "label": "jump",
+        "target": "NeverDJumpTableTests",
+        "command": [
+          "build-arm64e/bin/NeverDJumpTableTests",
+          "--gtest_output=json:regression-jump.json",
+          "--gtest_filter=JTE_AArch64.*:ResolverGuardPredicates.*:GuardExpression.*:LowIntrinsicMemoryOperands.*:ResolverLoadRoles.*"
+        ],
+        "registered": 57,
+        "passed": 57,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "232f6b98fd52a6ac30b7b352e20cf7f0632c6dd1bb8d733c062d155dcf98b9ad",
+        "binary_sha256": "ae7cd825e9a0515b1b107d0cb90e2b2829c7b664d2bf99941c26fa8be9545b87"
+      },
+      {
+        "label": "mops-cpuid",
+        "target": "NeverDLiftTests",
+        "command": [
+          "build-arm64e/bin/NeverDLiftTests",
+          "--gtest_output=json:regression-mops-cpuid.json",
+          "--gtest_filter=AArch64_Mops.*:X86_64_Intrinsics.*"
+        ],
+        "registered": 51,
+        "passed": 49,
+        "skipped": [],
+        "failures": [
+          "X86_64_Intrinsics.Decompile_UsesCorrectStyle",
+          "X86_64_Intrinsics.LlvmC_UsesCorrectStyle"
+        ],
+        "report_sha256": "570e84010f56ff1dc282e489db89bba8e230ea7cb8fd357151efe928e12f450d",
+        "binary_sha256": "0a59694ae2f30f1c3b2b93f7441d4c75610565b00f8e173d147598242267c4f9"
+      },
+      {
+        "label": "sgx",
+        "target": "NeverDX86VirtualizationSourceTests",
+        "command": [
+          "build-arm64e/bin/NeverDX86VirtualizationSourceTests",
+          "--gtest_output=json:regression-sgx.json",
+          "--gtest_filter=X86SgxSource.*"
+        ],
+        "registered": 7,
+        "passed": 2,
+        "skipped": [
+          "X86SgxSource.DynamicLeavesRetainRegistersFlagsFaultsAndDeadEffects",
+          "X86SgxSource.NeverCCompletionMatchesOriginalRegistersAndFlags",
+          "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+          "X86SgxSource.NeverCCompilesNativeCompletionAndCombinedAmxFeatures",
+          "X86SgxSource.UnusedLeafRegistersDoNotBecomeParametersOrTraps"
+        ],
+        "failures": [],
+        "report_sha256": "f5de37b978cf5fb4270274bde311d8dfd327435910a8ea2fb20616a52dd5228e",
+        "binary_sha256": "ba51799a33c79527b86266ae393995788aaa54797805147ce0c8d2c15433afae"
+      },
+      {
+        "label": "llvm-c",
+        "target": "NeverDLLVMCIntrinsicSemanticTests",
+        "command": [
+          "build-arm64e/bin/NeverDLLVMCIntrinsicSemanticTests",
+          "--gtest_output=json:regression-llvm-c.json"
+        ],
+        "registered": 62,
+        "passed": 52,
+        "skipped": [
+          "LLVMCIntrinsicSemantics.FxSnapshotsRetainLegacyAnd64BitStateEffects",
+          "LLVMCIntrinsicSemantics.X87SaturatingConversionsGuardUndefinedCasts",
+          "LLVMCIntrinsicSemantics.CPUArraysKeepDistinctNamesAcrossBlocks",
+          "LLVMCIntrinsicSemantics.XGETBVArraysKeepDistinctNamesAcrossBlocks",
+          "LLVMCIntrinsicSemantics.DeadCPUIDRetainsNativeQueryAndBreakpointOrder",
+          "LLVMCIntrinsicSemantics.NativeExchangeKeepsDeadWritesAndUnalignedBytes"
+        ],
+        "failures": [
+          "LLVMCIntrinsicSemantics.IntegerToFloatUsesOpcodeSignednessAndWidth",
+          "LLVMCIntrinsicSemantics.FloatToIntegerPreservesSignedResultBits",
+          "LLVMCIntrinsicSemantics.PackedIntegerNumericCastsKeepEveryLimb",
+          "LLVMCIntrinsicSemantics.PackedWideVectorCastsKeepLaneOrder"
+        ],
+        "report_sha256": "aa1a36fa81eb85325dfc3b13874a057800a11d5884d78f74442ae6248316f4d3",
+        "binary_sha256": "525f9d6ff7b0ef690acfac4783f210acabf8b6017d35a02bbf4f3871a843d55a"
+      },
+      {
+        "label": "win64",
+        "target": "NeverDWin64CallContractTests",
+        "command": [
+          "build-arm64e/bin/NeverDWin64CallContractTests",
+          "--gtest_output=json:regression-win64.json"
+        ],
+        "registered": 81,
+        "passed": 74,
+        "skipped": [
+          "SourceStackSpills/OverwrittenCallClobberSpills.AreNotValueReads/1",
+          "SourceStackSpills/OverwrittenCallClobberSpills.AreNotValueReads/2",
+          "SourceStackSpills/OverwrittenCallClobberSpills.AreNotValueReads/3"
+        ],
+        "failures": [
+          "Win64CallContract.ImmutableNoReturnSlotsEndBothSourcePaths",
+          "Win64CallContract.RelocatedCallbacksBindTheFinalExternalIdentifier",
+          "Win64CallContract.BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes",
+          "CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults"
+        ],
+        "report_sha256": "4cad751cf2c5b3f76bb65e53cc75f80db4ed6b083abd6b30b39b9cbc8f187c63",
+        "binary_sha256": "c7d06e1ff873185a3bced29ca11a9ebc4cfea3d804837e2c06e91db2663b8911"
+      },
+      {
+        "label": "i386",
+        "target": "NeverDI386CallContractTests",
+        "command": [
+          "build-arm64e/bin/NeverDI386CallContractTests",
+          "--gtest_output=json:regression-i386.json"
+        ],
+        "registered": 25,
+        "passed": 25,
+        "skipped": [],
+        "failures": [],
+        "report_sha256": "839908dc8e2e885ed10096d59c4458bdb168a54b0abd6e6d7501f81b8b33bc46",
+        "binary_sha256": "33272c6727ba7dceb9bcae76f6511324468dac628cae329ecd72641ed605c612"
+      }
+    ]
+  },
+  "build_receipt_sha256": "a132b07e6f43b336450c2d2785b956ec19b017d43db43eb202c0e11240d22435",
+  "dependency_inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+  "owned_source_sha256": {
+    "include/neverd/backend/c/render/AArch64/AArch64WritebackMemoryC.def": "51fd5fb98d8a77217ad0a89189ada8a0538d359b51fa95c93cfa2a732b7ec2d2",
+    "include/neverd/backend/c/render/AArch64/AArch64WritebackMemoryC.h": "b311ec0c55d2dd55f45d021ba239be2275146673f0b151f39e020f23db540b3b",
+    "include/neverd/ir/high/AArch64WritebackMemory.h": "084720ad61367d504dd27a4cb77779f70836ee813f16938779891b5da8586a2f",
+    "include/neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h": "1795865655f7a374d500df66a859a2d9fbd0dc1755dcb6dcd529dbacba9f8c02",
+    "include/neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.def": "0a93a7af3b170fff4475139712904f8a169679faa3e764498240c0ef60aad444",
+    "include/neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h": "c1c3885fbb722eb79e674c6a75b77bc712fdb975a74493b635c6761205913255",
+    "include/neverd/ir/low/AArch64ImmediateMemoryImage.h": "9d5d241de0f96fd63814d20efce2996bc71fa30d4ade5de4864c0623d95df369",
+    "include/neverd/ir/low/AArch64WritebackMemory.h": "2661b6fac10899319b258dddb3c3f81145b7f16e62876c77892046d69a9c71f4",
+    "include/neverd/ir/low/LowIntrinsicEffects.h": "f569f9108edfe8db906b22663c13cb1e9f0fb8a5c956ffabf1ba2105913d46f2",
+    "include/neverd/ir/med/IntrinsicShapes.h": "71d80ef7b9ddc15503f29e1354faa9dd9dfbdc9fa86904f99c8f803bc228c6f0",
+    "lib/backend/AArch64ImmediateMemoryBase.h": "9a6b87823c153eb22ff72f19f41644b4e3b482e13f6a19e49ef2ead352b4397a",
+    "lib/backend/c/render/ARM/HighCIntrinsicRenderARM.cpp": "48acda3dd4c5803a4948f20a4300f5bd35843f5db93f8e1d5a00e3219ed44799",
+    "lib/backend/c/render/ARM/LLVMCIntrinsicRenderARM.cpp": "79994ba888c6eece173c81119e169e625d83d452fb03480ec91f8679b15215ed",
+    "lib/backend/llvm/AArch64/MedLLVMAArch64ValueEmitter.cpp": "1dd2a3b5a1258254086348340824c2a8ce0f9e9a08163d52b9bebdf37d2e165d",
+    "lib/backend/llvm/emit/MedLLVMIntrinsic.cpp": "a078a9d3f373e21fc91aa144330ff79850759f7b8647f2616429c63c06b02f72",
+    "lib/ir/SourceStackFrame.cpp": "75a2f7b5ff30112feee1e5c8250b548387a5e6531de43d84ba7189479c19eddc",
+    "lib/ir/high/lower/MedOpToExpr.cpp": "bc581acfc9426566546e09eb2d4fd496d156d7dfaeff4f32d18921ff86c4efbe",
+    "lib/ir/low/LowIR.cpp": "ee8dc8a909007e43393bbbc6cb3935d7e6c72945a0182ee2b754c5df32368b53",
+    "lib/ir/low/NdOpEmulator.cpp": "23c5b6d022c01dd15c5c184ce2a8b2e1ed1d2ca2223d72a72ace48519d1ac78d",
+    "lib/ir/med/lower/LowToMed.cpp": "39aabb12692f2b7150c61641760f9d5db39b3f54580c069d8b8841ca25ddd7ed",
+    "lib/lift/AArch64/AArch64LiftMem.cpp": "1e7e4e7c0480512dc8c1559c80d3ed6014f4d5b914525b709cb7e09e4bdb58ef",
+    "lib/lift/AArch64/AArch64Lifter.cpp": "0a950c91b19bbccad774464fa46c7568e7b3f7f9a58d63be13f205f99ffab0b8",
+    "unittests/lift/aarch64/AArch64AddressMemoryTests.cpp": "540a7ce65700824ae8b94079967d5ef1e781d922cbf418375cf2110b2eaedfc8",
+    "unittests/lift/aarch64/AArch64PairMemoryFixtures.def": "4f13e4ee0c1ec5c1c656adf0f1bd4d02c3e49ea2a0055fd7daedc9074cec4bfa"
+  },
+  "primary_arm_reference": {
+    "url": "https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85",
+    "sha256": "b7baa6869789722df70da60170d999a62810409aaabbb6db1ef729ed68686bdf",
+    "published": "2025-03",
+    "consulted_pdf_pages": [
+      504,
+      508,
+      511
+    ],
+    "role": "Primary Arm LDNP/LDP/LDPSW operation reference; no pseudocode copied into implementation.",
+    "consulted_pair_sections": [
+      {
+        "name": "LDNP",
+        "pdf_page": 503
+      },
+      {
+        "name": "LDP",
+        "pdf_page": 505
+      },
+      {
+        "name": "LDPSW",
+        "pdf_page": 509
+      },
+      {
+        "name": "STNP",
+        "pdf_page": 908
+      },
+      {
+        "name": "STP",
+        "pdf_page": 910
+      },
+      {
+        "name": "LDNP (SIMD&FP)",
+        "pdf_page": 1615
+      },
+      {
+        "name": "LDP (SIMD&FP)",
+        "pdf_page": 1617
+      },
+      {
+        "name": "STNP (SIMD&FP)",
+        "pdf_page": 1971
+      },
+      {
+        "name": "STP (SIMD&FP)",
+        "pdf_page": 1973
+      }
+    ]
+  },
+  "retained_initial_failures": {
+    "report_sha256": "eef3310193eb9410c41f3d2e1b90d79d3db3f11a7f56aa9f065e96cedcf77ce7",
+    "failed_tests": 6,
+    "causes": [
+      "Legacy NEON dispatch intercepted non-temporal pairs before original-memory admission.",
+      "Uniform unused six-argument test declarations disagreed with HighC signature recovery."
+    ],
+    "status": "Fixed and all ten feature tests rerun successfully."
+  },
+  "unavailable_coverage": [
+    {
+      "group": "NeverDSysVCallContractTests",
+      "registered": 41,
+      "reason": "Fresh minimal ASan+UBSan compiler health checks time out at the unchanged20-second limit on both host architectures. The full group was not run or counted as passed.",
+      "health_report_sha256": "e479d956dd1258685588dfc1882207d7645455f6ff4fb81df027f9558c4bf986",
+      "observations": [
+        {
+          "architecture": "arm64",
+          "exit_code": -9,
+          "timed_out": true,
+          "seconds": 20.014191916998243
+        },
+        {
+          "architecture": "x86_64",
+          "exit_code": -9,
+          "timed_out": true,
+          "seconds": 20.010542208001425
+        }
+      ]
+    }
+  ],
+  "unqualified": [
+    "Original SP and synthetic frame/call/unwind execution",
+    "Other ordinary-memory instruction families",
+    "Native half/vector function entry and return ABI",
+    "Overflowing/tagged/foreign-translation memory and original exception-PC/syndrome identity",
+    "Whole authenticated-image rebuilding",
+    "Native Apple CPA2/CPTA-on hardware"
+  ],
+  "ci_diagnostics": "The required Code Review tool returned Connect your GitHub account to continue; no Actions CLI/REST/browser fallback was used.",
+  "previously_reproduced_baseline_failures": {
+    "previous_public_record": "arm64e-vector-writeback-memory-2026-10-26.json",
+    "previous_control_revision": "6fe525a6657e51f218cdad6dd1a1a193bbafe27c",
+    "comparison_scope": "The current failure assertions match the retained previous round. That previous round reproduced them with restored shared owners; no new baseline source build is claimed here.",
+    "comparisons": {
+      "wrmsr": {
+        "tests": {
+          "X86_64_Intrinsics.Decompile_UsesCorrectStyle": {
+            "same_previous_assertions": true
+          },
+          "X86_64_Intrinsics.LlvmC_UsesCorrectStyle": {
+            "same_previous_assertions": true
+          }
+        },
+        "previous_report": "arm64e-vector-writeback-evidence/mops-cpuid-typed.json",
+        "current_report": "regression-mops-cpuid.json"
+      },
+      "llvm-c": {
+        "tests": {
+          "LLVMCIntrinsicSemantics.IntegerToFloatUsesOpcodeSignednessAndWidth": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "8b97f13ddaccbdd0adb0cca38fe916aaa2792e6a6c21022eadf4a5917cbe10f1",
+            "previous_normalized_sha256": "8b97f13ddaccbdd0adb0cca38fe916aaa2792e6a6c21022eadf4a5917cbe10f1"
+          },
+          "LLVMCIntrinsicSemantics.FloatToIntegerPreservesSignedResultBits": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "305ff5d8e260c18f6b9948704b9a91893353ece1daa9fdbdd5a9ab61a1505c57",
+            "previous_normalized_sha256": "305ff5d8e260c18f6b9948704b9a91893353ece1daa9fdbdd5a9ab61a1505c57"
+          },
+          "LLVMCIntrinsicSemantics.PackedIntegerNumericCastsKeepEveryLimb": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "f627f9a9beff6e6a5cd8875121aa99a2eeec6f4c211ff3c91b1a55f0b90a1f9f",
+            "previous_normalized_sha256": "f627f9a9beff6e6a5cd8875121aa99a2eeec6f4c211ff3c91b1a55f0b90a1f9f"
+          },
+          "LLVMCIntrinsicSemantics.PackedWideVectorCastsKeepLaneOrder": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "8605681377a1f0039cf2198be8cf6e0fccd0512d30c73654d91933a2bf607aeb",
+            "previous_normalized_sha256": "8605681377a1f0039cf2198be8cf6e0fccd0512d30c73654d91933a2bf607aeb"
+          }
+        },
+        "normalization": "neverd-(?:intrinsic|source-call)-[0-9a-f-]+"
+      },
+      "win64": {
+        "tests": {
+          "Win64CallContract.ImmutableNoReturnSlotsEndBothSourcePaths": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "86b7cebbc044d79f5e661a571f312a78d25c6b50042b7a32207d42d62999dd90",
+            "previous_normalized_sha256": "86b7cebbc044d79f5e661a571f312a78d25c6b50042b7a32207d42d62999dd90"
+          },
+          "Win64CallContract.RelocatedCallbacksBindTheFinalExternalIdentifier": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "1dc5614c59db78565a680319eb99968a54ffb88006152300b189721ec8f24b2e",
+            "previous_normalized_sha256": "1dc5614c59db78565a680319eb99968a54ffb88006152300b189721ec8f24b2e"
+          },
+          "Win64CallContract.BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "1fcc4419974f130f3e855d4ac226d6c47b55a5a0f69b2bf28e57fcda6db40d13",
+            "previous_normalized_sha256": "1fcc4419974f130f3e855d4ac226d6c47b55a5a0f69b2bf28e57fcda6db40d13"
+          },
+          "CallExitRegisters.PureRegisterLeafKeepsDynamicExtraResults": {
+            "same_previous_assertions": true,
+            "current_normalized_sha256": "fc2fc4a1665ccbee50cf4d8a1196df9496f2b85c312459c03fb1d496ba7b972f",
+            "previous_normalized_sha256": "fc2fc4a1665ccbee50cf4d8a1196df9496f2b85c312459c03fb1d496ba7b972f"
+          }
+        },
+        "normalization": "neverd-(?:intrinsic|source-call)-[0-9a-f-]+"
+      }
+    }
+  }
+}

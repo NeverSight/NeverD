@@ -125,6 +125,17 @@ struct RawByteOracle {
         case NdOp::INT_SUB:
           write(Op.Output, read(Op.Inputs[0]) - read(Op.Inputs[1]));
           break;
+        case NdOp::INT_MULT:
+          write(Op.Output, read(Op.Inputs[0]) * read(Op.Inputs[1]));
+          break;
+        case NdOp::INT_LEFT: {
+          const uint64_t Value = read(Op.Inputs[0]);
+          const uint64_t Count = read(Op.Inputs[1]);
+          if (!Valid)
+            return false;
+          write(Op.Output, Count < Op.Inputs[0].Size * 8 ? Value << Count : 0);
+          break;
+        }
         case NdOp::INT_AND:
           write(Op.Output, read(Op.Inputs[0]) & read(Op.Inputs[1]));
           break;
@@ -133,6 +144,16 @@ struct RawByteOracle {
           break;
         case NdOp::INT_XOR:
           write(Op.Output, read(Op.Inputs[0]) ^ read(Op.Inputs[1]));
+          break;
+        case NdOp::INT_NOT:
+          write(Op.Output, ~read(Op.Inputs[0]));
+          break;
+        case NdOp::BOOL_NOT:
+          write(Op.Output, read(Op.Inputs[0]) == 0);
+          break;
+        case NdOp::SELECT:
+          write(Op.Output,
+                read(Op.Inputs[0]) ? read(Op.Inputs[1]) : read(Op.Inputs[2]));
           break;
         case NdOp::INT_EQUAL:
         case NdOp::INT_NOTEQUAL:
@@ -183,6 +204,16 @@ struct RawByteOracle {
             }
             write(Op.Output, Value);
           }
+          break;
+        }
+        case NdOp::COND_BR: {
+          const auto Target = read(Op.Inputs[0]);
+          const bool Taken = read(Op.Inputs[1]) != 0;
+          for (int Id : B.Succs)
+            if ((F.Blocks.at(Id).StartAddr == Target) == Taken)
+              Next = Id;
+          if (Next < 0)
+            return false;
           break;
         }
         case NdOp::BRANCH: {
@@ -857,13 +888,19 @@ TEST_F(PEFixedImageTest,
     ASSERT_EQ(Good.ExternalExits.size(), 2u);
     EXPECT_FALSE(bool(validateSpecializationRawEnvironment(Good, O)));
     auto Changed = Good;
-    Changed.ExternalExits[0].Original.Ops[0].Inputs[5].Offset ^= 1;
-    auto Error = validateSpecializationRawEnvironment(Changed, O);
-    ASSERT_TRUE(bool(Error));
-    llvm::consumeError(std::move(Error));
+    // The last inactive slot v1 encodes and every extension slot.
+    for (size_t Slot = kLowUndefinedV1InputSlots - 1;
+         Slot != kLowOperationInputs; ++Slot) {
+      SCOPED_TRACE(Slot);
+      Changed = Good;
+      Changed.ExternalExits[0].Original.Ops[0].Inputs[Slot].Offset ^= 1;
+      auto Error = validateSpecializationRawEnvironment(Changed, O);
+      ASSERT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+    }
     Changed = Good;
     Changed.ExternalExits[0].Original.UndefinedEffects.Diagnostic = "changed";
-    Error = validateSpecializationRawEnvironment(Changed, O);
+    auto Error = validateSpecializationRawEnvironment(Changed, O);
     ASSERT_TRUE(bool(Error));
     llvm::consumeError(std::move(Error));
     uint64_t Low = 0, High = O.MaxRawEnvironmentResultRecords;
@@ -1331,3 +1368,6 @@ TEST_F(PEFixedImageTest, RawCodeCmpxchgReceiptBindsOrdering) {
 
 #include "MachineExitEnvironmentTests.inc"
 #include "WideImmutableImageTests.inc"
+
+// Entry-object fixtures reuse the machine-exit byte oracle above.
+#include "EntryObjectEnvironmentTests.inc"

@@ -1,6 +1,7 @@
 #include "ConnectionsDialog.h"
 
 #include "Icons.h"
+#include "ModelessDialog.h"
 #include "Session.h"
 #include "Theme.h"
 #include "mcp/GuiSessionBroker.h"
@@ -49,6 +50,7 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
                                      McpConnectionManager &client,
                                      GuiSessionBroker &broker, QWidget *parent)
     : QDialog(parent), session_(session), client_(client), broker_(broker) {
+  setObjectName(QStringLiteral("connectionsDialog"));
   setWindowTitle(tr("MCP connections"));
   setWindowIcon(icon(QStringLiteral("mcp")));
   resize(1000, 700);
@@ -331,11 +333,12 @@ void ConnectionsDialog::selectEntry() {
 }
 
 void ConnectionsDialog::showSchema() {
-  QDialog dialog(this);
-  dialog.setWindowTitle(tr("Tool input schema"));
-  dialog.resize(640, 520);
-  auto *layout = new QVBoxLayout(&dialog);
-  auto *text = new QPlainTextEdit(&dialog);
+  auto *dialog = new QDialog(this);
+  dialog->setObjectName(QStringLiteral("toolSchemaDialog"));
+  dialog->setWindowTitle(tr("Tool input schema"));
+  dialog->resize(640, 520);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *text = new QPlainTextEdit(dialog);
   text->setReadOnly(true);
   text->setFont(Theme::instance().codeFont());
   text->setPlainText(QString::fromUtf8(
@@ -343,10 +346,10 @@ void ConnectionsDialog::showSchema() {
                         selectedTool_.value("inputSchema").toMap()))
           .toJson(QJsonDocument::Indented)));
   layout->addWidget(text);
-  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   layout->addWidget(buttons);
-  dialog.exec();
+  showModelessDialog(dialog, this);
 }
 
 } // namespace neverd::gui

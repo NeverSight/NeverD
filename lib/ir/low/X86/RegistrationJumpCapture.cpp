@@ -14,7 +14,7 @@
 
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowNoReturn.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
 
 namespace neverd::registration_state {

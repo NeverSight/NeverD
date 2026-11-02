@@ -11,6 +11,7 @@ class QMainWindow;
 class QMenu;
 class QMenuBar;
 class QToolBar;
+class QWidget;
 
 namespace neverd::gui {
 
@@ -33,11 +34,15 @@ public:
   const QList<QAction *> &allActions() const { return all_; }
   /// Attach the view-scoped shortcuts to \p view.
   void attachViewShortcuts(QWidget *view) const;
+  /// Keep workbench shortcuts available when a dock becomes a top-level window.
+  void attachWindowShortcuts(QWidget *view) const;
 
   /// Placeholder callback: fill \p menu with dynamic entries for \p name.
   using PlaceholderFiller = std::function<void(QMenu *menu, const QString &)>;
   void buildMenus(QMenuBar *bar, const PlaceholderFiller &fill);
   QList<QToolBar *> buildToolbars(QMainWindow *window);
+  /// The same commands in one compact row for the focus window's caption.
+  QToolBar *buildFocusToolbar(QWidget *parent) const;
   QMenu *menu(const QString &id) const { return menus_.value(id); }
 
   void retranslate();

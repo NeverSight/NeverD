@@ -1,17 +1,57 @@
-//===- AArch64_NativeDecodeParitySweepTests.cpp - randomized and real binary parity -===//
+//===- AArch64_NativeDecodeParitySweepTests.cpp - randomized and real binary
+// parity -===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64_NativeDecodeParityTestsDetail.h"
 #include "gtest/gtest.h"
 
-#include "AArch64_NativeDecodeParityTestsDetail.h"
+#include <stdexcept>
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::a64_parity_test;
+
+TEST_F(A64NativeParity, RefusalOutcomesRemainDistinctFromSuccessfulLifts) {
+  std::vector<LowOp> CsOps, NatOps;
+  cs_insn NativeInsn{};
+  cs_detail NativeDetail{};
+  ASSERT_TRUE(a64native::tryDecode(kParityRefusedWriteback,
+                                   kParityOutcomeAddress, NativeInsn,
+                                   NativeDetail));
+  const auto Capstone = liftOutcome([&] {
+    return O.lift(kParityRefusedWriteback, kParityOutcomeAddress, CsOps);
+  });
+  const auto Native = liftOutcome([&] {
+    nativeLift(kParityRefusedWriteback, kParityOutcomeAddress, NativeInsn,
+               NatOps);
+    return true;
+  });
+  EXPECT_EQ(Capstone, LiftOutcome::LiftRejected);
+  EXPECT_EQ(Native, LiftOutcome::LiftRejected);
+  EXPECT_TRUE(CsOps.empty());
+  EXPECT_TRUE(NatOps.empty());
+  EXPECT_TRUE(matchingLifts(Capstone, CsOps, Native, NatOps));
+  EXPECT_FALSE(matchingLifts(Capstone, CsOps, LiftOutcome::Lifted, NatOps));
+  EXPECT_FALSE(matchingLifts(LiftOutcome::Lifted, CsOps, Native, NatOps));
+  EXPECT_TRUE(
+      checkOne(O, kParityRefusedWriteback, kParityOutcomeAddress).empty());
+  EXPECT_TRUE(checkOneReuse(O, NativeInsn, NativeDetail,
+                            kParityRefusedWriteback, kParityOutcomeAddress)
+                  .empty());
+  EXPECT_EQ(liftOutcome([&] {
+              return O.lift(kParityAcceptedAdd, kParityOutcomeAddress, CsOps);
+            }),
+            LiftOutcome::Lifted);
+  EXPECT_FALSE(CsOps.empty());
+  EXPECT_THROW(liftOutcome([]() -> bool {
+                 throw std::runtime_error(kParityUnexpectedError);
+               }),
+               std::runtime_error);
+}
 
 // begin() resets only the header of the reused cs_aarch64 and leaves the
 // 16-slot operands[] array untouched (each decode fully writes operands[0,

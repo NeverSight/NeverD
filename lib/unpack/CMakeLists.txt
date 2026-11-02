@@ -6,7 +6,7 @@
 # format/   one directory per executable container
 # dynamic/  guest process observation, per instruction set and guest system
 set(_unpack_sources
-  arch/X64Imports.cpp
+  arch/x86_64/X64Imports.cpp
   core/Identify.cpp
   core/Image.cpp
   core/Registry.cpp

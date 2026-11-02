@@ -11,10 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X87Constant.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/X86/X87Constant.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -224,6 +225,28 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     // CFG stack admission proves the destination empty before projecting
     // the exact integer conversion and its successful-load C1 effect.
     S.emit(NdOp::FLOAT_INT2FLOAT, ST(0), {IVal});
+    break;
+  }
+  case X86_INS_FBLD:
+  case X86_INS_FBSTP: {
+    if (X86.op_count != 1 || X86.operands[0].type != X86_OP_MEM ||
+        X86.operands[0].size != x86reg::FPURegSize)
+      return false;
+    S.emitVoidIntrinsic(Intrinsic::X87Wait);
+    NdVar Control = S.makeTemp(2);
+    S.emitIntrinsic(Intrinsic::X87ReadControl, Control);
+    if (InsnId == X86_INS_FBLD) {
+      const NdVar Packed = operandRead(S, X86.operands[0]);
+      FPUTop = (FPUTop - 1) & 7;
+      S.emitIntrinsic(Intrinsic::X87LoadPackedBCD, ST(0), {Packed, Control});
+      S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
+    } else {
+      const NdVar Packed = S.makeTemp(x86reg::FPURegSize);
+      S.emitIntrinsic(Intrinsic::X87StorePackedBCD, Packed, {ST(0), Control});
+      S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
+      S.storeToMem(X86.operands[0], Packed);
+      FPUTop = (FPUTop + 1) & 7;
+    }
     break;
   }
   case X86_INS_FLD1:
@@ -635,16 +658,20 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   // the emitter turned into a silent 0 (same family as #303/#377/#381).
   case X86_INS_FSIN:
     S.emitIntrinsic(Intrinsic::X87Fsin, ST(0), {ST(0)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     break;
   case X86_INS_FCOS:
     S.emitIntrinsic(Intrinsic::X87Fcos, ST(0), {ST(0)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     break;
   case X86_INS_F2XM1:
     S.emitIntrinsic(Intrinsic::X87F2xm1, ST(0), {ST(0)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     break;
   // 2-operand, no pop: st0 = f(st0, st1).
   case X86_INS_FSCALE:
     S.emitIntrinsic(Intrinsic::X87Fscale, ST(0), {ST(0), ST(1)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     break;
   case X86_INS_FPREM:
     S.emitIntrinsic(Intrinsic::X87Fprem, ST(0), {ST(0), ST(1)});
@@ -657,46 +684,34 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   // 2-operand, pop: result lands in st1, then st0 is popped (st1 becomes top).
   case X86_INS_FPATAN:
     S.emitIntrinsic(Intrinsic::X87Fpatan, ST(1), {ST(0), ST(1)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     FPUTop = (FPUTop + 1) & 7;
     break;
   case X86_INS_FYL2X:
     S.emitIntrinsic(Intrinsic::X87Fyl2x, ST(1), {ST(0), ST(1)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     FPUTop = (FPUTop + 1) & 7;
     break;
   case X86_INS_FYL2XP1:
     S.emitIntrinsic(Intrinsic::X87Fyl2xp1, ST(1), {ST(0), ST(1)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
     FPUTop = (FPUTop + 1) & 7;
     break;
-  // FSINCOS: st0 = sin, push cos.  Hardware fsin/fcos share fsincos's argument
-  // reduction, so computing them separately is bit-identical.
-  case X86_INS_FSINCOS: {
-    NdVar Sin = S.makeTemp(x86reg::FPURegSize);
-    NdVar Cos = S.makeTemp(x86reg::FPURegSize);
-    S.emitIntrinsic(Intrinsic::X87Fsin, Sin, {ST(0)});
-    S.emitIntrinsic(Intrinsic::X87Fcos, Cos, {ST(0)});
-    S.emit(NdOp::COPY, ST(0), {Sin});
-    FPUTop = (FPUTop - 1) & 7;
-    S.emit(NdOp::COPY, ST(0), {Cos});
-    break;
-  }
-  // FPTAN: st0 = tan, push 1.0.
-  case X86_INS_FPTAN: {
-    NdVar Tan = S.makeTemp(x86reg::FPURegSize);
-    S.emitIntrinsic(Intrinsic::X87Fptan, Tan, {ST(0)});
-    S.emit(NdOp::COPY, ST(0), {Tan});
-    FPUTop = (FPUTop - 1) & 7;
-    fpuSetFromDoubleBits(S, ST(0), x86reg::FPU_CONST_1);
-    break;
-  }
-  // FXTRACT: st0 = exponent, push the significand.
+  // Each instruction produces two values in one execution. Runtime guards
+  // admit finite, all-masked completion and, for FPTAN/FSINCOS, the range that
+  // actually pushes. The CFG owner proves source and destination tags.
+  case X86_INS_FSINCOS:
+  case X86_INS_FPTAN:
   case X86_INS_FXTRACT: {
-    NdVar Exp = S.makeTemp(x86reg::FPURegSize);
-    NdVar Sig = S.makeTemp(x86reg::FPURegSize);
-    S.emitIntrinsic(Intrinsic::X87Fxtractexp, Exp, {ST(0)});
-    S.emitIntrinsic(Intrinsic::X87Fxtractsig, Sig, {ST(0)});
-    S.emit(NdOp::COPY, ST(0), {Exp});
+    const Intrinsic Id = InsnId == X86_INS_FSINCOS ? Intrinsic::X87FsincosPair
+                         : InsnId == X86_INS_FPTAN ? Intrinsic::X87FptanPair
+                                                   : Intrinsic::X87FxtractPair;
+    NdVar Pair = S.makeTemp(2 * x86reg::FPURegSize);
+    S.emitIntrinsic(Id, Pair, {ST(0), NdVar::reg(x86reg::FPU_CW, 2)});
+    S.emitIntrinsic(Intrinsic::X87ReadStatus, NdVar::reg(x86reg::FPU_SW, 2));
+    S.emit(NdOp::SUBBYTES, ST(0), {Pair, NdVar::cst(x86reg::FPURegSize, 1)});
     FPUTop = (FPUTop - 1) & 7;
-    S.emit(NdOp::COPY, ST(0), {Sig});
+    S.emit(NdOp::SUBBYTES, ST(0), {Pair, NdVar::cst(0, 1)});
     break;
   }
   // Classification also depends on the slot's empty tag. The CFG x87-state
@@ -802,6 +817,25 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     default:
       break;
     }
+    // Operand size selects the image layout independently of address size.
+    if (X86.prefix[2] == 0x66 && !(X86.rex & 0x08)) {
+      switch (Id) {
+      case Intrinsic::X87Fldenv:
+        Id = Intrinsic::X87Fldenv16;
+        break;
+      case Intrinsic::X87Fnstenv:
+        Id = Intrinsic::X87Fnstenv16;
+        break;
+      case Intrinsic::X87Frstor:
+        Id = Intrinsic::X87Frstor16;
+        break;
+      case Intrinsic::X87Fnsave:
+        Id = Intrinsic::X87Fnsave16;
+        break;
+      default:
+        break;
+      }
+    }
     if (X86.op_count < 1 || !S.emitMemoryIntrinsic(Id, X86.operands[0]))
       return false;
     break;
@@ -809,27 +843,34 @@ bool X86Lifter::liftFPU(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   case X86_INS_WAIT:
     S.emitVoidIntrinsic(Intrinsic::X87Wait);
     break;
-  case X86_INS_FFREE: {
-    if (X86.op_count != 1 || X86.operands[0].type != X86_OP_REG)
+  case X86_INS_FFREE:
+  case X86_INS_FFREEP: {
+    if (X86.op_count != 1 || X86.operands[0].type != X86_OP_REG ||
+        X86.operands[0].size != x86reg::FPURegSize)
       return false;
     const auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
     if (RI.Offset < x86reg::ST0 || RI.Offset > x86reg::ST7 ||
         (RI.Offset - x86reg::ST0) % x86reg::FPURegStride != 0)
       return false;
     const int Idx = x86reg::stRegIndex(RI.Offset);
-    S.emitVoidIntrinsic(Intrinsic::X87Ffree,
+    const auto Id =
+        InsnId == X86_INS_FFREE ? Intrinsic::X87Ffree : Intrinsic::X87Ffreep;
+    S.emitVoidIntrinsic(Id,
                         {ST(Idx), NdVar::cst(static_cast<uint64_t>(Idx), 1)});
+    FPUTop = (FPUTop + x87StackEffect(Id)->TopDelta) & 7;
     break;
   }
   case X86_INS_FINCSTP:
-    S.emitVoidIntrinsic(Intrinsic::X87Fincstp);
-    FPUTop = (FPUTop + 1) & 7;
+  case X86_INS_FDECSTP: {
+    if (X86.op_count != 0)
+      return false;
+    const auto Id = InsnId == X86_INS_FINCSTP ? Intrinsic::X87Fincstp
+                                              : Intrinsic::X87Fdecstp;
+    S.emitVoidIntrinsic(Id);
+    FPUTop = (FPUTop + x87StackEffect(Id)->TopDelta) & 7;
     break;
-  case X86_INS_FFREEP:
-  case X86_INS_FDECSTP:
+  }
   case X86_INS_FSTPNCE:
-  case X86_INS_FBLD:
-  case X86_INS_FBSTP:
   case X86_INS_FSETPM:
   case X86_INS_FDISI8087_NOP:
   case X86_INS_FENI8087_NOP:

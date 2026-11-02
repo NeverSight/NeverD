@@ -14,8 +14,95 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 namespace neverd::mobile::dalvik {
 namespace {
+// Java's named UTF-8 encoder replaces each malformed UTF-16 unit with '?'.
+// This is distinct from the WTF-8 representation used to retain DEX literals.
+template <typename ChargeUnit, typename EmitByte>
+void encodeUTF8(std::span<const uint8_t> bytes, ChargeUnit charge,
+                EmitByte emit) {
+  auto unit = [&](size_t i) {
+    return uint32_t(bytes[i] | uint32_t(bytes[i + 1]) << 8);
+  };
+  for (size_t i = 0; i < bytes.size(); i += 2) {
+    charge();
+    uint32_t c = unit(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 2 < bytes.size() &&
+        unit(i + 2) >= 0xdc00 && unit(i + 2) <= 0xdfff) {
+      charge();
+      c = 0x10000 + ((c - 0xd800) << 10) + (unit(i + 2) - 0xdc00);
+      i += 2;
+    } else if (c >= 0xd800 && c <= 0xdfff) {
+      c = '?';
+    }
+    if (c < 0x80) {
+      emit(uint8_t(c));
+    } else if (c < 0x800) {
+      emit(uint8_t(0xc0 | (c >> 6)));
+      emit(uint8_t(0x80 | (c & 0x3f)));
+    } else if (c < 0x10000) {
+      emit(uint8_t(0xe0 | (c >> 12)));
+      emit(uint8_t(0x80 | ((c >> 6) & 0x3f)));
+      emit(uint8_t(0x80 | (c & 0x3f)));
+    } else {
+      emit(uint8_t(0xf0 | (c >> 18)));
+      emit(uint8_t(0x80 | ((c >> 12) & 0x3f)));
+      emit(uint8_t(0x80 | ((c >> 6) & 0x3f)));
+      emit(uint8_t(0x80 | (c & 0x3f)));
+    }
+  }
+}
+
+// This bounded value subset needs no normalization or protocol-handler lookup.
+// Other URL forms remain unsupported, including forms that may be valid in
+// Java.
+bool retainedHTTPURL(std::span<const uint8_t> bytes) {
+  if (bytes.size() / 2 > ::neverd::limits::dalvik::kMaxJavaURLCodeUnits ||
+      bytes.size() % 2)
+    return false;
+  std::string text;
+  for (size_t i = 0; i < bytes.size(); i += 2) {
+    if (bytes[i + 1] || bytes[i] <= 32 || bytes[i] >= 127 || bytes[i] == '\\')
+      return false;
+    text.push_back(char(bytes[i]));
+  }
+  size_t begin = text.starts_with("http://")    ? 7
+                 : text.starts_with("https://") ? 8
+                                                : 0;
+  if (!begin)
+    return false;
+  auto end = text.find_first_of("/?#", begin);
+  auto authority = std::string_view(text).substr(
+      begin, end == text.npos ? text.size() - begin : end - begin);
+  auto colon = authority.find(':');
+  auto host = authority.substr(0, colon);
+  if (host.empty())
+    return false;
+  for (char c : host)
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '.' || c == '-'))
+      return false;
+  if (colon != authority.npos) {
+    auto port = authority.substr(colon + 1);
+    if (port.empty() || port.size() > 5 || (port.size() > 1 && port[0] == '0'))
+      return false;
+    unsigned number = 0;
+    for (char c : port) {
+      if (c < '0' || c > '9')
+        return false;
+      number = number * 10 + unsigned(c - '0');
+    }
+    if (number > 65535)
+      return false;
+  }
+  return true;
+}
 // These classes have no observable class initializer in this profile.
 static const LibraryMethod Methods[] = {
     {"java/lang/String", "intern", "()Ljava/lang/String;", Intern},
@@ -151,6 +238,152 @@ static const LibraryMethod Methods[] = {
     // preserve existing identities in deterministic execution reports.
     {"android/app/ActivityThread", "getInstrumentation",
      "()Landroid/app/Instrumentation;", ThreadInstrumentation},
+    {"android/content/Context", "getContentResolver",
+     "()Landroid/content/ContentResolver;", ContextContentResolver},
+    {"java/lang/StringBuilder", "<init>", "()V", Construct},
+    {"java/lang/StringBuilder", "append", "(C)Ljava/lang/StringBuilder;",
+     BuilderAppendChar},
+    {"java/lang/StringBuilder", "toString", "()Ljava/lang/String;",
+     BuilderString},
+    {"android/provider/Settings$Secure", "getString",
+     "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+     SecureSettingString, true},
+    {"android/provider/Settings$Secure", "getInt",
+     "(Landroid/content/ContentResolver;Ljava/lang/String;I)I",
+     SecureSettingIntDefault, true},
+    {"android/content/Context", "getApplicationInfo",
+     "()Landroid/content/pm/ApplicationInfo;", ContextApplicationInfo},
+    {"android/content/Context", "getPackageManager",
+     "()Landroid/content/pm/PackageManager;", ContextPackageManager},
+    {"android/content/pm/PackageManager", "getApplicationInfo",
+     "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;",
+     PackageApplicationInfo},
+    {"android/content/pm/PackageManager", "getApplicationLabel",
+     "(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;",
+     PackageApplicationLabel},
+    {"android/content/Context", "getPackageResourcePath",
+     "()Ljava/lang/String;", PackageResourcePath},
+    {"android/content/pm/PackageManager", "getPackageInfo",
+     "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", PackageInfoQuery},
+    {"dalvik/system/BaseDexClassLoader", "toString", "()Ljava/lang/String;",
+     ClassLoaderString},
+    {"java/util/Locale", "getDefault", "()Ljava/util/Locale;", LocaleDefault,
+     true},
+    {"java/util/Locale", "getLanguage", "()Ljava/lang/String;", LocaleLanguage},
+    {"java/util/Locale", "getCountry", "()Ljava/lang/String;", LocaleCountry},
+    {"android/os/Looper", "getMainLooper", "()Landroid/os/Looper;", MainLooper,
+     true},
+    {"android/os/Handler", "<init>", "(Landroid/os/Looper;)V", Construct},
+    {"android/os/Handler", "post", "(Ljava/lang/Runnable;)Z", HandlerPost,
+     false, true},
+    {"android/os/Looper", "getQueue", "()Landroid/os/MessageQueue;",
+     LooperQueue},
+    {"android/os/MessageQueue", "next", "()Landroid/os/Message;",
+     MessageQueueNext, false, false, false},
+    {"android/os/Message", "getCallback", "()Ljava/lang/Runnable;",
+     MessageCallback},
+    {"android/os/Message", "getTarget", "()Landroid/os/Handler;",
+     MessageTarget},
+    {"java/net/URL", "<init>", "(Ljava/lang/String;)V", Construct},
+    {"java/net/URL", "toString", "()Ljava/lang/String;", ToString},
+    {"java/net/URL", "toExternalForm", "()Ljava/lang/String;", ToString},
+    // These overrides must not inherit Object identity or String byte
+    // semantics.
+    {"java/net/URL", "equals", "(Ljava/lang/Object;)Z", Equals},
+    {"java/net/URL", "hashCode", "()I", Hash},
+    {"java/net/URL", "openConnection", "()Ljava/net/URLConnection;",
+     URLOpenConnection},
+    {"java/io/IOException", "<init>", "()V", ThrowableConstruct},
+    {"java/io/IOException", "<init>", "(Ljava/lang/String;)V",
+     ThrowableConstruct},
+    // Append new entries to preserve the existing JNI intrinsic method tokens.
+    {"java/lang/String", "getBytes", "(Ljava/lang/String;)[B", StringGetBytes},
+    {"android/os/SystemClock", "uptimeMillis", "()J", UptimeMillis, true},
+    {"android/os/SystemClock", "elapsedRealtime", "()J", ElapsedRealtime, true},
+    {"android/os/SystemClock", "elapsedRealtimeNanos", "()J",
+     ElapsedRealtimeNanos, true},
+    {"java/util/HashMap", "<init>", "()V", Construct},
+    {"java/util/HashMap", "size", "()I", MapSize},
+    {"java/util/HashMap", "isEmpty", "()Z", MapIsEmpty},
+    {"java/util/HashMap", "get", "(Ljava/lang/Object;)Ljava/lang/Object;",
+     MapGet},
+    {"java/util/HashMap", "put",
+     "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", MapPut},
+    {"java/util/HashMap", "containsKey", "(Ljava/lang/Object;)Z",
+     MapContainsKey},
+    {"java/util/HashMap", "remove", "(Ljava/lang/Object;)Ljava/lang/Object;",
+     MapRemove},
+    {"java/util/HashMap", "clear", "()V", MapClear},
+    {"java/util/AbstractMap", "equals", "(Ljava/lang/Object;)Z", Equals},
+    {"java/util/AbstractMap", "hashCode", "()I", Hash},
+    {"java/util/AbstractMap", "toString", "()Ljava/lang/String;", ToString},
+    {"android/os/SystemProperties", "getInt", "(Ljava/lang/String;I)I",
+     PropertyInt, true},
+    {"java/util/Map", "size", "()I", MapSize},
+    {"java/util/Map", "isEmpty", "()Z", MapIsEmpty},
+    {"java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", MapGet},
+    {"java/util/Map", "put",
+     "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", MapPut},
+    {"java/util/Map", "containsKey", "(Ljava/lang/Object;)Z", MapContainsKey},
+    {"java/util/Map", "remove", "(Ljava/lang/Object;)Ljava/lang/Object;",
+     MapRemove},
+    {"java/util/Map", "clear", "()V", MapClear},
+    {"com/android/internal/util/StatLogger", "<init>", "([Ljava/lang/String;)V",
+     Construct},
+    {"com/android/internal/util/StatLogger", "getTime", "()J", StatLoggerTime},
+    {"com/android/internal/util/StatLogger", "logDurationStat", "(IJ)J",
+     StatLoggerRecord},
+    {"java/util/HashMap", "putAll", "(Ljava/util/Map;)V", MapPutAll},
+    {"java/util/Map", "putAll", "(Ljava/util/Map;)V", MapPutAll},
+    {"android/os/ServiceManager", "getService",
+     "(Ljava/lang/String;)Landroid/os/IBinder;", ServiceGet, true},
+    {"android/os/ServiceManager", "checkService",
+     "(Ljava/lang/String;)Landroid/os/IBinder;", ServiceCheck, true},
+    {"android/os/ServiceManager", "initServiceCache", "(Ljava/util/Map;)V",
+     ServiceInitCache, true},
+    {"android/os/Binder", "allowBlocking",
+     "(Landroid/os/IBinder;)Landroid/os/IBinder;", BinderAllowBlocking, true},
+    {"android/os/IBinder", "queryLocalInterface",
+     "(Ljava/lang/String;)Landroid/os/IInterface;", BinderQueryLocalInterface},
+    {"android/os/BinderProxy", "queryLocalInterface",
+     "(Ljava/lang/String;)Landroid/os/IInterface;", BinderQueryLocalInterface,
+     false, false, false},
+    {"android/os/IInterface", "asBinder", "()Landroid/os/IBinder;",
+     ServiceAsBinder},
+    {"android/os/IServiceManager", "asBinder", "()Landroid/os/IBinder;",
+     ServiceAsBinder},
+    {"android/util/EventLog", "writeEvent", "(II)I", EventLogWrite, true},
+    {"android/util/EventLog", "writeEvent", "(IJ)I", EventLogWrite, true},
+    {"android/util/EventLog", "writeEvent", "(IF)I", EventLogWrite, true},
+    {"android/util/EventLog", "writeEvent", "(ILjava/lang/String;)I",
+     EventLogWrite, true},
+    {"android/util/EventLog", "writeEvent", "(I[Ljava/lang/Object;)I",
+     EventLogWrite, true},
+    {"java/lang/Integer", "<init>", "(I)V", Construct},
+    {"java/lang/Long", "<init>", "(J)V", Construct},
+    {"java/lang/Float", "<init>", "(F)V", Construct},
+    {"android/os/Parcel", "obtain", "()Landroid/os/Parcel;", ParcelData, true},
+    {"android/os/Parcel", "recycle", "()V", ParcelData, false, true},
+    {"android/os/Parcel", "dataSize", "()I", ParcelData, false, true},
+    {"android/os/Parcel", "dataPosition", "()I", ParcelData, false, true},
+    {"android/os/Parcel", "dataAvail", "()I", ParcelData, false, true},
+    {"android/os/Parcel", "setDataPosition", "(I)V", ParcelData, false, true},
+    {"android/os/Parcel", "writeInt", "(I)V", ParcelData, false, true},
+    {"android/os/Parcel", "readInt", "()I", ParcelData, false, true},
+    {"android/os/Parcel", "writeLong", "(J)V", ParcelData, false, true},
+    {"android/os/Parcel", "readLong", "()J", ParcelData, false, true},
+    {"android/os/Parcel", "writeString", "(Ljava/lang/String;)V", ParcelData,
+     false, true},
+    {"android/os/Parcel", "readString", "()Ljava/lang/String;", ParcelData,
+     false, true},
+    {"android/os/Parcel", "marshall", "()[B", ParcelData, false, true},
+    {"android/os/Parcel", "unmarshall", "([BII)V", ParcelData, false, true},
+    {"android/os/Parcel", "writeInterfaceToken", "(Ljava/lang/String;)V",
+     ParcelData, false, true},
+    {"android/os/Binder", "getThreadStrictModePolicy", "()I",
+     BinderGetStrictMode, true, true},
+    {"android/os/Binder", "setThreadStrictModePolicy", "(I)V",
+     BinderSetStrictMode, true, true},
 };
 
 struct LibraryStop {
@@ -260,7 +493,29 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
       result.external->library = std::move(text);
       return result;
     }
-    if (M.Op >= CurrentActivityThread && M.Op <= ThreadInstrumentation) {
+    if ((M.Op >= CurrentActivityThread && M.Op <= ThreadInstrumentation) ||
+        M.Op == ContextContentResolver || M.Op == SecureSettingString ||
+        M.Op == SecureSettingIntDefault || M.Op == ContextApplicationInfo ||
+        M.Op == ContextPackageManager || M.Op == PackageApplicationInfo ||
+        M.Op == PackageApplicationLabel || M.Op == PackageResourcePath ||
+        M.Op == PackageInfoQuery || M.Op == LocaleDefault ||
+        M.Op == LocaleLanguage || M.Op == LocaleCountry ||
+        M.Op == ClassLoaderString || M.Op == MainLooper ||
+        M.Op == HandlerPost || M.Op == LooperQueue ||
+        M.Op == MessageQueueNext || M.Op == MessageCallback ||
+        M.Op == MessageTarget || M.Op == UptimeMillis ||
+        M.Op == ElapsedRealtime || M.Op == ElapsedRealtimeNanos ||
+        M.Op == PropertyInt || M.Op == StatLoggerTime ||
+        M.Op == StatLoggerRecord || M.Op == ServiceGet ||
+        M.Op == ServiceCheck || M.Op == ServiceInitCache ||
+        M.Op == BinderAllowBlocking || M.Op == BinderQueryLocalInterface ||
+        M.Op == ServiceAsBinder || M.Op == EventLogWrite ||
+        M.Op == ParcelData || M.Op == BinderGetStrictMode ||
+        M.Op == BinderSetStrictMode ||
+        (M.Op == Construct &&
+         (std::string_view(M.Class) == "android/os/Handler" ||
+          std::string_view(M.Class) ==
+              "com/android/internal/util/StatLogger"))) {
       if (!program || !framework)
         return {ExecutionStop::Unsupported,
                 0,
@@ -287,6 +542,243 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
       work(bytes.size());
       return Ref(heap.stringConstant(key, {bytes.begin(), bytes.end()}));
     };
+    if (M.Op == Construct &&
+        (std::string_view(M.Class) == "java/lang/Integer" ||
+         std::string_view(M.Class) == "java/lang/Long" ||
+         std::string_view(M.Class) == "java/lang/Float")) {
+      if (!program)
+        return {ExecutionStop::Unsupported,
+                0,
+                {},
+                "Java boxed value declaration is not supplied"};
+      const auto *field = program->findField(
+          {"L" + std::string(M.Class) + ";", "value", Types[0]}, false);
+      if (!field)
+        return {ExecutionStop::Unsupported,
+                0,
+                {},
+                "Java boxed value field is not supplied"};
+      if (ObjectValue &&
+          (ObjectValue->Type != Object::Instance ||
+           ObjectValue->ClassName != M.Class || ObjectValue->Initialized ||
+           !ObjectValue->Fields.contains(field)))
+        return failure("Java boxed value constructor receiver mismatch");
+      tick();
+      auto result =
+          ObjectValue
+              ? ObjectValue
+              : heap.allocate(
+                    Object::Instance, M.Class, 0,
+                    ::neverd::limits::dalvik::kInstanceFieldStorageBytes);
+      if (!result)
+        return Ref(result);
+      result->Fields[field] = Types[0] == "J" ? Values[0] : uint32_t(Values[0]);
+      return Ref(result);
+    }
+    if (ObjectValue &&
+        (ObjectValue->ClassName == "java/lang/Integer" ||
+         ObjectValue->ClassName == "java/lang/Long" ||
+         ObjectValue->ClassName == "java/lang/Float") &&
+        !Nonvirtual &&
+        (M.Op == IdentityEquals || M.Op == Hash || M.Op == ToString))
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Java boxed value comparison and formatting are not modeled"};
+    if (std::string_view(M.Class) == "java/net/URL") {
+      if (ObjectValue && (ObjectValue->Type != Object::Instance ||
+                          ObjectValue->ClassName != M.Class))
+        return failure("Java URL receiver type mismatch");
+      if (M.Op == Construct) {
+        if (ObjectValue && ObjectValue->Initialized)
+          return failure("Java URL receiver is already initialized");
+        auto spec = object(Values[0]);
+        if (!spec)
+          return {ExecutionStop::Unsupported,
+                  0,
+                  {},
+                  "Java URL null input exception state is unmodeled"};
+        work(spec->Bytes.size());
+        if (!retainedHTTPURL(spec->Bytes))
+          return {ExecutionStop::Unsupported,
+                  0,
+                  {},
+                  "Java URL form is outside the bounded HTTP value contract"};
+        auto o = ObjectValue ? ObjectValue
+                             : heap.allocate(Object::Instance, M.Class,
+                                             spec->Bytes.size());
+        if (!o || !heap.replaceBytes(*o, spec->Bytes))
+          return Ref(std::shared_ptr<Object>());
+        return Ref(o);
+      }
+      if (M.Op == ToString)
+        return Make(ObjectValue->Bytes);
+      if (M.Op == URLOpenConnection) {
+        work(ObjectValue->Bytes.size());
+        if (!retainedHTTPURL(ObjectValue->Bytes))
+          return failure("Java URL receiver has no retained HTTP value");
+        if (!framework)
+          return {ExecutionStop::Unsupported,
+                  0,
+                  {},
+                  "Java URL.openConnection handler state is not supplied"};
+        return framework->openURL(
+            heap, ObjectValue->Bytes[8] == ':' ? "http" : "https", admit);
+      }
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Java URL handler-dependent equality or hashing is unmodeled"};
+    }
+    if (M.Op == IdentityEquals && !Nonvirtual && ObjectValue &&
+        ObjectValue->ClassName == "java/net/URL")
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Java URL handler-dependent equality or hashing is unmodeled"};
+    if (std::string_view(M.Class) == "java/util/AbstractMap" ||
+        (M.Op == IdentityEquals && !Nonvirtual && ObjectValue &&
+         assignable(objectDescriptor(*ObjectValue), "Ljava/util/AbstractMap;")))
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Java Map equality, hashing and string conversion are unmodeled"};
+    if (std::string_view(M.Class) == "java/util/HashMap" ||
+        std::string_view(M.Class) == "java/util/Map") {
+      if (ObjectValue && ObjectValue->ClassName != "java/util/HashMap")
+        return {ExecutionStop::Unsupported,
+                0,
+                {},
+                "Java HashMap subclass behavior is unmodeled"};
+      if (M.Op == Construct) {
+        if (ObjectValue &&
+            (ObjectValue->Initialized || ObjectValue->MapEntries))
+          return failure("Java HashMap receiver is already constructed");
+        auto o = ObjectValue ? ObjectValue
+                             : heap.allocate(Object::Instance, M.Class, 0);
+        if (!o || !heap.replaceMapEntries(*o, {}))
+          return Ref(std::shared_ptr<Object>());
+        return Ref(o);
+      }
+      if (!ObjectValue->MapEntries)
+        return {ExecutionStop::Unsupported,
+                0,
+                {},
+                "Java HashMap contents are not supplied"};
+      if (M.Op == MapPutAll) {
+        const auto source = object(Values[0]);
+        if (!source)
+          return Throw("java/lang/NullPointerException");
+        if (source->ClassName != "java/util/HashMap" || !source->MapEntries)
+          return {ExecutionStop::Unsupported,
+                  0,
+                  {},
+                  "Java putAll requires known HashMap contents"};
+        // Snapshot before mutation so putAll(this) keeps stable traversal.
+        for (size_t i = 0; i < source->MapEntries->size(); ++i)
+          tick();
+        const auto copy = *source->MapEntries;
+        const auto *put =
+            libraryMethod({"Ljava/util/HashMap;",
+                           "put",
+                           {"Ljava/lang/Object;", "Ljava/lang/Object;"},
+                           "Ljava/lang/Object;"},
+                          false);
+        for (const auto &entry : copy) {
+          const uint64_t args[] = {entry.Key, entry.Value};
+          auto result = executeLibrary(heap, *put, receiver, args, admit, false,
+                                       program, framework);
+          if (result.stop != ExecutionStop::Returned)
+            return result;
+        }
+        return value(0);
+      }
+      const auto &entries = *ObjectValue->MapEntries;
+      if (M.Op == MapSize)
+        return value(entries.size());
+      if (M.Op == MapIsEmpty)
+        return value(entries.empty());
+      if (M.Op == MapClear) {
+        for (size_t i = 0; i < entries.size(); ++i)
+          tick();
+        heap.replaceMapEntries(*ObjectValue, {});
+        return value(0);
+      }
+      const auto key = object(Values[0]);
+      if (key && key->Type != Object::String)
+        return {ExecutionStop::Unsupported,
+                0,
+                {},
+                "Java HashMap supports only String and null keys"};
+      size_t found = entries.size();
+      for (size_t i = 0; i < entries.size(); ++i) {
+        tick();
+        const auto stored = heap.get(entries[i].Key);
+        if (key && stored)
+          work(key->Bytes.size());
+        if (key == stored || (key && stored && key->Bytes == stored->Bytes)) {
+          found = i;
+          break;
+        }
+      }
+      const bool present = found != entries.size();
+      const uint32_t previous = present ? entries[found].Value : 0;
+      if (M.Op == MapGet)
+        return value(previous);
+      if (M.Op == MapContainsKey)
+        return value(present);
+      // Admit traversal and the complete retained copy before mutation.
+      for (size_t i = 0; i < entries.size(); ++i)
+        tick();
+      auto changed = entries;
+      if (M.Op == MapPut) {
+        if (present)
+          changed[found].Value = uint32_t(Values[1]);
+        else
+          changed.push_back({uint32_t(Values[0]), uint32_t(Values[1])});
+      } else if (M.Op == MapRemove) {
+        if (present)
+          changed.erase(changed.begin() + found);
+      } else {
+        return failure("unknown Java HashMap operation");
+      }
+      if (!heap.replaceMapEntries(*ObjectValue, std::move(changed)))
+        return Ref(std::shared_ptr<Object>());
+      return value(previous);
+    }
+    if (std::string_view(M.Class) == "java/lang/StringBuilder") {
+      // Constructors share the existing DEX/JNI constructor operation. The
+      // mutable UTF-16 value stays in the same retained workload object.
+      if (ObjectValue && (ObjectValue->Type != Object::Instance ||
+                          ObjectValue->ClassName != M.Class))
+        return failure("Java StringBuilder receiver type mismatch");
+      if (M.Op == Construct) {
+        if (ObjectValue && ObjectValue->Initialized)
+          return failure("Java StringBuilder receiver is already initialized");
+        auto o = ObjectValue ? ObjectValue
+                             : heap.allocate(Object::Instance, M.Class, 0);
+        if (!o || !heap.replaceBytes(*o, {}))
+          return Ref(std::shared_ptr<Object>());
+        return Ref(o);
+      }
+      if (M.Op == BuilderAppendChar) {
+        // Charge the complete copy before publishing any mutation.
+        work(ObjectValue->Bytes.size() + 2);
+        auto bytes = ObjectValue->Bytes;
+        bytes.push_back(uint8_t(Values[0]));
+        bytes.push_back(uint8_t(Values[0] >> 8));
+        if (!heap.replaceBytes(*ObjectValue, std::move(bytes)))
+          return Ref(std::shared_ptr<Object>());
+        return Ref(ObjectValue);
+      }
+      if (M.Op == BuilderString) {
+        // API 28 returns the interned empty literal; a nonempty result is a
+        // separate immutable String, unaffected by later appends.
+        return ObjectValue->Bytes.empty() ? Ref(heap.literal(""))
+                                          : Make(ObjectValue->Bytes);
+      }
+      return failure("unknown Java StringBuilder operation");
+    }
     const std::vector<uint8_t> EmptyBytes;
     if (M.Op == ObjectConstruct)
       return receiver ? value(receiver)
@@ -329,6 +821,50 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
       return Ref(ObjectValue);
     if (M.Op == ToChars)
       return Make(Bytes, true);
+    if (M.Op == StringGetBytes) {
+      auto charset = object(Values[0]);
+      if (!charset)
+        return Throw("java/lang/NullPointerException");
+      if (ObjectValue->Type != Object::String || Bytes.size() % 2 ||
+          ObjectValue->Length != Bytes.size() / 2 ||
+          charset->Type != Object::String || charset->Bytes.size() % 2 ||
+          charset->Length != charset->Bytes.size() / 2)
+        return failure("Java UTF-8 encoder string storage is malformed");
+      constexpr std::string_view name = "utf-8";
+      bool supported = charset->Length == name.size();
+      if (supported)
+        for (size_t i = 0; i < name.size(); ++i) {
+          tick();
+          auto c = Unit(charset->Bytes, i);
+          if (c >= 'A' && c <= 'Z')
+            c += 'a' - 'A';
+          supported &= c == uint8_t(name[i]);
+        }
+      if (!supported)
+        return {ExecutionStop::Unsupported,
+                0,
+                {},
+                "Java String.getBytes charset is unmodeled"};
+      // Account for both passes before allocating or publishing any result.
+      // The retained heap admits the exact byte count, including empty arrays.
+      uint64_t size = 0;
+      encodeUTF8(
+          Bytes,
+          [&] {
+            tick();
+            tick();
+          },
+          [&](uint8_t) { ++size; });
+      auto result = heap.allocate(Object::PrimitiveArray, "[B", size);
+      if (!result)
+        return Ref(result);
+      size_t offset = 0;
+      encodeUTF8(
+          Bytes, [] {}, [&](uint8_t byte) { result->Bytes[offset++] = byte; });
+      result->Length = size;
+      result->ElementSize = 1;
+      return Ref(result);
+    }
     if (M.Op == Hash) {
       uint32_t Hash = 0;
       for (size_t I = 0; I < ObjectValue->Length; ++I) {

@@ -309,4 +309,45 @@ TEST_F(NdOpEmulatorTest, SignExtInChain) {
   EXPECT_EQ(*T1, 0x1002u);
 }
 
+TEST_F(NdOpEmulatorTest, CopiesAndConcatenationsPreserveUnknownSourceBytes) {
+  for (uint16_t Bytes : {2, 16, 64})
+    for (auto Code :
+         {NdOp::COPY, NdOp::INT_ZEXT, NdOp::INT_SEXT, NdOp::CONCAT}) {
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      LowOp Op;
+      Op.Opcode = Code;
+      Op.Output = NdVar::reg(0x800, Code == NdOp::CONCAT ? Bytes * 2 : Bytes);
+      Op.addInput(NdVar::reg(0x700, Bytes));
+      if (Code == NdOp::CONCAT)
+        Op.addInput(NdVar::cst(7, Bytes));
+      E.setRegisterBytes(Op.Output.Offset,
+                         std::vector<uint8_t>(Op.Output.Size, 0x5a));
+      EXPECT_TRUE(E.step(Op));
+      EXPECT_FALSE(E.getRegisterBytes(Op.Output.Offset));
+      LowOp Copy;
+      Copy.Opcode = NdOp::COPY;
+      Copy.Output = NdVar::reg(0x900, Op.Output.Size);
+      Copy.addInput(Op.Output);
+      EXPECT_TRUE(E.step(Copy));
+      EXPECT_FALSE(E.getRegisterBytes(Copy.Output.Offset));
+    }
+}
+
+TEST_F(NdOpEmulatorTest, NarrowReshapesOnlyObserveTheRetainedBytes) {
+  NdOpEmulator E(Img);
+  E.setRegister(0x700, UINT64_C(0x123456789abcdef0));
+  for (auto Code : {NdOp::COPY, NdOp::SUBBYTES}) {
+    LowOp Op;
+    Op.Opcode = Code;
+    Op.Output = NdVar::reg(0x800, 4);
+    Op.addInput(NdVar::reg(0x700, 16)); // only the low eight bytes are known
+    if (Code == NdOp::SUBBYTES)
+      Op.addInput(NdVar::cst(4, 4));
+    EXPECT_TRUE(E.step(Op));
+    EXPECT_EQ(E.getRegister(0x800),
+              Code == NdOp::COPY ? UINT64_C(0x9abcdef0) : UINT64_C(0x12345678));
+  }
+}
+
 } // namespace

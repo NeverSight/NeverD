@@ -20,10 +20,14 @@
 #include "HighDCEDetail.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/high/HighIntegerProjection.h"
 #include "neverd/ir/high/MedToHigh.h"
+
+#include "llvm/ADT/SmallVector.h"
 
 #include <optional>
 #include <unordered_set>
+#include <vector>
 
 namespace neverd {
 
@@ -171,6 +175,290 @@ static ExprPtr asIntegerType(const ExprPtr &V, const TypeRef &Ty) {
   return Cast;
 }
 
+/// Equality observes word bits, so a wrapped difference (including a
+/// multiply by all-ones) is zero exactly when its two operands agree. Keep
+/// every operand evaluation and its order. Narrowing, floating conversions
+/// and ordered accesses are not word views.
+static ExprPtr foldDifferenceZeroTest(const ExprPtr &E) {
+  if (!E || E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
+      (E->Op != NdOp::INT_EQUAL && E->Op != NdOp::INT_NOTEQUAL) || !E->Type ||
+      E->Type->Kind != NdTypeKind::Int)
+    return nullptr;
+  const auto Plain = [](const ExprPtr &V) {
+    return V && V->Type && V->Type->Kind == NdTypeKind::Int &&
+           (V->Type->Size == 1 || V->Type->Size == 2 || V->Type->Size == 4 ||
+            V->Type->Size == 8) &&
+           !V->IndirectTarget && !V->SourceCallHint &&
+           V->IntrinsicId == Intrinsic::None && V->IntrinsicOutputs.empty() &&
+           V->MemoryOrdering == NdMemoryOrdering::None &&
+           V->MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
+  if (!Plain(E))
+    return nullptr;
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto &Zero = E->Operands[1 - I];
+    auto Input = E->Operands[I];
+    if (!Plain(Zero) || !isZeroConst(Zero) || !Zero->Operands.empty() ||
+        Zero->AddressOwnerVA != InvalidVA ||
+        (Zero->ConstProvenance != ConstantAddressProvenance::Scalar &&
+         Zero->ConstProvenance != ConstantAddressProvenance::Unknown) ||
+        !Plain(Input) || Zero->Type->Size != Input->Type->Size)
+      continue;
+    // Widening and same-width integer views preserve zero. Stop at a
+    // truncation: a nonzero machine word can have an all-zero low part.
+    for (unsigned Depth = 0;
+         Depth != ::neverd::limits::ir::kHighExprSimplifyZeroTestViewDepthLimit;
+         ++Depth) {
+      if (!Plain(Input) || Input->Operands.size() != 1 ||
+          !Plain(Input->Operands[0]) ||
+          Input->Operands[0]->Type->Size > Input->Type->Size)
+        break;
+      const bool Cast = Input->Kind == ExprKind::Cast && Input->CastTo &&
+                        Input->CastTo->Kind == NdTypeKind::Int &&
+                        Input->CastTo->Size == Input->Type->Size &&
+                        Input->CastTo->IsSigned == Input->Type->IsSigned;
+      const bool BitCast = Input->Kind == ExprKind::BitCast &&
+                           Input->Operands[0]->Type->Size == Input->Type->Size;
+      const bool Extension =
+          Input->Kind == ExprKind::UnaryOp &&
+          (Input->Op == NdOp::INT_ZEXT || Input->Op == NdOp::INT_SEXT);
+      if (!Cast && !BitCast && !Extension)
+        break;
+      Input = Input->Operands[0];
+    }
+    ExprPtr ViewOnly;
+    if (Input != E->Operands[I]) {
+      auto NarrowZero = HighExpr::makeConst(0, Input->Type->Size,
+                                            ConstantAddressProvenance::Scalar);
+      NarrowZero->Type = Input->Type;
+      ViewOnly = HighExpr::makeBinop(E->Op, Input, NarrowZero);
+      ViewOnly->Type = E->Type;
+    }
+    const auto Bytes = Input->Type->Size;
+    const auto Word = [&](const ExprPtr &V) {
+      return V && V->Type && V->Type->Kind == NdTypeKind::Int &&
+             V->Type->Size == Bytes;
+    };
+    const auto Bits = [&](ExprPtr V) -> ExprPtr {
+      for (unsigned Depth = 0;
+           Depth !=
+           ::neverd::limits::ir::kHighExprSimplifyZeroTestViewDepthLimit;
+           ++Depth) {
+        if (!Plain(V) || !Word(V))
+          return nullptr;
+        if (V->Kind != ExprKind::Cast && V->Kind != ExprKind::BitCast)
+          return V;
+        if (V->Operands.size() != 1 || !Word(V->Operands[0]) ||
+            (V->Kind == ExprKind::Cast &&
+             (!V->CastTo || V->CastTo->Kind != NdTypeKind::Int ||
+              V->CastTo->Size != Bytes ||
+              V->CastTo->IsSigned != V->Type->IsSigned)))
+          return nullptr;
+        V = V->Operands[0];
+      }
+      return nullptr;
+    };
+    auto Difference = Bits(Input);
+    if (!Difference || Difference->Kind != ExprKind::BinOp ||
+        Difference->Operands.size() != 2 || !Word(Difference->Operands[0]) ||
+        !Word(Difference->Operands[1]))
+      return ViewOnly;
+    ExprPtr Left, Right;
+    if (Difference->Op == NdOp::INT_SUB || Difference->Op == NdOp::INT_XOR) {
+      Left = Difference->Operands[0];
+      Right = Difference->Operands[1];
+    } else if (Difference->Op == NdOp::INT_ADD) {
+      for (unsigned J = 0; J != 2 && !Left; ++J) {
+        const auto Negative = Bits(Difference->Operands[J]);
+        if (!Negative)
+          continue;
+        ExprPtr Value;
+        if (Negative->Kind == ExprKind::UnaryOp &&
+            Negative->Op == NdOp::INT_NEG2 && Negative->Operands.size() == 1 &&
+            Word(Negative->Operands[0])) {
+          Value = Negative->Operands[0];
+        } else if (Negative->Kind == ExprKind::BinOp &&
+                   Negative->Op == NdOp::INT_MULT &&
+                   Negative->Operands.size() == 2) {
+          const uint64_t Mask =
+              Bytes == 8 ? ~uint64_t(0) : (uint64_t(1) << (Bytes * 8)) - 1;
+          for (unsigned K = 0; K != 2; ++K) {
+            const auto &Factor = Negative->Operands[K];
+            if (Plain(Factor) && Word(Factor) &&
+                Factor->Kind == ExprKind::Const && Factor->Operands.empty() &&
+                Factor->AddressOwnerVA == InvalidVA &&
+                (Factor->ConstProvenance == ConstantAddressProvenance::Scalar ||
+                 Factor->ConstProvenance ==
+                     ConstantAddressProvenance::Unknown) &&
+                (Factor->ConstVal & Mask) == Mask &&
+                Word(Negative->Operands[1 - K]))
+              Value = Negative->Operands[1 - K];
+          }
+        }
+        if (Value) {
+          Left = J == 0 ? Value : Difference->Operands[0];
+          Right = J == 0 ? Difference->Operands[1] : Value;
+        }
+      }
+    }
+    if (Left && Right) {
+      const auto Unsigned = NdType::makeInt(Bytes, false);
+      // Byte and halfword operands promote to int in C. Mixed signedness
+      // there needs a common unsigned word view (-1 and 255 have equal byte
+      // bits). Word-sized operands already compare those bits under C's
+      // usual arithmetic conversions; equal signedness and zero also need
+      // no extra casts.
+      const bool NeedsUnsigned =
+          Bytes < 4 && Left->Type->IsSigned != Right->Type->IsSigned &&
+          !isZeroConst(Left) && !isZeroConst(Right);
+      auto Result = HighExpr::makeBinop(
+          E->Op, NeedsUnsigned ? asIntegerType(Left, Unsigned) : Left,
+          NeedsUnsigned ? asIntegerType(Right, Unsigned) : Right);
+      Result->Type = E->Type;
+      return Result;
+    }
+    return ViewOnly;
+  }
+  return nullptr;
+}
+
+/// Exact word identities that need no search. Require equal integer widths
+/// and discardable operands: identical-looking loads or calls are separate
+/// observations, and a narrowing conversion cannot be erased by absorption.
+static ExprPtr foldWordIdentity(const ExprPtr &E) {
+  if (!E || E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
+      (E->Op != NdOp::INT_OR && E->Op != NdOp::INT_AND &&
+       E->Op != NdOp::INT_XOR && E->Op != NdOp::INT_SUB &&
+       E->Op != NdOp::INT_ADD) ||
+      !E->Type || E->Type->Kind != NdTypeKind::Int || !E->Type->Size ||
+      E->Type->Size > 8 || !isEffectFree(E))
+    return nullptr;
+  // Undef occurrences do not name one stable word. Also bound the expanded
+  // tree, not just distinct DAG nodes, before recursive equality checks.
+  size_t Budget = ::neverd::limits::ir::kHighExprSimplifyIsEffectFreeBudget;
+  llvm::SmallVector<const HighExpr *, 8> Pending{E.get()};
+  while (!Pending.empty()) {
+    const auto *V = Pending.pop_back_val();
+    if (!V || !Budget-- || V->Kind == ExprKind::Undef || V->IndirectTarget ||
+        (V->Kind == ExprKind::Var && V->Var.Kind == MedVar::Unspecified))
+      return nullptr;
+    for (const auto &Operand : V->Operands)
+      Pending.push_back(Operand.get());
+  }
+  const auto Word = [&](const ExprPtr &V) {
+    return V && V->Type && V->Type->Kind == NdTypeKind::Int &&
+           V->Type->Size == E->Type->Size;
+  };
+  const auto Bits = [&](ExprPtr V) {
+    while (Word(V) && V->Kind == ExprKind::Cast && V->CastTo &&
+           V->CastTo->Kind == NdTypeKind::Int &&
+           V->CastTo->Size == E->Type->Size && V->Operands.size() == 1 &&
+           Word(V->Operands[0]))
+      V = V->Operands[0];
+    return V;
+  };
+  const auto Same = [&](const ExprPtr &A, const ExprPtr &B) {
+    return Word(A) && Word(B) && Bits(A)->structuralEq(*Bits(B));
+  };
+  const auto &A = E->Operands[0], &B = E->Operands[1];
+  if (!Word(A) || !Word(B))
+    return nullptr;
+  if (Same(A, B)) {
+    if (E->Op == NdOp::INT_OR || E->Op == NdOp::INT_AND)
+      return asIntegerType(A, E->Type);
+    if (E->Op == NdOp::INT_XOR || E->Op == NdOp::INT_SUB) {
+      auto Zero = HighExpr::makeConst(0, E->Type->Size,
+                                      ConstantAddressProvenance::Scalar);
+      Zero->Type = E->Type;
+      return Zero;
+    }
+  }
+  if (E->Op == NdOp::INT_OR || E->Op == NdOp::INT_AND) {
+    const NdOp Inner = E->Op == NdOp::INT_OR ? NdOp::INT_AND : NdOp::INT_OR;
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto Nested = Bits(E->Operands[I]);
+      const auto &Value = E->Operands[1 - I];
+      if (Nested->Kind == ExprKind::BinOp && Nested->Op == Inner &&
+          Nested->Operands.size() == 2 &&
+          (Same(Nested->Operands[0], Value) ||
+           Same(Nested->Operands[1], Value)) &&
+          Word(Nested->Operands[0]) && Word(Nested->Operands[1]))
+        return asIntegerType(Value, E->Type);
+    }
+  }
+  const auto Pair = [&](const ExprPtr &V, NdOp Op) {
+    return Word(V) && V->Kind == ExprKind::BinOp && V->Op == Op &&
+           V->Operands.size() == 2 && Word(V->Operands[0]) &&
+           Word(V->Operands[1]);
+  };
+  const auto SamePair = [&](const ExprPtr &L, const ExprPtr &R) {
+    return (Same(L->Operands[0], R->Operands[0]) &&
+            Same(L->Operands[1], R->Operands[1])) ||
+           (Same(L->Operands[0], R->Operands[1]) &&
+            Same(L->Operands[1], R->Operands[0]));
+  };
+  // Fold scalar offsets in the word domain before reconstructing a source
+  // address. Address-bearing constants keep their identity and are not numeric
+  // offsets; changing widths between the two operations also stops this rule.
+  if (E->Op == NdOp::INT_ADD || E->Op == NdOp::INT_SUB) {
+    const auto ScalarConstant = [&](const ExprPtr &V) {
+      return Word(V) && V->Kind == ExprKind::Const && V->Operands.empty() &&
+             V->ConstProvenance == ConstantAddressProvenance::Scalar;
+    };
+    for (unsigned I = 0; I < 2; ++I) {
+      if (E->Op == NdOp::INT_SUB && I != 0)
+        continue;
+      const auto Nested = Bits(E->Operands[I]);
+      const auto Offset = Bits(E->Operands[1 - I]);
+      if (!ScalarConstant(Offset) ||
+          (!Pair(Nested, NdOp::INT_ADD) && !Pair(Nested, NdOp::INT_SUB)))
+        continue;
+      for (unsigned J = 0; J < 2; ++J) {
+        if (Nested->Op == NdOp::INT_SUB && J != 1)
+          continue;
+        const auto Earlier = Bits(Nested->Operands[J]);
+        if (!ScalarConstant(Earlier))
+          continue;
+        const auto Base = Bits(Nested->Operands[1 - J]);
+        const uint64_t Mask = E->Type->Size == 8
+                                  ? ~uint64_t(0)
+                                  : (uint64_t(1) << (E->Type->Size * 8)) - 1;
+        const uint64_t Delta =
+            ((Nested->Op == NdOp::INT_SUB ? uint64_t(0) - Earlier->ConstVal
+                                          : Earlier->ConstVal) +
+             (E->Op == NdOp::INT_SUB ? uint64_t(0) - Offset->ConstVal
+                                     : Offset->ConstVal)) &
+            Mask;
+        auto Value = asIntegerType(Base, E->Type);
+        if (!Delta)
+          return Value;
+        auto Constant = HighExpr::makeConst(Delta, E->Type->Size,
+                                            ConstantAddressProvenance::Scalar);
+        Constant->Type = E->Type;
+        auto Sum = HighExpr::makeBinop(NdOp::INT_ADD, Value, Constant);
+        Sum->Type = E->Type;
+        return Sum;
+      }
+    }
+  }
+  for (unsigned I = 0; I < 2; ++I) {
+    const auto L = Bits(E->Operands[I]), R = Bits(E->Operands[1 - I]);
+    // (a | b) + (a & b) = a + b, modulo the word width.
+    if (E->Op == NdOp::INT_ADD && Pair(L, NdOp::INT_OR) &&
+        Pair(R, NdOp::INT_AND) && SamePair(L, R)) {
+      auto Sum =
+          HighExpr::makeBinop(NdOp::INT_ADD, L->Operands[0], L->Operands[1]);
+      Sum->Type = E->Type;
+      return Sum;
+    }
+    // XOR's set bits are already contained in OR of the same words.
+    if (E->Op == NdOp::INT_AND && Pair(L, NdOp::INT_OR) &&
+        Pair(R, NdOp::INT_XOR) && SamePair(L, R))
+      return asIntegerType(R, E->Type);
+  }
+  return nullptr;
+}
+
 /// A constant mask observes only these bits. In particular, a masked status
 /// word must not evaluate unknown incoming bits that the machine never reads.
 /// This is local bit projection, independent of optional symbolic rewriting.
@@ -258,6 +546,11 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
   auto Copy = std::make_shared<HighExpr>(*E);
   Copy->Operands = {std::move(Left), std::move(Right)};
   return Copy;
+}
+
+ExprPtr projectHighIntegerBits(const ExprPtr &Value, uint64_t Demand) {
+  size_t Budget = limits::ir::kHighExpressionDemandedMaskWork;
+  return demandMaskedBits(Value, Demand, Budget);
 }
 
 /// Rewrite \p X knowing only its low \p Bytes bytes are read (the operand
@@ -605,14 +898,8 @@ static ExprPtr signedOrderFromFlags(const ExprPtr &E) {
   return nullptr;
 }
 
-static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
-                                  const HighExprSet &OrderedMemory,
-                                  bool &Changed) {
-  if (!E || !Seen.insert(E.get()).second)
-    return;
-  for (auto &Op : E->Operands)
-    simplifyExprRecursive(Op, Seen, OrderedMemory, Changed);
-
+static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
+                             bool &Changed) {
   // Atomic accesses are observable even when the surrounding value appears
   // algebraically redundant.  Keep the containing expression intact so a
   // simplification cannot discard, duplicate, or move the access.
@@ -624,10 +911,84 @@ static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
     E = std::move(Value);
   };
 
+  if (auto Comparison = foldDifferenceZeroTest(E)) {
+    // A comparison may have several users. Keep its stable node (and source
+    // metadata), updating its operands without modifying the shared word
+    // expression from which they were recovered.
+    E->Operands = std::move(Comparison->Operands);
+    Changed = true;
+    return;
+  }
+
   if (auto Joined = joinLocalSlices(E)) {
     Replace(std::move(Joined));
     return;
   }
+
+  // Machine sign extension is often lowered as (x << k) >>s k. Preserve the
+  // low-byte truncation and the signed narrow interpretation explicitly.
+  if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_ASHR &&
+      E->Operands.size() == 2 && E->Type && E->Type->Kind == NdTypeKind::Int &&
+      E->Type->Size <= 8 && E->Operands[0] && E->Operands[1] &&
+      E->Operands[1]->Kind == ExprKind::Const) {
+    const auto &Shift = E->Operands[0];
+    const uint64_t Bits = E->Type->Size * 8;
+    const uint64_t Amount = E->Operands[1]->ConstVal;
+    if (Shift->Kind == ExprKind::BinOp && Shift->Op == NdOp::INT_LEFT &&
+        Shift->Operands.size() == 2 && Shift->Type &&
+        Shift->Type->Kind == NdTypeKind::Int &&
+        Shift->Type->Size == E->Type->Size && Shift->Operands[0] &&
+        Shift->Operands[0]->Type &&
+        Shift->Operands[0]->Type->Kind == NdTypeKind::Int &&
+        Shift->Operands[0]->Type->Size == E->Type->Size && Shift->Operands[1] &&
+        Shift->Operands[1]->Kind == ExprKind::Const &&
+        Shift->Operands[1]->ConstVal == Amount && Amount && Amount < Bits &&
+        (Bits - Amount == 8 || Bits - Amount == 16 || Bits - Amount == 32)) {
+      auto Narrow = std::make_shared<HighExpr>();
+      Narrow->Kind = ExprKind::Cast;
+      Narrow->Type = Narrow->CastTo =
+          NdType::makeInt((Bits - Amount) / 8, true);
+      Narrow->Operands = {Shift->Operands[0]};
+      auto Extended = HighExpr::makeUnary(NdOp::INT_SEXT, Narrow);
+      Extended->Type = E->Type;
+      Replace(std::move(Extended));
+      return;
+    }
+  }
+
+  if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT &&
+      E->Operands.size() == 1 && E->Operands[0] && zeroOrOne(E->Operands[0])) {
+    const auto &View = E->Operands[0];
+    if (View->Operands.size() == 1 && View->Operands[0] &&
+        (View->Kind == ExprKind::Cast ||
+         (View->Kind == ExprKind::UnaryOp &&
+          (View->Op == NdOp::INT_ZEXT || View->Op == NdOp::INT_SEXT)))) {
+      auto Truth = std::make_shared<HighExpr>(*E);
+      Truth->Operands = {View->Operands[0]};
+      Replace(std::move(Truth));
+      return;
+    }
+  }
+
+  // A widened predicate still contains only zero or one. Negating its low
+  // bit is logical negation, with the original result width kept explicitly.
+  if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_AND &&
+      E->Operands.size() == 2 && E->Type && E->Type->Kind == NdTypeKind::Int)
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto &Mask = E->Operands[I];
+      const auto &Not = E->Operands[1 - I];
+      if (!Mask || Mask->Kind != ExprKind::Const || Mask->ConstVal != 1 ||
+          !Not || Not->Kind != ExprKind::UnaryOp || Not->Op != NdOp::INT_NOT ||
+          Not->Operands.size() != 1 || !Not->Type ||
+          Not->Type->Size != E->Type->Size || !zeroOrOne(Not->Operands[0]))
+        continue;
+      auto Truth = HighExpr::makeUnary(NdOp::BOOL_NOT, Not->Operands[0]);
+      Truth->Type = NdType::makeInt(1, false);
+      auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Truth);
+      Extended->Type = E->Type;
+      Replace(std::move(Extended));
+      return;
+    }
 
   // Re-reading the low part of a partially defined register does not read
   // its upper padding. Keep the original CONCAT for any other, wider uses,
@@ -866,6 +1227,11 @@ static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
   if (E->Kind != ExprKind::BinOp || E->Operands.size() != 2)
     return;
 
+  if (ExprPtr Identity = foldWordIdentity(E)) {
+    Replace(std::move(Identity));
+    return;
+  }
+
   // Two constants compare to a constant, at their width.
   if (E->Operands[0] && E->Operands[1] &&
       E->Operands[0]->Kind == ExprKind::Const &&
@@ -984,18 +1350,6 @@ static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
     }
   }
 
-  if ((E->Op == NdOp::INT_EQUAL || E->Op == NdOp::INT_NOTEQUAL) &&
-      E->Operands[0]->Kind == ExprKind::BinOp &&
-      E->Operands[0]->Op == NdOp::INT_SUB &&
-      E->Operands[0]->Operands.size() == 2 &&
-      E->Operands[1]->Kind == ExprKind::Const &&
-      E->Operands[1]->ConstVal == 0) {
-    auto SubExpr = E->Operands[0];
-    E->Operands[0] = SubExpr->Operands[0];
-    E->Operands[1] = SubExpr->Operands[1];
-    Changed = true;
-  }
-
   // (x + c) == k is x == k - c, and likewise !=: the sum wraps at its width
   // and equality compares the bits, so the fold is exact where an ordered
   // comparison's would not be.  `x + 1 == 0` is how a compiler tests for -1.
@@ -1032,14 +1386,25 @@ static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
     }
   }
 
-  if (E->Op == NdOp::INT_ADD && E->Operands[1]->Kind == ExprKind::Const) {
+  // Changing the spelling of a negative integer must preserve its scalar
+  // evidence. An explicit address, including a high kernel address, is not a
+  // negative offset and must keep its original identity. A low-64-bit constant
+  // is positive in a wider word; mixed-width additions need their original
+  // extension before interpreting its sign.
+  if (E->Op == NdOp::INT_ADD && E->Operands[1]->Kind == ExprKind::Const &&
+      E->Type && E->Type->Size && E->Type->Size <= sizeof(uint64_t) &&
+      E->Operands[1]->Type && E->Operands[1]->Type->Kind == NdTypeKind::Int &&
+      E->Operands[1]->Type->Size == E->Type->Size &&
+      (E->Operands[1]->ConstProvenance == ConstantAddressProvenance::Scalar ||
+       E->Operands[1]->ConstProvenance == ConstantAddressProvenance::Unknown)) {
     int64_t SignedVal = static_cast<int64_t>(E->Operands[1]->ConstVal);
     if (SignedVal < 0) {
       E->Op = NdOp::INT_SUB;
       Changed = true;
       E->Operands[1] = HighExpr::makeConst(
           uint64_t(0) - static_cast<uint64_t>(SignedVal),
-          E->Operands[1]->Type ? E->Operands[1]->Type->Size : 8);
+          E->Operands[1]->Type ? E->Operands[1]->Type->Size : 8,
+          E->Operands[1]->ConstProvenance);
     }
   }
 
@@ -1082,6 +1447,48 @@ static void simplifyExprRecursive(ExprPtr &E, HighExprSet &Seen,
            isZeroConst(E->Operands[1]) && E->Type && E->Operands[0]->Type &&
            E->Operands[0]->Type->Size == E->Type->Size)
     Replace(E->Operands[0]);
+  else if ((E->Op == NdOp::INT_LEFT || E->Op == NdOp::INT_RIGHT ||
+            E->Op == NdOp::INT_ASHR) &&
+           isZeroConst(E->Operands[0]) && E->Type && E->Type->Size &&
+           E->Type->Size <= 8 && E->Operands[1]->Kind == ExprKind::Const &&
+           E->Operands[1]->ConstVal < E->Type->Size * 8u &&
+           E->Operands[0]->AddressOwnerVA == InvalidVA &&
+           (E->Operands[0]->ConstProvenance ==
+                ConstantAddressProvenance::Unknown ||
+            E->Operands[0]->ConstProvenance ==
+                ConstantAddressProvenance::Scalar)) {
+    auto Zero = HighExpr::makeConst(0, E->Type->Size);
+    Zero->Type = E->Type;
+    Replace(std::move(Zero));
+  }
+}
+
+// Preserve operand order and the existing once-per-node visitation without
+// placing the large local-rewrite frame on the stack at every expression
+// level. A parent is rewritten only after its operand slots have finished;
+// those slots remain valid while their parent is waiting in the worklist.
+static void simplifyExprGraph(ExprPtr &Root, HighExprSet &Seen,
+                              const HighExprSet &OrderedMemory, bool &Changed) {
+  if (!Root || !Seen.insert(Root.get()).second)
+    return;
+  struct Frame {
+    ExprPtr *Slot;
+    size_t NextOperand;
+  };
+  llvm::SmallVector<Frame, 16> Work{{&Root, 0}};
+  while (!Work.empty()) {
+    auto &Current = Work.back();
+    auto &Expr = *Current.Slot;
+    if (Current.NextOperand < Expr->Operands.size()) {
+      auto &Child = Expr->Operands[Current.NextOperand++];
+      if (Child && Seen.insert(Child.get()).second)
+        Work.push_back({&Child, 0});
+      continue;
+    }
+    auto *Slot = Current.Slot;
+    Work.pop_back();
+    simplifyExprNode(*Slot, OrderedMemory, Changed);
+  }
 }
 
 bool simplifyAllExprs(std::vector<HighStmt> &Stmts) {
@@ -1097,7 +1504,7 @@ bool simplifyAllExprs(std::vector<HighStmt> &Stmts) {
   bool Changed = false;
   walkStmts(Stmts, [&](HighStmt &S) {
     forEachRhsExpr(S, [&](ExprPtr &EP) {
-      simplifyExprRecursive(EP, Seen, OrderedMemory, Changed);
+      simplifyExprGraph(EP, Seen, OrderedMemory, Changed);
     });
   });
   return Changed;

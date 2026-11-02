@@ -31,6 +31,8 @@ NEVERD_CHROME_COLOR(ToolTipBase, "#F3F3F3", "#252526")
 NEVERD_CHROME_COLOR(ToolTipText, "#3B3B3B", "#CCCCCC")
 NEVERD_CHROME_COLOR(PlaceholderText, "#8E8E8E", "#8C8C8C")
 NEVERD_CHROME_COLOR(Link, "#006AB1", "#3794FF")
+NEVERD_CHROME_COLOR(LinkVisited, "#795E9E", "#C586C0")
+NEVERD_CHROME_COLOR(BrightText, "#FFFFFF", "#FFFFFF")
 NEVERD_CHROME_COLOR(Light, "#FFFFFF", "#4A4A4A")
 NEVERD_CHROME_COLOR(Midlight, "#F0F0F0", "#3C3C3C")
 NEVERD_CHROME_COLOR(Mid, "#C8C8C8", "#2D2D2D")
@@ -111,6 +113,10 @@ NEVERD_CHROME_COLOR(Separator, "#E5E5E5", "#3C3C3C")
 NEVERD_CHROME_COLOR(ButtonPrimary, "#007ACC", "#0E639C")
 NEVERD_CHROME_COLOR(ButtonPrimaryHover, "#0062A3", "#1177BB")
 NEVERD_CHROME_COLOR(ButtonPrimaryText, "#FFFFFF", "#FFFFFF")
+// A primary button that cannot act: the button at 40% opacity, as Visual
+// Studio Code draws a disabled one (#AARRGGBB).
+NEVERD_CHROME_COLOR(ButtonPrimaryDisabled, "#66007ACC", "#660E639C")
+NEVERD_CHROME_COLOR(ButtonPrimaryDisabledText, "#66FFFFFF", "#66FFFFFF")
 // Quick start: file outlines share the action glyphs' clear blue accent.
 // Labels identify the format; missing files are dimmed.  Thin strokes read
 // darker than their color, so the dark theme draws them in Visual Studio

@@ -309,6 +309,36 @@ TEST(ExecutionExit, InstructionRejectionSurvivesASecondaryObserverFailure) {
   }
 }
 
+TEST(ExecutionExit, UnicornAtomicRejectionSurvivesObserverFailure) {
+  auto CPU = cpu({GuestArchitecture::AArch64, ExecutionContract::Software});
+  code(*CPU, {}, AtomicLoadDeviceARM);
+  unsigned DeviceReads = 0;
+  GuestMMIOCallbacks IO;
+  IO.Validate = [](uint64_t, uint64_t, bool) { return llvm::Error::success(); };
+  IO.Read = [&](uint64_t, unsigned) -> llvm::Expected<uint64_t> {
+    ++DeviceReads;
+    return DeviceValue;
+  };
+  IO.Write = [](uint64_t, unsigned, uint64_t) {
+    return llvm::Error::success();
+  };
+  llvm::cantFail(CPU->mapMMIO(Device, PageSize, std::move(IO)));
+  BackendHooks Hooks;
+  Hooks.InvalidInstruction = [&] {
+    CPU->stop();
+    throw std::runtime_error(CallbackFailure);
+  };
+  llvm::cantFail(CPU->installHooks(std::move(Hooks)));
+  const auto Exit = llvm::cantFail(CPU->runUntilExit(Code, Timeout));
+  EXPECT_EQ(Exit.Kind, ExecutionExitKind::UnsupportedOperation);
+  ASSERT_TRUE(Exit.Fault);
+  EXPECT_EQ(Exit.Fault->Kind, BackendFaultKind::InvalidInstruction);
+  EXPECT_EQ(Exit.Fault->PC, Code);
+  EXPECT_TRUE(Exit.StopRequested);
+  EXPECT_FALSE(Exit.Diagnostic.empty());
+  EXPECT_EQ(DeviceReads, 0u);
+}
+
 TEST(ExecutionExit, SoftwareHaltIsNotWorkloadCompletion) {
   auto CPU = cpu({GuestArchitecture::X64, ExecutionContract::Software});
   llvm::cantFail(CPU->write(Code, HaltX64));

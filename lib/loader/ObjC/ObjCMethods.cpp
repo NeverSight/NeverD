@@ -8,6 +8,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/SymbolSpelling.h"
 
@@ -23,6 +24,10 @@
 
 namespace neverd {
 namespace {
+
+#define NEVERD_OBJC_RELATIVE_LIST_TEXT(Name, Text)                             \
+  inline constexpr char Name[] = Text;
+#include "ObjCRelativeLists.def"
 
 /// The name a method implementation with no symbol takes: clang's
 /// `-[Class(Category) selector:]` (ObjCMethodSpellings.def), or
@@ -60,23 +65,8 @@ class RuntimeReader {
   }
 
   const uint8_t *bytes(va_t VA, size_t Size) {
-    const auto *Sec = Img.getSectionFor(VA);
-    const auto *Seg = Img.getSegmentFor(VA);
-    if (!Sec || !Seg || !Sec->isReadable() || !Seg->isReadable() ||
-        Size > InvalidVA - VA || Sec->Size > InvalidVA - Sec->VA ||
-        Seg->Size > InvalidVA - Seg->VA || Sec->VA < Seg->VA ||
-        !rangeInBounds(VA - Sec->VA, Size, Sec->Size) ||
-        !rangeInBounds(VA - Seg->VA, Size, Seg->Size) ||
-        !rangeInBounds(VA - Sec->VA, Size, Sec->FileSz) ||
-        !rangeInBounds(VA - Seg->VA, Size, Seg->FileSz) ||
-        Sec->FileOff < Seg->FileOff ||
-        Sec->FileOff - Seg->FileOff != Sec->VA - Seg->VA ||
-        (Sec->Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_ZEROFILL ||
-        (Sec->Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_GB_ZEROFILL ||
-        (Sec->Type & llvm::MachO::SECTION_TYPE) ==
-            llvm::MachO::S_THREAD_LOCAL_ZEROFILL)
-      return nullptr;
-    return Img.readVA(VA, Size);
+    const objc::RuntimeData Data(Img, objc::PointerView::MetadataTarget);
+    return Data.bytes(VA, Size);
   }
 
   std::optional<uint32_t> u32(va_t VA) {
@@ -87,15 +77,10 @@ class RuntimeReader {
   }
 
   std::optional<va_t> pointer(va_t VA) {
-    const auto *P = bytes(VA, 8);
-    if (!P)
-      return std::nullopt;
-    const uint64_t Value = llvm::support::endian::read64le(P);
-    if (Value && Img.MachOHasChainedFixups &&
-        !Img.MachOResolvedChainedPointerSlots.count(VA)) {
-      diagnostic("Objective-C pointer slot has an unresolved chained fixup");
-      return std::nullopt;
-    }
+    const objc::RuntimeData Data(Img, objc::PointerView::MetadataTarget);
+    const auto Value = Data.pointer(VA);
+    if (!Value)
+      diagnostic(macho_loader::arm64e::kObjCMetadataPointerUnavailable);
     return Value;
   }
 
@@ -151,7 +136,7 @@ class RuntimeReader {
       return;
     }
     Method.TypeHint = std::move(Hint);
-    Method.Status = "supported";
+    Method.Status = kSupportedMethod;
     Method.Diagnostics.push_back("Runtime type hint is unverified; fixed "
                                  "parameters only, variadic tail unknown");
   }
@@ -170,6 +155,7 @@ class RuntimeReader {
       const auto IMP = Record.Implementation;
       ObjCMethod Method;
       Method.MetadataAddress = Record.Address;
+      Method.CacheOrigin = Record.CacheOrigin;
       Method.ClassAddress = Class.Address;
       Method.ClassName = Class.Name;
       Method.IsClassMethod = ClassMethod;
@@ -177,8 +163,16 @@ class RuntimeReader {
       Method.TypeEncoding = std::move(Record.TypeEncoding);
       Method.Implementation = IMP.value_or(0);
       const size_t Align = Img.Arch == Arch::AArch64 ? 4 : 1;
-      if (!IMP || !*IMP || *IMP % Align || !Img.isCodeAddress(*IMP) ||
-          !bytes(*IMP, Align)) {
+      const auto *CacheMapping = IMP && Img.MachOSharedCache
+                                     ? Img.MachOSharedCache->mappingFor(*IMP)
+                                     : nullptr;
+      if (IMP && *IMP && !(*IMP % Align) && CacheMapping &&
+          (CacheMapping->InitialProtection & llvm::MachO::VM_PROT_EXECUTE) &&
+          !Img.isCodeAddress(*IMP) && bytes(*IMP, Align)) {
+        Method.Status = kExternalImplementation;
+        Method.Diagnostics.push_back(kExternalImplementationDiagnostic);
+      } else if (!IMP || !*IMP || *IMP % Align || !Img.isCodeAddress(*IMP) ||
+                 !bytes(*IMP, Align)) {
         Method.Status = "invalid_implementation";
         Method.Diagnostics.push_back(
             "Method IMP is not resolved file-backed executable code");
@@ -188,10 +182,20 @@ class RuntimeReader {
             "Method selector or type encoding is unavailable");
       } else {
         hint(Method);
-        if (!Img.hasFunctionSymbolAt(*IMP))
+        // LC_FUNCTION_STARTS proves an entry, but its synthesized name must
+        // not hide a method identity recovered from validated metadata.
+        const Symbol *Name = Img.functionNameSymbolAt(*IMP);
+        if (Name && Name->IsFunc && Name->Origin == NameOrigin::Synthesized) {
+          Symbol &Existing = Img.Symbols[Name - Img.Symbols.data()];
+          Existing.Name = implementationName(Class, Category, ClassMethod,
+                                             Method.Selector, *IMP);
+          Existing.Origin = NameOrigin::Stated;
+          Existing.IsBoundaryGuess = false;
+        } else if (!Img.hasFunctionSymbolAt(*IMP)) {
           Img.addSymbol(implementationName(Class, Category, ClassMethod,
                                            Method.Selector, *IMP),
                         *IMP, 0, true);
+        }
       }
       Img.ObjCMethods.push_back(std::move(Method));
     }
@@ -259,7 +263,7 @@ class RuntimeReader {
 
   void readCategory(va_t VA, const ImportStorageSlotCollection &Imports,
                     std::set<va_t> &Classes) {
-    const objc::RuntimeData Data(Img);
+    const objc::RuntimeData Data(Img, objc::PointerView::MetadataTarget);
     // The non-fragile category ABI has six common pointer fields. The seventh
     // (class properties) and newer compiler size fields are optional on disk;
     // do not infer their presence from sizeof a current runtime structure.
@@ -376,7 +380,7 @@ public:
     // Categories may precede their classes in section order, and +load entries
     // appear in both lists. Resolve classes first and visit each category once.
     const auto Imports = Img.collectImportStorageSlots();
-    const objc::RuntimeData Data(Img);
+    const objc::RuntimeData Data(Img, objc::PointerView::MetadataTarget);
     std::set<va_t> Categories;
     for (const Section &Sec : Img.Sections) {
       if (Sec.Name != "__objc_catlist" && Sec.Name != "__objc_nlcatlist")
@@ -463,7 +467,8 @@ void parseObjCMethods(BinaryImage &Img) {
         // Dispatch order does not erase a validated declaration's ABI. Calls
         // still require every matching declaration to agree; body selection
         // separately requires supported status and must not pick an override.
-        Method->Status = "ambiguous_dispatch";
+        if (Method->Status == kSupportedMethod)
+          Method->Status = "ambiguous_dispatch";
         Method->Diagnostics.push_back(
             "Duplicate class/category selector declarations have no unique "
             "recovered dispatch order");

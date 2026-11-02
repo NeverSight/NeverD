@@ -8,7 +8,7 @@
 
 #include "COFFRegistrationSEHJump.h"
 
-#include "neverd/ir/med/X86RegistrationSEHJump.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/IR/Operator.h"
 

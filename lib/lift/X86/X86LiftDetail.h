@@ -14,10 +14,9 @@
 /// the instruction is not one of its cases, so the dispatchers can chain them
 /// with `||` and keep the original dispatch order.
 ///
-/// Handlers that need X86Lifter's private cross-instruction state (the
-/// CQO/CDQ + DIV tracking, the get-PC thunk state, the x87 stack top, the
-/// target architecture) could not be carved out and stay in the member
-/// function next to the chain.
+/// Handlers that need X86Lifter's private context (the get-PC thunk state,
+/// x87 stack top or target architecture) remain in member functions next to
+/// the chain.
 ///
 /// This header is an implementation detail of lib/lift/X86/ and must NOT be
 /// included by code outside that directory.
@@ -27,8 +26,8 @@
 #ifndef NEVERD_LIFT_X86_X86LIFTDETAIL_H
 #define NEVERD_LIFT_X86_X86LIFTDETAIL_H
 
-#include "neverd/lift/X86Lifter.h"
-#include "neverd/support/X86Addressing.h"
+#include "neverd/lift/X86/X86Lifter.h"
+#include "neverd/support/X86/X86Addressing.h"
 
 #include <capstone/capstone.h>
 #include <cstddef>
@@ -42,6 +41,10 @@ namespace neverd {
 /// Element size (bytes) of a MOVS/STOS/LODS/SCAS/CMPS variant.
 /// Defined in X86LiftString.cpp.
 unsigned stringElemSize(unsigned InsnId);
+
+/// One native operation owns all REP register, flag and memory completion.
+void liftRepState(X86Lifter &L, X86Lifter::LiftState &S, const cs_x86 &X86,
+                  Intrinsic Id, unsigned Element, bool NotEqual = false);
 
 /// Address space selected for an implicit x86 string source.  Capstone exposes
 /// the source as a memory operand for MOVS/LODS/CMPS, but XLAT has no explicit
@@ -69,17 +72,6 @@ NdVar emitByteSplat(X86Lifter::LiftState &S, uint16_t Bytes, uint8_t Byte);
 /// handling. Ordinary vector writemasks are intentionally not rejected here.
 bool hasUnsupportedEvexValueModifier(const cs_x86 &X86);
 
-/// Decode the EVEX ModRM.reg vector-register number. EVEX P0 bit 7 extends
-/// register bit 3 and P0 bit 4 extends register bit 4; both are inverted.
-unsigned decodeEvexVectorRegIndex(uint8_t P0, uint8_t ModRM);
-
-/// Decode the EVEX register-form ModRM.rm vector-register number. P0 bits 5
-/// and 6 provide the inverted bit-3 and bit-4 extensions respectively.
-unsigned decodeEvexVectorRMIndex(uint8_t P0, uint8_t ModRM);
-
-/// Decode the inverted EVEX vvvv/V' vector-register number.
-unsigned decodeEvexVectorVvvvIndex(uint8_t P1, uint8_t P2);
-
 /// Expand one compact bit per vector lane into the sign-bit mask consumed by
 /// the x86 masked-load/store intrinsics.  The compact value may be a K-register
 /// view or an all-active constant; callers retain ownership of writemask
@@ -105,6 +97,27 @@ struct CanonicalEvexEncodingInfo {
   uint8_t P2 = 0;
   uint8_t Opcode = 0;
   uint8_t ModRM = 0;
+
+  // Only the low three register bits participate outside long mode. The raw
+  // fields remain available for reserved-bit and unused-vvvv validation.
+  unsigned regIndex() const {
+    return ((ModRM >> 3) & 7) |
+           (Is64Bit ? ((P0 & 0x80) ? 0 : 8) | ((P0 & 0x10) ? 0 : 16) : 0);
+  }
+  unsigned rmIndex() const {
+    return (ModRM & 7) |
+           (Is64Bit ? ((P0 & 0x20) ? 0 : 8) | ((P0 & 0x40) ? 0 : 16) : 0);
+  }
+  unsigned vvvvIndex() const {
+    return ((~static_cast<unsigned>(P1) >> 3) & (Is64Bit ? 15 : 7)) |
+           (Is64Bit && !(P2 & 0x08) ? 16 : 0);
+  }
+  unsigned baseExtension() const {
+    return Is64Bit ? ((P0 & 0x20) ? 0 : 8) | ((P0 & 0x08) ? 16 : 0) : 0;
+  }
+  unsigned indexExtension() const {
+    return Is64Bit ? ((P0 & 0x40) ? 0 : 8) | ((P1 & 0x04) ? 0 : 16) : 0;
+  }
 };
 
 /// Canonical three-byte VEX prefix and addressing metadata. FMA4 uses this
@@ -120,6 +133,16 @@ struct CanonicalVex3EncodingInfo {
   uint8_t P1 = 0;
   uint8_t Opcode = 0;
   uint8_t ModRM = 0;
+
+  // Outside long mode R/X distinguish VEX from LES, while B and the high
+  // bit of a used vvvv register field do not extend the register bank.
+  unsigned regIndex() const {
+    return ((ModRM >> 3) & 7) | (Is64Bit && !(P0 & 0x80) ? 8 : 0);
+  }
+  unsigned baseExtension() const { return Is64Bit && !(P0 & 0x20) ? 8 : 0; }
+  unsigned indexExtension() const { return Is64Bit && !(P0 & 0x40) ? 8 : 0; }
+  unsigned rmIndex() const { return (ModRM & 7) | baseExtension(); }
+  unsigned vvvvIndex() const { return (~P1 >> 3) & (Is64Bit ? 15 : 7); }
 };
 
 /// Parse the only legacy prefixes accepted before an EVEX instruction and
@@ -135,6 +158,10 @@ bool parseCanonicalEvexEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
 bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
                                     Arch TargetArch,
                                     CanonicalVex3EncodingInfo &Encoding);
+
+bool parseCanonicalXopEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
+                                   Arch TargetArch,
+                                   CanonicalVex3EncodingInfo &Encoding);
 
 /// Prove that an EVEX memory tail and Capstone's structured address detail are
 /// identical. TupleScale applies the architectural disp8*N compression;
@@ -248,8 +275,7 @@ bool liftSystem(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 //===----------------------------------------------------------------------===//
 
 /// BMI1/BMI2/ADX bit-manipulation extensions.
-bool liftExtBMI(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
-                const cs_x86 &X86);
+bool liftExtBMI(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn);
 
 //===----------------------------------------------------------------------===//
 // X86Lifter::liftSIMD handlers
@@ -297,7 +323,7 @@ bool liftSIMDLogicShift(X86Lifter &L, X86Lifter::LiftState &S,
 bool liftSIMDConvert(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                      const cs_x86 &X86);
 
-/// AES/SHA/PCLMULQDQ/CRC32 plus the TSX and MPX extensions.
+/// AES/SHA/PCLMULQDQ/CRC32 and MPX admission.
 bool liftSIMDCrypto(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                     const cs_x86 &X86);
 
@@ -340,6 +366,27 @@ bool liftSIMDAVXFloat(X86Lifter &L, X86Lifter::LiftState &S,
 /// BCD adjust, BOUND, INTO, SALC and the far-pointer loads.
 bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                    const cs_x86 &X86);
+
+/// SHA-512 integer message schedule and two-round state transform.
+bool liftSHA512(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+                const cs_x86 &X86);
+
+/// System state, selector and user-wait operands and completion.
+bool liftBoundedLeaf(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+                     const cs_x86 &X);
+
+bool liftSgx(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+             const cs_x86 &X86);
+bool liftSystemState(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+                     const cs_x86 &X86);
+
+/// Bounded transactional instructions; XBEGIN requires a separate continuation.
+bool liftTransactions(X86Lifter &L, X86Lifter::LiftState &S,
+                      const cs_insn *Insn, const cs_x86 &X86);
+
+/// Architectural VMX/SVM operands and completion.
+bool liftVirtualization(X86Lifter &L, X86Lifter::LiftState &S,
+                        const cs_insn *Insn, const cs_x86 &X86);
 
 /// 3DNow!, TBM, CET, VIA PadLock, GFNI, LWP and the other minor extensions.
 bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,

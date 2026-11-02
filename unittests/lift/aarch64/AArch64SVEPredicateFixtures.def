@@ -1,0 +1,100 @@
+//===- AArch64SVEPredicateFixtures.def - Predicate oracles -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Raw words from LLVM 22.1.6's MC/AArch64/SVE/{ptrue,movprfx,
+/// armv9.5a-cpa}.s; expectations are independent of production bit fields.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SVE_FIXTURE_VALUE
+#define NEVERD_SVE_FIXTURE_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_SVE_FIXTURE_PTRUE
+#define NEVERD_SVE_FIXTURE_PTRUE(Word, Register, Pattern, Element)
+#endif
+#ifndef NEVERD_SVE_FIXTURE_REJECT
+#define NEVERD_SVE_FIXTURE_REJECT(Word)
+#endif
+#ifndef NEVERD_SVE_FIXTURE_C
+#define NEVERD_SVE_FIXTURE_C(Pattern, Element, Expected)
+#endif
+#ifndef NEVERD_SVE_FIXTURE_WIDTH
+#define NEVERD_SVE_FIXTURE_WIDTH(Bytes)
+#endif
+#ifndef NEVERD_SVE_FIXTURE_BAD_SHAPE
+#define NEVERD_SVE_FIXTURE_BAD_SHAPE(Pattern, Element, PatternBytes,           \
+                                     ElementBytes, OutputBytes)
+#endif
+#ifndef NEVERD_SVE_FIXTURE_NATIVE
+#define NEVERD_SVE_FIXTURE_NATIVE(Producer, Consumer)
+#endif
+
+NEVERD_SVE_FIXTURE_VALUE(va_t, kEntry, 0x1000)
+NEVERD_SVE_FIXTURE_VALUE(size_t, kInstructionBytes, 4)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kPredicateBytes, 32)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kVectorBytes, 256)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kScalarBytes, 8)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kIdentifierBytes, 4)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kPatternBytes, 4)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kElementBytes, 1)
+NEVERD_SVE_FIXTURE_VALUE(unsigned, kCanonicalLanes, 16)
+NEVERD_SVE_FIXTURE_VALUE(unsigned, kByteElement, 1)
+NEVERD_SVE_FIXTURE_VALUE(uint64_t, kPattern, 2)
+NEVERD_SVE_FIXTURE_VALUE(uint64_t, kIndexStart, 7)
+NEVERD_SVE_FIXTURE_VALUE(uint64_t, kIndexStep, 3)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kLowIdentifierBytes, 2)
+NEVERD_SVE_FIXTURE_VALUE(uint64_t, kInvalidPattern, 32)
+NEVERD_SVE_FIXTURE_VALUE(uint16_t, kInvalidOutputBytes, 16)
+NEVERD_SVE_FIXTURE_VALUE(const char *, kDynamicOperand, "dynamic_value")
+NEVERD_SVE_FIXTURE_VALUE(const char *, kFunction, "predicate_carrier")
+NEVERD_SVE_FIXTURE_VALUE(const char *, kTriple, "aarch64-unknown-linux-gnu")
+NEVERD_SVE_FIXTURE_VALUE(const char *, kUnsupportedPattern, "32")
+NEVERD_SVE_FIXTURE_VALUE(const char *, kMalformedElement, "4294967297")
+
+NEVERD_SVE_FIXTURE_WIDTH(1)
+NEVERD_SVE_FIXTURE_WIDTH(2)
+NEVERD_SVE_FIXTURE_WIDTH(4)
+NEVERD_SVE_FIXTURE_WIDTH(8)
+NEVERD_SVE_FIXTURE_NATIVE(1, 8)
+NEVERD_SVE_FIXTURE_NATIVE(8, 1)
+
+NEVERD_SVE_FIXTURE_PTRUE(0x2518e000, 0, 0, 1)
+NEVERD_SVE_FIXTURE_PTRUE(0x2558e000, 0, 0, 2)
+NEVERD_SVE_FIXTURE_PTRUE(0x2598e027, 7, 1, 4)
+NEVERD_SVE_FIXTURE_PTRUE(0x25d8e3ef, 15, 31, 8)
+NEVERD_SVE_FIXTURE_PTRUE(0x2598e3c7, 7, 30, 4)
+// Encoded but unnamed patterns produce an empty predicate, not an error.
+NEVERD_SVE_FIXTURE_PTRUE(0x2518e1c0, 0, 14, 1)
+NEVERD_SVE_FIXTURE_PTRUE(0x2518e380, 0, 28, 1)
+
+NEVERD_SVE_FIXTURE_BAD_SHAPE(32, 1, 4, 1, 32)
+NEVERD_SVE_FIXTURE_BAD_SHAPE(2, 3, 4, 1, 32)
+NEVERD_SVE_FIXTURE_BAD_SHAPE(2, 4294967297, 4, 1, 32)
+NEVERD_SVE_FIXTURE_BAD_SHAPE(2, 1, 8, 1, 32)
+NEVERD_SVE_FIXTURE_BAD_SHAPE(2, 1, 4, 8, 32)
+NEVERD_SVE_FIXTURE_BAD_SHAPE(2, 1, 4, 1, 16)
+
+// PTRUES writes flags. These isolated prefixes have no follower evidence.
+NEVERD_SVE_FIXTURE_REJECT(0x2519e3e0)
+NEVERD_SVE_FIXTURE_REJECT(0x0420bc20)
+NEVERD_SVE_FIXTURE_REJECT(0x04d02020)
+NEVERD_SVE_FIXTURE_REJECT(0x04d12020)
+
+NEVERD_SVE_FIXTURE_C("31", "1", "svptrue_b8()")
+NEVERD_SVE_FIXTURE_C("31", "8", "svptrue_b64()")
+NEVERD_SVE_FIXTURE_C("0", "1", "svptrue_pat_b8((enum svpattern)(0))")
+NEVERD_SVE_FIXTURE_C("1", "2", "svptrue_pat_b16((enum svpattern)(1))")
+NEVERD_SVE_FIXTURE_C("30", "4", "svptrue_pat_b32((enum svpattern)(30))")
+NEVERD_SVE_FIXTURE_C("1", "8", "svptrue_pat_b64((enum svpattern)(1))")
+NEVERD_SVE_FIXTURE_C("14", "1", "svptrue_pat_b8((enum svpattern)(14))")
+NEVERD_SVE_FIXTURE_C("28", "8", "svptrue_pat_b64((enum svpattern)(28))")
+
+#undef NEVERD_SVE_FIXTURE_VALUE
+#undef NEVERD_SVE_FIXTURE_PTRUE
+#undef NEVERD_SVE_FIXTURE_REJECT
+#undef NEVERD_SVE_FIXTURE_C
+#undef NEVERD_SVE_FIXTURE_WIDTH
+#undef NEVERD_SVE_FIXTURE_BAD_SHAPE
+#undef NEVERD_SVE_FIXTURE_NATIVE

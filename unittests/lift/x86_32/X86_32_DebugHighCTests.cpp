@@ -11,7 +11,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/high/HighIR.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/Support/raw_ostream.h"
 

@@ -70,7 +70,7 @@ llvm::Expected<BinaryImage> RawLoader::load(const std::filesystem::path &Path) {
   if (getRawProcessorName(Options.TheArch, Options.Mode).empty())
     return rawError("no processor to read the file as");
   BinaryImage Img;
-  auto Buffer = readFileInto(Path, Img, BinaryFormat::Raw);
+  auto Buffer = readFileInto(Path, Img, BinaryFormat::Raw, true, Progress);
   if (!Buffer)
     return Buffer.takeError();
   // The bytes the options name, all of them, at the address they name.
@@ -106,10 +106,7 @@ llvm::Expected<BinaryImage> RawLoader::load(const std::filesystem::path &Path) {
   Img.ConventionFormat = Options.Platform.value_or(BinaryFormat::Unknown);
   Img.IsRelocatable = false;
 
-  const auto Begin =
-      Img.Raw.begin() + static_cast<std::ptrdiff_t>(Options.Offset);
-  const std::vector<uint8_t> Bytes(Begin,
-                                   Begin + static_cast<std::ptrdiff_t>(Size));
+  const llvm::ArrayRef<uint8_t> Bytes(Img.Raw.data() + Options.Offset, Size);
   const auto Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Segment Code;
   Code.Name = kSegmentName.str();
@@ -118,7 +115,7 @@ llvm::Expected<BinaryImage> RawLoader::load(const std::filesystem::path &Path) {
   Code.FileOff = Options.Offset;
   Code.FileSz = Size;
   Code.Flags = Flags;
-  Code.Data = Bytes;
+  copyImageBytes(Bytes, Code.Data, Progress);
   Img.Segments.push_back(std::move(Code));
   Section CodeSection;
   CodeSection.Name = kSegmentName.str();
@@ -128,10 +125,11 @@ llvm::Expected<BinaryImage> RawLoader::load(const std::filesystem::path &Path) {
   CodeSection.FileOff = Options.Offset;
   CodeSection.FileSz = Size;
   CodeSection.Flags = Flags;
-  CodeSection.Data = Bytes;
+  copyImageBytes(Bytes, CodeSection.Data, Progress);
   Img.Sections.push_back(std::move(CodeSection));
   Img.addSymbol(kEntryName, Entry, 0, /*IsFunc=*/true);
-  runPostLoadDiscovery(Img, "binary: loaded " + pathToUTF8(Path.filename()));
+  runPostLoadDiscovery(Img, "binary: loaded " + pathToUTF8(Path.filename()),
+                       Progress);
   return Img;
 }
 

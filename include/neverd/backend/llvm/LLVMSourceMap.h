@@ -79,6 +79,10 @@ struct LLVMSourceObservation {
   /// Never retain a naked instruction pointer across optimization or module
   /// replacement.
   LLVMSourceHandle Value;
+  /// Expression ancestry is useful for library recognition, but is not a
+  /// direct emission observation of this value. Keep that distinction through
+  /// optimizer replacement and module cloning.
+  bool ExpressionDerived = false;
 };
 
 /// Only sidecar state: no metadata or naming changes in the LLVM module.

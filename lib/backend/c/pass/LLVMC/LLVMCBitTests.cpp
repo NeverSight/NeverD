@@ -41,7 +41,10 @@ public:
 
   std::optional<BitValue> get(Value *V, unsigned Bit, unsigned Depth = 0) {
     auto *Type = dyn_cast<IntegerType>(V->getType());
-    if (!Type || Type->getBitWidth() > 64 || Bit >= Type->getBitWidth())
+    // The demanded slice is narrow, but its producer can be an x87 i80
+    // payload or another wide integer. Follow that bit without inspecting
+    // unrelated bits; the same query and depth allowances bound the walk.
+    if (!Type || Bit >= Type->getBitWidth())
       return std::nullopt;
     auto Key = std::make_pair(V, Bit);
     if (auto It = Cache.find(Key); It != Cache.end())
@@ -66,6 +69,11 @@ private:
     // A PHI, load, call or freeze is an existing SSA result. Never traverse
     // memory, loop recurrences or the independent choice made by freeze.
     const BitValue Opaque{V, Bit, false};
+    // A demanded bit can still be poison because of an overflow, exact-shift
+    // or narrowing promise. Projecting through that promise would silently
+    // discard an observation of poison in the original value.
+    if (auto *I = dyn_cast<Instruction>(V); I && I->hasPoisonGeneratingFlags())
+      return Opaque;
     if (V->getType()->isIntegerTy(1))
       return Opaque;
     auto Child = [&](Value *Value, unsigned Index) {
@@ -147,6 +155,84 @@ private:
 };
 } // namespace
 
+bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
+  using namespace llvm;
+  SmallVector<TruncInst *, 32> Slices;
+  for (auto &I : instructions(Function)) {
+    if (!WorkLimit)
+      return false;
+    --WorkLimit;
+    if (auto *Slice = dyn_cast<TruncInst>(&I);
+        Slice && !Slice->hasPoisonGeneratingFlags() &&
+        Slice->getType()->isIntegerTy() &&
+        Slice->getType()->getIntegerBitWidth() <=
+            ::neverd::limits::backend::kLLVMCIntegerSliceMaxBits)
+      Slices.push_back(Slice);
+  }
+  bool Changed = false;
+  for (auto *Slice : Slices) {
+    Value *Root = Slice->getOperand(0);
+    // An opaque whole value already has the same narrow cast. Only these
+    // producers can expose a different source or discard unobserved bits.
+    if (!isa<BinaryOperator, CastInst, SelectInst, ConstantInt>(Root))
+      continue;
+    const unsigned Width = Slice->getType()->getIntegerBitWidth();
+    BitProjection Project(WorkLimit);
+    Value *Source = nullptr;
+    std::optional<int> Offset;
+    APInt SourceMask(Width, 0), Invert(Width, 0), Ones(Width, 0);
+    bool Complete = true;
+    for (unsigned Bit = 0; Bit < Width; ++Bit) {
+      auto Part = Project.get(Root, Bit);
+      if (!Part) {
+        Complete = false;
+        break;
+      }
+      if (!Part->Source) {
+        if (Part->Invert)
+          Ones.setBit(Bit);
+        continue;
+      }
+      const int PartOffset =
+          static_cast<int>(Part->Bit) - static_cast<int>(Bit);
+      if ((Source && Source != Part->Source) ||
+          (Offset && *Offset != PartOffset)) {
+        Complete = false;
+        break;
+      }
+      Source = Part->Source;
+      Offset = PartOffset;
+      SourceMask.setBit(Bit);
+      if (Part->Invert)
+        Invert.setBit(Bit);
+    }
+    if (!Complete || (Source == Root && Offset == 0 && SourceMask.isAllOnes() &&
+                      Invert.isZero() && Ones.isZero()))
+      continue;
+    IRBuilder<> Builder(Slice);
+    Builder.SetCurrentDebugLocation(Slice->getDebugLoc());
+    Value *Result = ConstantInt::get(Slice->getType(), Ones);
+    if (Source) {
+      Result = Source;
+      if (*Offset > 0)
+        Result = Builder.CreateLShr(Result, *Offset);
+      Result = Builder.CreateZExtOrTrunc(Result, Slice->getType());
+      if (*Offset < 0)
+        Result = Builder.CreateShl(Result, -*Offset);
+      if (!SourceMask.isAllOnes())
+        Result = Builder.CreateAnd(Result, SourceMask);
+      if (!Invert.isZero())
+        Result = Builder.CreateXor(Result, Invert);
+      if (!Ones.isZero())
+        Result = Builder.CreateOr(Result, Ones);
+    }
+    Slice->replaceAllUsesWith(Result);
+    Slice->eraseFromParent();
+    Changed = true;
+  }
+  return Changed;
+}
+
 bool simplifyBitTests(llvm::Function &Function, unsigned WorkLimit) {
   using namespace llvm;
   SmallVector<Instruction *, 32> Tests;
@@ -156,7 +242,8 @@ bool simplifyBitTests(llvm::Function &Function, unsigned WorkLimit) {
     --WorkLimit;
     if (auto *Cmp = dyn_cast<ICmpInst>(&I); Cmp && Cmp->isEquality())
       Tests.push_back(Cmp);
-    else if (isa<TruncInst>(I) && I.getType()->isIntegerTy(1))
+    else if (isa<TruncInst>(I) && I.getType()->isIntegerTy(1) &&
+             !I.hasPoisonGeneratingFlags())
       Tests.push_back(&I);
   }
   bool Changed = false;

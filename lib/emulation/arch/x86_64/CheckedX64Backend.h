@@ -43,6 +43,8 @@ public:
   llvm::Error restoreContext(const BackendContext &) override;
 
 private:
+  llvm::Expected<RegisterValue> readContextRegister(const BackendContext &,
+                                                    CPURegister) const override;
   CheckedX64Backend(bool UserMode, bool SIMDExceptions, bool Direct)
       : CheckedBackend(x64::MaxInstructionBytes, 1, UserMode, Direct),
         SIMDExceptions(SIMDExceptions) {}

@@ -6,20 +6,25 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <utility>
 #include <vector>
@@ -35,6 +40,519 @@ Segment executableSegment(va_t Address, llvm::ArrayRef<uint8_t> Bytes) {
   Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Seg.Data.assign(Bytes.begin(), Bytes.end());
   return Seg;
+}
+
+BinaryImage x64UnwindTailAdapter(bool Large, va_t Target) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Entry = 0x1040;
+  std::vector<uint8_t> Code(256, 0xcc);
+  std::vector<uint8_t> Body =
+      Large ? std::vector<uint8_t>{0x48, 0x81, 0xec, 0x28, 0x01, 0, 0}
+            : std::vector<uint8_t>{0x48, 0x83, 0xec, 0x28};
+  const size_t Prologue = Body.size();
+  Body.push_back(0xe8);
+  Body.resize(Body.size() + 4);
+  writeLE<int32_t>(Body.data() + Prologue + 1,
+                   0x10c0 - (Img.Entry + Body.size()));
+  if (Large)
+    Body.insert(Body.end(), {0x4d, 0x8b, 0xc8}); // mov r9,r8
+  else
+    Body.insert(Body.end(), {0x8b, 0xc8}); // mov ecx,eax
+  const size_t Restore = Body.size();
+  const std::vector<uint8_t> Frame(Body.begin(), Body.begin() + Prologue);
+  Body.insert(Body.end(), Frame.begin(), Frame.end());
+  Body[Restore + 2] = 0xc4; // add rsp, same allocation
+  Body.push_back(0xe9);
+  Body.resize(Body.size() + 4);
+  writeLE<int32_t>(Body.data() + Body.size() - 4,
+                   Target - (Img.Entry + Body.size()));
+  const uint8_t Leaf[] = {0x81, 0xe1, 0, 3, 0, 0, 0x8b, 0xc1, 0xc3};
+  std::copy(std::begin(Leaf), std::end(Leaf), Code.begin() + Target - 0x1000);
+  std::copy(Body.begin(), Body.end(), Code.begin() + 0x40);
+  Code[0xc0] = 0xc3;
+  Img.Segments.push_back(executableSegment(0x1000, Code));
+  Img.Symbols.push_back(Symbol::makeFunc(0x10c0, 1));
+  ExceptionFunction F;
+  F.CodeRange = {Img.Entry, Img.Entry + Body.size()};
+  F.Encoding = ExceptionEncoding::X64UnwindV1;
+  F.UnwindVersion = 1;
+  F.PrologueSize = Prologue;
+  UnwindOperation Allocation;
+  Allocation.Kind = Large ? UnwindOperationKind::AllocateLarge
+                          : UnwindOperationKind::AllocateSmall;
+  Allocation.CodeOffset = Prologue;
+  Allocation.StackOffset = Large ? 0x128 : 0x28;
+  F.UnwindOperations.push_back(Allocation);
+  Img.KnownCodeRanges.emplace_back(F.CodeRange.Begin, F.CodeRange.End);
+  Img.ExceptionMetadata.PrimaryFunctionEntries.push_back(Img.Entry);
+  Img.ExceptionMetadata.Functions.push_back(F);
+  return Img;
+}
+
+TEST(FunctionDiscoveryAlignment,
+     RestoredUnwindAdaptersDiscoverLeafTailEntries) {
+  const auto PreviousWorkers = workerThreadOverride().load();
+  auto RestoreWorkers =
+      llvm::scope_exit([&] { setWorkerThreadCount(PreviousWorkers); });
+  for (unsigned Workers : {1u, 4u})
+    for (bool Large : {false, true})
+      for (va_t Target : {0x1020, 0x1080}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Workers << ':' << Large << ':' << Target);
+        setWorkerThreadCount(Workers);
+        auto Img = x64UnwindTailAdapter(Large, Target);
+        if (Large) {
+          auto &F = Img.ExceptionMetadata.Functions.front();
+          F.Encoding = ExceptionEncoding::X64UnwindV2;
+          F.UnwindVersion = 2;
+        }
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(Img));
+        const auto Found = FuncDetector().detect(Img, Dec);
+        EXPECT_TRUE(llvm::any_of(
+            Found, [=](const auto &F) { return F.first == Target; }));
+        EXPECT_TRUE(Img.VerifiedFunctionEntries.count(Target));
+        // Entry publication must remain stable on the next discovery pass.
+        EXPECT_EQ(FuncDetector().detect(Img, Dec), Found);
+      }
+}
+
+TEST(FunctionDiscoveryAlignment, UnprovedUnwindTailAdaptersStayUnsplit) {
+  for (unsigned Mutation = 0; Mutation != 22; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Img = x64UnwindTailAdapter(false, 0x1080);
+    auto &F = Img.ExceptionMetadata.Functions.front();
+    auto &Code = Img.Segments.front().Data;
+    const size_t Last = F.CodeRange.End - 0x1000 - 5;
+    switch (Mutation) {
+    case 0:
+      F.Encoding = ExceptionEncoding::Unknown;
+      break;
+    case 1:
+      F.ParseStatus = ExceptionParseStatus::Malformed;
+      break;
+    case 2:
+      F.ParseStatus = ExceptionParseStatus::Partial;
+      break;
+    case 3:
+      F.Kind = RuntimeFunctionKind::Fragment;
+      break;
+    case 4:
+      F.UnwindFlags = 4;
+      break;
+    case 5:
+      F.FrameRegister = 5;
+      break;
+    case 6:
+      F.UnwindOperations.front().StackOffset = 32;
+      break;
+    case 7:
+      F.UnwindOperations.front().CodeOffset = 3;
+      break;
+    case 8:
+      F.UnwindOperations.push_back(F.UnwindOperations.front());
+      break;
+    case 9:
+      Code[0x4e] = 0x20;
+      break; // restore a different stack size
+    case 10:
+      Code[0x4a] = 0xe0;
+      break; // mov esp,eax
+    case 11:
+      Code[0x4a] = 0xd8;
+      break; // mov ebx,eax
+    case 12:
+      Code[0x49] = 0x74;
+      Code[0x4a] = 0;
+      break; // conditional branch
+    case 13:
+      Code[0x49] = 0x89;
+      Code[0x4a] = 1;
+      break; // mov [rcx],eax
+    case 14:
+      Img.Symbols.front().Name = "abort";
+      break;
+    case 15:
+      writeLE<int32_t>(Code.data() + Last + 1, 0x1049 - (0x1000 + Last + 5));
+      break;
+    case 16:
+      Img.KnownCodeRanges.push_back({0x1070, 0x1090});
+      break;
+    case 17:
+      Img.ContinuationCodeStarts.insert(0x1080);
+      break;
+    case 18:
+      Code[0x80] = 0xeb;
+      Code[0x81] = 0xfe;
+      break; // no callable exit
+    case 19:
+      F.FragmentRanges.push_back({0x1080, 0x1089});
+      break;
+    case 20:
+      Code[0x43] = Code[0x4e] = 8;
+      F.UnwindOperations.front().StackOffset = 8;
+      break;
+    case 21:
+      Img.ExceptionMetadata.Functions.clear();
+      break;
+    }
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Img));
+    const auto Found = FuncDetector().detect(Img, Dec);
+    EXPECT_FALSE(llvm::any_of(
+        Found, [](const auto &Entry) { return Entry.first == 0x1080; }));
+    EXPECT_FALSE(Img.VerifiedFunctionEntries.count(0x1080));
+  }
+}
+
+TEST(FunctionDiscoveryAlignment, UnwindTailRequiresAnExecutableCompleteBody) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Img = x64UnwindTailAdapter(false, 0x1080);
+    Section Code;
+    Code.VA = 0x1000;
+    Code.Size = 0x100;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Section Data;
+    Data.VA = Mutation == 0 ? 0x1049 : 0x1080;
+    Data.Size = Mutation == 0 ? 2 : 9;
+    Data.Flags = SegmentFlags::Readable;
+    if (Mutation < 2) {
+      Img.Sections.push_back(Data);
+      Img.Sections.push_back(Code);
+    } else if (Mutation == 2)
+      Img.Segments.front().Data.resize(0x50); // truncated terminal displacement
+    else if (Mutation == 3)
+      Img.ExceptionMetadata.Functions.front().CodeRange.End -= 1;
+    else
+      Img.IsRelocatable = true;
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Img));
+    const auto Found = FuncDetector().detect(Img, Dec);
+    EXPECT_FALSE(llvm::any_of(
+        Found, [](const auto &Entry) { return Entry.first == 0x1080; }));
+  }
+}
+
+// A long `.text` is swept for call targets in pieces on the worker threads
+// and the pieces joined as one sweep would have gone.  Random bytes decode to
+// every length of instruction and to bytes that do not decode at all, so the
+// pieces start in the middle of instructions; the symbols start wherever
+// they like, some where the long sweep never lands and some ending inside an
+// instruction.  What the detector finds must not depend on any of that.
+TEST(FuncDetectorCoverage, SweepsInPiecesExactlyAsInOnePiece) {
+  const auto PreviousWorkers = workerThreadOverride().load();
+  auto RestoreWorkers =
+      llvm::scope_exit([&] { setWorkerThreadCount(PreviousWorkers); });
+  constexpr va_t TextVA = 0x401000;
+  constexpr size_t TextSize = 512 * 1024;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::ELF;
+  Img.Base = 0x400000;
+  Img.Entry = TextVA;
+
+  Segment Mapping;
+  Mapping.VA = TextVA;
+  Mapping.Size = TextSize;
+  Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Mapping.Data.resize(TextSize);
+  uint64_t State = 0x9E3779B97F4A7C15ull;
+  auto Next = [&] {
+    State ^= State << 13, State ^= State >> 7, State ^= State << 17;
+    return State;
+  };
+  for (uint8_t &Byte : Mapping.Data)
+    Byte = static_cast<uint8_t>(Next());
+  // Real calls among the noise: `push rbp; call rel32` into the text.
+  for (unsigned Call = 0; Call < 4000; ++Call) {
+    const size_t At = Next() % (TextSize - 16);
+    const size_t Target = Next() % (TextSize - 16) & ~size_t(15);
+    Mapping.Data[At] = 0x55;
+    Mapping.Data[At + 1] = 0xE8;
+    const int32_t Disp = static_cast<int32_t>(static_cast<int64_t>(Target) -
+                                              static_cast<int64_t>(At + 6));
+    std::memcpy(Mapping.Data.data() + At + 2, &Disp, sizeof(Disp));
+    std::memcpy(Mapping.Data.data() + Target, "\x55\x48\x89\xE5\x5D\xC3",
+                6); // a small function there
+  }
+  Img.Segments.push_back(std::move(Mapping));
+  Section Code;
+  Code.Name = ".text";
+  Code.VA = TextVA;
+  Code.Size = TextSize;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Code));
+  for (unsigned Sym = 0; Sym < 500; ++Sym) {
+    const va_t Start = TextVA + Next() % (TextSize - 64);
+    Img.Symbols.push_back(Symbol::makeFunc(Start, 1 + Next() % 60));
+  }
+
+  // Repeated nested ranges may begin/end inside canonical instructions.
+  Img.KnownCodeRanges = {{TextVA + 3, TextVA + 65539},
+                         {TextVA + 3, TextVA + 65539},
+                         {TextVA + 7, TextVA + 16391}};
+  auto DetectWith = [&](unsigned Threads) {
+    setWorkerThreadCount(Threads);
+    Decoder Dec;
+    EXPECT_TRUE(Dec.init(Arch::X64));
+    FuncDetector Detector;
+    auto Functions = Detector.detect(Img, Dec);
+    setWorkerThreadCount(0);
+    return Functions;
+  };
+  const auto OnePiece = DetectWith(1);
+  EXPECT_GT(OnePiece.size(), 1000u);
+  for (unsigned Workers : {2u, 4u, 16u})
+    EXPECT_EQ(DetectWith(Workers), OnePiece);
+}
+
+TEST(FunctionDiscoveryAlignment, LongCalleesNeedReachableCallableExits) {
+  enum class Shape {
+    PrefixBoundary,
+    Straight,
+    Conditional,
+    Trap,
+    Indirect,
+    Cycle,
+    Truncated,
+    CFGBoundary,
+    Exhausted,
+    EscapingBranch,
+    TruncatedArm,
+    ExhaustedArm,
+    MixedIndirect,
+    UnsupportedArm,
+    PACMArm,
+    ScalableCPAArm
+  };
+  // PTRUES remains refused because its NZCV effects are not modelled. PACM
+  // and scalable ADDPT now have checked semantics and are positive cases.
+  constexpr uint32_t UnsupportedPtrues = 0x2519e3e0;
+  constexpr uint32_t ScalableAddpt = 0x04e20820;
+  const std::pair<Arch, InstructionMode> Targets[] = {
+      {Arch::X86, InstructionMode::Default},
+      {Arch::X64, InstructionMode::Default},
+      {Arch::ARM, InstructionMode::ARM},
+      {Arch::ARM, InstructionMode::Thumb},
+      {Arch::AArch64, InstructionMode::Default}};
+  for (auto [Architecture, Mode] : Targets)
+    for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::MachO})
+      for (Shape Form :
+           {Shape::PrefixBoundary, Shape::Straight, Shape::Conditional,
+            Shape::Trap, Shape::Indirect, Shape::Cycle, Shape::Truncated,
+            Shape::CFGBoundary, Shape::Exhausted, Shape::EscapingBranch,
+            Shape::TruncatedArm, Shape::ExhaustedArm, Shape::MixedIndirect,
+            Shape::UnsupportedArm, Shape::PACMArm, Shape::ScalableCPAArm}) {
+        SCOPED_TRACE(testing::Message()
+                     << unsigned(Architecture) << ':' << unsigned(Mode) << ':'
+                     << unsigned(Format) << ':' << unsigned(Form));
+        constexpr va_t Base = 0x1000, Callee = Base + 32;
+        const bool X86 = Architecture == Arch::X86 || Architecture == Arch::X64;
+        const bool Thumb = Mode == InstructionMode::Thumb;
+        const bool A64 = Architecture == Arch::AArch64;
+        if ((Form == Shape::UnsupportedArm || Form == Shape::PACMArm ||
+             Form == Shape::ScalableCPAArm) &&
+            !A64)
+          continue;
+        // Pin both the 64/65 linear-prefix and 256/257 reachable-probe edges.
+        size_t Prefix = limits::kMaxVerifyInsns;
+        if (Form == Shape::PrefixBoundary)
+          --Prefix;
+        if (Form == Shape::CFGBoundary || Form == Shape::Exhausted)
+          Prefix = 256 - (Form == Shape::CFGBoundary ? 1 : 0);
+        const bool Conditional =
+            Form == Shape::Conditional || Form == Shape::EscapingBranch ||
+            Form == Shape::TruncatedArm || Form == Shape::ExhaustedArm ||
+            Form == Shape::MixedIndirect || Form == Shape::UnsupportedArm ||
+            Form == Shape::PACMArm || Form == Shape::ScalableCPAArm;
+        std::vector<uint8_t> Body;
+        const auto Word = [&](uint32_t Value) {
+          const size_t At = Body.size();
+          Body.resize(At + 4);
+          writeLE<uint32_t>(Body.data() + At, Value);
+        };
+        const auto Half = [&](uint16_t Value) {
+          const size_t At = Body.size();
+          Body.resize(At + 2);
+          writeLE<uint16_t>(Body.data() + At, Value);
+        };
+        const auto Arithmetic = [&] {
+          if (X86)
+            Body.push_back(0x90);
+          else if (Thumb)
+            Half(0x3001); // adds r0, #1
+          else
+            Word(A64 ? 0x11000400 : 0xe2800001); // add w0/r0, #1
+        };
+        const auto Return = [&] {
+          if (X86)
+            Body.push_back(0xc3);
+          else if (Thumb)
+            Half(0x4770);
+          else
+            Word(A64 ? 0xd65f03c0 : 0xe12fff1e); // ret / bx lr
+        };
+        const auto Indirect = [&] {
+          if (X86)
+            Body.insert(Body.end(), {0xff, 0xe0}); // jmp rax/eax
+          else if (Thumb)
+            Half(0x4718); // bx r3
+          else
+            Word(A64 ? 0xd61f0060 : 0xe12fff13); // br x3 / bx r3
+        };
+        for (size_t I = 0; I != Prefix; ++I)
+          Arithmetic();
+        if (Conditional) {
+          // The conditional transfer is outside the initial linear prefix on
+          // every ISA. Fallthrough returns; the other arm must still be
+          // checked.
+          if (X86) {
+            Body.insert(Body.end(), {0x0f, 0x85});
+            Word(Form == Shape::EscapingBranch ? 0x10000 : 1);
+          } else if (Thumb)
+            Half(Form == Shape::EscapingBranch ? 0xd17f : 0xd100);
+          else if (A64)
+            Word(Form == Shape::EscapingBranch ? 0x54080001 : 0x54000041);
+          else
+            Word(Form == Shape::EscapingBranch ? 0x1a003ffe : 0x1a000000);
+          Return();
+        }
+        if (Form == Shape::Truncated || Form == Shape::TruncatedArm)
+          Body.push_back(X86 ? 0x0f : 0);
+        else if (Form == Shape::Indirect || Form == Shape::MixedIndirect)
+          Indirect();
+        else if (Form == Shape::UnsupportedArm) {
+          Word(UnsupportedPtrues);
+          Return();
+        } else if (Form == Shape::ScalableCPAArm) {
+          Word(ScalableAddpt);
+          Return();
+        } else if (Form == Shape::PACMArm) {
+          Word(kAArch64PACMEncoding);
+          Return();
+        } else if (Form == Shape::Trap) {
+          if (X86)
+            Body.push_back(0xcc);
+          else if (Thumb)
+            Half(0xde00);
+          else
+            Word(A64 ? 0xd4200000 : 0xe7f000f0); // brk / udf
+        } else if (Form == Shape::Cycle) {
+          if (X86)
+            Body.insert(Body.end(), {0xeb, 0xfe});
+          else if (Thumb)
+            Half(0xe7fe);
+          else
+            Word(A64 ? 0x14000000 : 0xeafffffe); // b self
+        } else {
+          if (Form == Shape::ExhaustedArm)
+            for (size_t I = 0; I != 256; ++I)
+              Arithmetic();
+          Return();
+        }
+        std::vector<uint8_t> Bytes(Callee - Base, 0);
+        if (X86) {
+          Bytes[0] = 0xe8; // call callee; ret
+          writeLE<uint32_t>(Bytes.data() + 1, Callee - (Base + 5));
+          Bytes[5] = 0xc3;
+        } else if (Thumb) {
+          writeLE<uint16_t>(Bytes.data(), 0xf000); // bl callee
+          writeLE<uint16_t>(Bytes.data() + 2, 0xf80e);
+          writeLE<uint16_t>(Bytes.data() + 4, 0x4770);
+        } else if (A64) {
+          writeLE<uint32_t>(Bytes.data(), 0x94000008); // bl callee
+          writeLE<uint32_t>(Bytes.data() + 4, 0xd65f03c0);
+        } else {
+          writeLE<uint32_t>(Bytes.data(), 0xeb000006); // bl callee
+          writeLE<uint32_t>(Bytes.data() + 4, 0xe12fff1e);
+        }
+        llvm::append_range(Bytes, Body);
+        BinaryImage Img;
+        Img.Arch = Architecture;
+        Img.Bits = Architecture == Arch::X64 || A64 ? Bitness::Bits64
+                                                    : Bitness::Bits32;
+        Img.Mode = Mode;
+        Img.Format = Format;
+        Img.Entry = Base;
+        Img.Segments.push_back(executableSegment(Base, Bytes));
+        Img.Symbols.push_back(Symbol::makeFunc(Base, X86 || Thumb ? 6 : 8));
+        Decoder Dec;
+        ASSERT_TRUE(Dec.init(Img));
+        if (Form == Shape::UnsupportedArm || Form == Shape::ScalableCPAArm) {
+          uint8_t Bytes[4];
+          writeLE<uint32_t>(Bytes, Form == Shape::UnsupportedArm
+                                       ? UnsupportedPtrues
+                                       : ScalableAddpt);
+          DecodedInsn I;
+          ASSERT_EQ(Dec.decodeOneForLift(Bytes, sizeof(Bytes), Callee, I), 4);
+          ASSERT_FALSE(I.Raw->illegal);
+          std::vector<LowOp> Ops;
+          if (Form == Shape::UnsupportedArm)
+            EXPECT_THROW(Dec.liftToLow(I, Ops), UnliftedInstruction);
+          else {
+            EXPECT_NO_THROW(Dec.liftToLow(I, Ops));
+            EXPECT_FALSE(Ops.empty());
+          }
+        }
+        FuncDetector Detector;
+        const auto Functions = Detector.detect(Img, Dec);
+        // Callable identity needs an observed exit, not proof that all paths
+        // return. An indirect frontier alongside that exit keeps its old role.
+        const bool Expected =
+            Form == Shape::PrefixBoundary || Form == Shape::Straight ||
+            Form == Shape::Conditional || Form == Shape::CFGBoundary ||
+            Form == Shape::MixedIndirect || Form == Shape::PACMArm ||
+            Form == Shape::ScalableCPAArm;
+        EXPECT_EQ(
+            llvm::any_of(Functions,
+                         [&](const auto &F) { return F.first == Callee; }),
+            Expected);
+        EXPECT_EQ(Img.VerifiedFunctionEntries.count(Callee) != 0, Expected);
+      }
+}
+
+TEST(FunctionDiscoveryAlignment, LongCalleesVerifyUnprovenTailTargets) {
+  for (bool Authenticated : {false, true})
+    for (unsigned Ending = 0; Ending != 3; ++Ending) {
+      SCOPED_TRACE(testing::Message() << Authenticated << ':' << Ending);
+      constexpr va_t Base = 0x1000, Callee = Base + 32, Tail = Base + 512;
+      std::vector<uint8_t> Bytes(Tail - Base + 2, 0xcc);
+      const auto Transfer = [&](size_t At, uint8_t Opcode, va_t Target) {
+        Bytes[At] = Opcode;
+        writeLE<uint32_t>(Bytes.data() + At + 1, Target - (Base + At + 5));
+      };
+      Transfer(0, 0xe8, Callee);
+      Transfer(5, 0xe8, Tail); // The tail's address is also a scan candidate.
+      Bytes[10] = 0xc3;
+      std::fill_n(Bytes.begin() + (Callee - Base), limits::kMaxVerifyInsns,
+                  0x90);
+      Transfer(Callee - Base + limits::kMaxVerifyInsns, 0xe9, Tail);
+      Bytes[Tail - Base] = Ending == 0 ? 0xc3 : Ending == 1 ? 0xcc : 0xeb;
+      Bytes[Tail - Base + 1] = Ending == 2 ? 0xfe : 0xcc;
+      BinaryImage Img;
+      Img.Arch = Arch::X64;
+      Img.Bits = Bitness::Bits64;
+      Img.Format = BinaryFormat::ELF;
+      Img.Entry = Base;
+      Img.Segments.push_back(executableSegment(Base, Bytes));
+      Img.Symbols.push_back(Symbol::makeFunc(Base, 11));
+      if (Authenticated)
+        Img.Symbols.push_back(Symbol::makeFunc(Tail, 2));
+      EXPECT_EQ(Img.hasAuthenticatedFunctionEntryAt(Tail), Authenticated);
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(Img));
+      FuncDetector Detector;
+      const auto Functions = Detector.detect(Img, Dec);
+      const bool Expected = Authenticated || Ending == 0;
+      EXPECT_EQ(llvm::any_of(Functions,
+                             [&](const auto &F) { return F.first == Callee; }),
+                Expected);
+    }
 }
 
 TEST(FunctionDiscoveryAlignment, UsesVirtualAddressForEveryArchitecture) {
@@ -394,6 +912,32 @@ TEST(FunctionDiscoveryAlignment, PreservesAlignedEntriesAfterPadding) {
 
     ASSERT_EQ(Img.Symbols.size(), 1u);
     EXPECT_EQ(Img.Symbols.front().Addr, 0x1000 + C.Offset);
+  }
+}
+
+// 0x40-0x4F are REX prefixes only in 64-bit code; IA-32 decodes them as
+// INC/DEC.  There the byte after an int3 is more often the rest of an
+// operand holding 0xcc, as in `mov [0x4048cc], eax` (a3 cc 48 40 00), than a
+// function start.
+TEST(FunctionDiscoveryAlignment, RexBytesBeginFunctionsOnlyIn64BitCode) {
+  for (Arch Architecture : {Arch::X64, Arch::X86}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    BinaryImage Img;
+    Img.Arch = Architecture;
+    Img.Bits = Architecture == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+    // The scanner deliberately skips a segment's initial padding run.  Then
+    // x64 `sub rsp, 0x28; ret` and IA-32 `dec eax; sub esp, 0x28; ret`.
+    const uint8_t Bytes[] = {0x12, x86::kInt3, 0x48, 0x83, 0xec, 0x28, 0xc3};
+    Img.Segments.push_back(executableSegment(0x1000, Bytes));
+
+    scanPaddingBoundaries(Img);
+
+    if (Architecture == Arch::X64) {
+      ASSERT_EQ(Img.Symbols.size(), 1u);
+      EXPECT_EQ(Img.Symbols.front().Addr, 0x1002u);
+    } else {
+      EXPECT_TRUE(Img.Symbols.empty());
+    }
   }
 }
 

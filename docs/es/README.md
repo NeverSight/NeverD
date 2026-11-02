@@ -1,6 +1,6 @@
 **Idiomas**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 32288410e4352dcbe779ee091bfc8728b8d4e783203704b4d3a6d09f0421c96a -->
+<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
 
 [← Proyecto NeverD](project.md)
 
@@ -26,6 +26,7 @@ Las guías en inglés se encuentran directamente en `docs/`. Las traducciones se
 | [Perfil de fuentes HTML (inglés)](../web-html-profile.md) | Inventario acotado de scripts en C++, referencias locales capturadas y anclas originales de fuentes en línea |
 | [Pruebas](testing.md) | Suites, fixtures generadas, recorridos Unicorn y comandos incrementales |
 | [Banco de trabajo de escritorio (inglés)](../gui.md) | Disposición de desensamblador clásico, worker separado, bases de datos de proyecto, localización y conexiones MCP |
+| [Secciones de la imagen de análisis (inglés)](../analysis-sections.md) | Añadir código y datos materializados mediante la ABI C, el worker, la CLI y el entorno de trabajo; vistas nativas y persistencia del proyecto |
 | [Reconocimiento de bibliotecas (inglés)](../library-recognition.md) | Identidades de STL, ATL/MFC, COM y libc con evidencias, perfiles y plegado reversible de código C |
 | [Validación del escritorio (inglés)](../gui-qualification.md) | Evidencia GUI medida, límites del empaquetado y validación de plataformas pendiente |
 | [Recuperación de código fuente de intérpretes](interpreter-recovery.md) | Especialización experimental con `--devirtualize`, controles CLI, contrato de ejecución, evidencias y límites; propuestas de prueba para bucles anidados; presupuestos de descubrimiento explícitos y API C versionada; API de prueba exacta de código nativo a LLVM |

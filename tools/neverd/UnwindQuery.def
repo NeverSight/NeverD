@@ -1,0 +1,24 @@
+//===- UnwindQuery.def - Exact-PC CLI query vocabulary --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// CLI-only spellings and diagnostics. The public C API owns frame semantics.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_CLI_TEXT
+#define NEVERD_UNWIND_CLI_TEXT(Name, Text)
+#endif
+
+NEVERD_UNWIND_CLI_TEXT(kOption, "unwind-frame")
+NEVERD_UNWIND_CLI_TEXT(
+    kDescription, "Query unwind-frame JSON at an exact PC (requires --json)")
+NEVERD_UNWIND_CLI_TEXT(kAddressValue, "hex-address")
+NEVERD_UNWIND_CLI_TEXT(kRequiresJSON, "--unwind-frame requires --json")
+NEVERD_UNWIND_CLI_TEXT(
+    kInvalidAddress,
+    "--unwind-frame requires an unsigned 64-bit hexadecimal address")
+NEVERD_UNWIND_CLI_TEXT(kQueryFailed, "unwind-frame query failed: ")
+
+#undef NEVERD_UNWIND_CLI_TEXT

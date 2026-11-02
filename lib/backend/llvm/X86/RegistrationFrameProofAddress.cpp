@@ -12,7 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/RegistrationFrameAddress.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/IntrinsicInst.h"

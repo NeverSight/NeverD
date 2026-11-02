@@ -36,9 +36,11 @@ inline std::string functionAuditReason(const PipelineFunctionAudit &Audit) {
     if (!llvm::is_contained(Audit.UnprovenReturns, Addr))
       Unsupported.push_back(Addr);
   Name("unsupported instruction", Unsupported);
-  Name("return that may pop an address the function pushed",
+  Name("return or tail transfer with unproved return-address ownership",
        Audit.UnprovenReturns);
   Name("decode failure", Audit.DecodeFailures);
+  if (!Audit.Diagnostic.empty())
+    Reason += "; " + Audit.Diagnostic;
   return Reason;
 }
 

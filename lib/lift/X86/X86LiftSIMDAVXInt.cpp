@@ -17,7 +17,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 
@@ -196,10 +196,8 @@ bool validateEvexIntegerLogic(X86Lifter &L, const cs_insn *Insn,
       (!Info.MemoryForm && (Info.Encoding.P2 & 0x10) != 0) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(Left, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(Left))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(Left))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -243,8 +241,7 @@ bool validateEvexIntegerLogic(X86Lifter &L, const cs_insn *Insn,
                                            TupleSize);
   }
   if (!isX86VectorRegisterOfSize(Right, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Right) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(Right) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 || x86VectorRegisterIndex(Right) < 8;
@@ -351,8 +348,7 @@ bool validateEvexUnaryInteger(X86Lifter &L, const cs_insn *Insn,
       (!Info.MemoryForm && (Info.Encoding.P2 & 0x10) != 0) ||
       (Info.Broadcast && !Info.Spec.BroadcastAllowed) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination))
     return false;
   if (L.targetArch() == Arch::X86 && x86VectorRegisterIndex(Destination) >= 8)
     return false;
@@ -395,8 +391,7 @@ bool validateEvexUnaryInteger(X86Lifter &L, const cs_insn *Insn,
                                            TupleSize);
   }
   if (!isX86VectorRegisterOfSize(Source, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Source) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(Source) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 || x86VectorRegisterIndex(Source) < 8;
@@ -623,8 +618,7 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
   if (Info.Spec.Immediate) {
     if ((Info.Encoding.P0 & 0x90) != 0x90 ||
         ((Info.Encoding.ModRM >> 3) & 7) != Info.Spec.ModRMExtension ||
-        decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-            DestinationIndex ||
+        Info.Encoding.vvvvIndex() != DestinationIndex ||
         TailOperand.type != X86_OP_IMM || TailOperand.size != 1 ||
         X86.encoding.imm_size != 1 ||
         X86.encoding.imm_offset != Insn->size - 1 ||
@@ -632,10 +626,8 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       return false;
   } else {
     if (!isX86VectorRegisterOfSize(Value, Info.VectorSize) ||
-        decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-            DestinationIndex ||
-        decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-            x86VectorRegisterIndex(Value) ||
+        Info.Encoding.regIndex() != DestinationIndex ||
+        Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(Value) ||
         X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0)
       return false;
   }
@@ -683,8 +675,7 @@ bool validateEvexRotate(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
                                            TrailingBytes);
   }
   if (!isX86VectorRegisterOfSize(MemoryOrRegister, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(MemoryOrRegister) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(MemoryOrRegister) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding,
                                          TrailingBytes))
     return false;
@@ -879,10 +870,8 @@ bool validateEvexVariableShift(X86Lifter &L, const cs_insn *Insn,
       (Info.Broadcast && !Info.Spec.BroadcastAllowed) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(Value, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(Value))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(Value))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -926,8 +915,7 @@ bool validateEvexVariableShift(X86Lifter &L, const cs_insn *Insn,
                                            TupleSize);
   }
   if (!isX86VectorRegisterOfSize(Count, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Count) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(Count) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 || x86VectorRegisterIndex(Count) < 8;
@@ -1116,18 +1104,15 @@ bool validateEvexUniformShift(X86Lifter &L, const cs_insn *Insn,
   if (Info.Immediate) {
     if ((Info.Encoding.P0 & 0x90) != 0x90 ||
         ((Info.Encoding.ModRM >> 3) & 7) != Info.Spec.ImmediateExtension ||
-        decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-            DestinationIndex ||
-        Count.size != 1 || X86.encoding.imm_size != 1 ||
+        Info.Encoding.vvvvIndex() != DestinationIndex || Count.size != 1 ||
+        X86.encoding.imm_size != 1 ||
         X86.encoding.imm_offset != Insn->size - 1 ||
         Insn->bytes[Insn->size - 1] != static_cast<uint8_t>(Count.imm))
       return false;
   } else {
     if (!isX86VectorRegisterOfSize(Value, Info.VectorSize) ||
-        decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-            DestinationIndex ||
-        decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-            x86VectorRegisterIndex(Value) ||
+        Info.Encoding.regIndex() != DestinationIndex ||
+        Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(Value) ||
         X86.encoding.imm_offset != 0 || X86.encoding.imm_size != 0)
       return false;
   }
@@ -1178,8 +1163,7 @@ bool validateEvexUniformShift(X86Lifter &L, const cs_insn *Insn,
   }
   const uint16_t RegisterSize = Info.Immediate ? Info.VectorSize : 16;
   if (!isX86VectorRegisterOfSize(MemoryOrRegister, RegisterSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(MemoryOrRegister) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(MemoryOrRegister) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding,
                                          TrailingBytes))
     return false;
@@ -1385,10 +1369,8 @@ bool validateEvexPackedMultiply(X86Lifter &L, const cs_insn *Insn,
       (Info.Broadcast && !Info.Spec.BroadcastAllowed) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(Left, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(Left))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(Left))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -1432,8 +1414,7 @@ bool validateEvexPackedMultiply(X86Lifter &L, const cs_insn *Insn,
                                            TupleSize);
   }
   if (!isX86VectorRegisterOfSize(Right, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Right) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(Right) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 || x86VectorRegisterIndex(Right) < 8;
@@ -1592,13 +1573,11 @@ bool hasCanonicalMaskConversionEncoding(
 
   if (MaskToVector)
     return (Encoding.P0 & 0x60) == 0x60 &&
-           decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) ==
-               x86VectorRegisterIndex(VectorOperand) &&
+           Encoding.regIndex() == x86VectorRegisterIndex(VectorOperand) &&
            (Encoding.ModRM & 7) == MaskOperand.reg - X86_REG_K0;
   return (Encoding.P0 & 0x90) == 0x90 &&
          ((Encoding.ModRM >> 3) & 7) == MaskOperand.reg - X86_REG_K0 &&
-         decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) ==
-             x86VectorRegisterIndex(VectorOperand);
+         Encoding.rmIndex() == x86VectorRegisterIndex(VectorOperand);
 }
 
 bool hasCanonicalMaskBroadcastEncoding(const cs_insn *Insn, const cs_x86 &X86,
@@ -1622,8 +1601,7 @@ bool hasCanonicalMaskBroadcastEncoding(const cs_insn *Insn, const cs_x86 &X86,
   const uint16_t EncodedVectorSize =
       EncodedLength == 0 ? 16 : (EncodedLength == 0x20 ? 32 : 64);
   return EncodedVectorSize == VectorSize &&
-         decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) ==
-             x86VectorRegisterIndex(Destination) &&
+         Encoding.regIndex() == x86VectorRegisterIndex(Destination) &&
          (Encoding.ModRM & 7) == Source.reg - X86_REG_K0;
 }
 
@@ -1750,10 +1728,8 @@ bool validateEvexDoubleShift(X86Lifter &L, const cs_insn *Insn,
       (Info.Broadcast && !Info.Spec.AllowBroadcast) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(FirstSource, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(FirstSource))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(FirstSource))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -1799,8 +1775,7 @@ bool validateEvexDoubleShift(X86Lifter &L, const cs_insn *Insn,
                                            TrailingBytes);
   }
   if (!isX86VectorRegisterOfSize(SecondSource, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(SecondSource) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(SecondSource) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding,
                                          TrailingBytes))
     return false;
@@ -1891,10 +1866,8 @@ bool validateEvexVbmi(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       (Info.Broadcast && !Info.Spec.AllowBroadcast) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(FirstSource, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(FirstSource))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(FirstSource))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -1938,8 +1911,7 @@ bool validateEvexVbmi(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
                                            SecondSource, TupleSize);
   }
   if (!isX86VectorRegisterOfSize(SecondSource, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(SecondSource) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(SecondSource) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 ||
@@ -1999,8 +1971,7 @@ bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
       Info.VectorSize == 16 ? 0 : (Info.VectorSize == 32 ? 0x20 : 0x40);
   if (EncodedLength == 0x60 || EncodedLength != ExpectedLength ||
       ((Info.Encoding.ModRM >> 3) & 7) != Destination.reg - X86_REG_K0 ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(Data))
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(Data))
     return false;
   if (L.targetArch() == Arch::X86 && x86VectorRegisterIndex(Data) >= 8)
     return false;
@@ -2028,8 +1999,7 @@ bool validateEvexBitShuffle(X86Lifter &L, const cs_insn *Insn,
     return Controls.size == Info.VectorSize &&
            validateCanonicalEvexMemoryTail(Insn, X86, Info.Encoding, Controls,
                                            Info.VectorSize);
-  if (decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Controls) ||
+  if (Info.Encoding.rmIndex() != x86VectorRegisterIndex(Controls) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 || x86VectorRegisterIndex(Controls) < 8;
@@ -2115,10 +2085,8 @@ bool validateEvexBlend(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       (Info.Broadcast && !Info.Spec.AllowBroadcast) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(FirstSource, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(FirstSource))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(FirstSource))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -2164,8 +2132,7 @@ bool validateEvexBlend(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
                                            SecondSource, TupleSize);
   }
   if (!isX86VectorRegisterOfSize(SecondSource, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(SecondSource) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(SecondSource) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 ||
@@ -2240,10 +2207,8 @@ bool validateEvexIfma(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       (!Info.MemoryForm && (Info.Encoding.P2 & 0x10) != 0) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(FirstSource, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(FirstSource))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(FirstSource))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -2286,8 +2251,7 @@ bool validateEvexIfma(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
                                            SecondSource, TupleSize);
   }
   if (!isX86VectorRegisterOfSize(SecondSource, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(SecondSource) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(SecondSource) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 ||
@@ -2372,10 +2336,8 @@ bool validateEvexVnni(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
       (!Info.MemoryForm && (Info.Encoding.P2 & 0x10) != 0) ||
       !isX86VectorRegisterOfSize(Destination, Info.VectorSize) ||
       !isX86VectorRegisterOfSize(FirstSource, Info.VectorSize) ||
-      decodeEvexVectorRegIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(Destination) ||
-      decodeEvexVectorVvvvIndex(Info.Encoding.P1, Info.Encoding.P2) !=
-          x86VectorRegisterIndex(FirstSource))
+      Info.Encoding.regIndex() != x86VectorRegisterIndex(Destination) ||
+      Info.Encoding.vvvvIndex() != x86VectorRegisterIndex(FirstSource))
     return false;
   if (L.targetArch() == Arch::X86 &&
       (x86VectorRegisterIndex(Destination) >= 8 ||
@@ -2418,8 +2380,7 @@ bool validateEvexVnni(X86Lifter &L, const cs_insn *Insn, const cs_x86 &X86,
                                            SecondSource, TupleSize);
   }
   if (!isX86VectorRegisterOfSize(SecondSource, Info.VectorSize) ||
-      decodeEvexVectorRMIndex(Info.Encoding.P0, Info.Encoding.ModRM) !=
-          x86VectorRegisterIndex(SecondSource) ||
+      Info.Encoding.rmIndex() != x86VectorRegisterIndex(SecondSource) ||
       !validateCanonicalEvexRegisterTail(Insn, X86, Info.Encoding))
     return false;
   return L.targetArch() != Arch::X86 ||
@@ -2508,8 +2469,7 @@ bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
       !isX86VectorRegisterOfSize(First, VectorSize) ||
       ((Encoding.ModRM >> 3) & 7) !=
           static_cast<unsigned>(Destination.reg - X86_REG_K0) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          x86VectorRegisterIndex(First) ||
+      Encoding.vvvvIndex() != x86VectorRegisterIndex(First) ||
       (((Encoding.ModRM & 0xc0) != 0xc0) != MemoryForm))
     return false;
 
@@ -2543,8 +2503,7 @@ bool liftEvexMaskTest(X86Lifter &L, X86Lifter::LiftState &S,
       return false;
   } else if (Broadcast || !isX86VectorRegisterOfSize(Second, VectorSize) ||
              Second.avx_bcast != X86_AVX_BCAST_INVALID ||
-             decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                 x86VectorRegisterIndex(Second) ||
+             Encoding.rmIndex() != x86VectorRegisterIndex(Second) ||
              !validateCanonicalEvexRegisterTail(Insn, X86, Encoding)) {
     return false;
   }
@@ -2741,12 +2700,10 @@ bool liftSIMDAVXInt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (MemoryForm != (SecondSourceOperand.type == X86_OP_MEM) ||
         (!MemoryForm &&
          !isX86VectorRegisterOfSize(SecondSourceOperand, VectorSize)) ||
-        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-            x86VectorRegisterIndex(DestinationOperand) ||
-        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-            x86VectorRegisterIndex(FirstSourceOperand) ||
-        (!MemoryForm && decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                            x86VectorRegisterIndex(SecondSourceOperand)))
+        Encoding.regIndex() != x86VectorRegisterIndex(DestinationOperand) ||
+        Encoding.vvvvIndex() != x86VectorRegisterIndex(FirstSourceOperand) ||
+        (!MemoryForm &&
+         Encoding.rmIndex() != x86VectorRegisterIndex(SecondSourceOperand)))
       return false;
 
     const x86_avx_bcast ExpectedBroadcast =

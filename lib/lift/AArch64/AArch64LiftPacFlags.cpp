@@ -15,8 +15,10 @@
 
 #include "AArch64LiftDetail.h"
 
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
 
 namespace neverd {
 
@@ -137,54 +139,13 @@ bool liftPacFlags(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       break;
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar Src = L.operandRead(S, ARM64.operands[1]);
-    NdVar AddressOffset = NdVar::cst(
-        static_cast<uint64_t>(ARM64.operands[2].imm), Src.Size);
+    NdVar AddressOffset =
+        NdVar::cst(static_cast<uint64_t>(ARM64.operands[2].imm), Src.Size);
     NdVar TagOffset =
         NdVar::cst(static_cast<uint64_t>(ARM64.operands[3].imm), Src.Size);
     S.emitIntrinsic(Insn->id == AARCH64_INS_ADDG ? Intrinsic::Addg
                                                  : Intrinsic::Subg,
                     Dst, {Src, AddressOffset, TagOffset});
-    break;
-  }
-
-  // AUTDA / AUTDZA / AUTDZA / AUTDB / AUTDZB — pointer authentication (data).
-  case AARCH64_INS_AUTDA:
-  case AARCH64_INS_AUTDZA:
-  case AARCH64_INS_AUTDB:
-  case AARCH64_INS_AUTDZB: {
-    if (ARM64.op_count >= 1) {
-      NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      S.emitIntrinsic(Insn->id == AARCH64_INS_AUTDA ||
-                              Insn->id == AARCH64_INS_AUTDZA
-                          ? Intrinsic::Autda
-                          : Intrinsic::Autdb,
-                      Dst);
-    }
-    break;
-  }
-
-  // PACIA/PACIB/PACDA/PACDB — additional PAC variants.
-  case AARCH64_INS_PACDA:
-  case AARCH64_INS_PACDZA:
-  case AARCH64_INS_PACDB:
-  case AARCH64_INS_PACDZB: {
-    if (ARM64.op_count >= 1) {
-      NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      S.emitIntrinsic(Insn->id == AARCH64_INS_PACDA ||
-                              Insn->id == AARCH64_INS_PACDZA
-                          ? Intrinsic::Pacda
-                          : Intrinsic::Pacdb,
-                      Dst);
-    }
-    break;
-  }
-
-  // XPACD — strip PAC from data pointer.
-  case AARCH64_INS_XPACD: {
-    if (ARM64.op_count >= 1) {
-      NdVar Dst = L.operandWrite(ARM64.operands[0]);
-      S.emitIntrinsic(Intrinsic::Xpacd, Dst);
-    }
     break;
   }
 
@@ -273,74 +234,18 @@ bool liftPacFlags(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   // ========================================================================
   // PAC Extended variants (ARMv8.3+)
   // ========================================================================
-  case AARCH64_INS_BLRAA:
-  case AARCH64_INS_BLRAB: {
-    if (ARM64.op_count < 1)
-      break;
-    NdVar Target = L.operandRead(S, ARM64.operands[0]);
-    S.emit(NdOp::COPY, NdVar::reg(a64reg::X30, 8), {NdVar::cst(S.Addr + 4, 8)});
-    S.emit(NdOp::INDIR_CALL, NdVar::reg(a64reg::X0, 8), {Target});
-    break;
-  }
-  case AARCH64_INS_BLRAAZ:
-  case AARCH64_INS_BLRABZ: {
-    if (ARM64.op_count < 1)
-      break;
-    NdVar Target = L.operandRead(S, ARM64.operands[0]);
-    S.emit(NdOp::COPY, NdVar::reg(a64reg::X30, 8), {NdVar::cst(S.Addr + 4, 8)});
-    S.emit(NdOp::INDIR_CALL, NdVar::reg(a64reg::X0, 8), {Target});
-    break;
-  }
-  case AARCH64_INS_BRAA:
-  case AARCH64_INS_BRAB: {
-    if (ARM64.op_count < 1)
-      break;
-    NdVar Target = L.operandRead(S, ARM64.operands[0]);
-    S.emit(NdOp::INDIR_BR, {}, {Target});
-    break;
-  }
-  case AARCH64_INS_BRAAZ:
-  case AARCH64_INS_BRABZ: {
-    if (ARM64.op_count < 1)
-      break;
-    NdVar Target = L.operandRead(S, ARM64.operands[0]);
-    S.emit(NdOp::INDIR_BR, {}, {Target});
-    break;
-  }
-  case AARCH64_INS_RETAA:
-  case AARCH64_INS_RETAB:
-  case AARCH64_INS_RETAASPPC:
-  case AARCH64_INS_RETABSPPC:
-    S.emit(NdOp::RETURN, {}, {NdVar::reg(a64reg::X30, 8)});
-    break;
-  case AARCH64_INS_ERETAA:
-  case AARCH64_INS_ERETAB:
-    S.emitIntrinsic(Intrinsic::Eret);
-    break;
-  case AARCH64_INS_AUTIA171615:
-  case AARCH64_INS_AUTIASPPC:
-    S.emitIntrinsic(Intrinsic::Autia);
-    break;
-  case AARCH64_INS_AUTIB171615:
-  case AARCH64_INS_AUTIBSPPC:
-    S.emitIntrinsic(Intrinsic::Autib);
-    break;
-  case AARCH64_INS_PACIA171615:
-  case AARCH64_INS_PACIASPPC:
-  case AARCH64_INS_PACNBIASPPC:
-    S.emitIntrinsic(Intrinsic::Pacia);
-    break;
-  case AARCH64_INS_PACIB171615:
-  case AARCH64_INS_PACIBSPPC:
-  case AARCH64_INS_PACNBIBSPPC:
-    S.emitIntrinsic(Intrinsic::Pacib);
-    break;
   case AARCH64_INS_PACGA: {
-    if (ARM64.op_count < 3)
-      break;
+    if (ARM64.op_count != 3 || ARM64.operands[0].type != AARCH64_OP_REG ||
+        ARM64.operands[1].type != AARCH64_OP_REG ||
+        ARM64.operands[2].type != AARCH64_OP_REG)
+      throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
     NdVar Dst = L.operandWrite(ARM64.operands[0]);
     NdVar A = L.operandRead(S, ARM64.operands[1]);
     NdVar B = L.operandRead(S, ARM64.operands[2]);
+    if (Dst.Size != kAArch64PAuthPointerBytes ||
+        A.Size != kAArch64PAuthPointerBytes ||
+        B.Size != kAArch64PAuthPointerBytes)
+      throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
     S.emitIntrinsic(Intrinsic::A64_Pacga, Dst, {A, B});
     break;
   }

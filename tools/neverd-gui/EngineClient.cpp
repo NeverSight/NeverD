@@ -131,6 +131,19 @@ void WorkerTransport::stop() {
   diagnostics_.clear();
 }
 
+void WorkerTransport::shutdown() {
+  if (process_ && process_->state() != QProcess::NotRunning) {
+    process_->disconnect(this);
+    // EOF lets the worker retire queued reads and flush disposable facts on
+    // clean application exit. Restart/cancellation still uses immediate stop.
+    process_->closeWriteChannel();
+    process_->waitForFinished(
+        ::neverd::limits::gui::
+            kEngineClientWorkerTransportStopWaitForFinishedMilliseconds);
+  }
+  stop();
+}
+
 EngineClient::EngineClient(QObject *parent)
     : QObject(parent), transport_(new WorkerTransport) {
   transport_->moveToThread(&thread_);
@@ -164,7 +177,7 @@ EngineClient::EngineClient(QObject *parent)
 }
 
 EngineClient::~EngineClient() {
-  QMetaObject::invokeMethod(transport_, &WorkerTransport::stop,
+  QMetaObject::invokeMethod(transport_, &WorkerTransport::shutdown,
                             Qt::BlockingQueuedConnection);
   thread_.quit();
   thread_.wait();

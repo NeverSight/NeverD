@@ -17,16 +17,19 @@
 
 #include "neverd/ir/low/CFGBuilder.h"
 
+#include "PrologueStackAllocation.h"
+#include "X86/FrameEffects.h"
 #include "X86/RegistrationSEHControl.h"
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
 #include "neverd/ir/low/RegistrationABI.h"
-#include "neverd/lift/ARMRegs.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
@@ -431,13 +434,19 @@ void transferStackOffsets(const StackFrameModel &M, const LowOp &Op,
 /// preserve it. ABI register preservation does not bound a callee's stores.
 bool mayWriteOwnReturnSlot(const StackFrameModel &M, const LowOp &Op,
                            const StackOffsetState &State) {
-  if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-      Op.Opcode == NdOp::INTRINSIC)
+  if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
     return true;
-  if (Op.Opcode != NdOp::STORE && Op.Opcode != NdOp::ATOMIC_XCHG &&
-      Op.Opcode != NdOp::ATOMIC_ADD && Op.Opcode != NdOp::ATOMIC_CMPXCHG)
-    return false;
-  const auto Memory = lowMemoryOperands(Op);
+  LowMemoryOperandView Memory;
+  if (Op.Opcode == NdOp::INTRINSIC) {
+    if (isX86FrameReadIntrinsic(Op, M.TRI->TheArch))
+      return false;
+    Memory = x86FrameStateStore(Op, M.TRI->TheArch);
+  } else {
+    if (Op.Opcode != NdOp::STORE && Op.Opcode != NdOp::ATOMIC_XCHG &&
+        Op.Opcode != NdOp::ATOMIC_ADD && Op.Opcode != NdOp::ATOMIC_CMPXCHG)
+      return false;
+    Memory = lowMemoryOperands(Op);
+  }
   if (!Memory.Complete || !Memory.Address ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       (Memory.Address->Size != M.Width &&
@@ -638,6 +647,112 @@ bool CFGBuilder::codeFollowsTrap(const Decoder &Dec, va_t Next) {
   }
 }
 
+std::set<va_t>
+CFGBuilder::proveClosedOwnSubroutines(const BinaryImage &Img) const {
+  if (Img.Arch != Arch::X64 || OwnInteriorCallSites.empty())
+    return {};
+  const auto *Owner = Img.ExceptionMetadata.findFunction(CurrentFuncEntry);
+  if (!Owner || Owner->Kind != RuntimeFunctionKind::Primary ||
+      Owner->CodeRange.Begin != CurrentFuncEntry ||
+      !Owner->describesUnwindOnly() ||
+      !exceptionEncodingBoundsOneFunction(Owner->Encoding) ||
+      Owner->CodeRange.End <= CurrentFuncEntry ||
+      Owner->CodeRange.End - CurrentFuncEntry >
+          limits::ir::kOwnInteriorReturnProofBytes ||
+      OwnInteriorCallSites.size() >=
+          limits::ir::kOwnInteriorReturnProofFunctions)
+    return {};
+  std::set<va_t> Entries{CurrentFuncEntry};
+  for (const auto &[Target, Sites] : OwnInteriorCallSites) {
+    if (!Owner->CodeRange.contains(Target))
+      return {};
+    Entries.insert(Target);
+  }
+  Decoder Dec;
+  if (!Dec.init(Img))
+    return {};
+  StackFrameModel Model(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  Model.CallsKeepStackPointer = true;
+  for (va_t Entry : Entries) {
+    CFGBuilder Builder;
+    Builder.SkipCalleeRegisterProofs = true;
+    Builder.setKnownFuncEntries(&Entries);
+    Builder.setExecutableCodeOwnerIndex(ExecutableCodeOwners);
+    const LowFunc Body = Builder.buildIntegerFrameProof(Img, Dec, Entry, "");
+    if (Body.Blocks.empty() || !Body.hasCompleteLiftCoverage() ||
+        !Body.UnsafeIndirectBranchAddresses.empty())
+      return {};
+    std::vector<std::optional<StackOffsetState>> In(Body.Blocks.size());
+    In.front() = StackOffsetState{{Model.StackPointer, {0, 0, 0}}};
+    solveStackOffsets(Model, Body, In);
+    bool HasReturn = false;
+    for (size_t B = 0; B < Body.Blocks.size(); ++B) {
+      const auto &Block = Body.Blocks[B];
+      if (!In[B] || !Owner->CodeRange.contains(Block.StartAddr) ||
+          Block.EndAddr > Owner->CodeRange.End ||
+          !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
+        return {};
+      StackOffsetState State = *In[B];
+      bool Returns = false;
+      for (const LowOp &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INDIR_BR ||
+            Op.Opcode == NdOp::INTRINSIC)
+          return {};
+        if (Op.Output.isReg() && Op.Output.Offset != Model.TRI->StackPointer &&
+            Model.TRI->isCallPreserved(Op.Output.Offset, Op.Output.Size,
+                                       Model.Format))
+          return {}; // No invented ordinary ABI for a custom register helper.
+        const auto SP = State.find(Model.StackPointer);
+        if (Op.Opcode == NdOp::CALL) {
+          // Simultaneous induction over the closed group: every callee can
+          // write only below its entry SP, and returns through its unchanged
+          // entry PC. No assumption about an external callee enters the proof.
+          if (!Op.NumInputs || !Op.Inputs[0].isConst() ||
+              !Entries.count(Op.Inputs[0].Offset) || SP == State.end() ||
+              SP->second.Base != 0 || SP->second.Hi > 0)
+            return {};
+        } else if (Op.Opcode == NdOp::RETURN) {
+          if (SP == State.end() || SP->second != StackOffsetRange{0, 0, 0})
+            return {};
+          const Segment *Segment = Img.getSegmentFor(Op.Addr);
+          if (!Segment || Op.Addr < Segment->VA ||
+              Op.Addr - Segment->VA >= Segment->Data.size())
+            return {};
+          const uint8_t Opcode = Segment->Data[Op.Addr - Segment->VA];
+          // A synthetic tail return belongs to a direct CALL in this group;
+          // all physical returns must be the plain full-width near RET.
+          const bool Tail = llvm::any_of(Block.Ops, [&](const LowOp &Call) {
+            return Call.Addr == Op.Addr && Call.Opcode == NdOp::CALL;
+          });
+          if (Opcode != 0xC3 && !Tail)
+            return {};
+          Returns = HasReturn = true;
+        } else if (Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
+                   Op.Opcode == NdOp::ATOMIC_ADD ||
+                   Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
+          const auto Memory = lowMemoryOperands(Op);
+          if (!Memory.Complete || !Memory.Address ||
+              Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+            return {};
+          const auto Address =
+              State.find({Memory.Address->Space, Memory.Address->Offset,
+                          Memory.Address->Size});
+          if (Address == State.end() || Address->second.Base != 0 ||
+              Address->second.Hi > -int64_t(Memory.AccessSize))
+            return {};
+        }
+        transferStackOffsets(Model, Op, State);
+      }
+      if (Block.Succs.empty() && !Returns)
+        return {};
+    }
+    if (!HasReturn)
+      return {};
+  }
+  Entries.erase(CurrentFuncEntry);
+  return Entries;
+}
+
 CFGBuilder::OwnInteriorCallVerdict
 CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
                                      const LowFunc &Func) const {
@@ -645,7 +760,8 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   const size_t N = Func.Blocks.size();
   if (N == 0)
     return Verdict;
-  const StackFrameModel M(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  StackFrameModel M(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  M.CallsKeepStackPointer = Img.Arch == Arch::X64;
   const StackOffsetKey &StackPointerKey = M.StackPointer;
   // Offsets from the entry stack pointer.  Any other root, including a block
   // an exceptional edge enters, starts with nothing known.
@@ -661,8 +777,11 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   for (size_t B = 0; B < N; ++B)
     BlockAt[Func.Blocks[B].StartAddr] = B;
   auto StateBefore = [&](va_t Addr) -> std::optional<StackOffsetState> {
+    const auto Exact = BlockAt.find(Addr);
     for (size_t B = 0; B < N; ++B) {
       const LowBlock &Block = Func.Blocks[B];
+      if (Exact != BlockAt.end() && Exact->second != B)
+        continue;
       if (Addr < Block.StartAddr || Addr >= Block.EndAddr)
         continue;
       if (!FromEntry[B])
@@ -699,8 +818,97 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
     if (!Verdict.Unproven)
       Verdict.Unproven = Addr;
   };
+  // A direct tail call lifts as `call target; ret`. Where the target is
+  // proved never to return, as this build's own calls are, that RET never
+  // executes: the path ends there without popping anything.
+  auto EndsInNoReturnTail = [&](const LowOp &Op) {
+    if (Op.Opcode != NdOp::RETURN)
+      return false;
+    const auto It = Insns.find(Op.Addr);
+    return It != Insns.end() && It->second.IsCall && It->second.IsRet &&
+           !It->second.IsIndirect && It->second.Immediate &&
+           calleeNeverReturns(Img, *It->second.Immediate, NoReturnTargets,
+                              NoReturnCallees, NoReturnCalleeDepth);
+  };
 
-  std::vector<bool> ReachedByAny(N, false);
+  // A retpoline replaces an internal call's pushed PC, then pops it as an
+  // indirect tail transfer. Prove the architectural slot and the enclosing
+  // ABI stack independently: a matching SP alone says nothing about either
+  // PC. Keep the STORE and the eventual LOAD, including their fault effects.
+  if (Img.Arch == Arch::X64 && Func.hasCompleteLiftCoverage())
+    for (size_t B = 0; B < N; ++B) {
+      const auto &Block = Func.Blocks[B];
+      if (!FromEntry[B] || Block.Ops.empty())
+        continue;
+      const va_t Address = Block.Ops.back().Addr;
+      if (Block.Ops.back().Opcode != NdOp::RETURN)
+        continue;
+      const auto *Segment = Img.getSegmentFor(Address);
+      if (!Segment || Address < Segment->VA ||
+          Address - Segment->VA >= Segment->Data.size() ||
+          Segment->Data[Address - Segment->VA] != 0xc3 ||
+          Block.EndAddr != Address + 1)
+        continue;
+      size_t ReturnIndex = Block.Ops.size() - 1;
+      while (ReturnIndex && Block.Ops[ReturnIndex - 1].Addr == Address)
+        --ReturnIndex;
+      if (!ReturnIndex)
+        continue;
+      const LowOp &Store = Block.Ops[ReturnIndex - 1];
+      if (Store.Opcode != NdOp::STORE || Store.NumInputs != 2 ||
+          Store.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+          Store.Inputs[1].Size != M.Width || !Store.Inputs[1].isReg())
+        continue;
+      StackOffsetState Before = *FromEntry[B];
+      for (size_t I = 0; I + 1 < ReturnIndex; ++I)
+        transferStackOffsets(M, Block.Ops[I], Before);
+      const auto Slot =
+          Before.find({Store.Inputs[0].Space, Store.Inputs[0].Offset,
+                       Store.Inputs[0].Size});
+      const auto SP = Before.find(StackPointerKey);
+      const StackOffsetRange PushedSlot{0, -int64_t(M.Width),
+                                        -int64_t(M.Width)};
+      if (Slot == Before.end() || SP == Before.end() ||
+          Slot->second != PushedSlot || SP->second != PushedSlot)
+        continue;
+      bool Valid = true;
+      std::vector<bool> Seen(N, false);
+      std::vector<size_t> Pending{B};
+      while (Valid && !Pending.empty()) {
+        const size_t P = Pending.back();
+        Pending.pop_back();
+        if (Seen[P])
+          continue;
+        Seen[P] = true;
+        const LowBlock &Parent = Func.Blocks[P];
+        if (!FromEntry[P] || !Parent.ExceptionalPreds.empty() ||
+            (P != 0 &&
+             (Parent.Preds.empty() ||
+              Func.ModuleAnalysisRoots.count(Parent.StartAddr) ||
+              Func.OrdinaryModuleAnalysisRoots.count(Parent.StartAddr)))) {
+          Valid = false;
+          break;
+        }
+        StackOffsetState State = *FromEntry[P];
+        for (const LowOp &Op : Parent.Ops) {
+          if (P == B && Op.Addr == Address)
+            break;
+          if (mayWriteOwnReturnSlot(M, Op, State)) {
+            Valid = false;
+            break;
+          }
+          transferStackOffsets(M, Op, State);
+        }
+        for (int Pred : Parent.Preds)
+          if (Pred < 0 || size_t(Pred) >= N)
+            Valid = false;
+          else
+            Pending.push_back(size_t(Pred));
+      }
+      if (Valid)
+        Verdict.TailReturns.insert(Address);
+    }
+
   std::set<va_t> NonlocalReturns;
   for (const auto &[Target, Sites] : OwnInteriorCallSites) {
     auto TargetBlock = BlockAt.find(Target);
@@ -746,14 +954,12 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
     if (!Seed)
       continue;
 
-    std::set<va_t> ReplayedReturns;
+    std::set<va_t> ReplayedReturns = Verdict.TailReturns;
     for (const auto &[Address, Return] : OwnInteriorReturns)
       if (Return.Target == Target)
         ReplayedReturns.insert(Address);
     const std::vector<bool> Reached =
         Reach(TargetBlock->second, ReplayedReturns);
-    for (size_t B = 0; B < N; ++B)
-      ReachedByAny[B] = ReachedByAny[B] || Reached[B];
     std::vector<std::optional<StackOffsetState>> FromSlot(N);
     FromSlot[TargetBlock->second] = *Seed;
     solveStackOffsets(M, Func, FromSlot, ReplayedReturns);
@@ -801,6 +1007,12 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
       StackOffsetState Parent =
           FromEntry[B] ? *FromEntry[B] : StackOffsetState{};
       for (const LowOp &Op : Func.Blocks[B].Ops) {
+        if (Op.Seq == 0 && Verdict.TailReturns.count(Op.Addr)) {
+          Discards = true;
+          break;
+        }
+        if (EndsInNoReturnTail(Op))
+          break;
         const bool Replayed = Op.Seq == 0 && ReplayedReturns.count(Op.Addr);
         if (Op.Opcode == NdOp::RETURN || Replayed) {
           auto SP = S.find(StackPointerKey);
@@ -856,7 +1068,7 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
       Valid &= Call != Insns.end();
       const va_t Continuation =
           Call == Insns.end() ? InvalidVA : Call->first + Call->second.Size;
-      const auto *Own = Img.ExceptionMetadata.findFunction(Func.Entry);
+      const auto *Own = Img.ExceptionMetadata.findFunction(*Sites.begin());
       Valid &= Own && Own->CodeRange.contains(Continuation) &&
                Own->describesUnwindOnly();
       std::optional<size_t> Caller;
@@ -904,7 +1116,6 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
         }
       }
       if (Valid) {
-        NonlocalReturns.insert(DiscardingSites.begin(), DiscardingSites.end());
         const OwnInteriorReturn Return{Target, *Sites.begin(), Continuation};
         for (const auto &[Address, Block] : ConsumingSites) {
           const auto [It, New] = Verdict.Returns.emplace(Address, Return);
@@ -916,11 +1127,15 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
     }
     if (Unproven)
       NoteUnproven(*Unproven);
-    else if (ConsumesSlot && !Discards)
-      Verdict.Subroutines.insert(Target);
+    else {
+      NonlocalReturns.insert(DiscardingSites.begin(), DiscardingSites.end());
+      if (ConsumesSlot && !Discards)
+        Verdict.Subroutines.insert(Target);
+    }
   }
 
-  // Abandoning an internal PC does not authorize an arbitrary outer RET.
+  // Abandoning an internal PC does not authorize an arbitrary outer RET or
+  // tail transfer, even when every exit discards the internal slot.
   // The parent's physical PC must still occupy the entry slot and survive
   // every reaching write. This is independent of the internal-slot proof:
   // a write disjoint from that slot can corrupt the parent instead.
@@ -930,6 +1145,15 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
     for (size_t B = 0; B < N; ++B) {
       StackOffsetState S = FromEntry[B] ? *FromEntry[B] : StackOffsetState{};
       for (const LowOp &Op : Func.Blocks[B].Ops) {
+        if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+            NonlocalReturns.count(Op.Addr)) {
+          const auto Insn = Insns.find(Op.Addr);
+          // The CALL in a JMP's CALL + RETURN representation does not execute
+          // before the transfer. Check the physical PC and stack at entry to
+          // the target, before a real callee could write or pop arguments.
+          if (Insn != Insns.end() && Insn->second.IsCall && Insn->second.IsRet)
+            continue;
+        }
         if (Op.Opcode == NdOp::RETURN && NonlocalReturns.count(Op.Addr) &&
             !Verdict.Returns.count(Op.Addr)) {
           const auto SP = S.find(StackPointerKey);
@@ -965,26 +1189,6 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
     }
   }
 
-  // Whatever the targets do with their own slots, a return they lead to
-  // below the entry stack pointer pops something this function pushed.
-  for (size_t B = 0; B < N && !Verdict.Unproven; ++B) {
-    if (!ReachedByAny[B] || !FromEntry[B])
-      continue;
-    StackOffsetState S = *FromEntry[B];
-    for (const LowOp &Op : Func.Blocks[B].Ops) {
-      if (Op.Opcode == NdOp::RETURN) {
-        if (Verdict.Returns.count(Op.Addr))
-          continue;
-        auto SP = S.find(StackPointerKey);
-        if (SP != S.end() && SP->second.Base == 0 && SP->second.Hi < 0) {
-          NoteUnproven(Op.Addr);
-          break;
-        }
-        continue;
-      }
-      transferStackOffsets(M, Op, S);
-    }
-  }
   return Verdict;
 }
 
@@ -998,6 +1202,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   // Anything else makes the return that breaks the proof unsupported.
   KeptOwnInteriorCallTargets.clear();
   OwnInteriorReturns.clear();
+  OwnInteriorTailReturns.clear();
   RegistrationCallees.reset();
   X87CallEffects.reset();
   for (;;) {
@@ -1005,6 +1210,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
     if (OwnInteriorCallSites.empty())
       return Func;
     OwnInteriorCallVerdict Verdict = classifyOwnInteriorCalls(Img, Func);
+    for (va_t Address : OwnInteriorTailReturns)
+      if (!Verdict.TailReturns.count(Address))
+        Verdict.Unproven = Address;
     for (const auto &[Address, Return] : OwnInteriorReturns)
       if (auto It = Verdict.Returns.find(Address);
           It == Verdict.Returns.end() || It->second != Return)
@@ -1014,11 +1222,17 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                                         Verdict.Subroutines.end());
       continue;
     }
-    if (!Verdict.Unproven && Verdict.Returns != OwnInteriorReturns) {
+    if (!Verdict.Unproven && (Verdict.Returns != OwnInteriorReturns ||
+                              Verdict.TailReturns != OwnInteriorTailReturns)) {
       OwnInteriorReturns = std::move(Verdict.Returns);
+      OwnInteriorTailReturns = std::move(Verdict.TailReturns);
       continue;
     }
     if (Verdict.Unproven) {
+      if (const auto Closed = proveClosedOwnSubroutines(Img); !Closed.empty()) {
+        KeptOwnInteriorCallTargets.insert(Closed.begin(), Closed.end());
+        continue;
+      }
       Func.UnprovenReturnAddresses.push_back(*Verdict.Unproven);
       if (!llvm::is_contained(Func.UnsupportedInstructionAddresses,
                               *Verdict.Unproven))
@@ -1096,6 +1310,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   JumpTableProofContextComplete = false;
   RequestedCompleteJumpTableProof = false;
   PersistentCFGRoots.clear();
+  CalleePreservedGPRs.clear();
   OrdinaryCFGRoots.clear();
   DurableCFGRoots.clear();
   CurrentExceptionalEntries.clear();
@@ -1129,6 +1344,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   LiftedInstructionAddresses.clear();
   DecodeFailureAddresses.clear();
   UnsupportedInstructionAddresses.clear();
+  RemainingX86BoundedLeafWork = limits::kMaxX86BoundedLeafEvidenceWork;
   TruncatedPathAddresses.clear();
   RelocatedInstructionAddressOccurrences.clear();
   I386GetPcOccurrences.clear();
@@ -1365,7 +1581,23 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
 
   rebuildBlocks(Func);
 
+  size_t ScalarBranchWork = limits::kMaxScalarBranchEvidenceWork;
+  ScalarImageFacts ImageScalars;
+  recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork, ImageScalars);
   multiStageResolve(Img, Dec, Func);
+  // Jump-table exploration may add an incoming edge between a constant's
+  // definition and its use. Revalidate against that completed graph, and let
+  // the ordinary resolver reconsider any transfers whose proof was withdrawn.
+  while (recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork,
+                                       ImageScalars))
+    multiStageResolve(Img, Dec, Func);
+
+  size_t ComputedBranchWork = limits::kMaxComputedBranchEvidenceWork;
+  while (recoverComputedScalarBranches(Img, Dec, Func, ComputedBranchWork)) {
+    multiStageResolve(Img, Dec, Func);
+    recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork,
+                                  ImageScalars);
+  }
 
   if (usesAnalysisRecovery())
     recoverAnalysisTables(Img, Dec, Func);
@@ -1381,6 +1613,22 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   completeExactI386GOTBaseModels(Img);
   JumpTableProofContextComplete = false;
 
+  // Scalar proofs have reached their fixed point. An exact independent
+  // target gets the original transfer's call site, as a decoded direct tail
+  // branch does, instead of a synthetic block at the callee's entry. Earlier
+  // CFG changes can withdraw a proof only while it remains a branch.
+  bool ScalarTailCalls = false;
+  for (auto &[Addr, Rec] : Insns)
+    if (Rec.ScalarBranchInput && Rec.IsBranch && !Rec.IsIndirect &&
+        isTailCallTarget(Rec.BranchTarget) &&
+        !isBackwardSharedEpilogue(Img, CurrentFuncEntry, Addr, Rec.BranchTarget,
+                                  KnownFuncEntries)) {
+      rewriteAsTailCall(Rec);
+      Rec.ScalarBranchInput.reset();
+      ScalarTailCalls = true;
+    }
+  if (ScalarTailCalls)
+    rebuildBlocks(Func);
   convertIndirectTailCalls(Func);
   closeRegistrationCxxContinuations(Img, Dec, Func);
 
@@ -1663,10 +1911,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         DereferenceRec->second.IsResumableTerminator ||
         Dereference->Opcode != Occurrence.DereferenceOpcode ||
         (Dereference->Opcode != NdOp::LOAD &&
-         Dereference->Opcode != NdOp::STORE))
+         Dereference->Opcode != NdOp::STORE &&
+         !lowAArch64AddressMemoryShapeIsValid(*Dereference) &&
+         !lowAArch64WritebackMemoryShapeIsValid(*Dereference)))
       return false;
     NdVar DereferenceAddress = Current;
     bool SawDereference = false;
+    LowImageBaseMemoryWitness Memory;
     bool SawFinalArithmetic =
         DereferenceRec->second.Addr != Final.InstructionAddr;
     for (const LowOp &Op : DereferenceRec->second.Ops) {
@@ -1677,16 +1928,23 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         }
         continue;
       }
-      const LowMemoryOperandView CandidateMemory = lowMemoryOperands(Op);
       if (&Op == Dereference) {
-        if (!CandidateMemory.Complete || !CandidateMemory.Address ||
-            *CandidateMemory.Address != DereferenceAddress || SawDereference ||
+        Memory = lowImageBaseMemoryWitness(Img, Op, Address,
+                                           Occurrence.TargetOwnerVA);
+        if (!Memory.Complete || !Memory.Base ||
+            *Memory.Base != DereferenceAddress || SawDereference ||
             proofValueClobbers(Op.Output, Current))
           return false;
         SawDereference = true;
         continue;
       }
-      if (CandidateMemory.Complete || proofValueClobbers(Op.Output, Current))
+      if (SawDereference && lowImageBaseMemoryWritebackCommit(
+                                Op, Dereference, DereferenceRec->second.Ops))
+        continue;
+      if (lowMemoryOperands(Op).Complete ||
+          lowAArch64WritebackMemoryShapeIsValid(Op) ||
+          lowAArch64AddressMemoryShapeIsValid(Op) ||
+          proofValueClobbers(Op.Output, Current))
         return false;
       if (!SawDereference) {
         if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
@@ -1698,11 +1956,10 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         DereferenceAddress = Op.Output;
       }
     }
-    const LowMemoryOperandView Memory = lowMemoryOperands(*Dereference);
     if (!SawFinalArithmetic || !SawDereference || !Memory.Complete ||
-        !Memory.Address ||
+        !Memory.Base ||
         DereferenceAddress != Occurrence.DereferenceAddressWitness ||
-        *Memory.Address != DereferenceAddress ||
+        *Memory.Base != DereferenceAddress ||
         Memory.AccessSize != Occurrence.DereferenceAccessSize ||
         Memory.AccessSize == 0 || Memory.AccessSize - 1 > InvalidVA - Address)
       return false;
@@ -1954,6 +2211,20 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
       AddAttempted(Rec.Addr + Rec.Size);
   }
 
+  // Pending leaves belong to the final graph: an intermediate unresolved
+  // selector must not poison a later complete proof, and added edges can
+  // revoke an earlier specialization. Raw decoded instruction records stay
+  // pending across every rebuild.
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+          Op.Inputs[0].isConst() &&
+          isX86BoundedLeafPending(
+              static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+        UnsupportedInstructionAddresses.insert(Op.Addr);
+        LiftedInstructionAddresses.erase(Op.Addr);
+      }
+
   Func.DecodedInstructionCount = static_cast<uint64_t>(std::count_if(
       DecodedInstructionAddresses.begin(), DecodedInstructionAddresses.end(),
       [&](va_t Address) { return FinalAttemptedAddresses.count(Address); }));
@@ -1970,6 +2241,10 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   PublishFailures(UnsupportedInstructionAddresses,
                   Func.UnsupportedInstructionAddresses);
   PublishFailures(TruncatedPathAddresses, Func.TruncatedPathAddresses);
+  for (const auto &[Addr, Rec] : Insns)
+    if ((Rec.RejectedScalarBranch || Rec.RejectedComputedTargets) &&
+        ReachableInsnAddrs.count(Addr))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (UnsafeJumpTableBranches)
     for (va_t Addr : *UnsafeJumpTableBranches)
       if (Insns.count(Addr))
@@ -2028,6 +2303,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
       Table.SuppressibleRelocationSlots.clear();
       Table.AuthenticatedTableLoads.clear();
     }
+  canonicalizePrologueStackAllocation(Img, Func);
   return Func;
 }
 
@@ -2538,6 +2814,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       if (Rec.IsCall && !Rec.IsIndirect && Rec.Immediate)
         rewriteOwnInteriorCall(Img, Rec, Next);
       rewriteOwnInteriorReturn(Img, Rec);
+      rewriteOwnInteriorTailReturn(Img, Rec);
 
       // Keep recursive CFG exploration consistent with the decoder's
       // architecture-specific terminator classification.  Trap instructions
@@ -2681,6 +2958,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
     Stub.Mode = *Mode;
     Stub.BranchTarget = Entry;
     rewriteAsTailCall(Stub);
+    // This block models an edge into another function, not instructions
+    // decoded at that function's entry. Preserve synthetic provenance through
+    // Low-to-Med lowering; sequence zero would falsely bind the call/return to
+    // an original operation in the callee.
+    for (auto &Op : Stub.Ops)
+      Op.Seq = -1;
     Insns[Entry] = std::move(Stub);
     ExploredAddrs.insert(Entry);
   }
@@ -3290,6 +3573,18 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
           }
         }
 
+        if (CanAuthenticatePageByDereference &&
+            (lowAArch64AddressMemoryShapeIsValid(Op) ||
+             lowAArch64WritebackMemoryShapeIsValid(Op))) {
+          const auto Offset =
+              relativeOffset(Op.Inputs[kAddressMemoryBaseOperand + 1]);
+          if (Offset && *Offset == 0 &&
+              lowImageBaseMemoryWitness(Img, Op, PageBase, OwnerVA).Complete) {
+            ProvedExactDereference = true;
+            break;
+          }
+        }
+
         std::optional<uint64_t> Derived;
         if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
           Derived = relativeOffset(Op.Inputs[0]);
@@ -3719,13 +4014,13 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       // InsnRecord, and the usual all-path value queries remain authoritative.
       const LowOp *LocalArithmetic = nullptr;
       const LowOp *LocalDereference = nullptr;
-      LowMemoryOperandView LocalDereferenceMemory;
+      LowImageBaseMemoryWitness LocalDereferenceMemory;
       NdVar LocalDereferenceAddress;
       int LocalBaseSide = -1;
       NdVar LocalAddressValue = CurrentValue;
       bool InvalidLocalShape = false;
       for (const LowOp &Op : UseRec.Ops) {
-        const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+        const auto Memory = lowImageBaseMemoryWitness(Img, Op, CurrentAddress);
         if (!LocalArithmetic) {
           if (Memory.Complete) {
             InvalidLocalShape = true;
@@ -3771,8 +4066,10 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
 
         if (Memory.Complete) {
           if (LocalDereference ||
-              (Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
-              !Memory.Address || *Memory.Address != LocalAddressValue ||
+              (Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE &&
+               !lowAArch64AddressMemoryShapeIsValid(Op) &&
+               !lowAArch64WritebackMemoryShapeIsValid(Op)) ||
+              !Memory.Base || *Memory.Base != LocalAddressValue ||
               Op.Output == LocalAddressValue ||
               overlapsRegister(Op.Output, LocalAddressValue)) {
             InvalidLocalShape = true;
@@ -3780,7 +4077,7 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
           }
           LocalDereference = &Op;
           LocalDereferenceMemory = Memory;
-          LocalDereferenceAddress = *Memory.Address;
+          LocalDereferenceAddress = *Memory.Base;
           continue;
         }
         if (!LocalDereference && Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
@@ -3790,6 +4087,8 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
           LocalAddressValue = Op.Output;
           continue;
         }
+        if (lowImageBaseMemoryWritebackCommit(Op, LocalDereference, UseRec.Ops))
+          continue;
         if (!LocalDereference || Op.Output == LocalAddressValue ||
             overlapsRegister(Op.Output, LocalAddressValue)) {
           InvalidLocalShape = true;
@@ -3874,7 +4173,8 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       if (Arithmetic && BaseSide >= 0) {
         bool InvalidStep = false;
         for (const LowOp &Op : UseRec.Ops) {
-          const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+          const auto Memory =
+              lowImageBaseMemoryWitness(Img, Op, CurrentAddress);
           if (Memory.Complete ||
               (&Op != Arithmetic &&
                (overlapsRegister(Op.Output, CurrentValue) ||
@@ -3911,14 +4211,16 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       if (Steps.empty())
         break;
       const LowOp *Dereference = nullptr;
-      LowMemoryOperandView DereferenceMemory;
+      LowImageBaseMemoryWitness DereferenceMemory;
       NdVar DereferenceAddress = CurrentValue;
       bool InvalidDereference = false;
       for (const LowOp &Op : UseRec.Ops) {
-        const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+        const auto Memory = lowImageBaseMemoryWitness(Img, Op, CurrentAddress);
         if (Memory.Complete) {
-          if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE) ||
-              !Memory.Address || *Memory.Address != DereferenceAddress ||
+          if ((Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE &&
+               !lowAArch64AddressMemoryShapeIsValid(Op) &&
+               !lowAArch64WritebackMemoryShapeIsValid(Op)) ||
+              !Memory.Base || *Memory.Base != DereferenceAddress ||
               Dereference) {
             InvalidDereference = true;
             break;
@@ -3943,6 +4245,8 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
           }
           DereferenceAddress = Op.Output;
         }
+        if (lowImageBaseMemoryWritebackCommit(Op, Dereference, UseRec.Ops))
+          continue;
         if (overlapsRegister(Op.Output, CurrentValue)) {
           InvalidDereference = true;
           break;
@@ -4308,7 +4612,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   auto RememberPublishedJumpTables = [&]() {
     for (const auto &[Addr, Rec] : Insns)
       if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall &&
-          !Rec.JumpTableTargets.empty())
+          !Rec.ScalarBranchInput && !Rec.JumpTableTargets.empty())
         EverPublishedJumpTableBranches.insert(Addr);
   };
   RememberPublishedJumpTables();
@@ -4780,7 +5084,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     }
     CandidateAddrs.reserve(Insns.size());
     for (auto &[Addr, Rec] : Insns) {
-      if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
+      if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall ||
+          Rec.ComputedScalarTargets || Rec.RejectedComputedTargets ||
+          Rec.ScalarBranchInput)
         continue;
       auto Info = ResolvedTableInfo.find(Addr);
       const bool NeedsRevalidation = Info != ResolvedTableInfo.end() &&
@@ -5888,6 +6194,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       bool RemovedTableEdges = false;
       for (auto &[Addr, Rec] : Insns) {
         (void)Addr;
+        if (Rec.ScalarBranchInput)
+          continue;
         RemovedTableEdges |= !Rec.JumpTableTargets.empty();
         Rec.JumpTableTargets.clear();
       }

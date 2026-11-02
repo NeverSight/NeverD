@@ -146,11 +146,9 @@ if(WIN32)
 endif()
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebBrotli.cmake")
 neverd_add_web_brotli()
-find_package(ZLIB QUIET)
-if(ZLIB_FOUND)
-  target_link_libraries(NeverDWeb PRIVATE ZLIB::ZLIB)
-  target_compile_definitions(NeverDWeb PRIVATE NEVERD_WEB_ZLIB=1)
-endif()
+include(${CMAKE_SOURCE_DIR}/cmake/NeverDZlib.cmake)
+target_link_libraries(NeverDWeb PRIVATE ZLIB::ZLIB)
+target_compile_definitions(NeverDWeb PRIVATE NEVERD_WEB_ZLIB=1)
 # LLVM builds with Zstd remain the preferred decoder. A prebuilt LLVM package
 # may omit it; use only the pinned static SDK as an optional in-process fallback.
 # The existing format reader still owns framing and resource admission.
@@ -200,6 +198,7 @@ if(NEVERD_ENABLE_WEB_JAVASCRIPT)
   include("${CMAKE_SOURCE_DIR}/cmake/NeverDJavaScriptParser.cmake")
   neverd_add_javascript_parser()
   target_sources(NeverDWeb PRIVATE SourceParser.cpp ParserBudget.cpp
+    BunProject.cpp BunProjectSource.cpp BunProjectRequire.cpp BunSemanticIndex.cpp
     desktop/bridge/Source.cpp
     features/configuration/Analysis.cpp
     features/configuration/Files.cpp

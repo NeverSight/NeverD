@@ -16,7 +16,13 @@
 
 #include "neverd/symbolic/SymExpr.h"
 
+#include <algorithm>
+#include <array>
 #include <random>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace neverd::symbolic;
 
@@ -35,6 +41,143 @@ TEST(SymExpr, InterningMakesStructuralEqualityAPointerCompare) {
   EXPECT_EQ(Ctx.mkConst(W32, 7), Ctx.mkConst(W32, 7));
   // Same value, different width, different node.
   EXPECT_NE(Ctx.mkConst(W32, 7), Ctx.mkConst(8, 7));
+}
+
+TEST(SymExpr, NativeLiteralOverloadsKeepEveryWidthAndWordBoundary) {
+  SymContext Ctx;
+  std::mt19937_64 Random(0x6e6174697665636f);
+  for (unsigned Width = 1; Width <= 257; ++Width)
+    for (unsigned I = 0; I < 12; ++I) {
+      const auto Value = I == 0   ? uint64_t(0)
+                         : I == 1 ? ~uint64_t(0)
+                                  : Random();
+      const llvm::APInt Expected(Width, Value, false, true);
+      const auto Literal = Ctx.mkConst(Width, Value);
+      EXPECT_EQ(Ctx.constValue(Literal), Expected);
+      EXPECT_EQ(Literal, Ctx.mkConst(Expected));
+      SymEvalPlan Plan(Ctx, Literal);
+      EXPECT_EQ(Plan.numSteps(), 1u);
+      EXPECT_EQ(Plan.eval({}), Expected);
+      if (Width <= 64) {
+        EXPECT_EQ(Plan.evalU64({}), Expected.getZExtValue());
+        EXPECT_EQ(Plan.evalU64With([](uint32_t) {
+          ADD_FAILURE() << "a constant plan must not request an input";
+          return uint64_t(0);
+        }),
+                  Expected.getZExtValue());
+      }
+    }
+}
+
+TEST(SymExpr, InterningRetainsFullIdentityAcrossGrowthCopyAndMove) {
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", 64);
+  const auto WideValue = llvm::APInt::getOneBitSet(128, 100);
+  const auto Wide = Ctx.mkConst(WideValue);
+  // These literals exercise hashes zero, UINT64_MAX, UINT64_MAX-1 and
+  // 0xfffffffefffffffe, plus exact collisions with the variable and the first
+  // wide literal. A hash match must never substitute for full identity.
+  const std::array<uint64_t, 6> Values{
+      0x96c84cbe741a547eULL, 0xfb9ece775e7489a1ULL, 0xfb9ece775e7489a0ULL,
+      0xfb9ece785e7489a0ULL, 0xffffffffffffcfd1ULL, 0xffffffffffffefb0ULL};
+  std::vector<SymRef> Literals;
+  for (auto Value : Values) {
+    const auto R = Ctx.mkConst(64, Value);
+    EXPECT_NE(R, X);
+    EXPECT_NE(R, Wide);
+    for (auto Previous : Literals)
+      EXPECT_NE(R, Previous);
+    Literals.push_back(R);
+  }
+  const auto Sum = Ctx.mkAdd(X, Literals.front());
+  for (uint64_t I = 0; I < 8192; ++I)
+    Ctx.mkAdd(X, Ctx.mkConst(64, I));
+
+  auto Copy = Ctx;
+  auto Moved = std::move(Copy);
+  SymContext Assigned;
+  Assigned = Ctx;
+  for (auto *Context : {&Ctx, &Moved, &Assigned}) {
+    const auto Before = Context->numNodes();
+    EXPECT_EQ(Context->mkVar("x", 64), X);
+    EXPECT_EQ(Context->mkConst(WideValue), Wide);
+    for (size_t I = 0; I < Values.size(); ++I) {
+      EXPECT_EQ(Context->mkConst(64, Values[I]), Literals[I]);
+      EXPECT_EQ(Context->constValue(Literals[I]), llvm::APInt(64, Values[I]));
+    }
+    EXPECT_EQ(Context->mkAdd(X, Literals.front()), Sum);
+    EXPECT_EQ(Context->numNodes(), Before);
+  }
+  Moved.mkVar("after-copy", 64);
+  EXPECT_FALSE(Ctx.hasVarName("after-copy"));
+  EXPECT_FALSE(Assigned.hasVarName("after-copy"));
+}
+
+TEST(SymExpr, CollisionChainsSurviveIndependentCopiesAndOwnerDestruction) {
+  // These different literal identities all have hash 0xfb58cd469c6a459e.
+  constexpr std::array<std::pair<unsigned, uint64_t>, 5> Values{
+      {{16, 0x3c5c}, {24, 0x3e66}, {32, 0x17e8}, {48, 0x13d4}, {64, 0x1000}}};
+  SymContext Original;
+  std::array<SymRef, Values.size()> Refs;
+  for (size_t I = 0; I + 1 < Values.size(); ++I)
+    Refs[I] = Original.mkConst(Values[I].first, Values[I].second);
+  auto Copy = Original;
+  Refs.back() = Copy.mkConst(Values.back().first, Values.back().second);
+  EXPECT_EQ(Original.numNodes(), Values.size() - 1);
+  EXPECT_EQ(Copy.numNodes(), Values.size());
+  Original = SymContext();
+
+  auto Moved = std::move(Copy);
+  const auto X = Moved.mkVar("x", 64);
+  for (uint64_t I = 0; I < 8192; ++I)
+    Moved.mkAdd(X, Moved.mkConst(64, I));
+  SymContext Assigned;
+  Assigned = Moved;
+  Moved = SymContext();
+  const auto Before = Assigned.numNodes();
+  for (size_t I = 0; I < Values.size(); ++I) {
+    const auto [Width, Value] = Values[I];
+    EXPECT_EQ(Assigned.mkConst(Width, Value), Refs[I]);
+    EXPECT_EQ(Assigned.constValue(Refs[I]), llvm::APInt(Width, Value));
+    for (size_t J = 0; J < I; ++J)
+      EXPECT_NE(Refs[I], Refs[J]);
+  }
+  EXPECT_EQ(Assigned.numNodes(), Before);
+}
+
+TEST(SymExpr, LongOperandIdentityPreservesOrderAcrossGrowthAndCopies) {
+  for (unsigned Count : {7u, 8u, 9u, 16u, 65u}) {
+    SCOPED_TRACE(Count);
+    SymContext Ctx;
+    llvm::SmallVector<SymRef, 16> Inputs;
+    for (unsigned I = 0; I < Count; ++I)
+      Inputs.push_back(Ctx.mkVar("byte" + std::to_string(I), 8));
+    const auto Forward = Ctx.mkConcat(Inputs);
+    const auto Sum = Ctx.mkAdd(Inputs);
+    llvm::SmallVector<SymRef, 16> Reversed(Inputs.rbegin(), Inputs.rend());
+    const auto Backward = Ctx.mkConcat(Reversed);
+    EXPECT_NE(Forward, Backward);
+    EXPECT_EQ(Ctx.mkAdd(Reversed), Sum);
+    for (unsigned I = 0; I < 2048; ++I)
+      Ctx.mkVar("growth" + std::to_string(I), 32);
+    auto Copy = Ctx;
+    auto Moved = std::move(Copy);
+    for (auto *Context : {&Ctx, &Moved}) {
+      const auto Before = Context->numNodes();
+      EXPECT_EQ(Context->mkConcat(Inputs), Forward);
+      EXPECT_EQ(Context->mkConcat(Reversed), Backward);
+      EXPECT_EQ(Context->mkAdd(Reversed), Sum);
+      EXPECT_EQ(Context->numNodes(), Before);
+      llvm::APInt Expected(8 * Count, 0);
+      llvm::SmallVector<llvm::APInt, 16> Values;
+      for (unsigned I = 0; I < Count; ++I) {
+        Expected = Expected.shl(8) | (I + 1);
+        Values.emplace_back(8, I + 1);
+      }
+      SymEvalPlan Plan(*Context, Forward);
+      EXPECT_EQ(Plan.eval(Values), Expected);
+    }
+  }
 }
 
 TEST(SymExpr, CommutativeOperandsAreSorted) {
@@ -80,6 +223,51 @@ TEST(SymExpr, SumsCollectLikeTerms) {
   // A shared base with a compound body still collects.
   SymRef XY = Ctx.mkXor(X, Y);
   EXPECT_EQ(Ctx.mkAdd(XY, XY), Ctx.mkMul(Ctx.mkConst(W32, 2), XY));
+}
+
+TEST(SymExpr, SumCollectionKeepsCanonicalOrderAcrossTableGrowth) {
+  std::mt19937_64 Random(0x73756d73);
+  for (unsigned Width : {1u, 7u, 8u, 16u, 32u, 64u, 65u, 257u}) {
+    for (unsigned Count : {1u, 2u, 7u, 8u, 9u, 17u, 65u}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Count);
+      SymContext Ctx;
+      llvm::SmallVector<SymRef, 16> Terms{Ctx.mkConst(Width, 7)};
+      llvm::SmallVector<SymRef, 16> Cancellations;
+      std::vector<llvm::APInt> Coefficients;
+      for (unsigned I = 0; I < Count; ++I) {
+        auto V = Ctx.mkVar("v" + std::to_string(I), Width);
+        llvm::APInt Coefficient(Width, 2 + I % 7, false, true);
+        if (Width > 64)
+          Coefficient.setBit(Width - 1);
+        Terms.push_back(Ctx.mkMul(Ctx.mkConst(Coefficient), V));
+        Terms.push_back(Ctx.mkMul(Ctx.mkConst(Width, 3), Ctx.mkNeg(V)));
+        Coefficients.push_back(Coefficient - 3);
+        auto Shifted = Ctx.mkLShr(V, Ctx.mkConst(32, 1));
+        auto Slice = Ctx.mkAnd(V, Ctx.mkConst(~llvm::APInt(Width, 1)));
+        Cancellations.append({Shifted, Shifted, Ctx.mkNeg(Slice)});
+      }
+      auto Root = Ctx.mkAdd(Terms);
+      for (unsigned Permutation = 0; Permutation < 8; ++Permutation) {
+        std::shuffle(Terms.begin(), Terms.end(), Random);
+        EXPECT_EQ(Ctx.mkAdd(Terms), Root);
+      }
+      // Combining the shift coefficients exposes masks, which must be
+      // collected again against the existing negative masks after growth.
+      EXPECT_EQ(Ctx.mkAdd(Cancellations), Ctx.mkZero(Width));
+      SymEvalPlan Plan(Ctx, Root);
+      for (unsigned Sample = 0; Sample < 32; ++Sample) {
+        std::vector<llvm::APInt> Values;
+        llvm::APInt Expected(Width, 7, false, true);
+        for (unsigned I = 0; I < Count; ++I) {
+          Values.emplace_back(Width, Random(), false, true);
+          if (Width > 64 && (I + Sample) % 2)
+            Values.back().setBit(Width - 1);
+          Expected += Coefficients[I] * Values.back();
+        }
+        EXPECT_EQ(Plan.eval(Values), Expected);
+      }
+    }
+  }
 }
 
 TEST(SymExpr, ShiftsByConstantsBecomeProductsSoSumsCanCollectThem) {
@@ -930,6 +1118,26 @@ TEST(SymExpr, SubstitutionRebuildsThroughTheCanonicalisingBuilders) {
   EXPECT_EQ(Ctx.substituteVar(Sum, Ctx.varId(Y), Ctx.mkZero(W32)), X);
 }
 
+TEST(SymExpr, RebuildingMergedMasksRetainsDemandedSimplification) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    auto C = [&](uint64_t Value) { return Ctx.mkConst(Width, Value); };
+    const auto Sum = Ctx.mkAdd(Ctx.mkAnd(X, C(15)), Ctx.mkAnd(X, C(31)));
+    // Neither sparse mask demands a contiguous prefix. Their union does,
+    // but mask merging deliberately defers that additional normalization.
+    const auto Merged = Ctx.mkOr(Ctx.mkAnd(Sum, C(5)), Ctx.mkAnd(Sum, C(10)));
+    const auto Rebuilt = Ctx.rebuild(Merged, Ctx.operands(Merged));
+    EXPECT_LT(Ctx.readabilityCost(Rebuilt), Ctx.readabilityCost(Merged));
+    SymEvalPlan Plan(Ctx, Rebuilt);
+    for (uint64_t Value = 0; Value < 256; ++Value) {
+      const llvm::APInt Input(Width, Value);
+      EXPECT_EQ(Plan.eval({Input}), llvm::APInt(Width, (2 * Value) & 15));
+    }
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Evaluation
 //===----------------------------------------------------------------------===//
@@ -980,6 +1188,196 @@ TEST(SymExpr, EvaluationPlanReportsTheVariablesItReads) {
   EXPECT_GT(Plan.numSteps(), 0u);
 }
 
+TEST(SymExpr, NativeAssociativeEvaluationMatchesFullWidthArithmetic) {
+  std::mt19937_64 Random(0x6e617279);
+  for (unsigned Width = 1; Width <= 64; ++Width) {
+    for (unsigned Count : {2u, 3u, 8u, 33u}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "width=" << Width << " operands=" << Count);
+      SymContext Ctx;
+      llvm::SmallVector<SymRef, 8> Inputs;
+      for (unsigned I = 0; I < Count; ++I)
+        Inputs.push_back(Ctx.mkVar("v" + std::to_string(I), Width));
+      const std::array Roots{Ctx.mkAdd(Inputs), Ctx.mkMul(Inputs),
+                             Ctx.mkAnd(Inputs), Ctx.mkOr(Inputs),
+                             Ctx.mkXor(Inputs)};
+      for (unsigned Operation = 0; Operation < Roots.size(); ++Operation) {
+        SymEvalPlan Plan(Ctx, Roots[Operation]);
+        for (unsigned Sample = 0; Sample < 64; ++Sample) {
+          std::vector<uint64_t> Values(Count);
+          std::vector<llvm::APInt> Wide;
+          for (auto &Value : Values) {
+            Value = Sample == 0 ? ~uint64_t(0) : Sample == 1 ? 0 : Random();
+            Wide.emplace_back(Width, Value, /*isSigned=*/false,
+                              /*implicitTrunc=*/true);
+          }
+          llvm::APInt Expected = Wide.front();
+          for (unsigned I = 1; I < Count; ++I) {
+            switch (Operation) {
+            case 0:
+              Expected += Wide[I];
+              break;
+            case 1:
+              Expected *= Wide[I];
+              break;
+            case 2:
+              Expected &= Wide[I];
+              break;
+            case 3:
+              Expected |= Wide[I];
+              break;
+            case 4:
+              Expected ^= Wide[I];
+              break;
+            }
+          }
+          EXPECT_EQ(Plan.evalU64(Values), Expected.getZExtValue());
+          EXPECT_EQ(Plan.eval(Wide), Expected);
+        }
+      }
+    }
+  }
+}
+
+TEST(SymExpr, WideConstantSlotsSurviveInterruptedInputLookup) {
+  for (unsigned Width : {8u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto Literal =
+        llvm::APInt(Width, 7) | llvm::APInt::getOneBitSet(Width, Width - 3);
+    const auto Root = Ctx.mkAdd(X, Ctx.mkConst(Literal));
+    SymEvalPlan Plan(Ctx, Root);
+    EXPECT_THROW(Plan.evalWith([](uint32_t) -> const llvm::APInt * {
+      throw std::runtime_error("interrupted lookup");
+    }),
+                 std::runtime_error);
+    for (const auto &Value : {llvm::APInt(Width, 5), llvm::APInt(Width, 0),
+                              llvm::APInt::getAllOnes(Width),
+                              llvm::APInt::getOneBitSet(Width, Width - 1)}) {
+      const auto Actual = Plan.evalWith([&](uint32_t Id) {
+        EXPECT_EQ(Id, Ctx.varId(X));
+        return &Value;
+      });
+      ASSERT_EQ(Actual, Value + Literal);
+    }
+  }
+}
+
+TEST(SymExpr, EvaluationPlansKeepInterleavedConstantSlots) {
+  for (unsigned Width : {8u, 16u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto K = llvm::APInt::getOneBitSet(Width, Width - 1) | 7;
+    const llvm::APInt L(Width, 19), Three(Width, 3);
+    const auto Root =
+        Ctx.mkXor(Ctx.mkAdd(X, Ctx.mkConst(K)),
+                  Ctx.mkMul(Ctx.mkConst(Three), Ctx.mkXor(X, Ctx.mkConst(L))));
+    SymEvalPlan Plan(Ctx, Root);
+    EXPECT_EQ(Plan.numSteps(), Ctx.dagSize(Root));
+    for (const auto &Value : {llvm::APInt(Width, 0), llvm::APInt(Width, 5),
+                              llvm::APInt::getAllOnes(Width),
+                              llvm::APInt::getOneBitSet(Width, Width - 2)}) {
+      const auto Expected = (Value + K) ^ (Three * (Value ^ L));
+      EXPECT_EQ(Plan.evalWith([&](uint32_t) { return &Value; }), Expected);
+      if (Width <= 64)
+        EXPECT_EQ(
+            Plan.evalU64With([&](uint32_t) { return Value.getZExtValue(); }),
+            Expected.getZExtValue());
+    }
+    EXPECT_EQ(
+        Plan.evalWith([](uint32_t) -> const llvm::APInt * { return nullptr; }),
+        K ^ (Three * L));
+  }
+}
+
+TEST(SymExpr, EvaluationPlanKeepsSharedInputsAfterContextGrowth) {
+  for (unsigned Width : {8u, 64u, 65u, 257u}) {
+    SymContext Ctx;
+    auto X = Ctx.mkVar("x", Width);
+    Ctx.mkVar("unused", Width);
+    auto Y = Ctx.mkVar("y", Width);
+    auto Shared = Ctx.mkAdd(X, Ctx.mkMul(Ctx.mkConst(Width, 3), Y));
+    auto Root = Shared;
+    for (unsigned I = 0; I < 40; ++I)
+      Root = Ctx.mkXor(Ctx.mkAdd(Root, Ctx.mkConst(Width, I)), Shared);
+    SymEvalPlan Plan(Ctx, Root);
+    // A plan uses reachable handles, not a prefix of the growing context.
+    for (unsigned I = 0; I < 1024; ++I)
+      Ctx.mkAdd(X, Ctx.mkConst(Width, I));
+    ASSERT_EQ(Plan.vars().size(), 2u);
+    EXPECT_EQ(Plan.vars()[0], Ctx.varId(X));
+    EXPECT_EQ(Plan.vars()[1], Ctx.varId(Y));
+    std::vector<llvm::APInt> Values{llvm::APInt(Width, 197),
+                                    llvm::APInt::getAllOnes(Width),
+                                    llvm::APInt(Width, 211)};
+    const auto Base = Values[0] + 3 * Values[2];
+    auto Want = Base;
+    for (unsigned I = 0; I < 40; ++I)
+      Want = (Want + I) ^ Base;
+    EXPECT_EQ(Plan.eval(Values), Want);
+    unsigned Reads = 0;
+    EXPECT_EQ(Plan.evalWith([&](uint32_t Id) {
+      EXPECT_NE(Id, 1u);
+      ++Reads;
+      return &Values[Id];
+    }),
+              Want);
+    EXPECT_EQ(Reads, 2u);
+    if (Width <= 64) {
+      std::vector<uint64_t> Narrow{197, ~uint64_t(0), 211};
+      EXPECT_EQ(Plan.evalU64(Narrow), Want.getZExtValue());
+    }
+  }
+}
+
+TEST(SymExpr, NativeNormalizedResultsRetainWidthBoundaries) {
+  std::mt19937_64 Random(0x6e6f726d616c);
+  for (unsigned Width = 1; Width <= 64; ++Width) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Shift = Ctx.mkVar("shift", 64);
+    const auto Sum = Ctx.mkAdd(X, Y);
+    const auto Product = Ctx.mkMul(X, Ctx.mkConst(Width, 3));
+    const std::array Roots{
+        Ctx.mkLShr(Sum, Shift), Ctx.mkURem(Sum, Y),
+        Ctx.mkEq(Sum, X),       Ctx.mkUlt(Sum, Y),
+        Ctx.mkUle(Sum, X),      Ctx.mkIte(Ctx.mkEq(X, Y), Product, Sum),
+        Ctx.mkZExt(X, 64)};
+    for (unsigned Operation = 0; Operation < Roots.size(); ++Operation) {
+      SCOPED_TRACE(Operation);
+      SymEvalPlan Plan(Ctx, Roots[Operation]);
+      for (unsigned Trial = 0; Trial < 128; ++Trial) {
+        const std::array<uint64_t, 3> Values{
+            Trial == 0 || Trial == 2 ? ~uint64_t(0) : Random(),
+            Trial < 2    ? 0
+            : Trial == 2 ? ~uint64_t(0)
+                         : Random(),
+            std::array<uint64_t, 5>{0, Width - 1, Width, 64,
+                                    ~uint64_t(0)}[Trial % 5]};
+        const llvm::APInt A(Width, Values[0], false, true);
+        const llvm::APInt B(Width, Values[1], false, true);
+        const auto Total = A + B;
+        const std::array Expected{
+            Values[2] >= Width ? uint64_t(0)
+                               : Total.lshr(unsigned(Values[2])).getZExtValue(),
+            (B.isZero() ? Total : Total.urem(B)).getZExtValue(),
+            uint64_t(Total == A),
+            uint64_t(Total.ult(B)),
+            uint64_t(Total.ule(A)),
+            (A == B ? A * llvm::APInt(Width, 3, false, true) : Total)
+                .getZExtValue(),
+            A.getZExtValue()};
+        EXPECT_EQ(Plan.evalU64(Values), Expected[Operation]);
+        EXPECT_EQ(Plan.evalU64With([&](uint32_t Id) { return Values[Id]; }),
+                  Expected[Operation]);
+      }
+    }
+  }
+}
+
 TEST(SymExpr, U64ArithmeticShiftByZeroKeepsTheWholeWord) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", 64);
@@ -991,6 +1389,308 @@ TEST(SymExpr, U64ArithmeticShiftByZeroKeepsTheWholeWord) {
   Vars[Ctx.varId(X)] = 0x8000000000000001ull;
   Vars[Ctx.varId(Amount)] = 0;
   EXPECT_EQ(Plan.evalU64(Vars), 0x8000000000000001ull);
+}
+
+TEST(SymExpr, ZeroExtendedUnsignedRemaindersUseTheirNarrowOperands) {
+  std::mt19937_64 Random(0x7a65787472656d);
+  for (auto [Left, Right] : {std::pair{1u, 1u},
+                             {4u, 8u},
+                             {8u, 4u},
+                             {16u, 32u},
+                             {32u, 16u},
+                             {64u, 64u},
+                             {65u, 128u},
+                             {257u, 129u}}) {
+    SCOPED_TRACE(::testing::Message() << Left << ':' << Right);
+    const auto Inner = std::max(Left, Right);
+    const auto Outer = 2 * Inner;
+    SymContext C;
+    auto X = C.mkVar("x", Left), Y = C.mkVar("y", Right);
+    auto R = C.mkURem(C.mkZExt(X, Outer), C.mkZExt(Y, Outer));
+    EXPECT_EQ(
+        R, C.mkZExt(C.mkURem(C.mkZExt(X, Inner), C.mkZExt(Y, Inner)), Outer));
+    EXPECT_EQ(C.mkExtract(R, 0, Inner),
+              C.mkURem(C.mkZExt(X, Inner), C.mkZExt(Y, Inner)));
+    SymEvalPlan Plan(C, R);
+    for (unsigned Sample = 0; Sample != 128; ++Sample) {
+      llvm::APInt A(Left, 0), B(Right, 0);
+      for (unsigned Bit = 0; Bit < Left; Bit += 64)
+        A |= llvm::APInt(Left, Random()).shl(Bit);
+      for (unsigned Bit = 0; Bit < Right; Bit += 64)
+        B |= llvm::APInt(Right, Random()).shl(Bit);
+      if (Sample == 0)
+        B.clearAllBits();
+      auto N = A.zextOrTrunc(Inner), D = B.zextOrTrunc(Inner);
+      const auto Oracle = D.isZero() ? N : N.urem(D);
+      const llvm::APInt Values[] = {A, B};
+      EXPECT_EQ(Plan.eval(Values), Oracle.zext(Outer));
+    }
+  }
+}
+
+TEST(SymExpr, ZeroExtendedRemaindersCoverEveryBytePairIncludingZero) {
+  SymContext C;
+  auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  auto R = C.mkURem(C.mkZExt(X, 16), C.mkZExt(Y, 16));
+  SymEvalPlan Plan(C, R);
+  for (unsigned A = 0; A != 256; ++A)
+    for (unsigned B = 0; B != 256; ++B) {
+      const llvm::APInt Values[] = {llvm::APInt(8, A), llvm::APInt(8, B)};
+      const auto Oracle = B ? A % B : A;
+      ASSERT_EQ(Plan.eval(Values), llvm::APInt(16, Oracle));
+    }
+}
+
+TEST(SymExpr, RemainderNarrowingKeepsUnknownHighBitsAndWideDivideByZero) {
+  SymContext C;
+  auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  auto Wide = C.mkVar("wide", 16);
+  auto HighNumerator = C.mkURem(Wide, C.mkZExt(Y, 16));
+  auto HighDivisor = C.mkURem(C.mkZExt(X, 16), Wide);
+  EXPECT_EQ(C.op(HighNumerator), SymOp::URem);
+  EXPECT_EQ(C.op(HighDivisor), SymOp::URem);
+  const llvm::APInt Values[] = {llvm::APInt(8, 255), llvm::APInt(8, 127),
+                                llvm::APInt(16, 257)};
+  EXPECT_EQ(C.eval(HighNumerator, Values), llvm::APInt(16, 3));
+  EXPECT_EQ(C.eval(HighDivisor, Values), llvm::APInt(16, 255));
+  auto Quotient = C.mkUDiv(C.mkZExt(X, 16), C.mkZExt(Y, 16));
+  const llvm::APInt Zero[] = {llvm::APInt(8, 255), llvm::APInt(8, 0),
+                              llvm::APInt(16, 0)};
+  EXPECT_EQ(C.eval(Quotient, Zero), llvm::APInt::getAllOnes(16));
+  EXPECT_NE(Quotient, C.mkZExt(C.mkUDiv(X, Y), 16));
+}
+
+TEST(SymExpr, ScaledUnsignedProductSlicesUseOnlyTheirRequiredWidth) {
+  SymContext C;
+  auto X = C.mkVar("scaled_x", 32), Y = C.mkVar("scaled_y", 32);
+  auto Left =
+      C.mkZExt(C.mkMul(C.mkConst(64, uint64_t(1) << 32), C.mkZExt(X, 64)), 128);
+  auto Right = C.mkZExt(C.mkMul(C.mkConst(64, 256), C.mkZExt(Y, 64)), 128);
+  auto Slice = C.mkExtract(C.mkMul(Left, Right), 64, 64);
+  auto Product = C.mkMul(C.mkZExt(X, 64), C.mkZExt(Y, 64));
+  ASSERT_EQ(Slice, C.mkZExt(C.mkExtract(Product, 24, 40), 64));
+  SymEvalPlan Plan(C, Slice);
+  ASSERT_TRUE(Plan.fitsU64());
+  std::mt19937_64 Random(0x7363616c6564756c);
+  for (unsigned Sample = 0; Sample < 512; ++Sample) {
+    const uint64_t A =
+        Sample < 4 ? (Sample & 1 ? UINT32_MAX : 0) : uint32_t(Random());
+    const uint64_t B =
+        Sample < 4 ? (Sample & 2 ? UINT32_MAX : 0) : uint32_t(Random());
+    const uint64_t Inputs[] = {A, B};
+    EXPECT_EQ(Plan.evalU64(Inputs), (A * B) >> 24);
+  }
+}
+
+TEST(SymExpr, ScaledProductWindowsCoverEveryBytePairAndWideCarriers) {
+  SymContext C;
+  auto X = C.mkVar("byte_x", 8), Y = C.mkVar("byte_y", 8);
+  auto A = C.mkZExt(C.mkMul(C.mkConst(16, 16), C.mkZExt(X, 16)), 32);
+  auto B = C.mkZExt(C.mkMul(C.mkConst(16, 64), C.mkZExt(Y, 16)), 32);
+  auto Slice = C.mkExtract(C.mkMul(A, B), 12, 16);
+  auto Narrow = C.mkMul(C.mkZExt(X, 16), C.mkZExt(Y, 16));
+  ASSERT_EQ(Slice, C.mkZExt(C.mkExtract(Narrow, 2, 14), 16));
+  SymEvalPlan Plan(C, Slice);
+  ASSERT_TRUE(Plan.fitsU64());
+  for (unsigned Left = 0; Left < 256; ++Left)
+    for (unsigned Right = 0; Right < 256; ++Right) {
+      const uint64_t Inputs[] = {Left, Right};
+      ASSERT_EQ(Plan.evalU64(Inputs), (Left * Right) >> 2);
+    }
+  std::mt19937_64 Random(0x70726f6477696465);
+  for (unsigned Width : {1u, 7u, 16u, 32u, 65u, 129u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Wide;
+    auto L = Wide.mkVar("left", Width), R = Wide.mkVar("right", Width);
+    const unsigned Carrier = 4 * Width + 8;
+    auto Product = Wide.mkMul(Wide.mkZExt(L, Carrier), Wide.mkZExt(R, Carrier));
+    auto Result = Wide.mkExtract(Product, Width, 2 * Width);
+    for (unsigned Sample = 0; Sample < 32; ++Sample) {
+      llvm::APInt Left(Width, 0), Right(Width, 0);
+      for (unsigned Bit = 0; Bit < Width; Bit += 64) {
+        Left |= llvm::APInt(Width, Random()).shl(Bit);
+        Right |= llvm::APInt(Width, Random()).shl(Bit);
+      }
+      const llvm::APInt Inputs[] = {Left, Right};
+      auto Oracle = (Left.zext(Carrier) * Right.zext(Carrier))
+                        .extractBits(2 * Width, Width);
+      EXPECT_EQ(Wide.eval(Result, Inputs), Oracle);
+    }
+  }
+}
+
+TEST(SymExpr, ProductWindowsKeepCoefficientsCarriesAndMultipleFactors) {
+  for (unsigned Coefficient : {1u, 3u, 8u})
+    for (unsigned Shift : {0u, 2u, 6u}) {
+      SCOPED_TRACE(Coefficient);
+      SCOPED_TRACE(Shift);
+      SymContext C;
+      auto X = C.mkVar("x", 4), Y = C.mkVar("y", 4), Z = C.mkVar("z", 4);
+      auto Scaled = C.mkMul(C.mkConst(8, 1u << Shift), C.mkZExt(X, 8));
+      auto Product = C.mkMul({C.mkConst(32, Coefficient), C.mkZExt(Scaled, 32),
+                              C.mkZExt(Y, 32), C.mkZExt(Z, 32)});
+      for (unsigned Low : {1u, 4u, 8u, 20u, 24u}) {
+        SCOPED_TRACE(Low);
+        auto Slice = C.mkExtract(Product, Low, 8);
+        SymEvalPlan Plan(C, Slice);
+        for (unsigned A : {0u, 1u, 7u, 15u})
+          for (unsigned B : {0u, 1u, 7u, 15u})
+            for (unsigned D : {0u, 1u, 7u, 15u}) {
+              const llvm::APInt Inputs[] = {
+                  llvm::APInt(4, A), llvm::APInt(4, B), llvm::APInt(4, D)};
+              // Independent modular arithmetic retains the original inner
+              // byte wrap, then forms the complete outer product.
+              const uint32_t Oracle =
+                  Coefficient * ((A << Shift) & 255u) * B * D;
+              ASSERT_EQ(Plan.eval(Inputs), llvm::APInt(8, Oracle >> Low));
+            }
+      }
+      if (Coefficient == 8 && Shift == 2) {
+        auto Narrow =
+            C.mkMul({C.mkZExt(X, 12), C.mkZExt(Y, 12), C.mkZExt(Z, 12)});
+        EXPECT_EQ(C.mkExtract(Product, 9, 12),
+                  C.mkZExt(C.mkExtract(Narrow, 4, 8), 12));
+        EXPECT_EQ(C.mkExtract(Product, 20, 8), C.mkZero(8));
+      }
+    }
+}
+
+TEST(SymExpr, ProductWindowKeepsInnerOverflowAndSignedHighBits) {
+  SymContext C;
+  auto X = C.mkVar("full_x", 64), Y = C.mkVar("small_y", 32);
+  auto Wrapped = C.mkMul(C.mkConst(64, uint64_t(1) << 32), X);
+  auto ShiftedY = C.mkMul(C.mkConst(64, 256), C.mkZExt(Y, 64));
+  auto Actual = C.mkExtract(
+      C.mkMul(C.mkZExt(Wrapped, 128), C.mkZExt(ShiftedY, 128)), 64, 64);
+  const llvm::APInt Inputs[] = {llvm::APInt(64, uint64_t(1) << 40),
+                                llvm::APInt(32, UINT32_MAX)};
+  EXPECT_EQ(C.eval(Actual, Inputs), llvm::APInt(64, 0));
+  auto Incorrect =
+      C.mkExtract(C.mkMul(C.mkZExt(X, 128), C.mkZExt(Y, 128)), 24, 64);
+  EXPECT_NE(C.eval(Actual, Inputs), C.eval(Incorrect, Inputs));
+  auto Signed =
+      C.mkExtract(C.mkMul(C.mkSExt(Y, 128), C.mkZExt(X, 128)), 64, 64);
+  auto Oracle = (Inputs[1].sext(128) * Inputs[0].zext(128)).extractBits(64, 64);
+  EXPECT_EQ(C.eval(Signed, Inputs), Oracle);
+
+  SymContext Inner;
+  auto P = Inner.mkVar("p", 32), Q = Inner.mkVar("q", 32);
+  auto Truncated =
+      Inner.mkMul(Inner.mkConst(40, 1u << 16), Inner.mkZExt(P, 40));
+  auto Slice = Inner.mkExtract(
+      Inner.mkMul(Inner.mkZExt(Truncated, 128), Inner.mkZExt(Q, 128)), 64, 64);
+  const llvm::APInt WideInputs[] = {llvm::APInt(32, uint32_t(1) << 31),
+                                    llvm::APInt(32, UINT32_MAX)};
+  EXPECT_EQ(Inner.eval(Slice, WideInputs), llvm::APInt(64, 0));
+  auto LostWrap = Inner.mkExtract(
+      Inner.mkMul(Inner.mkZExt(P, 128), Inner.mkZExt(Q, 128)), 48, 64);
+  EXPECT_NE(Inner.eval(Slice, WideInputs), Inner.eval(LostWrap, WideInputs));
+}
+
+TEST(SymExpr, ProductWindowsFactorZeroConcatenationLanes) {
+  SymContext C;
+  auto X = C.mkVar("x", 32), Y = C.mkVar("y", 32);
+  auto Left = C.mkConcat({X, C.mkZero(32)});
+  auto Right = C.mkConcat({Y, C.mkZero(8)});
+  auto Product = C.mkMul(C.mkZExt(Left, 104), C.mkZExt(Right, 104));
+  auto Actual = C.mkExtract(Product, 64, 32);
+  auto Expected =
+      C.mkExtract(C.mkMul(C.mkZExt(X, 64), C.mkZExt(Y, 64)), 24, 32);
+  ASSERT_EQ(Actual, Expected);
+  ASSERT_TRUE(C.fitsU64(Actual));
+  SymEvalPlan Plan(C, Actual);
+  ASSERT_TRUE(Plan.fitsU64());
+  std::mt19937_64 Random(0x636f6e6361747072);
+  for (unsigned I = 0; I < 512; ++I) {
+    uint64_t A = I < 4
+                     ? std::array<uint32_t, 4>{0, 1, 0x80000000, UINT32_MAX}[I]
+                     : uint32_t(Random());
+    uint64_t B = I < 4 ? UINT32_MAX : uint32_t(Random());
+    auto Oracle = ((A * B) >> 24) & UINT32_MAX;
+    EXPECT_EQ(Plan.evalU64({A, B}), Oracle);
+  }
+}
+
+TEST(SymExpr, ZeroConcatProductWindowsKeepAllLowerCarries) {
+  for (unsigned LeftPad : {1u, 7u, 32u})
+    for (unsigned RightPad : {1u, 8u}) {
+      SCOPED_TRACE(LeftPad);
+      SCOPED_TRACE(RightPad);
+      SymContext C;
+      auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+      auto Carrier = 17 + LeftPad + RightPad;
+      auto Left = C.mkConcat({X, C.mkZero(LeftPad)});
+      auto Right = C.mkConcat({Y, C.mkZero(RightPad)});
+      auto Actual = C.mkExtract(
+          C.mkMul(C.mkZExt(Left, Carrier), C.mkZExt(Right, Carrier)),
+          LeftPad + RightPad + 4, 8);
+      auto Product = C.mkMul(C.mkZExt(X, 16), C.mkZExt(Y, 16));
+      ASSERT_EQ(Actual, C.mkExtract(Product, 4, 8));
+      SymEvalPlan Plan(C, Actual);
+      for (unsigned A = 0; A < 256; ++A)
+        for (unsigned B = 0; B < 256; ++B) {
+          const llvm::APInt Inputs[] = {llvm::APInt(8, A), llvm::APInt(8, B)};
+          ASSERT_EQ(Plan.eval(Inputs), llvm::APInt(8, (A * B) >> 4));
+        }
+    }
+  std::mt19937_64 Random(0x7a65726f6c616e65);
+  for (unsigned Width : {1u, 7u, 32u, 65u, 129u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Carrier = 2 * Width + 73;
+    auto Left = C.mkConcat({X, C.mkZero(64)});
+    auto Right = C.mkConcat({Y, C.mkZero(8)});
+    auto Low = 72 + Width / 2;
+    auto Actual = C.mkExtract(
+        C.mkMul(C.mkZExt(Left, Carrier), C.mkZExt(Right, Carrier)), Low, Width);
+    auto Product = C.mkMul(C.mkZExt(X, 2 * Width), C.mkZExt(Y, 2 * Width));
+    ASSERT_EQ(Actual, C.mkExtract(Product, Width / 2, Width));
+    SymEvalPlan Plan(C, Actual);
+    for (unsigned I = 0; I < 64; ++I) {
+      llvm::APInt A(Width, 0), B(Width, 0);
+      for (unsigned Bit = 0; Bit < Width; Bit += 64) {
+        A |= llvm::APInt(Width, Random()).shl(Bit);
+        B |= llvm::APInt(Width, Random()).shl(Bit);
+      }
+      auto Oracle = (A.zext(Carrier).shl(64) * B.zext(Carrier).shl(8))
+                        .extractBits(Width, Low);
+      const llvm::APInt Inputs[] = {A, B};
+      EXPECT_EQ(Plan.eval(Inputs), Oracle);
+    }
+  }
+}
+
+TEST(SymExpr, ZeroConcatFactoringPreservesNonzeroLanesAndInnerWrap) {
+  for (unsigned Tail : {0u, 1u, 0x80u, 0xFFu})
+    for (unsigned Low : {1u, 7u, 8u, 16u, 24u}) {
+      SymContext C;
+      auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+      auto Left = C.mkConcat({X, C.mkConst(8, Tail)});
+      auto Right = C.mkConcat({Y, C.mkZero(8)});
+      auto Actual = C.mkExtract(
+          C.mkMul(C.mkZExt(Left, 48), C.mkZExt(Right, 48)), Low, 16);
+      SymEvalPlan Plan(C, Actual);
+      for (unsigned A : {0u, 1u, 0x7Fu, 0x80u, 0xFFu})
+        for (unsigned B : {0u, 1u, 0x7Fu, 0x80u, 0xFFu}) {
+          auto Oracle = (uint64_t((A << 8) | Tail) * (B << 8)) >> Low;
+          const llvm::APInt Inputs[] = {llvm::APInt(8, A), llvm::APInt(8, B)};
+          EXPECT_EQ(Plan.eval(Inputs), llvm::APInt(16, Oracle));
+        }
+    }
+  SymContext C;
+  auto X = C.mkVar("full_x", 64), Y = C.mkVar("y", 32);
+  auto Wrapped = C.mkExtract(C.mkConcat({X, C.mkZero(32)}), 0, 64);
+  auto Actual =
+      C.mkExtract(C.mkMul(C.mkZExt(Wrapped, 128),
+                          C.mkZExt(C.mkConcat({Y, C.mkZero(8)}), 128)),
+                  64, 64);
+  const llvm::APInt Inputs[] = {llvm::APInt(64, uint64_t(1) << 40),
+                                llvm::APInt(32, UINT32_MAX)};
+  EXPECT_EQ(C.eval(Actual, Inputs), llvm::APInt(64, 0));
+  auto Incorrect =
+      C.mkExtract(C.mkMul(C.mkZExt(X, 128), C.mkZExt(Y, 128)), 24, 64);
+  EXPECT_NE(C.eval(Actual, Inputs), C.eval(Incorrect, Inputs));
 }
 
 TEST(SymExpr, DivisionAndRemainderFollowTheBitvectorTheory) {

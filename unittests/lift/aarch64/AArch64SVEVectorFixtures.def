@@ -1,0 +1,172 @@
+//===- AArch64SVEVectorFixtures.def - Independent Z oracles ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Raw INDEX/LASTB words from LLVM llvmorg-22.1.6 test/MC/AArch64/SVE.
+/// The cross-width case INDEX.D #7,#3; PTRUE.B VL2; LASTB.B reads byte 1
+/// (zero), not the second 64-bit lane (10). Runtime execution is a separate
+/// SVE hardware/emulator requirement; these checks compile the real paths.
+//===----------------------------------------------------------------------===//
+#ifndef NEVERD_SVE_VECTOR_FIXTURE
+#define NEVERD_SVE_VECTOR_FIXTURE(Type, Name, Value)
+#endif
+#ifndef NEVERD_SVE_VECTOR_WIDTH
+#define NEVERD_SVE_VECTOR_WIDTH(Bytes)
+#endif
+#ifndef NEVERD_SVE_VECTOR_RAW
+#define NEVERD_SVE_VECTOR_RAW(Word, Id, Element)
+#endif
+
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kFunction, "sve_vector_carrier")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kTriple, "aarch64-unknown-linux-gnu")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kNameFormat, "sve_vector_{0}_{1}_{2}")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kValueNameFormat, "value_{0}")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kCanonicalC, "svuint8_t")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kToByteC, "svreinterpret_u8_u64")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kFromByteC, "svreinterpret_u64_u8")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kByteLastC, "svlastb_u8")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kImmediateDupC,
+                          "svdup_n_u8((uint8_t)((uint32_t)(1)))")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kImmediateByteStartC,
+                          "(uint8_t)((uint32_t)(5))")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kImmediateByteStepC,
+                          "(uint8_t)((uint32_t)(0))")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kImmediateWideStartC,
+                          "(uint64_t)((uint32_t)(7))")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kImmediateWideStepC,
+                          "(uint64_t)((uint32_t)(3))")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kWideIndexIR,
+                          "llvm.aarch64.sve.index.nxv2i64")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kByteLastIR,
+                          "llvm.aarch64.sve.lastb.nxv16i8")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kCompiler, "clang")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kMissingCompiler,
+                          "Clang is required for SVE C object checks")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kTempPrefix, "neverd-sve-vector")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSourceExtension, "c")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kObjectExtension, "o")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kErrorExtension, "err")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kTargetOption, "-target")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kCTarget, "aarch64-none-elf")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kMarch, "-march=armv8.2-a+sve")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kFreeStanding, "-ffreestanding")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kNoSystemHeaders, "-nostdlibinc")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kIncludeOption, "-I")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kStandard, "-std=gnu11")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kCompileOption, "-c")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kOutputOption, "-o")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kO0, "-O0")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kO2, "-O2")
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kTimeoutSeconds, 30)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kEntry, 0x1000)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kBlockStride, 0x100)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kInstructionBytes, 4)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kScalarBytes, 8)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kVectorBytes, 256)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kPredicateBytes, 32)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kPatternBytes, 4)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kElementBytes, 1)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kLowIdBytes, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kVL2, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kIndexStart, 7)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kIndexStep, 3)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kAlternateStart, 13)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kSignedScalarBytes, 4)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kNarrowScalarBits, 0xffffffffULL)
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedNarrowC, "-1")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kWideElementC, "8")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kNarrowCastC, "uint32_t")
+NEVERD_SVE_VECTOR_FIXTURE(
+    const char *, kNarrowDupC,
+    "svreinterpret_u8_u64(svdup_n_u64((uint64_t)((uint32_t)(-1))))")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kNarrowIndexC,
+                          "svreinterpret_u8_u64(svindex_u64((uint64_t)((uint32_"
+                          "t)(-1)), (uint64_t)((uint32_t)(-1))))")
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kMinimumBytes, 16)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kByteElement, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kWideElement, 8)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kBadElement, 3)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kTruncatedElement, 0x100000001ULL)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kPredicateId, 0)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kVectorId, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kCopyId, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kResultId, 3)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kAlternateId, 4)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kJoinId, 5)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kLoopId, 6)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kNextId, 7)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kLoopTestId, 8)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kLoopVectorId, 9)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kPredicateOperation, 0)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kVectorOperation, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kCopyOperation, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kAlternateBlock, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kLoopBlock, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kClobberSite, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kParameterId, 10)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kPartialId, 11)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kNeonId, 12)
+NEVERD_SVE_VECTOR_FIXTURE(uint16_t, kNeonBytes, 16)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kPhysicalZ0, 0x1000)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kPhysicalV0, 0x200)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kTwoBlocks, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kExitBlock, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kConsumerAndReturn, 2)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kExcessiveBlocks, 4097)
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kStateLimitText,
+                          "SVE state proof exceeded its resource limit")
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kUnlistedTarget, 0xdeadbeef)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kSerialFunctionCount, 1)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kShardedFunctionCount, 8)
+NEVERD_SVE_VECTOR_FIXTURE(int, kSemanticErrorExit, 1)
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kUnknownStateSource, "unknown.s")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kUnknownStateObject, "unknown.o")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kUnknownStateText,
+                          "SVE state requires a complete local definition")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kLLVMDefinition, "define ")
+// Independent raw PTRUE.B/LASTB.B/RET sequence with no Z0 producer.
+NEVERD_SVE_VECTOR_FIXTURE(
+    const char *, kUnknownStateAssembly,
+    ".text\n.globl unknown_{0}\n.type unknown_{0},%function\nunknown_{0}:\n"
+    ".inst 0x2518e3e0\n.inst 0x0521a000\n.inst 0xd65f03c0\n"
+    ".size unknown_{0},.-unknown_{0}\n")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStateSource, "signed-sve.s")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStateObject, "signed-sve.o")
+// PACIASP; PTRUE.B ALL; DUP Z0.B,#1; LASTB W0,P0,Z0.B; RETAA.
+NEVERD_SVE_VECTOR_FIXTURE(
+    const char *, kSignedStateAssembly,
+    ".text\n.globl signed_sve_leaf\n.type signed_sve_leaf,%function\n"
+    "signed_sve_leaf:\n.inst 0xd503233f\n.inst 0x2518e3e0\n"
+    ".inst 0x2538c020\n.inst 0x0521a000\n.inst 0xd65f0bff\n"
+    ".size signed_sve_leaf,.-signed_sve_leaf\n")
+// The same leaf returning with RETAB: no proved recipe, explicit operations.
+NEVERD_SVE_VECTOR_FIXTURE(
+    const char *, kUnprovedSignedStateAssembly,
+    ".text\n.globl signed_sve_leaf\n.type signed_sve_leaf,%function\n"
+    "signed_sve_leaf:\n.inst 0xd503233f\n.inst 0x2518e3e0\n"
+    ".inst 0x2538c020\n.inst 0x0521a000\n.inst 0xd65f0fff\n"
+    ".size signed_sve_leaf,.-signed_sve_leaf\n")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStatePacia, "pacia ")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStateAuthenticate,
+                          "@llvm.ptrauth.auth(")
+NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStateTargetUse,
+                          "neverd authenticated target")
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kPAuthResultId, 13)
+NEVERD_SVE_VECTOR_FIXTURE(uint32_t, kAddressMemoryWord, 0xf8626820)
+NEVERD_SVE_VECTOR_FIXTURE(unsigned, kAddressMemoryIdFixtureBytes, 2)
+NEVERD_SVE_VECTOR_FIXTURE(uint64_t, kPAuthModeEnabled, 1)
+NEVERD_SVE_VECTOR_WIDTH(1)
+NEVERD_SVE_VECTOR_WIDTH(2)
+NEVERD_SVE_VECTOR_WIDTH(4)
+NEVERD_SVE_VECTOR_WIDTH(8)
+NEVERD_SVE_VECTOR_RAW(0x04ff43ffu, A64_SveIndex, 8)
+NEVERD_SVE_VECTOR_RAW(0x0521bfe0u, A64_SveLastb, 1)
+NEVERD_SVE_VECTOR_RAW(0x0561bfe0u, A64_SveLastb, 2)
+NEVERD_SVE_VECTOR_RAW(0x05a1bfe0u, A64_SveLastb, 4)
+NEVERD_SVE_VECTOR_RAW(0x05e1bfe0u, A64_SveLastb, 8)
+
+#undef NEVERD_SVE_VECTOR_FIXTURE
+#undef NEVERD_SVE_VECTOR_WIDTH
+#undef NEVERD_SVE_VECTOR_RAW

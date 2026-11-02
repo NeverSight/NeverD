@@ -1,0 +1,23 @@
+//===- SEHRuntimeImports.def - Win64 CRT memory-effect entries --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Exact runtime names and provider queries for Win64 SEH memory contracts.
+/// Define NEVERD_SEH_RUNTIME_IMPORT(Name, Kind, Provider) before inclusion.
+/// These identities grant no storage, format, argument or frame authority.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SEH_RUNTIME_IMPORT
+#error "Define NEVERD_SEH_RUNTIME_IMPORT before including this file"
+#endif
+
+NEVERD_SEH_RUNTIME_IMPORT("__acrt_iob_func", CRTStream, isX64CRTStdioProvider)
+NEVERD_SEH_RUNTIME_IMPORT("__stdio_common_vfprintf", CRTVfprintf,
+                          isX64CRTStdioProvider)
+NEVERD_SEH_RUNTIME_IMPORT("_controlfp_s", CRTControlFP, isX64ControlFPProvider)
+
+#undef NEVERD_SEH_RUNTIME_IMPORT

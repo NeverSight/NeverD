@@ -7,8 +7,8 @@
 #ifndef NEVERD_BACKEND_LLVM_X86_MEDLLVMREGISTRATIONSEHJUMP_H
 #define NEVERD_BACKEND_LLVM_X86_MEDLLVMREGISTRATIONSEHJUMP_H
 
-#include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/IR/IRBuilder.h"
 

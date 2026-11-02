@@ -13,16 +13,22 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/pipeline/PipelineCallAbiDetail.h"
+#include "SourceCallExecution.h"
+#include "WindowsQualifiedFixture.h"
+#include "WindowsVariadicFixture.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/ir/med/MedABIPass.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
@@ -89,6 +95,400 @@ BinaryImage makeImage(std::vector<uint8_t> Code,
   Function.Name = "_wrap";
   Img.Symbols.push_back(std::move(Function));
   return Img;
+}
+
+TEST(I386CallContract, PhysicalCallReturnSlotsDoNotKeepOldSourceConstants) {
+  for (bool Rewrite : {false, true})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      // PUSH 19 releases exactly the four bytes overwritten by the next CALL.
+      std::vector<uint8_t> Code = {0x83, 0xec, 16, 0x6a, 19, 0x83, 0xc4, 4};
+      const auto Call = callThroughSlot(Iat);
+      Code.insert(Code.end(), Call.begin(), Call.end());
+      const va_t ReturnPC = Text + Code.size();
+      if (Rewrite)
+        Code.insert(Code.end(), {0xc7, 0x44, 0x24, 0xfc, 19, 0, 0, 0});
+      Code.insert(Code.end(), {0x8b, 0x44, 0x24, 0xfc, 0x83, 0xc4, 16, 0xc3});
+      auto Image = makeImage(Code, {"rand"});
+      Image.Format = Format;
+      if (Format == BinaryFormat::ELF)
+        Image.Symbols.front().Name = "wrap";
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Iat, "rand", 0, ImportStorageEvidence::LoaderBind));
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message() << Rewrite << ':' << unsigned(Format)
+                                          << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          const auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Format;
+          COptions.Image = &Image;
+          COptions.EmitIncludes = false;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          const std::string Standalone =
+              "#include <stdint.h>\nint rand(void);\n" + Source;
+          source_call_execution_test::checkSyntax(
+              Standalone, {"--target=i686-pc-windows-msvc", "-ffreestanding"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+          std::string Oracle;
+          llvm::raw_string_ostream Native(Oracle);
+          Native << R"(
+#include <sys/mman.h>
+#include <string.h>
+static unsigned calls;
+int rand(void) { ++calls; return 13; }
+static int check_native(void) {
+  static const uint8_t original[] = {)";
+          for (uint8_t Byte : Code)
+            Native << unsigned(Byte) << ',';
+          Native << "};\n  const size_t size = " << Iat - Text + 4 << ";\n"
+                 << R"(
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan reads its function-type prefix before an indirect call target.
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uint32_t target = (uint32_t)(uintptr_t)rand;
+)";
+          Native << "  uint32_t slot = (uint32_t)(uintptr_t)(code + "
+                 << Iat - Text << ");\n"
+                 << "  memcpy(code + " << Iat - Text << ", &target, 4);\n"
+                 << "  memcpy(code + " << ReturnPC - Text - 4
+                 << ", &slot, 4);\n"
+                 << "  uint32_t expected = "
+                 << (Rewrite ? "19"
+                             : "(uint32_t)(uintptr_t)(code + " +
+                                   std::to_string(ReturnPC - Text) + ")")
+                 << ";\n"
+                 << R"(
+  calls = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint32_t actual = ((uint32_t (*)(void))code)();
+  int bad = actual != expected || calls != 1;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+int main(void) {
+  if (check_native()) return 1;
+  calls = 0;
+  return (uint32_t)wrap() != )"
+                 << (Rewrite ? 19 : ReturnPC) << " || calls != 1;\n}\n";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define _GNU_SOURCE\n" + Standalone + Oracle,
+                {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+          RecordProperty("native_i386_execution", "requires Linux x86");
+#endif
+        }
+    }
+}
+
+TEST(I386CallContract, HeaderFloatingImportsDefineTheNormalizedX87Result) {
+  class Header : public NullDebugContext {
+  public:
+    uint16_t Bytes = 8;
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "fixture_scalar_fp")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.PrototypeFromHeader = true;
+      Function.PrototypeLibrary = "test-header";
+      Function.CallConv = DebugCallConv::Cdecl;
+      Function.ReturnType = NdType::makeFloat(Bytes);
+      Function.Params = {{"left", NdType::makeFloat(Bytes)},
+                         {"right", NdType::makeFloat(Bytes)}};
+      const std::string Type = Bytes == 4 ? "float" : "double";
+      Function.PortablePrototypeDeclaration =
+          Type + " fixture_scalar_fp(" + Type + " left, " + Type + " right)";
+      return Function;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      auto Function =
+          Address == Iat ? resolvePrototype("fixture_scalar_fp") : std::nullopt;
+      if (Function)
+        Function->Addr = Address;
+      return Function;
+    }
+  } Debug;
+  for (uint16_t Bytes : {4u, 8u}) {
+    Debug.Bytes = Bytes;
+    for (bool StoreResult : {false, true}) {
+      std::vector<uint8_t> Code;
+      auto Push = [&](uint32_t Value) {
+        Code.push_back(0x68);
+        for (unsigned Byte = 0; Byte < 4; ++Byte)
+          Code.push_back(static_cast<uint8_t>(Value >> (8 * Byte)));
+      };
+      if (Bytes == 8) {
+        Push(0xC01A0000);
+        Push(0);
+        Push(0x40040000);
+        Push(0);
+      } else {
+        Push(0xC0D00000);
+        Push(0x40200000);
+      }
+      const auto Call = callThroughSlot(Iat);
+      Code.insert(Code.end(), Call.begin(), Call.end());
+      Code.insert(Code.end(), {0x83, 0xC4, uint8_t(2 * Bytes)});
+      if (StoreResult) {
+        // fstp/fld must see the actual post-call TOP, not a stale entry slot.
+        Code.insert(Code.end(), {0x83, 0xEC, uint8_t(Bytes),
+                                 uint8_t(Bytes == 8 ? 0xDD : 0xD9), 0x1C, 0x24,
+                                 uint8_t(Bytes == 8 ? 0xDD : 0xD9), 0x04, 0x24,
+                                 0x83, 0xC4, uint8_t(Bytes)});
+      }
+      Code.push_back(0xC3);
+      auto Image = makeImage(Code, {"fixture_scalar_fp"});
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Iat, "fixture_scalar_fp", 0, ImportStorageEvidence::LoaderBind));
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(Bytes);
+        SCOPED_TRACE(StoreResult);
+        SCOPED_TRACE(LLVM);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {Text};
+        Options.LiftMode = LLVM;
+        Options.SourceProjection = LLVM;
+        auto Result = Pipeline().run(Image, Context, Options, &Debug);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_EQ(Result.MedFuncs.size(), 1u);
+        EXPECT_TRUE(Result.MedFuncs.front().FPReturnViaX87);
+        ASSERT_TRUE(Result.MedFuncs.front().ReturnType);
+        EXPECT_EQ(Result.MedFuncs.front().ReturnType->Size, Bytes);
+        CEmitterOptions COptions;
+        COptions.TheArch = Image.Arch;
+        COptions.Format = Image.Format;
+        COptions.Image = &Image;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Out,
+                                               COptions, &Debug, &Image)
+                         : HighCEmitter().emit(Result.HighFuncs, Out, COptions,
+                                               &Debug));
+        if (!StoreResult) {
+          EXPECT_EQ(Source.find("_BitInt(80)"), std::string::npos) << Source;
+          EXPECT_EQ(Source.find("long double"), std::string::npos) << Source;
+        }
+        const std::string Type = Bytes == 4 ? "float" : "double";
+        source_call_execution_test::compileAndRun(
+            Source + "\n" + Type + " fixture_scalar_fp(" + Type + " left, " +
+            Type +
+            " right) {\n"
+            "  if (left != 2.5 || right != -6.5) __builtin_trap();\n"
+            "  return 42.25;\n}\n"
+            "int main(void) { return wrap() != 42.25; }\n");
+      }
+    }
+  }
+}
+
+TEST(I386CallContract, HeaderQualifiersKeepTheOuterCallingConvention) {
+  auto Code = callThroughSlot(Iat);
+  Code[1] = 0x25; // jmp [IAT], forwarding the two incoming stack arguments.
+  auto Image = makeImage(Code, {"fixture_qualified"});
+  ASSERT_TRUE(Image.recordImportStorageSlot(Iat, "fixture_qualified", 0,
+                                            ImportStorageEvidence::LoaderBind));
+  for (bool Stdcall : {false, true})
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(Stdcall);
+      SCOPED_TRACE(LLVM);
+      windows_qualified_test::Header Debug;
+      Debug.Slot = Iat;
+      Debug.PointerBytes = 4;
+      Debug.Convention =
+          Stdcall ? DebugCallConv::Stdcall : DebugCallConv::Cdecl;
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = LLVM;
+      Options.OnlyFunctionEntries = {Text};
+      auto Result = Pipeline().run(Image, Context, Options, &Debug);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      EXPECT_EQ(Result.MedFuncs.front().Params.size(), 2u);
+      CEmitterOptions COptions;
+      COptions.TheArch = Image.Arch;
+      COptions.Format = Image.Format;
+      COptions.Image = &Image;
+      COptions.EmitIncludes = false;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions,
+                                        &Debug, &Image));
+      } else {
+        ASSERT_TRUE(
+            HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+      }
+      const std::string Convention = Stdcall ? "__attribute__((stdcall)) " : "";
+      source_call_execution_test::checkSyntax(
+          "#include <stdint.h>\n" + Source + "\ntypedef const uint16_t *(" +
+              Convention +
+              "*Expected)(const uint16_t *, volatile uint32_t *);\n"
+              "_Static_assert(__builtin_types_compatible_p("
+              "__typeof__(&fixture_qualified), Expected), \"qualified "
+              "ABI\");\n",
+          {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+    }
+}
+
+TEST(I386CallContract, LLVMCCallbackFactoryKeepsBothCallingConventions) {
+  class Prototypes : public NullDebugContext {
+  public:
+    FunctionSym Signature;
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      return Name == "SetHandler" ? std::optional(Signature) : std::nullopt;
+    }
+  } Debug;
+  for (bool OuterStdcall : {false, true})
+    for (bool InnerStdcall : {false, true}) {
+      SCOPED_TRACE(OuterStdcall);
+      SCOPED_TRACE(InnerStdcall);
+      auto Pointer = NdType::makePtr(NdType::makeVoid());
+      Pointer->Size = 4;
+      auto Callback = NdType::makePtr(NdType::makeFunc(
+          NdType::makeInt(4, true), {Pointer, NdType::makeInt(4, false)},
+          InnerStdcall ? types::CallingConvention::Stdcall
+                       : types::CallingConvention::Unspecified));
+      Callback->Size = 4;
+      Debug.Signature.Name = "SetHandler";
+      Debug.Signature.PrototypeLibrary = "synthetic-windows";
+      Debug.Signature.ReturnType = Callback;
+      Debug.Signature.Params = {{"Handler", Callback}};
+      Debug.Signature.CallConv =
+          OuterStdcall ? DebugCallConv::Stdcall : DebugCallConv::Cdecl;
+      llvm::LLVMContext Context;
+      llvm::Module Module("callback-factory", Context);
+      Module.setDataLayout("e-p:32:32");
+      llvm::IRBuilder<> Builder(Context);
+      auto *FunctionType = llvm::FunctionType::get(
+          Builder.getInt32Ty(), {Builder.getInt32Ty()}, false);
+      auto *Factory = llvm::Function::Create(FunctionType,
+                                             llvm::GlobalValue::ExternalLinkage,
+                                             "_SetHandler", Module);
+      Factory->setCallingConv(OuterStdcall ? llvm::CallingConv::X86_StdCall
+                                           : llvm::CallingConv::C);
+      auto *Wrapper = llvm::Function::Create(
+          FunctionType, llvm::GlobalValue::ExternalLinkage, "_wrap", Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Wrapper));
+      auto *Call = Builder.CreateCall(Factory, {Wrapper->getArg(0)});
+      Call->setCallingConv(Factory->getCallingConv());
+      Builder.CreateRet(Call);
+      ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X86;
+      Options.Format = BinaryFormat::COFF;
+      Options.EmitIncludes = false;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, &Debug));
+      ASSERT_NE(Source.find("SetHandler("), std::string::npos) << Source;
+      const std::string Inner = InnerStdcall ? "__attribute__((stdcall)) " : "";
+      const std::string Outer = OuterStdcall ? "__attribute__((stdcall)) " : "";
+      source_call_execution_test::checkSyntax(
+          "#include <stdint.h>\n" + Source + "\ntypedef int32_t (" + Inner +
+              "*ExpectedCallback)(void*, uint32_t);\n"
+              "typedef ExpectedCallback (" +
+              Outer +
+              "*ExpectedFactory)(ExpectedCallback);\n"
+              "_Static_assert(__builtin_types_compatible_p("
+              "__typeof__(&SetHandler), ExpectedFactory), \"factory ABI\");\n",
+          {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+    }
+}
+
+TEST(I386CallContract, OmittedImportStackFactsDoNotDependOnTheSelection) {
+  constexpr va_t Other = Text + 0x40;
+  constexpr va_t Child = Text + 0x80;
+  std::vector<uint8_t> Code(0x100, 0xCC);
+  auto CallChild = [&](std::vector<uint8_t> &Body, va_t Entry) {
+    const uint32_t Displacement =
+        static_cast<uint32_t>(Child - (Entry + Body.size() + 5));
+    Body.push_back(0xE8);
+    for (unsigned Byte = 0; Byte != 4; ++Byte)
+      Body.push_back(static_cast<uint8_t>(Displacement >> (8 * Byte)));
+  };
+  // caller_a(p): child(p). caller_b(p): memcpy(p,p,0); child(p).
+  std::vector<uint8_t> First = {0x8B, 0x44, 0x24, 4, 0x50};
+  CallChild(First, Text);
+  First.insert(First.end(), {0x83, 0xC4, 4, 0xC3});
+  std::copy(First.begin(), First.end(), Code.begin());
+  std::vector<uint8_t> Second = {0x8B, 0x44, 0x24, 4, 0x6A, 0, 0x50, 0x50};
+  const auto ImportCall = callThroughSlot(Iat);
+  Second.insert(Second.end(), ImportCall.begin(), ImportCall.end());
+  Second.insert(Second.end(), {0x83, 0xC4, 12, 0x8B, 0x44, 0x24, 4, 0x50});
+  CallChild(Second, Other);
+  Second.insert(Second.end(), {0x83, 0xC4, 4, 0xC3});
+  std::copy(Second.begin(), Second.end(), Code.begin() + 0x40);
+  // child(p): memcpy(p+4,p,4). Its import is absent from caller_a's body.
+  std::vector<uint8_t> Body = {0x8B, 0x44, 0x24, 4,    0x8D, 0x50,
+                               4,    0x6A, 4,    0x50, 0x52};
+  Body.insert(Body.end(), ImportCall.begin(), ImportCall.end());
+  Body.insert(Body.end(), {0x83, 0xC4, 12, 0xC3});
+  std::copy(Body.begin(), Body.end(), Code.begin() + 0x80);
+  for (const BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (const bool Warm : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(Warm);
+      BinaryImage Image = makeImage(Code, {"memcpy"});
+      Image.Format = Format;
+      for (const auto &[Entry, Name] :
+           {std::pair{Other, "caller_b"}, {Child, "child"}}) {
+        auto Function = Symbol::makeFunc(Entry);
+        Function.Name = Name;
+        Image.Symbols.push_back(std::move(Function));
+      }
+      PipelineAnalysisCache Cache;
+      PipelineOptions Options;
+      Options.AnalysisCache = &Cache;
+      Options.EmitDumpOutput = false;
+      if (Warm)
+        ASSERT_TRUE(
+            Pipeline().warmAnalysisCache(Image, Options, nullptr, {Child}));
+      llvm::LLVMContext Context;
+      for (const va_t Entry : {Text, Other, Text}) {
+        Options.OnlyFunctionEntries = {Entry};
+        const auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_TRUE(Result.CalleeSignatureMemo);
+        const auto *Read = Result.CalleeSignatureMemo->find(Child);
+        ASSERT_TRUE(Read);
+        ASSERT_EQ(Read->Conversions.size(), 1u);
+        ASSERT_TRUE(Read->Conversions.front().Body);
+        EXPECT_EQ(Read->Conversions.front().Body->Params.size(), 1u);
+      }
+    }
 }
 
 /// The call of \p Callee in the HighC of `wrap` in \p Img: the rest of its
@@ -170,6 +570,14 @@ TEST(I386CallContract, WindowsNonlocalCallsRetainTheirControlFlowContract) {
                 if (const auto *Target = Call->getCalledFunction();
                     Target && Target->isIntrinsic())
                   continue;
+                if (llvm_source_unknown::isValue(Call)) {
+                  // The continuation overwrites the actual result and does
+                  // not observe any volatile register's remaining state.
+                  EXPECT_TRUE(Call->use_empty());
+                  EXPECT_FALSE(Call->hasFnAttr(llvm::Attribute::ReturnsTwice));
+                  EXPECT_FALSE(Call->hasFnAttr(llvm::Attribute::NoReturn));
+                  continue;
+                }
                 ASSERT_EQ(ObservedCall, nullptr);
                 ObservedCall = Call;
               }
@@ -283,6 +691,51 @@ TEST(I386CallContract, AStdcallImportPopsItsArguments) {
   // Without the pop the read lands on the pushed 7.
   EXPECT_NE(Result.find("arg0"), std::string::npos) << Source;
   EXPECT_EQ(Result.find("+ 7"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
+}
+
+TEST(I386CallContract, HeaderRecordStdcallKeepsItsStackCleanup) {
+  class Header : public NullDebugContext {
+  public:
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "RecordStatus")
+        return std::nullopt;
+      auto Record = NdType::makeNamedRecord("Record", 8);
+      Record->Alignment = 8;
+      Record->Passing = NdRecordPassing::ByValue;
+      Record->ScalarLeaves = {{0, 4, false}, {4, 4, false}};
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeInt(4, true);
+      Function.Params = {{"Value", Record}};
+      Function.CallConv = DebugCallConv::Stdcall;
+      Function.PrototypeLibrary = "test-windows-header";
+      Function.PrototypeFromHeader = true;
+      return Function;
+    }
+  } Debug;
+  // The record is two stack words. The load after the call must read the
+  // wrapper's original argument, not the record word left at the old SP.
+  std::vector<uint8_t> Code = {0x6A, 7, 0x6A, 3};
+  const auto Call = callThroughSlot(Iat);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.insert(Code.end(), {0x8B, 0x44, 0x24, 4, 0xC3});
+  BinaryImage Image = makeImage(Code, {"RecordStatus"});
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  const auto Result = Pipeline().run(Image, Context, Options, &Debug);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_TRUE(Result.CallEntryStackPops.count(Iat));
+  EXPECT_EQ(Result.CallEntryStackPops.at(Iat), 8);
+  CEmitterOptions COptions;
+  COptions.TheArch = Image.Arch;
+  COptions.Format = Image.Format;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+  EXPECT_NE(Source.find("return arg0;"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
 }
 
@@ -721,54 +1174,93 @@ TEST(I386CallContract, StoresThroughACopyOfESPAreArgumentsByOffset) {
 }
 
 TEST(I386CallContract, AStoreWiderThanASlotFillsEachSlotItCovers) {
-  // clang -O0 copies an eight-byte structure argument into the outgoing area
-  // with one `movsd [esp], xmm0`: its two halves are the first two arguments.
-  std::vector<uint8_t> Code = {
-      0x55,                         // push ebp
-      0x89, 0xE5,                   // mov ebp, esp
-      0x83, 0xEC, 0x18,             // sub esp, 0x18
-      0xF2, 0x0F, 0x10, 0x45, 0x08, // movsd xmm0, [ebp+8]
-      0x89, 0xE0,                   // mov eax, esp
-      0xF2, 0x0F, 0x11, 0x00,       // movsd [eax], xmm0
-  };
-  for (uint8_t B : callThroughSlot(slot(0)))
-    Code.push_back(B);
-  for (uint8_t B : {0x83, 0xC4, 0x18, // add esp, 0x18
-                    0x5D,             // pop ebp
-                    0xC3})            // ret
-    Code.push_back(B);
-  const BinaryImage Img = makeImage(Code, {"calloc"});
-  const std::string Call = callIn(Img, "calloc");
-  EXPECT_EQ(Call.find("unknown"), std::string::npos) << Call;
-  EXPECT_NE(Call.find(">> 32"), std::string::npos) << Call;
-  // Both source routes receive the same two four-byte lanes from MedIR.
-  // HighIR must not be the only layer that splits the outgoing store.
-  for (bool LLVM : {false, true})
-    for (bool NoOpt : {false, true}) {
-      SCOPED_TRACE(LLVM);
-      SCOPED_TRACE(NoOpt);
-      llvm::LLVMContext Context;
-      PipelineOptions Options;
-      Options.EmitDumpOutput = false;
-      Options.LiftMode = LLVM;
-      Options.NoOpt = NoOpt;
-      Options.OnlyFunctionEntries = {Text};
-      const auto Result = Pipeline().run(Img, Context, Options);
-      ASSERT_TRUE(Result.Success) << Result.Error;
-      ASSERT_EQ(Result.MedFuncs.size(), 1u);
-      ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
-      const auto &Info = Result.MedFuncs.front().CallInfos.front();
-      EXPECT_TRUE(Info.ArgumentsFromPrototype);
-      ASSERT_EQ(Info.Args.size(), 2u);
-      for (const MedVar &Arg : Info.Args) {
-        EXPECT_NE(Arg.Kind, MedVar::Unspecified);
-        EXPECT_EQ(Arg.Size, 4u);
+  for (bool RegisterTarget : {false, true})
+    for (int Overwrite : {-1, 0, 1}) {
+      // The MOVSD is a transport of two size_t arguments, not a double
+      // argument. A later word store changes only its own argument.
+      std::vector<uint8_t> Code = {
+          0x55,                         // push ebp
+          0x89, 0xE5,                   // mov ebp, esp
+          0x83, 0xEC, 0x18,             // sub esp, 0x18
+          0xF2, 0x0F, 0x10, 0x45, 0x08, // movsd xmm0, [ebp+8]
+          0x89, 0xE0,                   // mov eax, esp
+          0xF2, 0x0F, 0x11, 0x00,       // movsd [eax], xmm0
+      };
+      if (Overwrite >= 0)
+        Code.insert(Code.end(), {0xC7, 0x40, uint8_t(Overwrite * 4), 0xEF, 0xBE,
+                                 0xAD, 0xDE});
+      auto Call = callThroughSlot(slot(0));
+      if (RegisterTarget) {
+        Call.erase(Call.begin(), Call.begin() + 2);
+        Call.insert(Call.begin(), 0xa1);       // mov eax, [Iat]
+        Call.insert(Call.end(), {0xff, 0xd0}); // call eax
       }
-      EXPECT_FALSE(Info.Args[0] == Info.Args[1]);
-      if (LLVM) {
-        ASSERT_TRUE(Result.LlvmModule);
-        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
-      }
+      Code.insert(Code.end(), Call.begin(), Call.end());
+      Code.insert(Code.end(), {0x83, 0xC4, 0x18, 0x5D, 0xC3});
+      auto Image = makeImage(Code, {"calloc"});
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Iat, "calloc", 0, ImportStorageEvidence::LoaderBind));
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message() << RegisterTarget << ':' << Overwrite
+                                          << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          const auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          ASSERT_EQ(Result.MedFuncs.size(), 1u);
+          const auto &Function = Result.MedFuncs.front();
+          ASSERT_EQ(Function.CallInfos.size(), 1u);
+          const auto &Arguments = Function.CallInfos.front().Args;
+          ASSERT_EQ(Arguments.size(), 2u);
+          for (const auto &Argument : Arguments)
+            EXPECT_EQ(Argument.Size, 4u);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          COptions.EmitIncludes = false;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          Source = "#include <stdint.h>\n#include <stddef.h>\n"
+                   "void *calloc(size_t, size_t);\n" +
+                   Source;
+          EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
+          source_call_execution_test::checkSyntax(
+              Source, {"--target=i686-pc-windows-msvc", "-ffreestanding"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+          const std::string Oracle =
+              "\n#undef calloc\nstatic unsigned calls;\n"
+              "void *fixture_pair(size_t first, size_t second) {\n"
+              "  ++calls;\n"
+              "  return (void *)(uintptr_t)(first == " +
+              std::string(Overwrite == 0 ? "0xDEADBEEFu" : "0x12345678u") +
+              " && second == " +
+              std::string(Overwrite == 1 ? "0xDEADBEEFu" : "0x76543210u") +
+              " ? 37 : 41);\n}\n"
+              "int main(void) { return wrap(0x12345678, 0x76543210) != 37 || "
+              "calls != 1; }\n";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define calloc fixture_pair\n" + Source + Oracle,
+                {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+          RecordProperty("native_i386_execution", "requires Linux x86");
+#endif
+        }
     }
 }
 
@@ -984,6 +1476,91 @@ TEST(I386CallContract, APICPLTEntryJumpsByTheGOTItsCallerHolds) {
                            "(int32_t)islower(arg0);"})
     EXPECT_NE(Source.find(Call), std::string::npos) << Call << "\n" << Source;
   EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+}
+
+TEST(I386CallContract, HeaderVariadicStackPrefixKeepsTheOpenTail) {
+  windows_variadic_test::Header Debug;
+  Debug.Slot = Iat;
+  for (unsigned Tail : {0u, 1u, 3u}) {
+    std::vector<uint8_t> Code;
+    for (unsigned I = Tail; I > 0; --I)
+      Code.insert(Code.end(), {0x6A, static_cast<uint8_t>(11 * I)});
+    Code.insert(Code.end(), {0x6A, static_cast<uint8_t>(Tail)});
+    Code.insert(Code.end(),
+                {0xFF, 0x74, 0x24, static_cast<uint8_t>(4 * (Tail + 2))});
+    const auto Call = callThroughSlot(Iat);
+    Code.insert(Code.end(), Call.begin(), Call.end());
+    Code.insert(Code.end(),
+                {0x83, 0xC4, static_cast<uint8_t>(4 * (Tail + 2)), 0xC3});
+    auto Image = makeImage(Code, {"fixture_variadic"});
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(Tail);
+      SCOPED_TRACE(LLVM);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = LLVM;
+      Options.OnlyFunctionEntries = {Text};
+      auto Result = Pipeline().run(Image, Context, Options, &Debug);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      CEmitterOptions COptions;
+      COptions.TheArch = Image.Arch;
+      COptions.Format = Image.Format;
+      COptions.Image = &Image;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions,
+                                        &Debug, &Image));
+      } else {
+        ASSERT_TRUE(
+            HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+      }
+      source_call_execution_test::compileAndRun(
+          Source + windows_variadic_test::oracle(Tail, "wrap"));
+    }
+  }
+}
+
+TEST(I386CallContract, HeaderVariadicTailJumpRetainsItsFixedStackInputs) {
+  windows_variadic_test::Header Debug;
+  Debug.Slot = Iat;
+  auto Code = callThroughSlot(Iat);
+  Code[1] = 0x25; // jmp [Iat], forwarding the incoming fixed stack prefix
+  auto Image = makeImage(Code, {"fixture_variadic"});
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = LLVM;
+    Options.OnlyFunctionEntries = {Text};
+    auto Result = Pipeline().run(Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedFuncs.size(), 1u);
+    EXPECT_EQ(Result.MedFuncs.front().Params.size(), 2u);
+    CEmitterOptions COptions;
+    COptions.TheArch = Image.Arch;
+    COptions.Format = Image.Format;
+    COptions.Image = &Image;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVM) {
+      ASSERT_TRUE(Result.LlvmModule);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions, &Debug,
+                                      &Image));
+    } else {
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+    }
+    std::string Oracle = windows_variadic_test::oracle(0, "wrap");
+    const auto Call = Oracle.find("wrap(-7)");
+    ASSERT_NE(Call, std::string::npos);
+    Oracle.replace(Call, std::string("wrap(-7)").size(), "wrap(-7, 0)");
+    source_call_execution_test::compileAndRun(Source + Oracle);
+  }
 }
 
 } // namespace

@@ -194,6 +194,8 @@ llvm::Expected<int> applyRequestedSignatures(neverd_session_t Sess,
 extern llvm::cl::SubCommand LiftCmd;
 extern llvm::cl::SubCommand DecompileCmd;
 extern llvm::cl::SubCommand PatchCmd;
+extern llvm::cl::SubCommand PatchBytesCmd;
+int runPatchBytes(neverd_session_t Sess);
 extern llvm::cl::SubCommand InfoCmd;
 extern llvm::cl::SubCommand StringsCmd;
 extern llvm::cl::SubCommand XrefsCmd;
@@ -209,6 +211,7 @@ extern llvm::cl::SubCommand ExportCmd;
 extern llvm::cl::SubCommand BookmarksCmd;
 extern llvm::cl::SubCommand AnnotateCmd;
 extern llvm::cl::SubCommand DiffCmd;
+extern llvm::cl::SubCommand LineageCmd;
 extern llvm::cl::SubCommand CallGraphCmd;
 extern llvm::cl::SubCommand PathsCmd;
 extern llvm::cl::SubCommand CallTreeCmd;
@@ -219,6 +222,10 @@ extern llvm::cl::SubCommand IdentifyCmd;
 extern llvm::cl::SubCommand OperandsCmd;
 extern llvm::cl::SubCommand SearchCmd;
 extern llvm::cl::SubCommand SectionsCmd;
+extern llvm::cl::SubCommand AnalysisSectionsCmd;
+extern llvm::cl::opt<std::string> AnalysisSectionAdd;
+extern llvm::cl::opt<std::string> AnalysisSectionData;
+extern llvm::cl::opt<std::string> AnalysisSectionRemove;
 extern llvm::cl::SubCommand SymbolsCmd;
 extern llvm::cl::SubCommand RelocsCmd;
 extern llvm::cl::SubCommand HeadersCmd;
@@ -240,6 +247,7 @@ extern llvm::cl::opt<std::string> ExecutionConfiguration, ExecutionModules;
 extern llvm::cl::opt<std::string> ModulesAction, ModulesConfiguration,
     ModulesID, ModulesSymbol;
 extern llvm::cl::SubCommand CPUCapabilitiesCmd;
+extern llvm::cl::SubCommand X87CapabilitiesCmd;
 extern llvm::cl::SubCommand EmulateProcessCmd;
 extern llvm::cl::SubCommand UnpackCmd;
 extern llvm::cl::SubCommand AuditCmd;
@@ -283,6 +291,8 @@ extern llvm::cl::opt<std::string> VMChainTransfers;
 extern llvm::cl::opt<std::string> VMChainVisits;
 extern llvm::cl::opt<bool> VMChainStopAtRepeat;
 extern llvm::cl::opt<std::string> VMEntryFrame;
+extern llvm::cl::opt<bool> VMProveStoreReturnSeparation;
+extern llvm::cl::opt<bool> VMProveStoreFrameSeparation;
 extern llvm::cl::opt<std::string> VMEntryAlignment;
 extern llvm::cl::opt<bool> VMExternalStoresDisjointFrame;
 extern llvm::cl::opt<std::string> VMMaxSymbolicNodes;
@@ -290,6 +300,7 @@ extern llvm::cl::opt<bool> VMNoControlDiscovery;
 extern llvm::cl::opt<uint64_t> VMMaxOperations;
 extern llvm::cl::opt<std::string> VMRecoveryReport;
 extern llvm::cl::opt<bool> VMMachineState;
+extern llvm::cl::opt<std::string> VMMachineSourceABI;
 
 int runMobile(const char *Argv0);
 extern llvm::cl::opt<std::string> MobilePlatform;
@@ -316,6 +327,7 @@ extern llvm::cl::opt<std::string> InputFile;
 extern llvm::cl::opt<std::string> OutputFile;
 extern llvm::cl::opt<bool> Verbose;
 extern llvm::cl::opt<bool> JsonOutput;
+extern llvm::cl::opt<std::string> InfoUnwindFrame;
 extern llvm::cl::opt<bool> NoDebug;
 extern llvm::cl::opt<bool> NoDwarf;
 extern llvm::cl::opt<bool> NoPdb;
@@ -356,6 +368,8 @@ extern llvm::cl::opt<bool> DumpHigh;
 
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
+extern llvm::cl::opt<std::string> X64Continuation;
+extern llvm::cl::opt<std::string> ContinuationReport;
 extern llvm::cl::opt<bool> SourceSymbolic;
 extern llvm::cl::opt<bool> StackFrameInfo;
 extern llvm::cl::opt<std::string> StackFrameFile;
@@ -392,6 +406,8 @@ extern llvm::cl::opt<bool> TypesAsserts;
 extern llvm::cl::opt<bool> TypesDecimalOffsets;
 extern llvm::cl::opt<bool> TypesNoOffsets;
 extern llvm::cl::list<std::string> TypesDeclare;
+extern llvm::cl::opt<bool> TypesMergePrototypes;
+extern llvm::cl::list<std::string> TypesImportPrototypes;
 extern llvm::cl::opt<bool> TypesSave;
 extern llvm::cl::opt<bool> TypesSaveDeclarations;
 extern llvm::cl::opt<std::string> TypesInput;
@@ -480,6 +496,32 @@ extern llvm::cl::opt<std::string> DiffFileA;
 extern llvm::cl::opt<std::string> DiffFileB;
 extern llvm::cl::opt<std::string> DiffFunc;
 extern llvm::cl::opt<bool> DiffJson;
+extern llvm::cl::opt<bool> DiffStructural;
+extern llvm::cl::opt<std::string> DiffProfile, DiffOptions, DiffSave,
+    DiffReopen, DiffOverrides, DiffList, DiffRegion, DiffRegionKind,
+    DiffFlowFunction, DiffFlowSide, DiffFlowKind, DiffSliceDirection,
+    DiffFlowRegion, DiffFlowRegionCoordinates, DiffImpactFunction,
+    DiffImpactSide, DiffImpactDirection, DiffImpactKind, DiffChangesFunction,
+    DiffChangesSide, DiffChangesContext, DiffReviewRecord, DiffReviewCase,
+    DiffReviewFunction, DiffReviewSide, DiffValidationFunction,
+    DiffValidationSide, DiffListSide, DiffListSearch, DiffListSort,
+    DiffAmbiguousWith, DiffSourceFunction, DiffSourceSide,
+    DiffSourceRepresentation, DiffDataFlowProfile;
+extern llvm::cl::opt<bool> DiffIgnoreNames, DiffRegions, DiffRegionCalls,
+    DiffDataFlow, DiffSliceDataOnly, DiffFlowRegions, DiffFlowFragments,
+    DiffReviewLatest, DiffListDescending, DiffSourceDifference,
+    DiffSourcePrelude;
+extern llvm::cl::opt<double> DiffMinSimilarity;
+extern llvm::cl::opt<unsigned long long> DiffTimeout;
+extern llvm::cl::opt<unsigned long long> DiffImpactWork, DiffChangesWork,
+    DiffEffectWork, DiffValidationWork, DiffSourceWork, DiffSourceBytes;
+extern llvm::cl::opt<unsigned> DiffOffset, DiffLimit, DiffRegionAnchor,
+    DiffSliceNode, DiffArgumentAccessCall, DiffFlowRegionAnchor,
+    DiffImpactDepth, DiffImpactFunctions, DiffImpactSites, DiffImpactWitness,
+    DiffChangesRows, DiffChangesCount, DiffEffectRecords,
+    DiffValidationInstructions, DiffSourceInstructions;
+int runStructuralDiff();
+int runLineage();
 
 // Annotate.
 extern llvm::cl::opt<bool> AnnotateList;
@@ -537,6 +579,8 @@ extern UnsignedNumericOption ItemElementSize;
 extern llvm::cl::opt<std::string> ItemEncoding;
 extern llvm::cl::opt<std::string> OperandAddr;
 extern llvm::cl::opt<std::string> LoadLoader;
+extern llvm::cl::opt<std::string> LoadCacheImage;
+extern llvm::cl::opt<bool> ListCacheImages;
 extern llvm::cl::opt<std::string> LoadProcessor;
 extern llvm::cl::opt<std::string> LoadPlatform;
 extern llvm::cl::opt<std::string> LoadBase;
@@ -693,6 +737,8 @@ int runImports(neverd_session_t Sess);
 int runExports(neverd_session_t Sess);
 int runSegments(neverd_session_t Sess);
 int runSections(neverd_session_t Sess);
+bool loadAnalysisSections(neverd_session_t Sess);
+int runAnalysisSections(neverd_session_t Sess);
 int runSymbols(neverd_session_t Sess);
 int runRelocs(neverd_session_t Sess);
 int runEntryPoints(neverd_session_t Sess);
@@ -780,6 +826,7 @@ int runEmulateDriver();
 int runModules();
 int runExecution();
 int runCPUCapabilities();
+int runX87Capabilities();
 int runEmulateProcess();
 int runUnpack();
 
@@ -788,6 +835,7 @@ bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
+int runX64Continuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
 
 } // namespace neverd::cli

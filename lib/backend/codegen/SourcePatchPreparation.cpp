@@ -25,6 +25,7 @@
 #include "neverd/object/PELayout.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SHA256.h"
@@ -34,6 +35,10 @@
 
 namespace neverd {
 namespace {
+#define NEVERD_SOURCE_PATCH_PREPARATION_DIAGNOSTIC(Name, Value)                \
+  constexpr llvm::StringLiteral Name = Value;
+#include "SourcePatchPreparation.def"
+
 llvm::Error fail(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "source preparation: " + Message);
@@ -193,6 +198,9 @@ prepareSourcePatchCallbacks(const BinaryImage &Original,
       return fail(
           "original binding must name one distinct replaced function entry");
     const auto *Function = Original.ExceptionMetadata.findFunction(VA);
+    if (Apple && Function && Function->Compact &&
+        Function->Compact->ReturnAddressSigningOffset.has_value())
+      return fail(kARM64PAuthLRUnsupportedCallback);
     uint64_t End = Function ? Function->CodeRange.End
                             : Original.getFunctionMetadataEnd(VA);
     const bool CoalescedCompact =

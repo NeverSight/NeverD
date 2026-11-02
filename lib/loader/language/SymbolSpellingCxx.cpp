@@ -309,6 +309,17 @@ std::string neverd::cxxSourceName(llvm::StringRef Name) {
   }
 }
 
+bool neverd::isItaniumConstructorOrDestructor(llvm::StringRef Name) {
+  if (symbolScheme(Name) != SymbolScheme::Itanium)
+    return false;
+  if (Name.starts_with("__Z"))
+    Name = Name.drop_front();
+  const std::string Mangled = Name.str();
+  llvm::ItaniumPartialDemangler Demangler;
+  return !Demangler.partialDemangle(Mangled.c_str()) &&
+         Demangler.isFunction() && Demangler.isCtorOrDtor();
+}
+
 bool symbol_spelling::claimsItaniumName(llvm::StringRef) { return true; }
 
 std::string symbol_spelling::readableItaniumName(llvm::StringRef Name) {

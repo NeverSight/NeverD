@@ -94,12 +94,24 @@ NEVERD_ANDROID_DIAGNOSTIC(InactiveProviderPrefix,
 NEVERD_ANDROID_DIAGNOSTIC(GuestCalledPrefix, "guest called ")
 NEVERD_ANDROID_DIAGNOSTIC(MemcpyOverlap, "overlapping memcpy operands")
 NEVERD_ANDROID_DIAGNOSTIC(StringCopyOverlap, "overlapping strncpy operands")
+NEVERD_ANDROID_DIAGNOSTIC(TerminatedStringCopyOverlap,
+                          "overlapping strcpy operands")
+NEVERD_ANDROID_DIAGNOSTIC(SizedStringCopyOverlap,
+                          "overlapping strlcpy operands")
+NEVERD_ANDROID_DIAGNOSTIC(StringAppendOverlap,
+                          "overlapping string concatenation operands")
 NEVERD_ANDROID_DIAGNOSTIC(StringAddressOverflow, "string address overflows")
 NEVERD_ANDROID_DIAGNOSTIC(StringScanLimit, "string scan exceeds memory limit")
 NEVERD_ANDROID_DIAGNOSTIC(
     DecimalRange, "out-of-range decimal integer conversion is unmodeled")
 NEVERD_ANDROID_DIAGNOSTIC(FortifyReadPrefix,
                           "FORTIFY read exceeds object bounds in ")
+NEVERD_ANDROID_DIAGNOSTIC(FortifyWritePrefix,
+                          "FORTIFY destination extent exceeded: ")
+NEVERD_ANDROID_DIAGNOSTIC(FortifiedReadCount,
+                          "fortified read exceeds the signed byte-count limit")
+NEVERD_ANDROID_DIAGNOSTIC(FortifiedReadBounds,
+                          "fortified read extent exceeds destination bounds")
 NEVERD_ANDROID_DIAGNOSTIC(StringCompareLimit,
                           "string comparison exceeds memory limit")
 NEVERD_ANDROID_DIAGNOSTIC(ReallocationOwnership,
@@ -235,6 +247,10 @@ NEVERD_ANDROID_DIAGNOSTIC(AuxiliaryVectorInput,
                           "invalid or excessive auxiliary vector entries")
 NEVERD_ANDROID_DIAGNOSTIC(AuxiliaryVectorUnspecified,
                           "getauxval requires an explicit auxiliary vector")
+NEVERD_ANDROID_DIAGNOSTIC(EnvironmentUnspecified,
+                          "getenv requires an explicit environment vector")
+NEVERD_ANDROID_DIAGNOSTIC(EnvironmentScanLimit,
+                          "environment lookup exceeds the memory scan budget")
 NEVERD_ANDROID_DIAGNOSTIC(CalendarZoneInput, "invalid fixed calendar time zone")
 NEVERD_ANDROID_DIAGNOSTIC(CalendarZoneUnspecified,
                           "localtime requires an explicit fixed time zone")
@@ -279,10 +295,24 @@ NEVERD_ANDROID_DIAGNOSTIC(FormatConversion,
                           "unsupported format conversion (including "
                           "positional, floating-point, wide text and %n)")
 NEVERD_ANDROID_DIAGNOSTIC(
-    FormatCapacity, "snprintf capacity exceeds the supported INT_MAX bound")
+    FormatCapacity, "formatting capacity exceeds the supported INT_MAX bound")
+NEVERD_ANDROID_DIAGNOSTIC(FormatFortify,
+                          "fortify buffer-size failure requires process abort")
 NEVERD_ANDROID_DIAGNOSTIC(ArgumentVAListAlignment, "unaligned AAPCS64 va_list")
 NEVERD_ANDROID_DIAGNOSTIC(ArgumentRegisterOffset,
                           "invalid AAPCS64 general register offset")
+NEVERD_ANDROID_DIAGNOSTIC(DladdrObservationCount,
+                          "dladdr observation count exceeds its limit")
+NEVERD_ANDROID_DIAGNOSTIC(DladdrObservationInvalid,
+                          "invalid positive dladdr observation")
+NEVERD_ANDROID_DIAGNOSTIC(DladdrObservationBytes,
+                          "dladdr observation bytes exceed their limit")
+NEVERD_ANDROID_DIAGNOSTIC(
+    DladdrObservationUnknown,
+    "dladdr requires an explicit successful address observation")
+NEVERD_ANDROID_DIAGNOSTIC(DladdrObservationChanged,
+                          "dladdr observation string storage changed")
+NEVERD_ANDROID_DIAGNOSTIC(SnapshotDiagnosticTruncated, "... [truncated]")
 #endif
 
 NEVERD_ANDROID_DIAGNOSTIC(MutexWaitPadding,

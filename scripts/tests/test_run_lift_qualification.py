@@ -29,6 +29,24 @@ class LiftQualificationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 qualification.identities(bad)
 
+    def test_renames_retain_the_historical_case_and_outcome(self):
+        document = json.loads(qualification.MANIFEST.read_text())
+        old = "X86_32_X87FPU.NativeAndLiftedCallLoopsReturnTheIndependentSum"
+        current = "X87CallReplay.NativeAndLiftedCallLoopsReturnTheIndependentSum"
+        self.assertIn(old, [case["name"] for case in document["tests"]])
+        self.assertIn(current, qualification.identities(document))
+        self.assertNotIn(old, qualification.identities(document))
+        case = next(case for case in document["tests"] if case["name"] == old)
+        self.assertEqual(case["baseline"], "skipped")
+
+    def test_current_identities_cannot_collide_or_select_multiple_tests(self):
+        document = json.loads(qualification.MANIFEST.read_text())
+        for invalid in (document["tests"][1]["name"], "Example.*", "", None, []):
+            bad = copy.deepcopy(document)
+            bad["tests"][0]["current_name"] = invalid
+            with self.assertRaises(ValueError):
+                qualification.identities(bad)
+
     def test_accepts_complete_individual_passes(self):
         self.assertEqual(qualification.audit(self.xml, self.names, 0)["passed"], 2)
 

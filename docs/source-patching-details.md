@@ -213,18 +213,18 @@ x64 PLT specifier as an AArch64 page modifier. Late compiler calls such as
 `_Unwind_Resume` can therefore receive a wrong displacement. NeverD checks these
 encoded source-patch references and refuses an invalid image.
 
-The scoped backend correction is included in
-[`cmake/patches/llvm-aarch64-specifier-scope.patch`](../cmake/patches/llvm-aarch64-specifier-scope.patch).
-The integrated build applies this correction to a build-directory copy of the
-single LLVM source file. It preserves the submodule checkout and revision, and
-accepts an already corrected source. An unrecognized source fails configuration
-instead of silently skipping the correction. Use an integrated build:
+The address-model corrections live in the
+[NeverSight LLVM fork](https://github.com/NeverSight/llvm-project).
+The recorded submodule includes the AArch64 specifier guard, i386 GOT base
+arithmetic and Mach-O GOTPCREL data bias. Integrated builds compile this source
+directly. NeverD carries no LLVM source patch or build-directory overlay. Use an
+integrated build:
 
 ```sh
 cmake -S . -B build-source -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=ON -DNEVERD_LLVM_PREBUILT=OFF \
   -DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=/path/to/clang
-cmake --build build-source --target neverd NeverDSourcePatchTests \
+python3 scripts/build.py build-source --target neverd NeverDSourcePatchTests \
   NeverDNativeExceptionRewriteContractTests --parallel 4
 ```
 
@@ -353,12 +353,12 @@ The x64 Mach-O typed-catch probe exposed a four-byte error in LLVM's GOT data
 fixup base. LLDB showed the unwinder reading the original type-info GOT slot at
 slot + 4. Mach-O's non-PC-relative `FK_Data_4` GOTPCREL relocation becomes
 relative to the end of the word at object writing; the final-address backend
-had used its beginning. The scoped build copy now applies the data-only bias,
+had used its beginning. The LLVM fork now applies the data-only bias,
 while instructions keep their existing PC bias. An independent field regression
 and the seven real exception scenarios passed. Source publication also checks
 these encoded data fields, so the uncorrected r3/r4 package is refused instead
-of publishing the bad reference. The recorded LLVM checkout and shared package
-cache remain unchanged.
+of publishing the bad reference. Integrated builds use the corrected fork;
+shared prebuilt packages retain their recorded source until a new release.
 
 Intel Mach-O fixtures need room for both load-command headers and compact-unwind
 page growth. `-Wl,-headerpad,0x1000` reserves the former;

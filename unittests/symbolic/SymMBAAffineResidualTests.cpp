@@ -258,6 +258,37 @@ TEST(SymMBAAffineResidual, PreservesMinimalUnaryAnswersAcrossBudgets) {
   }
 }
 
+TEST(SymMBAAffineResidual, StopsAfterProvingAMinimalAffineVariable) {
+  for (unsigned Width : {2u, 3u, 8u, 64u, 128u, 257u, 4096u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    SymRef X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    for (SymRef E : {Ctx.mkAdd(Ctx.mkConst(Width, 2), Ctx.mkNot(X)),
+                     Ctx.mkAdd(Ctx.mkConst(Width, 2), X),
+                     Ctx.mkSub(Ctx.mkConst(Width, 2), X)}) {
+      MBAOptions Options;
+      Options.VerifySamples = 0;
+      detail::WorkBudget ArithmeticBudget(Options.MaxWork);
+      detail::SolveReport ArithmeticReport;
+      SymRef Arithmetic = detail::solveArithmetic(
+          Ctx, E, Options, ArithmeticBudget, ArithmeticReport);
+      ASSERT_EQ(Ctx.readabilityCost(Arithmetic), 3u);
+      detail::WorkBudget RegionBudget(Options.MaxWork);
+      detail::SolveReport RegionReport;
+      SymRef Result =
+          detail::solveOneRegion(Ctx, E, Options, RegionBudget, RegionReport);
+      EXPECT_EQ(Result, Arithmetic);
+      EXPECT_EQ(RegionBudget.used(), ArithmeticBudget.used());
+      EXPECT_EQ(RegionReport.Evidence, ArithmeticReport.Evidence);
+      if (Width <= 3)
+        expectAllPairsEqual(Ctx, E, Result, X, Y);
+    }
+    // The complement is cheaper than a subtraction with an all-ones offset.
+    SymRef Complement = Ctx.mkSub(Ctx.mkOnes(Width), X);
+    EXPECT_EQ(simplifyMBADeep(Ctx, Complement).Expr, Ctx.mkNot(X));
+  }
+}
+
 TEST(SymMBAAffineResidual, StopsAtDistinctFreeVariableProducts) {
   for (unsigned Width : {1u, 2u, 8u, 64u, 256u, 4096u}) {
     for (unsigned Count : {2u, 3u, 4u, 6u}) {

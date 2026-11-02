@@ -12,8 +12,11 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/ADT/StringSwitch.h"
 
 #include <set>
 
@@ -34,18 +37,18 @@ getCheckedX86LocalUnwindContract(const BinaryImage &Image, va_t Target,
     Slot = readLE<uint32_t>(Bytes->data() + 2);
   }
   const auto *Import = registration_abi::checkedImportSlot(Image, Slot);
-  if (!Import ||
-      (Import->Name != "_local_unwind2" && Import->Name != "_local_unwind4") ||
-      (!llvm::StringRef(Import->Module).equals_insensitive("msvcrt.dll") &&
-       !llvm::StringRef(Import->Module)
-            .equals_insensitive("vcruntime140.dll") &&
-       !llvm::StringRef(Import->Module)
-            .equals_insensitive("vcruntime140d.dll")))
+  if (!Import)
     return std::nullopt;
   using Kind = RegistrationLocalUnwindContract::Kind;
-  return RegistrationLocalUnwindContract{
-      Target, Indirect,
-      Import->Name == "_local_unwind4" ? Kind::EH4 : Kind::EH3, Slot};
+  const auto Routine = llvm::StringSwitch<std::optional<Kind>>(Import->Name)
+#define NEVERD_REGISTRATION_LOCAL_UNWIND(Name, Routine)                        \
+  .Case(Name, Kind::Routine)
+#include "RegistrationRuntimeImports.def"
+                           .Default(std::nullopt);
+  if (!Routine ||
+      !coff_loader::isX86RegistrationRuntimeProvider(Import->Module))
+    return std::nullopt;
+  return RegistrationLocalUnwindContract{Target, Indirect, *Routine, Slot};
 }
 
 std::optional<std::vector<RegistrationLocalUnwindContract>>

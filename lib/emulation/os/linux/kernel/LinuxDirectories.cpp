@@ -33,7 +33,7 @@ std::optional<std::string> LinuxFiles::descriptorPath(uint32_t FD) const {
   if (I == Descriptors.end())
     return std::nullopt;
   if (const auto *F = std::get_if<OpenFile>(I->second.get()))
-    return F->Path;
+    return fileName(F->Path);
   if (const auto *P = std::get_if<OpenProcFile>(I->second.get()))
     return P->Path;
   if (const auto *D = std::get_if<OpenDirectory>(I->second.get()))
@@ -51,9 +51,16 @@ std::optional<std::string> LinuxFiles::descriptorPath(uint32_t FD) const {
 llvm::Expected<uint64_t> LinuxFiles::inode(const std::string &Path) {
   if (auto *M = directoryMetadata(Path))
     return M->Inode;
-  if (auto M = Options->Metadata.find(Path); M != Options->Metadata.end())
-    return M->second.Inode;
-  if (auto I = Inodes.find(Path); I != Inodes.end())
+  const auto *Object = fileIdentity(Path);
+  const auto &Identity = Object ? *Object : Path;
+  // Only a live file binding can borrow its original object's metadata.
+  // A new directory may reuse a retired pathname without becoming that file.
+  if (Object)
+    if (auto M = Options->Metadata.find(*Object); M != Options->Metadata.end())
+      return M->second.Inode;
+  if (Object && CreatedFileLimits.contains(*Object))
+    return fileMetadata(*Object)->Inode;
+  if (auto I = Inodes.find(Identity); I != Inodes.end())
     return I->second;
   if (Inodes.size() >= FileDescriptorLimit * 2 + FileCountLimit)
     return failure("directory inode identity budget exhausted");
@@ -68,7 +75,7 @@ llvm::Expected<uint64_t> LinuxFiles::inode(const std::string &Path) {
     ++NextInode;
   const auto Number = NextInode++;
   UsedInodes.insert(Number);
-  return Inodes.emplace(Path, Number).first->second;
+  return Inodes.emplace(Identity, Number).first->second;
 }
 
 llvm::Expected<std::optional<uint64_t>>
@@ -119,8 +126,7 @@ LinuxFiles::directoryEntries(uint32_t FD, uint64_t Address, uint32_t Size,
       if (Path.consume_front(Prefix) && !Path.empty())
         Names.insert(Path.split('/').first.str());
     };
-    for (const auto &[Path, Bytes] : Options->Files)
-      Add(Path);
+    forEachFilePath([&](const std::string &Path) { Add(Path); });
     for (const auto &[Path, Bytes] : Options->SymbolicLinks)
       Add(Path);
     for (const auto &[Path, Device] : Options->Devices)

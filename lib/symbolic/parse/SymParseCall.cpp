@@ -41,6 +41,12 @@ SymRef Parser::makeLiteral(const Token &N) {
   if (Failed)
     return {};
 
+  // Most MBA coefficients fit in a native word. Parse those once; the
+  // literal builder owns truncation and zero extension to the declared width.
+  uint64_t Native;
+  if (!N.Digits.getAsInteger(N.Radix, Native))
+    return Ctx.mkConst(W, Native);
+
   unsigned Needed = llvm::APInt::getBitsNeeded(N.Digits, N.Radix);
   llvm::APInt V(std::max(Needed, W), N.Digits, N.Radix);
   return Ctx.mkConst(V.zextOrTrunc(W));

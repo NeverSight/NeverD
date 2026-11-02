@@ -13,10 +13,14 @@
 
 #include "neverd/loader/MachO/MachOLoader.h"
 
+#include "DyldCacheLoading.h"
+
 #include "neverd/Limits.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
+#include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"
 #include "neverd/loader/MachO/MachOExceptions.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
@@ -68,7 +72,11 @@ Arch cpuTypeToArch(uint32_t CpuType, bool Is64) {
 }
 
 /// How the load dialog names a cputype value.
-std::string cpuName(uint32_t CpuType) {
+std::string cpuName(uint32_t CpuType, uint32_t CpuSubtype = 0) {
+#define NEVERD_MACHO_CPU_SUBTYPE(CPU, Subtype, Name)                           \
+  if (CpuType == CPU && (CpuSubtype & ~uint32_t(CPU_SUBTYPE_MASK)) == Subtype) \
+    return Name;
+#include "neverd/loader/MachO/MachONames.def"
   switch (CpuType) {
 #define NEVERD_MACHO_CPU(Value, Name)                                          \
   case Value:                                                                  \
@@ -107,20 +115,66 @@ void judge(const llvm::object::MachOObjectFile &Obj, LoadCandidate &Row) {
 
 llvm::Expected<BinaryImage>
 MachOLoader::load(const std::filesystem::path &Path) {
-  auto Buffer = readFileBuffer(Path, BinaryFormat::MachO);
+  if (!CacheImage.empty()) {
+    auto Opened = macho_loader::DyldSharedCache::open(Path, Progress);
+    if (!Opened)
+      return Opened.takeError();
+    auto Cache =
+        std::make_shared<macho_loader::DyldSharedCache>(std::move(*Opened));
+    const auto Images = Cache->images();
+    auto Selected = llvm::find_if(
+        Images, [&](const auto &Image) { return Image.Path == CacheImage; });
+    if (Selected == Images.end() ||
+        llvm::count_if(Images, [&](const auto &Image) {
+          return Image.Path == CacheImage;
+        }) != 1)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     macho_loader::cache_load::kImageMissing);
+    const size_t Index = Selected - Images.begin();
+    auto Prepared = Cache->prepareImage(Index, Progress);
+    if (!Prepared)
+      return Prepared.takeError();
+    const llvm::StringRef Bytes(
+        reinterpret_cast<const char *>(Prepared->data()), Prepared->size());
+    return loadBufferImpl(llvm::MemoryBufferRef(Bytes, Selected->Path),
+                          std::move(Cache), Index);
+  }
+  auto Buffer = readFileBuffer(Path, BinaryFormat::MachO, Progress);
   if (!Buffer)
     return Buffer.takeError();
+  if (macho_loader::DyldSharedCache::hasMagic((*Buffer)->getBuffer()))
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        macho_loader::cache_load::kSelectionRequired);
   return loadBuffer((*Buffer)->getMemBufferRef());
 }
 
 llvm::Expected<BinaryImage>
 MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
+  if (!CacheImage.empty())
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        macho_loader::cache_load::kBufferUnavailable);
+  return loadBufferImpl(Buffer, nullptr);
+}
+
+llvm::Expected<BinaryImage> MachOLoader::loadBufferImpl(
+    llvm::MemoryBufferRef Buffer,
+    std::shared_ptr<const macho_loader::DyldSharedCache> Cache,
+    size_t ImageIndex) {
+  Progress.report("parse", 0, 1, "Mach-O tables");
   auto OpenOr = macho_loader::openMachOBuffer(Buffer);
   if (!OpenOr)
     return OpenOr.takeError();
 
   auto MachOObj = std::move(*OpenOr);
   const auto &Obj = *MachOObj;
+
+  if (Cache && Obj.getHeader().filetype != MH_DYLIB &&
+      Obj.getHeader().filetype != MH_DYLINKER)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        macho_loader::cache_load::kImageTypeUnsupported);
 
   bool Is64 = Obj.is64Bit();
   bool IsLE = Obj.isLittleEndian();
@@ -129,20 +183,33 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
         "macho: big-endian not supported", llvm::inconvertibleErrorCode());
 
   BinaryImage Img;
-  initializeImage(Buffer, Img, BinaryFormat::MachO, /*CopyRaw=*/false);
+  if (Cache) {
+    Img.Format = BinaryFormat::MachO;
+    Img.MachOSharedCache = std::move(Cache);
+    Img.MachOSharedCacheImagePath =
+        Img.MachOSharedCache->images()[ImageIndex].Path;
+    Img.MachOSharedCacheFileSHA256 =
+        Img.MachOSharedCache->fileDigests(Progress);
+    Img.InputFileSHA256 = Img.MachOSharedCacheFileSHA256.front();
+  } else {
+    initializeImage(Buffer, Img, BinaryFormat::MachO, /*CopyRaw=*/false,
+                    Progress);
+  }
   Img.IsRelocatable = Obj.getHeader().filetype == MH_OBJECT;
   Img.ReadsStaticSymbols = ReadsStaticSymbols;
   Img.MachOIsDylib = Obj.getHeader().filetype == MH_DYLIB;
+  Img.DynInfo.MachOFileType = Obj.getHeader().filetype;
   // An executable linked without MH_PIE runs at its link address.
-  Img.LoadsAtLinkAddress = Obj.getHeader().filetype == MH_EXECUTE &&
+  Img.LoadsAtLinkAddress = !Img.MachOSharedCache &&
+                           Obj.getHeader().filetype == MH_EXECUTE &&
                            !(Obj.getHeader().flags & MH_PIE);
   llvm::StringRef ObjBytes = Obj.getData();
-  Img.Raw.assign(reinterpret_cast<const uint8_t *>(ObjBytes.data()),
-                 reinterpret_cast<const uint8_t *>(ObjBytes.data()) +
-                     ObjBytes.size());
+  copyImageBytes(llvm::arrayRefFromStringRef(ObjBytes), Img.Raw, Progress);
 
   uint32_t CpuType = Is64 ? Obj.getHeader64().cputype : Obj.getHeader().cputype;
   Img.Arch = cpuTypeToArch(CpuType, Is64);
+  Img.MachOCPUSubtype =
+      Is64 ? Obj.getHeader64().cpusubtype : Obj.getHeader().cpusubtype;
   Img.Bits = Is64 ? Bitness::Bits64 : Bitness::Bits32;
   if (Img.Arch == Arch::Unknown)
     return llvm::make_error<llvm::StringError>(
@@ -242,6 +309,7 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
       Seg.Flags = ImgSec.Flags;
       Seg.Data = ImgSec.Data;
       for (const Segment &Existing : Img.Segments) {
+        Progress.check();
         if (Seg.VA < Existing.VA + Existing.Size &&
             Existing.VA < Seg.VA + Seg.Size) {
           OverlappingObjectSections = true;
@@ -270,6 +338,11 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
       return;
     }
     if (Img.IsRelocatable)
+      return;
+    // Packed linkedit bytes have file identity only. Their original VM range
+    // remains readable through the owning cache, never through this projection.
+    if (Img.MachOSharedCache &&
+        readMachOName(Name) == section_names::macho::LinkeditSeg)
       return;
     // A segment may carry more file bytes than it maps.  Go's internal Mach-O
     // linker emits `__DWARF` with a zero vmsize and the entire debug payload in
@@ -301,11 +374,13 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   };
 
   for (const auto &LC : Obj.load_commands()) {
+    Progress.check();
     if (LC.C.cmd == LC_SEGMENT_64 && Is64) {
       auto SegCmd = Obj.getSegment64LoadCommand(LC);
       AddSegment(SegCmd.segname, SegCmd.vmaddr, SegCmd.vmsize, SegCmd.fileoff,
                  SegCmd.filesize, SegCmd.initprot, SegCmd.flags);
       for (uint32_t SI = 0; SI < SegCmd.nsects; ++SI) {
+        Progress.check();
         auto S = Obj.getSection64(LC, SI);
         AddSection(S.sectname, S.segname, S.addr, S.size, S.offset, S.align,
                    S.flags, S.reserved1, S.reserved2, SegCmd.initprot);
@@ -317,6 +392,7 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
       AddSegment(SegCmd.segname, SegCmd.vmaddr, SegCmd.vmsize, SegCmd.fileoff,
                  SegCmd.filesize, SegCmd.initprot, SegCmd.flags);
       for (uint32_t SI = 0; SI < SegCmd.nsects; ++SI) {
+        Progress.check();
         auto S = Obj.getSection(LC, SI);
         AddSection(S.sectname, S.segname, S.addr, S.size, S.offset, S.align,
                    S.flags, S.reserved1, S.reserved2, SegCmd.initprot);
@@ -398,8 +474,10 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
         Sec.Name == section_names::macho::StubHelper)
       Img.recordImportStubRange(Sec.Addr, Sec.Size);
 
+  Progress.check();
   // --- Symbol table ---
   for (auto SI = Obj.symbol_begin(), SE = Obj.symbol_end(); SI != SE; ++SI) {
+    Progress.check();
     llvm::object::DataRefImpl DRI = SI->getRawDataRefImpl();
     uint64_t SymAddr;
     uint8_t NType, NSect;
@@ -484,6 +562,7 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   // Do not extrapolate through a mixed code/data section.
   if (Obj.getHeader().filetype == MH_OBJECT) {
     for (const Section &Sec : Img.Sections) {
+      Progress.check();
       if ((Sec.Type & S_ATTR_PURE_INSTRUCTIONS) == 0 || Sec.Size == 0 ||
           Sec.Size > InvalidVA - Sec.VA)
         continue;
@@ -496,6 +575,7 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
       });
       const va_t SectionEnd = Sec.VA + Sec.Size;
       for (size_t I = 0; I < Functions.size(); ++I) {
+        Progress.check();
         Symbol &Sym = Img.Symbols[Functions[I]];
         va_t End = SectionEnd;
         for (size_t J = I + 1; J < Functions.size(); ++J)
@@ -508,15 +588,18 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
     }
   }
 
+  Progress.check();
   // --- Apply relocations for .o files ---
   if (Obj.getHeader().filetype == MH_OBJECT) {
     if (llvm::Error Err = macho_loader::applyObjectRelocations(Obj, Img))
       return std::move(Err);
   }
 
+  Progress.check();
   // --- Stub-to-import mapping via indirect symbol table ---
   macho_loader::parseStubImports(Obj, Sections, BasePtr, FileSize, Is64, Img);
 
+  Progress.check();
   // --- Pointer-slot (__got / __la_symbol_ptr) -> import mapping.  Names the
   // GOT-indirect stack-probe call (____chkstk_darwin) the rewriter elides. ---
   macho_loader::parseNonLazyPtrImports(Obj, Sections, BasePtr, FileSize, Is64,
@@ -525,12 +608,28 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   macho_loader::parseFunctionStarts(BasePtr, FileSize, FuncStarts, TextVMAddr,
                                     Img);
   macho_loader::parseNeededLibraries(Obj, Img);
-  macho_loader::parseBindStreams(BasePtr, FileSize, DyldInfo, Img);
-  macho_loader::parseRebaseStream(BasePtr, FileSize, DyldInfo, Img);
-  macho_loader::parseChainedFixupsImports(BasePtr, FileSize, ChainedFixups,
-                                          Img);
-  macho_loader::parseChainedFixupsRebases(BasePtr, FileSize, ChainedFixups,
-                                          TextVMAddr, Img);
+  if (Img.MachOSharedCache) {
+    if (auto Error = macho_loader::applyCacheSlideFixups(Img, Progress))
+      return std::move(Error);
+  } else {
+    // Both chain containers establish the same exact-slot provenance. Keep
+    // load-command presence separate from that post-parse image property.
+    const bool HasModernChainedFixups = Img.MachOHasChainedFixups;
+    macho_loader::parseBindStreams(BasePtr, FileSize, DyldInfo, Img,
+                                   HasTextVMAddr ? TextVMAddr : InvalidVA);
+    if (Img.MachOChainedFixupsError.empty()) {
+      macho_loader::parseRebaseStream(BasePtr, FileSize, DyldInfo, Img);
+      if (HasModernChainedFixups) {
+        macho_loader::parseChainedFixupsImports(BasePtr, FileSize,
+                                                ChainedFixups, Img);
+        macho_loader::parseChainedFixupsRebases(BasePtr, FileSize,
+                                                ChainedFixups, TextVMAddr, Img);
+      }
+    }
+  }
+  if (!Img.MachOChainedFixupsError.empty())
+    return llvm::make_error<llvm::StringError>(Img.MachOChainedFixupsError,
+                                               llvm::inconvertibleErrorCode());
   macho_loader::parseRuntimeFunctionSections(Sections, TextVMAddr, Img);
   macho_loader::parseExportTrie(BasePtr, FileSize, DyldInfo, TextVMAddr, Img);
   macho_loader::parseUUID(Obj, Img);
@@ -548,22 +647,29 @@ MachOLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
     return std::move(Err);
 
   runPostLoadDiscovery(
-      Img, "macho: loaded " + pathToUTF8(std::filesystem::u8path(
-                                             Buffer.getBufferIdentifier().str())
-                                             .filename()));
+      Img,
+      "macho: loaded " +
+          pathToUTF8(std::filesystem::u8path(Buffer.getBufferIdentifier().str())
+                         .filename()),
+      Progress);
   // Classified before any table is read: a compact-unwind entry names a
   // personality slot, not a language, so what its LSDA means is settled by the
   // image's symbols and sections rather than by the entry.
   Img.ExceptionMetadata.Runtime = detectLanguageRuntime(Img);
   // Personality routines are reached through __got slots bound at load time,
   // so language-table decoding waits until stubs and bindings are known.
+  Progress.check();
   macho_unwind::parseDarwinExceptions(Img);
+  Progress.check();
   go_loader::parseGoExceptions(Img);
   // Rust and Objective-C share the Itanium tables above rather than emitting
   // their own, so their readings of them run last, over records that are
   // already normalized.
+  Progress.check();
   rust_eh::parseRustExceptions(Img);
+  Progress.check();
   objc_eh::parseObjCExceptions(Img);
+  Progress.report("parse", 1, 1);
   return Img;
 }
 
@@ -595,15 +701,16 @@ void MachOLoader::identify(llvm::MemoryBufferRef Buffer,
     size_t Index = 0;
     for (const auto &Slice : Universal->objects())
       if (Index++ == Chosen)
-        ChosenName = cpuName(Slice.getCPUType());
+        ChosenName = cpuName(Slice.getCPUType(), Slice.getCPUSubType());
     Index = 0;
     for (const auto &Slice : Universal->objects()) {
       LoadCandidate Row;
       Row.Row = LoadRow::FatMachO;
       Row.Format = BinaryFormat::MachO;
-      Row.Description = llvm::formatv(getLoadRowText(LoadRow::FatMachO).data(),
-                                      Index + 1, cpuName(Slice.getCPUType()))
-                            .str();
+      Row.Description =
+          llvm::formatv(getLoadRowText(LoadRow::FatMachO).data(), Index + 1,
+                        cpuName(Slice.getCPUType(), Slice.getCPUSubType()))
+              .str();
       if (auto Obj = Slice.getAsObjectFile()) {
         judge(**Obj, Row);
       } else {
@@ -635,9 +742,12 @@ void MachOLoader::identify(llvm::MemoryBufferRef Buffer,
       Obj->is64Bit() ? Obj->getHeader64().filetype : Obj->getHeader().filetype;
   const uint32_t CpuType =
       Obj->is64Bit() ? Obj->getHeader64().cputype : Obj->getHeader().cputype;
-  Row.Description = llvm::formatv(getLoadRowText(LoadRow::MachO).data(),
-                                  fileTypeName(FileType), cpuName(CpuType))
-                        .str();
+  const uint32_t CpuSubtype = Obj->is64Bit() ? Obj->getHeader64().cpusubtype
+                                             : Obj->getHeader().cpusubtype;
+  Row.Description =
+      llvm::formatv(getLoadRowText(LoadRow::MachO).data(),
+                    fileTypeName(FileType), cpuName(CpuType, CpuSubtype))
+          .str();
   judge(*Obj, Row);
   Rows.push_back(std::move(Row));
 }

@@ -7,6 +7,13 @@ add_neverd_component_library(NeverDPipeline
   evidence/ConstantStores.cpp
   Pipeline.cpp
   PipelineAnalysis.cpp
+  X86/X64ContinuationEnvironment.cpp
+  X86/X64ContinuationExport.cpp
+  X86/X64ContinuationSchedule.cpp
+  X86/X64RtmAbortRegions.cpp
+  X86/X64RtmRegions.cpp
+  X86/X64SpecialRegions.cpp
+  X86/X64FillReturn.cpp
   NativeSourceHints.cpp
   NativeSourcePreservation.cpp
   PipelineCallAbi.cpp
@@ -14,12 +21,17 @@ add_neverd_component_library(NeverDPipeline
   PipelineFormattedCalls.cpp
   PipelineFuncDetect.cpp
   PipelineHighIR.cpp
+  PipelineSourcePointerParameters.cpp
+  PipelineSourceInline.cpp
+  PipelineSourceInlineHigh.cpp
   PipelineLLVM.cpp
   PipelineLibraryRecognition.cpp
   PipelineLowIR.cpp
   PipelineSEHRuntimeMemory.cpp
   Windows/SEHRuntimeFormat.cpp
   PipelineMedIR.cpp
+  PipelineIncomingStack.cpp
+  PipelineRegisterCalls.cpp
   OptimizationGuards.cpp
   PipelineOptimize.cpp
   PipelinePatchLift.cpp

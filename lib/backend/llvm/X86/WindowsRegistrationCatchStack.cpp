@@ -7,7 +7,7 @@
 #include "WindowsRegistrationFramePrivate.h"
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationCatchStack.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatchStack.h"
 
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"

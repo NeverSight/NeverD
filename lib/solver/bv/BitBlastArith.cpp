@@ -30,6 +30,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <utility>
@@ -199,6 +200,27 @@ void multiplyByPattern(CnfEncoder &E, LitSpan A,
 
 void multiplyBits(CnfEncoder &E, LitSpan A, LitSpan B, LitVec &Out) {
   assert(A.size() == B.size() && "multiplication of unequal widths");
+
+  // Known low zeros contribute a fixed output shift. Only the remaining
+  // low-bit quotient participates in multiplication; restore every output bit
+  // afterwards. The recursive call has no known-zero prefix in either input.
+  size_t AZero = 0, BZero = 0;
+  while (AZero < A.size() && E.isFalseLit(A[AZero]))
+    ++AZero;
+  while (BZero < B.size() && E.isFalseLit(B[BZero]))
+    ++BZero;
+  if (AZero || BZero) {
+    const size_t N = A.size();
+    Out.assign(N, E.falseLit());
+    if (AZero >= N - BZero)
+      return;
+    const size_t Shift = AZero + BZero, Observed = N - Shift;
+    LitVec Product;
+    multiplyBits(E, A.slice(AZero, Observed), B.slice(BZero, Observed),
+                 Product);
+    std::copy(Product.begin(), Product.end(), Out.begin() + Shift);
+    return;
+  }
 
   // Either operand may be the literal: a product's operands are sorted by node
   // identity rather than by which of them happens to be known.

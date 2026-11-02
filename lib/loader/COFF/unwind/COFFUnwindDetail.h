@@ -26,6 +26,14 @@
 namespace neverd::coff_loader {
 namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE unwind_detail {
 
+/// Decode into a freshly constructed record in the owning directory. The
+/// value-returning public decoder uses the same implementation.
+void decodeX64ExceptionFunctionInto(const BinaryImage &Img, va_t ImageBase,
+                                    uint32_t RuntimeFunctionRVA,
+                                    uint32_t BeginRVA, uint32_t EndRVA,
+                                    uint32_t UnwindInfoRVA,
+                                    ExceptionFunction &Function);
+
 /// Resolve directory-backed x64 chained-unwind references and validate that
 /// each chain reaches a primary record.
 void resolveX64UnwindChains(ExceptionInfo &Info);

@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <array>
 #include <map>
 #include <variant>
 
@@ -72,12 +73,18 @@ struct LinkedImage {
   std::vector<uint8_t> JNIImage;
   uint64_t JNIThunkBegin = 0, JNIThunkEnd = 0;
   std::optional<uint64_t> JNIOnLoad;
+  std::map<uint64_t, std::array<uint64_t, 4>> DladdrObservations;
 };
 llvm::Error validateAuxiliaryVector(const AndroidNativeOptions &Options);
 llvm::Error validateCalendar(const AndroidNativeOptions &Options);
 llvm::Error initializeCalendar(AddressSpace &Space,
                                const AndroidNativeOptions &Options,
                                const LinkedImage &Linked);
+llvm::Error initializeDladdrObservations(AddressSpace &Space,
+                                         const AndroidNativeOptions &Options,
+                                         LinkedImage &Linked);
+llvm::Error initializeErrorStrings(AddressSpace &Space,
+                                   const LinkedImage &Linked);
 llvm::Error initializeJNI(AddressSpace &Space, LinkedImage &Linked);
 llvm::Expected<PropertyTable>
 initializeProperties(AddressSpace &Space, const ProcessOptions &Options,
@@ -124,6 +131,12 @@ struct GuestThreadWait {};
 struct GuestThreadExit {
   uint64_t Value;
 };
+/// Libc-only state carried unchanged by the scheduler through kernel waits
+/// and signal returns. Linux owns the copied remainder; Bionic owns rounding.
+struct SleepContinuation {
+  uint32_t Seconds, Excess;
+  std::shared_ptr<LinuxTimespec> Remaining;
+};
 /// A returning model either completes now or suspends for a guest callback.
 using BionicValue =
     std::variant<uint64_t, GuestCallback, GuestThreadWait, GuestThreadExit>;
@@ -144,6 +157,11 @@ public:
   virtual BionicResult resume(Bionic &LibC) = 0;
 };
 class GuestThreads;
+/// Native libbinder TLS, independent of JNI attachments and kernel handles.
+struct BinderThreadState {
+  // API 28 IPCThreadState construction starts a new native thread at zero.
+  uint32_t StrictModePolicy = 0;
+};
 class Bionic {
 public:
   Bionic(ExecutionBackend &CPU, linux_model::LinuxServices &Kernel,
@@ -158,7 +176,9 @@ public:
   void reportJNIState();
   BionicResult resumeMutex(uint64_t Address, uint16_t Attributes);
   /// Complete a shared kernel result using the current thread's libc errno.
-  BionicResult kernelResult(std::optional<uint64_t> Returned);
+  BionicResult
+  kernelResult(std::optional<uint64_t> Returned,
+               const std::optional<SleepContinuation> &Sleep = std::nullopt);
   BionicResult resumeSemaphore(uint64_t Address, bool Shared);
   llvm::Error jniThreadExit();
   llvm::Error initializeDex();
@@ -172,6 +192,8 @@ private:
   ExecutionBudget &Budget;
   const LinkedImage &Linked;
   GuestThreads *Threads;
+  BinderThreadState SingleThreadBinder;
+  BinderThreadState &binderThread();
   uint64_t tlsAddress() const;
   uint64_t threadID() const;
   bool Expired = false;
@@ -257,6 +279,7 @@ private:
   llvm::Expected<uint64_t> allocate(uint64_t Size, uint8_t FillByte = 0);
   llvm::Error release(uint64_t Address);
   llvm::Error setErrno(uint32_t Value);
+  llvm::Expected<uint32_t> errnoValue();
   BionicResult linkerError(llvm::StringRef Message, uint64_t ReturnValue = 0);
   static std::optional<BionicValue> value(uint64_t Value) {
     return BionicValue(Value);
@@ -272,13 +295,18 @@ private:
                 const ProcessServiceEvent &Event);
   BionicResult kernelCall(std::optional<linux_model::ServiceKind> Kind,
                           const NativeCallEvent &Call);
+  BionicResult checkedRead(const NativeCallEvent &Call);
   BionicResult usleep(const NativeCallEvent &Call);
+  BionicResult sleep(const NativeCallEvent &Call);
+  BionicResult sleepResult(uint64_t Returned,
+                           const SleepContinuation &Continuation);
   BionicResult getcwd(const NativeCallEvent &Call);
   BionicResult pollCall(const NativeCallEvent &Call);
   BionicResult openLibrary(NativeCallEvent &Call);
   BionicResult lookupSymbol(NativeCallEvent &Call);
   BionicResult closeLibrary(NativeCallEvent &Call);
   BionicResult getLinkerError(NativeCallEvent &Call);
+  BionicResult queryDladdr(const NativeCallEvent &Call);
   BionicResult unsupportedImport(const NativeCallEvent &Call);
   BionicResult failCall(const NativeCallEvent &Call);
   struct DirectoryStream {
@@ -299,6 +327,8 @@ private:
   std::map<uint64_t, LogList> LogLists;
   llvm::Expected<uint64_t> logToken();
   BionicResult logCall(const NativeCallEvent &Call);
+  std::optional<uint32_t> eventLogWrite(llvm::ArrayRef<uint8_t> Payload);
+  BionicResult eventLogCall(const NativeCallEvent &Call);
   BionicResult unsupportedLog(llvm::StringRef Detail);
   struct InputStream {
     uint32_t FD;
@@ -338,16 +368,20 @@ private:
   BionicResult compareMemory(const NativeCallEvent &Call);
   BionicResult descriptorSet(const NativeCallEvent &Call);
   BionicResult stringLength(const NativeCallEvent &Call);
+  llvm::Expected<uint64_t> stringLengthValue(uint64_t Address, uint64_t Size,
+                                             llvm::StringRef Name);
   BionicResult decimalInteger(const NativeCallEvent &Call);
   llvm::Expected<std::optional<uint64_t>>
   decimalValue(bool Narrow,
                llvm::function_ref<llvm::Expected<uint8_t>(uint64_t)> ReadByte);
   BionicResult compareString(const NativeCallEvent &Call);
   BionicResult getErrno(const NativeCallEvent &Call);
+  BionicResult errorString(const NativeCallEvent &Call);
   BionicResult getPageSize(const NativeCallEvent &Call);
   BionicResult getAPILevel(const NativeCallEvent &Call);
   BionicResult queryConfiguration(const NativeCallEvent &Call);
   BionicResult queryAuxiliaryVector(const NativeCallEvent &Call);
+  BionicResult queryEnvironment(const NativeCallEvent &Call);
   BionicResult getTime(const NativeCallEvent &Call);
   BionicResult calendarTime(const NativeCallEvent &Call);
   BionicResult getProperty(const NativeCallEvent &Call);
@@ -380,6 +414,7 @@ private:
   BionicResult findSubstring(const NativeCallEvent &Call);
   BionicResult spanString(const NativeCallEvent &Call);
   BionicResult copyBoundedString(const NativeCallEvent &Call);
+  BionicResult appendCheckedString(const NativeCallEvent &Call);
   BionicResult findCharacter(const NativeCallEvent &Call);
   class ArgumentReader;
   class StringFormatter;

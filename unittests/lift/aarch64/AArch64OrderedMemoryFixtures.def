@@ -1,0 +1,174 @@
+//===- AArch64OrderedMemoryFixtures.def - Ordered memory oracles -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent LLVM MC 22.1.6 words for all LRCPC2 GPR and LRCPC3 SIMD/FP
+/// ordered unscaled families, with five signed imm9 boundaries. CASE owns the
+/// original/scratch words, register class, access/result widths and
+/// displacement. REJECT owns unallocated neighboring words. VALUE/TEXT own
+/// fixture policy.
+//===----------------------------------------------------------------------===//
+
+#ifndef ORDERED_MEMORY_CASE
+#define ORDERED_MEMORY_CASE(Word, Scratch, Vector, Access, Result, Signed,     \
+                            Offset)
+#endif
+#ifndef ORDERED_MEMORY_REJECT
+#define ORDERED_MEMORY_REJECT(Word)
+#endif
+#ifndef ORDERED_MEMORY_VALUE
+#define ORDERED_MEMORY_VALUE(Type, Name, Value)
+#endif
+#ifndef ORDERED_MEMORY_TEXT
+#define ORDERED_MEMORY_TEXT(Name, Text)
+#endif
+
+ORDERED_MEMORY_CASE(0x19500020U, 0x19500211U, false, 1, 4, false, -256)
+ORDERED_MEMORY_CASE(0x195ff020U, 0x195ff211U, false, 1, 4, false, -1)
+ORDERED_MEMORY_CASE(0x19400020U, 0x19400211U, false, 1, 4, false, 0)
+ORDERED_MEMORY_CASE(0x19401020U, 0x19401211U, false, 1, 4, false, 1)
+ORDERED_MEMORY_CASE(0x194ff020U, 0x194ff211U, false, 1, 4, false, 255)
+ORDERED_MEMORY_CASE(0x59500020U, 0x59500211U, false, 2, 4, false, -256)
+ORDERED_MEMORY_CASE(0x595ff020U, 0x595ff211U, false, 2, 4, false, -1)
+ORDERED_MEMORY_CASE(0x59400020U, 0x59400211U, false, 2, 4, false, 0)
+ORDERED_MEMORY_CASE(0x59401020U, 0x59401211U, false, 2, 4, false, 1)
+ORDERED_MEMORY_CASE(0x594ff020U, 0x594ff211U, false, 2, 4, false, 255)
+ORDERED_MEMORY_CASE(0x99500020U, 0x99500211U, false, 4, 4, false, -256)
+ORDERED_MEMORY_CASE(0x995ff020U, 0x995ff211U, false, 4, 4, false, -1)
+ORDERED_MEMORY_CASE(0x99400020U, 0x99400211U, false, 4, 4, false, 0)
+ORDERED_MEMORY_CASE(0x99401020U, 0x99401211U, false, 4, 4, false, 1)
+ORDERED_MEMORY_CASE(0x994ff020U, 0x994ff211U, false, 4, 4, false, 255)
+ORDERED_MEMORY_CASE(0xd9500020U, 0xd9500211U, false, 8, 8, false, -256)
+ORDERED_MEMORY_CASE(0xd95ff020U, 0xd95ff211U, false, 8, 8, false, -1)
+ORDERED_MEMORY_CASE(0xd9400020U, 0xd9400211U, false, 8, 8, false, 0)
+ORDERED_MEMORY_CASE(0xd9401020U, 0xd9401211U, false, 8, 8, false, 1)
+ORDERED_MEMORY_CASE(0xd94ff020U, 0xd94ff211U, false, 8, 8, false, 255)
+ORDERED_MEMORY_CASE(0x19d00020U, 0x19d00211U, false, 1, 4, true, -256)
+ORDERED_MEMORY_CASE(0x19dff020U, 0x19dff211U, false, 1, 4, true, -1)
+ORDERED_MEMORY_CASE(0x19c00020U, 0x19c00211U, false, 1, 4, true, 0)
+ORDERED_MEMORY_CASE(0x19c01020U, 0x19c01211U, false, 1, 4, true, 1)
+ORDERED_MEMORY_CASE(0x19cff020U, 0x19cff211U, false, 1, 4, true, 255)
+ORDERED_MEMORY_CASE(0x19900020U, 0x19900211U, false, 1, 8, true, -256)
+ORDERED_MEMORY_CASE(0x199ff020U, 0x199ff211U, false, 1, 8, true, -1)
+ORDERED_MEMORY_CASE(0x19800020U, 0x19800211U, false, 1, 8, true, 0)
+ORDERED_MEMORY_CASE(0x19801020U, 0x19801211U, false, 1, 8, true, 1)
+ORDERED_MEMORY_CASE(0x198ff020U, 0x198ff211U, false, 1, 8, true, 255)
+ORDERED_MEMORY_CASE(0x59d00020U, 0x59d00211U, false, 2, 4, true, -256)
+ORDERED_MEMORY_CASE(0x59dff020U, 0x59dff211U, false, 2, 4, true, -1)
+ORDERED_MEMORY_CASE(0x59c00020U, 0x59c00211U, false, 2, 4, true, 0)
+ORDERED_MEMORY_CASE(0x59c01020U, 0x59c01211U, false, 2, 4, true, 1)
+ORDERED_MEMORY_CASE(0x59cff020U, 0x59cff211U, false, 2, 4, true, 255)
+ORDERED_MEMORY_CASE(0x59900020U, 0x59900211U, false, 2, 8, true, -256)
+ORDERED_MEMORY_CASE(0x599ff020U, 0x599ff211U, false, 2, 8, true, -1)
+ORDERED_MEMORY_CASE(0x59800020U, 0x59800211U, false, 2, 8, true, 0)
+ORDERED_MEMORY_CASE(0x59801020U, 0x59801211U, false, 2, 8, true, 1)
+ORDERED_MEMORY_CASE(0x598ff020U, 0x598ff211U, false, 2, 8, true, 255)
+ORDERED_MEMORY_CASE(0x99900020U, 0x99900211U, false, 4, 8, true, -256)
+ORDERED_MEMORY_CASE(0x999ff020U, 0x999ff211U, false, 4, 8, true, -1)
+ORDERED_MEMORY_CASE(0x99800020U, 0x99800211U, false, 4, 8, true, 0)
+ORDERED_MEMORY_CASE(0x99801020U, 0x99801211U, false, 4, 8, true, 1)
+ORDERED_MEMORY_CASE(0x998ff020U, 0x998ff211U, false, 4, 8, true, 255)
+ORDERED_MEMORY_CASE(0x19100020U, 0x19100211U, false, 1, 0, false, -256)
+ORDERED_MEMORY_CASE(0x191ff020U, 0x191ff211U, false, 1, 0, false, -1)
+ORDERED_MEMORY_CASE(0x19000020U, 0x19000211U, false, 1, 0, false, 0)
+ORDERED_MEMORY_CASE(0x19001020U, 0x19001211U, false, 1, 0, false, 1)
+ORDERED_MEMORY_CASE(0x190ff020U, 0x190ff211U, false, 1, 0, false, 255)
+ORDERED_MEMORY_CASE(0x59100020U, 0x59100211U, false, 2, 0, false, -256)
+ORDERED_MEMORY_CASE(0x591ff020U, 0x591ff211U, false, 2, 0, false, -1)
+ORDERED_MEMORY_CASE(0x59000020U, 0x59000211U, false, 2, 0, false, 0)
+ORDERED_MEMORY_CASE(0x59001020U, 0x59001211U, false, 2, 0, false, 1)
+ORDERED_MEMORY_CASE(0x590ff020U, 0x590ff211U, false, 2, 0, false, 255)
+ORDERED_MEMORY_CASE(0x99100020U, 0x99100211U, false, 4, 0, false, -256)
+ORDERED_MEMORY_CASE(0x991ff020U, 0x991ff211U, false, 4, 0, false, -1)
+ORDERED_MEMORY_CASE(0x99000020U, 0x99000211U, false, 4, 0, false, 0)
+ORDERED_MEMORY_CASE(0x99001020U, 0x99001211U, false, 4, 0, false, 1)
+ORDERED_MEMORY_CASE(0x990ff020U, 0x990ff211U, false, 4, 0, false, 255)
+ORDERED_MEMORY_CASE(0xd9100020U, 0xd9100211U, false, 8, 0, false, -256)
+ORDERED_MEMORY_CASE(0xd91ff020U, 0xd91ff211U, false, 8, 0, false, -1)
+ORDERED_MEMORY_CASE(0xd9000020U, 0xd9000211U, false, 8, 0, false, 0)
+ORDERED_MEMORY_CASE(0xd9001020U, 0xd9001211U, false, 8, 0, false, 1)
+ORDERED_MEMORY_CASE(0xd90ff020U, 0xd90ff211U, false, 8, 0, false, 255)
+ORDERED_MEMORY_CASE(0x1d500820U, 0x1d500a11U, true, 1, 16, false, -256)
+ORDERED_MEMORY_CASE(0x1d5ff820U, 0x1d5ffa11U, true, 1, 16, false, -1)
+ORDERED_MEMORY_CASE(0x1d400820U, 0x1d400a11U, true, 1, 16, false, 0)
+ORDERED_MEMORY_CASE(0x1d401820U, 0x1d401a11U, true, 1, 16, false, 1)
+ORDERED_MEMORY_CASE(0x1d4ff820U, 0x1d4ffa11U, true, 1, 16, false, 255)
+ORDERED_MEMORY_CASE(0x1d100820U, 0x1d100a11U, true, 1, 0, false, -256)
+ORDERED_MEMORY_CASE(0x1d1ff820U, 0x1d1ffa11U, true, 1, 0, false, -1)
+ORDERED_MEMORY_CASE(0x1d000820U, 0x1d000a11U, true, 1, 0, false, 0)
+ORDERED_MEMORY_CASE(0x1d001820U, 0x1d001a11U, true, 1, 0, false, 1)
+ORDERED_MEMORY_CASE(0x1d0ff820U, 0x1d0ffa11U, true, 1, 0, false, 255)
+ORDERED_MEMORY_CASE(0x5d500820U, 0x5d500a11U, true, 2, 16, false, -256)
+ORDERED_MEMORY_CASE(0x5d5ff820U, 0x5d5ffa11U, true, 2, 16, false, -1)
+ORDERED_MEMORY_CASE(0x5d400820U, 0x5d400a11U, true, 2, 16, false, 0)
+ORDERED_MEMORY_CASE(0x5d401820U, 0x5d401a11U, true, 2, 16, false, 1)
+ORDERED_MEMORY_CASE(0x5d4ff820U, 0x5d4ffa11U, true, 2, 16, false, 255)
+ORDERED_MEMORY_CASE(0x5d100820U, 0x5d100a11U, true, 2, 0, false, -256)
+ORDERED_MEMORY_CASE(0x5d1ff820U, 0x5d1ffa11U, true, 2, 0, false, -1)
+ORDERED_MEMORY_CASE(0x5d000820U, 0x5d000a11U, true, 2, 0, false, 0)
+ORDERED_MEMORY_CASE(0x5d001820U, 0x5d001a11U, true, 2, 0, false, 1)
+ORDERED_MEMORY_CASE(0x5d0ff820U, 0x5d0ffa11U, true, 2, 0, false, 255)
+ORDERED_MEMORY_CASE(0x9d500820U, 0x9d500a11U, true, 4, 16, false, -256)
+ORDERED_MEMORY_CASE(0x9d5ff820U, 0x9d5ffa11U, true, 4, 16, false, -1)
+ORDERED_MEMORY_CASE(0x9d400820U, 0x9d400a11U, true, 4, 16, false, 0)
+ORDERED_MEMORY_CASE(0x9d401820U, 0x9d401a11U, true, 4, 16, false, 1)
+ORDERED_MEMORY_CASE(0x9d4ff820U, 0x9d4ffa11U, true, 4, 16, false, 255)
+ORDERED_MEMORY_CASE(0x9d100820U, 0x9d100a11U, true, 4, 0, false, -256)
+ORDERED_MEMORY_CASE(0x9d1ff820U, 0x9d1ffa11U, true, 4, 0, false, -1)
+ORDERED_MEMORY_CASE(0x9d000820U, 0x9d000a11U, true, 4, 0, false, 0)
+ORDERED_MEMORY_CASE(0x9d001820U, 0x9d001a11U, true, 4, 0, false, 1)
+ORDERED_MEMORY_CASE(0x9d0ff820U, 0x9d0ffa11U, true, 4, 0, false, 255)
+ORDERED_MEMORY_CASE(0xdd500820U, 0xdd500a11U, true, 8, 16, false, -256)
+ORDERED_MEMORY_CASE(0xdd5ff820U, 0xdd5ffa11U, true, 8, 16, false, -1)
+ORDERED_MEMORY_CASE(0xdd400820U, 0xdd400a11U, true, 8, 16, false, 0)
+ORDERED_MEMORY_CASE(0xdd401820U, 0xdd401a11U, true, 8, 16, false, 1)
+ORDERED_MEMORY_CASE(0xdd4ff820U, 0xdd4ffa11U, true, 8, 16, false, 255)
+ORDERED_MEMORY_CASE(0xdd100820U, 0xdd100a11U, true, 8, 0, false, -256)
+ORDERED_MEMORY_CASE(0xdd1ff820U, 0xdd1ffa11U, true, 8, 0, false, -1)
+ORDERED_MEMORY_CASE(0xdd000820U, 0xdd000a11U, true, 8, 0, false, 0)
+ORDERED_MEMORY_CASE(0xdd001820U, 0xdd001a11U, true, 8, 0, false, 1)
+ORDERED_MEMORY_CASE(0xdd0ff820U, 0xdd0ffa11U, true, 8, 0, false, 255)
+ORDERED_MEMORY_CASE(0x1dd00820U, 0x1dd00a11U, true, 16, 16, false, -256)
+ORDERED_MEMORY_CASE(0x1ddff820U, 0x1ddffa11U, true, 16, 16, false, -1)
+ORDERED_MEMORY_CASE(0x1dc00820U, 0x1dc00a11U, true, 16, 16, false, 0)
+ORDERED_MEMORY_CASE(0x1dc01820U, 0x1dc01a11U, true, 16, 16, false, 1)
+ORDERED_MEMORY_CASE(0x1dcff820U, 0x1dcffa11U, true, 16, 16, false, 255)
+ORDERED_MEMORY_CASE(0x1d900820U, 0x1d900a11U, true, 16, 0, false, -256)
+ORDERED_MEMORY_CASE(0x1d9ff820U, 0x1d9ffa11U, true, 16, 0, false, -1)
+ORDERED_MEMORY_CASE(0x1d800820U, 0x1d800a11U, true, 16, 0, false, 0)
+ORDERED_MEMORY_CASE(0x1d801820U, 0x1d801a11U, true, 16, 0, false, 1)
+ORDERED_MEMORY_CASE(0x1d8ff820U, 0x1d8ffa11U, true, 16, 0, false, 255)
+
+ORDERED_MEMORY_REJECT(0x99c00020U)
+ORDERED_MEMORY_REJECT(0xd9800020U)
+ORDERED_MEMORY_REJECT(0xd9c00020U)
+ORDERED_MEMORY_REJECT(0x5d800820U)
+ORDERED_MEMORY_REJECT(0x5dc00820U)
+ORDERED_MEMORY_REJECT(0x9d800820U)
+ORDERED_MEMORY_REJECT(0x9dc00820U)
+ORDERED_MEMORY_REJECT(0xdd800820U)
+ORDERED_MEMORY_REJECT(0xddc00820U)
+
+ORDERED_MEMORY_VALUE(unsigned, kOrderedCaseCount, 115)
+ORDERED_MEMORY_VALUE(unsigned, kOrderedFamilyCount, 23)
+ORDERED_MEMORY_VALUE(unsigned, kOrderedEncodingCount, 11776)
+ORDERED_MEMORY_VALUE(unsigned, kOrderedGuardVectorRegister, 1)
+ORDERED_MEMORY_TEXT(kOrderedArtifactProperty,
+                    "arm64e_ordered_memory_artifact_directory")
+ORDERED_MEMORY_TEXT(kOrderedImageArtifactProperty,
+                    "arm64e_ordered_memory_image_artifact_directory")
+ORDERED_MEMORY_TEXT(kOrderedRelocatedArtifactProperty,
+                    "arm64e_ordered_memory_relocated_artifact_directory")
+ORDERED_MEMORY_TEXT(kOrderedRCPC2Feature, "hw.optional.arm.FEAT_LRCPC2")
+ORDERED_MEMORY_TEXT(kOrderedRCPC3Feature, "hw.optional.arm.FEAT_LRCPC3")
+ORDERED_MEMORY_TEXT(
+    kOrderedUnsupported,
+    "The execution host does not report the required ordered-memory feature")
+
+#undef ORDERED_MEMORY_CASE
+#undef ORDERED_MEMORY_REJECT
+#undef ORDERED_MEMORY_VALUE
+#undef ORDERED_MEMORY_TEXT

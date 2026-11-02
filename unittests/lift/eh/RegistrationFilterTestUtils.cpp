@@ -9,7 +9,7 @@
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "RegistrationStateTestUtils.h"
 
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <utility>
 

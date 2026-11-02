@@ -1,0 +1,43 @@
+cmake_minimum_required(VERSION 3.20)
+project(NeverDCompressionTests LANGUAGES C CXX)
+include(CTest)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDZlib.cmake")
+find_package(ZLIB 1.3.2 EXACT REQUIRED)
+add_library(NeverDCompressionBoundary SHARED CompressionBoundary.cpp)
+target_link_libraries(NeverDCompressionBoundary PRIVATE ZLIB::ZLIB)
+add_executable(NeverDCompressionTests CompressionTests.cpp)
+target_link_libraries(NeverDCompressionTests PRIVATE NeverDCompressionBoundary ZLIB::ZLIB)
+add_test(NAME NeverDCompressionTests COMMAND NeverDCompressionTests)
+install(TARGETS NeverDCompressionTests NeverDCompressionBoundary
+  RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
+if(APPLE)
+  set_property(TARGET NeverDCompressionTests PROPERTY INSTALL_RPATH "@loader_path/../lib")
+elseif(UNIX)
+  set_property(TARGET NeverDCompressionTests PROPERTY INSTALL_RPATH "$ORIGIN/../lib")
+endif()
+
+# Optional real prebuilt LLVM consumer: its find_package(ZLIB) must retain
+# the same static provider, even with stale system ZLIB cache entries.
+if(LLVM_DIR)
+  find_package(LLVM REQUIRED CONFIG)
+  include(FetchContent)
+  FetchContent_Declare(googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.tar.gz
+    URL_HASH SHA256=65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c)
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  set(INSTALL_GTEST OFF)
+  FetchContent_MakeAvailable(googletest)
+  include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/NeverDGoogleTest.cmake")
+  neverd_configure_googletest()
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDProjectDatabase.cmake")
+  neverd_add_project_database()
+  add_executable(NeverDProjectDatabaseTests ../ProjectDatabaseTests.cpp)
+  target_include_directories(NeverDProjectDatabaseTests PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_link_libraries(NeverDProjectDatabaseTests PRIVATE NeverDProjectDatabase
+    neverd_project_sqlite ZLIB::ZLIB LLVMSupport LLVMDemangle GTest::gtest_main)
+  include(GoogleTest)
+  gtest_discover_tests(NeverDProjectDatabaseTests DISCOVERY_MODE PRE_TEST)
+endif()

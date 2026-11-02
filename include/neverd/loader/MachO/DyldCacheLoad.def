@@ -1,0 +1,72 @@
+//===- DyldCacheLoad.def - Shared-cache selection vocabulary ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// User-facing options, JSON keys, identity paths and loader diagnostics.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_CACHE_LOAD_TEXT
+#define NEVERD_CACHE_LOAD_TEXT(Name, Text)
+#endif
+
+NEVERD_CACHE_LOAD_TEXT(kLoader, "dyld-cache")
+NEVERD_CACHE_LOAD_TEXT(kAuthGot, "__auth_got")
+NEVERD_CACHE_LOAD_TEXT(
+    kImageTypeUnsupported,
+    "dyld cache: selected image must be a dylib or dynamic linker")
+NEVERD_CACHE_LOAD_TEXT(kLoaderKey, "loader")
+NEVERD_CACHE_LOAD_TEXT(kAuthCountKey, "authenticated_slot_count")
+NEVERD_CACHE_LOAD_TEXT(kResolvedCountKey, "resolved_slot_count")
+NEVERD_CACHE_LOAD_TEXT(kSymbolCountKey, "symbol_slot_count")
+NEVERD_CACHE_LOAD_TEXT(
+    kLoaderHelp,
+    "How to read the input: binary as code of --processor at --load-base, evm "
+    "as EVM bytecode, dyld-cache with --cache-image, or auto by its header or "
+    "contents. The choice is kept with the input")
+NEVERD_CACHE_LOAD_TEXT(
+    kUnknownLoader,
+    "unknown loader {0}; the loaders are auto, evm, binary and dyld-cache")
+NEVERD_CACHE_LOAD_TEXT(kImagesOption, "cache-images")
+NEVERD_CACHE_LOAD_TEXT(
+    kImagesHelp,
+    "List the shared cache's selectable images without loading one")
+NEVERD_CACHE_LOAD_TEXT(kImagesKey, "images")
+NEVERD_CACHE_LOAD_TEXT(kPathKey, "path")
+NEVERD_CACHE_LOAD_TEXT(kErrorKey, "error")
+NEVERD_CACHE_LOAD_TEXT(kImageOption, "cache-image")
+NEVERD_CACHE_LOAD_TEXT(kImageKey, "cache_image")
+NEVERD_CACHE_LOAD_TEXT(
+    kImageHelp, "Select a dyld shared-cache image by its exact install name")
+NEVERD_CACHE_LOAD_TEXT(kImageValue, "install-name")
+NEVERD_CACHE_LOAD_TEXT(
+    kSelectionRequired,
+    "dyld cache: select an image with --cache-image <install-name>")
+NEVERD_CACHE_LOAD_TEXT(
+    kImageMissing, "dyld cache: selected install name is absent or ambiguous")
+NEVERD_CACHE_LOAD_TEXT(kChoiceInvalid,
+                       "dyld cache: cache_image must be a nonempty install "
+                       "name with the auto or dyld-cache loader")
+NEVERD_CACHE_LOAD_TEXT(
+    kBufferUnavailable,
+    "dyld cache: image loading requires a cache path and its subcache files")
+NEVERD_CACHE_LOAD_TEXT(
+    kInvalidSlideSlot,
+    "dyld cache: slide storage is inconsistent with the selected image")
+NEVERD_CACHE_LOAD_TEXT(kProjectSuffix, ".cache-image-")
+NEVERD_CACHE_LOAD_TEXT(kProjectWriterUnavailable,
+                       "project writer unavailable: ")
+NEVERD_CACHE_LOAD_TEXT(kCacheKey, "dyld_cache")
+NEVERD_CACHE_LOAD_TEXT(kFilesKey, "file_sha256")
+NEVERD_CACHE_LOAD_TEXT(kAddressKey, "address")
+NEVERD_CACHE_LOAD_TEXT(kProjectionKey, "analysis_projection")
+NEVERD_CACHE_LOAD_TEXT(kAnalysisFlag, "neverd.dyld-cache-analysis")
+NEVERD_CACHE_LOAD_TEXT(kRebuildUnsupported,
+                       "codegen: a shared-cache analysis projection cannot be "
+                       "rebuilt as a standalone image\n")
+NEVERD_CACHE_LOAD_TEXT(kSourceUnsupported,
+                       "a shared-cache analysis projection cannot receive "
+                       "standalone source replacements")
+
+#undef NEVERD_CACHE_LOAD_TEXT

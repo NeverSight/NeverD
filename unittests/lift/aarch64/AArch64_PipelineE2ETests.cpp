@@ -1,9 +1,24 @@
+//===- AArch64_PipelineE2ETests.cpp - AArch64 pipeline coverage -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Check complete AArch64 lifting, source emission and native patch paths.
+//===----------------------------------------------------------------------===//
+
 #include "NeverDLiftFixture.h"
 
 #include <fstream>
 #include <regex>
 #include <sstream>
 #include <string>
+
+namespace {
+#define NEVERD_A64_PIPELINE_FIXTURE_TEXT(Name, Value)                          \
+  constexpr char Name[] = Value;
+#include "AArch64PipelineFixtures.def"
+} // namespace
 
 class AArch64_PipelineE2E : public NeverDLiftTest {};
 
@@ -156,9 +171,9 @@ TEST_F(AArch64_PipelineE2E, PatchMachO_SimpleAdd) {
       << "int main(void) { return add(1, 2); }\n";
   }
   auto exe = tmpFile("macho_a64");
-  auto cr = exec("clang",
-                 {"-O0", "-target", "arm64-apple-macos",
-                  "-Wl,-no_compact_unwind", "-o", exe.string(), src.string()});
+  auto cr = exec("clang", {"-O0", "-target", "arm64-apple-macos",
+                           "-Wl,-no_compact_unwind", kMachOHeaderPadding, "-o",
+                           exe.string(), src.string()});
   if (cr.exitCode != 0)
     GTEST_SKIP() << "Cannot compile arm64 Mach-O on this host";
   verifyPatchProducesOutput(exe);
@@ -176,9 +191,9 @@ TEST_F(AArch64_PipelineE2E, PatchMachO_Loop) {
       << "int main(void) { return sum(10); }\n";
   }
   auto exe = tmpFile("macho_loop_a64");
-  auto cr = exec("clang",
-                 {"-O0", "-target", "arm64-apple-macos",
-                  "-Wl,-no_compact_unwind", "-o", exe.string(), src.string()});
+  auto cr = exec("clang", {"-O0", "-target", "arm64-apple-macos",
+                           "-Wl,-no_compact_unwind", kMachOHeaderPadding, "-o",
+                           exe.string(), src.string()});
   if (cr.exitCode != 0)
     GTEST_SKIP() << "Cannot compile arm64 Mach-O";
   verifyPatchProducesOutput(exe);
@@ -197,9 +212,9 @@ TEST_F(AArch64_PipelineE2E, PatchMachO_Recursive) {
       << "int main(void) { return fib(8); }\n";
   }
   auto exe = tmpFile("macho_recur_a64");
-  auto cr = exec("clang",
-                 {"-O0", "-target", "arm64-apple-macos",
-                  "-Wl,-no_compact_unwind", "-o", exe.string(), src.string()});
+  auto cr = exec("clang", {"-O0", "-target", "arm64-apple-macos",
+                           "-Wl,-no_compact_unwind", kMachOHeaderPadding, "-o",
+                           exe.string(), src.string()});
   if (cr.exitCode != 0)
     GTEST_SKIP() << "Cannot compile arm64 Mach-O";
   verifyPatchProducesOutput(exe);

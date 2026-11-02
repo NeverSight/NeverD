@@ -1,0 +1,50 @@
+//===- RegistrationRuntimeImports.def - PE32 runtime names -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Exact, case-sensitive names used by independent registration contracts.
+/// Define any of NEVERD_REGISTRATION_CRT_CLEANUP(Name, Family),
+/// NEVERD_REGISTRATION_JUMP(Name, Kind), or
+/// NEVERD_REGISTRATION_LOCAL_UNWIND(Name, Kind). Unused rows expand to nothing.
+/// Provider, import storage and physical invocation proofs remain mandatory.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_REGISTRATION_CRT_CLEANUP
+#define NEVERD_REGISTRATION_CRT_CLEANUP(Name, Family)
+#endif
+#ifndef NEVERD_REGISTRATION_JUMP
+#define NEVERD_REGISTRATION_JUMP(Name, Kind)
+#endif
+#ifndef NEVERD_REGISTRATION_LOCAL_UNWIND
+#define NEVERD_REGISTRATION_LOCAL_UNWIND(Name, Kind)
+#endif
+
+NEVERD_REGISTRATION_CRT_CLEANUP("malloc", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("calloc", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("realloc", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("free", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("memcpy", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("memmove", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("memset", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("??2@YAPAXI@Z", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("??_U@YAPAXI@Z", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("??3@YAXPAX@Z", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("??_V@YAXPAX@Z", Legacy)
+NEVERD_REGISTRATION_CRT_CLEANUP("log", Math)
+NEVERD_REGISTRATION_CRT_CLEANUP("exp", Math)
+
+NEVERD_REGISTRATION_JUMP("_setjmp3", Capture)
+NEVERD_REGISTRATION_JUMP("_longjmpex", Resume)
+NEVERD_REGISTRATION_JUMP("_seh_longjmp_unwind", EH3Unwind)
+NEVERD_REGISTRATION_JUMP("_seh_longjmp_unwind4", EH4Unwind)
+
+NEVERD_REGISTRATION_LOCAL_UNWIND("_local_unwind2", EH3)
+NEVERD_REGISTRATION_LOCAL_UNWIND("_local_unwind4", EH4)
+
+#undef NEVERD_REGISTRATION_CRT_CLEANUP
+#undef NEVERD_REGISTRATION_JUMP
+#undef NEVERD_REGISTRATION_LOCAL_UNWIND

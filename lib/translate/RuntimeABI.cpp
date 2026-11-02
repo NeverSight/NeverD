@@ -7,6 +7,7 @@
 #include "neverd/translate/RuntimeABI.h"
 
 #include "neverd/translate/TranslationResult.h"
+#include "neverd/translate/X86/RuntimeX87Helpers.h"
 
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
@@ -73,6 +74,16 @@ bool isKnownFault(RuntimeMemoryFaultKindV1 Kind) {
 
 bool isScalarAccessSize(uint64_t Size) {
   return Size == 1 || Size == 2 || Size == 4 || Size == 8;
+}
+
+bool isDataAccessSize(uint64_t Size, RuntimeControlProtocolV1 Protocol) {
+  switch (Protocol) {
+  case RuntimeControlProtocolV1::Scalar:
+    return isScalarAccessSize(Size);
+  case RuntimeControlProtocolV1::ExactSpan:
+    return Size != 0 && Size <= kMemoryFaultMaxAccessBytes;
+  }
+  llvm_unreachable("unknown runtime control protocol");
 }
 
 bool isKnownAccess(RuntimeMemoryAccessKindV1 Access) {
@@ -376,7 +387,10 @@ llvm::Expected<RuntimeMemoryFaultDetailsV1> unpackRuntimeMemoryFaultDetailsV1(
   return *Details;
 }
 
-llvm::Error validateRuntimeControlBlockV1(const RuntimeControlBlockV1 &Block) {
+namespace {
+
+llvm::Error validateRuntimeControlBlock(const RuntimeControlBlockV1 &Block,
+                                        RuntimeControlProtocolV1 Protocol) {
   if (Block.Magic != kRuntimeABIMagicV1)
     return invalid("invalid runtime ABI magic");
   if (Block.Version != kRuntimeABIVersionV1)
@@ -481,7 +495,7 @@ llvm::Error validateRuntimeControlBlockV1(const RuntimeControlBlockV1 &Block) {
   case RuntimeABIExitKindV1::SelfModification:
     if (!usesPolicy(Block, CodeInvalidationPolicy::InvalidateOnExecutableWrite))
       return invalid("runtime self-modification exit violates its policy");
-    if (!isScalarAccessSize(Block.Exit.Size) ||
+    if (!isDataAccessSize(Block.Exit.Size, Protocol) ||
         Block.Exit.Size - 1 >
             std::numeric_limits<uint64_t>::max() - Block.Exit.Address ||
         Block.Exit.Detail0 == std::numeric_limits<uint64_t>::max() ||
@@ -512,7 +526,7 @@ llvm::Error validateRuntimeControlBlockV1(const RuntimeControlBlockV1 &Block) {
     } else if (Details->Access == RuntimeMemoryAccessKindV1::Execute) {
       if (Block.Exit.Size == 0)
         return invalid("runtime execute memory fault has an empty access");
-    } else if (!isScalarAccessSize(Block.Exit.Size)) {
+    } else if (!isDataAccessSize(Block.Exit.Size, Protocol)) {
       return invalid("runtime memory-fault exit has an invalid access size");
     }
 
@@ -563,8 +577,51 @@ llvm::Error validateRuntimeControlBlockV1(const RuntimeControlBlockV1 &Block) {
   llvm_unreachable("validated runtime ABI exit kind");
 }
 
+} // namespace
+
+llvm::Error validateRuntimeControlBlockV1(const RuntimeControlBlockV1 &Block) {
+  return validateRuntimeControlBlock(Block, RuntimeControlProtocolV1::Scalar);
+}
+
+llvm::Error
+validateRuntimeControlBlockExactSpanV1(const RuntimeControlBlockV1 &Block) {
+  return validateRuntimeControlBlock(Block,
+                                     RuntimeControlProtocolV1::ExactSpan);
+}
+
 llvm::ArrayRef<RuntimeABIHelperSignatureV1> runtimeABIHelperSignaturesV1() {
   return HelperSignatures;
+}
+
+llvm::ArrayRef<RuntimeABIHelperSignatureV1>
+runtimeABIHelperSignaturesV1(TranslationRuntimeProfileV1 Profile) {
+  if (Profile == TranslationRuntimeProfileV1::ScalarInteger)
+    return runtimeABIHelperSignaturesV1();
+  if (Profile != TranslationRuntimeProfileV1::PortableX87)
+    return {};
+  static constexpr RuntimeABIValueKind Parameters[] = {
+      RuntimeABIValueKind::RuntimePointer,
+      RuntimeABIValueKind::StatePointer,
+      RuntimeABIValueKind::I32,
+      RuntimeABIValueKind::I64,
+      RuntimeABIValueKind::I64,
+      RuntimeABIValueKind::I64};
+  static constexpr TranslationRuntimeParameterKind VerifierParameters[] = {
+      TranslationRuntimeParameterKind::RuntimePointer,
+      TranslationRuntimeParameterKind::StatePointer,
+      TranslationRuntimeParameterKind::ScalarInteger,
+      TranslationRuntimeParameterKind::ScalarInteger,
+      TranslationRuntimeParameterKind::ScalarInteger,
+      TranslationRuntimeParameterKind::ScalarInteger};
+  static const std::vector<RuntimeABIHelperSignatureV1> Signatures = [] {
+    const auto Scalar = runtimeABIHelperSignaturesV1();
+    std::vector<RuntimeABIHelperSignatureV1> Result(Scalar.begin(),
+                                                    Scalar.end());
+    Result.push_back({kRuntimeX87StepNameV1, RuntimeABIValueKind::I32,
+                      Parameters, VerifierParameters});
+    return Result;
+  }();
+  return Signatures;
 }
 
 llvm::ArrayRef<TranslationIRMemorySlot> runtimeABIMemorySlotsV1() {
@@ -581,9 +638,26 @@ findRuntimeABIHelperSignatureV1(llvm::StringRef Name) {
 
 std::vector<TranslationRuntimeHelper>
 createRuntimeABIHelperPolicyV1(llvm::LLVMContext &Context) {
+  return createRuntimeABIHelperPolicyV1(
+      Context, TranslationRuntimeProfileV1::ScalarInteger);
+}
+
+const RuntimeABIHelperSignatureV1 *
+findRuntimeABIHelperSignatureV1(llvm::StringRef Name,
+                                TranslationRuntimeProfileV1 Profile) {
+  for (const auto &Signature : runtimeABIHelperSignaturesV1(Profile))
+    if (Signature.Name == Name)
+      return &Signature;
+  return nullptr;
+}
+
+std::vector<TranslationRuntimeHelper>
+createRuntimeABIHelperPolicyV1(llvm::LLVMContext &Context,
+                               TranslationRuntimeProfileV1 Profile) {
+  const auto Signatures = runtimeABIHelperSignaturesV1(Profile);
   std::vector<TranslationRuntimeHelper> Helpers;
-  Helpers.reserve(std::size(HelperSignatures));
-  for (const RuntimeABIHelperSignatureV1 &Signature : HelperSignatures) {
+  Helpers.reserve(Signatures.size());
+  for (const RuntimeABIHelperSignatureV1 &Signature : Signatures) {
     assert(Signature.Parameters.size() == Signature.VerifierParameters.size() &&
            "runtime helper type/provenance arity mismatch");
     std::vector<llvm::Type *> Parameters;

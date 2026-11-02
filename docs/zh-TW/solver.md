@@ -6,6 +6,8 @@
 
 NeverD 預設使用內建 bitvector solver。精確 MBA 推導不依賴一般 solver。表達式合成只會在證明等價後接受候選；反例或未決查詢都會保留原始表達式。
 
+內建乘法電路先移除兩個因子中已知為零的低位前綴，只建立剩餘位元的乘積，再還原完整輸出字。可選 Z3 配接器也依偶數常數係數實際能觀測的位寬編碼乘積。兩者皆保留全位寬等價查詢、獨立輸入模型及既有資源限制。CLI 與 GUI 的原始碼最佳化共用內建電路，無需額外開關。
+
 <!-- i18n-section: builtin-comparisons -->
 
 ## 內建比較電路
@@ -37,8 +39,8 @@ SAT 引擎在每個文字的 watch 串列內聯存放四個項目，較長串列
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DNEVERD_ENABLE_Z3=ON -DNEVERD_BUILD_SOLVER_BENCH=ON
-cmake --build build-release --target neverd NeverDSolverTests \
-  NeverDSymbolicTests neverd-solver-bench --parallel 4
+python scripts/build.py build-release --parallel 4 --target neverd \
+  NeverDSolverTests NeverDSymbolicTests neverd-solver-bench
 ```
 
 預設 provider 為 `NEVERD_Z3_PROVIDER=FETCH`。第一次 configure 下載原始碼，後續建置會重用 build 目錄的 `_deps`。不會建置 Z3 CLI、測試、範例、文件或語言繫結；Z3 Python 產生器會使用 NeverD 原本需要的 Python interpreter。使用已安裝程式庫時選擇 `-DNEVERD_Z3_PROVIDER=SYSTEM`，也可指定 `-DZ3_ROOT=/path/to/prefix`。缺少開發檔案就會失敗，不會靜默更換 provider。離線建置可用 `-DFETCHCONTENT_SOURCE_DIR_NEVERD_Z3=/path/to/z3` 指定本機原始碼。
@@ -72,6 +74,8 @@ result = synthesize_expression(
 
 啟用 Z3 時，`NeverDSolverTests` 包含獨立表達式評估與跨後端檢查。參考表達式直接建構，避免 NeverD 表達式 builder 的錯誤同時簡化測試雙方。停用 Z3 的建置會明確略過 oracle 案例，但仍測試後端不可用契約。
 
+縮放乘積測試使用獨立長乘法電路與整數運算檢查內建電路，涵蓋至 257 位元。Z3 測試證明它與獨立的全位寬編碼一致，並檢查高輸入位元及刻意改錯的最高輸出位元。
+
 ```sh
 build-release/bin/NeverDSolverTests --gtest_brief=1
 build-release/bin/neverd-solver-bench \
@@ -82,6 +86,8 @@ build-release/bin/neverd-solver-bench \
 
 每行非註解資料格式為 `original ; candidate`；沒有分號時，以 MBA 簡化器結果作為候選。工具會回報判定、模型重播與時間；計時包含 session 建立、翻譯、求解，不含解析、MBA 簡化、匯出與結束處理。每次重複都建立新 solver。SAT model 必須能在表達式 evaluator 重現差異。互相矛盾的確定判定、無效查詢或模型會使執行失敗；`unknown` 會記錄，但不是等價證明。
 
-匯出的 SMT-LIB 包含原 DAG、永久 assertions 和最後一次查詢的 assumptions，可用 `z3 query-N.smt2` 重播。請記錄資源限制與 solver 版本；兩個後端的預算單位不同，故比較的是有限 workload，而非相同工作量。Bitvector 證明採用表達式語言的 total fixed-width 語意。機器例外、記憶體效果和 LLVM poison 仍屬於提升與翻譯邊界的責任，表達式證明不會替它們背書。
+匯出的 SMT-LIB 包含等價編碼的 DAG、永久 assertions 和最後一次查詢的 assumptions，可用 `z3 query-N.smt2` 重播。請記錄資源限制與 solver 版本；兩個後端的預算單位不同，故比較的是有限 workload，而非相同工作量。Bitvector 證明採用表達式語言的 total fixed-width 語意。機器例外、記憶體效果和 LLVM poison 仍屬於提升與翻譯邊界的責任，表達式證明不會替它們背書。
 
 尚未搜尋的編碼副本從自身決策佇列移除根層已賦值變數，並重建嚴格的活躍度／編號堆積順序。賦值與子句保持完整，根層事實在所有回溯中保留。來源物件所有權、實際決策、完整模型和全部搜尋預算均不變。
+
+SMT-LIB 匯出的 DAG 是語意等價的編碼，可能包含上述精確縮放商，不保證與原始 DAG 結構相同。

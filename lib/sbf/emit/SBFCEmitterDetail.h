@@ -20,6 +20,7 @@
 
 #include "neverd/sbf/analysis/SBFStructuredCFG.h"
 #include "neverd/sbf/emit/SBFCEmitter.h"
+#include "neverd/sbf/emit/SBFSourcePartition.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
@@ -44,11 +45,24 @@ std::string comparison(const MedInstruction &Instruction);
 /// for the control-flow forms, which the caller renders itself.
 bool emitLinearInstruction(llvm::raw_ostream &OS,
                            const MedInstruction &Instruction,
-                           llvm::StringRef Indent);
+                           llvm::StringRef Indent,
+                           bool SharedMemoryHelpers = false);
 
 /// Render one arm of the dispatch switch, control flow included.
 void emitInstruction(llvm::raw_ostream &OS, const MedInstruction &Instruction,
-                     const SBFProgram &Program);
+                     const SBFProgram &Program, bool InPartition = false,
+                     bool FallThrough = false);
+
+/// Render shared call protocol helpers used by partitioned regions.
+void emitCallHelpers(llvm::raw_ostream &OS, const SBFProgram &Program);
+
+/// Render callback validation and status conversion once per memory form.
+void emitMemoryHelpers(llvm::raw_ostream &OS, const SBFProgram &Program);
+
+void emitPartitionedProgram(
+    llvm::raw_ostream &OS, const SBFProgram &Program,
+    const std::map<size_t, const MedInstruction *> &BySlot,
+    const SourcePartition &Partition);
 
 /// Render a validated structured control-flow plan. Returns false when the
 /// plan contains a node this backend cannot render.

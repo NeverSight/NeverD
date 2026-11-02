@@ -15,6 +15,10 @@
 #include "HighCWriter.h"
 
 #include "neverd/backend/c/CSourceMap.h"
+#include "neverd/debug/UserPrototype.h"
+#include "neverd/libc/LibCFloatingArguments.h"
+#include "neverd/libc/LibCNames.h"
+#include "neverd/loader/SymbolDecoration.h"
 
 #include <map>
 
@@ -28,6 +32,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   std::vector<TypeRef> Records;
   std::set<const NdType *> Seen;
   std::set<std::string> Named;
+  std::set<std::string> PointerRecords;
   std::function<void(const TypeRef &)> Visit = [&](const TypeRef &Type) {
     if (!Type || !Seen.insert(Type.get()).second)
       return;
@@ -35,6 +40,18 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
       Records.push_back(NdType::makeNamedRecord(Type->TypedefName));
     switch (Type->Kind) {
     case NdTypeKind::Ptr:
+      // An opaque pointee requires only its tag. A later member access asks
+      // for a complete definition through the existing WantedRecords pass.
+      // Completing every forwarded pointer would build the full local-type
+      // renderer even when the function never accesses the object itself.
+      if (const auto &Record = Type->Pointee;
+          Record && Record->Kind == NdTypeKind::Struct && !Record->IsEnum &&
+          !Record->Size && Record->Fields.empty() &&
+          Record->FieldDisplayNames.empty() && !Record->SourceName.empty()) {
+        if (PointerRecords.insert(Record->SourceName).second)
+          Records.push_back(Type);
+        return;
+      }
       Visit(Type->Pointee);
       return;
     case NdTypeKind::Array:
@@ -61,6 +78,33 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
         !Type->SourceName.empty() && Named.insert(Type->SourceName).second)
       Records.push_back(Type);
   };
+  // Import pointers need the library's tag kind, but do not require its
+  // layout. In particular, a union must not acquire a struct forward tag.
+  std::set<const NdType *> SeenImportTypes;
+  std::function<void(TypeRef, bool)> VisitImportType =
+      [&](TypeRef Type, bool NeedsDeclaration) {
+        VisitEnumeration(Type);
+        // A callee's included header already owns its opaque parameter types.
+        // Requesting a fresh tag here can redeclare an anonymous header typedef
+        // (pthread_mutex_t) as a different struct. Body-used types still go
+        // through Visit and the shared record-definition owner above.
+        if (!NeedsDeclaration || !Type ||
+            !SeenImportTypes.insert(Type.get()).second)
+          return;
+        if (Type->Kind == NdTypeKind::Ptr) {
+          if (Type->Pointee && Type->Pointee->Kind == NdTypeKind::Struct &&
+              !Type->Pointee->IsEnum &&
+              PointerRecords.insert(Type->Pointee->SourceName).second)
+            Records.push_back(Type);
+          VisitImportType(Type->Pointee, true);
+        } else if (Type->Kind == NdTypeKind::Func) {
+          VisitImportType(Type->RetType, true);
+          for (const TypeRef &Parameter : Type->ParamTypes)
+            VisitImportType(Parameter, true);
+        } else if (Type->Kind == NdTypeKind::Array) {
+          VisitImportType(Type->ElemType, true);
+        }
+      };
   std::function<void(const HighExpr &)> VisitExpr = [&](const HighExpr &E) {
     Visit(E.Type);
     if (E.SourceCallHint) {
@@ -70,9 +114,34 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
     }
     if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None)
       if (const std::optional<FunctionSym> Callee = debugCallee(E)) {
-        VisitEnumeration(Callee->ReturnType);
+        // This precedes the collection of DebugExternSigs. Use the actual
+        // resolved prototype, not the later name-only user-declaration cache.
+        // Indirect calls do not request a callee header at all.
+        const std::string Name =
+            cNameOfSymbol(resolvedCallTarget(E), Opts.Format, Opts.TheArch)
+                .str();
+        const bool NeedsDeclaration =
+            E.IsIndirectCall || !Callee->PrototypeFromCLibrary ||
+            Callee->PrototypeLibrary == UserPrototypeLibrary ||
+            Name != Callee->Name || isOwnFunctionName(Callee->Name, Funcs) ||
+            calleeHeaders(Callee->Name).empty();
+        VisitImportType(Callee->ReturnType, NeedsDeclaration);
         for (const auto &[Name, Type] : Callee->Params)
-          VisitEnumeration(Type);
+          VisitImportType(Type, NeedsDeclaration);
+        // Definitions are collected before headers are written. Known
+        // library headers supply their own value records, but cannot supply
+        // a user declaration's records merely because its name matches.
+        if (const auto Floating =
+                libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format);
+            Floating &&
+            (Callee->PrototypeLibrary == UserPrototypeLibrary ||
+             !libc::headerFor(Callee->Name)) &&
+            (!Floating->ParameterElements.empty() ||
+             Floating->ReturnElements)) {
+          Visit(Callee->ReturnType);
+          for (const auto &[Name, Type] : Callee->Params)
+            Visit(Type);
+        }
       }
     E.forEachChildExpr([&](const ExprPtr &Child) { VisitExpr(*Child); });
   };
@@ -86,7 +155,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
       forEachExpr(Statement, [&](const ExprPtr &E) { VisitExpr(*E); });
     });
     if (Dbg)
-      if (auto Found = Dbg->resolveFunction(Function.Entry)) {
+      if (auto Found = debugFunction(Function)) {
         Visit(Found->ReturnType);
         for (const auto &[Name, Type] : Found->Params)
           Visit(Type);
@@ -107,7 +176,8 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   // with.
   if (Dbg)
     for (const TypeRef &Record : Records)
-      Dbg->completeType(Record);
+      if (Record->Kind != NdTypeKind::Ptr)
+        Dbg->completeType(Record);
   RecordDefinitions = Opts.RecordDefinitions(Records);
 }
 
@@ -175,6 +245,12 @@ void HighCWriter::writeSourceRecordDeclarations(
         }
       }
       Visit(Record);
+    } else if (Type->Kind == NdTypeKind::Func) {
+      Visit(Type->RetType);
+      for (const TypeRef &Parameter : Type->ParamTypes)
+        Visit(Parameter);
+    } else if (Type->Kind == NdTypeKind::Array) {
+      Visit(Type->ElemType);
     }
   };
   auto Signature = [&](const FunctionSym &Function) {
@@ -193,7 +269,7 @@ void HighCWriter::writeSourceRecordDeclarations(
     for (const HighParam &Param : Function.Params)
       Visit(Param.Type);
     if (Dbg)
-      if (auto Found = Dbg->resolveFunction(Function.Entry))
+      if (auto Found = debugFunction(Function))
         Signature(*Found);
   }
   for (const auto &[Name, Function] : DebugExternSigs)
@@ -272,7 +348,9 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
   for (const HighFunc &Func : Funcs)
     if (auto It = FunctionIdentifiers.find(&Func);
         It != FunctionIdentifiers.end())
-      Add(CSourceName::Kind::Function, It->second, Func.Name, Func.Entry);
+      Add(CSourceName::Kind::Function, It->second, Func.Name,
+          sourceBodyOrigin(Func) ? std::nullopt
+                                 : std::optional<va_t>(Func.Entry));
   for (const auto &[Source, Identifier] : ExternalSourceIdentifiers)
     Add(CSourceName::Kind::Function, Identifier, Source, std::nullopt);
   for (const auto &[Source, Identifier] : ExternalFunctionIdentifiers)
@@ -281,10 +359,16 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
   for (const auto &[Identifier, Source] : ReferencedFunctionSymbols)
     if (!ByIdentifier.count(Identifier))
       Add(CSourceName::Kind::Function, Identifier, Source, std::nullopt);
+  for (const auto &[Address, Target] : FunctionAddressNames)
+    if (const auto Alias = FunctionAddressAliases.find(Target.Symbol);
+        !Target.Definition && Alias != FunctionAddressAliases.end())
+      Add(CSourceName::Kind::Function, Alias->second, Target.Symbol, Address);
   for (const auto &[Address, Object] : ImageObjects) {
     Add(CSourceName::Kind::Object, Object.Name, Object.Symbol, Address);
     if (Opts.SourceMap && Object.Type)
       for (const auto &Function : Funcs) {
+        if (sourceBodyOrigin(Function))
+          continue;
         SourceVariable Variable;
         Variable.Function = Function.Entry;
         Variable.Address = Address;
@@ -324,7 +408,7 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
     for (const HighLocal &Local : Func.Locals)
       AddType(Local.Type);
     if (Dbg)
-      if (auto Function = Dbg->resolveFunction(Func.Entry))
+      if (auto Function = debugFunction(Func))
         AddSignature(*Function);
   }
   for (const auto &[Identifier, Function] : DebugExternSigs)

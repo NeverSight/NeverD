@@ -40,3 +40,19 @@ MULTI_OUT(Intrinsic::A64_MopsSetPTN, 3);
 
 // AArch64 FEAT_MOPS copy prologue: destination, source, count, NZCV.
 MULTI_OUT(Intrinsic::A64_MopsCpyFP, 4);
+
+// SGX: rBX and the two-byte CF/ZF completion; rAX is the primary result.
+MULTI_OUT(Intrinsic::X86Encls, 2);
+MULTI_OUT(Intrinsic::X86Enclv, 2);
+
+#define NEVERD_X86_REP_STATE(Id, Name, Words, Compare, ...) MULTI_OUT(Intrinsic::Id, Words - 1 + Compare);
+#include "neverd/ir/intrinsics/X86/X86RepState.def"
+#undef NEVERD_X86_REP_STATE
+
+MULTI_OUT(Intrinsic::X86EncluPending, 4);
+MULTI_OUT(Intrinsic::X86GetsecPending, 4);
+MULTI_OUT(Intrinsic::X86EncluBounded, 4);
+MULTI_OUT(Intrinsic::X86GetsecBounded, 4);
+
+#define NEVERD_A64_WRITEBACK_MULTI_OUTPUT(Id, Count) MULTI_OUT(Intrinsic::Id, Count);
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.def"

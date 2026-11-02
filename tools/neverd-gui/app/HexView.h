@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Address.h"
+#include "WheelInput.h"
 
 #include <QAbstractScrollArea>
 #include <QHash>
@@ -10,10 +11,14 @@
 #include <list>
 #include <optional>
 
+class QAction;
+class QMenu;
+
 namespace neverd::gui {
 
 class AddressSpace;
 class Session;
+class PatchEditor;
 
 /// The hex dump: rows of sixteen bytes at addresses that are multiples of
 /// sixteen, over every mapped region, fetched from the worker in cached
@@ -33,10 +38,15 @@ public:
   /// The selected bytes, first and last, when more than the current one are
   /// selected: by dragging, shift-clicking or Shift and the arrow keys.
   std::optional<std::pair<Address, Address>> selection() const;
-  /// Copy the selected bytes, or the current item's, as hex text
-  /// (`48 89 5C 24 08`) once every one of them has loaded.
+  std::optional<std::pair<Address, Address>> byteSelection() const;
+  /// Copy the row address a click selected, else the selected bytes, or the
+  /// current item's, as hex text (`48 89 5C 24 08`) once every one of them
+  /// has loaded.
   void copySelection();
+  void setExportAction(QAction *action);
+  void editByte();
   std::optional<Address> currentAddress() const { return current_; }
+  QRect cursorViewportRect() const;
   /// Map rows again after the regions of the address space changed.
   void addressSpaceChanged();
   /// The byte at \p address once it is loaded and mapped.
@@ -51,6 +61,7 @@ public:
   void setTextEncoding(const QString &name);
 
 signals:
+  void populateContextMenu(QMenu *menu);
   void locationChanged(neverd::gui::Address address);
 
 protected:
@@ -95,6 +106,8 @@ private:
   void loadEncodings();
   /// The byte drawn at \p position, if any.
   std::optional<Address> addressAt(const QPointF &position) const;
+  /// The row whose address \p position is on, if it is on its digits.
+  std::optional<Address> rowAddressAt(const QPointF &position) const;
   /// Move the current byte, extending the selection from where it started.
   void moveCurrent(Address address, bool extend);
   /// Put the pending copy on the clipboard once all its bytes are loaded.
@@ -103,7 +116,9 @@ private:
   void updateMetrics();
   int visibleRows() const;
 
+  WheelInput wheel_;
   Session &session_;
+  QAction *ExportAction = nullptr;
   const AddressSpace &space_;
   mutable QHash<Address, Chunk> chunks_;
   mutable std::list<Address> order_;
@@ -112,6 +127,8 @@ private:
   int currentSize_ = 1;
   /// Where the selection started; it ends at the current byte.
   std::optional<Address> anchor_;
+  /// The row whose address a click selected; Ctrl+C copies it.
+  std::optional<Address> addressRow_;
   /// The bytes a copy waits for, first and last.
   std::optional<std::pair<Address, Address>> pendingCopy_;
   QString textEncoding_;

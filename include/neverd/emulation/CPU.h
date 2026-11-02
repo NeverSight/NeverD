@@ -11,7 +11,7 @@
 #include "neverd/emulation/GuestMemory.h"
 #include "neverd/emulation/Registers.h"
 #include "neverd/emulation/ResourceEvent.h"
-#include "neverd/emulation/X64BranchModel.h"
+#include "neverd/emulation/arch/x86_64/X64BranchModel.h"
 
 #include <array>
 #include <functional>
@@ -117,6 +117,16 @@ public:
   /// set. OS context restoration must not infer this from writable MXCSR bits.
   virtual bool supportsSIMDExceptions() const { return false; }
   virtual llvm::Expected<RegisterValue> readRegister(CPURegister Register) = 0;
+  /// Read the stopped CPU's complete modeled architectural register set.
+  /// All-or-error: no partial state, context switch, execution, or memory read.
+  /// This is observation only, not a resumable context or saved-thread state.
+  llvm::Expected<std::vector<RegisterSnapshot>> readRegisters();
+  /// Observe a saved context from this backend and its current address space.
+  /// Uses the same inventory and all-or-error contract as the current CPU.
+  /// Never restores the context or changes faults, pending events, or memory.
+  /// May inspect a saved context even when the current CPU is faulted.
+  llvm::Expected<std::vector<RegisterSnapshot>>
+  readRegisters(const BackendContext &Context) const;
   virtual llvm::Error writeRegister(CPURegister Register,
                                     const RegisterValue &Value) = 0;
   virtual llvm::Error fetch(uint64_t Address,
@@ -191,6 +201,9 @@ public:
   virtual bool executable(uint64_t Address) const = 0;
 
 protected:
+  virtual llvm::Expected<RegisterValue>
+  readContextRegister(const BackendContext &Context,
+                      CPURegister Register) const;
   static std::unique_ptr<BackendContext>
   makeContext(std::unique_ptr<BackendContext::Storage> State) {
     return std::unique_ptr<BackendContext>(

@@ -1,14 +1,25 @@
+//===- ObjCReadOnlyScalarSources.h - Bounded source table reads -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Bind immutable scalar tables only after proving each complete read range.
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_SDK_CAPI_OBJC_READONLYSCALARSOURCES_H
 #define NEVERD_SDK_CAPI_OBJC_READONLYSCALARSOURCES_H
 
 #include "BorrowedByteSources.h"
 
+#include "neverd/ir/high/AArch64AddressMemory.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/sdk/Limits.h"
 
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 
 namespace neverd::sdk {
@@ -21,6 +32,7 @@ struct LoadPlan {
   ExprPtr Index;
   ExprPtr Offset;
   ExprPtr BaseExpression;
+  std::optional<AArch64AddressMemoryInstruction> OriginalMemory;
 };
 inline bool ordinary(const ExprPtr &E) {
   return E && E->Type && E->IntrinsicId == Intrinsic::None &&
@@ -28,9 +40,33 @@ inline bool ordinary(const ExprPtr &E) {
          E->MemoryOrdering == NdMemoryOrdering::None &&
          E->MemoryAddressSpace == NdMemoryAddressSpace::Default;
 }
-inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
-                                        bool ObjectPointers) {
-  if (!ordinary(E) || E->Kind != ExprKind::Load || E->Operands.size() != 1 ||
+inline bool peelIndexExtension(LoadPlan &P) {
+  if (P.Index->Kind == ExprKind::UnaryOp && P.Index->Operands.size() == 1 &&
+      (P.Index->Op == NdOp::INT_ZEXT || P.Index->Op == NdOp::INT_SEXT)) {
+    const auto &Narrow = P.Index->Operands[0];
+    if (!ordinary(Narrow) || Narrow->Type->Kind != NdTypeKind::Int ||
+        !Narrow->Type->Size || Narrow->Type->Size > P.Index->Type->Size)
+      return false;
+    if (P.Index->Op == NdOp::INT_SEXT)
+      P.SignLimit = uint64_t{1} << (Narrow->Type->Size * 8 - 1);
+    P.Index = Narrow;
+  }
+  return true;
+}
+inline std::optional<LoadPlan>
+loadPlan(const ExprPtr &E, bool Bound, bool ObjectPointers, Arch Architecture) {
+  std::optional<AArch64AddressMemoryInstruction> Original;
+  if (Architecture == Arch::AArch64 && E && !E->SourceCallHint &&
+      !ObjectPointers && isAArch64AddressMemoryIntrinsic(E->IntrinsicId) &&
+      aarch64AddressMemoryHighShapeIsValid(*E)) {
+    Original = aarch64AddressMemoryInstruction(
+        E->Operands[kAddressMemoryWordOperand]->ConstVal);
+    if (!Original->isLoad() || Original->stackBase() ||
+        !Original->hasRegisterIndex())
+      return std::nullopt;
+  }
+  if ((!Original && (!ordinary(E) || E->Kind != ExprKind::Load ||
+                     E->Operands.size() != 1)) ||
       (ObjectPointers ? (E->Type->Kind != NdTypeKind::Ptr &&
                          E->Type->Kind != NdTypeKind::Int) ||
                             E->Type->Size != 8
@@ -40,16 +76,10 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
                           (E->Type->Kind == NdTypeKind::Float &&
                            (E->Type->Size == 4 || E->Type->Size == 8)))))
     return std::nullopt;
-  const auto &Address = E->Operands[0];
-  if (!ordinary(Address) || Address->Type->Size != 8 ||
-      Address->Kind != ExprKind::BinOp || Address->Op != NdOp::INT_ADD ||
-      Address->Operands.size() != 2)
-    return std::nullopt;
   LoadPlan P;
-  for (unsigned Side = 0; Side < 2; ++Side) {
-    const auto &Base = Address->Operands[Side];
+  auto takeBase = [&](const ExprPtr &Base) {
     if (!ordinary(Base) || Base->Type->Size != 8 || !Base->Operands.empty())
-      continue;
+      return false;
     if (!Bound && Base->Kind == ExprKind::Const &&
         Base->Type->Kind == NdTypeKind::Int) {
       P.Base = Base->ConstVal;
@@ -61,11 +91,36 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
       P.Base = Base->SourceCallHint->TargetAddress;
       P.Extent = Base->SourceCallHint->ByteCount;
     } else {
-      continue;
+      return false;
     }
     P.BaseExpression = Base;
-    P.Offset = Address->Operands[1 - Side];
-    break;
+    return P.Base != 0;
+  };
+  if (Original) {
+    P.OriginalMemory = Original;
+    P.Offset = E->Operands[kAddressMemoryIndexOperand];
+    if (!takeBase(E->Operands[kAddressMemoryBaseOperand]) ||
+        !ordinary(P.Offset) || P.Offset->Type->Kind != NdTypeKind::Int)
+      return std::nullopt;
+    // Keep the raw index and encoded extension/scale on the actual access.
+    // The range query observes that same input, and the instruction owner
+    // subsequently proves address equality for its complete admitted range.
+    P.Index = P.Offset;
+    P.Stride = uint64_t{1} << Original->indexShift();
+    if (!peelIndexExtension(P))
+      return std::nullopt;
+    return P;
+  }
+  const auto &Address = E->Operands[0];
+  if (!ordinary(Address) || Address->Type->Size != 8 ||
+      Address->Kind != ExprKind::BinOp || Address->Op != NdOp::INT_ADD ||
+      Address->Operands.size() != 2)
+    return std::nullopt;
+  for (unsigned Side = 0; Side < 2; ++Side) {
+    if (takeBase(Address->Operands[Side])) {
+      P.Offset = Address->Operands[1 - Side];
+      break;
+    }
   }
   if (!P.Base || !ordinary(P.Offset) || P.Offset->Type->Size != 8 ||
       P.Offset->Type->Kind != NdTypeKind::Int)
@@ -136,16 +191,8 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
         P.Index->Type->Size != 8)
       return std::nullopt;
   }
-  if (P.Index->Kind == ExprKind::UnaryOp && P.Index->Operands.size() == 1 &&
-      (P.Index->Op == NdOp::INT_ZEXT || P.Index->Op == NdOp::INT_SEXT)) {
-    const auto &Narrow = P.Index->Operands[0];
-    if (!ordinary(Narrow) || Narrow->Type->Kind != NdTypeKind::Int ||
-        !Narrow->Type->Size || Narrow->Type->Size > 8)
-      return std::nullopt;
-    if (P.Index->Op == NdOp::INT_SEXT)
-      P.SignLimit = uint64_t{1} << (Narrow->Type->Size * 8 - 1);
-    P.Index = Narrow;
-  }
+  if (!peelIndexExtension(P))
+    return std::nullopt;
   return P;
 }
 } // namespace readonly_scalar_detail
@@ -177,7 +224,7 @@ readOnlyLoadPlans(const HighFunc &Function, const BinaryImage &Image,
         Pending.pop_back();
         if (!E || !Seen.insert(E.get()).second)
           continue;
-        if (auto P = loadPlan(E, Bound, ObjectPointers)) {
+        if (auto P = loadPlan(E, Bound, ObjectPointers, Image.Arch)) {
           if (Queries.size() ==
               ::neverd::sdk::
                   kObjCReadOnlyScalarSourcesReadOnlyLoadPlansQueriesSizeLimit) {
@@ -201,7 +248,10 @@ readOnlyLoadPlans(const HighFunc &Function, const BinaryImage &Image,
     const auto Upper = Bounds[I];
     // Bound both the scalar inventory and the byte copy; sparse strides do
     // not permit unbounded reads or source helper growth.
-    if (!Upper || *Upper >= ::neverd::sdk::kMaxReadOnlyScalarEntries ||
+    if (!Upper ||
+        (P.OriginalMemory &&
+         !P.OriginalMemory->controlIndependentAddressRange(P.Base, *Upper)) ||
+        *Upper >= ::neverd::sdk::kMaxReadOnlyScalarEntries ||
         *Upper >= P.SignLimit ||
         *Upper > (::neverd::sdk::kMaxReadOnlyScalarBytes - Load->Type->Size) /
                      P.Stride) {

@@ -124,6 +124,50 @@ class MimallocConfigureTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_thp_settings_are_preserved(self):
+        # A local interface target exposes the value delivered to the fork;
+        # this fixture neither downloads nor compiles the allocator.
+        cases = [("Linux", None, "DEFAULT"), ("Darwin", None, "DEFAULT")]
+        cases += [("Linux", choice, choice)
+                  for choice in ("OFF", "ON", "FULL", "DEFAULT")]
+        for platform, choice, expected in cases:
+            with self.subTest(platform=platform, choice=choice):
+                with tempfile.TemporaryDirectory(prefix="neverd-thp-policy-") as temp:
+                    source = pathlib.Path(temp)
+                    fork = source / "allocator"
+                    fork.mkdir()
+                    fork.joinpath("CMakeLists.txt").write_text(
+                        'set(MI_ALLOW_THP "DEFAULT" CACHE STRING "Fixture THP policy")\n'
+                        'file(WRITE "${CMAKE_BINARY_DIR}/observed-thp.txt" "${MI_ALLOW_THP}")\n'
+                        "add_library(mimalloc-obj INTERFACE)\n"
+                        'set(mi_libraries "")\n',
+                        encoding="utf-8",
+                    )
+                    source.joinpath("CMakeLists.txt").write_text(
+                        "cmake_minimum_required(VERSION 3.20)\n"
+                        "project(AllocatorTHPPolicy NONE)\n"
+                        f'set(CMAKE_SYSTEM_NAME "{platform}")\n'
+                        "set(WIN32 OFF)\nset(APPLE OFF)\n"
+                        f'include("{ROOT.as_posix()}/cmake/NeverDMimalloc.cmake")\n',
+                        encoding="utf-8",
+                    )
+                    command = ["cmake", "-S", temp, "-B", str(source / "build"),
+                               "-DNEVERD_ENABLE_MIMALLOC=ON",
+                               f"-DFETCHCONTENT_SOURCE_DIR_NEVERD_MIMALLOC={fork}"]
+                    if choice is not None:
+                        command.append(f"-DMI_ALLOW_THP:STRING={choice}")
+                    result = subprocess.run(command, capture_output=True, text=True,
+                                            timeout=60)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    observed = source / "build" / "observed-thp.txt"
+                    self.assertEqual(observed.read_text(encoding="utf-8"), expected)
+                    # A subsequent configure must retain the cached selection
+                    # even after the explicit command-line override is removed.
+                    result = subprocess.run(command[:6], capture_output=True, text=True,
+                                            timeout=60)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(observed.read_text(encoding="utf-8"), expected)
+
     def test_worker_reuses_process_policy_and_preserves_legacy_opt_out(self):
         # A pre-existing process allocator must prevent the worker wrapper
         # from fetching another version or rejecting non-Linux platforms.
@@ -134,9 +178,12 @@ class MimallocConfigureTests(unittest.TestCase):
                     with tempfile.TemporaryDirectory(prefix="neverd-worker-policy-") as temp:
                         source = pathlib.Path(temp)
                         expected = "mimalloc" if effective and legacy != "OFF" else "system"
+                        source.joinpath("worker.cpp").write_text(
+                            "int main() { return 0; }\n", encoding="utf-8"
+                        )
                         source.joinpath("CMakeLists.txt").write_text(
                             "cmake_minimum_required(VERSION 3.20)\n"
-                            "project(WorkerAllocatorPolicy NONE)\n"
+                            "project(WorkerAllocatorPolicy CXX)\n"
                             f'set(CMAKE_SYSTEM_NAME "{platform}")\n'
                             "set(NEVERD_ENABLE_MIMALLOC ON)\n"
                             f'set(NEVERD_MIMALLOC_ENABLED {"ON" if effective else "OFF"})\n'
@@ -144,7 +191,9 @@ class MimallocConfigureTests(unittest.TestCase):
                             "function(neverd_link_mimalloc target)\n"
                             "  set_property(TARGET ${target} PROPERTY TEST_ALLOCATOR_LINKED ON)\n"
                             "endfunction()\n"
-                            "add_executable(worker IMPORTED)\n"
+                            # The wrapper configures a compiled executable, including
+                            # private definitions that imported targets cannot own.
+                            "add_executable(worker worker.cpp)\n"
                             f'include("{ROOT.as_posix()}/cmake/NeverDWorkerAllocator.cmake")\n'
                             "neverd_worker_allocator(worker)\n"
                             "get_target_property(actual worker NEVERD_WORKER_ALLOCATOR)\n"
@@ -155,6 +204,16 @@ class MimallocConfigureTests(unittest.TestCase):
                             'if((actual STREQUAL "mimalloc" AND NOT linked) OR\n'
                             '   (actual STREQUAL "system" AND linked))\n'
                             '  message(FATAL_ERROR "Worker did not follow process allocator policy")\n'
+                            "endif()\n"
+                            "get_target_property(definitions worker COMPILE_DEFINITIONS)\n"
+                            'if((actual STREQUAL "mimalloc" AND NOT\n'
+                            '    definitions STREQUAL "NEVERD_WORKER_HAS_MIMALLOC=1") OR\n'
+                            '   (actual STREQUAL "system" AND definitions))\n'
+                            '  message(FATAL_ERROR "Worker allocator definition disagrees with linkage")\n'
+                            "endif()\n"
+                            "get_target_property(public_definitions worker INTERFACE_COMPILE_DEFINITIONS)\n"
+                            "if(public_definitions)\n"
+                            '  message(FATAL_ERROR "Worker allocator definition must stay private")\n'
                             "endif()\n",
                             encoding="utf-8",
                         )

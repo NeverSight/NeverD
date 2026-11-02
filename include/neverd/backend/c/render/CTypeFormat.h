@@ -32,6 +32,7 @@ class StructType;
 namespace neverd {
 
 struct BinaryImage;
+struct SourceFrameBytes;
 class DebugContext;
 
 /// \p Ty as C.  Throws std::invalid_argument for a type C cannot spell, such
@@ -102,6 +103,11 @@ bool isStringLiteralText(llvm::StringRef Text);
 /// string starts there.
 std::optional<std::string> imageStringComment(const BinaryImage *Img,
                                               va_t Addr);
+
+/// Readable text in proven stack bytes, with its original observation address.
+/// A comment only: the source retains every original load and store.
+std::optional<std::string>
+sourceFrameStringComment(const SourceFrameBytes &Value);
 
 /// A string the image holds, as a C literal of exactly its bytes.
 struct ImageCString {

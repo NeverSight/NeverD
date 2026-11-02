@@ -146,12 +146,9 @@ llvm::Error collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
       llvm::consumeError(SymsOr.takeError());
       return llvm::Error::success();
     }
-    auto StrTabOr = ELF.getStringTableForSymtab(SH, Sections);
-    if (!StrTabOr) {
-      llvm::consumeError(StrTabOr.takeError());
+    const auto StrTab = getLinkedStringTable<ELFT>(ELF, Sections, SH);
+    if (StrTab.empty())
       return llvm::Error::success();
-    }
-    llvm::StringRef StrTab = *StrTabOr;
 
     for (size_t I = 1; I < SymsOr->size(); ++I) {
       const Elf_Sym &Sym = (*SymsOr)[I];

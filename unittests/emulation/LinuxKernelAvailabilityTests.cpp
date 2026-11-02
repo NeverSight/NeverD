@@ -13,6 +13,65 @@
 namespace neverd::emulation {
 namespace {
 using namespace linux_model;
+TEST(LinuxKernelAvailability,
+     ResidencyObservationsAreExplicitStrictAndBounded) {
+  auto O = processOptionsFromJSON(
+      R"({"linux_kernel":{"residency_observations":[{"address":"4294967296","pages":[0,1,0]}]}})");
+  ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+  ASSERT_TRUE(O->LinuxKernel->ResidencyObservations);
+  EXPECT_EQ(O->LinuxKernel->ResidencyObservations->at(0).Address, 0x100000000u);
+  EXPECT_EQ(O->LinuxKernel->ResidencyObservations->at(0).Pages,
+            (std::vector<uint8_t>{0, 1, 0}));
+  for (const char *Value :
+       {"null", "true", "{}", "0", "[null]", "[{}]",
+        R"([{"address":4097,"pages":[1]}])", R"([{"address":4096,"pages":[]}])",
+        R"([{"address":4096,"pages":[true]}])",
+        R"([{"address":4096,"pages":[2]}])",
+        R"([{"address":4096,"pages":[-1]}])",
+        R"([{"address":4096,"pages":["1"]}])",
+        R"([{"address":4096,"pages":[0],"extra":0}])",
+        R"([{"address":"0xfffffffffffff000","pages":[0]}])",
+        R"([{"address":"18446744073709547520","pages":[0]}])",
+        R"([{"address":9007199254740992,"pages":[0]}])"}) {
+    auto Bad = processOptionsFromJSON(
+        std::string("{\"linux_kernel\":{\"residency_observations\":") + Value +
+        "}}");
+    ASSERT_FALSE(bool(Bad)) << Value;
+    llvm::consumeError(Bad.takeError());
+  }
+  auto Empty = processOptionsFromJSON(
+      R"({"linux_kernel":{"residency_observations":[]}})");
+  ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());
+  EXPECT_TRUE(Empty->LinuxKernel->ResidencyObservations->empty());
+  auto Wide = processOptionsFromJSON(
+      R"({"linux_kernel":{"residency_observations":[{"address":"18014398509481984","pages":[1]}]}})");
+  ASSERT_TRUE(bool(Wide)) << llvm::toString(Wide.takeError());
+  EXPECT_EQ(Wide->LinuxKernel->ResidencyObservations->at(0).Address, uint64_t(1)
+                                                                         << 54);
+  auto &V = *O->LinuxKernel->ResidencyObservations;
+  for (auto Observation : std::vector<LinuxResidencyObservation>{
+           {0, {}},
+           {1, {0}},
+           {0, {2}},
+           {UINT64_MAX - 4095, {0}},
+           {0, std::vector<uint8_t>(65537)}}) {
+    V = {Observation};
+    auto E = validateKernelOptions(*O->LinuxKernel);
+    EXPECT_TRUE(bool(E));
+    llvm::consumeError(std::move(E));
+  }
+  V.assign(1025, {0, {0}});
+  auto E = validateKernelOptions(*O->LinuxKernel);
+  EXPECT_TRUE(bool(E));
+  llvm::consumeError(std::move(E));
+  V.assign(16, {0, std::vector<uint8_t>(65536, 1)});
+  EXPECT_FALSE(bool(validateKernelOptions(*O->LinuxKernel)));
+  V.push_back({0, {0}});
+  E = validateKernelOptions(*O->LinuxKernel);
+  EXPECT_TRUE(bool(E));
+  llvm::consumeError(std::move(E));
+}
+
 TEST(LinuxKernelAvailability, AbsenceAppliesOnlyToDeclaredInterfaces) {
   std::optional<LinuxKernelOptions> Options;
   EXPECT_FALSE(unavailableKernelService(ServiceKind::PidFDOpen, Options));
@@ -65,6 +124,140 @@ TEST(LinuxKernelAvailability, JSONAndTypedInputsFailBeforeLoading) {
   ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());
   EXPECT_TRUE(Empty->LinuxKernel->UnavailableSyscalls.empty());
 }
+TEST(LinuxKernelAvailability,
+     XAttrQueryImportContractsRequireExactTypedOrJSONInput) {
+  struct Case {
+    const char *Label;
+    LinuxXAttrQueryImport Import;
+  };
+  constexpr Case Cases[] = {
+      {"target-before-name", LinuxXAttrQueryImport::TargetBeforeName},
+      {"name-before-target", LinuxXAttrQueryImport::NameBeforeTarget}};
+  for (const auto &C : Cases) {
+    auto O = processOptionsFromJSON(
+        std::string("{\"linux_kernel\":{\"xattr_query_import\":\"") + C.Label +
+        "\"}}");
+    ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+    ASSERT_TRUE(O->LinuxKernel);
+    EXPECT_EQ(O->LinuxKernel->XAttrQueryImport, C.Import);
+    EXPECT_EQ(xattrQueryImport(*O->LinuxKernel), C.Import);
+    EXPECT_FALSE(O->LinuxKernel->GKI);
+    EXPECT_FALSE(bool(validateKernelOptions(*O->LinuxKernel)));
+  }
+  for (const char *Value :
+       {"null", "true", "false", "0", "[]", "{}", "\"\"", "\"unknown\"",
+        "\"target-first\"", "\"TARGET-BEFORE-NAME\""}) {
+    auto O = processOptionsFromJSON(
+        std::string("{\"linux_kernel\":{\"xattr_query_import\":") + Value +
+        "}}");
+    ASSERT_FALSE(bool(O)) << Value;
+    llvm::consumeError(O.takeError());
+  }
+  auto Extra = processOptionsFromJSON(
+      R"({"linux_kernel":{"xattr_query_import":"target-before-name","extra":0}})");
+  ASSERT_FALSE(bool(Extra));
+  llvm::consumeError(Extra.takeError());
+  ProcessOptions O;
+  auto &K = O.LinuxKernel.emplace();
+  EXPECT_FALSE(xattrQueryImport(K));
+  K.XAttrQueryImport = static_cast<LinuxXAttrQueryImport>(99);
+  EXPECT_FALSE(xattrQueryImport(K));
+  auto E = validateKernelOptions(K);
+  ASSERT_TRUE(bool(E));
+  EXPECT_EQ(llvm::toString(std::move(E)), KernelOptions);
+  auto Bad = emulateProcess("missing.elf", ProcessProfile::LinuxELF64, O);
+  ASSERT_FALSE(bool(Bad));
+  EXPECT_EQ(llvm::toString(Bad.takeError()), KernelOptions);
+}
+
+TEST(LinuxKernelAvailability,
+     AnonymousVMANamesRequireExplicitTypedOrJSONInput) {
+  auto O = processOptionsFromJSON(
+      R"({"linux_kernel":{"anonymous_vma_names":"android-user-pointer"}})");
+  ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+  ASSERT_TRUE(O->LinuxKernel);
+  EXPECT_EQ(O->LinuxKernel->AnonymousVMANames,
+            LinuxAnonymousVMANames::AndroidUserPointer);
+  EXPECT_FALSE(O->LinuxKernel->GKI);
+  EXPECT_FALSE(bool(validateKernelOptions(*O->LinuxKernel)));
+  for (const char *Value : {"null", "true", "false", "0", "[]", "{}", "\"\"",
+                            "\"linux\"", "\"ANDROID-USER-POINTER\""}) {
+    auto Bad = processOptionsFromJSON(
+        std::string("{\"linux_kernel\":{\"anonymous_vma_names\":") + Value +
+        "}}");
+    ASSERT_FALSE(bool(Bad)) << Value;
+    llvm::consumeError(Bad.takeError());
+  }
+  O->LinuxKernel->AnonymousVMANames = static_cast<LinuxAnonymousVMANames>(99);
+  auto Bad = emulateProcess("missing.elf", ProcessProfile::LinuxELF64, *O);
+  ASSERT_FALSE(bool(Bad));
+  EXPECT_EQ(llvm::toString(Bad.takeError()), KernelOptions);
+}
+
+TEST(LinuxKernelAvailability,
+     XAttrQueryImportPreservesGKIAndRejectsTwoAuthorities) {
+  struct Case {
+    AndroidGKIKernel Kernel;
+    const char *Label;
+    bool NameFirst;
+  };
+  constexpr Case Cases[] = {
+#define NEVERD_GKI_RELEASE_CASE(Name, Label, ThreadFlag, SingleBuffer, Error,  \
+                                NameFirst)                                     \
+  {AndroidGKIKernel::Name, Label, NameFirst},
+#include "GKIReleaseCases.def"
+#undef NEVERD_GKI_RELEASE_CASE
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Label);
+    LinuxKernelOptions K;
+    K.GKI = C.Kernel;
+    const auto Expected = C.NameFirst ? LinuxXAttrQueryImport::NameBeforeTarget
+                                      : LinuxXAttrQueryImport::TargetBeforeName;
+    EXPECT_EQ(xattrQueryImport(K), Expected);
+    EXPECT_FALSE(bool(validateKernelOptions(K)));
+    for (const auto &Import : {LinuxXAttrQueryImport::TargetBeforeName,
+                               LinuxXAttrQueryImport::NameBeforeTarget}) {
+      K.XAttrQueryImport = Import;
+      EXPECT_FALSE(xattrQueryImport(K));
+      auto E = validateKernelOptions(K);
+      ASSERT_TRUE(bool(E));
+      EXPECT_EQ(llvm::toString(std::move(E)), KernelOptions);
+    }
+    for (const char *Import : {"target-before-name", "name-before-target"}) {
+      auto O = processOptionsFromJSON(
+          std::string("{\"linux_kernel\":{\"gki\":\"") + C.Label +
+          "\",\"xattr_query_import\":\"" + Import + "\"}}");
+      ASSERT_FALSE(bool(O));
+      llvm::consumeError(O.takeError());
+    }
+  }
+  LinuxKernelOptions K;
+  K.GKI = static_cast<AndroidGKIKernel>(99);
+  EXPECT_FALSE(xattrQueryImport(K));
+}
+
+TEST(LinuxKernelAvailability,
+     XAttrQueryImportDoesNotSelectOtherKernelContracts) {
+  for (const char *Import : {"target-before-name", "name-before-target"}) {
+    auto O = processOptionsFromJSON(
+        std::string("{\"linux_kernel\":{\"xattr_query_import\":\"") + Import +
+        R"(","unavailable_syscalls":["pidfd_open"]}})");
+    ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+    auto &K = *O->LinuxKernel;
+    EXPECT_FALSE(K.GKI);
+    EXPECT_FALSE(K.Tasks);
+    EXPECT_TRUE(
+        unavailableKernelService(ServiceKind::PidFDOpen, O->LinuxKernel));
+    EXPECT_FALSE(
+        unavailableKernelService(ServiceKind::GetXAttr, O->LinuxKernel));
+    EXPECT_FALSE(bool(validateKernelOptions(K)));
+    K.XAttrQueryImport.reset();
+    EXPECT_FALSE(xattrQueryImport(K));
+    EXPECT_FALSE(bool(validateKernelOptions(K)));
+  }
+}
+
 struct Profile {
   const char *Name;
   ExecutionBackendKind Backend;

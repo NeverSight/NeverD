@@ -6,15 +6,14 @@
 ///
 /// \file
 /// Cryptographic acceleration (AES-NI, SHA-NI, carry-less
-/// multiply, CRC32) plus the transactional-memory (TSX) and
-/// bounds-check (MPX) extensions that share this dispatcher.
+/// multiply, CRC32) and admission of the MPX bounds-check extensions.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -33,8 +32,7 @@ bool validEvexCrypto(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch,
                      uint8_t Map, uint8_t Opcode, bool HasImmediate) {
   CanonicalEvexEncodingInfo Encoding;
   if (!parseCanonicalEvexEncodingInfo(Insn, X86, TargetArch, Encoding) ||
-      (Encoding.P0 & 0x07) != Map ||
-      ((Encoding.P1 | 0x04) & 0x87) != 0x05 ||
+      (Encoding.P0 & 0x07) != Map || ((Encoding.P1 | 0x04) & 0x87) != 0x05 ||
       (Encoding.P2 & 0x97) != 0 || Encoding.Opcode != Opcode ||
       X86.op_count != (HasImmediate ? 4 : 3) ||
       X86.encoding.imm_size != (HasImmediate ? 1 : 0) || X86.avx_sae ||
@@ -51,10 +49,8 @@ bool validEvexCrypto(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch,
   const uint8_t ExpectedLength =
       Dst.size == 16 ? 0 : (Dst.size == 32 ? 0x20 : 0x40);
   if ((Encoding.P2 & 0x60) != ExpectedLength ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorIndex(Dst) ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-          vectorIndex(Src1) ||
+      Encoding.regIndex() != vectorIndex(Dst) ||
+      Encoding.vvvvIndex() != vectorIndex(Src1) ||
       ((Encoding.ModRM & 0xc0) == 0xc0) != (Src2.type == X86_OP_REG))
     return false;
   for (unsigned Index = 0; Index < X86.op_count; ++Index)
@@ -67,8 +63,7 @@ bool validEvexCrypto(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch,
     if (!validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Src2, Dst.size,
                                          TrailingBytes))
       return false;
-  } else if (decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-                 vectorIndex(Src2) ||
+  } else if (Encoding.rmIndex() != vectorIndex(Src2) ||
              !validateCanonicalEvexRegisterTail(Insn, X86, Encoding,
                                                 TrailingBytes)) {
     return false;
@@ -76,8 +71,7 @@ bool validEvexCrypto(const cs_insn *Insn, const cs_x86 &X86, Arch TargetArch,
   if (!HasImmediate)
     return X86.encoding.imm_offset == 0;
   return X86.encoding.imm_offset == Insn->size - 1 &&
-         X86.operands[3].type == X86_OP_IMM &&
-         X86.operands[3].size == 1 &&
+         X86.operands[3].type == X86_OP_IMM && X86.operands[3].size == 1 &&
          static_cast<uint8_t>(X86.operands[3].imm) ==
              Insn->bytes[Insn->size - 1];
 }
@@ -88,79 +82,26 @@ bool liftSIMDCrypto(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   unsigned InsnId = Insn->id;
   switch (InsnId) {
 
-  // Intel TSX (transactional memory) instructions.
-  case X86_INS_XBEGIN:
-  case X86_INS_XEND:
-  case X86_INS_XABORT:
-  case X86_INS_XTEST:
-  case X86_INS_XACQUIRE:
-  case X86_INS_XRELEASE: {
-    if (InsnId == X86_INS_XABORT) {
-      // xabort imm8 — capture the immediate so codegen can re-emit
-      // `xabort $imm` (a bare `xabort` is rejected: too few operands).
-      uint64_t Imm = (X86.op_count >= 1 && X86.operands[0].type == X86_OP_IMM)
-                         ? static_cast<uint64_t>(X86.operands[0].imm)
-                         : 0;
-      // Outside a transaction XABORT does nothing; an abort resumes at the
-      // XBEGIN fallback, whose own output carries EAX.  No value falls
-      // through, so it defines no register here.
-      S.emitIntrinsic(Intrinsic::Xabort, NdVar(), {NdVar::cst(Imm & 0xFF, 1)});
-      break;
-    }
-    Intrinsic Id;
-    switch (InsnId) {
-    case X86_INS_XBEGIN:
-      Id = Intrinsic::Xbegin;
-      break;
-    case X86_INS_XEND:
-      Id = Intrinsic::Xend;
-      break;
-    case X86_INS_XTEST:
-      Id = Intrinsic::Xtest;
-      break;
-    case X86_INS_XACQUIRE:
-      Id = Intrinsic::Xacquire;
-      break;
-    case X86_INS_XRELEASE:
-      Id = Intrinsic::Xrelease;
-      break;
-    default:
-      Id = Intrinsic::Xbegin;
-      break;
-    }
-    if (Id == Intrinsic::Xtest) {
-      // XTEST clears ZF inside a transaction and sets it otherwise; it
-      // writes no general register.
-      NdVar InTransaction = S.makeTemp(1);
-      S.emitIntrinsic(Intrinsic::Xtest, InTransaction, {});
-      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
-             {InTransaction, NdVar::cst(0, 1)});
-      break;
-    }
-    if (Id != Intrinsic::Xbegin) {
-      // XEND and the XACQUIRE/XRELEASE hints write no register.
-      S.emitIntrinsic(Id, NdVar());
-      break;
-    }
-    S.emitIntrinsic(Id);
-    break;
-  }
+  case X86_INS_VSHA512MSG1:
+  case X86_INS_VSHA512MSG2:
+  case X86_INS_VSHA512RNDS2:
+    return liftSHA512(L, S, Insn, X86);
 
-  // BNDxxx — MPX bounds (deprecated). Treat as side-effect or COPY.
+  // HLE prefixes belong to their memory instruction, not a standalone NOP.
+  case X86_INS_XACQUIRE:
+  case X86_INS_XRELEASE:
+    return false;
+
+  // MPX owns bounds-register state, bounds tables and #BR completion. An
+  // ordinary COPY loses those semantics even on hosts that ignore MPX.
   case X86_INS_BNDMK:
   case X86_INS_BNDMOV:
   case X86_INS_BNDCL:
   case X86_INS_BNDCU:
   case X86_INS_BNDCN:
   case X86_INS_BNDLDX:
-  case X86_INS_BNDSTX: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
-    break;
-  }
+  case X86_INS_BNDSTX:
+    return false;
 
   case X86_INS_AESENC:
   case X86_INS_VAESENC: {

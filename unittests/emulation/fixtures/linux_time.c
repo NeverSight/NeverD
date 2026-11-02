@@ -54,6 +54,21 @@ void process_main(U64 *Stack) {
     check(linux_service(GetClock, 0, (U64)Pages, 0), 0);
     check(linux_service(GetClock, 1, (U64)Pages + 16, 0), 0);
     output(Pages, 32);
+  } else if (Mode == 'r') {
+    for (U64 Phase = 0; Phase != 2; ++Phase) {
+      U64 Destination = (U64)Pages + Phase * 48;
+      check(linux_service(GetClock, 0, Destination, 0), 0);
+      check(linux_service(GetClock, 1, Destination + 16, 0), 0);
+      check(linux_service(GetClock, 0x1234567800000004UL, Destination + 32, 0),
+            0);
+      if (!Phase) {
+        long Request[2] = {1, 7};
+        check(linux_service(Sleep, (U64)Request, (U64)Request, 0), 0);
+        check(Request[0], 1);
+        check(Request[1], 7);
+      }
+    }
+    output(Pages, 112);
   } else if (Mode == 'n') {
     check(linux_service(GetTV, (U64)Pages, (U64)Pages + 16, 0), 0);
     check(linux_service(GetClock, 0, (U64)Pages + 24, 0), 0);

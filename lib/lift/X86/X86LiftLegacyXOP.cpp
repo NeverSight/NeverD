@@ -13,10 +13,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FourSource.h"
 #include "X86LiftDetail.h"
+#include "X86NativeMemory.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 
@@ -118,10 +120,8 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         ImmediateOperand.type != X86_OP_IMM || ImmediateOperand.size != 1 ||
         static_cast<uint8_t>(ImmediateOperand.imm) !=
             Insn->bytes[Insn->size - 1] ||
-        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-            vectorRegisterIndex(DestinationOperand) ||
-        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-            vectorRegisterIndex(Source1Operand))
+        Encoding.regIndex() != vectorRegisterIndex(DestinationOperand) ||
+        Encoding.vvvvIndex() != vectorRegisterIndex(Source1Operand))
       return false;
 
     const bool MemoryForm = (Encoding.ModRM & 0xc0) != 0xc0;
@@ -132,8 +132,7 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                                            VectorSize, 1))) ||
         (!MemoryForm &&
          (!isVectorRegisterOfSize(Source2Operand, VectorSize) ||
-          decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-              vectorRegisterIndex(Source2Operand) ||
+          Encoding.rmIndex() != vectorRegisterIndex(Source2Operand) ||
           !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1))))
       return false;
 
@@ -245,10 +244,8 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         ImmediateOperand.type != X86_OP_IMM || ImmediateOperand.size != 1 ||
         static_cast<uint8_t>(ImmediateOperand.imm) !=
             Insn->bytes[Insn->size - 1] ||
-        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-            vectorRegisterIndex(DestinationOperand) ||
-        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-            vectorRegisterIndex(Source1Operand))
+        Encoding.regIndex() != vectorRegisterIndex(DestinationOperand) ||
+        Encoding.vvvvIndex() != vectorRegisterIndex(Source1Operand))
       return false;
 
     const bool MemoryForm = (Encoding.ModRM & 0xc0) != 0xc0;
@@ -259,8 +256,7 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                                            VectorSize, 1))) ||
         (!MemoryForm &&
          (!isVectorRegisterOfSize(Source2Operand, VectorSize) ||
-          decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-              vectorRegisterIndex(Source2Operand) ||
+          Encoding.rmIndex() != vectorRegisterIndex(Source2Operand) ||
           !validateCanonicalEvexRegisterTail(Insn, X86, Encoding, 1))))
       return false;
 
@@ -388,10 +384,8 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     const cs_x86_op &Memory = X86.operands[MemoryIndex];
     if (!isZmm64(Destination) || !isZmm64(Source) ||
         Memory.type != X86_OP_MEM || Memory.size != 16 ||
-        decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-            zmmIndex(Destination) ||
-        decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) !=
-            zmmIndex(Source) ||
+        Encoding.regIndex() != zmmIndex(Destination) ||
+        Encoding.vvvvIndex() != zmmIndex(Source) ||
         !validateCanonicalEvexMemoryTail(Insn, X86, Encoding, Memory, 16))
       break;
 
@@ -430,14 +424,26 @@ bool liftLegacyXOP(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       break;
     }
 
-    const Intrinsic Id = InsnId == X86_INS_VP4DPWSSD ? Intrinsic::X86VP4DPWSSD
-                                                     : Intrinsic::X86VP4DPWSSDS;
+    const auto Segment =
+        x86NativeI386Segment(L.targetArch(), Encoding.SegmentPrefix, Memory);
+    if (!Segment && !x86NativeSibAddressIsValid(L.targetArch(), X86, Memory))
+      return false;
+    const auto Kind = InsnId == X86_INS_VP4DPWSSD ? X86FourSourceKind::DPWSSD
+                                                  : X86FourSourceKind::DPWSSDS;
+    const bool Stack = x86NativeAddressIsStack(L.targetArch(), X86, Memory);
+    const X86FourSourceControl C{Kind, ZeroMask, Stack};
+    const auto Sources = x86FourSourceSnapshot(S, SourceBase, C);
+    const auto Control = static_cast<unsigned>(Kind) |
+                         (ZeroMask ? X86FourSourceZero : 0) |
+                         (Stack ? X86FourSourceStackReference : 0) |
+                         (Segment << X86FourSourceSegmentShift);
     const NdVar OldDestination = L.operandRead(S, Destination);
-    if (!S.emitMemoryIntrinsic(Id, Memory,
-                               {OldDestination, NdVar::cst(SourceBase, 1), Mask,
-                                NdVar::cst(ZeroMask ? 1 : 0, 1)},
-                               L.operandWrite(Destination)))
-      break;
+    const NdVar Address = S.computeEA(Memory, true, Segment != 0);
+    S.emitIntrinsic(Intrinsic::X86FourSourceMemory, L.operandWrite(Destination),
+                    {Address, OldDestination, Sources, Mask,
+                     NdVar::cst(Control, Segment ? 2 : 1)},
+                    NdMemoryOrdering::None,
+                    X86Lifter::LiftState::memoryAddressSpace(Memory));
     break;
   }
 

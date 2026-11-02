@@ -15,6 +15,9 @@ uint64_t Bionic::tlsAddress() const {
 uint64_t Bionic::threadID() const {
   return Threads ? Threads->id() : linux_model::ThreadID;
 }
+BinderThreadState &Bionic::binderThread() {
+  return Threads ? Threads->binder() : SingleThreadBinder;
+}
 BionicResult Bionic::unsupportedImport(const NativeCallEvent &Call) {
   Result.Stop = ProcessStopReason::UnsupportedService;
   Result.Diagnostic = diagnostic::ImportPrefix + Call.Name;
@@ -53,6 +56,15 @@ BionicResult Bionic::invoke(NativeCallEvent &Call) {
    }},
 #include "AndroidKernelServices.def"
 #undef NEVERD_ANDROID_KERNEL_SERVICE
+#define NEVERD_ANDROID_PATH_STATUS(Text, Flags)                                \
+  {Text, [](Bionic &Model, NativeCallEvent &Event) -> BionicResult {           \
+     auto Adapted = Event;                                                     \
+     Adapted.Arguments = {linux_model::AtCurrentDirectory, Event.Arguments[0], \
+                          Event.Arguments[1], Flags};                          \
+     return Model.kernelCall(linux_model::ServiceKind::FstatAt, Adapted);      \
+   }},
+#include "AndroidKernelServices.def"
+#undef NEVERD_ANDROID_PATH_STATUS
   };
   auto I = Handlers.find(Call.Name);
   if (I != Handlers.end())

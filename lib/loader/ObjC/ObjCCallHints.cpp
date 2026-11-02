@@ -10,7 +10,8 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"
@@ -1335,8 +1336,9 @@ static std::map<va_t, SourceCallTypeHint> sourceCallCandidates(
                  std::vector<ObjCReceiverTypeHint>, unsigned, va_t, uint32_t,
                  uint64_t, std::string>;
   std::map<ReceiverKey, ObjCReceiverDeclaration> ReceiverDeclarations;
+  using TransferResult = std::optional<Facts>;
   auto Transfer = [&](size_t Index, Facts State,
-                      Hints &BlockHints) -> std::optional<Facts> {
+                      Hints &BlockHints) -> TransferResult {
     auto &Values = State.Values;
     const auto &Block = Function.Blocks[Index];
     va_t PreviousAddress = InvalidVA;
@@ -1572,7 +1574,9 @@ static std::map<va_t, SourceCallTypeHint> sourceCallCandidates(
             ++It;
         PreviousAddress = Op.Addr;
       }
-      if (Op.Opcode == NdOp::INTRINSIC) {
+      const bool OriginalLoad =
+          Image.Arch == Arch::AArch64 && lowAArch64AddressLoadShapeIsValid(Op);
+      if (Op.Opcode == NdOp::INTRINSIC && !OriginalLoad) {
         Clobber(nullptr);
         continue;
       }
@@ -2573,7 +2577,7 @@ static std::map<va_t, SourceCallTypeHint> sourceCallCandidates(
             State.escapeFrame();
       }
       bool FrameDerived = false;
-      if (Op.Opcode != NdOp::LOAD)
+      if (Op.Opcode != NdOp::LOAD && !OriginalLoad)
         for (unsigned I = 0; I < Op.NumInputs; ++I)
           FrameDerived |= State.mayBeFrame(Op.Inputs[I]);
       std::optional<Value> Out;
@@ -2587,7 +2591,32 @@ static std::map<va_t, SourceCallTypeHint> sourceCallCandidates(
         if (Input && Input->TheKind == Value::Kind::ImageBytes)
           LowImageBytes = Input;
       }
-      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+      if (OriginalLoad) {
+        const auto Instruction = aarch64AddressMemoryInstruction(
+            Op.Inputs[kAddressMemoryWordOperand + 1].Offset);
+        const auto Base = Read(Op.Inputs[kAddressMemoryBaseOperand + 1]);
+        const auto Index = Read(Op.Inputs[kAddressMemoryIndexOperand + 1]);
+        // A validated object layout bounds a field within that live object.
+        // Keep only its declared receiver type on the normal continuation;
+        // retain the original checked load and all of its possible faults.
+        const auto Receiver = Base ? receiver(*Base) : std::nullopt;
+        if (Receiver && Index && !Instruction->stackBase() &&
+            Instruction->usesFullWidthIndex() &&
+            Instruction->accessBytes() == kAddressMemoryPointerBytes &&
+            !Instruction->indexShift()) {
+          const auto Field =
+              Index->TheKind == Value::Kind::Number
+                  ? objcReceiverFieldTypeHint(
+                        Image, *Receiver,
+                        Instruction->addressOffset(Index->Number))
+              : Instruction->hasRegisterIndex() &&
+                      Index->TheKind == Value::Kind::IvarOffset
+                  ? objcReceiverIvarTypeHint(Image, *Receiver, Index->Number)
+                  : std::nullopt;
+          if (Field)
+            Out = Value{Value::Kind::Receiver, 0, {}, *Field};
+        }
+      } else if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
         Out = Read(Op.Inputs[0]);
       else if (Op.Opcode == NdOp::SELECT && Op.NumInputs == 3 &&
                Op.Output.Size == Op.Inputs[1].Size &&

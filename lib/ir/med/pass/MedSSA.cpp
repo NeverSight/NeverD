@@ -16,6 +16,8 @@
 #include "../X86/SEHSourceRoots.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/SEHFrameProof.h"
@@ -23,12 +25,15 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ExceptionInfo.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -43,6 +48,50 @@
 namespace neverd {
 
 using x86_seh::proveSEHEstablisherFrame;
+
+namespace {
+
+/// The bytes an ARM64 prologue allocates, by its unwind codes: the frame its
+/// body runs in, which the unwinder passes a scope's handler as the
+/// establisher frame.  Nullopt when the codes do not fix that size.
+std::optional<uint64_t> arm64PrologueAllocation(const ExceptionFunction &EH) {
+  using K = UnwindOperationKind;
+  if (EH.ParseStatus != ExceptionParseStatus::Complete ||
+      EH.Kind != RuntimeFunctionKind::Primary ||
+      (EH.Encoding != ExceptionEncoding::ARM64Unpacked &&
+       EH.Encoding != ExceptionEncoding::ARM64Packed) ||
+      EH.UnwindOperations.empty())
+    return std::nullopt;
+  uint64_t Bytes = 0;
+  for (const UnwindOperation &Op : EH.UnwindOperations) {
+    switch (Op.Kind) {
+    case K::End:
+      return Bytes;
+    case K::AllocateStack:
+    case K::SaveRegisterPreIndexed:
+    case K::SaveRegisterPairPreIndexed:
+      if (Op.StackOffset > std::numeric_limits<uint32_t>::max())
+        return std::nullopt;
+      Bytes += Op.StackOffset;
+      break;
+    case K::SaveRegister:
+    case K::SaveRegisterPair:
+    case K::SaveNextPair:
+    case K::SetFramePointer:
+    case K::AddFramePointer:
+    case K::SignReturnAddress:
+    case K::Nop:
+      break;
+    default:
+      // A chained scope, an SVE-sized allocation, a stack pointer restored
+      // from a register, or a custom frame: the size is not this sum.
+      return std::nullopt;
+    }
+  }
+  return Bytes;
+}
+
+} // namespace
 
 void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   if (Func.Blocks.empty())
@@ -381,25 +430,36 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     return false;
   };
 
-  auto CallClobberedIds = [&](const MedOp &Op) {
-    std::set<int> Result;
+  // Lowering assigns each call a distinct occurrence ID. Entry seeding may
+  // move operations and SSA renames their values, but neither changes a
+  // call's preservation contract or the register views collected above.
+  // Reuse its complete clobber set across liveness, PHI placement and rename.
+  llvm::DenseMap<uint32_t, llvm::SmallVector<int, 8>> CallClobbers;
+  auto CallClobberedIds = [&](const MedOp &Op) -> llvm::ArrayRef<int> {
     if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
         Op.PreservesCallerSaved)
-      return Result;
+      return {};
+    auto [Cached, Inserted] = CallClobbers.try_emplace(Op.CallSiteId);
+    if (!Inserted)
+      return Cached->second;
+    auto &Result = Cached->second;
     for (const auto &[RegOff, Ids] : RegOffToIds)
       for (int Id : Ids)
         if (const auto It = RegVarOfId.find(Id);
             It != RegVarOfId.end() &&
             callClobbersRegister(Op, RegOff, It->second.Size, TRI,
                                  TargetFormat))
-          Result.insert(Id);
+          Result.push_back(Id);
+    llvm::sort(Result);
+    Result.erase(std::unique(Result.begin(), Result.end()), Result.end());
     return Result;
   };
 
-  // An x64 SEH handler is entered by the unwinder with the protected frame's
-  // nonvolatile registers as they were when the exception was raised. Where
-  // no protected block writes one, that is the value live throughout the
-  // protected range, not the value the function was entered with.
+  // A Windows x64, ARM or AArch64 SEH handler is entered by the unwinder with
+  // the protected frame's nonvolatile registers as they were when the
+  // exception was raised. Where no protected block writes one, that is the
+  // value live throughout the protected range, not the value the function was
+  // entered with.
   std::map<int, std::vector<int>> SEHProtected;
   std::map<int, std::map<int, std::set<va_t>>> CxxProtectedCalls;
   std::set<int> SEHTrackedIds;
@@ -455,6 +515,25 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             VarOfId.emplace(Inp.Id, Inp);
           }
         }
+        // A physical x86 CALL reads SP to write its return slot, even when
+        // none of its source arguments mention SP. Keep that use live across
+        // handler roots before a later explicit restore overwrites SP. The
+        // existing SEH frame proof then supplies the handler's frame value.
+        if (TRI.CallPushesReturnAddress &&
+            (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+          const auto Bias =
+              sourceCallReturnAddressBias(Image, TargetArch, Op.Addr);
+          if (!Bias || *Bias != 0)
+            if (auto It = RegOffToIds.find(TRI.StackPointer);
+                It != RegOffToIds.end())
+              for (int Id : It->second) {
+                const auto &View = RegVarOfId.at(Id);
+                if (IsFullStackPointer(View) && !Kill.count(Id)) {
+                  UEVar[B].insert(Id);
+                  VarOfId.emplace(Id, View);
+                }
+              }
+        }
         // A partial call clobber reads the pre-call value to retain its ABI-
         // preserved low prefix.  Account for that hidden use before applying
         // the call's kill, otherwise a first-use v8-v15 Q view would lack its
@@ -491,31 +570,34 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         for (const MedVar &Aux : Op.IntrinsicOutputs)
           if (Aux.Id >= 0 && Aux.Size > 0)
             Kill.insert(Aux.Id);
-        std::set<int> Clobbered = CallClobberedIds(Op);
+        llvm::ArrayRef<int> Clobbered = CallClobberedIds(Op);
         Kill.insert(Clobbered.begin(), Clobbered.end());
       }
     }
 
-    std::vector<std::set<int>> LiveIn(N), LiveOut(N);
-    bool Changed = true;
-    while (Changed) {
-      Changed = false;
+    // Each live-in fact crosses a predecessor edge only once. The transfer
+    // UEVar[B] union (LiveOut[B] - VarKill[B]) distributes over individual
+    // variables, so propagating only new facts reaches the same least fixpoint
+    // without rebuilding successor unions or revisiting unchanged facts.
+    auto LiveIn = std::move(UEVar);
+    // Self-edges cannot add another block's uses to a single-block function.
+    if (N > 1) {
+      std::queue<std::pair<int, int>> Pending;
       for (auto It = RPO.rbegin(); It != RPO.rend(); ++It) {
-        int B = *It;
+        const int B = *It;
         if (B == VirtualRoot)
           continue;
-        std::set<int> NewOut;
-        for (int S : FlowSuccs[B])
-          if (S >= 0 && S < N)
-            NewOut.insert(LiveIn[S].begin(), LiveIn[S].end());
-        std::set<int> NewIn = UEVar[B];
-        for (int V : NewOut)
-          if (!VarKill[B].count(V))
-            NewIn.insert(V);
-        if (NewIn != LiveIn[B] || NewOut != LiveOut[B]) {
-          LiveIn[B] = std::move(NewIn);
-          LiveOut[B] = std::move(NewOut);
-          Changed = true;
+        for (int Id : LiveIn[B])
+          Pending.emplace(B, Id);
+      }
+      while (!Pending.empty()) {
+        const auto [B, Id] = Pending.front();
+        Pending.pop();
+        for (int P : FlowPreds[B]) {
+          // The synthetic root joins dominance, not machine-entry values.
+          if (P != VirtualRoot && !VarKill[P].count(Id) &&
+              LiveIn[P].insert(Id).second)
+            Pending.emplace(P, Id);
         }
       }
     }
@@ -611,15 +693,15 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         // Ordinary flow and runtime resumption must agree on the same frame.
         // A runtime-only continuation is a real root: its SP is the proved
         // target frame, not a second ordinary function-entry SP.
-        bool IndependentEntries = false;
+        bool UnresolvedEntries = false;
         const auto FrameBytes = proveSEHEstablisherFrame(
             Low, Func, Func.Blocks[B].StartAddr, TRI,
             /*OrdinaryEntry=*/!IsRoot[B], LocalUnwindDigest,
             /*CxxContinuation=*/false, nullptr, nullptr,
-            SEHSourceProjectionEnabled, &IndependentEntries);
-        Func.HasUnresolvedSEHFrame |= IndependentEntries;
+            SEHSourceProjectionEnabled, &UnresolvedEntries);
+        Func.HasUnresolvedSEHFrame |= UnresolvedEntries;
         if (!IsRoot[B]) {
-          if (IndependentEntries)
+          if (UnresolvedEntries)
             SharedSourceSPRoots.insert(B);
           continue;
         }
@@ -635,10 +717,27 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     if (Func.HasUnresolvedSEHFrame)
       x86_seh::seedSourceEntries(Func, Low, LiveIn, VarOfId, TargetArch);
 
+    // ARM and AArch64 have no decoded-frame proof here. Their unwinder
+    // resumes an except handler with the protected frame's SP as well: the SP
+    // live throughout the protected range, where no protected operation
+    // moves it.
+    const bool ARMTableSEH =
+        (TargetArch == Arch::ARM || TargetArch == Arch::AArch64) &&
+        Low.ExceptionMetadata && Low.ExceptionMetadata->SEH;
+    if (ARMTableSEH)
+      for (int Root : Roots)
+        if (Root != 0 && llvm::any_of(Func.Blocks[Root].ExceptionalPreds,
+                                      [](const ExceptionalEdge &E) {
+                                        return E.Kind ==
+                                               ExceptionalEdgeKind::SEHHandler;
+                                      }))
+          SEHProtectedSPRoots.insert(Root);
+
     for (int Root : Roots) {
       if (Root != 0)
         NonEntryRootLiveIns.insert(LiveIn[Root].begin(), LiveIn[Root].end());
-      if (Root != 0 && (TargetArch == Arch::X64 || HasX86SEHFrame) &&
+      if (Root != 0 &&
+          (TargetArch == Arch::X64 || ARMTableSEH || HasX86SEHFrame) &&
           Low.ExceptionMetadata &&
           (Low.ExceptionMetadata->SEH || HasX86SEHFrame)) {
         const ExceptionFunction &EH = *Low.ExceptionMetadata;
@@ -926,6 +1025,61 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       DomChildren[IDom[C]].push_back(C);
   }
 
+  // ARM and AArch64 termination handlers are separate functions that read
+  // this one's callee-saved registers, which the unwinder restores to their
+  // values where the exception struck. Track each full-width callee-saved
+  // register through the blocks of every finally scope; a handler that ends
+  // several scopes needs one value for all of them.
+  const bool ARMSEHFunclets =
+      (TargetArch == Arch::ARM || TargetArch == Arch::AArch64) &&
+      Low.ExceptionMetadata && Low.ExceptionMetadata->SEH;
+  std::map<va_t, std::vector<int>> SEHFuncletProtected;
+  std::set<int> SEHFuncletTrackedIds;
+  std::optional<int64_t> SEHFuncletFrame;
+  if (ARMSEHFunclets) {
+    const ExceptionFunction &EH = *Low.ExceptionMetadata;
+    std::set<va_t> Refused;
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+      if (Scope.Kind != SEHScopeKind::Finally || !Scope.FilterOrFinallyVA ||
+          EH.ownsCode(Scope.FilterOrFinallyVA))
+        continue;
+      const va_t Funclet = Scope.FilterOrFinallyVA;
+      const auto Range = getSemanticSEHGuardedRange(Scope, TargetArch, EH);
+      if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range) {
+        Refused.insert(Funclet);
+        continue;
+      }
+      auto &Blocks = SEHFuncletProtected[Funclet];
+      const size_t Before = Blocks.size();
+      for (int B = 0; B < N; ++B)
+        if (Func.Blocks[B].StartAddr < Range->End &&
+            Func.Blocks[B].EndAddr > Range->Begin)
+          Blocks.push_back(B);
+      if (Blocks.size() == Before)
+        Refused.insert(Funclet);
+    }
+    for (va_t Funclet : Refused)
+      SEHFuncletProtected.erase(Funclet);
+    // AArch64 also passes the handler the establisher frame, the stack
+    // pointer the prologue leaves for the body. Where the protected ranges
+    // run on exactly that stack pointer, it is their stack pointer.
+    if (TargetArch == Arch::AArch64 && !SEHFuncletProtected.empty())
+      if (const auto Bytes = arm64PrologueAllocation(EH))
+        SEHFuncletFrame = -static_cast<int64_t>(*Bytes);
+    if (!SEHFuncletProtected.empty())
+      for (const auto &[Id, V] : RegVarOfId)
+        if (V.Size == TRI.PointerSize &&
+            (TRI.isStackPointer(V.RegOff)
+                 ? SEHFuncletFrame && IsFullStackPointer(V)
+                 : TRI.isCalleeSaveReg(V.RegOff) ||
+                       V.RegOff == TRI.FramePointer))
+          SEHFuncletTrackedIds.insert(Id);
+  }
+  std::set<int> SEHFuncletBlocks;
+  for (const auto &[Funclet, Blocks] : SEHFuncletProtected)
+    SEHFuncletBlocks.insert(Blocks.begin(), Blocks.end());
+  std::map<int, std::map<int, int>> SEHFuncletEntryVersions;
+
   std::set<int> SEHProtectedBlocks;
   for (const auto &[Root, Blocks] : SEHProtected)
     SEHProtectedBlocks.insert(Blocks.begin(), Blocks.end());
@@ -981,6 +1135,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     if (SEHProtectedBlocks.count(F.B))
       for (int Id : SEHTrackedIds)
         SEHEntryVersions[F.B][Id] = GetVersion(Id);
+    // -1 when no definition reaches here: version 0 is a register's first
+    // definition unless it is live into the function.
+    if (SEHFuncletBlocks.count(F.B))
+      for (int Id : SEHFuncletTrackedIds)
+        SEHFuncletEntryVersions[F.B][Id] =
+            VarStack[Id].empty() ? -1 : VarStack[Id].back();
     for (auto &Op : Blk.Ops) {
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           CxxThrowingCalls.count({F.B, Op.Addr}))
@@ -1142,6 +1302,184 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         In = MedVar::makeUnspecified(In.Size, TargetArch);
       else if (*Live > 0)
         In.SSAVer = *Live;
+    }
+  }
+  // Publish each termination handler's callee-saved register values. Each is
+  // resolved here to a form later passes neither rename nor delete, through a
+  // bounded chain of COPY and constant INT_ADD/INT_SUB definitions: no PHI web
+  // is walked, and each SSA value is resolved once.
+  if (!SEHFuncletProtected.empty()) {
+    // Every definition, so version 0 with none is the entry value. A PHI or
+    // an auxiliary output is a definition the trace does not follow.
+    std::map<std::pair<int, int>, const MedOp *> Defs;
+    for (const MedBlock &Blk : Func.Blocks) {
+      for (const PhiNode &Phi : Blk.Phis)
+        if (Phi.Output.Id >= 0)
+          Defs.emplace(std::make_pair(Phi.Output.Id, Phi.Output.SSAVer),
+                       nullptr);
+      for (const MedOp &Op : Blk.Ops) {
+        if (Op.Output.Id >= 0 && Op.Output.Size > 0)
+          Defs.emplace(std::make_pair(Op.Output.Id, Op.Output.SSAVer), &Op);
+        for (const MedVar &Aux : Op.IntrinsicOutputs)
+          if (Aux.Id >= 0)
+            Defs.emplace(std::make_pair(Aux.Id, Aux.SSAVer), nullptr);
+      }
+    }
+    const IntegerArgumentLayout Arguments =
+        TRI.integerArgumentLayout(TargetFormat);
+    std::map<std::pair<int, int>, std::optional<SEHFuncletRegisterValue>>
+        Resolved;
+    auto Trace = [&](MedVar V) -> std::optional<SEHFuncletRegisterValue> {
+      using Kind = SEHFuncletRegisterValue::Kind;
+      int64_t Acc = 0;
+      for (unsigned Hop = 0;
+           Hop < limits::ir::kMedSSASEHFuncletRegisterChainLimit; ++Hop) {
+        SEHFuncletRegisterValue Value;
+        if (V.Kind == MedVar::Const) {
+          // An offset from an address constant names no address by itself.
+          const bool Scalar =
+              V.Provenance == ConstantAddressProvenance::Unknown ||
+              V.Provenance == ConstantAddressProvenance::Scalar;
+          if (Acc && !Scalar)
+            return std::nullopt;
+          Value.ValueKind = Kind::Constant;
+          Value.Value = V.ConstVal + static_cast<uint64_t>(Acc);
+          if (TRI.PointerSize < 8)
+            Value.Value &= (uint64_t(1) << (TRI.PointerSize * 8)) - 1;
+          if (!Acc) {
+            Value.Provenance = V.Provenance;
+            Value.AddressOwnerVA = V.AddressOwnerVA;
+          }
+          return Value;
+        }
+        // A register's value on entry is its version 0 where it is live in,
+        // defined by the entry block's self-copy; elsewhere version 0 is its
+        // first definition, which is followed like any other.
+        const auto Def = Defs.find({V.Id, V.SSAVer});
+        auto SelfCopy = [&](const MedOp &Op) {
+          return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                 Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == V.Id &&
+                 Op.Inputs[0].SSAVer == 0;
+        };
+        if (V.Kind == MedVar::Reg && V.SSAVer == 0 &&
+            (Def == Defs.end() || (Def->second && SelfCopy(*Def->second)))) {
+          if (V.Size != TRI.PointerSize)
+            return std::nullopt;
+          if (TRI.isStackPointer(V.RegOff)) {
+            Value.ValueKind = Kind::EntryStackOffset;
+            Value.Offset = Acc;
+            return Value;
+          }
+          if (TRI.ZeroRegister && V.RegOff == *TRI.ZeroRegister) {
+            Value.ValueKind = Kind::Constant;
+            Value.Value = static_cast<uint64_t>(Acc);
+            Value.Provenance = ConstantAddressProvenance::Scalar;
+            return Value;
+          }
+          if (Acc || Arguments.registerIndex(V.RegOff) < 0)
+            return std::nullopt;
+          Value.ValueKind = Kind::EntryArgument;
+          Value.RegOff = V.RegOff;
+          return Value;
+        }
+        if (Def == Defs.end() || !Def->second)
+          return std::nullopt;
+        const MedOp &Op = *Def->second;
+        if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+          V = Op.Inputs[0];
+          continue;
+        }
+        if ((Op.Opcode != NdOp::INT_ADD && Op.Opcode != NdOp::INT_SUB) ||
+            Op.NumInputs != 2 || Op.Output.Size != TRI.PointerSize)
+          return std::nullopt;
+        const bool ConstantRight = Op.Inputs[1].isConst();
+        if (!ConstantRight &&
+            (Op.Opcode != NdOp::INT_ADD || !Op.Inputs[0].isConst()))
+          return std::nullopt;
+        const MedVar &Step = ConstantRight ? Op.Inputs[1] : Op.Inputs[0];
+        if (!Step.Size || Step.Size > 8)
+          return std::nullopt;
+        int64_t Delta = llvm::SignExtend64(Step.ConstVal, Step.Size * 8);
+        if (Op.Opcode == NdOp::INT_SUB &&
+            Delta == std::numeric_limits<int64_t>::min())
+          return std::nullopt;
+        if (Op.Opcode == NdOp::INT_SUB)
+          Delta = -Delta;
+        if (llvm::AddOverflow(Acc, Delta, Acc))
+          return std::nullopt;
+        V = ConstantRight ? Op.Inputs[0] : Op.Inputs[1];
+      }
+      return std::nullopt;
+    };
+    auto Resolve = [&](const MedVar &V) {
+      auto [It, Inserted] =
+          Resolved.try_emplace(std::make_pair(V.Id, V.SSAVer));
+      if (Inserted)
+        It->second = Trace(V);
+      return It->second;
+    };
+    for (const auto &[Funclet, Blocks] : SEHFuncletProtected) {
+      // A PHI in a protected block is not among its operations, but it is
+      // renamed before the block's entry versions are recorded, so blocks
+      // that join different values record different versions.
+      std::vector<std::pair<uint64_t, uint64_t>> Written;
+      auto NoteWrite = [&](const MedVar &V) {
+        if (V.Kind == MedVar::Reg && V.Size != 0)
+          Written.emplace_back(V.RegOff, V.RegOff + V.Size);
+      };
+      for (int B : Blocks)
+        for (const MedOp &Op : Func.Blocks[B].Ops) {
+          NoteWrite(Op.Output);
+          for (const MedVar &Aux : Op.IntrinsicOutputs)
+            NoteWrite(Aux);
+        }
+      for (int Id : SEHFuncletTrackedIds) {
+        const MedVar &V = RegVarOfId.at(Id);
+        if (llvm::any_of(Written, [&](const auto &W) {
+              return W.first < V.RegOff + V.Size && V.RegOff < W.second;
+            }))
+          continue;
+        std::optional<int> Live;
+        bool Same = true;
+        for (int B : Blocks) {
+          const auto &Versions = SEHFuncletEntryVersions[B];
+          const auto It = Versions.find(Id);
+          if (It == Versions.end() || (Live && *Live != It->second)) {
+            Same = false;
+            break;
+          }
+          Live = It->second;
+        }
+        if (!Same || !Live || *Live < 0)
+          continue;
+        MedVar At = V;
+        At.SSAVer = *Live;
+        const auto Value = Resolve(At);
+        if (!Value)
+          continue;
+        // The stack pointer is published only as the establisher frame.
+        if (TRI.isStackPointer(V.RegOff) &&
+            (Value->ValueKind !=
+                 SEHFuncletRegisterValue::Kind::EntryStackOffset ||
+             Value->Offset != *SEHFuncletFrame))
+          continue;
+        Func.SEHFuncletRegisters[Funclet][V.RegOff] = *Value;
+      }
+      // By one reading the establisher frame is the body's stack pointer, by
+      // another the frame pointer: clang-cl's handlers reach a parent slot at
+      // `x29 - 8` as `x1 - 8`. Keep it only where the ranges run with the
+      // frame pointer at that same frame, so both readings agree.
+      if (auto Registers = Func.SEHFuncletRegisters.find(Funclet);
+          Registers != Func.SEHFuncletRegisters.end()) {
+        auto &Values = Registers->second;
+        const auto SP = Values.find(TRI.StackPointer);
+        const auto FP = Values.find(TRI.FramePointer);
+        if (SP != Values.end() &&
+            (FP == Values.end() || FP->second != SP->second))
+          Values.erase(SP);
+        if (Values.empty())
+          Func.SEHFuncletRegisters.erase(Registers);
+      }
     }
   }
   // Without a proven protected range, a callee-saved register's value at

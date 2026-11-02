@@ -65,6 +65,8 @@ void negateBits(CnfEncoder &E, LitSpan A, LitVec &Out);
 
 /// `A * B` modulo two to the width.
 ///
+/// Known-zero low prefixes are removed from both factors before multiplying
+/// their exact low-bit quotient; the complete output word is then restored.
 /// Between two unknown values this is the sum of the shifted rows of the long
 /// multiplication, which costs on the order of a squared width in adder cells.
 ///

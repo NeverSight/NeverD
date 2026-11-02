@@ -13,10 +13,10 @@
 #include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 #include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationSEHStateStore.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsX86.h"

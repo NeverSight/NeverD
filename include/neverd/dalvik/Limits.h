@@ -17,10 +17,40 @@
 #include <cstdint>
 
 namespace neverd::limits::dalvik {
+// API 28 LOGGER_ENTRY_MAX_PAYLOAD, including the binary event's int32 tag.
+inline constexpr unsigned kAndroidEventLogPayloadBytes = 4068;
 
 // include/neverd/dalvik/Heap.h
 inline constexpr uint64_t kHeapByteLimit = 8 * 1024 * 1024;
 inline constexpr uint32_t kHeapObjectLimit = 4096;
+// Conservative byte budget per retained ordinary instance-field map entry.
+inline constexpr uint64_t kInstanceFieldStorageBytes = 64;
+
+// Explicit framework observations; independent limits for distinct providers.
+inline constexpr int kMaxAndroidSettingsValueBytes = 4096;
+inline constexpr int kMaxAndroidApplicationInfoFieldBytes = 4096;
+inline constexpr uint32_t kMaxAndroidApplicationSplitSources = 64;
+inline constexpr int kMaxAndroidApplicationInfoQueries = 64;
+inline constexpr int kMaxAndroidPackageResourcePathBytes = 4096;
+inline constexpr int kMaxAndroidPackageInfoFieldBytes = 4096;
+inline constexpr int kMaxAndroidPackageInfoQueries = 64;
+inline constexpr int kMaxAndroidLocaleComponentBytes = 1024;
+inline constexpr uint32_t kMaxAndroidClassLoaderPaths = 64;
+inline constexpr uint32_t kMaxAndroidClassLoaderPathBytes = 4096;
+inline constexpr uint32_t kMaxAndroidClassLoaderPathTotalBytes = 16384;
+// Retained messages traversed or enqueued in one modeled queue.
+inline constexpr uint32_t kMaxQueuedMessages = 1024;
+inline constexpr uint32_t kMaxAndroidServiceCacheEntries = 256;
+inline constexpr uint32_t kMaxAndroidBinderProxies = 256;
+inline constexpr uint32_t kMaxAndroidServiceNameBytes = 4096;
+inline constexpr uint32_t kMaxAndroidServiceLookupResults = 256;
+inline constexpr uint32_t kMaxJavaURLCodeUnits = 4096;
+inline constexpr uint32_t kMaxAndroidURLFailureHandlers = 2;
+inline constexpr uint32_t kMaxAndroidURLHandlerMessageBytes = 4096;
+// Conservative per-entry bookkeeping in addition to the retained state value.
+inline constexpr uint64_t kFrameworkFieldStateOverheadBytes = 64;
+inline constexpr uint64_t kAndroidApplicationInfoStateOverheadBytes =
+    kFrameworkFieldStateOverheadBytes;
 
 // lib/dalvik/AndroidFramework.cpp
 inline constexpr int kMaxAndroidApplicationClassLookupFailures = 256;

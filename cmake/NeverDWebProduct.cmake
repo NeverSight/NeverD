@@ -46,9 +46,6 @@ if(NEVERD_MIMALLOC_ENABLED)
     "$<TARGET_PROPERTY:mimalloc,NEVERD_REDIRECT_DLL>"
     DESTINATION bin COMPONENT WebProduct)
 endif()
-if(NEVERD_ENABLE_TBB AND TARGET tbb)
-  install(FILES "$<TARGET_FILE:tbb>" DESTINATION bin COMPONENT WebProduct)
-endif()
 # ICU data is loaded by ICU itself and need not appear in the engine's import
 # table. Always stage the exact data DLL alongside its exact 77.1 consumer.
 install(FILES "${_neverd_product_icu_root}/bin64/icuuc77.dll" "${_neverd_product_icu_root}/bin64/icudt77.dll"

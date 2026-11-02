@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Arrays/alignment/enum rows: pagination, real bits, replay and atomic refusal."""
+"""Arrays/alignment/enum rows: pagination, real bits, replay and atomic refusal;
+SBF and EVM operand formats in their own spellings."""
 import argparse
 from contextlib import ExitStack
 from pathlib import Path
@@ -22,6 +23,35 @@ def fixture():
     for n in range(64):
         struct.pack_into("<I", image, 4096+4*n, n+1)
     return image, entry
+
+
+def sbf_program(*instructions):
+    """A legacy SBF ELF (EM_BPF, version 0) whose text is the instructions."""
+    text = b"".join(struct.pack("<BBhi", op, (src << 4) | dst, offset, imm)
+                    for op, dst, src, offset, imm in instructions)
+    names = b"\0.text\0.rodata\0.shstrtab\0"
+    text_at, names_at = 64, 64 + len(text)
+    sections_at = (names_at + len(names) + 7) & ~7
+    header = (b"\x7fELF\x02\x01\x01" + bytes(9) +
+              struct.pack("<HHIQQQIHHHHHH", 3, 247, 1, 0, 0, sections_at, 0,
+                          64, 56, 0, 64, 4, 3))
+    image = bytearray(sections_at + 4 * 64)
+    image[:64] = header
+    image[text_at:names_at] = text
+    image[names_at:names_at + len(names)] = names
+    for index, (name, kind, flags, address, offset, size, align) in enumerate((
+            (0, 0, 0, 0, 0, 0, 0),
+            (1, 1, 6, 0, text_at, len(text), 8),
+            (7, 1, 2, len(text), names_at, 0, 8),
+            (15, 3, 0, 0, names_at, len(names), 1))):
+        struct.pack_into("<IIQQQQIIQQ", image, sections_at + 64 * index, name,
+                         kind, flags, address, offset, size, 0, 0, align, 0)
+    return bytes(image)
+
+
+def instructions(client, address):
+    return [row["text"] for row in listing(client, address)["lines"]
+            if row["kind"] == "insn"]
 
 
 def listing(client, address=DATA, **options):
@@ -124,6 +154,56 @@ def run(executable):
                {"address": hex(ENTRY), "operand": operand,
                 "action": "enum", "type": enum_type})
             assert expected in str(listing(client, ENTRY))
+        # SBF and EVM operands take the same formats in their own spellings.
+        program = Path(directory) / "program.so"
+        program.write_bytes(sbf_program(
+            (0xb7, 1, 0, 0, 24),       # mov64 r1, 24
+            (0x79, 3, 1, 24, 0),       # ldxdw r3, [r1 + 24]
+            (0xb4, 0, 0, 0, -1),       # mov32 r0, -1
+            (0x95, 0, 0, 0, 0)))       # exit
+        ok(client, "open", {"path": str(program), "analysis": False})
+        start = 0x100000000
+        source(client, "low", start)
+        ok(client, "local_types_declare", {"source": (
+            "struct QA_PAIR { long long first; long long second; "
+            "long long third; long long fourth; };"
+            "enum QA_MASK : unsigned { QA_ALL = ~0u };")})
+        assert "mov64   r1, 24" in instructions(client, start)[0], instructions(client, start)
+        ok(client, "operand_format", {"address": hex(start), "operand": 1, "action": "hex"})
+        ok(client, "operand_format", {"address": hex(start + 8), "operand": 1,
+                                      "action": "struct", "type": "QA_PAIR"})
+        ok(client, "operand_format", {"address": hex(start + 16), "operand": 1,
+                                      "action": "enum", "type": "QA_MASK"})
+        shown = instructions(client, start)
+        assert "r1, 0x18" in shown[0], shown
+        assert "r3, [r1 + QA_PAIR.fourth]" in shown[1], shown
+        assert "r0, QA_ALL" in shown[2], shown
+        # The type picker judges the operand's own access in SBF syntax.
+        fit = ok(client, "local_types_fit", {"address": hex(start + 8), "operand": 1})
+        assert fit["syntax"] == "sbf" and fit["target"]["base"] == "r1", fit
+        assert fit["accesses"][0]["offset"] == 24, fit
+        # A load's displacement takes a structure offset, but no number base.
+        assert client.call("operand_format", {"address": hex(start + 8), "operand": 1,
+                                              "action": "hex"})["status"] == "error"
+        bytecode = Path(directory) / "push.evm"
+        # PUSH2 0x0004; PUSH32 ff..ff; STOP
+        bytecode.write_text("610004" + "7f" + "ff" * 32 + "00", encoding="ascii")
+        ok(client, "open", {"path": str(bytecode), "analysis": False})
+        source(client, "low", 0)
+        ok(client, "local_types_declare",
+           {"source": "enum QA_EVM : unsigned short { QA_EVM_FOUR = 4 };", "language": "cpp"})
+        ok(client, "operand_format", {"address": "0x0", "operand": 0,
+                                      "action": "enum", "type": "QA_EVM"})
+        ok(client, "operand_format", {"address": "0x3", "operand": 0, "action": "decimal"})
+        shown = instructions(client, 0)
+        assert "PUSH2   QA_EVM_FOUR" in shown[0], shown
+        assert ("PUSH32  1157920892373161954235709850086879078532699846656405640394"
+                "57584007913129639935") in shown[1], shown
+        reply = client.call("operand_format", {"address": "0x3", "operand": 0,
+                                               "action": "enum", "type": "QA_EVM"})
+        assert reply["status"] == "error" and "64 bits" in reply["error"]["message"], reply
+        # Bytecode listings ask no native decoder about their functions.
+        assert b"unsupported arch for decoder" not in client.logs, bytes(client.logs)
 
 
 if __name__ == "__main__":

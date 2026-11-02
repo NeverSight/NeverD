@@ -363,7 +363,7 @@ int claudeSession(const char *Binary, Fixture &F) {
   const auto Bun =
       P.tool("web_bun_extract", {{"revision", Revision},
                                  {"artifact_id", Artifact.at("artifact_id")}});
-  require(Bun.at("module_count") == 2589 && Bun.at("region_count") == 10005,
+  require(Bun.at("module_count") == 2589 && Bun.at("region_count") == 10006,
           "MCP lost pinned Bun module or region evidence");
   unsigned Rows = 0, Sources = 0, Caches = 0, Maps = 0;
   for (unsigned Offset = 0; Offset < 2589; Offset += 128) {

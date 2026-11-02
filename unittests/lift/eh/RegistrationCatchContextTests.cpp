@@ -10,7 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/RegistrationState.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace {
 using namespace neverd;

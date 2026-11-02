@@ -71,8 +71,10 @@ from .bytecode import (
     BytecodeRecoveryResult, recover_bytecode, recover_bytecode_with_decoder,
 )
 from ._version import __version__
+from .lineage import Lineage
 
 __all__ = [
+    "Lineage",
     "BytecodeRecoveryResult",
     "recover_bytecode",
     "recover_bytecode_with_decoder",

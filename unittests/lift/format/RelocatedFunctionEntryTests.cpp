@@ -640,6 +640,33 @@ TEST(RelocatedFunctionEntries, EmitterDoesNotRetainProofsAcrossImageChanges) {
   EXPECT_EQ(Second, nullptr);
 }
 
+TEST(RelocatedFunctionEntries,
+     SymbolIndexPreservesAliasesAndResetsPerEmission) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto Img = pointerImage(Target, BinaryFormat::COFF);
+    const va_t Entry = Target == Arch::ARM ? 0x1041 : 0x1040;
+    for (const char *Name : {"first_alias", "last_alias"}) {
+      auto Sym = Symbol::makeFunc(Entry, 8);
+      Sym.Name = Name;
+      Img.Symbols.push_back(std::move(Sym));
+    }
+    MedLLVMEmitter Emitter;
+    llvm::LLVMContext Context;
+    auto First = Emitter.emit({pointerSource(Img)}, Context, "first", Target,
+                              {}, &Img, Img.Format);
+    ASSERT_NE(First, nullptr);
+    EXPECT_NE(First->getFunction("last_alias"), nullptr);
+    EXPECT_EQ(First->getFunction("first_alias"), nullptr);
+    Img.Symbols.back().Name = "renamed_alias";
+    auto Second = Emitter.emit({pointerSource(Img)}, Context, "second", Target,
+                               {}, &Img, Img.Format);
+    ASSERT_NE(Second, nullptr);
+    EXPECT_NE(Second->getFunction("renamed_alias"), nullptr);
+    EXPECT_EQ(Second->getFunction("last_alias"), nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Second, &llvm::errs()));
+  }
+}
+
 BinaryImage guardedImage(Arch Target, unsigned Extra = 0) {
   auto Img = pointerImage(Target, BinaryFormat::COFF);
   if (Target == Arch::X86 || Target == Arch::X64) {

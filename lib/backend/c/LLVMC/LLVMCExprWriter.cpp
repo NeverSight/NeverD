@@ -10,6 +10,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../CDeferredValue.h"
+#include "../CDisplayFieldPath.h"
+#include "../CDisplayFrameRecord.h"
+#include "LLVMCAtomicOrdering.h"
 #include "LLVMCFrameLayout.h"
 #include "LLVMCStorage.h"
 #include "LLVMCVariableEdits.h"
@@ -19,6 +23,7 @@
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/MsvcCallee.h"
@@ -157,20 +162,31 @@ std::string unsignedCmpOperand(const std::string &S) {
   return looksUnsignedCExpr(S) ? S : "(unsigned)" + S;
 }
 
+unsigned signedIntegerCarrierWidth(unsigned Width) {
+  if (Width > limits::kMaxCSourceIntegerBytes * 8)
+    throw std::runtime_error(
+        "LLVMC signed operand exceeds " +
+        std::to_string(limits::kMaxCSourceIntegerBytes * 8) + "-bit carrier");
+  return Width <= 8     ? 8
+         : Width <= 16  ? 16
+         : Width <= 32  ? 32
+         : Width <= 64  ? 64
+         : Width <= 128 ? 128
+                        : Width;
+}
+
+std::string signedIntegerCarrier(const llvm::Type *Type) {
+  const unsigned Width = signedIntegerCarrierWidth(Type->getIntegerBitWidth());
+  if (Width > 128)
+    return "_BitInt(" + std::to_string(Width) + ")";
+  return Width == 128 ? "__int128_t" : "int" + std::to_string(Width) + "_t";
+}
+
 std::string signedIntegerOperand(const llvm::Type *Type,
                                  const std::string &Text) {
   const unsigned Width = Type->getIntegerBitWidth();
-  if (Width > 512)
-    throw std::runtime_error("LLVMC signed operand exceeds 512-bit carrier");
-  if (Width > 128)
-    return "(_BitInt(" + std::to_string(Width) + "))(" + Text + ")";
-  const unsigned Carrier = Width <= 8    ? 8
-                           : Width <= 16 ? 16
-                           : Width <= 32 ? 32
-                           : Width <= 64 ? 64
-                                         : 128;
-  const std::string Signed =
-      Carrier == 128 ? "__int128_t" : "int" + std::to_string(Carrier) + "_t";
+  const unsigned Carrier = signedIntegerCarrierWidth(Width);
+  const std::string Signed = signedIntegerCarrier(Type);
   if (Width == Carrier)
     return "(" + Signed + ")(" + Text + ")";
   const std::string Unsigned =
@@ -328,17 +344,19 @@ std::string LLVMCWriter::resolveNdDataName(llvm::StringRef Name) const {
 }
 
 bool LLVMCWriter::isImageDataAddress(va_t Addr) const {
-  if (!Img || Addr == 0 || Addr == InvalidVA)
-    return false;
-  if (Img->findImportAt(Addr))
+  // The image's own headers are `__ImageBase`, never a copied object.
+  if (!Img || Addr == 0 || Addr == InvalidVA || Img->imageBaseOffset(Addr))
     return false;
   const Segment *Seg = Img->getSegmentFor(Addr);
   if (!Seg || !Seg->isReadable())
     return false;
   // Data the debug information places among the code is data.
-  if (Seg->isExecutable() && !Seg->isWritable())
-    return isCodeSectionData(Img, Addr);
-  return true;
+  if (Seg->isExecutable() && !Seg->isWritable() &&
+      !isCodeSectionData(Img, Addr))
+    return false;
+  // An import's slot or stub is no data object.  Asked last: a code address
+  // asks whether a function starts there, which reads the symbols.
+  return !Img->findImportAt(Addr);
 }
 
 std::optional<va_t>
@@ -370,7 +388,7 @@ LLVMCWriter::codeSectionAddressText(const llvm::ConstantInt &CI) const {
 
 std::optional<va_t>
 LLVMCWriter::uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const {
-  if (!Slot)
+  if (!Img || !Slot)
     return std::nullopt;
   std::optional<va_t> Found;
   for (const llvm::User *U : Slot->users()) {
@@ -397,7 +415,9 @@ LLVMCWriter::uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const {
 
 std::optional<std::pair<std::string, std::string>>
 LLVMCWriter::imageDataSymbolName(va_t Addr) const {
-  if (!Img)
+  // An undefined data symbol names another module's storage, never the
+  // image's own at its extern address.
+  if (!Img || Img->ObjectExternDataSymbols.count(Addr))
     return std::nullopt;
   const Symbol *Sym = Img->findSymbolAt(Addr);
   if (!Sym || Sym->IsFunc || Sym->Name.empty() ||
@@ -458,7 +478,37 @@ std::string LLVMCWriter::namedImageObject(va_t Addr) const {
   if (!Spelling.empty())
     if (std::string Comment = symbolComment(Spelling, Name); !Comment.empty())
       ImageObjectSymbols[Name] = std::move(Comment);
+  if (Opts.EmitComments)
+    if (const auto Text = imageStringComment(Img, Addr)) {
+      ImageObjectStrings[Addr] = *Text;
+      auto &Comment = ImageObjectSymbols[Name];
+      if (!Comment.empty())
+        Comment += "; ";
+      Comment += *Text;
+    }
   return Name;
+}
+
+std::string LLVMCWriter::imagePointerComment(const llvm::Value *Pointer) const {
+  if (!Opts.EmitComments || (Pointer->getType()->isPointerTy() &&
+                             Pointer->getType()->getPointerAddressSpace() != 0))
+    return {};
+  const auto Addr = imageDataVA(Pointer);
+  if (!Addr)
+    return {};
+  namedImageObject(*Addr);
+  const auto It = ImageObjectStrings.find(*Addr);
+  return It == ImageObjectStrings.end() ? std::string() : It->second;
+}
+
+std::string LLVMCWriter::imagePointerArgument(const llvm::Value *Pointer,
+                                              std::string Text) const {
+  // A literal already exposes its text. Integer carriers need the checked
+  // source pointer contract from call rendering before reaching this helper.
+  if (Text.find('"') == std::string::npos)
+    if (const auto Comment = imagePointerComment(Pointer); !Comment.empty())
+      Text += " /* " + Comment + " */";
+  return Text;
 }
 
 std::string LLVMCWriter::imageObjectSymbolLine(llvm::StringRef Name) const {
@@ -470,7 +520,9 @@ std::string LLVMCWriter::imageObjectSymbolLine(llvm::StringRef Name) const {
 }
 
 std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
-  if (!V)
+  // Numeric addresses need an image; named carriers need a module global.
+  // Without either root, recursive local-storage walks cannot find one.
+  if (!V || (!Img && CurMod && CurMod->global_empty()))
     return std::nullopt;
   V = V->stripPointerCasts();
   // A home may copy a load from another home that eventually copies this
@@ -492,8 +544,12 @@ std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
     auto Base = imageDataVA(GEP->getPointerOperand());
     if (!Base)
       return std::nullopt;
-    llvm::APInt Off(64, 0);
-    if (CurMod && GEP->accumulateConstantOffset(CurMod->getDataLayout(), Off))
+    llvm::APInt Off(CurMod ? CurMod->getDataLayout().getIndexSizeInBits(
+                                 GEP->getPointerAddressSpace())
+                           : 64,
+                    0);
+    if (CurMod && GEP->accumulateConstantOffset(CurMod->getDataLayout(), Off) &&
+        Off.isSignedIntN(64))
       return static_cast<va_t>(static_cast<int64_t>(*Base) +
                                Off.getSExtValue());
     if (GEP->getNumOperands() == 2) {
@@ -587,7 +643,7 @@ std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
 std::optional<std::pair<const llvm::GlobalVariable *, uint64_t>>
 LLVMCWriter::imageByteArrayBacking(const llvm::Value *V,
                                    uint64_t AccessSize) const {
-  if (!CurMod || AccessSize == 0)
+  if (!CurMod || CurMod->global_empty() || AccessSize == 0)
     return std::nullopt;
   const auto Addr = imageDataVA(V);
   if (!Addr)
@@ -596,9 +652,10 @@ LLVMCWriter::imageByteArrayBacking(const llvm::Value *V,
     const auto Base = parseNdDataSymbol(GV.getName());
     const auto *Array = llvm::dyn_cast<llvm::ArrayType>(GV.getValueType());
     if (!Base || !Array || !Array->getElementType()->isIntegerTy(8) ||
-        !GV.hasInitializer() ||
-        (!llvm::isa<llvm::ConstantAggregateZero>(GV.getInitializer()) &&
-         !llvm::isa<llvm::ConstantDataArray>(GV.getInitializer())) ||
+        (!llvm_original_image::isMarked(GV) &&
+         (!GV.hasInitializer() ||
+          (!llvm::isa<llvm::ConstantAggregateZero>(GV.getInitializer()) &&
+           !llvm::isa<llvm::ConstantDataArray>(GV.getInitializer())))) ||
         *Addr < *Base || AccessSize > Array->getNumElements())
       continue;
     const uint64_t Offset = *Addr - *Base;
@@ -622,7 +679,18 @@ LLVMCWriter::imageByteArrayPointer(const llvm::Value *V,
 
 std::optional<uint64_t> LLVMCWriter::foldReadonlyScalar(va_t Addr,
                                                         uint16_t Size) const {
-  if (!Img)
+  // Original-image storage is provided after relocation and runtime setup.
+  // The file's pointer bits are not a scalar constant of that live storage.
+  if (CurMod)
+    for (const auto &Global : CurMod->globals())
+      if (llvm_original_image::isMarked(Global))
+        if (const auto Base = parseNdDataSymbol(Global.getName()))
+          if (const auto *Array =
+                  llvm::dyn_cast<llvm::ArrayType>(Global.getValueType());
+              Array && Addr >= *Base && Addr - *Base < Array->getNumElements())
+            return std::nullopt;
+  // A header byte describes the image that runs, never this file's copy.
+  if (!Img || Img->imageBaseOffset(Addr))
     return std::nullopt;
   const Segment *Seg = Img->getSegmentFor(Addr);
   if (!Seg || Seg->isWritable())
@@ -640,6 +708,14 @@ std::optional<uint64_t> LLVMCWriter::foldReadonlyScalar(va_t Addr,
 
 std::optional<va_t>
 LLVMCWriter::declaredImageDataVA(const llvm::Value *V) const {
+  if (V->getType()->isPointerTy())
+    if (const auto *Global =
+            llvm::dyn_cast<llvm::GlobalVariable>(llvm::getUnderlyingObject(V));
+        Global && llvm_original_image::isMarked(*Global))
+      return std::nullopt;
+  if (auto Backing = imageByteArrayBacking(V, 1);
+      Backing && llvm_original_image::isMarked(*Backing->first))
+    return std::nullopt;
   // Full-module output owns the bytes of a pointer mirror or a section's
   // byte array it defines. Their interior fields are offsets into that
   // object, as the code spells them, not separate globals at the original
@@ -647,9 +723,14 @@ LLVMCWriter::declaredImageDataVA(const llvm::Value *V) const {
   // objects, and so does a module for a mirror its environment holds (one
   // with runtime-filled slots, such as an i386 GOT run and the data after
   // it), which it does not define.
-  if (!OnlyFunction && V->getType()->isPointerTy())
-    if (const auto *Global =
-            llvm::dyn_cast<llvm::GlobalVariable>(llvm::getUnderlyingObject(V));
+  // Taking an integer view of a pointer does not transfer its storage to
+  // a separate object or a string literal.
+  const llvm::Value *Pointer = V;
+  if (const auto *Cast = llvm::dyn_cast<llvm::PtrToIntOperator>(Pointer))
+    Pointer = Cast->getPointerOperand();
+  if (!OnlyFunction && Pointer->getType()->isPointerTy())
+    if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(
+            llvm::getUnderlyingObject(Pointer));
         Global && Global->hasInitializer() &&
         (parseNdCodePtrSymbol(Global->getName()) ||
          parseNdDataSymbol(Global->getName())))
@@ -693,9 +774,13 @@ std::string LLVMCWriter::getName(const llvm::Value *V) {
     Variable.Id = SourceValueIds.at(V);
     Variable.Name = Name;
     Variable.Bytes = llvmAccessSize(Type);
-    Variable.Type = Type->isFloatingPointTy()
-                        ? NdType::makeFloat(Variable.Bytes)
-                        : NdType::makeInt(Variable.Bytes);
+    if (Type->isFloatingPointTy())
+      Variable.Type = NdType::makeFloat(Variable.Bytes);
+    else if (Type->isIntegerTy() || Type->isPointerTy())
+      Variable.Type = NdType::makeInt(Variable.Bytes);
+    // Aggregate allocations retain their extent, but do not have a scalar
+    // edit type. Treating a whole frame as an integer also makes otherwise
+    // valid mapped source fail when its byte size exceeds a C integer.
     Variable.Parameter = llvm::isa<llvm::Argument>(V);
     Variable.Ambiguous =
         !Variable.Bytes || (!Type->isIntegerTy() && !Type->isPointerTy() &&
@@ -727,7 +812,10 @@ TypeRef LLVMCWriter::statedVariableType(const llvm::Value *V) const {
       return Type;
     }
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(V)) {
-    if (const auto Address = declaredImageDataVA(Load->getPointerOperand()))
+    // Source assertions describe the value loaded at this address, whether
+    // it is declared separately or held inside shared image byte storage.
+    // Declaration ownership must not erase the load's original identity.
+    if (const auto Address = imageDataVA(Load->getPointerOperand()))
       if (TypeRef Type = Opts.VariableTypes->global(
               *Address, llvmAccessSize(Load->getType()))) {
         if ((Type->Kind == NdTypeKind::Float) !=
@@ -778,7 +866,15 @@ std::string LLVMCWriter::rawSourceName(const llvm::Value *V) {
 }
 
 std::string LLVMCWriter::constStr(const llvm::Constant *C,
-                                  bool AllowImageAddress) {
+                                  bool AllowImageAddress,
+                                  bool *PointerSpelling) {
+  if (PointerSpelling)
+    *PointerSpelling = false;
+  auto AddressText = [&](std::string Text) {
+    if (PointerSpelling)
+      *PointerSpelling = true;
+    return Text;
+  };
   if (const auto *Vector =
           llvm::dyn_cast<llvm::FixedVectorType>(C->getType())) {
     if (!isCVectorType(C->getType()))
@@ -838,21 +934,34 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
       return *Text;
     if (auto Lit = stringLiteralAt(Img, Dbg, CI->getZExtValue(),
                                    /*AllowEmpty=*/true))
-      return *Lit;
+      return AddressText(*Lit);
     return integerConstantText(CI->getValue());
   }
 
   if (auto *CF = llvm::dyn_cast<llvm::ConstantFP>(C)) {
+    if ((C->getType()->isFloatTy() || C->getType()->isDoubleTy()) &&
+        !CF->getValueAPF().isFinite()) {
+      // Decimal NaN/Inf spellings are not C literals, and a generic NAN
+      // would discard payload and sign. This also covers aggregate members.
+      const auto Bits = CF->getValueAPF().bitcastToAPInt();
+      const auto Integer = "uint" + std::to_string(Bits.getBitWidth()) + "_t";
+      return "__builtin_bit_cast(" + typeToCLLVM(C->getType()) + ", (" +
+             Integer + ")0x" + llvm::utohexstr(Bits.getZExtValue()) + "ULL)";
+    }
     llvm::SmallString<32> Buf;
     CF->getValueAPF().toString(Buf, 0, 0);
     auto S = std::string(Buf.str());
     if (C->getType()->isFloatTy())
       S += "f";
+    else if (C->getType()->isX86_FP80Ty())
+      // An unsuffixed literal rounds as binary64 before any surrounding
+      // long-double expression can use its extra precision or exponent range.
+      S += "L";
     return S;
   }
 
   if (llvm::isa<llvm::ConstantPointerNull>(C))
-    return "((void*)0)";
+    return AddressText("((void*)0)");
 
   if (auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(C)) {
     // IRBuilder can retain scalar constant expressions containing vector
@@ -863,13 +972,13 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
       if (const auto *Folded =
               llvm::ConstantFoldConstant(CE, CurMod->getDataLayout());
           Folded != CE)
-        return constStr(Folded, AllowImageAddress);
+        return constStr(Folded, AllowImageAddress, PointerSpelling);
     }
     if (CE->getOpcode() == llvm::Instruction::GetElementPtr) {
       std::string Image = imageDataCName(CE);
       if (!Image.empty())
-        return "&" + Image;
-      return gepExpr(*llvm::cast<llvm::GEPOperator>(CE));
+        return AddressText("&" + Image);
+      return AddressText(gepExpr(*llvm::cast<llvm::GEPOperator>(CE)));
     }
     if (CE->getOpcode() == llvm::Instruction::PtrToInt) {
       auto *Src = CE->getOperand(0);
@@ -880,10 +989,12 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
           CI && CI->getBitWidth() <= 64)
         if (auto Lit = stringLiteralAt(Img, Dbg, CI->getZExtValue(),
                                        /*AllowEmpty=*/true))
-          return *Lit;
+          return AddressText(*Lit);
     }
     if (CE->getOpcode() == llvm::Instruction::BitCast ||
         CE->getOpcode() == llvm::Instruction::IntToPtr) {
+      if (PointerSpelling)
+        *PointerSpelling = CE->getType()->isPointerTy();
       return "(" + typeToCLLVM(CE->getType()) + ")" +
              valueStr(CE->getOperand(0));
     }
@@ -912,6 +1023,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
   }
 
   if (auto *GV = llvm::dyn_cast<llvm::GlobalValue>(C)) {
+    if (PointerSpelling)
+      *PointerSpelling = true;
     if (const auto *Fn = llvm::dyn_cast<llvm::Function>(GV)) {
       auto Name = functionIdentifier(*Fn);
       // Headers may overload an imported C symbol. An address expression
@@ -1174,14 +1287,10 @@ LLVMCWriter::foldImmediate(const llvm::Value *V) const {
         auto Text = Self(Self, Operand);
         if (!Text)
           return std::nullopt;
-        uint64_t Bits = 0;
-        int64_t Signed = 0;
-        if (llvm::StringRef(*Text).getAsInteger(0, Bits)) {
-          if (llvm::StringRef(*Text).getAsInteger(0, Signed))
-            return std::nullopt;
-          Bits = static_cast<uint64_t>(Signed);
-        }
-        Operands.push_back(llvm::ConstantInt::get(Ty, Bits));
+        const auto Bits = ParseInteger(*Text, Ty->getBitWidth());
+        if (!Bits)
+          return std::nullopt;
+        Operands.push_back(llvm::ConstantInt::get(Ty->getContext(), *Bits));
       }
       if (CurMod)
         if (const auto *C = llvm::dyn_cast_or_null<llvm::ConstantInt>(
@@ -1254,36 +1363,19 @@ void completeDisplayRecord(DebugContext *Dbg, const TypeRef &Ty) {
   }
 }
 
-// LLVM-C names members only: every display lookup here passes
-// ArrayElements false, so an array stays one member, as this takes it.
-std::optional<std::string> canonicalizeDisplayPath(llvm::StringRef Field) {
-  std::string Path;
-  llvm::StringRef Rest(Field);
-  while (!Rest.empty()) {
-    const auto Split = Rest.split('.');
-    const std::string Comp = Split.first.str();
-    const std::string Name = canonicalizeCProjectionIdentifier(Comp, "");
-    if (Name.empty() || Name != Comp)
-      return std::nullopt;
-    if (!Path.empty())
-      Path += '.';
-    Path += Name;
-    Rest = Split.second;
-  }
-  if (Path.empty())
-    return std::nullopt;
-  return Path;
-}
 } // namespace
 
 uint16_t LLVMCWriter::llvmAccessSize(const llvm::Type *Ty) const {
-  if (!Ty)
+  // Source-map discovery also visits EH tokens. They identify control-flow
+  // state and have no storage extent for DataLayout to measure.
+  if (!Ty || !Ty->isSized())
     return 0;
   if (CurMod) {
-    const uint64_t Size =
+    const auto Size =
         CurMod->getDataLayout().getTypeStoreSize(const_cast<llvm::Type *>(Ty));
-    if (Size && Size <= UINT16_MAX)
-      return static_cast<uint16_t>(Size);
+    if (!Size.isScalable() && Size.getFixedValue() <= UINT16_MAX)
+      return static_cast<uint16_t>(Size.getFixedValue());
+    return 0;
   }
   if (Ty->isIntegerTy())
     return static_cast<uint16_t>(Ty->getIntegerBitWidth() / 8);
@@ -1296,11 +1388,8 @@ TypeRef LLVMCWriter::cDisplayType(const TypeRef &Ty) const {
   if (Ty->Kind == NdTypeKind::Ptr)
     return NdType::makePtr(cDisplayType(Ty->Pointee));
   if (Ty->Kind == NdTypeKind::Struct && !Ty->SourceName.empty()) {
-    auto Out = NdType::makeNamedRecord(cNamedTypeSpelling(Ty->SourceName),
-                                       Ty->Size ? Ty->Size : 8, Ty->IsEnum);
-    Out->FieldDisplayNames = Ty->FieldDisplayNames;
-    Out->FieldDisplayOffsets = Ty->FieldDisplayOffsets;
-    Out->FieldDisplayTypes = Ty->FieldDisplayTypes;
+    auto Out = std::make_shared<NdType>(*Ty);
+    Out->SourceName = cNamedTypeSpelling(Ty->SourceName);
     return Out;
   }
   return Ty;
@@ -1534,6 +1623,8 @@ uint64_t frameMemberSize(const TypeRef &Ty) {
     const uint64_t Element = frameMemberSize(Ty->ElemType);
     return Element && Element * Ty->ArrayCount == Ty->Size ? Ty->Size : 0;
   }
+  case NdTypeKind::Struct:
+    return isCDisplayFrameRecord(Ty) ? Ty->Size : 0;
   default:
     return 0;
   }
@@ -1544,6 +1635,8 @@ uint64_t frameMemberSize(const TypeRef &Ty) {
 uint64_t frameMemberAlignment(const TypeRef &Ty) {
   if (!Ty)
     return 8;
+  if (Ty->Kind == NdTypeKind::Struct)
+    return cDisplayFrameRecordAlignment(Ty);
   if (Ty->Kind == NdTypeKind::Array)
     return frameMemberAlignment(Ty->ElemType);
   return Ty->Size;
@@ -1562,6 +1655,13 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
   auto Decide = [&] {
     if (!Load.isSimple())
       return false;
+    unsigned Remaining = limits::backend::kLLVMCStorageUseQueryWork;
+    const auto Charge = [&] {
+      if (!Remaining)
+        return false;
+      --Remaining;
+      return true;
+    };
     // The statements that print the value: its users, through expressions
     // printed inside theirs. A call may later print inside its own user. A
     // copy stored to a scalar home can print again where the home is read.
@@ -1570,8 +1670,12 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
     llvm::SmallVector<const llvm::Instruction *, 8> Work{&Load};
     llvm::SmallPtrSet<const llvm::Instruction *, 16> Seen;
     while (!Work.empty()) {
+      if (!Charge())
+        return false;
       const llvm::Instruction *Value = Work.pop_back_val();
       for (const llvm::User *User : Value->users()) {
+        if (!Charge())
+          return false;
         const auto *Use = llvm::dyn_cast<llvm::Instruction>(User);
         if (!Use || Use->getParent() != Block || llvm::isa<llvm::PHINode>(Use))
           return false;
@@ -1580,14 +1684,12 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
             Store && Store->getValueOperand() == Value)
           if (const auto *Home = llvm::dyn_cast<llvm::AllocaInst>(
                   Store->getPointerOperand()->stripPointerCasts());
-              Home && Home != SyntheticFrame)
-            for (const llvm::User *HomeUser : Home->users()) {
-              if (llvm::isa<llvm::StoreInst>(HomeUser) &&
-                  llvm::cast<llvm::StoreInst>(HomeUser)->getPointerOperand() ==
-                      Home)
-                continue;
-              const auto *Reload = llvm::dyn_cast<llvm::LoadInst>(HomeUser);
-              if (!Reload || Reload->getParent() != Block)
+              Home && Home != SyntheticFrame) {
+            const auto &Uses = allocaUseFacts(Home);
+            if (!Uses.OnlyDirectMemoryUsers)
+              return false;
+            for (const auto *Reload : Uses.Loads) {
+              if (!Charge() || Reload->getParent() != Block)
                 return false;
               // An earlier reload reads an older value of the home.
               if (!Store->comesBefore(Reload))
@@ -1598,6 +1700,7 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
                 Work.push_back(Reload);
               }
             }
+          }
         if (!Seen.insert(Use).second)
           continue;
         const bool Inline = Analysis.Inlinable.count(Use) != 0;
@@ -1665,6 +1768,7 @@ LLVMCWriter::frameRecordDeclaration(const llvm::AllocaInst &Frame) const {
       continue;
     if (Off > At)
       Members += Gap(At, Off - At);
+    noteRecordValue(Slot.MemberType);
     Members += "        " +
                (Slot.MemberType ? declarationToC(Slot.MemberType, Slot.Name)
                                 : "uint64_t " + Slot.Name) +
@@ -1746,9 +1850,9 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
           *SyntheticFrame, SyntheticFrame->getModule()->getDataLayout()))
     if (const auto It = Opts.FrameVariables->find(Disp);
         It != Opts.FrameVariables->end()) {
-      if ((AccessSize && AccessSize != It->second.Type->Size) || FrameRecord)
+      if (AccessSize && AccessSize != It->second.Type->Size)
         throw std::runtime_error(
-            "The named stack slot is not an independent scalar in LLVM C");
+            "The named stack slot has an incompatible access width in LLVM C");
       if (!Remember(Off, VariableSym{It->second.Name, It->second.Type}))
         throw std::runtime_error(
             "The named stack slot cannot preserve its storage identity");
@@ -1862,7 +1966,10 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
       return std::nullopt;
     const std::string Syn = syntheticFrameSlotName(Disp);
     if (!Syn.empty() && !isReservedFrameName(Syn)) {
-      const TypeRef SynType = AccessSize && AccessSize <= 8
+      // An integer SIMD spill owns all sixteen bytes even when later reads
+      // select only one word. Leaving its type unknown declares an eight-byte
+      // local and truncates the store before that selection.
+      const TypeRef SynType = AccessSize && AccessSize <= 16
                                   ? NdType::makeInt(AccessSize, false)
                                   : nullptr;
       if (const auto Known = FrameSlots.find(Off);
@@ -2135,10 +2242,16 @@ LLVMCWriter::peelPointerOffset(const llvm::Value *V) const {
       }
     }
     if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(V)) {
-      llvm::APInt Acc(64, 0);
+      llvm::APInt Acc(CurMod ? CurMod->getDataLayout().getIndexSizeInBits(
+                                   GEP->getPointerAddressSpace())
+                             : 64,
+                      0);
       if (CurMod &&
-          GEP->accumulateConstantOffset(CurMod->getDataLayout(), Acc)) {
-        Off += Acc.getZExtValue();
+          GEP->accumulateConstantOffset(CurMod->getDataLayout(), Acc) &&
+          Acc.isSignedIntN(64)) {
+        // A negative target-width displacement stays negative when the
+        // synthetic frame offset uses the host-width unsigned carrier.
+        Off += static_cast<uint64_t>(Acc.getSExtValue());
         V = GEP->getPointerOperand();
         continue;
       }
@@ -2266,7 +2379,7 @@ LLVMCWriter::typedRecordAccess(const llvm::Value *Ptr, uint16_t AccessSize,
       Type->Pointee->Kind == NdTypeKind::Struct && !Type->Pointee->IsEnum) {
     std::string Value;
     if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Peeled->first)) {
-      if (declaredImageDataVA(Load->getPointerOperand())) {
+      if (imageDataVA(Load->getPointerOperand())) {
         if (const auto Name = ValNames.find(Load); Name != ValNames.end())
           Value = Name->second;
       } else if (const auto *Slot = asAllocaPointer(Load->getPointerOperand()))
@@ -2342,7 +2455,7 @@ LLVMCWriter::typedRecordAccess(const llvm::Value *Ptr, uint16_t AccessSize,
   completeDisplayRecord(Dbg, Rec);
   auto Field =
       Rec->displayFieldPathAt(Peeled->second, AccessSize, EnterNestedAtZero,
-                              /*ArrayElements=*/false, Class);
+                              /*ArrayElements=*/true, Class);
   if (!Field)
     return std::nullopt;
   auto Path = canonicalizeDisplayPath(*Field);
@@ -2351,13 +2464,13 @@ LLVMCWriter::typedRecordAccess(const llvm::Value *Ptr, uint16_t AccessSize,
   TypedAccess Out;
   Out.Text = BaseName + "->" + *Path;
   Out.Type = Rec->displayFieldTypeAt(Peeled->second, AccessSize,
-                                     /*ArrayElements=*/false, Class);
+                                     /*ArrayElements=*/true, Class);
   // A value of a size is no whole record no member of which holds it, as a
   // union whose alternatives are all that wide is; the address of one is.
   if (EnterNestedAtZero && AccessSize && Out.Type &&
       Out.Type->Kind == NdTypeKind::Struct && !Out.Type->IsEnum &&
       !Out.Type->displayFieldPathAt(0, AccessSize, /*EnterNestedAtZero=*/true,
-                                    /*ArrayElements=*/false, Class))
+                                    /*ArrayElements=*/true, Class))
     return std::nullopt;
   MemberRecords.insert(Rec->SourceName);
   return Out;
@@ -3161,6 +3274,15 @@ std::string LLVMCWriter::memberAsAccessed(const llvm::LoadInst &Load,
 std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (PointerSpelling)
     *PointerSpelling = false;
+  if (auto Flag = DeferredUnknownFlags.find(V);
+      Flag != DeferredUnknownFlags.end()) {
+    if (ReadingDeferredPayload)
+      return getName(V);
+    return "(" + Flag->second + " ? " + getName(V) +
+           " : (__builtin_trap(), 0 /* unknown machine state */))";
+  }
+  if (llvm_source_unknown::isValue(V))
+    return "(__builtin_trap(), 0 /* unknown machine state */)";
   // A parameter the signature types as a pointer is the integer the code
   // computes with.
   if (const auto *Arg = llvm::dyn_cast<llvm::Argument>(V);
@@ -3224,7 +3346,10 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(V))
     if (std::string Addr = ctorThisAddress(*CB); !Addr.empty())
       return AddressText(std::move(Addr));
-  if (auto VA = imageDataVA(V))
+  // An owned image mirror keeps its complete storage and pointer identity.
+  // A string-looking prefix at an interior address cannot replace that
+  // object: a later access may read bytes beyond the first terminator.
+  if (auto VA = declaredImageDataVA(V))
     if (auto Lit = stringLiteralAt(Img, Dbg, *VA, /*AllowEmpty=*/true))
       return AddressText(*Lit);
   if (!llvm::isa<llvm::LoadInst>(V)) {
@@ -3244,9 +3369,10 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
       if (auto Acc = frameSlotAccess(LI->getPointerOperand(),
                                      llvmAccessSize(LI->getType()),
                                      /*AddressOf=*/false, /*Synthesize=*/false,
-                                     /*Overlay=*/false, LI->getType()))
-        return SourceRecorder ? SourceRecorder->expression(*LI, Acc->Text)
-                              : Acc->Text;
+                                     /*Overlay=*/false, LI->getType())) {
+        std::string Read = memberAsAccessed(*LI, Acc->Text, Acc->Type);
+        return SourceRecorder ? SourceRecorder->expression(*LI, Read) : Read;
+      }
     if (auto Acc = frameSlotAccess(LI, 0, /*AddressOf=*/true))
       return AddressText(Acc->Text);
   }
@@ -3380,8 +3506,7 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
     }
   }
   if (auto *C = llvm::dyn_cast<llvm::Constant>(V))
-    return llvm::isa<llvm::GlobalVariable>(C) ? AddressText(constStr(C))
-                                              : constStr(C);
+    return constStr(C, /*AllowImageAddress=*/true, PointerSpelling);
   if (const llvm::AllocaInst *Slot = llvm::dyn_cast<llvm::AllocaInst>(V))
     return AddressText("&" + getName(Slot));
   return getName(V);
@@ -3443,6 +3568,16 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
     // cast would truncate i64/i128 before division, remainder, or shifting.
     return Text.starts_with(Cast) ? Text : Cast + "(" + Text + ")";
   };
+  auto ShiftCount = [&]() {
+    const unsigned Width = Ty->getIntegerBitWidth();
+    uint64_t Constant = 0;
+    if (!llvm::StringRef(RHS).getAsInteger(0, Constant) && Constant < Width)
+      return RHS;
+    // Oversized LLVM shifts produce poison. A bounded count is one stable
+    // refinement of that value, allowing an enclosing freeze to materialize
+    // it without first executing undefined C. Both operands are read once.
+    return "(" + Unsigned(RHS) + " % " + std::to_string(Width) + ")";
+  };
   // Half arithmetic can use excess precision on hosts without native FP16.
   // An explicit cast publishes the rounding boundary even when a producer is
   // inlined into another operation; FP_CONTRACT alone does not do this.
@@ -3493,10 +3628,10 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   case llvm::Instruction::FRem:
     return LHS + " % " + RHS;
   case llvm::Instruction::Shl:
-    return castStr(llvm::Instruction::Trunc, Unsigned(LHS) + " << " + RHS, Ty,
-                   Ty);
+    return castStr(llvm::Instruction::Trunc,
+                   Unsigned(LHS) + " << " + ShiftCount(), Ty, Ty);
   case llvm::Instruction::LShr:
-    return Unsigned(LHS) + " >> " + RHS;
+    return Unsigned(LHS) + " >> " + ShiftCount();
   case llvm::Instruction::AShr:
     // LLVM integers have no declared signedness. The C carrier is unsigned,
     // so reconstruct the source-width sign before either assigned or inline
@@ -3505,7 +3640,8 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
     // odd-width returns must not leak sign-extension bits, and following
     // wrapping arithmetic must not inherit C signed-overflow behavior.
     return castStr(llvm::Instruction::Trunc,
-                   signedIntegerOperand(Ty, LHS) + " >> " + RHS, Ty, Ty);
+                   signedIntegerOperand(Ty, LHS) + " >> " + ShiftCount(), Ty,
+                   Ty);
   case llvm::Instruction::And:
     return LHS + " & " + RHS;
   case llvm::Instruction::Or:
@@ -3517,11 +3653,14 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   }
 }
 
-std::string LLVMCWriter::integerPointerOperandStr(const llvm::Value *Operand) {
+std::string LLVMCWriter::integerPointerOperandStr(const llvm::Value *Operand,
+                                                  const llvm::CallBase *Call,
+                                                  unsigned ArgIdx) {
   if (!Operand)
     return {};
   bool PointerSpelling = false;
-  std::string Text = valueStr(Operand, &PointerSpelling);
+  std::string Text = Call ? callArgStr(Operand, *Call, ArgIdx, &PointerSpelling)
+                          : valueStr(Operand, &PointerSpelling);
   if (!Operand->getType()->isIntegerTy() || !PointerSpelling)
     return Text;
   // The pointer-offset printer may return `&frame` for an integer IR value.
@@ -3591,12 +3730,15 @@ LLVMCWriter::lowBitsMaskCast(const llvm::BinaryOperator &Op) {
 std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
                                  llvm::Type *SrcTy, llvm::Type *DstTy) {
   const std::string Dst = typeToCLLVM(DstTy);
-  if (!SrcTy->isIntegerTy() || !DstTy->isIntegerTy())
-    return "(" + Dst + ")" + Src;
-  const unsigned SrcWidth = SrcTy->getIntegerBitWidth();
-  const unsigned DstWidth = DstTy->getIntegerBitWidth();
-  if (SrcWidth > 512 || DstWidth > 512)
-    throw std::runtime_error("LLVMC integer cast exceeds 512-bit carrier");
+  const unsigned SrcWidth =
+      SrcTy->isIntegerTy() ? SrcTy->getIntegerBitWidth() : 0;
+  const unsigned DstWidth =
+      DstTy->isIntegerTy() ? DstTy->getIntegerBitWidth() : 0;
+  if (SrcWidth > limits::kMaxCSourceIntegerBytes * 8 ||
+      DstWidth > limits::kMaxCSourceIntegerBytes * 8)
+    throw std::runtime_error(
+        "LLVMC integer cast exceeds " +
+        std::to_string(limits::kMaxCSourceIntegerBytes * 8) + "-bit carrier");
 
   auto Cast = [](const std::string &Type, const std::string &Text) {
     return "(" + Type + ")(" + Text + ")";
@@ -3619,6 +3761,24 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
                std::to_string(Width) + ") - 1))";
     return Result;
   };
+  // LLVM integer values have no signed type; their C storage is unsigned.
+  // Interpret the source bits before a numeric floating conversion, and
+  // convert a signed floating result before normalizing its integer bits.
+  // Casting a negative floating value straight to unsigned is not equivalent.
+  if (SrcTy->isIntegerTy() && DstTy->isFloatingPointTy()) {
+    if (Opcode == llvm::Instruction::SIToFP)
+      return Cast(Dst, signedIntegerOperand(SrcTy, Src));
+    if (Opcode == llvm::Instruction::UIToFP)
+      return Cast(Dst, Normalize(Src, SrcTy));
+  }
+  if (SrcTy->isFloatingPointTy() && DstTy->isIntegerTy()) {
+    if (Opcode == llvm::Instruction::FPToSI)
+      return Normalize(Cast(signedIntegerCarrier(DstTy), Src), DstTy);
+    if (Opcode == llvm::Instruction::FPToUI)
+      return Normalize(Src, DstTy);
+  }
+  if (!SrcTy->isIntegerTy() || !DstTy->isIntegerTy())
+    return "(" + Dst + ")" + Src;
   switch (Opcode) {
   case llvm::Instruction::Trunc:
     return Normalize(Src, DstTy);
@@ -3951,8 +4111,38 @@ std::string LLVMCWriter::aggregateMemberPath(llvm::Type *Ty,
 
 std::string LLVMCWriter::renderInline(const llvm::Instruction &Inst) {
   std::string Text = renderInlineImpl(Inst);
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+    if (const auto Comment = imagePointerComment(Load->getPointerOperand());
+        !Comment.empty())
+      Text += " /* " + Comment + " */";
   return SourceRecorder ? SourceRecorder->expression(Inst, std::move(Text))
                         : Text;
+}
+
+std::optional<std::string>
+LLVMCWriter::unknownBitwiseText(const llvm::BinaryOperator &Op) {
+  if ((Op.getOpcode() != llvm::Instruction::And &&
+       Op.getOpcode() != llvm::Instruction::Or) ||
+      !Op.getType()->isIntegerTy())
+    return std::nullopt;
+  const unsigned Bits = Op.getType()->getIntegerBitWidth();
+  if (Bits != 1 && Bits != 8 && Bits != 16 && Bits != 32 && Bits != 64)
+    return std::nullopt;
+  for (unsigned I = 0; I < 2; ++I) {
+    const llvm::Value *Unknown = Op.getOperand(I);
+    const llvm::Value *Known = Op.getOperand(1 - I);
+    if (!llvm_source_unknown::isValue(Unknown) ||
+        llvm_source_unknown::isValue(Known))
+      continue;
+    const std::string Value = valueStr(Known);
+    const auto *Constant = llvm::dyn_cast<llvm::ConstantInt>(Known);
+    if (Constant || Value == getName(Known))
+      return shortCircuitUnknownBits(
+          Op.getOpcode() == llvm::Instruction::And, Bits,
+          typeToCLLVM(Op.getType()), valueStr(Unknown), Value,
+          Constant ? std::optional(Constant->getZExtValue()) : std::nullopt);
+  }
+  return std::nullopt;
 }
 
 std::string LLVMCWriter::renderInlineImpl(const llvm::Instruction &Inst) {
@@ -3971,6 +4161,8 @@ std::string LLVMCWriter::renderInlineImpl(const llvm::Instruction &Inst) {
   if (const auto *Compare = llvm::dyn_cast<llvm::FCmpInst>(&Inst))
     return fcmpInlineText(*Compare);
   if (Inst.isBinaryOp()) {
+    if (auto Text = unknownBitwiseText(llvm::cast<llvm::BinaryOperator>(Inst)))
+      return *Text;
     if (auto Identity =
             targetPointerMaskIdentity(llvm::cast<llvm::BinaryOperator>(Inst)))
       return *Identity;
@@ -4107,27 +4299,7 @@ std::string LLVMCWriter::atomicRMWText(const llvm::AtomicRMWInst &AI) {
   default:
     llvm::report_fatal_error("unsupported atomicrmw operation");
   }
-  const char *Ord = nullptr;
-  switch (AI.getOrdering()) {
-  case llvm::AtomicOrdering::Unordered:
-  case llvm::AtomicOrdering::Monotonic:
-    Ord = "__ATOMIC_RELAXED";
-    break;
-  case llvm::AtomicOrdering::Acquire:
-    Ord = "__ATOMIC_ACQUIRE";
-    break;
-  case llvm::AtomicOrdering::Release:
-    Ord = "__ATOMIC_RELEASE";
-    break;
-  case llvm::AtomicOrdering::AcquireRelease:
-    Ord = "__ATOMIC_ACQ_REL";
-    break;
-  case llvm::AtomicOrdering::SequentiallyConsistent:
-    Ord = "__ATOMIC_SEQ_CST";
-    break;
-  default:
-    llvm::report_fatal_error("unsupported atomic ordering");
-  }
+  const char *Ord = llvmCAtomicOrderingToken(AI.getOrdering());
   HasCIntrinsics = true;
   std::string Ptr = valueStr(AI.getPointerOperand());
   bool TypedPointer = false;
@@ -4141,7 +4313,7 @@ std::string LLVMCWriter::atomicRMWText(const llvm::AtomicRMWInst &AI) {
       TypedPointer = true;
     }
   }
-  std::string Val = valueStr(AI.getValOperand());
+  std::string Val = integerPointerOperandStr(AI.getValOperand());
   if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(
           peelIntegerView(AI.getValOperand()))) {
     const unsigned W =

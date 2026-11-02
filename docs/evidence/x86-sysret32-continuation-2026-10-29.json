@@ -1,0 +1,135 @@
+{
+  "scope": "Canonical SYSRET from 64-bit CPL0 to 32-bit compatibility CPL3 in explicit V5/V6 continuations",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-sysret32-20261029",
+  "neverd_base": "2d29bf91d47fcea1331524cb1529edc95b8f75e7",
+  "source_files": {
+    "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h": {
+      "sha256": "9383888dfc83992dd4794fa08b2076673f3ff421830206c8972afae28c8be73f",
+      "bytes": 14546
+    },
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": {
+      "sha256": "18522a5ad43cba5aec04a4e45d14a4199de7569f5472447c58085ceaa66ac9ff",
+      "bytes": 56311
+    },
+    "lib/lift/X86/X86CompatibilityReturnUndefined.h": {
+      "sha256": "551e67a415f5b388cb6d04df20c64e4e33b7be2f52997a5622acdc4eabdef015",
+      "bytes": 2052
+    },
+    "lib/lift/X86/X86LiftExt.cpp": {
+      "sha256": "1cf159a2f032f0801a40584f65bdf647bef2820f1c93257eea2163991bc50ed5",
+      "bytes": 33022
+    },
+    "lib/lift/X86/X86Lifter.cpp": {
+      "sha256": "8746dd943ff2069d7226505e0f8b4e829a13eb1500db43a5aaba2f0862556280",
+      "bytes": 59728
+    },
+    "lib/lift/X86/X86NativeStateAudit.h": {
+      "sha256": "cdea627ef5f0f57ee92e580daf81edcbed3af962b5a0c00d30e3592ce5b747d5",
+      "bytes": 17608
+    },
+    "unittests/devirtualization/NativeStateAuditTests.cpp": {
+      "sha256": "470fe4133e2cb49a65a82b58e8553be6eed20382c24ca45b08321ccf8246b897",
+      "bytes": 53628
+    },
+    "unittests/devirtualization/OriginalBinaryUndefinedIndependenceTests.cpp": {
+      "sha256": "8b76fefe4a2a940a21a7c5c9c9ad7a66de2fb05f016094df80a6e3cad8b96e69",
+      "bytes": 112153
+    },
+    "unittests/devirtualization/X64ContinuationExportTests.cpp": {
+      "sha256": "bcd46fc18b5aba0d6bc0e473951447ca7cef5c077b300e50bad086fa8113e008",
+      "bytes": 25807
+    },
+    "unittests/devirtualization/X64ContinuationSourceTests.cpp": {
+      "sha256": "208f680ebdcb1e331fd1ab5e0783aeae13e30cdfe2b6c2c5e638d3380656fd8f",
+      "bytes": 83978
+    },
+    "unittests/devirtualization/X64SysretContinuationTests.inc": {
+      "sha256": "83b291dbe876f3876d2b42f0f255b58411018ae908d348da37ffef1a550d2d39",
+      "bytes": 4943
+    },
+    "unittests/devirtualization/fixtures/x64_continuation_kvm.c": {
+      "sha256": "dd1d0fcfe4decfaea62be4cf78d7e5deaa816a5fb2248a8cd8fc509b9206ed5e",
+      "bytes": 16543
+    }
+  },
+  "checks": {
+    "focused": {
+      "tests": 9,
+      "passed": 9,
+      "skipped": 0,
+      "artifact": "focused-arbitrary.xml",
+      "sha256": "33a1e2cc5e39cc40efe9b9ba9c19137f1eb9d45db6fb6958bc327199d238586a",
+      "bytes": 9669
+    },
+    "qualification": {
+      "tests": 138,
+      "passed": 138,
+      "skipped": 0,
+      "artifact": "qualification.xml",
+      "sha256": "83cbec6b9e9015597cf9e579df867f001e762ecd4ba9889b0219347d3c13d2ec",
+      "bytes": 145941
+    },
+    "proof_regressions": {
+      "tests": 871,
+      "passed": 871,
+      "skipped": 0,
+      "artifact": "proof-regressions.xml",
+      "sha256": "34d0cf9b9876ef8a7cd64689ea8f310a6a28bec4ebf9f8b2505ddff543f83577",
+      "bytes": 911570
+    }
+  },
+  "unique_tests_passed": 1009,
+  "tests_skipped": 0,
+  "native": {
+    "processor": "Intel Core i9-13900H",
+    "profiles": [
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "complete_state_pairs": 14040,
+    "matrix": "9 STAR selector values x 65 R11 patterns x 6 RCX high halves x 4 compiler profiles",
+    "stop": "KVM hardware execution breakpoint at compatibility EIP, before any target instruction",
+    "undefined_witnesses": "Measured high halves of RAX/RCX/RDX/RBX/RSP/RBP/RSI/RDI bind the eight independent arbitrary inputs; all state bits are then compared. Defined low halves and preserved R8-R15 are also checked independently.",
+    "other_state": "The runner checks all unrelated represented control/segment state remains unchanged."
+  },
+  "portable": {
+    "complete_state_pairs": 468000,
+    "matrix": "V5/V6 x 48/57 paging bits x 9 STAR selectors x 65 R11 patterns x 10 PCs x 5 independent high-half witness patterns x 4 compiler profiles",
+    "sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "sdk": "Both C routes at O0/O2; eight exact manifest slots, selectors/cache state, budget accounting and refusal to reenter compatibility user code.",
+    "audits": "Eight arbitrary fields bind exact encoding and LowIR digest; each field has six negative mutations, plus excess-field and nine byte/detail mutations.",
+    "ordinary_refusal_cases": 16
+  },
+  "initial_failure": {
+    "artifact": "focused.xml",
+    "sha256": "5c8eaefefb284904044d6fbc48b221bb0e8782bd8e9ced36c7caac404f193801",
+    "bytes": 20654,
+    "cause": "Initial model assumed preservation of all GPR high halves. Native SYSRET32 cleared RSP high bits. Intel SDM permits all eight legacy GPR high halves to become undefined on this mode switch.",
+    "fix": "Architecture-owned complete undefined-output sidecar, explicit arbitrary values, full-state native witness matching and independent portable checks; no comparison mask."
+  },
+  "isa_reference": {
+    "manual": "Intel SDM 325462-085US, Vol.1 section 3.4.1.1 and Vol.2B SYSRET operation",
+    "url": "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf"
+  },
+  "build": {
+    "configuration": "Release",
+    "receipt": {
+      "sha256": "58e2aa2cac3b4918869532b0c20526cf84092d605fe10c91c92efd99fcf19c5f",
+      "bytes": 3700
+    }
+  },
+  "limitations": [
+    "Successful sequential no-fault Intel x64 entry with SYSCALL/SYSRET enabled and CET/FRED disabled",
+    "Does not execute the compatibility target or provide ordinary C/native-proof admission",
+    "Other processor models and fault delivery unqualified",
+    "Global x86 gaps and NeverC full CI remain open"
+  ],
+  "release_and_pins_changed": false
+}

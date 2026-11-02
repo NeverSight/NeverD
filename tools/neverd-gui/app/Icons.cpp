@@ -19,9 +19,13 @@ class SvgIconEngine final : public QIconEngine {
 public:
   SvgIconEngine(QString name, std::shared_ptr<QSvgRenderer> renderer)
       : name_(std::move(name)), renderer_(std::move(renderer)) {}
+  SvgIconEngine(QString name, QString resourcePath)
+      : name_(std::move(name)), resourcePath_(std::move(resourcePath)) {}
 
   void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode,
              QIcon::State) override {
+    if (!renderer_)
+      renderer_ = std::make_shared<QSvgRenderer>(resourcePath_);
     painter->save();
     if (mode == QIcon::Disabled)
       painter->setOpacity(painter->opacity() * DisabledOpacity);
@@ -59,12 +63,14 @@ public:
     return size;
   }
   QIconEngine *clone() const override {
-    return new SvgIconEngine(name_, renderer_);
+    return renderer_ ? new SvgIconEngine(name_, renderer_)
+                     : new SvgIconEngine(name_, resourcePath_);
   }
   QString key() const override { return QStringLiteral("neverd-svg"); }
 
 private:
   QString name_;
+  QString resourcePath_;
   std::shared_ptr<QSvgRenderer> renderer_;
 };
 } // namespace
@@ -75,16 +81,19 @@ public:
   QIcon icon(IconType type) const override {
     switch (type) {
     case Computer:
+    case Desktop:
       return gui::icon(QStringLiteral("computer"));
     case Drive:
       return gui::icon(QStringLiteral("drive"));
     case Folder:
+    case Network:
       return gui::icon(QStringLiteral("folder"));
     case File:
       return gui::icon(QStringLiteral("file"));
-    default:
-      return QFileIconProvider::icon(type);
+    case Trashcan:
+      return gui::icon(QStringLiteral("local_types_delete"));
     }
+    return {};
   }
   QIcon icon(const QFileInfo &info) const override {
     if (info.isRoot())
@@ -107,11 +116,12 @@ QIcon icon(const QString &name) {
     return *it;
   QIcon result;
   const QString path = IconPrefix + name + QStringLiteral(".svg");
-  if (QFile::exists(path)) {
-    auto renderer = std::make_shared<QSvgRenderer>(path);
-    if (renderer->isValid())
-      result = QIcon(new SvgIconEngine(name, std::move(renderer)));
-  }
+  // Bundled resources are validated with the UI assets. Parse a menu's SVG
+  // only when it is painted, rather than decoding every hidden command while
+  // constructing the workbench. Imported files still validate at their
+  // boundary.
+  if (QFile::exists(path))
+    result = QIcon(new SvgIconEngine(name, path));
   cache.insert(name, result);
   return result;
 }

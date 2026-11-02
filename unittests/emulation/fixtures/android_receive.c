@@ -12,6 +12,7 @@ extern int mprotect(void *, U, int);
 extern long recv(int, void *, U, int);
 extern long recvfrom(int, void *, U, int, void *, unsigned *);
 extern long read(int, void *, U);
+extern long __read_chk(int, void *, U, U);
 extern int pthread_create(U *, const void *, void *(*)(void *), void *);
 extern int pthread_join(U, void **);
 extern int nanosleep(const void *, void *);
@@ -57,6 +58,9 @@ static void *reader(void *arg) {
     break;
   case 4:
     s->out[0] = syscall(207, s->fd, buffer, 1UL, 0UL, (void *)0, (void *)0);
+    break;
+  case 6:
+    s->out[0] = __read_chk(s->fd, buffer, 1, 1);
     break;
   default:
     s->out[20] = 16;

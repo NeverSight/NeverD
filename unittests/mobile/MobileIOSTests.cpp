@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/FloatingPointContract.h"
+#include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 
@@ -787,6 +788,58 @@ TEST(MobileIOSNative, ChangedOrConditionalFloatingPoliciesRemainUnsupported) {
   }
   Budget b;
   auto [batch, metadata] = objcFixture("\n" + policy + "return arg0 + arg1;");
+  EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
+                   "recovered_method_count"),
+            0);
+}
+TEST(MobileIOSNative, SharedRawCallPreamblePreservesSourceAndFunctionCount) {
+  const std::string rawCall = neverd::kAArch64PAuthCRawCallHeader;
+  const std::string floating = neverd::c_float::ContractionPolicy.str();
+  for (const auto &prefix : {rawCall, floating + rawCall, rawCall + floating}) {
+    SCOPED_TRACE(prefix);
+    EXPECT_EQ(nativeFunctionCount(prefix), 0u);
+    EXPECT_EQ(nativeFunctionCount(prefix +
+                                  "static inline int helper(){return 1;}\n"
+                                  "int real(){return helper();}\n"),
+              1u);
+    Budget b;
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;");
+    auto &method = *batch.getArray("methods")->front().getAsObject();
+    method["source"] = prefix + requiredString(method, "source");
+    const auto result = objcSources(batch, metadata, 8, b);
+    EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
+    EXPECT_NE(result.source.find(prefix), result.source.npos);
+    EXPECT_NE(result.source.find("return arg0 + arg1;"), result.source.npos);
+  }
+}
+TEST(MobileIOSNative, ChangedOrNestedRawCallPreamblesRemainUnsupported) {
+  const std::string rawCall = neverd::kAArch64PAuthCRawCallHeader;
+  std::vector<std::string> rejected = {
+      rawCall.substr(0, rawCall.find("#endif")),
+      "#if 0\n" + rawCall + "#endif\n",
+      "#define __neverd_aarch64_raw_call(fn) (0)\n" + rawCall,
+      rawCall + "#undef __neverd_aarch64_raw_call\n",
+      "int earlier;\n" + rawCall};
+  auto changed = rawCall;
+  changed.replace(changed.find("(fn), 0, 0"), 10, "(fn), 1, 0");
+  rejected.push_back(changed);
+  changed = rawCall;
+  changed.insert(changed.find("#endif"), "int hidden(){return 1;}\n");
+  rejected.push_back(changed);
+  for (const auto &prefix : rejected) {
+    SCOPED_TRACE(prefix);
+    EXPECT_THROW(nativeFunctionCount(prefix + "int real(){return 1;}\n"),
+                 Error);
+    Budget b;
+    auto [batch, metadata] = objcFixture("return arg0 + arg1;");
+    auto &method = *batch.getArray("methods")->front().getAsObject();
+    method["source"] = prefix + requiredString(method, "source");
+    EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
+                     "recovered_method_count"),
+              0);
+  }
+  Budget b;
+  auto [batch, metadata] = objcFixture("\n" + rawCall + "return arg0 + arg1;");
   EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
                    "recovered_method_count"),
             0);

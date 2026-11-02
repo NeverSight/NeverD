@@ -114,10 +114,9 @@ NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X64, WindowsKernelX64)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsKernel, X86, WindowsKernelX86)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X86, WindowsUserX86)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, X86, WindowsKernelX86)
-// No kernel library describes ARM64: mingw-w64's DDK declares none, and the
-// x64 kernel's records (CONTEXT, the trap and processor control blocks) are
-// x64's.
+NEVERD_HEADER_LIBRARY_IMAGE(WindowsKernel, AArch64, WindowsKernelARM64)
 NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, AArch64, WindowsUserARM64)
+NEVERD_HEADER_LIBRARY_IMAGE(WindowsUser, AArch64, WindowsKernelARM64)
 NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, X64, LinuxX64)
 NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, X86, LinuxX86)
 NEVERD_HEADER_LIBRARY_IMAGE(GNULinux, AArch64, LinuxARM64)

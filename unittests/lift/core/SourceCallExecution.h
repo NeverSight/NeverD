@@ -13,8 +13,9 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace source_call_execution_test {
-inline void compileAndRun(const std::string &Source,
-                          llvm::ArrayRef<llvm::StringRef> ExtraArguments = {}) {
+inline void compileSource(const std::string &Source,
+                          llvm::ArrayRef<llvm::StringRef> ExtraArguments,
+                          bool Execute) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -50,11 +51,11 @@ inline void compileAndRun(const std::string &Source,
       "-fno-inline",
       "-fblocks",
       "-Werror=implicit-function-declaration",
-      "-Werror=return-type",
-      SourcePath,
-      "-o",
-      BinaryPath};
+      "-Werror=return-type"};
   Arguments.append(ExtraArguments.begin(), ExtraArguments.end());
+  Arguments.append({SourcePath, "-o", BinaryPath});
+  if (!Execute)
+    Arguments.push_back("-fsyntax-only");
   std::string Error;
   const int Compiled = llvm::sys::ExecuteAndWait(
       Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
@@ -62,6 +63,8 @@ inline void compileAndRun(const std::string &Source,
   ASSERT_EQ(Compiled, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "") << "\n"
                          << Source;
+  if (!Execute)
+    return;
   const int Ran = llvm::sys::ExecuteAndWait(
       BinaryPath, {BinaryPath}, std::nullopt, Redirects, 30, 0, &Error);
   const auto RuntimeErrors = llvm::MemoryBuffer::getFile(ErrorPath);
@@ -70,6 +73,16 @@ inline void compileAndRun(const std::string &Source,
                                       : "")
                     << "\n"
                     << Source;
+}
+
+inline void compileAndRun(const std::string &Source,
+                          llvm::ArrayRef<llvm::StringRef> ExtraArguments = {}) {
+  compileSource(Source, ExtraArguments, true);
+}
+
+inline void checkSyntax(const std::string &Source,
+                        llvm::ArrayRef<llvm::StringRef> ExtraArguments = {}) {
+  compileSource(Source, ExtraArguments, false);
 }
 
 } // namespace source_call_execution_test

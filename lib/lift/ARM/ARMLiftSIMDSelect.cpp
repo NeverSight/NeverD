@@ -1,4 +1,5 @@
-//===- ARMLiftSIMDSelect.cpp - ARM32 VFP select, min/max and round lifter ---===//
+//===- ARMLiftSIMDSelect.cpp - ARM32 VFP select, min/max and round lifter
+//---===//
 //
 // NeverD Decompiler
 //
@@ -13,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -197,7 +198,7 @@ bool liftSIMDSelect(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
     NdVar Src = L.operandRead(S, ARM.operands[1]);
     if (Insn->id == ARM_INS_VRINTZ) {
       NdVar Fl = S.makeTemp(Dst.Size), Ce = S.makeTemp(Dst.Size),
-              IsNeg = S.makeTemp(1);
+            IsNeg = S.makeTemp(1);
       S.emit(NdOp::FLOAT_FLOOR, Fl, {Src});
       S.emit(NdOp::FLOAT_CEIL, Ce, {Src});
       S.emit(NdOp::FLOAT_LESS, IsNeg, {Src, NdVar::cst(0, Dst.Size)});

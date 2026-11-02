@@ -9,7 +9,9 @@
 
 #include "neverd/analysis/LowIRUndefinedIndependence.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
+
+#include <array>
 
 using namespace neverd;
 using namespace neverd::analysis;
@@ -89,6 +91,128 @@ TEST(BinaryUndefinedIndependence,
   Program.expect(Status::Proved);
   Program.Contract.ReturnRegisters.push_back({x86reg::AF, 1});
   Program.expect(Status::Dependent);
+}
+
+TEST(BinaryUndefinedIndependence,
+     BMILogicDoesNotCertifyArbitraryAuxiliaryCarryOrParity) {
+  for (auto Bytes : {std::array<uint8_t, 5>{0xc4, 0xe2, 0xf0, 0xf2, 0xc2},
+                     std::array<uint8_t, 5>{0xc4, 0xe2, 0xf8, 0xf3, 0xd9},
+                     std::array<uint8_t, 5>{0xc4, 0xe2, 0xf8, 0xf3, 0xd1},
+                     std::array<uint8_t, 5>{0xc4, 0xe2, 0xf8, 0xf3, 0xc9},
+                     std::array<uint8_t, 5>{0xc4, 0xe2, 0xe8, 0xf5, 0xc1}}) {
+    BinaryProgram Program;
+    Program.block(0x100,
+                  {Bytes[0], Bytes[1], Bytes[2], Bytes[3], Bytes[4], 0xc3});
+    for (unsigned Flag : {x86reg::CF, x86reg::ZF, x86reg::SF, x86reg::OF})
+      Program.Contract.ReturnRegisters.push_back({Flag, 1});
+    Program.expect(Status::Proved);
+    for (unsigned Flag : {x86reg::AF, x86reg::PF}) {
+      Program.Contract.ReturnRegisters.push_back({Flag, 1});
+      Program.expect(Status::Dependent);
+      Program.Contract.ReturnRegisters.pop_back();
+    }
+  }
+}
+
+TEST(BinaryUndefinedIndependence,
+     BMILogicNFTransportsThePriorArbitraryAuxiliaryCarry) {
+  for (auto Tail : {std::array<uint8_t, 4>{0xf4, 0x0c, 0xf2, 0xc2},
+                    std::array<uint8_t, 4>{0xfc, 0x0c, 0xf3, 0xd9},
+                    std::array<uint8_t, 4>{0xfc, 0x0c, 0xf3, 0xd1},
+                    std::array<uint8_t, 4>{0xfc, 0x0c, 0xf3, 0xc9},
+                    std::array<uint8_t, 4>{0xec, 0x0c, 0xf5, 0xc1}}) {
+    BinaryProgram Program;
+    Program.block(0x100, {0x31, 0xd2, 0x62, 0xf2, Tail[0], Tail[1], Tail[2],
+                          Tail[3], 0xc3});
+    Program.expect(Status::Proved);
+    Program.Contract.ReturnRegisters.push_back({x86reg::AF, 1});
+    Program.expect(Status::Dependent);
+  }
+}
+
+TEST(BinaryUndefinedIndependence,
+     BMI2ArithmeticTransportsThePriorArbitraryAuxiliaryCarry) {
+  for (bool Apx : {false, true})
+    for (auto Encoding : {std::array<uint8_t, 4>{0xfb, 0xf6, 0xf9, 2},
+                          std::array<uint8_t, 4>{0xf3, 0xf7, 0xc1, 2},
+                          std::array<uint8_t, 4>{0xf1, 0xf7, 0xc1, 2},
+                          std::array<uint8_t, 4>{0xf2, 0xf7, 0xc1, 2},
+                          std::array<uint8_t, 4>{0xfb, 0xf0, 0xc1, 3}}) {
+      BinaryProgram Program;
+      const auto [P1, Opcode, ModRM, Map] = Encoding;
+      const uint8_t P0 = (Apx ? 0xf0 : 0xe0) | Map;
+      // XOR defines the input but leaves AF arbitrary. RORX gets imm8=NOP;
+      // the other forms consume that same byte as a separate NOP instruction.
+      if (Apx)
+        Program.block(0x100,
+                      {0x31, 0xc9, 0x62, P0, static_cast<uint8_t>(P1 | 4), 8,
+                       Opcode, ModRM, 0x90, 0xc3});
+      else
+        Program.block(0x100,
+                      {0x31, 0xc9, 0xc4, P0, P1, Opcode, ModRM, 0x90, 0xc3});
+      Program.expect(Status::Proved);
+      Program.Contract.ReturnRegisters.push_back({x86reg::AF, 1});
+      Program.expect(Status::Dependent);
+    }
+}
+
+TEST(BinaryUndefinedIndependence,
+     ADXConsumesOnlyItsOwnCarryAndPreservesOtherArbitraryFlags) {
+  for (bool Overflow : {false, true}) {
+    BinaryProgram Program;
+    // TZCNT defines CF and leaves OF arbitrary. Only ADOX consumes that OF.
+    Program.block(0x100, {0x31, 0xd2, 0xf3, 0x48, 0x0f, 0xbc, 0xca,
+                          static_cast<uint8_t>(Overflow ? 0xf3 : 0x66), 0x48,
+                          0x0f, 0x38, 0xf6, 0xc1, 0xc3});
+    Program.expect(Overflow ? Status::Dependent : Status::Proved);
+    if (!Overflow) {
+      Program.Contract.ReturnRegisters.push_back({x86reg::OF, 1});
+      Program.expect(Status::Dependent);
+    }
+  }
+  for (uint8_t PP : {1, 2}) {
+    BinaryProgram Program;
+    Program.block(0x100,
+                  {0x31, 0xc9, 0x62, 0xf4, static_cast<uint8_t>(0xfc | PP), 8,
+                   0x66, 0xc1, 0xc3});
+    Program.expect(Status::Proved);
+    Program.Contract.ReturnRegisters.push_back({x86reg::AF, 1});
+    Program.expect(Status::Dependent);
+  }
+}
+
+TEST(BinaryUndefinedIndependence,
+     BitCountsDoNotCertifyUndefinedStatusFlagsAsConstants) {
+  for (uint8_t Opcode : {0xbc, 0xbd}) {
+    BinaryProgram Program;
+    Program.block(0x100, {0xf3, 0x48, 0x0f, Opcode, 0xc1, 0xc3});
+    Program.Contract.ReturnRegisters.push_back({x86reg::CF, 1});
+    Program.Contract.ReturnRegisters.push_back({x86reg::ZF, 1});
+    Program.expect(Status::Proved);
+    for (unsigned Flag : {x86reg::OF, x86reg::SF, x86reg::AF, x86reg::PF}) {
+      Program.Contract.ReturnRegisters.push_back({Flag, 1});
+      Program.expect(Status::Dependent);
+      Program.Contract.ReturnRegisters.pop_back();
+    }
+  }
+}
+
+TEST(BinaryUndefinedIndependence,
+     BitCountNFTransportsThePriorArbitraryAuxiliaryCarry) {
+  for (uint8_t Opcode : {0xf4, 0xf5, 0x88}) {
+    BinaryProgram Program;
+    // XOR creates arbitrary AF; APX NF must retain that exact producer.
+    Program.block(0x100,
+                  {0x31, 0xd2, 0x62, 0xf4, 0xfc, 0x0c, Opcode, 0xc1, 0xc3});
+    Program.expect(Status::Proved);
+    Program.Contract.ReturnRegisters.push_back({x86reg::AF, 1});
+    Program.expect(Status::Dependent);
+  }
+  BinaryProgram Defined;
+  // Ordinary POPCNT defines AF and therefore kills the earlier arbitrary bit.
+  Defined.block(0x100, {0x31, 0xd2, 0xf3, 0x48, 0x0f, 0xb8, 0xc1, 0xc3});
+  Defined.Contract.ReturnRegisters.push_back({x86reg::AF, 1});
+  Defined.expect(Status::Proved);
 }
 
 TEST(BinaryUndefinedIndependence, FlagSnapshotsShareOnlyTheirActualProducer) {

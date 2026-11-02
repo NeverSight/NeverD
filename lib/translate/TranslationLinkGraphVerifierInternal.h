@@ -19,7 +19,9 @@ llvm::Expected<TranslationLinkGraphAuditV1> auditTranslationLinkGraphPrePruneV1(
     const ResolvedHostTarget &ExpectedHostTarget,
     llvm::ArrayRef<TranslationObjectSymbolV1> ExpectedBlockSymbols,
     llvm::ArrayRef<TranslationObjectSymbolV1> SealedRuntimeSymbols,
-    llvm::StringRef SealedRuntimeRegistryIdentity);
+    llvm::StringRef SealedRuntimeRegistryIdentity,
+    TranslationRuntimeProfileV1 Profile =
+        TranslationRuntimeProfileV1::ScalarInteger);
 
 } // namespace neverd::translate::detail
 

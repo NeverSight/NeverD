@@ -24,6 +24,18 @@
 #define NEVERD_CHOOSER_COLUMN(Chooser, Field, Title, Format, SortField)
 #endif
 
+NEVERD_CHOOSER(PatchedBytes, "patches",
+               QT_TRANSLATE_NOOP("Choosers", "Patched bytes"), "patched_bytes",
+               false, false)
+NEVERD_CHOOSER_COLUMN(PatchedBytes, "address",
+                      QT_TRANSLATE_NOOP("Choosers", "Address"), Address, "")
+NEVERD_CHOOSER_COLUMN(PatchedBytes, "original",
+                      QT_TRANSLATE_NOOP("Choosers", "Original bytes"), Text, "")
+NEVERD_CHOOSER_COLUMN(PatchedBytes, "current",
+                      QT_TRANSLATE_NOOP("Choosers", "Patched bytes"), Text, "")
+NEVERD_CHOOSER_COLUMN(PatchedBytes, "kind",
+                      QT_TRANSLATE_NOOP("Choosers", "Action"), Text, "")
+
 NEVERD_CHOOSER(Functions, "functions",
                QT_TRANSLATE_NOOP("Choosers", "Functions"), "functions", true,
                false)

@@ -327,8 +327,10 @@ CheckedX64Backend::create(std::unique_ptr<MemoryProjection> Memory,
   return std::unique_ptr<ExecutionBackend>(std::move(B));
 }
 
-llvm::Expected<RegisterValue> CheckedX64Backend::readRegister(CPURegister R) {
-  if (!registerMatches(R, architecture()))
+namespace {
+llvm::Expected<RegisterValue> readStateRegister(const X64MachineState &CPU,
+                                                CPURegister R) {
+  if (!registerMatches(R, GuestArchitecture::X64))
     return error(diagnostic::Register);
   if (R == CPURegister::X64GSBase)
     return RegisterValue{CPU.GSBase, 0};
@@ -341,6 +343,22 @@ llvm::Expected<RegisterValue> CheckedX64Backend::readRegister(CPURegister R) {
   if (isX64FPRegister(R))
     return readX64FPRegister(CPU.FP, R);
   return RegisterValue{CPU.Registers[unsigned(R)], 0};
+}
+} // namespace
+llvm::Expected<RegisterValue> CheckedX64Backend::readRegister(CPURegister R) {
+  return readStateRegister(CPU, R);
+}
+llvm::Expected<RegisterValue>
+CheckedX64Backend::readContextRegister(const BackendContext &C,
+                                       CPURegister R) const {
+  const auto *State = contextStorage(C);
+  if (!State || State->Owner.expired())
+    return error(diagnostic::ContextExpired);
+  if (State->Owner.lock() != Identity)
+    return error(diagnostic::ContextOwner);
+  if (State->Space.lock() != addressSpace())
+    return error(diagnostic::ContextSpace);
+  return readStateRegister(static_cast<const SavedState &>(*State).CPU, R);
 }
 llvm::Expected<RegisterValue>
 CheckedX64Backend::supportedControlBits(CPURegister R) const {

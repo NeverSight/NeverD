@@ -9,21 +9,149 @@
 #include "neverd/types/DWARFTypeImport.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/LEB128.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
 #include <gtest/gtest.h>
+#include <initializer_list>
+#include <limits>
 
 using namespace neverd::types;
 using neverd::types::test::shapeOf;
 
 namespace {
+
+// A signed subrange in raw DWARF exercises boundary values without asking a
+// compiler to create an object of that size.
+llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>>
+arrayBoundSections(int64_t Lower, int64_t Upper) {
+  using namespace llvm::dwarf;
+  llvm::SmallString<128> Abbrev, Info;
+  llvm::raw_svector_ostream A(Abbrev), I(Info);
+  const auto abbrev = [&](unsigned Code, unsigned Tag, bool Children,
+                          std::initializer_list<unsigned> Attributes) {
+    llvm::encodeULEB128(Code, A);
+    llvm::encodeULEB128(Tag, A);
+    A << char(Children);
+    for (unsigned Attribute : Attributes)
+      llvm::encodeULEB128(Attribute, A);
+    A << char(0) << char(0);
+  };
+  abbrev(1, DW_TAG_compile_unit, true, {});
+  abbrev(2, DW_TAG_base_type, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_encoding, DW_FORM_data1,
+          DW_AT_byte_size, DW_FORM_data1});
+  abbrev(3, DW_TAG_array_type, true, {DW_AT_type, DW_FORM_ref4});
+  abbrev(4, DW_TAG_subrange_type, false,
+         {DW_AT_lower_bound, DW_FORM_sdata, DW_AT_upper_bound, DW_FORM_sdata});
+  abbrev(5, DW_TAG_typedef, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_type, DW_FORM_ref4});
+  A << char(0);
+  const auto u32 = [&](uint32_t Value) {
+    char Bytes[4];
+    llvm::support::endian::write32le(Bytes, Value);
+    I.write(Bytes, sizeof(Bytes));
+  };
+  u32(0);
+  I << char(4) << char(0);
+  u32(0);
+  I << char(8) << char(1);
+  const uint32_t ElementOffset = Info.size();
+  I << char(2) << "unsigned char" << char(0) << char(DW_ATE_unsigned_char)
+    << char(1);
+  const uint32_t ArrayOffset = Info.size();
+  I << char(3);
+  u32(ElementOffset);
+  I << char(4);
+  llvm::encodeSLEB128(Lower, I);
+  llvm::encodeSLEB128(Upper, I);
+  I << char(0) << char(5) << "BoundedArray" << char(0);
+  u32(ArrayOffset);
+  I << char(0);
+  llvm::support::endian::write32le(Info.data(), Info.size() - 4);
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> Sections;
+  Sections["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(Abbrev);
+  Sections["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(Info);
+  return Sections;
+}
+
+/// A Go func value with unmarked parameters, as the legacy writer emits,
+/// or with explicit input markers.
+/// Each parameter names bool or *bool; the typedef makes the value visible
+/// to the importer without requiring an installed Go toolchain.
+llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>>
+goFunctionSections(llvm::StringRef Name, llvm::ArrayRef<bool> PointerParams,
+                   bool InputMarkers = false) {
+  using namespace llvm::dwarf;
+  llvm::SmallString<128> Abbrev, Info;
+  llvm::raw_svector_ostream A(Abbrev), I(Info);
+  const auto abbrev = [&](unsigned Code, unsigned Tag, bool Children,
+                          std::initializer_list<unsigned> Attributes) {
+    llvm::encodeULEB128(Code, A);
+    llvm::encodeULEB128(Tag, A);
+    A << char(Children);
+    for (unsigned Attribute : Attributes)
+      llvm::encodeULEB128(Attribute, A);
+    A << char(0) << char(0);
+  };
+  abbrev(1, DW_TAG_compile_unit, true, {DW_AT_language, DW_FORM_data2});
+  abbrev(2, DW_TAG_base_type, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_encoding, DW_FORM_data1,
+          DW_AT_byte_size, DW_FORM_data1});
+  abbrev(3, DW_TAG_pointer_type, false, {DW_AT_type, DW_FORM_ref4});
+  abbrev(4, DW_TAG_subroutine_type, true,
+         {DW_AT_name, DW_FORM_string, DW_AT_byte_size, DW_FORM_data1});
+  if (InputMarkers)
+    abbrev(5, DW_TAG_formal_parameter, false,
+           {DW_AT_type, DW_FORM_ref4, DW_AT_variable_parameter, DW_FORM_flag});
+  else
+    abbrev(5, DW_TAG_formal_parameter, false, {DW_AT_type, DW_FORM_ref4});
+  abbrev(6, DW_TAG_typedef, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_type, DW_FORM_ref4});
+  A << char(0);
+  const auto u32 = [&](uint32_t Value) {
+    char Bytes[4];
+    llvm::support::endian::write32le(Bytes, Value);
+    I.write(Bytes, sizeof(Bytes));
+  };
+  u32(0);                  // Unit length, patched below.
+  I << char(4) << char(0); // DWARF version.
+  u32(0);                  // Abbreviation offset.
+  I << char(8) << char(1) << char(DW_LANG_Go) << char(0);
+  const uint32_t BoolOffset = Info.size();
+  I << char(2) << "bool" << char(0) << char(DW_ATE_boolean) << char(1);
+  const uint32_t PointerOffset = Info.size();
+  I << char(3);
+  u32(BoolOffset);
+  const uint32_t FunctionOffset = Info.size();
+  I << char(4) << Name << char(0) << char(8);
+  for (bool Pointer : PointerParams) {
+    I << char(5);
+    u32(Pointer ? PointerOffset : BoolOffset);
+    if (InputMarkers)
+      I << char(0);
+  }
+  I << char(0) << char(6) << "Callback" << char(0);
+  u32(FunctionOffset);
+  I << char(0);
+  llvm::support::endian::write32le(Info.data(), Info.size() - 4);
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> Sections;
+  Sections["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(Abbrev);
+  Sections["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(Info);
+  return Sections;
+}
 
 /// The types of the object \p Name, of the fixtures, which a compiler wrote
 /// with DWARF.
@@ -255,7 +383,12 @@ TEST(DWARFTypeImportGo, ReadsGosStructuresAndFuncValues) {
               "type Spans struct {\n\tx uint64\n\ts Span\n}\n"
               "type Calls struct {\n\t_ [2]byte\n"
               "\tEqual func(a, b uintptr) bool\n\t_ [6]byte\n"
-              "\tPair func() (int, bool)\n\tCount int32\n}\n"
+              "\tPair func() (int, bool)\n\tCount int32\n"
+              "\tPointer func(*bool) *bool\n"
+              "\tProcedure func(*bool)\n"
+              "\tNested func(func(int, int) bool, *bool) *bool\n"
+              "\tTagged func(struct { Value int `json:\",)\"` }) bool\n"
+              "\tVariadic func(...*bool) bool\n}\n"
               "//go:noinline\n"
               "func area(p *Point) int64 { return int64(p.X) * p.Y }\n"
               "//go:noinline\n"
@@ -320,7 +453,8 @@ TEST(DWARFTypeImportGo, ReadsGosStructuresAndFuncValues) {
   const LocalType *Calls = Library.find("main.Calls");
   ASSERT_NE(Calls, nullptr);
   EXPECT_EQ(shapeOf(*Calls->Record), "struct{_@0 Equal@8 _1@16 Pair@24 "
-                                     "Count@32}");
+                                     "Count@32 Pointer@40 Procedure@48 "
+                                     "Nested@56 Tagged@64 Variadic@72}");
   const auto pointee = [&](llvm::StringRef Wanted) -> const TypeExpr * {
     for (const Member &Field : Calls->Record->Members)
       if (Field.Name == Wanted) {
@@ -348,5 +482,188 @@ TEST(DWARFTypeImportGo, ReadsGosStructuresAndFuncValues) {
   ASSERT_NE(Pair, nullptr);
   EXPECT_EQ(Pair->Kind, TypeExprKind::Builtin);
   EXPECT_EQ(Pair->TheBuiltin, Builtin::Void);
+  // Legacy output pointers are unwrapped once; input pointers and a
+  // pointer-valued result keep their own indirection.
+  const TypeExpr *Pointer = pointee("Pointer");
+  ASSERT_NE(Pointer, nullptr);
+  ASSERT_EQ(Pointer->Kind, TypeExprKind::Function);
+  ASSERT_EQ(Pointer->Function->Params.size(), 1u);
+  EXPECT_EQ(Pointer->Function->Params[0].Type->Kind, TypeExprKind::Pointer);
+  ASSERT_EQ(Pointer->Function->Return->Kind, TypeExprKind::Pointer);
+  EXPECT_EQ(Pointer->Function->Return->Element->TheBuiltin, Builtin::Bool);
+  const TypeExpr *Procedure = pointee("Procedure");
+  ASSERT_NE(Procedure, nullptr);
+  ASSERT_EQ(Procedure->Kind, TypeExprKind::Function);
+  ASSERT_EQ(Procedure->Function->Params.size(), 1u);
+  EXPECT_EQ(Procedure->Function->Params[0].Type->Kind, TypeExprKind::Pointer);
+  EXPECT_EQ(Procedure->Function->Return->TheBuiltin, Builtin::Void);
+  const TypeExpr *Nested = pointee("Nested");
+  ASSERT_NE(Nested, nullptr);
+  ASSERT_EQ(Nested->Kind, TypeExprKind::Function);
+  ASSERT_EQ(Nested->Function->Params.size(), 2u);
+  EXPECT_EQ(Nested->Function->Params[0].Type->Kind, TypeExprKind::Named);
+  EXPECT_EQ(Nested->Function->Params[1].Type->Kind, TypeExprKind::Pointer);
+  EXPECT_EQ(Nested->Function->Return->Kind, TypeExprKind::Pointer);
+  const TypeExpr *Tagged = pointee("Tagged");
+  ASSERT_NE(Tagged, nullptr);
+  ASSERT_EQ(Tagged->Kind, TypeExprKind::Function);
+  EXPECT_EQ(Tagged->Function->Params.size(), 1u);
+  EXPECT_EQ(Tagged->Function->Return->TheBuiltin, Builtin::Bool);
+  const TypeExpr *Variadic = pointee("Variadic");
+  ASSERT_NE(Variadic, nullptr);
+  ASSERT_EQ(Variadic->Kind, TypeExprKind::Function);
+  EXPECT_TRUE(Variadic->Function->Variadic);
+  EXPECT_EQ(Variadic->Function->Params.size(), 1u);
+  EXPECT_EQ(Variadic->Function->Return->TheBuiltin, Builtin::Bool);
   llvm::sys::fs::remove_directories(Dir);
 }
+
+TEST(DWARFTypeImportGo, LegacyResultsKeepRealPointerInputs) {
+  const bool Params[] = {true, true};
+  auto Sections = goFunctionSections("func(*bool) bool", Params);
+  auto Context = llvm::DWARFContext::create(Sections, 8, true);
+  DWARFTypeImportStats Stats;
+  auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+  ASSERT_TRUE(static_cast<bool>(Library))
+      << llvm::toString(Library.takeError());
+  EXPECT_TRUE(Stats.Skipped.empty());
+  const LocalType *Callback = (*Library)->find("Callback");
+  ASSERT_NE(Callback, nullptr);
+  ASSERT_EQ(Callback->Target->Kind, TypeExprKind::Pointer);
+  const TypeExpr &Function = *Callback->Target->Element;
+  ASSERT_EQ(Function.Kind, TypeExprKind::Function);
+  ASSERT_EQ(Function.Function->Params.size(), 1u);
+  EXPECT_EQ(Function.Function->Params[0].Type->Kind, TypeExprKind::Pointer);
+  EXPECT_EQ(Function.Function->Return->TheBuiltin, Builtin::Bool);
+}
+
+TEST(DWARFTypeImportGo, AnAmbiguousLegacyFunctionKeepsItsClosureAddress) {
+  const bool Params[] = {false, true};
+  for (const char *Name : {"main.Callback", ""}) {
+    SCOPED_TRACE(Name);
+    auto Sections = goFunctionSections(Name, Params);
+    auto Context = llvm::DWARFContext::create(Sections, 8, true);
+    DWARFTypeImportStats Stats;
+    auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+    ASSERT_TRUE(static_cast<bool>(Library))
+        << llvm::toString(Library.takeError());
+    EXPECT_TRUE(Stats.Skipped.empty());
+    const LocalType *Callback = (*Library)->find("Callback");
+    ASSERT_NE(Callback, nullptr);
+    ASSERT_EQ(Callback->Target->Kind, TypeExprKind::Pointer);
+    ASSERT_EQ(Callback->Target->Element->Kind, TypeExprKind::Builtin);
+    EXPECT_EQ(Callback->Target->Element->TheBuiltin, Builtin::Void);
+    EXPECT_EQ((*Library)->sizeOf(*Callback->Target), 8u);
+  }
+}
+
+TEST(DWARFTypeImportGo, ReportsMalformedLegacySignaturesAndResultTypes) {
+  const struct {
+    const char *Name;
+    bool Params[2];
+    unsigned Count;
+    const char *Reason;
+  } Cases[] = {
+      {"func(bool", {false}, 1, "incomplete Go function signature"},
+      {"func(,bool) bool",
+       {false, true},
+       2,
+       "incomplete Go function signature"},
+      {"func(struct { X string \"unterminated }) bool",
+       {false, true},
+       2,
+       "incomplete Go function signature"},
+      {"func(bool) bool",
+       {false},
+       1,
+       "Go signature that disagrees with its parameters"},
+      {"func(bool)",
+       {false, true},
+       2,
+       "Go signature that disagrees with its parameters"},
+      {"func(bool) bool",
+       {false, false},
+       2,
+       "legacy Go result that is not a pointer"},
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    auto Sections = goFunctionSections(
+        Case.Name, llvm::ArrayRef(Case.Params).take_front(Case.Count));
+    auto Context = llvm::DWARFContext::create(Sections, 8, true);
+    DWARFTypeImportStats Stats;
+    auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+    ASSERT_TRUE(static_cast<bool>(Library))
+        << llvm::toString(Library.takeError());
+    EXPECT_EQ((*Library)->find("Callback"), nullptr);
+    ASSERT_FALSE(Stats.Skipped.empty());
+    EXPECT_NE(Stats.Skipped.front().find(Case.Reason), std::string::npos)
+        << Stats.Skipped.front();
+  }
+}
+
+TEST(DWARFTypeImportGo, ExplicitInputMarkersKeepANamedVoidFunction) {
+  const bool Params[] = {true};
+  auto Sections = goFunctionSections("main.Callback", Params, true);
+  auto Context = llvm::DWARFContext::create(Sections, 8, true);
+  DWARFTypeImportStats Stats;
+  auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+  ASSERT_TRUE(static_cast<bool>(Library))
+      << llvm::toString(Library.takeError());
+  EXPECT_TRUE(Stats.Skipped.empty());
+  const LocalType *Callback = (*Library)->find("Callback");
+  ASSERT_NE(Callback, nullptr);
+  ASSERT_EQ(Callback->Target->Kind, TypeExprKind::Pointer);
+  const TypeExpr &Function = *Callback->Target->Element;
+  ASSERT_EQ(Function.Kind, TypeExprKind::Function);
+  ASSERT_EQ(Function.Function->Params.size(), 1u);
+  EXPECT_EQ(Function.Function->Params[0].Type->Kind, TypeExprKind::Pointer);
+  EXPECT_EQ(Function.Function->Return->TheBuiltin, Builtin::Void);
+}
+
+TEST(DWARFTypeImportArray, CountsSignedBoundsWithoutOverflow) {
+  constexpr int64_t Min = std::numeric_limits<int64_t>::min();
+  constexpr int64_t Max = std::numeric_limits<int64_t>::max();
+  const struct {
+    int64_t Lower;
+    int64_t Upper;
+    std::optional<uint64_t> Count;
+  } Cases[] = {{0, 3, 4},
+               {-3, 2, 6},
+               {0, Max, uint64_t(1) << 63},
+               {Min, -1, uint64_t(1) << 63},
+               {Min, Max - 1, std::numeric_limits<uint64_t>::max()},
+               {Max, Max, 1},
+               {1, 0, std::nullopt}};
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Lower);
+    SCOPED_TRACE(Case.Upper);
+    auto Sections = arrayBoundSections(Case.Lower, Case.Upper);
+    auto Context = llvm::DWARFContext::create(Sections, 8, true);
+    DWARFTypeImportStats Stats;
+    auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+    ASSERT_TRUE(static_cast<bool>(Library))
+        << llvm::toString(Library.takeError());
+    EXPECT_TRUE(Stats.Skipped.empty());
+    const LocalType *Array = (*Library)->find("BoundedArray");
+    ASSERT_NE(Array, nullptr);
+    ASSERT_TRUE(Array->Target);
+    ASSERT_EQ(Array->Target->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Array->Target->Count, Case.Count);
+  }
+}
+
+TEST(DWARFTypeImportArray, RefusesAnUnrepresentableFullSignedRange) {
+  auto Sections = arrayBoundSections(std::numeric_limits<int64_t>::min(),
+                                     std::numeric_limits<int64_t>::max());
+  auto Context = llvm::DWARFContext::create(Sections, 8, true);
+  DWARFTypeImportStats Stats;
+  auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+  ASSERT_TRUE(static_cast<bool>(Library))
+      << llvm::toString(Library.takeError());
+  EXPECT_EQ((*Library)->find("BoundedArray"), nullptr);
+  ASSERT_FALSE(Stats.Skipped.empty());
+  EXPECT_NE(Stats.Skipped.front().find("array bound range that exceeds 64 bits"),
+            std::string::npos);
+}
+

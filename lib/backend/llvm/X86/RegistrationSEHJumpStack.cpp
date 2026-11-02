@@ -6,7 +6,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
-#include "neverd/backend/llvm/X86RegistrationSEHJump.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"

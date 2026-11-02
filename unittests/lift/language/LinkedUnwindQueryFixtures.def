@@ -1,0 +1,111 @@
+//===- LinkedUnwindQueryFixtures.def - Linked query contract ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Consumer inputs, independent public JSON expectations and test budgets.
+/// Assembly and signing offsets remain in AArch64LinkedUnwindFixtures.def.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_LINKED_QUERY_TEXT
+#define NEVERD_LINKED_QUERY_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_LINKED_QUERY_LIMIT
+#define NEVERD_LINKED_QUERY_LIMIT(Name, Value)
+#endif
+
+NEVERD_LINKED_QUERY_LIMIT(kSkipReturnCode, 77)
+NEVERD_LINKED_QUERY_LIMIT(kCTestTimeout, 300)
+NEVERD_LINKED_QUERY_TEXT(kSourceRootArgument, "--source-root")
+NEVERD_LINKED_QUERY_TEXT(kLibraryArgument, "--library")
+NEVERD_LINKED_QUERY_TEXT(kCLIArgument, "--neverd")
+NEVERD_LINKED_QUERY_TEXT(kWorkerArgument, "--worker")
+NEVERD_LINKED_QUERY_TEXT(kArtifactsArgument, "--artifacts")
+NEVERD_LINKED_QUERY_TEXT(kSourceRoot, "source_root")
+NEVERD_LINKED_QUERY_TEXT(kLibrary, "library")
+NEVERD_LINKED_QUERY_TEXT(kCLI, "neverd")
+NEVERD_LINKED_QUERY_TEXT(kWorker, "worker")
+NEVERD_LINKED_QUERY_TEXT(kArtifacts, "artifacts")
+NEVERD_LINKED_QUERY_TEXT(kTemporaryPrefix, "neverd-linked-unwind-query-")
+NEVERD_LINKED_QUERY_TEXT(kApplePlatform, "darwin")
+NEVERD_LINKED_QUERY_TEXT(
+    kLinkedFixtures, "unittests/lift/language/AArch64LinkedUnwindFixtures.def")
+NEVERD_LINKED_QUERY_TEXT(kPythonSDK, "pluginsdk/python")
+NEVERD_LINKED_QUERY_TEXT(kWorkerTests, "tools/neverd-worker/tests")
+NEVERD_LINKED_QUERY_TEXT(kNM, "nm")
+NEVERD_LINKED_QUERY_TEXT(kNMArguments, "-n -g")
+NEVERD_LINKED_QUERY_TEXT(kCLIInfo, "info")
+NEVERD_LINKED_QUERY_TEXT(kCLINoDebug, "--no-debug")
+NEVERD_LINKED_QUERY_TEXT(kCLIJSON, "--json")
+NEVERD_LINKED_QUERY_TEXT(kCLIUnwind, "--unwind-frame=")
+NEVERD_LINKED_QUERY_TEXT(kCreate, "neverd_session_create")
+NEVERD_LINKED_QUERY_TEXT(kDestroy, "neverd_session_destroy")
+NEVERD_LINKED_QUERY_TEXT(kDebug, "neverd_session_set_debug_info_enabled")
+NEVERD_LINKED_QUERY_TEXT(kOperation, "unwind_frame")
+NEVERD_LINKED_QUERY_TEXT(kOpen, "open")
+NEVERD_LINKED_QUERY_TEXT(kMetadata, "metadata")
+NEVERD_LINKED_QUERY_TEXT(kPath, "path")
+NEVERD_LINKED_QUERY_TEXT(kReadOnly, "read_only")
+NEVERD_LINKED_QUERY_TEXT(kAnalysis, "analysis")
+NEVERD_LINKED_QUERY_TEXT(kCapabilities, "capabilities")
+NEVERD_LINKED_QUERY_TEXT(kStatus, "status")
+NEVERD_LINKED_QUERY_TEXT(kPayload, "payload")
+NEVERD_LINKED_QUERY_TEXT(kOK, "ok")
+NEVERD_LINKED_QUERY_TEXT(kAddress, "address")
+NEVERD_LINKED_QUERY_TEXT(kAddressPrefix, "0x")
+NEVERD_LINKED_QUERY_TEXT(kBegin, "begin")
+NEVERD_LINKED_QUERY_TEXT(kEnd, "end")
+NEVERD_LINKED_QUERY_TEXT(kReturnAddress, "return_address")
+NEVERD_LINKED_QUERY_TEXT(kQueryPC, "query_pc")
+NEVERD_LINKED_QUERY_TEXT(kDwarf, "dwarf_state_at_pc")
+NEVERD_LINKED_QUERY_TEXT(kCompact, "compact_recipe")
+NEVERD_LINKED_QUERY_TEXT(kSigningPC, "signing_pc")
+NEVERD_LINKED_QUERY_TEXT(kDiagnostic, "diagnostic")
+NEVERD_LINKED_QUERY_TEXT(kKnown, "known")
+NEVERD_LINKED_QUERY_TEXT(kUnknown, "unknown")
+NEVERD_LINKED_QUERY_TEXT(kKind, "kind")
+NEVERD_LINKED_QUERY_TEXT(kUnsigned, "unsigned")
+NEVERD_LINKED_QUERY_TEXT(kSPAndPC, "sp_and_pc")
+NEVERD_LINKED_QUERY_TEXT(kKey, "key")
+NEVERD_LINKED_QUERY_TEXT(kKeyB, "b")
+NEVERD_LINKED_QUERY_TEXT(kRecipe, "recipe")
+NEVERD_LINKED_QUERY_TEXT(kHint, "hint_pacm")
+NEVERD_LINKED_QUERY_TEXT(kNonHint, "non_hint_pauth_lr")
+NEVERD_LINKED_QUERY_TEXT(kRevision, "revision")
+NEVERD_LINKED_QUERY_TEXT(kProject, "project_id")
+NEVERD_LINKED_QUERY_TEXT(kAnalysisState, "analysis_state")
+NEVERD_LINKED_QUERY_TEXT(kExplicitCase, "explicit-compact")
+NEVERD_LINKED_QUERY_TEXT(kLegacyCase, "legacy-dwarf")
+NEVERD_LINKED_QUERY_TEXT(kAbsoluteCase, "absolute-dwarf")
+NEVERD_LINKED_QUERY_TEXT(kCommandLog, "command-{index:03}.json")
+NEVERD_LINKED_QUERY_TEXT(kCommandArguments, "arguments")
+NEVERD_LINKED_QUERY_TEXT(kExitCode, "exit_code")
+NEVERD_LINKED_QUERY_TEXT(kTimedOut, "timed_out")
+NEVERD_LINKED_QUERY_TEXT(kStdoutLog, "command-{index:03}.stdout")
+NEVERD_LINKED_QUERY_TEXT(kStderrLog, "command-{index:03}.stderr")
+NEVERD_LINKED_QUERY_TEXT(kQueriesLog, "queries.json")
+NEVERD_LINKED_QUERY_TEXT(kWorkerLog, "worker.stderr")
+NEVERD_LINKED_QUERY_TEXT(kFailureLog, "failure.log")
+NEVERD_LINKED_QUERY_TEXT(kSkipLog, "skip.log")
+NEVERD_LINKED_QUERY_TEXT(kSummaryLog, "summary.json")
+NEVERD_LINKED_QUERY_TEXT(kCAPIResult, "capi")
+NEVERD_LINKED_QUERY_TEXT(kPythonResult, "python")
+NEVERD_LINKED_QUERY_TEXT(kCLIResult, "cli")
+NEVERD_LINKED_QUERY_TEXT(kWorkerResult, "worker")
+NEVERD_LINKED_QUERY_TEXT(kExpectedResult, "expected_signing")
+NEVERD_LINKED_QUERY_TEXT(kCommandFailed, "child command failed; inspect {path}")
+NEVERD_LINKED_QUERY_TEXT(
+    kBaselineUnavailable,
+    "SKIP: Apple arm64e baseline unavailable; inspect {path}")
+NEVERD_LINKED_QUERY_TEXT(kCompleted,
+                         "Apple-linked exact-PC queries passed through C API, "
+                         "Python, CLI and worker; artifacts: {path}")
+NEVERD_LINKED_QUERY_TEXT(kFailed,
+                         "Apple-linked query failed; artifacts: {path}")
+NEVERD_LINKED_QUERY_TEXT(kNoExecution,
+                         "compile/link/load/query only; no fixture execution "
+                         "or live return-address authentication")
+
+#undef NEVERD_LINKED_QUERY_TEXT
+#undef NEVERD_LINKED_QUERY_LIMIT

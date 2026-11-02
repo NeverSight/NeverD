@@ -13,7 +13,11 @@
 #ifndef NEVERD_LIB_PIPELINE_PIPELINERETURNMODELINGDETAIL_H
 #define NEVERD_LIB_PIPELINE_PIPELINERETURNMODELINGDETAIL_H
 
+#include "PipelineSourceStackAccesses.h"
+
 #include "neverd/Common.h"
+
+#include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
 #include <map>
@@ -22,6 +26,7 @@ namespace neverd {
 
 struct BinaryImage;
 struct MedFunc;
+struct MedReturnReg;
 struct MedOp;
 struct PipelineResult;
 class DebugContext;
@@ -37,7 +42,8 @@ MedFunc *forwardingCallee(const BinaryImage &Img, const PipelineResult &Result,
 /// Widen every callee that returns a 64-bit integer in a register pair to an
 /// i64 return, and remodel the call sites (including loop-carried i64
 /// accumulators) so both halves flow through.  32-bit targets only.
-void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result);
+void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
+                         MedStackProjection StackProjection);
 
 /// Learn each callee's multi-register return shape from its direct callers'
 /// field-extract remodeling and re-type the callee to match.  64-bit targets.
@@ -66,6 +72,14 @@ enum class StructReturnEvidence : uint8_t {
   CallersAndBody,
 };
 
+/// Whether every normal return supplies the caller-observed fields. Used for
+/// selected definitions and bounded omitted-callee bodies alike. Without
+/// \p PreservedArguments (no caller observed the first word), an argument
+/// register the callee never writes supplies no field.
+bool returnsStructFields(const MedFunc &Function,
+                         llvm::ArrayRef<MedReturnReg> Shape, Arch Architecture,
+                         BinaryFormat Format, bool PreservedArguments = true);
+
 /// Recover a multi-register (or single wide-vector) return shape from a
 /// callee's own body when no direct caller reveals it.  AArch64 only.
 void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
@@ -76,6 +90,10 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
 /// op reads.  AArch64 only.
 void materializeKnownStructReturnCallSites(const BinaryImage &Img,
                                            PipelineResult &Result);
+
+/// Bind declared scalar floating results to their physical return register,
+/// and propagate the resulting types through forwarding calls in both routes.
+void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result);
 
 /// Settle which functions return no value a caller could rely on
 /// (MedFunc::ReturnsNoValue), once for both C backends.

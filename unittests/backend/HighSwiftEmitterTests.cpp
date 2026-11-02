@@ -4,10 +4,11 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/X86FPState.h"
+#include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/high/MedToHigh.h"
-#include "neverd/ir/high/X86FPStateShape.h"
+#include "neverd/ir/high/X86/X86FPStateShape.h"
 #include "neverd/ir/med/MedTypePass.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -16,9 +17,12 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <set>
+#include <utility>
+#include <vector>
 
 using namespace neverd;
 namespace {
@@ -94,6 +98,124 @@ std::pair<HighFunc, SwiftSourceSignature> wideFunction(bool Memory) {
   return {F, S};
 }
 } // namespace
+
+TEST(HighSwiftEmitter, ReturnProtectionCannotDisappearFromNativeSource) {
+  auto F = function();
+  F.ReturnProtection = AArch64ReturnProtection{true, true};
+  const auto Result = HighSwiftEmitter().emit(F, signature());
+  EXPECT_FALSE(Result.Recovered);
+  EXPECT_TRUE(Result.Source.empty());
+  EXPECT_NE(Result.Reason.find("PAC return-protection"), std::string::npos);
+}
+
+TEST(HighSwiftEmitter, StackScalarBindingsDoNotInventPhysicalStackWrites) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    for (unsigned Kind = 0; Kind != 3; ++Kind) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Kind);
+      const bool X64 = Architecture == Arch::X64;
+      auto S = signature();
+      S.Name = "stackScalars";
+      S.Parameters.clear();
+      S.Labels.clear();
+      SourceFunctionTypeHint Hint;
+      Hint.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      auto Add = [&](SwiftSourceType Type, TypeRef Native) {
+        const auto Name = "arg" + std::to_string(S.Parameters.size());
+        S.Parameters.push_back({Name, std::move(Type)});
+        S.Labels.push_back("_");
+        Hint.Parameters.push_back({Name, std::move(Native)});
+      };
+      const SwiftSourceType F32{SwiftSourceType::Kind::Floating, "Float", 32,
+                                false, nullptr};
+      const SwiftSourceType F64{SwiftSourceType::Kind::Floating, "Double", 64,
+                                false, nullptr};
+      if (Kind != 1)
+        for (unsigned I = 0; I != (X64 ? 6U : 8U); ++I)
+          Add(i64(), NdType::makeInt(8, true));
+      if (Kind != 0)
+        for (unsigned I = 0; I != 8; ++I)
+          Add(Kind == 1 ? F32 : F64, NdType::makeFloat(Kind == 1 ? 4 : 8));
+      if (Kind == 0) {
+        Add({SwiftSourceType::Kind::Integer, "Int32", 32, true, nullptr},
+            NdType::makeInt(4, true));
+        Add(i64(), NdType::makeInt(8, true));
+        Hint.ReturnType = NdType::makeInt(8, true);
+      } else {
+        if (Kind == 2)
+          Add({SwiftSourceType::Kind::Integer, "Int8", 8, true, nullptr},
+              NdType::makeInt(1, true));
+        else
+          Add(F32, NdType::makeFloat(4));
+        Add(F32, NdType::makeFloat(4));
+        S.ReturnType = Kind == 1 ? F32 : F64;
+        Hint.ReturnType = NdType::makeFloat(Kind == 1 ? 4 : 8);
+      }
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error))
+          << Error;
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Format = BinaryFormat::MachO;
+      Image.Bits = Bitness::Bits64;
+      Image.Entry = Image.Base = S.Entry;
+      Segment Text;
+      Text.Name = "__text";
+      Text.VA = S.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      if (X64) {
+        Text.Data = {0x55, 0x48, 0x89, 0xe5}; // push rbp; mov rbp,rsp
+        const std::vector<std::vector<uint8_t>> Bodies = {
+            {0x48, 0x63, 0x45, 0x10,        // movsxd rax,dword [rbp+16]
+             0x48, 0x03, 0x45, 0x18},       // add rax,qword [rbp+24]
+            {0xf3, 0x0f, 0x10, 0x45, 0x10,  // movss xmm0,[rbp+16]
+             0xf3, 0x0f, 0x58, 0x45, 0x18}, // addss xmm0,[rbp+24]
+            {0x0f, 0xbe, 0x45, 0x10,        // movsx eax,byte [rbp+16]
+             0xf2, 0x0f, 0x2a, 0xc0,        // cvtsi2sd xmm0,eax
+             0xf3, 0x0f, 0x10, 0x4d, 0x18,  // movss xmm1,[rbp+24]
+             0xf3, 0x0f, 0x5a, 0xc9,        // cvtss2sd xmm1,xmm1
+             0xf2, 0x0f, 0x58, 0xc1}};      // addsd xmm0,xmm1
+        Text.Data.insert(Text.Data.end(), Bodies[Kind].begin(),
+                         Bodies[Kind].end());
+        Text.Data.insert(Text.Data.end(), {0x5d, 0xc3}); // pop rbp; ret
+      } else {
+        const std::vector<std::vector<uint8_t>> Bodies = {
+            {0xe0, 0x03, 0x80, 0xb9,   // ldrsw x0,[sp]
+             0xe8, 0x07, 0x40, 0xf9,   // ldr x8,[sp,#8]
+             0x00, 0x00, 0x08, 0x8b},  // add x0,x0,x8
+            {0xe0, 0x03, 0x40, 0xbd,   // ldr s0,[sp]
+             0xe1, 0x07, 0x40, 0xbd,   // ldr s1,[sp,#4]
+             0x00, 0x28, 0x21, 0x1e},  // fadd s0,s0,s1
+            {0xe8, 0x03, 0xc0, 0x39,   // ldrsb w8,[sp]
+             0x00, 0x01, 0x62, 0x1e,   // scvtf d0,w8
+             0xe1, 0x07, 0x40, 0xbd,   // ldr s1,[sp,#4]
+             0x21, 0xc0, 0x22, 0x1e,   // fcvt d1,s1
+             0x00, 0x28, 0x61, 0x1e}}; // fadd d0,d0,d1
+        Text.Data = Bodies[Kind];
+        Text.Data.insert(Text.Data.end(), {0xc0, 0x03, 0x5f, 0xd6}); // ret
+      }
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Segments.push_back(std::move(Text));
+      auto FunctionSymbol = Symbol::makeFunc(S.Entry);
+      FunctionSymbol.Name = S.Name;
+      Image.Symbols.push_back(std::move(FunctionSymbol));
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.SourceTypeHints.emplace(S.Entry, Hint);
+      llvm::LLVMContext Context;
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1U);
+      ASSERT_TRUE(Result.MedFuncs.front().SourceParametersBound);
+      for (const auto &Block : Result.MedFuncs.front().Blocks)
+        for (const auto &Op : Block.Ops)
+          EXPECT_FALSE(Op.Opcode == NdOp::STORE && !Op.PrologueSave);
+      ASSERT_EQ(Result.HighFuncs.size(), 1U);
+      const auto Output = HighSwiftEmitter().emit(Result.HighFuncs.front(), S);
+      EXPECT_TRUE(Output.Recovered) << Output.Reason;
+    }
+  }
+}
 
 namespace {
 ExprPtr fpStateCall(Intrinsic Id, unsigned Bytes,
@@ -304,8 +426,8 @@ TEST(HighSwiftEmitter, ScalarDoubleConversionsKeepDistinctSourcesAndOneHelper) {
       ASSERT_TRUE(E.Recovered) << E.Reason;
       const std::string Definition =
           "static func " + x86FPScalarConvertMnemonic(Control & ~8u) +
-          "_source" + std::to_string(x86FPScalarConvertSourceBytes(Control) * 8) +
-          "(";
+          "_source" +
+          std::to_string(x86FPScalarConvertSourceBytes(Control) * 8) + "(";
       const auto First = E.MemberSource.find(Definition);
       ASSERT_NE(First, std::string::npos);
       EXPECT_EQ(E.MemberSource.find(Definition, First + 1), std::string::npos);

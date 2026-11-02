@@ -7,5 +7,9 @@
 namespace neverd {
 bool hasNativeScalarIntrinsicEvidence(const MedOp &Operation,
                                       Arch Architecture);
+/// A validated original load writes only its scalar result on normal
+/// continuation. This grants no address, no-fault or frame-byte identity.
+bool hasNativeReadOnlyMemoryIntrinsicEvidence(const MedOp &Operation,
+                                              Arch Architecture);
 } // namespace neverd
 #endif

@@ -54,6 +54,8 @@ CSourceRecorder::CSourceRecorder(CSourceMap &Map, llvm::StringRef Ordinary,
 void CSourceRecorder::prepareHighSources() {
   if (!Map.HighSources)
     return;
+  if (recordsInstructions())
+    HighStatements.emplace(*Map.HighSources);
   using Key = std::pair<va_t, const HighExpr *>;
   std::map<Key, std::set<sigs::LibraryOccurrence>> Origins;
   std::map<Key, std::shared_ptr<const HighExpr>> Alive;
@@ -63,16 +65,13 @@ void CSourceRecorder::prepareHighSources() {
   size_t Work = ::neverd::limits::backend::
       kCSourceRecorderCSourceRecorderPrepareHighSourcesWork;
   for (const auto &Source : *Map.HighSources) {
-    if (recordsInstructions() && Source.Kind != HighSourceKind::Expression &&
-        Source.StatementKind)
-      HighAnchors[{Source.Function, Source.Occurrence.Address,
-                   *Source.StatementKind}]
-          .insert(Source.Occurrence);
     if (Source.Kind == HighSourceKind::Store) {
       Stores[{Source.Function, Source.Occurrence.Address}].insert(
           Source.Occurrence);
       continue;
     }
+    if (Source.Kind == HighSourceKind::StatementExpression)
+      continue;
     if (auto Expr = Source.Expression.lock()) {
       Key K{Source.Function, Expr.get()};
       if (recordsInstructions() &&
@@ -344,10 +343,9 @@ CSourceRecorder::instruction(const llvm::Instruction &Value) {
 std::optional<size_t> CSourceRecorder::statement(va_t Function,
                                                  const HighStmt &Stmt) {
   const auto At = HighStores.find({Function, Stmt.Addr});
-  const auto Anchor = HighAnchors.find({Function, Stmt.Addr, Stmt.Kind});
-  if (recordsInstructions() && !Stmt.IsPhiCopy && Anchor != HighAnchors.end() &&
-      Anchor->second.size() == 1)
-    return event(std::nullopt, {*Anchor->second.begin()}, Function);
+  if (recordsInstructions() && HighStatements)
+    if (const auto Origin = HighStatements->lookup(Function, Stmt))
+      return event(std::nullopt, {*Origin}, Function);
   if (Stmt.Kind != StmtKind::Store)
     return std::nullopt;
   return At == HighStores.end()

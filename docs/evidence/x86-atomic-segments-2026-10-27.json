@@ -1,0 +1,1365 @@
+{
+  "scope": "i386 legacy AADD/AAND/AOR/AXOR CS/ES/SS offsets and implicit SS",
+  "goal_complete": false,
+  "sources": {
+    "neverd_fixed_code": "06f7628d0ffb7c8158e7f40f0cb4b2fca446d4b1",
+    "neverd_base": "2361c8c3c6e1c982b69c2ae0162eb715d1ad5238",
+    "neverd_integrated_base": "3ce94473539deb175e8984f3bf2a8d33c4df0f69",
+    "previous_x86_publication": "218342f0aac1b3585cd69cc70f0cd954de643811",
+    "capstone": "5ee0573f7897a33a0702d1e868b710a429a5642e",
+    "llvm": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "llvm_release_and_pins_changed": false
+  },
+  "artifact_root": "/mnt/data/neverd-x86-atomic-segments",
+  "validation": {
+    "pinned": {
+      "tests": 95,
+      "reports": [
+        {
+          "path": "pinned-NeverDHighCIntegerWidthTests.xml",
+          "sha256": "b6017cd7ef8b3c5a408dddad8781dc1b117932aab453643a92f009ea393ebbff",
+          "tests": 24,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86APXAtomicSemanticTests.xml",
+          "sha256": "c15a3320e9fddfe08938126c388fa65084889ff553177badd573f896c5dd5d28",
+          "tests": 30,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86APXAtomicSourceTests.xml",
+          "sha256": "33535cbe955087cd1ed6f9bb85c377e868e3ba55ea69366315398c463bf4c8d6",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86AtomicSegmentTests.xml",
+          "sha256": "c9cc6ce3f939201b2223b6c58861cf129765ae88aaae2c987671d5a5df6aeb05",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86CompactSegmentTests.xml",
+          "sha256": "348a36c9ff26411373eed6ee1527a21cf3db21e2a2b77bdaa5eb4097f510b130",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86CompressExpandSourceTests.xml",
+          "sha256": "560821823bfca4a030f1776e767d59991327b6989864c4dd33a9320f3bce778a",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86FourSourceSegmentTests.xml",
+          "sha256": "1dfae95af979127ae6709edcdab71ff9a109c2ed24e784288bdadd436d0f678d",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86LegacyEncodingSourceTests.xml",
+          "sha256": "7a2b98a4c50b2f7d799ad16890295644b044024f3e11113721c6d23363e3e54a",
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "pinned-build.log",
+        "sha256": "9fae8830d06969df9c028652a04b0d8588f1450dc5f4706682a8a53741c21ab7"
+      },
+      "commands": {
+        "path": "pinned-commands.json",
+        "sha256": "f574e0c085c2fb52e2b566e65362dd9f39b84b67cd4159f20d0463a4cdeba35a"
+      },
+      "source_commands": {
+        "path": "pinned-source-commands.json",
+        "sha256": "b98dfc3a356ea02c5053d9191f4639ed322d8577b2d213337d406e728a0e2dfa"
+      },
+      "legacy_commands": {
+        "path": "pinned-legacy-commands.json",
+        "sha256": "5a4dc26261934097a9e24bb511f42af7fca06e8e88cc9300882215852fc798ad"
+      },
+      "native_and_c_objects": {
+        "atomic": 360,
+        "compact_regression": 270,
+        "four_source_regression": 540,
+        "inventory": {
+          "path": "pinned-objects.json",
+          "sha256": "fa17e3b22cf57029c52c59d3322765a368ea55e42eb578fe8296c7708fb0e50f"
+        }
+      },
+      "source_transport": {
+        "atomic": {
+          "runs": 576,
+          "clang_asan_ubsan": 288,
+          "neverc": 288,
+          "report": {
+            "path": "pinned-atomic-recorders/qualification.json",
+            "sha256": "b54e7f32bfa30b925c88b2ce514c6f1d422caa7b80df91727543c05322f1f317"
+          }
+        },
+        "compact": {
+          "runs": 432,
+          "clang_asan_ubsan": 216,
+          "neverc": 216,
+          "report": {
+            "path": "pinned-compact-recorders/qualification.json",
+            "sha256": "0e75b8884e5a141c9f18226327b11a7efaee050d9bdcb8d649dc181dbe942df6"
+          }
+        },
+        "four": {
+          "runs": 864,
+          "clang_asan_ubsan": 432,
+          "neverc": 432,
+          "report": {
+            "path": "pinned-four-recorders/qualification.json",
+            "sha256": "22ac58d2253aa02671b9854e48646288636e230532b0f578659d3f485c2b3de8"
+          }
+        }
+      },
+      "controlled_i386": {
+        "wrapper_objects": 21,
+        "wrapper_function_entries": 2352,
+        "wrapper_completions": 35280,
+        "pipeline_profiles": 288,
+        "pipeline_objects": 1440,
+        "pipeline_completions": 1440,
+        "report": {
+          "path": "pinned-i386-final-width/qualification.json",
+          "sha256": "bef7c7a244233e9a03a223f36123217774c9601490a9b1a9993fa7212666da82"
+        }
+      }
+    },
+    "native": {
+      "tests": 95,
+      "reports": [
+        {
+          "path": "native-NeverDHighCIntegerWidthTests.xml",
+          "sha256": "26894cdbbe4667b3d7d1cac3b230536e0c11e5e9267c7ebf53757341001c34fa",
+          "tests": 24,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86APXAtomicSemanticTests.xml",
+          "sha256": "67eb02b930f16c61d812ca7bde5273c74b9ea8a0d6fc1ff04efd8c52547f3f9b",
+          "tests": 30,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86APXAtomicSourceTests.xml",
+          "sha256": "e8e9ac01d5214bc96c33c437c5eed1397007812485106fcef6f102b0b0a4d46d",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86AtomicSegmentTests.xml",
+          "sha256": "6421dedf964b1fda2f33ffba58bd4a0fad1c095a11cc4bf80ba48f1d5b0b2329",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86CompactSegmentTests.xml",
+          "sha256": "2e54d69c4f30819ce4e8a87bb257d8536a5c3c44191b93cd47abe904ea061f43",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86CompressExpandSourceTests.xml",
+          "sha256": "3cba9c1a1c941fe4388ca0ac4566381c172070894418eabe56dd2f0313a2c0c2",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86FourSourceSegmentTests.xml",
+          "sha256": "a0344915d3821a78469f59f76e0b7bf9541c76d98fab357578ef99453a9c68ae",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86LegacyEncodingSourceTests.xml",
+          "sha256": "3cba9e2e06e6a1d676a1ca5164128b87452854a7c71f1c508a4221ad047c9bcc",
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "native-build.log",
+        "sha256": "332964d67efe47b27980fd0da4fc1eac54c7ae58716e0e60f36a36686bb4cd1c"
+      },
+      "commands": {
+        "path": "native-commands.json",
+        "sha256": "c92ef9a094ea056ce4fc195c941e0df3d39399130fd065f9f7fe5c1a7c080acc"
+      },
+      "source_commands": {
+        "path": "native-source-commands.json",
+        "sha256": "1f5d92b55a8d3fb166a8faa1cbc543b6530dba6766f59cb5f94900f7913510bb"
+      },
+      "legacy_commands": {
+        "path": "native-legacy-commands.json",
+        "sha256": "38dda53e777ecf9f2919f82e3d83c90125510f09ac16baa1313fb5a6953a127e"
+      },
+      "native_and_c_objects": {
+        "atomic": 360,
+        "compact_regression": 270,
+        "four_source_regression": 540,
+        "inventory": {
+          "path": "native-objects.json",
+          "sha256": "e131c108c482052366969b2a27cdcb56528eb78cd77d2c01b0bda6c69164472a"
+        }
+      },
+      "source_transport": {
+        "atomic": {
+          "runs": 576,
+          "clang_asan_ubsan": 288,
+          "neverc": 288,
+          "report": {
+            "path": "native-atomic-recorders/qualification.json",
+            "sha256": "50245a54a12474ad7cbe2907bbd63485fb731736f55dd6b4e58c9d5d7c5771ae"
+          }
+        },
+        "compact": {
+          "runs": 432,
+          "clang_asan_ubsan": 216,
+          "neverc": 216,
+          "report": {
+            "path": "native-compact-recorders/qualification.json",
+            "sha256": "1d6483dad5ffd706bfd8094bf28d9c2afcac0133bd4559fc90568db0aeb71722"
+          }
+        },
+        "four": {
+          "runs": 864,
+          "clang_asan_ubsan": 432,
+          "neverc": 432,
+          "report": {
+            "path": "native-four-recorders/qualification.json",
+            "sha256": "f3b5cc7f022431ad45bf14921128201a2a61a86aae0a857c98fa04a0f7a23398"
+          }
+        }
+      },
+      "controlled_i386": {
+        "wrapper_objects": 21,
+        "wrapper_function_entries": 2352,
+        "wrapper_completions": 35280,
+        "pipeline_profiles": 288,
+        "pipeline_objects": 1440,
+        "pipeline_completions": 1440,
+        "report": {
+          "path": "native-i386-final-width/qualification.json",
+          "sha256": "bef7c7a244233e9a03a223f36123217774c9601490a9b1a9993fa7212666da82"
+        }
+      }
+    }
+  },
+  "qualification_driver": {
+    "path": "qualify.py",
+    "sha256": "0cf1d8cbfa11e42a6f10b51a2adfdfd0b9df69ba357e6ad10f540867822e764f"
+  },
+  "source_driver": {
+    "path": "qualify-source.py",
+    "sha256": "32919fd316f7cec7793b55f5eee195e99cfb98bd338a1a99d72f37627ba816af"
+  },
+  "legacy_driver": {
+    "path": "qualify-legacy.py",
+    "sha256": "ceeef9bbe0b1df3e496f7039dfdb6dfb27e3ec4d39378bbc4888762b85ed0ac8"
+  },
+  "admission_per_sdk": {
+    "decoder_lift_checks": 1008,
+    "malformed_contract_refusals": 120,
+    "wrapped_offsets": 24,
+    "concrete_descriptor_refusals": 12,
+    "decoder_routes": [
+      "full",
+      "lightweight",
+      "lift"
+    ],
+    "address_widths": [
+      16,
+      32
+    ],
+    "prefixes": [
+      "implicit DS/SS",
+      "ES",
+      "CS",
+      "SS",
+      "DS",
+      "FS",
+      "GS"
+    ],
+    "policies": [
+      "strict",
+      "permissive"
+    ]
+  },
+  "emission": {
+    "atomic_source_profiles": 72,
+    "architecture": "i386",
+    "formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "pipelines": [
+      "default",
+      "NoOpt"
+    ],
+    "routes": [
+      "LLVM object",
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "families": [
+      "AADD",
+      "AAND",
+      "AOR",
+      "AXOR"
+    ],
+    "absolute_segment_offset_aliasing_ds_image": "0x4000",
+    "constant_address_forms": [
+      "absolute displacement",
+      "MOV EAX,0x4000 then [EAX]"
+    ],
+    "recorded_scalar_parameter_with_high_bit_set": "0xf2345678",
+    "recorded_source_with_high_bit_set": "0x87654321",
+    "objects_decoded_for_original_instruction_and_segment": true
+  },
+  "unknown_native_target": {
+    "red": {
+      "path": "unknown-red-result.json",
+      "sha256": "dbb09a0c85a7d2440b5ee57eabf7050eabed139c9834d396a7469b4166d5a78d"
+    },
+    "red_log": {
+      "path": "unknown-red.log",
+      "sha256": "7d2309573192484c5b04a435db6e4ed4165820260296c08021ba4bc9047a03a2"
+    },
+    "green": {
+      "path": "unknown-green-result.json",
+      "sha256": "31f2b853587ea53e72e91da64366b6f23e158bb10593ad95c53037b4c97c3835"
+    },
+    "green_report": {
+      "path": "unknown-green.xml",
+      "sha256": "8a8092d473edefcc1477ae7cd4b0f9ed860ff2ca05881ed6ba638ed2bab13949"
+    },
+    "contract": "Representation-neutral shapes may omit the architecture. LLVM and HighC must require a valid x86APXAtomicPlan before dereferencing it or emitting native code."
+  },
+  "ordinary_gs_hardware": {
+    "platform": "Linux x86-64",
+    "checks_per_sdk": 16,
+    "executables_per_sdk": 2,
+    "parameter_widths": [
+      16,
+      32
+    ],
+    "source_types": [
+      "signed",
+      "unsigned"
+    ],
+    "extensions": [
+      "zero",
+      "sign"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "operation": "Set GS base so each specified signed/unsigned offset addresses one known volatile word; execute the generated segmented load and restore GS."
+  },
+  "regression": {
+    "before": "HighC source case 1, AADD ES with MOV EAX,0x4000, passed &dword_4000 after native instruction decoding had already passed.",
+    "failing_run": {
+      "path": "pre-raw-address-fix/native-recorders.log",
+      "sha256": "8375acda154a8b0103416bdfd1eb808ebbe837982ea681390dc90931aea26ab4"
+    },
+    "failing_source": {
+      "path": "pre-raw-address-fix/native-recorders/1-high.c",
+      "sha256": "f2748a42f7aa54263550496d8dae07c72c5ca2ae15df38a95abbf7745829f6a7"
+    },
+    "after": "HighC/X86 native-memory arguments share the raw addrStr owner; MedIR and HighC reuse one representation-neutral segment-offset predicate. Ordinary DS loads retain their relocated image objects.",
+    "sibling_coverage": [
+      "atomic",
+      "compact",
+      "four-source",
+      "ordinary GS loads"
+    ],
+    "intermediate_width_failure": {
+      "path": "before-width-fix/native-compact-recorders.log",
+      "sha256": "02b8d707c983b689ccf655fba755e4553347f308dfa8c1db21840d32d30225b7"
+    },
+    "intermediate_width_source": {
+      "path": "before-width-fix/native-compact-2-high.c",
+      "sha256": "7b9685e1726d573189a9af8be11bbb828d1658fbc568d3e9d8ed7d44a7c7884f"
+    },
+    "width_fix": "Raw addrStr and intrinsic operands share the same view-selection rule, retaining source-width zero/sign extensions and arithmetic wrapping."
+  },
+  "semantics": {
+    "reference": {
+      "url": "https://cdrdv2-public.intel.com/859029/319433-058-architecture-instruction-set-extensions-programming-reference.pdf",
+      "sha256": "c90251c5ed18688ea060517aeaeccd1898bfce503ae3f8081ce7786b4a66dc79",
+      "sections": "Chapter 2 AADD/AAND/AOR/AXOR, 2-2..2-9",
+      "mode_support": "V/V for 64/32-bit modes",
+      "fault_distinction": "Protected-mode illegal SS addresses retain #SS; other segment address faults use #GP."
+    },
+    "control": "Optional byte 1 retains long-mode stack provenance; bytes 0x26/0x2e/0x36 retain an i386 segment offset. Mixed or mode-inconsistent controls refuse.",
+    "address": "Original-width address arithmetic precedes native segment selection; offsets never acquire process-pointer relocation.",
+    "concrete": "CS/ES/SS access refuses without descriptors before reading memory, storing bytes or publishing a result; the source remains unchanged.",
+    "instruction_effects": "Original native RAO operation owns relaxed ordering, alignment/WB checks and arithmetic-flag preservation."
+  },
+  "oracle": {
+    "source": "Local-only diagnostic oracle: verify-apx-atomic-completion.py (not distributed)",
+    "packages": {
+      "capstone": "5.0.7",
+      "lief": "1.0.0-d05b3499b",
+      "unicorn": "2.1.4"
+    },
+    "operation": "Independent decoder locates native RAO boundaries. Unicorn executes surrounding i386 code while an explicit scalar completion updates memory at each boundary. Prefixes, offset wrapping, sources, return flags, cdecl stack and preserved GPRs are checked.",
+    "physical_raoint_execution": false
+  },
+  "boundaries": {
+    "physical_atomicity_qualified": false,
+    "descriptor_fault_execution_qualified": false,
+    "write_back_memory_behavior_qualified": false,
+    "neverc_frontend_architecture": "x64",
+    "neverc_i386_execution_qualified": false,
+    "host_source_transport": "Recorders replace native operations only; host x64 Clang and NeverC runs validate operands and storage, not i386 instruction execution.",
+    "remaining": [
+      "Concrete segment-descriptor environments and physical fault/atomicity qualification",
+      "Other instruction and state gaps in docs/x86-instruction-support.md"
+    ]
+  },
+  "integration": {
+    "commit": "048f7be35fcea88a0e3ff6784ab4962abde55a78",
+    "reviewed_remote": "804417cf00e24dba6080ce080a01ade36dd186ee",
+    "capstone": "bbcfea6d5a2ad19ffb0600bf6e6cf7b1e252a958",
+    "review": {
+      "path": "integration-review.json",
+      "sha256": "a6d649078f40414b87a7298af2d804bdba652709aea71b6a7e4404568842ab1b"
+    },
+    "driver": {
+      "path": "qualify-integration.py",
+      "sha256": "f082e61cc943ad7bc80f1efa78b2f8d54484eac9736450fe49c8bf9f48f6cdaa"
+    },
+    "inventory_driver": {
+      "path": "inventory-exports.py",
+      "sha256": "ea598e19ef856dc2eabdfab8e14df1c329c5aee5729315fc28e35fc76581c023"
+    },
+    "comparison_driver": {
+      "path": "compare-exports.py",
+      "sha256": "9f3e0e6ddf4948608cc08a405a254e933f834e63694fb9dc73da78a3ae41c392"
+    },
+    "validation": {
+      "pinned": {
+        "tests": 95,
+        "reports": [
+          {
+            "path": "integration/pinned-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "0ecd0c61586b835d472c878d5b6244215cf4156a66547e907ebedde630198bd1",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "141fdaeb22d75e524e909ebf18ef328e724b43f73aa627b77dde1b3158db8d17",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "b5553bb4d69dc53d808e3263706a9da3a57621a4e12ce69ffcfedab0cbe21f35",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "ad38233a3036d570e609b79d79787d20f2c4bc0e83a155ba176f2d9a8d6d8b3b",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86CompactSegmentTests.xml",
+            "sha256": "6bd9a7b8cf4a06932b8a2495e7993abd668246b1aebb9108c392c9b6a163e38c",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "c05244075a5cfeac2acd47d598c55a37a55e8c222f076b692a90f40c39048671",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "faa11eb1b19f7aa0a73771335aa19f26fc1ca0eda13406adb477708c9da2fd8e",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/pinned-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "0cba97501df88a706788fe5cb27a37cab3b829027cb40663decbf060664c5d25",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "build": {
+          "path": "integration/pinned-build.log",
+          "sha256": "a1c8d408f25c74a130091a761e27e3e1f8c047c8737a9d5a5eb0e94bf7419fc0"
+        },
+        "commands": {
+          "path": "integration/pinned-commands.json",
+          "sha256": "52f1712d9dcf824d8b164c93f3db0be952368566771db7088e7d251c04ce7294"
+        },
+        "export_replay": {
+          "files": 11038,
+          "objects": 2865,
+          "c_sources": 3843,
+          "llvm_sources": 1921,
+          "c_and_ir_byte_identical": true,
+          "external_inputs_byte_identical": true
+        },
+        "normalizations": {
+          "coff_timestamp_only": 312,
+          "command_temp_directory_only": 940
+        },
+        "comparison": {
+          "path": "integration-pinned-comparison.json",
+          "sha256": "bc701c89c5cb90b1dc556c40d65702ad812eb1f3556a6334e210365cb45d00a7"
+        },
+        "fixed_inventory": {
+          "path": "fixed-pinned-exports.json",
+          "sha256": "ebc9a3f8058812685240cfe98ea1b797bb9f09b7c10591a57d00453ad79061dc"
+        },
+        "integrated_inventory": {
+          "path": "integrated-pinned-exports.json",
+          "sha256": "6387f6478c15f10f6685fb5a9ad7864de7d8286430102e51b7be8c098009163d"
+        }
+      },
+      "native": {
+        "tests": 95,
+        "reports": [
+          {
+            "path": "integration/native-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "8b5df4f529d277342d087864d35008fc066713bc9b6127dc1a1af1adf0b647ec",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "700b08a485f68f847f94e8f526ac1b997b58ad36b75cad5cc7dc7c9384af1633",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "6cc59eb3d673472173d50ec0b897739e87ca9159b1534ff4aaf3f8f8f1f96aeb",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "e08ab794688a3c7a11a8bd4e4c64567b47afa740f070992354df831e1e5810fd",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86CompactSegmentTests.xml",
+            "sha256": "adee27ebdc89e207b7bf3a23351c1d94d57f0e1f6bd96c83292943d639f3d5be",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "0fa8aeaa4267d8743ec580ddfd5ecfe2111d060052743d6f357f2276445f312f",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "7a99331d30cb5a2d635a7c0c3c22a1e2e9d7cae01f1d64177c461ca03c66da31",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integration/native-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "e3b953331cbb75b5b68d809ac86230677f8986d8780cd275e68a5824d9721dea",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "build": {
+          "path": "integration/native-build.log",
+          "sha256": "61d96f1870b421b7180f1712a98e1254718985f47b8a3706dd0e2000275b00fb"
+        },
+        "commands": {
+          "path": "integration/native-commands.json",
+          "sha256": "250a978537041a517d7834a02ae40241ef782aace7bdb35bdf1493ade6f09c06"
+        },
+        "export_replay": {
+          "files": 11038,
+          "objects": 2865,
+          "c_sources": 3843,
+          "llvm_sources": 1921,
+          "c_and_ir_byte_identical": true,
+          "external_inputs_byte_identical": true
+        },
+        "normalizations": {
+          "coff_timestamp_only": 312,
+          "command_temp_directory_only": 940
+        },
+        "comparison": {
+          "path": "integration-native-comparison.json",
+          "sha256": "3a2427bb9f61a79691f818329fa0c7ecde4a88cf7bb19238460e7303f0bafa21"
+        },
+        "fixed_inventory": {
+          "path": "fixed-native-exports.json",
+          "sha256": "926d057601eb559cda428bdee1254156118c8608127c78a9254b569005d4a6ec"
+        },
+        "integrated_inventory": {
+          "path": "integrated-native-exports.json",
+          "sha256": "9fb91c6815100d9ed6f0c15d73ee5f57714066438e0526a1df54382ebed2dde8"
+        }
+      }
+    },
+    "external_results": "All consumed source/IR/native-object exports are byte-identical to the qualified fixed-code corpus. C-compiled COFF objects differ only in their four-byte TimeDateStamp; command receipts differ only in temporary-directory names. Every other object byte is identical. The source-transport and controlled-i386 receipts remain applicable.",
+    "goal_complete": false
+  },
+  "followup": {
+    "commit": "270a66d88b5fe07e371eeddece3e6ba8979f7271",
+    "base": "048f7be35fcea88a0e3ff6784ab4962abde55a78",
+    "capstone": "bbcfea6d5a2ad19ffb0600bf6e6cf7b1e252a958",
+    "driver": {
+      "path": "qualify-followup.py",
+      "sha256": "af3a7aad1d4f393b28910d5505124e53e9434e314d755a2a7a39eae16dee10cd"
+    },
+    "comparison_driver": {
+      "path": "compare-followup.py",
+      "sha256": "c84f2b1709543fed774df8e42670b5b6e305aa283284a574f47f0d16b34b2e58"
+    },
+    "validation": {
+      "pinned": {
+        "tests": 95,
+        "reports": [
+          {
+            "path": "followup/pinned-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "e17d1693b1e831e2a8309872b2342982e2cbec344f1d1005c6bd5a0789457c1b",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "63510cf56a5fd9eec3b098eba7b2006bdfcfbad0048a6ab37c6d532ae377b20d",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "26622ed85987af1bcf355258aca0c123742506851ed1cc0a490bf2e1a5d9e0b5",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "f05d38a93ecfa04d882bf2c90e3017fdbf35afa002a7f489fce7620c3aa87e5b",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86CompactSegmentTests.xml",
+            "sha256": "c053ffafb73f88482c6174fbfc309a08ee2e532df0abd1a0f9c9fc94667d6ead",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "efd2ecd9d2efc9e92cc9a70f50e70cb73f338f6d25cf949254563c944023634b",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "e8ae3487bf1b77ef5da6655c0addbb3c0a49dd61d90d3695e5d41c9744333f56",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/pinned-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "458778e17f0d76b96ed1722eddd2ab8c0b04dae85d453126ca3b97ebb05e94ce",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "gs_hardware": {
+          "native_gs_loads": 40,
+          "native_executables": 2
+        },
+        "build": {
+          "path": "followup/pinned-build.log",
+          "sha256": "90abb9807c4285b1da34a8ccf873a07ae06cd22e7a2b8b9d4b47caf5988c4d7e"
+        },
+        "commands": {
+          "path": "followup/pinned-commands.json",
+          "sha256": "361171245ef19ded33496df0a6db4d77d2b10de9864189de5b2b08bc4f376225"
+        },
+        "export_replay": {
+          "files": 11038,
+          "objects": 2865,
+          "c_sources": 3843,
+          "llvm_sources": 1921,
+          "c_and_ir_byte_identical": true,
+          "external_inputs_byte_identical": true
+        },
+        "normalizations": {
+          "coff_timestamp_only": 312,
+          "command_temp_directory_only": 940
+        },
+        "comparison": {
+          "path": "followup-pinned-comparison.json",
+          "sha256": "e9dc7268f0a6ec1c3b0ae59d941384b4289ff94e0c03b9e25b0437c408963953"
+        },
+        "export_inventory": {
+          "path": "followup-pinned-exports.json",
+          "sha256": "19dc7c91021b81a838c7db94731b6b3ee88f4b6de72cc2d136132ed08b2c23ce"
+        },
+        "constant_extension_red": {
+          "result": {
+            "path": "pinned-constant-gs-red-result.json",
+            "sha256": "56296949d3a02e635b050fd6b4762f0f0b52c23d05b925203095f7daf8e19027"
+          },
+          "report": {
+            "path": "pinned-constant-gs-red.xml",
+            "sha256": "131c5500a7f34459870a55c2e562fac19c40d362927394270cfcb5c6969b4031"
+          },
+          "log": {
+            "path": "pinned-constant-gs-red.log",
+            "sha256": "dc2c63383b54604a0e858cded776cc4ffa7595c3f9997e6d4412074b21ad80f8"
+          }
+        },
+        "constant_extension_32_case_green": {
+          "result": {
+            "path": "pinned-constant-gs-green-result.json",
+            "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+          },
+          "report": {
+            "path": "pinned-constant-gs-green.xml",
+            "sha256": "333d1466c65f20c70283f272cb298ad527dc6ec02c45de1726b80751109ab18a"
+          },
+          "log": {
+            "path": "pinned-constant-gs-green.log",
+            "sha256": "c88af88a06a1c23f7b1d73e9cbb19c8bca8255d503a257574b802dd429da30c4"
+          }
+        }
+      },
+      "native": {
+        "tests": 95,
+        "reports": [
+          {
+            "path": "followup/native-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "f1f106c3e0ca8cb37252d7360be4dc095ae5b79569b17f9363f544434186859e",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "3eb6c7ff1c9275d3dd81927db71f7f30bb9d8bcadadf79954f05f4ed19d7364a",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "81713e9c9e934e2fd587029219ed747f1c54843afefa37bad26ceb98db87017f",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "7ffa71ebec498f15e78dd5b6daf1da8238a68498b4f48ab836f97bd94ace3717",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86CompactSegmentTests.xml",
+            "sha256": "70b3fad25994ea7425b4d487120658e1a94346765e965178ce1235b5470d2535",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "e195a7d62ee858abba2153298f1bc2b0e694e364899cbc8740c86905876078da",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "3987890c592eec4f20aab0f926fa5e5d16fa72ea76a24c8770fecc6f8c55ce0c",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "followup/native-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "05c9e9a53cd728f03fce84bf9658866954bc3aa53c9abee8d500b727590af9f4",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "gs_hardware": {
+          "native_gs_loads": 40,
+          "native_executables": 2
+        },
+        "build": {
+          "path": "followup/native-build.log",
+          "sha256": "36918a99ca24dcfc829dd6586f9fdbe06c2146113e46f8ca140352291fb4137f"
+        },
+        "commands": {
+          "path": "followup/native-commands.json",
+          "sha256": "6cf923dcc6760ab8c86ac31d8df3f8ae177800d88541f967ac8e6faea0e6cd31"
+        },
+        "export_replay": {
+          "files": 11038,
+          "objects": 2865,
+          "c_sources": 3843,
+          "llvm_sources": 1921,
+          "c_and_ir_byte_identical": true,
+          "external_inputs_byte_identical": true
+        },
+        "normalizations": {
+          "coff_timestamp_only": 312,
+          "command_temp_directory_only": 940
+        },
+        "comparison": {
+          "path": "followup-native-comparison.json",
+          "sha256": "abe7d1fbd1d941bfe4ab9691c96d2db35016b2bf192f4649cb261c6688ed7600"
+        },
+        "export_inventory": {
+          "path": "followup-native-exports.json",
+          "sha256": "8e8bea2465888185531cca2bdf0f72d6e4c45c9168a136fbdf4bda5657367f41"
+        },
+        "constant_extension_red": {
+          "result": {
+            "path": "native-constant-gs-red-result.json",
+            "sha256": "56296949d3a02e635b050fd6b4762f0f0b52c23d05b925203095f7daf8e19027"
+          },
+          "report": {
+            "path": "native-constant-gs-red.xml",
+            "sha256": "50b08be8dd5cb3dde86653eee139bbcfed46bd915447c30bcbced4ac1d03f09c"
+          },
+          "log": {
+            "path": "native-constant-gs-red.log",
+            "sha256": "ea0f2cc4c18a873f8d4fa9ca6168c2c3573c6f80874003c7e50fa4c67bdc66cd"
+          }
+        },
+        "constant_extension_32_case_green": {
+          "result": {
+            "path": "native-constant-gs-green-result.json",
+            "sha256": "81868a6e94ffc0178bf833deb1c9013d9fab4ee95ddb876a5e8ec4f1d26376d2"
+          },
+          "report": {
+            "path": "native-constant-gs-green.xml",
+            "sha256": "61f8abf1aeb0345102c78515e024a0908f8a1848609098da1b23de4bc9eb52fd"
+          },
+          "log": {
+            "path": "native-constant-gs-green.log",
+            "sha256": "9d1faa110a61ddc3826de3522f0666501877f80897d34a743b898e66ae17f0e9"
+          }
+        }
+      }
+    },
+    "defect": "constAddress peeled integer views from typed constants, turning sext(i16 0xf234) into positive 0xf234 rather than 0xfffffffffffff234. The generated GS load failed on both SDKs.",
+    "fix": "Evaluate scalar constant widths, zero/sign extension, integer casts, bounded byte extraction and wrapped addition/subtraction in the shared address owner.",
+    "stronger_mixed_roles": "The same constant EAX value is used by an i386 segment instruction and an ordinary DS load in the atomic, compact and four-source pipeline fixtures.",
+    "hardware_coverage": "20 ordinary GS loads compiled and executed at O0/O2 per SDK: signed/unsigned 16/32-bit parameters and constants, zero/sign extensions, wrapped sums, low-byte extraction and narrowing casts. PIE executables use a static volatile word and restore GS.",
+    "external_results": "All externally consumed C, IR and native-object exports are byte-identical to the already qualified fixed-code corpus. Only C-compiled COFF TimeDateStamp bytes and command temporary-directory names differ. Prior 1872 source executions and 36720 controlled i386 completions per SDK remain applicable.",
+    "goal_complete": false
+  },
+  "publication_integration": {
+    "commit": "8bcd359a1555d6bfb889966f530cdc3bdfef62fb",
+    "reviewed_remote": "646713b7e5f33ae7e4be682dfa18fc3767d9ba81",
+    "capstone": "45dcfb3f82b7ea759ef741941d880ce4cae1ebf8",
+    "signatures": "2007f9dc263ca4482ef9718b1a305a91c9989a90",
+    "review": {
+      "path": "publication-review.json",
+      "sha256": "b447a1b398b6bc8e1ade56813e7b908a5962e66a1282325d42d5d86c1711d6a4"
+    },
+    "driver": {
+      "path": "qualify-publication.py",
+      "sha256": "3ffd34e3a7125afe01989b0654fbb6148269de9b22923a6cc7934f2858415f6a"
+    },
+    "comparison_driver": {
+      "path": "compare-publication.py",
+      "sha256": "3289fc5783355a0ca91a3444fe63da312af3e07927e04231c3e0144695e19b2d"
+    },
+    "validation": {
+      "pinned": {
+        "tests": 100,
+        "core_tests": 95,
+        "transaction_begin": {
+          "path": "publication/pinned-transaction-begin.xml",
+          "sha256": "0cd92dce20905ca96a44241075f815f49fbd18f785c93cdc5cffe227a2bcbca6",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        "immediate_metadata": {
+          "cases": 65540,
+          "compile": {
+            "path": "publication/pinned-metadata-build.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "execution": {
+            "path": "publication/pinned-metadata-unit.log",
+            "sha256": "9a7a6c65704036d1513a2654459903703ebfb7986a594690fb420eacfc507b93"
+          }
+        },
+        "reports": [
+          {
+            "path": "publication/pinned-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "3d207896f9da296bd2faba114c1587fd53ceb9f5c06ee9a11a61efa4ec4868eb",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "7dfafcc2f32d514464c2cafc5b77b8de1ccb0bee26739ba544b71658a37b511b",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "88dad6d0fa57d2bbd4bb1e4aa579ab82b70801e67230869094e804b0f226e84a",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "83c2fde8a611b31303e341718eae40899d18571e25140299d05dede9813e74e7",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86CompactSegmentTests.xml",
+            "sha256": "a0629f69132cdcb3ca0102dc904f270f9139a2a202ac4396d3ac97751ddf0704",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "ea7b7f43b2473eef02c0d89c8091ddcc7ef72afc33fa4b545e2d665b864cc4da",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "eaed4197f6bad5ca0c3d002099457d42d11c3e0faff691132969f2f3c3ce24c9",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "f6d7521a0dde10675d893e597444bd493fc20013700a3afc55d8eddb8e9b1119",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/pinned-transaction-begin.xml",
+            "sha256": "0cd92dce20905ca96a44241075f815f49fbd18f785c93cdc5cffe227a2bcbca6",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "gs_hardware": {
+          "native_gs_loads": 40,
+          "native_executables": 2
+        },
+        "build": {
+          "path": "publication/pinned-build.log",
+          "sha256": "9193e435f101d96ff27234cec64ccccb6bdcf2f8bf4f69f894b02fcb53984bac"
+        },
+        "commands": {
+          "path": "publication/pinned-commands.json",
+          "sha256": "b0dcd199cd54da18a225330e9090e0fc99ca0c8f1e8330ab3335b4d1505dbec5"
+        },
+        "build_inputs": {
+          "neverd-build-receipt.json": {
+            "path": "publication/pinned-neverd-build-receipt.json",
+            "sha256": "03d4b9eb03b3ce751197c221627adbf8062fa9d3fff553a9a16fac6836c0a59d"
+          },
+          "neverd-dependency-inputs.json": {
+            "path": "publication/pinned-neverd-dependency-inputs.json",
+            "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+          }
+        },
+        "export_replay": {
+          "files": 11038,
+          "objects": 2865,
+          "c_sources": 3843,
+          "llvm_sources": 1921,
+          "c_and_ir_byte_identical": true,
+          "external_inputs_byte_identical": true
+        },
+        "normalizations": {
+          "coff_timestamp_only": 312,
+          "command_temp_directory_only": 940
+        },
+        "comparison": {
+          "path": "publication-pinned-comparison.json",
+          "sha256": "2d85b07c5368734949381fe347e6e19496c4c7c378e4130789e242e5b19b2e26"
+        },
+        "export_inventory": {
+          "path": "publication-pinned-exports.json",
+          "sha256": "e2bd6f99ef22226423d3db882db820e79bffba1729e24e014b8692c1bae18438"
+        }
+      },
+      "native": {
+        "tests": 100,
+        "core_tests": 95,
+        "transaction_begin": {
+          "path": "publication/native-transaction-begin.xml",
+          "sha256": "7d313212f6ff36f14e79c29c4d2b7ba8bbbaa38951598cd01bd15fd8e3ddf4e6",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        "immediate_metadata": {
+          "cases": 65540,
+          "compile": {
+            "path": "publication/native-metadata-build.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "execution": {
+            "path": "publication/native-metadata-unit.log",
+            "sha256": "9a7a6c65704036d1513a2654459903703ebfb7986a594690fb420eacfc507b93"
+          }
+        },
+        "reports": [
+          {
+            "path": "publication/native-NeverDHighCIntegerWidthTests.xml",
+            "sha256": "0080e918bc8606a49dcaf5ab1ef1205c7942adb5ac7a5a1d4b5867f86cf6e4dc",
+            "tests": 24,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86APXAtomicSemanticTests.xml",
+            "sha256": "ccb6db20eff50dc2d1b1803fd354612d28ceeea9e953ebae53236439f8d42746",
+            "tests": 30,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86APXAtomicSourceTests.xml",
+            "sha256": "adba3475f5f9e75207135026858ea29879084f377cf615953c21bb7f41058575",
+            "tests": 7,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86AtomicSegmentTests.xml",
+            "sha256": "c42623734cc927ea9cd8dffd6ab58f95f023a154fa5ca87340dff63919329ede",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86CompactSegmentTests.xml",
+            "sha256": "b59bfd6fe969d230186b82b52a00291b6d189b8e62caebb3b5b5c30fefe0f00b",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "f9d4997899ac5931ccb41c41fd18a939d0923c2c6ad18d87f8bc00f441834b1b",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86FourSourceSegmentTests.xml",
+            "sha256": "564a4e1fd87d621a979dc7ca2cbb47e5723f36971e7d895bf7bb91e6f5247746",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-NeverDX86LegacyEncodingSourceTests.xml",
+            "sha256": "8a39a8d17dcecaee3c44a4f71eb3109682e353b3b1dbb4a39ba50a301d4152e1",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "publication/native-transaction-begin.xml",
+            "sha256": "7d313212f6ff36f14e79c29c4d2b7ba8bbbaa38951598cd01bd15fd8e3ddf4e6",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "gs_hardware": {
+          "native_gs_loads": 40,
+          "native_executables": 2
+        },
+        "build": {
+          "path": "publication/native-build.log",
+          "sha256": "d6f95a0b8dbbc4e67cda7e90d2bafdb22dbb223d12aa46bb38793ae16c3ffdd6"
+        },
+        "commands": {
+          "path": "publication/native-commands.json",
+          "sha256": "2ec270cd4c6a1f95213686da920b17a8828d253d7df749dc0a57a34290263e03"
+        },
+        "build_inputs": {
+          "neverd-build-receipt.json": {
+            "path": "publication/native-neverd-build-receipt.json",
+            "sha256": "26586b5faf7ed290a1c0fe35dd4e98caaefebe179ef476bf6abe23b967fed3e0"
+          },
+          "neverd-dependency-inputs.json": {
+            "path": "publication/native-neverd-dependency-inputs.json",
+            "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+          }
+        },
+        "export_replay": {
+          "files": 11038,
+          "objects": 2865,
+          "c_sources": 3843,
+          "llvm_sources": 1921,
+          "c_and_ir_byte_identical": true,
+          "external_inputs_byte_identical": true
+        },
+        "normalizations": {
+          "coff_timestamp_only": 312,
+          "command_temp_directory_only": 940
+        },
+        "comparison": {
+          "path": "publication-native-comparison.json",
+          "sha256": "a12a83a1fb2ae46586da6557daa2021105c156ff94cac1dfb1bd09e180e75fa5"
+        },
+        "export_inventory": {
+          "path": "publication-native-exports.json",
+          "sha256": "a33c6589d80ddf50ab0035ab353a9dc203f191f78bc7ca0f93260c49ca7b077b"
+        }
+      }
+    },
+    "code_publication": {
+      "path": "publication-code-merge.json",
+      "sha256": "2c554bedb60165cb4e9a3be268521de2382620c0e3d121737e92911f96ef2197"
+    },
+    "metadata_generation": {
+      "path": "publication/metadata-generation.json",
+      "sha256": "58b551e7f2071e6b0f7ebf5f3dd6eebd2073a530bf28e1e8e9d852730473a068"
+    },
+    "published_code_commit": "bd665c5a16144f51ac1d94ccff3fabe6448a4a1b",
+    "scope_note": "Qualification belongs to frozen 8bcd359a15. The published merge bd665c5a16 adds only reviewed upstream observed-window non-growth changes in SymMBA and its test/documentation; native x86 and C address code is identical.",
+    "cross_architecture": {
+      "sdk": "pinned",
+      "report": {
+        "path": "publication/pinned-cross-architecture.xml",
+        "sha256": "0446b574d92fb7a7db4b456477185b9b4e1c50f07782401c82d29b3459f112c9",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "skipped": 0
+      },
+      "scope": "AArch64 raw-SP provenance and typed pointer/source roles, including shared ABI return widths across AArch64, ARM, x64 and i386. No physical AArch64 execution is claimed."
+    },
+    "external_results": "All external C, IR and native-object inputs remain byte-identical to the fixed-code qualification corpus; only C-compiled COFF timestamps and command temporary paths were normalized. Prior source execution and controlled i386 receipts remain applicable.",
+    "llvm_release_and_pins_changed": false,
+    "goal_complete": false
+  }
+}

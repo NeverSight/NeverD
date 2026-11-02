@@ -115,6 +115,8 @@ NEVERD_CONFIGURATION_X64(HaltX64, 0xf4)
 #ifdef NEVERD_CONFIGURATION_ARM
 // ldr w0, [x1]; nop
 NEVERD_CONFIGURATION_ARM(LoadDeviceARM, 0xb9400020, 0xd503201f)
+// ldxr x0, [x1]: a software atomic must refuse device memory before access.
+NEVERD_CONFIGURATION_ARM(AtomicLoadDeviceARM, 0xc85f7c20)
 NEVERD_CONFIGURATION_ARM(LoopARM, 0x14000000)
 NEVERD_CONFIGURATION_ARM(TrapARM, 0xd4000001)
 #endif

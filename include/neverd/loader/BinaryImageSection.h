@@ -37,6 +37,9 @@ struct Section {
   uint32_t Type = 0;
   uint32_t Alignment = 1;
   std::vector<uint8_t> Data;
+  /// Loader-owned header storage appended after the file's section table.
+  /// It has no original section number, including in COFF debug records.
+  bool IsImageHeader = false;
 
   bool isExecutable() const { return hasFlag(Flags, SegmentFlags::Executable); }
   bool isWritable() const { return hasFlag(Flags, SegmentFlags::Writable); }

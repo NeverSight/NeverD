@@ -800,9 +800,10 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
               (uint64_t(uint32_t(Current.BlockId)) << 32) |
               uint64_t(uint32_t(OpIndex));
           const unsigned Invocation = Current.CallInvocations[OccurrenceKey]++;
-          CallEffect = Opts.CallEffects(
-              Ctx, Current.State, Op,
-              {Op.Addr, Op.Seq, Current.BlockId, OpIndex, Invocation});
+          CallEffect =
+              Opts.CallEffects(Ctx, Current.State, Op,
+                               {Op.Addr, Op.Seq, Current.BlockId, OpIndex,
+                                Invocation, Current.Constraints});
         }
         Result = Exec.step(Op, CallEffect ? &*CallEffect : nullptr);
         for (size_t ConstraintIndex = FirstEffectConstraint;
@@ -838,6 +839,8 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
             Current.CallResults.push_back(
                 {Op.Addr, Current.BlockId, OpIndex, Value});
         }
+        if (Current.Infeasible)
+          break;
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           const LowInstructionBoundary *Boundary =
               instructionBoundaryForOp(*Block, OpIndex);

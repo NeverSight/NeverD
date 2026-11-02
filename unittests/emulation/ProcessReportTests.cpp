@@ -15,7 +15,9 @@
 #include "DarwinTimestampMutationTestData.h"
 #include "LinuxFileTestMetadata.h"
 #include "gtest/gtest.h"
+#include "os/linux/kernel/LinuxFiles.h"
 
+#include "neverd/dalvik/Limits.h"
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessReportFields.h"
 
@@ -24,7 +26,131 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
+#include <string>
+#include <string_view>
+
 namespace neverd::emulation {
+TEST(ProcessReport,
+     CPUStateObservationIsStrictLosslessAndKeepsFailureSeparate) {
+  auto Default = llvm::cantFail(processOptionsFromJSON(R"({"android":{}})"));
+  EXPECT_FALSE(Default.Android->ObserveCPUState);
+  for (auto Value : {"true", "false"}) {
+    auto Parsed = llvm::cantFail(processOptionsFromJSON(
+        std::string(R"({"android":{"observe_cpu_state":)") + Value + "}}"));
+    EXPECT_EQ(Parsed.Android->ObserveCPUState, std::string(Value) == "true");
+  }
+  for (auto Value : {"1", "null", "[]", "{}", "\"true\""}) {
+    auto Bad = processOptionsFromJSON(
+        std::string(R"({"android":{"observe_cpu_state":)") + Value + "}}");
+    ASSERT_FALSE(bool(Bad));
+    llvm::consumeError(Bad.takeError());
+  }
+  ProcessResult R{ProcessProfile::AndroidNativeAArch64,
+                  GuestArchitecture::AArch64,
+                  ExecutionBackendKind::Unicorn,
+                  {}};
+  R.Stop = ProcessStopReason::CPUFailure;
+  R.Diagnostic = "original CPU fault";
+  auto JSON = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+  EXPECT_FALSE(JSON.getAsObject()->getObject("android")->get("cpu_state"));
+  auto &State = R.CPUState.emplace();
+  State.ThreadID = 1007;
+  State.Diagnostic = "register transport unavailable";
+  JSON = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+  EXPECT_EQ(JSON.getAsObject()->getString("stop_reason"), "cpu_failure");
+  EXPECT_EQ(JSON.getAsObject()->getString("diagnostic"), "original CPU fault");
+  const auto *S =
+      JSON.getAsObject()->getObject("android")->getObject("cpu_state");
+  EXPECT_EQ(S->getInteger("thread_id"), 1007);
+  EXPECT_EQ(*S->get("registers"), llvm::json::Value(nullptr));
+  EXPECT_EQ(S->getString("diagnostic"), "register transport unavailable");
+  State.Diagnostic.clear();
+  State.Registers = std::vector<RegisterSnapshot>{
+      {CPURegister::AArch64X0, {UINT64_MAX, 0}},
+      {CPURegister::AArch64V31,
+       {0x0123456789abcdefull, 0xfedcba9876543210ull}}};
+  JSON = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+  S = JSON.getAsObject()->getObject("android")->getObject("cpu_state");
+  const auto *Registers = S->getObject("registers");
+  ASSERT_NE(Registers, nullptr);
+  EXPECT_EQ((*Registers->getArray("X0"))[0].getAsString(), "ffffffffffffffff");
+  EXPECT_EQ((*Registers->getArray("V31"))[0].getAsString(), "123456789abcdef");
+  EXPECT_EQ((*Registers->getArray("V31"))[1].getAsString(), "fedcba9876543210");
+}
+TEST(ProcessReport, MemoryAtStopObservationRequiresAnExplicitBoolean) {
+  auto Default = llvm::cantFail(processOptionsFromJSON(R"({"android":{}})"));
+  EXPECT_FALSE(Default.Android->ObserveMemoryAtStop);
+  for (auto Value : {"true", "false"}) {
+    auto Parsed = llvm::cantFail(processOptionsFromJSON(
+        std::string(R"({"android":{"observe_memory_at_stop":)") + Value +
+        "}}"));
+    EXPECT_EQ(Parsed.Android->ObserveMemoryAtStop,
+              std::string(Value) == "true");
+  }
+  for (auto Value : {"1", "null", "[]", "{}", "\"true\""}) {
+    auto Bad = processOptionsFromJSON(
+        std::string(R"({"android":{"observe_memory_at_stop":)") + Value + "}}");
+    ASSERT_FALSE(bool(Bad));
+    llvm::consumeError(Bad.takeError());
+  }
+}
+TEST(ProcessReport, ThreadCPUStatesDistinguishOmittedEmptyAndFailedCaptures) {
+  auto Default = llvm::cantFail(processOptionsFromJSON(R"({"android":{}})"));
+  EXPECT_FALSE(Default.Android->ObserveThreadCPUStates);
+  for (auto Value : {"true", "false"}) {
+    auto Parsed = llvm::cantFail(processOptionsFromJSON(
+        std::string(R"({"android":{"observe_thread_cpu_states":)") + Value +
+        "}}"));
+    EXPECT_EQ(Parsed.Android->ObserveThreadCPUStates,
+              std::string(Value) == "true");
+  }
+  for (auto Value : {"1", "null", "[]", "{}", "\"true\""}) {
+    auto Bad = processOptionsFromJSON(
+        std::string(R"({"android":{"observe_thread_cpu_states":)") + Value +
+        "}}");
+    ASSERT_FALSE(bool(Bad));
+    llvm::consumeError(Bad.takeError());
+  }
+  ProcessResult R{ProcessProfile::AndroidNativeAArch64,
+                  GuestArchitecture::AArch64,
+                  ExecutionBackendKind::Unicorn,
+                  {}};
+  R.Stop = ProcessStopReason::CPUFailure;
+  R.Diagnostic = "original CPU fault";
+  auto JSON = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+  EXPECT_FALSE(
+      JSON.getAsObject()->getObject("android")->get("thread_cpu_states"));
+  auto &States = R.ThreadCPUStates.emplace();
+  JSON = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+  EXPECT_TRUE(JSON.getAsObject()
+                  ->getObject("android")
+                  ->getArray("thread_cpu_states")
+                  ->empty());
+  States.push_back({{1000, std::nullopt, "saved register read failed"}, false});
+  States.push_back(
+      {{1001,
+        std::vector<RegisterSnapshot>{
+            {CPURegister::AArch64V31, {UINT64_MAX, UINT64_MAX - 1}}},
+        ""},
+       true});
+  JSON = llvm::cantFail(llvm::json::parse(processResultJSON(R)));
+  EXPECT_EQ(JSON.getAsObject()->getString("stop_reason"), "cpu_failure");
+  EXPECT_EQ(JSON.getAsObject()->getString("diagnostic"), "original CPU fault");
+  const auto *Threads =
+      JSON.getAsObject()->getObject("android")->getArray("thread_cpu_states");
+  ASSERT_EQ(Threads->size(), 2u);
+  const auto *Failed = (*Threads)[0].getAsObject();
+  EXPECT_EQ(Failed->getInteger("thread_id"), 1000);
+  EXPECT_EQ(Failed->getBoolean("current_cpu"), false);
+  EXPECT_EQ(*Failed->get("registers"), llvm::json::Value(nullptr));
+  EXPECT_EQ(Failed->getString("diagnostic"), "saved register read failed");
+  const auto *Current = (*Threads)[1].getAsObject();
+  EXPECT_EQ(Current->getInteger("thread_id"), 1001);
+  EXPECT_EQ(Current->getBoolean("current_cpu"), true);
+  const auto *Value = Current->getObject("registers")->getArray("V31");
+  EXPECT_EQ((*Value)[0].getAsString(), "ffffffffffffffff");
+  EXPECT_EQ((*Value)[1].getAsString(), "fffffffffffffffe");
+}
 TEST(ProcessReport,
      SignalTerminationIsDistinctFromExitAndCompletedEntryReturn) {
   ProcessResult R{ProcessProfile::AndroidNativeAArch64,
@@ -67,6 +193,16 @@ TEST(ProcessReport, IoctlTraceHasStrictBoundsAndExplicitCaptureStatus) {
   const auto &T = *O->LinuxFiles->IoctlTrace;
   EXPECT_EQ(T.EventLimit, 8u);
   EXPECT_EQ(T.ByteLimit, 256u);
+  EXPECT_TRUE(T.IncludeUnlisted);
+  for (const char *Value : {"true", "false"}) {
+    auto Selected = processOptionsFromJSON(
+        std::string(R"({"linux_files":{"files":[],"ioctl_trace":{
+          "event_limit":1,"byte_limit":1,"requests":[],"include_unlisted":)") +
+        Value + "}}}");
+    ASSERT_TRUE(bool(Selected)) << llvm::toString(Selected.takeError());
+    EXPECT_EQ(Selected->LinuxFiles->IoctlTrace->IncludeUnlisted,
+              llvm::StringRef(Value) == "true");
+  }
   ASSERT_EQ(T.Requests.at(UINT32_MAX).size(), 1u);
   EXPECT_EQ(T.Requests.at(UINT32_MAX)[0].PointerOffset, 0u);
   for (
@@ -76,6 +212,9 @@ TEST(ProcessReport, IoctlTraceHasStrictBoundsAndExplicitCaptureStatus) {
        R"({"event_limit":4097,"byte_limit":1,"requests":[]})",
        R"({"event_limit":1,"byte_limit":1048577,"requests":[]})",
        R"({"event_limit":1,"byte_limit":1,"requests":[],"extra":0})",
+       R"({"event_limit":1,"byte_limit":1,"requests":[],"include_unlisted":null})",
+       R"({"event_limit":1,"byte_limit":1,"requests":[],"include_unlisted":0})",
+       R"({"event_limit":1,"byte_limit":1,"requests":[],"include_unlisted":"false"})",
        R"({"event_limit":1,"byte_limit":1,"requests":[{"request":4294967296,"memory":[]}]})",
        R"({"event_limit":1,"byte_limit":1,"requests":[{"request":0,"memory":[]},{"request":0,"memory":[]}]})",
        R"({"event_limit":1,"byte_limit":1,"requests":[{"request":0,"memory":[{"offset":0,"size":0}]}]})",
@@ -1603,6 +1742,368 @@ TEST(ProcessReport, DirectoryCreationRequiresCompleteBoundedMetadata) {
   Refused(V);
 }
 
+TEST(ProcessReport, FileRenamesRequireSeparateBoundedDirectoryGrants) {
+  auto M = llvm::cantFail(llvm::json::parse(FileTestMetadataJSON));
+  auto &O = *M.getAsObject();
+  O["mode"] = 0040755;
+  O["inode"] = 91;
+  O["size"] = 40;
+  O["blocks"] = 0;
+  O["block_size"] = 4096;
+  O["link_count"] = 2;
+  llvm::json::Value Directory =
+      llvm::json::Object{{"umask", 18},
+                         {"limit", 2},
+                         {"parents", llvm::json::Array{llvm::json::Object{
+                                         {"path", "/work"}, {"metadata", M}}}}};
+  auto Parse = [&](const llvm::json::Value &V, bool Provider = true) {
+    return processOptionsFromJSON(
+        R"({"linux_files":{"files":[],"directories":["/work"],"file_renames":)" +
+        llvm::formatv("{0}", V).str() +
+        (Provider ? ",\"directory_creation\":" +
+                        llvm::formatv("{0}", Directory).str()
+                  : "") +
+        "}}");
+  };
+  llvm::json::Value Good =
+      llvm::json::Object{{"parents", llvm::json::Array{"/work"}}, {"limit", 2}};
+  auto Parsed = Parse(Good);
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_TRUE(Parsed->LinuxFiles->FileRenames);
+  EXPECT_EQ(Parsed->LinuxFiles->FileRenames->Parents,
+            (std::set<std::string>{"/work"}));
+  EXPECT_EQ(Parsed->LinuxFiles->FileRenames->Limit, 2u);
+  auto reject = [&](llvm::json::Value V, bool Provider = true) {
+    auto R = Parse(V, Provider);
+    EXPECT_FALSE(bool(R));
+    llvm::consumeError(R.takeError());
+  };
+  reject(Good, false);
+  for (const char *Key : {"parents", "limit"}) {
+    auto V = Good;
+    V.getAsObject()->erase(Key);
+    reject(V);
+    V = Good;
+    (*V.getAsObject())[Key] = nullptr;
+    reject(V);
+  }
+  for (int Limit : {-1, 0, 65}) {
+    auto V = Good;
+    (*V.getAsObject())["limit"] = Limit;
+    reject(V);
+  }
+  for (const char *Text : {"[]", "[12]", "[\"/work\",\"/work\"]",
+                           "[\"/absent\"]", "[\"/work/\"]", "[\"relative\"]"}) {
+    auto V = Good;
+    (*V.getAsObject())["parents"] = llvm::cantFail(llvm::json::parse(Text));
+    reject(V);
+  }
+  auto V = Good;
+  (*V.getAsObject())["extra"] = 0;
+  reject(V);
+  V = Good;
+  (*V.getAsObject())["limit"] = 1.5;
+  reject(V);
+  auto Typed = *Parsed->LinuxFiles;
+  Typed.FileRenames->Limit = 0;
+  auto E = linux_model::validateFileOptions(Typed);
+  EXPECT_TRUE(bool(E));
+  llvm::consumeError(std::move(E));
+}
+
+TEST(ProcessReport, FileUnlinksRequireSeparateBoundedDirectoryGrants) {
+  auto M = llvm::cantFail(llvm::json::parse(FileTestMetadataJSON));
+  auto &O = *M.getAsObject();
+  O["mode"] = 0040755;
+  O["inode"] = 91;
+  O["size"] = 40;
+  O["blocks"] = 0;
+  O["block_size"] = 4096;
+  O["link_count"] = 2;
+  llvm::json::Value Directory =
+      llvm::json::Object{{"umask", 18},
+                         {"limit", 2},
+                         {"parents", llvm::json::Array{llvm::json::Object{
+                                         {"path", "/work"}, {"metadata", M}}}}};
+  auto Parse = [&](const llvm::json::Value &V, bool Provider = true) {
+    return processOptionsFromJSON(
+        R"({"linux_files":{"files":[],"directories":["/work"],"file_unlinks":)" +
+        llvm::formatv("{0}", V).str() +
+        (Provider ? ",\"directory_creation\":" +
+                        llvm::formatv("{0}", Directory).str()
+                  : "") +
+        "}}");
+  };
+  llvm::json::Value Good =
+      llvm::json::Object{{"parents", llvm::json::Array{"/work"}}, {"limit", 2}};
+  auto Parsed = Parse(Good);
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_TRUE(Parsed->LinuxFiles->FileUnlinks);
+  EXPECT_EQ(Parsed->LinuxFiles->FileUnlinks->Parents,
+            (std::set<std::string>{"/work"}));
+  EXPECT_EQ(Parsed->LinuxFiles->FileUnlinks->Limit, 2u);
+  auto reject = [&](llvm::json::Value V, bool Provider = true) {
+    auto R = Parse(V, Provider);
+    EXPECT_FALSE(bool(R));
+    llvm::consumeError(R.takeError());
+  };
+  reject(Good, false);
+  for (const char *Key : {"parents", "limit"}) {
+    auto V = Good;
+    V.getAsObject()->erase(Key);
+    reject(V);
+    V = Good;
+    (*V.getAsObject())[Key] = nullptr;
+    reject(V);
+  }
+  for (int Limit : {-1, 0, 65}) {
+    auto V = Good;
+    (*V.getAsObject())["limit"] = Limit;
+    reject(V);
+  }
+  for (const char *Text : {"[]", "[12]", "[\"/work\",\"/work\"]",
+                           "[\"/absent\"]", "[\"/work/\"]", "[\"relative\"]"}) {
+    auto V = Good;
+    (*V.getAsObject())["parents"] = llvm::cantFail(llvm::json::parse(Text));
+    reject(V);
+  }
+  auto V = Good;
+  (*V.getAsObject())["extra"] = 0;
+  reject(V);
+  V = Good;
+  (*V.getAsObject())["limit"] = 1.5;
+  reject(V);
+  auto Max = Good;
+  (*Max.getAsObject())["limit"] = 64u;
+  auto AtLimit = Parse(Max);
+  ASSERT_TRUE(bool(AtLimit)) << llvm::toString(AtLimit.takeError());
+  auto ImplicitOnly = *Parsed->LinuxFiles;
+  ImplicitOnly.Directories.clear();
+  ImplicitOnly.Files["/work/child"] = {};
+  ImplicitOnly.DirectoryCreation->Parents.at("/work").Size = 60;
+  auto MissingPersistent = linux_model::validateFileOptions(ImplicitOnly);
+  ASSERT_TRUE(bool(MissingPersistent));
+  EXPECT_NE(llvm::toString(std::move(MissingPersistent))
+                .find("declared non-proc parents"),
+            std::string::npos);
+  auto Wide = *Parsed->LinuxFiles;
+  Wide.Directories.clear();
+  Wide.DirectoryCreation->Parents.clear();
+  Wide.FileUnlinks->Parents.clear();
+  for (unsigned I = 0; I != 64u; ++I) {
+    auto Name = "/parent" + std::to_string(I);
+    auto Metadata = Parsed->LinuxFiles->DirectoryCreation->Parents.at("/work");
+    Metadata.Inode += I;
+    Wide.Directories.push_back(Name);
+    Wide.DirectoryCreation->Parents[Name] = Metadata;
+    Wide.FileUnlinks->Parents.insert(Name);
+  }
+  auto AcceptedWide = linux_model::validateFileOptions(Wide);
+  ASSERT_FALSE(bool(AcceptedWide)) << llvm::toString(std::move(AcceptedWide));
+  Wide.FileUnlinks->Parents.insert("/one-more");
+  auto TooWide = linux_model::validateFileOptions(Wide);
+  EXPECT_TRUE(bool(TooWide));
+  llvm::consumeError(std::move(TooWide));
+  auto Typed = *Parsed->LinuxFiles;
+  Typed.FileUnlinks->Limit = 0;
+  auto E = linux_model::validateFileOptions(Typed);
+  EXPECT_TRUE(bool(E));
+  llvm::consumeError(std::move(E));
+}
+
+TEST(ProcessReport, FileCreationReservationsAreExplicitBoundedAndSeparate) {
+  auto M = llvm::cantFail(llvm::json::parse(FileTestMetadataJSON));
+  auto &O = *M.getAsObject();
+  O["mode"] = 0040755;
+  O["inode"] = 91;
+  O["size"] = 40;
+  O["blocks"] = 0;
+  O["block_size"] = 4096;
+  O["link_count"] = 2;
+  llvm::json::Value Directory =
+      llvm::json::Object{{"umask", 18},
+                         {"limit", 1},
+                         {"parents", llvm::json::Array{llvm::json::Object{
+                                         {"path", "/work"}, {"metadata", M}}}}};
+  auto Parse = [&](const llvm::json::Value &V, bool Provider = true) {
+    return processOptionsFromJSON(
+        R"({"linux_files":{"files":[],"directories":["/work"],"file_creations":)" +
+        llvm::formatv("{0}", V).str() +
+        (Provider ? ",\"directory_creation\":" +
+                        llvm::formatv("{0}", Directory).str()
+                  : "") +
+        "}}");
+  };
+  llvm::json::Value Row =
+      llvm::json::Object{{"path", "/work/data"}, {"write_limit", 8192}};
+  llvm::json::Value Good = llvm::json::Array{Row};
+  auto Parsed = Parse(Good);
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_TRUE(Parsed->LinuxFiles->FileCreations);
+  ASSERT_EQ(Parsed->LinuxFiles->FileCreations->Files.size(), 1u);
+  const auto &Reservation =
+      Parsed->LinuxFiles->FileCreations->Files.at("/work/data");
+  EXPECT_EQ(Reservation.WriteLimit, 8192u);
+  EXPECT_EQ(Reservation.Count, 1u);
+  EXPECT_TRUE(Parsed->LinuxFiles->Files.empty());
+  EXPECT_TRUE(Parsed->LinuxFiles->WriteLimits.empty());
+  auto Reject = [&](const llvm::json::Value &V, bool Provider = true) {
+    auto R = Parse(V, Provider);
+    EXPECT_FALSE(bool(R));
+    llvm::consumeError(R.takeError());
+  };
+  Reject(Good, false);
+  for (const char *Text : {"null", "{}", "[]", "[null]", "[12]"})
+    Reject(llvm::cantFail(llvm::json::parse(Text)));
+  Reject(llvm::json::Array{Row, Row});
+  for (const char *Key : {"path", "write_limit"}) {
+    auto Bad = Row;
+    Bad.getAsObject()->erase(Key);
+    Reject(llvm::json::Array{Bad});
+    Bad = Row;
+    (*Bad.getAsObject())[Key] = nullptr;
+    Reject(llvm::json::Array{Bad});
+  }
+  for (const char *Text : {"-1", "1.5", "true", "\"18446744073709551616\""}) {
+    auto Bad = Row;
+    (*Bad.getAsObject())["write_limit"] =
+        llvm::cantFail(llvm::json::parse(Text));
+    Reject(llvm::json::Array{Bad});
+  }
+  for (const char *Path : {"/", "/work", "relative", "/work/data/",
+                           "/work/../data", "/missing/data"}) {
+    auto Bad = Row;
+    (*Bad.getAsObject())["path"] = Path;
+    Reject(llvm::json::Array{Bad});
+  }
+  auto Extra = Row;
+  (*Extra.getAsObject())["extra"] = 0;
+  Reject(llvm::json::Array{Extra});
+  auto Zero = Row;
+  (*Zero.getAsObject())["write_limit"] = 0;
+  auto EmptyFileGrant = Parse(llvm::json::Array{Zero});
+  ASSERT_TRUE(bool(EmptyFileGrant))
+      << llvm::toString(EmptyFileGrant.takeError());
+  for (const char *Text : {"0", "-1", "1.5", "true", "null", "65", "4294967295",
+                           "\"4294967296\""}) {
+    auto Bad = Row;
+    (*Bad.getAsObject())["count"] = llvm::cantFail(llvm::json::parse(Text));
+    Reject(llvm::json::Array{Bad});
+  }
+  auto Twice = Row;
+  (*Twice.getAsObject())["count"] = "2";
+  auto ParsedTwice = Parse(llvm::json::Array{Twice});
+  ASSERT_TRUE(bool(ParsedTwice)) << llvm::toString(ParsedTwice.takeError());
+  EXPECT_EQ(
+      ParsedTwice->LinuxFiles->FileCreations->Files.at("/work/data").Count, 2u);
+  auto ExtraCount = Twice;
+  (*ExtraCount.getAsObject())["extra"] = 0;
+  Reject(llvm::json::Array{ExtraCount});
+  Reject(llvm::json::Array{Row, Twice});
+  auto AllSlots = Zero;
+  (*AllSlots.getAsObject())["count"] = 64u;
+  auto ParsedSlots = Parse(llvm::json::Array{AllSlots});
+  ASSERT_TRUE(bool(ParsedSlots)) << llvm::toString(ParsedSlots.takeError());
+  auto RejectTyped = [&](const LinuxFileOptions &F) {
+    auto E = linux_model::validateFileOptions(F);
+    EXPECT_TRUE(bool(E));
+    llvm::consumeError(std::move(E));
+  };
+  for (uint32_t Count : {0u, 64u + 1u, UINT32_MAX}) {
+    auto Bad = *Parsed->LinuxFiles;
+    Bad.FileCreations->Files.at("/work/data").Count = Count;
+    RejectTyped(Bad);
+  }
+  auto OneTooMany = *ParsedSlots->LinuxFiles;
+  OneTooMany.FileCreations->Files["/work/other"] = {0};
+  RejectTyped(OneTooMany);
+  auto Other = Zero;
+  (*Other.getAsObject())["path"] = "/work/other";
+  Reject(llvm::json::Array{AllSlots, Other});
+  auto HalfSlots = AllSlots;
+  (*HalfSlots.getAsObject())["count"] = 64u / 2;
+  (*Other.getAsObject())["count"] = 64u / 2;
+  auto SplitSlots = Parse(llvm::json::Array{HalfSlots, Other});
+  ASSERT_TRUE(bool(SplitSlots)) << llvm::toString(SplitSlots.takeError());
+  auto ObjectEdge = *ParsedSlots->LinuxFiles;
+  const auto DirectorySlots = linux_model::FileCountLimit - 64u - 1;
+  ObjectEdge.DirectoryCreation->Limit = DirectorySlots;
+  auto AtObjectBudget = linux_model::validateFileOptions(ObjectEdge);
+  ASSERT_FALSE(bool(AtObjectBudget))
+      << llvm::toString(std::move(AtObjectBudget));
+  ++ObjectEdge.DirectoryCreation->Limit;
+  RejectTyped(ObjectEdge);
+  (*Directory.getAsObject())["limit"] = DirectorySlots;
+  auto WireObjectEdge = Parse(llvm::json::Array{AllSlots});
+  ASSERT_TRUE(bool(WireObjectEdge))
+      << llvm::toString(WireObjectEdge.takeError());
+  (*Directory.getAsObject())["limit"] = DirectorySlots + 1;
+  Reject(llvm::json::Array{AllSlots});
+  (*Directory.getAsObject())["limit"] = 1;
+  const uint64_t PerGeneration =
+      (linux_model::FileByteLimit - (std::string("/work").size() + 1) -
+       linux_model::FilePathLimit) /
+          2 -
+      (std::string("/work/data").size() + 1);
+  auto ByteEdge = *Parsed->LinuxFiles;
+  ByteEdge.FileCreations->Files.at("/work/data") = {PerGeneration, 2};
+  auto AtRepeatedByteBudget = linux_model::validateFileOptions(ByteEdge);
+  ASSERT_FALSE(bool(AtRepeatedByteBudget))
+      << llvm::toString(std::move(AtRepeatedByteBudget));
+  ++ByteEdge.FileCreations->Files.at("/work/data").WriteLimit;
+  RejectTyped(ByteEdge);
+  ByteEdge.FileCreations->Files.at("/work/data").WriteLimit = UINT64_MAX;
+  RejectTyped(ByteEdge);
+  auto ByteRow = Twice;
+  (*ByteRow.getAsObject())["write_limit"] = PerGeneration;
+  auto WireByteEdge = Parse(llvm::json::Array{ByteRow});
+  ASSERT_TRUE(bool(WireByteEdge)) << llvm::toString(WireByteEdge.takeError());
+  (*ByteRow.getAsObject())["write_limit"] = PerGeneration + 1;
+  Reject(llvm::json::Array{ByteRow});
+  auto Wide = *Parsed->LinuxFiles;
+  Wide.FileCreations->Files.clear();
+  llvm::json::Array WireWide;
+  for (unsigned I = 0; I != 64u; ++I) {
+    const auto Path = "/work/f" + std::to_string(I);
+    Wide.FileCreations->Files[Path] = {0};
+    WireWide.push_back(llvm::json::Object{{"path", Path}, {"write_limit", 0}});
+  }
+  auto TypedWide = linux_model::validateFileOptions(Wide);
+  ASSERT_FALSE(bool(TypedWide)) << llvm::toString(std::move(TypedWide));
+  auto ParsedWide = Parse(llvm::json::Array(WireWide));
+  ASSERT_TRUE(bool(ParsedWide)) << llvm::toString(ParsedWide.takeError());
+  Wide.FileCreations->Files["/work/extra"] = {0};
+  auto TooWide = linux_model::validateFileOptions(Wide);
+  EXPECT_TRUE(bool(TooWide));
+  llvm::consumeError(std::move(TooWide));
+  WireWide.push_back(
+      llvm::json::Object{{"path", "/work/extra"}, {"write_limit", 0}});
+  Reject(llvm::json::Array(WireWide));
+  auto Exact = *Parsed->LinuxFiles;
+  const uint64_t Capacity =
+      linux_model::FileByteLimit - (std::string("/work").size() + 1) -
+      (std::string("/work/data").size() + 1) - linux_model::FilePathLimit;
+  Exact.FileCreations->Files.at("/work/data").WriteLimit = Capacity;
+  auto AtBudget = linux_model::validateFileOptions(Exact);
+  ASSERT_FALSE(bool(AtBudget)) << llvm::toString(std::move(AtBudget));
+  ++Exact.FileCreations->Files.at("/work/data").WriteLimit;
+  auto BeyondBudget = linux_model::validateFileOptions(Exact);
+  EXPECT_TRUE(bool(BeyondBudget));
+  llvm::consumeError(std::move(BeyondBudget));
+  auto Existing = *Parsed->LinuxFiles;
+  Existing.Files["/work/data"] = {'o', 'l', 'd'};
+  Existing.DirectoryCreation->Parents.at("/work").Size = 60;
+  auto FutureReplacement = linux_model::validateFileOptions(Existing);
+  ASSERT_FALSE(bool(FutureReplacement))
+      << llvm::toString(std::move(FutureReplacement));
+  Existing.Files.clear();
+  Existing.Files["/work/data/child"] = {};
+  Existing.DirectoryCreation->Parents.at("/work").LinkCount = 3;
+  auto ImplicitDirectory = linux_model::validateFileOptions(Existing);
+  EXPECT_TRUE(bool(ImplicitDirectory));
+  llvm::consumeError(std::move(ImplicitDirectory));
+}
+
 TEST(ProcessReport, GuestDirectoriesAreExplicitAndTyped) {
   auto Parsed = processOptionsFromJSON(R"({"linux_files":{"files":[],
     "directories":["/work","/app/files"],"working_directory":"/work"},
@@ -1672,6 +2173,7 @@ TEST(ProcessReport, AndroidLoaderFailuresRequireExactTypedOutcomes) {
     const auto &Rows = Good->Android->Application->class_lookup_failures;
     ASSERT_EQ(Rows.size(), 1u);
     EXPECT_EQ(Rows[0].binary_name, "test.Absent");
+    EXPECT_FALSE(Rows[0].exact_query);
     EXPECT_FALSE(Rows[0].message);
   }
   auto Text = processOptionsFromJSON(Wrap(
@@ -1691,6 +2193,59 @@ TEST(ProcessReport, AndroidLoaderFailuresRequireExactTypedOutcomes) {
     auto Result = processOptionsFromJSON(Wrap(Bad));
     EXPECT_FALSE(bool(Result)) << Bad;
     llvm::consumeError(Result.takeError());
+  }
+}
+
+TEST(ProcessReport, AndroidExactQueryLookupFailuresPreserveTypedNames) {
+  auto Wrap = [](std::string Body) {
+    return std::string(
+               R"({"android":{"jni":true,"application_snapshot":{"phase":"application","class_lookup_failures":)") +
+           Body + "}}}";
+  };
+  for (const char *Loader : {"boot", "system", "application"}) {
+    auto Good = processOptionsFromJSON(
+        Wrap(std::string(R"([{"loader":")") + Loader +
+             R"(","exact_query":" test. Absent ","message":null}])"));
+    ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+    const auto &Rows = Good->Android->Application->class_lookup_failures;
+    ASSERT_EQ(Rows.size(), 1u);
+    EXPECT_TRUE(Rows[0].binary_name.empty());
+    EXPECT_EQ(Rows[0].exact_query, " test. Absent ");
+    EXPECT_FALSE(Rows[0].message);
+  }
+  auto Text = processOptionsFromJSON(Wrap(
+      R"([{"loader":"boot","exact_query":"test.Absent ","message":"explicit"}])"));
+  ASSERT_TRUE(bool(Text)) << llvm::toString(Text.takeError());
+  EXPECT_EQ(Text->Android->Application->class_lookup_failures[0].message,
+            "explicit");
+  for (
+      const char *Bad :
+      {R"([{"loader":"boot","exact_query":"test.Absent "}])",
+       R"([{"loader":"boot","exact_query":null,"message":null}])",
+       R"([{"loader":"boot","exact_query":42,"message":null}])",
+       R"([{"loader":"boot","exact_query":"","message":null}])",
+       R"([{"loader":"boot","exact_query":"test/Absent","message":null}])",
+       R"([{"loader":"boot","exact_query":"[I","message":null}])",
+       R"([{"loader":"boot","exact_query":"test.\u0000Absent","message":null}])",
+       R"([{"loader":"boot","exact_query":"test.\tAbsent","message":null}])",
+       R"([{"loader":"boot","exact_query":"test.\u007fAbsent","message":null}])",
+       R"([{"loader":"boot","exact_query":"test.\u00e9","message":null}])",
+       R"([{"loader":"boot","binary_name":"","exact_query":"test.Absent ","message":null}])",
+       R"([{"loader":"boot","binary_name":"test.Absent ","message":null}])",
+       R"([{"loader":"boot","binary_name":"test.Absent","message":null},{"loader":"boot","exact_query":"test.Absent","message":null}])"}) {
+    auto Result = processOptionsFromJSON(Wrap(Bad));
+    EXPECT_FALSE(bool(Result)) << Bad;
+    llvm::consumeError(Result.takeError());
+  }
+  for (auto Size : {::neverd::limits::dalvik::kMaxAndroidClassNameBytes,
+                    ::neverd::limits::dalvik::kMaxAndroidClassNameBytes + 1}) {
+    auto Result = processOptionsFromJSON(
+        Wrap(std::string(R"([{"loader":"boot","exact_query":")") +
+             std::string(Size, 'x') + R"(","message":null}])"));
+    EXPECT_EQ(bool(Result),
+              Size == ::neverd::limits::dalvik::kMaxAndroidClassNameBytes);
+    if (!Result)
+      llvm::consumeError(Result.takeError());
   }
 }
 
@@ -1722,6 +2277,907 @@ TEST(ProcessReport, AndroidApplicationSnapshotIsExplicitAndStrict) {
     ASSERT_TRUE(bool(Input)) << llvm::toString(Input.takeError());
     EXPECT_FALSE(Input->Android->Application->package_name.has_value());
   }
+}
+TEST(ProcessReport, AndroidSecureSettingsCacheRequiresExplicitNullableValue) {
+  auto wrap = [](const std::string &entry, const char *phase = "application") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\",\"secure_settings_cache\":" + entry + "}}}";
+  };
+  for (auto text : {"null", "\"\"", "\"fixture\"", "\"A\\u0000\\u00e9\""}) {
+    auto parsed = processOptionsFromJSON(
+        wrap(std::string("{\"android_id\":") + text + "}"));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &cache = parsed->Android->Application->secure_settings_cache;
+    ASSERT_TRUE(cache);
+    EXPECT_EQ(cache->android_id.has_value(), std::string_view(text) != "null");
+  }
+  for (auto bad : {"null", "[]", "true", "{}", "{\"android_id\":true}",
+                   "{\"android_id\":1}", "{\"android_id\":null,\"extra\":0}",
+                   "{\"other\":\"value\"}"}) {
+    auto parsed = processOptionsFromJSON(wrap(bad));
+    EXPECT_FALSE(bool(parsed)) << bad;
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto phase : {"attached", "unattached"}) {
+    auto parsed = processOptionsFromJSON(wrap("{\"android_id\":null}", phase));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto large = processOptionsFromJSON(
+      wrap("{\"android_id\":\"" + std::string(4097, 'x') + "\"}"));
+  EXPECT_FALSE(bool(large));
+  llvm::consumeError(large.takeError());
+}
+
+TEST(ProcessReport, AndroidGlobalSettingsCacheRequiresExplicitNullableValue) {
+  auto wrap = [](const std::string &entry, const char *phase = "application") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\",\"global_settings_cache\":" + entry + "}}}";
+  };
+  for (auto text :
+       {"null", "\"\"", "\"0\"", "\"1\"", "\"-1\"", "\"\\u0661\""}) {
+    auto parsed = processOptionsFromJSON(
+        wrap(std::string("{\"adb_enabled\":") + text + "}"));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &cache = parsed->Android->Application->global_settings_cache;
+    ASSERT_TRUE(cache);
+    EXPECT_EQ(cache->adb_enabled.has_value(), std::string_view(text) != "null");
+    EXPECT_FALSE(parsed->Android->Application->secure_settings_cache);
+  }
+  for (auto bad :
+       {"null", "[]", "{}", "{\"adb_enabled\":true}", "{\"adb_enabled\":1}",
+        "{\"adb_enabled\":null,\"extra\":0}", "{\"android_id\":\"0\"}"}) {
+    auto parsed = processOptionsFromJSON(wrap(bad));
+    EXPECT_FALSE(bool(parsed)) << bad;
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto phase : {"attached", "unattached"}) {
+    auto parsed = processOptionsFromJSON(wrap("{\"adb_enabled\":null}", phase));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto large = processOptionsFromJSON(
+      wrap("{\"adb_enabled\":\"" + std::string(4097, 'x') + "\"}"));
+  EXPECT_FALSE(bool(large));
+  llvm::consumeError(large.takeError());
+}
+
+TEST(ProcessReport,
+     AndroidApplicationInfoRequiresExplicitNullableSourceDirectory) {
+  auto wrap = [](const std::string &entry, const char *phase = "application") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\",\"application_info\":" + entry + "}}}";
+  };
+  for (auto text :
+       {"null", "\"\"", "\"/test/base.apk\"", "\"a\\u0000\\u00e9\""}) {
+    auto parsed = processOptionsFromJSON(
+        wrap(std::string("{\"source_dir\":") + text + "}"));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &info = parsed->Android->Application->application_info;
+    ASSERT_TRUE(info);
+    EXPECT_EQ(info->source_dir.has_value(), std::string_view(text) != "null");
+  }
+  for (auto bad :
+       {"null", "[]", "{}", "{\"source_dir\":true}", "{\"source_dir\":1}",
+        "{\"source_dir\":null,\"extra\":0}", "{\"sourceDir\":\"x\"}"}) {
+    auto parsed = processOptionsFromJSON(wrap(bad));
+    EXPECT_FALSE(bool(parsed)) << bad;
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto phase : {"attached", "unattached"}) {
+    auto parsed = processOptionsFromJSON(wrap("{\"source_dir\":null}", phase));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto large = processOptionsFromJSON(
+      wrap("{\"source_dir\":\"" + std::string(4097, 'x') + "\"}"));
+  EXPECT_FALSE(bool(large));
+  llvm::consumeError(large.takeError());
+}
+
+TEST(ProcessReport,
+     AndroidApplicationInfoNativeDirectoryIsOptionalAndNullable) {
+  auto wrap = [](const std::string &value) {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"application\",\"application_info\":{"
+                       "\"source_dir\":\"/base.apk\",\"native_library_dir\":") +
+           value + "}}}}";
+  };
+  for (auto value : {"null", "\"\"", "\"/lib/arm64\"", "\"\\u00e9\""}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &info = *parsed->Android->Application->application_info;
+    ASSERT_TRUE(info.native_library_dir);
+    EXPECT_EQ(info.native_library_dir->has_value(),
+              std::string_view(value) != "null");
+    EXPECT_EQ(info.source_dir, "/base.apk");
+  }
+  for (auto value : {"true", "1", "{}", "[]"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto large =
+      processOptionsFromJSON(wrap("\"" + std::string(4097, 'x') + "\""));
+  EXPECT_FALSE(bool(large));
+  llvm::consumeError(large.takeError());
+}
+
+TEST(ProcessReport, AndroidPackageApplicationInfoQueriesHaveStrictTypedKeys) {
+  auto wrap = [](const std::string &queries, const char *available = "true",
+                 const char *phase = "application") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\",\"package_manager_available\":" + available +
+           ",\"application_info_queries\":" + queries + "}}}";
+  };
+  for (auto flags : {"-2147483648", "0", "2147483647"})
+    for (bool quoted : {false, true}) {
+      const std::string wire =
+          quoted ? std::string("\"") + flags + "\"" : flags;
+      auto parsed = processOptionsFromJSON(wrap(
+          std::string("[{\"package_name\":\"test.\\u00e9\",\"flags\":") + wire +
+          ",\"info\":{\"source_dir\":null,\"native_library_dir\":\"/lib\"}}]"));
+      ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+      const auto &queries =
+          parsed->Android->Application->application_info_queries;
+      ASSERT_EQ(queries.size(), 1u);
+      EXPECT_EQ(queries[0].package_name, "test.\xc3\xa9");
+      EXPECT_EQ(queries[0].flags, std::stoll(flags));
+      EXPECT_FALSE(queries[0].info.source_dir);
+      ASSERT_TRUE(queries[0].info.native_library_dir);
+      EXPECT_EQ(*queries[0].info.native_library_dir, "/lib");
+    }
+  for (
+      auto invalid :
+      {"null",
+       "{}",
+       "[null]",
+       "[{}]",
+       R"([{"package_name":"","flags":0,"info":{"source_dir":null}}])",
+       R"([{"package_name":"a\u0000b","flags":0,"info":{"source_dir":null}}])",
+       R"([{"package_name":1,"flags":0,"info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":true,"info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":"+0","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":"0x0","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":" 0","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":"0 ","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":"-","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":"2147483648","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":"-2147483649","info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":0.5,"info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":2147483648,"info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":-2147483649,"info":{"source_dir":null}}])",
+       R"([{"package_name":"test.app","flags":0,"info":null}])",
+       R"([{"package_name":"test.app","flags":0,"info":{}}])",
+       R"([{"package_name":"test.app","flags":0,"info":{"source_dir":false}}])",
+       R"([{"package_name":"test.app","flags":0,"info":{"source_dir":null,"native_library_dir":1}}])",
+       R"([{"package_name":"test.app","flags":0,"info":{"source_dir":null},"extra":0}])"}) {
+    auto parsed = processOptionsFromJSON(wrap(invalid));
+    EXPECT_FALSE(bool(parsed)) << invalid;
+    llvm::consumeError(parsed.takeError());
+  }
+  const std::string one =
+      R"({"package_name":"test.app","flags":0,"info":{"source_dir":null}})";
+  for (auto available : {"false", "null"}) {
+    auto parsed = processOptionsFromJSON(wrap("[" + one + "]", available));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto phase : {"attached", "unattached"}) {
+    auto parsed = processOptionsFromJSON(wrap("[" + one + "]", "true", phase));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto duplicate = processOptionsFromJSON(wrap("[" + one + "," + one + "]"));
+  EXPECT_FALSE(bool(duplicate));
+  llvm::consumeError(duplicate.takeError());
+  std::string queries = "[";
+  for (unsigned i = 0; i < 65; ++i) {
+    if (i)
+      queries += ",";
+    queries += "{\"package_name\":\"test.app\",\"flags\":" + std::to_string(i) +
+               ",\"info\":{\"source_dir\":null}}";
+    if (i == 63) {
+      auto accepted = processOptionsFromJSON(wrap(queries + "]"));
+      ASSERT_TRUE(bool(accepted)) << llvm::toString(accepted.takeError());
+    }
+  }
+  auto too_many = processOptionsFromJSON(wrap(queries + "]"));
+  EXPECT_FALSE(bool(too_many));
+  llvm::consumeError(too_many.takeError());
+  for (auto field : {"source_dir", "native_library_dir"}) {
+    std::string info =
+        field == std::string_view("source_dir") ? "" : "\"source_dir\":null,";
+    auto large = processOptionsFromJSON(
+        wrap("[{\"package_name\":\"test.app\",\"flags\":0,\"info\":{" + info +
+             "\"" + field + "\":\"" + std::string(4097, 'x') + "\"}}]"));
+    EXPECT_FALSE(bool(large));
+    llvm::consumeError(large.takeError());
+  }
+}
+
+TEST(ProcessReport, AndroidPackageInfoApplicationReusesExplicitNullableSchema) {
+  auto wrap = [](const std::string &info) {
+    return std::string(
+               R"({"android":{"jni":true,"application_snapshot":{)"
+               R"("phase":"application","package_manager_available":true,)"
+               R"("package_info_queries":[{"package_name":"test.app",)"
+               R"("flags":0,"info":)") +
+           info + "}]}}}";
+  };
+  auto unknown = processOptionsFromJSON(wrap("{}"));
+  ASSERT_TRUE(bool(unknown)) << llvm::toString(unknown.takeError());
+  EXPECT_FALSE(unknown->Android->Application->package_info_queries[0]
+                   .info.application_info);
+  auto null = processOptionsFromJSON(wrap(R"({"application_info":null})"));
+  ASSERT_TRUE(bool(null)) << llvm::toString(null.takeError());
+  const auto &empty =
+      null->Android->Application->package_info_queries[0].info.application_info;
+  ASSERT_TRUE(empty);
+  EXPECT_FALSE(*empty);
+  auto object = processOptionsFromJSON(
+      wrap(R"({"application_info":{"source_dir":"parcel.apk",)"
+           R"("native_library_dir":null,"non_localized_label":"label",)"
+           R"("target_sdk_version":-2147483648}})"));
+  ASSERT_TRUE(bool(object)) << llvm::toString(object.takeError());
+  const auto &nested = object->Android->Application->package_info_queries[0]
+                           .info.application_info;
+  ASSERT_TRUE(nested);
+  ASSERT_TRUE(*nested);
+  EXPECT_EQ((*nested)->source_dir, "parcel.apk");
+  ASSERT_TRUE((*nested)->native_library_dir);
+  EXPECT_FALSE(*(*nested)->native_library_dir);
+  EXPECT_EQ((*nested)->non_localized_label,
+            std::optional<std::string>{"label"});
+  EXPECT_EQ((*nested)->target_sdk_version, INT32_MIN);
+  auto null_source = processOptionsFromJSON(
+      wrap(R"({"application_info":{"source_dir":null}})"));
+  ASSERT_TRUE(bool(null_source)) << llvm::toString(null_source.takeError());
+  const auto &known = null_source->Android->Application->package_info_queries[0]
+                          .info.application_info;
+  ASSERT_TRUE(known && *known);
+  EXPECT_FALSE((*known)->source_dir);
+  EXPECT_FALSE((*known)->native_library_dir);
+  for (const char *bad :
+       {"1", "false", "[]", "{}", R"("text")", R"({"source_dir":false})",
+        R"({"source_dir":null,"extra":0})",
+        R"({"source_dir":null,"native_library_dir":1})",
+        R"({"source_dir":null,"non_localized_label":true})",
+        R"({"source_dir":null,"target_sdk_version":2147483648})"}) {
+    auto rejected = processOptionsFromJSON(
+        wrap(std::string(R"({"application_info":)") + bad + "}"));
+    EXPECT_FALSE(bool(rejected)) << bad;
+    llvm::consumeError(rejected.takeError());
+  }
+  for (const char *field :
+       {"source_dir", "native_library_dir", "non_localized_label"}) {
+    std::string prefix = R"({"application_info":{)";
+    if (std::string(field) != "source_dir")
+      prefix += R"("source_dir":null,)";
+    auto rejected = processOptionsFromJSON(wrap(
+        prefix + "\"" + field + "\":\"" + std::string(4097, 'x') + "\"}}"));
+    EXPECT_FALSE(bool(rejected)) << field;
+    llvm::consumeError(rejected.takeError());
+  }
+}
+TEST(ProcessReport, AndroidPackageInfoQueriesHaveStrictKeysAndOptionalFields) {
+  auto wrap = [](const std::string &queries, const char *available = "true",
+                 const char *phase = "application") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\",\"package_manager_available\":" + available +
+           ",\"package_info_queries\":" + queries + "}}}";
+  };
+  auto one = [](const std::string &info, const std::string &flags = "0") {
+    return "{\"package_name\":\"test.app\",\"flags\":" + flags +
+           ",\"info\":" + info + "}";
+  };
+  for (auto integer : {"-2147483648", "0", "2147483647"})
+    for (bool quoted : {false, true}) {
+      const std::string wire =
+          quoted ? std::string("\"") + integer + "\"" : integer;
+      auto parsed = processOptionsFromJSON(
+          wrap("[" +
+               one(std::string("{\"package_name\":\"result.\\u00e9\",\"version_"
+                               "name\":null,") +
+                       "\"version_code\":" + wire + "}",
+                   wire) +
+               "]"));
+      ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+      const auto &queries = parsed->Android->Application->package_info_queries;
+      ASSERT_EQ(queries.size(), 1u);
+      EXPECT_EQ(queries[0].flags, std::stoll(integer));
+      EXPECT_EQ(queries[0].info.package_name,
+                std::optional<std::string>{"result.\xc3\xa9"});
+      ASSERT_TRUE(queries[0].info.version_name);
+      EXPECT_FALSE(*queries[0].info.version_name);
+      EXPECT_EQ(queries[0].info.version_code, std::stoll(integer));
+    }
+  auto unknown = processOptionsFromJSON(wrap("[" + one("{}") + "]"));
+  ASSERT_TRUE(bool(unknown)) << llvm::toString(unknown.takeError());
+  const auto &info =
+      unknown->Android->Application->package_info_queries[0].info;
+  EXPECT_FALSE(info.package_name);
+  EXPECT_FALSE(info.version_name);
+  EXPECT_FALSE(info.version_code);
+  for (auto invalid :
+       {"null", "{}", "[null]", "[{}]",
+        R"([{"package_name":"","flags":0,"info":{}}])",
+        R"([{"package_name":"a\u0000b","flags":0,"info":{}}])",
+        R"([{"package_name":1,"flags":0,"info":{}}])",
+        R"([{"package_name":"test.app","info":{}}])",
+        R"([{"package_name":"test.app","flags":0,"info":{},"extra":0}])"}) {
+    auto parsed = processOptionsFromJSON(wrap(invalid));
+    EXPECT_FALSE(bool(parsed)) << invalid;
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto bad : {"null", "true", "\"+0\"", "\" 0\"", "\"0x0\"",
+                   "\"2147483648\"", "0.5", "2147483648", "-2147483649"}) {
+    for (bool flags : {false, true}) {
+      auto parsed = processOptionsFromJSON(
+          wrap("[" +
+               (flags ? one("{}", bad)
+                      : one(std::string("{\"version_code\":") + bad + "}")) +
+               "]"));
+      EXPECT_FALSE(bool(parsed)) << bad << " flags=" << flags;
+      llvm::consumeError(parsed.takeError());
+    }
+  }
+  for (auto bad : {"null", "1", "[]", R"({"extra":null})",
+                   R"({"package_name":false})", R"({"version_name":7})"}) {
+    auto parsed = processOptionsFromJSON(wrap("[" + one(bad) + "]"));
+    EXPECT_FALSE(bool(parsed)) << bad;
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto available : {"false", "null"}) {
+    auto parsed =
+        processOptionsFromJSON(wrap("[" + one("{}") + "]", available));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  for (auto phase : {"attached", "unattached"}) {
+    auto parsed =
+        processOptionsFromJSON(wrap("[" + one("{}") + "]", "true", phase));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto duplicate =
+      processOptionsFromJSON(wrap("[" + one("{}") + "," + one("{}") + "]"));
+  EXPECT_FALSE(bool(duplicate));
+  llvm::consumeError(duplicate.takeError());
+  std::string queries = "[";
+  for (unsigned i = 0; i < 65; ++i) {
+    if (i)
+      queries += ",";
+    queries += one("{}", std::to_string(i));
+    if (i == 63) {
+      auto accepted = processOptionsFromJSON(wrap(queries + "]"));
+      ASSERT_TRUE(bool(accepted)) << llvm::toString(accepted.takeError());
+    }
+  }
+  auto too_many = processOptionsFromJSON(wrap(queries + "]"));
+  EXPECT_FALSE(bool(too_many));
+  llvm::consumeError(too_many.takeError());
+  for (auto field : {"package_name", "version_name"}) {
+    for (unsigned length : {4096u, 4097u}) {
+      auto parsed =
+          processOptionsFromJSON(wrap("[" +
+                                      one("{\"" + std::string(field) + "\":\"" +
+                                          std::string(length, 'x') + "\"}") +
+                                      "]"));
+      EXPECT_EQ(bool(parsed), length == 4096);
+      if (!parsed)
+        llvm::consumeError(parsed.takeError());
+    }
+  }
+}
+TEST(ProcessReport, AndroidHandlerPostRequiresExplicitPoolAndQueueState) {
+  auto wrap = [](std::string extra) {
+    return R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached",)" +
+           extra + "}}}";
+  };
+  for (const char *blocked : {"true", "false"}) {
+    auto parsed = processOptionsFromJSON(wrap(
+        std::string(
+            R"("main_looper_prepared":true,"initial_main_queue":{"blocked":)") +
+        blocked + R"(},"initial_message_pool_empty":true)"));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &input = *parsed->Android->Application;
+    EXPECT_EQ(input.initial_message_pool_empty, true);
+    ASSERT_TRUE(input.initial_main_queue);
+    EXPECT_EQ(input.initial_main_queue->blocked,
+              std::string_view(blocked) == "true");
+    EXPECT_FALSE(input.initial_main_queue->native_callbacks_empty.has_value());
+  }
+  for (
+      auto input :
+      {R"("initial_main_queue":{"blocked":false})",
+       R"("main_looper_prepared":false,"initial_main_queue":{"blocked":false})",
+       R"("main_looper_prepared":true,"initial_main_queue":{})",
+       R"("main_looper_prepared":true,"initial_main_queue":{"blocked":0})",
+       R"("main_looper_prepared":true,"initial_main_queue":{"blocked":false,"empty":true})",
+       R"("main_looper_prepared":true,"initial_main_queue":null)",
+       R"("initial_message_pool_empty":null)",
+       R"("initial_message_pool_empty":1)"}) {
+    auto parsed = processOptionsFromJSON(wrap(input));
+    EXPECT_FALSE(bool(parsed)) << input;
+    llvm::consumeError(parsed.takeError());
+  }
+  auto nonempty =
+      processOptionsFromJSON(wrap(R"("initial_message_pool_empty":false)"));
+  ASSERT_TRUE(bool(nonempty)) << llvm::toString(nonempty.takeError());
+  EXPECT_EQ(nonempty->Android->Application->initial_message_pool_empty, false);
+  ProcessResult result{ProcessProfile::AndroidNativeAArch64,
+                       GuestArchitecture::AArch64,
+                       ExecutionBackendKind::Unicorn,
+                       {}};
+  result.JavaState.emplace();
+  auto &queue = result.JavaState->framework.main_message_queue.emplace();
+  queue.identity = 0x17;
+  queue.blocked = true;
+  queue.complete = false;
+  queue.messages.push_back({0x20, 0x11, 0x12, 0x20, -1, 3});
+  auto encoded = llvm::cantFail(llvm::json::parse(processResultJSON(result)));
+  const auto *out = encoded.getAsObject()
+                        ->getObject("android")
+                        ->getObject("java_state")
+                        ->getObject("framework")
+                        ->getObject("main_message_queue");
+  ASSERT_NE(out, nullptr);
+  EXPECT_EQ(out->getString("identity"), "17");
+  EXPECT_EQ(out->getBoolean("blocked"), true);
+  EXPECT_EQ(out->getBoolean("complete"), false);
+  const auto *message = out->getArray("messages")->front().getAsObject();
+  EXPECT_EQ(message->getString("identity"), "20");
+  EXPECT_EQ(message->getString("callback"), "12");
+  EXPECT_EQ(message->getString("next"), "20");
+  EXPECT_EQ(message->getInteger("when"), -1);
+  EXPECT_EQ(message->getInteger("flags"), 3);
+}
+
+TEST(ProcessReport, AndroidQueueNativeCallbacksRemainAnExplicitBoolean) {
+  auto wrap = [](std::string value) {
+    return R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached","main_looper_prepared":true,"initial_main_queue":{"blocked":false,"native_callbacks_empty":)" +
+           value + "}}}}";
+  };
+  for (const char *value : {"true", "false"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    ASSERT_TRUE(parsed->Android->Application->initial_main_queue);
+    EXPECT_EQ(parsed->Android->Application->initial_main_queue
+                  ->native_callbacks_empty,
+              std::string_view(value) == "true");
+  }
+  for (const char *value : {"null", "0", "1", R"("true")", "{}", "[]",
+                            R"(true,"unexpected":false)"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    EXPECT_FALSE(bool(parsed)) << value;
+    llvm::consumeError(parsed.takeError());
+  }
+}
+TEST(ProcessReport, AndroidMainLooperRequiresAnExplicitBoolean) {
+  for (const auto *phase : {"unattached", "attached", "application"}) {
+    auto wrap = [&](const std::string &value) {
+      return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                         "\"phase\":\"") +
+             phase + "\"" +
+             (value.empty() ? "" : ",\"main_looper_prepared\":" + value) +
+             "}}}";
+    };
+    for (const auto *value : {"", "true", "false"}) {
+      auto parsed = processOptionsFromJSON(wrap(value));
+      ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+      const auto &state = parsed->Android->Application->main_looper_prepared;
+      EXPECT_EQ(state.has_value(), std::string_view(value) != "");
+      if (state)
+        EXPECT_EQ(*state, std::string_view(value) == "true");
+    }
+    for (const auto *value : {"null", "0", "1", "\"true\"", "{}", "[]"}) {
+      auto parsed = processOptionsFromJSON(wrap(value));
+      EXPECT_FALSE(bool(parsed));
+      llvm::consumeError(parsed.takeError());
+    }
+  }
+}
+TEST(ProcessReport, AndroidClassLoaderPathsRequireCompleteBoundedInventories) {
+  auto wrap = [](const std::string &value, bool application) {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           (application ? "application" : "unattached") + "\"" +
+           (value.empty() ? ""
+                          : std::string(",\"") +
+                                (application ? "application_loader_paths"
+                                             : "system_loader_paths") +
+                                "\":" + value) +
+           "}}}";
+  };
+  const std::string empty =
+      R"({"dex_zip_files":[],"native_library_directories":[],"system_native_library_directories":[]})";
+  for (bool application : {false, true}) {
+    for (
+        const auto &value :
+        {std::string{}, empty,
+         std::string(
+             R"({"dex_zip_files":["/one.apk","/two.apk"],"native_library_directories":[""],"system_native_library_directories":["/system/lib"]})")}) {
+      auto parsed = processOptionsFromJSON(wrap(value, application));
+      ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+      const auto &state = *parsed->Android->Application;
+      const auto &paths = application ? state.application_loader_paths
+                                      : state.system_loader_paths;
+      EXPECT_EQ(paths.has_value(), !value.empty());
+      if (value == empty)
+        EXPECT_TRUE(paths->dex_zip_files.empty());
+    }
+    for (
+        const auto &value : std::vector<std::string>{
+            "null", "false", "[]", "{}",
+            R"({"dex_zip_files":[],"native_library_directories":[]})",
+            R"({"dex_zip_files":[null],"native_library_directories":[],"system_native_library_directories":[]})",
+            R"({"dex_zip_files":[],"native_library_directories":[],"unknown":[]})",
+            "{\"dex_zip_files\":[\"" + std::string(4097, 'a') +
+                "\"],\"native_library_directories\":[],\"system_native_library_"
+                "directories\":[]}"}) {
+      auto parsed = processOptionsFromJSON(wrap(value, application));
+      EXPECT_FALSE(bool(parsed));
+      llvm::consumeError(parsed.takeError());
+    }
+  }
+}
+
+TEST(ProcessReport, AndroidURLHandlerRequiresExplicitBoundedCustomFailures) {
+  auto wrap = [](const std::string &value) {
+    return "{\"android\":{\"jni\":true,\"application_snapshot\":{\"phase\":"
+           "\"unattached\",\"url_open_failure_handlers\":" +
+           value + "}}}";
+  };
+  for (
+      const auto *value :
+      {"[]", R"([{"scheme":"http","message":null}])",
+       R"([{"scheme":"http","message":""},{"scheme":"https","message":"local\u0000离线"}])"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &handlers =
+        parsed->Android->Application->url_open_failure_handlers;
+    if (handlers.size() == 1)
+      EXPECT_FALSE(handlers[0].message);
+    if (handlers.size() == 2) {
+      ASSERT_TRUE(handlers[0].message);
+      EXPECT_TRUE(handlers[0].message->empty());
+      EXPECT_EQ(handlers[1].message, std::string("local\0", 6) + "离线");
+    }
+  }
+  for (
+      const auto &value : std::vector<std::string>{
+          "null", "false", "{}", "[null]", R"([{"scheme":"https"}])",
+          R"([{"message":null}])", R"([{"scheme":"HTTPS","message":null}])",
+          R"([{"scheme":"file","message":null}])",
+          R"([{"scheme":"https","message":false}])",
+          R"([{"scheme":"https","message":null,"extra":0}])",
+          R"([{"scheme":"http","message":null},{"scheme":"http","message":""}])",
+          R"([{"scheme":"http","message":null},{"scheme":"https","message":null},{"scheme":"other","message":null}])",
+          "[{\"scheme\":\"https\",\"message\":\"" + std::string(4097, 'x') +
+              "\"}]"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    EXPECT_FALSE(bool(parsed)) << value;
+    llvm::consumeError(parsed.takeError());
+  }
+}
+
+TEST(ProcessReport, AndroidServiceManagerPreservesUnknownNullAndProxyKeys) {
+  auto wrap = [](const std::string &value) {
+    return "{\"android\":{\"jni\":true,\"application_snapshot\":{\"phase\":"
+           "\"unattached\",\"service_manager\":" +
+           value + "}}}";
+  };
+  for (
+      const auto *value :
+      {"{}", R"({"cache":[],"manager_proxy":null,"context_object":null})",
+       R"({"binder_proxies":[{"key":7,"warn_on_blocking":true},{"key":8}],"cache":[{"name":"a\u0000b","binder":7},{"name":null,"binder":null}],"manager_proxy":7,"context_object":8})"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    ASSERT_TRUE(parsed->Android->Application->service_manager);
+    const auto &state = *parsed->Android->Application->service_manager;
+    if (!state.binder_proxies.empty()) {
+      EXPECT_EQ(state.binder_proxies[0].warn_on_blocking, true);
+      EXPECT_FALSE(state.binder_proxies[1].warn_on_blocking);
+      EXPECT_EQ(state.cache->at(0).name, std::string("a\0b", 3));
+      EXPECT_EQ(state.manager_proxy, std::optional<std::optional<uint32_t>>(7));
+    }
+  }
+  for (
+      const auto *value :
+      {"null", "[]", R"({"cache":null})", R"({"unknown":0})",
+       R"({"binder_proxies":[{"key":0}]})",
+       R"({"binder_proxies":[{"key":null}]})",
+       R"({"binder_proxies":[{"key":7,"warn_on_blocking":null}]})",
+       R"({"binder_proxies":[{"key":7,"extra":false}]})",
+       R"({"binder_proxies":[{"key":7},{"key":7}]})", R"({"manager_proxy":7})",
+       R"({"context_object":false})", R"({"context_object":4294967296})",
+       R"({"cache":[{"name":"x","binder":7}]})", R"({"cache":[{"name":"x"}]})",
+       R"({"cache":[{"name":false,"binder":null}]})",
+       R"({"cache":[{"name":"x","binder":null},{"name":"x","binder":null}]})"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    EXPECT_FALSE(bool(parsed)) << value;
+    llvm::consumeError(parsed.takeError());
+  }
+}
+TEST(ProcessReport, AndroidServiceLookupRepliesRequireExactExplicitQueries) {
+  auto wrap = [](std::string_view queries) {
+    return std::string(
+               R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached","service_manager":{"binder_proxies":[{"key":7},{"key":8}],"lookup_results":)") +
+           std::string(queries) + "}}}}";
+  };
+  auto parsed = processOptionsFromJSON(wrap(
+      R"([{"operation":"get","manager":7,"name":"a\u0000b","binder":8},{"operation":"check","manager":7,"name":null,"binder":null}])"));
+  ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+  const auto &state = *parsed->Android->Application->service_manager;
+  ASSERT_EQ(state.lookup_results.size(), 2u);
+  EXPECT_EQ(state.lookup_results[0].manager, 7u);
+  EXPECT_EQ(state.lookup_results[0].name, std::string("a\0b", 3));
+  EXPECT_EQ(state.lookup_results[0].binder, 8u);
+  EXPECT_EQ(state.lookup_results[1].operation,
+            mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+                LookupResult::Operation::Check);
+  EXPECT_FALSE(state.lookup_results[1].name);
+  EXPECT_FALSE(state.lookup_results[1].binder);
+  EXPECT_FALSE(state.cache);
+  EXPECT_FALSE(state.manager_proxy);
+  EXPECT_FALSE(state.context_object);
+  for (
+      const auto *queries :
+      {"null", "{}", "[null]", "[{}]",
+       R"([{"operation":"get","manager":7,"name":"alpha"}])",
+       R"([{"operation":"get","manager":7,"name":"alpha","binder":8,"extra":0}])",
+       R"([{"operation":"GET","manager":7,"name":"alpha","binder":8}])",
+       R"([{"operation":null,"manager":7,"name":"alpha","binder":8}])",
+       R"([{"operation":"get","manager":null,"name":"alpha","binder":8}])",
+       R"([{"operation":"get","manager":0,"name":"alpha","binder":8}])",
+       R"([{"operation":"get","manager":9,"name":"alpha","binder":8}])",
+       R"([{"operation":"get","manager":7,"name":true,"binder":8}])",
+       R"([{"operation":"get","manager":7,"name":"alpha","binder":9}])",
+       R"([{"operation":"get","manager":7,"name":"alpha","binder":null},{"operation":"get","manager":7,"name":"alpha","binder":8}])"}) {
+    auto rejected = processOptionsFromJSON(wrap(queries));
+    EXPECT_FALSE(bool(rejected)) << queries;
+    llvm::consumeError(rejected.takeError());
+  }
+}
+TEST(ProcessReport, AndroidServiceCacheDoesNotSupplyIndependentBinderState) {
+  for (const char *cache : {"[]", R"([{"name":"alpha","binder":null}])",
+                            R"([{"name":"alpha","binder":7}])"}) {
+    auto parsed = processOptionsFromJSON(
+        std::string(R"({"android":{"jni":true,"application_snapshot":{)"
+                    R"("phase":"unattached","service_manager":{)"
+                    R"("binder_proxies":[{"key":7}],"cache":)") +
+        cache + "}}}}");
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    ASSERT_TRUE(parsed->Android->Application->service_manager);
+    const auto &state = *parsed->Android->Application->service_manager;
+    ASSERT_TRUE(state.cache);
+    ASSERT_EQ(state.binder_proxies.size(), 1u);
+    EXPECT_EQ(state.binder_proxies[0].key, 7u);
+    EXPECT_FALSE(state.binder_proxies[0].warn_on_blocking.has_value());
+    EXPECT_FALSE(state.manager_proxy.has_value());
+    EXPECT_FALSE(state.context_object.has_value());
+    if (std::string_view(cache) == "[]") {
+      EXPECT_TRUE(state.cache->empty());
+    } else {
+      ASSERT_EQ(state.cache->size(), 1u);
+      EXPECT_EQ(state.cache->at(0).name, "alpha");
+      if (std::string_view(cache).find("null") != std::string_view::npos)
+        EXPECT_FALSE(state.cache->at(0).binder.has_value());
+      else
+        EXPECT_EQ(state.cache->at(0).binder, 7u);
+    }
+  }
+}
+TEST(ProcessReport, JavaServiceManagerObservationUsesRetainedIdentities) {
+  ProcessResult result{ProcessProfile::AndroidNativeAArch64,
+                       GuestArchitecture::AArch64,
+                       ExecutionBackendKind::Unicorn,
+                       {}};
+  result.JavaState.emplace();
+  auto &state = result.JavaState->framework.service_manager.emplace();
+  state.initialized = true;
+  state.cache = 0xa;
+  state.stat_logger = 0xb;
+  state.cache_known = true;
+  state.entries = {{0xc, 0xd}, {0, 0xd}};
+  state.binder_proxies = {{7, 0xd, std::nullopt}};
+  auto value = llvm::cantFail(llvm::json::parse(processResultJSON(result)));
+  auto *object = value.getAsObject()
+                     ->getObject("android")
+                     ->getObject("java_state")
+                     ->getObject("framework")
+                     ->getObject("service_manager");
+  ASSERT_NE(object, nullptr);
+  EXPECT_EQ(object->getString("cache"), "a");
+  EXPECT_EQ(object->getString("stat_logger"), "b");
+  EXPECT_EQ(object->getBoolean("cache_known"), true);
+  EXPECT_EQ(object->get("manager")->kind(), llvm::json::Value::Null);
+  ASSERT_EQ(object->getArray("entries")->size(), 2u);
+  const auto *proxy = object->getArray("binder_proxies")->front().getAsObject();
+  EXPECT_EQ(proxy->getInteger("key"), 7);
+  EXPECT_EQ(proxy->getString("identity"), "d");
+  EXPECT_EQ(proxy->get("warn_on_blocking")->kind(), llvm::json::Value::Null);
+}
+
+TEST(ProcessReport, AndroidDefaultLocaleRequiresCanonicalExplicitState) {
+  auto wrap = [](const std::string &value, const char *phase = "unattached") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\"" +
+           (value.empty() ? "" : ",\"default_locale\":" + value) + "}}}";
+  };
+  for (const auto *phase : {"unattached", "attached", "application"}) {
+    for (const auto *value : {"", "{}", R"({"language":"","country":""})",
+                              R"({"language":"iw","country":"419"})"}) {
+      auto parsed = processOptionsFromJSON(wrap(value, phase));
+      ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+      const auto &locale = parsed->Android->Application->default_locale;
+      EXPECT_EQ(locale.has_value(), *value != '\0');
+      if (std::string_view(value) == "{}") {
+        ASSERT_TRUE(locale);
+        EXPECT_FALSE(locale->language);
+        EXPECT_FALSE(locale->country);
+      }
+    }
+  }
+  for (const auto &value : std::vector<std::string>{
+           "null", "false", "[]", R"({"language":null})", R"({"country":1})",
+           R"({"language":"he"})", R"({"language":"EN"})",
+           R"({"country":"us"})", R"({"unexpected":""})",
+           "{\"language\":\"" + std::string(1025, 'a') + "\"}"}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    EXPECT_FALSE(bool(parsed)) << value;
+    llvm::consumeError(parsed.takeError());
+  }
+}
+TEST(ProcessReport, AndroidTargetSdkVersionUsesAnExplicitInt32Field) {
+  auto wrap = [](const std::string &value, bool query) {
+    auto info = "{\"source_dir\":null" +
+                (value.empty() ? "" : ",\"target_sdk_version\":" + value) + "}";
+    return std::string(
+               "{\"android\":{\"jni\":true,\"application_snapshot\":{") +
+           "\"phase\":\"application\",\"package_manager_available\":true," +
+           (query ? "\"application_info_queries\":[{\"package_name\":\"test."
+                    "app\","
+                    "\"flags\":0,\"info\":" +
+                        info + "}]"
+                  : "\"application_info\":" + info) +
+           "}}}";
+  };
+  for (bool query : {false, true}) {
+    for (auto value : {"", "-2147483648", "0", "28", "2147483647"})
+      for (bool quoted : {false, true}) {
+        if (quoted && std::string_view(value).empty())
+          continue;
+        const std::string wire =
+            quoted ? std::string("\"") + value + "\"" : value;
+        auto parsed = processOptionsFromJSON(wrap(wire, query));
+        ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+        const auto &snapshot = *parsed->Android->Application;
+        const auto &info = query ? snapshot.application_info_queries[0].info
+                                 : *snapshot.application_info;
+        if (std::string_view(value).empty())
+          EXPECT_FALSE(info.target_sdk_version);
+        else
+          EXPECT_EQ(info.target_sdk_version, std::stoll(value));
+      }
+    for (auto value : {"null", "true", "\"+28\"", "\" 28\"", "\"0x1c\"",
+                       "\"2147483648\"", "0.5", "2147483648", "-2147483649"}) {
+      auto parsed = processOptionsFromJSON(wrap(value, query));
+      EXPECT_FALSE(bool(parsed)) << value;
+      llvm::consumeError(parsed.takeError());
+    }
+  }
+}
+TEST(ProcessReport, AndroidApplicationLabelInputsRemainExplicitAndStrict) {
+  auto wrap = [](const std::string &value, bool query = false) {
+    const std::string info = "{\"source_dir\":null,\"native_library_dir\":null,"
+                             "\"non_localized_label\":" +
+                             value + "}";
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"application\",\"package_manager_"
+                       "available\":true,") +
+           (query ? "\"application_info_queries\":[{\"package_name\":\"test."
+                    "app\","
+                    "\"flags\":0,\"info\":" +
+                        info + "}]"
+                  : "\"application_info\":" + info) +
+           "}}}";
+  };
+  for (bool query : {false, true}) {
+    for (auto value :
+         {"null", "\"\"", "\"  label  \"", "\"a\\u0000\\u00e9\""}) {
+      auto parsed = processOptionsFromJSON(wrap(value, query));
+      ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+      const auto &input = *parsed->Android->Application;
+      EXPECT_FALSE(input.package_item_force_safe_labels);
+      const auto &info = query ? input.application_info_queries[0].info
+                               : *input.application_info;
+      ASSERT_TRUE(info.non_localized_label);
+      EXPECT_EQ(info.non_localized_label->has_value(),
+                std::string_view(value) != "null");
+      ASSERT_TRUE(info.native_library_dir);
+      EXPECT_FALSE(*info.native_library_dir);
+    }
+    for (auto value : {"true", "1", "{}", "[]"}) {
+      auto parsed = processOptionsFromJSON(wrap(value, query));
+      EXPECT_FALSE(bool(parsed));
+      llvm::consumeError(parsed.takeError());
+    }
+    auto large = processOptionsFromJSON(
+        wrap("\"" + std::string(4097, 'x') + "\"", query));
+    EXPECT_FALSE(bool(large));
+    llvm::consumeError(large.takeError());
+  }
+  auto flag = [](const std::string &value) {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"application\",\"package_item_force_safe_"
+                       "labels\":") +
+           value + "}}}";
+  };
+  for (auto value : {"false", "true"}) {
+    auto parsed = processOptionsFromJSON(flag(value));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    EXPECT_EQ(parsed->Android->Application->package_item_force_safe_labels,
+              std::string_view(value) == "true");
+  }
+  for (auto value : {"null", "\"false\"", "0", "{}", "[]"}) {
+    auto parsed = processOptionsFromJSON(flag(value));
+    EXPECT_FALSE(bool(parsed));
+    llvm::consumeError(parsed.takeError());
+  }
+  auto unknown = processOptionsFromJSON(
+      R"({"android":{"jni":true,"application_snapshot":{"phase":"application","application_info":{"source_dir":null,"nonLocalizedLabel":"x"}}}})");
+  EXPECT_FALSE(bool(unknown));
+  llvm::consumeError(unknown.takeError());
+}
+
+TEST(ProcessReport,
+     AndroidPackageResourcePathDistinguishesUnknownNullAndString) {
+  auto wrap = [](const std::string &value, const char *phase = "application") {
+    return std::string("{\"android\":{\"jni\":true,\"application_snapshot\":{"
+                       "\"phase\":\"") +
+           phase + "\",\"package_resource_path\":" + value + "}}}";
+  };
+  for (auto value :
+       {"null", "\"\"", "\"/public//fixture.apk\"", "\"a\\u0000\\u00e9\""}) {
+    auto parsed = processOptionsFromJSON(wrap(value));
+    ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+    const auto &path = parsed->Android->Application->package_resource_path;
+    ASSERT_TRUE(path);
+    EXPECT_EQ(path->has_value(), std::string_view(value) != "null");
+    if (std::string_view(value) == "\"/public//fixture.apk\"")
+      EXPECT_EQ(**path, "/public//fixture.apk");
+  }
+  auto absent = processOptionsFromJSON(
+      R"({"android":{"jni":true,"application_snapshot":{"phase":"application","application_info":{"source_dir":"/known.apk"}}}})");
+  ASSERT_TRUE(bool(absent)) << llvm::toString(absent.takeError());
+  EXPECT_FALSE(absent->Android->Application->package_resource_path);
+  for (auto value : {"true", "0", "{}", "[]"}) {
+    auto invalid = processOptionsFromJSON(wrap(value));
+    EXPECT_FALSE(bool(invalid));
+    llvm::consumeError(invalid.takeError());
+  }
+  for (auto phase : {"unattached", "attached"}) {
+    auto invalid = processOptionsFromJSON(wrap("null", phase));
+    EXPECT_FALSE(bool(invalid));
+    llvm::consumeError(invalid.takeError());
+  }
+  auto large =
+      processOptionsFromJSON(wrap("\"" + std::string(4097, 'x') + "\""));
+  EXPECT_FALSE(bool(large));
+  llvm::consumeError(large.takeError());
+  auto boundary =
+      processOptionsFromJSON(wrap("\"" + std::string(4096, 'x') + "\""));
+  ASSERT_TRUE(bool(boundary)) << llvm::toString(boundary.takeError());
+  EXPECT_EQ((**boundary->Android->Application->package_resource_path).size(),
+            4096u);
 }
 
 TEST(ProcessReport, JavaLibraryBindingRequiresInitializedJNIGuestImage) {
@@ -1838,6 +3294,27 @@ TEST(ProcessReport, AndroidLoaderMayBeEstablishedBeforeApplication) {
   }
 }
 
+TEST(ProcessReport, AndroidPackageManagerAvailabilityIsExplicitAndStrict) {
+  const std::string Prefix =
+      R"({"android":{"jni":true,"application_snapshot":{"phase":"application")";
+  auto Unknown = processOptionsFromJSON(Prefix + "}}}");
+  ASSERT_TRUE(bool(Unknown)) << llvm::toString(Unknown.takeError());
+  EXPECT_FALSE(Unknown->Android->Application->package_manager_available);
+  for (bool Available : {false, true}) {
+    auto O =
+        processOptionsFromJSON(Prefix + R"(,"package_manager_available":)" +
+                               (Available ? "true" : "false") + "}}}");
+    ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+    EXPECT_EQ(O->Android->Application->package_manager_available, Available);
+  }
+  for (auto Bad : {"null", "0", "\"true\"", "[]", "{}"}) {
+    auto O = processOptionsFromJSON(
+        Prefix + R"(,"package_manager_available":)" + Bad + "}}}");
+    ASSERT_FALSE(bool(O));
+    EXPECT_NE(llvm::toString(O.takeError()).find("package_manager_available"),
+              std::string::npos);
+  }
+}
 TEST(ProcessReport, RejectsMalformedRequestsBeforeWorkloadConstruction) {
 #define NEVERD_PROCESS_INVALID_JSON(Name, Text)                                \
   {                                                                            \
@@ -1877,9 +3354,9 @@ TEST(ProcessReport, DexWireBudgetPreservesTheMetadataAndDecodedByteBounds) {
   const std::string Request = Prefix + Hex + Suffix;
   ASSERT_GT(Request.size(), 65536u);
   check(Request, true);
-  check(Request + std::string(field::JSONLimit - Request.size(), ' '), true);
-  check(Request + std::string(field::JSONLimit - Request.size() + 1, ' '),
-        false);
+  const size_t WireLimit = Hex.size() + field::JSONMetadataLimit;
+  check(Request + std::string(WireLimit - Request.size(), ' '), true);
+  check(Request + std::string(WireLimit - Request.size() + 1, ' '), false);
   check(Prefix + Hex + "ab" + Suffix, false);
   check(Prefix + Hex.substr(0, Hex.size() / 2) + "\",\"" +
             Hex.substr(Hex.size() / 2) + Suffix,
@@ -1897,6 +3374,110 @@ TEST(ProcessReport, DexWireBudgetPreservesTheMetadataAndDecodedByteBounds) {
     ASSERT_FALSE(bool(Rejected));
     EXPECT_EQ(llvm::toString(Rejected.takeError()), field::TooLarge);
   }
+}
+TEST(ProcessReport, LinuxFileWireBudgetPreservesMetadataAndDecodedBounds) {
+  const size_t FileLimit = 16u * 1024u * 1024u;
+  const std::string Prefix =
+      R"({"linux_files":{"files":[{"path":"/f","bytes_hex":")";
+  const std::string Suffix = R"("}]}})";
+  // The existing decoded catalogue budget includes the path and its terminator.
+  const std::string Hex((FileLimit - 3) * 2, 'a');
+  const std::string Request = Prefix + Hex + Suffix;
+  auto check = [&](const std::string &Text, bool Accepted) {
+    auto O = processOptionsFromJSON(Text);
+    const bool Valid = bool(O);
+    const auto Error = Valid ? std::string() : llvm::toString(O.takeError());
+    EXPECT_EQ(Valid, Accepted) << Error;
+    if (!Valid)
+      return;
+    ASSERT_TRUE(O->LinuxFiles);
+    const auto &Bytes = O->LinuxFiles->Files.at("/f");
+    EXPECT_EQ(Bytes.size(), FileLimit - 3);
+    EXPECT_TRUE(llvm::all_of(Bytes, [](uint8_t B) { return B == 0xaa; }));
+  };
+  check(Request, true);
+  const size_t WireLimit = Hex.size() + field::JSONMetadataLimit;
+  check(Request + std::string(WireLimit - Request.size(), ' '), true);
+  check(Request + std::string(WireLimit - Request.size() + 1, ' '), false);
+  check(Prefix + Hex + "aa" + Suffix, false);
+  check(Prefix + Hex + R"("},{"path":"/g","bytes_hex":")" + Suffix, false);
+}
+
+TEST(ProcessReport, LinuxFileWireAllowanceCombinesValidatedPayloads) {
+  const size_t FileBytes = 16u * 1024u * 1024u - 6;
+  const size_t DexBytes = 1024u * 1024u;
+  const std::string First(FileBytes, 'a');
+  const std::string Second(FileBytes, 'b');
+  const std::string Dex(DexBytes * 2, 'c');
+  const std::string Request =
+      std::string(R"({"linux_files":{"files":[{"path":"/a","bytes_hex":")") +
+      First + R"("},{"path":"/b","bytes_hex":")" + Second +
+      R"("}]},"android":{"jni":true,"dex_images":[")" + Dex + R"("]}})";
+  ASSERT_GT(Request.size(), 32u * 1024u * 1024u);
+  auto O = processOptionsFromJSON(Request);
+  ASSERT_TRUE(bool(O)) << llvm::toString(O.takeError());
+  ASSERT_TRUE(O->LinuxFiles);
+  ASSERT_TRUE(O->Android);
+  ASSERT_EQ(O->LinuxFiles->Files.size(), 2u);
+  EXPECT_EQ(O->LinuxFiles->Files.at("/a").size(), FileBytes / 2);
+  EXPECT_EQ(O->LinuxFiles->Files.at("/b").size(), FileBytes / 2);
+  EXPECT_EQ(O->LinuxFiles->Files.at("/a").back(), 0xaa);
+  EXPECT_EQ(O->LinuxFiles->Files.at("/b").back(), 0xbb);
+  ASSERT_EQ(O->Android->DexImages.size(), 1u);
+  EXPECT_EQ(O->Android->DexImages.front().size(), DexBytes);
+  EXPECT_EQ(O->Android->DexImages.front().back(), 0xcc);
+  const size_t WireLimit =
+      (FileBytes + DexBytes) * 2 + field::JSONMetadataLimit;
+  auto Exact = processOptionsFromJSON(
+      Request + std::string(WireLimit - Request.size(), ' '));
+  ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+  auto Excess = processOptionsFromJSON(
+      Request + std::string(WireLimit - Request.size() + 1, ' '));
+  ASSERT_FALSE(bool(Excess));
+  EXPECT_EQ(llvm::toString(Excess.takeError()), field::TooLarge);
+}
+
+TEST(ProcessReport, LinuxFileWireAllowanceRequiresValidatedRegularFiles) {
+  const std::string Hex(80000, 'a');
+  for (const auto &Text :
+       {std::string(R"({"darwin_files":{"files":[{"path":"/f","bytes_hex":")") +
+            Hex + R"("}]}})",
+        std::string(R"({"arguments":[")") + Hex + R"("]})"}) {
+    auto O = processOptionsFromJSON(Text);
+    ASSERT_FALSE(bool(O));
+    EXPECT_EQ(llvm::toString(O.takeError()), field::TooLarge);
+  }
+  for (const auto &Text :
+       {std::string(R"({"linux_files":{"files":[{"path":"/f","bytes_hex":")") +
+            Hex + R"(g0"}]}})",
+        std::string(R"({"linux_files":{"files":[{"path":"/f","bytes_hex":")") +
+            Hex + R"(","unknown":0}]}})",
+        std::string(R"({"linux_files":{"files":[{"path":"/f","bytes_hex":")") +
+            Hex + R"("},{"path":"/f","bytes_hex":""}]}})",
+        std::string(R"({"linux_files":{"files":[{"path":"/f","bytes":")") +
+            Hex + R"("}]}})"}) {
+    auto O = processOptionsFromJSON(Text);
+    ASSERT_FALSE(bool(O));
+    llvm::consumeError(O.takeError());
+  }
+}
+
+TEST(ProcessReport, LinuxFileWireAllowanceChargesJSONEscapeOverhead) {
+  const std::string Hex(80000, 'a');
+  const std::string Request =
+      std::string(
+          R"({"linux_files":{"files":[{"path":"/f","bytes_hex":"\u0061)") +
+      Hex.substr(1) + R"("}]}})";
+  const size_t WireLimit = Hex.size() + field::JSONMetadataLimit;
+  auto Exact = processOptionsFromJSON(
+      Request + std::string(WireLimit - Request.size(), ' '));
+  ASSERT_TRUE(bool(Exact)) << llvm::toString(Exact.takeError());
+  ASSERT_TRUE(Exact->LinuxFiles);
+  EXPECT_EQ(Exact->LinuxFiles->Files.at("/f").size(), Hex.size() / 2);
+  auto Excess = processOptionsFromJSON(
+      Request + std::string(WireLimit - Request.size() + 1, ' '));
+  ASSERT_FALSE(bool(Excess));
+  EXPECT_EQ(llvm::toString(Excess.takeError()), field::TooLarge);
 }
 TEST(ProcessReport, DarwinFileInputsAreLosslessAndRequireDarwinProfiles) {
   auto O = processOptionsFromJSON(R"({"darwin_files":{"files":[
@@ -4736,5 +6317,103 @@ TEST(ProcessReport, DirectFileMetadataUsesTheSameValidationBoundary) {
               std::string::npos);
   }
 }
+TEST(ProcessReport, AndroidSplitSourceDirsHasStrictNullableArraySchema) {
+  using Info = mobile::dalvik::AndroidApplicationSnapshot::ApplicationInfo;
+  auto wrap = [](const std::string &members, unsigned origin) {
+    std::string info = R"({"source_dir":"base.apk")" + members + "}";
+    std::string prefix =
+        R"({"android":{"jni":true,"application_snapshot":{"phase":"application","package_manager_available":true,)";
+    if (origin == 0)
+      return prefix + R"("application_info":)" + info + "}}}";
+    if (origin == 1)
+      return prefix +
+             R"("application_info_queries":[{"package_name":"test.app","flags":0,"info":)" +
+             info + "}]}}}";
+    return prefix +
+           R"("package_info_queries":[{"package_name":"test.app","flags":0,"info":{"application_info":)" +
+           info + "}}]}}}";
+  };
+  auto info = [](const ProcessOptions &options,
+                 unsigned origin) -> const Info & {
+    const auto &input = *options.Android->Application;
+    return origin == 0 ? *input.application_info
+           : origin == 1
+               ? input.application_info_queries[0].info
+               : **input.package_info_queries[0].info.application_info;
+  };
+  for (auto [name, field] :
+       {std::pair{"split_source_dirs", &Info::split_source_dirs},
+        {"split_public_source_dirs", &Info::split_public_source_dirs}}) {
+    auto member = [name](std::string value) {
+      return ",\"" + std::string(name) + "\":" + value;
+    };
+    for (unsigned origin = 0; origin != 3; ++origin) {
+      SCOPED_TRACE(name);
+      SCOPED_TRACE(origin);
+      auto absent = processOptionsFromJSON(wrap("", origin));
+      ASSERT_TRUE(bool(absent)) << llvm::toString(absent.takeError());
+      EXPECT_FALSE(info(*absent, origin).*field);
+      auto null = processOptionsFromJSON(wrap(member("null"), origin));
+      ASSERT_TRUE(bool(null)) << llvm::toString(null.takeError());
+      ASSERT_TRUE(info(*null, origin).*field);
+      EXPECT_FALSE(*(info(*null, origin).*field));
+      auto empty = processOptionsFromJSON(wrap(member("[]"), origin));
+      ASSERT_TRUE(bool(empty)) << llvm::toString(empty.takeError());
+      ASSERT_TRUE(info(*empty, origin).*field);
+      ASSERT_TRUE(*(info(*empty, origin).*field));
+      EXPECT_TRUE((**(info(*empty, origin).*field)).empty());
+      auto array = processOptionsFromJSON(
+          wrap(member(R"(["one",null,"","a\u0000b","\u732b.apk"])"), origin));
+      ASSERT_TRUE(bool(array)) << llvm::toString(array.takeError());
+      const auto &values = **(info(*array, origin).*field);
+      ASSERT_EQ(values.size(), 5u);
+      EXPECT_EQ(values[0], "one");
+      EXPECT_FALSE(values[1]);
+      EXPECT_EQ(values[2], "");
+      EXPECT_EQ(values[3], std::string("a\0b", 3));
+      EXPECT_EQ(values[4], "\xe7\x8c\xab.apk");
+      for (const char *bad :
+           {"1", "true", "{}", R"("text")", "[1]", "[false]", "[[]]", "[{}]"}) {
+        auto rejected = processOptionsFromJSON(wrap(member(bad), origin));
+        EXPECT_FALSE(bool(rejected)) << bad;
+        llvm::consumeError(rejected.takeError());
+      }
+      std::string entries;
+      for (unsigned i = 0;
+           i != ::neverd::limits::dalvik::kMaxAndroidApplicationSplitSources;
+           ++i) {
+        if (i)
+          entries += ',';
+        entries += "null";
+      }
+      auto accepted =
+          processOptionsFromJSON(wrap(member("[" + entries + "]"), origin));
+      ASSERT_TRUE(bool(accepted)) << llvm::toString(accepted.takeError());
+      auto too_many = processOptionsFromJSON(
+          wrap(member("[" + entries + ",null]"), origin));
+      EXPECT_FALSE(bool(too_many));
+      llvm::consumeError(too_many.takeError());
+      auto too_long = processOptionsFromJSON(
+          wrap(member("[\"" +
+                      std::string(::neverd::limits::dalvik::
+                                          kMaxAndroidApplicationInfoFieldBytes +
+                                      1,
+                                  'x') +
+                      "\"]"),
+               origin));
+      EXPECT_FALSE(bool(too_long));
+      llvm::consumeError(too_long.takeError());
+      auto independent = processOptionsFromJSON(wrap(
+          R"(,"split_source_dirs":["code.apk"],"split_public_source_dirs":["resources.apk"])",
+          origin));
+      ASSERT_TRUE(bool(independent)) << llvm::toString(independent.takeError());
+      EXPECT_EQ((**info(*independent, origin).split_source_dirs)[0],
+                "code.apk");
+      EXPECT_EQ((**info(*independent, origin).split_public_source_dirs)[0],
+                "resources.apk");
+    }
+  }
+}
+
 } // namespace
 } // namespace neverd::emulation

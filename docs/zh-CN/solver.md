@@ -6,6 +6,8 @@
 
 NeverD 默认使用内置 bitvector solver。精确 MBA 推导独立于通用 solver。表达式合成只有在证明等价后才接受候选；反例或未决查询都会保留原表达式。
 
+内置乘法电路先移除两个因子中已知为零的低位前缀，只构造剩余位的乘积，再恢复完整输出字。可选 Z3 适配器也按偶数常量系数实际能观测的位宽编码乘积。两者均保留全位宽等价查询、独立输入模型和现有资源限制。CLI 和 GUI 的源码优化共享内置电路，无需额外开关。
+
 <!-- i18n-section: builtin-comparisons -->
 
 ## 内置比较电路
@@ -37,8 +39,8 @@ SAT 引擎在每个文字的 watch 列表内联存放四个条目，较长列表
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DNEVERD_ENABLE_Z3=ON -DNEVERD_BUILD_SOLVER_BENCH=ON
-cmake --build build-release --target neverd NeverDSolverTests \
-  NeverDSymbolicTests neverd-solver-bench --parallel 4
+python scripts/build.py build-release --parallel 4 --target neverd \
+  NeverDSolverTests NeverDSymbolicTests neverd-solver-bench
 ```
 
 默认 provider 为 `NEVERD_Z3_PROVIDER=FETCH`。首次配置会下载源码，后续构建复用 build 目录的 `_deps`。不会构建 Z3 CLI、测试、示例、文档或语言绑定；Z3 Python 生成器使用 NeverD 已依赖的 Python interpreter。使用已安装库时选择 `-DNEVERD_Z3_PROVIDER=SYSTEM`，也可指定 `-DZ3_ROOT=/path/to/prefix`。缺少开发文件会失败，不会静默切换 provider。离线构建可用 `-DFETCHCONTENT_SOURCE_DIR_NEVERD_Z3=/path/to/z3` 指定本地源码。
@@ -72,6 +74,8 @@ result = synthesize_expression(
 
 启用 Z3 时，`NeverDSolverTests` 包含独立表达式求值和跨后端检查。参考表达式会直接构造，避免 NeverD 表达式 builder 的错误把测试两侧一起简化。禁用 Z3 的构建会明确跳过 oracle 用例，但仍测试后端不可用契约。
 
+缩放乘积测试使用独立长乘法电路和整数运算检查内置电路，覆盖至 257 位。Z3 测试证明它与独立的全位宽编码一致，并检查高输入位及故意改错的最高输出位。
+
 ```sh
 build-release/bin/NeverDSolverTests --gtest_brief=1
 build-release/bin/neverd-solver-bench \
@@ -82,6 +86,8 @@ build-release/bin/neverd-solver-bench \
 
 每条非注释行格式为 `original ; candidate`；没有分号时，以 MBA 简化器的结果作为候选。工具报告判定、模型重放及耗时；计时包括 session 创建、翻译和求解，不包括解析、MBA 简化、导出和销毁。每次重复使用全新 solver。SAT 模型必须在表达式求值器中重现差异。相互矛盾的确定判定、无效查询或模型会使运行失败；`unknown` 会记录，但不构成等价证明。
 
-SMT-LIB 导出包含原 DAG、永久断言和最后一次查询的假设，可用 `z3 query-N.smt2` 重放。应记录资源限制和 solver 版本。两个后端的预算单位不同，因此比较的是有界工作负载，不是相同工作量。Bitvector 证明采用表达式语言的 total fixed-width 语义。机器异常、内存效果和 LLVM poison 仍由提升／翻译边界负责，表达式证明并不认证这些行为。
+SMT-LIB 导出包含等价编码的 DAG、永久断言和最后一次查询的假设，可用 `z3 query-N.smt2` 重放。应记录资源限制和 solver 版本。两个后端的预算单位不同，因此比较的是有界工作负载，不是相同工作量。Bitvector 证明采用表达式语言的 total fixed-width 语义。机器异常、内存效果和 LLVM poison 仍由提升／翻译边界负责，表达式证明并不认证这些行为。
 
 尚未搜索的编码副本从自身决策队列移除根层已赋值变量，并重建严格的活跃度／编号堆顺序。赋值和子句保持完整，根层事实在所有回溯中保留。源对象所有权、实际决策、完整模型和全部搜索预算均不变。
+
+SMT-LIB 导出的 DAG 是语义等价的编码，可能包含上述精确缩放商，而不保证与原始 DAG 结构相同。

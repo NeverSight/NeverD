@@ -15,8 +15,8 @@
 #define NEVERD_IR_MED_INDIRECTCALLSLOT_H
 
 #include "neverd/Limits.h"
-#include "neverd/ir/med/I386PicAddress.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/X86/I386PicAddress.h"
 
 #include <map>
 #include <optional>

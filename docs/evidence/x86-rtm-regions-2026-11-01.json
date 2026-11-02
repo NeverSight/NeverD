@@ -1,0 +1,2582 @@
+{
+  "schema_version": 1,
+  "scope": "Selected x64 V6 native RTM commit, nesting, rollback and refusal; native CPUID header repair",
+  "artifact_directory": "neverd-rtm-regions-20261101",
+  "path_normalization": "Private checkout, build and executable paths are represented by repository-relative names and artifact/tool placeholders. Original artifact digests are retained.",
+  "revisions": {
+    "neverd_feature": "adc162b827",
+    "neverd_verified_integration": "8f62c01a4a5301319867f78f1a4c1091e59b360c",
+    "llvm_cpuid_header_fix": "83fb72868148019fb4cf0ebe9e4bf3008d3d0b61",
+    "llvm_backend_implementation": "fdf9a1d8df5c22f284db89abc33d8d4f404a71f5",
+    "neverc_cpuid_header_fix": "edb7105e1db598fdc0bee3206f4c04a06ecff1d8"
+  },
+  "published_sdk_unchanged": "neverd-llvm-v23.0.0-r6",
+  "neverd_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "counts": {
+    "exported_sources": 48,
+    "scenarios": 12,
+    "compiler_paths": 3,
+    "optimization_levels": [
+      "O0",
+      "O2"
+    ],
+    "emulator_modes": [
+      "full",
+      "cpuid-disabled"
+    ],
+    "execution_profiles": 576,
+    "harness_rounds": 36864,
+    "full_rtm_rounds": 18432,
+    "original_machine_code_comparisons": 13824,
+    "commit_rounds": 6144,
+    "explicit_abort_rounds": 4608,
+    "cpuid_pause_abort_rounds": 3072,
+    "unsupported_path_or_loop_budget_refusal_rounds": 4608,
+    "additional_two_instruction_budget_rollbacks": 18432,
+    "standalone_xtest_and_xabort_acceptances": 36864,
+    "cpuid_disabled_rounds": 18432
+  },
+  "round_definition": "Each round seeds all represented state, RAM and guest stack; invokes the selected transaction, standalone XTEST/XABORT, standalone XEND refusal, a two-instruction rollback attempt, and invalid/zero-budget inputs. Only the nine admitted original-code scenarios invoke the independent raw-code oracle. These counts are not instruction-coverage percentages.",
+  "scenarios": [
+    "commit",
+    "explicit abort",
+    "nested commit",
+    "nested abort",
+    "loop and conditional branch",
+    "guest CALL/RET",
+    "callee abort",
+    "CPUID abort",
+    "PAUSE abort",
+    "unsupported CLI rollback",
+    "unselected indirect target rollback",
+    "loop budget rollback"
+  ],
+  "matrices": {
+    "neverc": {
+      "record": {
+        "file": "<artifacts>/neverc/qualification.json",
+        "sha256": "ed4987c8ce9b9c9a58fd52bc283d1a0ee73b90f764967fb67fcd0550902e0b58"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        }
+      },
+      "script_sha256": "a025e9d5adf21a3f4094eae474ff0bfacf8390d240a83b2013e94139f18569bd",
+      "commands_sha256": "a1e928ab0f4958948ab9182866bcf1d56e59d1651eb3e756ebe8b9eb7237d5ce",
+      "profiles": 192,
+      "rounds": 12288,
+      "executables": {
+        "rtm-region-0-high-direct-O0": {
+          "sha256": "5e7fbc1b4619a517a76588df535ba6b6bcfb548946b64c814cd89b21a32af77a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-direct-O2": {
+          "sha256": "1c44c86dde2d4b999a6b7630251626280de2e92c0e4b2518710dc86018bce263",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-switch-O0": {
+          "sha256": "74aaf96d045c0a047df8b891a430d7bf23bd5b37f967d4329c718b3a3b6ac811",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-switch-O2": {
+          "sha256": "36ebb8ded641c2910fee613e599faf7ffffd6cb145d767a2caf53c46d2620a47",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-direct-O0": {
+          "sha256": "189a255f2052277c01b0d176547c13a831a42a5f88c9a6441337abc13d01d493",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-direct-O2": {
+          "sha256": "a8ba8c12f2114c781a0f5ddbb51d95312bd1b06f60a3db58830ac305ff2f0381",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-switch-O0": {
+          "sha256": "1996db77ed83dab7cd0c411cb3524b1501bf622f28db2ec243fc0cf01e802475",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-switch-O2": {
+          "sha256": "bbf4c75920c1555f20ae7ebcaefe5d4316cb2407455c8374ce5fe16fcb000c5a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-direct-O0": {
+          "sha256": "c522578b9cc8b77b115433ec5c3d32f09f661dcfc12de52d202594fbfadd27be",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-direct-O2": {
+          "sha256": "b9b07eb4210987f19bbb15cc19d45616c4a3e3b446269b8cfa2e9fca35ca7f91",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-switch-O0": {
+          "sha256": "afb0265d69cc8ef0519437ed5cd0dfa686472b9e1af35dbe349b7dffed428631",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-switch-O2": {
+          "sha256": "c481bcf93c077be5b86c0d35c6c64d67acb4b02de3b489fe8cc226f068ba5843",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-direct-O0": {
+          "sha256": "b9acfacd5f165a16042c5d5d82f2c732ff927c3ce6b1a10f9953542f095ffc3f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-direct-O2": {
+          "sha256": "61a50248445a1e88079b4d44a25083dd82cf2337784cecfe9871f34f8aacc734",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-switch-O0": {
+          "sha256": "4a8985d1ba7ddda28233bf55be17fc225b8360132199805dc0c6b7e2a5f15d0c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-switch-O2": {
+          "sha256": "519f0715ad0fafd7f8df017e2298c3daaef76c31dd51912c5a4be847eef64fe8",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-direct-O0": {
+          "sha256": "7d5cad9c4bd389a3ebfc54c3013fdb4183769eae977522d375f3a4e1baf57dbd",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-direct-O2": {
+          "sha256": "293d30cfc8e5467de43af7a5d25e6d35fa7ce2c63ab1d4b04c17823e382790c4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-switch-O0": {
+          "sha256": "331c8ce835d78b14cb0d527217db7c06b34ffad29a4410f1249368b17c9a7b27",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-switch-O2": {
+          "sha256": "26e3daae4f553b6e79a08d392a8480deb27a29a4f8701c55bc0f5a00206d505a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-direct-O0": {
+          "sha256": "50e5b6db05e4b90994b37aaccfd25dee29e6e48035c3832a2d021fd7d28c6f7a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-direct-O2": {
+          "sha256": "26b21d03d46134212280dfe50d5a7a7f50ec1592805a6c5e1a0922e2a6e3a01e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-switch-O0": {
+          "sha256": "e32df052efdfcc0ca212ce74527730daa0b4d6ba89627f03e4cb98beb5219b0a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-switch-O2": {
+          "sha256": "5b790201e098ea81ed726abf6bc4f9a1d65142e94ae9de04c0f3e9610f5503d9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-direct-O0": {
+          "sha256": "6ff9a87eac93cbd183c37459bfb66712c8f506f66c504dbff0d098436dea981c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-direct-O2": {
+          "sha256": "b1cad032427beebcb70148a53dd74fd33185ca6fd07e1ec9f10bbbd02b7c35dc",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-switch-O0": {
+          "sha256": "2003f52889567bd38d30e06153838c1e9e0f9ec2480e7ca0ec2a5f1fe626d45a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-switch-O2": {
+          "sha256": "0bcf14d2a3522761d862b62ae19fc3ae10bc992b162148a493cbc7b76776f737",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-direct-O0": {
+          "sha256": "fe58d3127720f90575907214141d670acf4ba70d3a691f489634ae6e74d7ed7a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-direct-O2": {
+          "sha256": "69d0c52c3a8121b158fdad6d86de60414c4b729db02cc91cfa339e155e244f7d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-switch-O0": {
+          "sha256": "1c3fd55f70e6ec8af64ae2b1787ddb25c628de27735109b779d50edeb35662f5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-switch-O2": {
+          "sha256": "834bd8618ed2bc65424957e9b97ff3d943abfcee76a9460bcbfc866c080532a4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-direct-O0": {
+          "sha256": "c1fcd0e9627a9f567fc6f56fc86da6a1a58b3266befe43bb6af254686768ddab",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-direct-O2": {
+          "sha256": "43e90c242ebcfbea7deee469575bda4f8abc260337b367e477fb691bcef7d9dc",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-switch-O0": {
+          "sha256": "7a8dbec1ffed564accf20b67c6d2484fbbe156eec068a669934fcfa053c23c99",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-switch-O2": {
+          "sha256": "41b34f6aa4499e592375e40e1845a68e76ec38ad04b10d77c6f4eb665a00f1b5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-direct-O0": {
+          "sha256": "926219baae16e1308f6f30919ad638cf6cccee0f3961812d4631d12bb52d7fb4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-direct-O2": {
+          "sha256": "7d60c7fc81062a1129df3d62091da9617956d74c59f3440ff4dfef7a1a2f3c3a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-switch-O0": {
+          "sha256": "3ad39df7b82125807d0e20a0c812917455d2bbd23dc322aec5ba47d064a495db",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-switch-O2": {
+          "sha256": "f6bc04df846ffaf2de6d18eb322ab37d654ea5fc2b4dab7b9a39a5d95241befe",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-direct-O0": {
+          "sha256": "4508aa50dea2537dd0679f99a4b15a050b25cbcd1ec08b7b84c568b94cb11523",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-direct-O2": {
+          "sha256": "1e414f4cf40114c5aaeb8e96a0960ac1d34f3064e1f6bbd0a6ea78d36180deca",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-switch-O0": {
+          "sha256": "e72982d4e9f00bfe7c3d7a996be33d6f4513ce48b35a66b1ea7e6a623fa21f76",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-switch-O2": {
+          "sha256": "c0b1967b75a2288ac0b98a0fbf6dddbef1bf66011ed9c5c62adc7f5d72f587d1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-direct-O0": {
+          "sha256": "60f689af823cb042601af442c06e6cce167abeab828a31691e8a92cc0e13fa09",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-direct-O2": {
+          "sha256": "96060bd4f55f48a383fb5f2a894f6706c96170036ec25ff89a2a9d9347555624",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-switch-O0": {
+          "sha256": "227ca79c00eacc8471e2fe403ba4c10ad85218d4023905b1547098b15d15a20b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-switch-O2": {
+          "sha256": "1660a07191ff725f8c7654a674007d87c877cdd3c7217a7950a305aa01e3966a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-direct-O0": {
+          "sha256": "12f9a5673975f81df0a411a195e733956c2fb4bba57a7fe8d93ef21d4bb41048",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-direct-O2": {
+          "sha256": "af97345d72eea1663ae6fb9d993f3c29d3cc993da0e10afdc92678ceaa4fb0a4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-switch-O0": {
+          "sha256": "3e4167b6df7eee0aa1ee1529d7aad4869280d27933f30028e6d53361ce6db252",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-switch-O2": {
+          "sha256": "79ca4de158e77488c5ebdcefd797eebef4c5776c9ce4eb1504de13d94022257c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-direct-O0": {
+          "sha256": "65135b9d9fdf4df082c20ff6865a22836030cbea3920946177c7c5c7dd050713",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-direct-O2": {
+          "sha256": "d461ee0c8f8dbf21b712452e48eea287cf88ce9a900d484b34d172b81a2edbec",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-switch-O0": {
+          "sha256": "e83abb7f86445a0db02cee42c8ced8cc98b10100de4c53d01a3fd3e5d80ff413",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-switch-O2": {
+          "sha256": "4b2c69a90539c6d5d6eeb2e25b83766a9dd0230b6aa1f3973d40d20fdf816e46",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-direct-O0": {
+          "sha256": "2b9fbc9c0cf8f7cb70300431a67139781aebbdc72cb99633028a01cdf916952b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-direct-O2": {
+          "sha256": "9f4af046a4c2321705dc48ae106c6cc55e1269ef4862da32692528da0d4bed8e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-switch-O0": {
+          "sha256": "3feb8d039556f14335701a7584bfeb636486827e53bffa7c012a4272331eb4fc",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-switch-O2": {
+          "sha256": "ffd370eb0f98d3da8e2fe237822ab426cbcaad759bef7b317b9ba002e853ce9d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-direct-O0": {
+          "sha256": "090bd8fdda72eb0c787da03c582b1ee3815eedd6f1e385e18f4a43af112d6768",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-direct-O2": {
+          "sha256": "abc5e021fb0f417b044e2192456ad2901afdfb28342c5c7df7e53bde0e742728",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-switch-O0": {
+          "sha256": "d1b28936674868c58bd5b1ab4f419d5bb8612a35e5d566863bc48a1fcd6ecd12",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-switch-O2": {
+          "sha256": "3cf85374ad567b67957e1e9e722ca21e03389526cef20b6e9cd27bbbdcb33657",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-direct-O0": {
+          "sha256": "c091871e9b6251a033119d84a23b135a30d495f9227b811cb8357b4f418c40d6",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-direct-O2": {
+          "sha256": "e56e0b7bfd2d13e96f19a6c58afaf03e8eff7c39e4cb1190bd4c852c01f39269",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-switch-O0": {
+          "sha256": "fa1e26d7f9ea49b6160d1fef4254e371aadfbd345d69f9c3dd1cd692776327f8",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-switch-O2": {
+          "sha256": "a757de71d0175c0b3ca09edf8ade2a814f8ff07192f86e77bcda13afab85c4a9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-direct-O0": {
+          "sha256": "ddcfa1f467f16e8de893ce8e74f7a8df76821f8e3e1d125221d84bebbd172b0c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-direct-O2": {
+          "sha256": "bfcf3b0f2b9acd43bd11d5e5654fceae87b951ad9d0f471107c1a1317e98ac2f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-switch-O0": {
+          "sha256": "72a2fd07b34e31671d4dde116fda2f9cbd4ea607b51722fa793f17ecd388b430",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-switch-O2": {
+          "sha256": "42d7af84befcfabba9a676f64d194e6ea70d03897cb4e37f18dd1ba407a66d2f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-direct-O0": {
+          "sha256": "42086d36413eb1f4da4a6f02042822158793113d01b9cfd49be5cd9687e3a57d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-direct-O2": {
+          "sha256": "e6a4de30ada1803adf594e8d27a664e5fdf35b89e20a4189d36c6a362b926370",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-switch-O0": {
+          "sha256": "590aa66b8298a369708bb5e6e1c9fbaff36669ecf6be22f4a0ca5a3e0bfbcd97",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-switch-O2": {
+          "sha256": "9b88e950fad120e2441823eaf4c591ac5d0a77609878526ee423992249d5cc65",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-direct-O0": {
+          "sha256": "e06df6a626570618110a3e8346e1643f86b7270c1f0540e80247411131d58380",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-direct-O2": {
+          "sha256": "d0673bd8dc9b2cde8dac01e6cc8c937c766f276bf7052b4e482dc9fd62f8184e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-switch-O0": {
+          "sha256": "e61fae721eb37095bab12495ff882891b832970c6158b3a56814f8b8bad38593",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-switch-O2": {
+          "sha256": "c7ec6ada57ad2bfa45d7c655cb4709d4025be9d8e6c85b87c790ae1b750acecf",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-direct-O0": {
+          "sha256": "6b9fce49650c50a2a8d89d471102db87d3f99565d7fc2f8ca5e1e282794ddad3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-direct-O2": {
+          "sha256": "a3b4710d4641cbe2ed90d36dc5ff1142d3e50eabc64ec2c9e8e0ecfbfbd6fe28",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-switch-O0": {
+          "sha256": "f5fba95488dc90982466a831fdb4cc7a11cc3f0ad0de3afe4295498765a6c79b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-switch-O2": {
+          "sha256": "f21784d35183d14a3f42f670030250973f0acd55dd114f319a378c9c06bddcfd",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-direct-O0": {
+          "sha256": "5fd4153f13819bf92d27330e1de10cb822384bc39abb564edac729466a9b5a62",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-direct-O2": {
+          "sha256": "7353808e3d2aaeb4f6492d447f99d5242e9ef353f3893fd6a69ecbe9d2d80f36",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-switch-O0": {
+          "sha256": "13e2a6c3fb9ca66d938ed3744a12f67d3bbcd232c9914b2ee69f06da1bec0f84",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-switch-O2": {
+          "sha256": "b6da45c9168032851d907725ed246c816f46cbab717e136adca35488263222fb",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-direct-O0": {
+          "sha256": "64afd877bd8f4afa6dbdea98feef0184adbfcded5faf065b346138370fc57be7",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-direct-O2": {
+          "sha256": "40ec555cdb6a8b08c22454d480b8965e8b1f25545fa9d30ebc656c0ec811cf6d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-switch-O0": {
+          "sha256": "d6c4dd0f71b9ac0230b96c55f3c2141d61be76f1dbed199af83f8680c52ccdf3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-switch-O2": {
+          "sha256": "0dbd0a0930d4e54f91d23bbeb97a1f884ca87b92982844e2e6536bbf857bc140",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-direct-O0": {
+          "sha256": "75b7aef817700610d277db33f48ee9ec391da588337190f4a4f66a28e55265ec",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-direct-O2": {
+          "sha256": "48f60e35f35a8bc64eb92387dbe0c4413027bb3c46059534719d2b4ee30ce03b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-switch-O0": {
+          "sha256": "52cedaf016c23d5b4320d175a835498b3fc2a9db3c6e0afe6e15f0f1944dbea1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-switch-O2": {
+          "sha256": "5a42ca66180a7e373f9ddd574929c86cc876f51cde96109fe5bff81c0fd84b0f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        }
+      }
+    },
+    "llvm-legacy": {
+      "record": {
+        "file": "<artifacts>/llvm-legacy/qualification.json",
+        "sha256": "85dbbd66352453d6dead15183c42d9b5d84a36cbc6b924abcb3b25d2e1e97817"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "file": "<qualified-tools>/llc",
+          "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "script_sha256": "ec6b3d5a9c12e21a47b61b53fab1e7ce12fc056300c736f1f46ab74b09730a05",
+      "commands_sha256": "dfdb5a899c276ed15c81b45f642edf683d0203c593875d28c318771c954faa8f",
+      "profiles": 192,
+      "rounds": 12288,
+      "executables": {
+        "rtm-region-0-high-direct-O0": {
+          "sha256": "cc0593df8f4f2849ea61f58132b5bb99c95a74947bd69900afa8613261a2c3e4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-direct-O2": {
+          "sha256": "21279a8a59726c36982561084b7a1186f54568aa8378610a46743a98150b88d4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-switch-O0": {
+          "sha256": "b239179d5c7acdad4ed2e3e16046c4ce9d5d4f6a73e29516a80b20c5dbfd42cd",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-switch-O2": {
+          "sha256": "6aebab9a694462fe7d4cfa66c7b629b43920541134b13c98ae06641772d4d577",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-direct-O0": {
+          "sha256": "359b5edfd7bdd825128e37b665655b29489faada3e86c1690007058f62ada012",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-direct-O2": {
+          "sha256": "9193de9307b972185cf5c811c8573fa1131ade9a88c54f0d122cea7bc71dac21",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-switch-O0": {
+          "sha256": "0fccfda633b338c75ebcc1af3cfa5ca70954d675aa2634cdc8a9f15d37f74d14",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-switch-O2": {
+          "sha256": "e7444911c8d2ff55bdb06f9a9ed3c6b5cf70c1c0b7d1c03ee8b7543c68936b0d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-direct-O0": {
+          "sha256": "91b7a6f51ee6cda69e78ea502a9ffd864d0c963c456ce3d761cbe95383d8266e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-direct-O2": {
+          "sha256": "6a42097c26250d21edb96151a27ac825ddd771007f8832beba30dc6a5943f58f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-switch-O0": {
+          "sha256": "cb50b872498d2ab6ba77a6f57361f6b0ed13fb29e80a20cecc058c34514da29a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-switch-O2": {
+          "sha256": "b63260c53011582c2247a574e934fef2c1c06680cf25f834c80bce6e59a2c987",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-direct-O0": {
+          "sha256": "c38eae2638ce6c74df45b3a47e2ebabe1e7c60da10edadbafe70c5e7a175b22d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-direct-O2": {
+          "sha256": "397985c017b4e87b2ce11247f2f499a81449b5d503246a5c2c2453ef54b38b71",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-switch-O0": {
+          "sha256": "1daf5edbe21a796b12f80c408957f07eb267c9c9e3c538e77df6b40ed99501a3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-switch-O2": {
+          "sha256": "fc2441b42ca6457e32f65bf92f32bee1c514e7b0822a15e24396ddd03f979ad3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-direct-O0": {
+          "sha256": "d11534422ebafbcda447faebe4546651ddf27ad1cc08ba0ddfa332232509546b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-direct-O2": {
+          "sha256": "fc2cf977e6795143712ee7897041e86bdf28cc21b68d79172b74d42b7bc71a2b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-switch-O0": {
+          "sha256": "98c0c9ee21f506bbcec356ce545f2c0ca4f1f0f329b90db4773b8569500bcd97",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-switch-O2": {
+          "sha256": "53a1fb23a3a12759f67a29be1eb53ca000067b1374710dbb1435207aa8526e91",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-direct-O0": {
+          "sha256": "f41085e7db3e8ab08e352638365aec7d18a35737fcdd3e051576b76bfc263fe9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-direct-O2": {
+          "sha256": "737036e352e416e8423a93d05b9e8144dc50bd5cb96c075d97eae3041c49264b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-switch-O0": {
+          "sha256": "693c4a394f4254684177caf0ab2f9e83665fce66800fa7b00ce9b39b01a90fc1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-switch-O2": {
+          "sha256": "deb82a790b905f80a89359677a7359df8b0d525c95f1ad81f9bc518a2bb2224f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-direct-O0": {
+          "sha256": "4456506a6526e0621b5fd96ebe73f71ee545d33c84bccfebbdb0ce59bd49014e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-direct-O2": {
+          "sha256": "fa328e6ca10e95985bd3f029268f724a49c0b23026e3f02ef1f947e8ea587a81",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-switch-O0": {
+          "sha256": "982fb3d7087d5dca59f3857244df133df65e3bede535dfbecfa500cdb17f4104",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-switch-O2": {
+          "sha256": "44d56de6565543f2281787ef4d49ca4245aff4fd0382170b90889c1e6c5a074f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-direct-O0": {
+          "sha256": "de9d79b91600321889a151395c1409eb426d4abe443dce67dd64b17fd0562e95",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-direct-O2": {
+          "sha256": "910fe0e70fd3c661e181fc05736915dc2fbebef86bdb0f2a782e86369103024f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-switch-O0": {
+          "sha256": "386e33991d067dbc73078176d65518654284b2d368ba052ce49093a3a4cdf528",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-switch-O2": {
+          "sha256": "e07197c0c03fbe44514f9136eaf7c0552f9282b5840a5b22fd05b127f699fd55",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-direct-O0": {
+          "sha256": "8ce4c9ccced2da2b05e5bb8889f500b28a26822f0e6214db1aa1a6e5517192f1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-direct-O2": {
+          "sha256": "4293b03314bd5b48e5d27b486e21db9911f97a855f84fac537cc895c149ca5b8",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-switch-O0": {
+          "sha256": "1e39f5f1de60dcd157d72f62c690c998fb6c4f6a8b9aa85e35709d394378b5b4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-switch-O2": {
+          "sha256": "1b29dfe6cd59f788ce423905fbed31f6fbd39a5cbe6ba1aab3ae73b23daf2424",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-direct-O0": {
+          "sha256": "9d1daa5538ac00fcf70af5681184e371d4bb9e80532b240ff8553a38a0eb859b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-direct-O2": {
+          "sha256": "1db79413e0964db96cf80e85d0786ece69fbbd4affb04dfcb24b725eb3d386aa",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-switch-O0": {
+          "sha256": "48646088a0b3426ab9e699f050a4a940b2ac5df4527960b83fe907a1fe359a35",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-switch-O2": {
+          "sha256": "1033ab5d8b3c03ccc9e75f7ded41e1b345da55308f292572a3b8a17135103c25",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-direct-O0": {
+          "sha256": "e683f0cf35beb76c38504b4a6d1555613a59a77da98e2f568a1091719098063d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-direct-O2": {
+          "sha256": "f6058db2bd5576ed1c4b2adf0d39173605667b52e2a5f97e1ee30bfd976342e1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-switch-O0": {
+          "sha256": "6e41cc27a8a3844a10654d0afcb5707cc304b2fe636e0cfb28676e126f3931a2",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-switch-O2": {
+          "sha256": "a20f810a2d27d90142b1cd2b336ad9c12fc5c64a8c0115f8cb6d03e64cb5ab7d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-direct-O0": {
+          "sha256": "ca4c63a005add099b9168b05730d0cbf0351fb6a7373895870b82593d5901c32",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-direct-O2": {
+          "sha256": "9477d3fe58a7af6ff04e3c9cf32079e3a3191bc65b5db0178883ed2ad7184fbb",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-switch-O0": {
+          "sha256": "1e81fcdea2fc2504ced48fc83f3f6f66d3dd70055dd9b0560d5b1f2bcb2149fa",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-switch-O2": {
+          "sha256": "8878096d708aadf54ad043792d9eeabcfea155b0416cded0195ba89ed1c90fd8",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-direct-O0": {
+          "sha256": "1bd2d44d281ca02eb4e489a88532720e1b4f87311bc9511133bca40cf3e9218d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-direct-O2": {
+          "sha256": "7d1a32e739e50c6b61600d6a52fba0ab4459caae791b86efbb4e3c3ab6464cad",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-switch-O0": {
+          "sha256": "9e1bbf0940f37fa2493540e192aefb7463749667014f2b8ae1c41f9b70b7314b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-switch-O2": {
+          "sha256": "994b559932ef5fc9dc4604876584e5fb6575043b429f8c582997eec15888d991",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-direct-O0": {
+          "sha256": "748ace75ba416c0196310086e522030a5134562bb4c2d3704b7ea3c3abb41ed1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-direct-O2": {
+          "sha256": "d7b945f525e9d0f86327c2d911a0c8ecf1171c806045e43b8824c87ba2cce029",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-switch-O0": {
+          "sha256": "597766d8fc37de87f0020e51050cce91a7cbbd88593c4b17f45f828225c861b4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-switch-O2": {
+          "sha256": "fbae70db6e68b8b2dc0209fd2a891c927a62610312a0f2a6c905aa662e0ba840",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-direct-O0": {
+          "sha256": "05edd2ca6ba583259533d8e5724e0bb2d738c0da1b3db8d0aef197da40417807",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-direct-O2": {
+          "sha256": "9c271bf058c30001172b3d3fdbbf49e986f9f98023c98e10176072114638aeb4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-switch-O0": {
+          "sha256": "d3c8d4007b16fa1200a058bfb2db6e29bdc8214177348fb6f696716e640d80b2",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-switch-O2": {
+          "sha256": "8119aa7232da27cf3640a0794ea537f624c74b383984a4c333d9f90304343b75",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-direct-O0": {
+          "sha256": "43fe9d510766cc26fa1e2ac0c055fb96dd41539eb198287ebe54da3f411fe868",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-direct-O2": {
+          "sha256": "96f4f9287cf894dbbc64653e2be4aebd2a563e4f8cb2c89a08ac59713ad9ccc1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-switch-O0": {
+          "sha256": "3c1d717b6be02999d9814f56b47f9355d4d7c03564925edff99da2676f7fe564",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-switch-O2": {
+          "sha256": "f93463bacda8b414172ed9cbcb244ac560a23a5ae54090a2963f5143f07f9e4d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-direct-O0": {
+          "sha256": "184ce8d92d6045d9d6601f89b987cf92bdea30ce3451abf08ce1a1b331cb795a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-direct-O2": {
+          "sha256": "8384863f411d1d891e1f0517c3eb7594c5a0265622a49f5ae42c01cb2b0fa4ca",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-switch-O0": {
+          "sha256": "5d47549883e7ebc2d534d6d0ac174952e69e36b9a65c0041f2c242b86588f171",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-switch-O2": {
+          "sha256": "9cdf074f4230a9c184e863aacd16361807e55011459cec1c9fa4f08b7c4c893f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-direct-O0": {
+          "sha256": "dee4f1f015e85a368c21ef5b41d2af9a9091dd658242fa2a17721bebe62e16d5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-direct-O2": {
+          "sha256": "2b79eb6eb6bcf179e3eb77a606b8da618d469a3629b3cdfa3f26eb35bd287f9a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-switch-O0": {
+          "sha256": "add1f204ecefe025bf473f1ab17190b64cebceaf4c338cb68a9ee22fe12eff74",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-switch-O2": {
+          "sha256": "2484d4a2d0360bcbd2c5a8968073a8baaa9c874e6649f4435e84a1adba2401d3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-direct-O0": {
+          "sha256": "ec4ee5530c7d791242c0305306a3c238a21f0c7f516150ff5c0db0ffd4b3dbed",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-direct-O2": {
+          "sha256": "caee5c12f07a9f3a254761b73cd54d97bff88c62400583e29cb294b4c8f874fe",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-switch-O0": {
+          "sha256": "686b8f754cbc01cbf1409941b18a986dbad2e943264479f467a15cfdc01c408e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-switch-O2": {
+          "sha256": "f24285a10b5e51d05a340fdf15451762211ed2e57dd983d8de3b80d69d5ada00",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-direct-O0": {
+          "sha256": "e478517aff35692ac4618bc37b6d8d52a18cb162f448ea39545cf4db2d2803e5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-direct-O2": {
+          "sha256": "a4f0a52c95debe0d1c1b44680f7d79e976f68bb4b46d68071c1100745166a4e6",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-switch-O0": {
+          "sha256": "f31f49b726559067d2208511b68d0fa17c58e1f0981ef588d4e31aa1c6fa8fde",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-switch-O2": {
+          "sha256": "e352e0c5f875af8c720639336e95ac3b1ca378e8030719d64d32b437fb2158b5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-direct-O0": {
+          "sha256": "1cf9be11b775157e87cab8311cdb290c822543d2bded3f488e954fc2b280237e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-direct-O2": {
+          "sha256": "cd7947d120f3edd6ed85268c7efaaccc4c08dbb7e140ac741a1fa0d8c4c09855",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-switch-O0": {
+          "sha256": "2061da358849b927dc573745ea875d13f8fa8a008af9ff63460fe1d45ef703ff",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-switch-O2": {
+          "sha256": "5a1d13dfd6c0468cdd4343b2f4664c2e3cca831fb79f354657dbaeb1d2799dde",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-direct-O0": {
+          "sha256": "a11bf5a4277fad3765af02f1cbab6a72415f6d776a191cd2b33955bbe35591f9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-direct-O2": {
+          "sha256": "b9d19cd2c9690efe068d4a89ff3c0c32ecfb66a155ce23bc361d1e56058f8544",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-switch-O0": {
+          "sha256": "16a451ef74bc1ef32f94d6f1b7a3f249ee177c936159ab44d35e793ea1b4aeae",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-switch-O2": {
+          "sha256": "e4c766e8b1e7cceca73af3ebb8c5a0772c9e6fef095d7288cfb8e082d170de76",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-direct-O0": {
+          "sha256": "fd47e6c61d7ad6db86190381be765ac65ca4f2d2ed984fc703f8133eb804c5c3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-direct-O2": {
+          "sha256": "1d6d4cd2edc9ffc77a98fa27beb28409232699b2be7f30e60a7880123c146471",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-switch-O0": {
+          "sha256": "88c772b9d2f465e27a718a161639a40736117184f8929e605ed5b8c22a71ce6c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-switch-O2": {
+          "sha256": "7187d8de16da7c6259dde4a8cc964aed58a4a5a7d3c9b293e7a3efa8bd326d6c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-direct-O0": {
+          "sha256": "86005141a61f1f21e74d01d0c1f99090ead63a2bfd728b0c0209ffa8f56551db",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-direct-O2": {
+          "sha256": "511fccb5ed6b620be56c36b5eb69693fd3e37492bb66ef3d2c8cf1deacce2632",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-switch-O0": {
+          "sha256": "668f128df08740b0e182786de4e95341b3449961c2ecc584ed7fae915b9bd0ad",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-switch-O2": {
+          "sha256": "ef5f3aab5cc4f43cb970aa41a3964b07ad72041253959dbf3d0753e6ad1db133",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        }
+      }
+    },
+    "llvm-new": {
+      "record": {
+        "file": "<artifacts>/llvm-new/qualification.json",
+        "sha256": "f859f7da58b69bbfec7dd84ba25423f9ffe2d5edf308b79d31a5a4f10a48ae94"
+      },
+      "tools": {
+        "compiler": {
+          "file": "<qualified-tools>/neverc",
+          "sha256": "e6addbe893af2a69bdaf0efcae383baa7f47663436d9a907834b0c156d0e273e"
+        },
+        "sde": {
+          "file": "<qualified-tools>/sde64",
+          "sha256": "257872adf7e5cb0855c6774539590587238302bdcd90ddfccca074e9c4c4a3f5"
+        },
+        "host": {
+          "file": "<qualified-tools>/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "llc": {
+          "file": "<qualified-tools>/llc",
+          "sha256": "42bba0d2cc437a152a5035dfbde446fb6913ba02b0ed87642169937b3eee5484"
+        },
+        "compiler_cpuid_header": {
+          "file": "<qualified-tools>/cpuid.h",
+          "sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a"
+        }
+      },
+      "script_sha256": "ec6b3d5a9c12e21a47b61b53fab1e7ce12fc056300c736f1f46ab74b09730a05",
+      "commands_sha256": "7f37c4d124aba0926e33bd8d2ae5eca7ce7b56a20c0c4b73d66e3f1bd3584818",
+      "profiles": 192,
+      "rounds": 12288,
+      "executables": {
+        "rtm-region-0-high-direct-O0": {
+          "sha256": "cc0593df8f4f2849ea61f58132b5bb99c95a74947bd69900afa8613261a2c3e4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-direct-O2": {
+          "sha256": "dfac3afc173eff44d98a8a731c955be98f46ae301a78238159dacd061bc276c5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-switch-O0": {
+          "sha256": "b239179d5c7acdad4ed2e3e16046c4ce9d5d4f6a73e29516a80b20c5dbfd42cd",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-high-switch-O2": {
+          "sha256": "f6dccf9accf778c321c31c138e85a4d6c539e2844e9a609736e8743e38706acd",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-direct-O0": {
+          "sha256": "359b5edfd7bdd825128e37b665655b29489faada3e86c1690007058f62ada012",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-direct-O2": {
+          "sha256": "2c273b5159633f3541d0a9fd481d95e538e5eb4dc7afb39a84dd64d15d335b48",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-switch-O0": {
+          "sha256": "0fccfda633b338c75ebcc1af3cfa5ca70954d675aa2634cdc8a9f15d37f74d14",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-0-llvm-switch-O2": {
+          "sha256": "49719d6bb199fad02ca02f875d4a1c0b4364c390965c0c9ce43d0e040b1a8faa",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-direct-O0": {
+          "sha256": "91b7a6f51ee6cda69e78ea502a9ffd864d0c963c456ce3d761cbe95383d8266e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-direct-O2": {
+          "sha256": "5359c883e9cdb8d3a51703680834945f60fea336bd11dc53636c6b05526e72a3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-switch-O0": {
+          "sha256": "cb50b872498d2ab6ba77a6f57361f6b0ed13fb29e80a20cecc058c34514da29a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-high-switch-O2": {
+          "sha256": "52e14bf13f6499cbd634b389783322b6f350bcda849b6707aaa3608434aa82f1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-direct-O0": {
+          "sha256": "c38eae2638ce6c74df45b3a47e2ebabe1e7c60da10edadbafe70c5e7a175b22d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-direct-O2": {
+          "sha256": "92972dfc222a001970f2298b730e76e26c91769415c08f7b29480451e0265145",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-switch-O0": {
+          "sha256": "1daf5edbe21a796b12f80c408957f07eb267c9c9e3c538e77df6b40ed99501a3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-1-llvm-switch-O2": {
+          "sha256": "951705295dd3592d00102b26b817eae507f840100410708e57e99389b9e21433",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-direct-O0": {
+          "sha256": "d11534422ebafbcda447faebe4546651ddf27ad1cc08ba0ddfa332232509546b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-direct-O2": {
+          "sha256": "afda7573ee97d9f0e5e286c98237d1f1e1d7864e9103378597bbb5c9a326bdbe",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-switch-O0": {
+          "sha256": "98c0c9ee21f506bbcec356ce545f2c0ca4f1f0f329b90db4773b8569500bcd97",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-high-switch-O2": {
+          "sha256": "76f464a2d9f252eaeef9ce74b6c0ae20ef8f23f9455fc19a7de6bc3fe920cfb5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-direct-O0": {
+          "sha256": "f41085e7db3e8ab08e352638365aec7d18a35737fcdd3e051576b76bfc263fe9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-direct-O2": {
+          "sha256": "4ad33deeb787938876ca228c9ea1d39cf3c2933038e411336b215cb1e9d2a6a9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-switch-O0": {
+          "sha256": "693c4a394f4254684177caf0ab2f9e83665fce66800fa7b00ce9b39b01a90fc1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-10-llvm-switch-O2": {
+          "sha256": "12d2b50950e84d208113aaa870cfe29af59a79c473b1e2849770c357839c2e82",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-direct-O0": {
+          "sha256": "4456506a6526e0621b5fd96ebe73f71ee545d33c84bccfebbdb0ce59bd49014e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-direct-O2": {
+          "sha256": "ec3cbb9ec64017f23a3e2ce65b447092335113fbfc67381cb16c0f67d9a5f2ab",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-switch-O0": {
+          "sha256": "982fb3d7087d5dca59f3857244df133df65e3bede535dfbecfa500cdb17f4104",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-high-switch-O2": {
+          "sha256": "c27097f3f4301b35d6da1fc3f38246a265bdc29ba0fcfc308e517141bd2eda42",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-direct-O0": {
+          "sha256": "de9d79b91600321889a151395c1409eb426d4abe443dce67dd64b17fd0562e95",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-direct-O2": {
+          "sha256": "f67332c7cbf60dd106ab5fcd1577f8c8cd0926b181ab81fcee839b621a391612",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-switch-O0": {
+          "sha256": "386e33991d067dbc73078176d65518654284b2d368ba052ce49093a3a4cdf528",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-11-llvm-switch-O2": {
+          "sha256": "b02158552a652dfe1aac38e2a90e04bcb86f509963db99a182dedb3634f69841",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-direct-O0": {
+          "sha256": "8ce4c9ccced2da2b05e5bb8889f500b28a26822f0e6214db1aa1a6e5517192f1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-direct-O2": {
+          "sha256": "c4d5124dc5f7e0a3ba70beab10dee9070c781620ef3af9973b13171b57767e8b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-switch-O0": {
+          "sha256": "1e39f5f1de60dcd157d72f62c690c998fb6c4f6a8b9aa85e35709d394378b5b4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-high-switch-O2": {
+          "sha256": "24c92fb1a9e18e8a71a2bd383a23a0166ff0739c9f24145cc27e827ef830543c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-direct-O0": {
+          "sha256": "9d1daa5538ac00fcf70af5681184e371d4bb9e80532b240ff8553a38a0eb859b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-direct-O2": {
+          "sha256": "f1c027dac2e6053c32cc96af30dc3c001ab8f11b1685bf381dd7d39c41817e3f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-switch-O0": {
+          "sha256": "48646088a0b3426ab9e699f050a4a940b2ac5df4527960b83fe907a1fe359a35",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-2-llvm-switch-O2": {
+          "sha256": "7e59c2e151242328ee985cf0a096e6a1c97f305c06baf623b3154ad2e5adb287",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-direct-O0": {
+          "sha256": "e683f0cf35beb76c38504b4a6d1555613a59a77da98e2f568a1091719098063d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-direct-O2": {
+          "sha256": "d2be0dd2185c7a3f3a0756b53aafe3a2b601887b15197438982e32011fcb719b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-switch-O0": {
+          "sha256": "6e41cc27a8a3844a10654d0afcb5707cc304b2fe636e0cfb28676e126f3931a2",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-high-switch-O2": {
+          "sha256": "4b5d903fffe050b063b114bd0e235dce9138fadee723d2c47bdc5c12b8e058ae",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-direct-O0": {
+          "sha256": "ca4c63a005add099b9168b05730d0cbf0351fb6a7373895870b82593d5901c32",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-direct-O2": {
+          "sha256": "48e48bc39f908c3d9aeb7991b466b782b41fc04d22d700ed0b7314181b1600de",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-switch-O0": {
+          "sha256": "1e81fcdea2fc2504ced48fc83f3f6f66d3dd70055dd9b0560d5b1f2bcb2149fa",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-3-llvm-switch-O2": {
+          "sha256": "64888404679aabfef017f4bfaf9af480ee4b218558f4be27d754cf143a27b1fd",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-direct-O0": {
+          "sha256": "1bd2d44d281ca02eb4e489a88532720e1b4f87311bc9511133bca40cf3e9218d",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-direct-O2": {
+          "sha256": "64b75b79ccaa5d9700b41fc690cccd0999cc37800d73a86b4e24b74015c02cf8",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-switch-O0": {
+          "sha256": "9e1bbf0940f37fa2493540e192aefb7463749667014f2b8ae1c41f9b70b7314b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-high-switch-O2": {
+          "sha256": "4e4ee13b1d15f66b4b02e1e58e74843ba579db913b492ffae5096cca2f97699a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-direct-O0": {
+          "sha256": "748ace75ba416c0196310086e522030a5134562bb4c2d3704b7ea3c3abb41ed1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-direct-O2": {
+          "sha256": "a444af4d616b131729e601d3f981a40e627e17ce81cf023e89bfa3ddfba3d9b3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-switch-O0": {
+          "sha256": "597766d8fc37de87f0020e51050cce91a7cbbd88593c4b17f45f828225c861b4",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-4-llvm-switch-O2": {
+          "sha256": "b6cfae00fed2a8e6abcfecb2f5f51cc07576eba44826c826c5b0c4dffaaf4cbf",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-direct-O0": {
+          "sha256": "05edd2ca6ba583259533d8e5724e0bb2d738c0da1b3db8d0aef197da40417807",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-direct-O2": {
+          "sha256": "b0fc38ed1d9f9c0d19a5051f176dd932ec192a4bfceaf6e65fba04eb66680616",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-switch-O0": {
+          "sha256": "d3c8d4007b16fa1200a058bfb2db6e29bdc8214177348fb6f696716e640d80b2",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-high-switch-O2": {
+          "sha256": "715c3e842c35ba4d1283230be396ff1a94c5e14b5dc609b8431c6364d4e62056",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-direct-O0": {
+          "sha256": "43fe9d510766cc26fa1e2ac0c055fb96dd41539eb198287ebe54da3f411fe868",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-direct-O2": {
+          "sha256": "e565c94c0bb4b0136823043ceb9f93f0051e4cd06f6919e32d79048eeaee8fd8",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-switch-O0": {
+          "sha256": "3c1d717b6be02999d9814f56b47f9355d4d7c03564925edff99da2676f7fe564",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-5-llvm-switch-O2": {
+          "sha256": "53139eb4f77ea46ae04347c5f8a68a0147674025a8949f82be58a98c9ee09f58",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-direct-O0": {
+          "sha256": "184ce8d92d6045d9d6601f89b987cf92bdea30ce3451abf08ce1a1b331cb795a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-direct-O2": {
+          "sha256": "4bbc70d4fdb914ff14eca41841377888c01cffb080de2daba02162de25b1a0c5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-switch-O0": {
+          "sha256": "5d47549883e7ebc2d534d6d0ac174952e69e36b9a65c0041f2c242b86588f171",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-high-switch-O2": {
+          "sha256": "77899899cc7926be822cdc9878d9eb6bb7a968348b98b560cd104371642b3fc5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-direct-O0": {
+          "sha256": "dee4f1f015e85a368c21ef5b41d2af9a9091dd658242fa2a17721bebe62e16d5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-direct-O2": {
+          "sha256": "fea4cc0f06b12553786fbd49231b31cc917234b9083015bb30307f22468ec1b5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-switch-O0": {
+          "sha256": "add1f204ecefe025bf473f1ab17190b64cebceaf4c338cb68a9ee22fe12eff74",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-6-llvm-switch-O2": {
+          "sha256": "52b6c8ba4ecb6ec8f2cf4bb34202037cb69bd6fcf5314a97d1537781531e22e1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-direct-O0": {
+          "sha256": "ec4ee5530c7d791242c0305306a3c238a21f0c7f516150ff5c0db0ffd4b3dbed",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-direct-O2": {
+          "sha256": "195682d6fd4a1150ff7f2a60182a66fb160ac22bae7d894a4b7cf5b835c0627b",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-switch-O0": {
+          "sha256": "686b8f754cbc01cbf1409941b18a986dbad2e943264479f467a15cfdc01c408e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-high-switch-O2": {
+          "sha256": "e1239d04f9230ee4dc6f61ea9149589d8b36fdc4be1c088746ccd571784e3cad",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-direct-O0": {
+          "sha256": "e478517aff35692ac4618bc37b6d8d52a18cb162f448ea39545cf4db2d2803e5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-direct-O2": {
+          "sha256": "abacc3d13c7b1cfaabf12324497c26696339ca976f482510b3bc88a1e73cf694",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-switch-O0": {
+          "sha256": "f31f49b726559067d2208511b68d0fa17c58e1f0981ef588d4e31aa1c6fa8fde",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-7-llvm-switch-O2": {
+          "sha256": "d3e854ee4b28aae90573d7eb48bb8129607a3384c021ccc2f625eaf410f2c49a",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-direct-O0": {
+          "sha256": "1cf9be11b775157e87cab8311cdb290c822543d2bded3f488e954fc2b280237e",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-direct-O2": {
+          "sha256": "affd329dacc0aa82b0504f67e9f3494483374a9488f0e8d162bf04de7ba1fab5",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-switch-O0": {
+          "sha256": "2061da358849b927dc573745ea875d13f8fa8a008af9ff63460fe1d45ef703ff",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-high-switch-O2": {
+          "sha256": "ac27842f658e218fa8d9577aa018a4d4af9a371076a98ed41e51ac197abf10cf",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-direct-O0": {
+          "sha256": "a11bf5a4277fad3765af02f1cbab6a72415f6d776a191cd2b33955bbe35591f9",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-direct-O2": {
+          "sha256": "e8a84a33560a6b5e92e5de02f8f81823a105a013845ed1d91cc2fae1e6a8a7df",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-switch-O0": {
+          "sha256": "16a451ef74bc1ef32f94d6f1b7a3f249ee177c936159ab44d35e793ea1b4aeae",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-8-llvm-switch-O2": {
+          "sha256": "1a707f52c789880be53f83b283ffeb2ced5e48100f7afbeb6bf122fcf0e302fc",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-direct-O0": {
+          "sha256": "fd47e6c61d7ad6db86190381be765ac65ca4f2d2ed984fc703f8133eb804c5c3",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-direct-O2": {
+          "sha256": "2f2dfaa1bb350fc107eb28445a77449569316d23221feaa60abbe29e0f792279",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-switch-O0": {
+          "sha256": "88c772b9d2f465e27a718a161639a40736117184f8929e605ed5b8c22a71ce6c",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-high-switch-O2": {
+          "sha256": "ccd8ca17937b9f07fd5d9b35fc646593d69904763816970d4e416785f93fb3d1",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-direct-O0": {
+          "sha256": "86005141a61f1f21e74d01d0c1f99090ead63a2bfd728b0c0209ffa8f56551db",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-direct-O2": {
+          "sha256": "fc9250f26812daf50524b37a6d95ad9192fa105de27ec9aef360da2aa1495d5f",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-switch-O0": {
+          "sha256": "668f128df08740b0e182786de4e95341b3449961c2ecc584ed7fae915b9bd0ad",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        },
+        "rtm-region-9-llvm-switch-O2": {
+          "sha256": "3a24b03e16e862e63399b4422e88674c810f8ec9276927780de4bcedd7705c14",
+          "modes": [
+            "full",
+            "cpuid-disabled"
+          ]
+        }
+      }
+    }
+  },
+  "source_matrices": {
+    "rtm-region-0-high-direct": {
+      "source_sha256": "1357e18893880be49297c1f4ca356fb8eb4494dfe0b3df99824fca772c299f0b",
+      "manifest_sha256": "16c69e2d6cb5ab3f27964ee58fe426dcc8ea788853a1c95771ecfe81d7982224",
+      "test_sha256": "7b19ae74a6ae9de94751a94fdd9d059a9375d27bf376cea06a3e781d5ffb08af",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-0-high-switch": {
+      "source_sha256": "e7e9d29cb3f93b58f1afa270dbd792f42c0964694c0119d516d448e57ebdd57e",
+      "manifest_sha256": "4bc8da227b7ff3d793f01f371b6bd6f5b6e2b1c30946ad16ffa05f361b7df62e",
+      "test_sha256": "d3f37ad9b229c02ce111dc222f9e044133d14b0598c01a626e4114df27a99c1c",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-0-llvm-direct": {
+      "source_sha256": "3ef3229ffe2ddf80c0e81191f2ee77a25742fa7ff5e4055c0fabba30d44f40b4",
+      "manifest_sha256": "cb9df83c7dfcc9a0fdc6aa5bae03026e900432696de38ae963771ddef8943034",
+      "test_sha256": "e110884a74a1dbc467ea5677f760fdcdf3efb9da705d1d56eab2d6091bc922d8",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-0-llvm-switch": {
+      "source_sha256": "074b53180ebd187b6f847616f072f3611618edfcfde791e5ec11ca1af85c8100",
+      "manifest_sha256": "715aaf25b1aa92477ed8f181042f619cc5370b6b12768324f6023c7b5ffc1b51",
+      "test_sha256": "555e2b34130b92a0b1546e4b17ca93ee02c171efba21583fc7a753ab2ee16b1a",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-1-high-direct": {
+      "source_sha256": "0ef491f71dbe21c8e3013533c5b2fcb667667602f8a4f93b85b6434676544582",
+      "manifest_sha256": "3b28e6a12efcd4c31864c9ca658ed3adbb87d6c1538ab4a979808b1eb3d964c7",
+      "test_sha256": "a851f078f68905f9b207c934457b3ba3ced67dd94c4c6942cbb47b7158b3432d",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-1-high-switch": {
+      "source_sha256": "1797767b2f8dd83ce206990105edc0a9c3c34b5915094439f19ee9e0aad7e740",
+      "manifest_sha256": "5a8ed10e050a60e7a03e60023eef2306d05dc96b6f8e86c7abaa8dd71aece021",
+      "test_sha256": "ea0d1a1cca5fd2b73c451f8e73bad3ea2980033d6493f71b1a94b12859ef6508",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-1-llvm-direct": {
+      "source_sha256": "1cf6890956ec93d58f4a6f939b24273d5c14e51e46187a5c9a3614e1441be072",
+      "manifest_sha256": "d9f1e5b224191969567b3987df11c543b312430a3a20ec5a84dda26804a91009",
+      "test_sha256": "317d65b0a42d89c80434c77a48ac22d90fc636c6b36229c286cf8cfe1bf5191c",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-1-llvm-switch": {
+      "source_sha256": "5286c74925967656202f9dca266fe79f08db7fc43f49297d09d322dd0b8640ca",
+      "manifest_sha256": "41f46d55f71be81368bec96770dcc98bc270eede5d565d104c3c0e7bcac18765",
+      "test_sha256": "8e7a13f5fce7b0b43e40e98e42f164db3bae05a9bf9a66f1dda1e1a886716607",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-10-high-direct": {
+      "source_sha256": "731d07e34ab4ddf05486dbd271a89c7e455b2f5e43c347424e03b753fd532c1d",
+      "manifest_sha256": "edd3ae28e309e23ae01291150f23d463dfcff476e0e9ab5ef596f1b925a389da",
+      "test_sha256": "06d03ad4b0ae97fb60b76cb131f478a2f3c9e1f0254c9b5dc7eb40928c35e4bc",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-10-high-switch": {
+      "source_sha256": "797ad12a4ada37e9ab863e276bf65f7926253f1b6f8729a8454c6271641ae50e",
+      "manifest_sha256": "98df604f3edb51f6b71cb9f540ba5d6f8b2374acb297a519e47b16871c1aa8f5",
+      "test_sha256": "08d114d307f0b566429ac9da00948d4a8e00de9075b9603d61f449c611479604",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-10-llvm-direct": {
+      "source_sha256": "79131c92d216b6534c5a5c7770234f8d9571ce6bc3938b0cb21e164a7286f591",
+      "manifest_sha256": "bdd0e3fd0499accebbf260a8c5ab49869d1ed3cf6b660c921f1bdf05cc50f966",
+      "test_sha256": "282dcb606914903756dbc26f6e8c8138b88a87e7b468c08737079eee426694cf",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-10-llvm-switch": {
+      "source_sha256": "591caf6a90661889dd7dc2bcfb1cb435e838a68e0c341f1649f0c23dea9bd253",
+      "manifest_sha256": "0eeb56c852ef9ce13fefaf098bbf08939b8f03a0acada307da1ca2936add9a90",
+      "test_sha256": "76b1277f256f8e49b0b822cae070e406b8997468a6753003d9cbc54db2010602",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-11-high-direct": {
+      "source_sha256": "b21194ed97707f4f3cd6f588b8b60b19d0b8b3766e1aa22823084e79feb2b985",
+      "manifest_sha256": "ffc3d9756373b23cd566693ed4f21c563c142c298674239c4d06c955e6880e19",
+      "test_sha256": "374407b3da529b94eaa55dbec4c2fb3560edb2e7bbd47456424bb118ebce3d87",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-11-high-switch": {
+      "source_sha256": "97c7bb444bbc55d5a2a3d886c01f3d76f228d83a1dbe906a1919171b7a292cfd",
+      "manifest_sha256": "9862f767659a622775da8c5eb65d3ab5f364b5e4f59ff233ceb70aa91d9276a4",
+      "test_sha256": "53f83e48722a62762eb3ad7451a5033468b22869b41949680fd7ecdab0787b4e",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-11-llvm-direct": {
+      "source_sha256": "72101ee6be6c1794177c2d81641812c94c89d7567dd7ada4674cff7a4101a68d",
+      "manifest_sha256": "21368654c8fe2b2f88ae6a2ed65f72f127cbc5a1e6372bcf77bc6c8052dfe1a5",
+      "test_sha256": "18b642758db8243d8305c056e9893197968ccdd1a2e334b4c313045b3da84222",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-11-llvm-switch": {
+      "source_sha256": "c7de6c6eaf17bcc543c3992e7a2bca8a1b160937fb22e5a8630f07dab2601872",
+      "manifest_sha256": "5830b2621bb42d0b61010dc571fb46119ae25bb80f75df8764d0a223d707fad2",
+      "test_sha256": "4a7ce70821fc98cfbd2296dc2bf2d0b3ae51a7c6936efe017d0391ca3796071b",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-2-high-direct": {
+      "source_sha256": "a4ace266a548149b09ab11c165a89c04e215892c4eb1e56712a6411edf9fb22c",
+      "manifest_sha256": "e3c74c726062e9a75e4c8195af11597a2d5126b084f582113037352312a60e0b",
+      "test_sha256": "1aa165bf12e82df29932d721341c771e34bda7defb0195a256a0e571bc5fc6ce",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-2-high-switch": {
+      "source_sha256": "e37d199d1b3ddc6044cc0c16326453be59df9e509e6ed1dc35b81facb9c7d350",
+      "manifest_sha256": "7e70b33f039a064c9ce469c78b40cf4252183db32df682565c2c365913d00578",
+      "test_sha256": "346d2710c2f18d8233eed721bdccd3f79dc02ec5c3f98f9e43057710a66ced46",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-2-llvm-direct": {
+      "source_sha256": "7bd8a0cde7c09f80b218ae6a23cd23cd2bd553a0845712492a107637a24f1fbb",
+      "manifest_sha256": "5a465b4c373b7ae10abc45577123e248039dfd875f9850334267d12d48860bc6",
+      "test_sha256": "6b8379049bea966f27f6953bcbf0816dc0fcbd799acf9490774485968e9f052d",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-2-llvm-switch": {
+      "source_sha256": "b187b99fd7b8fcaa55077135961401395530ce2d3ff5e4bfbe51fda3775341b7",
+      "manifest_sha256": "ce38e2aa38da924b6233c93f36eb6005989674422642cf311e520ded39672141",
+      "test_sha256": "68a44c0178e9386819da8b4773364073eabc43379dfad18eb0a48cf1e61ae22e",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-3-high-direct": {
+      "source_sha256": "78ffba91141abf9948c6f7b1478f8bc0343049df5642ccdb8750640c975256c1",
+      "manifest_sha256": "188db9484a8492b0bd2ee90dd86bfac1f3008927ca843fc01c2663d17ff42001",
+      "test_sha256": "47e11f00d2c752feddf3af5cdd92c1f357ebb080751ae0783558c1eb39e27f80",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-3-high-switch": {
+      "source_sha256": "a521574d83422cc203b33b8a5a964b059bd12fe15ad267156ab69c281e908b40",
+      "manifest_sha256": "41bd4254e7ecf2247182e25f397ad00fb7fe069c3c7970a5bf40ee7db043fed2",
+      "test_sha256": "851e30d753ee976277b8e46a8e878307f5166c4f0fcb89931ec109b8eb0a4c2f",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-3-llvm-direct": {
+      "source_sha256": "74ebc2f7fe3a68c56a26f875c239566feaebaec6240d92abce44fc35cce2e585",
+      "manifest_sha256": "dd92e467ce48165492b219bf282e010273a6cde211be32b294d408582d00ac4d",
+      "test_sha256": "a39dcde4b002ccbd17b1ed4d8fc784234f6285e3ac8219b34fd5def07a45adee",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-3-llvm-switch": {
+      "source_sha256": "e2fb3970fe1ba782438d3d3fd13fca43b1f044f937bd9cb6852138bbdc64b3ca",
+      "manifest_sha256": "20fb84df0edbc75670889bf2f664ccb48a88728640a4d7f80860e0e3a89500dd",
+      "test_sha256": "e15a04465768c4c46067e0f8b70a860acc23d168acd0533fd419deee5ac21df9",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-4-high-direct": {
+      "source_sha256": "be0ac3e32ffba95cad585dd2ec57a39e0e1cfac07c7137c0414817134d9a55bb",
+      "manifest_sha256": "2ed2c07877556635bad04cd4a54b9d029b56599b965e60cd3eadd1df212dcadd",
+      "test_sha256": "6e29355c196fadf79f6358fde70ec2d9e228cbddebc054cec0c647e4af13f3a5",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-4-high-switch": {
+      "source_sha256": "c89cadfb38faf58faec2b8f6ccfb1338dd13112a33e5a2d9a25a9960d10f1946",
+      "manifest_sha256": "a38e5ebc3bd13b63e3829cc94a84ab988d2a8b4a652dfb3112b3ea173c5e80dc",
+      "test_sha256": "be7eadb7266e2fba847bad772a59607cb18e5c4472b9107f4f753074ce9a9488",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-4-llvm-direct": {
+      "source_sha256": "eff4376931f5e64ad0b20b4dfe14c1ea57ae9ad64709f6efcd90337040ecc048",
+      "manifest_sha256": "d45d378dda67bd24c42ec2799f4b077b98edc25b33953dc0b4d69afd3ee32f7b",
+      "test_sha256": "ea1d2bd2e844c87125590a7c134a082766af93a7d6298441cd4c03a61d4602ae",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-4-llvm-switch": {
+      "source_sha256": "5798a9817cf95d77c6e3a977c210b68aa78c7ae37f22e5e779831179ed955328",
+      "manifest_sha256": "7e52de2d9ed98a31e38901918cb04cf6476b9b38d6117b2ef52598a990940809",
+      "test_sha256": "9f537bf8faf895479db83afb014175ac2f7d37ab732d3dc65b98f501a7a7af52",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-5-high-direct": {
+      "source_sha256": "894ef6edfc5c4d0cd4e3a18227f86af2caa29070c21588ad16e86dc7ff65d243",
+      "manifest_sha256": "1c905757ddacead00fda0e356ed8e83af879eaebc6dc0b1cb9f0fa54ed1aadb0",
+      "test_sha256": "430d006a658c731d28fd886aa9fc4652852b1b0f94b78a4580513166718cd37f",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-5-high-switch": {
+      "source_sha256": "5364bc963bc108b65bcc4a456912e808ae7865c7ad941799e15ba7a812c766e6",
+      "manifest_sha256": "ae46e1e146c20328c0a841b760f5731e7f0a53bdf8752e27382a759338040996",
+      "test_sha256": "fcd1c51e060bc27f737ef07618d78ea82c3ed0af8bba22bb083dba6d6ac92148",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-5-llvm-direct": {
+      "source_sha256": "b10f1da5bccaac60a3d43a27fa8550899eef77b9683cb611e83d9d183afe404d",
+      "manifest_sha256": "b9378008686df10ca8cec8545e9439a7b40ea1fd561ff4503018a9373b118c3a",
+      "test_sha256": "bc2393ba12e50d4a11ca5a0f4ce11df3089dddb176226bdd61cb4a7e21624ecd",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-5-llvm-switch": {
+      "source_sha256": "0e095b310086fc923895423ce9575cfed1b0587dab22dd025e251926b160747b",
+      "manifest_sha256": "ed92d768514e04de67546e9e69068aef7379633bd9e68a9d5a09fb1d083563b1",
+      "test_sha256": "287b1c57d923d0963f721f59967e0221b6552344820b81123505a422321360e4",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-6-high-direct": {
+      "source_sha256": "d91d6c453338276bf4a22f1fa873b9a81a620b3683c0d835ca6cd5c734a8e378",
+      "manifest_sha256": "696c5c2755b9d151d33ea8b6f2ddf234b8ed2b2410c32cacf1efbdf4fd3dd867",
+      "test_sha256": "81053da43fb508aefd000dc1cc4aaac36179690154b3c5b45dc7d40c89e86b29",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-6-high-switch": {
+      "source_sha256": "d8194918d0ddfe01ba16b8dbf60b1e3384aa79ac344865bacbf84de4098d3583",
+      "manifest_sha256": "96482a3709c044fc7283f8b3022898e2a8962095fafabfa16b7e83050778da36",
+      "test_sha256": "cd8a9048db0a9ca7a9b0cba368882a42ba55c6a348783332276a9722a4780fb7",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-6-llvm-direct": {
+      "source_sha256": "28b65a873807768966ab6329414d7465eafb492b974e9067b202382324218e6e",
+      "manifest_sha256": "34270a9eb914dcffd2f3e434ad9d5f8cfd564c9e71ee1d30bb62430b921c8eac",
+      "test_sha256": "1aa641550f13ebd7cafbd366716d37a02fd22b84589e5a72145559ee25711e1b",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-6-llvm-switch": {
+      "source_sha256": "e10f915fa97819fb5aeceb0df8b784767ef98a1bf511058fb203733db4b35207",
+      "manifest_sha256": "811475f9287b0b7b620053946b02f6a52e9cff864babdcdaf7bdf4ba007c00a2",
+      "test_sha256": "e31bcc0f43fefa21d7cdd5a893bbb133894c4b465aa017ebe3090f32cb02d437",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-7-high-direct": {
+      "source_sha256": "c4955cb3855096a3826f79d1dd4ca26c597c52c560feb8dac3992a854d21eab6",
+      "manifest_sha256": "ef4b41e118572bdb9bda973441cd49e6160a05e958876392c8c75f43b912aaff",
+      "test_sha256": "cc59a547e6e33e76585fb8ecf1a7dea428e0fc794758b020277b1c8e7fb67f0b",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-7-high-switch": {
+      "source_sha256": "e4c4604b54a2e50cf96f6cf1f74a947ab3bc9fe952895b85244e79793f950a66",
+      "manifest_sha256": "d5b940ea6559cbeb424f1d4eec2826afe6ea9b509675c420ff9c77f1f7549ca1",
+      "test_sha256": "6f76a7129afaa0aaa30eea7ef52074755232933e344548d94fb39efd2d219e20",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-7-llvm-direct": {
+      "source_sha256": "86136a33bc570b283fdcede660681d627767a00b3693c22c691774b0cd25d72b",
+      "manifest_sha256": "17b8dd40d05c8281ea24f1b8d32064402dd8618809973149ea28cd6abe03344c",
+      "test_sha256": "3fbd54e722ccfe67226d454c32d3584de7f83dfc6ad5709f898148db50bd941d",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-7-llvm-switch": {
+      "source_sha256": "34767d47acea09cb7f422386a2d7fc7d40fc8251b5bfde6dcfa9fbe9d87145c1",
+      "manifest_sha256": "d35db674afef8a325cbbe7d66428c850314f21649a37f2a28fd4cf61d180cf37",
+      "test_sha256": "428fdcf09ed8efd6ecffac43f336b1ac5cbbbc465dc1f048065dc263e4073487",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-8-high-direct": {
+      "source_sha256": "acf80c93c91de54d0b099b50531f656f7debf31a6f1992e62ff5f19b2611e4ee",
+      "manifest_sha256": "59f6212303ea6ef9db2e4812c2e34afa40a2cd04385d93de24095eb5bc175405",
+      "test_sha256": "625796f4808aa87c9b31218df106a445c7efbb768e83d40b43d8f32b0738afca",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-8-high-switch": {
+      "source_sha256": "7a7a0a7b1dbcb53de0398710293e54b16c8e7887e3be906830a1cd84820da427",
+      "manifest_sha256": "9d5a4acec1a75bb9d0e9db8850584cfb9d9955e1cadd624db1ed0b29611408b2",
+      "test_sha256": "6daf82e830a4a3f5735adec36c58e1f9a1996fe37a070d03d22b5f50190e0f5d",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-8-llvm-direct": {
+      "source_sha256": "3a7264fe445a458b23b0bc36b2883b38a6a415e542bfb5941299551ac17f5466",
+      "manifest_sha256": "6ee71e2bdfd69e0e357a39bc98bcc56999506f49755cc0facade8b73db461b4b",
+      "test_sha256": "680e82f64967cded5dc1a3394d7428759d5f0e5a639a46b925dd86f7addce126",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-8-llvm-switch": {
+      "source_sha256": "6f93e4afb182d326705e4a15dae150ec90d39a935c008bb73970ed8d4c4f7a18",
+      "manifest_sha256": "255bb99894d967c0cfbac179538ed21485af1862bb2f58e6ac337cf5b12309d0",
+      "test_sha256": "dba101217a5b4a78acd85c8ab3567b4245c24a3bda863dc6cf7b8309fc41e4f1",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-9-high-direct": {
+      "source_sha256": "186c02568987f23a7f85f5732280430f6a20f6496e08344dc854d5f1e0fda62f",
+      "manifest_sha256": "81df4096134b647e9c3a3dd18c118b4461bef152d274a176b02ecac9aeeee029",
+      "test_sha256": "f4c3c21bcb69c13be80d86c01e93ce2c2fb6db35ca1377c7e6359955e39e5121",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-9-high-switch": {
+      "source_sha256": "50a1314c3069bd5340f34a7c126cc6a793ae8c5b1532372899ff40b0d226f81f",
+      "manifest_sha256": "3e8e57978b6e450c3126165c10d166f87bb0e88793938b82e4a1f7c9740dee48",
+      "test_sha256": "7031b12422b52fb925e60610db91c9c05e8560b0fb15a6986b1053afc9628786",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-9-llvm-direct": {
+      "source_sha256": "75a2998c0752ce95a5e8bea0db1d39215b355699d293d263682b142ed94b6b54",
+      "manifest_sha256": "072ab47857064edc8ba0f5c6bb1718332d025c2583e0aa87cae44506e0c6aec5",
+      "test_sha256": "b8e616d1fabb9b321fa530a5a1ba0f3aeec78578efa073a9d68107140fe29945",
+      "source_and_harness_preserved_verbatim": true
+    },
+    "rtm-region-9-llvm-switch": {
+      "source_sha256": "11fdd54b0816aa15aa9a8cfc9d50bf3ab02c93b1a6e1950ad11cff5487746dff",
+      "manifest_sha256": "d50a11fce9f19f28311e245fb7ad009d5451684fd40e67b41fa0d1b0c3891382",
+      "test_sha256": "1ce1bf0330e47b5b44b4f3bae478aafc74a82d4bc382addc029c851ca582c3dc",
+      "source_and_harness_preserved_verbatim": true
+    }
+  },
+  "sdk_source_equivalence": {
+    "files": 144,
+    "parts": [
+      "source",
+      "manifest",
+      "unmodified test harness"
+    ],
+    "native_and_r6_identical_before_and_after_remote_integration": true
+  },
+  "tests": {
+    "neverd_native": {
+      "file": "<artifacts>/nd-native-merged.xml",
+      "sha256": "1b1902096701972792c1e2e9b744dde9ecb42f6a9bb2fa80219450522ee806a6",
+      "tests": 61,
+      "passed": 61,
+      "skipped": 0
+    },
+    "neverd_r6": {
+      "file": "<artifacts>/nd-r6-merged.xml",
+      "sha256": "9f1f3feedd05cee79a6525e54c440b57b8af1fe4dcca887ffdbc2b032f01fda5",
+      "tests": 61,
+      "passed": 61,
+      "skipped": 0
+    },
+    "neverc_frontend_x86": {
+      "file": "<artifacts>/neverc-x86.xml",
+      "sha256": "3306a20453cd8a8d835fa479aa572c25919d717d13a8831169b1bcdb7daea5af",
+      "tests": 143,
+      "passed": 143,
+      "skipped": 0
+    },
+    "neverc_backend_x86": {
+      "file": "<artifacts>/neverc-backend.xml",
+      "sha256": "51340afa4dc79120fb89dfa0750eb219d8044c4d9a0677443d97dbabd4d82888",
+      "tests": 8,
+      "passed": 8,
+      "skipped": 0
+    },
+    "neverc_final_cpuid_and_transaction": {
+      "file": "<artifacts>/neverc-focused-final.xml",
+      "sha256": "5b0f40e307264e6e2d93525a6e2acd6c51411d92b5a61df966ae9f656233d968",
+      "tests": 8,
+      "passed": 8,
+      "skipped": 0
+    }
+  },
+  "llvm_header_checks": {
+    "passed": 3,
+    "compiler": "Host Clang; no new Clang executable build is claimed",
+    "test": "clang/test/Headers/cpuid.c",
+    "profiles": [
+      "x86_64-apple-darwin O0 CHECK-64",
+      "i386 O0 CHECK-32",
+      "x86_64-unknown-linux-gnu O2 CHECK-DEAD"
+    ],
+    "ir": [
+      {
+        "file": "<artifacts>/cpuid-x86_64-apple-darwin-O0.ll",
+        "sha256": "0f62dc018940e396e63457f2566a58ba6369a9aa3af3512bb252cefc576b9431"
+      },
+      {
+        "file": "<artifacts>/cpuid-i386-O0.ll",
+        "sha256": "8dc659fb5444058c975d03b1ea103c6137f9bc27eef46dc3083a1c2a2fcd10d4"
+      },
+      {
+        "file": "<artifacts>/cpuid-x64-O2.ll",
+        "sha256": "ff9131993a6c8eebe4ec0e7bd7dc0b29172123d59a4d7c412131c86506037a79"
+      }
+    ]
+  },
+  "cpuid_regression": {
+    "cause": "The XCHG temporary in the old public header lacked early-clobber. With dead EAX/ECX/EDX outputs it could share EAX, changing the CPUID leaf and clobbering live RBX.",
+    "reproducer": {
+      "file": "<artifacts>/cpuid-dead-output.c",
+      "sha256": "4813fd4686a40573523299a60bcaa92e1976a27ceb58960dee59e9a584842745"
+    },
+    "before": {
+      "file": "<artifacts>/cpuid-dead-output-before",
+      "sha256": "f63f0ca0b8c3e3bc70172eb0205fed4f76e5a68abdc9f2ce9584be926aef46d2",
+      "exit_code": 1
+    },
+    "after": {
+      "file": "<artifacts>/cpuid-dead-output-after",
+      "sha256": "712ea8406ffb4502485e15509e5dc1e04ee1731b30804f1df636bcd327b5c031",
+      "exit_code": 0
+    },
+    "unchanged_rtm_counterexample_after_fix": {
+      "file": "<artifacts>/diagnostic.c",
+      "sha256": "2abbd50e6546495905fe0d229f759d508faff3cf290acaefeb0ca5c556a0c463",
+      "full_sde_rounds": 64,
+      "exit_code": 0,
+      "log": {
+        "file": "<artifacts>/diagnostic-after.log",
+        "sha256": "769d2f2e0390f303ed983be6ff15e557c897c47318d68bbf982b8427155222f6"
+      }
+    },
+    "native_header_sha256": "f935eecbc66ac1ab6945939d586329da5aa42701144523d623ee5760055db62a",
+    "built_resource_header_identical": true,
+    "fallback": "Early-clobber fix is also retained in NeverC and the LLVM fork Clang header; native and compatibility header paths execute at O0/O2."
+  },
+  "neverd_source_sha256": {
+    "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h": "94310128022040f56c2dd9ab854310408092372f1ac8c36df483fc1b2aed0490",
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": "8ba26d65c1687534fc61cfe1816721c0380a98f6c6e2de788c9fb24924bc23d4",
+    "lib/pipeline/X86/X64RtmRegions.h": "076bcef47c99264918cfcdef3d054cfeb892bdda2ffb89703bd254e5457945e5",
+    "lib/pipeline/X86/X64RtmRegions.cpp": "4a4592dc63d645292b6b21b3e9761d56ef0dbd0ac4c9dbe251cb6329c5721f67",
+    "lib/pipeline/X86/X64ContinuationExport.cpp": "09e2097c92e02e2a2792f400086b8bad4a90b6fed339968c64044db774c40641",
+    "lib/pipeline/X86/X64SpecialRegions.cpp": "6043786f46186d1d164b2753f107eb3eccc91b1332fd50617b43b619f90d5d1e",
+    "scripts/isa/x86/verify_rtm_regions.py": "ec6b3d5a9c12e21a47b61b53fab1e7ce12fc056300c736f1f46ab74b09730a05",
+    "unittests/devirtualization/x86_64/X64RtmRegionExportTests.inc": "6fdfe44386c379021e443e5633849d86f087c971f86039381bf33d9bad2cf9fc"
+  },
+  "physical_rtm_qualified": false,
+  "forced_early_abort_publication_qualified": false,
+  "limitations": [
+    "SDE 10.13.1 processor-model execution, not physical RTM hardware.",
+    "Forced-abort SDE mode clears CPUID RTM; production providers decline it.",
+    "CPUID/PAUSE qualify real non-explicit abort publication after body entry, not forced early abort at the initial XBEGIN.",
+    "Original RAM excludes state, context, code and private compiler storage; no MMIO, faults, debug traps or asynchronous delivery.",
+    "Other system effects, nonstatus flag changes, unowned intrinsic bodies, noncanonical prefixes and i386 continuation state remain outside the binding.",
+    "A selected set using all 256 original XABORT codes has no private rollback channel and fails export.",
+    "Capacity/conflict behavior, progress and native abort-reason equivalence are not promised.",
+    "Other x86 state contracts remain open; no LLVM SDK release or production pin update is claimed."
+  ],
+  "primary_references": [
+    "https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf",
+    "https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html"
+  ]
+}

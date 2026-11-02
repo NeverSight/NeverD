@@ -6,6 +6,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
+#include "neverd/emulation/Limits.h"
+#include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 
 #include <tuple>
@@ -61,10 +63,68 @@ protected:
 
 TEST_P(AndroidSnapshots, InitialMappingRequirementRemainsTheDefault) {
   Options.Android->ReadMemory.back() = {Dynamic, 64};
-  auto R = run();
-  ASSERT_FALSE(bool(R));
-  EXPECT_NE(llvm::toString(R.takeError()).find("not readable at entry"),
-            std::string::npos);
+  for (bool Observe : {false, true}) {
+    Options.Android->ObserveMemoryAtStop = Observe;
+    auto R = run();
+    ASSERT_FALSE(bool(R));
+    EXPECT_NE(llvm::toString(R.takeError()).find("not readable at entry"),
+              std::string::npos);
+  }
+}
+
+TEST_P(AndroidSnapshots,
+       AtStopRAMKeepsWorkloadOutcomeAndContinuesAfterMissingRanges) {
+  const std::vector<NativeMemoryRead> Reads{
+      {Initial, 64}, {Dynamic, 64, false}, {Initial, 64}};
+  for (unsigned Mode = 0; Mode != 6; ++Mode) {
+    SCOPED_TRACE(Mode);
+    Options.Limits.Instructions = 1000;
+    Options.Android->ReadMemory.clear();
+    Options.Android->ObserveMemoryAtStop = false;
+    const auto Before = llvm::cantFail(run(Mode));
+    Options.Android->ReadMemory = Reads;
+    Options.Android->ObserveMemoryAtStop = true;
+    auto After = llvm::cantFail(run(Mode));
+    ASSERT_EQ(After.MemorySnapshots.size(), Reads.size());
+    EXPECT_EQ(After.MemorySnapshots.front().Bytes,
+              std::vector<uint8_t>(64, 0xa5));
+    EXPECT_EQ(After.MemorySnapshots.back().Bytes,
+              std::vector<uint8_t>(64, 0xa5));
+    const auto &DynamicSnapshot = After.MemorySnapshots[1];
+    if (Mode == 1) {
+      EXPECT_TRUE(DynamicSnapshot.Bytes.empty());
+      EXPECT_FALSE(DynamicSnapshot.Diagnostic.empty());
+      EXPECT_LE(
+          DynamicSnapshot.Diagnostic.size(),
+          ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes);
+    } else {
+      std::vector<uint8_t> Expected(64);
+      for (unsigned I = 0; I != 32; ++I)
+        Expected[13 + I] = I * 7 + 3;
+      EXPECT_EQ(DynamicSnapshot.Bytes, Expected);
+      EXPECT_TRUE(DynamicSnapshot.Diagnostic.empty());
+    }
+    After.MemorySnapshots.clear();
+    EXPECT_EQ(processResultJSON(After), processResultJSON(Before));
+  }
+}
+
+TEST_P(AndroidSnapshots, AtStopRAMReservesDiagnosticBudgetOncePerRange) {
+  Options.Android->ReadMemory = {{Dynamic, 64, false}};
+  Options.Android->ObserveMemoryAtStop = true;
+  Options.Android->ObserveMemoryOnFailure = true;
+  Options.OutputLimit =
+      64 + ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes -
+      1;
+  auto Rejected = run(1);
+  ASSERT_FALSE(bool(Rejected));
+  llvm::consumeError(Rejected.takeError());
+  ++Options.OutputLimit;
+  const auto Result = llvm::cantFail(run(1));
+  EXPECT_EQ(Result.Stop, ProcessStopReason::Returned);
+  ASSERT_EQ(Result.MemorySnapshots.size(), 1u);
+  EXPECT_TRUE(Result.MemorySnapshots[0].Bytes.empty());
+  EXPECT_FALSE(Result.MemorySnapshots[0].Diagnostic.empty());
 }
 
 TEST_P(AndroidSnapshots, DeferredReadObservesGuestCreatedBytes) {

@@ -18,6 +18,7 @@
 
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace neverd::sigs;
@@ -393,5 +394,144 @@ TEST(PatternParserHex, DecodesEveryPairAtAnyLength) {
       if (Expected[I] >= 0)
         EXPECT_EQ(ModuleOrErr->TailBytes[I].Value, Expected[I]) << I;
     }
+  }
+}
+
+TEST(PatternParserReferences, RequiredReferencesAreExplicitAndComplete) {
+  auto Mod = PatternParser::parseLine(
+      "E8........C3 00 0000 0006 !refs :0000 wrapper ^0001 callee");
+  ASSERT_TRUE(bool(Mod)) << llvm::toString(Mod.takeError());
+  EXPECT_TRUE(Mod->RequireReferences);
+  for (const char *Line :
+       {"E8........C3 00 0000 0006 !refs :0000 wrapper",
+        "E8........C3 00 0000 0007 !refs :0000 wrapper ^0001 callee",
+        "E8........C3 00 0000 0006 :0000 wrapper !refs ^0001 callee",
+        "E8........C3 00 0000 0006 !refs !refs :0000 wrapper ^0001 callee",
+        "E8........C3 00 0000 0006 :0000 !refs ^0001 callee"}) {
+    auto Bad = PatternParser::parseLine(Line);
+    EXPECT_FALSE(bool(Bad)) << Line;
+    if (!Bad)
+      llvm::consumeError(Bad.takeError());
+  }
+}
+
+TEST(PatternParserReferences, CallerContextCannotBecomeAnOrdinaryPattern) {
+  auto Mod = PatternParser::parseLine(
+      "33C0C3 00 0000 0003 !caller :0000 zero :0000 alias");
+  ASSERT_TRUE(bool(Mod)) << llvm::toString(Mod.takeError());
+  EXPECT_TRUE(Mod->RequireCaller);
+  EXPECT_FALSE(Mod->RequireReferences);
+  for (const char *Line : {"33C0C3 00 0000 0004 !caller :0000 zero",
+                           "33C0C3 00 0000 0003 !caller :0001 zero",
+                           "33C0C3 00 0000 0003 !caller !refs :0000 zero",
+                           "33C0C3 00 0000 0003 :0000 zero !caller"}) {
+    auto Bad = PatternParser::parseLine(Line);
+    EXPECT_FALSE(bool(Bad)) << Line;
+    if (!Bad)
+      llvm::consumeError(Bad.takeError());
+  }
+}
+
+TEST(PatternParserReferences, DataKindsSurvivePackingAndRejectMixedSites) {
+  const std::string Line =
+      "488D05........E8........C3 00 0000 000D !refs :0000 wrapper "
+      "&0003 global &0003 alias ^0008 callee";
+  auto Mod = PatternParser::parseLine(Line);
+  ASSERT_TRUE(bool(Mod)) << llvm::toString(Mod.takeError());
+  ASSERT_EQ(Mod->References.size(), 3u);
+  EXPECT_TRUE(Mod->References[0].IsData);
+  EXPECT_TRUE(Mod->References[1].IsData);
+  EXPECT_FALSE(Mod->References[2].IsData);
+  auto Packed = PatternParser::parseText(Line);
+  ASSERT_TRUE(bool(Packed)) << llvm::toString(Packed.takeError());
+  for (const char *Bad :
+       {"488D05........C3 00 0000 0008 :0000 a &0003 global",
+        "488D05........C3 00 0000 0008 !refs :0000 a &0003 global ^0003 callee",
+        "488D05........C3 00 0000 0008 !caller :0000 a ^0003 callee &0003 "
+        "global",
+        "488D05........C3 00 0000 0008 !refs :0000 a &0003 &0004 global",
+        "488D05........C3 00 0000 0009 !refs :0000 a &0003 global"}) {
+    auto Result = PatternParser::parseLine(Bad);
+    EXPECT_FALSE(bool(Result)) << Bad;
+    if (!Result)
+      llvm::consumeError(Result.takeError());
+  }
+}
+
+TEST(PatternParserReferences, LocalDataHasACanonicalDistinctContextualKind) {
+  const std::string Head = "488D05........C3 00 0000 0008 ";
+  auto Good = PatternParser::parseLine(
+      Head + "!refs :0000 getter %0003 00000013:anchor");
+  ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+  ASSERT_EQ(Good->References.size(), 1u);
+  EXPECT_TRUE(Good->References[0].IsData);
+  EXPECT_TRUE(Good->References[0].IsLocalData);
+  for (const auto &Tail :
+       {":0000 getter %0003 00000013:anchor",
+        "!refs :0000 getter %0003 13:anchor",
+        "!refs :0000 getter %0003 0000001a:anchor",
+        "!refs :0000 getter %0003 00000013:",
+        "!refs :0000 getter %0003 100000013:anchor",
+        "!refs :0000 getter %0003 00000013:anchor &0003 global",
+        "!refs :0000 getter ^0003 function %0003 00000013:anchor"}) {
+    auto Bad = PatternParser::parseLine(Head + Tail);
+    EXPECT_FALSE(bool(Bad)) << Tail;
+    if (!Bad)
+      llvm::consumeError(Bad.takeError());
+  }
+}
+
+TEST(PatternParserReferences, LocalLayoutDeltasHaveOneCanonicalSpelling) {
+  const std::string Head =
+      "488D05........C3 00 0000 0008 !refs :0000 getter %0003 ";
+  for (const auto *Key :
+       {"00000013+00000008:anchor", "00000013-00000008:anchor",
+        "00000013+FFFFFFFF:anchor", "00000013-FFFFFFFF:anchor"}) {
+    auto Good = PatternParser::parseLine(Head + Key);
+    ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+    EXPECT_EQ(Good->References.front().Name, Key);
+    EXPECT_TRUE(Good->References.front().IsLocalData);
+  }
+  for (const auto *Key :
+       {"00000013+00000000:anchor", "00000013-00000000:anchor",
+        "00000013+0000000a:anchor", "00000013+100000000:anchor",
+        "00000013+8:anchor", "00000013+-00000008:anchor", "00000013+00000008",
+        "00000013+00000008:"}) {
+    auto Bad = PatternParser::parseLine(Head + Key);
+    EXPECT_FALSE(bool(Bad)) << Key;
+    if (!Bad)
+      llvm::consumeError(Bad.takeError());
+  }
+}
+
+TEST(PatternParserVTable, PrimaryTableMetadataHasItsOwnRecordKind) {
+  const std::string Line =
+      "................................ 00 0000 0010 !vtable "
+      ":0000 ??_7Widget@@6B@ ^0000 destroy ^0000 fallback ^0008 action";
+  auto Parsed = PatternParser::parseLine(Line);
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_TRUE(Parsed->IsVTable);
+  EXPECT_FALSE(Parsed->RequireCaller);
+  EXPECT_FALSE(Parsed->RequireReferences);
+  EXPECT_EQ(Parsed->References.size(), 3u);
+  for (const auto &[Before, After] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"................................",
+            "90.............................."},
+           {"00 0000", "01 0000"},
+           {"0010 !vtable", "0018 !vtable"},
+           {"??_7Widget@@6B@", "function"},
+           {"??_7Widget@@6B@", "??_7Derived@@6BBase@@@"},
+           {"^0008 action", "^0004 action"},
+           {"^0008 action", ""},
+           {"^0008 action", "&0008 action"},
+           {":0000 ??_7Widget@@6B@", ":0008 ??_7Widget@@6B@"},
+       }) {
+    std::string Bad = Line;
+    Bad.replace(Bad.find(Before), Before.size(), After);
+    auto Rejected = PatternParser::parseLine(Bad);
+    EXPECT_FALSE(bool(Rejected)) << Bad;
+    if (!Rejected)
+      llvm::consumeError(Rejected.takeError());
   }
 }

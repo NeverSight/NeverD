@@ -6,6 +6,7 @@
 
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -194,20 +195,27 @@ openMachOBuffer(llvm::MemoryBufferRef Buffer) {
 
 void parseDyldInfoLoadCommands(const llvm::object::MachOObjectFile &Obj,
                                DyldInfoOffsets &Out) {
+  bool Found = false;
   for (const auto &LC : Obj.load_commands()) {
     if ((LC.C.cmd != LC_DYLD_INFO && LC.C.cmd != LC_DYLD_INFO_ONLY) ||
         LC.C.cmdsize < sizeof(dyld_info_command))
       continue;
+    if (Found) {
+      Out.Ambiguous = true;
+      continue;
+    }
+    Found = true;
     auto DI = *reinterpret_cast<const dyld_info_command *>(LC.Ptr);
     Out.RebaseOff = DI.rebase_off;
     Out.RebaseSize = DI.rebase_size;
     Out.BindOff = DI.bind_off;
     Out.BindSize = DI.bind_size;
+    Out.WeakBindOff = DI.weak_bind_off;
+    Out.WeakBindSize = DI.weak_bind_size;
     Out.LazyBindOff = DI.lazy_bind_off;
     Out.LazyBindSize = DI.lazy_bind_size;
     Out.ExportOff = DI.export_off;
     Out.ExportSize = DI.export_size;
-    return;
   }
 }
 
@@ -411,9 +419,11 @@ void parseRuntimeFunctionSections(const std::vector<SectionInfo> &Sections,
           continue;
         Addr = TextVMAddr + Offset;
       } else {
-        Addr = static_cast<va_t>(readPtr(P, Img.is64Bit()));
-        if (Addr == 0)
+        const auto Target =
+            readMetadataPointerTarget(Img, Sec.Addr + I * EntrySize);
+        if (!Target || !*Target)
           continue;
+        Addr = *Target;
       }
       appendRuntimeFunction(Addr, Out, Img);
     }

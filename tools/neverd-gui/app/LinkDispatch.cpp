@@ -9,14 +9,17 @@
 #include "../ResourceLimits.h"
 #include "DeepLink.h"
 #include "InstanceServer.h"
+#include "ProjectDatabase.h"
 #include "SettingsKeys.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -62,11 +65,20 @@ InstanceChoice chooseInstance(const QList<QJsonObject> &instances,
 Dispatched dispatchLink(const QString &text, const DeepLink &link) {
   QList<QJsonObject> infos;
   QStringList servers;
+  QStringList endpoints;
   for (const auto &instance : InstanceServer::discover())
-    if (const auto info = InstanceServer::request(
-            instance.server, {{QStringLiteral("cmd"), "get_info"}})) {
-      infos << *info;
-      servers << instance.server;
+    endpoints << instance.server;
+  const bool named = !link.input.isEmpty() || !link.sha256.isEmpty();
+  const auto replies = InstanceServer::requestMany(
+      endpoints, {{QStringLiteral("cmd"), "get_info"}},
+      ::neverd::limits::gui::kInstanceServerRequestTimeoutMs,
+      [&](int, const QJsonObject &info) {
+        return named && chooseInstance({info}, link).index == 0;
+      });
+  for (int index = 0; index < replies.size(); ++index)
+    if (replies[index]) {
+      infos << *replies[index];
+      servers << endpoints[index];
     }
   const InstanceChoice choice = chooseInstance(infos, link);
   Dispatched result;
@@ -110,9 +122,15 @@ Dispatched dispatchLink(const QString &text, const DeepLink &link) {
 
 QString describeInstances() {
   QStringList lines;
-  for (const auto &instance : InstanceServer::discover()) {
-    const auto info = InstanceServer::request(
-        instance.server, {{QStringLiteral("cmd"), "get_info"}});
+  const auto instances = InstanceServer::discover();
+  QStringList servers;
+  for (const auto &instance : instances)
+    servers << instance.server;
+  const auto replies = InstanceServer::requestMany(
+      servers, {{QStringLiteral("cmd"), "get_info"}});
+  for (int index = 0; index < instances.size(); ++index) {
+    const auto &instance = instances[index];
+    const auto &info = replies[index];
     if (!info) {
       lines << QCoreApplication::translate("LinkDispatch",
                                            "%1\t(does not answer)")
@@ -146,8 +164,22 @@ std::optional<QString> recentFileFor(const DeepLink &link) {
   for (const QString &path :
        QSettings().value(settings::RecentFiles).toStringList()) {
     const QFileInfo file(path);
-    if (!file.isFile() ||
-        (!link.input.isEmpty() && !linkNamesInput(link.input, file.fileName())))
+    if (!file.isFile())
+      continue;
+    if (ProjectDatabase::isDatabase(path)) {
+      const auto input = ProjectDatabase::read(
+          path, nullptr, ProjectDatabase::ReadScope::InputIdentity);
+      if (!input)
+        continue;
+      if (!link.sha256.isEmpty()
+              ? link.namesHash(input->inputSha256)
+              : linkNamesInput(link.input, input->inputName) ||
+                    linkNamesInput(link.input, file.fileName()))
+        return file.absoluteFilePath();
+      continue;
+    }
+    if (link.sha256.isEmpty() && !link.input.isEmpty() &&
+        !linkNamesInput(link.input, file.fileName()))
       continue;
     if (!link.sha256.isEmpty() && !link.namesHash(fileSha256(path)))
       continue;
@@ -217,33 +249,70 @@ bool registerLinkHandler(bool install, QString &message) {
         "LinkDispatch", "neverd:// links no longer open in NeverD.");
     return true;
   }
-  QFile file(entry);
+  QSaveFile file(entry);
   if (!QDir().mkpath(applications) ||
       !file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
     message = QCoreApplication::translate("LinkDispatch", "Could not write %1.")
                   .arg(entry);
     return false;
   }
-  // The desktop entry format quotes an argument with spaces and doubles a
-  // percent sign.
-  QString quoted = executable;
-  quoted.replace(QLatin1Char('\\'), QStringLiteral("\\\\"))
-      .replace(QLatin1Char('"'), QStringLiteral("\\\""))
-      .replace(QLatin1Char('%'), QStringLiteral("%%"));
-  QTextStream(&file) << "[Desktop Entry]\n"
-                     << "Type=Application\n"
-                     << "Name=NeverD\n"
-                     << "Comment=Open neverd:// links in NeverD\n"
-                     << "Exec=\"" << quoted << "\" --link %u\n"
-                     << "NoDisplay=true\n"
-                     << "Terminal=false\n"
-                     << "MimeType=x-scheme-handler/neverd;\n";
-  file.close();
-  const int status = QProcess::execute(
-      QStringLiteral("xdg-mime"),
-      {QStringLiteral("default"), QStringLiteral("neverd-links.desktop"),
-       QStringLiteral("x-scheme-handler/neverd")});
-  if (status != 0) {
+  // Desktop strings are unescaped before Exec arguments are unquoted. Escape
+  // at both levels, then preserve literal percent signs during field expansion.
+  const auto quotedArgument = [](QString value) {
+    value.replace(QLatin1Char('\\'), QStringLiteral("\\\\"))
+        .replace(QLatin1Char('"'), QStringLiteral("\\\""))
+        .replace(QLatin1Char('$'), QStringLiteral("\\$"))
+        .replace(QLatin1Char('`'), QStringLiteral("\\`"))
+        .replace(QLatin1Char('\\'), QStringLiteral("\\\\"))
+        .replace(QLatin1Char('\n'), QStringLiteral("\\n"))
+        .replace(QLatin1Char('\r'), QStringLiteral("\\r"))
+        .replace(QLatin1Char('\t'), QStringLiteral("\\t"))
+        .replace(QLatin1Char('%'), QStringLiteral("%%"));
+    return QLatin1Char('"') + value + QLatin1Char('"');
+  };
+  QString command = quotedArgument(executable);
+  // GLib checks the executable before expanding %% in Exec arguments. env
+  // keeps literal percent signs (and '=' forbidden in an Exec program name)
+  // in an argument that the desktop expands before launching the real binary.
+  if (executable.contains(QLatin1Char('%')) ||
+      executable.contains(QLatin1Char('='))) {
+    const QString launcher =
+        QStandardPaths::findExecutable(QStringLiteral("env"));
+    if (launcher.isEmpty()) {
+      message =
+          QCoreApplication::translate("LinkDispatch", "Could not write %1.")
+              .arg(entry);
+      return false;
+    }
+    command = quotedArgument(launcher) + QStringLiteral(" -- ") + command;
+  }
+  QTextStream stream(&file);
+  stream << "[Desktop Entry]\n"
+         << "Type=Application\n"
+         << "Name=NeverD\n"
+         << "Comment=Open neverd:// links in NeverD\n"
+         << "Exec=" << command << " --link %u\n"
+         << "NoDisplay=true\n"
+         << "Terminal=false\n"
+         << "MimeType=x-scheme-handler/neverd;\n";
+  stream.flush();
+  if (stream.status() != QTextStream::Ok || !file.commit()) {
+    message = QCoreApplication::translate("LinkDispatch", "Could not write %1.")
+                  .arg(entry);
+    return false;
+  }
+  QDeadlineTimer deadline(::neverd::limits::gui::kLinkHandlerCommandTimeoutMs);
+  QProcess process;
+  process.start(QStringLiteral("xdg-mime"),
+                {QStringLiteral("default"),
+                 QStringLiteral("neverd-links.desktop"),
+                 QStringLiteral("x-scheme-handler/neverd")});
+  if (!process.waitForStarted(int(deadline.remainingTime())) ||
+      !process.waitForFinished(int(deadline.remainingTime())) ||
+      process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    process.kill();
+    process.waitForFinished(
+        ::neverd::limits::gui::kLinkHandlerCommandTimeoutMs);
     message = QCoreApplication::translate(
                   "LinkDispatch",
                   "Wrote %1, but xdg-mime did not make it the handler of "

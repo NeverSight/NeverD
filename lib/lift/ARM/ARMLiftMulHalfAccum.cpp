@@ -1,4 +1,5 @@
-//===- ARMLiftMulHalfAccum.cpp - ARM32 halfword multiply-accumulate lifter ---===//
+//===- ARMLiftMulHalfAccum.cpp - ARM32 halfword multiply-accumulate lifter
+//---===//
 //
 // NeverD Decompiler
 //
@@ -13,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -21,8 +22,8 @@
 
 namespace neverd {
 
-bool liftMulHalfAccum(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
-                      const cs_arm &ARM) {
+bool liftMulHalfAccum(ARMLifter &L, ARMLifter::LiftState &S,
+                      const cs_insn *Insn, const cs_arm &ARM) {
   switch (Insn->id) {
   // SMLA{BB|BT|TB|TT}: extract 16-bit halves, multiply, accumulate
   case ARM_INS_SMLABB:

@@ -9,7 +9,7 @@
 
 #include "../NeverDLiftFixture.h"
 
-#include "neverd/ir/X86FPState.h"
+#include "neverd/ir/X86/X86FPState.h"
 
 #include "llvm/ADT/StringExtras.h"
 

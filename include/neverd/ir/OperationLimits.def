@@ -1,0 +1,21 @@
+//===- OperationLimits.def - Machine-operation representation -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Fixed storage required by a complete four-vector memory operation.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_OPERATION_LIMIT
+#define NEVERD_OPERATION_LIMIT(Name, Value)
+#endif
+#ifndef NEVERD_OPERATION_TEXT
+#define NEVERD_OPERATION_TEXT(Name, Value)
+#endif
+NEVERD_OPERATION_LIMIT(kLowOperationInputs, 8)
+NEVERD_OPERATION_LIMIT(kIntrinsicOperationOutputs, 5)
+NEVERD_OPERATION_TEXT(kLowOperationInputOverflow,
+                      "LowIR operation exceeds its input capacity")
+#undef NEVERD_OPERATION_LIMIT
+#undef NEVERD_OPERATION_TEXT

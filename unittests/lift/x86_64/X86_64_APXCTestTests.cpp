@@ -4,7 +4,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
@@ -377,8 +377,8 @@ TEST(X86APXCTest, UBitSelectsR28ForAddr64AndAddr32Memory) {
     Image.Segments[0].Data = {0x78, 0x56, 0x34, 0x12};
     NdOpEmulator Emulator(Image);
     initializeStrict(Emulator, {});
-    ASSERT_TRUE(Emulator.setMemoryAddressSpaceBase(
-        NdMemoryAddressSpace::X86FS, Target - 0x30));
+    ASSERT_TRUE(Emulator.setMemoryAddressSpaceBase(NdMemoryAddressSpace::X86FS,
+                                                   Target - 0x30));
     Emulator.setRegister(x86reg::R29,
                          Address32 ? UINT64_C(0xaaaaaaaa00000008) : 8);
     Emulator.setRegister(x86reg::R28,
@@ -398,13 +398,12 @@ TEST(X86APXCTest, UBitSelectsR28ForAddr64AndAddr32Memory) {
     });
   }
 
-  const std::vector<uint8_t> RegisterU0 = {0x62, 0x6c, 0x28,
-                                           0x02, 0x85, 0xd1};
+  const std::vector<uint8_t> RegisterU0 = {0x62, 0x6c, 0x28, 0x02, 0x85, 0xd1};
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));
   DecodedInsn Invalid{};
   EXPECT_NE(Dec.decodeOneForLift(RegisterU0.data(), RegisterU0.size(),
-                                kInstructionAddress, Invalid),
+                                 kInstructionAddress, Invalid),
             static_cast<int>(RegisterU0.size()));
 }
 

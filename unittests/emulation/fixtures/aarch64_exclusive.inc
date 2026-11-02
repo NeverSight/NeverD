@@ -76,14 +76,14 @@ enum {
     }                                                                          \
     return 1;                                                                  \
   }
-#include "../AArch64ExclusiveCases.def"
+#include "../aarch64/AArch64ExclusiveCases.def"
 #undef NEVERD_EXCLUSIVE_CASE
 
 static int checkExclusiveAccesses(void) {
 #define NEVERD_EXCLUSIVE_CASE(Name, Load, Store, Width, Count)                 \
   if (!checkExclusive##Name())                                                 \
     return 0;
-#include "../AArch64ExclusiveCases.def"
+#include "../aarch64/AArch64ExclusiveCases.def"
 #undef NEVERD_EXCLUSIVE_CASE
   return 1;
 }

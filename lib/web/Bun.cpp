@@ -220,17 +220,22 @@ public:
         throw Error("bun_invalid_prelinked_files");
       within({At, Files * 4}, DataSize);
       std::set<uint32_t> Seen;
+      Out.PrelinkedModuleFiles.reserve(Files);
       for (uint64_t I = 0; I < Files; ++I) {
         const auto File = R.integer(At + I * 4, 4);
         if (File >= Count || !Seen.insert(File).second)
           throw Error("bun_invalid_prelinked_files");
+        Out.PrelinkedModuleFiles.push_back(File);
       }
       At += Files * 4;
     }
     if (Out.Flags & (1 << 12)) {
-      // Preserve build-time runtime defaults as opaque graph metadata. They
-      // cannot configure the host or change the source decoder's semantics.
+      // Preserve build-time runtime defaults without interpreting their bits.
+      // They cannot configure the host or change the decoder's semantics.
       within({At, 8}, DataSize);
+      const auto Bytes = R.read({At, 8});
+      auto &Options = Out.RuntimeOptions.emplace();
+      std::copy(Bytes.begin(), Bytes.end(), Options.begin());
       At += 8;
     }
     // The fixed StringBuilder writes a terminator even for empty argv.
@@ -254,6 +259,10 @@ public:
     region({0, Out.GraphOffset - 8}, "native_container_prefix");
     const auto End = Out.GraphOffset + Out.GraphSize;
     region({End, Input.Content.size() - End}, "native_container_suffix");
+    // Append after the existing regions so their indices and export filenames
+    // remain stable. The exact argv framing was validated above.
+    Out.CompileArguments =
+        region({Out.GraphOffset + Args.Offset, Args.Size}, "compile_exec_argv");
     for (size_t I = 0; I < Out.Regions.size(); ++I) {
       auto &V = Out.Regions[I];
       V.BlobHash = V.Content.digest();
@@ -301,7 +310,7 @@ std::vector<std::string> bunProfiles() {
 namespace {
 BunSourceRange decodeSource(const BunExtraction &E, const BunModule &M,
                             uint64_t MaxBytes, std::optional<Range> Query) {
-  if (M.SourceArtifactID.empty() || M.Contents >= E.Regions.size())
+  if ((M.Loader > 3 && M.Loader != 13) || M.Contents >= E.Regions.size())
     throw Error("bun_source_unavailable");
   const auto &Content = E.Regions[M.Contents].Content;
   const auto Budget = std::min(MaxBytes, MaxBunDecodedSourceBytes);
@@ -399,12 +408,21 @@ BunSourceRange decodeSource(const BunExtraction &E, const BunModule &M,
 
 std::string bunSourceBytes(const BunExtraction &E, const BunModule &M,
                            uint64_t MaxBytes) {
+  if (M.Loader > 3 || M.SourceArtifactID.empty())
+    throw Error("bun_source_unavailable");
+  return decodeSource(E, M, MaxBytes, std::nullopt).Text;
+}
+
+std::string bunTextBytes(const BunExtraction &E, const BunModule &M,
+                         uint64_t MaxBytes) {
   return decodeSource(E, M, MaxBytes, std::nullopt).Text;
 }
 
 BunSourceRange bunSourceRange(const BunExtraction &E, const BunModule &M,
                               uint64_t Offset, uint64_t Length,
                               uint64_t MaxBytes) {
+  if (M.Loader > 3 || M.SourceArtifactID.empty())
+    throw Error("bun_source_unavailable");
   return decodeSource(E, M, MaxBytes, Range{Offset, Length});
 }
 } // namespace neverd::web

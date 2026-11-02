@@ -26,6 +26,9 @@ struct LinuxIoctlTraceOptions {
   uint32_t EventLimit = 4096;
   uint64_t ByteLimit = 1048576;
   std::map<uint32_t, std::vector<LinuxIoctlTraceMemory>> Requests;
+  /// False records only listed request numbers. Unlisted calls still execute
+  /// normally and consume neither evidence budget nor diagnostic reads.
+  bool IncludeUnlisted = true;
 };
 
 struct LinuxDeviceMemory {

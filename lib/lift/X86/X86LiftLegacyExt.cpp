@@ -13,17 +13,159 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86FPEncoding.h"
 #include "X86LiftDetail.h"
+#include "X86LiftTBM.h"
+#include "X86LiftThreeDNow.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/ir/intrinsics/X86/X86SegmentedBlock.h"
+#include "neverd/lift/X86/X86Lifter.h"
+#include "neverd/support/ISAEncoding.h"
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
 
 namespace {
+
+bool liftCacheZero(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
+                   const cs_x86 &X) {
+  if (!Insn->detail || Insn->size < 3 || Insn->size > x86::kMaxInstructionLen ||
+      X.op_count || X.eflags || X.encoding.imm_size || X.encoding.imm_offset ||
+      X.encoding.disp_size || X.encoding.disp_offset ||
+      Insn->detail->regs_read_count || Insn->detail->regs_write_count ||
+      Insn->detail->groups_count)
+    return false;
+  const bool Mode64 = L.targetArch() == Arch::X64;
+  uint8_t Segment = 0, Rex = 0;
+  bool OperandOverride = false, AddressOverride = false;
+  const auto OpcodeOffset = Insn->size - 3;
+  for (unsigned I = 0; I < OpcodeOffset; ++I) {
+    const uint8_t Byte = Insn->bytes[I];
+    if (Mode64 && Byte >= 0x40 && Byte <= 0x4f) {
+      Rex = Byte;
+      continue;
+    }
+    Rex = 0;
+    if (Byte == 0x66)
+      OperandOverride = true;
+    else if (Byte == 0x67)
+      AddressOverride = true;
+    else if (Byte == 0x3e || Byte == 0x64 || Byte == 0x65)
+      Segment = Byte;
+    else
+      // Other segment identities and refining prefixes need their own
+      // architectural contract; do not silently turn them into default DS.
+      return false;
+  }
+  const unsigned AddressSize =
+      Mode64 ? (AddressOverride ? 4 : 8) : (AddressOverride ? 2 : 4);
+  if (X.prefix[0] || X.prefix[1] != Segment ||
+      X.prefix[2] != (OperandOverride ? 0x66 : 0) ||
+      X.prefix[3] != (AddressOverride ? 0x67 : 0) || X.rex != Rex ||
+      X.addr_size != AddressSize || S.AddressSize != AddressSize ||
+      X.opcode[0] != 0x0f || X.opcode[1] != 0x01 || X.opcode[2] ||
+      X.opcode[3] || X.modrm != 0xfc ||
+      X.encoding.modrm_offset != OpcodeOffset + 2 ||
+      Insn->bytes[OpcodeOffset] != 0x0f ||
+      Insn->bytes[OpcodeOffset + 1] != 0x01 ||
+      Insn->bytes[OpcodeOffset + 2] != 0xfc)
+    return false;
+  // Capstone supplies no explicit operand or register-read entry. The
+  // address-size-selected AX/EAX/RAX is nevertheless the instruction input.
+  NdVar Address = NdVar::reg(x86reg::RAX, AddressSize);
+  if (AddressSize != 8) {
+    const auto Extended = S.makeTemp(8);
+    S.emit(NdOp::INT_ZEXT, Extended, {Address});
+    Address = Extended;
+  }
+  const auto Space = Segment == 0x64   ? NdMemoryAddressSpace::X86FS
+                     : Segment == 0x65 ? NdMemoryAddressSpace::X86GS
+                                       : NdMemoryAddressSpace::Default;
+  S.emitIntrinsic(Intrinsic::Clzero, {}, {Address}, NdMemoryOrdering::None,
+                  Space);
+  return true;
+}
+
+bool liftSegmentedBlock32(X86Lifter &L, X86Lifter::LiftState &S,
+                          const cs_insn *Insn, const cs_x86 &X86,
+                          X86SegmentedBlockKind Kind) {
+  FPEncodingInfo E;
+  const unsigned PP = Kind == X86SegmentedBlockKind::DirectStore ? 1
+                      : Kind == X86SegmentedBlockKind::Enqueue   ? 3
+                                                                 : 2;
+  // The pinned handwritten ENQ decoder retains REP in prefix[0] and all
+  // three opcode bytes. Authenticate that detail before adapting it to the
+  // generated legacy layout consumed by the common byte/detail validator.
+  cs_x86 Detail = X86;
+  if (Kind != X86SegmentedBlockKind::DirectStore) {
+    const auto Prefix = Kind == X86SegmentedBlockKind::Enqueue ? 0xf2 : 0xf3;
+    if (X86.prefix[0] != Prefix || X86.opcode[0] != 0x0f ||
+        X86.opcode[1] != 0x38 || X86.opcode[2] != 0xf8 || X86.opcode[3] != 0)
+      return false;
+    Detail.prefix[0] = 0;
+    Detail.opcode[1] = 0xf8;
+    Detail.opcode[2] = 0;
+  }
+  if (!parseFPEncoding(Insn, Detail, Arch::X86, false, 2, PP, E) ||
+      E.Opcode != 0xf8 || X86.op_count != 2 ||
+      !matchesFPGPROperand(X86.operands[0], E.gprRegIndex(), E.AddressSize) ||
+      X86.operands[1].type != X86_OP_MEM || X86.operands[1].size != 64 ||
+      !validateFPEncodingTail(Insn, Detail, E, X86.operands[1]))
+    return false;
+  const auto &Memory = X86.operands[1];
+  X86BlockSegment Segment;
+  switch (Memory.mem.segment) {
+  case X86_REG_ES:
+    Segment = X86BlockSegment::ES;
+    break;
+  case X86_REG_CS:
+    Segment = X86BlockSegment::CS;
+    break;
+  case X86_REG_SS:
+    Segment = X86BlockSegment::SS;
+    break;
+  case X86_REG_DS:
+    Segment = X86BlockSegment::DS;
+    break;
+  case X86_REG_FS:
+    Segment = X86BlockSegment::FS;
+    break;
+  case X86_REG_GS:
+    Segment = X86BlockSegment::GS;
+    break;
+  case X86_REG_INVALID:
+    Segment = Memory.mem.base == X86_REG_BP || Memory.mem.base == X86_REG_EBP ||
+                      Memory.mem.base == X86_REG_ESP
+                  ? X86BlockSegment::SS
+                  : X86BlockSegment::DS;
+    break;
+  default:
+    return false;
+  }
+  const auto SourceEA = S.computeEA(Memory, true, true);
+  auto Source = S.makeTemp(4);
+  S.emit(NdOp::SUBBYTES, Source, {SourceEA, NdVar::scalar(0, 1)});
+  auto Destination = L.operandRead(S, X86.operands[0]);
+  if (Destination.Size == 2) {
+    auto Extended = S.makeTemp(4);
+    S.emit(NdOp::INT_ZEXT, Extended, {Destination});
+    Destination = Extended;
+  }
+  const auto Selector =
+      x86SegmentedBlockSelector(Kind, Segment, E.AddressSize == 2);
+  const bool HasFlag = x86SegmentedBlockHasFlag(Selector);
+  S.emitIntrinsic(Intrinsic::X86SegmentedBlockMemory,
+                  HasFlag ? NdVar::reg(x86reg::ZF, 1) : NdVar{},
+                  {NdVar::scalar(Selector, 2), Source, Destination});
+  if (HasFlag)
+    for (uint64_t Flag :
+         {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::SF, x86reg::OF})
+      S.emit(NdOp::COPY, NdVar::reg(Flag, 1), {NdVar::scalar(0, 1)});
+  return true;
+}
 
 bool beginsWithPotentialEvexPrefix(const cs_insn *Insn) {
   if (!Insn)
@@ -110,17 +252,15 @@ bool liftEvexGfni(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   const unsigned DestinationRegister = vectorRegisterIndex(Destination);
   const unsigned Source1Register = vectorRegisterIndex(Source1);
-  if (decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          DestinationRegister ||
-      decodeEvexVectorVvvvIndex(Encoding.P1, Encoding.P2) != Source1Register ||
+  if (Encoding.regIndex() != DestinationRegister ||
+      Encoding.vvvvIndex() != Source1Register ||
       (L.targetArch() == Arch::X86 &&
        (DestinationRegister >= 8 || Source1Register >= 8)))
     return false;
   if (RegisterSource) {
     const unsigned Source2Register = vectorRegisterIndex(Source2);
     if ((Encoding.ModRM & 0xc0) != 0xc0 || (Encoding.P2 & 0x10) != 0 ||
-        decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-            Source2Register ||
+        Encoding.rmIndex() != Source2Register ||
         (L.targetArch() == Arch::X86 && Source2Register >= 8))
       return false;
   } else if ((Encoding.ModRM & 0xc0) == 0xc0) {
@@ -219,98 +359,18 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   unsigned InsnId = Insn->id;
   switch (InsnId) {
 
-  // ========================================================================
-  // 3DNow! — AMD's deprecated SIMD (PF* prefix). Approximate as FLOAT_*.
-  // ========================================================================
-  case X86_INS_PFADD:
-  case X86_INS_PFACC:
-  case X86_INS_PFNACC:
-  case X86_INS_PFPNACC: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_ADD, Dst, {Dst, Src});
-    break;
-  }
-  case X86_INS_PFSUB:
-  case X86_INS_PFSUBR: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_SUB, Dst, {Dst, Src});
-    break;
-  }
-  case X86_INS_PFMUL: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_MULT, Dst, {Dst, Src});
-    break;
-  }
-  case X86_INS_PFMAX:
-  case X86_INS_PFMIN: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
-    break;
-  }
-  case X86_INS_PFCMPEQ:
-  case X86_INS_PFCMPGE:
-  case X86_INS_PFCMPGT: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_EQUAL, Dst, {Dst, Src});
-    break;
-  }
-  case X86_INS_PFRCP:
-  case X86_INS_PFRCPIT1:
-  case X86_INS_PFRCPIT2:
-  case X86_INS_PFRSQIT1:
-  case X86_INS_PFRSQRT: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_SQRT, Dst, {Src});
-    break;
-  }
-  case X86_INS_PF2ID:
-  case X86_INS_PF2IW: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_TRUNC, Dst, {Src});
-    break;
-  }
-  case X86_INS_PI2FD:
-  case X86_INS_PI2FW: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::FLOAT_INT2FLOAT, Dst, {Src});
-    break;
-  }
-  case X86_INS_PSWAPD:
-  case X86_INS_PMULHRW: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
-    break;
-  }
+    // ========================================================================
+    // 3DNow! owns its packed arithmetic and the complete MMX/x87 transition.
+    // ========================================================================
+#define NEVERD_3DNOW(Name, Opcode, Reads, Enhanced) case X86_INS_##Name:
+#include "neverd/ir/X86/X86ThreeDNow.def"
+#undef NEVERD_3DNOW
+    if (liftThreeDNow(L, S, Insn, X86))
+      return true;
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
   // ========================================================================
-  // TBM — trailing bit manipulation (AMD). INT_AND/OR/XOR approximations.
+  // TBM — encoding, results and flags have one family owner.
   // ========================================================================
   case X86_INS_BLCFILL:
   case X86_INS_BLCI:
@@ -320,92 +380,8 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_BLSFILL:
   case X86_INS_BLSIC:
   case X86_INS_T1MSKC:
-  case X86_INS_TZMSK: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    // All TBM ops are of the form: Dst = f(Src, Src±1). Approximate as
-    // the dominant operation pattern (AND/OR with adjacents).
-    switch (InsnId) {
-    case X86_INS_BLCFILL: {
-      // Dst = Src & (Src + 1)
-      NdVar Inc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_ADD, Inc, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_AND, Dst, {Src, Inc});
-      break;
-    }
-    case X86_INS_BLCI: {
-      // Dst = Src | ~(Src + 1)
-      NdVar Inc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_ADD, Inc, {Src, NdVar::cst(1, Dst.Size)});
-      NdVar NotInc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_NOT, NotInc, {Inc});
-      S.emit(NdOp::INT_OR, Dst, {Src, NotInc});
-      break;
-    }
-    case X86_INS_BLCIC: {
-      // Dst = ~Src & (Src + 1)
-      NdVar NotSrc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_NOT, NotSrc, {Src});
-      NdVar Inc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_ADD, Inc, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_AND, Dst, {NotSrc, Inc});
-      break;
-    }
-    case X86_INS_BLCMSK: {
-      // Dst = Src ^ (Src + 1)
-      NdVar Inc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_ADD, Inc, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_XOR, Dst, {Src, Inc});
-      break;
-    }
-    case X86_INS_BLCS: {
-      // Dst = Src | (Src + 1)
-      NdVar Inc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_ADD, Inc, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_OR, Dst, {Src, Inc});
-      break;
-    }
-    case X86_INS_BLSFILL: {
-      // Dst = Src | (Src - 1)
-      NdVar Dec = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_SUB, Dec, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_OR, Dst, {Src, Dec});
-      break;
-    }
-    case X86_INS_BLSIC: {
-      // Dst = ~Src | (Src - 1)
-      NdVar NotSrc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_NOT, NotSrc, {Src});
-      NdVar Dec = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_SUB, Dec, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_OR, Dst, {NotSrc, Dec});
-      break;
-    }
-    case X86_INS_T1MSKC: {
-      // Dst = ~Src | (Src + 1)
-      NdVar NotSrc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_NOT, NotSrc, {Src});
-      NdVar Inc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_ADD, Inc, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_OR, Dst, {NotSrc, Inc});
-      break;
-    }
-    case X86_INS_TZMSK: {
-      // Dst = ~Src & (Src - 1)
-      NdVar NotSrc = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_NOT, NotSrc, {Src});
-      NdVar Dec = S.makeTemp(Dst.Size);
-      S.emit(NdOp::INT_SUB, Dec, {Src, NdVar::cst(1, Dst.Size)});
-      S.emit(NdOp::INT_AND, Dst, {NotSrc, Dec});
-      break;
-    }
-    default:
-      break;
-    }
-    break;
-  }
+  case X86_INS_TZMSK:
+    return tbm::lift(L, S, Insn);
 
   // ========================================================================
   // CET — Control-flow Enforcement (ENDBR, shadow stack, etc.).
@@ -505,15 +481,24 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // MOVDIRI — scalar direct store.
   case X86_INS_MOVDIRI: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    if (X86.operands[0].type == X86_OP_MEM) {
-      S.storeToMem(X86.operands[0], Src);
-    } else {
-      S.emit(NdOp::COPY, Dst, {Src});
-    }
+    FPEncodingInfo Encoding;
+    if (!parseFPEncoding(Insn, X86, L.targetArch(), false, 2, 0, Encoding) ||
+        Encoding.Opcode != 0xf9 || X86.op_count != 2)
+      return false;
+    const uint16_t Width = Encoding.W ? 8 : 4;
+    if (X86.operands[0].type != X86_OP_MEM || X86.operands[0].size != Width ||
+        !matchesFPGPROperand(X86.operands[1], Encoding.gprRegIndex(), Width) ||
+        !validateFPEncodingTail(Insn, X86, Encoding, X86.operands[0]))
+      return false;
+    const NdVar Address = S.computeEA(X86.operands[0]);
+    const NdVar Source = L.operandRead(S, X86.operands[1]);
+    if (Address.Size != 8 || Source.Size != Width)
+      return false;
+    // A plain STORE loses the WC transaction and write-completion atomicity.
+    // Keep the actual memory operation, including unaligned stores, native.
+    S.emitIntrinsic(Intrinsic::X86DirectStore, {}, {Address, Source},
+                    NdMemoryOrdering::None,
+                    S.memoryAddressSpace(X86.operands[0]));
     break;
   }
 
@@ -521,12 +506,18 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // 64-byte-atomic direct store to the address held in the register operand.
   // The register is an address source, not a destination register.
   case X86_INS_MOVDIR64B: {
-    // In 64-bit mode ES has architectural base zero.  The 32-bit form needs
-    // explicit ES-base and segment-limit state that LowIR does not model, so
-    // keep that form fail-closed instead of silently treating ES as flat.
-    if (L.targetArch() != Arch::X64 || X86.op_count != 2 ||
+    if (L.targetArch() == Arch::X86)
+      return liftSegmentedBlock32(L, S, Insn, X86,
+                                  X86SegmentedBlockKind::DirectStore);
+    FPEncodingInfo Encoding;
+    if (L.targetArch() != Arch::X64 ||
+        !parseFPEncoding(Insn, X86, L.targetArch(), false, 2, 1, Encoding) ||
+        Encoding.Opcode != 0xf8 || X86.op_count != 2 ||
         X86.operands[0].type != X86_OP_REG ||
-        X86.operands[1].type != X86_OP_MEM || X86.operands[1].size != 64)
+        X86.operands[1].type != X86_OP_MEM || X86.operands[1].size != 64 ||
+        !matchesFPGPROperand(X86.operands[0], Encoding.gprRegIndex(),
+                             Encoding.AddressSize) ||
+        !validateFPEncodingTail(Insn, X86, Encoding, X86.operands[1]))
       return false;
 
     NdVar Address = L.operandRead(S, X86.operands[0]);
@@ -538,18 +529,15 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       Address = ExtendedAddress;
     }
 
-    // Intel specifies that the ordinary source read precedes the direct
-    // store.  Keeping the load first also snapshots overlapping sources.
-    const NdVar Source = L.operandRead(S, X86.operands[1]);
-    if (Source.Size != 64)
+    const NdVar SourceAddress = S.computeEA(X86.operands[1]);
+    if (SourceAddress.Size != 8)
       return false;
-    S.emitIntrinsic(Intrinsic::RequireAligned, {},
-                    {Address, NdVar::cst(64, 8)});
-
-    const NdVar FullMask = expandCompactLaneMask(S, NdVar::cst(0xff, 1), 64, 8);
-    if (FullMask.Size != 64)
-      return false;
-    S.emitIntrinsic(Intrinsic::MaskedStoreQ, {}, {Address, FullMask, Source});
+    // The instruction owns feature checks, the complete source read, alignment
+    // and the indivisible direct store. A masked ordinary store cannot express
+    // its write-completion atomicity or memory-type protocol.
+    S.emitIntrinsic(Intrinsic::X86DirectStore64B, {}, {SourceAddress, Address},
+                    NdMemoryOrdering::None,
+                    S.memoryAddressSpace(X86.operands[1]));
     break;
   }
 
@@ -560,9 +548,11 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // header and portal before returning the enqueue completion in ZF.
   case X86_INS_ENQCMD:
   case X86_INS_ENQCMDS: {
-    // The portal register is an offset in ES.  ES has architectural base zero
-    // in 64-bit mode; the 32-bit modes need explicit ES base/limit state that
-    // LowIR does not carry, so those modes remain fail-closed.
+    if (L.targetArch() == Arch::X86)
+      return liftSegmentedBlock32(
+          L, S, Insn, X86,
+          InsnId == X86_INS_ENQCMD ? X86SegmentedBlockKind::Enqueue
+                                   : X86SegmentedBlockKind::EnqueueSupervisor);
     if (L.targetArch() != Arch::X64 ||
         (S.AddressSize != 4 && S.AddressSize != 8) || X86.op_count != 2 ||
         X86.operands[0].type != X86_OP_REG ||
@@ -759,8 +749,7 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // CLZERO — zero cache line (AMD Zen).
   case X86_INS_CLZERO:
-    S.emitIntrinsic(Intrinsic::Clzero, NdVar());
-    break;
+    return liftCacheZero(L, S, Insn, X86);
 
   // XTEST already handled in TSX block.
 
@@ -768,15 +757,15 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // in some Capstone builds. Already covered via VPCLMULQDQ above.
 
   // ========================================================================
-  // Prefixes — not standalone instructions; emit NOP.
+  // Prefixes belong to their complete instruction. A standalone prefix ID
+  // cannot certify an instruction boundary or invent a successful NOP.
   // ========================================================================
   case X86_INS_DATA16:
   case X86_INS_LOCK:
   case X86_INS_REP:
   case X86_INS_REPNE:
   case X86_INS_REX64:
-    S.emit(NdOp::NOP, {}, {});
-    break;
+    return false;
 
   // ========================================================================
   // SSE/MMX data moves — treat as COPY to preserve dataflow.
@@ -811,26 +800,13 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
 
   // ========================================================================
-  // 3DNow! — rare; COPY-based dataflow preservation.
-  // ========================================================================
-  case X86_INS_PAVGUSB: {
-    if (X86.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
-    S.emit(NdOp::COPY, Dst, {Src});
-    break;
-  }
-
-  // ========================================================================
   // System instructions.
   // ========================================================================
   case X86_INS_CLDEMOTE:
     S.emitIntrinsic(Intrinsic::Cldemote, NdVar());
     break;
   case X86_INS_INVLPGA:
-    S.emitIntrinsic(Intrinsic::Invlpga, NdVar());
-    break;
+    return liftVirtualization(L, S, Insn, X86);
   case X86_INS_PCONFIG:
     S.emitIntrinsic(Intrinsic::Pconfig);
     break;
@@ -841,12 +817,19 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_WRPKRU:
     S.emitIntrinsic(Intrinsic::Wrpkru, NdVar());
     break;
+  // SYSEXITQ/SYSRETQ are terminal syscall returns: they transfer control to a
+  // named register and never resume in the lifted function.  Project them as a
+  // terminal state-transfer intrinsic naming the transferred cells; this grants
+  // no source ABI contract and reconstructs no privilege or segment change.
   case X86_INS_SYSEXITQ:
-    S.emitIntrinsic(Intrinsic::Sysexitq);
+    // SYSEXITQ: RIP <- RDX, RSP <- RCX.
+    S.emitVoidIntrinsic(Intrinsic::Sysexitq, {NdVar::reg(x86reg::RDX, 8),
+                                              NdVar::reg(x86reg::RCX, 8)});
     break;
   case X86_INS_SYSRETQ:
-    // Control leaves for user mode; no value falls through.
-    S.emitIntrinsic(Intrinsic::Sysretq, NdVar());
+    // SYSRETQ: RIP <- RCX, RFLAGS <- R11.
+    S.emitVoidIntrinsic(Intrinsic::Sysretq, {NdVar::reg(x86reg::RCX, 8),
+                                             NdVar::reg(x86reg::R11, 8)});
     break;
   case X86_INS_WBNOINVD:
     S.emitIntrinsic(Intrinsic::Wbnoinvd, NdVar());

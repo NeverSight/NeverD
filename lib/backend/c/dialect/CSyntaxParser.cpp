@@ -32,6 +32,7 @@ const llvm::StringSet<> &headerTypeNames() {
     llvm::StringSet<> Result;
 #define NEVERD_C_HEADER_INTEGER(Name, Bits, Signed) Result.insert(Name);
 #define NEVERD_C_HEADER_NAMED_TYPE(Name, Bits) Result.insert(Name);
+#define NEVERD_C_HEADER_FLOATING(Name, Bits) Result.insert(Name);
 #include "neverd/backend/c/dialect/CHeaderNames.def"
     return Result;
   }();
@@ -71,6 +72,7 @@ struct Specifiers {
   bool Noreturn = false;
   bool Const = false;
   bool Volatile = false;
+  bool Inferred = false;
   unsigned AddressSpace = 0;
   std::optional<uint64_t> AlignAs;
   llvm::SmallVector<llvm::StringRef, 1> Attributes;
@@ -112,6 +114,15 @@ public:
     }
     for (llvm::StringRef Name : headerTypeNames().keys())
       TypedefNames.insert(Name);
+    for (const TopLevel &Item : T.HeaderDeclarations)
+      for (const Decl *D : Item.Decls) {
+        if (D->Kind == DeclKind::Typedef) {
+          TypedefNames.insert(D->Name);
+          Typedefs[D->Name] = D->Ty;
+        }
+        if (D->Ty->isRecord())
+          HeaderRecords.insert(D->Ty->Record->Spelling);
+      }
   }
 
   void run() {
@@ -306,6 +317,8 @@ private:
             true)
         .Case("enum", true)
         .Cases({"__attribute__", "_Atomic", "_Complex"}, true)
+        .Case("__typeof__", true)
+        .Cases({"_Float16", "__fp16", "__bf16", "__auto_type"}, true)
         .Default(TypedefNames.contains(Tok.Text) && !shadowed(Tok.Text));
   }
   /// Whether a block declares typedef name \p Name as an ordinary identifier,
@@ -411,6 +424,18 @@ private:
           return fail("_Alignas needs an integer");
         S.AlignAs = Align;
         continue;
+      } else if (W == "__typeof__") {
+        if (AnyTypeKeyword())
+          break;
+        if (!(Named = parsePrototypeIntegerType()))
+          return false;
+        continue;
+      } else if (W == "_Float16" || W == "__fp16" || W == "__bf16" ||
+                 W == "__auto_type") {
+        if (AnyTypeKeyword())
+          break;
+        S.Inferred = W == "__auto_type";
+        Named = S.Inferred ? T.Types.unknownType() : T.Types.floating(16, W);
       } else if (W == "void")
         ++Void;
       else if (W == "_Bool" || W == "bool")
@@ -465,7 +490,7 @@ private:
           ++Pos;
         if (tok().Kind != TokenKind::Identifier) {
           // A structure or union without a tag, as a record's member.
-          if (!AnonymousRecords || !isPunct("{"))
+          if (!isPunct("{"))
             return fail("expected a record name");
           Named = T.Types.anonymousRecord(Union);
           if (!parseRecordBody(Named->Spelling, Union, Alignment))
@@ -568,10 +593,54 @@ private:
 #define NEVERD_C_HEADER_NAMED_TYPE(HeaderName, Bits)                           \
   if (!Result && Name == HeaderName)                                           \
     Result = T.Types.named(Name, Bits);
+#define NEVERD_C_HEADER_FLOATING(HeaderName, Bits)                             \
+  if (!Result && Name == HeaderName)                                           \
+    Result = T.Types.floating(Bits, Name);
 #include "neverd/backend/c/dialect/CHeaderNames.def"
     if (Result && Name == "wchar_t")
       Result = T.Types.integer(M.WCharBits, M.WCharSigned, Name);
     return Result;
+  }
+
+  /// CTypeRender's portable prototype integers retain their keyword identity
+  /// when its width agrees with the target, and use a fixed-width type
+  /// otherwise. Read that emitted typeof without treating choose_expr as an
+  /// ordinary call or applying the conditional operator's arithmetic
+  /// conversions.
+  const CType *parsePrototypeIntegerType() {
+    const size_t Begin = offset();
+    ++Pos;
+    if (!expect("("))
+      return nullptr;
+    Expr *Choice = parseAssignment();
+    if (!Choice || !expect(")"))
+      return nullptr;
+    if (Choice->Kind != ExprKind::Call || Choice->Ops.size() != 4 ||
+        Choice->Ops[0]->Kind != ExprKind::Name ||
+        Choice->Ops[0]->Text != "__builtin_choose_expr")
+      return fail("typeof needs a supported prototype integer choice"), nullptr;
+    const Expr *Condition = Choice->Ops[1];
+    if (Condition->Kind != ExprKind::Binary || Condition->Text != "==" ||
+        Condition->Ops[0]->Kind != ExprKind::SizeofType ||
+        Condition->Ops[1]->Kind != ExprKind::Integer)
+      return fail("typeof needs a sizeof type comparison"), nullptr;
+    const auto Size = T.Types.sizeOf(Condition->Ops[0]->Written);
+    uint64_t Bytes = 0;
+    if (!Size || Condition->Ops[1]->Text.getAsInteger(0, Bytes))
+      return fail("typeof needs a known sizeof type comparison"), nullptr;
+    const auto operandType = [](const Expr *Operand) -> const CType * {
+      if (Operand->Kind != ExprKind::Cast || !Operand->Written->isInteger() ||
+          Operand->Ops.front()->Kind != ExprKind::Integer ||
+          Operand->Ops.front()->Text != "0")
+        return nullptr;
+      return Operand->Written;
+    };
+    const CType *Keyword = operandType(Choice->Ops[2]);
+    const CType *Fixed = operandType(Choice->Ops[3]);
+    if (!Keyword || !Fixed)
+      return fail("typeof needs typed zero integer operands"), nullptr;
+    return T.Types.spelled(*Size == Bytes ? Keyword : Fixed,
+                           Src.slice(Begin, lastEnd()));
   }
 
   /// `{ A = 1, B, ... }` after `enum Name`.
@@ -599,8 +668,12 @@ private:
   bool parseRecordBody(llvm::StringRef Spelling, bool Union,
                        uint64_t Alignment) {
     RecordDef *Record = T.Types.recordDef(Spelling);
-    if (Record->Complete)
-      return fail("record defined twice");
+    if (Record->Complete) {
+      if (!HeaderRecords.erase(Spelling))
+        return fail("record defined twice");
+      Record->Fields.clear();
+      Record->Complete = false;
+    }
     Record->Union = Union;
     Record->Alignment = Alignment;
     Record->Pack = Pack;
@@ -644,6 +717,13 @@ private:
             return fail("a bit-field needs an integer type and a width");
           ++Pos;
           Field.BitWidth = static_cast<unsigned>(Width);
+        }
+        while (isIdent("__attribute__")) {
+          llvm::SmallVector<llvm::StringRef, 1> Attributes;
+          unsigned Space = 0;
+          if (!parseAttribute(Attributes, &Space))
+            return false;
+          Field.Type = T.Types.qualified(Field.Type, false, false, Space);
         }
         Record->Fields.push_back(std::move(Field));
       } while (accept(","));
@@ -904,6 +984,7 @@ private:
     Result->Static = S.Static;
     Result->Inline = S.Inline;
     Result->Register = S.Register;
+    Result->Inferred = S.Inferred;
     Result->Noreturn = S.Noreturn;
     Result->AlignAs = S.AlignAs;
     Result->Attributes = S.Attributes;
@@ -1538,14 +1619,34 @@ private:
       E->End = lastEnd();
       return WithLeading(E);
     }
+    if (Tok.isPunctuator("(") && isIdent("__typeof__", 1) &&
+        !isIdent("__builtin_choose_expr", 3)) {
+      Pos += 2;
+      if (!expect("("))
+        return nullptr;
+      Expr *Query = parseExpression();
+      if (!Query || !expect(")") || !expect(")"))
+        return nullptr;
+      Expr *E = T.newExpr(ExprKind::Cast, Begin);
+      E->TypeQuery = Query;
+      Expr *Operand = parseUnary();
+      if (!Operand)
+        return nullptr;
+      E->Ops.push_back(Operand);
+      E->End = lastEnd();
+      return WithLeading(E);
+    }
     if (Tok.isPunctuator("(") && isTypeNameStart(1)) {
       ++Pos;
+      const size_t TypeBegin = offset();
       const CType *Ty = parseTypeName();
+      const size_t TypeEnd = lastEnd();
       if (!Ty || !expect(")"))
         return nullptr;
       if (isPunct("{")) {
         Expr *E = T.newExpr(ExprKind::CompoundLiteral, Begin);
         E->Written = Ty;
+        E->Text = Src.slice(TypeBegin, TypeEnd);
         Expr *Init = parseInitializer();
         if (!Init)
           return nullptr;
@@ -1773,9 +1874,10 @@ private:
   size_t Pos = 0;
   unsigned Nesting = 0;
   bool AllowUnnamed = false;
-  /// Whether specifiers may declare a structure or union without a tag, as
-  /// a record's member does.
+  /// Whether a typedef name followed by ':' starts an unnamed bit-field,
+  /// rather than a statement's label.
   bool AnonymousRecords = false;
+  llvm::StringSet<> HeaderRecords;
   /// Whether specifiers may define an enumeration: a file-scope
   /// declaration's may.
   bool EnumerationsDefined = false;
@@ -1813,7 +1915,23 @@ std::vector<TopLevel> csyntax::parseDeclarations(llvm::StringRef Source,
   return Items;
 }
 
-void csyntax::parse(llvm::StringRef Source, Tree &Result) {
+void csyntax::parse(llvm::StringRef Source, Tree &Result,
+                    llvm::StringRef HeaderDeclarations) {
   Result.Source = Source;
+  if (!HeaderDeclarations.empty()) {
+    Result.Sources.push_back(HeaderDeclarations.str());
+    Result.HeaderDeclarations =
+        parseDeclarations(Result.Sources.back(), Result);
+    for (const TopLevel &Item : Result.HeaderDeclarations)
+      if (Item.TheKind == TopLevel::Kind::Unread) {
+        TopLevel Unread;
+        Unread.TheKind = TopLevel::Kind::Unread;
+        Unread.End = Source.size();
+        Unread.Text = Source;
+        Unread.Reason = "target header declaration: " + Item.Reason;
+        Result.Items.push_back(std::move(Unread));
+        return;
+      }
+  }
   Result.Items = parseDeclarations(Source, Result);
 }

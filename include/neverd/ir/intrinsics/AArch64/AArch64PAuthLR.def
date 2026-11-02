@@ -1,0 +1,87 @@
+//===- AArch64PAuthLR.def - Two-modifier authentication --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// FEAT_PAuth_LR operations and encoding contracts. Instruction rows select
+/// the original pointer, first modifier and second modifier. PC-relative
+/// authentication subtracts an unsigned imm16 scaled by four from the PC.
+/// Return rows authenticate without writing the architectural link register.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_PAUTH_LR_OPERATION
+#define NEVERD_A64_PAUTH_LR_OPERATION(Id, Mnemonic, Key, Auth, Return, Asm)
+#endif
+#ifndef NEVERD_A64_PAUTH_LR_INSTRUCTION
+#define NEVERD_A64_PAUTH_LR_INSTRUCTION(Mask, Word, Id, Pointer, Mod, Mod2)
+#endif
+#ifndef NEVERD_A64_PAUTH_LR_RETURN
+#define NEVERD_A64_PAUTH_LR_RETURN(Mask, Word, Id, Mod2)
+#endif
+#ifndef NEVERD_A64_PAUTH_LR_VALUE
+#define NEVERD_A64_PAUTH_LR_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_PAUTH_LR_TEXT
+#define NEVERD_A64_PAUTH_LR_TEXT(Name, Text)
+#endif
+
+// The implicit-register instructions accept arbitrary materialized modifiers,
+// including the original PC after the instruction has been relocated.
+NEVERD_A64_PAUTH_LR_OPERATION(A64_Pacia2, "pacia171615", IA, false, false,
+                              ".inst 0xdac18bfe")
+NEVERD_A64_PAUTH_LR_OPERATION(A64_Pacib2, "pacib171615", IB, false, false,
+                              ".inst 0xdac18ffe")
+NEVERD_A64_PAUTH_LR_OPERATION(A64_Autia2, "autia171615", IA, true, false,
+                              ".inst 0xdac1bbfe")
+NEVERD_A64_PAUTH_LR_OPERATION(A64_Autib2, "autib171615", IB, true, false,
+                              ".inst 0xdac1bffe")
+NEVERD_A64_PAUTH_LR_OPERATION(A64_AuthReturnIA2, "retaasppc", IA, true, true,
+                              ".inst 0xdac1bbfe")
+NEVERD_A64_PAUTH_LR_OPERATION(A64_AuthReturnIB2, "retabsppc", IB, true, true,
+                              ".inst 0xdac1bffe")
+
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac18bfe, A64_Pacia2, X17, X16,
+                                X15)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac18ffe, A64_Pacib2, X17, X16,
+                                X15)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac1bbfe, A64_Autia2, X17, X16,
+                                X15)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac1bffe, A64_Autib2, X17, X16,
+                                X15)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac1a3fe, A64_Pacia2, X30, SP, PC)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac1a7fe, A64_Pacib2, X30, SP, PC)
+// The NB forms differ only in their BTI landing-pad classification.
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac183fe, A64_Pacia2, X30, SP, PC)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac187fe, A64_Pacib2, X30, SP, PC)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffe0001f, 0xf380001f, A64_Autia2, X30, SP,
+                                PCRel)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffe0001f, 0xf3a0001f, A64_Autib2, X30, SP,
+                                PCRel)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xfffffc1f, 0xdac1901e, A64_Autia2, X30, SP, Rn)
+NEVERD_A64_PAUTH_LR_INSTRUCTION(0xfffffc1f, 0xdac1941e, A64_Autib2, X30, SP, Rn)
+NEVERD_A64_PAUTH_LR_RETURN(0xffe0001f, 0x5500001f, A64_AuthReturnIA2, PCRel)
+NEVERD_A64_PAUTH_LR_RETURN(0xffe0001f, 0x5520001f, A64_AuthReturnIB2, PCRel)
+// Rm == 31 is the baseline RETAA/B, whose second modifier depends on PACM.
+NEVERD_A64_PAUTH_LR_RETURN(0xffffffe0, 0xd65f0be0, A64_AuthReturnIA2, Rm)
+NEVERD_A64_PAUTH_LR_RETURN(0xffffffe0, 0xd65f0fe0, A64_AuthReturnIB2, Rm)
+
+NEVERD_A64_PAUTH_LR_VALUE(unsigned, kAArch64PAuthLRImmShift, 5)
+NEVERD_A64_PAUTH_LR_VALUE(uint32_t, kAArch64PAuthLRImmMask, 0xffff)
+NEVERD_A64_PAUTH_LR_VALUE(unsigned, kAArch64PAuthLRScale, 4)
+NEVERD_A64_PAUTH_LR_VALUE(unsigned, kAArch64PAuthLRRegMask, 31)
+NEVERD_A64_PAUTH_LR_TEXT(kAArch64PAuthLRConstraints, "={x17},0,{x16},{x15}")
+NEVERD_A64_PAUTH_LR_TEXT(kAArch64PAuthLRTargetFeature, ",+pauth-lr")
+NEVERD_A64_PAUTH_LR_TEXT(kAArch64PAuthLRReturnConstraints,
+                         "={x17},0,{x16},{x15},~{x14},~{cc}")
+// Match the valid-target contract of llvm.ptrauth.auth. A non-faulting AUT
+// poison must not become an ordinary C return with an unused target.
+NEVERD_A64_PAUTH_LR_TEXT(kAArch64PAuthLRReturnCheck,
+                         "\nmov x14, x17\nxpaci x14\ncmp x14, x17\n"
+                         "b.eq 1f\nbrk #0xc470\n1:")
+
+#undef NEVERD_A64_PAUTH_LR_OPERATION
+#undef NEVERD_A64_PAUTH_LR_INSTRUCTION
+#undef NEVERD_A64_PAUTH_LR_RETURN
+#undef NEVERD_A64_PAUTH_LR_VALUE
+#undef NEVERD_A64_PAUTH_LR_TEXT

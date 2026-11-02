@@ -1138,6 +1138,34 @@ TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
       pdb_loader_detail::recordedSectionsMatch(Trailing, Recharacterized));
 }
 
+TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
+  const pdb_loader_detail::RecordedSection Recorded[] = {
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
+  };
+  BinaryImage Image = imageWithSections({Recorded[0], Recorded[1]});
+  Section Headers;
+  Headers.Name = "<PE headers>";
+  Headers.VA = Image.Base;
+  Headers.Size = Headers.FileSz = 0x400;
+  Image.Sections.push_back(Headers);
+  // A name alone cannot hide an extra section from the PDB check.
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  Image.Sections.back().IsImageHeader = true;
+  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  Image.Sections.back().Name = "renamed header storage";
+  Image.Sections[1].Size += 0x1000;
+  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  ++Image.Sections.front().Size;
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  --Image.Sections.front().Size;
+  Image.Sections.erase(Image.Sections.begin());
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  Image = imageWithSections({Recorded[0], Recorded[1]});
+  Image.Sections.front().IsImageHeader = true;
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+}
+
 TEST(PDBIdentityIntegration, ImageWithoutUniqueRSDSCannotUsePDBNames) {
   BinaryImage Image;
   Image.Format = BinaryFormat::COFF;
@@ -1771,6 +1799,36 @@ TEST(PDB20IdentityIntegration, MappedHeadersSupplyNoAdditionalSegmentNumber) {
       return F.Name == "header_impostor";
     }));
   }
+}
+
+TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
+  constexpr uint32_t Signature = 0x12345678;
+  constexpr uint32_t Age = 1;
+  constexpr uint32_t Chars = 0x60000020;
+  auto Module = makeLegacyProcStream("code_target", 0x100, 1, 0x20);
+  const auto Invalid = makeLegacyProcStream("header_target", 0x100, 2, 0x20);
+  Module.insert(Module.end(), Invalid.begin() + 4, Invalid.end());
+  std::vector<std::vector<uint8_t>> Streams(6);
+  Streams[1] = makeLegacyInfo(Signature, Age);
+  Streams[3] = makeLegacyDbi(Age, 5, static_cast<uint32_t>(Module.size()), 4);
+  Streams[4] =
+      makeLegacySectionHdr(".text", 0x1000, 0x1000, 0x200, 0x400, Chars);
+  Streams[5] = Module;
+  ScratchDir Dir;
+  const auto Path = writePdb(writeJgPdb(Streams), Dir);
+  BinaryImage Image = makeX86PeImage(Signature, Age, Chars);
+  Section Headers;
+  Headers.VA = Image.Base;
+  Headers.Size = 0x400;
+  Headers.IsImageHeader = true;
+  Image.Sections.push_back(Headers);
+  auto Context = PDBDebugContext::load(Path, Image);
+  ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+  const auto Function = (*Context)->resolveFunction(0x401100);
+  ASSERT_TRUE(Function);
+  EXPECT_EQ(Function->Name, "code_target");
+  EXPECT_FALSE((*Context)->resolveFunction(0x400100));
+  EXPECT_EQ((*Context)->allFunctions().size(), 1u);
 }
 
 TEST(PDB20IdentityIntegration, SignatureOrAgeMismatchRejectsTheCompanion) {

@@ -1,0 +1,93 @@
+//===- AArch64SVEPrefixFixtures.def - Independent prefix pairs -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// PAIR records independently assembled prefix/follower words and expected
+/// copy operands. Intrinsic::_Count denotes an ordinary whole-register COPY.
+/// REJECT covers constrained-unpredictable pairs and unowned consumers.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SVE_PREFIX_PAIR
+#define NEVERD_SVE_PREFIX_PAIR(Word, Follower, Id, Dst, Src, Pred, Machine)
+#endif
+#ifndef NEVERD_SVE_PREFIX_REJECT
+#define NEVERD_SVE_PREFIX_REJECT(Word, Follower)
+#endif
+#ifndef NEVERD_SVE_PREFIX_SETUP
+#define NEVERD_SVE_PREFIX_SETUP(Word)
+#endif
+#ifndef NEVERD_SVE_PREFIX_FIXTURE
+#define NEVERD_SVE_PREFIX_FIXTURE(Type, Name, Value)
+#endif
+
+// LLVM 22.1.6 llvm-mc, -triple=aarch64 -mattr=+sve,+cpa.
+NEVERD_SVE_PREFIX_PAIR(0x0420bc60, 0x04c40020, _Count, 0, 3, 0, 0x04c40020)
+NEVERD_SVE_PREFIX_PAIR(0x0420bc60, 0x04c50020, _Count, 0, 3, 0, 0x04c50020)
+NEVERD_SVE_PREFIX_PAIR(0x0420bc60, 0x44c1d840, _Count, 0, 3, 0, 0x44c1d840)
+NEVERD_SVE_PREFIX_PAIR(0x0420bc60, 0x44c2d020, _Count, 0, 3, 0, 0x44c2d020)
+NEVERD_SVE_PREFIX_PAIR(0x04d02060, 0x04c40020, A64_SveMovprfxZero, 0, 3, 0,
+                       0x04c40020)
+NEVERD_SVE_PREFIX_PAIR(0x04d02060, 0x04c50020, A64_SveMovprfxZero, 0, 3, 0,
+                       0x04c50020)
+NEVERD_SVE_PREFIX_PAIR(0x04d12060, 0x04c40020, A64_SveMovprfxMerge, 0, 3, 0,
+                       0x04c40020)
+NEVERD_SVE_PREFIX_PAIR(0x04d12060, 0x04c50020, A64_SveMovprfxMerge, 0, 3, 0,
+                       0x04c50020)
+NEVERD_SVE_PREFIX_PAIR(0x04d03fdf, 0x04c51fbf, A64_SveMovprfxZero, 31, 30, 7,
+                       0x04c50020)
+NEVERD_SVE_PREFIX_PAIR(0x04d13fff, 0x04c41fdf, A64_SveMovprfxMerge, 31, 31, 7,
+                       0x04c40020)
+NEVERD_SVE_PREFIX_PAIR(0x0420bfff, 0x44c1d85f, _Count, 31, 31, 0, 0x44c1d840)
+NEVERD_SVE_PREFIX_PAIR(0x0420bc00, 0x44c2d020, _Count, 0, 0, 0, 0x44c2d020)
+NEVERD_SVE_PREFIX_PAIR(0x04d02000, 0x04c40020, A64_SveMovprfxZero, 0, 0, 0,
+                       0x04c40020)
+
+// NOP, branch, another prefix, return, and constructive consumers.
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0xd503201f)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x14000000)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x0420bc60)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0xd65f03c0)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04e20820)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04e10fff)
+// Wrong destination, then every destructive source overlap.
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04c40021)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04c40000)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04c50000)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x44c1d800)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x44c0d840)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x44c2d000)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x44c0d020)
+// Predicated prefixes cannot precede multiply; Pg and element sizes must match.
+NEVERD_SVE_PREFIX_REJECT(0x04d02060, 0x44c1d840)
+NEVERD_SVE_PREFIX_REJECT(0x04d12060, 0x44c2d020)
+NEVERD_SVE_PREFIX_REJECT(0x04d02460, 0x04c40020)
+NEVERD_SVE_PREFIX_REJECT(0x04d12060, 0x04c50420)
+NEVERD_SVE_PREFIX_REJECT(0x04102060, 0x04c40020)
+NEVERD_SVE_PREFIX_REJECT(0x04502060, 0x04c40020)
+NEVERD_SVE_PREFIX_REJECT(0x04912060, 0x04c40020)
+// An unowned destructive ADD and a reserved follower are not CPA proofs.
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04c00020)
+NEVERD_SVE_PREFIX_REJECT(0x0420bc60, 0x04c42020)
+
+NEVERD_SVE_PREFIX_SETUP(0x04e140a3)
+NEVERD_SVE_PREFIX_SETUP(0x04e2413d)
+NEVERD_SVE_PREFIX_SETUP(0x04e3417e)
+
+NEVERD_SVE_PREFIX_FIXTURE(unsigned, kPrefixTestPairBytes, 8)
+NEVERD_SVE_PREFIX_FIXTURE(unsigned, kPrefixTestPredCPA, 2)
+NEVERD_SVE_PREFIX_FIXTURE(unsigned, kPrefixTestValueId, 40)
+NEVERD_SVE_PREFIX_FIXTURE(unsigned, kPrefixTestMergeIndex, 2)
+NEVERD_SVE_PREFIX_FIXTURE(uint64_t, kPrefixTestOverflowPC, 0xfffffffffffffffc)
+NEVERD_SVE_PREFIX_FIXTURE(uint32_t, kPrefixTestDirectBranch, 0x34000040)
+NEVERD_SVE_PREFIX_FIXTURE(const char *, kPrefixTestFunction, "sve_prefix_pair")
+NEVERD_SVE_PREFIX_FIXTURE(const char *, kPrefixTestSelectName,
+                          "sve.prefix.result")
+NEVERD_SVE_PREFIX_FIXTURE(const char *, kPrefixTestSelectC, "svsel_u64")
+NEVERD_SVE_PREFIX_FIXTURE(const char *, kPrefixTestZeroC, "svdup_n_u64(0)")
+
+#undef NEVERD_SVE_PREFIX_PAIR
+#undef NEVERD_SVE_PREFIX_REJECT
+#undef NEVERD_SVE_PREFIX_SETUP
+#undef NEVERD_SVE_PREFIX_FIXTURE

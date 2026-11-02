@@ -6,7 +6,13 @@
 #ifndef NEVERD_BACKEND_LLVM_LLVMSOURCETYPEHINTS_H
 #define NEVERD_BACKEND_LLVM_LLVMSOURCETYPEHINTS_H
 
+#include "neverd/ir/NdTypes.h"
+
 #include "llvm/ADT/StringRef.h"
+
+namespace llvm {
+class Argument;
+} // namespace llvm
 
 namespace neverd {
 // LLVM integers are signless. These producer-supplied spelling facts preserve
@@ -25,5 +31,16 @@ inline constexpr llvm::StringLiteral LLVMSourceArgumentType =
 // spelling at that call only; it does not classify other calls to the callee.
 inline constexpr llvm::StringLiteral LLVMSourceByValueStringParameter =
     "neverd.source.by_value_string";
+
+// Opaque LLVM pointers erase pointees. This argument attribute retains only a
+// source spelling: scalar pointees, named opaque records and pointer chains.
+// It grants no ABI, storage extent, aliasing or dereferenceability authority.
+// Argument attributes follow argument reordering; a function-wide ordinal
+// table would become stale when LLVM removes a preceding argument.
+inline constexpr llvm::StringLiteral LLVMSourcePointerParameter =
+    "neverd.source.pointer_parameter";
+void writeLLVMSourcePointerParameter(llvm::Argument &Argument,
+                                     const TypeRef &Type);
+TypeRef readLLVMSourcePointerParameter(const llvm::Argument &Argument);
 } // namespace neverd
 #endif

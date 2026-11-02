@@ -45,6 +45,7 @@ private:
   quint64 serial_ = 0, next_ = 0;
   bool ready_ = false;
   bool snapshotBlocked_ = false, startingReplica_ = false;
+  bool updatesNames_ = false, refreshingNames_ = false;
 };
 
 /// Bounded independent replicas. A function's pages and graph transaction stay

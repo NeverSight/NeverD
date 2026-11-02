@@ -1,0 +1,398 @@
+{
+  "scope": "All six i386 four-source CS/ES/SS native forms and shared segment-offset classification",
+  "goal_complete": false,
+  "sources": {
+    "neverd_fixed_code": "b5b724b7c766ff8514cdce9b099810df2d1a29ef",
+    "neverd_qualified_code": "ed0152e32f0391ca7c3aadbce23dd44ac2121473",
+    "neverd_base": "159588db824627d08765a0434517db522b2ef5a5",
+    "remote_exact_sha": "7a605bd2d47fc0b089cc56cb975000b510e0f00f",
+    "remote_change": "Concurrent signature-corpus pointer update; no shared C++ changes.",
+    "capstone": "a6108a7b988228e104e727b2120d1f9a474eb94a",
+    "signatures": "187f26fd3406804873a1c8a52cf0b33a276c5fd8",
+    "llvm": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "llvm_release_and_pins_changed": false
+  },
+  "artifact_root": "/mnt/data/neverd-x86-four-segments",
+  "validation": {
+    "pinned": {
+      "tests": 78,
+      "reports": [
+        {
+          "path": "committed-pinned-NeverDX86BoundedLeafTests.xml",
+          "sha256": "244c2aefa2eb8ca6fcf734b533bd21dd9f5243f19900b2409d9e1f8dbcfbf708",
+          "tests": 15,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86CompactSegmentTests.xml",
+          "sha256": "5069a614fd8e1f907bc0efe9da41a8799958968d765935f0813a1e19a8110cb2",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86CompressExpandSourceTests.xml",
+          "sha256": "05eaead32a5f1cee64072b4e456e2c3c41639290edc352d583065ec4ccd1d787",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86EVEXCompressExpandMemoryTests.xml",
+          "sha256": "1d57ba845e5ee21cc0a58577d67ab988cff3f74844a7a290128efb99e785618f",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86FourFMAExactTests.xml",
+          "sha256": "e5e8a2f90e28362d7479892dffee75079fb35a9d2c8088089e0da988354056e2",
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86FourSourceSegmentTests.xml",
+          "sha256": "e58b133d81ac938549e3410f6c38ec1c9c7e29baeb325808504457623c4801fa",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86FourSourceSourceTests.xml",
+          "sha256": "a79ae67838b1998eb620a347ebb04cc6d6669ac43bddbf43da237f067d00eb08",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86RepStateTests.xml",
+          "sha256": "b3e5e0bd6e937644988d2e7a9bc355de515b95345fb31249acd876378d3f5b57",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-pinned-NeverDX86VP4DPWTests.xml",
+          "sha256": "6ffd8c4f0c02cfe386eea552c432aa4c12ba0d986e64ce16ba1c74cc8fce3cea",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "committed-pinned-final-build.log",
+        "sha256": "0dfca764381963464308312d81263c4a2f076f76f68c602708e31afdd49f5ada"
+      },
+      "commands": {
+        "path": "committed-pinned-commands.json",
+        "sha256": "f34f5b073e6e668e91bb3e89abf5f706db8c3ccdb7e7810b5ca80ad5fae8bb89"
+      },
+      "i386_objects": {
+        "four_source": 540,
+        "compact": 270,
+        "inventory": {
+          "path": "committed-pinned-objects.json",
+          "sha256": "b212d60a7a53f9fcdcd1ec06e3ecfc00f094d111cef49d2495330b73a1c4f62e"
+        }
+      },
+      "four_source_transport": {
+        "runs": 864,
+        "clang_asan_ubsan": 432,
+        "neverc": 432,
+        "report": {
+          "path": "committed-four-recorders/qualification.json",
+          "sha256": "f4457ba838ac6239b8eecfa70e3eb5d722a8cfdeaa81568c6da0283d81c55e61"
+        }
+      },
+      "compact_transport_regression": {
+        "runs": 432,
+        "clang_asan_ubsan": 216,
+        "neverc": 216,
+        "report": {
+          "path": "committed-pinned-compact-recorders/qualification.json",
+          "sha256": "57ea5321e7242402dd5e3e9a31ee079ac0589f3deee12052cc5e5d744febcac9"
+        }
+      },
+      "packed_constant_comparisons": {
+        "clang_asan_ubsan": 252,
+        "neverc": 252
+      },
+      "four_source_native_interfaces": {
+        "objects": 522,
+        "functions": 5544,
+        "native_instructions": 10656,
+        "source_recorders": 16,
+        "report": {
+          "path": "committed-pinned-four-checked/qualification.json",
+          "sha256": "7a3c13181b4ef9b6169564f032e23f4b093750c5f0cb53883ab6aecd96a08afb"
+        }
+      }
+    },
+    "native": {
+      "tests": 78,
+      "reports": [
+        {
+          "path": "committed-native-NeverDX86BoundedLeafTests.xml",
+          "sha256": "5a66666820e62032366159d1d14502d4e8b3f58390683a3880f8ef2276455b55",
+          "tests": 15,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86CompactSegmentTests.xml",
+          "sha256": "cb3b6f8fd9bd2d0c0a12919c75a1a4f240d1e85a0c344b9516b4bba0e255cc64",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86CompressExpandSourceTests.xml",
+          "sha256": "664d268f52bec1751afdf8726ee884e1d57b78ec8792ff09a67de6bcb46771a9",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86EVEXCompressExpandMemoryTests.xml",
+          "sha256": "7908071a0e19e58b8eb5c9a555d985cb35c9e0c3fb204918e27950bf87c79171",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86FourFMAExactTests.xml",
+          "sha256": "b5d3f319dceaf425d9aaeb502a0cbf9e9557565bdfe1b72eef44f702c15156af",
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86FourSourceSegmentTests.xml",
+          "sha256": "fb812e41bee9df9a973e2a631fa9c24f17687b94699b0a0b8a44e25348d08984",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86FourSourceSourceTests.xml",
+          "sha256": "e23541ba0319866295afaf538fe48116d953a1a2c0db5703b6437d77d605e91f",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86RepStateTests.xml",
+          "sha256": "84ecfbd6b4c6aa035357272a71546ead220b8be28a04402352dca476e48871ea",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "committed-native-NeverDX86VP4DPWTests.xml",
+          "sha256": "f07cee1d45eb7b6ac4ebb0d03cb983bd55f6e25d652356437e090bb5ebb8578a",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "committed-native-final-build.log",
+        "sha256": "0a26d50ac155a4b546c9db9eb808f95b8175ac3c9a54ce4c29dd18d89828397e"
+      },
+      "commands": {
+        "path": "committed-native-commands.json",
+        "sha256": "a6e5a0e263a9624f86af274a64085934050f9b34050e6b0c47c1f0429bb67671"
+      },
+      "i386_objects": {
+        "four_source": 540,
+        "compact": 270,
+        "inventory": {
+          "path": "committed-native-objects.json",
+          "sha256": "a5d1bde5d8a72b812acc32fc0b3709d63f4599a37e24d3866a9b8164a19af8e0"
+        }
+      },
+      "four_source_transport": {
+        "runs": 864,
+        "clang_asan_ubsan": 432,
+        "neverc": 432,
+        "report": {
+          "path": "committed-native-four-recorders/qualification.json",
+          "sha256": "39b6499e9fb3aa547f43d45fdff5e49cd470d8e93a3492cee70e4982c78377bd"
+        }
+      },
+      "compact_transport_regression": {
+        "runs": 432,
+        "clang_asan_ubsan": 216,
+        "neverc": 216,
+        "report": {
+          "path": "committed-native-compact-recorders/qualification.json",
+          "sha256": "f8326cfb928c1a4c5ee126c8e1aea1dcff818225e985a65de92905a433c705e8"
+        }
+      },
+      "packed_constant_comparisons": {
+        "clang_asan_ubsan": 252,
+        "neverc": 252
+      },
+      "four_source_native_interfaces": {
+        "objects": 522,
+        "functions": 5544,
+        "native_instructions": 10656,
+        "source_recorders": 16,
+        "report": {
+          "path": "committed-native-four-checked/qualification.json",
+          "sha256": "bb54297213d7b63cc7ca39dd7e5e2620f8692fe7e1e5817329f682ac50f15a5c"
+        }
+      }
+    }
+  },
+  "qualification_driver": {
+    "path": "qualify-committed.py",
+    "sha256": "df975f5312e54700f8babf487a77e5d80715b58c14f68bccd36ddb01adbd1d59"
+  },
+  "draft_note": "The initial 73-test run passed on both SDKs. Final qualification adds the five integer semantic tests, direct test-header dependencies and a distinct four-source artifact name. Initial artifact directories are diagnostic only because compact and four-source pipeline test names originally collided.",
+  "admission_per_sdk": {
+    "four_source_decoder_lift_checks": 3024,
+    "compact_decoder_lift_checks": 13608,
+    "four_source_malformed_control_refusals": 108,
+    "four_source_wrong_mode_refusals": 18,
+    "four_source_active_and_suppressed_concrete_cases": 72,
+    "decoder_routes": [
+      "full",
+      "lightweight",
+      "lift"
+    ],
+    "address_widths": [
+      16,
+      32
+    ],
+    "prefixes": [
+      "implicit DS/SS",
+      "ES",
+      "CS",
+      "SS",
+      "DS",
+      "FS",
+      "GS"
+    ],
+    "policies": [
+      "strict",
+      "permissive"
+    ]
+  },
+  "emission": {
+    "four_source_profiles": 108,
+    "compact_profiles": 54,
+    "architecture": "i386",
+    "formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "pipelines": [
+      "default",
+      "NoOpt"
+    ],
+    "routes": [
+      "LLVM object",
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "four_source_families": [
+      "V4FMADDPS",
+      "V4FNMADDPS",
+      "V4FMADDSS",
+      "V4FNMADDSS",
+      "VP4DPWSSD",
+      "VP4DPWSSDS"
+    ],
+    "i386_native_wrapper_functions": 72,
+    "absolute_segment_offset_aliasing_ds_image": "0x4000",
+    "recorded_scalar_parameter_with_high_bit_set": "0xf2345678",
+    "objects_decoded_for_original_instruction_and_segment": true,
+    "both_sdk_sources_executed_separately": true
+  },
+  "unchanged_compact_native_interfaces": {
+    "exports": 1308,
+    "equivalence": {
+      "path": "compact-interface-exports-equivalence.json",
+      "sha256": "74c3558ecbb7a3be17fb48f7a9411751f7b6eba9f7145fad09959646c212ca79"
+    },
+    "previous_qualification": "docs/evidence/x86-compact-segments-2026-10-27.json",
+    "note": "The 654 C/LLVM compact-interface exports per SDK are byte-identical to the previous integrated qualification; its unchanged external matrix was not rerun. Compact pipeline objects, source transport and packed storage were rerun."
+  },
+  "semantics": {
+    "reference": "https://cdrdv2-public.intel.com/874247/334569-090-sdm-vol-2d.pdf",
+    "section": "Chapter 8: instructions unique to Intel Xeon Phi processors",
+    "control": "Existing one-byte forms remain valid; a checked second byte retains i386 CS/ES/SS.",
+    "address": "Original-width effective-address arithmetic precedes native segment selection; offsets never acquire process-pointer relocation.",
+    "memory": "Any active lane observes the entire m128 tuple; a zero mask suppresses memory. Active concrete CS/ES/SS refuses without descriptors before loading memory or changing MXCSR/output.",
+    "scalar_accumulator": "Upper 96 bits remain observed under either masked merging or zeroing."
+  },
+  "refactoring": {
+    "lifter": "lib/lift/X86/X86NativeMemory.h selects authenticated i386 segments for compact and four-source families.",
+    "type_roles": "include/neverd/ir/med/X86/X86NativeMemory.h is shared by MedIR and HighIR inference.",
+    "source_fixture": "unittests/lift/x86/X86NativeSegmentFixture.h shares native/C compilation, raw-offset checks and object decoding.",
+    "source_verifier": "Compact and four-source recorder drivers share the compiler execution/report loop."
+  },
+  "boundaries": {
+    "physical_four_source_execution_qualified": false,
+    "descriptor_fault_execution_qualified": false,
+    "neverc_frontend_architecture": "x64",
+    "neverc_i386_execution_qualified": false,
+    "source_transport": "Recorders replace only native operations and remove target attributes; host x64 runs verify operand storage and values, not i386 processor behavior.",
+    "remaining": [
+      "i386 atomic non-DS/FS/GS address forms",
+      "Concrete segment descriptor environments and physical fault qualification",
+      "Other instruction/state gaps in docs/x86-instruction-support.md"
+    ]
+  },
+  "publication_integration": {
+    "remote_exact_sha": "92b7f8dab1624d601bcb4e60b08fbc354226f077",
+    "scope": "Worker patch/history implementation, its tests, performance skill and documentation only. No source or dependency used by the qualified x86 library/test targets changed.",
+    "qualified_code_unchanged": true
+  }
+}

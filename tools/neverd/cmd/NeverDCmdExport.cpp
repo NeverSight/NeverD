@@ -179,6 +179,29 @@ int runExport(neverd_session_t Sess) {
 }
 
 int runDiff() {
+  if (DiffStructural)
+    return runStructuralDiff();
+  if (!DiffOptions.empty() || !DiffSave.empty() || !DiffReopen.empty() ||
+      !DiffOverrides.empty() || !DiffList.empty() || DiffIgnoreNames ||
+      DiffProfile.getNumOccurrences() ||
+      DiffMinSimilarity.getNumOccurrences() ||
+      DiffTimeout.getNumOccurrences() || DiffOffset.getNumOccurrences() ||
+      DiffLimit.getNumOccurrences() || DiffListSide.getNumOccurrences() ||
+      DiffListSearch.getNumOccurrences() || DiffListSort.getNumOccurrences() ||
+      DiffListDescending.getNumOccurrences() ||
+      DiffAmbiguousWith.getNumOccurrences() ||
+      DiffSourceFunction.getNumOccurrences() ||
+      DiffSourceSide.getNumOccurrences() ||
+      DiffSourceRepresentation.getNumOccurrences() ||
+      DiffSourceInstructions.getNumOccurrences() ||
+      DiffSourceDifference.getNumOccurrences() ||
+      DiffSourcePrelude.getNumOccurrences() ||
+      DiffSourceWork.getNumOccurrences() ||
+      DiffSourceBytes.getNumOccurrences()) {
+    WithColor::error()
+        << "structural comparison options require --structural\n";
+    return 1;
+  }
   if (!JsonOutput && !DiffJson)
     outs() << "=== " << ProjectName << " v" << VersionString << " (diff) ===\n";
 

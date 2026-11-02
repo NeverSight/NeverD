@@ -33,6 +33,47 @@ namespace {
 constexpr uint32_t kMaxCommonEncodings = 127;
 constexpr uint32_t kMaxIndexedEncodings = 256;
 
+#define NEVERD_COMPACT_PAGE_VALUE(Type, Name, Value)                           \
+  constexpr Type Name = Value;
+#define NEVERD_COMPACT_PAGE_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "CompactUnwindPage.def"
+
+const char *validatePageIndex(uint32_t FunctionOffset, uint32_t PageOffset,
+                              bool HasPrevious, uint32_t PreviousFunction,
+                              bool IsTerminal) {
+  if (HasPrevious && FunctionOffset <= PreviousFunction)
+    return kPageIndexNotIncreasing;
+  if ((PageOffset == 0) != IsTerminal)
+    return kPageIndexInvalidSentinel;
+  return nullptr;
+}
+
+const char *decodeCompressedFunctionOffset(uint32_t PageBegin, uint32_t Packed,
+                                           uint32_t &FunctionOffset) {
+  const uint32_t Delta = Packed & kCompressedFunctionDeltaMask;
+  if (Delta > std::numeric_limits<uint32_t>::max() - PageBegin)
+    return kCompressedFunctionDeltaOverflow;
+  FunctionOffset = PageBegin + Delta;
+  return nullptr;
+}
+
+const char *validatePageFunctionOffset(uint32_t FunctionOffset,
+                                       uint32_t PageBegin, uint32_t PageEnd,
+                                       bool IsFirst, uint32_t PreviousFunction,
+                                       uint32_t Kind) {
+  const bool IsCompressed = Kind == kSecondLevelCompressed;
+  if (FunctionOffset < PageBegin || FunctionOffset >= PageEnd)
+    return IsCompressed ? kCompressedEntryOutsidePage
+                        : kRegularEntryOutsidePage;
+  if (IsFirst && FunctionOffset != PageBegin)
+    return IsCompressed ? kCompressedPageStartMismatch
+                        : kRegularPageStartMismatch;
+  if (!IsFirst && FunctionOffset <= PreviousFunction)
+    return IsCompressed ? kCompressedEntriesNotIncreasing
+                        : kRegularEntriesNotIncreasing;
+  return nullptr;
+}
+
 /// A bounded view over the section, so every field read is checked once here
 /// instead of at each use.
 class SectionReader {
@@ -185,15 +226,12 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
         !R.u32At(Offset + 4, Entry.SecondLevelPageSectionOffset) ||
         !R.u32At(Offset + 8, Entry.LSDAIndexArraySectionOffset))
       return rawParseError("first-level index is truncated");
-    if (!Result.Index.empty() &&
-        Entry.FunctionOffset <= Result.Index.back().FunctionOffset)
-      return rawParseError(
-          "first-level function offsets are not strictly increasing");
-
-    const bool IsTerminal = I + 1 == Header.IndexCount;
-    if ((Entry.SecondLevelPageSectionOffset == 0) != IsTerminal)
-      return rawParseError(
-          "first-level index does not have one final terminal sentinel");
+    if (const char *Error = validatePageIndex(
+            Entry.FunctionOffset, Entry.SecondLevelPageSectionOffset,
+            !Result.Index.empty(),
+            Result.Index.empty() ? 0 : Result.Index.back().FunctionOffset,
+            I + 1 == Header.IndexCount))
+      return rawParseError(Error);
     Result.Index.push_back(Entry);
   }
 
@@ -265,7 +303,7 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
          !R.u16At(uint64_t(Page.SectionOffset) + 10, Page.EncodingsCount)))
       return rawParseError("compressed page header is truncated");
     if (Page.EntryCount == 0)
-      return rawParseError("second-level page has no entries");
+      return rawParseError(kPageHasNoEntries);
     TotalEntries += Page.EntryCount;
     if (TotalEntries > Options.MaxEntries)
       return rawParseError(
@@ -319,14 +357,11 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
         if (!R.u32At(Offset, Entry.FunctionOffset) ||
             !R.u32At(Offset + 4, Entry.Encoding))
           return rawParseError("regular page entry is truncated");
-        if (Entry.FunctionOffset < PageIndex.FunctionOffset ||
-            Entry.FunctionOffset >= Result.Index[I + 1].FunctionOffset)
-          return rawParseError("regular entry lies outside its page range");
-        if (E == 0 && Entry.FunctionOffset != PageIndex.FunctionOffset)
-          return rawParseError("regular page does not begin at its index key");
-        if (E != 0 && Entry.FunctionOffset <= PreviousFunction)
-          return rawParseError(
-              "regular entries are duplicated or not strictly sorted");
+        if (const char *Error = validatePageFunctionOffset(
+                Entry.FunctionOffset, PageIndex.FunctionOffset,
+                Result.Index[I + 1].FunctionOffset, E == 0, PreviousFunction,
+                Page.Kind))
+          return rawParseError(Error);
         PreviousFunction = Entry.FunctionOffset;
         Page.RegularEntries.push_back(Entry);
       }
@@ -338,12 +373,12 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
         if (!R.u32At(Offset, Entry.PackedValue))
           return rawParseError("compressed page entry is truncated");
 
-        const uint32_t Delta = Entry.PackedValue & 0x00ffffffu;
-        if (Delta >
-            std::numeric_limits<uint32_t>::max() - PageIndex.FunctionOffset)
-          return rawParseError("compressed function delta overflows");
-        Entry.FunctionOffset = PageIndex.FunctionOffset + Delta;
-        Entry.EncodingIndex = Entry.PackedValue >> 24;
+        if (const char *Error = decodeCompressedFunctionOffset(
+                PageIndex.FunctionOffset, Entry.PackedValue,
+                Entry.FunctionOffset))
+          return rawParseError(Error);
+        Entry.EncodingIndex =
+            Entry.PackedValue >> kCompressedEncodingIndexShift;
         if (Entry.EncodingIndex < Result.CommonEncodings.size()) {
           Entry.Encoding = Result.CommonEncodings[Entry.EncodingIndex];
         } else {
@@ -354,15 +389,11 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
           Entry.Encoding = Page.LocalEncodings[LocalIndex];
         }
 
-        if (Entry.FunctionOffset < PageIndex.FunctionOffset ||
-            Entry.FunctionOffset >= Result.Index[I + 1].FunctionOffset)
-          return rawParseError("compressed entry lies outside its page range");
-        if (E == 0 && Entry.FunctionOffset != PageIndex.FunctionOffset)
-          return rawParseError(
-              "compressed page does not begin at its index key");
-        if (E != 0 && Entry.FunctionOffset <= PreviousFunction)
-          return rawParseError(
-              "compressed entries are duplicated or not strictly sorted");
+        if (const char *Error = validatePageFunctionOffset(
+                Entry.FunctionOffset, PageIndex.FunctionOffset,
+                Result.Index[I + 1].FunctionOffset, E == 0, PreviousFunction,
+                Page.Kind))
+          return rawParseError(Error);
         PreviousFunction = Entry.FunctionOffset;
         Page.CompressedEntries.push_back(Entry);
       }
@@ -520,6 +551,11 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
         !R.u32At(Base + 4, Entry.SecondLevelOffset) ||
         !R.u32At(Base + 8, Entry.LSDAArrayOffset))
       return malformed("__unwind_info index leaves its section");
+    if (const char *Error = validatePageIndex(
+            Entry.FunctionOffset, Entry.SecondLevelOffset, !Index.empty(),
+            Index.empty() ? 0 : Index.back().FunctionOffset,
+            I + 1 == IndexCount))
+      return malformed(Error);
     Index.push_back(Entry);
   }
 
@@ -544,20 +580,18 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
   }
 
   // --- Second-level pages -------------------------------------------------
-  // Collect (functionOffset, encoding) in address order; a range ends where
-  // the next entry begins, and the last one ends at the sentinel.
+  // Keep the owning page bound with each validated entry. If another page is
+  // malformed and omitted, the preceding range must not grow across its gap.
   struct RawEntry {
     uint32_t FunctionOffset = 0;
     uint32_t Encoding = 0;
+    uint32_t PageEnd = 0;
   };
   std::vector<RawEntry> Raw;
+  uint64_t TotalEntries = 0;
 
   for (size_t I = 0; I + 1 < Index.size(); ++I) {
     const IndexEntry &Page = Index[I];
-    // A zero second-level offset marks the sentinel, which carries no page.
-    if (Page.SecondLevelOffset == 0)
-      continue;
-
     uint32_t Kind = 0;
     if (!R.u32At(Page.SecondLevelOffset, Kind)) {
       partial("__unwind_info second-level page leaves its section");
@@ -569,11 +603,34 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
       partial("__unwind_info second-level page header is truncated");
       continue;
     }
-    if (Raw.size() + EntryCount >
+    if (EntryCount == 0) {
+      partial(kPageHasNoEntries);
+      continue;
+    }
+    TotalEntries += EntryCount;
+    if (TotalEntries >
         ::neverd::limits::loader::kMachOCompactUnwindMaxEntries) {
       partial("__unwind_info exceeds the entry decode budget");
       break;
     }
+
+    const size_t PageEntriesBegin = Raw.size();
+    const uint32_t PageEnd = Index[I + 1].FunctionOffset;
+    uint32_t PreviousFunction = 0;
+    bool PageValid = true;
+    auto appendEntry = [&](RawEntry Entry, bool IsFirst) {
+      if (const char *Error = validatePageFunctionOffset(
+              Entry.FunctionOffset, Page.FunctionOffset, PageEnd, IsFirst,
+              PreviousFunction, Kind)) {
+        partial(Error);
+        PageValid = false;
+        return false;
+      }
+      Entry.PageEnd = PageEnd;
+      PreviousFunction = Entry.FunctionOffset;
+      Raw.push_back(Entry);
+      return true;
+    };
 
     if (Kind == kSecondLevelRegular) {
       for (uint32_t E = 0; E < EntryCount; ++E) {
@@ -583,9 +640,11 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
         if (!R.u32At(Off, Entry.FunctionOffset) ||
             !R.u32At(Off + 4, Entry.Encoding)) {
           partial("__unwind_info regular page entry leaves its section");
+          PageValid = false;
           break;
         }
-        Raw.push_back(Entry);
+        if (!appendEntry(Entry, E == 0))
+          break;
       }
     } else if (Kind == kSecondLevelCompressed) {
       uint16_t EncodingsPageOffset = 0, EncodingsCount = 0;
@@ -600,13 +659,19 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
         uint32_t Packed = 0;
         if (!R.u32At(Off, Packed)) {
           partial("__unwind_info compressed page entry leaves its section");
+          PageValid = false;
           break;
         }
         RawEntry Entry;
         // A compressed entry stores its function offset relative to the page's
         // own base, which is the first-level index entry's function offset.
-        Entry.FunctionOffset = Page.FunctionOffset + (Packed & 0x00ffffffu);
-        const uint32_t EncodingIndex = Packed >> 24;
+        if (const char *Error = decodeCompressedFunctionOffset(
+                Page.FunctionOffset, Packed, Entry.FunctionOffset)) {
+          partial(Error);
+          PageValid = false;
+          break;
+        }
+        const uint32_t EncodingIndex = Packed >> kCompressedEncodingIndexShift;
         if (EncodingIndex < CommonEncodings.size()) {
           Entry.Encoding = CommonEncodings[EncodingIndex];
         } else {
@@ -616,14 +681,20 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
                            uint64_t(Local) * 4,
                        Entry.Encoding)) {
             partial("__unwind_info entry names an undecodable encoding");
-            continue;
+            PageValid = false;
+            break;
           }
         }
-        Raw.push_back(Entry);
+        if (!appendEntry(Entry, E == 0))
+          break;
       }
     } else {
       partial("unknown __unwind_info second-level page kind");
     }
+    // A failed entry leaves the page's recipe boundaries unproven. Publish no
+    // ranges from that page, even if a prefix happened to decode successfully.
+    if (!PageValid)
+      Raw.resize(PageEntriesBegin);
   }
 
   std::stable_sort(Raw.begin(), Raw.end(),
@@ -635,12 +706,17 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
   Result.Entries.reserve(Raw.size());
   for (size_t I = 0; I < Raw.size(); ++I) {
     const uint32_t Begin = Raw[I].FunctionOffset;
-    const uint32_t End =
-        I + 1 < Raw.size() ? Raw[I + 1].FunctionOffset : SentinelOffset;
+    const uint32_t End = std::min(I + 1 < Raw.size() ? Raw[I + 1].FunctionOffset
+                                                     : SentinelOffset,
+                                  Raw[I].PageEnd);
     // The sentinel bounds the last range; a page boundary that repeats an
     // address would otherwise produce an empty one.
     if (End <= Begin)
       continue;
+    if (ImageBase > std::numeric_limits<va_t>::max() - End) {
+      partial(kCompactUnwindCodeRangeOverflow);
+      continue;
+    }
 
     CompactUnwindEntry Entry;
     Entry.CodeRange = {canonicalCodeAddress(Img.Arch, ImageBase + Begin),
@@ -656,6 +732,11 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
                 "encoding alone cannot prove");
       else
         partial("__unwind_info entry uses an invalid or reserved encoding");
+    }
+    if (Entry.ReturnAddressSigningOffset &&
+        !isValidEncodingRange(Img.Arch, Raw[I].Encoding, Entry.CodeRange)) {
+      Entry.SemanticStatus = CompactUnwindSemanticStatus::Partial;
+      partial(kARM64PAuthLRInvalidSigningRange);
     }
 
     if (Entry.Kind == CompactUnwindKind::FramelessIndirect) {

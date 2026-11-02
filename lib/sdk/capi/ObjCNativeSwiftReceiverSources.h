@@ -7,6 +7,7 @@
 #include "ObjCSourceBindings.h"
 #include "SourceExpressionIdentity.h"
 
+#include "neverd/ir/high/AArch64AddressMemory.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/sdk/Limits.h"
@@ -30,12 +31,24 @@ struct BodyProof {
            E->MemoryOrdering == NdMemoryOrdering::None &&
            E->MemoryAddressSpace == NdMemoryAddressSpace::Default;
   }
+  bool originalMemoryWord(const ExprPtr &E) const {
+    if (Image.Arch != Arch::AArch64 || !E || E->SourceCallHint ||
+        !aarch64AddressMemoryHighShapeIsValid(*E))
+      return false;
+    const auto Instruction = aarch64AddressMemoryInstruction(
+        E->Operands[kAddressMemoryWordOperand]->ConstVal);
+    return Instruction->isLoad() && !Instruction->stackBase() &&
+           Instruction->hasRegisterIndex() &&
+           Instruction->usesFullWidthIndex() &&
+           Instruction->accessBytes() == kAddressMemoryPointerBytes &&
+           !Instruction->indexShift();
+  }
   template <class Match>
   bool resolve(const ExprPtr &E, const Match &Leaf, unsigned Depth = 0) {
     if (!Budget ||
         Depth >=
             ::neverd::sdk::kObjCNativeSwiftReceiverSourcesResolveDepthLimit ||
-        !word(E))
+        (!word(E) && !originalMemoryWord(E)))
       return false;
     --Budget;
     if (E->Kind == ExprKind::Cast && E->Operands.size() == 1 &&
@@ -56,6 +69,25 @@ struct BodyProof {
     }
     return Leaf(E, Depth);
   }
+  bool offset(const ExprPtr &E, va_t Slot, unsigned Depth) {
+    return resolve(
+        E,
+        [&](const ExprPtr &W, unsigned) {
+          if (W->Kind == ExprKind::Call && W->SourceCallHint) {
+            const auto &B = *W->SourceCallHint;
+            return B.CallKind == SourceCallTypeHint::Kind::RuntimeIvarOffset &&
+                   B.TargetAddress == Slot && W->Operands.empty() &&
+                   !W->CallAddr && !W->IsIndirectCall &&
+                   objcSourceCallBound(*W, Image, {});
+          }
+          return W->Kind == ExprKind::Load && W->Operands.size() == 1 &&
+                 !W->SourceCallHint && W->Operands[0] &&
+                 W->Operands[0]->Kind == ExprKind::Const &&
+                 W->Operands[0]->Operands.empty() &&
+                 W->Operands[0]->ConstVal == Slot && word(W->Operands[0]);
+        },
+        Depth);
+  }
   bool receiver(const ExprPtr &E, const ObjCReceiverTypeHint &Root,
                 size_t Steps, unsigned Depth = 0) {
     if (Depth >=
@@ -74,8 +106,14 @@ struct BodyProof {
           const auto &Step = Root.Steps[Steps - 1];
           if (Step.TheKind != ObjCReceiverTypeHint::TypeStep::Kind::IvarLoad ||
               Step.ByteOffset || Step.OffsetWidth != 8 ||
-              !Step.Selector.empty() || V->Kind != ExprKind::Load ||
-              V->Operands.size() != 1 || V->SourceCallHint)
+              !Step.Selector.empty() || V->SourceCallHint)
+            return false;
+          if (originalMemoryWord(V))
+            return receiver(V->Operands[kAddressMemoryBaseOperand], Root,
+                            Steps - 1, D + 1) &&
+                   offset(V->Operands[kAddressMemoryIndexOperand],
+                          Step.OffsetSlot, D + 1);
+          if (V->Kind != ExprKind::Load || V->Operands.size() != 1)
             return false;
           return resolve(
               V->Operands[0],
@@ -84,35 +122,13 @@ struct BodyProof {
                     Address->Op != NdOp::INT_ADD ||
                     Address->Operands.size() != 2 || Address->SourceCallHint)
                   return false;
-                const auto Offset = [&](const ExprPtr &O) {
-                  return resolve(
-                      O,
-                      [&](const ExprPtr &W, unsigned) {
-                        if (W->Kind == ExprKind::Call && W->SourceCallHint) {
-                          const auto &B = *W->SourceCallHint;
-                          return B.CallKind == SourceCallTypeHint::Kind::
-                                                   RuntimeIvarOffset &&
-                                 B.TargetAddress == Step.OffsetSlot &&
-                                 W->Operands.empty() && !W->CallAddr &&
-                                 !W->IsIndirectCall &&
-                                 objcSourceCallBound(*W, Image, {});
-                        }
-                        return W->Kind == ExprKind::Load &&
-                               W->Operands.size() == 1 && !W->SourceCallHint &&
-                               W->Operands[0] &&
-                               W->Operands[0]->Kind == ExprKind::Const &&
-                               W->Operands[0]->Operands.empty() &&
-                               W->Operands[0]->ConstVal == Step.OffsetSlot &&
-                               word(W->Operands[0]);
-                      },
-                      AD + 1);
-                };
                 return (receiver(Address->Operands[0], Root, Steps - 1,
                                  AD + 1) &&
-                        Offset(Address->Operands[1])) ||
+                        offset(Address->Operands[1], Step.OffsetSlot,
+                               AD + 1)) ||
                        (receiver(Address->Operands[1], Root, Steps - 1,
                                  AD + 1) &&
-                        Offset(Address->Operands[0]));
+                        offset(Address->Operands[0], Step.OffsetSlot, AD + 1));
               },
               D + 1);
         },

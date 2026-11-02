@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "NeverDLiftFixture.h"
+#include "JumpTableSourceExecution.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -17,7 +17,7 @@
 
 namespace {
 
-class JumpTableFiniteSelector : public NeverDLiftTest {
+class JumpTableFiniteSelector : public JumpTableSourceExecution {
 protected:
   void SetUp() override {
     NeverDLiftTest::SetUp();
@@ -325,51 +325,61 @@ TEST_F(JumpTableFiniteSelector, ExhaustedEvidenceDoesNotPublish) {
   }
 }
 
-TEST_F(JumpTableFiniteSelector, BothSourceRoutesExecuteTheOriginalSelection) {
-  for (const std::string Arch : {"aarch64", "x86_64"})
-    for (unsigned Case : {0u, 1u, 7u, 10u, 11u}) {
-      const fs::path Object = compileFixture(Arch, Case);
-      const std::string Name = Case == 0    ? "finite_ro"
-                               : Case == 1  ? "finite_rw"
-                               : Case == 7  ? "finite_large"
-                               : Case == 10 ? "finite_large_rw"
-                                            : "finite_foreign_prefix";
-      for (unsigned Route : {0u, 1u, 2u}) {
-        SCOPED_TRACE(Arch + ":" + Name + ":" + std::to_string(Route));
-        const auto File = tmpFile("selection.c");
-        std::vector<std::string> Args = {
-            "decompile", Object.string(), "--func", Name, "-o", File.string()};
-        if (Route != 0)
-          Args.push_back("--llvm");
-        if (Route == 2)
-          Args.push_back("--no-opt");
-        const auto Recovered = exec(ndBin(), Args);
-        ASSERT_TRUE(Recovered.ok()) << Recovered.err;
-        std::ifstream Input(File);
-        const std::string Source((std::istreambuf_iterator<char>(Input)), {});
-        ASSERT_EQ(Source.find("unresolved indirect branch"), std::string::npos);
-        std::ofstream Out(File, std::ios::app);
-        Out << "\nint main(void) {\n"
-               "const uint32_t inputs[] = {0, 1, 2, 99, UINT32_MAX, "
-               "UINT32_C(0x80000000)};\n"
-               "for (unsigned i = 0; i < sizeof(inputs)/sizeof(inputs[0]); ++i)"
-               "if ("
-            << Name << "(inputs[i]) != (inputs[i] == 0 ? 99 : 41)) return 1;\n"
-            << "return 0; }\n";
-        Out.close();
-        for (const char *Optimization : {"-O0", "-O2"}) {
-          const auto Exe = tmpFile(std::string("selection") +
-                                   neverd::test::executableSuffix());
-          const auto Built = exec(
-              NEVERD_TEST_CLANG,
-              {"-std=c11", Optimization, "-fsanitize=undefined",
-               "-fsanitize-trap=undefined", File.string(), "-o", Exe.string()});
-          ASSERT_TRUE(Built.ok()) << Built.err;
-          const auto Run = exec(Exe.string(), {});
-          EXPECT_TRUE(Run.ok()) << Run.err;
-        }
-      }
+class JumpTableFiniteSelectorSource
+    : public JumpTableFiniteSelector,
+      public ::testing::WithParamInterface<const char *> {};
+
+TEST_P(JumpTableFiniteSelectorSource,
+       BothSourceRoutesExecuteTheOriginalSelection) {
+  const std::string Arch = GetParam();
+  const auto Emulator = executor(Arch);
+  if (!Emulator)
+    GTEST_SKIP() << "Execution of " << Arch << " source requires qemu-" << Arch;
+  for (unsigned Case : {0u, 1u, 7u, 10u, 11u}) {
+    const fs::path Object = compileFixture(Arch, Case);
+    const std::string Name = Case == 0    ? "finite_ro"
+                             : Case == 1  ? "finite_rw"
+                             : Case == 7  ? "finite_large"
+                             : Case == 10 ? "finite_large_rw"
+                                          : "finite_foreign_prefix";
+    const std::string Main =
+        "\nint main(void) {\n"
+        "const uint32_t inputs[] = {0, 1, 2, 99, UINT32_MAX, "
+        "UINT32_C(0x80000000)};\n"
+        "for (unsigned i = 0; i < sizeof(inputs)/sizeof(inputs[0]); ++i)"
+        "if (" +
+        Name +
+        "(inputs[i]) != (inputs[i] == 0 ? 99 : 41)) return 1;\n"
+        "return 0; }\n";
+    const auto Original = tmpFile("original-selection.c");
+    std::ofstream(Original)
+        << "#include <stdint.h>\nuint32_t " << Name << "(uint32_t);\n"
+        << Main;
+    ASSERT_NO_FATAL_FAILURE(
+        expectSourceRuns(Original, Arch, *Emulator, {Object.string()}));
+    for (unsigned Route : {0u, 1u, 2u}) {
+      SCOPED_TRACE(Arch + ":" + Name + ":" + std::to_string(Route));
+      const auto File = tmpFile("selection.c");
+      std::vector<std::string> Args = {
+          "decompile", Object.string(), "--func", Name, "-o", File.string()};
+      if (Route != 0)
+        Args.push_back("--llvm");
+      if (Route == 2)
+        Args.push_back("--no-opt");
+      const auto Recovered = exec(ndBin(), Args);
+      ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+      std::ifstream Input(File);
+      const std::string Source((std::istreambuf_iterator<char>(Input)), {});
+      ASSERT_EQ(Source.find("unresolved indirect branch"), std::string::npos);
+      std::ofstream Out(File, std::ios::app);
+      Out << Main;
+      Out.close();
+      ASSERT_NO_FATAL_FAILURE(expectSourceRuns(File, Arch, *Emulator));
     }
+  }
 }
+
+INSTANTIATE_TEST_SUITE_P(NativeTargets, JumpTableFiniteSelectorSource,
+                         ::testing::Values("aarch64", "x86_64"));
 
 } // namespace

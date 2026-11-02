@@ -1,0 +1,82 @@
+//===- UnwindInfoFixtures.def - Unwind presentation oracles ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent exact addresses and typed source reports for GUI delivery.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_GUI_TEST_TEXT
+#define NEVERD_UNWIND_GUI_TEST_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_UNWIND_GUI_TEST_VALUE
+#define NEVERD_UNWIND_GUI_TEST_VALUE(Type, Name, Value)
+#endif
+
+NEVERD_UNWIND_GUI_TEST_VALUE(quint64, kZeroPC, 0)
+NEVERD_UNWIND_GUI_TEST_VALUE(int, kLongDiagnosticRepeats, 128)
+NEVERD_UNWIND_GUI_TEST_VALUE(qreal, kLargeFontScale, 1.5)
+NEVERD_UNWIND_GUI_TEST_VALUE(int, kNarrowWidthCharacters, 70)
+NEVERD_UNWIND_GUI_TEST_VALUE(int, kNarrowHeightLines, 26)
+NEVERD_UNWIND_GUI_TEST_TEXT(kLongDiagnosticChunk,
+                            "<b>Signed return-address metadata remains "
+                            "unavailable at the selected PC.</b> ")
+NEVERD_UNWIND_GUI_TEST_TEXT(kCaptureLarge, "unwind-large-font.png")
+
+NEVERD_UNWIND_GUI_TEST_VALUE(quint64, kHighPC, 0xffff800012340004ULL)
+NEVERD_UNWIND_GUI_TEST_TEXT(kHighAddress, "0xffff800012340004")
+NEVERD_UNWIND_GUI_TEST_TEXT(kZeroAddress, "0x0")
+NEVERD_UNWIND_GUI_TEST_TEXT(kProject, "unwind-project")
+NEVERD_UNWIND_GUI_TEST_TEXT(kOtherProject, "different-program")
+NEVERD_UNWIND_GUI_TEST_TEXT(kFirstRevision, "1")
+NEVERD_UNWIND_GUI_TEST_TEXT(kNextRevision, "2")
+NEVERD_UNWIND_GUI_TEST_TEXT(kApplication, "UnwindInfoTests")
+NEVERD_UNWIND_GUI_TEST_TEXT(kOrganization, "NeverDTests")
+NEVERD_UNWIND_GUI_TEST_TEXT(kCaptureEnvironment, "NEVERD_UNWIND_GUI_CAPTURES")
+NEVERD_UNWIND_GUI_TEST_TEXT(kCaptureLight, "unwind-light.png")
+NEVERD_UNWIND_GUI_TEST_TEXT(kCaptureDark, "unwind-dark.png")
+NEVERD_UNWIND_GUI_TEST_TEXT(kCaptureRTL, "unwind-rtl.png")
+NEVERD_UNWIND_GUI_TEST_TEXT(kUnsupported, "unsupported")
+NEVERD_UNWIND_GUI_TEST_TEXT(kMalformed, "malformed")
+NEVERD_UNWIND_GUI_TEST_TEXT(kResourceLimit, "resource_limit")
+NEVERD_UNWIND_GUI_TEST_TEXT(kOutOfRange, "out_of_range")
+NEVERD_UNWIND_GUI_TEST_TEXT(kFutureStatus, "future_status")
+
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireRequestID, "request_id")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireOperation, "operation")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWirePayload, "payload")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireRevision, "revision")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireProject, "project_id")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireStatus, "status")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireType, "type")
+NEVERD_UNWIND_GUI_TEST_TEXT(kWireResponse, "response")
+NEVERD_UNWIND_GUI_TEST_TEXT(kOK, "ok")
+NEVERD_UNWIND_GUI_TEST_TEXT(kOperation, "unwind_frame")
+NEVERD_UNWIND_GUI_TEST_TEXT(kAddress, "address")
+NEVERD_UNWIND_GUI_TEST_TEXT(kUnknown, "unknown")
+NEVERD_UNWIND_GUI_TEST_TEXT(kUnsigned, "unsigned")
+NEVERD_UNWIND_GUI_TEST_TEXT(kZeroSigningPC, "Signing PC: 0x0")
+NEVERD_UNWIND_GUI_TEST_TEXT(kPlainDiagnostic, "<b>runtime register 34</b>")
+NEVERD_UNWIND_GUI_TEST_TEXT(
+    kStates,
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"unknown","diagnostic":"<b>runtime register 34</b>"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
+NEVERD_UNWIND_GUI_TEST_TEXT(
+    kZeroQuery,
+    R"json({"begin":"0x0","end":"0x40","return_address":{"query_pc":"0x0","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":null}})json")
+NEVERD_UNWIND_GUI_TEST_TEXT(
+    kAbsentDwarf,
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":null,"compact_recipe":{"status":"unknown","diagnostic":"no compact signing recipe"}}})json")
+NEVERD_UNWIND_GUI_TEST_TEXT(
+    kLegacy,
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"dwarf-fde"})json")
+NEVERD_UNWIND_GUI_TEST_TEXT(
+    kWrongPC,
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","return_address":{"query_pc":"0xffff800012340000","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":null}})json")
+
+NEVERD_UNWIND_GUI_TEST_TEXT(
+    kAtRangeEnd,
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340004","return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":null}})json")
+
+#undef NEVERD_UNWIND_GUI_TEST_TEXT
+#undef NEVERD_UNWIND_GUI_TEST_VALUE

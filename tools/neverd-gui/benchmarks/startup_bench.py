@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import statistics
 import subprocess
 import tempfile
@@ -43,13 +44,13 @@ def distribution(values):
             "mean_ms": statistics.mean(values)}
 
 
-def validate_report(report, returncode):
+def validate_report(report, returncode, expected_input=None):
     if not isinstance(report, dict):
         return "GUI report must be a JSON object"
-    if returncode != 0 or not report.get("success"):
+    if returncode != 0 or report.get("success") is not True:
         return report.get("error") or report.get("failure_reason") or "GUI failed"
-    if report.get("schema_version") != 3:
-        return "Startup report schema 3 (Qt Widgets workbench) is required"
+    if report.get("schema_version") != 4:
+        return "Startup report schema 4 (listing evidence) is required"
     milestones = report.get("milestones", {})
     if not isinstance(milestones, dict):
         return "GUI milestones must be a JSON object"
@@ -57,13 +58,35 @@ def validate_report(report, returncode):
                 "first_frame_ms", "useful_frame_ms", "useful_frame_flushed_ms")
     for name in required:
         value = milestones.get(name)
-        if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             return f"Missing or invalid milestone: {name}"
     if not (milestones["metadata_ms"] <= milestones["useful_frame_ms"]
             <= milestones["useful_frame_flushed_ms"]):
         return "Useful frame precedes the opened file's metadata"
     if milestones["first_frame_ms"] > milestones["useful_frame_ms"]:
         return "Useful frame precedes the first frame"
+    listing = report.get("listing")
+    if not isinstance(listing, dict) or listing.get("rows_current") is not True:
+        return "Startup listing is missing or stale"
+    if listing.get("jump_pending") is not False:
+        return "Startup listing has unfinished navigation"
+    for name in ("current_address", "top_address"):
+        value = listing.get(name)
+        if not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]{1,16}", value):
+            return f"Missing or invalid listing address: {name}"
+    text = listing.get("loaded_text")
+    if not isinstance(text, str) or not text.strip():
+        return "Startup listing has no content"
+    if expected_input is not None:
+        reported_input = report.get("input_path")
+        if not isinstance(reported_input, str) or not reported_input:
+            return "Startup listing has no input path"
+        try:
+            same_input = Path(reported_input).resolve() == Path(expected_input).resolve()
+        except (OSError, ValueError):
+            same_input = False
+        if not same_input:
+            return "Startup listing belongs to a different input"
     return None
 
 
@@ -153,7 +176,7 @@ def main():
             sample["process_wall_ms"] = (time.perf_counter_ns() - started) / 1e6
             try:
                 sample["report"] = json.loads(destination.read_text(encoding="utf-8"))
-                failure = validate_report(sample["report"], sample["returncode"])
+                failure = validate_report(sample["report"], sample["returncode"], binary)
                 if failure:
                     sample["error"] = failure
             except (OSError, ValueError, TypeError) as error:

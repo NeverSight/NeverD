@@ -22,7 +22,9 @@
 #include "neverd/ir/med/MedDispatchSlots.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include <functional>
 #include <map>
@@ -226,6 +228,11 @@ void chooseIntegerSignedness(HighFunc &Func);
 /// local before it, when evaluating the value earlier cannot fault or have
 /// an effect.  The C writer prints each read of a shared node in full.
 bool nameRepeatedValues(HighFunc &Func);
+/// Share a terminal if arm with the equivalent fallthrough suffix. Temporary
+/// names may differ only when every occurrence stays inside those copies.
+/// A function with exception flow (see \p Med) is left unchanged.
+bool foldDuplicateTerminalContinuations(HighFunc &Func,
+                                        const MedFunc *Med = nullptr);
 /// Marks a System V x86-64 variadic function whose va_start builds a va_list
 /// only to pass it on (HighFunc::VaStart): every access to the va_list, the
 /// register save area and the overflow homes is va_start's own, the va_list's
@@ -264,8 +271,11 @@ void fillUnstructuredGotoSkeleton(HighFunc &Func, const MedFunc &Med);
 /// widest direct call stores from the call's stack pointer up, which MedToHigh
 /// seeds where its va_arg walk reads its overflow.  For a convention whose
 /// calls take their arguments from callee summaries, which recover no call
-/// arguments for finalizeVariadicCallees to count.
-void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch);
+/// arguments for finalizeVariadicCallees to count.  A slot holding only a
+/// scratch register's undefined incoming value under the convention of a
+/// \p Format image is no argument (holdsUndefinedIncomingScratch).
+void sizeVariadicOverflowFromStores(std::vector<MedFunc> &Funcs, Arch TheArch,
+                                    BinaryFormat Format);
 
 /// What its name says of a call target outside \p Funcs, or of one named as
 /// a C library routine (markVaListCalls): how many integer parameters it
@@ -407,6 +417,7 @@ private:
   /// Put the copies a handler block's PHIs take on the dispatcher's entry in
   /// the `__except` arm that reaches it (see PhiNode::ExceptionalEntry).
   void attachSEHHandlerEntryCopies(HighFunc &Func, const MedFunc &Med);
+  void collectItaniumCallFrameOffsets(HighFunc &Func, const MedFunc &Med);
   void inferTypes(HighFunc &Func);
   void simplifyControlFlow(HighFunc &Func, const MedFunc &Med);
   void inlineGotoReturns(HighFunc &Func, const MedFunc &Med);
@@ -530,8 +541,7 @@ private:
   void lowerStore(HighFunc &Func, const MedOp &CurOp);
   void lowerCall(HighFunc &Func, const MedBlock &CurBlock, const MedOp &CurOp);
   void lowerIntrinsic(HighFunc &Func, const MedBlock &CurBlock,
-                      const MedOp &CurOp, size_t OpIdx,
-                      std::set<size_t> &IntrinsicSkip);
+                      const MedOp &CurOp, size_t OpIdx);
   void lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
                     const MedOp &CurOp);
   void lowerCBranch(HighFunc &Func, const MedOp &CurOp);
@@ -590,6 +600,7 @@ private:
   TypeRef sourceCallResultType(const MedOp &Op) const;
   VarKeyMap<ExprPtr> DefExpr;
   VarKeyMap<TypeRef> SourceRecordValues;
+  VarKeyMap<TypeRef> SourceFloatCallValues;
   std::vector<SourceABIParameter> SourceParameters;
   VarKeySet CallOutputs;
   VarKeySet PhiOutputVars;
@@ -600,12 +611,11 @@ private:
   const MedCallClobber *findCallClobber(const MedVar &V) const;
   /// Per-function indexes for the Win64 callee-save parameter mapping in
   /// medvarToExpr: register COPYs whose source is an entry parameter (in
-  /// block/op order, with that parameter's index), and every (Id, SSAVer)
-  /// with a computed def (anything but a COPY of a register or parameter).
+  /// block/op order, with that parameter's index), and every defined SSA value.
   /// Built lazily for \c ParamCopyIndexFunc.
   const MedFunc *ParamCopyIndexFunc = nullptr;
   std::vector<std::pair<const MedOp *, int>> ParamSourceCopies;
-  std::set<std::pair<int, int>> ComputedVersions;
+  VarKeySet DefinedVersions;
   /// A native read is evaluated at its statement, then used as an SSA value.
   /// Re-expanding it at a use could cross an aliasing write or repeat the read.
   VarKeySet MemoryReadOutputs;
@@ -623,6 +633,9 @@ private:
   /// anchor ahead of its first top-level statement, so its label stays.
   void anchorDispatcherEntries(HighFunc &Func) const;
   const MedFunc *CurMed = nullptr;
+  std::set<const MedOp *> ReturnProtectionOps;
+  llvm::DenseMap<const MedOp *, const MedOp *> AArch64AuthenticatedCalls;
+  llvm::SmallPtrSet<const MedOp *, 8> AArch64CallAuthentications;
   /// Entry-relative stack slots CurMed loads anywhere or whose address
   /// escapes; such a slot is a local, not an outgoing argument (cached per
   /// function).

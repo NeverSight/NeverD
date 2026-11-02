@@ -13,9 +13,9 @@ namespace {
 class RelativeSleep final : public KernelWait {
 public:
   RelativeSleep(ExecutionBackend &CPU, const MemoryLayout &Layout,
-                LinuxClock &Clock, uint64_t Deadline, uint64_t Remaining)
+                LinuxClock &Clock, uint64_t Deadline, SleepRemainder Remaining)
       : CPU(CPU), Layout(Layout), Clock(Clock), Deadline(Deadline),
-        Remaining(Remaining) {}
+        Remaining(std::move(Remaining)) {}
   bool ready() const override { return Deadline <= Clock.elapsed(); }
   std::optional<uint64_t> nextWake() const override { return Deadline; }
   llvm::Expected<std::optional<uint64_t>> resume(ProcessResult &) override {
@@ -25,12 +25,18 @@ public:
   llvm::Expected<std::optional<uint64_t>>
   interrupt(ProcessResult &Result) override {
     assert(!ready() && "completed sleep cannot be interrupted");
-    if (Remaining) {
-      const uint64_t Left = Deadline - Clock.elapsed();
+    const uint64_t Left = Deadline - Clock.elapsed();
+    const LinuxTimespec Value{int64_t(Left / 1000000000),
+                              int64_t(Left % 1000000000)};
+    if (auto *Output =
+            std::get_if<std::shared_ptr<LinuxTimespec>>(&Remaining)) {
+      assert(*Output && "modeled libc remainder has no storage");
+      **Output = Value;
+    } else if (const auto Address = std::get<uint64_t>(Remaining)) {
       uint8_t Bytes[16];
-      llvm::support::endian::write64le(Bytes, Left / 1000000000);
-      llvm::support::endian::write64le(Bytes + 8, Left % 1000000000);
-      auto Stored = writeUserMemory(CPU, Layout, Remaining, Bytes);
+      llvm::support::endian::write64le(Bytes, Value.Seconds);
+      llvm::support::endian::write64le(Bytes + 8, Value.Nanoseconds);
+      auto Stored = writeUserMemory(CPU, Layout, Address, Bytes);
       if (!Stored)
         return Stored.takeError();
       if (*Stored == UserWriteResult::BadAddress)
@@ -49,7 +55,8 @@ private:
   ExecutionBackend &CPU;
   const MemoryLayout Layout;
   LinuxClock &Clock;
-  uint64_t Deadline, Remaining;
+  uint64_t Deadline;
+  SleepRemainder Remaining;
 };
 } // namespace
 llvm::Expected<std::optional<uint64_t>>
@@ -84,7 +91,7 @@ std::optional<uint64_t> sleepRelative(ExecutionBackend &CPU,
                                       const LinuxTimespec &Duration,
                                       LinuxClock &Clock, ThreadContext *Thread,
                                       ProcessResult &Result,
-                                      uint64_t Remaining) {
+                                      SleepRemainder Remaining) {
   using Reply = std::optional<uint64_t>;
   if (!Clock.advancesOnIdle()) {
     Result.Stop = ProcessStopReason::UnsupportedService;
@@ -102,8 +109,8 @@ std::optional<uint64_t> sleepRelative(ExecutionBackend &CPU,
     return Reply(0);
   if (Thread) {
     assert(!Thread->Pending && !Thread->Exit);
-    Thread->Pending = std::make_unique<RelativeSleep>(CPU, Layout, Clock,
-                                                      *Deadline, Remaining);
+    Thread->Pending = std::make_unique<RelativeSleep>(
+        CPU, Layout, Clock, *Deadline, std::move(Remaining));
     return Reply();
   }
   if (!Clock.advanceTo(*Deadline, Result))

@@ -36,11 +36,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "Limits.h"
 #include "SymMBADetail.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Compiler.h"
 
 #include <algorithm>
 #include <array>
@@ -258,6 +260,310 @@ llvm::APInt randomWord(std::mt19937_64 &Rng, uint32_t Width) {
   return llvm::APInt(Width, Words);
 }
 
+// Both complete plans and additive residuals use the same original variable
+// union and deterministic assignments. A canceled term can still be the only
+// use of a variable whose random words precede a surviving input's words.
+template <typename NativeCheck, typename WideCheck>
+bool agreeOnAssignments(const SymContext &Ctx,
+                        llvm::SmallVectorImpl<uint32_t> &Vars, unsigned Samples,
+                        bool Native, NativeCheck &&CheckNative,
+                        WideCheck &&CheckWide) {
+  std::sort(Vars.begin(), Vars.end());
+  Vars.erase(std::unique(Vars.begin(), Vars.end()), Vars.end());
+  // A contiguous window of sorted unique input IDs needs only its origin to
+  // locate assignments. Sparse contexts retain the compact lookup and never
+  // allocate scratch for unrelated or unused variables.
+  const uint32_t First = Vars.empty() ? 0 : Vars.front();
+  const bool Dense = Vars.empty() || Vars.back() - First == Vars.size() - 1;
+  llvm::SmallDenseMap<uint32_t, unsigned, 16> Positions;
+  if (!Dense)
+    for (unsigned I = 0; I < Vars.size(); ++I)
+      Positions[Vars[I]] = I;
+  auto Position = [&](uint32_t Id) {
+    if (Dense)
+      return Id - First;
+    auto It = Positions.find(Id);
+    assert(It != Positions.end() && "plan requested an unlisted variable");
+    return It->second;
+  };
+
+  if (Native) {
+    llvm::SmallVector<uint64_t, 8> Masks;
+    for (uint32_t Id : Vars) {
+      const uint32_t Width = Ctx.varInfo(Id).Width;
+      assert(Width <= 64 && "word plan contains a wide variable");
+      Masks.push_back(~uint64_t(0) >> (64 - Width));
+    }
+    llvm::SmallVector<uint64_t, 8> Assignment(Masks.size());
+    auto CheckSamples = [&](auto &&Lookup) {
+      std::mt19937_64 Rng(0x9E3779B97F4A7C15ull);
+      for (unsigned S = 0; S < Samples; ++S) {
+        // The first three points and one generator word per narrow input match
+        // the arbitrary-width path. Only referenced inputs advance the stream.
+        for (size_t I = 0; I < Assignment.size(); ++I)
+          Assignment[I] = S == 0   ? 0
+                          : S == 1 ? Masks[I]
+                          : S == 2 ? 1
+                                   : Rng() & Masks[I];
+        if (!CheckNative(Lookup))
+          return false;
+      }
+      return true;
+    };
+    // Select the lookup once, outside both evaluation loops. Dense samples
+    // need neither the position table nor a per-variable layout branch.
+    if (Dense)
+      return CheckSamples([&](uint32_t Id) { return Assignment[Id - First]; });
+    return CheckSamples([&](uint32_t Id) { return Assignment[Position(Id)]; });
+  }
+
+  llvm::SmallVector<llvm::APInt, 8> Assignment;
+  Assignment.reserve(Vars.size());
+  for (uint32_t Id : Vars)
+    Assignment.emplace_back(Ctx.varInfo(Id).Width, 0);
+  auto Lookup = [&](uint32_t Id) -> const llvm::APInt * {
+    return &Assignment[Position(Id)];
+  };
+
+  std::mt19937_64 Rng(0x9E3779B97F4A7C15ull);
+  for (unsigned S = 0; S < Samples; ++S) {
+    for (size_t I = 0; I < Assignment.size(); ++I) {
+      uint32_t W = Assignment[I].getBitWidth();
+      // The first few rounds pin every input to a corner of the space, where a
+      // mistake in the corner arithmetic itself would show; the rest are
+      // ordinary values, where a mistake in the algebra would.
+      switch (S) {
+      case 0:
+        Assignment[I] = llvm::APInt(W, 0);
+        break;
+      case 1:
+        Assignment[I] = llvm::APInt::getAllOnes(W);
+        break;
+      case 2:
+        Assignment[I] = llvm::APInt(W, 1);
+        break;
+      default:
+        Assignment[I] = randomWord(Rng, W);
+        break;
+      }
+    }
+    if (!CheckWide(Lookup))
+      return false;
+  }
+  return true;
+}
+
+bool splitCommonOperands(const SymContext &Ctx, SymRef A, SymRef B,
+                         llvm::SmallVectorImpl<SymRef> &Common,
+                         llvm::SmallVectorImpl<SymRef> &LeftRest,
+                         llvm::SmallVectorImpl<SymRef> &RightRest) {
+  llvm::SmallVector<SymRef, 8> Left(Ctx.operands(A)), Right(Ctx.operands(B));
+  // Canonical additions order scaled terms by their base, not their full node.
+  llvm::sort(Left);
+  llvm::sort(Right);
+  size_t I = 0, J = 0;
+  while (I < Left.size() && J < Right.size()) {
+    if (Left[I] == Right[J]) {
+      Common.push_back(Left[I++]);
+      ++J;
+    } else if (Left[I] < Right[J]) {
+      LeftRest.push_back(Left[I++]);
+    } else {
+      RightRest.push_back(Right[J++]);
+    }
+  }
+  LeftRest.append(Left.begin() + I, Left.end());
+  RightRest.append(Right.begin() + J, Right.end());
+  return !Common.empty();
+}
+
+// A product's unchanged factors need evaluating only if the two remaining
+// products differ at this assignment. They are never canceled from equality:
+// an even common factor can annihilate a nonzero modular difference.
+std::optional<bool>
+agreeAfterFactoringProducts(const SymContext &Ctx, SymRef A, SymRef B,
+                            unsigned Samples,
+                            llvm::ArrayRef<SymRef> Canceled = {},
+                            llvm::ArrayRef<SymRef> LeftAddends = {},
+                            llvm::ArrayRef<SymRef> RightAddends = {}) {
+  if (Ctx.op(A) != SymOp::Mul || Ctx.op(B) != SymOp::Mul ||
+      Ctx.width(A) != Ctx.width(B))
+    return std::nullopt;
+  llvm::SmallVector<SymRef, 8> Common, LeftRest, RightRest;
+  if (!splitCommonOperands(Ctx, A, B, Common, LeftRest, RightRest))
+    return std::nullopt;
+  // A small intersection cannot justify splitting the larger changed DAGs
+  // into per-factor plans. Keep their internal sharing in the complete-plan
+  // path; factoring is useful when unchanged factors dominate the remainder.
+  if (Common.size() < LeftRest.size() + RightRest.size())
+    return std::nullopt;
+
+  const uint32_t Width = Ctx.width(A);
+  llvm::SmallVector<uint32_t, 16> Vars;
+  for (SymRef R : Canceled)
+    Ctx.collectVars(R, Vars);
+  for (SymRef R : Common)
+    Ctx.collectVars(R, Vars);
+  bool Native = Width <= 64 && llvm::all_of(Vars, [&](uint32_t Id) {
+                  return Ctx.varInfo(Id).Width <= 64;
+                });
+  std::vector<SymEvalPlan> CommonPlans, LeftPlans, RightPlans, LeftSumPlans,
+      RightSumPlans;
+  auto Compile = [&](llvm::ArrayRef<SymRef> Factors,
+                     std::vector<SymEvalPlan> &Plans) {
+    Plans.reserve(Factors.size());
+    for (SymRef R : Factors) {
+      SymEvalPlan &Plan = Plans.emplace_back(Ctx, R);
+      Native &= Plan.fitsU64();
+      Vars.append(Plan.vars().begin(), Plan.vars().end());
+    }
+  };
+  Compile(LeftRest, LeftPlans);
+  Compile(RightRest, RightPlans);
+  Compile(LeftAddends, LeftSumPlans);
+  Compile(RightAddends, RightSumPlans);
+  // Keep every original input in the assignment stream, but lower unchanged
+  // factors only if a nonzero sampled difference actually reaches them.
+  auto CommonPlan = [&](size_t I) -> SymEvalPlan & {
+    if (CommonPlans.size() == I) {
+      if (!I)
+        CommonPlans.reserve(Common.size());
+      CommonPlans.emplace_back(Ctx, Common[I]);
+    }
+    return CommonPlans[I];
+  };
+  return agreeOnAssignments(
+      Ctx, Vars, Samples, Native,
+      [&](auto &&Lookup) {
+        uint64_t Rest = 0;
+        for (SymEvalPlan &Plan : LeftSumPlans)
+          Rest += Plan.evalU64With(Lookup);
+        for (SymEvalPlan &Plan : RightSumPlans)
+          Rest -= Plan.evalU64With(Lookup);
+        uint64_t Left = 1, Right = 1;
+        for (SymEvalPlan &Plan : LeftPlans)
+          Left *= Plan.evalU64With(Lookup);
+        for (SymEvalPlan &Plan : RightPlans)
+          Right *= Plan.evalU64With(Lookup);
+        const uint64_t Mask = ~uint64_t(0) >> (64 - Width);
+        uint64_t Difference = (Left - Right) & Mask;
+        for (size_t I = 0; I < Common.size() && Difference; ++I) {
+          SymEvalPlan &Plan = CommonPlan(I);
+          uint64_t Value;
+          if (Plan.fitsU64()) {
+            Value = Plan.evalU64With(Lookup);
+          } else {
+            // All inputs fit a native word, but an unchanged factor can
+            // contain a wider intermediate. Preserve that operation's AP
+            // semantics while using the same native input assignments.
+            llvm::APInt Input(1, 0);
+            Value = Plan.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+                          Input =
+                              llvm::APInt(Ctx.varInfo(Id).Width, Lookup(Id));
+                          return &Input;
+                        })
+                        .getZExtValue();
+          }
+          Difference = (Difference * Value) & Mask;
+        }
+        return ((Difference + Rest) & Mask) == 0;
+      },
+      [&](auto &&Lookup) {
+        llvm::APInt Rest(Width, 0);
+        for (SymEvalPlan &Plan : LeftSumPlans)
+          Rest += Plan.evalWith(Lookup);
+        for (SymEvalPlan &Plan : RightSumPlans)
+          Rest -= Plan.evalWith(Lookup);
+        llvm::APInt Left(Width, 1), Right(Width, 1);
+        for (SymEvalPlan &Plan : LeftPlans)
+          Left *= Plan.evalWith(Lookup);
+        for (SymEvalPlan &Plan : RightPlans)
+          Right *= Plan.evalWith(Lookup);
+        llvm::APInt Difference = Left - Right;
+        for (size_t I = 0; I < Common.size() && !Difference.isZero(); ++I)
+          Difference *= CommonPlan(I).evalWith(Lookup);
+        return (Difference + Rest).isZero();
+      });
+}
+
+// Cancel only identical complete addends, with their multiplicities, in the
+// same modular ring. The remaining sums have exactly the same difference at
+// every assignment; no sampling is used to establish the cancellation itself.
+LLVM_ATTRIBUTE_NOINLINE
+std::optional<bool> agreeAfterCancelingAddends(const SymContext &Ctx, SymRef A,
+                                               SymRef B, unsigned Samples) {
+  if (Ctx.op(A) != SymOp::Add || Ctx.op(B) != SymOp::Add ||
+      Ctx.width(A) != Ctx.width(B))
+    return std::nullopt;
+  llvm::SmallVector<SymRef, 8> Common, LeftRest, RightRest;
+  splitCommonOperands(Ctx, A, B, Common, LeftRest, RightRest);
+  // Isolate one n-ary product beside an additive tail. Splitting a sum of
+  // several n-ary products into separate plans would lose shared subterms;
+  // that shape keeps the complete DAG evaluation instead.
+  auto IsolatedProduct = [&](llvm::ArrayRef<SymRef> Terms) {
+    size_t Best = Terms.size();
+    for (size_t I = 0; I < Terms.size(); ++I) {
+      if (Ctx.op(Terms[I]) == SymOp::Mul && Ctx.numOperands(Terms[I]) > 2) {
+        if (Best != Terms.size())
+          return Terms.size();
+        Best = I;
+      }
+    }
+    return Best;
+  };
+  const size_t LeftProduct = IsolatedProduct(LeftRest),
+               RightProduct = IsolatedProduct(RightRest);
+  if (LeftProduct != LeftRest.size() && RightProduct != RightRest.size()) {
+    llvm::SmallVector<SymRef, 8> OtherLeft(LeftRest), OtherRight(RightRest);
+    OtherLeft.erase(OtherLeft.begin() + LeftProduct);
+    OtherRight.erase(OtherRight.begin() + RightProduct);
+    if (auto Agrees = agreeAfterFactoringProducts(
+            Ctx, LeftRest[LeftProduct], RightRest[RightProduct], Samples,
+            Common, OtherLeft, OtherRight))
+      return Agrees;
+  }
+  if (Common.empty())
+    return std::nullopt;
+
+  llvm::SmallVector<uint32_t, 16> Vars;
+  for (SymRef R : Common)
+    Ctx.collectVars(R, Vars);
+  bool Native = Ctx.width(A) <= 64 && llvm::all_of(Vars, [&](uint32_t Id) {
+                  return Ctx.varInfo(Id).Width <= 64;
+                });
+  std::vector<SymEvalPlan> LeftPlans, RightPlans;
+  auto Compile = [&](llvm::ArrayRef<SymRef> Rest,
+                     std::vector<SymEvalPlan> &Plans) {
+    Plans.reserve(Rest.size());
+    for (SymRef R : Rest) {
+      SymEvalPlan &Plan = Plans.emplace_back(Ctx, R);
+      Native &= Plan.fitsU64();
+      Vars.append(Plan.vars().begin(), Plan.vars().end());
+    }
+  };
+  Compile(LeftRest, LeftPlans);
+  Compile(RightRest, RightPlans);
+  const uint32_t Width = Ctx.width(A);
+  return agreeOnAssignments(
+      Ctx, Vars, Samples, Native,
+      [&](auto &&Lookup) {
+        uint64_t Difference = 0;
+        for (SymEvalPlan &Plan : LeftPlans)
+          Difference += Plan.evalU64With(Lookup);
+        for (SymEvalPlan &Plan : RightPlans)
+          Difference -= Plan.evalU64With(Lookup);
+        return (Difference & (~uint64_t(0) >> (64 - Width))) == 0;
+      },
+      [&](auto &&Lookup) {
+        llvm::APInt Difference(Width, 0);
+        for (SymEvalPlan &Plan : LeftPlans)
+          Difference += Plan.evalWith(Lookup);
+        for (SymEvalPlan &Plan : RightPlans)
+          Difference -= Plan.evalWith(Lookup);
+        return Difference.isZero();
+      });
+}
+
 /// The largest t with 2^t entries or fewer.
 unsigned atomsFittingEntries(size_t Entries) {
   unsigned Atoms = 0;
@@ -284,7 +590,7 @@ std::optional<SymOp> fullCornerReduction(const SymContext &Ctx, SymRef R,
       return std::nullopt;
     Seen.push_back(Ctx.varId(Term));
   }
-  llvm::sort(Seen);
+  std::sort(Seen.begin(), Seen.end());
   return llvm::equal(Seen, SortedAtoms) ? std::optional<SymOp>(Op)
                                         : std::nullopt;
 }
@@ -357,7 +663,7 @@ std::vector<llvm::APInt> measure(const SymContext &Ctx, SymRef Body,
   // Keep the general evaluator for smaller tables and every other shape.
   if (NumAtoms >= 8) {
     llvm::SmallVector<uint32_t, 8> SortedAtoms(Atoms.begin(), Atoms.end());
-    llvm::sort(SortedAtoms);
+    std::sort(SortedAtoms.begin(), SortedAtoms.end());
     std::optional<SymOp> First = fullCornerReduction(Ctx, Body, SortedAtoms);
     std::optional<SymOp> Second;
     if (!First && Ctx.op(Body) == SymOp::Add && Ctx.numOperands(Body) == 2) {
@@ -406,80 +712,22 @@ bool agreeOnSamples(const SymContext &Ctx, SymRef A, SymRef B,
                     unsigned Samples) {
   if (!Samples)
     return true;
+  if (auto Agrees = agreeAfterCancelingAddends(Ctx, A, B, Samples))
+    return *Agrees;
+  if (auto Agrees = agreeAfterFactoringProducts(Ctx, A, B, Samples))
+    return *Agrees;
   SymEvalPlan PlanA(Ctx, A);
   SymEvalPlan PlanB(Ctx, B);
-
   llvm::SmallVector<uint32_t, 16> Vars(PlanA.vars());
   Vars.append(PlanB.vars().begin(), PlanB.vars().end());
-  llvm::sort(Vars);
-  Vars.erase(std::unique(Vars.begin(), Vars.end()), Vars.end());
-  llvm::SmallDenseMap<uint32_t, unsigned, 16> Positions;
-  for (unsigned I = 0; I < Vars.size(); ++I)
-    Positions[Vars[I]] = I;
-  auto Position = [&](uint32_t Id) {
-    auto It = Positions.find(Id);
-    assert(It != Positions.end() && "plan requested an unlisted variable");
-    return It->second;
-  };
-
-  if (PlanA.fitsU64() && PlanB.fitsU64()) {
-    llvm::SmallVector<uint64_t, 8> Masks;
-    for (uint32_t Id : Vars) {
-      const uint32_t Width = Ctx.varInfo(Id).Width;
-      assert(Width <= 64 && "word plan contains a wide variable");
-      Masks.push_back(~uint64_t(0) >> (64 - Width));
-    }
-    llvm::SmallVector<uint64_t, 8> Assignment(Masks.size());
-    auto Lookup = [&](uint32_t Id) { return Assignment[Position(Id)]; };
-    std::mt19937_64 Rng(0x9E3779B97F4A7C15ull);
-    for (unsigned S = 0; S < Samples; ++S) {
-      // The first three points and one generator word per narrow input match
-      // the arbitrary-width path. Only referenced inputs advance the stream.
-      for (size_t I = 0; I < Assignment.size(); ++I)
-        Assignment[I] = S == 0   ? 0
-                        : S == 1 ? Masks[I]
-                        : S == 2 ? 1
-                                 : Rng() & Masks[I];
-      if (PlanA.evalU64With(Lookup) != PlanB.evalU64With(Lookup))
-        return false;
-    }
-    return true;
-  }
-
-  llvm::SmallVector<llvm::APInt, 8> Assignment;
-  Assignment.reserve(Vars.size());
-  for (uint32_t Id : Vars)
-    Assignment.emplace_back(Ctx.varInfo(Id).Width, 0);
-  auto Lookup = [&](uint32_t Id) -> const llvm::APInt * {
-    return &Assignment[Position(Id)];
-  };
-
-  std::mt19937_64 Rng(0x9E3779B97F4A7C15ull);
-  for (unsigned S = 0; S < Samples; ++S) {
-    for (size_t I = 0; I < Assignment.size(); ++I) {
-      uint32_t W = Assignment[I].getBitWidth();
-      // The first few rounds pin every input to a corner of the space, where a
-      // mistake in the corner arithmetic itself would show; the rest are
-      // ordinary values, where a mistake in the algebra would.
-      switch (S) {
-      case 0:
-        Assignment[I] = llvm::APInt(W, 0);
-        break;
-      case 1:
-        Assignment[I] = llvm::APInt::getAllOnes(W);
-        break;
-      case 2:
-        Assignment[I] = llvm::APInt(W, 1);
-        break;
-      default:
-        Assignment[I] = randomWord(Rng, W);
-        break;
-      }
-    }
-    if (PlanA.evalWith(Lookup) != PlanB.evalWith(Lookup))
-      return false;
-  }
-  return true;
+  return agreeOnAssignments(
+      Ctx, Vars, Samples, PlanA.fitsU64() && PlanB.fitsU64(),
+      [&](auto &&Lookup) {
+        return PlanA.evalU64With(Lookup) == PlanB.evalU64With(Lookup);
+      },
+      [&](auto &&Lookup) {
+        return PlanA.evalWith(Lookup) == PlanB.evalWith(Lookup);
+      });
 }
 
 size_t termBudget(const SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
@@ -524,13 +772,16 @@ void affineResidualCandidates(SymContext &Ctx,
   const unsigned Count = static_cast<unsigned>(Atoms.size());
   // This search reuses only the existing small exact Boolean recipes. A
   // larger caller ceiling must not trigger the four-input optimal table here.
-  if (Count < 2 || Count > std::min({3u, Limits.MaxOptimalSynthesisAtoms,
+  if (Count < 2 || Count > std::min({limits::kMaxResidualSynthesisAtoms,
+                                     Limits.MaxOptimalSynthesisAtoms,
                                      Limits.MaxSynthesisAtoms}))
     return;
   if (TermBudget < 3)
     return;
   assert(Weights.size() == (size_t(1) << Count));
   if (!Budget.consume(Weights.size()))
+    return;
+  if (isIndependentWeightedSum(Weights))
     return;
   llvm::SmallVector<llvm::APInt, 4> Values;
   for (const llvm::APInt &Value : Weights) {
@@ -639,8 +890,7 @@ void affineResidualCandidates(SymContext &Ctx,
         auto Found = Synthesized.find(Key);
         if (Found == Synthesized.end()) {
           const unsigned Arity = std::popcount(truthTableSupport(Table));
-          const size_t Functions = size_t(1) << (size_t(1) << Arity);
-          const size_t SynthesisWork = Functions * Functions;
+          const size_t SynthesisWork = bitwiseSynthesisWork(Arity);
           // This optional table must fit the remaining shared allowance.
           // Refusing it must not spend work that later regions could use.
           if (SynthesisWork > Limits.SynthesisWork ||
@@ -693,7 +943,8 @@ void booleanResidualCandidates(SymContext &Ctx,
   // XOR and its complement. Two XOR tables cannot give four value pairs, so
   // one selector is an affine atom already covered by the earlier reading.
   if (Count < 3 ||
-      Count > std::min({3u, Limits.MaxOptimalSynthesisAtoms,
+      Count > std::min({limits::kMaxResidualSynthesisAtoms,
+                        Limits.MaxOptimalSynthesisAtoms,
                         Limits.MaxSynthesisAtoms}) ||
       TermBudget < 3)
     return;
@@ -740,8 +991,7 @@ void booleanResidualCandidates(SymContext &Ctx,
     auto Found = Synthesized.find(Key);
     if (Found == Synthesized.end()) {
       const unsigned Arity = std::popcount(truthTableSupport(Table));
-      const size_t Functions = size_t(1) << (size_t(1) << Arity);
-      const size_t Work = Functions * Functions;
+      const size_t Work = bitwiseSynthesisWork(Arity);
       if (Work > Limits.SynthesisWork || !Budget.canConsume(Work))
         return std::nullopt;
       if (!Budget.consume(Work))

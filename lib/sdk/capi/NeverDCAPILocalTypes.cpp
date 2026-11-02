@@ -23,16 +23,34 @@
 #include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
 #include "neverd/types/DWARFTypeImport.h"
+#include "neverd/types/TypeImport.h"
 #include "neverd/types/TypeJSON.h"
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
+
+#ifdef IMAGE_SUBSYSTEM_NATIVE
+#undef IMAGE_SUBSYSTEM_NATIVE
+#endif
+#ifdef IMAGE_SUBSYSTEM_WINDOWS_GUI
+#undef IMAGE_SUBSYSTEM_WINDOWS_GUI
+#endif
+#ifdef IMAGE_SUBSYSTEM_WINDOWS_CUI
+#undef IMAGE_SUBSYSTEM_WINDOWS_CUI
+#endif
+#ifdef IMAGE_FILE_EXECUTABLE_IMAGE
+#undef IMAGE_FILE_EXECUTABLE_IMAGE
+#endif
+#ifdef IMAGE_FILE_DLL
+#undef IMAGE_FILE_DLL
+#endif
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -200,6 +218,7 @@ bool compatibleLibrary(const Session &S, types::HeaderLibrary Library) {
 /// program's.  One the user added that lays out otherwise, as a
 /// libraries.json edited by hand may name, joins nothing and says why.
 void joinHeaders(Session &S) {
+  S.LocalTypeEntryDeclaration = S.platformEntryDeclaration();
   const auto join = [&](types::HeaderLibrary Library, bool Added) {
     if (llvm::any_of(S.LocalTypeHeaders,
                      [&](const Session::JoinedHeaders &Joined) {
@@ -213,7 +232,7 @@ void joinHeaders(Session &S) {
       Joined.Error = "its records lay out otherwise than the program's";
     } else if (const types::TypeLibrary *Headers =
                    types::headerLibrary(Library, &Joined.Error)) {
-      Joined.Merge = types::mergeHeaderTypes(*S.LocalTypes, *Headers);
+      Joined.Merge = types::mergeHeaderTypes(*S.LocalTypes, *Headers, Library);
     }
     S.LocalTypeHeaders.push_back(std::move(Joined));
   };
@@ -265,11 +284,12 @@ void redeclare(Session &S) {
 }
 
 std::filesystem::path declarationsPath(const Session &S) {
-  return project_files::path(S.FilePath, project_files::File::Types);
+  return project_files::path(S.projectInputPath(), project_files::File::Types);
 }
 
 std::filesystem::path librariesPath(const Session &S) {
-  return project_files::path(S.FilePath, project_files::File::TypeLibraries);
+  return project_files::path(S.projectInputPath(),
+                             project_files::File::TypeLibraries);
 }
 
 /// The libraries \p Value's \p Key names, or none with \p Error.
@@ -691,6 +711,16 @@ bool Session::typesChanged(const types::TypeLibrary &Library,
   return Shows;
 }
 
+std::string Session::platformEntryDeclaration() const {
+  if (Img.Format == BinaryFormat::COFF && Img.Entry &&
+      (Img.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) &&
+      (Img.DynInfo.PESubsystem == llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_GUI ||
+       Img.DynInfo.PESubsystem == llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI))
+    return "BOOL __stdcall DllEntryPoint(HINSTANCE hinstDLL, DWORD fdwReason, "
+           "LPVOID lpReserved)";
+  return {};
+}
+
 types::TypeLibrary *Session::readLocalTypes() { return localTypes(*this); }
 
 bool Session::checkFunctionDeclaration(const std::string &Text,
@@ -779,7 +809,7 @@ DebugContext *Session::decompileDebug() {
       Library ? std::make_shared<types::TypeLibrary>(*Library)
               : std::shared_ptr<types::TypeLibrary>(libraryFor(Img)),
       std::move(Declarations), &Img, std::move(Headers), SigDB.buildNameMap(),
-      LocalTypeEntryType, programMain());
+      LocalTypeEntryType, programMain(), LocalTypeEntryDeclaration);
   return LocalTypesDbg.get();
 }
 
@@ -870,6 +900,8 @@ const char *neverd_local_types_json(neverd_session_t Sess,
                           {"unions", S->LocalTypeStats.Unions},
                           {"enums", S->LocalTypeStats.Enums},
                           {"declaredOnly", S->LocalTypeStats.DeclaredOnly},
+                          {"unsupportedFunctionTypes",
+                           S->LocalTypeStats.UnsupportedFunctionTypes},
                           {"nestingMismatches", std::move(Mismatches)},
                           {"skipped", std::move(Skipped)},
                           {"conflicts", std::move(Conflicts)},
@@ -1161,7 +1193,7 @@ const char *neverd_types_convert(const char *RequestJson) {
   types::TypeLibrary Library(*Model);
   if (ABI)
     Library.setRecordABI(*ABI);
-  llvm::json::Array Types, Prototypes, Problems;
+  llvm::json::Array Types, Prototypes, Problems, Imports;
   const llvm::json::Array *Declarations = Request->getArray("declarations");
   if (!Declarations)
     return refuse("\"declarations\" must be an array");
@@ -1176,11 +1208,64 @@ const char *neverd_types_convert(const char *RequestJson) {
     if (!Lang || !Source)
       return refuse("a declaration needs a language (c, cpp, rust or go) and "
                     "its source");
+    std::optional<llvm::StringRef> Prefix;
+    if (const auto *Value = Declaration->get("importPrefix")) {
+      Prefix = Value->getAsString();
+      if (!Prefix || Prefix->empty())
+        return refuse("\"importPrefix\" must be a nonempty C identifier");
+    }
+    std::vector<llvm::StringRef> Selected;
+    std::optional<llvm::ArrayRef<llvm::StringRef>> Selection;
+    if (const auto *Value = Declaration->get("importPrototypes")) {
+      const auto *Names = Value->getAsArray();
+      if (!Prefix || !Names)
+        return refuse(
+            "\"importPrototypes\" requires importPrefix and an array of names");
+      for (const auto &Name : *Names) {
+        const auto Text = Name.getAsString();
+        if (!Text || Text->empty())
+          return refuse("\"importPrototypes\" names must be nonempty strings");
+        Selected.push_back(*Text);
+      }
+      Selection = Selected;
+    }
     types::ParseOptions Parse;
     Parse.Lang = *Lang;
     Parse.KeepGoing = KeepGoing;
-    const types::ParseResult Result =
-        types::parseTypes(*Source, Library, Parse);
+    types::TypeLibrary Provider(*Model);
+    Provider.setRecordABI(Library.recordABI());
+    types::ParseResult Result =
+        types::parseTypes(*Source, Prefix ? Provider : Library, Parse);
+    if (Prefix) {
+      // Partial provider declarations cannot establish a complete dependency
+      // closure. Even keepGoing must not import a partly parsed provider.
+      Result.Types.clear();
+      Result.Prototypes.clear();
+      if (Result.Problems.empty()) {
+        auto Imported =
+            types::importPrototypes(Library, Provider, *Prefix, Selection);
+        if (!Imported)
+          return refuse("declaration " + std::to_string(I) + ": " +
+                        llvm::toString(Imported.takeError()));
+        llvm::json::Array Renamed, Dependencies, Added;
+        for (const auto &Name : Imported->Dependencies)
+          Dependencies.push_back(jsonSafeText(Name));
+        for (const auto &Name : Imported->Prototypes)
+          Added.push_back(jsonSafeText(Name));
+        for (const auto &[Original, Name] : Imported->Renamed)
+          Renamed.push_back(
+              llvm::json::Object{{"original", jsonSafeText(Original)},
+                                 {"name", jsonSafeText(Name)}});
+        Imports.push_back(
+            llvm::json::Object{{"declaration", static_cast<int64_t>(I)},
+                               {"prefix", jsonSafeText(*Prefix)},
+                               {"renamed", std::move(Renamed)},
+                               {"dependencies", std::move(Dependencies)},
+                               {"prototypes", std::move(Added)}});
+        Result.Types = std::move(Imported->Types);
+        Result.Prototypes = std::move(Imported->Prototypes);
+      }
+    }
     for (const std::string &Name : Result.Types)
       Types.push_back(jsonSafeText(Name));
     for (const std::string &Name : Result.Prototypes)
@@ -1194,6 +1279,8 @@ const char *neverd_types_convert(const char *RequestJson) {
   }
   llvm::json::Object Reply{{"types", std::move(Types)},
                            {"prototypes", std::move(Prototypes)}};
+  if (!Imports.empty())
+    Reply["imports"] = std::move(Imports);
   // Nothing renders from declarations that do not read, unless asked to
   // keep going past them.
   if (const llvm::json::Object *Render = Request->getObject("render");
@@ -1330,7 +1417,7 @@ int neverd_type_libraries_save(neverd_session_t Sess) {
   S->clearError();
   if (!S->requireFileBacked() || !S->Loaded)
     return -1;
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;
@@ -1395,7 +1482,7 @@ int neverd_type_declarations_save(neverd_session_t Sess) {
   S->clearError();
   if (!S->requireFileBacked() || !S->Loaded)
     return -1;
-  ProjectWriteLock Lock(S->FilePath);
+  ProjectWriteLock Lock(S->FilePath, S->projectNamespaceSuffix());
   if (!Lock) {
     S->setError("project writer unavailable: " + Lock.error());
     return -1;

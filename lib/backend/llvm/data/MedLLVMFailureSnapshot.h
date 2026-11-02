@@ -194,6 +194,8 @@ struct SnapshotWriter {
     B.number(static_cast<int>(T->Kind));
     n("size", T->Size);
     n("signed", T->IsSigned);
+    n("function_convention",
+      T->FunctionConvention ? static_cast<int>(*T->FunctionConvention) : -1);
     u("array_count", T->ArrayCount);
     key("pointee");
     type(T->Pointee, Depth + 1);

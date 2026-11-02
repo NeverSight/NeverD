@@ -33,6 +33,8 @@ add_neverd_component_library(NeverDLift
   AArch64/AArch64LiftNEONWiden.cpp
   AArch64/AArch64LiftNarrowShift.cpp
   AArch64/AArch64LiftPacFlags.cpp
+  AArch64/AArch64LiftPAuth.cpp
+  AArch64/AArch64LiftCPA.cpp
   AArch64/AArch64LiftRotate.cpp
   AArch64/AArch64LiftSIMD.cpp
   AArch64/AArch64LiftSIMDExt.cpp
@@ -92,6 +94,9 @@ add_neverd_component_library(NeverDLift
   ARM/ARMLiftSIMDSelect.cpp
   ARM/ARMLifter.cpp
   ARM/ARMRegs.cpp
+  X86/X86FPEncoding.cpp
+  X86/X86MpxEncoding.cpp
+  X86/X86MpxExecution.cpp
   X86/X86LiftAtomic.cpp
   X86/X86LiftControl.cpp
   X86/X86LiftCore.cpp
@@ -100,6 +105,7 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftCoreMove.cpp
   X86/X86LiftCoreShift.cpp
   X86/X86LiftExt.cpp
+  X86/X86LiftADX.cpp
   X86/X86LiftExtBMI.cpp
   X86/X86LiftFPU.cpp
   X86/X86LiftLegacyBCD.cpp
@@ -133,6 +139,19 @@ add_neverd_component_library(NeverDLift
   X86/X86LiftString.cpp
   X86/X86LiftStringMove.cpp
   X86/X86LiftSystem.cpp
+  X86/X86LiftVirtualization.cpp
+  X86/X86LiftSystemState.cpp
+  X86/X86LiftTBM.cpp
+  X86/X86LiftThreeDNow.cpp
+  X86/X86LiftBEXTR.cpp
+  X86/X86LiftBitCount.cpp
+  X86/X86LiftBMI2.cpp
+  X86/X86LiftBMILogic.cpp
+  X86/X86LiftTransactions.cpp
+  X86/X86LiftRepState.cpp
+  X86/X86LiftSgx.cpp
+  X86/X86LiftBoundedLeaf.cpp
+  X86/X86LiftSHA512.cpp
   X86/X86Lifter.cpp
   X86/X86Regs.cpp
 

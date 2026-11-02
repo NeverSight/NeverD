@@ -30,8 +30,10 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -69,6 +71,10 @@ constexpr GPRFamilyMask vectorArgumentFamilies(unsigned Count) {
 using GPRReadWidths =
     std::array<uint8_t, kX64VectorFamilyBase + kX64VectorArgumentFamilies>;
 
+/// Extra full-width scalar words left on every ordinary return, ordered by
+/// register byte offset. ABI result registers and address identities stay out.
+using GPRExitConstants = std::vector<std::pair<uint64_t, uint64_t>>;
+
 /// The GPR family of a register slice, or nullopt when \p RegOff is not one
 /// of the sixteen x86-64 GPRs this summary tracks.
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff);
@@ -99,6 +105,13 @@ struct RegisterStep {
   /// \p Callee is entered by a tail call (a branch into its entry or a
   /// rewritten tail jump), so it receives this function's registers.
   bool TailCallee = false;
+  /// The constant the call's own setup loads into AL, the count of vector
+  /// registers a System V caller passes a variadic callee
+  /// (lowByteConstantAtCall), or -1 where it loads none.  A callee whose
+  /// register save area holds the vector registers
+  /// (LocalRegisterEffect::SavesVectorArguments) reads the low double of
+  /// each of that many as an argument.
+  int8_t VectorCount = -1;
   /// Control leaves for code that no summary describes: an import tail
   /// call or an indirect tail jump.
   bool UnknownTailCall = false;
@@ -137,6 +150,11 @@ struct RegisterBlock {
 /// \p F has an effect this summary cannot describe.
 struct LocalRegisterEffect {
   GPRFamilyMask Writes = 0;
+  GPRExitConstants ExitConstants;
+  /// Complete, bounded straight-line scalar/CPUID body with an ordinary RET.
+  /// Source call recovery may expand it after checking the caller's physical
+  /// return-slot observations. This is not a general cached body for lifting.
+  std::shared_ptr<const std::vector<LowOp>> RegisterLeaf;
   std::set<va_t> Callees;
   /// Direct targets of calls that never return, but for those the name list
   /// knows: proved ones, and the code the user states never returns.  Their
@@ -157,6 +175,10 @@ struct LocalRegisterEffect {
   /// this to the solver, which knows the prototypes (RegisterStep::
   /// ImportCallee).
   bool UnknownEntryReads = false;
+  /// Independent entries, exceptional edges or malformed successors are not
+  /// represented by the ordinary register-flow graph. They forbid an absence
+  /// of observations proof without changing the argument-inference contract.
+  bool UnknownObservers = false;
   /// Liveness skeleton; block 0 is the entry.
   std::vector<RegisterBlock> Blocks;
   /// Positional arguments implied by the incoming stack-argument slots the
@@ -177,6 +199,13 @@ struct LocalRegisterEffect {
   /// the first of those slots on as the va_list.  Those spills are not
   /// argument reads: a caller passes exactly the variadic arguments it sets.
   int VariadicFrom = -1;
+  /// A System V variadic function whose prologue tests AL and, where it is
+  /// not zero, saves the vector argument registers to its register save
+  /// area (findRegisterSaveAreaSpills).  Those spills are not argument reads
+  /// either: va_arg reads the floating arguments a caller passes there, the
+  /// first AL of them, each promoted to double.  A call that loads AL with a
+  /// constant passes that many (RegisterStep::VectorCount).
+  bool SavesVectorArguments = false;
 };
 
 /// Summarize \p F.  A call into a function \p NoReturnTargets names as
@@ -212,10 +241,21 @@ struct CallRegisterSummaries {
   /// Families a call may change, for functions whose whole call tree is
   /// known.
   std::map<va_t, GPRFamilyMask> MayWrite;
+  /// Constants established locally on every return of a bounded call-free
+  /// body. Unknown paths, exceptional roots and addresses supply no fact.
+  std::map<va_t, GPRExitConstants> ExitConstants;
   /// Bytes of each family read before being written on some path from
   /// entry, including through callees.  A pass-through argument counts; a
-  /// register a nested call merely receives does not.
+  /// register a nested call merely receives does not.  The vector registers
+  /// a call's AL counts for a callee that saves them
+  /// (LocalRegisterEffect::SavesVectorArguments) are read as doubles.
   std::map<va_t, GPRReadWidths> EntryReads;
+  /// Non-result/control GPR families whose incoming values no path can observe.
+  /// Preserved-register exit transport still needs the caller's ABI check.
+  /// Unlike argument inference, this proof treats opaque calls as reading every
+  /// register and
+  /// never uses a nested call's may-write mask as a definite overwrite.
+  std::map<va_t, GPRFamilyMask> Unread;
   /// Positional arguments implied by the incoming stack slots a function
   /// reads, including through tail calls (0 when none), for functions whose
   /// stack reads are bounded, and for the imports whose counts are fixed.
@@ -255,6 +295,12 @@ CallRegisterSummaries solveCallRegisterEffects(
 /// Each function's local effect, by entry, where another owner keeps it (as
 /// a cache of callee effects does).
 using LocalRegisterEffectRefs = std::map<va_t, const LocalRegisterEffect *>;
+
+/// Prove unobserved incoming GPR families from the same register-flow bodies.
+/// Opaque effects, partial writes and exhausted work retain the input. Argument
+/// counts and pointer-variable initializer hints cannot establish this fact.
+std::map<va_t, GPRFamilyMask>
+proveUnreadCallRegisters(const LocalRegisterEffectRefs &Funcs);
 
 /// As above, over effects \p Funcs points at.
 CallRegisterSummaries solveCallRegisterEffects(

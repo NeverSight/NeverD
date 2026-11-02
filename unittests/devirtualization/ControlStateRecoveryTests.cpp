@@ -13,6 +13,7 @@
 
 #include <map>
 #include <optional>
+#include <string>
 
 using namespace neverd;
 using namespace neverd::analysis;
@@ -1443,6 +1444,8 @@ TEST(ControlStateRecovery, ProducerClosureChargesWorkBeforeAnotherRestart) {
     else
       EXPECT_GT(Result.NodeEvaluations, Boundary.NodeEvaluations);
     EXPECT_EQ(Result.ControlRefinements, Boundary.ControlRefinements);
+    EXPECT_NE(Result.Diagnostic.find("last recovery frontier: at 0x"),
+              std::string::npos);
   }
 }
 
@@ -1638,6 +1641,35 @@ TEST(ControlStateRecovery, AutomaticRefinementBudgetsPublishNoPartialGraph) {
     }
     expectBudgetRefusal(specializeInterpreter(Provider, {Entry}, Options));
   }
+}
+
+TEST(ControlStateRecovery, BudgetDiagnosticRetainsLastRecoveryFrontier) {
+  auto Provider = makeBankProgram(false);
+  auto Options = automaticBankOptions();
+  Options.DiscoverControlState = false;
+  const auto Unresolved = specializeInterpreter(Provider, {Entry}, Options);
+  ASSERT_EQ(Unresolved.Status, SpecializationStatus::UnresolvedControl)
+      << Unresolved.Diagnostic;
+
+  Options.DiscoverControlState = true;
+  Options.MaxControlRefinements = 0;
+  const auto Limited = specializeInterpreter(Provider, {Entry}, Options);
+  expectBudgetRefusal(Limited);
+  EXPECT_EQ(Limited.Diagnostic,
+            "control-state discovery/refinement budget exhausted; last "
+            "recovery frontier: " +
+                Unresolved.Diagnostic);
+
+  Options = automaticBankOptions();
+  Options.MaxOperations = 1;
+  const auto Early = specializeInterpreter(Provider, {Entry}, Options);
+  expectBudgetRefusal(Early);
+  EXPECT_EQ(Early.Diagnostic.find("last recovery frontier"), std::string::npos);
+
+  const auto Complete =
+      specializeInterpreter(Provider, {Entry}, automaticBankOptions());
+  ASSERT_TRUE(Complete.complete()) << Complete.Diagnostic;
+  EXPECT_TRUE(Complete.Diagnostic.empty());
 }
 
 TEST(ControlStateRecovery, ManualAndAutomaticFieldsShareOneFieldBudget) {

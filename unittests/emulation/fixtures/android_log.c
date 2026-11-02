@@ -27,6 +27,34 @@ extern int munmap(void *, U64);
 extern void *dlopen(const char *, int);
 extern void *dlsym(void *, const char *);
 extern int dlclose(void *);
+extern int __android_log_bwrite(int, const void *, U64);
+
+static __attribute__((noinline)) int direct_event_write(const void *Payload,
+                                                        U64 Size) {
+  return __android_log_bwrite(-7, Payload, Size);
+}
+
+U64 log_event_write(U64 *Out, const void *Payload, U64 Size, U64 Count,
+                    U64 Dynamic) {
+  if (Count > 4)
+    return 1;
+  void *Library = Dynamic ? dlopen("liblog.so", 2) : (void *)0;
+  int (*Write)(int, const void *, U64) =
+      Dynamic ? (int (*)(int, const void *, U64))dlsym(Library,
+                                                       "__android_log_bwrite")
+              : (void *)0;
+  if (Dynamic && !Write)
+    return 2;
+  for (U64 I = 0; I != Count; ++I) {
+    *__errno() = 73;
+    Out[2 * I] = (long)(Dynamic ? Write(-7, Payload, Size)
+                                : direct_event_write(Payload, Size));
+    Out[2 * I + 1] = *__errno();
+  }
+  if (Dynamic && dlclose(Library))
+    return 3;
+  return 0;
+}
 
 static void capture(unsigned char *Out, int Result,
                     const struct LogMessage *M) {

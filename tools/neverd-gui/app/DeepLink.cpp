@@ -12,6 +12,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <algorithm>
+#include <limits>
 
 namespace neverd::gui {
 namespace {
@@ -46,14 +47,21 @@ constexpr int HashDigits = 64, MinHashDigits = 8;
 
 /// A number as a link writes it: decimal, or hexadecimal after 0x.
 std::optional<Address> linkNumber(const QString &text) {
+  const bool hexadecimal =
+      text.startsWith(QLatin1String("0x"), Qt::CaseInsensitive);
+  const QStringView digits =
+      hexadecimal ? QStringView(text).sliced(2) : QStringView(text);
+  if (digits.isEmpty() ||
+      !std::all_of(digits.begin(), digits.end(), [hexadecimal](QChar c) {
+        return (c >= u'0' && c <= u'9') ||
+               (hexadecimal &&
+                ((c >= u'a' && c <= u'f') || (c >= u'A' && c <= u'F')));
+      }))
+    return std::nullopt;
   bool ok = false;
-  const Address value =
-      text.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)
-          ? text.mid(2).toULongLong(&ok, 16)
-          : text.toULongLong(&ok, 10);
-  // toULongLong takes a sign and spaces, which a link does not.
-  if (!ok || text.isEmpty() || text.contains(QLatin1Char('+')) ||
-      text.contains(QLatin1Char('-')) || text.contains(QLatin1Char(' ')))
+  const Address value = hexadecimal ? text.mid(2).toULongLong(&ok, 16)
+                                    : text.toULongLong(&ok, 10);
+  if (!ok)
     return std::nullopt;
   return value;
 }
@@ -69,7 +77,7 @@ LinkView DeepLink::shownView() const {
 std::optional<Address> DeepLink::address(Address base) const {
   if (ea)
     return ea;
-  if (rva)
+  if (rva && *rva <= std::numeric_limits<Address>::max() - base)
     return base + *rva;
   return std::nullopt;
 }

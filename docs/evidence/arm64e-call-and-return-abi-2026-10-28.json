@@ -1,0 +1,549 @@
+{
+  "schema": 1,
+  "date": "2026-10-28",
+  "scope": "Compiler-owned conventional SP return-signing frames, paired authenticated calls, implicit Darwin IB CIE metadata and bounded integer call execution. This does not grant complete arm64e whole-image or native Darwin signed-unwind ABI support.",
+  "source_revision": "510439f28bb7e031ac60cda925314b3285390c98",
+  "implementation_revision": "be019e1f135ae923266e9d697672f9762a2763d1",
+  "integrated_dev_revision": "f3be796c5a72174568c76d8f4ef72faa18a53d7c",
+  "environment_revision": "9ccb9d4f217988b4dd545d53958a5bf9ba1598b1",
+  "environment_pull_request": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "dependency_state": {
+    "signatures": {
+      "head": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "dirty": false
+    },
+    "third_party/capstone": {
+      "head": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+      "dirty": false
+    }
+  },
+  "toolchain": {
+    "backend": "NeverSight LLVM v23.0.0-r6, configured cached prebuilt; no LLVM patches or overlays",
+    "frontend": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "model_guest_compiler": "Ubuntu Clang/LLD/LLVM objcopy 18",
+    "docker_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "model_version": "Arm official AEM FVP 11.32+19",
+    "model_archive_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "network": "disabled during model execution"
+  },
+  "coverage": {
+    "focused": {
+      "call-definition-final": {
+        "passed": 5,
+        "report_sha256": "075a26931719e121f953be08568b651e4ba850c3bc0ac40b27450f02d50b4f68"
+      },
+      "return-unwind-guard": {
+        "passed": 19,
+        "report_sha256": "4050b96d75146cb036e05002871125cd6ee08e779db8146a62a9d58e56f17c8a"
+      }
+    },
+    "return_frame_object_variants": 6,
+    "decoded_authenticated_link_operand_words": 8,
+    "call_export_groups": 9,
+    "call_export_files": 116,
+    "actual_elf_call_objects": 45,
+    "additional_macho_authenticated_call_objects": 8,
+    "model_guests": 30,
+    "integer_valid_pairs": 1080,
+    "actual_normal_executions": 2160,
+    "invalid_signature_pairs": 2880,
+    "actual_faults": 5760,
+    "matching_original_exception_class_pairs": 2112,
+    "known_C_O0_different_exception_class_pairs": 768,
+    "environment_admission_tests": 34,
+    "base_environment_guests": 2
+  },
+  "regression": {
+    "source_revision": "510439f28bb7e031ac60cda925314b3285390c98",
+    "registered": 2541,
+    "passed": 2526,
+    "skipped": 15,
+    "failed": 0,
+    "clean_disjoint_full_inventory": false,
+    "serial_failure_repeat": {
+      "passed": 2,
+      "parallel": 1,
+      "unchanged_timeout_seconds": 120,
+      "junit_sha256": "0d88a78490f2ea9f809235b691c4590611fa5461ced3b809d6b184d845124e49",
+      "cases": [
+        {
+          "name": "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+          "seconds": 65.502
+        },
+        {
+          "name": "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases",
+          "seconds": 27.4673
+        }
+      ],
+      "diagnosis": "Both cases complete without source changes in serial isolation. The exact cause of the concurrent timeout is not conclusively identified; no timeout limit was raised."
+    },
+    "first_complete_inventory_failures": [
+      "AArch64AddressMemory.NarrowAliasedIndicesSurviveDecodedSSAAndBothSourceABIs",
+      "AArch64PairMemory.OwnedImagesValidateBothAccessesAndReturnedBases"
+    ],
+    "single_unsharded_run": false,
+    "runs": {
+      "broad-complete-final": {
+        "registered": 2537,
+        "skipped": 15,
+        "failed": 2,
+        "junit_sha256": "bbd2b58c42a4505964d8da0c77ad0ae39b91ad1fdc9f49dbe86a382a13ca48e9"
+      },
+      "x64-complete-final": {
+        "registered": 4,
+        "skipped": 0,
+        "failed": 0,
+        "junit_sha256": "0f12be952604e4724db83045de00fbbc17cc341848a27092c7f80c851279657b"
+      }
+    },
+    "labels": [
+      "NeverDAAPCS64CallContractTests",
+      "NeverDAArch64AuthenticatedCallTests",
+      "NeverDAArch64PAuthTests",
+      "NeverDAArch64ReturnProtectionTests",
+      "NeverDArm64eAnalysisTests",
+      "NeverDHighControlFlowTests",
+      "NeverDLLVMCIntrinsicSemanticTests",
+      "NeverDLLVMCVectorTests",
+      "NeverDLanguageEHTests",
+      "NeverDLiftTests",
+      "NeverDLowInstructionBoundaryTests",
+      "NeverDLowUndefinedDigestTests",
+      "NeverDMedMutableSourceTests",
+      "NeverDNativeExceptionRewriteContractTests",
+      "NeverDSourceCallABITests",
+      "NeverDSourceDialectTests",
+      "NeverDSourceStackFrameTests"
+    ],
+    "inventory_sha256": "2bcb87cf8e81d65e8f816ffaabc679900a3090798fa98b0b7e18aaee4478bdb5",
+    "binary_sha256": {
+      "NeverDAAPCS64CallContractTests": "50755edd328d0261f2db46085aa88566b67126f7a94b6bc4575ef80be728232d",
+      "NeverDAArch64AuthenticatedCallTests": "5469ac847c1625311fb5719dc3060202f56a3f6223c5d083a6f0f7b47eb5de5b",
+      "NeverDAArch64ReturnProtectionTests": "abea8c01011567eb49c3a83c58f51ea8fc02ae60ee55185c749b879258c09c90",
+      "NeverDArm64eAnalysisTests": "d5c12a8228c7116d684ed800654bac8b609c3b26d5e8118e386c1bd97d98037f",
+      "NeverDHighControlFlowTests": "c762b71dbea39fc5d67b18f0ca54e68d3ac34dd8c691a88327b28f1c2cadd115",
+      "NeverDLLVMCIntrinsicSemanticTests": "29b22c997e4827ee5a533f4f754a9bc6717bda6af7e48610ca4f95f43832ed27",
+      "NeverDLLVMCVectorTests": "9f834fe0dea9767bd4f0bb3a50141f7bf13f5eab55bb0c50af73f57e33d3dbd3",
+      "NeverDLanguageEHTests": "9ea7b1249f41a184cce1e6a6e4339a83bfe4cb512332061ef3f3e6fc8b256a63",
+      "NeverDLiftTests": "e79048337387faeba989d3028e93cbaf90cf350d4042518f336b353f323e5820",
+      "NeverDLowInstructionBoundaryTests": "fe07af5902635a073cc0cf47af84956fabcf66f97eb3b498f01c04a190b05df9",
+      "NeverDLowUndefinedDigestTests": "2b343bfd0329467909eaa15aa30dc6b3e263e8cdf08320d7aa4da0f2cb9fb6a5",
+      "NeverDMedMutableSourceTests": "de22981006ced3fb45f4edd7ae6d6ae9346632b3b974126819e4c170058d57cd",
+      "NeverDNativeExceptionRewriteContractTests": "9226f39053f985ca1d1abe9b4e36f5994500ec04623826d316dc2d4f1bd2ff27",
+      "NeverDSourceCallABITests": "a26e496e6db75a90181eb722b69510f0f1ae710b6c6f4a5d2e87c21c675ff3be",
+      "NeverDSourceDialectTests": "eeaca2bf6b370d69edc83762cc1bf6bfbf87b9b4e4f1ae2d63b99b1132a41b87",
+      "NeverDSourceStackFrameTests": "0fd463c3e6c3fc3ab3c87ad800f9584b9099129340ca1d77e3b0303aa619c6da"
+    },
+    "x64_compiler_control": {
+      "cases": [
+        "LLVMCIntrinsicSemantics.IntegerToFloatUsesOpcodeSignednessAndWidth",
+        "LLVMCIntrinsicSemantics.FloatToIntegerPreservesSignedResultBits",
+        "LLVMCIntrinsicSemantics.PackedIntegerNumericCastsKeepEveryLimb",
+        "LLVMCIntrinsicSemantics.PackedWideVectorCastsKeepLaneOrder"
+      ],
+      "compiler": "/usr/bin/clang -target x86_64-apple-macos",
+      "execution": "Rosetta x86_64",
+      "scope": "Only these four explicitly X64 C fixtures use this wrapper; the remaining inventory uses the ordinary configured host compiler."
+    },
+    "skipped_cases": [
+      "SourceDialect.CorpusReadsBackAsTheSameC",
+      "SourceDialect.OneFile",
+      "A64FastClassifyParity.OptionalRealBinaryWalk",
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "A64FastClassifyParity.OptionalRealBinaryWalk",
+      "Scratch.DumpRealBinary",
+      "LLVMCIntrinsicSemantics.FxSnapshotsRetainLegacyAnd64BitStateEffects",
+      "LLVMCIntrinsicSemantics.X87SaturatingConversionsGuardUndefinedCasts",
+      "LLVMCIntrinsicSemantics.CPUArraysKeepDistinctNamesAcrossBlocks",
+      "LLVMCIntrinsicSemantics.XGETBVArraysKeepDistinctNamesAcrossBlocks",
+      "LLVMCIntrinsicSemantics.DeadCPUIDRetainsNativeQueryAndBreakpointOrder",
+      "LLVMCIntrinsicSemantics.NativeExchangeKeepsDeadWritesAndUnalignedBytes"
+    ]
+  },
+  "model": {
+    "source_revision": "debcc3963a783a0e1078e1229228bb46aeae7607",
+    "current_source_export_inheritance": {
+      "model_source_revision": "debcc3963a783a0e1078e1229228bb46aeae7607",
+      "current_source_revision": "510439f28bb7e031ac60cda925314b3285390c98",
+      "identical_files": 116,
+      "input_export": "artifacts-final",
+      "current_export": "artifacts-definition-final"
+    },
+    "report_sha256": "0f6ec1f8b1fa87edd9656da01a4e65bf7b4aa5722d1ad5ecf8d5109a5e408a8e",
+    "provenance_sha256": "178fd31bba5279f5b21e79ee62381751e416a676b71882181be57034d460fb91",
+    "artifact_manifest_sha256": "317cbd4480ac236d755e41f2436a728e7aba8e33fadd6b241323ba379d9261ee",
+    "canonical_artifact_map_sha256": "da48d11090cbe68e11caa79dbe4c8fda8b009fe628dbf7b1bea0d2f3821a2c71",
+    "routes": [
+      "native",
+      "high-O0",
+      "high-O2",
+      "llvm-O0",
+      "llvm-O2"
+    ],
+    "feature_parameter_values": [
+      0,
+      2,
+      3
+    ],
+    "actual_instruction_pauth_levels": [
+      1,
+      4,
+      5
+    ],
+    "exception_levels": [
+      1,
+      0
+    ],
+    "cpta_cpta0_values": [
+      0,
+      512,
+      1024,
+      1536
+    ],
+    "input_schema": "IA/IB x zero/dynamic discriminator x one/ten uint64 arguments, plus one raw BLR control",
+    "invalid_stimuli": [
+      "wrong instruction key",
+      "wrong discriminator",
+      "PAC bit 48 corruption"
+    ],
+    "gates": [
+      "actual CPA2 and PAuth ID fields",
+      "nonzero APIA/APIB keys installed and read back",
+      "SCTLR.EnIA/EnIB enabled and read back",
+      "all effective CPTA/CPTA0 modes",
+      "actual EL0t or EL1h fault origin",
+      "independently calculated return value and exactly one callback on success",
+      "both original and projected callback counts zero on every invalid signature",
+      "24 paired synchronous faults per control",
+      "all guest checks, explicit completion and process exit success",
+      "native and C O2 retain original exception class",
+      "C O0 PAuth/FPAC alternate classes counted exactly; FPACCOMBINE requires matching classes"
+    ],
+    "results": [
+      {
+        "route": "native",
+        "pauth_level": 1,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "9933c2bd98c7000cd7ac3e0321f44f6b00d41f944bf21b5edc7043af4054bb1a"
+      },
+      {
+        "route": "native",
+        "pauth_level": 1,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "d0e3af6b26f81ed86d40661b92657e54309fc7a801f0bf6ce41d726416a719aa"
+      },
+      {
+        "route": "native",
+        "pauth_level": 4,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "8e109fe72a0ed8e7226d51e1f203b63572084a8bc4be9239d2e5978c6650b7f2"
+      },
+      {
+        "route": "native",
+        "pauth_level": 4,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "3e1bdb99de3026fe7d73b7776a84a0f84b04c507d580a51ffa09976c221a6ee4"
+      },
+      {
+        "route": "native",
+        "pauth_level": 5,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "8b00bbe0af0738223182caa829a20e8217c881d310b5e0ef0254a09fa7298297"
+      },
+      {
+        "route": "native",
+        "pauth_level": 5,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "f2c89b2d3ffd4b14f0fb0c388e4e4eb9979f1f1dd7c51b33ab5964e81d93661c"
+      },
+      {
+        "route": "high-O0",
+        "pauth_level": 1,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "9abae6367376fadbd2c633e302e67a11072ebddb3a6d30212035d072c5d1f3f5"
+      },
+      {
+        "route": "high-O0",
+        "pauth_level": 1,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "7c83d988a54ee6d59f443a775e3485640fcd83469804f9bcc158f004230752db"
+      },
+      {
+        "route": "high-O0",
+        "pauth_level": 4,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "14c6677d51d8964103fbfe8b9b412d8b135b716734d8d8ed044fc75457028adb"
+      },
+      {
+        "route": "high-O0",
+        "pauth_level": 4,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "8b5281eb69984e7f22d4c01df8bba8f6f74c64c1e87bb12d3e7b2523d3c6009c"
+      },
+      {
+        "route": "high-O0",
+        "pauth_level": 5,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "3398011cf630e1ac0dc098fecf2041473b03aa58aefb73c6b8b49180cd7d6032"
+      },
+      {
+        "route": "high-O0",
+        "pauth_level": 5,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "5bbefa65add7f5e2abbecc65e3718796318ff0851b22dc25b609c7dea27eedb8"
+      },
+      {
+        "route": "high-O2",
+        "pauth_level": 1,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "90e4586713fff72d1336de44db328e09d7c2b74d8ed24f92caa849a59da42dfb"
+      },
+      {
+        "route": "high-O2",
+        "pauth_level": 1,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "d75662ed46c82174cf93cc381bebe88f41c4960ea0780f04f686352ba8a2bef9"
+      },
+      {
+        "route": "high-O2",
+        "pauth_level": 4,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "22d6f23ffc769962cd107257d715e6c67304244d08586a269d025bef2b14a399"
+      },
+      {
+        "route": "high-O2",
+        "pauth_level": 4,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "7b902407c1dd1e082883f99b63938ce59ccff8d473f51e21bc1a715a272dd1b0"
+      },
+      {
+        "route": "high-O2",
+        "pauth_level": 5,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "6901965e390a2562b1f1f2f8598d2b45e2be551aa087778a248a5afc6c3f69ec"
+      },
+      {
+        "route": "high-O2",
+        "pauth_level": 5,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "039b16a44012836e256bee70fb0dbdccc5c6130b294750eeebe7d24083e2ebf3"
+      },
+      {
+        "route": "llvm-O0",
+        "pauth_level": 1,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "9abae6367376fadbd2c633e302e67a11072ebddb3a6d30212035d072c5d1f3f5"
+      },
+      {
+        "route": "llvm-O0",
+        "pauth_level": 1,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "7c83d988a54ee6d59f443a775e3485640fcd83469804f9bcc158f004230752db"
+      },
+      {
+        "route": "llvm-O0",
+        "pauth_level": 4,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "14c6677d51d8964103fbfe8b9b412d8b135b716734d8d8ed044fc75457028adb"
+      },
+      {
+        "route": "llvm-O0",
+        "pauth_level": 4,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": false,
+        "known_alternate_exception_pairs": 96,
+        "guest_sha256": "8b5281eb69984e7f22d4c01df8bba8f6f74c64c1e87bb12d3e7b2523d3c6009c"
+      },
+      {
+        "route": "llvm-O0",
+        "pauth_level": 5,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "3398011cf630e1ac0dc098fecf2041473b03aa58aefb73c6b8b49180cd7d6032"
+      },
+      {
+        "route": "llvm-O0",
+        "pauth_level": 5,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "5bbefa65add7f5e2abbecc65e3718796318ff0851b22dc25b609c7dea27eedb8"
+      },
+      {
+        "route": "llvm-O2",
+        "pauth_level": 1,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "90e4586713fff72d1336de44db328e09d7c2b74d8ed24f92caa849a59da42dfb"
+      },
+      {
+        "route": "llvm-O2",
+        "pauth_level": 1,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "d75662ed46c82174cf93cc381bebe88f41c4960ea0780f04f686352ba8a2bef9"
+      },
+      {
+        "route": "llvm-O2",
+        "pauth_level": 4,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "22d6f23ffc769962cd107257d715e6c67304244d08586a269d025bef2b14a399"
+      },
+      {
+        "route": "llvm-O2",
+        "pauth_level": 4,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "7b902407c1dd1e082883f99b63938ce59ccff8d473f51e21bc1a715a272dd1b0"
+      },
+      {
+        "route": "llvm-O2",
+        "pauth_level": 5,
+        "el": 1,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "6901965e390a2562b1f1f2f8598d2b45e2be551aa087778a248a5afc6c3f69ec"
+      },
+      {
+        "route": "llvm-O2",
+        "pauth_level": 5,
+        "el": 0,
+        "passed": true,
+        "exact_original_exception_class": true,
+        "known_alternate_exception_pairs": 0,
+        "guest_sha256": "039b16a44012836e256bee70fb0dbdccc5c6130b294750eeebe7d24083e2ebf3"
+      }
+    ]
+  },
+  "native_apple_control": {
+    "qualified": false,
+    "reason": "M4 ordinary arm64 process accepted wrong instruction-PAC modifiers at O0/O2; the full arm64e executable was unavailable/killed. Signed Darwin C++ unwind controls did not pass. Positive ordinary-arm64 returns do not establish active authentication."
+  },
+  "primary_sources": [
+    "https://clang.llvm.org/docs/PointerAuthentication.html",
+    "https://llvm.org/docs/PointerAuth.html",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/libunwind/src/DwarfInstructions.hpp"
+  ],
+  "retained_earlier_findings": [
+    {
+      "artifact": "broad-first.xml",
+      "finding": "One obsolete return-projection assertion and four X64 fixtures compiled with an A64 default target failed; final complete disjoint inventory uses the updated assertion and explicit X64 compiler control."
+    },
+    {
+      "artifact": "return-object-second.log",
+      "finding": "Mach-O omits an encoded B-key CIE augmentation. The reader now keeps the image-derived implicit IB ABI separately; arm64e A-key object/rewrite policies fail clearly."
+    },
+    {
+      "artifact": "model-execution-second",
+      "finding": "An initial exact-exception-class requirement exposed real C O0 auth-and-resign diagnostics; the accepted scope excludes exact syndrome for these routes, counts every difference, and keeps callback rejection strict."
+    },
+    {
+      "artifact": "model-maintained-smoke.log",
+      "finding": "A globally exported model C++ runtime prevented Clang from starting; the maintained runner uses the normal compiler runtime."
+    }
+  ],
+  "unqualified": [
+    "whole-image reconstructed calls, authenticated storage and signed fixups/relocations",
+    "native Darwin synchronous and asynchronous signed C++ exception unwind",
+    "authenticated FP, HFA, aggregate and variadic calling conventions in the controlled model",
+    "complete ESR equality and exact fault PC for every route; C O0 additionally has known exception-class differences",
+    "A-key signed frames on arm64e Mach-O output",
+    "PC-dependent/PAuthLR nonconventional return recipes as ordinary compiler-owned source frames",
+    "native Apple CPA2/CPTA-on execution"
+  ],
+  "reproduce": {
+    "build": "python3 scripts/build.py build-arm64e --target NeverDAAPCS64CallContractTests NeverDAArch64AuthenticatedCallTests NeverDAArch64ReturnProtectionTests NeverDArm64eAnalysisTests NeverDHighControlFlowTests NeverDLLVMCIntrinsicSemanticTests NeverDLLVMCVectorTests NeverDLanguageEHTests NeverDLiftTests NeverDLowInstructionBoundaryTests NeverDLowUndefinedDigestTests NeverDMedMutableSourceTests NeverDNativeExceptionRewriteContractTests NeverDSourceCallABITests NeverDSourceDialectTests NeverDSourceStackFrameTests --parallel 4",
+    "export": "NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR=/absolute/export build-arm64e/bin/NeverDAArch64AuthenticatedCallTests --gtest_output=json:/absolute/call-tests.json",
+    "model": "python3 neverd-cpta/authenticated_calls.py --artifacts /absolute/export --test-report /absolute/call-tests.json --neverd-revision 510439f28bb7e031ac60cda925314b3285390c98 --model /absolute/FVP_Base_RevC-2xAEMvA --output /absolute/model-output",
+    "raw_evidence_directory": "build-arm64e/arm64e-call-unwind-evidence (ignored local diagnostic artifacts)"
+  },
+  "interrupted_regression": {
+    "artifact": "unrebuilt-aggregate-broad-final.log",
+    "reason": "The selected labels also admitted aggregate NeverDLiftTests cases whose binary had not yet been rebuilt. That run was interrupted, the aggregate target was rebuilt, and the final complete inventory was restarted."
+  },
+  "ci": {
+    "status": "unavailable",
+    "diagnostic": "Code Review pull_requests_checks returned Connect your GitHub account to continue; no Actions API, CLI or browser fallback was used."
+  }
+}

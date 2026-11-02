@@ -36,6 +36,8 @@
 
 // A directory holds pattern files; the numbers in their names are decimal.
 NEVERD_SIGS_FILE_STRING(PatternExtension, ".pat")
+// NeverD constraints live separately so older directory readers ignore them.
+NEVERD_SIGS_FILE_STRING(NativePatternExtension, ".npat")
 NEVERD_SIGS_FILE_VALUE(NameNumberRadix, 10)
 
 // A library too large for one file is split into parts: part 1 under the

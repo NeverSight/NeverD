@@ -4,8 +4,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -154,12 +156,26 @@ void parseNonLazyPtrImports(const llvm::object::MachOObjectFile &Obj,
 
   const uint64_t PtrSize = Is64 ? 8 : 4;
   for (const auto &Sect : Sections) {
-    if (Sect.Flags != S_NON_LAZY_SYMBOL_POINTERS &&
+    // dyld reclassifies optimized GOTs as S_REGULAR while retaining their
+    // indirect-table indices. Coalesced entries become zero and lose their
+    // slide recipe; surviving entries keep their original slot and identity.
+    // See Apple's CacheDylib::bind and Adjustor::adjustLoadCommands.
+    const bool OptimizedCacheGOT = Img.MachOSharedCache && Is64 &&
+                                   Sect.Flags == S_REGULAR &&
+                                   (Sect.Name == section_names::macho::Got ||
+                                    Sect.Name == cache_load::kAuthGot);
+    if (!OptimizedCacheGOT && Sect.Flags != S_NON_LAZY_SYMBOL_POINTERS &&
         Sect.Flags != S_LAZY_SYMBOL_POINTERS)
       continue;
 
     uint64_t NSlots = Sect.Size / PtrSize;
     uint32_t IndirectBase = Sect.Reserved1;
+    if (Img.MachOSharedCache &&
+        (Sect.Size % PtrSize || Sect.Addr % PtrSize ||
+         !rangeInBounds(IndirectBase, NSlots, DysymtabCmd.nindirectsyms))) {
+      Img.MachOChainedFixupsAmbiguous = true;
+      return;
+    }
 
     for (uint64_t SI = 0; SI < NSlots; ++SI) {
       if (SI > std::numeric_limits<uint32_t>::max() - IndirectBase)
@@ -180,6 +196,20 @@ void parseNonLazyPtrImports(const llvm::object::MachOObjectFile &Obj,
       if (SI > (std::numeric_limits<va_t>::max() - Sect.Addr) / PtrSize)
         break;
       va_t SlotAddr = Sect.Addr + SI * PtrSize;
+      if (Img.MachOSharedCache) {
+        const auto *Slot = Img.readVA(SlotAddr, PtrSize);
+        if (!Slot) {
+          Img.MachOChainedFixupsAmbiguous = true;
+          return;
+        }
+        if (OptimizedCacheGOT && !readLE<uint64_t>(Slot))
+          continue;
+        auto [It, Inserted] =
+            Img.MachOSharedCacheSymbolPointers.try_emplace(SlotAddr, SymName);
+        if (!Inserted && It->second != SymName)
+          Img.MachOChainedFixupsAmbiguous = true;
+        continue;
+      }
       Img.ImportPtrSlots[SlotAddr] = SymName;
       Img.recordImportStorageSlot(SlotAddr, SymName, 0,
                                   ImportStorageEvidence::PointerTable);

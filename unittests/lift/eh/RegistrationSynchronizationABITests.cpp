@@ -10,7 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/ir/med/X86RegistrationCall.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
 
 #include <cstdint>
 

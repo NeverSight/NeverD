@@ -27,6 +27,7 @@
 #include "neverd/analysis/Limits.h"
 #include "neverd/analysis/LowIRRefinement.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/symbolic/SymExec.h"
 
@@ -38,6 +39,7 @@
 #include <bit>
 #include <climits>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1634,7 +1636,7 @@ class Checker {
         fail(Status::BudgetExceeded, "original operation budget exhausted");
       NativeInputOperations += Insn.Ops.size();
       for (const auto &Op : Insn.Ops)
-        if (Op.NumInputs > 6)
+        if (Op.NumInputs > std::size(Op.Inputs))
           fail(Status::Invalid, "operand capacity exceeded");
       for (const auto &Op : Insn.Ops) {
         checkScratch(Op.Output);
@@ -2529,10 +2531,10 @@ class Checker {
           if (!Unique.insert(S).second)
             fail(Status::Invalid, "duplicate CFG successor");
         for (const auto &Op : B.Ops) {
-          if (isLowRawEnvironmentRequirement(Op))
+          if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
             fail(Status::Unsupported,
                  "raw environment requirement has no static proof contract");
-          if (Op.NumInputs > 6)
+          if (Op.NumInputs > std::size(Op.Inputs))
             fail(Status::Invalid, "operand capacity exceeded");
         }
         for (const auto &Op : B.Ops) {
@@ -2754,8 +2756,9 @@ public:
           checkTemporary(V, Defined);
         };
         for (const auto &Op : C.Expressions) {
-          if (Op.NumInputs > 6 || !Op.Output.isTemp() || !scalar(Op.Output) ||
-              Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
+          if (Op.NumInputs > std::size(Op.Inputs) || !Op.Output.isTemp() ||
+              !scalar(Op.Output) || Op.Opcode == NdOp::LOAD ||
+              Op.Opcode == NdOp::STORE ||
               Op.MemoryOrdering != NdMemoryOrdering::None ||
               Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
               !supportedShape(Op))
@@ -3262,9 +3265,10 @@ public:
       } else {
         if (Contract.X64FlagsProfile) {
           const auto Raw = Ctx.mkFreshVar(64, "entry_flags");
-          const auto Packed =
-              Ctx.mkOr(Ctx.mkAnd(Raw, Ctx.mkConst(64, FlagProfile::EntryMask)),
-                       Ctx.mkConst(64, 2));
+          const auto Packed = Ctx.mkOr(
+              Ctx.mkAnd(Raw, Ctx.mkConst(64, FlagProfile::entryMask(
+                                                 *Contract.X64FlagsProfile))),
+              Ctx.mkConst(64, 2));
           EntrySystem =
               Ctx.mkAnd(Packed, Ctx.mkConst(64, ~FlagProfile::SplitMask));
           for (const auto &[Offset, Bit] : FlagProfile::Flags)
@@ -3327,7 +3331,7 @@ public:
           };
           for (const auto &B : Refinement->Candidate.Blocks)
             for (const auto &Op : B.Ops) {
-              if (Op.NumInputs > 6)
+              if (Op.NumInputs > std::size(Op.Inputs))
                 fail(Status::Invalid, "candidate operand capacity exceeded");
               if (Op.Output.Size)
                 Seed(Op.Output);
@@ -3713,7 +3717,7 @@ bool prepareCandidateRecords(
     }
     Operations += B.Ops.size();
     for (const auto &Op : B.Ops)
-      if (Op.NumInputs > 6) {
+      if (Op.NumInputs > std::size(Op.Inputs)) {
         Session.Statistics.Diagnostic = "candidate operand capacity exceeded";
         return false;
       }

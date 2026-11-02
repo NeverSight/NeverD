@@ -1,0 +1,254 @@
+//===- X87PortableEmulatorTests.cpp - Portable x87 LowIR integration ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Decode original x86 instructions through the existing owned-state lifter,
+/// then execute the explicit portable slice without any host x87 requirement.
+//===----------------------------------------------------------------------===//
+
+#include "gtest/gtest.h"
+
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/X86/X87Binary80.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/lift/X86/X86Regs.h"
+
+#include <algorithm>
+
+using namespace neverd;
+
+namespace {
+constexpr uint64_t Entry = 0x1000, DataAddress = 0x3000;
+constexpr uint64_t IntegerBit = UINT64_C(1) << 63;
+
+BinaryImage image() {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.X87ContextOverride = true;
+  Segment Data;
+  Data.VA = DataAddress;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(256, 0);
+  Data.Size = Data.FileSz = Data.Data.size();
+  auto One = X87Binary80{IntegerBit, 0x3fff}.bytes();
+  auto Tiny = X87Binary80{IntegerBit, 0x3fc0}.bytes(); // 2^-63.
+  std::copy(One.begin(), One.end(), Data.Data.begin());
+  std::copy(Tiny.begin(), Tiny.end(), Data.Data.begin() + 16);
+  Img.Segments.push_back(std::move(Data));
+  return Img;
+}
+
+bool instruction(NdOpEmulator &E, std::span<const uint8_t> Code,
+                 uint64_t IP = Entry) {
+  Decoder D;
+  if (!D.init(Arch::X64))
+    return false;
+  D.setX87ContextOwnership(true);
+  DecodedInsn I;
+  if (D.decodeOneForLift(Code.data(), Code.size(), IP, I) != Code.size())
+    return false;
+  std::vector<LowOp> Ops;
+  D.liftToLow(I, Ops);
+  for (const auto &Op : Ops)
+    if (!E.step(Op))
+      return false;
+  return true;
+}
+
+TEST(X87PortableEmulator, LiftedInstructionsRetainBeyondBinary64Precision) {
+  auto Img = image();
+  for (bool Strict : {false, true}) {
+    NdOpEmulator E(Img);
+    E.setStrictMode(Strict);
+    E.setX87PortableMode(true);
+    ASSERT_TRUE(E.setX86LinearAddressBits(48));
+    E.setRegister(x86reg::RAX, DataAddress);
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+    ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0xe3})); // FNINIT
+    ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28})); // FLD m80
+    E.setRegister(x86reg::RAX, DataAddress + 16);
+    ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+    ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xde, 0xc1})); // FADDP
+    const auto Expected = X87Binary80{IntegerBit + 1, 0x3fff}.bytes();
+    EXPECT_EQ(E.getRegisterBytes(x86reg::ST7),
+              std::vector<uint8_t>(Expected.begin(), Expected.end()));
+    EXPECT_EQ(E.getRegister(x86reg::FPU_SW), 0x3800);
+    EXPECT_FALSE(E.getX87Context()); // Six retained empty payloads are unknown.
+    E.setRegister(x86reg::RAX, DataAddress + 32);
+    ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x38})); // FSTP m80
+    LowOp Load;
+    Load.Opcode = NdOp::LOAD;
+    Load.Output = NdVar::tmp(90001, 16);
+    Load.addInput(NdVar::cst(DataAddress + 32, 8));
+    ASSERT_TRUE(E.step(Load));
+    std::vector<uint8_t> ExpectedMemory(16, 0);
+    std::copy(Expected.begin(), Expected.end(), ExpectedMemory.begin());
+    EXPECT_EQ(E.getRegisterBytes(90001), ExpectedMemory);
+    E.reset();
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+    ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0xe3}));
+    // Reset retains backend choice, but cannot invent operand memory or state.
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+  }
+}
+
+TEST(X87PortableEmulator, LiftedResetsPreserveOrForgetPhysicalPayloads) {
+  auto Img = image();
+  for (bool Strict : {false, true})
+    for (unsigned Top = 0; Top != 8; ++Top)
+      for (const auto Bytes : {std::array<uint8_t, 2>{0xd9, 0xd0},
+                               std::array<uint8_t, 2>{0x0f, 0x77},
+                               std::array<uint8_t, 2>{0x0f, 0x0e}}) {
+        NdOpEmulator E(Img);
+        E.setStrictMode(Strict);
+        E.setX87PortableMode(true);
+        ASSERT_TRUE(E.setX86LinearAddressBits(48));
+        EXPECT_FALSE(instruction(E, Bytes));
+        std::array<uint8_t, 512> State{};
+        State[0] = 0x7f;
+        State[1] = 3;
+        State[3] = Top << 3;
+        State[4] = 0xff;
+        for (unsigned I = 32; I != 160; ++I)
+          State[I] = I ^ 0xa5;
+        ASSERT_TRUE(E.setX87Context(State));
+        ASSERT_TRUE(instruction(E, Bytes));
+        EXPECT_EQ(E.getRegister(x86reg::FPU_SW),
+                  Bytes[0] == 0xd9 ? Top << 11 : 0);
+        if (Bytes[1] != 0x0e) {
+          if (Bytes[0] == 0xd9) {
+            for (unsigned I = 0; I != 8; ++I)
+              State[8 + I] = Entry >> (I * 8);
+          } else {
+            const auto Before = State;
+            State[3] = 0;
+            State[4] = 0;
+            for (unsigned Physical = 0; Physical != 8; ++Physical)
+              std::copy_n(Before.begin() + 32 + ((Physical + 8 - Top) & 7) * 16,
+                          16, State.begin() + 32 + Physical * 16);
+          }
+          EXPECT_EQ(E.getX87Context(), State);
+          continue;
+        }
+        EXPECT_FALSE(E.getX87Context());
+        for (unsigned I = 0; I != 8; ++I)
+          EXPECT_FALSE(E.getRegisterBytes(x86reg::stReg(I)));
+        E.setRegister(x86reg::RAX, DataAddress);
+        const auto One = X87Binary80{IntegerBit, 0x3fff}.bytes();
+        for (unsigned I = 0; I != 8; ++I) {
+          ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+          const unsigned Written = 7 - I;
+          EXPECT_EQ(E.getRegisterBytes(x86reg::stReg(Written)),
+                    std::vector<uint8_t>(One.begin(), One.end()));
+          EXPECT_EQ(bool(E.getX87Context()), I == 7);
+        }
+      }
+}
+
+TEST(X87PortableEmulator, UnsupportedMemoryAndExternalStateFailClosed) {
+  auto Img = image();
+  for (bool Strict : {false, true}) {
+    NdOpEmulator E(Img);
+    E.setStrictMode(Strict);
+    E.setX87PortableMode(true);
+    ASSERT_TRUE(E.setX86LinearAddressBits(48));
+    std::array<uint8_t, 512> State{};
+    State[0] = 0x7f;
+    State[1] = 3;
+    ASSERT_TRUE(E.setX87Context(State));
+    E.setRegister(x86reg::RAX, 0xdead0000);
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+    EXPECT_EQ(E.getX87Context(), State);
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xd9, 0xfe})); // FSIN
+    EXPECT_EQ(E.getX87Context(), State);
+    E.setRegister(x86reg::RAX, DataAddress);
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdf, 0x20})); // FBLD
+    EXPECT_EQ(E.getX87Context(), State);
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdd, 0x30})); // FNSAVE
+    EXPECT_EQ(E.getX87Context(), State);
+    LowOp Restore;
+    Restore.Opcode = NdOp::INTRINSIC;
+    Restore.addInput(NdVar::cst(unsigned(Intrinsic::Fxrstor64Mem), 2));
+    Restore.addInput(NdVar::cst(DataAddress, 8));
+    EXPECT_FALSE(E.step(Restore));
+    EXPECT_EQ(E.getX87Context(), State);
+    LowOp MMX;
+    MMX.Opcode = NdOp::INTRINSIC;
+    MMX.addInput(NdVar::cst(unsigned(Intrinsic::X87ContextMMXEnter), 2));
+    MMX.addInput(NdVar::reg(x86reg::X87ContextHandle, 8));
+    EXPECT_FALSE(E.step(MMX));
+    EXPECT_EQ(E.getX87Context(), State);
+    // A caller or external-state import cannot preserve the earlier context
+    // merely because the backend knows finite arithmetic.
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(NdVar::cst(Entry + 128, 8));
+    EXPECT_FALSE(E.step(Call));
+    E.setRegister(x86reg::FPU_SW, 0);
+    EXPECT_FALSE(E.getX87Context());
+    EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x28}));
+  }
+}
+
+TEST(X87PortableEmulator, CompareFlagsFeedDownstreamIntegerInstructions) {
+  auto Img = image();
+  NdOpEmulator E(Img);
+  E.setStrictMode(true);
+  E.setX87PortableMode(true);
+  std::array<uint8_t, 512> State{};
+  State[0] = 0x7f;
+  State[1] = 3;
+  State[4] = 3;
+  const auto Tiny = X87Binary80{IntegerBit, 0x3fc0}.bytes();
+  const auto One = X87Binary80{IntegerBit, 0x3fff}.bytes();
+  std::copy(Tiny.begin(), Tiny.end(), State.begin() + 32);
+  std::copy(One.begin(), One.end(), State.begin() + 48);
+  ASSERT_TRUE(E.setX87Context(State));
+  for (const auto &Flag : x86reg::EFlagsBits)
+    E.setRegister(Flag.Flag, 1);
+  E.setRegister(x86reg::RAX, 0);
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdb, 0xf1})); // FCOMI
+  EXPECT_EQ(E.getRegister(x86reg::CF), 1);
+  for (auto Flag : {x86reg::ZF, x86reg::PF, x86reg::AF, x86reg::SF, x86reg::OF})
+    EXPECT_EQ(E.getRegister(Flag), 0);
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 3>{0x0f, 0x92, 0xc0})); // SETB
+  EXPECT_EQ(E.getRegister(x86reg::RAX), 1);
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdf, 0xe9})); // FUCOMIP
+  ASSERT_TRUE(E.getX87Context());
+  EXPECT_EQ((*E.getX87Context())[4], 2);
+  EXPECT_EQ((*E.getRegister(x86reg::FPU_SW) >> 11) & 7, 1);
+}
+
+TEST(X87PortableEmulator, IntegerStoreWritesOnlyAuthenticatedDestination) {
+  auto Img = image();
+  NdOpEmulator E(Img);
+  E.setStrictMode(true);
+  E.setX87PortableMode(true);
+  ASSERT_TRUE(E.setX86LinearAddressBits(48));
+  std::array<uint8_t, 512> State{};
+  State[0] = 0x7f;
+  State[1] = 3;
+  State[4] = 1;
+  const auto Value = X87Binary80{UINT64_C(0xc000000000000000), 0x3fff}.bytes();
+  std::copy(Value.begin(), Value.end(), State.begin() + 32);
+  ASSERT_TRUE(E.setX87Context(State));
+  // A four-byte store crossing the segment end cannot consume ST0.
+  E.setRegister(x86reg::RAX, DataAddress + 254);
+  EXPECT_FALSE(instruction(E, std::array<uint8_t, 2>{0xdb, 0x18}));
+  EXPECT_EQ(E.getX87Context(), State);
+  // The same address is a valid exact-extent two-byte destination.
+  ASSERT_TRUE(instruction(E, std::array<uint8_t, 2>{0xdf, 0x18}));
+  EXPECT_EQ(E.getRegister(x86reg::FPU_SW), 0x0a20);
+  ASSERT_TRUE(E.getX87Context());
+  EXPECT_EQ((*E.getX87Context())[4], 0);
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = NdVar::tmp(90002, 2);
+  Load.addInput(NdVar::cst(DataAddress + 254, 8));
+  ASSERT_TRUE(E.step(Load));
+  EXPECT_EQ(E.getRegister(90002), 2);
+}
+} // namespace

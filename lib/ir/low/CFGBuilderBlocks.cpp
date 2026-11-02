@@ -84,6 +84,15 @@ void CFGBuilder::splitBlocks() {
   const bool Registration =
       CurrentImg && CurrentImg->Arch == Arch::X86 && EH && EH->Registration;
   for (auto &[Addr, Rec] : Insns) {
+    // x86 can enter after a prefix or in an immediate. Each decoded stream
+    // falls through at its own instruction end, not the next address in the
+    // instruction map. Split the convergence points before forming blocks.
+    const auto Next = Insns.upper_bound(Addr);
+    if (Next != Insns.end() && Next->first < Addr + Rec.Size) {
+      BlockStarts.insert(Next->first);
+      if (Insns.count(Addr + Rec.Size))
+        BlockStarts.insert(Addr + Rec.Size);
+    }
     if (Rec.IsBranch && Rec.IsCond)
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration &&
@@ -772,6 +781,8 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   }
   linkExceptionalSuccessors(Func);
   extractJumpTables(Func);
+  resolveAArch64PAuthPrefixes(Func);
+  resolveX86BoundedLeaves(Func);
   fixupFpuStack(Func, FinalView.SuppressedRelocationRoots);
 }
 
@@ -831,8 +842,9 @@ void CFGBuilder::linkSuccessors(LowFunc &Func,
     } else if (!Rec.IsBranch || Rec.IsCall) {
       // An unconditional no-return call ends control flow.  A conditional
       // call still reaches the next block when its predicate is false.
-      if ((!Rec.IsNoReturnCall || Rec.IsCond) && I + 1 < Func.Blocks.size())
-        Blk.Succs.push_back(static_cast<int>(I + 1));
+      const auto Fall = AddrToBlock.find(Rec.Addr + Rec.Size);
+      if ((!Rec.IsNoReturnCall || Rec.IsCond) && Fall != AddrToBlock.end())
+        Blk.Succs.push_back(Fall->second);
     }
 
     // A predicated non-control ARM instruction uses an instruction-local

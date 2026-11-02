@@ -7,6 +7,8 @@
 #include "X86LiftAPXValidation.h"
 #include "X86LiftDetail.h"
 
+#include "neverd/support/ISAEncoding.h"
+
 #include <algorithm>
 
 namespace neverd {
@@ -262,7 +264,8 @@ bool parseCanonicalEvexEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
   Encoding.Opcode = Insn->bytes[Encoding.Offset + 4];
   Encoding.ModRM = Insn->bytes[Encoding.Offset + 5];
   if (!Encoding.Is64Bit &&
-      ((Encoding.P0 & 0x08) != 0 || (Encoding.P1 & 0x04) == 0))
+      ((Encoding.P0 & 0xc8) != 0xc0 || (Encoding.P1 & 0x04) == 0 ||
+       (Encoding.P2 & 0x08) == 0))
     return false;
   Encoding.AddressSize = Encoding.Is64Bit ? (Encoding.AddressOverride ? 4 : 8)
                                           : (Encoding.AddressOverride ? 2 : 4);
@@ -279,15 +282,17 @@ bool parseCanonicalEvexEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
   return true;
 }
 
-bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
-                                    Arch TargetArch,
-                                    CanonicalVex3EncodingInfo &Encoding) {
+static bool parseCanonicalThreeBytePrefix(const cs_insn *Insn,
+                                          const cs_x86 &X86, Arch TargetArch,
+                                          uint8_t Escape,
+                                          CanonicalVex3EncodingInfo &Encoding) {
   Encoding = {};
-  if (!Insn || Insn->size == 0 || Insn->size > 15 ||
+  if (!Insn || Insn->size == 0 || Insn->size > x86::kMaxInstructionLen ||
       (TargetArch != Arch::X64 && TargetArch != Arch::X86))
     return false;
   Encoding.Is64Bit = TargetArch == Arch::X64;
-  while (Encoding.Offset < Insn->size && Insn->bytes[Encoding.Offset] != 0xc4) {
+  while (Encoding.Offset < Insn->size &&
+         Insn->bytes[Encoding.Offset] != Escape) {
     const uint8_t Prefix = Insn->bytes[Encoding.Offset++];
     if (isSegmentPrefix(Prefix)) {
       if (Encoding.SegmentPrefix != 0)
@@ -301,18 +306,19 @@ bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
       return false;
     }
   }
-  if (Encoding.Offset + 5 > Insn->size || Insn->bytes[Encoding.Offset] != 0xc4)
+  if (Encoding.Offset + 5 > Insn->size ||
+      Insn->bytes[Encoding.Offset] != Escape)
     return false;
   Encoding.P0 = Insn->bytes[Encoding.Offset + 1];
   Encoding.P1 = Insn->bytes[Encoding.Offset + 2];
   Encoding.Opcode = Insn->bytes[Encoding.Offset + 3];
   Encoding.ModRM = Insn->bytes[Encoding.Offset + 4];
-  if (!Encoding.Is64Bit && (Encoding.P0 & 0xe0) != 0xe0)
+  if (!Encoding.Is64Bit && (Encoding.P0 & 0xc0) != 0xc0)
     return false;
   Encoding.AddressSize = Encoding.Is64Bit ? (Encoding.AddressOverride ? 4 : 8)
                                           : (Encoding.AddressOverride ? 2 : 4);
-  // Capstone synthesizes the VEX REX view only in 64-bit mode. The raw W bit
-  // remains in P1 for instruction families that use it in 32-bit mode.
+  // Capstone synthesizes the VEX/XOP REX view only in 64-bit mode. The raw W
+  // bit remains in P1 for instruction families that use it in 32-bit mode.
   const uint8_t ExpectedRex =
       Encoding.Is64Bit
           ? static_cast<uint8_t>(0x40 | ((Encoding.P1 & 0x80) != 0 ? 0x08 : 0) |
@@ -325,11 +331,23 @@ bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
       X86.prefix[3] != (Encoding.AddressOverride ? 0x67 : 0) ||
       X86.rex != ExpectedRex || X86.addr_size != Encoding.AddressSize ||
       X86.encoding.modrm_offset != Encoding.Offset + 4 ||
-      X86.modrm != Encoding.ModRM || X86.opcode[0] != 0xc4 ||
+      X86.modrm != Encoding.ModRM || X86.opcode[0] != Escape ||
       X86.opcode[1] != Encoding.P0 || X86.opcode[2] != Encoding.P1 ||
       X86.opcode[3] != 0)
     return false;
   return true;
+}
+
+bool parseCanonicalVex3EncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
+                                    Arch TargetArch,
+                                    CanonicalVex3EncodingInfo &Encoding) {
+  return parseCanonicalThreeBytePrefix(Insn, X86, TargetArch, 0xc4, Encoding);
+}
+
+bool parseCanonicalXopEncodingInfo(const cs_insn *Insn, const cs_x86 &X86,
+                                   Arch TargetArch,
+                                   CanonicalVex3EncodingInfo &Encoding) {
+  return parseCanonicalThreeBytePrefix(Insn, X86, TargetArch, 0x8f, Encoding);
 }
 
 bool validateCanonicalEvexMemoryTail(const cs_insn *Insn, const cs_x86 &X86,
@@ -337,14 +355,10 @@ bool validateCanonicalEvexMemoryTail(const cs_insn *Insn, const cs_x86 &X86,
                                      const cs_x86_op &Operand,
                                      uint16_t TupleScale,
                                      size_t TrailingBytes) {
-  const unsigned BaseExtension = ((Encoding.P0 & 0x20) == 0 ? 8 : 0) |
-                                 ((Encoding.P0 & 0x08) != 0 ? 16 : 0);
-  const unsigned IndexExtension = ((Encoding.P0 & 0x40) == 0 ? 8 : 0) |
-                                  ((Encoding.P1 & 0x04) == 0 ? 16 : 0);
   return validateCanonicalVectorMemoryTail(
       Insn, X86, Encoding.Offset + 6, Encoding.ModRM, Encoding.SegmentPrefix,
-      Encoding.Is64Bit, Encoding.AddressSize, BaseExtension, IndexExtension,
-      TupleScale, Operand, TrailingBytes);
+      Encoding.Is64Bit, Encoding.AddressSize, Encoding.baseExtension(),
+      Encoding.indexExtension(), TupleScale, Operand, TrailingBytes);
 }
 
 bool validateCanonicalEvexRegisterTail(
@@ -358,12 +372,10 @@ bool validateCanonicalVex3MemoryTail(const cs_insn *Insn, const cs_x86 &X86,
                                      const CanonicalVex3EncodingInfo &Encoding,
                                      const cs_x86_op &Operand,
                                      size_t TrailingBytes) {
-  const unsigned BaseExtension = (Encoding.P0 & 0x20) == 0 ? 8 : 0;
-  const unsigned IndexExtension = (Encoding.P0 & 0x40) == 0 ? 8 : 0;
   return validateCanonicalVectorMemoryTail(
       Insn, X86, Encoding.Offset + 5, Encoding.ModRM, Encoding.SegmentPrefix,
-      Encoding.Is64Bit, Encoding.AddressSize, BaseExtension, IndexExtension, 1,
-      Operand, TrailingBytes);
+      Encoding.Is64Bit, Encoding.AddressSize, Encoding.baseExtension(),
+      Encoding.indexExtension(), 1, Operand, TrailingBytes);
 }
 
 bool validateCanonicalVex3RegisterTail(

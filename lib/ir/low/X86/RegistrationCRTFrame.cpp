@@ -12,6 +12,7 @@
 
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -19,19 +20,14 @@ namespace neverd::registration_state {
 
 bool isCheckedControlFPSlot(const BinaryImage &Image, va_t Slot) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
-      Image.Format != BinaryFormat::COFF ||
-      !isFileBackedPEImportSlot(Image, Slot))
+      Image.Format != BinaryFormat::COFF)
     return false;
+  // Reject unrelated identities before scanning current storage and fixups.
   const auto *Imported = Image.findImportAt(Slot);
   if (!Imported || Imported->IsDelayImport || Imported->Name != "_controlfp_s")
     return false;
-  const llvm::StringRef Module = Imported->Module;
-  return Module.equals_insensitive("api-ms-win-crt-math-l1-1-0.dll") ||
-         Module.equals_insensitive("api-ms-win-crt-runtime-l1-1-0.dll") ||
-         Module.equals_insensitive("ucrtbase.dll") ||
-         Module.equals_insensitive("ucrtbased.dll") ||
-         Module.equals_insensitive("msvcrt.dll") ||
-         Module.equals_insensitive("msvcr100.dll");
+  return coff_loader::isX86ControlFPProvider(Imported->Module) &&
+         isFileBackedPEImportSlot(Image, Slot);
 }
 
 bool isCheckedControlFPCall(const BinaryImage &Image, const LowOp &Op,

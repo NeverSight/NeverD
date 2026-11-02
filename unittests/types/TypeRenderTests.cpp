@@ -13,6 +13,30 @@
 
 using namespace neverd::types;
 
+TEST(TypeRender, ForeignWidthPointersAreAddressesInOtherLanguages) {
+  for (const auto Model : {DataModel::ILP32, DataModel::LLP64}) {
+    TypeLibrary Library(Model);
+    ASSERT_TRUE(parseCTypes("struct Mixed { void * __ptr32 Small; "
+                            "void * __ptr64 Large; };",
+                            Library)
+                    .ok());
+    const auto *Type = Library.find("Mixed");
+    ASSERT_NE(Type, nullptr);
+    for (const auto Lang : {Language::Rust, Language::Go, Language::Python}) {
+      RenderOptions Options;
+      Options.Lang = Lang;
+      const std::string Text = renderType(Library, *Type, Options);
+      const bool Wide = Model == DataModel::LLP64;
+      const char *Expected =
+          Lang == Language::Rust ? (Wide ? "u32" : "u64")
+          : Lang == Language::Go
+              ? (Wide ? "uint32" : "uint64")
+              : (Wide ? "ctypes.c_uint32" : "ctypes.c_uint64");
+      EXPECT_NE(Text.find(Expected), std::string::npos) << Text;
+    }
+  }
+}
+
 namespace {
 
 std::unique_ptr<TypeLibrary> loadFixture() {
@@ -991,6 +1015,45 @@ TEST(TypeRender, NamesStepAroundKeywords) {
       contains(renderType(Library, Words, in(Language::Go)), "\ttype_ uint32"));
 }
 
+TEST(TypeRender, KeywordNamespacesKeepTheirDistinctSpellings) {
+  TypeLibrary Library;
+  for (const char *Name :
+       {"auto", "class", "func", "end", "return", "yield", "self", "Self",
+        "crate", "super", "_", "neverd_keyword"})
+    Library.define(
+        structure(Name, 4, {member("value", makeBuiltin(Builtin::Int), 0)}));
+  using Names = std::map<std::string, std::string>;
+  const Names Cpp = {
+      {"auto", "auto_"}, {"class", "class_"}, {"return", "return_"}};
+  const std::pair<Language, Names> Cases[] = {
+      // Library views of C also escape C++ keywords.
+      {Language::C, Cpp},
+      {Language::Cpp, Cpp},
+      {Language::Rust,
+       {{"_", "__"},
+        {"crate", "crate_"},
+        {"return", "r#return"},
+        {"self", "self_"},
+        {"Self", "Self_"},
+        {"super", "super_"},
+        {"yield", "r#yield"}}},
+      {Language::Go, {{"func", "func_"}, {"return", "return_"}}},
+      {Language::Python,
+       {{"class", "class_"}, {"return", "return_"}, {"yield", "yield_"}}},
+      {Language::JavaScript,
+       {{"class", "class_"},
+        {"return", "return_"},
+        {"super", "super_"},
+        {"yield", "yield_"}}},
+      {Language::Lua, {{"end", "end_"}, {"return", "return_"}}}};
+  for (const auto &[Lang, Expected] : Cases) {
+    SCOPED_TRACE(languageId(Lang).str());
+    const auto Renamed = renamedNames(Library, Lang);
+    const Names Actual(Renamed.begin(), Renamed.end());
+    EXPECT_EQ(Actual, Expected);
+  }
+}
+
 TEST(TypeRender, UnitsSpellReservedTypedefsInExactWidths) {
   // Darwin's headers define __darwin_size_t as unsigned long, which
   // uint64_t, an unsigned long long there, is not: a decompiled unit that
@@ -1244,6 +1307,7 @@ TEST(TypeRender, UnitsSpellHeaderTypedefRecordsByTheirNames) {
   EXPECT_TRUE(contains(Embedded.Text, "fd_set readable;")) << Embedded.Text;
   EXPECT_FALSE(contains(Embedded.Text, "struct fd_set")) << Embedded.Text;
   EXPECT_TRUE(llvm::is_contained(Embedded.HeaderTypedefs, "fd_set"));
+  EXPECT_TRUE(llvm::is_contained(Embedded.HeaderTypes, "fd_set"));
 }
 
 TEST(TypeRender, HeaderRecordsNamedLikeTheirFunctionsKeepTheirTags) {

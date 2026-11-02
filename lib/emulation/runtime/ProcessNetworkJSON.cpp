@@ -110,17 +110,34 @@ linuxNetworkOptionsFromJSON(const llvm::json::Value &Value) {
   const auto *Object = Value.getAsObject();
   if (!Object || Object->empty())
     return invalid(field::LinuxNetwork);
-  for (const auto &[Key, V] : *Object)
-    if ((Key != field::Connections && Key != field::DatagramConnections) ||
-        !V.getAsArray() ||
-        V.getAsArray()->size() >
-            ::neverd::limits::emulation::
-                kProcessNetworkJSONLinuxNetworkOptionsFromJSONVGetAsArraySizeLimit)
+  for (const auto &[Key, V] : *Object) {
+    if (Key == field::TCPConnectFailures) {
+      if (!V.getAsObject())
+        return invalid(Key);
+    } else if ((Key != field::Connections &&
+                Key != field::DatagramConnections) ||
+               !V.getAsArray() ||
+               V.getAsArray()->size() >
+                   ::neverd::limits::emulation::kMaxNetworkConnections) {
       return invalid(field::LinuxNetwork);
+    }
+  }
   const llvm::json::Array Empty;
   const auto *Connections = Object->getArray(field::Connections);
   const auto *Datagrams = Object->getArray(field::DatagramConnections);
   LinuxNetworkOptions Out;
+  if (const auto *F = Object->getObject(field::TCPConnectFailures)) {
+    if (F->size() != 2 || !F->get(field::NetworkErrno) ||
+        !F->get(field::NetworkFailureCount))
+      return invalid(field::TCPConnectFailures);
+    auto &Failure = Out.TCPConnectFailures.emplace();
+    if (auto E = number(*F->get(field::NetworkErrno), field::NetworkErrno,
+                        Failure.Error))
+      return std::move(E);
+    if (auto E = number(*F->get(field::NetworkFailureCount),
+                        field::NetworkFailureCount, Failure.Count))
+      return std::move(E);
+  }
   uint64_t Remaining = ::neverd::limits::emulation::
       kProcessNetworkJSONLinuxNetworkOptionsFromJSONRemaining;
   for (const auto &Item : Connections ? *Connections : Empty) {

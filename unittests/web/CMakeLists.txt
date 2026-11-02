@@ -81,8 +81,31 @@ add_neverd_unittest(NeverDWebSourceMapTests
 target_include_directories(NeverDWebSourceMapTests PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
 target_compile_definitions(NeverDWebSourceMapTests PRIVATE
   NEVERD_WEB_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_executable(neverd-web-source-map-model EXCLUDE_FROM_ALL fixtures/bun/SourceMapModel.cpp)
+target_include_directories(neverd-web-source-map-model PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
+target_link_libraries(neverd-web-source-map-model PRIVATE NeverDWeb)
 if(NEVERD_ENABLE_WEB_JAVASCRIPT)
+  # Explicit development driver: export only; never invoke a compiler/runtime.
+  add_executable(neverd-web-bun-inventory EXCLUDE_FROM_ALL fixtures/bun/Inventory.cpp)
+  target_include_directories(neverd-web-bun-inventory PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
+  target_link_libraries(neverd-web-bun-inventory PRIVATE NeverDWeb)
+  add_executable(neverd-web-source-recovery EXCLUDE_FROM_ALL fixtures/bun/SourceRecovery.cpp)
+  target_include_directories(neverd-web-source-recovery PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
+  target_link_libraries(neverd-web-source-recovery PRIVATE NeverDWeb)
+  add_executable(neverd-web-source-model EXCLUDE_FROM_ALL fixtures/bun/SourceModel.cpp)
+  target_include_directories(neverd-web-source-model PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
+  target_link_libraries(neverd-web-source-model PRIVATE NeverDWeb)
+  add_executable(neverd-web-bun-project EXCLUDE_FROM_ALL fixtures/bun/Project.cpp)
+  target_include_directories(neverd-web-bun-project PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
+  target_link_libraries(neverd-web-bun-project PRIVATE NeverDWeb)
+  add_executable(neverd-web-bun-semantic-index EXCLUDE_FROM_ALL fixtures/bun/SemanticIndex.cpp)
+  target_include_directories(neverd-web-bun-semantic-index PRIVATE "${CMAKE_SOURCE_DIR}/lib/web")
+  target_link_libraries(neverd-web-bun-semantic-index PRIVATE NeverDWeb)
   add_neverd_unittest(NeverDWebSourceTests
+    BunProjectSourceTests.cpp
+    BunProjectRequireTests.cpp
+    BunProjectTests.cpp
+    BunSemanticIndexTests.cpp
     NodeBehaviorTests.cpp
     PackageBehaviorTests.cpp
     PackageBehaviorDiffTests.cpp

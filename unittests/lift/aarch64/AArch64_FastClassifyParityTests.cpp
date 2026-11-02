@@ -6,8 +6,8 @@
 ///
 /// \file
 /// Differential test: the Capstone-free fixed-width classifiers in
-/// neverd/decode/AArch64FastClassify.h must agree, bit-for-bit, with a full
-/// Capstone decode of the same 32-bit word.  Capstone is the oracle.
+/// neverd/decode/AArch64/AArch64FastClassify.h must agree, bit-for-bit, with a
+/// full Capstone decode of the same 32-bit word.  Capstone is the oracle.
 ///
 /// This is a *correctness* test, so its result is independent of machine load
 /// (unlike the throughput numbers the decode benchmark reports).  It exercises
@@ -25,7 +25,7 @@
 
 #include "gtest/gtest.h"
 
-#include "neverd/decode/AArch64FastClassify.h"
+#include "neverd/decode/AArch64/AArch64FastClassify.h"
 
 #include <capstone/capstone.h>
 #include <cstdint>
@@ -81,7 +81,11 @@ public:
     T.Terminator =
         (Id == AARCH64_INS_RET || Id == AARCH64_INS_B || Id == AARCH64_INS_BR ||
          Id == AARCH64_INS_ERET || Id == AARCH64_INS_BRK ||
-         Id == AARCH64_INS_HLT || Id == AARCH64_INS_UDF);
+         Id == AARCH64_INS_HLT || Id == AARCH64_INS_UDF ||
+         Id == AARCH64_INS_RETAA || Id == AARCH64_INS_RETAB ||
+         Id == AARCH64_INS_RETAASPPC || Id == AARCH64_INS_RETABSPPC ||
+         Id == AARCH64_INS_BRAA || Id == AARCH64_INS_BRAB ||
+         Id == AARCH64_INS_BRAAZ || Id == AARCH64_INS_BRABZ);
     if (Id == AARCH64_INS_BL && Insn->detail &&
         Insn->detail->aarch64.op_count >= 1 &&
         Insn->detail->aarch64.operands[0].type == AARCH64_OP_IMM)
@@ -140,8 +144,8 @@ TEST_F(A64FastClassifyParity, EdgeEncodings) {
       0xD65F03C0u, // ret
       0xD65F0000u, // ret x0
       0xD65F03E0u, // ret xzr
-      0xD65F0BFFu, // retaa   (distinct id -> NOT a terminator)
-      0xD65F0FFFu, // retab   (distinct id -> NOT a terminator)
+      0xD65F0BFFu, // retaa
+      0xD65F0FFFu, // retab
       0xD61F0000u, // br x0
       0xD61F03C0u, // br x30
       0xD69F03E0u, // eret
@@ -180,6 +184,38 @@ TEST_F(A64FastClassifyParity, RetBrRegisterSweep) {
     EXPECT_TRUE(diffOne(Oracle, 0xD65F0000u | (Rn << 5), A).empty());
     EXPECT_TRUE(diffOne(Oracle, 0xD61F0000u | (Rn << 5), A).empty());
   }
+}
+
+TEST_F(A64FastClassifyParity, AuthenticatedTransferRegisterSweep) {
+  for (uint32_t Key = 0; Key < 2; ++Key)
+    for (uint32_t Pointer = 0; Pointer < 32; ++Pointer)
+      for (uint32_t Modifier = 0; Modifier < 32; ++Modifier)
+        for (uint32_t Base :
+             {0xD71F0800u, 0xD73F0800u, 0xD61F081Fu, 0xD63F081Fu}) {
+          const uint32_t Word = Base | (Key << 10) | (Pointer << 5) |
+                                ((Base & 31) ? 0 : Modifier);
+          EXPECT_TRUE(diffOne(Oracle, Word, 0x400000).empty())
+              << diffOne(Oracle, Word, 0x400000);
+        }
+}
+
+TEST_F(A64FastClassifyParity, TwoModifierReturnSweep) {
+  for (uint32_t Key = 0; Key < 2; ++Key) {
+    for (uint32_t Imm = 0; Imm <= 0xffff; ++Imm) {
+      const uint32_t Word = 0x5500001fu | (Key << 21) | (Imm << 5);
+      EXPECT_TRUE(diffOne(Oracle, Word, 0x400000).empty())
+          << diffOne(Oracle, Word, 0x400000);
+    }
+    for (uint32_t Register = 0; Register < 32; ++Register) {
+      const uint32_t Word = 0xd65f0be0u | (Key << 10) | Register;
+      EXPECT_TRUE(diffOne(Oracle, Word, 0x400000).empty())
+          << diffOne(Oracle, Word, 0x400000);
+    }
+  }
+  for (uint32_t Word : {0x55000000u, 0x5500001eu, 0x5540001fu, 0x5560001fu,
+                        0xd65f0bc0u, 0xd65f0fc0u, 0xd65f1be0u})
+    EXPECT_TRUE(diffOne(Oracle, Word, 0x400000).empty())
+        << diffOne(Oracle, Word, 0x400000);
 }
 
 // Exhaustive over the conditional-branch condition (bits[3:0]) and the o0 bit

@@ -3,6 +3,7 @@
 #include "../ResourceLimits.h"
 #include "Address.h"
 
+#include "neverd/support/ProjectDatabase.h"
 #include "neverd/support/ProjectFiles.h"
 
 #include <QCoreApplication>
@@ -19,16 +20,16 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include <QtConcurrent/QtConcurrentMap>
-#include <QtEndian>
 #include <algorithm>
 #include <map>
 #include <vector>
 
 namespace neverd::gui {
 namespace {
-constexpr int FormatVersion = 1;
-constexpr int CompressionLevel = 6;
-constexpr char InputBlob[] = "input";
+using project_database::FormatVersion;
+using project_database::InputBlob;
+constexpr int CompressionLevel =
+    limits::support::kProjectDatabaseCompressionLevel;
 constexpr char DatabasesDirectory[] = "databases";
 QString recoveryMarker(const QString &binary) {
   return ProjectDatabase::projectFolder(binary) +
@@ -62,33 +63,18 @@ bool sidecarsMatch(const QString &binary,
   }
   return true;
 }
-// A SQLite header starts with this string and its terminating NUL, and holds
-// the big-endian application id at ApplicationIdOffset.
-constexpr char SqliteMagic[] = "SQLite format 3";
-constexpr qint64 ApplicationIdOffset = 68;
-constexpr qint64 HeaderPrefixBytes = ApplicationIdOffset + sizeof(qint32);
-
-// Schema of format 1.  Text keys keep the file inspectable with any SQLite
-// browser.
-constexpr const char *Schema[] = {
-    "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT "
-    "NULL)",
-    "CREATE TABLE IF NOT EXISTS blobs(name TEXT NOT NULL, chunk INTEGER NOT "
-    "NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(name, "
-    "chunk))",
-    "CREATE TABLE IF NOT EXISTS sidecars(suffix TEXT PRIMARY KEY, data BLOB "
-    "NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, value BLOB NOT "
-    "NULL)",
-};
+using project_database::Schema;
 
 /// One SQLite connection for the calling thread, closed on scope exit.
 class Connection {
 public:
-  explicit Connection(const QString &path)
+  enum class Access { ReadOnly, ReadWrite };
+  explicit Connection(const QString &path, Access access = Access::ReadWrite)
       : name_(QStringLiteral("nddb-") + QUuid::createUuid().toString()) {
     auto database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name_);
     database.setDatabaseName(path);
+    if (access == Access::ReadOnly)
+      database.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
     if (!database.open())
       error_ = database.lastError().text();
   }
@@ -211,7 +197,8 @@ std::optional<std::vector<Chunk>> compressInput(const QString &path,
   std::vector<Chunk> chunks;
   do {
     Chunk chunk;
-    chunk.data = file.read(::neverd::limits::gui::kProjectDatabaseChunkBytes);
+    chunk.data =
+        file.read(::neverd::limits::support::kProjectDatabaseChunkBytes);
     chunk.size = chunk.data.size();
     chunks.push_back(std::move(chunk));
   } while (!file.atEnd());
@@ -235,25 +222,51 @@ namespace {
 const QStringList &legacySidecarSuffixes() {
   static const QStringList suffixes = [] {
     QStringList keys;
-    for (const project_files::File Id :
-         {project_files::File::Annotations, project_files::File::Renames,
-          project_files::File::Functions, project_files::File::Items,
-          project_files::File::Operands, project_files::File::Code})
-      keys.append(QLatin1String(project_files::describe(Id).Legacy));
-    keys.append(QStringLiteral(".neverd-history.json"));
-    keys.append(QStringLiteral(".neverd-load.json"));
+    for (const auto &key : project_database::legacyFileKeys())
+      keys.append(QString::fromStdString(key));
     return keys;
   }();
   return suffixes;
 }
 
-/// The key a database names a project file by: the suffix NeverD gave it
-/// beside the input before projects had a folder, else its path in the
-/// folder.  A database written before keeps reading.
 QString databaseKey(const project_files::Description &file) {
-  const std::string_view key = file.Legacy.empty() ? file.Path : file.Legacy;
+  const auto key = project_database::fileKey(file);
   return QString::fromLatin1(key.data(), static_cast<qsizetype>(key.size()));
 }
+
+ProjectDatabase::Contents qtContents(const project_database::Contents &value) {
+  ProjectDatabase::Contents result;
+  result.inputName = QString::fromStdString(value.InputName);
+  result.inputSha256 = QString::fromStdString(value.InputSHA256);
+  result.inputSize = static_cast<qint64>(value.InputSize);
+  result.generator = QString::fromStdString(value.Generator);
+  result.savedAt = QString::fromStdString(value.SavedAt);
+  for (const auto &key : value.PackedFiles)
+    result.packedSuffixes.append(QString::fromStdString(key));
+  for (const auto &[key, bytes] : value.Sidecars)
+    result.sidecars.insert(QString::fromStdString(key),
+                           QByteArray::fromStdString(bytes));
+  for (const auto &[key, bytes] : value.State)
+    result.state.insert(QString::fromStdString(key),
+                        QByteArray::fromStdString(bytes));
+  return result;
+}
+
+class InputSink final : public project_database::InputSink {
+public:
+  explicit InputSink(QSaveFile &file) : file_(file) {}
+  void write(std::span<const uint8_t> bytes) override {
+    const auto *data = reinterpret_cast<const char *>(bytes.data());
+    if (file_.write(data, bytes.size()) != qsizetype(bytes.size()))
+      throw project_database::Error(file_.errorString().toStdString());
+    hash_.addData(QByteArrayView(data, bytes.size()));
+  }
+  std::string sha256() override { return hash_.result().toHex().toStdString(); }
+
+private:
+  QSaveFile &file_;
+  QCryptographicHash hash_{QCryptographicHash::Sha256};
+};
 
 /// \p path as the standard library names files, without a lossy encoding.
 std::filesystem::path filePath(const QString &path) {
@@ -268,9 +281,7 @@ const QStringList &ProjectDatabase::sidecarSuffixes() {
     QStringList keys = legacySidecarSuffixes();
     for (const auto &file : project_files::Files)
       if (const QString key = databaseKey(file);
-          !keys.contains(key) && file.Id != project_files::File::Journal &&
-          file.Id != project_files::File::Workbench &&
-          file.Id != project_files::File::WriterLock)
+          !keys.contains(key) && project_database::isPackedFile(file))
         keys.append(key);
     return keys;
   }();
@@ -395,16 +406,7 @@ bool ProjectDatabase::hasState(const QString &path) {
 }
 
 bool ProjectDatabase::isDatabase(const QString &path) {
-  if (path.endsWith(QLatin1String(Extension), Qt::CaseInsensitive))
-    return true;
-  QFile file(path);
-  if (!file.open(QIODevice::ReadOnly))
-    return false;
-  const QByteArray header = file.read(HeaderPrefixBytes);
-  return header.size() == HeaderPrefixBytes &&
-         header.startsWith(QByteArrayView(SqliteMagic, sizeof(SqliteMagic))) &&
-         qFromBigEndian<qint32>(header.constData() + ApplicationIdOffset) ==
-             ApplicationId;
+  return project_database::isDatabase(filePath(path));
 }
 
 QString ProjectDatabase::workingDirectory(const QString &database) {
@@ -467,6 +469,11 @@ QString ProjectDatabase::workingCopy(const QString &binary, QString *error) {
 
 QString ProjectDatabase::save(const QString &database, const QString &binary,
                               const QHash<QString, QByteArray> &state) {
+  if (!project_database::validInputName(
+          QFileInfo(binary).fileName().toStdString()))
+    return QCoreApplication::translate(
+        "ProjectDatabase",
+        "The input filename cannot be stored in a portable project.");
   QString error;
   const QString digest = sha256(binary, error);
   if (digest.isEmpty())
@@ -619,65 +626,21 @@ QString ProjectDatabase::saveState(const QString &database,
 }
 
 std::optional<ProjectDatabase::Contents>
-ProjectDatabase::read(const QString &database, QString *error) {
+ProjectDatabase::read(const QString &database, QString *error,
+                      ReadScope scope) {
   const auto failed = [&](const QString &message) {
     if (error)
       *error = message;
     return std::nullopt;
   };
-  if (!QFileInfo(database).isFile())
-    return failed(
-        QCoreApplication::translate("ProjectDatabase", "%1 does not exist.")
-            .arg(database));
-  Connection connection(database);
-  if (!connection.error().isEmpty())
-    return failed(connection.error());
-  auto db = connection.database();
-  const QString format = databaseFormat(db);
-  if (format.toInt() != FormatVersion)
-    return failed(format.isEmpty()
-                      ? QCoreApplication::translate(
-                            "ProjectDatabase", "%1 is not a NeverD database.")
-                            .arg(database)
-                      : QCoreApplication::translate(
-                            "ProjectDatabase",
-                            "%1 uses database format %2, which this NeverD "
-                            "cannot read.")
-                            .arg(database, format));
-  Contents contents;
-  contents.inputName = metaValue(db, QStringLiteral("input_name"));
-  contents.inputSha256 = metaValue(db, QStringLiteral("input_sha256"));
-  contents.inputSize = metaValue(db, QStringLiteral("input_size")).toLongLong();
-  contents.generator = metaValue(db, QStringLiteral("generator"));
-  contents.savedAt = metaValue(db, QStringLiteral("saved_at"));
-  const QString packed = metaValue(db, QStringLiteral("sidecar_suffixes"));
-  contents.packedSuffixes =
-      packed.isEmpty() ? legacySidecarSuffixes()
-                       : packed.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-  // A database names its input; never let that name leave the directory.
-  if (contents.inputName.isEmpty() ||
-      contents.inputName.contains(QLatin1Char('/')) ||
-      contents.inputName.contains(QLatin1Char('\\')) ||
-      contents.inputName == QLatin1String("..") ||
-      contents.inputName == QLatin1String("."))
-    return failed(QCoreApplication::translate("ProjectDatabase",
-                                              "%1 names an invalid input file.")
-                      .arg(database));
-  QSqlQuery sidecars(db);
-  if (!sidecars.exec(QStringLiteral("SELECT suffix, data FROM sidecars")))
-    return failed(lastError(sidecars));
-  while (sidecars.next()) {
-    const QString suffix = sidecars.value(0).toString();
-    if (sidecarSuffixes().contains(suffix))
-      contents.sidecars.insert(suffix, sidecars.value(1).toByteArray());
+  try {
+    project_database::Reader reader(filePath(database));
+    if (scope == ReadScope::Project)
+      reader.readProject();
+    return qtContents(reader.contents());
+  } catch (const project_database::Error &failure) {
+    return failed(QString::fromUtf8(failure.what()));
   }
-  QSqlQuery state(db);
-  if (!state.exec(QStringLiteral("SELECT key, value FROM state")))
-    return failed(lastError(state));
-  while (state.next())
-    contents.state.insert(state.value(0).toString(),
-                          state.value(1).toByteArray());
-  return contents;
 }
 
 QString ProjectDatabase::unpack(const QString &database,
@@ -690,10 +653,15 @@ QString ProjectDatabase::unpack(const QString &database,
       *error = message;
     return QString();
   };
-  QString message;
-  const auto contents = read(database, &message);
-  if (!contents)
-    return failed(message);
+  std::unique_ptr<project_database::Reader> reader;
+  std::optional<Contents> contents;
+  try {
+    reader = std::make_unique<project_database::Reader>(filePath(database));
+    reader->readProject();
+    contents = qtContents(reader->contents());
+  } catch (const project_database::Error &failure) {
+    return failed(QString::fromUtf8(failure.what()));
+  }
   if (!QDir().mkpath(directory))
     return failed(
         QCoreApplication::translate("ProjectDatabase", "Cannot create %1")
@@ -726,56 +694,21 @@ QString ProjectDatabase::unpack(const QString &database,
   QString digestError;
   if (!QFileInfo::exists(input) ||
       sha256(input, digestError) != contents->inputSha256) {
-    Connection connection(database);
-    if (!connection.error().isEmpty())
-      return failed(connection.error());
-    auto db = connection.database();
-    QSqlQuery chunks(db);
-    chunks.prepare(QStringLiteral(
-        "SELECT size, data FROM blobs WHERE name = ? ORDER BY chunk"));
-    chunks.addBindValue(QString::fromLatin1(InputBlob));
-    if (!chunks.exec())
-      return failed(lastError(chunks));
-    std::vector<std::pair<qint64, QByteArray>> packed;
-    while (chunks.next())
-      packed.emplace_back(chunks.value(0).toLongLong(),
-                          chunks.value(1).toByteArray());
-    const auto expanded = QtConcurrent::blockingMapped<std::vector<QByteArray>>(
-        packed, [](const std::pair<qint64, QByteArray> &chunk) {
-          QByteArray bytes = qUncompress(chunk.second);
-          return bytes.size() == chunk.first ? bytes : QByteArray();
-        });
-    QFile file(input + QStringLiteral(".unpacking"));
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-      return failed(
-          QCoreApplication::translate("ProjectDatabase", "Cannot write %1: %2")
-              .arg(file.fileName(), file.errorString()));
-    qint64 total = 0;
-    for (std::size_t i = 0; i < expanded.size(); ++i) {
-      if (expanded[i].size() != packed[i].first ||
-          file.write(expanded[i]) != expanded[i].size()) {
-        file.remove();
-        return failed(
-            QCoreApplication::translate("ProjectDatabase",
-                                        "The input stored in %1 is damaged.")
-                .arg(database));
-      }
-      total += expanded[i].size();
+    QSaveFile file(input);
+    if (!file.open(QIODevice::WriteOnly))
+      return failed(file.errorString());
+    try {
+      InputSink sink(file);
+      reader->unpackInput(sink);
+    } catch (const project_database::Error &failure) {
+      file.cancelWriting();
+      return failed(QString::fromUtf8(failure.what()));
     }
-    file.close();
-    if (total != contents->inputSize ||
-        sha256(file.fileName(), digestError) != contents->inputSha256) {
-      file.remove();
-      return failed(QCoreApplication::translate(
-                        "ProjectDatabase", "The input stored in %1 is damaged.")
-                        .arg(database));
-    }
-    QFile::remove(input);
-    if (!QFile::rename(file.fileName(), input))
-      return failed(
-          QCoreApplication::translate("ProjectDatabase", "Cannot write %1")
-              .arg(input));
+    if (!file.commit())
+      return failed(file.errorString());
   }
+
+  reader.reset();
   // A pending journal means the worker will recover newer edits itself.
   migrate(input);
   if (QFileInfo::exists(

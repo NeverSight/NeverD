@@ -6,6 +6,7 @@
 
 #include "neverd/analysis/LLVMScalarEquivalence.h"
 
+#include "neverd/analysis/Limits.h"
 #include "neverd/symbolic/SymExec.h"
 #include "neverd/symbolic/SymKnownBits.h"
 
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <set>
+#include <system_error>
 
 namespace neverd::analysis {
 namespace {
@@ -31,8 +33,21 @@ struct Failure {
 
 struct Budget {
   uint64_t Remaining;
+  const LLVMScalarModelOptions &Options;
   bool Exceeded = false;
+  uint64_t UntilStopPoll = 0;
+  void poll() {
+    if (Options.StopRequested && Options.StopRequested())
+      throw Failure{Status::Cancelled, "scalar proof cancelled"};
+    UntilStopPoll = limits::analysis::kLLVMScalarStopPollWork;
+  }
   void spend(uint64_t N = 1) {
+    if (Options.StopRequested) {
+      if (N >= UntilStopPoll)
+        poll();
+      else
+        UntilStopPoll -= N;
+    }
     if (N > Remaining) {
       Remaining = 0;
       Exceeded = true;
@@ -417,17 +432,21 @@ public:
 LLVMScalarEquivalenceResult
 checkLLVMScalarEquivalence(const llvm::Function &Original,
                            const llvm::Function &Candidate,
-                           const LLVMScalarEquivalenceLimits &Limits) {
+                           const LLVMScalarEquivalenceLimits &Limits,
+                           const LLVMScalarModelOptions &Options) {
   LLVMScalarEquivalenceResult Result;
-  Budget Work{Limits.MaxWork};
+  Result.InputDomain = Options.InputDomain;
+  Budget Work{Limits.MaxWork, Options};
   std::set<Bit> Domain;
   auto Model = [&](const llvm::Function &F) {
-    auto M = modelLLVMScalarFunction(F, Limits.Model);
+    auto M = modelLLVMScalarFunction(F, Limits.Model, Options);
     if (!M) {
       llvm::handleAllErrors(M.takeError(), [&](const llvm::ErrorInfoBase &E) {
         Result.Diagnostic = E.message();
         Result.Status =
-            E.convertToErrorCode() == llvm::errc::result_out_of_range
+            E.convertToErrorCode() == std::errc::operation_canceled
+                ? Status::Cancelled
+            : E.convertToErrorCode() == llvm::errc::result_out_of_range
                 ? Status::BudgetExceeded
                 : Status::Unsupported;
       });
@@ -511,6 +530,7 @@ checkLLVMScalarEquivalence(const llvm::Function &Original,
         ++Result.CompletedPartitions;
       }
       if (!Refine) {
+        Work.poll();
         Result.Status = Status::Proved;
         break;
       }

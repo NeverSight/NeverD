@@ -26,6 +26,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedConstantPropagation.h"
 
 #include "llvm/ADT/StringMap.h"
 
@@ -194,10 +195,22 @@ MedOp buildCmpOp(CondCode CC, const MedVar &A, const MedVar &B,
                  const MedVar &OutputVar, va_t Addr) {
   MedOp Op;
   Op.Addr = Addr;
+  Op.Output = OutputVar;
+  Op.Output.Kind = MedVar::Temp;
+  Op.Output.Size = 1;
   // Every VS fold here requires a genuine INT_SUB source. Its V flag is the
   // signed overflow of A-B (INT_SBOR), not the overflow of A+B (INT_SOVF).
   // ADD-derived VS conditions stay in the original flag chain.
   Op.Opcode = CC == CondCode::VS ? NdOp::INT_SBOR : condToOpcode(CC);
+  // These comparisons cannot observe the bits of an identical SSA value.
+  // Materialize their boolean here, before source emission would turn an
+  // otherwise unused incoming register into an unknown-state guard. Distinct
+  // reads and unspecified values are not interchangeable SSA observations.
+  if (const auto Known = selfComparisonConstant(Op.Opcode, A, B)) {
+    Op.Opcode = NdOp::COPY;
+    Op.addInput(MedVar::makeConst(*Known, 1));
+    return Op;
+  }
   if (condSwapsOperands(CC)) {
     Op.addInput(B);
     Op.addInput(A);
@@ -205,9 +218,6 @@ MedOp buildCmpOp(CondCode CC, const MedVar &A, const MedVar &B,
     Op.addInput(A);
     Op.addInput(B);
   }
-  Op.Output = OutputVar;
-  Op.Output.Kind = MedVar::Temp;
-  Op.Output.Size = 1;
   return Op;
 }
 
@@ -357,6 +367,8 @@ CmpSource findCmpSource(const std::vector<MedOp> &Ops, int SearchEnd,
         Result.SourceOpIndex = J;
         Result.FlagOpIndex = I;
         if (Prev.Opcode == NdOp::INT_SUB) {
+          // A-A compares equal for every input. Keep both operands; replacing
+          // the second with zero would instead test A itself, as TEST does.
           Result.A = Prev.Inputs[0];
           Result.B = Prev.Inputs[1];
           Result.FromSub = true;
@@ -378,8 +390,6 @@ CmpSource findCmpSource(const std::vector<MedOp> &Ops, int SearchEnd,
         break;
     }
   }
-  if (Result.Valid && Result.A == Result.B)
-    Result.B = MedVar::makeConst(0, Result.A.Size);
   return Result;
 }
 
@@ -539,16 +549,20 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
   // locally while a successor block still consumes it.  Computed once up front
   // (conservative: never removes a use, so it can only keep extra defs alive).
   UseBlockMap UseBlocks;
-  for (int B = 0; B < static_cast<int>(Func.Blocks.size()); ++B) {
-    for (auto &Op : Func.Blocks[B].Ops)
-      for (uint8_t K = 0; K < Op.NumInputs; ++K)
-        UseBlocks[Op.Inputs[K].display()].insert(B);
-    // A PHI reads each argument on its predecessor edge. Record the owning
-    // successor as a distinct use block so simplifying a predecessor branch
-    // cannot delete the flag definition before that edge copy consumes it.
-    for (const auto &Phi : Func.Blocks[B].Phis)
-      for (const auto &Argument : Phi.Args)
-        UseBlocks[Argument.second.display()].insert(B);
+  // A single block has no cross-block readers, even with a self-loop.
+  // markFlagChainDead still checks its remaining operation uses.
+  if (Func.Blocks.size() > 1) {
+    for (int B = 0; B < static_cast<int>(Func.Blocks.size()); ++B) {
+      for (auto &Op : Func.Blocks[B].Ops)
+        for (uint8_t K = 0; K < Op.NumInputs; ++K)
+          UseBlocks[Op.Inputs[K].display()].insert(B);
+      // A PHI reads each argument on its predecessor edge. Record the owning
+      // successor as a distinct use block so simplifying a predecessor branch
+      // cannot delete the flag definition before that edge copy consumes it.
+      for (const auto &Phi : Func.Blocks[B].Phis)
+        for (const auto &Argument : Phi.Args)
+          UseBlocks[Argument.second.display()].insert(B);
+    }
   }
 
   for (int BlkIdx = 0; BlkIdx < static_cast<int>(Func.Blocks.size());

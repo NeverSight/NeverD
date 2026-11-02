@@ -730,6 +730,30 @@ struct ResolverGraphCacheTestAccess {
       B.BlockStarts.erase(0x200);
       B.BlockStarts.erase(0x201);
     }
+    if (Variant == 8) {
+      // Two independent arms apply identical guards. Numerical deduplication
+      // must preserve the actual predecessor join for finite-domain queries.
+      B.CurrentFuncEntry = 0x80;
+      B.PersistentCFGRoots = {0x80};
+      B.BlockStarts.insert(0x80);
+      B.BlockStarts.insert(0x81);
+      Emit(0x80, NdOp::COND_BR, {},
+           {NdVar::cst(0x200, PointerSize), NdVar::reg(24, 1)});
+      B.Insns.at(0x80).IsBranch = B.Insns.at(0x80).IsCond = true;
+      B.Insns.at(0x80).BranchTarget = 0x200;
+      Emit(0x81, NdOp::BRANCH, {}, {NdVar::cst(0x100, PointerSize)});
+      B.Insns.at(0x81).IsBranch = true;
+      B.Insns.at(0x81).BranchTarget = 0x100;
+      B.Insns.at(0x200) = B.Insns.at(0x100);
+      B.Insns.at(0x200).Addr = 0x200;
+      for (auto &Op : B.Insns.at(0x200).Ops)
+        Op.Addr = 0x200;
+      B.Insns.erase(0x201);
+      Emit(0x201, NdOp::BRANCH, {}, {NdVar::cst(0x101, PointerSize)});
+      B.Insns.at(0x201).IsBranch = true;
+      B.Insns.at(0x201).BranchTarget = 0x101;
+      Dispatch.JumpTableTargets = {0x300};
+    }
     Query Q;
     Q.Candidate = WideIndex;
     Q.UseAddr = 0x101;
@@ -810,6 +834,81 @@ struct ResolverGraphCacheTestAccess {
     Q.UseSeq = UseSeq;
     Q.Relation = Relation::JoinedUnsignedFeasibleSet;
     Q.UnsignedUpperBound = 4;
+    return Q;
+  }
+
+  static Query seedReadonlyLookup(CFGBuilder &B, const BinaryImage &Image,
+                                  unsigned Variant = 0) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x200, 0x201, 0x300, 0x301, 0x400};
+    const auto W = uint16_t(Image.getPointerSize());
+    const NdVar Index = NdVar::reg(0, W), Address = NdVar::tmp(0x10000, W);
+    const NdVar Byte = NdVar::tmp(0x10008, 1),
+                Condition = NdVar::tmp(0x10010, 1);
+    const NdVar Value = NdVar::reg(16, W);
+    auto Emit = [&](va_t A, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[A];
+      R.Addr = A;
+      R.Size = 1;
+      LowOp Op;
+      Op.Addr = A;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (auto Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+    };
+    auto Branch = [&](va_t A, va_t Target, bool Conditional = false) {
+      if (Conditional)
+        Emit(A, NdOp::COND_BR, {}, {NdVar::cst(Target, W), Condition});
+      else
+        Emit(A, NdOp::BRANCH, {}, {NdVar::cst(Target, W)});
+      auto &R = B.Insns[A];
+      R.IsBranch = true;
+      R.IsCond = Conditional;
+      R.BranchTarget = Target;
+    };
+    Emit(0x100, NdOp::COPY, Index,
+         {Variant == 1 ? NdVar::reg(8, W) : NdVar::cst(0, W)});
+    Branch(0x100, 0x200);
+    Emit(0x200, NdOp::INT_ADD, Address,
+         {Variant == 6 ? NdVar::scalar(0x4000, W) : NdVar::address(0x4000, W),
+          Index});
+    if (Variant == 7)
+      Emit(0x200, NdOp::COPY, NdVar::tmp(Address.Offset, 1),
+           {NdVar::cst(0, 1)});
+    Emit(0x200, NdOp::LOAD, Byte, {Address});
+    Emit(0x200, NdOp::INT_ZEXT, Value, {Byte});
+    Emit(0x200, NdOp::COPY, Condition, {NdVar::reg(8, 1)});
+    Branch(0x200, 0x400, true);
+    Emit(0x201, NdOp::INT_ADD, Index, {Index, NdVar::cst(1, W)});
+    Branch(0x201, 0x300);
+    Emit(0x300, NdOp::INT_LESS, Condition,
+         {Index, NdVar::cst(Variant == 2 ? 4 : 3, W)});
+    Branch(0x300, 0x200, true);
+    Branch(0x301, 0x400);
+    if (Variant == 3 || Variant == 8) {
+      Emit(0x400, Variant == 3 ? NdOp::CALL : NdOp::INDIR_CALL, {},
+           {NdVar::address(0x9000, W)});
+      B.Insns[0x400].IsCall = true;
+    } else if (Variant == 4)
+      Emit(0x400, NdOp::COPY, NdVar::reg(16, 1), {NdVar::reg(24, 1)});
+    const int Seq = static_cast<int>(B.Insns[0x400].Ops.size());
+    Emit(0x400, NdOp::RETURN, {}, {Value});
+    B.Insns[0x400].IsRet = true;
+    if (Variant == 5)
+      B.PersistentCFGRoots.insert(0x400);
+    Query Q;
+    Q.Candidate = Value;
+    Q.UseAddr = 0x400;
+    Q.UseSeq = Seq;
+    Q.Relation = Relation::ReadonlyUnsignedEnvelope;
+    Q.UnsignedUpperBound = 64;
     return Q;
   }
 
@@ -2059,6 +2158,28 @@ struct ResolverGraphCacheTestAccess {
     Q.Relation = Relation::ConstantAddress;
     return Q;
   }
+  static void useWideAddressContainers(CFGBuilder &B, unsigned SliceOffset) {
+    for (va_t Address : {0x101, 0x102}) {
+      auto &Ops = B.Insns.at(Address).Ops;
+      const auto Destination = Ops.front().Output;
+      LowOp Seed = Ops.front();
+      Seed.Output = NdVar::tmp(1, 8);
+      LowOp Slice;
+      Slice.Addr = Address;
+      Slice.Seq = 1;
+      Slice.Opcode = NdOp::SUBBYTES;
+      Slice.Output = NdVar::tmp(2, Destination.Size);
+      Slice.addInput(Seed.Output);
+      Slice.addInput(NdVar::scalar(SliceOffset, 1));
+      LowOp Store = Ops.front();
+      Store.Seq = 2;
+      Store.Inputs[0] = Slice.Output;
+      Ops.front() = Seed;
+      Ops.insert(Ops.begin() + 1, {Slice, Store});
+      if (Ops.size() > 3)
+        Ops.back().Seq = 3;
+    }
+  }
   static void addAddressUseRoot(CFGBuilder &B) {
     B.PersistentCFGRoots.insert(0x103);
   }
@@ -2135,6 +2256,9 @@ struct ResolverGraphCacheTestAccess {
 } // namespace neverd::detail
 
 namespace {
+#define RESOLVER_GUARDED_BOUND_VALUE(Type, Name, Value)                        \
+  inline constexpr Type Name = Value;
+#include "ResolverGuardedBoundFixtures.def"
 using Access = detail::ResolverGraphCacheTestAccess;
 
 BinaryImage image() {
@@ -2220,6 +2344,37 @@ TEST(ResolverConstantAddress, EveryArchitectureAndFormatRequiresOneAddress) {
           EXPECT_EQ(Access::addressBatch(B, {Q}), Result);
         }
       }
+    }
+}
+
+TEST(ResolverConstantAddress, WideContainersRetainOnlyTheCompleteGuestPointer) {
+  for (Arch Target : {Arch::X86, Arch::ARM})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Bitness::Bits32;
+      for (const NdVar Value :
+           {NdVar::address(0x4000, 8), NdVar::address(0x100004000, 8),
+            NdVar::scalar(0x4000, 8), NdVar::addressFragment(0x4000, 8),
+            NdVar::cst(0x4000, 8), NdVar::reg(24, 8)})
+        for (unsigned Offset : {0u, 1u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << ':' << unsigned(Format) << ':'
+                       << unsigned(Value.Provenance) << ':' << Value.Offset
+                       << ':' << Offset);
+          CFGBuilder B;
+          const auto Q = Access::seedAddressJoin(B, Image, Value, Value);
+          Access::useWideAddressContainers(B, Offset);
+          const auto Result = Access::addressBatch(B, {Q});
+          ASSERT_TRUE(Result.Complete);
+          const bool Exact = Value == NdVar::address(0x4000, 8) && Offset == 0;
+          EXPECT_EQ(Result.Values, (std::vector<bool>{Exact}));
+          EXPECT_EQ(Result.Addresses,
+                    (std::vector<std::optional<va_t>>{
+                        Exact ? std::optional<va_t>(0x4000) : std::nullopt}));
+        }
     }
 }
 
@@ -3043,6 +3198,108 @@ TEST(ResolverGuardPredicates, ReloadConditionsRespectModesAndEvidence) {
       EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
                               [](uint64_t Mask) { return Mask == 0; }));
     }
+  }
+}
+
+BinaryImage readonlyLookupImage(Arch Target, BinaryFormat Format) {
+  auto Image = image();
+  Image.Arch = Target;
+  Image.Format = Format;
+  Image.Bits = Target == Arch::X64 || Target == Arch::AArch64 ? Bitness::Bits64
+                                                              : Bitness::Bits32;
+  Segment Data;
+  Data.VA = 0x4000;
+  Data.Size = Data.FileSz = 4;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data = {0, 2, 1, 255};
+  Section Section;
+  Section.VA = Data.VA;
+  Section.Size = Section.FileSz = Data.Size;
+  Section.Flags = Data.Flags;
+  Image.Segments.push_back(Data);
+  Image.Sections.push_back(Section);
+  return Image;
+}
+
+TEST(ResolverReadonlyLookup, FiniteLoopClosesBeforePublishingTheEnvelope) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Target) << ':' << unsigned(Format));
+      auto Image = readonlyLookupImage(Target, Format);
+      CFGBuilder B;
+      const auto Q = Access::seedReadonlyLookup(B, Image);
+      const auto Full = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+      ASSERT_TRUE(Full.Complete);
+      EXPECT_EQ(Full.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Full.Masks, (std::vector<uint64_t>{7}));
+      EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Full);
+      Access::clear(B);
+      EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Full);
+    }
+}
+
+TEST(ResolverReadonlyLookup,
+     UnknownInputsPoisonRowsAndClobbersDoNotProveBounds) {
+  for (unsigned Variant = 1; Variant != 9; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto Image = readonlyLookupImage(Arch::AArch64, BinaryFormat::ELF);
+    CFGBuilder B;
+    const auto Q = Access::seedReadonlyLookup(B, Image, Variant);
+    const auto Answer = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+  }
+}
+
+TEST(ResolverReadonlyLookup, MutableRelocatedAndAmbiguousStorageStaysUnknown) {
+  for (unsigned Variant = 0; Variant != 4; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto Image = readonlyLookupImage(Arch::AArch64, BinaryFormat::ELF);
+    if (Variant == 0)
+      Image.Segments.front().Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+    else if (Variant == 1)
+      Image.BaseRelocations.push_back({0x3fff, 10});
+    else if (Variant == 2)
+      Image.Sections.push_back(Image.Sections.front());
+    else
+      Image.Segments.front().FileSz = 2;
+    CFGBuilder B;
+    const auto Q = Access::seedReadonlyLookup(B, Image);
+    EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+  }
+}
+
+TEST(ResolverReadonlyLookup, GraphCacheDoesNotRetainChangedImageBytes) {
+  auto Image = readonlyLookupImage(Arch::AArch64, BinaryFormat::ELF);
+  CFGBuilder B;
+  const auto Q = Access::seedReadonlyLookup(B, Image);
+  ASSERT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{true}));
+  Image.Segments.front().Data[2] = 255;
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+  Image.Segments.front().Data[2] = 1;
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{true}));
+}
+
+TEST(ResolverReadonlyLookup, ColdAndWarmQueriesChargeIdenticalWork) {
+  auto Image = readonlyLookupImage(Arch::AArch64, BinaryFormat::ELF);
+  CFGBuilder Warm;
+  const auto Q = Access::seedReadonlyLookup(Warm, Image);
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Used = 1000000 - Full.Remaining;
+  for (size_t Budget : {size_t{0}, size_t{10}, Used / 2, Used - 1, Used}) {
+    CFGBuilder Cold;
+    Access::seedReadonlyLookup(Cold, Image);
+    const auto Answer =
+        Access::batch(Warm, {Q}, Budget, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Cold, {Q}, Budget, 0, 0, true, true, true), Answer);
+    if (Budget < Used)
+      EXPECT_TRUE(Answer.Values.empty() || !Answer.Values.front());
+    else
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
   }
 }
 
@@ -5590,6 +5847,101 @@ TEST(ResolverPredicateDemand, PolicyChangesAndBudgetsAgreeColdAndWarm) {
         EXPECT_EQ(Access::batch(Warm, {Q}, Limit, Depth, 0, true, true, true),
                   Access::batch(Cold, {Q}, Limit, Depth, 0, true, true, true));
       }
+  }
+}
+
+TEST(ResolverGuardPredicates, GuardedBoundsDoNotClaimFiniteJoinOwnership) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    CFGBuilder B;
+    auto Guarded = Access::seedJoinedGuard(B, Image, kGuardedBoundStraightLine);
+    Guarded.Relation = Access::Relation::GuardedUnsignedLessThan;
+    Guarded.UnsignedUpperBound = kGuardedBoundEnvelope;
+    auto Cheap = Guarded;
+    Cheap.Relation = Access::Relation::UnsignedLessThan;
+    auto Join = Guarded;
+    Join.Relation = Access::Relation::JoinedUnsignedFeasibleSet;
+    const std::vector<Access::Query> Queries{Cheap, Guarded, Join, Guarded,
+                                             Cheap};
+    const auto Answer =
+        Access::batch(B, Queries, kGuardedBoundBudget, 0, 0, true, true, true);
+    ASSERT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values,
+              (std::vector<bool>{false, true, false, true, false}));
+    EXPECT_EQ(Answer.Masks, std::vector<uint64_t>(Queries.size(), 0));
+    EXPECT_EQ(
+        Access::batch(B, Queries, kGuardedBoundBudget, 0, 0, true, true, true),
+        Answer);
+    Access::clear(B);
+    EXPECT_EQ(
+        Access::batch(B, Queries, kGuardedBoundBudget, 0, 0, true, true, true),
+        Answer);
+    Guarded.UnsignedUpperBound = kGuardedBoundLargeEnvelope;
+    const auto Large = Access::batch(B, {Guarded}, kGuardedBoundBudget, 0, 0,
+                                     true, true, true);
+    ASSERT_TRUE(Large.Complete);
+    EXPECT_EQ(Large.Values, (std::vector<bool>{true}));
+    EXPECT_EQ(Large.Masks, (std::vector<uint64_t>{0}));
+  }
+}
+
+TEST(ResolverGuardPredicates, IdenticalIncomingValuesKeepTheirJoinEvidence) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    CFGBuilder Warm;
+    const auto Q = Access::seedJoinedGuard(Warm, Image, 8);
+    const auto Answer =
+        Access::batch(Warm, {Q}, kGuardedBoundBudget, 0, 0, true, true, true);
+    ASSERT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+    EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{7}));
+    const size_t Work = kGuardedBoundBudget - Answer.Remaining;
+    ASSERT_GT(Work, 0u);
+    for (size_t Budget : {size_t{0}, Work - 1, Work, Work + 1}) {
+      CFGBuilder Cold;
+      Access::seedJoinedGuard(Cold, Image, 8);
+      EXPECT_EQ(Access::batch(Warm, {Q}, Budget, 0, 0, true, true, true),
+                Access::batch(Cold, {Q}, Budget, 0, 0, true, true, true));
+    }
+  }
+}
+
+TEST(ResolverGuardPredicates,
+     GuardedBoundsRejectChangedUnboundedAndUnguardedLanes) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    for (unsigned Variant : {1u, 2u, 3u, 4u, 5u, kGuardedBoundNarrowGuard}) {
+      if (Variant == kGuardedBoundNarrowGuard &&
+          Image.getPointerSize() == kGuardedBoundWordBytes)
+        continue;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(Variant);
+      CFGBuilder B;
+      auto Query = Access::seedJoinedGuard(B, Image, Variant);
+      Query.Relation = Access::Relation::GuardedUnsignedLessThan;
+      Query.UnsignedUpperBound = kGuardedBoundEnvelope;
+      const auto Answer = Access::batch(B, {Query}, kGuardedBoundBudget, 0, 0,
+                                        true, true, true);
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+      EXPECT_EQ(Access::batch(B, {Query}, kGuardedBoundBudget, 0, 0, true, true,
+                              true),
+                Answer);
+    }
   }
 }
 

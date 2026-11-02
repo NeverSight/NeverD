@@ -31,6 +31,8 @@ const char *intrinsicName(Intrinsic Id) {
     return "syscall";
   if (Id == Intrinsic::RawEnvironmentRequirementV1)
     return "raw_environment_requirement_v1";
+  if (Id == Intrinsic::ArchitecturalValueV1)
+    return "architectural_value_v1";
   if (auto *CName = intrinsicCName(Id))
     return CName;
   if (auto *Asm = intrinsicAsmMnemonic(Id))
@@ -49,13 +51,17 @@ struct CNameTable {
     auto C = [this](Intrinsic Id, const char *N) {
       names[static_cast<size_t>(Id)] = N;
     };
+#define NEVERD_X87_PORTABLE_HELPER(Role, Name, ...)                            \
+  C(Intrinsic::PortableX87##Role, #Name);
+#include "neverd/ir/X86/X87PortableABI.def"
+#undef NEVERD_X87_PORTABLE_HELPER
     C(Intrinsic::X86SEHRegisterRead, "__neverd_seh_register_read");
     C(Intrinsic::X86SEHRegisterWrite, "__neverd_seh_register_write");
 
-#include "neverd/ir/intrinsics/intrinsics_aarch64_cnames.inc"
-#include "neverd/ir/intrinsics/intrinsics_arm_cnames.inc"
-#include "neverd/ir/intrinsics/intrinsics_x86_cnames.inc"
-#include "neverd/ir/intrinsics/intrinsics_x86_fp_state_cnames.inc"
+#include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_cnames.inc"
+#include "neverd/ir/intrinsics/ARM/intrinsics_arm_cnames.inc"
+#include "neverd/ir/intrinsics/X86/intrinsics_x86_cnames.inc"
+#include "neverd/ir/intrinsics/X86/intrinsics_x86_fp_state_cnames.inc"
   }
 };
 
@@ -73,9 +79,9 @@ struct AsmTable {
       names[static_cast<size_t>(Id)] = N;
     };
 
-#include "neverd/ir/intrinsics/intrinsics_aarch64_asm.inc"
-#include "neverd/ir/intrinsics/intrinsics_arm_asm.inc"
-#include "neverd/ir/intrinsics/intrinsics_x86_asm.inc"
+#include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_asm.inc"
+#include "neverd/ir/intrinsics/ARM/intrinsics_arm_asm.inc"
+#include "neverd/ir/intrinsics/X86/intrinsics_x86_asm.inc"
   }
 };
 
@@ -141,11 +147,16 @@ struct SideEffectTable {
       Flags[static_cast<size_t>(Id)] = true;
     };
 
+#define NEVERD_X87_PORTABLE_HELPER(Role, ...)                                  \
+  SIDEEFFECT(Intrinsic::PortableX87##Role);
+#include "neverd/ir/X86/X87PortableABI.def"
+#undef NEVERD_X87_PORTABLE_HELPER
     SIDEEFFECT(Intrinsic::Syscall);
     SIDEEFFECT(Intrinsic::RawEnvironmentRequirementV1);
-#include "neverd/ir/intrinsics/intrinsics_aarch64_sideeffect.inc"
-#include "neverd/ir/intrinsics/intrinsics_arm_sideeffect.inc"
-#include "neverd/ir/intrinsics/intrinsics_x86_sideeffect.inc"
+    SIDEEFFECT(Intrinsic::ArchitecturalValueV1);
+#include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_sideeffect.inc"
+#include "neverd/ir/intrinsics/ARM/intrinsics_arm_sideeffect.inc"
+#include "neverd/ir/intrinsics/X86/intrinsics_x86_sideeffect.inc"
   }
 };
 
@@ -193,7 +204,8 @@ std::optional<std::string> x86SystemRegisterName(Intrinsic Id,
     return "%cr8";
   case Intrinsic::ReadDr:
   case Intrinsic::WriteDr:
-    if (DebugIndex > 15)
+    // REX.R does not extend the debug register bank: DR8..15 encode #UD.
+    if (DebugIndex > 7)
       return std::nullopt;
     return "%dr" + std::to_string(DebugIndex);
   default:
@@ -210,6 +222,8 @@ Intrinsic intrinsicFromName(const char *Name) {
     return Intrinsic::Syscall;
   if (std::strcmp(Name, "raw_environment_requirement_v1") == 0)
     return Intrinsic::RawEnvironmentRequirementV1;
+  if (std::strcmp(Name, "architectural_value_v1") == 0)
+    return Intrinsic::ArchitecturalValueV1;
   for (size_t I = 0; I < kCount; ++I) {
     auto IId = static_cast<Intrinsic>(I);
     if (auto *C = intrinsicCName(IId))

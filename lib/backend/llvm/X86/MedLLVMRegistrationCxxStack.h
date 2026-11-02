@@ -8,7 +8,7 @@
 #define NEVERD_MEDLLVMREGISTRATIONCXXSTACK_H
 
 #include "neverd/Common.h"
-#include "neverd/backend/llvm/X86RegistrationCatchStack.h"
+#include "neverd/backend/llvm/X86/X86RegistrationCatchStack.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"

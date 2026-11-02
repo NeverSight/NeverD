@@ -8,7 +8,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -85,8 +85,14 @@ std::optional<MedVar> valueLeftByCall(const MedFunc &Func, const MedOp &Call,
   return MedVar::makeUnspecified(Size, TRI.TheArch);
 }
 
-ValuesLeftByCalls::ValuesLeftByCalls(const MedFunc &Func) {
+ValuesLeftByCalls::ValuesLeftByCalls(const MedFunc &Func)
+    : ValuesLeftByCalls(Func, {}) {}
+
+ValuesLeftByCalls::ValuesLeftByCalls(const MedFunc &Func,
+                                     llvm::ArrayRef<MedVar> PossibleResults) {
   std::set<std::tuple<int, int, int>> ResultFields;
+  for (const MedVar &Field : PossibleResults)
+    ResultFields.insert(valueKey(Field));
   for (const MedStructReturnCandidate &Candidate : Func.StructReturnCandidates)
     for (const MedVar &Field : Candidate.Fields)
       ResultFields.insert(valueKey(Field));

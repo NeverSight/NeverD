@@ -67,9 +67,12 @@ NEVERD_LINUX_VALUE(RangeError, 34)
 NEVERD_LINUX_VALUE(XAttrNameLimit, 256)
 NEVERD_LINUX_VALUE(FileDescriptorLimit, 4096)
 NEVERD_LINUX_VALUE(FileCountLimit, 256)
+NEVERD_LINUX_VALUE(TmpfsDirectoryEntryBytes, 20)
 NEVERD_LINUX_VALUE(DeviceIoctlLimit, 1024)
 NEVERD_LINUX_VALUE(DeviceMappingLimit, 16)
 NEVERD_LINUX_VALUE(DeviceMappingPageSize, 4096)
+// Explicit residency observations currently select the 4 KiB LP64 contract.
+NEVERD_LINUX_VALUE(ResidencyPageSize, 4096)
 NEVERD_LINUX_VALUE(DeviceMemoryLimit, 16)
 NEVERD_LINUX_VALUE(FileByteLimit, 16 * 1024 * 1024)
 NEVERD_LINUX_VALUE(ProcBlockSize, 1024)
@@ -77,6 +80,7 @@ NEVERD_LINUX_VALUE(FilePathLimit, 4096)
 NEVERD_LINUX_VALUE(FileNameLimit, 255)
 NEVERD_LINUX_VALUE(FileRegularMode, 0100000)
 NEVERD_LINUX_VALUE(FilePermissionMask, 07777)
+NEVERD_LINUX_VALUE(FileRWXModeBits, 0777)
 NEVERD_LINUX_VALUE(FileAccessMask, 7)
 NEVERD_LINUX_VALUE(FileStatusSizeARM64, 128)
 NEVERD_LINUX_VALUE(FileStatusSizeX64, 144)
@@ -108,8 +112,11 @@ NEVERD_LINUX_VALUE(MapAnonymous, 0x20)
 NEVERD_LINUX_VALUE(ProtRead, 0x01)
 NEVERD_LINUX_VALUE(ProtWrite, 0x02)
 NEVERD_LINUX_VALUE(ProtExecute, 0x04)
+NEVERD_LINUX_VALUE(AdviceDontNeed, 4)
 NEVERD_LINUX_VALUE(AdviceMergeable, 12)
 NEVERD_LINUX_VALUE(AdviceUnmergeable, 13)
+NEVERD_LINUX_VALUE(PRSetVMA, 0x53564d41)
+NEVERD_LINUX_VALUE(PRSetVMAAnonName, 0)
 NEVERD_LINUX_VALUE(ExitMask, 0xff)
 NEVERD_LINUX_VALUE(SignalCount, 64)
 NEVERD_LINUX_VALUE(SignalKill, 9)
@@ -231,6 +238,7 @@ NEVERD_LINUX_SERVICE(Mprotect, 10, 226, 3)
 NEVERD_LINUX_SERVICE(Munmap, 11, 215, 2)
 NEVERD_LINUX_SERVICE(Madvise, 28, 233, 3)
 NEVERD_LINUX_SERVICE(Brk, 12, 214, 1)
+NEVERD_LINUX_SERVICE(Prctl, 157, 167, 5)
 #endif
 #ifdef NEVERD_LINUX_ABI
 NEVERD_LINUX_ABI(X64, X64Syscall, X64AX, X64AX, X64SP, X64PC, X64DI, X64SI,
@@ -250,6 +258,17 @@ NEVERD_LINUX_DYNAMIC_DEPENDENCY(DependencyAudit, 0x6ffffefb)
 #ifdef NEVERD_LINUX_DIAGNOSTIC
 NEVERD_LINUX_DIAGNOSTIC(MemoryResidency,
                         "unmodeled Linux page residency observation")
+NEVERD_LINUX_DIAGNOSTIC(ResidencyExhausted,
+                        "Linux residency observation catalogue exhausted")
+NEVERD_LINUX_DIAGNOSTIC(ResidencyMismatch,
+                        "Linux residency observation does not match the query")
+NEVERD_LINUX_DIAGNOSTIC(
+    ResidencyBacking,
+    "Linux residency requires owned anonymous mmap or brk backing")
+NEVERD_LINUX_DIAGNOSTIC(ResidencyDeviceOutput,
+                        "Linux residency output in device memory is unmodeled")
+NEVERD_LINUX_DIAGNOSTIC(ResidencyPartialCopy,
+                        "partial Linux residency vector copy is unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(KernelOptions,
                         "invalid Linux kernel availability input")
 NEVERD_LINUX_DIAGNOSTIC(PidFDTargetMissing,
@@ -319,7 +338,8 @@ NEVERD_LINUX_DIAGNOSTIC(DeviceMappingAdvice,
                         "Linux device mapping advice is unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(
     XAttrKernel,
-    "extended attribute queries require explicit released GKI input")
+    "extended attribute queries require explicit released GKI input or "
+    "xattr_query_import")
 NEVERD_LINUX_DIAGNOSTIC(
     XAttrObservation,
     "extended attributes for this catalogue object are unmodeled")
@@ -415,7 +435,7 @@ NEVERD_LINUX_DIAGNOSTIC(TimePartialOutput,
 NEVERD_LINUX_DIAGNOSTIC(
     TimeClockOption, "linux_time requires distinct supported Linux clock IDs")
 NEVERD_LINUX_DIAGNOSTIC(TimeCPUObservation,
-                        "Linux process CPU clocks require consistent GKI task "
+                        "Linux process CPU clocks require consistent task "
                         "observations and nonnegative seconds")
 NEVERD_LINUX_DIAGNOSTIC(TimeCPUTargetMissing,
                         "CPU clock target process is not modeled")
@@ -437,9 +457,10 @@ NEVERD_LINUX_DIAGNOSTIC(TimeDynamicClock,
                         "dynamic and encoded Linux clocks are unmodeled")
 NEVERD_LINUX_DIAGNOSTIC(TimezoneMissing,
                         "Linux timezone has no explicit linux_time input")
-NEVERD_LINUX_DIAGNOSTIC(TimeAdvanceClock,
-                        "advance_on_idle supports realtime, monotonic, "
-                        "boottime and fixed process CPU clocks only")
+NEVERD_LINUX_DIAGNOSTIC(
+    TimeAdvanceClock,
+    "virtual time advancement supports realtime, monotonic, "
+    "monotonic raw, boottime and fixed process CPU clocks only")
 NEVERD_LINUX_DIAGNOSTIC(
     TimeAdvanceOverflow,
     "Linux virtual clock advancement exceeds its modeled range")
@@ -449,4 +470,19 @@ NEVERD_LINUX_DIAGNOSTIC(
     SleepRange, "Linux sleep deadline exceeds the modeled virtual time range")
 NEVERD_LINUX_DIAGNOSTIC(SleepPartialOutput,
                         "unmodeled partial Linux nanosleep remainder output")
+#endif
+
+// Append service identities; existing internal catalogue values stay stable.
+#ifdef NEVERD_LINUX_X64_SERVICE
+NEVERD_LINUX_X64_SERVICE(Unlink, 87, 1)
+#endif
+#ifdef NEVERD_LINUX_SERVICE
+NEVERD_LINUX_SERVICE(UnlinkAt, 263, 35, 3)
+#endif
+
+#ifdef NEVERD_LINUX_X64_SERVICE
+NEVERD_LINUX_X64_SERVICE(Rename, 82, 2)
+#endif
+#ifdef NEVERD_LINUX_SERVICE
+NEVERD_LINUX_SERVICE(RenameAt, 264, 38, 4)
 #endif

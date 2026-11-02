@@ -14,7 +14,9 @@
 #include "neverd/web/Artifact.h"
 #include "neverd/web/Limits.h"
 
+#include <array>
 #include <limits>
+#include <optional>
 
 namespace neverd::web {
 inline constexpr std::string_view BunProfile = "bun-1.4.2-linux-x64-elf-v1";
@@ -45,6 +47,14 @@ struct BunExtraction {
   std::string ContainerFormat, Platform, Architecture;
   uint64_t GraphOffset = 0, GraphSize = 0;
   uint32_t EntryPoint = 0, StartupCount = 0, Flags = 0;
+  /// Prelinked graph index -> Modules index, in the producer's exact order.
+  /// Presence is recorded by graph flag bit 11, including an empty mapping.
+  std::vector<uint32_t> PrelinkedModuleFiles;
+  /// Opaque producer bytes, never interpreted as host runtime configuration.
+  std::optional<std::array<uint8_t, 8>> RuntimeOptions;
+  /// Raw compile-time argv, excluding the storage terminator. Even empty
+  /// arguments have a region; this does not parse or execute their contents.
+  uint32_t CompileArguments = NoBunIndex;
   std::vector<BunModule> Modules;
   std::vector<BunRegion> Regions;
 };
@@ -58,6 +68,10 @@ std::vector<std::string> bunProfiles();
 /// surrogates refuse UTF-8 projection; the original bytes remain available.
 std::string bunSourceBytes(const BunExtraction &Extraction,
                            const BunModule &Module, uint64_t MaxBytes);
+/// The same strict decoder for admitted JS and text-loader (13) modules.
+/// Text assets do not acquire a JavaScript source artifact identity.
+std::string bunTextBytes(const BunExtraction &Extraction,
+                         const BunModule &Module, uint64_t MaxBytes);
 struct BunSourceRange {
   std::string Text;
   uint64_t Offset = 0, Size = 0;

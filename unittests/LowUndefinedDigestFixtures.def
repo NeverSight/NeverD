@@ -1,0 +1,36 @@
+//===- LowUndefinedDigestFixtures.def - Extended identity -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent Python hashlib/struct little-endian V2 vectors, covering both
+/// buffered and streaming paths. Original V1 vectors remain unchanged.
+//===----------------------------------------------------------------------===//
+#ifdef LOW_UNDEFINED_V2_CASE
+LOW_UNDEFINED_V2_CASE(
+    1, "aeee2413eb814ce696971354e525fda4e6a2b02222f2ba7c5e70217c58d64bb7")
+LOW_UNDEFINED_V2_CASE(
+    2, "a5fa341f65a23a7c250e33a4c110650ba807c6c4d3bc5344a302badebb0af3f6")
+LOW_UNDEFINED_V2_CASE(
+    3, "57e6e013770f31e2c750a90ec03cff5a91b5e4792bd7732d76e23630b91e6ae5")
+LOW_UNDEFINED_V2_CASE(
+    4, "a2c52e8b12782267f46b80d7abfbc0f97cf9a3abfb44a5f18aee9cb51eb626a5")
+LOW_UNDEFINED_V2_CASE(
+    159, "5961a9f67c96d5eee4a0f3f3d1b4a4d7af8901ca94d20a1d4ea47e528ea98088")
+LOW_UNDEFINED_V2_CASE(
+    160, "407823e19713cf38cc7264bc52635e06b5459ddf68c030a179891eda511cf636")
+LOW_UNDEFINED_V2_CASE(
+    161, "5fa9a3f955ad217c845391192707adce907030bfa9d05c667928eccec1cfa79c")
+LOW_UNDEFINED_V2_CASE(
+    199, "8e6cafe6dbc75a096ba5929ff25fa65a38888f7809c8f794a5e1ce0ee7c3f817")
+LOW_UNDEFINED_V2_CASE(
+    200, "9d4796130f92728c4b32bbd5c5a4b536a9ed3e10806e0f0b76469c7613decefc")
+LOW_UNDEFINED_V2_CASE(
+    201, "1c6e6b95a0234e87af9836d6ad8bed133c5c4b199255e854dfde69ab4caebb10")
+LOW_UNDEFINED_V2_CASE(
+    512, "56aa48e52c4213acb5e9a04abc665faaa0cd8582675c1cb39a76dff9d25dcf35")
+LOW_UNDEFINED_V2_CASE(
+    4096, "e869b48abd7c8b8e80e05cc15b632551cc363ccc5634b5e8f46eacd54fe516e8")
+#undef LOW_UNDEFINED_V2_CASE
+#endif

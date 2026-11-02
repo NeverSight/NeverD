@@ -109,21 +109,26 @@ foreach(_optimization O0 O2)
   endforeach()
 endforeach()
 foreach(_optimization O0 O2)
-  foreach(_file_source android_time.c linux_files.c android_search.c android_copy.c
+  foreach(_file_source android_time.c linux_files.c android_search.c android_copy.c android_length.c
       android_signals.c android_snapshots.c android_allocation.c android_log.c linux_residency.c
-      android_sleep.c linux_devices.c android_proc.c android_jni.c android_binder.c
-      android_semaphore.c android_random.c android_network.c android_auxv.c
-      android_calendar.c android_fdset.c android_readiness.c android_receive.c android_stream_waits.c android_poll.c)
+      android_sleep.c linux_devices.c android_proc.c android_jni.c android_message_queue.c android_string_getbytes.c android_scan_text.c android_binder.c
+      android_semaphore.c android_random.c android_network.c android_auxv.c android_environment.c
+      android_errors.c android_errors_dynamic.c
+      android_calendar.c android_dladdr.c android_fdset.c android_readiness.c android_receive.c android_stream_waits.c android_poll.c)
     get_filename_component(_file_kind "${_file_source}" NAME_WE)
     string(REGEX REPLACE "^(android|linux)_" "" _file_kind "${_file_kind}")
     set(_service_object "${_android_fixture_dir}/${_file_kind}-${_optimization}.o")
+    set(_service_dependencies "fixtures/${_file_source}")
+    if(_file_source STREQUAL "android_errors_dynamic.c")
+      list(APPEND _service_dependencies fixtures/android_errors.c)
+    endif()
     add_custom_command(OUTPUT "${_service_object}"
       COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}" --target=aarch64-linux-android28
         -std=c11 -ffreestanding -fno-builtin -fPIC -fstack-protector-all
         -fno-vectorize -fno-slp-vectorize -fno-unwind-tables
         -fno-asynchronous-unwind-tables "-${_optimization}" -c
         "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${_file_source}" -o "${_service_object}"
-      DEPENDS "fixtures/${_file_source}" VERBATIM)
+      DEPENDS ${_service_dependencies} VERBATIM)
     foreach(_packing none android relr)
       set(_service_file "${_android_fixture_dir}/${_file_kind}-${_optimization}-${_packing}.so")
       add_custom_command(OUTPUT "${_service_file}"

@@ -1,7 +1,20 @@
+//===- SourceStackFrame.cpp - Entry-relative stack observations ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Bounded must-analysis for stack observations and private source correction.
+//===----------------------------------------------------------------------===//
+
 #include "neverd/ir/SourceStackFrame.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
+
+#include "llvm/Support/MathExtras.h"
 
 #include <deque>
 #include <tuple>
@@ -79,6 +92,47 @@ bool meet(State &Left, const State &Right) {
   return Before != Left;
 }
 } // namespace
+
+std::vector<StackFrameAccess>
+sourceEntryStackAccesses(llvm::ArrayRef<LowOp> Operations, Arch Architecture,
+                         size_t &Remaining) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const auto Width = TRI.PointerSize;
+  if (Width != 8 ||
+      (Architecture != Arch::X64 && Architecture != Arch::AArch64))
+    return {};
+  State Values{{{VnodeSpace::REG, TRI.StackPointer}, 0}};
+  std::vector<StackFrameAccess> Accesses;
+  va_t Instruction = InvalidVA;
+  for (const LowOp &Op : Operations) {
+    const size_t Cost = 1 + Values.size();
+    if (Cost > Remaining) {
+      Remaining = 0;
+      return {};
+    }
+    Remaining -= Cost;
+    if (terminal(Op.Opcode) || Op.Opcode == NdOp::CALL ||
+        Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      break;
+    if (Op.Addr != Instruction) {
+      std::erase_if(Values, [](const auto &Item) {
+        return Item.first.first == VnodeSpace::TEMP;
+      });
+      Instruction = Op.Addr;
+    }
+    if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+        Op.NumInputs == (Op.Opcode == NdOp::LOAD ? 1 : 2))
+      if (const auto At = offset(Values, Op.Inputs[0], Width))
+        Accesses.push_back(
+            {Op.Addr, Op.Seq, *At,
+             Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size,
+             Op.Opcode == NdOp::STORE});
+    transfer(Values, Op, Width);
+  }
+  return Accesses;
+}
 
 StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
                                            const SourceStackFrame &Policy) {
@@ -158,9 +212,12 @@ StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
     for (size_t I = 0; I < B.Ops.size();) {
       const auto PC = B.Ops[I].Addr;
       expire(S, F, Width);
-      if (Record)
+      if (Record) {
         Out.Instructions[PC].Before =
             offset(S, NdVar::reg(TRI.StackPointer, Width), Width);
+        Out.Instructions[PC].FrameBefore =
+            offset(S, NdVar::reg(TRI.FramePointer, Width), Width);
+      }
       do {
         const auto &Op = B.Ops[I];
         if (++Work >
@@ -177,6 +234,63 @@ StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
                 {PC, Op.Seq, *At,
                  Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size,
                  Op.Opcode == NdOp::STORE});
+        }
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            isAArch64AddressMemoryIntrinsic(
+                static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+          if (Architecture != Arch::AArch64 ||
+              !lowAArch64AddressMemoryShapeIsValid(Op)) {
+            Out.Error = kAddressMemoryMalformed;
+            return S;
+          }
+          const auto Instruction = *aarch64AddressMemoryInstruction(
+              Op.Inputs[kAddressMemoryWordOperand + 1].Offset);
+          const auto &Index = Op.Inputs[kAddressMemoryIndexOperand + 1];
+          const auto Base =
+              offset(S, Op.Inputs[kAddressMemoryBaseOperand + 1], Width);
+          // Keep the original instruction opaque to generic memory proofs.
+          // A constant index describes its nominal footprint, including SP
+          // origin, but proves no checked address, translation or tagging.
+          int64_t At, End;
+          if (Record && Base && Index.isConst() &&
+              !llvm::AddOverflow(
+                  *Base,
+                  static_cast<int64_t>(Instruction.addressOffset(Index.Offset)),
+                  At) &&
+              !llvm::AddOverflow(At, int64_t(Instruction.accessBytes()), End) &&
+              bounded(At) && bounded(End))
+            Out.Accesses.push_back({PC, Op.Seq, At,
+                                    uint16_t(Instruction.accessBytes()),
+                                    !Instruction.isLoad(), Instruction.Word});
+        }
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            isAArch64WritebackMemoryIntrinsic(
+                static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+          if (Architecture != Arch::AArch64 ||
+              !lowAArch64WritebackMemoryShapeIsValid(Op)) {
+            Out.Error = kWritebackMalformed;
+            return S;
+          }
+          const auto Instruction = *aarch64WritebackMemoryInstruction(
+              Op.Inputs[kWritebackWordOperand + 1].Offset);
+          const auto Base =
+              offset(S, Op.Inputs[kWritebackBaseOperand + 1], Width);
+          int64_t At, End;
+          if (Record && Base &&
+              !llvm::AddOverflow(
+                  *Base,
+                  Instruction.offsetAccess()
+                      ? static_cast<int64_t>(Instruction.displacement())
+                      : 0,
+                  At) &&
+              !llvm::AddOverflow(At, int64_t(Instruction.totalAccessBytes()),
+                                 End) &&
+              bounded(At) && bounded(End))
+            Out.Accesses.push_back({PC, Op.Seq, At,
+                                    uint16_t(Instruction.totalAccessBytes()),
+                                    !Instruction.isLoad(), Instruction.Word});
         }
         transfer(S, Op, Width);
         // Calls may overwrite every alias except SP. This is intentionally

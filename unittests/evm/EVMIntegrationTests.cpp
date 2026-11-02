@@ -10,6 +10,8 @@
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
 
 #include <filesystem>
 #include <fstream>
@@ -138,6 +140,36 @@ TEST_F(EVMIntegrationTest, ExposesAllStagesAndBothSourceLanguages) {
   EXPECT_NE(takeString(neverd_last_error(Session))
                 .find("object-code roundtrip is not supported"),
             std::string::npos);
+}
+
+TEST_F(EVMIntegrationTest, OperandEnumsNamePushDataOfAtMost64Bits) {
+  // PUSH2 0x0004; PUSH9 0x000000000000000004; STOP
+  write("61000468000000000000000004"
+        "00");
+  ASSERT_EQ(neverd_session_load(Session, Path.string().c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  // An enumerator is no wider than the operand it names: PUSH2's 16 bits.
+  const std::string Declared = takeString(neverd_local_types_declare(
+      Session, "enum KIND : unsigned short { FOUR = 4 };", nullptr));
+  ASSERT_NE(Declared.find(R"("problems":[])"), std::string::npos) << Declared;
+  const char *Kind = R"({"base":"enum","type":"KIND"})";
+  // PUSH data is the only operand, and an enumerator holds 64 bits at most.
+  EXPECT_EQ(neverd_operand_format_set(Session, 0, 1, Kind), -1);
+  EXPECT_EQ(neverd_operand_format_set(Session, 3, 0, Kind), -1);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("at most 64 bits"),
+            std::string::npos);
+  ASSERT_EQ(neverd_operand_format_set(Session, 0, 0, Kind), 0)
+      << takeString(neverd_last_error(Session));
+  auto Rows = llvm::json::parse(takeString(neverd_disasm_json(Session, 0, 2)));
+  ASSERT_TRUE(static_cast<bool>(Rows)) << llvm::toString(Rows.takeError());
+  const llvm::json::Array *Array = Rows->getAsArray();
+  ASSERT_TRUE(Array && Array->size() == 2);
+  const llvm::json::Object *Push2 = (*Array)[0].getAsObject();
+  const llvm::json::Object *Push9 = (*Array)[1].getAsObject();
+  ASSERT_TRUE(Push2 && Push9);
+  EXPECT_EQ(Push2->getString("op_str"), "0x0004");
+  EXPECT_EQ(Push2->getString("display_op_str"), "FOUR");
+  EXPECT_FALSE(Push9->getString("display_op_str"));
 }
 
 TEST_F(EVMIntegrationTest, HardforkAndStrictnessAreConfigurable) {

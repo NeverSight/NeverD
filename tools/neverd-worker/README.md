@@ -23,9 +23,10 @@ exact transport, request schemas, limits, cancellation and persistence contracts
   positions and explicit truncation. The older `cfg` preview alone retains its
   500-node/2,000-edge limit. The existing engine still constructs a whole CFG
   result; its 32 MiB adapter limit can reject unusually large block text.
-- Native Low/Med IR pages include exact retained instruction anchors when the
+- Native Low/Med/High IR pages include exact retained instruction anchors when the
   engine exports `neverd_ir_view_json`. Headers and synthetic operations remain
-  unmapped. C/High/LLVM and VM mappings are explicitly unsupported; older engines
+  unmapped. C and LLVMC retain surviving source-statement anchors. VM instruction
+  mappings remain unsupported; older engines
   report the missing capability while keeping text browsing available. Anchors
   are not a complete set of contributing instructions after transformations.
 - Annotations remain staged until Save. Rename history is saved immediately and

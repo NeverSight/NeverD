@@ -1,0 +1,122 @@
+//===- AArch64LinkedUnwindFixtures.def - Linked Apple RA probes -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent instructions and metadata declarations assembled and linked by
+/// the host Apple toolchain. These artifacts are never executed. The explicit
+/// compact row tests linker transport, not automatic compiler mode selection.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_LINKED_VALUE
+#define NEVERD_A64_LINKED_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_LINKED_TEXT
+#define NEVERD_A64_LINKED_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_LINKED_VALUE(unsigned, kToolTimeoutSeconds, 30)
+NEVERD_A64_LINKED_VALUE(unsigned, kPathCapacity, 128)
+NEVERD_A64_LINKED_VALUE(uint64_t, kSigningOffset, 4)
+NEVERD_A64_LINKED_VALUE(uint64_t, kAbsoluteStateOffset, 8)
+NEVERD_A64_LINKED_VALUE(uint64_t, kCompactCodeBytes, 28)
+NEVERD_A64_LINKED_VALUE(uint64_t, kDwarfCodeBytes, 36)
+NEVERD_A64_LINKED_VALUE(uint32_t, kCompactEncoding, 0x05001000)
+NEVERD_A64_LINKED_VALUE(uint32_t, kPACIBSPPC, 0xdac1a7fe)
+NEVERD_A64_LINKED_VALUE(uint32_t, kPACM, 0xd50324ff)
+NEVERD_A64_LINKED_VALUE(uint32_t, kPACIBSP, 0xd503237f)
+NEVERD_A64_LINKED_VALUE(uint64_t, kPCSigningState, 2)
+NEVERD_A64_LINKED_VALUE(int64_t, kSigningDisplacement, -4)
+NEVERD_A64_LINKED_TEXT(kTemporaryPrefix, "neverd-linked-arm64e-unwind")
+NEVERD_A64_LINKED_TEXT(kXcrun, "xcrun")
+NEVERD_A64_LINKED_TEXT(kClang, "clang")
+NEVERD_A64_LINKED_TEXT(kTarget, "-target")
+NEVERD_A64_LINKED_TEXT(kTriple, "arm64e-apple-macos15")
+NEVERD_A64_LINKED_TEXT(kCompile, "-c")
+NEVERD_A64_LINKED_TEXT(kDynamicLibrary, "-dynamiclib")
+NEVERD_A64_LINKED_TEXT(kOutput, "-o")
+NEVERD_A64_LINKED_TEXT(kStdout, "stdout.txt")
+NEVERD_A64_LINKED_TEXT(kStderr, "stderr.txt")
+NEVERD_A64_LINKED_TEXT(kProbeSourceFile, "probe.s")
+NEVERD_A64_LINKED_TEXT(kProbeImageFile, "probe.dylib")
+NEVERD_A64_LINKED_TEXT(kSourceFile, "frame.s")
+NEVERD_A64_LINKED_TEXT(kObjectFile, "frame.o")
+NEVERD_A64_LINKED_TEXT(kImageFile, "frame.dylib")
+NEVERD_A64_LINKED_TEXT(kSymbol, "_signed_frame")
+NEVERD_A64_LINKED_TEXT(kHostUnavailable,
+                       "linked arm64e unwind probes require Apple tools")
+NEVERD_A64_LINKED_TEXT(kToolchainUnavailable,
+                       "Apple Clang/ld cannot link the baseline arm64e probe: ")
+NEVERD_A64_LINKED_TEXT(kProbeSource, R"(
+.text
+.globl _signed_frame
+.p2align 2
+_signed_frame:
+ .cfi_startproc
+ .cfi_b_key_frame
+ ret
+ .cfi_endproc
+)")
+NEVERD_A64_LINKED_TEXT(kCompactSource, R"(
+.text
+.globl _signed_frame
+.p2align 2
+_signed_frame:
+ nop
+Lpac:
+ .inst 0xdac1a7fe
+ stp x29, x30, [sp, #-16]!
+ mov x29, sp
+ mov w0, #7
+ ldp x29, x30, [sp], #16
+ .inst 0x552000bf
+Lend:
+.section __LD,__compact_unwind,regular,debug
+.p2align 3
+.quad _signed_frame
+.long Lend-_signed_frame
+.long 0x05001000
+.quad 0
+.quad 0
+)")
+// The toolchain's zRB CIE has no N augmentation. Use the matching PACM/HINT
+// instruction sequence, rather than inferring a non-HINT recipe from code.
+NEVERD_A64_LINKED_TEXT(kDwarfPrefix, R"(
+.text
+.globl _signed_frame
+.p2align 2
+_signed_frame:
+ .cfi_startproc
+ .cfi_b_key_frame
+ .inst 0xd50324ff
+Lpac:
+)")
+NEVERD_A64_LINKED_TEXT(kLegacySigning, R"(
+ .cfi_escape 0x2c
+ .inst 0xd503237f
+)")
+NEVERD_A64_LINKED_TEXT(kAbsoluteSigning, R"(
+ .inst 0xd503237f
+ .cfi_escape 0x2b, 2, 0x7c
+)")
+NEVERD_A64_LINKED_TEXT(kDwarfSuffix, R"(
+ stp x29, x30, [sp, #-16]!
+ .cfi_def_cfa_offset 16
+ .cfi_offset w29, -16
+ .cfi_offset w30, -8
+ mov x29, sp
+ .cfi_def_cfa w29, 16
+ mov w0, #7
+ ldp x29, x30, [sp], #16
+ .cfi_def_cfa wsp, 0
+ .cfi_same_value w29
+ .cfi_same_value w30
+ adr x16, Lpac
+ .inst 0xd50324ff
+ retab
+ .cfi_endproc
+)")
+
+#undef NEVERD_A64_LINKED_VALUE
+#undef NEVERD_A64_LINKED_TEXT

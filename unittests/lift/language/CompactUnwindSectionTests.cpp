@@ -12,12 +12,32 @@
 #include "neverd/loader/SourceUnwind.h"
 
 #include <cstring>
+#include <limits>
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::macho_unwind;
 using namespace neverd::compact_unwind_test;
+
+namespace fixture {
+#define NEVERD_COMPACT_ARM64_FIXTURE_VALUE(Type, Name, Value)                  \
+  [[maybe_unused]] constexpr Type Name = Value;
+#include "CompactUnwindARM64Fixtures.def"
+#define NEVERD_COMPACT_PAGE_FIXTURE_VALUE(Type, Name, Value)                   \
+  [[maybe_unused]] constexpr Type Name = Value;
+#include "CompactUnwindPageFixtures.def"
+
+struct PageMode {
+  Arch TargetArch;
+  uint32_t Encoding;
+};
+constexpr PageMode PageModes[] = {
+#define NEVERD_COMPACT_PAGE_FIXTURE_MODE(TargetArch, Encoding)                 \
+  {Arch::TargetArch, Encoding},
+#include "CompactUnwindPageFixtures.def"
+};
+} // namespace fixture
 
 void putU16(std::vector<uint8_t> &Bytes, size_t Offset, uint16_t Value) {
   ASSERT_LE(Offset + sizeof(Value), Bytes.size());
@@ -45,6 +65,47 @@ bool rawParseFails(llvm::ArrayRef<uint8_t> Bytes) {
     return false;
   llvm::consumeError(Parsed.takeError());
   return true;
+}
+
+std::vector<uint8_t> buildPageBoundaryInfo(uint32_t Encoding,
+                                           bool MultiplePages = false) {
+  std::vector<uint8_t> Bytes(MultiplePages ? fixture::kMultiPageSectionSize
+                                           : fixture::kSinglePageSectionSize);
+  if (MultiplePages) {
+#define NEVERD_COMPACT_PAGE_FIXTURE_MULTI_WORD(Offset, Value)                  \
+  putU32(Bytes, Offset, Value);
+#define NEVERD_COMPACT_PAGE_FIXTURE_MULTI_HALF(Offset, Value)                  \
+  putU16(Bytes, Offset, Value);
+#include "CompactUnwindPageFixtures.def"
+    putU32(Bytes, fixture::kMultiFirstEncodingOffset, Encoding);
+    putU32(Bytes, fixture::kMultiLastEncodingOffset, Encoding);
+  } else {
+#define NEVERD_COMPACT_PAGE_FIXTURE_SINGLE_WORD(Offset, Value)                 \
+  putU32(Bytes, Offset, Value);
+#define NEVERD_COMPACT_PAGE_FIXTURE_SINGLE_HALF(Offset, Value)                 \
+  putU16(Bytes, Offset, Value);
+#include "CompactUnwindPageFixtures.def"
+  }
+  putU32(Bytes, fixture::kPageFixtureEncodingOffset, Encoding);
+  return Bytes;
+}
+
+void expectRejectedPage(std::vector<uint8_t> Bytes, Arch TargetArch,
+                        llvm::StringRef ExpectedDiagnostic) {
+  auto Raw = parseCompactUnwindRaw(Bytes);
+  ASSERT_FALSE(Raw);
+  const std::string RawDiagnostic = llvm::toString(Raw.takeError());
+  EXPECT_NE(RawDiagnostic.find(ExpectedDiagnostic.str()), std::string::npos);
+  BinaryImage Img = makeImage(TargetArch);
+  attachUnwindInfo(Img, std::move(Bytes));
+  const ParseResult Parsed = parseCompactUnwind(Img);
+  EXPECT_EQ(Parsed.ParseStatus, ExceptionParseStatus::Partial);
+  EXPECT_TRUE(Parsed.Entries.empty());
+  EXPECT_NE(std::find(Parsed.Diagnostics.begin(), Parsed.Diagnostics.end(),
+                      ExpectedDiagnostic.str()),
+            Parsed.Diagnostics.end());
+  parseDarwinExceptions(Img);
+  EXPECT_TRUE(Img.ExceptionMetadata.Functions.empty());
 }
 
 std::vector<uint8_t> buildRawCompressedInfo() {
@@ -336,9 +397,216 @@ TEST(CompactUnwindSection, ModeZeroIsAnAbsenceOfInformation) {
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
 }
 
+TEST(CompactUnwindSection, PAuthLRSigningPCUsesEachRegularRecipeStart) {
+  BinaryImage Img = makeImage(Arch::AArch64);
+  attachUnwindInfo(
+      Img,
+      buildUnwindInfo({{fixture::kFirstRecipeRVA, fixture::kPAuthLRNextPair},
+                       {fixture::kSecondRecipeRVA, fixture::kPAuthLRNextPair}},
+                      fixture::kTerminalRVA));
+  const ParseResult Result = parseCompactUnwind(Img);
+  ASSERT_EQ(Result.Entries.size(), fixture::kTwoEntryCount);
+  EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+  for (const auto &Entry : Result.Entries) {
+    EXPECT_EQ(Entry.NativeEncoding, fixture::kPAuthLRNextPair);
+    EXPECT_EQ(Entry.Kind, CompactUnwindKind::FramePointer);
+    ASSERT_TRUE(Entry.ReturnAddressSigningOffset);
+    EXPECT_EQ(*Entry.ReturnAddressSigningOffset, fixture::kNextSigningOffset);
+  }
+  const auto &First = Result.Entries.front();
+  const auto &Second = Result.Entries.back();
+  EXPECT_EQ(First.CodeRange.Begin + *First.ReturnAddressSigningOffset,
+            kImageBase + fixture::kFirstRecipeSigningRVA);
+  EXPECT_EQ(Second.CodeRange.Begin + *Second.ReturnAddressSigningOffset,
+            kImageBase + fixture::kSecondRecipeSigningRVA);
+}
+
+TEST(CompactUnwindSection,
+     PAuthLRCompressedCommonAndLocalRecipesKeepSigningPC) {
+  BinaryImage Img = makeImage(Arch::AArch64);
+  std::vector<uint8_t> Bytes = buildRawCompressedInfo();
+  // Replace only the fixture's common/local encoding words, preserving its
+  // personality and LSDA linkage.
+  putU32(Bytes, fixture::kCompressedCommonEncodingOffset,
+         fixture::kPAuthLRFirstPair);
+  putU32(Bytes, fixture::kCompressedLocalEncodingOffset,
+         fixture::kPAuthLRCompressedLocal);
+  attachUnwindInfo(Img, std::move(Bytes));
+  const ParseResult Result = parseCompactUnwind(Img);
+  ASSERT_EQ(Result.Entries.size(), fixture::kTwoEntryCount);
+  EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+  const auto &First = Result.Entries.front();
+  const auto &Second = Result.Entries.back();
+  ASSERT_TRUE(First.ReturnAddressSigningOffset);
+  EXPECT_EQ(*First.ReturnAddressSigningOffset, fixture::kFirstSigningOffset);
+  ASSERT_TRUE(Second.ReturnAddressSigningOffset);
+  EXPECT_EQ(*Second.ReturnAddressSigningOffset, fixture::kLocalSigningOffset);
+  EXPECT_EQ(Second.CodeRange.Begin + *Second.ReturnAddressSigningOffset,
+            kImageBase + fixture::kCompressedLocalSigningRVA);
+  EXPECT_EQ(Second.NativeEncoding, fixture::kPAuthLRCompressedLocal);
+}
+
+TEST(CompactUnwindSection, PAuthLRBadSigningRangeCannotBecomePlainUnwind) {
+  struct RangeCase {
+    uint32_t Begin;
+    uint32_t End;
+    uint32_t Encoding;
+  };
+  const RangeCase Cases[] = {
+#define NEVERD_COMPACT_ARM64_FIXTURE_BAD_SECTION_RANGE(Begin, End, Encoding)   \
+  {Begin, End, Encoding},
+#include "CompactUnwindARM64Fixtures.def"
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Begin);
+    SCOPED_TRACE(Case.End);
+    BinaryImage Img = makeImage(Arch::AArch64);
+    attachUnwindInfo(Img,
+                     buildUnwindInfo({{Case.Begin, Case.Encoding}}, Case.End));
+    const ParseResult Result = parseCompactUnwind(Img);
+    ASSERT_EQ(Result.Entries.size(), fixture::kOneEntryCount);
+    EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Partial);
+    EXPECT_EQ(Result.Entries.front().SemanticStatus,
+              CompactUnwindSemanticStatus::Partial);
+    EXPECT_NE(std::find(Result.Diagnostics.begin(), Result.Diagnostics.end(),
+                        kARM64PAuthLRInvalidSigningRange),
+              Result.Diagnostics.end());
+    parseDarwinExceptions(Img);
+    const ExceptionFunction *Function =
+        Img.ExceptionMetadata.findFunction(kImageBase + Case.Begin);
+    ASSERT_NE(Function, nullptr);
+    EXPECT_FALSE(isPlainSourceUnwind(*Function));
+  }
+}
+
+TEST(CompactUnwindSection, PAuthLRImageRelativeRangeCannotWrapAddressSpace) {
+  BinaryImage Img = makeImage(Arch::AArch64);
+  Img.Base = std::numeric_limits<va_t>::max() - fixture::kOverflowImageHeadroom;
+  Img.Segments.front().VA = Img.Base;
+  attachUnwindInfo(
+      Img, buildUnwindInfo({{fixture::kFirstRecipeRVA, fixture::kPAuthLRFirst}},
+                           fixture::kSecondRecipeRVA));
+  const ParseResult Result = parseCompactUnwind(Img);
+  EXPECT_TRUE(Result.Entries.empty());
+  EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Partial);
+  EXPECT_NE(std::find(Result.Diagnostics.begin(), Result.Diagnostics.end(),
+                      kCompactUnwindCodeRangeOverflow),
+            Result.Diagnostics.end());
+}
+
 //===----------------------------------------------------------------------===//
 // Darwin function symbols
 //===----------------------------------------------------------------------===//
+
+TEST(CompactUnwindSection, CompressedPageAddressesUseCheckedSharedValidation) {
+  struct InvalidCase {
+    const char *Name;
+    uint32_t Begin;
+    uint32_t End;
+    uint32_t First;
+    uint32_t Second;
+    const char *Diagnostic;
+  };
+  const InvalidCase Cases[] = {
+#define NEVERD_COMPACT_PAGE_FIXTURE_INVALID_COMPRESSED(                        \
+    Name, Begin, End, First, Second, Diagnostic)                               \
+  {#Name, Begin, End, First, Second, Diagnostic},
+#include "CompactUnwindPageFixtures.def"
+  };
+  for (const auto &Mode : fixture::PageModes) {
+    SCOPED_TRACE(Mode.Encoding);
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(Case.Name);
+      auto Bytes = buildPageBoundaryInfo(Mode.Encoding);
+      putU32(Bytes, fixture::kSinglePageBeginOffset, Case.Begin);
+      putU32(Bytes, fixture::kSinglePageEndOffset, Case.End);
+      putU32(Bytes, fixture::kSingleFirstPackedOffset, Case.First);
+      putU32(Bytes, fixture::kSingleSecondPackedOffset, Case.Second);
+      expectRejectedPage(std::move(Bytes), Mode.TargetArch, Case.Diagnostic);
+    }
+  }
+}
+
+TEST(CompactUnwindSection, RegularPageAddressesUseCheckedSharedValidation) {
+  struct InvalidCase {
+    const char *Name;
+    uint32_t First;
+    uint32_t Second;
+    const char *Diagnostic;
+  };
+  const InvalidCase Cases[] = {
+#define NEVERD_COMPACT_PAGE_FIXTURE_INVALID_REGULAR(Name, First, Second,       \
+                                                    Diagnostic)                \
+  {#Name, First, Second, Diagnostic},
+#include "CompactUnwindPageFixtures.def"
+  };
+  for (const auto &Mode : fixture::PageModes) {
+    SCOPED_TRACE(Mode.Encoding);
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(Case.Name);
+      auto Bytes = buildUnwindInfo(
+          {{Case.First, Mode.Encoding}, {Case.Second, Mode.Encoding}},
+          fixture::kPageFixtureEnd);
+      putU32(Bytes, fixture::kRegularPageIndexOffset,
+             fixture::kPageFixtureBegin);
+      expectRejectedPage(std::move(Bytes), Mode.TargetArch, Case.Diagnostic);
+    }
+  }
+}
+
+TEST(CompactUnwindSection, InvalidIndexCannotSupplySemanticPageBounds) {
+  struct InvalidIndex {
+    size_t Offset;
+    uint32_t Value;
+  };
+  const InvalidIndex Cases[] = {
+#define NEVERD_COMPACT_PAGE_FIXTURE_INVALID_INDEX(Offset, Value)               \
+  {Offset, Value},
+#include "CompactUnwindPageFixtures.def"
+  };
+  for (const auto &Case : Cases) {
+    auto Bytes = buildPageBoundaryInfo(fixture::kPAuthLRFirst);
+    putU32(Bytes, Case.Offset, Case.Value);
+    EXPECT_TRUE(rawParseFails(Bytes));
+    BinaryImage Img = makeImage(Arch::AArch64);
+    attachUnwindInfo(Img, std::move(Bytes));
+    const ParseResult Parsed = parseCompactUnwind(Img);
+    EXPECT_EQ(Parsed.ParseStatus, ExceptionParseStatus::Malformed);
+    EXPECT_TRUE(Parsed.Entries.empty());
+  }
+}
+
+TEST(CompactUnwindSection, OmittedPageDoesNotWidenAdjacentValidRecipes) {
+  for (const auto &Mode : fixture::PageModes) {
+    SCOPED_TRACE(Mode.Encoding);
+    auto Bytes = buildPageBoundaryInfo(Mode.Encoding, true);
+    EXPECT_FALSE(rawParseFails(Bytes));
+    BinaryImage ValidImg = makeImage(Mode.TargetArch);
+    attachUnwindInfo(ValidImg, Bytes);
+    const ParseResult Valid = parseCompactUnwind(ValidImg);
+    EXPECT_EQ(Valid.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_EQ(Valid.Entries.size(), fixture::kValidMultiPageEntryCount);
+
+    putU32(Bytes, fixture::kMultiSecondPackedOffset,
+           fixture::kMultiInvalidSecondPacked);
+    EXPECT_TRUE(rawParseFails(Bytes));
+    BinaryImage Img = makeImage(Mode.TargetArch);
+    attachUnwindInfo(Img, std::move(Bytes));
+    const ParseResult Parsed = parseCompactUnwind(Img);
+    EXPECT_EQ(Parsed.ParseStatus, ExceptionParseStatus::Partial);
+    ASSERT_EQ(Parsed.Entries.size(), fixture::kRetainedPageEntryCount);
+    EXPECT_EQ(Parsed.Entries.front().CodeRange.Begin,
+              kImageBase + fixture::kRetainedFirstBegin);
+    EXPECT_EQ(Parsed.Entries.front().CodeRange.End,
+              kImageBase + fixture::kRetainedFirstEnd);
+    EXPECT_EQ(Parsed.Entries.back().CodeRange.Begin,
+              kImageBase + fixture::kRetainedLastBegin);
+    EXPECT_EQ(Parsed.Entries.back().CodeRange.End,
+              kImageBase + fixture::kRetainedLastEnd);
+    for (const auto &Entry : Parsed.Entries)
+      EXPECT_EQ(Entry.SemanticStatus, CompactUnwindSemanticStatus::Complete);
+  }
+}
 
 TEST(DarwinUnwindSymbols, PromotesAllAliasesAfterSymbolVectorGrowth) {
   BinaryImage Img = makeImage();

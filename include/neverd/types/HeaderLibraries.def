@@ -41,6 +41,8 @@ NEVERD_HEADER_LIBRARY(WindowsUserX86, "windows-user-x86", WindowsUserX86, ILP32,
                       Microsoft, Windows)
 NEVERD_HEADER_LIBRARY(WindowsUserARM64, "windows-user-arm64", WindowsUserARM64,
                       LLP64, Microsoft, Windows)
+NEVERD_HEADER_LIBRARY(WindowsKernelARM64, "windows-kernel-arm64",
+                      WindowsKernelARM64, LLP64, Microsoft, Windows)
 
 NEVERD_HEADER_LIBRARY(LinuxX64, "linux-x64", LinuxX64, LP64, Itanium, Portable)
 NEVERD_HEADER_LIBRARY(LinuxX86, "linux-x86", LinuxX86, ILP32, I386SystemV,

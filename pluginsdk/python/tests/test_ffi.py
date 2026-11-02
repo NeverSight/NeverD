@@ -35,6 +35,31 @@ class _FakeLibrary:
 
 
 class HostAPITests(unittest.TestCase):
+    def test_dyld_cache_catalogue_retains_and_frees_its_owned_pointer(self) -> None:
+        from neverd_plugin.ffi import HostAPI
+
+        library = _FakeLibrary()
+        library.buffer = ctypes.create_string_buffer(b'{"images":[]}')
+        paths: list[bytes] = []
+
+        def catalogue(path):
+            paths.append(path)
+            return ctypes.addressof(library.buffer)
+
+        library.neverd_dyld_cache_images_json = _FakeFunction(catalogue)
+        api = HostAPI(library)
+
+        path = "/tmp/cache-\u2713".encode()
+        self.assertEqual(
+            api.owned_string("neverd_dyld_cache_images_json", path),
+            '{"images":[]}',
+        )
+        self.assertEqual(paths, [path])
+        self.assertEqual(library.freed, [ctypes.addressof(library.buffer)])
+        self.assertIs(library.neverd_dyld_cache_images_json.restype, ctypes.c_void_p)
+        self.assertEqual(library.neverd_dyld_cache_images_json.argtypes,
+                         [ctypes.c_char_p])
+
     def test_owned_string_is_decoded_and_freed_exactly_once(self) -> None:
         from neverd_plugin.ffi import HostAPI
 

@@ -57,6 +57,8 @@ struct CRecordDefinitions {
   /// unit defines as its own.
   std::vector<std::string> Types;
   std::vector<std::string> DeclaredTypes;
+  /// Types whose matching target header declarations Text includes instead.
+  std::vector<std::string> HeaderTypes;
   /// The records the unit's headers name by a typedef alone, as bionic's
   /// <pthread.h> does pthread_mutex_t: the unit spells each by that name
   /// and declares no typedef of its own, which would contradict the
@@ -86,6 +88,8 @@ struct CEmitterOptions {
   /// LLVMC clients with a complete source contract can retain the module's
   /// function types and request prototypes for definitions as well as imports.
   /// Disables inferred-void and debug-signature projections in that route.
+  /// A settled no-value contract still discards the machine return register;
+  /// a retained non-void signature uses a zero-initialized carrier instead.
   bool PreserveLLVMFunctionTypes = false;
   /// Spell ordinary scalar byte accesses through pointers, as
   /// ScalarPointers says. Ordered and unusual-width accesses retain their
@@ -128,14 +132,35 @@ struct CEmitterOptions {
   const DataAccessWidths *AccessWidths = nullptr;
   /// Optional source-map sink. Recording never changes the emitted C text.
   CSourceMap *SourceMap = nullptr;
+  /// HighC-only helper names and the original bodies they specialize. These
+  /// functions have no native entry ABI. Suppress native-variable editing
+  /// identities for them rather than inventing addresses for generated code.
+  const std::map<std::string, va_t> *SourceBodyOrigins = nullptr;
   /// Receives the names the text spells (CSourceMap::Names) without the
   /// marked render a source map needs.
   std::vector<CSourceName> *SourceNames = nullptr;
+  /// A function definition the writer could not form C for.
+  struct RefusedDefinition {
+    va_t Entry = 0;
+    std::string Name;
+    std::string Reason;
+  };
+  /// Where a unit lists the definitions it leaves out rather than failing:
+  /// one whose source requirements fail, then one whose C throws, each in the
+  /// unit's order, is omitted with what it threw, and the others are written.
+  /// Null fails the unit at the first, as one function's view does.  A
+  /// rendering that records positions, a source map or source names still
+  /// fails, as its text follows one pass, and so does one whose requirements
+  /// fail under structured exception syntax, which writes funclets inside
+  /// their parents, or in a function whose body fills another's `__finally`.
+  std::vector<RefusedDefinition> *RefusedDefinitions = nullptr;
   /// Given the named records a unit's types reach, through pointers and
   /// arrays, the definitions the program's local types give them.  A record
   /// left out, as one the local types do not define or define otherwise
   /// than the debug information the unit reads its members by, stays
-  /// declared only.
+  /// declared only. A pointer to a named record requests only its tag and
+  /// declaration, even if the library has its complete layout. A separate
+  /// by-value request for the same record still requires that layout.
   std::function<CRecordDefinitions(
       const std::vector<std::shared_ptr<NdType>> &)>
       RecordDefinitions;

@@ -14,6 +14,7 @@
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ARMWinEH.h"
 #include "llvm/Support/Debug.h"
@@ -41,6 +42,12 @@ using namespace llvm::object;
 namespace {
 
 using FunctionSymbolIndex = std::map<va_t, std::vector<size_t>>;
+
+void diagnoseDirectory(BinaryImage &Img, llvm::StringRef Message) {
+  auto &State = *Img.ExceptionMetadata.StructuralDecode;
+  State.mergeStatus(ExceptionParseStatus::Malformed);
+  State.Diagnostics.push_back(Message.str());
+}
 
 FunctionSymbolIndex indexFunctionSymbols(const BinaryImage &Img) {
   // A section or data label must not suppress independent unwind discovery.
@@ -173,9 +180,7 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   uintptr_t ExcPtr;
   if (auto Err = Obj.getRvaPtr(ExcDir->RelativeVirtualAddress, ExcPtr)) {
     llvm::consumeError(std::move(Err));
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "x64 exception directory RVA is not file-backed");
+    diagnoseDirectory(Img, "x64 exception directory RVA is not file-backed");
     return;
   }
 
@@ -191,9 +196,7 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   size_t Count =
       std::min<size_t>(ExcDir->Size, AvailBytes) / sizeof(RuntimeFunc);
   if (ExcDir->Size > AvailBytes || ExcDir->Size % sizeof(RuntimeFunc) != 0) {
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "truncated or misaligned x64 exception directory");
+    diagnoseDirectory(Img, "truncated or misaligned x64 exception directory");
   }
   const auto *RFBytes = reinterpret_cast<const uint8_t *>(ExcPtr);
 
@@ -231,9 +234,8 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       continue;
     }
     if (SawZeroEntry && !DiagnosedInteriorPadding) {
-      Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-      Img.ExceptionMetadata.Diagnostics.push_back(
-          "x64 exception directory contains non-trailing zero padding");
+      diagnoseDirectory(
+          Img, "x64 exception directory contains non-trailing zero padding");
       DiagnosedInteriorPadding = true;
     }
     uint64_t RecordRVA64 = uint64_t(ExcDir->RelativeVirtualAddress) +
@@ -263,27 +265,27 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
         continue;
     }
     const auto Predecoded = RestrictedDecoded.find(I);
-    ExceptionFunction EF = Predecoded != RestrictedDecoded.end()
-                               ? std::move(Predecoded->second)
-                               : decodeX64ExceptionFunction(
-                                     Img, ImageBase, RecordRVA, RF.BeginAddress,
-                                     RF.EndAddress, RF.UnwindInformation);
+    // Construct directly in the reserved directory. Moving a complete record
+    // also visits the many optional language tables absent from most entries.
+    ExceptionFunction &Stored = Img.ExceptionMetadata.Functions.emplace_back();
+    if (Predecoded != RestrictedDecoded.end())
+      Stored = std::move(Predecoded->second);
+    else
+      unwind_detail::decodeX64ExceptionFunctionInto(
+          Img, ImageBase, RecordRVA, RF.BeginAddress, RF.EndAddress,
+          RF.UnwindInformation, Stored);
     Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-        Img.ExceptionMetadata.ParseStatus, EF.ParseStatus);
-    const bool HasRange = EF.CodeRange.isValid();
-    const bool IsChained = EF.Kind == RuntimeFunctionKind::Chained;
-    Img.ExceptionMetadata.Functions.push_back(std::move(EF));
-    const ExceptionFunction &Stored = Img.ExceptionMetadata.Functions.back();
+        Img.ExceptionMetadata.ParseStatus, Stored.ParseStatus);
+    const bool HasRange = Stored.CodeRange.isValid();
+    const bool IsChained = Stored.Kind == RuntimeFunctionKind::Chained;
     if (!HasRange)
       continue;
     Addr = Stored.CodeRange.Begin;
     End = Stored.CodeRange.End;
-    if (HasRange) {
-      if (Restrict)
-        notePdataNeighbors(Img, ImageBase, Addr, End);
-      else
-        Img.KnownCodeRanges.emplace_back(Addr, End);
-    }
+    // Full loads recorded this directory range before decoding the unwind
+    // info, including records whose unwind bytes are malformed.
+    if (Restrict)
+      notePdataNeighbors(Img, ImageBase, Addr, End);
 
     if (IsChained)
       continue;
@@ -400,9 +402,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   uintptr_t ExcPtr;
   if (auto Err = Obj.getRvaPtr(ExcDir->RelativeVirtualAddress, ExcPtr)) {
     llvm::consumeError(std::move(Err));
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "ARM exception directory RVA is not file-backed");
+    diagnoseDirectory(Img, "ARM exception directory RVA is not file-backed");
     return;
   }
 
@@ -414,9 +414,7 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   constexpr size_t EntrySize = 2 * sizeof(uint32_t);
   size_t Count = std::min<size_t>(ExcDir->Size, AvailBytes) / EntrySize;
   if (ExcDir->Size > AvailBytes || ExcDir->Size % EntrySize != 0) {
-    Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        "truncated or misaligned ARM exception directory");
+    diagnoseDirectory(Img, "truncated or misaligned ARM exception directory");
   }
   const auto *RFBytes = reinterpret_cast<const uint8_t *>(ExcPtr);
   Img.ExceptionMetadata.Functions.reserve(Count);
@@ -427,11 +425,8 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
   const bool IsAArch64 = Img.Arch == Arch::AArch64;
   [[maybe_unused]] const char *ArchName = IsAArch64 ? "ARM64" : "ARM32";
   auto DiagnoseEntry = [&](size_t Index, llvm::StringRef Message) {
-    Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-        Img.ExceptionMetadata.ParseStatus, ExceptionParseStatus::Malformed);
-    Img.ExceptionMetadata.Diagnostics.push_back(
-        std::string(ArchName) + " pdata entry " + std::to_string(Index) + ": " +
-        Message.str());
+    diagnoseDirectory(Img, std::string(ArchName) + " pdata entry " +
+                               std::to_string(Index) + ": " + Message.str());
   };
 
   [[maybe_unused]] size_t Added = 0;
@@ -448,10 +443,9 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       continue;
     }
     if (SawZeroEntry && !DiagnosedInteriorPadding) {
-      Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
-      Img.ExceptionMetadata.Diagnostics.push_back(
-          std::string(ArchName) +
-          " exception directory contains non-trailing zero padding");
+      diagnoseDirectory(Img, std::string(ArchName) +
+                                 " exception directory contains non-trailing "
+                                 "zero padding");
       DiagnosedInteriorPadding = true;
     }
 
@@ -473,7 +467,6 @@ void parseARMExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     ExceptionParseStatus EntryStatus = ExceptionParseStatus::Complete;
     std::vector<std::string> EntryDiagnostics;
     auto DiagnoseUnwindBody = [&](llvm::StringRef Message) {
-      DiagnoseEntry(I, Message);
       EntryStatus = mergeExceptionParseStatus(EntryStatus,
                                               ExceptionParseStatus::Malformed);
       EntryDiagnostics.push_back(Message.str());
@@ -737,33 +730,41 @@ void unwind_detail::resolveX64UnwindChains(ExceptionInfo &Info) {
   for (ExceptionFunction &Function : Info.Functions)
     Function.FragmentRanges.clear();
 
-  // Index by start VA so a 100k-entry .pdata does not scan every record for
-  // every chained entry.  Vectors keep directory order so the first match is
-  // the same record the previous nested loop selected.
-  std::unordered_map<va_t, std::vector<size_t>> ByBegin;
+  // Directory entries usually arrive in address order. A contiguous index
+  // avoids a node and a separate vector allocation for every start address.
+  // Preserve directory order among duplicate starts, including unsorted input.
+  std::vector<std::pair<va_t, size_t>> ByBegin;
   ByBegin.reserve(Info.Functions.size());
   for (size_t J = 0; J < Info.Functions.size(); ++J) {
     const ExceptionAddressRange &Range = Info.Functions[J].CodeRange;
     if (Range.isValid())
-      ByBegin[Range.Begin].push_back(J);
+      ByBegin.emplace_back(Range.Begin, J);
   }
+  const auto ByAddress = [](const auto &A, const auto &B) {
+    return A.first < B.first;
+  };
+  if (!std::is_sorted(ByBegin.begin(), ByBegin.end(), ByAddress))
+    std::stable_sort(ByBegin.begin(), ByBegin.end(), ByAddress);
 
   for (size_t I = 0; I < Info.Functions.size(); ++I) {
     ExceptionFunction &F = Info.Functions[I];
     if (F.Kind != RuntimeFunctionKind::Chained || !F.ChainedPrimaryRange)
       continue;
-    const auto Found = ByBegin.find(F.ChainedPrimaryRange->Begin);
-    if (Found != ByBegin.end()) {
-      for (size_t J : Found->second) {
-        if (I == J)
-          continue;
-        const ExceptionFunction &Candidate = Info.Functions[J];
-        if (Candidate.CodeRange.End == F.ChainedPrimaryRange->End &&
-            (F.ChainedUnwindInfoRVA == 0 ||
-             Candidate.UnwindInfoRVA == F.ChainedUnwindInfoRVA)) {
-          F.PrimaryFunctionIndex = J;
-          break;
-        }
+    const va_t ParentBegin = F.ChainedPrimaryRange->Begin;
+    const auto Found = std::lower_bound(
+        ByBegin.begin(), ByBegin.end(), ParentBegin,
+        [](const auto &Entry, va_t Begin) { return Entry.first < Begin; });
+    for (auto It = Found; It != ByBegin.end() && It->first == ParentBegin;
+         ++It) {
+      const size_t J = It->second;
+      if (I == J)
+        continue;
+      const ExceptionFunction &Candidate = Info.Functions[J];
+      if (Candidate.CodeRange.End == F.ChainedPrimaryRange->End &&
+          (F.ChainedUnwindInfoRVA == 0 ||
+           Candidate.UnwindInfoRVA == F.ChainedUnwindInfoRVA)) {
+        F.PrimaryFunctionIndex = J;
+        break;
       }
     }
     if (!F.PrimaryFunctionIndex) {
@@ -779,7 +780,7 @@ void unwind_detail::resolveX64UnwindChains(ExceptionInfo &Info) {
     ExceptionFunction &Root = Info.Functions[I];
     if (Root.Kind != RuntimeFunctionKind::Chained || !Root.PrimaryFunctionIndex)
       continue;
-    std::set<size_t> Visited;
+    llvm::SmallDenseSet<size_t, 8> Visited;
     size_t Current = I;
     bool ReachedTerminal = false;
     size_t Terminal = I;
@@ -967,6 +968,8 @@ bool ensureX64RuntimeFunction(BinaryImage &Img, va_t Address) {
 void parseExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
                      uint64_t ImageBase) {
   Img.ExceptionMetadata = ExceptionInfo{};
+  // Establish the directory owner before aggregating localized frame faults.
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
   if (const data_directory *ExcDir =
           Obj.getDataDirectory(llvm::COFF::EXCEPTION_TABLE)) {
     Img.ExceptionMetadata.DirectoryRVA = ExcDir->RelativeVirtualAddress;
@@ -976,6 +979,8 @@ void parseExceptions(const COFFObjectFile &Obj, BinaryImage &Img,
     parseX64Exceptions(Obj, Img, ImageBase);
   else if (Img.Arch == Arch::AArch64 || Img.Arch == Arch::ARM)
     parseARMExceptions(Obj, Img, ImageBase);
+  Img.ExceptionMetadata.captureUnstructuredParseContributions();
+  Img.ExceptionMetadata.rebuildParseSummary();
 }
 
 } // namespace coff_loader

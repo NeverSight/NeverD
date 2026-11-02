@@ -4,7 +4,7 @@
 
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"

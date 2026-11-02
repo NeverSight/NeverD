@@ -9,9 +9,9 @@
 
 #include "X86FPStateAccuracyFixture.h"
 
-#include "neverd/backend/llvm/LLVMX86FPStateAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/high/X86FPStateShape.h"
+#include "neverd/ir/high/X86/X86FPStateShape.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
 #include <array>

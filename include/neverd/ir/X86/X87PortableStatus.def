@@ -1,0 +1,32 @@
+//===- X87PortableStatus.def - Stable portable execution outcomes --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Define NEVERD_X87_PORTABLE_STATUS(CxxName, CName, Value, Diagnostic).
+// Append values without renumbering. The plain C ABI returns uint32_t.
+
+NEVERD_X87_PORTABLE_STATUS(Completed, COMPLETED, 0, "completed")
+NEVERD_X87_PORTABLE_STATUS(InvalidState, INVALID_STATE, 1, "invalid-state")
+NEVERD_X87_PORTABLE_STATUS(UnknownEnvironment, UNKNOWN_ENVIRONMENT, 2,
+                           "unknown-environment")
+NEVERD_X87_PORTABLE_STATUS(InvalidInstruction, INVALID_INSTRUCTION, 3,
+                           "invalid-instruction")
+NEVERD_X87_PORTABLE_STATUS(UnsupportedInstruction, UNSUPPORTED_INSTRUCTION, 4,
+                           "unsupported-instruction")
+NEVERD_X87_PORTABLE_STATUS(InvalidControl, INVALID_CONTROL, 5,
+                           "invalid-control")
+NEVERD_X87_PORTABLE_STATUS(PendingException, PENDING_EXCEPTION, 6,
+                           "pending-exception")
+NEVERD_X87_PORTABLE_STATUS(UnmaskedControl, UNMASKED_CONTROL, 7,
+                           "unmasked-control")
+NEVERD_X87_PORTABLE_STATUS(UnknownPayload, UNKNOWN_PAYLOAD, 8,
+                           "unknown-payload")
+NEVERD_X87_PORTABLE_STATUS(StackFault, STACK_FAULT, 9, "stack-fault")
+NEVERD_X87_PORTABLE_STATUS(UnsupportedValue, UNSUPPORTED_VALUE, 10,
+                           "unsupported-value")
+NEVERD_X87_PORTABLE_STATUS(InvalidMemory, INVALID_MEMORY, 11, "invalid-memory")
+NEVERD_X87_PORTABLE_STATUS(MemoryFault, MEMORY_FAULT, 12, "memory-fault")
+NEVERD_X87_PORTABLE_STATUS(SelfModification, SELF_MODIFICATION, 13,
+                           "self-modification")
+NEVERD_X87_PORTABLE_STATUS(InternalError, INTERNAL_ERROR, 14, "internal-error")

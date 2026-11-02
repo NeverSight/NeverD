@@ -91,6 +91,93 @@ MedFunc scan(unsigned Width) {
   return F;
 }
 
+TEST(MedImmutableTableScans, FoldsScalarReadsAmongImmutableInstructionBytes) {
+  for (unsigned Width : {4u, 8u}) {
+    for (bool WritableSection : {false, true}) {
+      auto Image = table(Width, 4);
+      Image.Segments[0].Flags =
+          Image.Segments[0].Flags | SegmentFlags::Executable;
+      Image.Sections[0].Flags =
+          Image.Sections[0].Flags | SegmentFlags::Executable;
+      // Runtime mapping permissions own immutability. A section attribute
+      // alone cannot make bytes writable inside a read-only mapping.
+      if (WritableSection)
+        Image.Sections[0].Flags =
+            Image.Sections[0].Flags | SegmentFlags::Writable;
+      MedFunc F;
+      F.Blocks.resize(1);
+      F.Blocks[0].Id = 0;
+      F.Blocks[0].Ops = {
+          op(NdOp::LOAD, var(1, 4), {MedVar::makeConst(0x5000 + Width, Width)}),
+          op(NdOp::INT_ADD, var(2, 4), {var(1, 4), MedVar::makeConst(6, 4)}),
+          op(NdOp::LOAD, var(3, 4), {var(8, Width)}),
+          op(NdOp::INT_XOR, var(4, 4), {var(2, 4), var(3, 4)})};
+      ASSERT_TRUE(foldImmutableTableScans(F, Image));
+      const auto &Folded = F.Blocks[0].Ops[1];
+      EXPECT_EQ(Folded.Opcode, NdOp::COPY);
+      EXPECT_EQ(Folded.Inputs[0].ConstVal, 48u);
+      EXPECT_EQ(Folded.Inputs[0].Provenance, ConstantAddressProvenance::Scalar);
+      // A remaining runtime memory input is not guessed from the image.
+      EXPECT_EQ(F.Blocks[0].Ops[2].Opcode, NdOp::LOAD);
+      EXPECT_EQ(F.Blocks[0].Ops[3].Opcode, NdOp::INT_XOR);
+    }
+  }
+}
+
+TEST(MedImmutableTableScans, CodeScalarReadsRetainStorageAndEffectGuards) {
+  for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = table(8, 4);
+    Image.Segments[0].Flags =
+        Image.Segments[0].Flags | SegmentFlags::Executable;
+    Image.Sections[0].Flags =
+        Image.Sections[0].Flags | SegmentFlags::Executable;
+    MedFunc F;
+    F.Blocks.resize(1);
+    F.Blocks[0].Id = 0;
+    F.Blocks[0].Ops = {
+        op(NdOp::LOAD, var(1, 8), {MedVar::makeConst(0x5008, 8)})};
+    switch (Mutation) {
+    case 0:
+      Image.Segments[0].Flags =
+          Image.Segments[0].Flags | SegmentFlags::Writable;
+      break;
+    case 1:
+      Image.Segments[0].Flags =
+          Image.Segments[0].Flags | SegmentFlags::Writable;
+      Image.Sections[0].Flags =
+          Image.Sections[0].Flags | SegmentFlags::Writable;
+      break;
+    case 2:
+      Image.Sections[0].Flags = SegmentFlags::Executable;
+      break;
+    case 3:
+      Image.Sections.push_back(Image.Sections[0]);
+      break;
+    case 4:
+      Image.Sections[0].FileSz = 12;
+      break;
+    case 5:
+      Image.CodePtrRelocSlots.insert(0x500c);
+      break;
+    case 6:
+      F.Blocks[0].Ops[0].MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 7:
+      Image.IsRelocatable = true;
+      break;
+    case 8:
+      // Executable bytes that happen to hold a mapped address are not a
+      // certificate authorizing a relocatable pointer or a scalar fallback.
+      Image.Segments[0].Data[8] = 0x10;
+      Image.Segments[0].Data[9] = 0x50;
+      break;
+    }
+    EXPECT_FALSE(foldImmutableTableScans(F, Image));
+    EXPECT_EQ(F.Blocks[0].Ops[0].Opcode, NdOp::LOAD);
+  }
+}
+
 TEST(MedImmutableTableScans, EvaluatesSentinelCountAtItsExactExit) {
   for (unsigned Width : {4u, 8u})
     for (unsigned Count : {0u, 1u, 4u, 128u}) {

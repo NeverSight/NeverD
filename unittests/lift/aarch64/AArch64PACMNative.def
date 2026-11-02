@@ -1,0 +1,90 @@
+//===- AArch64PACMNative.def - Independent native prefix oracle -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Native qualification requires active IA/IB keys and an effective second
+/// diversifier. A compatible HINT implementation cannot qualify this test.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PACM_NATIVE_TEXT
+#error "Define NEVERD_PACM_NATIVE_TEXT before including AArch64PACMNative.def"
+#endif
+
+NEVERD_PACM_NATIVE_TEXT(kNativeTarget, "arm64e-apple-macos")
+NEVERD_PACM_NATIVE_TEXT(kNativeUnavailable,
+                        "this host cannot execute PACM with active IA/IB keys "
+                        "and a second diversifier")
+NEVERD_PACM_NATIVE_TEXT(kOracle, R"(
+#include <stdint.h>
+static uint64_t sign_a(uint64_t pointer, uint64_t first, uint64_t second,
+                       uint64_t mode) {
+  uint64_t result;
+  if (mode) {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\nmov x15, %3\n"
+                     ".inst 0xd50324ff\n.inst 0xd503211f\nmov %0, x17"
+                     : "=r"(result) : "r"(pointer), "r"(first), "r"(second)
+                     : "x15", "x16", "x17");
+  } else {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\n"
+                     ".inst 0xd503211f\nmov %0, x17"
+                     : "=r"(result) : "r"(pointer), "r"(first)
+                     : "x16", "x17");
+  }
+  return result;
+}
+static uint64_t sign_b(uint64_t pointer, uint64_t first, uint64_t second,
+                       uint64_t mode) {
+  uint64_t result;
+  if (mode) {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\nmov x15, %3\n"
+                     ".inst 0xd50324ff\n.inst 0xd503215f\nmov %0, x17"
+                     : "=r"(result) : "r"(pointer), "r"(first), "r"(second)
+                     : "x15", "x16", "x17");
+  } else {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\n"
+                     ".inst 0xd503215f\nmov %0, x17"
+                     : "=r"(result) : "r"(pointer), "r"(first)
+                     : "x16", "x17");
+  }
+  return result;
+}
+static int qualifies(void) {
+  int active_a = 0, active_b = 0, diversifies_a = 0, diversifies_b = 0;
+  for (uint64_t i = 0; i != 64; ++i) {
+    uint64_t pointer = 0x12340 + i * 16, first = i * 0x12345678;
+    uint64_t a = sign_a(pointer, first, i, 1);
+    uint64_t b = sign_b(pointer, first, i, 1);
+    active_a |= a != pointer;
+    active_b |= b != pointer;
+    diversifies_a |= a != sign_a(pointer, first, i + 4, 1);
+    diversifies_b |= b != sign_b(pointer, first, i + 4, 1);
+  }
+  return active_a && active_b && diversifies_a && diversifies_b;
+}
+)")
+NEVERD_PACM_NATIVE_TEXT(kProbeMain, R"(
+int main(void) { return !qualifies(); }
+)")
+NEVERD_PACM_NATIVE_TEXT(kCompareMain, R"(
+int main(void) {
+  if (!qualifies()) return 4;
+  for (uint64_t mode = 0; mode != 2; ++mode)
+    for (uint64_t i = 0; i != 64; ++i) {
+      uint64_t pointer = 0x12340 + i * 16;
+      uint64_t first = i * 0x12345678, second = i * 0x98765432;
+      uint64_t a = sign_a(pointer, first, second, mode);
+      uint64_t b = sign_b(pointer, first, second, mode);
+      if (test_pacia_m(pointer, first, second, mode) != a ||
+          test_pacib_m(pointer, first, second, mode) != b) return 1;
+      if (test_autia_m(a, first, second, mode) != pointer ||
+          test_autib_m(b, first, second, mode) != pointer) return 2;
+      if (test_returnia_m(a, first, second, mode) != pointer ||
+          test_returnib_m(b, first, second, mode) != pointer) return 3;
+    }
+  return 0;
+}
+)")
+
+#undef NEVERD_PACM_NATIVE_TEXT

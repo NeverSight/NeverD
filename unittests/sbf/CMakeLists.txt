@@ -1,5 +1,6 @@
 add_neverd_unittest(NeverDSBFEmitterTests
   SBFEmitterTests.cpp
+  SBFSourcePartitionTests.cpp
 
   LINK_COMPONENTS
   SBF
@@ -81,6 +82,7 @@ add_neverd_unittest(NeverDSBFSolanaModelTests
   SBFSolanaCPITests.cpp
   SBFSolanaPDATests.cpp
   SBFSolanaRecoveryTests.cpp
+  SBFWordRecoveryTests.cpp
 
   LINK_COMPONENTS
   Loader
@@ -96,6 +98,9 @@ target_include_directories(NeverDSBFSolanaModelTests PRIVATE
 
 add_neverd_unittest(NeverDSBFAnalyzerTests
   SBFAnalyzerTests.cpp
+  SBFAnalysisReportTests.cpp
+  SBFCallXContextTests.cpp
+  SBFImmutableLoadTests.cpp
 
   LINK_COMPONENTS
   Loader
@@ -120,6 +125,12 @@ target_include_directories(NeverDSBFAnalyzerTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/sbf/analysis
   ${LLVM_INCLUDE_DIRS}
 )
+
+add_test(NAME NeverDSBFCorpusRunnerTests
+  COMMAND ${Python3_EXECUTABLE} -m unittest scripts.tests.test_sbf_corpus)
+set_tests_properties(NeverDSBFCorpusRunnerTests PROPERTIES
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS NeverDSBFCorpusRunnerTests)
 
 add_neverd_unittest(NeverDSBFProgramImageTests
   SBFProgramImageTests.cpp

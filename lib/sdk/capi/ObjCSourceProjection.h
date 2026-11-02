@@ -12,6 +12,7 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/AArch64AddressMemory.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -34,6 +35,20 @@ namespace objc_projection_detail {
 inline bool sameHint(const SourceFunctionTypeHint &Left,
                      const SourceFunctionTypeHint &Right) {
   return equalSourceABIs(Left, Right);
+}
+
+// These calls are original memory instructions with an existing HighC
+// projection. Reuse its shape contract and retain every operand for the
+// recursive source-binding inspection below.
+inline bool isProjectedMemory(const HighExpr &Expression, Arch Architecture) {
+  if (Architecture != Arch::AArch64 ||
+      !isAArch64AddressMemoryIntrinsic(Expression.IntrinsicId) ||
+      !aarch64AddressMemoryHighShapeIsValid(Expression))
+    return false;
+  const auto Instruction = aarch64AddressMemoryInstruction(
+      Expression.Operands[kAddressMemoryWordOperand]->ConstVal);
+  // The C projection cannot recreate the original SP alignment/tagging state.
+  return Instruction && !Instruction->stackBase();
 }
 
 inline bool isPlainUnwind(const ExceptionFunction &Metadata) {
@@ -224,6 +239,7 @@ inline void collectSourceBodyDiagnostics(
     }
     if (Expression->Kind == ExprKind::Call &&
         !(CallAllowed && CallAllowed(*Expression)) &&
+        !isProjectedMemory(*Expression, Hint.Architecture) &&
         (Expression->IntrinsicId == Intrinsic::None ||
          !intrinsicCName(Expression->IntrinsicId) ||
          Expression->IsIndirectCall ||

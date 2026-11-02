@@ -17,8 +17,10 @@
 #include "NeverDSymbolDownload.h"
 
 #include "neverd/Common.h"
-#include "neverd/loader/ARMModeCLIStrings.h"
+#include "neverd/loader/ARM/ARMModeCLIStrings.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/support/ProjectWriteLock.h"
 #include "neverd/support/StackSizeMain.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -34,6 +36,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -92,6 +95,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runIdentify();
   if (DiffCmd)
     return runDiff();
+  if (LineageCmd)
+    return runLineage();
   if (SimplifyCmd)
     return runSimplify();
   if (MergeProjectCmd)
@@ -106,6 +111,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runEmulateDriver();
   if (CPUCapabilitiesCmd)
     return runCPUCapabilities();
+  if (X87CapabilitiesCmd)
+    return runX87Capabilities();
   if (ModulesCmd)
     return runModules();
   if (ExecutionCmd)
@@ -145,6 +152,47 @@ static int realMain(int Argc, char *Argv[]) {
   if (!std::filesystem::exists(Path)) {
     WithColor::error() << "file not found: " << InputFile.getValue() << "\n";
     return 1;
+  }
+
+  // Protect the complete sidecar read/modify/write transaction, including
+  // restoration before the edit. The GUI holds the same project lock.
+  std::unique_ptr<ProjectWriteLock> SectionWriter;
+  if (AnalysisSectionsCmd &&
+      (!AnalysisSectionAdd.empty() || !AnalysisSectionRemove.empty())) {
+    SectionWriter = std::make_unique<ProjectWriteLock>(Path);
+    if (!*SectionWriter) {
+      WithColor::error() << "cannot acquire project writer lock: "
+                         << SectionWriter->error() << "\n";
+      return 1;
+    }
+  }
+  if (ListCacheImages) {
+    const char *Reply =
+        neverd_dyld_cache_images_json(InputFile.getValue().c_str());
+    const std::string Text = Reply ? Reply : "";
+    neverd_free_string(Reply);
+    auto Parsed = json::parse(Text);
+    if (!Parsed) {
+      logAllUnhandledErrors(Parsed.takeError(), errs());
+      return 1;
+    }
+    const auto *Object = Parsed->getAsObject();
+    if (JsonOutput) {
+      outs() << Text << '\n';
+    } else if (Object) {
+      if (auto Error = Object->getString(macho_loader::cache_load::kErrorKey))
+        errs() << *Error << '\n';
+      if (const auto *Images =
+              Object->getArray(macho_loader::cache_load::kImagesKey))
+        for (const auto &Image : *Images)
+          outs() << *Image.getAsObject()->getString(
+                        macho_loader::cache_load::kAddressKey)
+                 << " "
+                 << *Image.getAsObject()->getString(
+                        macho_loader::cache_load::kPathKey)
+                 << '\n';
+    }
+    return !Object || Object->get(macho_loader::cache_load::kErrorKey) ? 1 : 0;
   }
 
   if (PdbUnverified && PdbFile.getValue().empty()) {
@@ -230,9 +278,9 @@ static int realMain(int Argc, char *Argv[]) {
   // same one-function PE path as a known hex address.  The hint is checked
   // against the loaded name table below; normal loading remains authoritative.
   neverd_va_t NameHint = 0;
-  // Interpreter recovery follows dispatch outside the selected function and
-  // needs image-wide relocation and exception evidence from the loader.
-  if (!ExportFunc.empty() && !Devirtualize) {
+  // Interpreter recovery and callee closure need the image-wide function,
+  // relocation and exception inventory before selecting their work set.
+  if (!ExportFunc.empty() && !Devirtualize && !DecompileCallees) {
     StringRef FuncRef(ExportFunc.getValue());
     if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
       uint64_t Addr = 0;
@@ -276,8 +324,13 @@ static int realMain(int Argc, char *Argv[]) {
         nullptr);
   }
   // A binary file reads as --loader and its placement say.
-  if (!LoadLoader.empty()) {
-    json::Object Options{{"loader", LoadLoader.getValue()}};
+  if (!LoadLoader.empty() || !LoadCacheImage.empty()) {
+    json::Object Options{{macho_loader::cache_load::kLoaderKey,
+                          LoadLoader.empty()
+                              ? std::string(macho_loader::cache_load::kLoader)
+                              : LoadLoader.getValue()}};
+    if (!LoadCacheImage.empty())
+      Options[macho_loader::cache_load::kImageKey] = LoadCacheImage.getValue();
     if (!LoadProcessor.empty())
       Options["processor"] = LoadProcessor.getValue();
     if (!LoadPlatform.empty())
@@ -310,7 +363,8 @@ static int realMain(int Argc, char *Argv[]) {
     return 1;
   }
   // The input is read this way from now on, as the GUI keeps it.
-  if (!LoadLoader.empty() && neverd_load_options_save(Sess) != 0)
+  if ((!LoadLoader.empty() || !LoadCacheImage.empty()) &&
+      neverd_load_options_save(Sess) != 0)
     WithColor::warning() << "load options were not kept: "
                          << takeLastError(Sess) << "\n";
   if (NameHint) {
@@ -325,6 +379,11 @@ static int realMain(int Argc, char *Argv[]) {
       }
     }
   }
+  // Analysis sections are database overlays, never implicit input to binary
+  // rewriting or runtime execution. Shared native read commands see them.
+  if (!PatchCmd && !AnnotateCmd && !RenameCmd && !SigsCmd &&
+      !loadAnalysisSections(Sess))
+    return 1;
   if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd ||
        AuditCmd || HuntCmd) &&
       !configureAnalysisSession(Sess))
@@ -342,7 +401,7 @@ static int realMain(int Argc, char *Argv[]) {
     }
   }
 
-  if (!JsonOutput && !SymbolicCmd && !AuditCmd && !HuntCmd &&
+  if (!PatchBytesCmd && !JsonOutput && !SymbolicCmd && !AuditCmd && !HuntCmd &&
       !(PatchCmd && PatchReport)) {
     const char *ArchStr = neverd_session_arch_name(Sess);
     outs() << "=== " << ProjectName << " v" << VersionString << " (" << Command
@@ -393,6 +452,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runSegments(Sess);
   if (SectionsCmd)
     return runSections(Sess);
+  if (AnalysisSectionsCmd)
+    return runAnalysisSections(Sess);
   if (SymbolsCmd)
     return runSymbols(Sess);
   if (RelocsCmd)
@@ -449,6 +510,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runLift(Sess);
   if (DecompileCmd)
     return runDecompile(Sess);
+  if (PatchBytesCmd)
+    return runPatchBytes(Sess);
   if (PatchCmd)
     return runPatch(Sess);
 

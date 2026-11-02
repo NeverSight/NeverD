@@ -324,6 +324,7 @@
     },
     {
       "name": "X86_32_X87FPU.NativeAndLiftedCallLoopsReturnTheIndependentSum",
+      "current_name": "X87CallReplay.NativeAndLiftedCallLoopsReturnTheIndependentSum",
       "baseline": "skipped"
     },
     {

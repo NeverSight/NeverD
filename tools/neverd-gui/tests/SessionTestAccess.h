@@ -9,5 +9,8 @@ struct SessionTestAccess {
   static void receive(Session &S, const QJsonObject &Message) {
     S.receive(Message);
   }
+  static QString nextBackgroundSequence(const Session &S) {
+    return QString::number(S.BackgroundSequence.value_or(0) + 1);
+  }
 };
 } // namespace neverd::gui

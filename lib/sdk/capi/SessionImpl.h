@@ -14,6 +14,9 @@
 #define NEVERD_SDK_CAPI_SESSION_IMPL_H
 
 #include "../../pipeline/PipelineCallAbiDetail.h"
+#include "../../pipeline/PipelineFunctionNames.h"
+#include "../../pipeline/PipelineSourceInline.h"
+#include "../../pipeline/PipelineSourceStackAccesses.h"
 #include "../plugin/PluginManager.h"
 #include "FunctionAuditReason.h"
 #include "ImageStrings.h"
@@ -21,6 +24,7 @@
 #include "LoadOptions.h"
 #include "LocalTypesDebugContext.h"
 #include "NativeImmediateIndex.h"
+#include "ProjectInput.h"
 
 #include "neverd/DataAccessWidths.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -39,8 +43,10 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/FunctionNames.h"
 #include "neverd/loader/SymbolSpelling.h"
 #include "neverd/pass/Limits.h"
+#include "neverd/patch/PatchOverlay.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/sbf/emit/SBFLLVMEmitter.h"
 #include "neverd/sdk/Limits.h"
@@ -58,6 +64,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -91,6 +98,8 @@ struct FuncInfo {
   /// Original identity is never overwritten by a display annotation or rename.
   std::string LinkageName;
   NameOrigin LinkageOrigin = NameOrigin::Stated;
+  /// Origin of OriginalNames after recognition, before an analyst's rename.
+  NameOrigin ResolvedOrigin = NameOrigin::Synthesized;
 
   bool operator==(const FuncInfo &) const = default;
 };
@@ -108,16 +117,23 @@ struct Session {
   /// authenticated sanitizer path only.  FilePath deliberately preserves the
   /// caller's legacy spelling for every pre-existing C API consumer.
   std::filesystem::path SanitizeSourcePath;
+  /// Declared before the image/debug owners, so its private extracted files
+  /// outlive all readers. Empty for ordinary file or memory sessions.
+  std::shared_ptr<ProjectInput> PackedProject;
   /// Snapshot-backed native sessions have no host path or sidecar namespace.
   std::optional<uint64_t> MemoryInputBytes;
   std::string WebNativeProvenance;
   BinaryImage Img;
+  patch::PatchOverlay BytePatches;
+  std::optional<std::array<uint8_t, 32>> BytePatchesSavedDigest;
+  std::optional<patch::InputFile> PatchInput;
   bool Loaded = false;
 
   // Debug information for the loaded image.  DbgRequest is the caller's search
   // policy and must be set before neverd_session_load(); the rest describe what
   // that load actually found.
   DebugInfoRequest DbgRequest;
+  DebugInfoRequest LoadedDbgRequest;
   LoadProgress LoadProgressCb;
   std::unique_ptr<DebugContext> Dbg;
   DebugInfoKind DbgKind = DebugInfoKind::None;
@@ -128,6 +144,7 @@ struct Session {
   /// file loaded later can read it again the same way
   /// (reloadDebugInformation).
   bool ReadFromFile = false;
+  bool LoadedStaticSymbols = true;
   /// The program's local types, read from its debug information when first
   /// asked for (NeverDCAPILocalTypes.cpp).  A new image or PDB drops them.
   std::unique_ptr<types::TypeLibrary> LocalTypes;
@@ -171,6 +188,10 @@ struct Session {
   /// to a function, where the image's kind says which
   /// (NEVERD_HEADER_PE_ENTRY_TYPE): empty for none.
   std::string LocalTypeEntryType;
+  /// Platform entry contract when no shipped typedef names it.
+  std::string LocalTypeEntryDeclaration;
+  /// Platform entry text without importing or parsing a type library.
+  std::string platformEntryDeclaration() const;
   /// Drops the program's types, read anew when next asked for; the user's
   /// declarations stay, to be read again over them.
   void dropLocalTypes() {
@@ -182,6 +203,7 @@ struct Session {
     DeclarationProblems.clear();
     LocalTypeHeaders.clear();
     LocalTypeEntryType.clear();
+    LocalTypeEntryDeclaration.clear();
     dropLocalTypesDebug();
   }
 
@@ -279,9 +301,11 @@ struct Session {
   struct FunctionLlvmModule {
     va_t Entry = 0;
     bool NoOpt = false;
+    bool OriginalImageStorage = false;
     SourceViewOptions Options;
     std::unique_ptr<llvm::Module> Module;
     std::shared_ptr<LLVMSourceMap> Sources;
+    std::shared_ptr<SourceInlineHighPreparation> PreparedHigh;
     /// The LLVM IR view of an inspection module's function, made when first
     /// shown (functionLlvmView).  Its comments read the user's names.
     mutable std::shared_ptr<const LLVMFunctionView> View;
@@ -331,6 +355,7 @@ struct Session {
   /// mutate the HighIR route's MedIR: later source variants rebuild from that
   /// same prepared input.
   std::optional<std::vector<MedFunc>> NativeMedFuncs;
+  std::vector<MedFunc> NativeCalleeDeclarations;
   bool SBFFunctionsSynchronized = false;
   bool NativeFunctionsSynchronized = false;
   /// The image's strings under the options last searched with
@@ -342,14 +367,21 @@ struct Session {
   struct FunctionDiscoveryResult {
     std::vector<std::pair<va_t, std::string>> Functions;
     std::set<va_t> VerifiedEntries, CodeReferences;
+    bool Cancelled = false;
   };
   struct FunctionDiscoveryJob {
     uint64_t Revision;
     std::future<FunctionDiscoveryResult> Result;
+    std::shared_ptr<std::atomic<bool>> Cancel =
+        std::make_shared<std::atomic<bool>>(false);
   };
   /// The job owns its image; it never borrows Session state. Stale jobs stay
   /// here until ready, so an edit neither waits nor accumulates retired jobs.
   std::optional<FunctionDiscoveryJob> FunctionDiscovery;
+  ~Session() {
+    if (FunctionDiscovery)
+      FunctionDiscovery->Cancel->store(true, std::memory_order_relaxed);
+  }
   /// Drop a finished job of an earlier function list, its result and failure
   /// alike, whatever the current image is. A running one stays: an async
   /// future joins its task on destruction.
@@ -381,6 +413,8 @@ struct Session {
   Decoder Dec;
 
   std::vector<FuncInfo> Functions;
+  /// Caller-declared analysis sections. Bytes live in Img, never FilePath.
+  llvm::json::Array AnalysisSections;
   /// What resetFunctionsFromImage last built Functions from, while nothing
   /// but a name refresh has changed the list since (functionListCurrent).
   /// The image's own tables change only on loads, which build the list
@@ -404,7 +438,11 @@ struct Session {
   /// was read from the list knows whether the list is still the one it read.
   /// Code that changes the list calls functionListChanged().
   uint64_t FunctionListRevision = 0;
-  void functionListChanged() { ++FunctionListRevision; }
+  void functionListChanged() {
+    ++FunctionListRevision;
+    if (FunctionDiscovery)
+      FunctionDiscovery->Cancel->store(true, std::memory_order_relaxed);
+  }
   /// Address order belongs to the complete function-list revision, not to
   /// one page. Reference scans and warmup can request thousands of pages.
   struct FunctionPageIndex {
@@ -581,6 +619,10 @@ struct Session {
 
   void setError(const std::string &Msg) { LastError = Msg; }
   void clearError() { LastError.clear(); }
+  /// Selection-specific sidecar namespace, without changing the source locator.
+  std::filesystem::path projectInputPath() const;
+  std::string projectNamespaceSuffix() const;
+
   uint64_t inputFileSize() const {
     if (!Loaded)
       return 0;
@@ -748,6 +790,18 @@ struct Session {
       return;
     const auto Symbols = Img.getFunctionSymbols();
     Functions.reserve(Symbols.size());
+    // Loader boundary guesses are provisional. A completed detector run can
+    // refute one, but cannot withdraw a stated symbol or a user's identity.
+    // Keep this gate in rebuilding the list so lazy analysis cannot resurrect
+    // a rejected guess after discovery has reconciled the catalog.
+    std::unordered_set<va_t> Confirmed;
+    if (DiscoveredFunctions) {
+      for (const auto &[Entry, Name] : *DiscoveredFunctions)
+        Confirmed.insert(Entry);
+      for (const Symbol *Symbol : Symbols)
+        if (!Symbol->IsBoundaryGuess)
+          Confirmed.insert(Symbol->Addr);
+    }
     // The export each address names first, as findExportAt finds it, for
     // every symbol at once: an image can hold thousands of both.
     std::unordered_map<va_t, const Export *> ExportAt;
@@ -755,6 +809,10 @@ struct Session {
     for (const Export &Exp : Img.Exports)
       ExportAt.try_emplace(Exp.Addr, &Exp);
     for (const Symbol *Symbol : Symbols) {
+      if (DiscoveredFunctions && Symbol->IsBoundaryGuess &&
+          !Confirmed.count(Symbol->Addr) && !Renames.count(Symbol->Addr) &&
+          !FunctionEdits.count(Symbol->Addr))
+        continue;
       // A name that states nothing gives way to the export there, as the
       // analysis names the function (getFunctionNameAt): a PE names its
       // functions by exports, and one entry several times where its linker
@@ -824,8 +882,8 @@ struct Session {
       const auto Rename = Renames.find(Entry);
       const bool Renamed = Rename != Renames.end();
       Functions.push_back({Entry, 0, Renamed ? Rename->second : Name,
-                           Renamed ? NameOrigin::User : NameOrigin::Analysis,
-                           Name, NameOrigin::Analysis});
+                           Renamed ? NameOrigin::User : NameOrigin::Synthesized,
+                           Name, NameOrigin::Synthesized});
       Added = true;
     }
     if (Added) {
@@ -846,6 +904,11 @@ struct Session {
     Known.reserve(Functions.size());
     for (const FuncInfo &F : Functions)
       Known.insert(F.Entry);
+    std::map<va_t, llvm::StringRef> NewNames;
+    for (const auto &[Entry, Name] : *DiscoveredFunctions)
+      if (!isDeletedFunction(Entry) && !Known.contains(Entry))
+        NewNames.try_emplace(Entry, Name);
+    const auto Origins = recoveredFunctionNameOrigins(Img, NewNames);
     bool Added = false;
     for (const auto &[Entry, Name] : *DiscoveredFunctions) {
       if (isDeletedFunction(Entry) || !Known.insert(Entry).second)
@@ -853,9 +916,9 @@ struct Session {
       OriginalNames.try_emplace(Entry, Name);
       const auto Rename = Renames.find(Entry);
       const bool Renamed = Rename != Renames.end();
+      const auto Origin = Origins.at(Entry);
       Functions.push_back({Entry, 0, Renamed ? Rename->second : Name,
-                           Renamed ? NameOrigin::User : NameOrigin::Analysis,
-                           Name, NameOrigin::Analysis});
+                           Renamed ? NameOrigin::User : Origin, Name, Origin});
       Added = true;
     }
     if (Added) {
@@ -871,6 +934,10 @@ struct Session {
   /// Recompute display identity from current evidence. No IR or image names
   /// are modified, and a failed/withdrawn match cannot leave a stale label.
   void refreshFunctionNames();
+  /// The same from \p Names, the names signatures give entries
+  /// (SignatureDB::buildNameMap): a list prepared apart from the session that
+  /// publishes it names its entries by that session's signatures.
+  void refreshFunctionNames(std::unordered_map<uint64_t, std::string> Names);
 
   /// Drop the kept C of every function and the kept LLVM IR views.  A change
   /// to anything the C emitters or the views' comments read beyond the
@@ -932,6 +999,7 @@ struct Session {
     CurrentCallResults.clear();
     UsingAnalystCallContracts = false;
     NativeMedFuncs.reset();
+    NativeCalleeDeclarations.clear();
     PipeResult = {};
     LLVMCtx.reset();
     PipeRan = false;
@@ -1004,19 +1072,35 @@ struct Session {
     resetFunctionsFromImage();
   }
 
+  /// What a selected function's pipeline must have prepared for a view:
+  /// its control-flow graphs alone, the analysis every IR and source view
+  /// shares, or that with the HighIR source emission reads.
+  enum class PipelineDepth { LowIR, Analysis, HighIR };
+
   bool ensurePipeline(bool NeedHighIR = true) {
+    return ensurePipeline(NeedHighIR ? PipelineDepth::HighIR
+                                     : PipelineDepth::Analysis);
+  }
+
+  bool ensurePipeline(PipelineDepth Depth) {
     if (!Loaded) {
       setError("no binary loaded");
       return false;
     }
     if (PipelineFeatureGeneration != SigDB.featureGeneration())
       clearPipeline();
-    if (!PipeRan) {
-      LLVMCtx = std::make_unique<llvm::LLVMContext>();
+    // A deeper view of the same run resumes it with the run's own options.
+    const auto runOptions = [&] {
       PipelineOptions Opts;
       applyAnalysisOptions(Opts);
-      Opts.DeferHighIR = !NeedHighIR;
+      Opts.DeferMedIR = Depth == PipelineDepth::LowIR;
+      Opts.DeferHighIR = Depth != PipelineDepth::HighIR;
       Opts.AnalysisCache = &AnalysisCache;
+      return Opts;
+    };
+    if (!PipeRan) {
+      LLVMCtx = std::make_unique<llvm::LLVMContext>();
+      PipelineOptions Opts = runOptions();
       Pipeline ThePipeline;
       // Debug names already reached Img.Symbols at load time; handing the
       // context to the pipeline also carries source locations, declared sizes,
@@ -1025,7 +1109,11 @@ struct Session {
       PipelineFeatureGeneration = SigDB.featureGeneration();
       PipeRan = true;
     }
-    if (NeedHighIR && PipeResult.Success && PipeResult.HighIRDeferred) {
+    if (Depth != PipelineDepth::LowIR && PipeResult.Success &&
+        PipeResult.MedIRDeferred)
+      Pipeline().resumeMedIR(Img, runOptions(), PipeResult, decompileDebug());
+    if (Depth == PipelineDepth::HighIR && PipeResult.Success &&
+        PipeResult.HighIRDeferred) {
       PipelineOptions Opts;
       applyAnalysisOptions(Opts);
       Pipeline().resumeHighIR(Img, Opts, PipeResult, decompileDebug());
@@ -1103,7 +1191,10 @@ struct Session {
   /// error and returns null when the emitter refuses or verification fails.
   std::unique_ptr<llvm::Module>
   emitNativeLlvm(bool NoOpt, const std::vector<char> *BodyMask,
-                 std::shared_ptr<LLVMSourceMap> &Sources) {
+                 std::shared_ptr<LLVMSourceMap> &Sources,
+                 bool OriginalImageStorage = false,
+                 std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh =
+                     nullptr) try {
     // HighIR decompile does not run recoverCallAbi. --func --llvm still emits
     // from that MedIR, so populate CallInfos here; otherwise MedLLVM emits
     // 0-arg calls for unwritten live-in rcx.  A body-masked module declares
@@ -1115,32 +1206,37 @@ struct Session {
       for (const auto &MF : PipeResult.MedFuncs)
         if (!MF.Name.empty())
           FuncNames[MF.Entry] = MF.Name;
+      for (const auto &[Address, Name] : Img.getImportAddressNames())
+        FuncNames[Address] = Name;
+      for (auto &[Address, Name] : pipeline_detail::debugFunctionNames(
+               PipeResult, FuncNames, decompileDebug()))
+        FuncNames[Address] = std::move(Name);
       // Recover the calls as the module pipeline does, with its evidence:
       // every callee's arity, the signatures of callees this pipeline did
       // not keep, and what each function-pointer variable starts at.
       PipelineResult Recovery;
       Recovery.MedFuncs = PipeResult.MedFuncs;
-      Recovery.CallMayWriteGPRs = PipeResult.CallMayWriteGPRs;
-      Recovery.CallEntryReadGPRs = PipeResult.CallEntryReadGPRs;
-      Recovery.CallEntryStackArgs = PipeResult.CallEntryStackArgs;
-      Recovery.CallEntryStackSlots = PipeResult.CallEntryStackSlots;
-      Recovery.CallEntryArgumentCounts = PipeResult.CallEntryArgumentCounts;
-      Recovery.OmittedCalleeArgumentCounts =
-          PipeResult.OmittedCalleeArgumentCounts;
-      Recovery.CallPrototypeArguments = PipeResult.CallPrototypeArguments;
-      Recovery.CallUserPrototypes = PipeResult.CallUserPrototypes;
-      Recovery.CallArgumentSources = PipeResult.CallArgumentSources;
+      copyCallSignatureFacts(PipeResult, Recovery);
       Recovery.OmittedCallees = PipeResult.OmittedCallees;
       // The pipeline's callee memo keeps the forwarder probes of those
       // callees, which serve where this recovery reads the same.
       Recovery.CalleeSignatureMemo = PipeResult.CalleeSignatureMemo;
-      recoverModuleCallAbi(Img, Recovery, FuncNames);
+      recoverModuleCallAbi(Img, Recovery, FuncNames,
+                           /*SourceDeclarations=*/true,
+                           /*SourceParameterReads=*/true);
+      // Recovery rebuilds CallInfos. Reapply the same source observation
+      // proof as module emission before caching these single-function views.
+      prepareRecoveredSourceStackAccesses(Img, Recovery, PipeResult.LowFuncs);
       NativeMedFuncs = std::move(Recovery.MedFuncs);
+      NativeCalleeDeclarations = std::move(Recovery.OmittedCalleeDeclarations);
     }
     std::vector<std::pair<va_t, std::string>> ImportMap;
     for (const auto &[Addr, Name] : Img.getImportAddressNames())
       ImportMap.emplace_back(Addr, Name);
     MedLLVMEmitter Emitter;
+    Emitter.setPreserveUnknownSourceValues(true);
+    Emitter.setSourceCalleeDeclarations(NativeCalleeDeclarations);
+    Emitter.setOriginalImageStorageForSource(OriginalImageStorage);
     Emitter.setAnalystSourceProjection(UsingAnalystCallContracts);
     if (UsingAnalystCallContracts && CallVariant)
       Emitter.setSourceTargetSignatures(&CallVariant->TargetSignatures);
@@ -1170,11 +1266,32 @@ struct Session {
     if (UsingAnalystCallContracts &&
         !SourceOptions.StackFrame.Variables.empty())
       preserveAnalystStackObjects(*Candidate);
+    bool SpecializedSource = false;
+    if (!NoOpt && OriginalImageStorage && !UsingAnalystCallContracts &&
+        supportsSourceCallSpecialization(Img, PipeResult, SourceOptions)) {
+      // Match HighC's proof input and avoid optimizing a caller which the
+      // validated joint source module will replace. The full optimizer still
+      // runs exactly once for either successful or refused specialization.
+      Pipeline::promoteScaffoldingAllocas(*Candidate);
+      PipelineOptions AnalysisOptions;
+      applyAnalysisOptions(AnalysisOptions);
+      AnalysisOptions.AnalysisCache = &AnalysisCache;
+      auto Specialized = specializeUnavailableSourceCalls(
+          Img, PipeResult, *Candidate, decompileDebug(), AnalysisOptions,
+          SourceOptions);
+      if (Specialized.Module) {
+        Candidate = std::move(Specialized.Module);
+        Sources = std::move(Specialized.Sources);
+        if (PreparedHigh)
+          *PreparedHigh = std::move(Specialized.PreparedHigh);
+        SpecializedSource = true;
+      }
+    }
     if (NoOpt) {
       Pipeline::promoteScaffoldingAllocas(*Candidate);
       if (Sources)
         Sources->refreshExpressionOrigins();
-    } else {
+    } else if (!SpecializedSource) {
       const OptimizationResult Optimization = Pipeline::optimizeOrPromoteModule(
           *Candidate, Sources.get(), SourceOptions);
       if (Optimization.Stop == OptimizationStopReason::VerificationFailed) {
@@ -1191,11 +1308,21 @@ struct Session {
       return nullptr;
     }
     return Candidate;
+  } catch (const std::exception &Error) {
+    Sources.reset();
+    setError(std::string("native LLVM emission failed: ") + Error.what());
+    return nullptr;
+  } catch (...) {
+    Sources.reset();
+    setError("unexpected native LLVM emission failure");
+    return nullptr;
   }
 
   /// The module that shows the function at \p Entry: its body alone, every
   /// other function declared.  Kept for the functions shown last.
-  const FunctionLlvmModule *ensureFunctionLlvmModule(va_t Entry, bool NoOpt) {
+  const FunctionLlvmModule *
+  ensureFunctionLlvmModule(va_t Entry, bool NoOpt,
+                           bool OriginalImageStorage = false) {
     if (PipeRan && PipelineFeatureGeneration != SigDB.featureGeneration())
       clearPipeline();
     SourceViewOptions NativeOptions = SourceOptions;
@@ -1204,6 +1331,7 @@ struct Session {
     for (auto It = FunctionLlvmModules.begin(); It != FunctionLlvmModules.end();
          ++It)
       if (It->Entry == Entry && It->NoOpt == NoOpt &&
+          It->OriginalImageStorage == OriginalImageStorage &&
           It->Options == NativeOptions) {
         FunctionLlvmModules.splice(FunctionLlvmModules.begin(),
                                    FunctionLlvmModules, It);
@@ -1227,8 +1355,10 @@ struct Session {
     FunctionLlvmModule Built;
     Built.Entry = Entry;
     Built.NoOpt = NoOpt;
+    Built.OriginalImageStorage = OriginalImageStorage;
     Built.Options = std::move(NativeOptions);
-    Built.Module = emitNativeLlvm(NoOpt, &Mask, Built.Sources);
+    Built.Module = emitNativeLlvm(NoOpt, &Mask, Built.Sources,
+                                  OriginalImageStorage, &Built.PreparedHigh);
     if (!Built.Module)
       return nullptr;
     FunctionLlvmModules.push_front(std::move(Built));
@@ -1309,6 +1439,10 @@ struct PipelineRunner {
   PipelineResult Result;
 
   bool load(const char *InputPath, std::string &Err, const Session *Policy);
+  /// Read-only views of the same loaded file retain its analysis additions.
+  /// File rewriting and round trips continue to use load().
+  bool loadAnalysis(const char *InputPath, std::string &Err,
+                    const Session *Policy);
   /// Runs the pipeline over the image with \p Debug, else the image's own
   /// debug information.
   bool run(PipelineOptions Opts, std::string &Err,
@@ -1320,6 +1454,11 @@ struct PipelineRunner {
 /// naming \p Kind.
 bool saveSidecar(Session *S, const std::filesystem::path &Path,
                  llvm::json::Value Values, llvm::StringRef Kind);
+/// Stream an already canonical value through the same atomic writer. Emit
+/// exactly one value with sorted keys and canonical addresses.
+bool saveSidecar(Session *S, const std::filesystem::path &Path,
+                 llvm::function_ref<void(llvm::json::OStream &)> Emit,
+                 llvm::StringRef Kind);
 
 /// The SHA-256 of the input as loaded, in lowercase hexadecimal: the one the
 /// loader took while it read the input, else one hash of the file, kept.
@@ -1328,6 +1467,9 @@ std::string inputSha256(Session &S);
 
 /// The loaded input as a project's project.json names it.
 llvm::json::Object projectInput(Session &S);
+llvm::json::Object sharedCacheIdentity(const BinaryImage &Image);
+bool matchesProjectInput(const llvm::json::Object &Left,
+                         const llvm::json::Object &Right);
 
 /// The input the project's project.json names, if it names one.
 std::optional<llvm::json::Object> recordedInput(const Session &S);
@@ -1342,12 +1484,21 @@ bool recordProjectInput(Session *S);
 /// after the image ranks as it would had the load named it: a PDB's or
 /// DWARF's names replace a MAP's, and a MAP's fill only what they leave.
 /// The session then takes the image, keeping the user's names, comments and
-/// edits, and \p Request becomes its next load's.  \p Unchanged, when given,
-/// is asked once the files are read and before the session takes them; it
-/// sets the error when it answers false.  Returns 1, or 0 with the session's
-/// error and the session as it was.
+/// edits, and \p Request becomes its next load's.  The session's analysis
+/// sections join the image read again as an edit adds them; one it cannot
+/// take keeps the session as it was.  \p Unchanged, when given, is asked once
+/// the files are read and before the session takes them; it sets the error
+/// when it answers false.  Returns 1, or 0 with the session's error and the
+/// session as it was.
 int reloadDebugInformation(Session &S, DebugInfoRequest Request,
                            llvm::function_ref<bool()> Unchanged = {});
+
+/// \p Image, the session's input read again, with the session's analysis
+/// sections added as neverd_analysis_section_add adds them, from the bytes
+/// the session's image holds; else the error naming the section \p Image
+/// cannot take.  Without sections \p Image passes through unchanged.
+llvm::Expected<BinaryImage> withAnalysisSections(const Session &S,
+                                                 BinaryImage Image);
 
 /// The files \p S read its debug information from, as
 /// neverd_session_debug_info_json() lists them.

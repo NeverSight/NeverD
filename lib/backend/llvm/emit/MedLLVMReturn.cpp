@@ -263,7 +263,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                       TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0;
     uint64_t HiRetOff = TRI.IntReturnReg2;
     const uint16_t IntegerReturnSize =
-        WantWide64 ? TRI.PointerSize
+        WantWide64             ? TRI.PointerSize
+        : RetTy->isPointerTy() ? TRI.PointerSize
         : RetTy->isIntegerTy()
             ? static_cast<uint16_t>((RetTy->getIntegerBitWidth() + 7) / 8)
             : 0;
@@ -523,6 +524,10 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (RetVal->getType()->isIntegerTy())
         RetVal = Builder.CreateBitCast(RetVal, llvm::Type::getX86_FP80Ty(*Ctx));
       RetVal = Builder.CreateFPTrunc(RetVal, RetTy);
+    } else if (RetTy->isPointerTy() && RetVal->getType()->isIntegerTy()) {
+      RetVal = Builder.CreateIntToPtr(RetVal, RetTy);
+    } else if (RetTy->isIntegerTy() && RetVal->getType()->isPointerTy()) {
+      RetVal = Builder.CreatePtrToInt(RetVal, RetTy);
     } else if (RetTy->isIntegerTy() && RetVal->getType()->isIntegerTy()) {
       if (RetVal->getType()->getIntegerBitWidth() > RetTy->getIntegerBitWidth())
         RetVal = Builder.CreateTrunc(RetVal, RetTy);

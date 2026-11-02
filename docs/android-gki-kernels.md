@@ -173,7 +173,7 @@ also apply without a GKI selection; they do not infer procfs content or mounts.
 
 ## Extended-attribute query import and target errors
 
-With explicit GKI and `linux_files` selection, raw x64/AArch64 `getxattr`,
+With explicit query import order and `linux_files` selection, raw x64/AArch64 `getxattr`,
 `lgetxattr` and `fgetxattr` share the file owner with their three named Bionic
 imports. The model admits errors determined by importing the attribute name
 or resolving a declared target. Empty names and names with no terminator in
@@ -187,6 +187,21 @@ and unreadable name return ENOENT and EFAULT respectively. The order is
 source-pinned in [5.10 `path_getxattr` and `fgetxattr`](https://android.googlesource.com/kernel/common/+/b14525331e0d5d335b037d6ed17d40424ed47b0a/fs/xattr.c),
 [6.12](https://android.googlesource.com/kernel/common/+/894a317b5382555614ef2be7a79cca79083c6cf2/fs/xattr.c)
 and [6.18 `path_getxattrat`](https://android.googlesource.com/kernel/common/+/bab5f6aca819542b9dd13a70d3c62271e81b8e85/fs/xattr.c).
+
+GKI selection supplies this order from the release table. To declare only the
+observed order without selecting the other GKI contracts, use:
+
+```json
+{"linux_kernel":{"xattr_query_import":"target-before-name"},"linux_files":{"files":[]}}
+```
+
+The other accepted value is `"name-before-target"`. The values are exact and
+case sensitive. Supplying `gki` together with `xattr_query_import` is rejected,
+even when they agree. Without either input, these queries remain unsupported.
+This declaration
+does not supply attribute values, permission or namespace policy, link
+traversal, task observations or any other syscall's semantics. Explicit absence
+observations such as `unavailable_syscalls:["pidfd_open"]` remain independent.
 The name limit comes from each pin's
 [UAPI limits](https://android.googlesource.com/kernel/common/+/bab5f6aca819542b9dd13a70d3c62271e81b8e85/include/uapi/linux/limits.h).
 
@@ -201,8 +216,8 @@ additional contracts.
 
 ## Implemented process CPU clock subset
 
-With explicit GKI selection, `clock_gettime` admits negative encoded process
-CPU clock IDs for PROF, VIRT and SCHED. It uses the low signed 32-bit argument;
+With explicit GKI selection or an explicit `linux_kernel.tasks` catalogue,
+`clock_gettime` admits negative encoded process CPU clock IDs for PROF, VIRT and SCHED. It uses the low signed 32-bit argument;
 the encoded PID and clock kind identify an explicit sample in `linux_time`.
 The current process is implicit. Other processes must be declared live group
 leaders in the closed task catalogue before a clock sample can be supplied:
@@ -211,13 +226,18 @@ leaders in the closed task catalogue before a clock sample can be supplied:
 {"linux_kernel":{"gki":"android17-6.18","tasks":[{"id":2000,"group_leader":true}]},"linux_time":{"advance_on_idle":true,"clocks":[{"id":1,"seconds":10,"nanoseconds":0},{"id":2,"seconds":3,"nanoseconds":4},{"id":-16006,"seconds":7,"nanoseconds":9}]}}
 ```
 
+Omit `gki` when only the task catalogue and process CPU clock subset are
+observed. An explicitly empty `tasks` array admits the current process and
+observes foreign absence. This does not enable pidfd release semantics or
+supply any clock samples.
+
 Here `-16006` is PID 2000's SCHED clock. PROF and VIRT are independent
 observations. For the current process, SCHED IDs 2, -6 (encoded PID zero) and
 -8006 (PID 1000) share one sample. The corresponding PROF aliases are -8 and
 -8008, and VIRT aliases are -7 and -8007. Duplicate aliases are rejected even
 when their values agree. CPU seconds must be nonnegative and nanoseconds
 normalized. Idle advancement leaves every process CPU sample fixed while
-advancing only wall clock IDs 0, 1 and 7. Instruction execution does not infer
+advancing only declared wall clock IDs 0, 1, 4 and 7 from their own epochs. Instruction execution does not infer
 CPU usage.
 
 The current task's own TID also identifies its process group, including in

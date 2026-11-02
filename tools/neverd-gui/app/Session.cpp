@@ -129,13 +129,17 @@ bool isEdit(const QString &operation) {
                                    QStringLiteral("function_delete"),
                                    QStringLiteral("function_edit"),
                                    QStringLiteral("item_define"),
+                                   QStringLiteral("patch_apply"),
+                                   QStringLiteral("patch_revert"),
                                    QStringLiteral("operand_format"),
                                    QStringLiteral("local_types_declare"),
                                    QStringLiteral("local_types_forget"),
                                    QStringLiteral("type_libraries_set"),
                                    QStringLiteral("undo"),
                                    QStringLiteral("redo"),
-                                   QStringLiteral("save")};
+                                   QStringLiteral("save"),
+                                   QStringLiteral("analysis_section_add"),
+                                   QStringLiteral("analysis_section_remove")};
   return edits.contains(operation);
 }
 
@@ -144,12 +148,38 @@ bool silentFailure(const QString &status, const QString &code) {
          code == QLatin1String("worker_stopped") ||
          code == QLatin1String("session_changed");
 }
+
+QString patchLogBytes(const QString &bytes) {
+  const auto limit = ::neverd::limits::gui::kPatchLogHexCharacters;
+  return bytes.left(limit) +
+         (bytes.size() > limit ? QStringLiteral("…") : QString());
+}
+
+QString patchLogInstructions(const QJsonObject &plan, const QString &field) {
+  const auto rows = plan.value(field).toArray();
+  QStringList text;
+  for (const auto &value : rows) {
+    if (text.size() == ::neverd::limits::gui::kPatchLogInstructions)
+      break;
+    text.append(value.toObject().value("text").toString().simplified());
+  }
+  if (rows.size() > text.size() || plan.value(field + "_truncated").toBool())
+    text.append(QStringLiteral("…"));
+  return text.join(QStringLiteral("; "));
+}
 } // namespace
 
 Session::Session(QString workerPath, QObject *parent)
     : QObject(parent), queries_(&client_), analysis_(queries_, workerPath),
       workerPath_(std::move(workerPath)),
       sessionEpoch_(queries_.sessionEpoch()) {
+  connect(this, &Session::opened, this, &Session::refreshBytePatches);
+  connect(this, &Session::revisionChanged, this, &Session::refreshBytePatches);
+  connect(this, &Session::unloaded, this, [this] {
+    patchRanges_.clear();
+    emit bytePatchesChanged();
+    highlightLocks_.clear();
+  });
   queries_.setCacheBudgetMiB(::neverd::limits::gui::kSessionCacheMiB);
   connect(&analysis_, &AnalysisPool::diagnostic, this,
           [this](const QString &text) { emit message(text, 0); });
@@ -189,12 +219,17 @@ Session::Session(QString workerPath, QObject *parent)
   });
   connect(&queries_, &QueryService::loadProgress, this,
           [this](const QJsonObject &payload) {
+            // A step of one unit only begins and ends; its fraction is
+            // unknown in between.
             const double total = payload.value("total").toDouble();
             const double done = payload.value("done").toDouble();
             emit loadProgress(payload.value("phase").toString(),
-                              total > 0 ? std::clamp(done / total, 0.0, 1.0)
-                                        : -1.0);
+                              total > 1 ? std::clamp(done / total, 0.0, 1.0)
+                                        : -1.0,
+                              payload.value("detail").toString());
           });
+  connect(&queries_, &QueryService::backgroundSnapshotReady, this,
+          &Session::applyBackgroundSnapshot);
   // A change on disk settles before the project takes it: git and editors
   // write several files, some by replacing them.
   projectSync_.setSingleShot(true);
@@ -221,6 +256,13 @@ Address Session::entryAddress() const {
 
 bool Session::indexReady() const {
   return background_.value("state").toString() == QLatin1String("ready");
+}
+
+bool Session::analysisComplete() const {
+  return loaded_ && !opening_ &&
+         (indexReady() || (background_.value("state").toString() ==
+                               QLatin1String("unavailable") &&
+                           queries_.analysisComplete()));
 }
 
 bool Session::busy() const {
@@ -278,40 +320,57 @@ void Session::receive(const QJsonObject &incoming) {
       openPending();
     }
   } else if (type == QLatin1String("heartbeat")) {
-    // A heartbeat the worker built before a reply that changed the project
-    // can arrive after that reply. Its background state, including discovery
-    // completion that releases the large-image replica gate, is not ours.
-    if (incoming.value("project_id").toString() != queries_.projectId())
-      return;
-    const auto background = incoming.value("background").toObject();
-    const auto state = background.value("state").toString();
-    if (loaded_ && background.value("discovery_complete")
-                       .toBool(state == QLatin1String("building") ||
-                               state == QLatin1String("ready") ||
-                               state == QLatin1String("unavailable")))
-      analysis_.setSnapshotBlocked(false);
-    if (background != background_) {
-      background_ = background;
-      const auto generation = background.value("generation").toString();
-      const bool newGeneration = generation != generation_;
-      generation_ = generation;
-      const auto functions =
-          background.value("functions").toInteger(functionCount_);
-      const bool moreFunctions =
-          functionCount_ >= 0 && functions != functionCount_;
-      functionCount_ = functions;
-      if (newGeneration || moreFunctions)
-        queries_.listingChanged();
-      emit backgroundChanged();
-      if (newGeneration)
-        emit generationChanged();
-      if (moreFunctions)
-        emit functionsChanged();
-      emit stateChanged();
-    }
+    applyBackgroundSnapshot(incoming);
   } else if (type == QLatin1String("fatal")) {
     setError(incoming.value("error").toObject().value("message").toString());
     client_.stop();
+  }
+}
+
+void Session::applyBackgroundSnapshot(const QJsonObject &incoming) {
+  if (!loaded_ || !incoming.value("background").isObject() ||
+      incoming.value("project_id").toString() != queries_.projectId() ||
+      (incoming.contains("revision") &&
+       incoming.value("revision").toString() != queries_.revision()))
+    return;
+  // A periodic heartbeat can be written after a newer executor reply.
+  // The worker's publication sequence orders both channels without guessing
+  // an ordering for opaque listing generations or project revisions.
+  const auto sequence = incoming.value("background_sequence");
+  if (!sequence.isUndefined()) {
+    bool valid = false;
+    const auto next = sequence.toString().toULongLong(&valid);
+    if (!valid || (BackgroundSequence && next <= *BackgroundSequence))
+      return;
+    BackgroundSequence = next;
+  } else if (BackgroundSequence) {
+    return;
+  }
+  const auto background = incoming.value("background").toObject();
+  const auto state = background.value("state").toString();
+  if (background.value("discovery_complete")
+          .toBool(state == QLatin1String("building") ||
+                  state == QLatin1String("ready") ||
+                  state == QLatin1String("unavailable")))
+    analysis_.setSnapshotBlocked(false);
+  if (background != background_) {
+    background_ = background;
+    const auto generation = background.value("generation").toString();
+    const bool newGeneration = generation != generation_;
+    generation_ = generation;
+    const auto functions =
+        background.value("functions").toInteger(functionCount_);
+    const bool moreFunctions =
+        functionCount_ >= 0 && functions != functionCount_;
+    functionCount_ = functions;
+    if (newGeneration || moreFunctions)
+      queries_.listingChanged();
+    emit backgroundChanged();
+    if (newGeneration)
+      emit generationChanged();
+    if (moreFunctions)
+      emit functionsChanged();
+    emit stateChanged();
   }
 }
 
@@ -325,15 +384,16 @@ QString Session::platformName() const {
   return {};
 }
 
-QueryService::SubscriptionId Session::read(const QString &operation,
-                                           const QJsonObject &payload,
-                                           QObject *owner, Reply done,
-                                           Failure failed) {
+QueryService::SubscriptionId
+Session::read(const QString &operation, const QJsonObject &payload,
+              QObject *owner, Reply done, Failure failed,
+              QueryService::QuerySpec::Priority priority) {
   auto &service = AnalysisService::handles(operation)
                       ? analysis_.queries(payload, owner ? owner : &reads_)
                       : queries_;
   return service.subscribe(
-      {operation, payload}, owner ? owner : &reads_,
+      {operation, payload, QueryService::QuerySpec::Latest, {}, priority},
+      owner ? owner : &reads_,
       [this, done = std::move(done),
        failed = std::move(failed)](const QJsonObject &response) {
         const auto status = response.value("status").toString();
@@ -351,6 +411,30 @@ QueryService::SubscriptionId Session::read(const QString &operation,
           failed(code, text);
         else
           emit message(text, 1);
+      });
+}
+
+void Session::produceBinary(const QString &operation,
+                            const QJsonObject &payload, QObject *owner,
+                            Reply done, Failure failed) {
+  if (operation != "patch_export" && operation != "source_patch")
+    return;
+  const QPointer<QObject> alive(owner);
+  command(
+      operation, payload,
+      [this, operation, address = payload.value("address").toString(), alive,
+       done = std::move(done)](const QJsonObject &result) {
+        if (operation == "source_patch")
+          emit message(tr("Rewritten function at %1 saved to %2")
+                           .arg(address, result.value("path").toString()),
+                       0);
+        if (alive && done)
+          done(result);
+      },
+      [alive, failed = std::move(failed)](const QString &code,
+                                          const QString &message) {
+        if (alive && failed)
+          failed(code, message);
       });
 }
 
@@ -376,6 +460,17 @@ void Session::command(const QString &operation, const QJsonObject &payload,
           if (status == QLatin1String("ok")) {
             if (payload.contains("dirty"))
               dirty_ = payload.value("dirty").toBool();
+            if (operation == QLatin1String("analysis_section_add") ||
+                operation == QLatin1String("analysis_section_remove") ||
+                operation == QLatin1String("reload")) {
+              metadata_ = payload;
+              background_ = payload.value("background").toObject();
+              generation_ = background_.value("generation").toString();
+              functionCount_ = -1;
+              emit functionsChanged();
+              emit generationChanged();
+              emit backgroundChanged();
+            }
             // An opened database holds the project until it is written back.
             if (edit && openedFromDatabase_)
               databaseDirty_ = true;
@@ -418,6 +513,7 @@ void Session::resetState() {
   metadata_ = {};
   history_ = {};
   background_ = {};
+  BackgroundSequence.reset();
   generation_.clear();
   functionCount_ = -1;
 }
@@ -551,6 +647,7 @@ void Session::openPending() {
   const auto requested = std::exchange(pendingFile_, {});
   const auto options = std::exchange(pendingOptions_, {});
   opening_ = true;
+  openingFile_ = requested;
   error_.clear();
   emit message(tr("Loading %1…").arg(QFileInfo(requested).fileName()), 0);
   emit stateChanged();
@@ -754,8 +851,17 @@ void Session::sendOpen(const QString &requested, const QString &path,
         analysis_.setSnapshotBlocked(options.analysis && native && large);
         if (options.analysis && native && !large &&
             functionCount_ >=
-                ::neverd::limits::gui::kSessionSendOpenFunctionCountLimit)
-          analysis_.prefetchSource(entryAddress());
+                ::neverd::limits::gui::kSessionSendOpenFunctionCountLimit) {
+          // Speculative source preparation must follow the initial browsing
+          // reads instead of starting a replica and snapshot ahead of them.
+          connect(
+              &queries_, &QueryService::idle, this,
+              [this, opened = epoch(), entry = entryAddress()] {
+                if (loaded_ && epoch() == opened)
+                  analysis_.prefetchSource(entry);
+              },
+              Qt::SingleShotConnection);
+        }
         emit opened();
         emit stateChanged();
         refreshHistory();
@@ -922,7 +1028,7 @@ void Session::save() {
   command(QStringLiteral("save"), {}, [this](const QJsonObject &) {
     dirty_ = false;
     refreshHistory();
-    emit message(tr("Comments and history saved"), 0);
+    emit message(tr("Project changes saved"), 0);
     if (openedFromDatabase_)
       writeDatabase(databasePath_);
   });
@@ -1134,6 +1240,48 @@ bool Session::acceptsEdit(std::optional<quint64> epoch) {
   return true;
 }
 
+void Session::editBytePatch(const QString &operation,
+                            const QJsonObject &request, quint64 epoch,
+                            std::function<void()> done, Failure failed) {
+  if ((operation != "patch_apply" && operation != "patch_revert") ||
+      !keepsBytePatches() || !acceptsEdit(epoch))
+    return;
+  if (dirty_)
+    save();
+  command(
+      operation, request,
+      [this, operation, request, done](const QJsonObject &result) {
+        const auto address = result.value("address").toString();
+        if (!result.value("saved").toBool()) {
+          emit message(tr("Patch at %1 made no changes.").arg(address), 0);
+        } else if (operation == "patch_revert") {
+          emit message(
+              tr("Restored original bytes at %1 (%2 ranges).")
+                  .arg(address)
+                  .arg(std::max(1,
+                                int(request.value("ranges").toArray().size()))),
+              0);
+        } else {
+          auto text =
+              tr("Applied patch at %1 (bytes: %2): %3 → %4")
+                  .arg(address)
+                  .arg(result.value("size").toInteger())
+                  .arg(patchLogBytes(result.value("original").toString()),
+                       patchLogBytes(result.value("current").toString()));
+          const auto before = patchLogInstructions(result, "covers");
+          const auto after = patchLogInstructions(result, "decoded");
+          if (!before.isEmpty() && !after.isEmpty())
+            text += '\n' + tr("Instructions: %1 → %2").arg(before, after);
+          emit message(text, 0);
+        }
+        refreshHistory();
+        emit functionsChanged();
+        if (done)
+          done();
+      },
+      std::move(failed));
+}
+
 void Session::editDataPresentation(const QString &operation,
                                    const QJsonObject &request, quint64 epoch) {
   if ((operation != "item_define" && operation != "operand_format") ||
@@ -1299,6 +1447,14 @@ void Session::rename(Address function, const QString &name,
           });
 }
 
+void Session::prepareCodeName(const QJsonObject &edit, quint64 epoch) {
+  if (!acceptsEdit(epoch) ||
+      !capabilities_.contains(QStringLiteral("code_edit_prepare")))
+    return;
+  read(QStringLiteral("code_edit_prepare"), edit, this, {},
+       [](const QString &, const QString &) {});
+}
+
 void Session::editCode(const QJsonObject &edit, quint64 epoch) {
   if (!acceptsEdit(epoch))
     return;
@@ -1325,6 +1481,8 @@ void Session::undo() {
   if (!canUndo())
     return;
   command(QStringLiteral("undo"), {}, [this](const QJsonObject &payload) {
+    emit message(
+        tr("Undid edit at %1.").arg(payload.value("address").toString()), 0);
     history_ = payload;
     emit historyChanged();
   });
@@ -1334,6 +1492,8 @@ void Session::redo() {
   if (!canRedo())
     return;
   command(QStringLiteral("redo"), {}, [this](const QJsonObject &payload) {
+    emit message(
+        tr("Redid edit at %1.").arg(payload.value("address").toString()), 0);
     history_ = payload;
     emit historyChanged();
   });
@@ -1349,6 +1509,16 @@ void Session::loadSignatures(const QString &path, bool tree) {
                              .arg(payload.value("byte_matches").toInt()),
                          0);
           });
+}
+
+void Session::declinePdb() {
+  if (!loaded_)
+    return;
+  loadOptions_.pdb = {{"mode", "none"}};
+  metadata_.insert(QStringLiteral("pdb"), loadOptions_.pdb);
+  metadata_.remove(QStringLiteral("pdb_download"));
+  recordDebugChoices(true);
+  emit stateChanged();
 }
 
 void Session::loadPdb(const QJsonObject &selection) {
@@ -1651,6 +1821,60 @@ void Session::executeContribution(const QString &id,
   // Contributions are declarative reads; they never mutate the project.
   read(QStringLiteral("contribution_execute"), payload, &reads_,
        [this](const QJsonObject &result) { emit contributionResult(result); });
+}
+
+bool Session::hasBytePatch(Address address, Address size) const {
+  if (!size)
+    return false;
+  auto it = std::lower_bound(
+      patchRanges_.begin(), patchRanges_.end(), address,
+      [](const auto &range, Address at) { return range.first < at; });
+  if (it != patchRanges_.end() && it->first - address < size)
+    return true;
+  if (it == patchRanges_.begin())
+    return false;
+  --it;
+  return address - it->first < it->second;
+}
+void Session::refreshBytePatches() {
+  if (!loaded_ || !keepsBytePatches()) {
+    if (!patchRanges_.isEmpty()) {
+      patchRanges_.clear();
+      emit bytePatchesChanged();
+    }
+    return;
+  }
+  const auto before = revision();
+  const auto opened = epoch();
+  read("patches", {{"ranges_only", true}}, this,
+       [this, before, opened](const QJsonObject &rows) {
+         if (before != revision() || opened != epoch())
+           return;
+         decltype(patchRanges_) ranges;
+         for (const auto &value : rows.value("items").toArray()) {
+           const auto row = value.toObject();
+           const auto at = parseAddress(row.value("address").toString());
+           const auto size = row.value("size").toInteger();
+           if (at && size > 0)
+             ranges.append({*at, Address(size)});
+         }
+         std::sort(ranges.begin(), ranges.end());
+         if (ranges == patchRanges_)
+           return;
+         patchRanges_ = std::move(ranges);
+         emit bytePatchesChanged();
+       });
+}
+
+void Session::addAnalysisSection(const QJsonObject &description, Reply done,
+                                 Failure failed) {
+  command(QStringLiteral("analysis_section_add"), description, std::move(done),
+          std::move(failed));
+}
+void Session::removeAnalysisSection(const QString &name, Reply done,
+                                    Failure failed) {
+  command(QStringLiteral("analysis_section_remove"), {{"name", name}},
+          std::move(done), std::move(failed));
 }
 
 } // namespace neverd::gui

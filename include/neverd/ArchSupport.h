@@ -29,6 +29,12 @@ inline bool archLiftSupported(Arch A) {
 
 inline bool archCodegenSupported(Arch A) { return archLiftSupported(A); }
 
+/// Whether every instruction of an \p A image decodes in the one mode the
+/// image's bitness gives it.  AArch32 interworks ARM and Thumb code, whose
+/// mode each address takes from the image's metadata, so code placed at a new
+/// address has no mode until something states one.
+constexpr bool archHasSingleInstructionMode(Arch A) { return A != Arch::ARM; }
+
 /// Whether \p A stores a multi-byte value least significant byte first.  The
 /// loaders take no big-endian image of the native ISAs; EVM memory is
 /// big-endian.

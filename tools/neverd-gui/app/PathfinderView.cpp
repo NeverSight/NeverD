@@ -11,9 +11,12 @@
 #include "ChooserView.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
+#include "ModelessDialog.h"
 #include "Session.h"
+#include "ShortcutHint.h"
 #include "ShrinkableRow.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
@@ -41,6 +44,31 @@ enum Column { NameColumn, AddressColumn, ReferenceColumn, Columns };
 
 /// What a row of the waypoint list stands for.
 enum class Row { Waypoint, Segment, Path, Step };
+enum class ListKey { Add, Remove, Up, Down, Copy };
+
+QKeySequence listKey(ListKey command) {
+  switch (command) {
+  case ListKey::Add:
+    return QKeySequence(Qt::Key_Insert);
+  case ListKey::Remove:
+    return QKeySequence(QKeySequence::Delete);
+  case ListKey::Up:
+    return QKeySequence(Qt::ALT | Qt::Key_Up);
+  case ListKey::Down:
+    return QKeySequence(Qt::ALT | Qt::Key_Down);
+  case ListKey::Copy:
+    return QKeySequence(QKeySequence::Copy);
+  }
+  return {};
+}
+
+QAction *showListKey(QAction *action, ListKey command) {
+  action->setShortcut(listKey(command));
+  action->setShortcutContext(Qt::WidgetShortcut);
+  action->setShortcutVisibleInContextMenu(true);
+  return action;
+}
+
 constexpr int RowRole = Qt::UserRole;
 /// The function or import a row names.
 constexpr int NodeRole = Qt::UserRole + 1;
@@ -101,21 +129,21 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
                            ? text
                            : QStringLiteral("%1 (%2)").arg(
                                  text, key.toString(QKeySequence::NativeText)));
+    setShortcutHint(*button, key);
     button->setAutoRaise(true);
     commandLayout->addWidget(button);
     return button;
   };
   add_ = commandButton("function_create", tr("Add a waypoint"),
-                       QKeySequence(Qt::Key_Insert), "pathfinderAdd");
+                       listKey(ListKey::Add), "pathfinderAdd");
   exclude_ = commandButton("pathfinder_exclude", tr("Exclude a function"),
-                           QKeySequence(), "pathfinderExclude");
-  remove_ =
-      commandButton("function_delete", tr("Remove"),
-                    QKeySequence(QKeySequence::Delete), "pathfinderRemove");
-  up_ = commandButton("up", tr("Move the waypoint up"),
-                      QKeySequence(Qt::ALT | Qt::Key_Up), "pathfinderUp");
+                           listKey(ListKey::Add), "pathfinderExclude");
+  remove_ = commandButton("function_delete", tr("Remove"),
+                          listKey(ListKey::Remove), "pathfinderRemove");
+  up_ = commandButton("up", tr("Move the waypoint up"), listKey(ListKey::Up),
+                      "pathfinderUp");
   down_ = commandButton("down", tr("Move the waypoint down"),
-                        QKeySequence(Qt::ALT | Qt::Key_Down), "pathfinderDown");
+                        listKey(ListKey::Down), "pathfinderDown");
   clear_ = commandButton("output_clear", tr("Clear the waypoints"),
                          QKeySequence(), "pathfinderClear");
   commandLayout->addStretch(1);
@@ -143,6 +171,7 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
     toggle->setObjectName(QString::fromLatin1(name));
     toggle->setText(text);
     toggle->setCheckable(true);
+    toggle->setProperty("glyphToggle", true);
     toggle->setAutoRaise(true);
     toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     toggle->setArrowType(Qt::RightArrow);
@@ -235,23 +264,19 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
     keys->setContext(Qt::WidgetWithChildrenShortcut);
     connect(keys, &QShortcut::activated, this, std::move(slot));
   };
-  shortcut(waypointList_, QKeySequence(Qt::Key_Insert),
-           [this] { chooseWaypoint(); });
-  shortcut(exclusionList_, QKeySequence(Qt::Key_Insert),
+  shortcut(waypointList_, listKey(ListKey::Add), [this] { chooseWaypoint(); });
+  shortcut(exclusionList_, listKey(ListKey::Add),
            [this] { chooseExclusion(); });
   for (QWidget *list : {static_cast<QWidget *>(waypointList_),
                         static_cast<QWidget *>(exclusionList_)}) {
-    shortcut(list, QKeySequence(QKeySequence::Delete),
-             [this] { removeCurrent(); });
-    shortcut(list, QKeySequence(QKeySequence::Copy), [this] {
+    shortcut(list, listKey(ListKey::Remove), [this] { removeCurrent(); });
+    shortcut(list, listKey(ListKey::Copy), [this] {
       if (const QString text = selectedText(); !text.isEmpty())
         QApplication::clipboard()->setText(text);
     });
   }
-  shortcut(waypointList_, QKeySequence(Qt::ALT | Qt::Key_Up),
-           [this] { moveCurrent(-1); });
-  shortcut(waypointList_, QKeySequence(Qt::ALT | Qt::Key_Down),
-           [this] { moveCurrent(1); });
+  shortcut(waypointList_, listKey(ListKey::Up), [this] { moveCurrent(-1); });
+  shortcut(waypointList_, listKey(ListKey::Down), [this] { moveCurrent(1); });
 
   connect(waypointList_, &QTreeWidget::itemActivated, this,
           [this](QTreeWidgetItem *item) {
@@ -271,11 +296,15 @@ PathfinderView::PathfinderView(Session &session, const AddressSpace &space,
   connect(exclusionList_, &QTreeWidget::customContextMenuRequested, this,
           [this](const QPoint &point) {
             QMenu menu(this);
-            menu.addAction(icon(QStringLiteral("pathfinder_exclude")),
-                           tr("Exclude a function..."), this,
-                           &PathfinderView::chooseExclusion);
-            menu.addAction(icon(QStringLiteral("function_delete")),
-                           tr("Remove"), this, &PathfinderView::removeCurrent)
+            showListKey(
+                menu.addAction(icon(QStringLiteral("pathfinder_exclude")),
+                               tr("Exclude a function..."), this,
+                               &PathfinderView::chooseExclusion),
+                ListKey::Add);
+            showListKey(menu.addAction(icon(QStringLiteral("function_delete")),
+                                       tr("Remove"), this,
+                                       &PathfinderView::removeCurrent),
+                        ListKey::Remove)
                 ->setEnabled(exclusionList_->currentItem() != nullptr);
             menu.exec(exclusionList_->viewport()->mapToGlobal(point));
           });
@@ -372,15 +401,15 @@ void PathfinderView::add(Address node, const Node &described, Role role,
 void PathfinderView::choose(Role role) {
   if (!session_.loaded() || !session_.findsCallPaths())
     return;
-  // Functions and imports, as IDA's waypoint chooser lists functions.
-  QDialog dialog(this);
-  dialog.setObjectName(QStringLiteral("pathfinderChooser"));
-  dialog.setWindowTitle(role == Role::Waypoint ? tr("Add a Waypoint")
-                                               : tr("Exclude a Function"));
-  dialog.setWindowIcon(icon(QStringLiteral("pathfinder")));
-  dialog.resize(640, 420);
-  auto *layout = new QVBoxLayout(&dialog);
-  auto *tabs = new QTabWidget(&dialog);
+  const auto epoch = session_.epoch();
+  auto *dialog = new QDialog(this);
+  dialog->setObjectName(QStringLiteral("pathfinderChooser"));
+  dialog->setWindowTitle(role == Role::Waypoint ? tr("Add a Waypoint")
+                                                : tr("Exclude a Function"));
+  dialog->setWindowIcon(icon(QStringLiteral("pathfinder")));
+  dialog->resize(640, 420);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *tabs = new QTabWidget(dialog);
   auto *functions =
       new ChooserView(session_, space_, ChooserKind::Functions, tabs);
   auto *imports = new ChooserView(session_, space_, ChooserKind::Imports, tabs);
@@ -388,29 +417,31 @@ void PathfinderView::choose(Role role) {
   tabs->addTab(imports, icon(QStringLiteral("imports")), tr("Imports"));
   layout->addWidget(tabs, 1);
   auto *buttons = new QDialogButtonBox(
-      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
   buttons->button(QDialogButtonBox::Ok)
       ->setText(role == Role::Waypoint ? tr("Add") : tr("Exclude"));
   layout->addWidget(buttons);
-  std::optional<Address> chosen;
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-    chosen =
+  connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+  // These lists are created after the session's initial load notification.
+  for (ChooserView *view : {functions, imports}) {
+    view->model().reload();
+    connect(view, &ChooserView::activated, dialog, &QDialog::accept);
+  }
+  connect(dialog, &QDialog::accepted, this, [this, tabs, role, epoch] {
+    if (!session_.loaded() || session_.epoch() != epoch)
+      return;
+    const auto chosen =
         qobject_cast<ChooserView *>(tabs->currentWidget())->currentAddress();
-    dialog.accept();
+    if (!chosen)
+      return;
+    if (role == Role::Waypoint)
+      addWaypoint(*chosen);
+    else
+      addExclusion(*chosen);
   });
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  for (ChooserView *view : {functions, imports})
-    connect(view, &ChooserView::activated, &dialog, [&](Address address) {
-      chosen = address;
-      dialog.accept();
-    });
+  showModelessDialog(dialog, this, &session_);
   functions->focusFilter();
-  if (dialog.exec() != QDialog::Accepted || !chosen)
-    return;
-  if (role == Role::Waypoint)
-    addWaypoint(*chosen);
-  else
-    addExclusion(*chosen);
 }
 
 void PathfinderView::chooseWaypoint() { choose(Role::Waypoint); }
@@ -749,8 +780,10 @@ void PathfinderView::contextMenu(const QPoint &point) {
     waypointList_->setCurrentItem(item);
   const bool usable = session_.loaded() && session_.findsCallPaths();
   QMenu menu(this);
-  menu.addAction(icon(QStringLiteral("function_create")),
-                 tr("Add a waypoint..."), this, &PathfinderView::chooseWaypoint)
+  showListKey(menu.addAction(icon(QStringLiteral("function_create")),
+                             tr("Add a waypoint..."), this,
+                             &PathfinderView::chooseWaypoint),
+              ListKey::Add)
       ->setEnabled(usable);
   menu.addAction(icon(QStringLiteral("pathfinder_exclude")),
                  tr("Exclude a function..."), this,
@@ -783,21 +816,26 @@ void PathfinderView::contextMenu(const QPoint &point) {
   }
   if (rowKind(item) == Row::Waypoint) {
     menu.addSeparator();
-    menu.addAction(up_->icon(), tr("Move up"), this,
-                   [this] { moveCurrent(-1); })
+    showListKey(menu.addAction(up_->icon(), tr("Move up"), this,
+                               [this] { moveCurrent(-1); }),
+                ListKey::Up)
         ->setEnabled(up_->isEnabled());
-    menu.addAction(down_->icon(), tr("Move down"), this,
-                   [this] { moveCurrent(1); })
+    showListKey(menu.addAction(down_->icon(), tr("Move down"), this,
+                               [this] { moveCurrent(1); }),
+                ListKey::Down)
         ->setEnabled(down_->isEnabled());
-    menu.addAction(remove_->icon(), tr("Remove"), this,
-                   &PathfinderView::removeCurrent);
+    showListKey(menu.addAction(remove_->icon(), tr("Remove"), this,
+                               &PathfinderView::removeCurrent),
+                ListKey::Remove);
   }
   menu.addSeparator();
-  menu.addAction(icon(QStringLiteral("copy")), tr("Copy"), this,
-                 [this] {
-                   if (const QString text = selectedText(); !text.isEmpty())
-                     QApplication::clipboard()->setText(text);
-                 })
+  showListKey(menu.addAction(icon(QStringLiteral("copy")), tr("Copy"), this,
+                             [this] {
+                               if (const QString text = selectedText();
+                                   !text.isEmpty())
+                                 QApplication::clipboard()->setText(text);
+                             }),
+              ListKey::Copy)
       ->setEnabled(!waypointList_->selectedItems().isEmpty());
   menu.addAction(clear_->icon(), tr("Clear the waypoints"), this,
                  &PathfinderView::clearWaypoints)

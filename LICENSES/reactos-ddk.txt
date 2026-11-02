@@ -1,0 +1,33 @@
+The generated Windows kernel type libraries include declarations derived from
+sdk/include/ddk/fltkernel.h in ReactOS, commit
+b6224c3165811265422dacd5ed0de36b1c2311c9:
+https://github.com/reactos/reactos/blob/b6224c3165811265422dacd5ed0de36b1c2311c9/sdk/include/ddk/fltkernel.h
+
+WindowsKernelARM64.h also derives from the public-domain core DDK templates
+under sdk/include/xdk at that revision, including wdm.template.h,
+ntddk.template.h, ntifs.template.h and ntdef.template.h and their included
+declarations. The source manifest is scripts/windows_types/reactos-arm64.sha256.
+Core DDK contributors include Amine Khaldi and Timo Kreuzer.
+The driver annotations in sdk/include/ddk/kernelspecs.h,
+sdk/include/psdk/driverspecs.h and sdk/include/psdk/suppress.h are also public
+domain; kernelspecs.h and suppress.h credit Timo Kreuzer.
+The public-domain disclaimer below applies to these DDK headers too.
+
+The original header's notice follows:
+
+fltkernel.h
+
+This file is part of the ReactOS DDK package.
+
+Contributors:
+  Amine Khaldi (amine.khaldi@reactos.org)
+
+THIS SOFTWARE IS NOT COPYRIGHTED
+
+This source code is offered for use in the public domain. You may
+use, modify or distribute it freely.
+
+This code is distributed in the hope that it will be useful but
+WITHOUT ANY WARRANTY. ALL WARRANTIES, EXPRESS OR IMPLIED ARE HEREBY
+DISCLAIMED. This includes but is not limited to warranties of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.

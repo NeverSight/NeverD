@@ -22,7 +22,8 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/DirectTailCall.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/libc/NoReturnLoadedTarget.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
@@ -111,8 +112,8 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
     // every reaching path. Existing table identity/quarantine guards still own
     // dispatch classification; this frame condition supplies no callee ABI.
     if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsRet ||
-        Rec.IsCond || !Rec.JumpTableTargets.empty() ||
-        (NeedsFrameGuard && !Restored(Addr)) ||
+        Rec.IsCond || Rec.RejectedScalarBranch || Rec.RejectedComputedTargets ||
+        !Rec.JumpTableTargets.empty() || (NeedsFrameGuard && !Restored(Addr)) ||
         EverPublishedJumpTableBranches.count(Addr) ||
         LostValidatedJumpTableBranches.count(Addr) ||
         StackTableEvidenceIncompleteBranches.count(Addr) ||
@@ -393,11 +394,11 @@ bool CFGBuilder::isNoReturnCall(const InsnRecord &Rec) const {
       break;
     }
     // x86 lifts `call [slot]` as an INDIR_CALL of the slot address. Only the
-    // import the loader binds to the slot can prove the call never returns.
+    // import binding or a proved immutable code pointer can name its target.
     if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs >= 1 &&
         Op.Inputs[0].isConst()) {
-      return libc::isNoReturnTarget(*CurrentImg, Op.Inputs[0].Offset,
-                                    NoReturnTargets);
+      return libc::isNoReturnLoadedTarget(*CurrentImg, Op.Inputs[0].Offset,
+                                          NoReturnTargets);
     }
   }
   if (Target == InvalidVA)
@@ -537,16 +538,20 @@ void CFGBuilder::rewriteOwnInteriorCall(const BinaryImage &Img, InsnRecord &Rec,
   // A call to an internal label can either return normally or abandon the
   // invocation. Its pushed return address is a value like any other.
   // Whether a return later pops it is for
-  // classifyOwnInteriorCalls to prove.  The function's body is the extent
-  // its own unwind record declares (a function-table entry or a DWARF FDE);
-  // a range recovered from code or shared by several functions bounds
-  // nothing.
+  // classifyOwnInteriorCalls to prove.  A body is the extent an unwind record
+  // declares (a function-table entry or a DWARF FDE); a range recovered from
+  // code or shared by several functions bounds nothing.  The function must own
+  // the record that starts at its entry. A call inside that record is interior
+  // to it; a call this function reaches inside another record's body, after
+  // a jump into code that record owns, is interior to that record instead.
   const va_t Target = *Rec.Immediate;
-  const ExceptionFunction *Own =
+  const ExceptionFunction *Self =
       Img.ExceptionMetadata.findFunction(CurrentFuncEntry);
-  if (!Own || Own->Kind != RuntimeFunctionKind::Primary ||
+  const ExceptionFunction *Own = Img.ExceptionMetadata.findFunction(Rec.Addr);
+  if (!Self || Self->Kind != RuntimeFunctionKind::Primary ||
+      Self->CodeRange.Begin != CurrentFuncEntry || !Own ||
+      Own->Kind != RuntimeFunctionKind::Primary ||
       !exceptionEncodingBoundsOneFunction(Own->Encoding) ||
-      Own->CodeRange.Begin != CurrentFuncEntry ||
       !Own->CodeRange.contains(Rec.Addr) || !Own->CodeRange.contains(Target) ||
       Target == Own->CodeRange.Begin || isKnownFunctionEntry(Target) ||
       KeptOwnInteriorCallTargets.count(Target))
@@ -615,6 +620,49 @@ void CFGBuilder::rewriteOwnInteriorReturn(const BinaryImage &Img,
   Rec.IsBranch = true;
   Rec.BranchTarget = It->second.Continuation;
   Rec.Immediate = It->second.Continuation;
+}
+
+void CFGBuilder::rewriteOwnInteriorTailReturn(const BinaryImage &Img,
+                                              InsnRecord &Rec) {
+  if (!OwnInteriorTailReturns.count(Rec.Addr))
+    return;
+  const auto *Segment = Img.getSegmentFor(Rec.Addr);
+  if (Img.Arch != Arch::X64 || !Segment || Rec.Addr < Segment->VA ||
+      Rec.Addr - Segment->VA >= Segment->Data.size() ||
+      Segment->Data[Rec.Addr - Segment->VA] != 0xc3 || Rec.Size != 1 ||
+      !Rec.IsRet || Rec.IsCall || Rec.IsCond || Rec.Ops.size() != 1 ||
+      Rec.Ops.front().Opcode != NdOp::RETURN) {
+    UnsupportedInstructionAddresses.insert(Rec.Addr);
+    return;
+  }
+  const auto &TRI = getTargetRegInfo(Img.Arch);
+  const NdVar SP = NdVar::reg(TRI.StackPointer, TRI.PointerSize);
+  // A decoded RET has no other temporary. LowToMed keeps its instruction
+  // identity distinct from temporaries used by the preceding STORE.
+  const NdVar Target = NdVar::tmp(0, TRI.PointerSize);
+  LowOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Output = Target;
+  Load.addInput(SP);
+  LowOp Pop;
+  Pop.Opcode = NdOp::INT_ADD;
+  Pop.Output = SP;
+  Pop.addInput(SP);
+  Pop.addInput(NdVar::scalar(TRI.PointerSize, TRI.PointerSize));
+  LowOp Call;
+  Call.Opcode = NdOp::INDIR_CALL;
+  Call.Output = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
+  Call.addInput(Target);
+  LowOp Return = Rec.Ops.front();
+  Rec.Ops = {Load, Pop, Call, Return};
+  for (size_t I = 0; I < Rec.Ops.size(); ++I) {
+    Rec.Ops[I].Addr = Rec.Addr;
+    Rec.Ops[I].Seq = I;
+  }
+  Rec.IsCall = Rec.IsRet = Rec.IsIndirect = true;
+  Rec.IsBranch = Rec.IsCond = false;
+  Rec.BranchTarget = InvalidVA;
+  Rec.Immediate.reset();
 }
 
 void CFGBuilder::rewriteAsIndirectTailCall(InsnRecord &Rec) {
@@ -698,11 +746,11 @@ void CFGBuilder::rewriteAsIndirectTailCall(InsnRecord &Rec) {
   Rec.BranchTarget = InvalidVA;
   // A jump through the slot of an import that never returns, as a PLT entry
   // of exit, never returns either, as a call through that slot does not.
-  // Only the import the loader binds to the slot proves it: a jump that
-  // ends its function's code range is an ordinary tail call.
+  // A loader binding or immutable code pointer proves the target. A jump
+  // that ends its function's code range is an ordinary tail call.
   Rec.IsNoReturnCall =
       Target.isConst() &&
-      libc::isNoReturnTarget(*CurrentImg, Target.Offset, NoReturnTargets);
+      libc::isNoReturnLoadedTarget(*CurrentImg, Target.Offset, NoReturnTargets);
 }
 
 } // namespace neverd

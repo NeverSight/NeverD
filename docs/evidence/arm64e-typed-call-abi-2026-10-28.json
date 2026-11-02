@@ -1,0 +1,2821 @@
+{
+  "schema": 1,
+  "date": "2026-10-28",
+  "scope": "Bounded supplied C call-site prototypes and Darwin scalar call ABI. This does not grant complete arm64e support, automatic source-type/ABI recovery, HFA/aggregate qualification, authenticated Swift/ObjC/Block ABI, whole images, native Apple execution, signed exception unwinding or exact fault PC/ESR equivalence.",
+  "source_revision": "1d20cd38dfccf42015c310b673bb50b05e23eabc",
+  "initial_implementation_revision": "2958160e98a48b6a8b223988ef80d3336b22cc42",
+  "integrated_dev_revision": "6361fc7c9b407c4d0ea14e3532034dca0a751b32",
+  "test_update_revision": "8506fad7ba7d174898b12de9155b803728a8c243",
+  "final_integrated_revision": "0d62ff745244e804b643fe0f9d25fd244282e9d6",
+  "environment_revision": "a355ce263c8ecf3b49c11d0230ca0f9fa5b8acaa",
+  "environment_pull_request": "https://github.com/gmh5225/test_mac_intel/pull/3",
+  "dependency_state": {
+    "signatures": {
+      "head": "20b9036f4367e1308a3d2f0b214e06859090a7af",
+      "dirty": false
+    },
+    "third_party/capstone": {
+      "head": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
+      "dirty": false
+    }
+  },
+  "toolchain": {
+    "backend": "Configured NeverSight LLVM v23.0.0-r6 cached prebuilt; no LLVM patches or source overlays",
+    "frontend": "Apple clang 17.0.0 (clang-1700.0.13.5)",
+    "model_guest_compiler": "Ubuntu Clang/LLD/LLVM objcopy 18",
+    "model": "Arm AEM FVP 11.32+19",
+    "docker_image": "sha256:b60022df2f5f52d4461b273e3b44190abb85effff05cbb52e1ed25818f010023",
+    "network_during_execution": "disabled",
+    "formatter": "clang-format version 22.1.2"
+  },
+  "regression": {
+    "build_profile": "Release",
+    "targets": [
+      "NeverDAArch64AuthenticatedCallTests",
+      "NeverDSourceCallABITests",
+      "NeverDSourceEntryBindingTests",
+      "NeverDHighControlFlowTests",
+      "NeverDSourceDialectTests",
+      "NeverDAAPCS64CallContractTests",
+      "NeverDLLVMCIntrinsicSemanticTests",
+      "NeverDLLVMCVectorTests",
+      "NeverDLiftTests",
+      "NeverDSourceStackFrameTests",
+      "NeverDAArch64ReturnProtectionTests",
+      "NeverDArm64eAnalysisTests",
+      "NeverDAArch64PAuthTests",
+      "NeverDLanguageEHTests",
+      "NeverDNativeExceptionRewriteContractTests"
+    ],
+    "registered": 10838,
+    "accepted": 10568,
+    "skipped": [
+      {
+        "id": 333,
+        "name": "SourceDialect.CorpusReadsBackAsTheSameC",
+        "binary": "NeverDSourceDialectTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 334,
+        "name": "SourceDialect.OneFile",
+        "binary": "NeverDSourceDialectTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 2786,
+        "name": "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2817,
+        "name": "A64NativeParity.OptionalRealBinaryWalk",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2835,
+        "name": "ARM32_CallAbi.AnIndirectCallPassesEveryStackArgument",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2836,
+        "name": "ARM32_CallAbi.AVariadicCalleeReadsItsStackArgumentsInPlace",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2894,
+        "name": "ARM32_LiteralPool.AConstantBesideARelocatedWordIsAConstant",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2915,
+        "name": "ARM32_ObjectImmediate.ALoopCountIsNoAddress",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2916,
+        "name": "ARM32_ObjectImmediate.ACompareWithZeroIsADoubleCompare",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2917,
+        "name": "ARM32_ObjectImmediate.AConcatenatedMaskClearsAnUnknownLane",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2918,
+        "name": "ARM32_ObjectImmediate.ACursorFromAFrameAddressKeepsMoving",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2919,
+        "name": "ARM32_ObjectImmediate.AFirstWrittenMaskRegisterIsTheConstant",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2965,
+        "name": "ARM32_ThumbPC.PICDataRunsLikeTheSource",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2997,
+        "name": "X86_32_CallAbi.AForwardedZeroExtensionReachesAnImportsArgument",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2998,
+        "name": "X86_32_CallAbi.ARealignedFramesStackArgumentsKeepTheirSlots",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 2999,
+        "name": "X86_32_CallAbi.AVectorSlotIsAlignedAsTheCallerAlignsTheStack",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3000,
+        "name": "X86_32_CallAbi.ACallThroughAFieldsTableLoadsTwice",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3003,
+        "name": "X86_32_CallAbi.AVariadicCalleeReadsItsStackArgumentsInPlace",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3004,
+        "name": "X86_32_CallAbi.ADoubleArgumentPassesOnlyItsLowLane",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3005,
+        "name": "X86_32_CallAbi.AWideLoadOfStackArgumentsReadsEverySlot",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3007,
+        "name": "X86_32_CallAbi.AnSSEDoubleReturnsOnTheX87Stack",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3008,
+        "name": "X86_32_CallAbi.AnXmmRegisterPastTheArgumentOnesIsNoParameter",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3009,
+        "name": "X86_32_CallAbi.BytesAShiftDropsAreNotRead",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3083,
+        "name": "X86_32_HighCData.AViewOfACalleeSavedRegisterStoredInALocalStays",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3084,
+        "name": "X86_32_HighCData.AConstantMulsdReadsThroughTheGotIsWhole",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3085,
+        "name": "X86_32_HighCData.AnIndexBiasBeforeAStringReadsTheString",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3086,
+        "name": "X86_32_HighCData.AnAlignedVectorReadChecksItsConstantsObject",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3088,
+        "name": "X86_32_HighCTruth.ATestOfTheLowByteIgnoresTheBytesAbove",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3131,
+        "name": "X86_32_NativeHostMode.IdentityPatchAgreesWithCpu",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3132,
+        "name": "X86_32_NativeHostMode.EnterWPatchAgreesWithCpu",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3281,
+        "name": "X86_32_X87FPU.RelocatedSwitchMatchesNativeIntegerLoadClassification",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3282,
+        "name": "X86_32_X87FPU.ExamineClassificationMatchesNativeExtendedEncodings",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3283,
+        "name": "X86_32_X87FPU.NativeAndLiftedConsumersPreserveTheRemainingStackAndBinary80",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3288,
+        "name": "X87CallReplay.NativeCRTStackCallsMatchIndependentMachineCallers",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3289,
+        "name": "X87CallReplay.NativeCRTAdaptersTransportAllBinary80Bits",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3290,
+        "name": "X87CallReplay.NativeAndLiftedCallLoopsReturnTheIndependentSum",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 3488,
+        "name": "X86_64_CallAbi.ArgumentSetupCrossesFloatingConversions",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.04
+      },
+      {
+        "id": 3491,
+        "name": "X86_64_CallAbi.ACallToTheFunctionAtAddressZeroPassesItsArguments",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.03
+      },
+      {
+        "id": 4035,
+        "name": "X86_64_NativeHostMode.EnterWLiftDecompilePatchAgreeWithCpu",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 4036,
+        "name": "X86_64_NativeHostMode.CvtSI2SDMulpdPatchAgreesWithCpu",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 4066,
+        "name": "X86_64_X87FPU.EmittedCExecutesArithmeticAndDynamicRounding",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 4370,
+        "name": "MedSEHEstablisherFrame.PublicNestedSEHUsesOneSlotInMedAndHighC",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 4377,
+        "name": "MedCxxContinuationFrame.PublicNestedCatchKeepsOneParameterAndResumeEdges",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 4378,
+        "name": "MedCxxContinuationFrame.ClangInteriorStateMarkersKeepThePrologueFrame",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6203,
+        "name": "HighSwiftEmitter.GeneratedSSESourceTrapsBeforeNumericalAndStateStores",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6206,
+        "name": "HighSwiftEmitter.GenericUnmaskedScalarCompletionTrapsBeforeOutputs",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6209,
+        "name": "HighSwiftEmitter.ScalarDoubleConversionTrapsBeforeResultAndStateStores",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6345,
+        "name": "HighCPointerAddresses.AtomicFetchAddComposesIntoCompare",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6749,
+        "name": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6751,
+        "name": "HighCPointerAddresses.CorpusBufferedCatchUsesParentFrameForIndex",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6752,
+        "name": "HighCPointerAddresses.CorpusSehIndexedBufferUsesSameFrame",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6753,
+        "name": "HighCPointerAddresses.CorpusFuncLoadGsCookieReturnsOnTheValidPath",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6754,
+        "name": "HighCPointerAddresses.CorpusFuncLoadGsHandlerCheckReturnsOne",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6755,
+        "name": "HighCPointerAddresses.CorpusCalleeSavesAreNotStoresOfLaterArguments",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6756,
+        "name": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbeCatchReturnsValue",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6757,
+        "name": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6758,
+        "name": "HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsUnwindDestructor",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6761,
+        "name": "HighCPointerAddresses.CorpusArmPredicatedBranchesStayForwardJumps",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6762,
+        "name": "HighCPointerAddresses.CorpusFuncLoadSehProbeRaisesImmediate",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6764,
+        "name": "HighCPointerAddresses.FuncLoadUsesDebugFunctionNameOnSynthesizedEntry",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6765,
+        "name": "HighCPointerAddresses.CorpusFuncLoadX86FilterThunksPrintTheirValue",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6766,
+        "name": "HighCPointerAddresses.CorpusFuncLoadX86SehProbeExceptAssignsResult",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6767,
+        "name": "HighCPointerAddresses.CorpusRustFormatKeepsTheEntryStackPointer",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6772,
+        "name": "HighCPointerAddresses.MemoryExchangePreservesTypedPointerMemberBits",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6774,
+        "name": "HighCPointerAddresses.MemoryExchangeReturnsItsSnapshotThroughBothRoutes",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6775,
+        "name": "HighCPointerAddresses.MemoryAdditionReturnsItsSnapshotThroughBothRoutes",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6816,
+        "name": "HighCPointerAddresses.DirectionFlagIsClearOnEntry",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6817,
+        "name": "HighCPointerAddresses.FlatRepeatedFillsAndCopiesRetainMachineCompletion",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6888,
+        "name": "HighCPointerAddresses.AnX87ValueRoundsToTheDoubleItIsStoredAs",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6889,
+        "name": "HighCPointerAddresses.X87ArithmeticComputesInLongDouble",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6890,
+        "name": "HighCPointerAddresses.AnX87StoreWritesItsTenBytes",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6891,
+        "name": "HighCPointerAddresses.AScalarFloatArgumentIsADoubleParameter",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6892,
+        "name": "HighCPointerAddresses.AnIntegerConvertedIntoXMM0IsNoParameter",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6897,
+        "name": "HighCPointerAddresses.RecordsNamedLikeFunctionsAreSpelledByTheirTags",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6900,
+        "name": "HighCPointerAddresses.TrapsUseTheBuiltinsTheirHeadersDeclare",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6915,
+        "name": "HighCPointerAddresses.GnuToolchainsReadCpuidThroughCpuidH",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6916,
+        "name": "HighCPointerAddresses.GnuLibrariesHeadersDeclareTheirExtensions",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6918,
+        "name": "HighCPointerAddresses.UnderscoredHeaderRoutinesTakeTheirStreams",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 6919,
+        "name": "HighCPointerAddresses.GnuProgramObjectsAreTheHeaders",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6932,
+        "name": "HighCPointerAddresses.LargeFileComparatorsTakeTheirOwnRecords",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6934,
+        "name": "HighCPointerAddresses.AlignedAccessesInRelocatedWordsKeepTheirResidue",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.03
+      },
+      {
+        "id": 6935,
+        "name": "HighCPointerAddresses.HeaderRecordsNamedLikeTheirFunctionsKeepTags",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 6936,
+        "name": "HighCPointerAddresses.AlignedReadsOfAStringAlignItsArray",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7123,
+        "name": "LLVMCPointerAddresses.CorpusCalleeSavesStayOutOfTheFrame",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7177,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadGsCookieDoesNotLoadNull",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7178,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadSehProbeHasSingleWin64Arg",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 7179,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmcExceptContainsHandler",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7180,
+        "name": "LLVMCPointerAddresses.CorpusOptimizedSehResultIsAssignedOnBothPaths",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7181,
+        "name": "LLVMCPointerAddresses.CorpusSehProbeCliLlvmcKeepsProtectedEffects",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7182,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 7183,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadCxxEhProbeCatchContinuationEmits",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7184,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadCxxEhProbeLlvmOptIsVerifierClean",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 7185,
+        "name": "LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmOptIsVerifierClean",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 7246,
+        "name": "HighCIntegerWidths.SegmentOffsetsPreserveIntegerExtensions",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7308,
+        "name": "CSymbolNames.ElfCxxLabelsLinkToTheMangledDefinitions",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7330,
+        "name": "CSymbolNames.OtherLanguageLabelsLinkToTheirSymbols",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7765,
+        "name": "DataSymbolBindingTest.ExternalDataRunsAndDoesNotConflictWithHeaders",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7776,
+        "name": "DataSymbolBindingTest.PointerVariableCallsRunWithTheirArguments",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 7777,
+        "name": "DataSymbolBindingTest.OpaqueAliasesKeepByteLoadAndStoreSemantics",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8278,
+        "name": "NativePointerRelocationBoundary.OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8279,
+        "name": "NativePointerRelocationBoundary.NonlocalImportCallsPreserveLiveValuesAcrossBothReturns",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8280,
+        "name": "NativePointerRelocationBoundary.BoundedRuntimeOffsetsAndNullableCallbacksExecute",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8284,
+        "name": "NativePointerRelocationBoundary.RuntimeIndexedMirrorSelectionsSurviveRelinking",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8285,
+        "name": "NativePointerRelocationBoundary.RuntimeIndexedMutableMirrorsKeepDirectAndSelectedStoresAliased",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8286,
+        "name": "NativePointerRelocationBoundary.RuntimeGlobalPointersFeedUnboundedScalarIndices",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8303,
+        "name": "NativePointerRelocationBoundary.ALinkedELFsLoadSegmentsKeepTheirNamesAndRelroIsTheAddresss",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 8588,
+        "name": "COFFExceptionParser.LoadsStrippedGSWrapperForFocusedX64Function",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 9324,
+        "name": "RegistrationTryLevel.CxxEAXHelperInputPE32HasTheCheckedPhysicalCall",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 9664,
+        "name": "JTE_X86_64.ReloadedGuardExecutesTheOriginalSelection",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 9948,
+        "name": "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 10404,
+        "name": "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/\"aarch64\"",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.02
+      },
+      {
+        "id": 10405,
+        "name": "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/\"x86_64\"",
+        "binary": "NeverDLiftTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 14768,
+        "name": "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "binary": "NeverDArm64eAnalysisTests",
+        "status": "***Skipped",
+        "seconds": 0.07
+      },
+      {
+        "id": 14808,
+        "name": "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "binary": "NeverDArm64eAnalysisTests",
+        "status": "***Skipped",
+        "seconds": 1.13
+      },
+      {
+        "id": 14825,
+        "name": "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "binary": "NeverDArm64eAnalysisTests",
+        "status": "***Skipped",
+        "seconds": 1.23
+      },
+      {
+        "id": 14837,
+        "name": "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "binary": "NeverDArm64eAnalysisTests",
+        "status": "***Skipped",
+        "seconds": 1.31
+      },
+      {
+        "id": 14853,
+        "name": "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "binary": "NeverDArm64eAnalysisTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16290,
+        "name": "Scratch.DumpRealBinary",
+        "binary": "NeverDLanguageEHTests",
+        "status": "***Skipped",
+        "seconds": 0.05
+      },
+      {
+        "id": 16328,
+        "name": "LLVMCIntrinsicSemantics.FxSnapshotsRetainLegacyAnd64BitStateEffects",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.06
+      },
+      {
+        "id": 16369,
+        "name": "LLVMCIntrinsicSemantics.X87SaturatingConversionsGuardUndefinedCasts",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16379,
+        "name": "LLVMCIntrinsicSemantics.CPUArraysKeepDistinctNamesAcrossBlocks",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16380,
+        "name": "LLVMCIntrinsicSemantics.XGETBVArraysKeepDistinctNamesAcrossBlocks",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16384,
+        "name": "LLVMCIntrinsicSemantics.DeadCPUIDRetainsNativeQueryAndBreakpointOrder",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16385,
+        "name": "LLVMCIntrinsicSemantics.NativeExchangeKeepsDeadWritesAndUnalignedBytes",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16386,
+        "name": "LLVMCIntrinsicSemantics.NativeAdditionKeepsDeadWritesAndUnalignedBytes",
+        "binary": "NeverDLLVMCIntrinsicSemanticTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16475,
+        "name": "Transports/AArch64PAuth.OnlyDeclaredHintWordsPreserveCompleteState/(4-byte object <02-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16476,
+        "name": "Transports/AArch64PAuth.OnlyDeclaredHintWordsPreserveCompleteState/(4-byte object <02-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16477,
+        "name": "Transports/AArch64PAuth.OnlyDeclaredHintWordsPreserveCompleteState/(4-byte object <03-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16478,
+        "name": "Transports/AArch64PAuth.OnlyDeclaredHintWordsPreserveCompleteState/(4-byte object <03-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16483,
+        "name": "Transports/AArch64PAuth.CompatibilityPreservesZeroAndHighReturnAddressBits/(4-byte object <02-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16484,
+        "name": "Transports/AArch64PAuth.CompatibilityPreservesZeroAndHighReturnAddressBits/(4-byte object <02-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16485,
+        "name": "Transports/AArch64PAuth.CompatibilityPreservesZeroAndHighReturnAddressBits/(4-byte object <03-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16486,
+        "name": "Transports/AArch64PAuth.CompatibilityPreservesZeroAndHighReturnAddressBits/(4-byte object <03-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16491,
+        "name": "Transports/AArch64PAuth.XPACLRIPreservesUnsignedLow48BitReturnAddresses/(4-byte object <02-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16492,
+        "name": "Transports/AArch64PAuth.XPACLRIPreservesUnsignedLow48BitReturnAddresses/(4-byte object <02-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16493,
+        "name": "Transports/AArch64PAuth.XPACLRIPreservesUnsignedLow48BitReturnAddresses/(4-byte object <03-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16494,
+        "name": "Transports/AArch64PAuth.XPACLRIPreservesUnsignedLow48BitReturnAddresses/(4-byte object <03-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16499,
+        "name": "Transports/AArch64PAuth.XPACLRIRejectsReturnAddressesOutsideTheFixedPointContract/(4-byte object <02-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16500,
+        "name": "Transports/AArch64PAuth.XPACLRIRejectsReturnAddressesOutsideTheFixedPointContract/(4-byte object <02-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16501,
+        "name": "Transports/AArch64PAuth.XPACLRIRejectsReturnAddressesOutsideTheFixedPointContract/(4-byte object <03-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16502,
+        "name": "Transports/AArch64PAuth.XPACLRIRejectsReturnAddressesOutsideTheFixedPointContract/(4-byte object <03-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.01
+      },
+      {
+        "id": 16507,
+        "name": "Transports/AArch64PAuth.NonHintAuthenticationAndControlAccessRemainUnsupported/(4-byte object <02-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16508,
+        "name": "Transports/AArch64PAuth.NonHintAuthenticationAndControlAccessRemainUnsupported/(4-byte object <02-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16509,
+        "name": "Transports/AArch64PAuth.NonHintAuthenticationAndControlAccessRemainUnsupported/(4-byte object <03-00 00-00>, false)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      },
+      {
+        "id": 16510,
+        "name": "Transports/AArch64PAuth.NonHintAuthenticationAndControlAccessRemainUnsupported/(4-byte object <03-00 00-00>, true)",
+        "binary": "NeverDAArch64PAuthTests",
+        "status": "***Skipped",
+        "seconds": 0.0
+      }
+    ],
+    "unresolved_new_failures": [],
+    "baseline_failures": [
+      {
+        "id": 2635,
+        "name": "AArch64_HighCExecution.AVariadicCalleeReadsItsStackArgumentsInPlace",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.08
+      },
+      {
+        "id": 2715,
+        "name": "AArch64_SVEState.SignedLeafPreservesLocalScalableOperations",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.08
+      },
+      {
+        "id": 2862,
+        "name": "ARM32_Coprocessor.BothRoutesCallTheACLEIntrinsics",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.16
+      },
+      {
+        "id": 2864,
+        "name": "ARM32_ThreadPointer.CallsAreTheThreadPointerRead",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.37
+      },
+      {
+        "id": 2890,
+        "name": "ARM32_Intrinsics.Decompile_NeonSaturatingOperationsUseACLE",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.12
+      },
+      {
+        "id": 2892,
+        "name": "ARM32_Intrinsics.Decompile_NeonEstimatesUseACLE",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.14
+      },
+      {
+        "id": 2893,
+        "name": "ARM32_Intrinsics.ALaneOfAZeroLiteralIsZero",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.17
+      },
+      {
+        "id": 2995,
+        "name": "X86_32_CallAbi.GccRegparmFunctionsTakeEaxEdxEcx",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.08
+      },
+      {
+        "id": 2996,
+        "name": "X86_32_CallAbi.GccRegparmStackArgumentFollowsTheRegisters",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.08
+      },
+      {
+        "id": 3002,
+        "name": "X86_32_CallAbi.AStackDoubleFeedsItsMultiplyWhole",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.22
+      },
+      {
+        "id": 3006,
+        "name": "X86_32_CallAbi.AVectorOfOnesReadsNoRegister",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      },
+      {
+        "id": 3082,
+        "name": "X86_32_HighCData.AnUnnamedTableIndexedThroughTheGotIsDeclared",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.9
+      },
+      {
+        "id": 3395,
+        "name": "X86_32_FunctionDiscovery.LiftsMmxPunpckldq",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 3396,
+        "name": "X86_32_FunctionDiscovery.LiftsMmxPunpckldqFromMemory",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 3485,
+        "name": "X86_64_CallAbi.ALiftedVariadicCalleeTakesItsStackArguments",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.12
+      },
+      {
+        "id": 3486,
+        "name": "X86_64_CallAbi.AVariadicForwarderPassesItsVaListOn",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.09
+      },
+      {
+        "id": 3590,
+        "name": "X86_64_DynamicStack.VariableLengthArraysAreStorageTheCAllocates",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.22
+      },
+      {
+        "id": 3654,
+        "name": "X86_64_FrameAlias.AnAddressDerivedFromAnAdvancingOneIsNoFixedSlot",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.23
+      },
+      {
+        "id": 3655,
+        "name": "X86_64_FramePointerWalk.AnAdvancedPointerIsNoFrameAddress",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.2
+      },
+      {
+        "id": 3661,
+        "name": "X86_64_ImageTable.AWideConstantVectorKeepsItsValue",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.09
+      },
+      {
+        "id": 3663,
+        "name": "X86_64_ImageTable.AnIndexBiasedDownReadsTheString",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.16
+      },
+      {
+        "id": 3670,
+        "name": "X86_64_Intrinsics.Decompile_UsesCorrectStyle",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.05
+      },
+      {
+        "id": 3675,
+        "name": "X86_64_Intrinsics.LlvmC_UsesCorrectStyle",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.05
+      },
+      {
+        "id": 3712,
+        "name": "X86_64_HighCIntrinsics.SaturatingLanesRunLikeTheSource",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.04
+      },
+      {
+        "id": 3713,
+        "name": "X86_64_HighCIntrinsics.Crc32RunsLikeTheSource",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.04
+      },
+      {
+        "id": 3714,
+        "name": "X86_64_HighCIntrinsics.ThirtyTwoBitPextAndPdepRunLikeTheSource",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      },
+      {
+        "id": 3715,
+        "name": "X86_64_HighCIntrinsics.AGatherKeepsTheMaskOfTheElementsLeft",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.11
+      },
+      {
+        "id": 3716,
+        "name": "X86_64_HighCIntrinsics.APermuteByIndexTakesTheDataFirst",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      },
+      {
+        "id": 3718,
+        "name": "X86_64_HighCIntrinsics.ConstantPoolOperandsKeepTheirWidth",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.16
+      },
+      {
+        "id": 3719,
+        "name": "X86_64_HighCIntrinsics.ABroadcastConstantWidensToItsVector",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.08
+      },
+      {
+        "id": 3720,
+        "name": "X86_64_SystemRegister.AStoredSelectorIsTheValueReturned",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.09
+      },
+      {
+        "id": 3874,
+        "name": "X86_64_PipelineE2E.DecompileC_MemAtomicSupportedFunctions",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.33
+      },
+      {
+        "id": 4013,
+        "name": "X86_64_SignedCompare.AHalfwordAtMostZeroComparesItsSign",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.15
+      },
+      {
+        "id": 4042,
+        "name": "X86_64_StructReturn.TwoDoublesReturnBoth",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.16
+      },
+      {
+        "id": 4043,
+        "name": "X86_64_StructReturn.ADoubleAndALongReturnBoth",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.15
+      },
+      {
+        "id": 4044,
+        "name": "X86_64_StructReturn.AnIntAndADoubleReturnBoth",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.15
+      },
+      {
+        "id": 4045,
+        "name": "X86_64_StructReturn.TwoFloatsReturnPackedInOneRegister",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.16
+      },
+      {
+        "id": 4047,
+        "name": "X86_64_StructReturn.AFloatAndADoubleReturnWithoutTheirPadding",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.17
+      },
+      {
+        "id": 4048,
+        "name": "X86_64_StructReturn.ThreeFloatsReturnWithoutTheirPadding",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.08
+      },
+      {
+        "id": 4176,
+        "name": "X86_64_DebugParams.ParametersAreNamedWhereTheConventionPassesThem",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.13
+      },
+      {
+        "id": 4199,
+        "name": "AArch64_RoundTrip.LiveInIdentityAndCallClobbersStayExact",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.09
+      },
+      {
+        "id": 4261,
+        "name": "LowInstructionBoundary.X86FSGSOverridesSurviveLiftingAsTargetMemoryAddressSpaces",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.69
+      },
+      {
+        "id": 4395,
+        "name": "Win64Forwarder.ArgumentSlotTheCalleeNeverReadsIsZero",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4566,
+        "name": "MedImmutableTableScans.CodeScalarReadsRetainStorageAndEffectGuards",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 4757,
+        "name": "ObjCCallHints.SwiftWillThrowRevalidatesErrorABIAndImport",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4761,
+        "name": "ObjCCallHints.ImmutableBytesRejectAliasingWritableAndRelocatedStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4803,
+        "name": "ObjCCallHints.SelectorStubCommandProofDoesNotRequireMethodSignature",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4807,
+        "name": "ObjCCallHints.SelectorStubCommandProofRejectsUnverifiedCodeAndSlots",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4808,
+        "name": "ObjCCallHints.VerifiedSelectorStubDiscardsStaleCallerCommand",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4809,
+        "name": "ObjCCallHints.UnverifiedSelectorStubKeepsObservedCallerCommand",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 4853,
+        "name": "ObjCCallHints.SDKRecordDataRechecksCurrentImportProviderAndStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 4999,
+        "name": "SwiftFieldReceiver.FixedNativeRootLayoutRejectsStaleOrIncompleteEvidence",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 5032,
+        "name": "SwiftFixedRecordConstructor.MessageReplayRejectsChangedCurrentEvidence",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.15
+      },
+      {
+        "id": 5033,
+        "name": "SwiftFixedRecordConstructor.MessageIdentityKeepsExactSelectorPointerOwner",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5115,
+        "name": "ObjCSourceBindings.RegisteredNestedSwiftTypesRequireTheirCompleteNamedContext",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5118,
+        "name": "ObjCSourceBindings.RegisteredOptionalTupleRejectsExpandedSubstitutionsAndStaleIdentity",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5136,
+        "name": "ObjCSourceBindings.OriginalReadOnlyTablesRejectInvalidAccessOrDomain",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5143,
+        "name": "ObjCSourceBindings.CountdownByteTableRejectsUnboundedOrEscapingWalks",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5145,
+        "name": "ObjCSourceBindings.ReadOnlyTablesRejectUnprovenRangesStorageAndUses",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 5152,
+        "name": "ObjCSourceBindings.TaggedCStringWordsRejectUnprovenAddressOccurrences",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5157,
+        "name": "ObjCSourceBindings.ImmutableWideScalarsPreserveBothLanesAndRejectPointers",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5158,
+        "name": "ObjCSourceBindings.ImmutableScalarsRejectUnprovedStorageAndAddressUses",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5165,
+        "name": "ObjCSourceBindings.SwiftLiteralStorageRejectsChangedWordsStorageAndImports",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5173,
+        "name": "ObjCSourceBindings.ImmutablePointerLoadsRejectIncompleteAndStaleProofs",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 5176,
+        "name": "ObjCSourceBindings.ConstantObjectGraphsRejectConflictingOrMutableStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5179,
+        "name": "ObjCSourceBindings.ImportedBooleanEdgesRejectAliasesAndStaleImports",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 5222,
+        "name": "ObjCSourceBindings.SwiftScalarStorageRejectsAmbiguousOrMutableImage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 6301,
+        "name": "SwiftVirtualCalls.NativeClassSelfRejectsChangedPathOrMachine",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.03
+      },
+      {
+        "id": 6366,
+        "name": "HighCPointerAddresses.GoImageBytesAreNoCString",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6375,
+        "name": "HighCPointerAddresses.NamedEmptyWideImageConstPrintsAddressOfObject",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6376,
+        "name": "HighCPointerAddresses.MsvcStringLiteralPublicEmptyWidePrintsLEmpty",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6384,
+        "name": "HighCPointerAddresses.ExternalPrototypeMatchesLeadingUnderscoreCall",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6385,
+        "name": "HighCPointerAddresses.ExternalCallsKeepDistinctUnderscoreSpellings",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6393,
+        "name": "HighCPointerAddresses.UntypedCallPeelsWidenedImmediate",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6441,
+        "name": "HighCPointerAddresses.SingleUseCallsKeepSequencedCaptures",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6611,
+        "name": "HighCPointerAddresses.Win64InBlockConstantOverridesJoinPhi",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6668,
+        "name": "HighCPointerAddresses.ThenPredChainUndefSkipArmFoldsElse",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6681,
+        "name": "HighCPointerAddresses.NestedIfAndKeepsPredicateCallsAfterIndependentWork",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 6683,
+        "name": "HighCPointerAddresses.NestedIfDropsLeftoverKindAssignsBeforeFieldGuard",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 6685,
+        "name": "HighCPointerAddresses.NestedIfDropsLeftoverKindAssignReusedAsClobber",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 6717,
+        "name": "HighCPointerAddresses.ConsecutiveSkipGotosKeepsReloadedCallPredicate",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6742,
+        "name": "HighCPointerAddresses.TerminateProcessReturnsItsResult",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6746,
+        "name": "HighCPointerAddresses.CallResultUsedByTestEaxIsAssigned",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6768,
+        "name": "HighCPointerAddresses.RsdsPdbNamesFrameSlotsOnSafetyFixture",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6791,
+        "name": "HighCPointerAddresses.Win64TwelveArgumentCallKeepsEveryStackArgument",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 3.75
+      },
+      {
+        "id": 6799,
+        "name": "HighCPointerAddresses.Win64StackArgumentsFollowTheHomeArea",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6801,
+        "name": "HighCPointerAddresses.Win64StackArgumentsThroughEntryStackCopy",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 6922,
+        "name": "HighCPointerAddresses.NarrowStringParametersTakeNarrowLiterals",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.07
+      },
+      {
+        "id": 6939,
+        "name": "LLVMCPointerAddresses.ReadonlyWideImageStringPrintsLLiteral",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.03
+      },
+      {
+        "id": 7245,
+        "name": "HighCIntegerWidths.SegmentedOffsetsDoNotAliasOverlappingImageBacking",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 7252,
+        "name": "HighCDemandedBytes.AConversionKeepsNoUnreadUpperHalf",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.29
+      },
+      {
+        "id": 7253,
+        "name": "HighCDemandedBytes.AShiftDropsTheHalfAnUnsetRegisterGave",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.09
+      },
+      {
+        "id": 7268,
+        "name": "CSourcePresentation.KnownNarrowStringCallsDoNotRequireAWideLiteral",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 7274,
+        "name": "CImageObjects.StringsDeclareTheirTextAndScalarsTheirValues",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 7277,
+        "name": "CImageObjects.DeclaredObjectsHoldTheImageBytes",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.04
+      },
+      {
+        "id": 7294,
+        "name": "CSymbolNames.ElfCxxCallsReadByScopeAndLinkByMangledName",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 7309,
+        "name": "CSymbolNames.StartupPassesMainThroughItsPrototype",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.06
+      },
+      {
+        "id": 7310,
+        "name": "CSymbolNames.FunctionAddressesReadAsTheirFunctions",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 7313,
+        "name": "CSymbolNames.CxxRuntimeRoutinesTakeTheirPrototypes",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.06
+      },
+      {
+        "id": 7314,
+        "name": "CSymbolNames.APointerResultKeepsTheMachineInteger",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.06
+      },
+      {
+        "id": 7315,
+        "name": "CSymbolNames.HeaderFunctionsTakeFunctionsAsTheirParameterTypes",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 1.66
+      },
+      {
+        "id": 7600,
+        "name": "ObjCMergedSetterSources.CGRectRechecksCurrentLayoutABIAndFrameEvidence",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.12
+      },
+      {
+        "id": 7609,
+        "name": "ObjCImmutableStringCallbackSources.RejectsChangedMachinePathStorageAndProvider",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.03
+      },
+      {
+        "id": 7700,
+        "name": "ObjCBlockSources.PooledHeaderBitsRequireImmutableUnambiguousScalarStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 7764,
+        "name": "DataSymbolBindingTest.PICObjectsKeepTheirIdentityAcrossArchitectures",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.82
+      },
+      {
+        "id": 7767,
+        "name": "DataSymbolBindingTest.WritableSlotsRetainStorageAndSymbolInitializer",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.09
+      },
+      {
+        "id": 7771,
+        "name": "DataSymbolBindingTest.VariadicCallsPassOnlyWhatTheirCallerSets",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.12
+      },
+      {
+        "id": 7882,
+        "name": "ELFARM32ModeTest.FindsDirectInterworkingCallsWithoutSectionMetadata",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 5.55
+      },
+      {
+        "id": 8198,
+        "name": "LLVMCodePointerInvariantBoundary.MaterializesExactGenericCodeAddressAtAtomicValueSinksAcrossFormats",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 8244,
+        "name": "ImmutablePEPointer.RequiresExactRelocationAndUnambiguousStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 8246,
+        "name": "ImmutablePEPointer.CodeTargetsNeedImmutableAlignedInstructionStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 8250,
+        "name": "ImmutableChainedValue.RejectsAmbiguousStorageAndCompetingFixups",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 8298,
+        "name": "NativePointerRelocationBoundary.ScalarSelectIndexCycleRemainsNumericTableOffset",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 2.36
+      },
+      {
+        "id": 8302,
+        "name": "NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.78
+      },
+      {
+        "id": 9293,
+        "name": "RegistrationTryLevel.EH4WrapperRequiresTheExactRuntimeForwardingABI",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 9294,
+        "name": "RegistrationTryLevel.GSCookieCheckerHasOnlyTheCheckedLeafSuccessPath",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 9363,
+        "name": "RegistrationTryLevel.AllocatingProbeRequiresCurrentInstructionsAndStorage",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.01
+      },
+      {
+        "id": 9431,
+        "name": "COFFARMPipeline.ARM32ThumbLiftAndDecompile",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.21
+      },
+      {
+        "id": 9456,
+        "name": "FunctionDiscoveryARM.ConditionalNoReturnCallDoesNotTerminateCandidateVerification",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.02
+      },
+      {
+        "id": 9537,
+        "name": "JTE_X86_32.SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.04
+      },
+      {
+        "id": 9538,
+        "name": "JTE_X86_32.AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.04
+      },
+      {
+        "id": 10058,
+        "name": "RenamedSectionPatch.MachOSectionModeAutoRecovers",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      },
+      {
+        "id": 10059,
+        "name": "RenamedSectionPatch.MachOSectionModeExplicitOverride",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      },
+      {
+        "id": 10060,
+        "name": "RenamedSectionPatch.MachORenamedTextSegmentExplicitOverride",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      },
+      {
+        "id": 10061,
+        "name": "RenamedSectionPatch.MachORenamedTextSegmentAutoRecovers",
+        "binary": "NeverDLiftTests",
+        "status": "***Failed",
+        "seconds": 0.1
+      }
+    ],
+    "baseline_comparison_sha256": "29b15f22f7d76d63599c4bdf62946262306ae4f467022ec8bccdb9bbcf5f6eed",
+    "baseline_provenance_sha256": "818aaa5c2e4596fca141017d5787112671891d91d2420fdfc571cfa46a3fb568",
+    "updated_capability_expectation": {
+      "id": 7216,
+      "name": "FixedIntegerCallArguments.RequiresCompleteOrdinaryDeclarations",
+      "passed": true,
+      "revision": "8506fad7ba7d174898b12de9155b803728a8c243",
+      "reason": "The old assertion required refusing Darwin scalar stack overflow. The replacement checks independently specified byte/halfword/pointer offsets 0/2/8 through the fixed-integer caller adapter. Runtime implementations were not changed.",
+      "standalone_report_sha256": "c3e35bdf54014b4328d54b550afbfcc38da25b851bebdefd3f96088ba7f4bc39",
+      "aggregate_report_sha256": "af2dcb17fb441efc2feda94516c1bb3c293bb2d4dc82512b7e79b2dceeb9173a"
+    },
+    "all_selected_checks_green": false,
+    "initial_run": {
+      "statuses": {
+        "Passed": 10555,
+        "***Failed": 132,
+        "***Skipped": 145,
+        "***Timeout": 6
+      },
+      "report_sha256": "3e7dd55df6145ac4510c67f7c379973841bc294f1786451a3eb32932dc1bd81d"
+    },
+    "repeats": {
+      "results": [
+        {
+          "id": 4460,
+          "name": "IncomingHomeSource.ExplicitStackCarrierReachesBothCPaths",
+          "binary": "NeverDLiftTests",
+          "passed": true,
+          "status": 0,
+          "seconds": 25.551045542000793,
+          "limit_seconds": 120,
+          "command": [
+            "build-arm64e/bin/NeverDLiftTests",
+            "--gtest_filter=IncomingHomeSource.ExplicitStackCarrierReachesBothCPaths",
+            "--gtest_also_run_disabled_tests",
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4460.xml"
+          ],
+          "log_sha256": "5a08e6b826ff7e6a28dc590d186ee1eebb1ee47e39441be809691f0afbf18e6e"
+        },
+        {
+          "id": 4462,
+          "name": "IncomingHomeSource.NarrowStackInputsKeepTheirExactWidth",
+          "binary": "NeverDLiftTests",
+          "passed": true,
+          "status": 0,
+          "seconds": 76.6635042919952,
+          "limit_seconds": 120,
+          "command": [
+            "build-arm64e/bin/NeverDLiftTests",
+            "--gtest_filter=IncomingHomeSource.NarrowStackInputsKeepTheirExactWidth",
+            "--gtest_also_run_disabled_tests",
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4462.xml"
+          ],
+          "log_sha256": "360ef2362c0d2b51dd2c7252c6a924a1f975226c3cdb5b9cd9183e15cab7f89b"
+        },
+        {
+          "id": 4466,
+          "name": "IncomingHomeSource.SelectedCallerRetainsExplicitScalarDeclarations",
+          "binary": "NeverDLiftTests",
+          "passed": true,
+          "status": 0,
+          "seconds": 24.83386466698721,
+          "limit_seconds": 120,
+          "command": [
+            "build-arm64e/bin/NeverDLiftTests",
+            "--gtest_filter=IncomingHomeSource.SelectedCallerRetainsExplicitScalarDeclarations",
+            "--gtest_also_run_disabled_tests",
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4466.xml"
+          ],
+          "log_sha256": "57d1fffa246afb3f2a4f0a92ebdbb4627d010eb36980a8fc29eaa1ef206ca135"
+        },
+        {
+          "id": 4467,
+          "name": "IncomingHomeSource.ExplicitStackInputSurvivesAFrame",
+          "binary": "NeverDLiftTests",
+          "passed": true,
+          "status": 0,
+          "seconds": 25.56907633400988,
+          "limit_seconds": 120,
+          "command": [
+            "build-arm64e/bin/NeverDLiftTests",
+            "--gtest_filter=IncomingHomeSource.ExplicitStackInputSurvivesAFrame",
+            "--gtest_also_run_disabled_tests",
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4467.xml"
+          ],
+          "log_sha256": "9b1098cadaff3b4d7d38e5f99c2b0e116cda4e9dd78b3e1307c77889c7c88d36"
+        },
+        {
+          "id": 4470,
+          "name": "IncomingHomeSource.ExplicitStackInputSurvivesAnAllocatedFrame",
+          "binary": "NeverDLiftTests",
+          "passed": true,
+          "status": 0,
+          "seconds": 25.335637000011047,
+          "limit_seconds": 120,
+          "command": [
+            "build-arm64e/bin/NeverDLiftTests",
+            "--gtest_filter=IncomingHomeSource.ExplicitStackInputSurvivesAnAllocatedFrame",
+            "--gtest_also_run_disabled_tests",
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4470.xml"
+          ],
+          "log_sha256": "ffa3c63ddbdc74dfb1fb353521089b096a3a2e5a6b7f48c7bb2c6a9338ca8f23"
+        },
+        {
+          "id": 13437,
+          "name": "IncomingHomeSource.NarrowStackInputsKeepTheirExactWidth",
+          "binary": "NeverDSourceEntryBindingTests",
+          "passed": true,
+          "status": 0,
+          "seconds": 79.48454495798796,
+          "limit_seconds": 120,
+          "command": [
+            "build-arm64e/bin/NeverDSourceEntryBindingTests",
+            "--gtest_filter=IncomingHomeSource.NarrowStackInputsKeepTheirExactWidth",
+            "--gtest_also_run_disabled_tests",
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-13437.xml"
+          ],
+          "log_sha256": "755aea1e4fd4987a6de87a5f06ae7e39aacb48129f9bb613c070d12d40d265ba"
+        }
+      ]
+    },
+    "inventory_sha256": "b3fdd6a41dd3d23e784a6118f47c1a861e4afe44d320694b7f4e5b45af337c19",
+    "preparatory_build_interruptions": "Two preparatory builds stopped before testing: integrate current dev, then close the recovered-native sibling path. Neither is counted as a test pass."
+  },
+  "focused_call_tests": {
+    "passed": 7,
+    "report_sha256": "02d40bbfc9e8f827c02120cf390d270bfe874a9c83741a5227fb74a184f10f6e"
+  },
+  "environment_admission_tests": 38,
+  "qualified_scalar_argument_types": [
+    "float",
+    "double",
+    "uint64_t"
+  ],
+  "qualified_scalar_return_types": [
+    "float",
+    "double"
+  ],
+  "narrow_integer_and_pointer_parameter_execution_qualified": false,
+  "models": {
+    "typed": {
+      "source_revision": "2958160e98a48b6a8b223988ef80d3336b22cc42",
+      "summary_sha256": "5de84b13cdc1d37f6e3a45ee08506e218f66049d3d5384e887f29c3ee8deff45",
+      "provenance_sha256": "df60411d0fc99da22dd388cea59fd97518cb40bc0c5ec39995a2d5f2e8781205",
+      "guests": 30,
+      "groups": 30,
+      "cpta_modes": 4,
+      "valid_pairs": 3600,
+      "normal_function_executions": 7200,
+      "invalid_signature_pairs": 8640,
+      "actual_faults": 17280,
+      "original_exception_class_qualified_guests": 22,
+      "known_C_O0_exception_class_difference_pairs": 2304,
+      "exact_ESR_or_PC_qualified": false
+    },
+    "integer": {
+      "source_revision": "510439f28bb7e031ac60cda925314b3285390c98",
+      "summary_sha256": "35f89b86b59f12291470aadf908621c41c93c07fe1ea64c0cb1fe30fc98a435e",
+      "provenance_sha256": "9c6997d414d025f644b05a049b256844c8a5729b37c202d402ba5b22df457548",
+      "guests": 30,
+      "groups": 9,
+      "cpta_modes": 4,
+      "valid_pairs": 1080,
+      "normal_function_executions": 2160,
+      "invalid_signature_pairs": 2880,
+      "actual_faults": 5760,
+      "original_exception_class_qualified_guests": 22,
+      "known_C_O0_exception_class_difference_pairs": 768,
+      "exact_ESR_or_PC_qualified": false
+    }
+  },
+  "preserved_failures": {
+    "initial_fixture_contract_failure": "c0ebf88075fac99050911ebfedfc95574b6d04bc6d5b44ac7cea71ad56dd8bef",
+    "valid_pre_fix_reproducer": "89280575752643db732e059ed3fb6e57b735a0c7a741d90bb88db42d0155838d",
+    "darwin_fixed_spill_refusal": "0c390db16118a98b7a91746dc319b21765a336fa3997554df4e725d44eb073d4",
+    "pre_fix_recovered_native_reproducer": "3f5c9f33da82fc1eefd432f0fcb452ae0416cd6ec1f88f64007bdb98c106c3e1",
+    "initial_model_sample_gate": "Old 9-sample compile gate rejected the 30-sample typed profile before calls; fixed without weakening sample validation. Partial matrix retained and not counted."
+  },
+  "artifact_inheritance": {
+    "integer": {
+      "count": 116,
+      "changed": []
+    },
+    "typed": {
+      "count": 360,
+      "changed": []
+    }
+  },
+  "native_C_equivalent_model_inputs": [
+    {
+      "native": "native-typed-0-false-false/high-O0.ll",
+      "model_input": "typed-f64-one-0-false-false/high-O0.ll",
+      "sha256": "2cbd345f3dc68ce394c8910588dcc0f6c2067264454f8ffc58c74af6d978369b"
+    },
+    {
+      "native": "native-typed-0-false-false/high-O2.ll",
+      "model_input": "typed-f64-one-0-false-false/high-O2.ll",
+      "sha256": "bc746e8b1480501b1125f9b5cdde50c12ee4448a2d2d8d27cd2c8910ddaddf3c"
+    },
+    {
+      "native": "native-typed-0-false-false/high-O0.o",
+      "model_input": "typed-f64-one-0-false-false/high-O0.o",
+      "sha256": "7fa6c6598d498690c6615289cc8a7516913bcd0388536cfaa6c7479fcba48543"
+    },
+    {
+      "native": "native-typed-0-false-false/high-O2.o",
+      "model_input": "typed-f64-one-0-false-false/high-O2.o",
+      "sha256": "2860c0f2ed908b6a004c2625964f95c2650658b4635c9a43e81ab9528cc26e57"
+    },
+    {
+      "native": "native-typed-0-true-false/high-O0.ll",
+      "model_input": "typed-f64-one-0-true-false/high-O0.ll",
+      "sha256": "f7997d964adf33b5b498606fa981b5926cea911e023dac4f7748f106e50e6a37"
+    },
+    {
+      "native": "native-typed-0-true-false/high-O2.ll",
+      "model_input": "typed-f64-one-0-true-false/high-O2.ll",
+      "sha256": "82970c8aa32c701a87e5bd5849a3ac320e4e6af882750ce18d9956cbc71555a1"
+    },
+    {
+      "native": "native-typed-0-true-false/high-O0.o",
+      "model_input": "typed-f64-one-0-true-false/high-O0.o",
+      "sha256": "543d4edcd4b172e94290944bdefeb11ee71947e8f77b7be7df7cc485bfb36c2e"
+    },
+    {
+      "native": "native-typed-0-true-false/high-O2.o",
+      "model_input": "typed-f64-one-0-true-false/high-O2.o",
+      "sha256": "339d8ffd7f5bd1b6bc979741cb7a8adeab45106451868b42621a5f5d45cfa991"
+    },
+    {
+      "native": "native-typed-1-false-false/high-O0.ll",
+      "model_input": "typed-f64-one-1-false-false/high-O0.ll",
+      "sha256": "ccd71b46a8e8e0a40c0d280778c17ab84be0ef904907b3b4b62d38ea9acae786"
+    },
+    {
+      "native": "native-typed-1-false-false/high-O2.ll",
+      "model_input": "typed-f64-one-1-false-false/high-O2.ll",
+      "sha256": "3f50e550776340bbf372a4893fbb68719a8a95b3432707ab953472c83f09fbb5"
+    },
+    {
+      "native": "native-typed-1-false-false/high-O0.o",
+      "model_input": "typed-f64-one-1-false-false/high-O0.o",
+      "sha256": "3d6dff39e3a3024086afa0cdecaac48a44eaf176b2394a1175e33355b1078daa"
+    },
+    {
+      "native": "native-typed-1-false-false/high-O2.o",
+      "model_input": "typed-f64-one-1-false-false/high-O2.o",
+      "sha256": "930e67bc159acc45be567625ca6bae8ce74d93197328e243818736fa634808d3"
+    },
+    {
+      "native": "native-typed-1-true-false/high-O0.ll",
+      "model_input": "typed-f64-one-1-true-false/high-O0.ll",
+      "sha256": "90d410ee571eb45881f7c8dfe708fb73448cd9f9cfe8a24dc3ca7cd49463d642"
+    },
+    {
+      "native": "native-typed-1-true-false/high-O2.ll",
+      "model_input": "typed-f64-one-1-true-false/high-O2.ll",
+      "sha256": "b83ea0bd41d2ec0df9750fd331159c39e5cf60e94d92b4b74a3ca0c35b396743"
+    },
+    {
+      "native": "native-typed-1-true-false/high-O0.o",
+      "model_input": "typed-f64-one-1-true-false/high-O0.o",
+      "sha256": "bf540d6b036a75eaad518bf2d04831db98c95e68341a7e49300e4fee3152c6eb"
+    },
+    {
+      "native": "native-typed-1-true-false/high-O2.o",
+      "model_input": "typed-f64-one-1-true-false/high-O2.o",
+      "sha256": "20228f97e82aba3abcfe3f640144401a10cf250dae24a69d79b6bc17974b3963"
+    },
+    {
+      "native": "native-typed-0-false-true/high-O0.ll",
+      "model_input": "typed-f64-one-0-false-true/high-O0.ll",
+      "sha256": "0c0b5195fa92be688a829e26c9aae5746644b20c2894e3e059b16ecfe3273833"
+    },
+    {
+      "native": "native-typed-0-false-true/high-O2.ll",
+      "model_input": "typed-f64-one-0-false-true/high-O2.ll",
+      "sha256": "a734d1defabcc9c5a7ad5b74c0f335ff34db430cc9813232f64fc09d15b7bcd5"
+    },
+    {
+      "native": "native-typed-0-false-true/high-O0.o",
+      "model_input": "typed-f64-one-0-false-true/high-O0.o",
+      "sha256": "0d1374fbde5b36421e0aba1ff3d358b599a45ec3857b2261b216dabd6791abf7"
+    },
+    {
+      "native": "native-typed-0-false-true/high-O2.o",
+      "model_input": "typed-f64-one-0-false-true/high-O2.o",
+      "sha256": "17cdb75e107812814b4ab8c52dfb6518c51f57a2e6715020a780b8af1e5ae475"
+    }
+  ],
+  "export_count": 501,
+  "object_formats": {
+    "Mach-O": 168,
+    "ELF": 45
+  },
+  "artifacts_sha256": {
+    "0-false-1/high-O0.ll": "5563a0f7b51e6b6e3528af70bf483155230ef05384f0abf1bf40d8b5e045ee87",
+    "0-false-1/high-O0.o": "33a33709745f646dd5d105f1bf5ca9c6e9bd394ae1bc87700c914dd32c50020c",
+    "0-false-1/high-O2.ll": "7574a297d790e5b1420b63630b5f849fa08abc396b973ce147442d1597650262",
+    "0-false-1/high-O2.o": "c0198b2d65b8ab9ecf8ac4c4842056475b490cc764bda079157175e41aae43df",
+    "0-false-1/high.c": "ad8ff9ff1e23a8f009ddd8e774f423ebd3421fa451d38450706047864888248b",
+    "0-false-1/llvm-O0.ll": "a46a3d483fba3ff3a94cc05d158d1e7ebaf0c8be9239e89aa9ef0a5efbd3ac39",
+    "0-false-1/llvm-O0.o": "33a33709745f646dd5d105f1bf5ca9c6e9bd394ae1bc87700c914dd32c50020c",
+    "0-false-1/llvm-O2.ll": "7574a297d790e5b1420b63630b5f849fa08abc396b973ce147442d1597650262",
+    "0-false-1/llvm-O2.o": "c0198b2d65b8ab9ecf8ac4c4842056475b490cc764bda079157175e41aae43df",
+    "0-false-1/llvm.c": "ebdeb264b89de57a6572bcbb668810653ecdc177fca5a0914a85bffb1fee04f2",
+    "0-false-1/native-macho.o": "121cc6380c6977ba8cf4b6e4b940c0d5c18771a1122d5a0a86a4860575fa9906",
+    "0-false-1/native.ll": "c1b37fcf355e12e4316680fd1c05c0c8bfe7f8d5c8e3aba0077decc871dc0293",
+    "0-false-1/native.o": "4e7d27bf54fcc80238749fd08d7ae1e591c9cd365ae67fdb3ee4f17771178439",
+    "0-false-10/high-O0.ll": "9841787a1c0f2197d76e74638c4561558c0f5c9e4acd29bd8d9a0793548157fd",
+    "0-false-10/high-O0.o": "9644d946212b4936415869cbf1d62345fc46872341a78cac2f4583a90b0930c7",
+    "0-false-10/high-O2.ll": "1088269bb73bb7a25c31746a454ff14d9ebab0909500ba30a9ea0d3be015f8a6",
+    "0-false-10/high-O2.o": "624320ca6c4ea345b2df78f50aa7e7e8a6e22f32008e377725eb172cc8fcfd93",
+    "0-false-10/high.c": "56b2722459f9c0865d23da85d2acb51c80ae0d62003f33baa6897968c6847d53",
+    "0-false-10/llvm-O0.ll": "79242d05e8ffba914c05f6af9e2c597ce7bb7494a3d6397b7fb8319bf0510584",
+    "0-false-10/llvm-O0.o": "9644d946212b4936415869cbf1d62345fc46872341a78cac2f4583a90b0930c7",
+    "0-false-10/llvm-O2.ll": "1088269bb73bb7a25c31746a454ff14d9ebab0909500ba30a9ea0d3be015f8a6",
+    "0-false-10/llvm-O2.o": "624320ca6c4ea345b2df78f50aa7e7e8a6e22f32008e377725eb172cc8fcfd93",
+    "0-false-10/llvm.c": "4ac051e63e7a06759616cafe1f5d6c8fd54b04aaf0ab135620ded841750d31ef",
+    "0-false-10/native-macho.o": "beae364050e357416547fa4537b72cb9a97f17b4dc0d0f5a5a9b3a58102d2b98",
+    "0-false-10/native.ll": "79955eedde806be50a4a5c185b50adfbef8b02cc969fce9eab03c76e5d2821de",
+    "0-false-10/native.o": "1f294249deda26d34c4f80e90689bc0658bd259484ac390c6fbc203eb12e1c97",
+    "0-true-1/high-O0.ll": "c304b81cf80d6c695a3b9402a8dad8072776a2dd1b21629aadb2eff55fbe91dc",
+    "0-true-1/high-O0.o": "6bf598c355e621842bebef8085bd4e42f4a5651b7a5907867329761610a7aecc",
+    "0-true-1/high-O2.ll": "601defb8fb9e6b733ca4b22f3cbbae02e50e5a24297dd8684ee1cbe3c19ae128",
+    "0-true-1/high-O2.o": "0d840b9810c2e81991c5cd62f46e90cc51070370abcc20180f9856ce09ba81e6",
+    "0-true-1/high.c": "3a4cb3db175038f83ebd7875c82f231be75a128f82a21dd1bf1a621e656e6a48",
+    "0-true-1/llvm-O0.ll": "39e70f1e263df43136bf35c0067763d09268d4cbb3337414840787fecd059a52",
+    "0-true-1/llvm-O0.o": "6bf598c355e621842bebef8085bd4e42f4a5651b7a5907867329761610a7aecc",
+    "0-true-1/llvm-O2.ll": "601defb8fb9e6b733ca4b22f3cbbae02e50e5a24297dd8684ee1cbe3c19ae128",
+    "0-true-1/llvm-O2.o": "0d840b9810c2e81991c5cd62f46e90cc51070370abcc20180f9856ce09ba81e6",
+    "0-true-1/llvm.c": "9836c0f979962c472c0208160a3d7fc981a3c4d633a95dfcdfe6ee4832255862",
+    "0-true-1/native-macho.o": "69445cf0908b3a094685c280d77774c054b257b2eedb167024bb8b6b539a46fa",
+    "0-true-1/native.ll": "87e8b20ed6f33cc4c84b37c619716f01afcb1ac3e148abe1c6902f7cc8364496",
+    "0-true-1/native.o": "0d6396395a0d7ddb996f3a9dce5fa6002a323709337bdb69fed3ba33182fccb1",
+    "0-true-10/high-O0.ll": "35c7928ea0bb66799381860dfb155d562d538a3cb0103d7382b3c7aff6429751",
+    "0-true-10/high-O0.o": "628614dbf0d5e567b4e5240ec117d4f53d0a8d131b52c353500d19f66b0eddc7",
+    "0-true-10/high-O2.ll": "c46f23c13a0fe9c212ba23cb887beb3ecf50a0dbc828b7b8e21f9a9fb6fdbd81",
+    "0-true-10/high-O2.o": "b443934f9e40210b04af769fab1b5c71d271dba04e85ec4a3fac33f932a82f65",
+    "0-true-10/high.c": "afeeaf9e4ed9dfeb075c9e0bdd96cdf15f6b02957eacbe1d275bf41d0f1cff3f",
+    "0-true-10/llvm-O0.ll": "2b68b01423d4ab6b438baeacc634fc7ea97131003be7db9edb656de68e9796d7",
+    "0-true-10/llvm-O0.o": "628614dbf0d5e567b4e5240ec117d4f53d0a8d131b52c353500d19f66b0eddc7",
+    "0-true-10/llvm-O2.ll": "c46f23c13a0fe9c212ba23cb887beb3ecf50a0dbc828b7b8e21f9a9fb6fdbd81",
+    "0-true-10/llvm-O2.o": "b443934f9e40210b04af769fab1b5c71d271dba04e85ec4a3fac33f932a82f65",
+    "0-true-10/llvm.c": "fa01977d9e5c9b41857130dedda7c6d52114dbd0f1520b1773e013f69096681c",
+    "0-true-10/native-macho.o": "be94e1159f52b7bde8bfdf33742dd621559b18a2b05bf26f916f47be6d527934",
+    "0-true-10/native.ll": "3a40d8821a756656e7c2c64e07a50998c5d3b8c8d6f88cc7fc787533574b499d",
+    "0-true-10/native.o": "234983e244909c16c813863887875a8f07432bdd9af79333267beeb02f8c3e15",
+    "1-false-1/high-O0.ll": "da6e45f66a946584f531ff965fb0ad5fd3176a1c588dba437c0b69f0315b9a39",
+    "1-false-1/high-O0.o": "f1644a2e529f34a962e6b65e31711ffec8dba50698b89d8311bfe7368a2b2312",
+    "1-false-1/high-O2.ll": "f42a5c7aec940d5d094b368b2b4e617016254a81499ece4a5e0b16ece265d594",
+    "1-false-1/high-O2.o": "e25d0ad564595b9b333383d5c1fa3303b6379a7bb592e8bb36c35d850b2a4411",
+    "1-false-1/high.c": "8940b78e7ebb61acf6f5deb826c5f16b24c3f6e262973c0765237925e8d5220c",
+    "1-false-1/llvm-O0.ll": "1009b54011967317f4f9497f74ebbac9cd7a0e0cda2ecba4950f37c3ec2b4b6f",
+    "1-false-1/llvm-O0.o": "f1644a2e529f34a962e6b65e31711ffec8dba50698b89d8311bfe7368a2b2312",
+    "1-false-1/llvm-O2.ll": "f42a5c7aec940d5d094b368b2b4e617016254a81499ece4a5e0b16ece265d594",
+    "1-false-1/llvm-O2.o": "e25d0ad564595b9b333383d5c1fa3303b6379a7bb592e8bb36c35d850b2a4411",
+    "1-false-1/llvm.c": "7a7cf688e68a70eaef18b5dacf7d7ffa2e9ddb63d621e15c33d90fe014386576",
+    "1-false-1/native-macho.o": "8f606bb24b04ca4092eb568b0d5ba812cf4cff30bad86477ec7b89f1df23a24b",
+    "1-false-1/native.ll": "589a4527c46bdfa4fb4ade6d5908bcdbb85b4bd060ba1812e3732ad51866852a",
+    "1-false-1/native.o": "8c77a77ca5bda5f53cae1fe5813a64bbbb46102dc18850ff415cb07d661ff1d2",
+    "1-false-10/high-O0.ll": "707a5464f0b605f425ea43d8db53a6982619b97eb689a0a1d4b63665b564f459",
+    "1-false-10/high-O0.o": "7db4a5e7eac075ee40527d6bfeec1a02d4e1a1d357c37545b14a385fe3ba9354",
+    "1-false-10/high-O2.ll": "e4ee30314a27038bb447fcc33edd8836b48027ba02e835adac3f3b90f8ae9a04",
+    "1-false-10/high-O2.o": "722626c742b5d24e0c57669dd3b11e9c7b2b00cba9da3832d1249b3b9a03307f",
+    "1-false-10/high.c": "0a37be1cc77d05015bdcea7f8086c780259ecf5a26381cef53178633b53feca4",
+    "1-false-10/llvm-O0.ll": "1120537d15bb651064b43f97156999ee01d035592896448d9dfd5db4239aada9",
+    "1-false-10/llvm-O0.o": "7db4a5e7eac075ee40527d6bfeec1a02d4e1a1d357c37545b14a385fe3ba9354",
+    "1-false-10/llvm-O2.ll": "e4ee30314a27038bb447fcc33edd8836b48027ba02e835adac3f3b90f8ae9a04",
+    "1-false-10/llvm-O2.o": "722626c742b5d24e0c57669dd3b11e9c7b2b00cba9da3832d1249b3b9a03307f",
+    "1-false-10/llvm.c": "b345d105e1545d4fd56d4538c8fdfc3934fcaa12fe9f2ad778bb9b958604eb35",
+    "1-false-10/native-macho.o": "101d92297cdc45d1c923fa996441242a9bc0451a87eae5418f6cefc9a049251a",
+    "1-false-10/native.ll": "457cbcfb14445ce84a25756c3c74631b2836ec20dfae8b0eb194608792d69212",
+    "1-false-10/native.o": "69956cc321189aa51ce5f463284a34b4579658406cf153038a993e29d0b0cc70",
+    "1-true-1/high-O0.ll": "5f15343b10d25cda49f81f40da94f4e363a6655ff90cc9a93d46cb3343eaac12",
+    "1-true-1/high-O0.o": "df8f530242f2b6beb50180ff80ca9e67376ed62d9a3270696559bf9321d282bd",
+    "1-true-1/high-O2.ll": "69e6fd43084ddbdb403297fb0dc480b5fd68f63b3b813545d47868533f4042b1",
+    "1-true-1/high-O2.o": "6661b16ee676cf548d372e90cfa63454717032969252d7375df9a829d7435c51",
+    "1-true-1/high.c": "3d9f28e6269ff26ae5ac416e7ad5910af228d627782cfd5d47646b5b005d6094",
+    "1-true-1/llvm-O0.ll": "41bbec779d05a6749c704fd240d429d6ce6c3fb2939a6f9533846ccb6bc307e2",
+    "1-true-1/llvm-O0.o": "df8f530242f2b6beb50180ff80ca9e67376ed62d9a3270696559bf9321d282bd",
+    "1-true-1/llvm-O2.ll": "69e6fd43084ddbdb403297fb0dc480b5fd68f63b3b813545d47868533f4042b1",
+    "1-true-1/llvm-O2.o": "6661b16ee676cf548d372e90cfa63454717032969252d7375df9a829d7435c51",
+    "1-true-1/llvm.c": "42e03f605afab44c6880857f93750ea4ccf24998712589aa129f84e8db9c406d",
+    "1-true-1/native-macho.o": "548ed80cb3eb0a0f6709fcc9693163237ba67fc5ff4d72d7c8c357e8d9301668",
+    "1-true-1/native.ll": "c23d0fe548d4e32fc89b2b49c596655aa5ce41f2ee0f0429efe0aa9c65dbb961",
+    "1-true-1/native.o": "61658d0ecaa9b1c56086c47add986e432d7f6e9612923dd3f571d0d3271bd595",
+    "1-true-10/high-O0.ll": "55b474b509d1f127c7afbfd9ea1e8306b0fde25035f4b829667ffeece9feabfd",
+    "1-true-10/high-O0.o": "75b1a9ae97da792f278934be4aa327909423161db324f845c7ecacdd5f4f7ff2",
+    "1-true-10/high-O2.ll": "e7684c7c6ee51859406848a77b3b06a7431687b92ce65b1bce2135950cfb6770",
+    "1-true-10/high-O2.o": "f356e35b4e4c13e80ed64cb4c9c841f9bb18ff71a9fd87b37ca7caa09cf172a9",
+    "1-true-10/high.c": "6f233aa213ad5340b8bb2ad76bc271ab9ae7d8f1ee203e1340e8a583c904e155",
+    "1-true-10/llvm-O0.ll": "2671a806398d72ad3a207b51d03715433f2ef6f404fdf8d0f1c9934586e48e9e",
+    "1-true-10/llvm-O0.o": "75b1a9ae97da792f278934be4aa327909423161db324f845c7ecacdd5f4f7ff2",
+    "1-true-10/llvm-O2.ll": "e7684c7c6ee51859406848a77b3b06a7431687b92ce65b1bce2135950cfb6770",
+    "1-true-10/llvm-O2.o": "f356e35b4e4c13e80ed64cb4c9c841f9bb18ff71a9fd87b37ca7caa09cf172a9",
+    "1-true-10/llvm.c": "e0f5e3a1f0dc228b1cbe2ea1b77fdda63e293b8c2caf706dfce7f32165411c8f",
+    "1-true-10/native-macho.o": "744508fd48a7812c25bc5a6708b5b8d4847e823126f09c29aa4c05e84a9def4d",
+    "1-true-10/native.ll": "8be20013879d16cb36d6fa5aa78efb1c574ac80275b62df446b78a79eb7f1743",
+    "1-true-10/native.o": "1d080ee111c7286a2656dbcd53338b5f1105e3840d304775755b0b9694176418",
+    "native-typed-0-false-false/high-O0.ll": "2cbd345f3dc68ce394c8910588dcc0f6c2067264454f8ffc58c74af6d978369b",
+    "native-typed-0-false-false/high-O0.o": "7fa6c6598d498690c6615289cc8a7516913bcd0388536cfaa6c7479fcba48543",
+    "native-typed-0-false-false/high-O2.ll": "bc746e8b1480501b1125f9b5cdde50c12ee4448a2d2d8d27cd2c8910ddaddf3c",
+    "native-typed-0-false-false/high-O2.o": "2860c0f2ed908b6a004c2625964f95c2650658b4635c9a43e81ab9528cc26e57",
+    "native-typed-0-false-false/high.c": "de55d2c07180756952be6909c931434c48048b1c0f5c8b8512a2715f3cee1877",
+    "native-typed-0-false-true/high-O0.ll": "0c0b5195fa92be688a829e26c9aae5746644b20c2894e3e059b16ecfe3273833",
+    "native-typed-0-false-true/high-O0.o": "0d1374fbde5b36421e0aba1ff3d358b599a45ec3857b2261b216dabd6791abf7",
+    "native-typed-0-false-true/high-O2.ll": "a734d1defabcc9c5a7ad5b74c0f335ff34db430cc9813232f64fc09d15b7bcd5",
+    "native-typed-0-false-true/high-O2.o": "17cdb75e107812814b4ab8c52dfb6518c51f57a2e6715020a780b8af1e5ae475",
+    "native-typed-0-false-true/high.c": "23aec756dd74599b5215556cf2b5700f43057e1e4d7356bc68c3f91735afea73",
+    "native-typed-0-true-false/high-O0.ll": "f7997d964adf33b5b498606fa981b5926cea911e023dac4f7748f106e50e6a37",
+    "native-typed-0-true-false/high-O0.o": "543d4edcd4b172e94290944bdefeb11ee71947e8f77b7be7df7cc485bfb36c2e",
+    "native-typed-0-true-false/high-O2.ll": "82970c8aa32c701a87e5bd5849a3ac320e4e6af882750ce18d9956cbc71555a1",
+    "native-typed-0-true-false/high-O2.o": "339d8ffd7f5bd1b6bc979741cb7a8adeab45106451868b42621a5f5d45cfa991",
+    "native-typed-0-true-false/high.c": "c79557648fd258e4ae82de229e7245eebbd508460c6ab797c04e8d8ff6508130",
+    "native-typed-1-false-false/high-O0.ll": "ccd71b46a8e8e0a40c0d280778c17ab84be0ef904907b3b4b62d38ea9acae786",
+    "native-typed-1-false-false/high-O0.o": "3d6dff39e3a3024086afa0cdecaac48a44eaf176b2394a1175e33355b1078daa",
+    "native-typed-1-false-false/high-O2.ll": "3f50e550776340bbf372a4893fbb68719a8a95b3432707ab953472c83f09fbb5",
+    "native-typed-1-false-false/high-O2.o": "930e67bc159acc45be567625ca6bae8ce74d93197328e243818736fa634808d3",
+    "native-typed-1-false-false/high.c": "fb031276bd32a7b873f81718d0d7bf4302895bf188aae847be44bc602cd32211",
+    "native-typed-1-true-false/high-O0.ll": "90d410ee571eb45881f7c8dfe708fb73448cd9f9cfe8a24dc3ca7cd49463d642",
+    "native-typed-1-true-false/high-O0.o": "bf540d6b036a75eaad518bf2d04831db98c95e68341a7e49300e4fee3152c6eb",
+    "native-typed-1-true-false/high-O2.ll": "b83ea0bd41d2ec0df9750fd331159c39e5cf60e94d92b4b74a3ca0c35b396743",
+    "native-typed-1-true-false/high-O2.o": "20228f97e82aba3abcfe3f640144401a10cf250dae24a69d79b6bc17974b3963",
+    "native-typed-1-true-false/high.c": "0ca39250c58a218266396bce321d0738fd2facca1eba9e25aa6f15ef1af26bbc",
+    "raw-1/high-O0.ll": "e1aebf316eb50a76a5cd5b865704f42fd8f624b817b72113b0b2cb8dada8b79c",
+    "raw-1/high-O0.o": "ea6856d15cf33f90c29d958b0ce3b57d18e807a8a68b1c8ec5d8e097c8857910",
+    "raw-1/high-O2.ll": "b083f632e05ee4ca7b5e3f12a5dca86e8f2a85bcecad66e1c9b2fdea75f73c7e",
+    "raw-1/high-O2.o": "838bc10558358e9d4fe548201730c9a149bcccbba9de45ba7d1fddfebb5886c3",
+    "raw-1/high.c": "985e89cfb0edd3a365306a7cb1474620e52ebf2af4b597f550682c75d14d21aa",
+    "raw-1/llvm-O0.ll": "e1aebf316eb50a76a5cd5b865704f42fd8f624b817b72113b0b2cb8dada8b79c",
+    "raw-1/llvm-O0.o": "ea6856d15cf33f90c29d958b0ce3b57d18e807a8a68b1c8ec5d8e097c8857910",
+    "raw-1/llvm-O2.ll": "b083f632e05ee4ca7b5e3f12a5dca86e8f2a85bcecad66e1c9b2fdea75f73c7e",
+    "raw-1/llvm-O2.o": "838bc10558358e9d4fe548201730c9a149bcccbba9de45ba7d1fddfebb5886c3",
+    "raw-1/llvm.c": "b310aa3c57c0a53ecec5c11be60416593fe2bb81e0072038f2d6a75a0e1b5547",
+    "raw-1/native.ll": "9c05067693f96a11b7403f7071ef17af7b092a6bc969abe6f8cacc042d533f4c",
+    "raw-1/native.o": "40f2eab565c86d488f872e49e5c4a8a24153be9dcd9d924ddb9182775cee96d6",
+    "typed-f32-ten-0-false-false/high-O0.ll": "2ce1512c8d53e70d22192e608fd41ecefd10d9276dbfe66ae70acf27e5fa7a0c",
+    "typed-f32-ten-0-false-false/high-O0.o": "88ea7851db05ea475ccc8f5ee5ab784d354cee4a6860b3a02c10a4e7ccb69f12",
+    "typed-f32-ten-0-false-false/high-O2.ll": "fd31730743ba65661cbcad6f7585e5609f971fe47b74321289a8cc6f27257a77",
+    "typed-f32-ten-0-false-false/high-O2.o": "a1e2b3c716c616000c2a130a125047b780788ada6dbfea9d092886a170bd1970",
+    "typed-f32-ten-0-false-false/high.c": "869f855242231447dda151ee0b49fdc319b3d4d95dde98d0a913461b4ad17f1c",
+    "typed-f32-ten-0-false-false/llvm-O0.ll": "ecefcebb2a27d80e29252a50b032b53e888dcfe9f6d67655427ba4d1c1283c89",
+    "typed-f32-ten-0-false-false/llvm-O0.o": "cf7c495d677dd5a3feb78bacdcd5d15f9195dce78c176077ddbadb85d4833da9",
+    "typed-f32-ten-0-false-false/llvm-O2.ll": "fd31730743ba65661cbcad6f7585e5609f971fe47b74321289a8cc6f27257a77",
+    "typed-f32-ten-0-false-false/llvm-O2.o": "a1e2b3c716c616000c2a130a125047b780788ada6dbfea9d092886a170bd1970",
+    "typed-f32-ten-0-false-false/llvm.c": "af00176d836d0564acd88979f6b93ac9a1c5ddef93780daab4b6fdc4f35d1632",
+    "typed-f32-ten-0-false-false/native.ll": "db601522d480ebc708d84612730a7adb5c1260aae7176c84ee43304bbdfe8574",
+    "typed-f32-ten-0-false-false/native.o": "9ae833408b8191dcc65d2f249c234b7ad0d557cfe9c4b76f025afb9509cd823d",
+    "typed-f32-ten-0-false-true/high-O0.ll": "814ea3372504e00664eb1e7a5e7c2d39cde99b6f225a61a46e6c18999670a826",
+    "typed-f32-ten-0-false-true/high-O0.o": "69bd659ec6bbe0b516cd1f0d9ef87da96859e9e5d3222a1af4bfa1452db88558",
+    "typed-f32-ten-0-false-true/high-O2.ll": "feafa5c74c58e303f7a815ef54028e89cd1a082554e4fcf9f448014356d9f819",
+    "typed-f32-ten-0-false-true/high-O2.o": "38306585fadacd9c9f4284c9046e58f3b1f7f8c518d817aafa503f0a2c0aed9b",
+    "typed-f32-ten-0-false-true/high.c": "dcaa2fb6a86260cee667ad5bd6a08c398e97c8fe80ef98a5433e8174009db670",
+    "typed-f32-ten-0-false-true/llvm-O0.ll": "0053e35a0005fdaf4c1f6ba0ebc40dfee4fd22992d292b948957cf1b4b519cd2",
+    "typed-f32-ten-0-false-true/llvm-O0.o": "c48cda3cf29dee966ac732d067b5b342db55595f43fe272b5f8514461c42adcf",
+    "typed-f32-ten-0-false-true/llvm-O2.ll": "2f11c3644c29a1643a8b924aad6e941f1f1382c5063662019596874654e20759",
+    "typed-f32-ten-0-false-true/llvm-O2.o": "9f432d6a4ae400600071139fdcce05b6ddda95042665ac9b5e0e689787573d5b",
+    "typed-f32-ten-0-false-true/llvm.c": "43c3b20819467ab3dcd037d1ebabd079664c51f13b8cdbf65b7cead9621c7364",
+    "typed-f32-ten-0-false-true/native.ll": "40c541ce558714c90e57c39f597e71ad26849e5f7f0eb57d4c82d0f215ccf2a8",
+    "typed-f32-ten-0-false-true/native.o": "6006b8acb21c23dbc02bdddd389caaa118984a71b619796ede8e2563f6c7b0a5",
+    "typed-f32-ten-0-true-false/high-O0.ll": "82f784e3c20daff6feb377d6e8606a28aca861891b59791f93194e860d508456",
+    "typed-f32-ten-0-true-false/high-O0.o": "3ea722a31d5d1f7fdd5765d49dd987d036f177e6a1ec8d7b52fc48a2263bb261",
+    "typed-f32-ten-0-true-false/high-O2.ll": "8d15c096ca381d58ba222a8625dfe01bcbf1fb6445725d2cbb14e056dc12d799",
+    "typed-f32-ten-0-true-false/high-O2.o": "dc28b3d4162af4c1ac769af7461759eb96f192055bc8ea784d37d0234f580134",
+    "typed-f32-ten-0-true-false/high.c": "ccb312a2e7bdb32c9a869c6f97f3e81af0634191e121472aeea1f45b05412ac3",
+    "typed-f32-ten-0-true-false/llvm-O0.ll": "c94a96690218912b5c401278fe2c01af29c28a46bc48357089cec579660f1d74",
+    "typed-f32-ten-0-true-false/llvm-O0.o": "710342ba7ac2c4f4c1890ceabe4118ecf73ac192db3a14c2a025162b998a52fd",
+    "typed-f32-ten-0-true-false/llvm-O2.ll": "8d15c096ca381d58ba222a8625dfe01bcbf1fb6445725d2cbb14e056dc12d799",
+    "typed-f32-ten-0-true-false/llvm-O2.o": "dc28b3d4162af4c1ac769af7461759eb96f192055bc8ea784d37d0234f580134",
+    "typed-f32-ten-0-true-false/llvm.c": "4e6c7ae208f7c92c7381ad668fb6a1396fef363dfd600fe98dc1f36e0bb5c39d",
+    "typed-f32-ten-0-true-false/native.ll": "f2b5bdc8057efba00e709f19dc6eff51ce5402a43d3b19969747fcdce29ea42c",
+    "typed-f32-ten-0-true-false/native.o": "1c43aebf4b8473683f7d4a6ff1f3961811f4ca50bfef5bed3cf1c1a5d0face00",
+    "typed-f32-ten-1-false-false/high-O0.ll": "0998d9be701dd0ad38026602cc05ffd30d94df7b81b994ad53bb20b74a117992",
+    "typed-f32-ten-1-false-false/high-O0.o": "cdaf4de3f0b5d58cc9a4b54155cd7872809b14481100b8966ee30e319c4a81f1",
+    "typed-f32-ten-1-false-false/high-O2.ll": "ca71a8941af1743f002f7af6d533f5a7f7cb1296865f8fc8f67860c6cc9b0a62",
+    "typed-f32-ten-1-false-false/high-O2.o": "6a8349ed194a216a44b3bfd6621c5eafc5399c2c7a70c6e85a961cd0bec13bbf",
+    "typed-f32-ten-1-false-false/high.c": "5487279a2b69e116f7e57fdad93ec6fbdafea614ff0c57c9b74c935fc8dcce85",
+    "typed-f32-ten-1-false-false/llvm-O0.ll": "aef7c333ec29c6bbe7708c0ff5b3bbddc0464c7b20d68048363ab36c8a0311c7",
+    "typed-f32-ten-1-false-false/llvm-O0.o": "a87204d5df5fcbdff21cee0c652bcf8b1e64f752ae4d983416fae28cd9e8fcf3",
+    "typed-f32-ten-1-false-false/llvm-O2.ll": "ca71a8941af1743f002f7af6d533f5a7f7cb1296865f8fc8f67860c6cc9b0a62",
+    "typed-f32-ten-1-false-false/llvm-O2.o": "6a8349ed194a216a44b3bfd6621c5eafc5399c2c7a70c6e85a961cd0bec13bbf",
+    "typed-f32-ten-1-false-false/llvm.c": "75c33539598a4e6efc277ed6b709b87f13c3a23abef29472e302ae02fe7eec51",
+    "typed-f32-ten-1-false-false/native.ll": "dc0d92ef05543786e3b8bd6fe81b1fafb5e04a70d29c868a0a186c37af9476a3",
+    "typed-f32-ten-1-false-false/native.o": "85e68f8fabdb6c431dd23fa16671285f6d57c1cdf865076f4512a6018f2fd172",
+    "typed-f32-ten-1-true-false/high-O0.ll": "3d8fcf673950d994665a44cf86ea3e7481723e53300d8daddc22a14884445fe7",
+    "typed-f32-ten-1-true-false/high-O0.o": "15ed0bf61bfaecf1447e4ee3b9688dc165c427e2d0c8cab6dc9e39ab52a9934d",
+    "typed-f32-ten-1-true-false/high-O2.ll": "cd95f0b6db747eb2a96f5b413166a8aff45d1f637da41d960ed612eb13f94f94",
+    "typed-f32-ten-1-true-false/high-O2.o": "2dd077c6a67bb937af744881aa651ea76859d2abd5911e589c5eb470e656ea09",
+    "typed-f32-ten-1-true-false/high.c": "d759f82adf1c540c15424368c0ffc4c83d32dc6b03a818c32976f2031d5f9f16",
+    "typed-f32-ten-1-true-false/llvm-O0.ll": "e04aebde4a6903a3d0139107b2be5d3340ac3316dc88c18a70d907bf9de6d359",
+    "typed-f32-ten-1-true-false/llvm-O0.o": "944745f1fd5af3dcdf364b4ce28713a3a76181bdc186f8e97c8fcaef59c4b19d",
+    "typed-f32-ten-1-true-false/llvm-O2.ll": "cd95f0b6db747eb2a96f5b413166a8aff45d1f637da41d960ed612eb13f94f94",
+    "typed-f32-ten-1-true-false/llvm-O2.o": "2dd077c6a67bb937af744881aa651ea76859d2abd5911e589c5eb470e656ea09",
+    "typed-f32-ten-1-true-false/llvm.c": "4311a8ec4011184e3d71100bca5211c8c4f0b1ce5865913f6cdb414723b2ffa5",
+    "typed-f32-ten-1-true-false/native.ll": "132352a4f56b1f1a21d87b4a7e578a5a753d72ef71148c1ab7a0d292b9ae128b",
+    "typed-f32-ten-1-true-false/native.o": "a9f6ba1d32b3095f99af617dd329abb6ab6007592533fc79460e54dc9bbb6a73",
+    "typed-f64-one-0-false-false/high-O0.ll": "2cbd345f3dc68ce394c8910588dcc0f6c2067264454f8ffc58c74af6d978369b",
+    "typed-f64-one-0-false-false/high-O0.o": "7fa6c6598d498690c6615289cc8a7516913bcd0388536cfaa6c7479fcba48543",
+    "typed-f64-one-0-false-false/high-O2.ll": "bc746e8b1480501b1125f9b5cdde50c12ee4448a2d2d8d27cd2c8910ddaddf3c",
+    "typed-f64-one-0-false-false/high-O2.o": "2860c0f2ed908b6a004c2625964f95c2650658b4635c9a43e81ab9528cc26e57",
+    "typed-f64-one-0-false-false/high.c": "8f3790cd4be89aae45b449b5bd38bbbab9df05989f900e7c5e1f05cddb0d6ce3",
+    "typed-f64-one-0-false-false/llvm-O0.ll": "c3c08b19b54adf06c10b8dda5cea8ff4539bb5cdf3da68b61bea6757675de17d",
+    "typed-f64-one-0-false-false/llvm-O0.o": "078d81e6d8a8605dd94390589b5f44bb21c2c416c5d783cd7d37411b1ca8e0c5",
+    "typed-f64-one-0-false-false/llvm-O2.ll": "bc746e8b1480501b1125f9b5cdde50c12ee4448a2d2d8d27cd2c8910ddaddf3c",
+    "typed-f64-one-0-false-false/llvm-O2.o": "2860c0f2ed908b6a004c2625964f95c2650658b4635c9a43e81ab9528cc26e57",
+    "typed-f64-one-0-false-false/llvm.c": "3e254273a00e8c3a8bd77984443a58aeea4df376b907a06ddde25fa6a8186463",
+    "typed-f64-one-0-false-false/native.ll": "9316ecb9383b8edacdbe3d8874b9287a8dd791eb4cf60adb416edc4bed87655e",
+    "typed-f64-one-0-false-false/native.o": "4fcbd65c2a06f08eb11535e1701f1b898271a4dbb70761849d4050537555956e",
+    "typed-f64-one-0-false-true/high-O0.ll": "0c0b5195fa92be688a829e26c9aae5746644b20c2894e3e059b16ecfe3273833",
+    "typed-f64-one-0-false-true/high-O0.o": "0d1374fbde5b36421e0aba1ff3d358b599a45ec3857b2261b216dabd6791abf7",
+    "typed-f64-one-0-false-true/high-O2.ll": "a734d1defabcc9c5a7ad5b74c0f335ff34db430cc9813232f64fc09d15b7bcd5",
+    "typed-f64-one-0-false-true/high-O2.o": "17cdb75e107812814b4ab8c52dfb6518c51f57a2e6715020a780b8af1e5ae475",
+    "typed-f64-one-0-false-true/high.c": "811083e43a3775574ba20d3bfcd2da275d241d1fa9447ce0de6ac58e0e738e72",
+    "typed-f64-one-0-false-true/llvm-O0.ll": "3299c32661f6b361c199b940a1f383240f99496851a5e9b116dcc945f587e3c5",
+    "typed-f64-one-0-false-true/llvm-O0.o": "a73fc5232add1026374fae16256ea6e62834288bdbfcd4d16f959af3715c3304",
+    "typed-f64-one-0-false-true/llvm-O2.ll": "00cf65b9fbd093cf5407e571ec9bac646a25ea21d3afa76bf7cb5e423594a9cc",
+    "typed-f64-one-0-false-true/llvm-O2.o": "7357b9f1a11212f2df2f348c2568c01145868e5814aee4f6d6d456c2ebd235ed",
+    "typed-f64-one-0-false-true/llvm.c": "4cfc41f3f84ee045abdfa6ec23dbd993fe814764b6a8721426d8a43808183b81",
+    "typed-f64-one-0-false-true/native.ll": "fd355fdfdaca715ee948d82cc995712f5effab99ac9de0452891c1fa90d307ae",
+    "typed-f64-one-0-false-true/native.o": "a3f581929ae8c0c8658c5017fabb0e76a4df92b9c560f024d56e2f6984fc9c60",
+    "typed-f64-one-0-true-false/high-O0.ll": "f7997d964adf33b5b498606fa981b5926cea911e023dac4f7748f106e50e6a37",
+    "typed-f64-one-0-true-false/high-O0.o": "543d4edcd4b172e94290944bdefeb11ee71947e8f77b7be7df7cc485bfb36c2e",
+    "typed-f64-one-0-true-false/high-O2.ll": "82970c8aa32c701a87e5bd5849a3ac320e4e6af882750ce18d9956cbc71555a1",
+    "typed-f64-one-0-true-false/high-O2.o": "339d8ffd7f5bd1b6bc979741cb7a8adeab45106451868b42621a5f5d45cfa991",
+    "typed-f64-one-0-true-false/high.c": "f9ab734401490cc4e3bcedfa4bc7f7f88bebccb7a9c6f2ce2011c3e3819e8fdf",
+    "typed-f64-one-0-true-false/llvm-O0.ll": "6b83109954a432aae32e17e13d75649d6aeffef5febe3caf97e98149433b60fd",
+    "typed-f64-one-0-true-false/llvm-O0.o": "edf08c0c6fae95dd6afbb67dfbd57ca2136bf788c927257dd7c59dcdf2d2d54d",
+    "typed-f64-one-0-true-false/llvm-O2.ll": "82970c8aa32c701a87e5bd5849a3ac320e4e6af882750ce18d9956cbc71555a1",
+    "typed-f64-one-0-true-false/llvm-O2.o": "339d8ffd7f5bd1b6bc979741cb7a8adeab45106451868b42621a5f5d45cfa991",
+    "typed-f64-one-0-true-false/llvm.c": "0fd07f0a453dfe8567bf8972a927afc9d0e4ef161d117a853ccf7fc1fbdec6e1",
+    "typed-f64-one-0-true-false/native.ll": "9ec2a5183fa86f788eddc14ca0d594cef2f3c6ce69ba1b95bbdc0c1128daf1af",
+    "typed-f64-one-0-true-false/native.o": "f5ea99f8d63ae863149bd4bea83f670efec7a333d288a3bb06088519470dad36",
+    "typed-f64-one-1-false-false/high-O0.ll": "ccd71b46a8e8e0a40c0d280778c17ab84be0ef904907b3b4b62d38ea9acae786",
+    "typed-f64-one-1-false-false/high-O0.o": "3d6dff39e3a3024086afa0cdecaac48a44eaf176b2394a1175e33355b1078daa",
+    "typed-f64-one-1-false-false/high-O2.ll": "3f50e550776340bbf372a4893fbb68719a8a95b3432707ab953472c83f09fbb5",
+    "typed-f64-one-1-false-false/high-O2.o": "930e67bc159acc45be567625ca6bae8ce74d93197328e243818736fa634808d3",
+    "typed-f64-one-1-false-false/high.c": "720810452ce2efe4c3ed7af1e87f4fb6e7d8ee94169881aa923c2a189fe8f5b0",
+    "typed-f64-one-1-false-false/llvm-O0.ll": "51c240d18b1dc796f0109e1333dfab6fc77ee8ce31a1da98e51730d2b5662186",
+    "typed-f64-one-1-false-false/llvm-O0.o": "d78d5a613c5e955b8d21644a37bac775f5c26004fadcb4fcf38eb9db0e3ccbc6",
+    "typed-f64-one-1-false-false/llvm-O2.ll": "3f50e550776340bbf372a4893fbb68719a8a95b3432707ab953472c83f09fbb5",
+    "typed-f64-one-1-false-false/llvm-O2.o": "930e67bc159acc45be567625ca6bae8ce74d93197328e243818736fa634808d3",
+    "typed-f64-one-1-false-false/llvm.c": "45435b657c2005e4bbbcbe40a4d189f3cb105a6899b6ea4eb267d98825b34d2d",
+    "typed-f64-one-1-false-false/native.ll": "74aaa207b864baac2e8f618cf4ec4c015e9bd5a4beb6ceaaeca99702191bc261",
+    "typed-f64-one-1-false-false/native.o": "398590e0a7beb60c8fcd991e74b1a76ebd89a2c286e858523422fbfa2377b6f8",
+    "typed-f64-one-1-true-false/high-O0.ll": "90d410ee571eb45881f7c8dfe708fb73448cd9f9cfe8a24dc3ca7cd49463d642",
+    "typed-f64-one-1-true-false/high-O0.o": "bf540d6b036a75eaad518bf2d04831db98c95e68341a7e49300e4fee3152c6eb",
+    "typed-f64-one-1-true-false/high-O2.ll": "b83ea0bd41d2ec0df9750fd331159c39e5cf60e94d92b4b74a3ca0c35b396743",
+    "typed-f64-one-1-true-false/high-O2.o": "20228f97e82aba3abcfe3f640144401a10cf250dae24a69d79b6bc17974b3963",
+    "typed-f64-one-1-true-false/high.c": "3645dd7ec78c11800473d0c27700d3a28503beed7bd1cfea601f1f69bcf8b934",
+    "typed-f64-one-1-true-false/llvm-O0.ll": "e2246bb17f67f4d0c6c6bb309b2dbd5998ef510e9611f0b66a4d6ecc9ee98445",
+    "typed-f64-one-1-true-false/llvm-O0.o": "a5e025c5e9ef3bce7ef657dc76e19b0f24ff26f6b605e03229a7d8c60b8d3624",
+    "typed-f64-one-1-true-false/llvm-O2.ll": "b83ea0bd41d2ec0df9750fd331159c39e5cf60e94d92b4b74a3ca0c35b396743",
+    "typed-f64-one-1-true-false/llvm-O2.o": "20228f97e82aba3abcfe3f640144401a10cf250dae24a69d79b6bc17974b3963",
+    "typed-f64-one-1-true-false/llvm.c": "dc3df36efccb8039f91b47b3f08ea2066676deed76483bc0b2f5bafa2e64cc6d",
+    "typed-f64-one-1-true-false/native.ll": "0f206fe811122b3d84b39140ee6a9153c23a4419835f8d2096a885ad6a506e1d",
+    "typed-f64-one-1-true-false/native.o": "fe94ff920581d3a40d7c0a381b88c1483cc4040c05a7a05f68a4ca72e62853aa",
+    "typed-f64-ten-0-false-false/high-O0.ll": "fe3bcf50cc36a11da694bafb87821efd7afed80f27551323bd81843715ad8bb5",
+    "typed-f64-ten-0-false-false/high-O0.o": "0c394547d1f195aa1c7293ee6f5a1d350131d8620b0b2b0765388310cc30de1d",
+    "typed-f64-ten-0-false-false/high-O2.ll": "66f08ee740fdd19aecc0f739937a10eaf417ce0f95d70b3e1ee96b6ad8890400",
+    "typed-f64-ten-0-false-false/high-O2.o": "76add57364e208b8050e3bdbbd77a104a22bf0a08d36482eed7c0521c24d499c",
+    "typed-f64-ten-0-false-false/high.c": "23caa2626d15b457555aa19be53c7c924637ccc0cf5c2126e2718a7ca56ccd82",
+    "typed-f64-ten-0-false-false/llvm-O0.ll": "9c7f6e01d8d075230a7095f305edf088a7022a2ca92d1ebf1d8c22b01a3502c2",
+    "typed-f64-ten-0-false-false/llvm-O0.o": "5b313342c2765b640e3c3da09c44172ccf835c12d1cc64d818f6dee5f3f7c5d3",
+    "typed-f64-ten-0-false-false/llvm-O2.ll": "66f08ee740fdd19aecc0f739937a10eaf417ce0f95d70b3e1ee96b6ad8890400",
+    "typed-f64-ten-0-false-false/llvm-O2.o": "76add57364e208b8050e3bdbbd77a104a22bf0a08d36482eed7c0521c24d499c",
+    "typed-f64-ten-0-false-false/llvm.c": "ee2b866c1fc685bf3633e1f0d4e56d91ff25064037eb65b0c6d6160285ff18f6",
+    "typed-f64-ten-0-false-false/native.ll": "879bf282a5ebd847fb875e636c5db23f1299959bc5356b77fdea5ea6d5e5535a",
+    "typed-f64-ten-0-false-false/native.o": "7d2ab5bd9d70f9ef61f107886fe90a940e53b950dae4c1152f862cc523ef2704",
+    "typed-f64-ten-0-false-true/high-O0.ll": "3bed32d28a35864caa6b77919e3779b64aeb6c5dd85c924e2c0e686b83457024",
+    "typed-f64-ten-0-false-true/high-O0.o": "8b15cc12ceec86b9616a2b62532048825f7def3ebab7d0ec76970fb3ee3424a4",
+    "typed-f64-ten-0-false-true/high-O2.ll": "ba9edb5ddbd10c3f881326cd825d44f97ac64ba2caa92b279cd32277a18079e6",
+    "typed-f64-ten-0-false-true/high-O2.o": "364794e1705b6c2f375522a5fbbdad1a2a6283e829662d9a5a30fe374485829c",
+    "typed-f64-ten-0-false-true/high.c": "03407a77a094a98c1c4fcb4f1e134c34514479ee85b717c65818213a648c7056",
+    "typed-f64-ten-0-false-true/llvm-O0.ll": "a227d52af24a1a0d219e686d4663073cb1324b18554f4f636f4ec32d88661fdd",
+    "typed-f64-ten-0-false-true/llvm-O0.o": "88694e89787c38945e36ce04206b4ff6a26eb25fe94d73052f74f2111a14b5f4",
+    "typed-f64-ten-0-false-true/llvm-O2.ll": "efa7d84f0b544797dde4f26ac787c563f7f538cc7e319282150289f4b587bf86",
+    "typed-f64-ten-0-false-true/llvm-O2.o": "87ab84bd53ec69c2130275d0d397a960698a5f7f23bd9b2e4c855d22f306640c",
+    "typed-f64-ten-0-false-true/llvm.c": "1250af0e042988c9945d8ca582360a2723f9dcab0926bcb4281977e8a01b55d9",
+    "typed-f64-ten-0-false-true/native.ll": "f67b492a938d4f99af099c54d12dc82ec675f29f922a0e00a9c61f5e533dd02f",
+    "typed-f64-ten-0-false-true/native.o": "cf3bec3e528d9e1ede0a1787fadfe5fa2af8eeaa8ce7cd458631c8e5f60234c9",
+    "typed-f64-ten-0-true-false/high-O0.ll": "4ebd4a6d5b11504c697d1561870b7390d743d3763ff74cba13a2fbd9850443f6",
+    "typed-f64-ten-0-true-false/high-O0.o": "570dba4f7051bcab1c84e45f018255e574cd28183e9e9ce349321265df6fe454",
+    "typed-f64-ten-0-true-false/high-O2.ll": "afd7da2ad1fccf3156a0df44809b8c7e5f8dd404ec8ac983e8a9f0c70a2a63d3",
+    "typed-f64-ten-0-true-false/high-O2.o": "b815951804af47a60f157cb8d522a30817ab612ce9630ee30192e39cd18befd6",
+    "typed-f64-ten-0-true-false/high.c": "50d1e6c1ccc7359809ada598b3bbb1c226accff8db2c28d3e291cbf0237f86a5",
+    "typed-f64-ten-0-true-false/llvm-O0.ll": "15faf43a4442379049952a30f8eb0c4f31dd18743690013a2f7e0043a0fe9a4b",
+    "typed-f64-ten-0-true-false/llvm-O0.o": "b4cecba6891306169af917af186c4696efe476a54780b25a4630ab965dae698d",
+    "typed-f64-ten-0-true-false/llvm-O2.ll": "afd7da2ad1fccf3156a0df44809b8c7e5f8dd404ec8ac983e8a9f0c70a2a63d3",
+    "typed-f64-ten-0-true-false/llvm-O2.o": "b815951804af47a60f157cb8d522a30817ab612ce9630ee30192e39cd18befd6",
+    "typed-f64-ten-0-true-false/llvm.c": "2841358b2b0636c90d4de28ed276ab0672915658aeacaea67746f84c37fff029",
+    "typed-f64-ten-0-true-false/native.ll": "12ef022087def122a2d1e1fda699b0987387d09f3f0478ab3d8c32d594dfde3c",
+    "typed-f64-ten-0-true-false/native.o": "17c2b9e990a9b76fd6c5748f27ffa91137a619d0b1c7b8f5ad85586ab90a992d",
+    "typed-f64-ten-1-false-false/high-O0.ll": "caec9139c4b4fb56fab8cbb0bc07d94ea4580fa45687a9b3b6f266c8c2c40a4f",
+    "typed-f64-ten-1-false-false/high-O0.o": "12d5cdc006038ecaac5d717e2ee5efbf3ffffe6231086e7a42d98a8a9b756fe2",
+    "typed-f64-ten-1-false-false/high-O2.ll": "39340cf4d8fe6269383f67e664a9fb4f4b85a342eeaff2e571cfe9f0a0929b89",
+    "typed-f64-ten-1-false-false/high-O2.o": "0b9249c5809659adb57978f10a0263997e04cc980693f5b70e2b224936ebad0b",
+    "typed-f64-ten-1-false-false/high.c": "0dbe240fabda352246e89690792b492c99979cec84ee98e849863ce272c676ed",
+    "typed-f64-ten-1-false-false/llvm-O0.ll": "fcf2b48f2d61441b9c3c05fb83b08c5e8bfb350dc06ab647a89dcb9bc9e94c73",
+    "typed-f64-ten-1-false-false/llvm-O0.o": "a15c021c0cbbb3bf67301bde23f54c4cf12fa2f2efd55e83b8975c86b1b8c317",
+    "typed-f64-ten-1-false-false/llvm-O2.ll": "39340cf4d8fe6269383f67e664a9fb4f4b85a342eeaff2e571cfe9f0a0929b89",
+    "typed-f64-ten-1-false-false/llvm-O2.o": "0b9249c5809659adb57978f10a0263997e04cc980693f5b70e2b224936ebad0b",
+    "typed-f64-ten-1-false-false/llvm.c": "1b6d52b644dafd4ca006eeea176c154c3115db8ce4220631f2bb4574756b6add",
+    "typed-f64-ten-1-false-false/native.ll": "2201d499c2d490aad3d8d0ccc4d0a00d1c056184ff69d34c83896ba0a00410eb",
+    "typed-f64-ten-1-false-false/native.o": "8ab4a34e40e2ba6f8203ab835b32ca03689e0c81ac91ce980509675675f74d64",
+    "typed-f64-ten-1-true-false/high-O0.ll": "40d79dc3459775e30397b676cbf71f3e13f0056a600fa89bb6807cb3f4929871",
+    "typed-f64-ten-1-true-false/high-O0.o": "d1c8cb0540c12dc1744f042bd8aa3bdc3defd809165a685cf562ed1d33a5b4f8",
+    "typed-f64-ten-1-true-false/high-O2.ll": "145c0ac84579385f3cfae303d8ce653110f834648ce6fe4827d85aa22fb83755",
+    "typed-f64-ten-1-true-false/high-O2.o": "6ee844de3e549c16b7a533b6336c414c67daca949234312846b658c97a0003c1",
+    "typed-f64-ten-1-true-false/high.c": "53204b56331665964f893ecbb7613a1b1e78c0d72ed7fd8e3616e88e612c5183",
+    "typed-f64-ten-1-true-false/llvm-O0.ll": "f130716b6e11081f04747f2b5b36dfee80e58831c8e4a034cb4261476970bb2a",
+    "typed-f64-ten-1-true-false/llvm-O0.o": "811073bc96ab482cd8bd82c6e9c81720586dd7c7a04e435ca44b85382f4a2b2c",
+    "typed-f64-ten-1-true-false/llvm-O2.ll": "145c0ac84579385f3cfae303d8ce653110f834648ce6fe4827d85aa22fb83755",
+    "typed-f64-ten-1-true-false/llvm-O2.o": "6ee844de3e549c16b7a533b6336c414c67daca949234312846b658c97a0003c1",
+    "typed-f64-ten-1-true-false/llvm.c": "dbecdeaacec95e8e4bbe9b168a21a96ede26377b1ae6f9b7effb125ec112cdc6",
+    "typed-f64-ten-1-true-false/native.ll": "dfc338983c59b93d8704e01b69c547c37be761cbe12754a482ef2fde11d019c2",
+    "typed-f64-ten-1-true-false/native.o": "182d4b872b53a8f891cd8d58a6ada43d2dcfb2970a7ca57aa46dbeb0b6c811db",
+    "typed-mixed-ten-0-false-false/high-O0.ll": "f7e4b61ab857deaf28f1a412ff6befefb51a33fe7b035e2bfb40fcea89a9bac9",
+    "typed-mixed-ten-0-false-false/high-O0.o": "f1d3d1ae25d7632ec3e06f08e8b664ce5723fbb1f16d168c7d12f9e6f0f30e03",
+    "typed-mixed-ten-0-false-false/high-O2.ll": "1a6b2c0ee420957cb4a779033d0f9e9360b2e3b0b00c154d62496b8204e562fc",
+    "typed-mixed-ten-0-false-false/high-O2.o": "0ab176ef432b5d1c0920a7e34c15a7712be4fa808cafbe9a8ed73db56b91752e",
+    "typed-mixed-ten-0-false-false/high.c": "8c21ee3d50c8541df0a12425a83de36181074186601c140208aa4d025f624bee",
+    "typed-mixed-ten-0-false-false/llvm-O0.ll": "ae1c901af3c2b1af61149ba198546b90345dc5fe399b5a4104e245e35bf211b3",
+    "typed-mixed-ten-0-false-false/llvm-O0.o": "201233c8646e006db21170c7414e4be3ee7be65dc407ee068d283d8605c59b8d",
+    "typed-mixed-ten-0-false-false/llvm-O2.ll": "1a6b2c0ee420957cb4a779033d0f9e9360b2e3b0b00c154d62496b8204e562fc",
+    "typed-mixed-ten-0-false-false/llvm-O2.o": "0ab176ef432b5d1c0920a7e34c15a7712be4fa808cafbe9a8ed73db56b91752e",
+    "typed-mixed-ten-0-false-false/llvm.c": "38f288100b1a11785fc47da0792a0c2ee745e494982ec3ac11e6bf849a767bd8",
+    "typed-mixed-ten-0-false-false/native.ll": "7472b60e2252af418205500013b5d480e82294251f79cd309a838c0601abaaf7",
+    "typed-mixed-ten-0-false-false/native.o": "322fe3f13952d6b2d75e51b6be380a7deb7a32a5169a320a3af6ab51a52e0593",
+    "typed-mixed-ten-0-false-true/high-O0.ll": "15ad6cf7123fa5ae5a04646dd06219396a02433cdf9f72169df1c843f8b5a213",
+    "typed-mixed-ten-0-false-true/high-O0.o": "2749e50009441427d7dc499a07bfba493f2461d615b4b5f75daf8b36b834794b",
+    "typed-mixed-ten-0-false-true/high-O2.ll": "706a69bf6aa136e10948020899482fc483ecc8d1b9a1990db6cdc9fd2bcee645",
+    "typed-mixed-ten-0-false-true/high-O2.o": "bc71f266e9b370473e16a2da60d05c064dfee011d223c7014618e1e68057bc1a",
+    "typed-mixed-ten-0-false-true/high.c": "b6530334e4e8a10f4710a821bb1233c3a3867f9fcdd315ece0fea87e8de33e11",
+    "typed-mixed-ten-0-false-true/llvm-O0.ll": "039d95724e19beb8f3bb88fea21bfb7019cb0baf3ab2dff61c236339308d265d",
+    "typed-mixed-ten-0-false-true/llvm-O0.o": "341ee7e114a21c7a58527f1e911eb664028336eb17acc3efc670464ee76587f5",
+    "typed-mixed-ten-0-false-true/llvm-O2.ll": "4183728145124b1b1aef79c83c8982172843d6540c26cb889f64b941ed986b99",
+    "typed-mixed-ten-0-false-true/llvm-O2.o": "d5d25002c65d5d6317e5aabd39636d1233be49d2bcd1d7f5bcc800e097fc141a",
+    "typed-mixed-ten-0-false-true/llvm.c": "5771e406dc92309d76f486d1ace84159f88a7dbe97110f81ec5ce4ee5e8a437f",
+    "typed-mixed-ten-0-false-true/native.ll": "19d5fff2990192bee919ebedd49359051b82b16d3e62a8636299a0d7c63bd54a",
+    "typed-mixed-ten-0-false-true/native.o": "34b2160caf6916f668fe6e166fc91c5e678c344797942e6ca762f31192a066d1",
+    "typed-mixed-ten-0-true-false/high-O0.ll": "b86c427674618f578577cf611786b6e4be9594ac5a3136633f99789f76c21ebc",
+    "typed-mixed-ten-0-true-false/high-O0.o": "5ac8eb585c007d88437551fe489bb63fd5c8a10288a58af57986c45f5312ab25",
+    "typed-mixed-ten-0-true-false/high-O2.ll": "8ee074e146cce64b7b9861ac1911bd2e0d63d56bd063476a4aa2b387f87b33fe",
+    "typed-mixed-ten-0-true-false/high-O2.o": "ce08128883f94646532277f11c9a814d1fd4601e48e73431c7648bd97d848be4",
+    "typed-mixed-ten-0-true-false/high.c": "80efc42b0981ca582e50fc8013d45c298ff13cbc3b7399658250717961e0e8ab",
+    "typed-mixed-ten-0-true-false/llvm-O0.ll": "57e640d2bfb86f4963a3fa51f3cf5970d5462b2e59ac3faf3c763e9d9281de41",
+    "typed-mixed-ten-0-true-false/llvm-O0.o": "41638d31a936eb0837d1f36e35d7e4afe5067d5a713fc898f559d97bed80b3c4",
+    "typed-mixed-ten-0-true-false/llvm-O2.ll": "8ee074e146cce64b7b9861ac1911bd2e0d63d56bd063476a4aa2b387f87b33fe",
+    "typed-mixed-ten-0-true-false/llvm-O2.o": "ce08128883f94646532277f11c9a814d1fd4601e48e73431c7648bd97d848be4",
+    "typed-mixed-ten-0-true-false/llvm.c": "16031d060e69b2ccd6fe4c9b0e5e3c15e683365e83f5dd19729caeb40653b4a5",
+    "typed-mixed-ten-0-true-false/native.ll": "cc0d9d8c37e3c03f5a3f601d5f71e9f8322344ac148407620c90476c34a1d4a5",
+    "typed-mixed-ten-0-true-false/native.o": "b4b1bec3809c8c4256e14563c6fdc4ea363e83b25e896fb3114f49ad08fcefe4",
+    "typed-mixed-ten-1-false-false/high-O0.ll": "f3ce4a32af218e9dae791d40c72f73b10bdae020214efcc1eecf11bd2429be74",
+    "typed-mixed-ten-1-false-false/high-O0.o": "9c1b8b9ca3b407dd15c92977e04c7b8461e9a971907aa746fd948f0f1059c981",
+    "typed-mixed-ten-1-false-false/high-O2.ll": "dcc36fff0ddd2747c4b5d6dd385b6712fc331f111d43d10aa406f6400643ca6a",
+    "typed-mixed-ten-1-false-false/high-O2.o": "460540267ae4bcedd4ef3a89fba59ff6c9324231cbb4d6d4f15819cfc8c80f16",
+    "typed-mixed-ten-1-false-false/high.c": "f2205aae1214a30b197fd736b3a9faa80d92ab9015716dbf776173f79fa9c5f0",
+    "typed-mixed-ten-1-false-false/llvm-O0.ll": "cc5351430dd9705a377f2bc1dd747c402f3c299306e0d30be585b3c6d64cb4ad",
+    "typed-mixed-ten-1-false-false/llvm-O0.o": "fd54c49dd4cd30936d9922839bcb487b773f64ea29be54b39eca812681f81471",
+    "typed-mixed-ten-1-false-false/llvm-O2.ll": "dcc36fff0ddd2747c4b5d6dd385b6712fc331f111d43d10aa406f6400643ca6a",
+    "typed-mixed-ten-1-false-false/llvm-O2.o": "460540267ae4bcedd4ef3a89fba59ff6c9324231cbb4d6d4f15819cfc8c80f16",
+    "typed-mixed-ten-1-false-false/llvm.c": "89afe4041dee77227407bb63f09497d74bb38f003adcef670f7b269190086caf",
+    "typed-mixed-ten-1-false-false/native.ll": "f6b4c2c3cbd519f72c64106d7a721ef81b741d1d5d8c0a447906efdcac8f02f6",
+    "typed-mixed-ten-1-false-false/native.o": "847c46f172227ff08ef2ccb35c3d2689a552ab4f599686fb4799d7cebc66500a",
+    "typed-mixed-ten-1-true-false/high-O0.ll": "c3692f417ffaa11b382645ff2a0cc15f9f40e2cd36c819d6cd1cdd49653f9371",
+    "typed-mixed-ten-1-true-false/high-O0.o": "2fb85412b677d448146f7d67f182d95fc0e208da98ecae7fe775e7f274e0d2be",
+    "typed-mixed-ten-1-true-false/high-O2.ll": "343996a872fa8d14bfe513b1722ac54f8ed39fed105802786b45a66e069ad65b",
+    "typed-mixed-ten-1-true-false/high-O2.o": "e67efec88801ad28959a975437b7a1b429931124da65c1a8f358da59550e1cf0",
+    "typed-mixed-ten-1-true-false/high.c": "54fd20d8cd13e28ceead5762786a3837d1d5dcebd0eca6a76e9f1548cbb5c907",
+    "typed-mixed-ten-1-true-false/llvm-O0.ll": "c64ac67580408bf13f397a615f6b95923c14f6726a5ba3ff090414d5b070eca8",
+    "typed-mixed-ten-1-true-false/llvm-O0.o": "2d3ca302ed1f75a8ae8e83b534e9d6b1326d3be2bb831cb5da237d4fec26c1ed",
+    "typed-mixed-ten-1-true-false/llvm-O2.ll": "343996a872fa8d14bfe513b1722ac54f8ed39fed105802786b45a66e069ad65b",
+    "typed-mixed-ten-1-true-false/llvm-O2.o": "e67efec88801ad28959a975437b7a1b429931124da65c1a8f358da59550e1cf0",
+    "typed-mixed-ten-1-true-false/llvm.c": "fdf233b7001c9b8175495b61623b9218c804259dd7ad2f6a2a693ac33c73fdbf",
+    "typed-mixed-ten-1-true-false/native.ll": "e007c530290660775638acda42970bdfa920eda0ec80d9d3dd0771d5ce1475d0",
+    "typed-mixed-ten-1-true-false/native.o": "2e181996e30e11d48cb65f9f04b6f1afaddf34b1355dafea6ef419ca9175e545",
+    "typed-variadic-double-0-false-false/high-O0.ll": "6147754a480dad9e1e188f223b8bb1955ae404f694cf67e8bc9ba358462da673",
+    "typed-variadic-double-0-false-false/high-O0.o": "0f02939bf512834f84e14ad7d7e2ce41c5ecfba357b368eccd9bacf245118d01",
+    "typed-variadic-double-0-false-false/high-O2.ll": "121259d70e528affee523bc3f5ab2810dce7ee90b3f1a8c36fa93996c61067ef",
+    "typed-variadic-double-0-false-false/high-O2.o": "29df5bb78023edd0212c6eed524372fb7033d2983abef6dcc4a7cd381b6b6df3",
+    "typed-variadic-double-0-false-false/high.c": "100b321264688cad1db1f4c901beb9f0edee9f6f0199dd060dd1b3f7342b759e",
+    "typed-variadic-double-0-false-false/llvm-O0.ll": "20ba28e100c91e625525b7c32bc97ffc7078afb316a73f72c4acdb9fb9a5fe52",
+    "typed-variadic-double-0-false-false/llvm-O0.o": "580107e0bbb32aacedcdd8abe8e5fc58ead8e0537b5171bfbc19286019135da7",
+    "typed-variadic-double-0-false-false/llvm-O2.ll": "121259d70e528affee523bc3f5ab2810dce7ee90b3f1a8c36fa93996c61067ef",
+    "typed-variadic-double-0-false-false/llvm-O2.o": "29df5bb78023edd0212c6eed524372fb7033d2983abef6dcc4a7cd381b6b6df3",
+    "typed-variadic-double-0-false-false/llvm.c": "3ecf685caad35256e79ee6c54c94f2a06f189fc626d02e3285f87b4e96f8f36d",
+    "typed-variadic-double-0-false-false/native.ll": "e6b02042e192712f74b15ac5b8914f88eb27fb542431c2a79bd20f907b9daabe",
+    "typed-variadic-double-0-false-false/native.o": "37503d8b588713b3a1d9f091ea623fb87db2c4f92ad1773e73045a5c84a347b6",
+    "typed-variadic-double-0-false-true/high-O0.ll": "5ede84ab627657c5f2be4fde7a3ebeb270f33b52c8eb917a28f50daba1230eb7",
+    "typed-variadic-double-0-false-true/high-O0.o": "91bd617d356bd5ce9afd478a202dbb1433ca682401352d83dc4608599570d2aa",
+    "typed-variadic-double-0-false-true/high-O2.ll": "bd7e53bff3e1552a2bea93d48fd7d0adbd7fe00a9f25324153bfdbf4218ec86b",
+    "typed-variadic-double-0-false-true/high-O2.o": "be7da53fc9fac62183f2e1331f0f4c072319d79972a170874024872a8157cde8",
+    "typed-variadic-double-0-false-true/high.c": "c04ef0a04c2738f159dd3e358b3c5b6864f0ee8e0d1dd7860ae7d699290a0290",
+    "typed-variadic-double-0-false-true/llvm-O0.ll": "d222792521fb98e51eb9f755d92eacb66209a2c77f4a2502a01df3beff00c9ee",
+    "typed-variadic-double-0-false-true/llvm-O0.o": "b026c1588389cac1d600b5e566f41104a1a743b1496c8d395a4ee6f520e7df3c",
+    "typed-variadic-double-0-false-true/llvm-O2.ll": "40a3f6361939ecd1fdef1bd9ed5c5819b28fc99912da2c0e2abcf1b474c717d7",
+    "typed-variadic-double-0-false-true/llvm-O2.o": "be7da53fc9fac62183f2e1331f0f4c072319d79972a170874024872a8157cde8",
+    "typed-variadic-double-0-false-true/llvm.c": "d5eb7a9daefcc25e0b757377a0a784ad69f3ee48392c5df488397c1740795d9b",
+    "typed-variadic-double-0-false-true/native.ll": "817ebed5e82fc3f30786598626024fed5aa9e3a376d50b254d5eb96880595d80",
+    "typed-variadic-double-0-false-true/native.o": "5d5dd6f211f756e21d88e359b8c917c64ede62e9d4f58a39fa6f1084c6f9a24d",
+    "typed-variadic-double-0-true-false/high-O0.ll": "dedaee71f3597726c68a77991887de4c4678b64bfd0143fbd40412bcead31e01",
+    "typed-variadic-double-0-true-false/high-O0.o": "854f70f85dbf8affd163e99a61eee949b0c4213635fe23c664adba8af667166e",
+    "typed-variadic-double-0-true-false/high-O2.ll": "1a8b4280c18906356834b9b4cb2283ba386740559bb28d8ed8f5a82f6f2a6122",
+    "typed-variadic-double-0-true-false/high-O2.o": "537bedcb46c22c4522e3118319e52d7b3dd5e8a2cee0cd166284880d8828a014",
+    "typed-variadic-double-0-true-false/high.c": "5dfe49de64418e3c9ba2e426b590bc8f649e42d116ce7b284a450c9a2ee0e7f5",
+    "typed-variadic-double-0-true-false/llvm-O0.ll": "2b8c4bba89a3e866c866aeef54e7d876d9289d5d32141f05a27996e4791a4442",
+    "typed-variadic-double-0-true-false/llvm-O0.o": "d186fc3e7110c24e34d9e297c1c0efc292bf08954b9883c39c1280230c1e3f41",
+    "typed-variadic-double-0-true-false/llvm-O2.ll": "1a8b4280c18906356834b9b4cb2283ba386740559bb28d8ed8f5a82f6f2a6122",
+    "typed-variadic-double-0-true-false/llvm-O2.o": "537bedcb46c22c4522e3118319e52d7b3dd5e8a2cee0cd166284880d8828a014",
+    "typed-variadic-double-0-true-false/llvm.c": "dfac6a2e9fbdd940dd51cd19390d6a4ecd6ea4af65f7e5db32b40b7aec378890",
+    "typed-variadic-double-0-true-false/native.ll": "f95f1b5927c883e65fb8f619fde0aeaa070ef535fd3d8443d47c48af9ccbb95f",
+    "typed-variadic-double-0-true-false/native.o": "220537f6b397d9eed37d09307d3749ebde133eb1b7462011c700951a13b2f3a0",
+    "typed-variadic-double-1-false-false/high-O0.ll": "30a6299cb600a88ad2ea83d19710ff7656149b2ee2ea181426063256f47d7321",
+    "typed-variadic-double-1-false-false/high-O0.o": "62c701fc8d0ae28151821c3062cfb6afa41780bc0862b0354a4a5dc98308b7d1",
+    "typed-variadic-double-1-false-false/high-O2.ll": "ac5071ca168e1072c8f0f500e4a2ee7535014d5dceff09389ff4b87da2c52584",
+    "typed-variadic-double-1-false-false/high-O2.o": "288aa9daf022d4ce0233e61936726feff8e0cebbe8942ef7d219cfbc10e580b6",
+    "typed-variadic-double-1-false-false/high.c": "e05a11023a7b699e76aa086704fe841800f906cc14ebf1d958d82d4816c68668",
+    "typed-variadic-double-1-false-false/llvm-O0.ll": "d038cd7d56ef4f70ea2f1c5ce40f7e4b2a66f4fb5151c659c13455e3777ac29e",
+    "typed-variadic-double-1-false-false/llvm-O0.o": "e4540ed27f0b97ddc05e434f8ca3301947484ab545ec7cb4f61bebb4334e0f6a",
+    "typed-variadic-double-1-false-false/llvm-O2.ll": "ac5071ca168e1072c8f0f500e4a2ee7535014d5dceff09389ff4b87da2c52584",
+    "typed-variadic-double-1-false-false/llvm-O2.o": "288aa9daf022d4ce0233e61936726feff8e0cebbe8942ef7d219cfbc10e580b6",
+    "typed-variadic-double-1-false-false/llvm.c": "29f944835aaca670fb1967362cb761631c5f85be38375c926872d6b6284bccc3",
+    "typed-variadic-double-1-false-false/native.ll": "31b230abd682b026db7cccd2b9433312dd102ff4cad9765b03ca79e9f496838f",
+    "typed-variadic-double-1-false-false/native.o": "3e0da3bc2d28bc7d0a66be4e74629abe453b1c4c61282f033b1bd916c49fc917",
+    "typed-variadic-double-1-true-false/high-O0.ll": "64cc7d8599d86dbfa17d4a9a2f09b205f7df215d93b6c866ef0bb5d4ffe49a1c",
+    "typed-variadic-double-1-true-false/high-O0.o": "dcd288fb89613019eb4c9c1dfec17277b851e9817c65a7fa2d86593eaf7b4b51",
+    "typed-variadic-double-1-true-false/high-O2.ll": "9501c299d689bacaa3b0f9720c346c126de4effb0ace84c60cbab3df7ad2e0d2",
+    "typed-variadic-double-1-true-false/high-O2.o": "4c0f2da181a39732cd045114b5caad4d847f7ccfe877dd9a1a506238116c62be",
+    "typed-variadic-double-1-true-false/high.c": "fb73110cef72054b2219ba830c6e5b7eeca6114adbb57db550aae1593c0576af",
+    "typed-variadic-double-1-true-false/llvm-O0.ll": "69ec33ec58c3d542b5a71753abe8097c9cc5d65263fe5bdd5e772d49d25303da",
+    "typed-variadic-double-1-true-false/llvm-O0.o": "796b8ef82c29a74e5cdf546382ce0b5b98c4b5d4571ffa5df8326edef4fef766",
+    "typed-variadic-double-1-true-false/llvm-O2.ll": "9501c299d689bacaa3b0f9720c346c126de4effb0ace84c60cbab3df7ad2e0d2",
+    "typed-variadic-double-1-true-false/llvm-O2.o": "4c0f2da181a39732cd045114b5caad4d847f7ccfe877dd9a1a506238116c62be",
+    "typed-variadic-double-1-true-false/llvm.c": "a621a0771cf1788166dd371c138c0843b0da44d22adf21c0386e9ec88587d217",
+    "typed-variadic-double-1-true-false/native.ll": "8664d18c26a9398d6e00d63605f73808a6028ed62e7a70a89fdefd05775beabd",
+    "typed-variadic-double-1-true-false/native.o": "519a48b1c5bb67287839cd63c2da27f47f56c22e3741f6d68ebfabf26e3da0e8",
+    "typed-variadic-mixed-0-false-false/high-O0.ll": "e9cc8b8fafdb66ae90020553995e5e3862f49d5da019c7238d9cd1eb484a9760",
+    "typed-variadic-mixed-0-false-false/high-O0.o": "0e532e33df25b1a2f746289cf6fcf202fe796edde78f749c6caf12a4bdeb9a47",
+    "typed-variadic-mixed-0-false-false/high-O2.ll": "0958ade9eeb02e458afd92ae77f02863ae9b2efd415c5d8c9885f396b83c604d",
+    "typed-variadic-mixed-0-false-false/high-O2.o": "2b09d1d3e8322144e6001538bc58c504b408cbe7ea0910184f4a33142c472f90",
+    "typed-variadic-mixed-0-false-false/high.c": "f532619647bbd52e118d5da36119b7088987c795ba9cb0a5991c85338cf90496",
+    "typed-variadic-mixed-0-false-false/llvm-O0.ll": "53b9aee38b6812522f24592f6945571a849efe468c2f3eef2fdd5dbe632e6af0",
+    "typed-variadic-mixed-0-false-false/llvm-O0.o": "86ba2d1bf11044c60fc9da984ab452f092948e6e31bcbccec8b3356d4af61933",
+    "typed-variadic-mixed-0-false-false/llvm-O2.ll": "0958ade9eeb02e458afd92ae77f02863ae9b2efd415c5d8c9885f396b83c604d",
+    "typed-variadic-mixed-0-false-false/llvm-O2.o": "2b09d1d3e8322144e6001538bc58c504b408cbe7ea0910184f4a33142c472f90",
+    "typed-variadic-mixed-0-false-false/llvm.c": "386ec91455ef28cac804d4be7c4bcddb641c19392f76487e6b348ab5cc4c6a47",
+    "typed-variadic-mixed-0-false-false/native.ll": "9952fec0a1c9415939be554e94087150a3e87eb587dbb1f5062448c454a9cc2e",
+    "typed-variadic-mixed-0-false-false/native.o": "5df6eef6601f2e81dc045c7ebfac91c9372603f9ba6879e3b27556987d7fe255",
+    "typed-variadic-mixed-0-false-true/high-O0.ll": "03fed9e91929a9e8b248ae5b8fd906983948bfe4ecdf528d09310f8350905322",
+    "typed-variadic-mixed-0-false-true/high-O0.o": "8843ade102c1cc8129ea37d32fa68beef4be6289dff5a2a6e2dedd3029a7308d",
+    "typed-variadic-mixed-0-false-true/high-O2.ll": "491d37ecbc03b8cb121e418aec33718e92c388b373c0c3cb54278264bb737c2b",
+    "typed-variadic-mixed-0-false-true/high-O2.o": "027ed8179cde436b3d3d6b8c87a8074d8ee12848ad3d60b528f83246b76cbe0d",
+    "typed-variadic-mixed-0-false-true/high.c": "b34e04a50edd2bbfd378fba634aa447179500b0294c577fc0f6472cd427aa3d0",
+    "typed-variadic-mixed-0-false-true/llvm-O0.ll": "cce0e0207c9326d247e865ccddbb52d1995f59e1e90e12dce5034c4aa31f4a59",
+    "typed-variadic-mixed-0-false-true/llvm-O0.o": "74d0294c806bf51db0d995b41b9f5b942e383ecc9abfdb356139c6a23c117312",
+    "typed-variadic-mixed-0-false-true/llvm-O2.ll": "d7425bb92d25537ec41aee9687e28ad9212fa81f35b375423ee5b3944629f196",
+    "typed-variadic-mixed-0-false-true/llvm-O2.o": "80a5b95852790dfb08fbbf25c8cdb0a67d0c4cc9a4cdc80990f13675fdbc3b6b",
+    "typed-variadic-mixed-0-false-true/llvm.c": "8a4d9826fffbf263ebb32dc828689d4332e88d7a44597d67af6311a4c1ff568e",
+    "typed-variadic-mixed-0-false-true/native.ll": "58919e85003471a0935f6ae84e7d996dca3b6015456de26f8fe812eea5072b4c",
+    "typed-variadic-mixed-0-false-true/native.o": "390af6804c2a34d04050b23a79d0ee3d080b5ae593f6572f37bd06004f8f08b7",
+    "typed-variadic-mixed-0-true-false/high-O0.ll": "9adc05a28ca6f30d219711204e56d850eb957929e6144ffd1f647d90713030f9",
+    "typed-variadic-mixed-0-true-false/high-O0.o": "82c8188f62a1e48df6d0d8b91a75ee88c68bdb2f9cf64d97bd63ec9963eed534",
+    "typed-variadic-mixed-0-true-false/high-O2.ll": "2332584293b373ab1073f1bddeee4883e70ad233f9bdee456b003d07724fd46b",
+    "typed-variadic-mixed-0-true-false/high-O2.o": "4247cf29128a7cf14710c0881f3ba3660c60ebe0cd1af463af4a53e8a6f126f4",
+    "typed-variadic-mixed-0-true-false/high.c": "b21f241710203ee98c1870dc408581a599486f3650bc3e9ddecf8ef3d25cd189",
+    "typed-variadic-mixed-0-true-false/llvm-O0.ll": "0fd7c4641c8707ddcc754af5ff9ab5594c0671250232f0ee6e3581fe69df621a",
+    "typed-variadic-mixed-0-true-false/llvm-O0.o": "58710bd9a91c744bb79fdd7b91f5405ca6597c21f021f8cc0e7cc0b25b23561e",
+    "typed-variadic-mixed-0-true-false/llvm-O2.ll": "2332584293b373ab1073f1bddeee4883e70ad233f9bdee456b003d07724fd46b",
+    "typed-variadic-mixed-0-true-false/llvm-O2.o": "4247cf29128a7cf14710c0881f3ba3660c60ebe0cd1af463af4a53e8a6f126f4",
+    "typed-variadic-mixed-0-true-false/llvm.c": "b4a379346cbb6f1c1686b276d33a4ad76bafeeec08fa20c834a4967e68a8db63",
+    "typed-variadic-mixed-0-true-false/native.ll": "10f877c3d79c43186414be486ddd6c1f8d0e1f62116b995892fa2d8383483fad",
+    "typed-variadic-mixed-0-true-false/native.o": "b96269cfe47198d4f1bb35544f12f3ca9a72dd29e963675e5ead29a04b1a6986",
+    "typed-variadic-mixed-1-false-false/high-O0.ll": "ca8c2e123a50de3c6d67495428efa23a5896812847edf7c3b144fa46d692851d",
+    "typed-variadic-mixed-1-false-false/high-O0.o": "76a6d3eb9ef0112d3732829b9e575d66f6f168e543d6575a0e34a35e5f2a2ca2",
+    "typed-variadic-mixed-1-false-false/high-O2.ll": "81dc809625f2da4ad5eb905133006168def841490a90b1c63810c12bc118bb9a",
+    "typed-variadic-mixed-1-false-false/high-O2.o": "cddb066851942dad7c31d13e1a374040f86ddcc6be2cd2c25ba14f69477a385b",
+    "typed-variadic-mixed-1-false-false/high.c": "cdbef7fcbc596821300cd1ce66a73295e9c6f9d643c811ffafc2ea59b1fd5c52",
+    "typed-variadic-mixed-1-false-false/llvm-O0.ll": "148308cd7982b9a946ff236df31a20fde307d1448acd69d4c4b609233e897cd7",
+    "typed-variadic-mixed-1-false-false/llvm-O0.o": "9ebc3aa417da0f202ae44d430cb8d9d9d5a63d9dd3e2bdf8115442091fbd4470",
+    "typed-variadic-mixed-1-false-false/llvm-O2.ll": "81dc809625f2da4ad5eb905133006168def841490a90b1c63810c12bc118bb9a",
+    "typed-variadic-mixed-1-false-false/llvm-O2.o": "cddb066851942dad7c31d13e1a374040f86ddcc6be2cd2c25ba14f69477a385b",
+    "typed-variadic-mixed-1-false-false/llvm.c": "19c787d861e9e450d082dca6f8e8bc19ad0b09436d96e62763f594a68c5d328d",
+    "typed-variadic-mixed-1-false-false/native.ll": "e4b74a17ff7abf7c008e810fb45cef560ba7c98e3f351553c81eea334916aa03",
+    "typed-variadic-mixed-1-false-false/native.o": "0ddc9be70ade6033fb56f066e8014fd646f3ee9d4c94634e4f2e8d280a9c37d7",
+    "typed-variadic-mixed-1-true-false/high-O0.ll": "1d8572df62327a29ed4579a9500aec6875b304a905687027929ae5bde61acb4a",
+    "typed-variadic-mixed-1-true-false/high-O0.o": "93bf01ff5ae321fe6d66a5e55450c9021a0b844b6d5bad8ce605f007102b8a4a",
+    "typed-variadic-mixed-1-true-false/high-O2.ll": "4e8ed00ad866e3ce3ff159b4ad1e80273f68d06045130a15ed23aab7b3abd849",
+    "typed-variadic-mixed-1-true-false/high-O2.o": "d7ae350b5135b6c611e3ed0a6e4253d866d562f2acc4fff1c019535310b76b0b",
+    "typed-variadic-mixed-1-true-false/high.c": "27d4a9aae3f43962ff6b9c6cbef90c464d3000e016cb85d15169ce9dfbb4e5b7",
+    "typed-variadic-mixed-1-true-false/llvm-O0.ll": "995b4258b0ba52a5fc6f663fc190422a7b35a3c1a9c979c6ec9ddd67b1023612",
+    "typed-variadic-mixed-1-true-false/llvm-O0.o": "2cb97667e5013d056493a6897182251822c83ef3bf72d1f4e3df505b4cf5a70a",
+    "typed-variadic-mixed-1-true-false/llvm-O2.ll": "4e8ed00ad866e3ce3ff159b4ad1e80273f68d06045130a15ed23aab7b3abd849",
+    "typed-variadic-mixed-1-true-false/llvm-O2.o": "d7ae350b5135b6c611e3ed0a6e4253d866d562f2acc4fff1c019535310b76b0b",
+    "typed-variadic-mixed-1-true-false/llvm.c": "7f5e8abfa41e530a8058f0348fd0e5020bdac8e44f5eb2684fd37e00eee5fab7",
+    "typed-variadic-mixed-1-true-false/native.ll": "c9187946908165f4f0f2af0db7cba2f683e1b077f8cc782fce5f274449877604",
+    "typed-variadic-mixed-1-true-false/native.o": "2b2ac769899505747f669f42c0db2aa99d8526c84cda10c1ce15791ec7b11440"
+  },
+  "x64_control_compiler": "Apple clang 17 with explicit -target x86_64-apple-macos via the preserved test wrapper; native arm64 Clang rejects these x64 _BitInt widths",
+  "ci_diagnostics": {
+    "available": false,
+    "message": "Connect your GitHub account to continue",
+    "source": "pull_requests_checks only; no Actions CLI/API fallback"
+  },
+  "integration_verification": {
+    "revision": "0d62ff745244e804b643fe0f9d25fd244282e9d6",
+    "results": [
+      {
+        "name": "calls",
+        "passed": true,
+        "tests": 7,
+        "report_sha256": "194621d074f02f16779a4851f5f2a98e90133b07cccb5c1ada621da676f657ec",
+        "skipped": [],
+        "accepted": 7
+      },
+      {
+        "name": "source-abi",
+        "passed": true,
+        "tests": 13,
+        "report_sha256": "e3391029939464f25b34608f4de064ca9acafc4ec2ccbb52645552627d06e75f",
+        "skipped": [],
+        "accepted": 13
+      },
+      {
+        "name": "integer-abi",
+        "passed": true,
+        "tests": 13,
+        "report_sha256": "232f4f719d7c5be74d095c07985dcd5d51cc129d7bd05f99442d2d50fe2f4d46",
+        "skipped": [],
+        "accepted": 13
+      },
+      {
+        "name": "return-protection",
+        "passed": true,
+        "tests": 19,
+        "report_sha256": "0cea1a541de646acb6e762e2612cd1f30f377ae738322cd5f0d8b5a3dc53b0ba",
+        "skipped": [],
+        "accepted": 19
+      },
+      {
+        "name": "arm64e-analysis",
+        "passed": true,
+        "tests": 402,
+        "report_sha256": "69f35704af5fb512d7821fa82cbefd505c6d4784cf43f252e4e85e97f9b4e4c8",
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "A64FastClassifyParity.OptionalRealBinaryWalk"
+        ],
+        "accepted": 397
+      },
+      {
+        "name": "aapcs64",
+        "passed": true,
+        "tests": 28,
+        "report_sha256": "4552b9602b1e13c5df75f899245ac1a125858fa19588e9b5b562925fd3a40a69",
+        "skipped": [],
+        "accepted": 28
+      },
+      {
+        "name": "high-conversions",
+        "passed": true,
+        "tests": 17,
+        "report_sha256": "a6591dbf466087ecc8e31e3ecb1751cc771d874eb8c4af2337c25b4812bf3714",
+        "skipped": [],
+        "accepted": 17
+      }
+    ],
+    "artifact_count": 501,
+    "changed_artifacts": [],
+    "passed": true
+  }
+}

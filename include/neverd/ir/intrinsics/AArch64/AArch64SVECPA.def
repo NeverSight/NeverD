@@ -1,0 +1,63 @@
+//===- AArch64SVECPA.def - Scalable checked pointer operations -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// OPERATION(Id, Insn, Name, Form, Mask, Encoding, MachineAsm, Constraints)
+/// describes the six FEAT_SVE && FEAT_CPA classes in Arm DDI0602 2025-09.
+/// Binary inputs are N/M; merging inputs are P/old-D/M; multiply inputs
+/// are old-D/second/third, retaining MADPT's multiplicand versus MLAPT's
+/// addend. Every operation ends with constant element-width metadata.
+/// Machine operations use Z0/Z1/Z2 and P0, with tied destructive inputs.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_SVE_CPA_OPERATION
+#define NEVERD_A64_SVE_CPA_OPERATION(Id, Insn, Name, Form, Mask, Encoding,     \
+                                     Asm, Constraints)
+#endif
+#ifndef NEVERD_A64_SVE_CPA_FORM
+#define NEVERD_A64_SVE_CPA_FORM(Name, Count, Vectors, Predicates, RawCount)
+#endif
+#ifndef NEVERD_A64_SVE_CPA_VALUE
+#define NEVERD_A64_SVE_CPA_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_SVE_CPA_TEXT
+#define NEVERD_A64_SVE_CPA_TEXT(Name, Value)
+#endif
+
+NEVERD_A64_SVE_CPA_FORM(Binary, 2, 0x3, 0, 3)
+NEVERD_A64_SVE_CPA_FORM(Merging, 3, 0x6, 0x1, 4)
+NEVERD_A64_SVE_CPA_FORM(Multiply, 3, 0x7, 0, 3)
+NEVERD_A64_SVE_CPA_OPERATION(A64_SveAddpt, ADDPT, "addpt", Binary, 0xffe0fc00,
+                             0x04e00800, ".inst 0x04e10800", "={z0},0,{z1}")
+NEVERD_A64_SVE_CPA_OPERATION(A64_SveSubpt, SUBPT, "subpt", Binary, 0xffe0fc00,
+                             0x04e00c00, ".inst 0x04e10c00", "={z0},0,{z1}")
+NEVERD_A64_SVE_CPA_OPERATION(A64_SveAddptPred, ADDPT, "addpt", Merging,
+                             0xffffe000, 0x04c40000, ".inst 0x04c40020",
+                             "={z0},{p0},0,{z1}")
+NEVERD_A64_SVE_CPA_OPERATION(A64_SveSubptPred, SUBPT, "subpt", Merging,
+                             0xffffe000, 0x04c50000, ".inst 0x04c50020",
+                             "={z0},{p0},0,{z1}")
+NEVERD_A64_SVE_CPA_OPERATION(A64_SveMadpt, MADPT, "madpt", Multiply, 0xffe0fc00,
+                             0x44c0d800, ".inst 0x44c1d840",
+                             "={z0},0,{z1},{z2}")
+NEVERD_A64_SVE_CPA_OPERATION(A64_SveMlapt, MLAPT, "mlapt", Multiply, 0xffe0fc00,
+                             0x44c0d000, ".inst 0x44c2d020",
+                             "={z0},0,{z1},{z2}")
+
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPAElementBytes, 8)
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPAMinimumLanes, 2)
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPARegisterMask, 31)
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPAPredicateMask, 7)
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPASecondShift, 5)
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPAPredicateShift, 10)
+NEVERD_A64_SVE_CPA_VALUE(unsigned, kCPAThirdShift, 16)
+NEVERD_A64_SVE_CPA_TEXT(kCPAValueName, "sve.checked.pointer")
+NEVERD_A64_SVE_CPA_TEXT(kCPAInputName, "sve.checked.input")
+NEVERD_A64_SVE_CPA_TEXT(kCPATargetFeatures, ",+sve,+cpa")
+
+#undef NEVERD_A64_SVE_CPA_OPERATION
+#undef NEVERD_A64_SVE_CPA_FORM
+#undef NEVERD_A64_SVE_CPA_VALUE
+#undef NEVERD_A64_SVE_CPA_TEXT

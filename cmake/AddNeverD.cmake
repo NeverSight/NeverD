@@ -90,7 +90,6 @@ function(add_neverd_tool name)
 
   add_executable(${name} ${ARG_UNPARSED_ARGUMENTS})
   neverd_link_mimalloc(${name})
-  neverd_stage_task_runtime(${name})
   neverd_stage_performance_notices(${name})
 
   target_compile_features(${name} PRIVATE cxx_std_20)
@@ -161,7 +160,6 @@ function(add_neverd_unittest name)
 
   add_executable(${name} ${ARG_UNPARSED_ARGUMENTS})
   neverd_link_mimalloc(${name})
-  neverd_stage_task_runtime(${name})
 
   target_compile_features(${name} PRIVATE cxx_std_20)
 

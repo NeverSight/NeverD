@@ -3,7 +3,9 @@
 #include "Address.h"
 #include "AnalysisService.h"
 #include "EngineClient.h"
+#include "HighlightLocks.h"
 #include "QueryService.h"
+#include "UnwindInfoWords.h"
 
 #include <QFileSystemWatcher>
 #include <QHash>
@@ -83,10 +85,23 @@ public:
   }
 
   bool connected() const { return connected_; }
+  bool reportsUnwindFrames() const {
+    return capabilities_.contains(QLatin1String(unwind_info::kOperation));
+  }
+  bool reportsX87Capabilities() const {
+    return capabilities_.contains(QStringLiteral("x87_capabilities"));
+  }
+  bool recoversInterpreterSource() const {
+    return capabilities_.contains(QStringLiteral("interpreter_recovery"));
+  }
   /// The configured NeverD worker, also used by separate offline workbenches.
   QString workerPath() const { return workerPath_; }
   bool loaded() const { return loaded_; }
   bool opening() const { return opening_; }
+  /// What the user is opening, while it opens.
+  QString openingFile() const { return opening_ ? openingFile_ : QString(); }
+  /// Whether the worker analyzes the loaded file in idle time.
+  bool idleAnalysis() const { return loadOptions_.analysis; }
   /// Whether quitting or opening another file must ask first: edits are
   /// staged or in flight, or a database the user opened lacks its edits.
   bool dirty() const {
@@ -132,6 +147,8 @@ public:
   /// Background reference-index state from the latest heartbeat.
   const QJsonObject &background() const { return background_; }
   bool indexReady() const;
+  /// Navigation analysis is complete even if reference indexing is unsupported.
+  bool analysisComplete() const;
   /// Changes whenever listing text can change without a revision change.
   QString generation() const { return generation_; }
   /// Requests are queued or the background index is still building.
@@ -201,6 +218,8 @@ public:
     return capabilities_.contains(QStringLiteral("call_paths"));
   }
   void loadPdb(const QJsonObject &selection);
+  /// Remember declining a missing PDB for subsequent opens and reloads.
+  void declinePdb();
   /// Load the MAP file \p selection names ({path,mode,stamp}) into the open
   /// image, after its PDB or DWARF, whose names outrank the MAP's.
   void loadMap(const QJsonObject &selection);
@@ -286,6 +305,22 @@ public:
   bool keepsDataItems() const {
     return capabilities_.contains(QStringLiteral("item_define"));
   }
+  bool hasBytePatch(Address address, Address size = 1) const;
+  bool hasBytePatches() const { return !patchRanges_.isEmpty(); }
+  /// The words Lock highlight keeps colored in every view of this file.
+  HighlightLocks &highlightLocks() { return highlightLocks_; }
+  const HighlightLocks &highlightLocks() const { return highlightLocks_; }
+  void refreshBytePatches();
+  bool keepsBytePatches() const {
+    return capabilities_.contains(QStringLiteral("patch_apply"));
+  }
+  bool keepsSourcePatches() const {
+    return capabilities_.contains(QStringLiteral("source_patch"));
+  }
+  void editBytePatch(
+      const QString &operation, const QJsonObject &request, quint64 epoch,
+      std::function<void()> done = {},
+      std::function<void(const QString &, const QString &)> failed = {});
   /// Define the item at \p address: \p action "data" makes a value, the
   /// next size each time; "string" the string that starts there; "undefine"
   /// shows the item's bytes as bytes.  Each commits at once, like a rename.
@@ -312,6 +347,8 @@ public:
               std::optional<quint64> epoch = {},
               std::function<void()> then = {});
   void editCode(const QJsonObject &edit, quint64 epoch);
+  /// Prepare and validate the owner's source while the name dialog is open.
+  void prepareCodeName(const QJsonObject &edit, quint64 epoch);
   void setComment(Address address, const QString &text,
                   std::optional<quint64> epoch = {});
   void undo();
@@ -340,7 +377,18 @@ public:
   /// given, otherwise logged.  Cancellation and session changes are silent.
   QueryService::SubscriptionId read(const QString &operation,
                                     const QJsonObject &payload, QObject *owner,
-                                    Reply done, Failure failed = {});
+                                    Reply done, Failure failed = {},
+                                    QueryService::QuerySpec::Priority priority =
+                                        QueryService::QuerySpec::Normal);
+
+  void produceBinary(const QString &operation, const QJsonObject &payload,
+                     QObject *owner, Reply done, Failure failed = {});
+
+  /// Extend the active image and refresh its revision and dependent views.
+  void addAnalysisSection(const QJsonObject &description, Reply done = {},
+                          Failure failed = {});
+  void removeAnalysisSection(const QString &name, Reply done = {},
+                             Failure failed = {});
 
   // Local types.
   /// Adds the types \p source declares in \p language (c, cpp, rust or go)
@@ -365,6 +413,7 @@ public:
   QJsonObject selection() const { return selection_; }
 
 signals:
+  void bytePatchesChanged();
   void stateChanged();
   void opened();
   void unloaded();
@@ -375,7 +424,10 @@ signals:
   void functionsChanged();
   void backgroundChanged();
   void historyChanged();
-  void loadProgress(const QString &phase, double fraction);
+  /// A step of the open: the engine's phase token, the step's completed
+  /// fraction or a negative value while unknown, and the engine's detail.
+  void loadProgress(const QString &phase, double fraction,
+                    const QString &detail);
   /// level: 0 information, 1 warning, 2 error.
   void message(const QString &text, int level);
   void transitionRequested(const QString &action);
@@ -393,12 +445,14 @@ signals:
   void projectFileChanged(const QString &suffix);
 
 private:
+  HighlightLocks highlightLocks_;
   /// The operations the worker offers (its hello).
   QSet<QString> capabilities_;
   using Callback = std::function<void(const QJsonObject &payload)>;
   void command(const QString &operation, const QJsonObject &payload,
                Callback done, Failure failed = {});
   void receive(const QJsonObject &message);
+  void applyBackgroundSnapshot(const QJsonObject &snapshot);
   void startWorker();
   void openPending();
   void sendOpen(const QString &requested, const QString &path,
@@ -438,6 +492,7 @@ private:
   bool acceptsEdit(std::optional<quint64> epoch);
 
   EngineClient client_;
+  QVector<std::pair<Address, Address>> patchRanges_;
   QueryService queries_;
   AnalysisPool analysis_;
   QObject reads_, external_;
@@ -449,10 +504,13 @@ private:
   std::optional<LoadOptions> reloadOptions_;
   /// The open in flight reads the open file again.
   bool reloading_ = false;
+  /// What the open in flight opens, as the user named it.
+  QString openingFile_;
   QString projectPath_, databasePath_;
   QHash<QString, QByteArray> databaseState_;
   std::function<QHash<QString, QByteArray>()> stateProvider_;
   QString generation_;
+  std::optional<quint64> BackgroundSequence;
   qint64 functionCount_ = -1;
   QJsonObject metadata_, background_, history_, selection_;
   QJsonArray contributions_;

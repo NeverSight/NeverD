@@ -19,6 +19,7 @@
 #include "../../../lib/ir/low/X86/RegistrationOrdinaryGraph.h"
 #include "../../../lib/ir/low/X86/RegistrationStackOwner.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
+#include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -32,9 +33,9 @@
 #include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/ir/med/X86RegistrationFrame.h"
-#include "neverd/ir/med/X86RegistrationPhysicalFrame.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
+#include "neverd/ir/med/X86/X86RegistrationPhysicalFrame.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoader.h"
@@ -521,7 +522,8 @@ TEST(RegistrationTryLevel, GSCookieCheckerHasOnlyTheCheckedLeafSuccessPath) {
         if (Mutation == 0)
           Text.Flags = Text.Flags | SegmentFlags::Writable;
         if (Mutation == 1)
-          Section.Flags = Section.Flags | SegmentFlags::Writable;
+          setMappedSectionFlags(Changed, Section,
+                                Section.Flags | SegmentFlags::Writable);
         if (Mutation == 2)
           Text.Flags = SegmentFlags::Executable;
         if (Mutation == 3)
@@ -5383,8 +5385,8 @@ TEST(RegistrationTryLevel,
       Text.Flags = Text.Flags | SegmentFlags::Writable;
       break;
     case 6:
-      Image.Sections[0].Flags =
-          Image.Sections[0].Flags | SegmentFlags::Writable;
+      setMappedSectionFlags(Image, Image.Sections[0],
+                            Image.Sections[0].Flags | SegmentFlags::Writable);
       break;
     case 7:
       Text.Data.pop_back();

@@ -9,13 +9,14 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/Support/Errc.h"
 
 #include <iterator>
 #include <map>
 #include <optional>
+#include <vector>
 
 using namespace neverd;
 using namespace neverd::analysis;
@@ -122,7 +123,7 @@ public:
     LowOp Op;
     Op.Opcode = NdOp::INTRINSIC;
     Op.Addr = 0x200;
-    Op.addInput(NdVar::scalar(static_cast<uint64_t>(Intrinsic::Int3), 2));
+    Op.addInput(NdVar::cst(static_cast<uint64_t>(Intrinsic::Int3), 2));
     Trap.Ops = {Op};
     Trap.Origin.Address = 0x200;
     Trap.Origin.Size = 1;
@@ -133,7 +134,6 @@ public:
     Trap.Fallthrough.Address = 0x201;
     Trap.NativeBytes = {0xcc};
     certify(Trap);
-    Trap.UndefinedEffects.Coverage = LowUndefinedCoverage::Missing;
   }
 
   void untakenUnaudited() {
@@ -623,61 +623,108 @@ TEST(NativeUndefinedIndependence, IndirectCycleCannotPublishABoundedPrefix) {
 }
 
 TEST(NativeUndefinedIndependence, UntakenTrapStillRequiresExactEvidence) {
-  NativeProvider Provider;
-  Provider.untakenTrap();
-  const auto Check = [&] {
-    return neverd::analysis::detail::checkNativeUndefinedIndependence(
-        Provider, {0x100}, contract(), {});
+  const struct {
+    std::vector<uint8_t> Bytes;
+    Intrinsic Id;
+    bool Resumable;
+  } Traps[] = {
+      {{0xcc}, Intrinsic::Int3, true},
+      {{0xf1}, Intrinsic::Int1, true},
+      {{0xcd, 0x03}, Intrinsic::Int3, true},
+      {{0x0f, 0x0b}, Intrinsic::Ud2, false},
   };
-  const auto Valid = Check();
-  ASSERT_TRUE(Valid.Proof.proved()) << Valid.Proof.Diagnostic;
-  ASSERT_EQ(Valid.Instructions.size(), 3U);
-  EXPECT_EQ(Provider.Fetches.count(0x201), 0U);
-  EXPECT_EQ(Valid.Instructions.back().UndefinedEffects.Coverage,
-            LowUndefinedCoverage::Missing);
-  const auto Original = Provider.Instructions.at(0x200);
-  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
-    SCOPED_TRACE(Mutation);
+  for (const auto &Encoding : Traps) {
+    SCOPED_TRACE(unsigned(Encoding.Bytes.front()));
+    NativeProvider Provider;
+    Provider.untakenTrap();
     auto &Trap = Provider.Instructions.at(0x200);
-    Trap = Original;
-    switch (Mutation) {
-    case 0:
-      Trap.UndefinedEffects.OperationDigest.clear();
-      break;
-    case 1:
-      Trap.Ops[0].Output = NdVar::reg(0, 8);
-      break;
-    case 2:
-      Trap.Ops[0].Inputs[0] =
-          NdVar::scalar(static_cast<uint64_t>(Intrinsic::Rdtsc), 2);
-      break;
-    case 3:
-      Trap.Ops[0].addInput(NdVar::scalar(0, 1));
-      break;
-    case 4:
+    Trap.NativeBytes = Encoding.Bytes;
+    Trap.Origin.Size = Encoding.Bytes.size();
+    Trap.Fallthrough.Address = Trap.Origin.Address + Trap.Origin.Size;
+    if (!Encoding.Resumable)
       Trap.Origin.ControlFlags = LowInstructionControlFlag::Terminator;
-      break;
-    case 5:
-      Trap.NativeStackControl = SpecializationNativeStackControl::Return;
-      break;
-    case 6:
-      Trap.Ops[0].Opcode = NdOp::NOP;
-      Trap.Ops[0].NumInputs = 0;
-      break;
-    case 7:
-      Trap.UndefinedEffects.OpCount = 0;
-      break;
+    Trap.Ops[0].Inputs[0] = NdVar::cst(static_cast<uint64_t>(Encoding.Id), 2);
+    const auto Coverage = Encoding.Id == Intrinsic::Int3
+                              ? LowUndefinedCoverage::Complete
+                              : LowUndefinedCoverage::Missing;
+    Trap.UndefinedEffects.Coverage = Coverage;
+    Trap.UndefinedEffects.OperationDigest =
+        lowUndefinedOperationDigest(Trap.Ops);
+    const auto Check = [&] {
+      return neverd::analysis::detail::checkNativeUndefinedIndependence(
+          Provider, {0x100}, contract(), {});
+    };
+    const auto Valid = Check();
+    ASSERT_TRUE(Valid.Proof.proved()) << Valid.Proof.Diagnostic;
+    ASSERT_EQ(Valid.Instructions.size(), 3U);
+    EXPECT_EQ(Provider.Fetches.count(Trap.Fallthrough.Address), 0U);
+    EXPECT_EQ(Valid.Instructions.back().UndefinedEffects.Coverage, Coverage);
+    const auto Original = Trap;
+    for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      Trap = Original;
+      switch (Mutation) {
+      case 0:
+        Trap.UndefinedEffects.OperationDigest.clear();
+        break;
+      case 1:
+        Trap.Ops[0].Output = NdVar::reg(0, 8);
+        break;
+      case 2:
+        Trap.Ops[0].Inputs[0] =
+            NdVar::scalar(static_cast<uint64_t>(Intrinsic::Rdtsc), 2);
+        break;
+      case 3:
+        Trap.Ops[0].addInput(NdVar::scalar(0, 1));
+        break;
+      case 4:
+        Trap.Origin.ControlFlags = LowInstructionControlFlag::Terminator;
+        if (!Encoding.Resumable)
+          Trap.Origin.ControlFlags |= LowInstructionControlFlag::Resumable;
+        break;
+      case 5:
+        Trap.NativeStackControl = SpecializationNativeStackControl::Return;
+        break;
+      case 6:
+        Trap.Ops[0].Opcode = NdOp::NOP;
+        Trap.Ops[0].NumInputs = 0;
+        break;
+      case 7:
+        Trap.UndefinedEffects.OpCount = 0;
+        break;
+      case 8:
+        // Keep valid trap bytes, flags and a self-consistent operation digest,
+        // but give the retained intrinsic a different exception identity.
+        Trap.Ops[0].Inputs[0] =
+            NdVar::cst(static_cast<uint64_t>(Encoding.Id == Intrinsic::Int1
+                                                 ? Intrinsic::Int3
+                                                 : Intrinsic::Int1),
+                       2);
+        break;
+      case 9:
+        Trap.NativeBytes.assign(Trap.Origin.Size, 0x90);
+        break;
+      case 10:
+        Trap.UndefinedEffects.Coverage =
+            Coverage == LowUndefinedCoverage::Complete
+                ? LowUndefinedCoverage::Missing
+                : LowUndefinedCoverage::Complete;
+        break;
+      case 11:
+        Trap.PreservedState.SemanticsVersion = 1;
+        break;
+      }
+      if (Mutation != 0)
+        Trap.UndefinedEffects.OperationDigest =
+            lowUndefinedOperationDigest(Trap.Ops);
+      const auto Rejected = Check();
+      EXPECT_TRUE(Rejected.Proof.Status == LowIRIndependenceStatus::Invalid ||
+                  Rejected.Proof.Status == LowIRIndependenceStatus::Unsupported)
+          << Rejected.Proof.Diagnostic;
+      EXPECT_FALSE(Rejected.Proof.Certificate.has_value());
+      EXPECT_TRUE(Rejected.Instructions.empty());
+      EXPECT_TRUE(Rejected.Reads.empty());
     }
-    if (Mutation != 0)
-      Trap.UndefinedEffects.OperationDigest =
-          lowUndefinedOperationDigest(Trap.Ops);
-    const auto Rejected = Check();
-    EXPECT_TRUE(Rejected.Proof.Status == LowIRIndependenceStatus::Invalid ||
-                Rejected.Proof.Status == LowIRIndependenceStatus::Unsupported)
-        << Rejected.Proof.Diagnostic;
-    EXPECT_FALSE(Rejected.Proof.Certificate.has_value());
-    EXPECT_TRUE(Rejected.Instructions.empty());
-    EXPECT_TRUE(Rejected.Reads.empty());
   }
 }
 

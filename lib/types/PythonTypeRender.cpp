@@ -210,8 +210,8 @@ std::string PythonWriter::type(const TypeExpr &Type) const {
   }
   case TypeExprKind::Pointer: {
     // A 32-bit program's pointer is its address on a host of any width.
-    if (!Wide)
-      return "ctypes.c_uint32";
+    if (!Wide || Type.PointerBytes != pointerBytes(Library.dataModel()))
+      return "ctypes.c_uint" + std::to_string(Type.PointerBytes * 8);
     HostPointers = true;
     if (!Type.Element)
       return "ctypes.c_void_p";
@@ -258,7 +258,7 @@ std::string PythonWriter::note(const TypeExpr &Type) const {
     if (const LocalType *Named = resolved(Element->Name))
       Says = Named->Kind == TypeKind::Enum;
   if (Element->Kind == TypeExprKind::Pointer) {
-    Says = !Wide;
+    Says = !Wide || Element->PointerBytes != pointerBytes(Library.dataModel());
     if (const TypeExpr *Target = Element->Element.get()) {
       Says |= Target->Kind == TypeExprKind::Function;
       if (Target->Kind == TypeExprKind::Named)

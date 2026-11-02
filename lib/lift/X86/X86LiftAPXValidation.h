@@ -15,7 +15,7 @@
 #ifndef NEVERD_LIB_LIFT_X86_X86LIFTAPXVALIDATION_H
 #define NEVERD_LIB_LIFT_X86_X86LIFTAPXVALIDATION_H
 
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include <capstone/capstone.h>
 #include <cstddef>

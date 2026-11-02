@@ -1,0 +1,475 @@
+{
+  "scope": "i386 compact CS/ES/SS offsets and full-width compact/four-source HighC input storage",
+  "goal_complete": false,
+  "sources": {
+    "neverd_fixed_code": "69ce43af7f1cc45d0a9afa462b8ee74f8817ec2b",
+    "neverd_base": "4c7050fb9704aff866bb88ee5c939755b4ae51a8",
+    "llvm": "cf2bde2743795897aef1f1f3712a9fd40a19252d",
+    "neverc": "880d1e96ff48f41c5069c6d8f9839eaa8f37d64a",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "qualified_capstone": "991f4d6214c3c599bb84e8a6490ae034d819641e",
+    "llvm_release_and_pins_changed": false
+  },
+  "artifact_root": "/mnt/data/neverd-x86-compact-segments",
+  "validation": {
+    "pinned": {
+      "tests": 57,
+      "reports": [
+        {
+          "path": "pinned-NeverDX86BoundedLeafTests.xml",
+          "sha256": "87ba11e34176efd8224f43b6ce92c2bc98c72f20c2885d522686f75061338324",
+          "tests": 15,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86CompactSegmentTests.xml",
+          "sha256": "79251e330ba0bea71f3422ce8bf08561099b2c4a718e5e8bfedecd1d7436e49f",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86CompressExpandSourceTests.xml",
+          "sha256": "6837067b011da45b751c6a87153c0f500f4717d92b21b46e3566187c51905ff1",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86EVEXCompressExpandMemoryTests.xml",
+          "sha256": "332fc1729057f73ead2749f4e34f2ecbff7e75b8d00866d37b27d53d7615b11b",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86FourSourceSourceTests.xml",
+          "sha256": "9816a1dd19bacda82d8dc5a761bbcfc6a27f4fa8dda9e625c18a0cc48e731a90",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "pinned-NeverDX86RepStateTests.xml",
+          "sha256": "d4fa2d7eb091814e55bd7c7fc328c5f178f5b4d21abaf04e64dec6135212fe44",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "pinned-final-build.log",
+        "sha256": "a06272d7c4ff618f6cbc13035657aae6648093bb43021ac3e2b8e27ae4cfb628"
+      },
+      "commands": {
+        "path": "pinned-commands.json",
+        "sha256": "a400c4b426285a980512db31e48eb2c05f52dea7dbce819bc5f5e66da87dd9bd"
+      },
+      "i386_native_and_c_objects": 270,
+      "objects": {
+        "path": "pinned-objects.json",
+        "sha256": "dd022d6311e5e0b04975ce444de54f5709fc5a14037e6a0abbe491157f0285af"
+      },
+      "decoder_lift_checks": 13608,
+      "packed_constant_comparisons_asan_ubsan": 252,
+      "source_transport": {
+        "report": {
+          "path": "pinned-recorders/qualification.json",
+          "sha256": "c7cfe13d10921d50ca7000db1b0a69b1d6267f1645e5d5db7e63c6b4af89a34d"
+        },
+        "runs": 432,
+        "clang_asan_ubsan_runs": 216,
+        "neverc_runs": 216,
+        "packed_constant_comparisons_neverc": 252
+      },
+      "compact_native_interfaces": {
+        "report": {
+          "path": "pinned-compact-checked/qualification.json",
+          "sha256": "143cc1f405ccb6c7644ff17845ed100b837385ce32a189288edc896cce444046"
+        },
+        "objects": 90,
+        "source_recorders": 8
+      },
+      "four_native_interfaces": {
+        "report": {
+          "path": "pinned-four-checked/qualification.json",
+          "sha256": "362afbadaefc354f7c834dd057ae4ef6726b591c041d8d375dd18fc522339b87"
+        },
+        "objects": 522,
+        "source_recorders": 16
+      }
+    },
+    "native": {
+      "tests": 57,
+      "reports": [
+        {
+          "path": "native-NeverDX86BoundedLeafTests.xml",
+          "sha256": "5696fcfd6546397ce4c6e926462c26a29d6c25069f7b114be97ed21dee021aec",
+          "tests": 15,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86CompactSegmentTests.xml",
+          "sha256": "62b83d6554f4c7075b70fc837a3236d155f2d68a9e21569b79c2f5436dbc2bb0",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86CompressExpandSourceTests.xml",
+          "sha256": "1bc381a9d7814c1b28d57038fe3e74157e37a50b96eb977312c5194da53a2726",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86EVEXCompressExpandMemoryTests.xml",
+          "sha256": "aa84e1e349ae6b5f1d919578fca7464680bcbd3af32243c02d4ab596cd3da585",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86FourSourceSourceTests.xml",
+          "sha256": "4b6e931bc8a7ea7a81bedfeba621f2306996559361f3905965d6d5a6a231e2bd",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        },
+        {
+          "path": "native-NeverDX86RepStateTests.xml",
+          "sha256": "50a3df48886cce0ce53b96506b41912019096bc7089a7728505cbb0098429d98",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "disabled": 0,
+          "skipped": 0
+        }
+      ],
+      "build": {
+        "path": "native-final-build.log",
+        "sha256": "d23969fe7fa08e8ca63600042a961947a91d66e09d2d9db32274194816b5fd40"
+      },
+      "commands": {
+        "path": "native-commands.json",
+        "sha256": "65f137b295bd1c1a809df555ccb4f223c16825f0eadb8ab3b9f0faf139e63586"
+      },
+      "i386_native_and_c_objects": 270,
+      "objects": {
+        "path": "native-objects.json",
+        "sha256": "88f0ce5fade9608ad3fa00f9cc00a8a7685b46eebbb1a96cbb800a07498e156f"
+      },
+      "decoder_lift_checks": 13608,
+      "packed_constant_comparisons_asan_ubsan": 252,
+      "source_transport": {
+        "report": {
+          "path": "native-recorders/qualification.json",
+          "sha256": "2876889c65fcb418e797a713cdefeaff3926664c5272f1ca682c498351b969f4"
+        },
+        "runs": 432,
+        "clang_asan_ubsan_runs": 216,
+        "neverc_runs": 216,
+        "packed_constant_comparisons_neverc": 252
+      },
+      "compact_native_interfaces": {
+        "report": {
+          "path": "native-compact-checked/qualification.json",
+          "sha256": "35102e0211f26036bc4c6003414d6b261fa0087514c0b1b9745b174d866ced7c"
+        },
+        "objects": 90,
+        "source_recorders": 8
+      },
+      "four_native_interfaces": {
+        "report": {
+          "path": "native-four-checked/qualification.json",
+          "sha256": "3404de0380b371fbf0a3ee3480307fceb0eeafbf8a0fbc42fce927149aaf8449"
+        },
+        "objects": 522,
+        "source_recorders": 16
+      }
+    }
+  },
+  "qualification_driver": {
+    "path": "qualify.py",
+    "sha256": "1b838fac49217686bf07bd69fa1bfc4df234208b23d9ff43d6c65f8145d31110"
+  },
+  "command_record_note": "The driver first passed compact segments/storage and compact source suites, then encountered a stale test expecting i386 SS refusal. After updating that expectation, the six targets were rebuilt and the remaining four suites passed. The commands files retain this last stage; all six XML reports are retained. Compiled production sources were unchanged throughout these checks.",
+  "emission": {
+    "source_profiles": 54,
+    "architecture": "i386",
+    "formats": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "pipelines": [
+      "default",
+      "NoOpt"
+    ],
+    "segment_prefixes": [
+      "ES 0x26",
+      "CS 0x2e",
+      "SS 0x36"
+    ],
+    "forms": [
+      "VPCOMPRESSD",
+      "VPEXPANDD merging",
+      "VPEXPANDD zeroing"
+    ],
+    "routes": [
+      "LLVM object",
+      "HighC O0",
+      "HighC O2",
+      "LLVMC O0",
+      "LLVMC O2"
+    ],
+    "native_objects_decode_to_original_instruction_and_segment": true,
+    "raw_offset_aliases_ds_image_object": "0x4000",
+    "parameter_offset_recorded_with_high_bit_set": "0xf2345678",
+    "compact_wrapper_functions": {
+      "i386": 324,
+      "x64": 216
+    },
+    "native_headers": true
+  },
+  "semantics": {
+    "reference": "https://cdrdv2-public.intel.com/836199/361050-intel-avx10.2-spec.pdf",
+    "section": "E4 exception conditions, table 4.7",
+    "control": "Existing byte control is unchanged; i386 CS/ES/SS uses a checked two-byte control with the architectural prefix in bits 8..15.",
+    "address": "EA wraps at original addr16/addr32 width; raw segment offsets are never rebased as image pointers.",
+    "concrete_execution": "Active CS/ES/SS access refuses without descriptor context before observing or mutating memory; zero-mask suppression needs no descriptor.",
+    "source_storage": "HighIR scalar inputs have unsigned _BitInt storage at their complete packed width, including all four packed sources. LLVM-to-C keeps its already checked vector types."
+  },
+  "counterexample": {
+    "cause": "__auto_type input = 0 allocated four bytes before a 16-byte memcpy.",
+    "sanitizer": "AddressSanitizer stack-buffer-overflow",
+    "source": {
+      "path": "high-constant-counterexample.c",
+      "sha256": "e19d7735514708db27a27c98de6e566b084ac172b6098a1683e36fc21d36f1cf"
+    },
+    "log": {
+      "path": "high-constant-counterexample.log",
+      "sha256": "7577bf67a876e30dd570fa568d5e68f6d4504b5ed2b27ff37b84888b2c8ebb75"
+    },
+    "regression": "126 compact/four-source literal cases per optimization level, executed with Clang ASan/UBSan and NeverC."
+  },
+  "boundaries": {
+    "physical_avx512_execution_qualified": false,
+    "descriptor_fault_execution_qualified": false,
+    "neverc_frontend_architecture": "x64",
+    "neverc_i386_execution_qualified": false,
+    "source_transport_recorders": "Native calls alone are replaced by checked recorders; target attributes are removed. Host x64 runs validate operand values, widths, masks, zeroing, segment prefixes and ordinary DS object access, not i386 execution.",
+    "remaining": [
+      "i386 four-source and atomic non-DS/FS/GS address forms",
+      "Concrete descriptor environments and physical fault qualification",
+      "Other instruction/state gaps in docs/x86-instruction-support.md"
+    ]
+  },
+  "integration": {
+    "neverd_fixed_code": "946d55f48f890836fc5deba920d336fceb893bbf",
+    "remote_exact_sha": "1fd53dd41d84e1c1aad22bc36f9069237819c092",
+    "capstone": "a6108a7b988228e104e727b2120d1f9a474eb94a",
+    "capstone_update_origin": "Concurrent dev commit 47af7133db, preserved during integration",
+    "qualification": {
+      "pinned": {
+        "tests": 57,
+        "reports": [
+          {
+            "path": "integrated-pinned-NeverDX86BoundedLeafTests.xml",
+            "sha256": "ebdc06b519ebb6c2aa206b2575392d71213ef0075b7b6973a5adfe80466de69f",
+            "tests": 15,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86CompactSegmentTests.xml",
+            "sha256": "ad166f819986783e1ff385c546715e0ac4138209e3b70d1395673063d1fd3e39",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "0769416696151c1437feec63f8f489c9ca58daa3ae24ce5501cf11722a703903",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86EVEXCompressExpandMemoryTests.xml",
+            "sha256": "a1b82df6744584996aa55db70b4e1df1d83d7649d0ed7cce49446ac68e0e23ef",
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86FourSourceSourceTests.xml",
+            "sha256": "3f7fa9d217b151cc323f0760e335d8a3a24bb19827411c48461b09d3706bee87",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-pinned-NeverDX86RepStateTests.xml",
+            "sha256": "002579924a7f896cb6511b0826f53c0c768d032fdd509b16b0513bc7c47323d0",
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "build": {
+          "path": "integrated-pinned-final-build.log",
+          "sha256": "378a099b659c6b6b065fa823f229f1bebeea565f8ed607237797bf816f81f48b"
+        },
+        "commands": {
+          "path": "integrated-pinned-commands.json",
+          "sha256": "c2d4af987c5b9346426250fb2e85047d59c384c1a375898797b45541c5432589"
+        },
+        "i386_native_and_c_objects": 270,
+        "objects": {
+          "path": "integrated-pinned-objects.json",
+          "sha256": "5b817baf9429e9c0bac74260ffc386648b99d3de75436682169d6ff3414e483a"
+        },
+        "decoder_lift_checks": 13608,
+        "packed_constant_comparisons_asan_ubsan": 252,
+        "source_transport": {
+          "report": {
+            "path": "integrated-pinned-recorders/qualification.json",
+            "sha256": "b030de8cdedcb04f722faed3096570a8ddb87bc63644d2c85b0e634f74983eb5"
+          },
+          "runs": 432,
+          "clang_asan_ubsan_runs": 216,
+          "neverc_runs": 216,
+          "packed_constant_comparisons_neverc": 252
+        }
+      },
+      "native": {
+        "tests": 57,
+        "reports": [
+          {
+            "path": "integrated-native-NeverDX86BoundedLeafTests.xml",
+            "sha256": "a1e3def7433b5273c5b1f3548e268ad947094c3a8fa0cc0b773325c80319a63b",
+            "tests": 15,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86CompactSegmentTests.xml",
+            "sha256": "e5a60d0db74e8214dd8b9475d4e49007acc05f583e8d7adc8fc562bd005e7212",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86CompressExpandSourceTests.xml",
+            "sha256": "087d9afc278bf69d87c65d301ada7eb9fdb5886ed5a68f3be563f854d4dd78be",
+            "tests": 11,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86EVEXCompressExpandMemoryTests.xml",
+            "sha256": "5df37411f71977d29ed5b08949d71448dbc1bec53ad1880ed9390e3461806abb",
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86FourSourceSourceTests.xml",
+            "sha256": "f9d160b710da07bbd32352fef803a1f2944d7834a762a92e090ae3ad1884b1ee",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          },
+          {
+            "path": "integrated-native-NeverDX86RepStateTests.xml",
+            "sha256": "92f5611f5909a9a9e464b8826c34864a0b2ec85097270d4f9ac9e61ac262d553",
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "disabled": 0,
+            "skipped": 0
+          }
+        ],
+        "build": {
+          "path": "integrated-native-final-build.log",
+          "sha256": "5fc5d83753c78296a7b5c2739e64e77dedf4b73d7917e149ceacfba01d180472"
+        },
+        "commands": {
+          "path": "integrated-native-commands.json",
+          "sha256": "a9b581c299c8ef8791fe1bc26f78391d6ce6fdc5ac8e0277366a82a101ad3f46"
+        },
+        "i386_native_and_c_objects": 270,
+        "objects": {
+          "path": "integrated-native-objects.json",
+          "sha256": "74468f23b0136e25328f4a2b7fdf93b5b192dc4532aef5dca98377c8e4b0ce10"
+        },
+        "decoder_lift_checks": 13608,
+        "packed_constant_comparisons_asan_ubsan": 252,
+        "source_transport": {
+          "report": {
+            "path": "integrated-native-recorders/qualification.json",
+            "sha256": "c6b4b1532234418f776159426403efac0b11d344f301da22401514802121d354"
+          },
+          "runs": 432,
+          "clang_asan_ubsan_runs": 216,
+          "neverc_runs": 216,
+          "packed_constant_comparisons_neverc": 252
+        }
+      }
+    },
+    "native_interface_export_equivalence": {
+      "path": "integration-exports-equivalence.json",
+      "sha256": "71902c32c92d0fb411718da4afa2c52ff669d20c668b3843bf90b5696a50b08c"
+    },
+    "native_interface_note": "All 804 C/LLVM exports per SDK are byte-identical to the fixed-code exports already checked through native LLVM/NeverC interfaces. These unchanged external matrices were not rerun; full integrated pipelines and source-transport recorders were rerun."
+  }
+}

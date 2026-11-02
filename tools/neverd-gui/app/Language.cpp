@@ -1,6 +1,9 @@
 #include "Language.h"
 
+#include "Theme.h"
+
 #include <QApplication>
+#include <QCoreApplication>
 #include <QLibraryInfo>
 #include <QLocale>
 #include <QSettings>
@@ -69,8 +72,11 @@ void applyLanguage(const QString &code) {
                             QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
       QCoreApplication::installTranslator(&qtTranslator());
   }
-  QApplication::setLayoutDirection(QLocale(resource).textDirection());
+  if (qobject_cast<QApplication *>(QCoreApplication::instance()))
+    QApplication::setLayoutDirection(QLocale(resource).textDirection());
   QSettings().setValue(LanguageKey, code);
+  if (qobject_cast<QApplication *>(QCoreApplication::instance()))
+    Theme::instance().apply();
 }
 
 } // namespace neverd::gui

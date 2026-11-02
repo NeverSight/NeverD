@@ -8,9 +8,9 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedIR.h"
-#include "neverd/ir/med/X86RegistrationSEHCall.h"
-#include "neverd/ir/med/X86RegistrationSEHJump.h"
-#include "neverd/ir/med/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHJump.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 
 #include <set>
 

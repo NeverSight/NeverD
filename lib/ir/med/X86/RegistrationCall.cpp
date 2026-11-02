@@ -6,8 +6,8 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/ir/med/X86RegistrationCall.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd {
 
@@ -17,9 +17,11 @@ llvm::ArrayRef<uint64_t> RegistrationCallABI::integerArgumentRegisters() const {
                     : llvm::ArrayRef<uint64_t>{};
 }
 
-std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
-                                                 const LowBlock &Block,
-                                                 const LowOp &Call) {
+namespace {
+/// The cleanup a complete registration proof binds to this exact call.
+std::optional<uint32_t> checkedCallStackPop(const LowFunc &Func,
+                                            const LowBlock &Block,
+                                            const LowOp &Call) {
   if (!Func.ExceptionMetadata || !Func.RegistrationStates ||
       !Func.RegistrationStates->Complete ||
       (Call.Opcode != NdOp::CALL && Call.Opcode != NdOp::INDIR_CALL) ||
@@ -100,6 +102,27 @@ std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
       Callee.StackPopBytes > UINT16_MAX || Callee.StackPopBytes % 4)
     return std::nullopt;
   return Callee.StackPopBytes;
+}
+} // namespace
+
+std::optional<uint32_t> registrationCallStackPop(const LowFunc &Func,
+                                                 const LowBlock &Block,
+                                                 const LowOp &Call) {
+  if (const auto Pop = checkedCallStackPop(Func, Block, Call))
+    return Pop;
+  // A direct callee pops the same bytes at every call that returns, so its
+  // proven cleanup holds where the registration state stays unproven. The
+  // call must still be an operation of this block.
+  if (!Func.ExceptionMetadata || !Func.RegistrationStates ||
+      Call.Opcode != NdOp::CALL || Call.NumInputs != 1 ||
+      !Call.Inputs[0].isConst() || Call.Inputs[0].Size != 4 || Call.Seq < 0 ||
+      llvm::none_of(Block.Ops, [&](const LowOp &Op) { return &Op == &Call; }))
+    return std::nullopt;
+  for (const auto &Stack : Func.RegistrationStates->CalleeStacks)
+    if (!Stack.Indirect && Stack.Target == Call.Inputs[0].Offset)
+      return Stack.StackPopBytes ? std::optional(Stack.StackPopBytes)
+                                 : std::nullopt;
+  return std::nullopt;
 }
 
 std::optional<RegistrationCallABI> registrationCallABI(const MedFunc &Func,

@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 #include "neverd/dalvik/Heap.h"
 
+#include <cassert>
+
 namespace neverd::mobile::dalvik {
 Heap::Heap(uint64_t byte_limit, uint32_t object_limit)
     : limit(byte_limit), count_limit(object_limit) {}
@@ -24,6 +26,30 @@ std::shared_ptr<Object> Heap::allocate(Object::Kind kind, std::string_view name,
   used += bytes + extra + overhead;
   return object;
 }
+std::shared_ptr<Object> Heap::allocateArray(std::string_view type,
+                                            uint32_t length) {
+  assert(type.starts_with('[') && length <= INT32_MAX);
+  const auto component = type.substr(1);
+  const bool refs = referenceType(component);
+  assert(refs || (component.size() == 1 &&
+                  std::string_view("ZBCSIJFD").find(component[0]) !=
+                      std::string_view::npos));
+  const unsigned width = refs ? sizeof(std::weak_ptr<Object>)
+                         : component == "J" || component == "D" ? 8
+                         : component == "I" || component == "F" ? 4
+                         : component == "C" || component == "S" ? 2
+                                                                : 1;
+  const uint64_t bytes = uint64_t(length) * width;
+  auto object = allocate(refs ? Object::ObjectArray : Object::PrimitiveArray,
+                         type, refs ? 0 : bytes, refs ? bytes : 0);
+  if (object) {
+    object->Length = length;
+    object->ElementSize = width;
+    if (refs)
+      object->Elements.resize(length);
+  }
+  return object;
+}
 std::shared_ptr<Object> Heap::get(uint64_t id) const {
   return id && id <= objects.size() ? objects[id - 1] : nullptr;
 }
@@ -36,6 +62,29 @@ bool Heap::replaceBytes(Object &object, std::vector<uint8_t> bytes) {
   used += growth; // Conservative retained capacity; no model GC/reclamation.
   object.Bytes = std::move(bytes);
   object.Length = object.Bytes.size() / 2;
+  return true;
+}
+bool Heap::resizeBytes(Object &object, uint64_t size) {
+  const uint64_t growth =
+      size > object.Bytes.size() ? size - object.Bytes.size() : 0;
+  if (growth > limit - used)
+    return false;
+  used += growth; // Same conservative retained-capacity policy as replacement.
+  object.Bytes.resize(size);
+  object.Length = size / 2;
+  return true;
+}
+bool Heap::replaceMapEntries(Object &object,
+                             std::vector<Object::MapEntry> entries) {
+  const size_t previous = object.MapEntries ? object.MapEntries->size() : 0;
+  const uint64_t growth =
+      entries.size() > previous
+          ? (entries.size() - previous) * sizeof(Object::MapEntry)
+          : 0;
+  if (growth > limit - used)
+    return false;
+  used += growth; // No model reclamation, including after remove/clear.
+  object.MapEntries = std::move(entries);
   return true;
 }
 std::shared_ptr<Object> Heap::classObject(std::string_view name) {
@@ -118,6 +167,39 @@ std::vector<uint8_t> javaStringBytes(std::string_view text) {
   }
   return bytes;
 }
+std::vector<uint8_t> artStringUTF8(std::span<const uint8_t> UTF16) {
+  std::vector<uint8_t> Out;
+  for (size_t I = 0; I < UTF16.size(); I += 2) {
+    const uint16_t Value = uint16_t(UTF16[I] | uint16_t(UTF16[I + 1]) << 8);
+    // ART's JNI encoding uses four bytes for a complete surrogate pair;
+    // isolated surrogate units still retain their three-byte representation.
+    if (Value >= 0xd800 && Value < 0xdc00 && I + 2 < UTF16.size()) {
+      const uint16_t Next =
+          uint16_t(UTF16[I + 2] | uint16_t(UTF16[I + 3]) << 8);
+      if (Next >= 0xdc00 && Next <= 0xdfff) {
+        const uint32_t Scalar =
+            0x10000 + ((Value - 0xd800) << 10) + (Next - 0xdc00);
+        Out.push_back(0xf0 | (Scalar >> 18));
+        Out.push_back(0x80 | ((Scalar >> 12) & 63));
+        Out.push_back(0x80 | ((Scalar >> 6) & 63));
+        Out.push_back(0x80 | (Scalar & 63));
+        I += 2;
+        continue;
+      }
+    }
+    if (Value && Value < 0x80) {
+      Out.push_back(Value);
+    } else if (Value < 0x800) {
+      Out.push_back(0xc0 | (Value >> 6));
+      Out.push_back(0x80 | (Value & 63));
+    } else {
+      Out.push_back(0xe0 | (Value >> 12));
+      Out.push_back(0x80 | ((Value >> 6) & 63));
+      Out.push_back(0x80 | (Value & 63));
+    }
+  }
+  return Out;
+}
 bool platformClass(std::string_view name) {
   constexpr std::string_view names[] = {
       "java/lang/Object",
@@ -126,6 +208,7 @@ bool platformClass(std::string_view name) {
       "java/lang/String",
       "java/lang/Cloneable",
       "java/io/Serializable",
+      "java/io/IOException",
       "java/lang/Throwable",
       "java/lang/Exception",
       "java/lang/RuntimeException",
@@ -133,6 +216,7 @@ bool platformClass(std::string_view name) {
       "java/lang/ArithmeticException",
       "java/lang/NullPointerException",
       "java/lang/IllegalArgumentException",
+      "java/lang/IllegalStateException",
       "java/lang/IndexOutOfBoundsException",
       "java/lang/ArrayIndexOutOfBoundsException",
       "java/lang/StringIndexOutOfBoundsException",
@@ -167,7 +251,7 @@ std::string_view javaParent(std::string_view name) {
     return {};
   if (name == "java/lang/ClassNotFoundException")
     return "java/lang/ReflectiveOperationException";
-  if (name == "java/lang/RuntimeException" ||
+  if (name == "java/io/IOException" || name == "java/lang/RuntimeException" ||
       name == "java/lang/ReflectiveOperationException")
     return "java/lang/Exception";
   if (name == "java/lang/Exception" || name == "java/lang/Error")
@@ -209,6 +293,8 @@ bool referenceAssignable(std::string_view source,
   destination = destination.substr(1, destination.size() - 2);
   for (; !source.empty(); source = javaParent(source)) {
     if (source == destination ||
+        (source == "java/lang/String" &&
+         destination == "java/lang/CharSequence") ||
         (destination == "java/io/Serializable" &&
          (source == "java/lang/String" || source == "java/lang/Class" ||
           source == "java/lang/Throwable")))

@@ -227,7 +227,9 @@ TEST_F(ARM32_Intrinsics, Decompile_ClrexUsesCompilerBuiltin) {
 
 // The NEON saturating and rounding shifts by a vector of signed amounts, the
 // narrowing shifts right, and the saturating doubling multiplies print as
-// the ACLE intrinsic their shape names.
+// the ACLE intrinsic their shape names.  The stores take only the registers
+// the operations write: a scratch register no instruction writes holds no
+// known value, which the C names as unknown.
 TEST_F(ARM32_Intrinsics, Decompile_NeonSaturatingOperationsUseACLE) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "assembling ARM requires Clang";
@@ -251,13 +253,15 @@ neon_saturating:
   vqdmulh.s16 q13, q0, q1
   vqrdmulh.s32 d28, d0, d1
   vqdmull.s16 q15, d2, d3
-  vst1.8 {d16-d19}, [r1]
-  add r1, r1, #32
+  vst1.8 {d16-d18}, [r1]
+  add r1, r1, #24
   vst1.8 {d20-d23}, [r1]
   add r1, r1, #32
   vst1.8 {d24-d27}, [r1]
   add r1, r1, #32
-  vst1.8 {d28-d31}, [r1]
+  vst1.8 {d28}, [r1]
+  add r1, r1, #8
+  vst1.8 {d30-d31}, [r1]
   bx lr
 .size neon_saturating,.-neon_saturating
 )S";
@@ -334,7 +338,7 @@ neon_shift_left_unsigned:
 
 // The NEON reciprocal and reciprocal square root estimates and steps on f32
 // lanes, and the unsigned estimates on u32 lanes, print as the ACLE intrinsic
-// of their shape.
+// of their shape.  As above, the stores take only the registers written.
 TEST_F(ARM32_Intrinsics, Decompile_NeonEstimatesUseACLE) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "assembling ARM requires Clang";
@@ -354,11 +358,11 @@ neon_estimates:
   vrsqrts.f32 d22, d2, d3
   vrecpe.u32 q12, q0
   vrsqrte.u32 d26, d1
-  vst1.8 {d16-d19}, [r1]
-  add r1, r1, #32
-  vst1.8 {d20-d23}, [r1]
-  add r1, r1, #32
-  vst1.8 {d24-d27}, [r1]
+  vst1.8 {d16-d18}, [r1]
+  add r1, r1, #24
+  vst1.8 {d20-d22}, [r1]
+  add r1, r1, #24
+  vst1.8 {d24-d26}, [r1]
   bx lr
 .size neon_estimates,.-neon_estimates
 )S";

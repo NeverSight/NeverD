@@ -71,6 +71,9 @@ def build(directory, options):
                 receipt["configure_inputs"] = json.loads(effective.read_text())
                 receipt["inputs_sha256"] = forks.digest(effective)
             receipt["cache_sha256"] = forks.digest(directory / "CMakeCache.txt")
+            windows_types = directory / "neverd-windows-types-inputs.json"
+            if windows_types.exists():
+                receipt["windows_types_sha256"] = forks.digest(windows_types)
             receipt["status"] = "success"
         except BaseException:
             receipt["status"] = "failed"

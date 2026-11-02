@@ -1,0 +1,33 @@
+//===- AArch64ExceptionReturnFixtures.def - ERET refusal fixtures --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent A64 encodings and inputs for raw/handwritten-IR admission.
+/// Define WORD(Word), VALUE(Type, Name, Value), or TEXT(Name, Text).
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_ERET_WORD
+#define NEVERD_A64_ERET_WORD(Word)
+#endif
+#ifndef NEVERD_A64_ERET_VALUE
+#define NEVERD_A64_ERET_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_ERET_TEXT
+#define NEVERD_A64_ERET_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_ERET_WORD(0xd69f03e0)
+NEVERD_A64_ERET_WORD(0xd69f0bff)
+NEVERD_A64_ERET_WORD(0xd69f0fff)
+NEVERD_A64_ERET_VALUE(va_t, kBase, 0x1000)
+NEVERD_A64_ERET_VALUE(unsigned, kWordBytes, 4)
+NEVERD_A64_ERET_VALUE(unsigned, kPointerBytes, 8)
+NEVERD_A64_ERET_VALUE(unsigned, kIntrinsicIdBytes, 2)
+NEVERD_A64_ERET_VALUE(uint32_t, kReturn, 0xd65f03c0)
+NEVERD_A64_ERET_TEXT(kFunctionName, "exception_return")
+
+#undef NEVERD_A64_ERET_WORD
+#undef NEVERD_A64_ERET_VALUE
+#undef NEVERD_A64_ERET_TEXT

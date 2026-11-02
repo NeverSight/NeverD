@@ -151,6 +151,17 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
         !(S.Val && S.Val->Kind == ExprKind::Var && S.Val->Var == S.Dst->Var))
       Assigned[varKey(S.Dst->Var)] = true;
   });
+  // Only an unchanged entry value stored to memory can be prologue storage
+  // (IsCalleeSaveStore below); without one, no read needs collecting.
+  bool SavesEntryValue = false;
+  if (Func.FrameSize > 0)
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      SavesEntryValue |=
+          S.Kind == StmtKind::Store && S.StoreVal &&
+          S.StoreVal->Kind == ExprKind::Var && S.StoreVal->Var.SSAVer == 0 &&
+          S.StoreVal->Var.RenameTag < 0 && S.StoreVal->Var.Size &&
+          !Assigned.count(varKey(S.StoreVal->Var));
+    });
   // Preservation is a byte-range property: AArch64 saves D8-D15, while
   // their Q-register upper halves remain volatile. Share the ABI predicate
   // used by call liveness instead of the integer-only register list.
@@ -171,31 +182,58 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     std::optional<MedVar> Restores;
   };
   std::vector<FrameRead> FrameReads;
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    const HighExpr *Restore = S.Kind == StmtKind::Assign && S.Dst &&
-                                      S.Dst->Kind == ExprKind::Var &&
-                                      S.Dst->Var.Kind == MedVar::Reg && S.Val &&
-                                      S.Val->Kind == ExprKind::Load
-                                  ? S.Val.get()
-                                  : nullptr;
-    std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
-      if (!E)
-        return;
-      if (E->Kind == ExprKind::Load && !E->Operands.empty() && E->Type &&
-          E->Type->Size)
-        if (const auto At = high_detail::frameAddressOffset(
-                forceInlineExpr(E->Operands[0]), Func, TargetArch,
-                FrameBudget)) {
-          FrameRead Read{*At, E->Type->Size, std::nullopt};
-          if (E.get() == Restore)
-            Read.Restores = S.Dst->Var;
-          FrameReads.push_back(std::move(Read));
+  VarKeySet ReadValues;
+  HighExprSet ReadExpressions;
+  if (SavesEntryValue)
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      const auto Read = [&](const ExprPtr &Root) {
+        std::vector<ExprPtr> Pending{Root};
+        while (!Pending.empty() && FrameBudget) {
+          auto E = Pending.back();
+          Pending.pop_back();
+          --FrameBudget;
+          if (!E || !ReadExpressions.insert(E.get()).second)
+            continue;
+          if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi)
+            ReadValues.insert(varKey(E->Var));
+          E->forEachChildExpr(
+              [&](const ExprPtr &Child) { Pending.push_back(Child); });
         }
-      E->forEachChildExpr(Visit);
-    };
-    forEachExpr(S, Visit);
-  });
+      };
+      forEachRhsExpr(S, Read);
+      // A store-form assignment reads its destination's address.
+      if (S.Dst && S.Dst->Kind == ExprKind::Load)
+        for (const ExprPtr &Operand : S.Dst->Operands)
+          Read(Operand);
+    });
+  if (SavesEntryValue)
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      const HighExpr *Restore = S.Kind == StmtKind::Assign && S.Dst &&
+                                        S.Dst->Kind == ExprKind::Var &&
+                                        S.Dst->Var.Kind == MedVar::Reg &&
+                                        S.Val && S.Val->Kind == ExprKind::Load
+                                    ? S.Val.get()
+                                    : nullptr;
+      std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
+        if (!E)
+          return;
+        if (E->Kind == ExprKind::Load && !E->Operands.empty() && E->Type &&
+            E->Type->Size)
+          if (const auto At = high_detail::frameAddressOffset(
+                  forceInlineExpr(E->Operands[0]), Func, TargetArch,
+                  FrameBudget)) {
+            FrameRead Read{*At, E->Type->Size, std::nullopt};
+            if (E.get() == Restore && !ReadValues.count(varKey(S.Dst->Var)))
+              Read.Restores = S.Dst->Var;
+            FrameReads.push_back(std::move(Read));
+          }
+        E->forEachChildExpr(Visit);
+      };
+      forEachExpr(S, Visit);
+    });
   auto OnlyRestored = [&](int64_t Offset, const MedVar &V) {
+    if (!FrameBudget)
+      return false;
     return llvm::all_of(FrameReads, [&](const FrameRead &Read) {
       if (Read.Offset >= Offset + V.Size || Offset >= Read.Offset + Read.Size)
         return true;
@@ -226,7 +264,11 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     const int64_t End = *Offset + V.Size;
     const bool OwnFrame = *Offset >= -Func.FrameSize && End <= 0;
     const bool Home = *Offset >= HomeBegin && End <= Layout.EntryStackBase;
-    if (!OwnFrame && !(Home && OnlyRestored(*Offset, V)))
+    // An ABI-preserved register can also carry ordinary data. A private
+    // spill is disposable only when every read is an unobserved restore,
+    // exactly as for a home slot above the entry SP. Otherwise deleting its
+    // initializer leaves a later source load undefined.
+    if ((!OwnFrame && !Home) || !OnlyRestored(*Offset, V))
       return false;
     if (OwnFrame && (IsFPReg(V) || IsLRReg(V)))
       return true;
@@ -234,7 +276,8 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
            TRI.isCallPreserved(V.RegOff, V.Size, Convention);
   };
 
-  eraseKeepingBranchEntries(Func.Body, BranchTargets, IsCalleeSaveStore);
+  if (SavesEntryValue)
+    eraseKeepingBranchEntries(Func.Body, BranchTargets, IsCalleeSaveStore);
 
   std::set<std::string> UsedFrameVars;
   std::function<void(const ExprPtr &)> CollectVarRefs;

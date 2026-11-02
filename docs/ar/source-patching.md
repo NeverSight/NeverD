@@ -1,6 +1,6 @@
 **Languages**: [English](../source-patching.md) | [简体中文](../zh-CN/source-patching.md) | [繁體中文](../zh-TW/source-patching.md) | [日本語](../ja/source-patching.md) | [한국어](../ko/source-patching.md) | [Français](../fr/source-patching.md) | [Deutsch](../de/source-patching.md) | [Español](../es/source-patching.md) | [Italiano](../it/source-patching.md) | [Русский](../ru/source-patching.md) | [العربية](source-patching.md)
 
-<!-- i18n-source: 63d86e1a94d8b33e055360514902466c202d434ebb87823cd91181b98a556871 -->
+<!-- i18n-source: 40bc95b0497bcc23428886f1765116ce87275a1507ae139a70be4896271650a7 -->
 
 [← Documentation Index](README.md)
 
@@ -185,7 +185,7 @@ report = session.patch_source(
 
 يستخدم تأهيل Windows ARM64 مكتبة Unicorn C DLL أصلية لمعمارية ARM64، بُنيت فعلياً من الوحدة الفرعية المثبتة بأدوات LLVM-MinGW المتحقق منها، مع مكتبة استيراد MSVC وتجاوز صريح لهدف CMake. توثّق نسخة البناء المعزولة ثلاثة إصلاحات للمضيف: زوج انتقالات بلا SEH، ورد نداء ARM64 لتخصيص الصفحات مع مزامنة ذاكرة التعليمات المخبأة، وأقنعة قيم فورية 64 بت لـ Windows LLP64. لا تتغير مصادر الوحدة الفرعية أو مراجعتها. هذا يؤهل مضيف الاختبار لمصفوفة CPU ولا يثبت دعم JIT MSVC ARM64 الافتراضي. تُسجّل فحوص استعادة المضيف الخمسة منفصلة عن أدلة التنفيذ الأصلي للعمليات المعدلة واستثناءات C++.
 
-حدد مترجماً متوافقاً عبر `NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE` (جرى اختبار Clang 22.1.6). يصحح البناء المتكامل نسخة LLVM داخل دليل البناء فقط، دون تعديل الوحدة الفرعية أو ذاكرة الحزم المشتركة. قد يرفض خطأ x64 PLT في حزم r3/r4 تصحيح IR؛ تتجنب الكائنات الأصلية هذا المسار MC. يشترط `NEVERD_TEST_REQUIRE_FIXED_LLVM=1` إنتاج PLT الدقيق المصحح.
+حدد مترجماً متوافقاً عبر `NEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE` (جرى اختبار Clang 22.1.6). يترجم البناء المتكامل مباشرة مراجعة فرع LLVM الخاص بـ NeverSight المسجلة. تبقى تصحيحات إعادة التموضع في الفرع، ولا يطبق NeverD رقعاً على مصدر LLVM. قد يرفض خطأ x64 PLT في حزم r3/r4 تصحيح IR؛ تتجنب الكائنات الأصلية هذا المسار MC. يشترط `NEVERD_TEST_REQUIRE_FIXED_LLVM=1` إنتاج PLT الدقيق المصحح.
 
 تحتوي `NeverDSourcePatchTests` على حالات C/API/الكائنات/الاستثناءات الأصلية؛ وتفحص `NeverDSourcePatchMatrixTests` كل التركيبات باستخدام Unicorn. تنفذ `SourcePatchPE` سبعة سيناريوهات C++ عند تحديد `NEVERD_TEST_WINDOWS_CRT_LIB` و`NEVERD_TEST_WINDOWS_UCRT_LIB` و`NEVERD_TEST_WINDOWS_SDK_LIB`. يحتاج المضيف غير Windows أيضاً إلى `NEVERD_TEST_WINDOWS_RUNNER`. يجعل `NEVERD_TEST_REQUIRE_WINDOWS_RUNTIME=1` المدخلات الناقصة فشلاً. يشترط سير عمل Windows المخصص التنفيذ الأصلي ويرفض الحالات المتخطاة.
 
@@ -203,7 +203,7 @@ ctest --test-dir build-source -L \
   --output-on-failure --parallel 4
 ```
 
-تصحح نسخة LLVM أيضاً مراجع بيانات GOT في Mach-O x64؛ تقاس جداول catch ذات النوع في Clang من نهاية حقل إعادة التموضع ذي أربعة بايتات. تزحزحه r3/r4 أربعة بايتات، وترفضه مراجعة ما قبل النشر. تنفذ حالات x64 على Mac عبر Rosetta 2، وحالات ARM64 مباشرةً.
+يصحح فرع LLVM أيضاً مراجع بيانات GOT في Mach-O x64؛ تقاس جداول catch ذات النوع في Clang من نهاية حقل إعادة التموضع ذي أربعة بايتات. تزحزحه r3/r4 أربعة بايتات، وترفضه مراجعة ما قبل النشر. تنفذ حالات x64 على Mac عبر Rosetta 2، وحالات ARM64 مباشرةً.
 
 اجتاز التحقق في بيئة Windows x64 الأصلية [2ed7e78fc](https://github.com/NeverSight/NeverD/actions/runs/38307461805) جميع الاختبارات المتخصصة وعددها 16 لمسارات PE والكائنات وtrampoline، وجميع اختبارات مصفوفة أهداف CPU وعددها 143، دون تخطي أي حالة. نفّذ اختبار FH3 سبعة سيناريوهات تشغيل C++؛ وتستخدم مصفوفة الأهداف Unicorn. استُخدم Clang 22.1.6 مع MSVC وWindows SDK الأصليين وLLVM المدمج.
 
@@ -259,3 +259,10 @@ ctest --test-dir build-source -L \
 تتحقق إصلاحات Mach-O من دوال Thumb المختارة بصورة مستقلة عن وصف الصورة العام المختلط ARM/Thumb، وتوحّد مؤشرات تصدير Thumb المثبتة وعناوين شيفرة فك المكدس في ARM32 دون تغيير مؤشرات البيانات أو أطوال النطاقات. اجتاز البناء باستخدام مصادر LLVM المدمجة محليًا جميع فحوص مصفوفة CPU البالغ عددها 283 وفحوص عقود الاستثناءات البالغ عددها 258، دون إخفاق أو تخطٍ. تستخدم اختبارات Mach-O القديمة رابطًا مفتوح المصدر موثقًا وتحجز سعة لبيانات فك المكدس؛ ولـ i386 نقطة بدء بمحاذاة صحيحة ومقطع صفحة صفر بحجم 64 KiB.
 
 تثبت هذه النتائج تنفيذ C ضمن المحاكيات وطبقات التوافق المذكورة. Wine ليس Microsoft Windows، وDarling ليس macOS، وتنفيذ ARMv7k داخل محاكاة iOS عالية المستوى لا يثبت دعم watchOS أو WatchKit أو أجهزة Apple الفعلية. لا يُستنتج منها تحقق من SDK قديم لـ Apple أو عتاد أصلي ذي 32 بت، كما لا تثبت هذه الاختبارات فك مكدس استثناءات C++. تبقى أدلة التشغيل الأصلي والتوافق السابقة منفصلة. لم يُبنَ NeverC ولم يُعدّل.
+
+<!-- i18n-section: interactive-byte-patches -->
+## مسؤولية التصحيحات التفاعلية
+
+تتولى `lib/patch` التحقق من البايتات وترميز LLVM MC ولقطة الإدخال الثابتة وسجلات التغييرات الموحدة والتصدير الحصري. تتحقق SDK من أهداف المصدر باستخدام نص C الفعلي ومواضع LowIR الأصلية والمعاملات المفكوكة؛ لا تكفي علامة التنقل وحدها للسماح بالتعديل. يدمج العامل ملف `patches.json` الاختياري مع التراجع والإعادة ويبطل التحليل بعد التعديل. تقرأ التواقيع البايتات الأصلية، وتفقد الدوال المعدلة آثار المكتبة المستنتجة من هويتها. تستخدم GUI وCLI وPython واجهات API نفسها. يظل استبدال الدالة كاملة عبر `neverd_patch_source` ويتطلب تصدير تغييرات البايتات وإعادة فتحها أولاً.
+
+[GUI](../gui.md) · `neverd patch-bytes` · `Session.byte_patches` · `Session.apply_byte_patch` · `Session.export_byte_patches`

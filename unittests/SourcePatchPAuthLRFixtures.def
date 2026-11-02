@@ -1,0 +1,23 @@
+//===- SourcePatchPAuthLRFixtures.def - Signed callback cases --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent compact-unwind encoding and callback entry test values.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE
+#define NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(Type, Name, Value)
+#endif
+
+NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(uint32_t, kCallbackPAuthLREncoding,
+                                   0x05002000)
+NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(uint32_t, kCallbackPAuthLRSigningOffset, 8)
+NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(uint32_t, kCallbackPAuthLRExactEntry, 0)
+NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(uint32_t, kCallbackPAuthLRInteriorEntry, 16)
+NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE(llvm::StringLiteral,
+                                   kCallbackPAuthLRExpectedDiagnostic,
+                                   "PAuth_LR original callbacks")
+
+#undef NEVERD_SOURCE_PATCH_PAUTH_LR_VALUE

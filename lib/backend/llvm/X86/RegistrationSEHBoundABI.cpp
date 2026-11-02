@@ -6,7 +6,7 @@
 /// \file
 /// Materialize ABI types after the source invocation has been authenticated.
 
-#include "neverd/backend/llvm/X86RegistrationSEHBoundCall.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/IR/DerivedTypes.h"

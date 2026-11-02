@@ -2,10 +2,10 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/Support/raw_ostream.h"
 

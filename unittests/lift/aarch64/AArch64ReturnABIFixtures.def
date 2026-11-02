@@ -1,0 +1,53 @@
+//===- AArch64ReturnABIFixtures.def - Callable signing oracles --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent native return-signing words and public LLVM/C ABI spellings.
+//===----------------------------------------------------------------------===//
+
+#ifndef A64_RETURN_ABI_TEXT
+#define A64_RETURN_ABI_TEXT(Name, Text)
+#endif
+#ifndef A64_RETURN_ABI_VALUE
+#define A64_RETURN_ABI_VALUE(Type, Name, Value)
+#endif
+
+A64_RETURN_ABI_TEXT(kProtectedFunction, "protected_return")
+A64_RETURN_ABI_TEXT(kSigningScope, "sign-return-address")
+A64_RETURN_ABI_TEXT(kSigningKey, "sign-return-address-key")
+A64_RETURN_ABI_TEXT(kSigningAll, "all")
+A64_RETURN_ABI_TEXT(kArm64eUnwindDiagnostic,
+                    "arm64e unwind requires an IB return-signing policy")
+A64_RETURN_ABI_TEXT(kSigningNonLeaf, "non-leaf")
+A64_RETURN_ABI_TEXT(kSigningAKey, "a_key")
+A64_RETURN_ABI_TEXT(kSigningBKey, "b_key")
+A64_RETURN_ABI_TEXT(kSourceAKey, "branch-protection=pac-ret+leaf")
+A64_RETURN_ABI_TEXT(kSourceBKey, "branch-protection=pac-ret+leaf+b-key")
+A64_RETURN_ABI_TEXT(kRawAuthenticatedReturn, "llvm.ptrauth.auth")
+A64_RETURN_ABI_TEXT(kReturnModule, "protected_returns")
+A64_RETURN_ABI_TEXT(kObjectName, "protected_returns.o")
+A64_RETURN_ABI_TEXT(kArm64eTriple, "arm64e-apple-macos15")
+A64_RETURN_ABI_VALUE(uint32_t, kArm64eSubtype, 2)
+A64_RETURN_ABI_TEXT(kELFFrameSection, ".eh_frame")
+A64_RETURN_ABI_TEXT(kMachOFrameSection, "__eh_frame")
+A64_RETURN_ABI_TEXT(kBadSigningScope, "invalid")
+A64_RETURN_ABI_TEXT(kBadSigningKey, "invalid")
+A64_RETURN_ABI_TEXT(kPCSigningAttribute, "branch-protection-pauth-lr")
+A64_RETURN_ABI_VALUE(uint32_t, kUnsignedReturn, 0xd65f03c0U)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnAuthA, 0xd50323bfU)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnAuthB, 0xd50323ffU)
+A64_RETURN_ABI_VALUE(unsigned, kNativeWordBytes, 4)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnSignA, 0xd503233fU)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnSignB, 0xd503237fU)
+A64_RETURN_ABI_VALUE(uint32_t, kAuthenticatedReturnA, 0xd65f0bffU)
+A64_RETURN_ABI_VALUE(uint32_t, kAuthenticatedReturnB, 0xd65f0fffU)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnSeven, 0xd28000e0U)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnFrameSave, 0xa9be7bfdU)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnFramePointer, 0x910003fdU)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnCall, 0x9400003dU)
+A64_RETURN_ABI_VALUE(uint32_t, kReturnFrameRestore, 0xa8c27bfdU)
+
+#undef A64_RETURN_ABI_TEXT
+#undef A64_RETURN_ABI_VALUE

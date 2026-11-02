@@ -44,15 +44,25 @@ void expectIntrinsicStyle(const std::string &Source, bool LLVMPath = false) {
   while ((Search = Source.find("__asm__ volatile", Search)) !=
          std::string::npos) {
     const auto Asm = std::string_view(Source).substr(Search);
+    // Scalar MSR access keeps owned assembly only as the last
+    // NEVERD_X86_SCALAR_SYSTEM choice, after the builtin and the MSVC
+    // intrinsic, for a compiler with neither.
+    const size_t Line = Source.rfind('\n', Search) + 1;
+    const bool ScalarSystemFallback =
+        Asm.starts_with("__asm__ volatile(\"wrmsr\"") &&
+        Source.find("NEVERD_X86_SCALAR_SYSTEM(__builtin_ia32_wrmsr(", Line) <
+            Search;
     EXPECT_TRUE(Asm.starts_with("__asm__ volatile(\"syscall\"") ||
+                ScalarSystemFallback ||
                 (LLVMPath && (Asm.starts_with("__asm__ volatile(\"cpuid\"") ||
                               Asm.starts_with("__asm__ volatile(\"xgetbv\""))))
         << Source.substr(Search, 200);
     Search += std::strlen("__asm__ volatile");
     ++AsmCount;
   }
-  // The fixture has two CPUID occurrences, one XGETBV and one SYSCALL.
-  EXPECT_EQ(AsmCount, LLVMPath ? 4u : 1u) << Source;
+  // The fixture has two CPUID occurrences, one XGETBV, one SYSCALL and one
+  // WRMSR fallback.
+  EXPECT_EQ(AsmCount, LLVMPath ? 5u : 2u) << Source;
   for (const char *Name :
        {"test_rdtsc_intrinsic", "test_pause_intrinsic", "test_mfence_intrinsic",
         "test_lfence_intrinsic", "test_sfence_intrinsic",
@@ -66,6 +76,11 @@ void expectIntrinsicStyle(const std::string &Source, bool LLVMPath = false) {
                      std::strcmp(Name, "test_xgetbv_intrinsic") == 0)) {
       EXPECT_NE(Body.find("__asm__ volatile"), std::string::npos) << Body;
       EXPECT_NE(Body.find(": \"memory\");"), std::string::npos) << Body;
+    } else if (std::strcmp(Name, "test_wrmsr_intrinsic") == 0) {
+      EXPECT_NE(Body.find("NEVERD_X86_SCALAR_SYSTEM(__builtin_ia32_wrmsr("),
+                std::string::npos)
+          << Body;
+      EXPECT_NE(Body.find("__writemsr("), std::string::npos) << Body;
     } else
       EXPECT_EQ(Body.find("__asm__ volatile"), std::string::npos) << Body;
   }

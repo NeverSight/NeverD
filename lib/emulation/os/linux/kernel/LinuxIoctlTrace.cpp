@@ -17,6 +17,9 @@ LinuxFiles::tracedIoctl(const ProcessServiceEvent &Event,
   if (!Options->IoctlTrace)
     return deviceIoctl(FD, Request, Argument, Result);
   const auto &Config = *Options->IoctlTrace;
+  auto Ranges = Config.Requests.find(Request);
+  if (!Config.IncludeUnlisted && Ranges == Config.Requests.end())
+    return deviceIoctl(FD, Request, Argument, Result);
   if (Result.IoctlTrace.size() == Config.EventLimit) {
     Result.IoctlTraceTruncated = true;
     return deviceIoctl(FD, Request, Argument, Result);
@@ -54,8 +57,8 @@ LinuxFiles::tracedIoctl(const ProcessServiceEvent &Event,
     }
     return "complete";
   };
-  if (auto I = Config.Requests.find(Request); I != Config.Requests.end()) {
-    for (const auto &Range : I->second) {
+  if (Ranges != Config.Requests.end()) {
+    for (const auto &Range : Ranges->second) {
       auto &M = Trace.Memory.emplace_back();
       M.Size = Range.Size;
       uint64_t Base = Argument;

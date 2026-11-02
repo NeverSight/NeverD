@@ -42,6 +42,10 @@ namespace {
 using namespace neverd;
 using namespace llvm::MachO;
 
+#define NEVERD_COMPACT_PAUTH_LR_VALUE(Type, Name, Value)                       \
+  constexpr Type Name = Value;
+#include "MachOCompactPAuthLRFixtures.def"
+
 constexpr uint64_t kBaseVA = 0x100000000;
 constexpr uint32_t kEHFrameOff = 300;
 constexpr uint64_t kEHFrameSize = 16;
@@ -220,9 +224,8 @@ void addGeneratedFunctionProvenance(CompiledImage &Image, uint64_t FunctionVA) {
   Image.SymbolAddrs["f"] = FunctionVA;
   Image.FunctionOwnerAddrs["_f"] = FunctionVA;
   Image.SourceFunctionOwners.push_back({"f", "_f", FunctionVA});
-  Image.FunctionRanges.push_back(
-      {1, "_f", FunctionVA, "L_begin_f", FunctionVA, "L_end_f",
-       FunctionVA + 0x10});
+  Image.FunctionRanges.push_back({1, "_f", FunctionVA, "L_begin_f", FunctionVA,
+                                  "L_end_f", FunctionVA + 0x10});
 }
 
 CompiledImage makeGeneratedEHFrame(const MachOEHFrameRegion &Region,
@@ -800,8 +803,8 @@ TEST(MachOExceptionPatch, AcceptsARMImageWithoutUnwindAsNoOp) {
   std::vector<uint8_t> Binary = {0x41, 0x52, 0x4d};
   const std::vector<uint8_t> Before = Binary;
 
-  auto Receipt = installMachOEHFrameWithReceipt(
-      Binary, std::nullopt, Compiled, Module, nullptr);
+  auto Receipt = installMachOEHFrameWithReceipt(Binary, std::nullopt, Compiled,
+                                                Module, nullptr);
   ASSERT_TRUE(static_cast<bool>(Receipt))
       << llvm::toString(Receipt.takeError());
   EXPECT_EQ(Receipt->disposition(), MachOEHFrameInstallDisposition::Unchanged);
@@ -821,14 +824,8 @@ TEST(MachOExceptionPatch,
   Compact.TargetArch = Arch::ARM;
   Compact.PointerWidth = 4;
   Compact.ByteOrder = llvm::endianness::little;
-  Compact.Records.push_back({1,
-                             "_f",
-                             FunctionVA,
-                             FunctionVA,
-                             FunctionVA + 0x10,
-                             0x10,
-                             macho_unwind::kARMModeFrame,
-                             "L_begin_f"});
+  Compact.Records.push_back({1, "_f", FunctionVA, FunctionVA, FunctionVA + 0x10,
+                             0x10, macho_unwind::kARMModeFrame, "L_begin_f"});
 
   std::vector<uint8_t> Binary = {0x41, 0x52, 0x4d};
   const std::vector<uint8_t> Before = Binary;
@@ -877,8 +874,8 @@ TEST(MachOExceptionPatch,
     const std::vector<uint8_t> Before = Binary;
     auto Region = findMachOEHFrameRegion(Binary);
     ASSERT_TRUE(Region.has_value());
-    auto Receipt = installMachOEHFrameWithReceipt(
-        Binary, Region, Generated, *makeRequiredModule(Context));
+    auto Receipt = installMachOEHFrameWithReceipt(Binary, Region, Generated,
+                                                  *makeRequiredModule(Context));
     EXPECT_FALSE(static_cast<bool>(Receipt));
     if (!Receipt)
       llvm::consumeError(Receipt.takeError());
@@ -894,20 +891,18 @@ TEST(MachOExceptionPatch,
   WrongEnd.FunctionRanges[0].EndVA = FunctionVA + 0x11;
   Reject(std::move(WrongEnd));
 
-  CompiledImage MissingFragment =
-      makeGeneratedEHFrame(*Region, FunctionVA);
+  CompiledImage MissingFragment = makeGeneratedEHFrame(*Region, FunctionVA);
   MissingFragment.Sections[1].Size = 0x20;
-  MissingFragment.FunctionRanges.push_back(
-      {2, "_f", FunctionVA, "L_begin_f_1", FunctionVA + 0x10,
-       "L_end_f_1", FunctionVA + 0x20});
+  MissingFragment.FunctionRanges.push_back({2, "_f", FunctionVA, "L_begin_f_1",
+                                            FunctionVA + 0x10, "L_end_f_1",
+                                            FunctionVA + 0x20});
   Reject(std::move(MissingFragment));
 
   CompiledImage ExtraFDE = makeGeneratedEHFrame(*Region, FunctionVA);
   std::vector<uint8_t> &Frame = ExtraFDE.Sections[0].ExternalBytes;
   ASSERT_GE(Frame.size(), sizeof(uint32_t));
   Frame.resize(Frame.size() - sizeof(uint32_t));
-  const std::vector<uint8_t> Unowned =
-      makeEHFrameFragment(FunctionVA + 0x100);
+  const std::vector<uint8_t> Unowned = makeEHFrameFragment(FunctionVA + 0x100);
   Frame.insert(Frame.end(), Unowned.begin(), Unowned.end());
   ExtraFDE.Sections[0].Size = Frame.size();
   Reject(std::move(ExtraFDE));
@@ -939,13 +934,20 @@ TEST(MachOExceptionPatch,
   Record.FunctionSymbol = "L_begin_f";
   Compact.Records.push_back(Record);
 
-  auto Receipt = installMachOEHFrameWithReceipt(
-      Binary, Region, Generated, *makeRequiredModule(Context), &Compact);
-  ASSERT_TRUE(static_cast<bool>(Receipt))
-      << llvm::toString(Receipt.takeError());
-  EXPECT_EQ(Receipt->disposition(), MachOEHFrameInstallDisposition::Unchanged);
-  EXPECT_TRUE(Receipt->installedFDEs().empty());
-  EXPECT_EQ(Binary, Before);
+  for (uint32_t Encoding :
+       {macho_unwind::kARM64ModeFrame, macho_unwind::kARM64ModeFramePAuthLR,
+        kPAuthLRRecipeEncoding}) {
+    SCOPED_TRACE(Encoding);
+    Compact.Records.front().Encoding = Encoding;
+    auto Receipt = installMachOEHFrameWithReceipt(
+        Binary, Region, Generated, *makeRequiredModule(Context), &Compact);
+    ASSERT_TRUE(static_cast<bool>(Receipt))
+        << llvm::toString(Receipt.takeError());
+    EXPECT_EQ(Receipt->disposition(),
+              MachOEHFrameInstallDisposition::Unchanged);
+    EXPECT_TRUE(Receipt->installedFDEs().empty());
+    EXPECT_EQ(Binary, Before);
+  }
 }
 
 TEST(MachOExceptionPatch,
@@ -959,14 +961,8 @@ TEST(MachOExceptionPatch,
   Valid.TargetArch = Arch::AArch64;
   Valid.PointerWidth = 8;
   Valid.ByteOrder = llvm::endianness::little;
-  Valid.Records.push_back({1,
-                           "_f",
-                           FunctionVA,
-                           FunctionVA,
-                           FunctionVA + 0x10,
-                           0x10,
-                           macho_unwind::kARM64ModeFrame,
-                           "L_begin_f"});
+  Valid.Records.push_back({1, "_f", FunctionVA, FunctionVA, FunctionVA + 0x10,
+                           0x10, macho_unwind::kARM64ModeFrame, "L_begin_f"});
 
   auto Reject = [&](const CompiledImage &Candidate,
                     const MachOCompactUnwindRecords &Coverage) {
@@ -1019,8 +1015,8 @@ TEST(MachOExceptionPatch,
   Reject(Generated, WrongByteOrder);
 
   for (uint32_t ForgedEncoding :
-       {0u, 0x05000000u,
-        macho_unwind::kARM64ModeFrame | 0x00800000u,
+       {0u, kReservedARM64Mode, kPAuthLRReservedEncoding,
+        kPAuthLRPastShortFrame, macho_unwind::kARM64ModeFrame | 0x00800000u,
         macho_unwind::kX86_64ModeRBPFrame}) {
     SCOPED_TRACE(ForgedEncoding);
     MachOCompactUnwindRecords Forged = Valid;

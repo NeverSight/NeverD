@@ -1,0 +1,36 @@
+//===- UnwindFrameCLIFixtures.def - Exact-PC CLI inputs --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// CLI argument spellings and independent malformed-address witnesses.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_CLI_TEST_TEXT
+#define NEVERD_UNWIND_CLI_TEST_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_UNWIND_CLI_TEST_VALUE
+#define NEVERD_UNWIND_CLI_TEST_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_UNWIND_CLI_TEST_INVALID
+#define NEVERD_UNWIND_CLI_TEST_INVALID(Text)
+#endif
+
+NEVERD_UNWIND_CLI_TEST_TEXT(kHexPrefix, "0x")
+NEVERD_UNWIND_CLI_TEST_TEXT(kInfo, "info")
+NEVERD_UNWIND_CLI_TEST_TEXT(kJSON, "--json")
+NEVERD_UNWIND_CLI_TEST_TEXT(kNoDebug, "--no-debug")
+NEVERD_UNWIND_CLI_TEST_TEXT(kAddressArgument, "--unwind-frame=")
+NEVERD_UNWIND_CLI_TEST_TEXT(kOutputFile, "frame.json")
+NEVERD_UNWIND_CLI_TEST_TEXT(kErrorFile, "frame.stderr")
+NEVERD_UNWIND_CLI_TEST_VALUE(unsigned, kQueryTimeoutSeconds, 30)
+NEVERD_UNWIND_CLI_TEST_INVALID("")
+NEVERD_UNWIND_CLI_TEST_INVALID("-1")
+NEVERD_UNWIND_CLI_TEST_INVALID("0x")
+NEVERD_UNWIND_CLI_TEST_INVALID("0x10000000000000000")
+NEVERD_UNWIND_CLI_TEST_INVALID("function_name")
+
+#undef NEVERD_UNWIND_CLI_TEST_TEXT
+#undef NEVERD_UNWIND_CLI_TEST_VALUE
+#undef NEVERD_UNWIND_CLI_TEST_INVALID

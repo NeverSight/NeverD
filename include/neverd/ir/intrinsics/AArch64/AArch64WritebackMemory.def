@@ -1,0 +1,265 @@
+//===- AArch64WritebackMemory.def - Original writeback memory --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// GPR/SIMD single writeback and pair instructions. One native operation owns
+/// the access and AddressAdd, including their order and completed base result.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_WRITEBACK_OPERATION
+#define NEVERD_A64_WRITEBACK_OPERATION(Id, Name)
+#endif
+#ifndef NEVERD_A64_WRITEBACK_ENCODING
+#define NEVERD_A64_WRITEBACK_ENCODING(Word, Load, Access, Result)
+#endif
+#ifndef NEVERD_A64_WRITEBACK_VECTOR_ENCODING
+#define NEVERD_A64_WRITEBACK_VECTOR_ENCODING(Word, Load, Access)
+#endif
+#ifndef NEVERD_A64_PAIR_ENCODING
+#define NEVERD_A64_PAIR_ENCODING(Word, Load, Access, Vector, Signed)
+#endif
+#ifndef NEVERD_A64_WRITEBACK_MULTI_OUTPUT
+#define NEVERD_A64_WRITEBACK_MULTI_OUTPUT(Id, Count)
+#endif
+#ifndef NEVERD_A64_WRITEBACK_MACHINE
+#define NEVERD_A64_WRITEBACK_MACHINE(Stack, Vector, Pair, Load, Asm,           \
+                                     Constraints)
+#endif
+#ifndef NEVERD_A64_WRITEBACK_VALUE
+#define NEVERD_A64_WRITEBACK_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_WRITEBACK_TEXT
+#define NEVERD_A64_WRITEBACK_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_WRITEBACK_OPERATION(A64_LoadWriteback, "load_writeback")
+NEVERD_A64_WRITEBACK_OPERATION(A64_StoreWriteback, "store_writeback")
+NEVERD_A64_WRITEBACK_OPERATION(A64_VectorLoadWriteback, "vector_load_writeback")
+NEVERD_A64_WRITEBACK_OPERATION(A64_VectorStoreWriteback,
+                               "vector_store_writeback")
+// Append-only: pair operations keep two values and the completed base.
+NEVERD_A64_WRITEBACK_OPERATION(A64_PairLoad, "pair_load")
+NEVERD_A64_WRITEBACK_OPERATION(A64_PairStore, "pair_store")
+NEVERD_A64_WRITEBACK_OPERATION(A64_VectorPairLoad, "vector_pair_load")
+NEVERD_A64_WRITEBACK_OPERATION(A64_VectorPairStore, "vector_pair_store")
+// Append-only: complete structure values, followed by the completed base.
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLoad1, "structure_load1")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLoad1, 2)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLoad2, "structure_load2")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLoad2, 3)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLoad3, "structure_load3")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLoad3, 4)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLoad4, "structure_load4")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLoad4, 5)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLaneLoad1, "structure_laneload1")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLaneLoad1, 2)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLaneLoad2, "structure_laneload2")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLaneLoad2, 3)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLaneLoad3, "structure_laneload3")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLaneLoad3, 4)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureLaneLoad4, "structure_laneload4")
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_StructureLaneLoad4, 5)
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureStore1, "structure_store1")
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureStore2, "structure_store2")
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureStore3, "structure_store3")
+NEVERD_A64_WRITEBACK_OPERATION(A64_StructureStore4, "structure_store4")
+
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_PairLoad, 3)
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_VectorPairLoad, 3)
+NEVERD_A64_WRITEBACK_MULTI_OUTPUT(A64_VectorLoadWriteback, 2)
+
+// Mode bits retain non-temporal, offset, post-index and pre-index semantics.
+NEVERD_A64_PAIR_ENCODING(0x28400000U, true, 4, false, false)
+NEVERD_A64_PAIR_ENCODING(0xa8400000U, true, 8, false, false)
+NEVERD_A64_PAIR_ENCODING(0x68400000U, true, 4, false, true)
+NEVERD_A64_PAIR_ENCODING(0x28000000U, false, 4, false, false)
+NEVERD_A64_PAIR_ENCODING(0xa8000000U, false, 8, false, false)
+NEVERD_A64_PAIR_ENCODING(0x2c400000U, true, 4, true, false)
+NEVERD_A64_PAIR_ENCODING(0x6c400000U, true, 8, true, false)
+NEVERD_A64_PAIR_ENCODING(0xac400000U, true, 16, true, false)
+NEVERD_A64_PAIR_ENCODING(0x2c000000U, false, 4, true, false)
+NEVERD_A64_PAIR_ENCODING(0x6c000000U, false, 8, true, false)
+NEVERD_A64_PAIR_ENCODING(0xac000000U, false, 16, true, false)
+
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kPairOpcodeMask, 0xfe400000U)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kPairModeMask, 0x01800000U)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kPairWritebackBit, 0x00800000U)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kPairPreIndexBit, 0x01000000U)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairSecondShift, 10)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairImmediateShift, 15)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kPairImmediateMask, 0x7fU)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kPairImmediateSignBit, 0x40U)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairValues, 2)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairBaseIndex, 2)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairSecondDataOperand, 3)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairStoreOperands, 4)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kPairSecondScratch, 15)
+NEVERD_A64_WRITEBACK_TEXT(kPairLoadAsm, "// neverd.pair.load\n\t.inst ${4:c}")
+NEVERD_A64_WRITEBACK_TEXT(kPairStoreAsm, "// neverd.pair.store\n\t.inst ${4:c}")
+NEVERD_A64_WRITEBACK_TEXT(kPairVectorLoadAsm,
+                          "// neverd.pair.vector.load\n\t.inst ${4:c}")
+NEVERD_A64_WRITEBACK_TEXT(kPairVectorStoreAsm,
+                          "// neverd.pair.vector.store\n\t.inst ${4:c}")
+NEVERD_A64_WRITEBACK_TEXT(kPairLoadConstraints,
+                          "=&{x17},=&{x15},={x16},2,i,~{memory}")
+NEVERD_A64_WRITEBACK_TEXT(kPairStoreConstraints,
+                          "={x16},0,{x17},{x15},i,~{memory}")
+NEVERD_A64_WRITEBACK_TEXT(kPairVectorLoadConstraints,
+                          "=&{v17},=&{v15},={x16},2,i,~{memory}")
+NEVERD_A64_WRITEBACK_TEXT(kPairVectorStoreConstraints,
+                          "={x16},0,{v17},{v15},i,~{memory}")
+NEVERD_A64_WRITEBACK_ENCODING(0x38000400U, false, 1, 0)
+NEVERD_A64_WRITEBACK_ENCODING(0x38400400U, true, 1, 4)
+NEVERD_A64_WRITEBACK_ENCODING(0x38800400U, true, 1, 8)
+NEVERD_A64_WRITEBACK_ENCODING(0x38c00400U, true, 1, 4)
+NEVERD_A64_WRITEBACK_ENCODING(0x78000400U, false, 2, 0)
+NEVERD_A64_WRITEBACK_ENCODING(0x78400400U, true, 2, 4)
+NEVERD_A64_WRITEBACK_ENCODING(0x78800400U, true, 2, 8)
+NEVERD_A64_WRITEBACK_ENCODING(0x78c00400U, true, 2, 4)
+NEVERD_A64_WRITEBACK_ENCODING(0xb8000400U, false, 4, 0)
+NEVERD_A64_WRITEBACK_ENCODING(0xb8400400U, true, 4, 4)
+NEVERD_A64_WRITEBACK_ENCODING(0xb8800400U, true, 4, 8)
+NEVERD_A64_WRITEBACK_ENCODING(0xf8000400U, false, 8, 0)
+NEVERD_A64_WRITEBACK_ENCODING(0xf8400400U, true, 8, 8)
+
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0x3c000400U, false, 1)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0x3c400400U, true, 1)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0x7c000400U, false, 2)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0x7c400400U, true, 2)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0xbc000400U, false, 4)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0xbc400400U, true, 4)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0xfc000400U, false, 8)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0xfc400400U, true, 8)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0x3c800400U, false, 16)
+NEVERD_A64_WRITEBACK_VECTOR_ENCODING(0x3cc00400U, true, 16)
+
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kWritebackOpcodeMask, 0xffe00400U)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kWritebackPreIndexBit, 0x800U)
+NEVERD_A64_WRITEBACK_VALUE(uint32_t, kWritebackModeMask, 0xc00U)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackBaseOperand, 0)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackWordOperand, 1)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackDataOperand, 2)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackLoadOperands, 2)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackStoreOperands, 3)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackPairBytes, 16)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackPairBits, 128)
+NEVERD_A64_WRITEBACK_VALUE(uint8_t, kWritebackByteSignBit, 0x80U)
+NEVERD_A64_WRITEBACK_VALUE(uint8_t, kWritebackByteMask, 0xffU)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackValueIndex, 0)
+NEVERD_A64_WRITEBACK_VALUE(unsigned, kWritebackBaseIndex, 1)
+NEVERD_A64_WRITEBACK_TEXT(kWritebackLoadAsm,
+                          "// neverd.writeback.load\n\t.inst ${3:c}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackStoreAsm,
+                          "// neverd.writeback.store\n\t.inst ${3:c}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackLoadConstraints,
+                          "=&{x17},={x16},1,i,~{memory}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackStoreConstraints,
+                          "={x16},0,{x17},i,~{memory}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackVectorLoadAsm,
+                          "// neverd.writeback.vector.load\n\t.inst ${3:c}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackVectorStoreAsm,
+                          "// neverd.writeback.vector.store\n\t.inst ${3:c}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackVectorLoadConstraints,
+                          "=&{v17},={x16},1,i,~{memory}")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackVectorStoreConstraints,
+                          "={x16},0,{v17},i,~{memory}")
+// SP is borrowed for one instruction. Capture its completed value before
+// restoring the host stack; no compiler access or call occurs in this window.
+NEVERD_A64_WRITEBACK_TEXT(
+    kWritebackStoreSPAsm,
+    "// neverd.writeback.store.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${3:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackStoreSPConstraints,
+                          "={x16},0,{x17},i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, false, false, false, kWritebackStoreAsm,
+                             kWritebackStoreConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, false, false, false, kWritebackStoreSPAsm,
+                             kWritebackStoreSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kWritebackLoadSPAsm,
+    "// neverd.writeback.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${3:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackLoadSPConstraints,
+                          "=&{x17},={x16},1,i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, false, false, true, kWritebackLoadAsm,
+                             kWritebackLoadConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, false, false, true, kWritebackLoadSPAsm,
+                             kWritebackLoadSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kWritebackVectorStoreSPAsm,
+    "// neverd.writeback.vector.store.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${3:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackVectorStoreSPConstraints,
+                          "={x16},0,{v17},i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, true, false, false,
+                             kWritebackVectorStoreAsm,
+                             kWritebackVectorStoreConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, true, false, false,
+                             kWritebackVectorStoreSPAsm,
+                             kWritebackVectorStoreSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kWritebackVectorLoadSPAsm,
+    "// neverd.writeback.vector.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${3:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackVectorLoadSPConstraints,
+                          "=&{v17},={x16},1,i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, true, false, true, kWritebackVectorLoadAsm,
+                             kWritebackVectorLoadConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, true, false, true, kWritebackVectorLoadSPAsm,
+                             kWritebackVectorLoadSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kPairStoreSPAsm, "// neverd.pair.store.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+                     ".inst ${4:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kPairStoreSPConstraints,
+                          "={x16},0,{x17},{x15},i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, false, true, false, kPairStoreAsm,
+                             kPairStoreConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, false, true, false, kPairStoreSPAsm,
+                             kPairStoreSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kPairLoadSPAsm, "// neverd.pair.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+                    ".inst ${4:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kPairLoadSPConstraints,
+                          "=&{x17},=&{x15},={x16},2,i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, false, true, true, kPairLoadAsm,
+                             kPairLoadConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, false, true, true, kPairLoadSPAsm,
+                             kPairLoadSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kPairVectorStoreSPAsm,
+    "// neverd.pair.vector.store.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${4:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kPairVectorStoreSPConstraints,
+                          "={x16},0,{v17},{v15},i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, true, true, false, kPairVectorStoreAsm,
+                             kPairVectorStoreConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, true, true, false, kPairVectorStoreSPAsm,
+                             kPairVectorStoreSPConstraints)
+NEVERD_A64_WRITEBACK_TEXT(
+    kPairVectorLoadSPAsm,
+    "// neverd.pair.vector.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+    ".inst ${4:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_WRITEBACK_TEXT(kPairVectorLoadSPConstraints,
+                          "=&{v17},=&{v15},={x16},2,i,~{x14},~{memory}")
+NEVERD_A64_WRITEBACK_MACHINE(false, true, true, true, kPairVectorLoadAsm,
+                             kPairVectorLoadConstraints)
+NEVERD_A64_WRITEBACK_MACHINE(true, true, true, true, kPairVectorLoadSPAsm,
+                             kPairVectorLoadSPConstraints)
+
+NEVERD_A64_WRITEBACK_TEXT(kWritebackResult, "memory.writeback")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackMalformed,
+                          "malformed AArch64 writeback memory operation")
+NEVERD_A64_WRITEBACK_TEXT(kWritebackSPUnsupported,
+                          "writeback SP memory requires the original SP "
+                          "alignment and memory-tagging environment")
+
+#undef NEVERD_A64_WRITEBACK_MACHINE
+#undef NEVERD_A64_PAIR_ENCODING
+#undef NEVERD_A64_WRITEBACK_VECTOR_ENCODING
+#undef NEVERD_A64_WRITEBACK_MULTI_OUTPUT
+#undef NEVERD_A64_WRITEBACK_TEXT
+#undef NEVERD_A64_WRITEBACK_VALUE
+#undef NEVERD_A64_WRITEBACK_ENCODING
+#undef NEVERD_A64_WRITEBACK_OPERATION

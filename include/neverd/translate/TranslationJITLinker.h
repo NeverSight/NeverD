@@ -18,6 +18,7 @@
 #include "neverd/translate/RuntimeHelpers.h"
 #include "neverd/translate/RuntimeSymbolRegistry.h"
 #include "neverd/translate/TranslationObjectCompiler.h"
+#include "neverd/translate/X86/RuntimeX87GuestState.h"
 
 #include "llvm/Support/Error.h"
 
@@ -177,6 +178,12 @@ public:
   /// execution lease; once unload begins no new invocation is admitted.
   llvm::Expected<uint32_t> invoke(RuntimeGuestStateX86_64V1 &State,
                                   RuntimeCallFrameV1 &Runtime) const;
+
+  /// Explicit larger state ABI. Only a canonical object result bound to the
+  /// portable x87 profile may enter; the integer overload rejects this profile.
+  llvm::Expected<uint32_t>
+  invokePortableX87(RuntimeGuestStateX86_64X87V1 &State,
+                    RuntimeCallFrameV1 &Runtime) const;
 
   /// Synchronously revoke invocation and release executable memory.  This is
   /// idempotent.  A deallocation error still leaves the block revoked because

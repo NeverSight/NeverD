@@ -4,8 +4,9 @@
 The workbench side drives the real worker as the GUI does when it opens a
 file: open, the first page of the function list and of the listing, then the
 reference index (finished on demand, as an explicit cross-reference query
-does), then the first page of each sampled function's pseudocode, which F5
-decompiles on demand.  The IDA side runs IDA as a library (idalib) in its own
+does), then every page of each sampled function's C. The first-page latency
+is recorded separately. Optional warming finishes before the timed requests.
+The IDA side runs IDA as a library (idalib) in its own
 Python: it loads the file without analysis in one process, and in another
 opens it with auto-analysis, waits for it to finish, then decompiles the same
 functions with the decompiler and prints them as text.
@@ -81,9 +82,16 @@ def call(client, operation, payload, timeout):
     return response["payload"]
 
 
-def run_neverd(transport, worker, binary, functions, timeout):
+def run_neverd(transport, worker, binary, functions, timeout, *, warm=False):
+    with tempfile.TemporaryDirectory(prefix="neverd-compare-") as directory:
+        copied = Path(directory) / binary.name
+        shutil.copyfile(binary, copied)
+        return measure_neverd(transport, worker, copied, functions, timeout, warm=warm)
+
+
+def measure_neverd(transport, worker, binary, functions, timeout, *, warm=False):
     """Opens binary in a fresh worker as the GUI does, finishes its reference
-    index, then pages the pseudocode of each of functions; returns the
+    index, then reads the complete C of each of functions; returns the
     timings and the function entries."""
     started = time.perf_counter()
     client = transport.Client(str(worker))
@@ -96,7 +104,9 @@ def run_neverd(transport, worker, binary, functions, timeout):
         return value
 
     try:
-        timed("open_ms", "open", {"path": str(binary), "read_only": True})
+        opened = time.perf_counter()
+        timed("open_ms", "open", {"path": str(binary), "read_only": True,
+                                  "analysis": True, "warm": warm})
         page = timed("function_list_ms", "functions", {"limit": 512})
         items = page.get("items", [])
         first = items[0]["address"] if items else None
@@ -110,18 +120,57 @@ def run_neverd(transport, worker, binary, functions, timeout):
         if first:
             timed("references_ms", "xrefs", {"address": first, "direction": "to", "limit": 1})
         result["analysis_ms"] = result["browse_ms"] + result.get("references_ms", 0)
+        if warm:
+            deadline = time.monotonic() + timeout
+            while True:
+                beat = client.next(lambda message: message.get("type") == "heartbeat",
+                                   timeout=max(0, deadline - time.monotonic()))
+                state = (beat.get("background") or {}).get("warm") or {}
+                if state.get("state") in ("complete", "full", "unavailable", "off"):
+                    result["warm_state"] = state
+                    break
+            if state["state"] in ("unavailable", "off"):
+                raise RuntimeError(f"requested warming did not run: {state}")
+        result["ready_ms"] = (time.perf_counter() - opened) * 1e3
         result["functions"] = len(entries)
         result["entries"] = entries
-        timings, failures = [], []
+        known_entries = set(entries)
+        timings, failures, records, first_pages = [], [], [], []
         for entry in functions:
             started = time.perf_counter()
+            record = dict(entry=f"0x{entry:x}")
             try:
-                call(client, "decompile", {"address": f"0x{entry:x}", "representation": "c",
-                                           "limit": PAGE_LINES}, timeout)
-                timings.append((time.perf_counter() - started) * 1e3)
+                if entry not in known_entries:
+                    raise RuntimeError("not recognized as a function entry")
+                offset, seen, chunks = 0, set(), []
+                while offset is not None:
+                    if offset in seen:
+                        raise RuntimeError(f"repeated source-page offset {offset}")
+                    seen.add(offset)
+                    page = call(client, "decompile", {"address": record["entry"],
+                                                     "representation": "c", "offset": offset,
+                                                     "limit": PAGE_LINES}, timeout)
+                    if len(seen) == 1:
+                        record["first_page_ms"] = (time.perf_counter() - started) * 1e3
+                    chunks.append(page.get("text", ""))
+                    following = page.get("next_offset")
+                    if following is not None and (type(following) is not int or following <= offset):
+                        raise RuntimeError(f"invalid source-page offset {following!r}")
+                    offset = following
+                source = "".join(chunks).encode("utf-8")
+                elapsed = (time.perf_counter() - started) * 1e3
+                if not source:
+                    raise RuntimeError("empty C source")
+                record.update(ms=elapsed, bytes=len(source), pages=len(seen),
+                              sha256=hashlib.sha256(source).hexdigest())
+                timings.append(elapsed)
+                first_pages.append(record["first_page_ms"])
             except (RuntimeError, TimeoutError) as error:
-                failures.append(dict(entry=f"0x{entry:x}", error=str(error)[:200]))
-        result.update(decompile_ms=timings, decompile_failures=failures,
+                record["error"] = str(error)[:200]
+                failures.append(dict(entry=record["entry"], error=record["error"]))
+            records.append(record)
+        result.update(decompile_ms=timings, first_page_ms=first_pages,
+                      decompile_records=records, decompile_failures=failures,
                       peak_rss_bytes=peak_rss_bytes(client.process.pid))
     finally:
         try:
@@ -138,8 +187,10 @@ def ida_child(binary, functions_file, output):
     import idapro  # noqa: F401  (idalib must be imported first)
     import ida_auto
     import ida_hexrays
+    import ida_kernwin
     import idautils
-    result = dict(startup_ms=(time.perf_counter() - started) * 1e3)
+    result = dict(startup_ms=(time.perf_counter() - started) * 1e3,
+                  kernel_version=ida_kernwin.get_kernel_version())
     load_only = functions_file == "--load-only"
     started = time.perf_counter()
     if idapro.open_database(str(binary), not load_only) != 0:
@@ -151,23 +202,35 @@ def ida_child(binary, functions_file, output):
         return
     ida_auto.auto_wait()
     result["analysis_ms"] = (time.perf_counter() - started) * 1e3
+    result["ready_ms"] = result["analysis_ms"]
     entries = list(idautils.Functions())
     result["functions"] = len(entries)
     result["entries"] = entries
-    timings, failures = [], []
+    known_entries = set(entries)
+    timings, failures, records = [], [], []
     functions = json.loads(Path(functions_file).read_text())
     if functions and not ida_hexrays.init_hexrays_plugin():
         raise SystemExit("the decompiler is not available")
     for entry in functions:
         started = time.perf_counter()
+        record = dict(entry=f"0x{entry:x}")
         try:
-            text = str(ida_hexrays.decompile(entry))
-            timings.append((time.perf_counter() - started) * 1e3)
+            if entry not in known_entries:
+                raise RuntimeError("not recognized as an IDA function entry")
+            function = ida_hexrays.decompile(entry)
+            if function is None:
+                raise RuntimeError("decompile returned None")
+            text = str(function).encode("utf-8")
+            elapsed = (time.perf_counter() - started) * 1e3
             if not text:
-                failures.append(dict(entry=f"0x{entry:x}", error="empty"))
+                raise RuntimeError("empty C source")
+            record.update(ms=elapsed, bytes=len(text), sha256=hashlib.sha256(text).hexdigest())
+            timings.append(elapsed)
         except Exception as error:  # DecompilationFailure and friends.
-            failures.append(dict(entry=f"0x{entry:x}", error=str(error)[:200]))
-    result.update(decompile_ms=timings, decompile_failures=failures,
+            record["error"] = str(error)[:200]
+            failures.append(dict(entry=record["entry"], error=record["error"]))
+        records.append(record)
+    result.update(decompile_ms=timings, decompile_records=records, decompile_failures=failures,
                   peak_rss_bytes=peak_rss_bytes(os.getpid()))
     idapro.close_database(False)
     Path(output).write_text(json.dumps(result))
@@ -204,6 +267,7 @@ def summarize(samples, browse=None):
     rss = [sample["peak_rss_bytes"] for sample in samples if sample.get("peak_rss_bytes")]
     return dict(browse=percentiles([sample["browse_ms"] for sample in browse or samples]),
                 analysis=percentiles([sample["analysis_ms"] for sample in samples]),
+                ready=percentiles([sample["ready_ms"] for sample in samples]),
                 decompile=percentiles(decompile), functions=samples[0]["functions"],
                 decompile_failures=max(len(sample["decompile_failures"]) for sample in samples),
                 startup=percentiles([sample["startup_ms"] for sample in samples]),
@@ -214,12 +278,12 @@ def markdown(report):
     def ms(value):
         return "-" if value is None else (f"{value / 1e3:.2f} s" if value >= 1e4 else f"{value:.0f} ms")
 
-    lines = [f"Samples per binary: {report['samples']}; functions decompiled per sample: up to "
-             f"{report['decompile']}; machine: {report['machine']}.", "",
+    lines = [f"Samples per binary: {report['samples']}; selected function addresses are retained "
+             f"in JSON; machine: {report['machine']}.", "",
              "| Binary | Size | Functions (NeverD / IDA) | Browsable p50 (NeverD / IDA) "
-             "| Analysis complete p50 | F5 p50 (NeverD / IDA) | F5 p95 | F5 max | Failed F5 "
+             "| Analysis complete p50 | Ready p50 | F5 p50 (NeverD / IDA) | F5 p95 | F5 max | Failed F5 "
              "| Peak RSS (NeverD / IDA) |",
-             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for row in report["binaries"]:
         n, i = row["neverd"], row["ida"]
 
@@ -230,6 +294,7 @@ def markdown(report):
                          for side in (n, i))
         lines.append(f"| {row['name']} | {row['size'] / 2**20:.1f} MiB | {n['functions']} / "
                      f"{i['functions']} | {pair('browse', 'p50_ms')} | {pair('analysis', 'p50_ms')} | "
+                     f"{pair('ready', 'p50_ms')} | "
                      f"{pair('decompile', 'p50_ms')} | "
                      f"{pair('decompile', 'p95_ms')} | {pair('decompile', 'max_ms')} | "
                      f"{n['decompile_failures']} / {i['decompile_failures']} | {rss} |")
@@ -249,16 +314,27 @@ def main():
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--decompile", type=int, default=100,
                         help="functions to decompile per sample, chosen from those both sides found")
+    parser.add_argument("--entries-file", type=Path,
+                        help="one hexadecimal entry per line; requires exactly one binary")
+    parser.add_argument("--warm", action="store_true",
+                        help="finish the worker's background warming before decompiling")
     parser.add_argument("--seed", type=int, default=3389)
     parser.add_argument("--timeout", type=float, default=3600, help="seconds per step")
     parser.add_argument("--output", type=Path, required=True, help="the JSON report")
     parser.add_argument("--markdown", type=Path, help="also write a Markdown summary")
     parser.add_argument("binaries", type=Path, nargs="+")
     args = parser.parse_args()
+    if args.samples < 1 or args.decompile < 0 or args.timeout <= 0:
+        parser.error("--samples and --timeout must be positive and --decompile nonnegative")
+    if args.entries_file and len(args.binaries) != 1:
+        parser.error("--entries-file requires exactly one binary")
     transport = load_transport()
-    report = dict(schema=1, kind="engine-work-vs-ida", platform=platform.platform(),
+    report = dict(schema=2, kind="engine-work-vs-ida", platform=platform.platform(),
                   machine=platform.machine(), cpus=os.cpu_count(), samples=args.samples,
                   decompile=args.decompile, seed=args.seed, page_lines=PAGE_LINES,
+                  warm=args.warm,
+                  entries_file_sha256=(hashlib.sha256(args.entries_file.read_bytes()).hexdigest()
+                                       if args.entries_file else None),
                   worker_sha256=hashlib.sha256(args.worker.read_bytes()).hexdigest(),
                   engine_sha256=(hashlib.sha256(args.engine.read_bytes()).hexdigest()
                                  if args.engine else None),
@@ -269,8 +345,9 @@ def main():
                            "the listing while auto-analysis runs).",
                            "Analysis complete: the workbench adds the whole function list "
                            "and its reference index; IDA's load with auto-analysis.",
-                           "The workbench's F5 is a worker round trip for the first "
-                           f"{PAGE_LINES} lines; IDA's is decompile() and the full text.",
+                           "F5 reads complete C on both sides. Worker records also retain "
+                           "the first-page latency, output size and SHA-256.",
+                           "Warming, when requested, is included in ready_ms, outside F5.",
                            "IDA's figures include idalib's Python bindings."],
                   binaries=[])
     with tempfile.TemporaryDirectory(prefix="ida-compare-") as scratch:
@@ -280,17 +357,22 @@ def main():
             neverd = run_neverd(transport, args.worker, binary, [], args.timeout)
             ida = run_ida(args.ida_python, binary, [], scratch, args.timeout)
             common = sorted(set(neverd["entries"]) & set(ida["entries"]))
-            chosen = sorted(random.Random(args.seed).sample(common, min(args.decompile, len(common))))
+            chosen = (list(dict.fromkeys(int(value, 16) for value in
+                                        args.entries_file.read_text().split()))
+                      if args.entries_file else
+                      sorted(random.Random(args.seed).sample(common, min(args.decompile, len(common)))))
             row = dict(name=binary.name, size=binary.stat().st_size,
                        sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                        common_functions=len(common), decompiled=[f"0x{entry:x}" for entry in chosen],
+                       missing_neverd=[f"0x{entry:x}" for entry in chosen if entry not in neverd["entries"]],
+                       missing_ida=[f"0x{entry:x}" for entry in chosen if entry not in ida["entries"]],
                        samples=dict(neverd=[], ida=[], ida_load=[]))
             for index in range(args.samples):
                 print(f"{binary.name}: sample {index + 1}/{args.samples}", file=sys.stderr)
-                for side, result in (("neverd", run_neverd(transport, args.worker, binary, chosen,
-                                                           args.timeout)),
-                                     ("ida", run_ida(args.ida_python, binary, chosen, scratch,
-                                                     args.timeout))):
+                for side in (("neverd", "ida") if index % 2 == 0 else ("ida", "neverd")):
+                    result = (run_neverd(transport, args.worker, binary, chosen, args.timeout,
+                                         warm=args.warm) if side == "neverd" else
+                              run_ida(args.ida_python, binary, chosen, scratch, args.timeout))
                     result.pop("entries", None)
                     row["samples"][side].append(result)
                 row["samples"]["ida_load"].append(run_ida(args.ida_python, binary, [], scratch,

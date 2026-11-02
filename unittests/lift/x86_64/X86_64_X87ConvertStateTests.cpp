@@ -9,10 +9,13 @@
 
 #include "X86FPStateAccuracyFixture.h"
 
-#include "neverd/ir/X87Context.h"
-#include "neverd/ir/high/X87ContextShape.h"
+#include "neverd/ir/X86/X87BCD.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/high/X86/X87ContextShape.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+
+#include <bit>
 
 namespace {
 LowOp contextStep(uint32_t Selector, uint64_t Address = 0) {
@@ -82,19 +85,19 @@ TEST(X87ContextContract, LowMedHighRefuseForgedHandlesAndTruncatedSelectors) {
     EXPECT_EQ(x87ContextLowShapeIsValid(Op, Arch::X64), Mutation == 0);
     MedOp Med;
     Med.Opcode = Op.Opcode;
-    Med.NumInputs = Op.NumInputs;
     Med.Output.Size = Op.Output.Size;
     Med.MemoryOrdering = Op.MemoryOrdering;
     Med.MemoryAddressSpace = Op.MemoryAddressSpace;
     for (unsigned I = 0; I < Op.NumInputs; ++I) {
+      MedVar Input;
       if (Op.Inputs[I].isConst())
-        Med.Inputs[I] =
-            MedVar::makeConst(Op.Inputs[I].Offset, Op.Inputs[I].Size);
+        Input = MedVar::makeConst(Op.Inputs[I].Offset, Op.Inputs[I].Size);
       else {
-        Med.Inputs[I].Kind = MedVar::Temp;
-        Med.Inputs[I].Id = I;
-        Med.Inputs[I].Size = Op.Inputs[I].Size;
+        Input.Kind = MedVar::Temp;
+        Input.Id = I;
+        Input.Size = Op.Inputs[I].Size;
       }
+      Med.addInput(Input);
     }
     EXPECT_EQ(x87ContextMedShapeIsValid(Med, Arch::X64), Mutation == 0);
     if (Mutation !=
@@ -279,6 +282,122 @@ TEST(X87ContextConcrete, PendingExceptionsAndMalformedShapesRefuseAtomically) {
     }
 }
 
+TEST(X87ContextConcrete, InvalidPackedBCDDigitsCannotBecomeExactNativeResults) {
+  // FBLD does not check the digits in hardware; A..F produce an undefined
+  // numerical result. No current execution profile qualifies those inputs.
+  const uint32_t Fbld = 0xdf | (0x20U << 8) | X87ContextMemory |
+                        (0x20U << X87ContextOriginalModRMShift);
+  for (unsigned Digit = 0; Digit < 18; ++Digit)
+    for (unsigned Value = 10; Value < 16; ++Value)
+      for (bool Strict : {false, true})
+        for (bool Reference : {false, true}) {
+          SCOPED_TRACE(Digit);
+          SCOPED_TRACE(Value);
+          SCOPED_TRACE(Strict);
+          SCOPED_TRACE(Reference);
+          BinaryImage Img;
+          Img.Arch = Arch::X64;
+          Segment Data;
+          Data.VA = 0x2000;
+          Data.Size = Data.FileSz = 10;
+          Data.Flags = SegmentFlags::Readable;
+          Data.Data.assign(10, 0);
+          Data.Data[Digit / 2] = Value << ((Digit & 1) * 4);
+          Img.Segments.push_back(Data);
+          NdOpEmulator E(Img);
+          E.setStrictMode(Strict);
+          E.setX87NativeReferenceMode(Reference);
+          E.setLoadCollect(true);
+          ASSERT_TRUE(E.setX86LinearAddressBits(48));
+          std::array<uint8_t, 512> State{};
+          State[0] = 0x7f;
+          State[1] = 3;
+          ASSERT_TRUE(E.setX87Context(State));
+          EXPECT_FALSE(E.step(contextStep(Fbld, Data.VA)));
+          EXPECT_EQ(E.getX87Context(), State);
+          EXPECT_FALSE(E.skips().any());
+          EXPECT_TRUE(E.getLoadRecords().empty());
+        }
+}
+
+TEST(X87BCDContract, OnlyTheEighteenDecimalDigitsConstrainAdmission) {
+  std::array<uint8_t, 11> Bytes{};
+  for (unsigned Sign = 0; Sign != 256; ++Sign) {
+    Bytes[9] = Sign;
+    EXPECT_TRUE(x87PackedBCDIsValid({Bytes.data(), 10}));
+  }
+  EXPECT_FALSE(x87PackedBCDIsValid(Bytes));
+  EXPECT_FALSE(x87PackedBCDIsValid({Bytes.data(), 9}));
+  EXPECT_FALSE(x87PackedBCDIsValid({}));
+}
+
+TEST(X87ContextConcrete, PackedBCDLoadPreservesAllDigitsAndSignedZero) {
+#if (defined(__x86_64__) || defined(_M_X64)) &&                                \
+    (defined(__clang__) || defined(__GNUC__))
+  const uint32_t Fbld = 0xdf | (0x20U << 8) | X87ContextMemory |
+                        (0x20U << X87ContextOriginalModRMShift);
+  for (uint64_t Magnitude :
+       {UINT64_C(0), UINT64_C(1), UINT64_C(9), UINT64_C(10),
+        UINT64_C(123456789012345678), UINT64_C(999999999999999999)})
+    for (unsigned Sign : {0U, 0x7fU, 0x80U, 0xffU})
+      for (unsigned PC : {0U, 2U, 3U})
+        for (unsigned RC = 0; RC != 4; ++RC)
+          for (unsigned Top = 0; Top != 8; ++Top) {
+            SCOPED_TRACE(Magnitude);
+            SCOPED_TRACE(Sign);
+            SCOPED_TRACE(Top);
+            SCOPED_TRACE(PC * 4 + RC);
+            BinaryImage Img;
+            Img.Arch = Arch::X64;
+            Segment Data;
+            Data.VA = 0x2000;
+            Data.Size = Data.FileSz = 10;
+            Data.Flags = SegmentFlags::Readable;
+            Data.Data.assign(10, 0);
+            auto Digits = Magnitude;
+            for (unsigned I = 0; I != 9; ++I) {
+              Data.Data[I] = Digits % 10;
+              Digits /= 10;
+              Data.Data[I] |= (Digits % 10) << 4;
+              Digits /= 10;
+            }
+            Data.Data[9] = Sign;
+            Img.Segments.push_back(Data);
+            NdOpEmulator E(Img);
+            E.setStrictMode(true);
+            ASSERT_TRUE(E.setX86LinearAddressBits(48));
+            std::array<uint8_t, 512> State{};
+            State[0] = 0x7f;
+            State[1] = PC | (RC << 2);
+            State[3] = Top << 3;
+            ASSERT_TRUE(E.setX87Context(State));
+            ASSERT_TRUE(E.step(contextStep(Fbld, Data.VA)));
+            const unsigned Destination = (Top + 7) & 7;
+            uint64_t Significand = 0;
+            uint16_t Exponent = (Sign & 0x80) << 8;
+            if (Magnitude) {
+              const unsigned Shift = std::countl_zero(Magnitude);
+              Significand = Magnitude << Shift;
+              Exponent |= 0x3fff + 63 - Shift;
+            }
+            std::vector<uint8_t> Expected(10);
+            std::memcpy(Expected.data(), &Significand, 8);
+            std::memcpy(Expected.data() + 8, &Exponent, 2);
+            EXPECT_EQ(E.getRegisterBytes(x86reg::stReg(Destination)), Expected);
+            const auto Actual = E.getX87Context();
+            ASSERT_TRUE(Actual);
+            EXPECT_EQ((*Actual)[4], 1U << Destination);
+            EXPECT_EQ(((*Actual)[3] >> 3) & 7, Destination);
+            EXPECT_EQ((*Actual)[0], State[0]);
+            EXPECT_EQ((*Actual)[1], State[1]);
+            EXPECT_FALSE((*Actual)[2] & 0x3f);
+            EXPECT_FALSE(E.skips().any());
+          }
+#else
+  GTEST_SKIP() << "native x64 GCC/Clang context executor required";
+#endif
+}
+
 #if (defined(__x86_64__) || defined(_M_X64)) &&                                \
     (defined(__clang__) || defined(__GNUC__))
 std::array<uint8_t, 512> nativeFistp(std::array<uint8_t, 512> State,
@@ -374,6 +493,7 @@ protected:
   bool ObserveEnvironment = false;
   bool ObserveEntryLoop = false;
   bool ObserveEntryState = false;
+  bool ObserveBCDSource = false;
   unsigned RestoredEnvironmentBytes = 0;
   std::string comparisonDriver(bool, bool DeclareProbe, bool,
                                bool = false) override {
@@ -387,6 +507,8 @@ protected:
                              : "#define OBSERVE_ENTRY_LOOP 0\n";
     Text += ObserveEntryState ? "#define OBSERVE_ENTRY_STATE 1\n"
                               : "#define OBSERVE_ENTRY_STATE 0\n";
+    Text += ObserveBCDSource ? "#define OBSERVE_BCD_SOURCE 1\n"
+                             : "#define OBSERVE_BCD_SOURCE 0\n";
     Text += "#define RESTORED_ENVIRONMENT_BYTES " +
             std::to_string(RestoredEnvironmentBytes) + "\n";
     Text += R"(
@@ -467,6 +589,16 @@ int main(void) {
             memcpy(expected + 2, &saved, 2);
             memcpy(expected + 8, &values[v].sig, 8);
             memcpy(expected + 16, &values[v].exp, 2);
+            if (OBSERVE_BCD_SOURCE) {
+              const uint64_t magnitudes[] = {0, 1, 9, 10,
+                UINT64_C(123456789012345678), UINT64_C(999999999999999999)};
+              uint64_t digits = magnitudes[(v / 2) % 6];
+              for (unsigned i = 0; i < 9; ++i) {
+                expected[8+i] = digits % 10; digits /= 10;
+                expected[8+i] |= (digits % 10) << 4; digits /= 10;
+              }
+              expected[17] = 0x7f | ((v & 1) << 7);
+            }
             if (OBSERVE_FLAGS)
               expected[24] = 2 | (flags & 1) | ((flags & 2) << 1) |
                              ((flags & 4) << 4) | (flags & 1 ? 0x90 : 0);
@@ -548,6 +680,7 @@ int main(void) {
     ObserveEnvironment = Kind == 17;
     ObserveEntryLoop = Kind == 19;
     ObserveEntryState = Kind >= 33 && Kind <= 35;
+    ObserveBCDSource = Kind == 37 || Kind == 39;
     RestoredEnvironmentBytes = Kind == 28   ? 28
                                : Kind == 29 ? 14
                                : Kind == 30 ? 108
@@ -571,7 +704,31 @@ int main(void) {
       Opcode = Width == 4 ? 0xd9 : 0xdd;
       ModRM = Kind == 3 ? 0x50 : 0x58;
     }
-    if (ObserveEntryState) {
+    if (Kind == 36 || Kind == 38) {
+      if (Kind == 38)
+        Bytes.insert(Bytes.end(), {0xdd, 0xc0});                   // FFREE ST0
+      Bytes.insert(Bytes.end(), {0xdf, uint8_t(0x70 | Base), 32}); // FBSTP
+    } else if (ObserveBCDSource) {
+      Bytes = {0xdb, 0xe3, 0xd9, uint8_t(0x28 | Base)}; // reset; control
+      if (Kind == 39)
+        for (unsigned I = 0; I != 8; ++I)
+          Bytes.insert(Bytes.end(), {0xd9, 0xe8}); // fill all eight tags
+      Bytes.insert(Bytes.end(), {0xdf, uint8_t(0x60 | Base), 8}); // FBLD
+    } else if (Kind == 40) {
+      Bytes.insert(Bytes.end(), {0xd9, 0xe8, 0xdf, 0xc1}); // FFREEP ST1
+    } else if (Kind == 41) {
+      Bytes.insert(Bytes.end(), {0xd9, 0xf6}); // FDECSTP
+    } else if (Kind >= 42 && Kind <= 53) {
+      // These compare the same physical CPU, including its selected
+      // transcendental/reduction behavior. They do not establish portable
+      // exactness or cross-CPU identity for implementation-dependent results.
+      static constexpr uint8_t Operations[] = {0xfe, 0xff, 0xfb, 0xf2,
+                                               0xf3, 0xf0, 0xf1, 0xf9,
+                                               0xfd, 0xf4, 0xf8, 0xf5};
+      if (Kind == 46 || (Kind >= 48 && Kind <= 50) || Kind >= 52)
+        Bytes.insert(Bytes.end(), {0xd9, 0xe8, 0xd9, 0xc9}); // st1=1
+      Bytes.insert(Bytes.end(), {0xd9, Operations[Kind - 42]});
+    } else if (ObserveEntryState) {
       const uint8_t Operation = Kind == 33 ? 0xe0 : Kind == 34 ? 0xe1 : 0xe5;
       Bytes = {0xd9, Operation};
     } else if (Kind == 32) {
@@ -1031,5 +1188,60 @@ TEST_F(X87ConvertFixture, EntryFabsCapturesEmptyAndFullIncomingSlots) {
 }
 TEST_F(X87ConvertFixture, EntryFxamCapturesEmptyAndFullIncomingSlots) {
   check(35, 8, true);
+}
+TEST_F(X87ConvertFixture, FbstpPreservesRoundingMemoryAndUnmaskedNoPop) {
+  check(36, 10, true);
+}
+TEST_F(X87ConvertFixture, FbldPreservesAllDigitsSignAndControl) {
+  check(37, 10, true);
+}
+TEST_F(X87ConvertFixture, FbstpEmptyStackPreservesMaskedAndUnmaskedFaults) {
+  check(38, 10, true);
+}
+TEST_F(X87ConvertFixture, FbldFullStackPreservesMaskedAndUnmaskedFaults) {
+  check(39, 10, true);
+}
+TEST_F(X87ConvertFixture,
+       FfreepEmptiesBothTagsWithoutChangingRetainedPayloads) {
+  check(40, 10, true);
+}
+TEST_F(X87ConvertFixture, FdecstpRotatesWithoutChangingTagsOrPayloads) {
+  check(41, 10, true);
+}
+TEST_F(X87ConvertFixture, FsinRetainsSelectedHostResultAndState) {
+  check(42, 10, true);
+}
+TEST_F(X87ConvertFixture, FcosRetainsSelectedHostResultAndState) {
+  check(43, 10, true);
+}
+TEST_F(X87ConvertFixture, FsincosRetainsSelectedHostResultsAndConditionalPush) {
+  check(44, 10, true);
+}
+TEST_F(X87ConvertFixture, FptanRetainsSelectedHostResultAndConditionalPush) {
+  check(45, 10, true);
+}
+TEST_F(X87ConvertFixture, FpatanRetainsSelectedHostResultAndPop) {
+  check(46, 10, true);
+}
+TEST_F(X87ConvertFixture, F2xm1RetainsSelectedHostResultAndState) {
+  check(47, 10, true);
+}
+TEST_F(X87ConvertFixture, Fyl2xRetainsSelectedHostResultAndPop) {
+  check(48, 10, true);
+}
+TEST_F(X87ConvertFixture, Fyl2xp1RetainsSelectedHostResultAndPop) {
+  check(49, 10, true);
+}
+TEST_F(X87ConvertFixture, FscaleRetainsSelectedHostResultAndState) {
+  check(50, 10, true);
+}
+TEST_F(X87ConvertFixture, FxtractRetainsSelectedHostResultsAndPush) {
+  check(51, 10, true);
+}
+TEST_F(X87ConvertFixture, FpremRetainsSelectedHostReductionAndConditionBits) {
+  check(52, 10, true);
+}
+TEST_F(X87ConvertFixture, Fprem1RetainsSelectedHostReductionAndConditionBits) {
+  check(53, 10, true);
 }
 } // namespace

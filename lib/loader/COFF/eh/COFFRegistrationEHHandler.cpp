@@ -14,6 +14,7 @@
 #include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -117,12 +118,7 @@ getSEH3Personality(const BinaryImage &Img, va_t HandlerVA, bool Immutable) {
     const auto *Import = Img.findImportAt(Slot);
     if (!Import || Import->Name != "_except_handler3" ||
         !Img.readVA(Import->IATAddr, 4) ||
-        !(llvm::StringRef(Import->Module).equals_insensitive("msvcrt.dll") ||
-          llvm::StringRef(Import->Module).equals_insensitive("ucrtbase.dll") ||
-          llvm::StringRef(Import->Module)
-              .equals_insensitive("vcruntime140.dll") ||
-          llvm::StringRef(Import->Module)
-              .equals_insensitive("vcruntime140d.dll")))
+        !isX86SEHHandlerProvider(Import->Module))
       return std::nullopt;
     if (Immutable) {
       if (Import->IATAddr != Slot || !isFileBackedPEImportSlot(Img, Slot) ||

@@ -11,6 +11,8 @@ static const U64 UserLimit = 0x0001000000000000UL;
 enum {
   FaccessAt = 48,
   MkdirAt = 34,
+  UnlinkAt = 35,
+  RenameAt = 38,
   OpenAt = 56,
   ReadlinkAt = 78,
   Read = 63,
@@ -35,6 +37,8 @@ static const U64 UserLimit = 0x0000800000000000UL;
 enum {
   FaccessAt = 269,
   MkdirAt = 258,
+  UnlinkAt = 263,
+  RenameAt = 264,
   OpenAt = 257,
   ReadlinkAt = 267,
   Read = 0,
@@ -87,6 +91,46 @@ static const unsigned char Expected[] = {0, 0xff, 0x41, 0x0a, 0x80, 0x5a};
     if ((U64)(A) != (U64)(B))                                                  \
       return __LINE__;                                                         \
   } while (0)
+
+U64 files_unlink_errors(void) {
+  CHECK(raw(UnlinkAt, (U64)-1, (U64) "/absent", 0, 0), (U64)-2);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64) "//absent///", 0, 0), (U64)-2);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64) "", 0, 0), (U64)-2);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64) "/fixture/data/child", 0, 0), (U64)-20);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64) "/fixture/data/", 0, 0), (U64)-20);
+  CHECK(raw(UnlinkAt, (U64)-1, 0, 0, 0), (U64)-14);
+  CHECK(raw(UnlinkAt, (U64)-1, UserLimit, 0, 0), (U64)-14);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64) "/absent", 0xabcdef0000000000UL, 0),
+        (U64)-2);
+#if defined(__x86_64__)
+  CHECK(raw(87, (U64) "/absent", 0, 0, 0), (U64)-2);
+  CHECK(raw(87, (U64) "/fixture/data/child", 0, 0, 0), (U64)-20);
+#endif
+  Pages[4095] = 0;
+  CHECK(raw(Protect, (U64)Pages + 4096, 4096, 0, 0), 0);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64)Pages + 4095, 0, 0), (U64)-2);
+  CHECK(raw(UnlinkAt, (U64)-1, (U64)Pages + 4096, 0, 0), (U64)-14);
+  CHECK(raw(Protect, (U64)Pages + 4096, 4096, 3, 0), 0);
+  for (unsigned i = 0; i != 4096; ++i)
+    Pages[i] = 'x';
+  CHECK(raw(UnlinkAt, (U64)-1, (U64)Pages, 0, 0), (U64)-36);
+  U64 fd = raw(OpenAt, (U64)-100, (U64)Path, 0, 0);
+  CHECK(fd, 3);
+  CHECK(raw(Read, fd, (U64)Pages, sizeof(Expected), 0), sizeof(Expected));
+  for (unsigned i = 0; i != sizeof(Expected); ++i)
+    CHECK(Pages[i], Expected[i]);
+  CHECK(raw(Close, fd, 0, 0, 0), 0);
+  return 0;
+}
+U64 files_unlink_pending(U64 mode) {
+  const char *name = mode == 0   ? Path
+                     : mode == 1 ? "/fixture"
+                     : mode == 2 ? "fixture/absent"
+                     : mode == 3 ? "/absent"
+                     : mode == 4 ? "/links/raw"
+                                 : "/fixture/../absent";
+  return raw(UnlinkAt, (U64)-1, (U64)name, mode == 3 ? 512 : 0, 0);
+}
 
 U64 files_sequence(void) {
   U64 F = raw(OpenAt, 0x77889900ffffffffUL, (U64)Path,
@@ -530,6 +574,286 @@ _Static_assert(sizeof(struct FileStatus) == 144, "x64 stat ABI");
 _Static_assert(__builtin_offsetof(struct FileStatus, BlockSize) == 56,
                "stat block-size offset");
 
+static const char RenamedPath[] = "/fixture/moved";
+static U64 rename_prepare(struct FileStatus *Before) {
+  U64 fd = raw(OpenAt, -1UL, (U64)Path, 2, 0);
+  CHECK(fd, 3);
+  CHECK(raw(Read, fd, (U64)Pages, 1, 0), 1);
+  CHECK(Pages[0], Expected[0]);
+  CHECK(raw(Fstat, fd, (U64)Before, 0, 0), 0);
+  return fd;
+}
+static U64 rename_verify(U64 fd, struct FileStatus *Before) {
+  struct FileStatus After;
+  Before->Change.Seconds = 100;
+  Before->Change.Nanoseconds = 123;
+  CHECK(raw(Fstat, fd, (U64)&After, 0, 0), 0);
+  for (unsigned i = 0; i < sizeof(After); ++i)
+    CHECK(((unsigned char *)&After)[i], ((unsigned char *)Before)[i]);
+  CHECK(raw(FstatAt, -1UL, (U64)RenamedPath, (U64)&After, 0), 0);
+  for (unsigned i = 0; i < sizeof(After); ++i)
+    CHECK(((unsigned char *)&After)[i], ((unsigned char *)Before)[i]);
+  CHECK(raw(FaccessAt, -1UL, (U64)Path, 0, 0), (U64)-2);
+  CHECK(raw(FaccessAt, -1UL, (U64)RenamedPath, 0, 0), 0);
+  CHECK(raw(Read, fd, (U64)Pages, 2, 0), 2);
+  CHECK(Pages[0], Expected[1]);
+  CHECK(Pages[1], Expected[2]);
+  U64 second = raw(OpenAt, -1UL, (U64)RenamedPath, 2, 0);
+  CHECK(second, 4);
+  Pages[0] = 0x7e;
+  CHECK(raw(Write, second, (U64)Pages, 1, 0), 1);
+  CHECK(raw(Close, second, 0, 0, 0), 0);
+  CHECK(raw(Seek, fd, 0, 0, 0), 0);
+  CHECK(raw(Read, fd, (U64)Pages, sizeof(Expected), 0), sizeof(Expected));
+  CHECK(Pages[0], 0x7e);
+  for (unsigned i = 1; i < sizeof(Expected); ++i)
+    CHECK(Pages[i], Expected[i]);
+  CHECK(raw(ReadlinkAt, -1UL, (U64) "/proc/self/fd/3", (U64)Pages, 64),
+        sizeof(RenamedPath) - 1);
+  for (unsigned i = 0; i < sizeof(RenamedPath) - 1; ++i)
+    CHECK(Pages[i], RenamedPath[i]);
+  return 0;
+}
+U64 files_rename_raw(void) {
+  struct FileStatus Before;
+  U64 fd = rename_prepare(&Before);
+  CHECK(fd, 3);
+  CHECK(raw(RenameAt, -1UL, (U64)Path, -1UL, (U64)RenamedPath), 0);
+  CHECK(rename_verify(fd, &Before), 0);
+#if defined(__x86_64__)
+  CHECK(raw(82, (U64)RenamedPath, (U64)Path, 0, 0), 0);
+#else
+  CHECK(raw(RenameAt, -1UL, (U64)RenamedPath, -1UL, (U64)Path), 0);
+#endif
+  CHECK(raw(FaccessAt, -1UL, (U64)Path, 0, 0), 0);
+  CHECK(raw(FaccessAt, -1UL, (U64)RenamedPath, 0, 0), (U64)-2);
+  CHECK(raw(Close, fd, 0, 0, 0), 0);
+  return 0;
+}
+U64 files_rename_reuse(U64 *out) {
+  struct FileStatus Before, Directory, File;
+  U64 fd = rename_prepare(&Before);
+  CHECK(fd, 3);
+  CHECK(raw(RenameAt, -1UL, (U64)Path, -1UL, (U64)RenamedPath), 0);
+  CHECK(raw(MkdirAt, -1UL, (U64)Path, 0755, 0), 0);
+  CHECK(raw(FstatAt, -1UL, (U64)Path, (U64)&Directory, 0), 0);
+  if (out) {
+    out[0] = Directory.Inode;
+    out[1] = Before.Inode;
+  }
+  CHECK(Directory.Inode != Before.Inode, 1);
+  CHECK(Directory.Mode & 0170000, 0040000);
+  CHECK(raw(Fstat, fd, (U64)&File, 0, 0), 0);
+  CHECK(File.Inode, Before.Inode);
+  CHECK(File.Mode & 0170000, 0100000);
+  CHECK(raw(FstatAt, -1UL, (U64)RenamedPath, (U64)&File, 0), 0);
+  CHECK(File.Inode, Before.Inode);
+  CHECK(raw(Read, fd, (U64)Pages, 1, 0), 1);
+  CHECK(Pages[0], Expected[1]);
+  CHECK(raw(ReadlinkAt, -1UL, (U64) "/proc/self/fd/3", (U64)Pages, 64),
+        sizeof(RenamedPath) - 1);
+  for (unsigned i = 0; i < sizeof(RenamedPath) - 1; ++i)
+    CHECK(Pages[i], RenamedPath[i]);
+  CHECK(raw(Close, fd, 0, 0, 0), 0);
+  return 0;
+}
+U64 files_rename_fdinfo(unsigned char *out) {
+  struct FileStatus Before, File, Directory;
+  U64 fd = rename_prepare(&Before);
+  CHECK(fd, 3);
+  U64 info = raw(OpenAt, -1UL, (U64) "/proc/self/fdinfo/3", 0, 0);
+  CHECK(info, 4);
+  unsigned char *observed = out ? out : Pages;
+  for (unsigned phase = 0; phase != 3; ++phase) {
+    if (phase == 1)
+      CHECK(raw(RenameAt, -1UL, (U64)Path, -1UL, (U64)RenamedPath), 0);
+    if (phase == 2)
+      CHECK(raw(MkdirAt, -1UL, (U64)Path, 0755, 0), 0);
+    CHECK(raw(Seek, info, 0, 0, 0), 0);
+    U64 count = raw(Read, info, (U64)(observed + phase * 256 + 16), 128, 0);
+    CHECK(count <= 128, 1);
+    *(U64 *)(observed + phase * 256) = count;
+  }
+  CHECK(raw(Fstat, fd, (U64)&File, 0, 0), 0);
+  CHECK(raw(FstatAt, -1UL, (U64)Path, (U64)&Directory, 0), 0);
+  *(U64 *)(observed + 768) = File.Inode;
+  *(U64 *)(observed + 776) = Directory.Inode;
+#if defined(__aarch64__)
+  static const char expected[] =
+      "pos:\t1\nflags:\t0400002\nmnt_id:\t1\nino:\t42\n";
+#else
+  static const char expected[] =
+      "pos:\t1\nflags:\t0100002\nmnt_id:\t1\nino:\t42\n";
+#endif
+  for (unsigned phase = 0; phase != 3; ++phase) {
+    CHECK(*(U64 *)(observed + phase * 256), sizeof(expected) - 1);
+    for (unsigned i = 0; i != sizeof(expected) - 1; ++i)
+      CHECK(observed[phase * 256 + 16 + i], expected[i]);
+  }
+  CHECK(File.Inode, 42);
+  CHECK(Directory.Inode != File.Inode, 1);
+  CHECK(raw(Read, fd, (U64)Pages + 1024, 1, 0), 1);
+  CHECK(Pages[1024], Expected[1]);
+  CHECK(raw(Close, info, 0, 0, 0), 0);
+  CHECK(raw(Close, fd, 0, 0, 0), 0);
+  return 0;
+}
+U64 files_rename_pending(U64 mode) {
+  const char *source = mode == 0   ? "/fixture/absent"
+                       : mode == 1 ? "fixture/data"
+                                   : Path;
+  const char *target = mode == 2   ? Path
+                       : mode == 3 ? "/other/moved"
+                       : mode == 4 ? "/fixture/moved/"
+                                   : RenamedPath;
+  return raw(RenameAt, -1UL, (U64)source, -1UL, mode == 5 ? 0 : (U64)target);
+}
+
+static U64 creation_prepare(struct FileStatus *Before) {
+  U64 fd = rename_prepare(Before);
+  CHECK(fd, 3);
+  CHECK(raw(RenameAt, -1UL, (U64)Path, -1UL, (U64)RenamedPath), 0);
+  Before->Change.Seconds = 100;
+  Before->Change.Nanoseconds = 123;
+  return fd;
+}
+
+static U64 creation_verify(U64 old, U64 created,
+                           const struct FileStatus *Before) {
+  struct FileStatus Original, New, ByName, Parent;
+  CHECK(created, 4);
+  CHECK(raw(Fstat, old, (U64)&Original, 0, 0), 0);
+  for (unsigned i = 0; i != sizeof(Original); ++i)
+    CHECK(((unsigned char *)&Original)[i], ((const unsigned char *)Before)[i]);
+  CHECK(raw(Fstat, created, (U64)&New, 0, 0), 0);
+  CHECK(New.Inode != 0 && New.Inode != Original.Inode && New.Inode != 91, 1);
+  CHECK(New.Device, 7);
+  CHECK(New.Mode, 0100644);
+  CHECK(New.Links, 1);
+  CHECK(New.UID, 1000);
+  CHECK(New.GID, 1000);
+  CHECK(New.Size, 0);
+  CHECK(New.BlockSize, 4096);
+  CHECK(New.Blocks, 0);
+  CHECK(New.Access.Seconds, 100);
+  CHECK(New.Access.Nanoseconds, 123);
+  CHECK(New.Modification.Seconds, 100);
+  CHECK(New.Modification.Nanoseconds, 123);
+  CHECK(New.Change.Seconds, 100);
+  CHECK(New.Change.Nanoseconds, 123);
+  CHECK(raw(FstatAt, -1UL, (U64)Path, (U64)&ByName, 0), 0);
+  for (unsigned i = 0; i != sizeof(New); ++i)
+    CHECK(((unsigned char *)&New)[i], ((unsigned char *)&ByName)[i]);
+  CHECK(raw(FstatAt, -1UL, (U64) "/fixture", (U64)&Parent, 0), 0);
+  CHECK(Parent.Size, 80);
+  CHECK(Parent.Links, 2);
+  CHECK(Parent.Modification.Seconds, 100);
+  CHECK(Parent.Modification.Nanoseconds, 123);
+  CHECK(raw(Write, created, (U64) "new", 3, 0), 3);
+  CHECK(raw(Seek, created, 0, 0, 0), 0);
+  CHECK(raw(Read, created, (U64)Pages, 3, 0), 3);
+  CHECK(Pages[0], 'n');
+  CHECK(Pages[1], 'e');
+  CHECK(Pages[2], 'w');
+  CHECK(raw(Read, old, (U64)Pages, 1, 0), 1);
+  CHECK(Pages[0], Expected[1]);
+  CHECK(raw(ReadlinkAt, -1UL, (U64) "/proc/self/fd/4", (U64)Pages, 128),
+        sizeof(Path) - 1);
+  for (unsigned i = 0; i != sizeof(Path) - 1; ++i)
+    CHECK(Pages[i], Path[i]);
+  CHECK(raw(Close, created, 0, 0, 0), 0);
+  // The old descriptor has the same initial pathname but a different object.
+  CHECK(raw(UnlinkAt, -1UL, (U64)Path, 0, 0), 0);
+  CHECK(raw(FaccessAt, -1UL, (U64)Path, 0, 0), (U64)-2);
+  CHECK(raw(FstatAt, -1UL, (U64)RenamedPath, (U64)&Original, 0), 0);
+  for (unsigned i = 0; i != sizeof(Original); ++i)
+    CHECK(((unsigned char *)&Original)[i], ((const unsigned char *)Before)[i]);
+  CHECK(raw(Seek, old, 0, 0, 0), 0);
+  CHECK(raw(Read, old, (U64)Pages, sizeof(Expected), 0), sizeof(Expected));
+  for (unsigned i = 0; i != sizeof(Expected); ++i)
+    CHECK(Pages[i], Expected[i]);
+  CHECK(raw(Close, old, 0, 0, 0), 0);
+  return 0;
+}
+
+U64 files_creation_raw(void) {
+  struct FileStatus Before;
+  U64 old = creation_prepare(&Before);
+  CHECK(old, 3);
+  U64 created =
+      raw(OpenAt, -1UL, (U64)Path, 0x1234567800000000UL | 0100 | 01000 | 2,
+          0xabcdef0000000000UL | 0666);
+  return creation_verify(old, created, &Before);
+}
+
+static U64 counted_raw_open(U64 Mode) {
+  (void)Mode;
+  return raw(OpenAt, -1UL, (U64)Path, 0102, 0666);
+}
+
+static U64 creation_counted(U64 (*Create)(U64), U64 Mode) {
+  struct FileStatus Before, Original, New, ByName, Parent;
+  U64 old = creation_prepare(&Before);
+  CHECK(old, 3);
+  U64 previous = Before.Inode;
+  for (unsigned generation = 0; generation != 2; ++generation) {
+    U64 created = Create(Mode);
+    CHECK(created, 4);
+    CHECK(raw(Fstat, created, (U64)&New, 0, 0), 0);
+    CHECK(New.Inode != 0 && New.Inode != previous && New.Inode != Before.Inode,
+          1);
+    previous = New.Inode;
+    CHECK(New.Device, 7);
+    CHECK(New.Mode, 0100644);
+    CHECK(New.Links, 1);
+    CHECK(New.UID, 1000);
+    CHECK(New.GID, 1000);
+    CHECK(New.Size, 0);
+    CHECK(New.BlockSize, 4096);
+    CHECK(New.Blocks, 0);
+    CHECK(New.Access.Seconds, 100);
+    CHECK(New.Access.Nanoseconds, 123);
+    CHECK(New.Modification.Seconds, 100);
+    CHECK(New.Modification.Nanoseconds, 123);
+    CHECK(New.Change.Seconds, 100);
+    CHECK(New.Change.Nanoseconds, 123);
+    CHECK(raw(FstatAt, -1UL, (U64)Path, (U64)&ByName, 0), 0);
+    for (unsigned i = 0; i != sizeof(New); ++i)
+      CHECK(((unsigned char *)&New)[i], ((unsigned char *)&ByName)[i]);
+    const char *value = generation ? "two" : "one";
+    CHECK(raw(Write, created, (U64)value, 3, 0), 3);
+    CHECK(raw(Seek, created, 0, 0, 0), 0);
+    CHECK(raw(Read, created, (U64)Pages, 3, 0), 3);
+    for (unsigned i = 0; i != 3; ++i)
+      CHECK(Pages[i], value[i]);
+    // An existing-name open does not consume the next creation's reservation.
+    CHECK(raw(OpenAt, -1UL, (U64)Path, 0102, 0666), 5);
+    CHECK(raw(Close, 5, 0, 0, 0), 0);
+    CHECK(raw(Read, old, (U64)Pages, 1, 0), 1);
+    CHECK(Pages[0], Expected[generation + 1]);
+    CHECK(raw(FstatAt, -1UL, (U64) "/fixture", (U64)&Parent, 0), 0);
+    CHECK(Parent.Size, 80);
+    CHECK(raw(Close, created, 0, 0, 0), 0);
+    CHECK(raw(UnlinkAt, -1UL, (U64)Path, 0, 0), 0);
+    CHECK(raw(FaccessAt, -1UL, (U64)Path, 0, 0), (U64)-2);
+    CHECK(raw(FstatAt, -1UL, (U64) "/fixture", (U64)&Parent, 0), 0);
+    CHECK(Parent.Size, 60);
+    CHECK(raw(Fstat, old, (U64)&Original, 0, 0), 0);
+    for (unsigned i = 0; i != sizeof(Original); ++i)
+      CHECK(((unsigned char *)&Original)[i], ((unsigned char *)&Before)[i]);
+  }
+  CHECK(raw(Seek, old, 0, 0, 0), 0);
+  CHECK(raw(Read, old, (U64)Pages, sizeof(Expected), 0), sizeof(Expected));
+  for (unsigned i = 0; i != sizeof(Expected); ++i)
+    CHECK(Pages[i], Expected[i]);
+  CHECK(raw(Close, old, 0, 0, 0), 0);
+  return 0;
+}
+
+U64 files_creation_counted_raw(void) {
+  return creation_counted(counted_raw_open, 0);
+}
+
 // Keep independent field observations scalar under both optimization levels.
 static U64 verify_status(const volatile struct FileStatus *S) {
   CHECK(S->Device, 0xfe12cd34UL);
@@ -820,6 +1144,7 @@ extern int open64(const char *, int, ...);
 extern int openat(int, const char *, int, ...);
 extern int openat64(int, const char *, int, ...);
 extern I64 read(int, void *, U64);
+extern I64 __read_chk(int, void *, U64, U64);
 extern int close(int);
 extern I64 lseek(int, I64, int);
 extern I64 lseek64(int, I64, int);
@@ -827,6 +1152,10 @@ extern int fstat(int, struct FileStatus *);
 extern int fstat64(int, struct FileStatus *);
 extern int fstatat(int, const char *, struct FileStatus *, int);
 extern int fstatat64(int, const char *, struct FileStatus *, int);
+extern int stat(const char *, struct FileStatus *);
+extern int stat64(const char *, struct FileStatus *);
+extern int lstat(const char *, struct FileStatus *);
+extern int lstat64(const char *, struct FileStatus *);
 extern int access(const char *, int);
 extern int faccessat(int, const char *, int, int);
 extern int mkdir(const char *, U32);
@@ -1058,6 +1387,45 @@ extern void *dlopen(const char *, int);
 extern void *dlsym(void *, const char *);
 extern int dlclose(void *);
 
+U64 files_read_chk_sequence(U64 Mode) {
+  I64 (*Checked)(int, void *, U64, U64) = __read_chk;
+  void *Library = 0;
+  if (Mode) {
+    Library = dlopen("libfiles.so", 2);
+    CHECK(Library != 0, 1);
+    Checked = dlsym(Library, "__read_chk");
+    CHECK(Checked != 0, 1);
+    if (Mode == 2)
+      CHECK(dlclose(Library), 0);
+  }
+  int FD = open(Path, 0);
+  CHECK(FD, 3);
+  *__errno() = 77;
+  CHECK(Checked(FD, (void *)1, 0, 0), 0);
+  CHECK(*__errno(), 77);
+  CHECK(Checked(FD, (void *)1, 1, 1), -1);
+  CHECK(*__errno(), 14);
+  *__errno() = 77;
+  CHECK(Checked(FD, Pages, 2, 2), 2);
+  CHECK(raw(Read, FD, (U64)(Pages + 2), 2, 0), 2);
+  CHECK(Checked(FD, Pages + 4, 4096, ~0UL), 2);
+  for (unsigned I = 0; I != sizeof(Expected); ++I)
+    CHECK(Pages[I], Expected[I]);
+  CHECK(Checked(FD, Pages, sizeof(Expected), sizeof(Expected)), 0);
+  CHECK(*__errno(), 77);
+  CHECK(close(FD), 0);
+  CHECK(Checked(FD, Pages, 1, 1), -1);
+  CHECK(*__errno(), 9);
+  if (Mode)
+    CHECK(dlclose(Library), 0);
+  return 0;
+}
+
+U64 files_read_chk_bounds(void *Buffer, U64 Count, U64 Capacity) {
+  *__errno() = 77;
+  return __read_chk(99, Buffer, Count, Capacity);
+}
+
 static void *reader(void *Arg) {
   U64 FD = (U64)Arg;
   *__errno() = 82;
@@ -1219,6 +1587,31 @@ U64 files_filesystem_status_dynamic(U64 Closed, U64 Alias, U64 Descriptor) {
   return 0;
 }
 
+U64 files_open_at_call(U64 Route, U64 BasePath, U64 Name, U64 Flags, U64 Mode,
+                       U64 ObservedErrno) {
+  I64 Directory = BasePath ? open((const char *)BasePath, 0) : -1;
+  if (BasePath)
+    CHECK(Directory, 3);
+  *__errno() = 83;
+  I64 Result;
+  switch (Route) {
+  case 0:
+    Result = openat(Directory, (const char *)Name, Flags, Mode);
+    break;
+  case 1:
+    Result = openat64(Directory, (const char *)Name, Flags, Mode);
+    break;
+  case 2:
+    Result = syscall(OpenAt, Directory, Name, Flags, Mode);
+    break;
+  default:
+    Result = raw(OpenAt, Directory, Name, Flags, Mode);
+    break;
+  }
+  *(U64 *)ObservedErrno = *__errno();
+  return Result;
+}
+
 U64 files_status_at_call(U64 Route, U64 Directory, U64 Name, U64 Output,
                          U64 Flags, U64 ObservedErrno) {
   *__errno() = 83;
@@ -1240,6 +1633,45 @@ U64 files_status_at_call(U64 Route, U64 Directory, U64 Name, U64 Output,
     break;
   }
   *(U64 *)ObservedErrno = *__errno();
+  return Result;
+}
+
+U64 files_path_status_call(U64 Alias, U64 Name, U64 Output, U64 ObservedErrno,
+                           U64 Dynamic) {
+  void *Library = 0;
+  int (*Function)(const char *, struct FileStatus *) = 0;
+  if (Dynamic) {
+    const char *Names[] = {"stat", "stat64", "lstat", "lstat64"};
+    Library = dlopen("libfiles.so", 2);
+    CHECK(Library != 0, 1);
+    Function = dlsym(Library, Names[Alias]);
+    CHECK(Function != 0, 1);
+    if (Dynamic == 2)
+      CHECK(dlclose(Library), 0);
+  }
+  *__errno() = 83;
+  I64 Result;
+  if (Dynamic) {
+    Result = Function((const char *)Name, (struct FileStatus *)Output);
+  } else {
+    switch (Alias) {
+    case 0:
+      Result = stat((const char *)Name, (struct FileStatus *)Output);
+      break;
+    case 1:
+      Result = stat64((const char *)Name, (struct FileStatus *)Output);
+      break;
+    case 2:
+      Result = lstat((const char *)Name, (struct FileStatus *)Output);
+      break;
+    default:
+      Result = lstat64((const char *)Name, (struct FileStatus *)Output);
+      break;
+    }
+  }
+  *(U64 *)ObservedErrno = *__errno();
+  if (Dynamic == 1)
+    CHECK(dlclose(Library), 0);
   return Result;
 }
 
@@ -1446,12 +1878,196 @@ U64 files_directory_dynamic(U64 Closed, U64 At) {
   CHECK(*__errno(), 17);
   return 0;
 }
+
+extern int rename(const char *, const char *);
+extern int renameat(int, const char *, int, const char *);
+U64 files_rename_bionic(U64 mode) {
+  void *library = 0, *function = 0;
+  if (mode >= 3) {
+    library = dlopen("libfiles.so", 2);
+    CHECK(library != 0, 1);
+    function = dlsym(library, (mode == 4 || mode == 6) ? "renameat" : "rename");
+    CHECK(function != 0, 1);
+    if (mode >= 5)
+      CHECK(dlclose(library), 0);
+  }
+  struct FileStatus Before;
+  U64 fd = rename_prepare(&Before);
+  CHECK(fd, 3);
+  *__errno() = 77;
+  I64 result =
+      mode == 0   ? rename(Path, RenamedPath)
+      : mode == 1 ? renameat(-1, Path, -1, RenamedPath)
+      : mode == 2 ? syscall(RenameAt, -1UL, Path, -1UL, RenamedPath)
+      : (mode == 4 || mode == 6)
+          ? ((int (*)(int, const char *, int, const char *))function)(
+                -1, Path, -1, RenamedPath)
+          : ((int (*)(const char *, const char *))function)(Path, RenamedPath);
+  CHECK(result, 0);
+  CHECK(*__errno(), 77);
+  CHECK(rename_verify(fd, &Before), 0);
+  CHECK(raw(Close, fd, 0, 0, 0), 0);
+  if (library)
+    CHECK(dlclose(library), 0);
+  return 0;
+}
+
+extern int unlink(const char *);
+extern int unlinkat(int, const char *, int);
+U64 files_unlink_bionic(U64 mode, U64 *out) {
+  void *library = 0, *function = 0;
+  if (mode >= 3) {
+    library = dlopen("libfiles.so", 2);
+    CHECK(library != 0, 1);
+    function = dlsym(library, (mode == 4 || mode == 6) ? "unlinkat" : "unlink");
+    CHECK(function != 0, 1);
+    if (mode >= 5)
+      CHECK(dlclose(library), 0);
+  }
+  const char *names[] = {"/absent", "", "/fixture/data/child", (const char *)0};
+  const int errors[] = {2, 2, 20, 14};
+  for (unsigned i = 0; i != 4; ++i) {
+    *__errno() = 77;
+    I64 result =
+        mode == 0   ? unlink(names[i])
+        : mode == 1 ? unlinkat(-1, names[i], 0)
+        : mode == 2 ? syscall(UnlinkAt, -1UL, names[i], 0UL)
+        : (mode == 4 || mode == 6)
+            ? ((int (*)(int, const char *, int))function)(-1, names[i], 0)
+            : ((int (*)(const char *))function)(names[i]);
+    out[2 * i] = result;
+    out[2 * i + 1] = *__errno();
+    CHECK(result, -1);
+    CHECK(*__errno(), errors[i]);
+  }
+  CHECK(access(Path, 0), 0);
+  CHECK(*__errno(), 14);
+  if (library)
+    CHECK(dlclose(library), 0);
+  return 0;
+}
+
+U64 files_unlink_closed_bionic(U64 mode) {
+  void *library = 0, *function = 0;
+  if (mode >= 3) {
+    library = dlopen("libfiles.so", 2);
+    CHECK(library != 0, 1);
+    function = dlsym(library, (mode == 4 || mode == 6) ? "unlinkat" : "unlink");
+    CHECK(function != 0, 1);
+    if (mode >= 5)
+      CHECK(dlclose(library), 0);
+  }
+  *__errno() = 77;
+  I64 result = mode == 0   ? unlink(Path)
+               : mode == 1 ? unlinkat(-1, Path, 0)
+               : mode == 2 ? syscall(UnlinkAt, -1UL, Path, 0UL)
+               : (mode == 4 || mode == 6)
+                   ? ((int (*)(int, const char *, int))function)(-1, Path, 0)
+                   : ((int (*)(const char *))function)(Path);
+  CHECK(result, 0);
+  CHECK(*__errno(), 77);
+  CHECK(access(Path, 0), -1);
+  CHECK(*__errno(), 2);
+  CHECK(access("/fixture", 0), 0);
+  CHECK(*__errno(), 2);
+  CHECK(unlink(Path), -1);
+  CHECK(*__errno(), 2);
+  if (library)
+    CHECK(dlclose(library), 0);
+  return 0;
+}
+
+extern void *fopen(const char *, const char *);
+extern int fclose(void *);
+
+static U64 counted_bionic_open(U64 Mode) {
+  if (Mode == 0)
+    return open(Path, 0102, 0666);
+  if (Mode == 1)
+    return openat(-1, Path, 0102, 0666);
+  if (Mode == 2)
+    return syscall(OpenAt, -1UL, Path, 0102UL, 0666UL);
+  if (Mode == 3) {
+    void *stream = fopen(Path, "w+");
+    CHECK(stream != 0, 1);
+    CHECK(fclose(stream), 0);
+    return open(Path, 2);
+  }
+  void *library = dlopen("libfiles.so", 2);
+  CHECK(library != 0, 1);
+  int (*create)(int, const char *, int, ...) = dlsym(library, "openat");
+  CHECK(create != 0, 1);
+  I64 result = create(-1, Path, 0102, 0666);
+  CHECK(dlclose(library), 0);
+  return result;
+}
+
+U64 files_creation_counted_bionic(U64 Mode) {
+  *__errno() = 77;
+  CHECK(creation_counted(counted_bionic_open, Mode), 0);
+  CHECK(*__errno(), 77);
+  return 0;
+}
+
+U64 files_creation_bionic(U64 mode) {
+  void *library = 0, *function = 0;
+  if (mode >= 3 && mode <= 6) {
+    library = dlopen("libfiles.so", 2);
+    CHECK(library != 0, 1);
+    function = dlsym(library, (mode == 4 || mode == 6) ? "openat" : "open");
+    CHECK(function != 0, 1);
+    if (mode >= 5)
+      CHECK(dlclose(library), 0);
+  }
+  struct FileStatus Before;
+  U64 old = creation_prepare(&Before);
+  CHECK(old, 3);
+  *__errno() = 77;
+  I64 created;
+  if (mode == 7) {
+    void *stream = fopen(Path, "w+");
+    CHECK(stream != 0, 1);
+    CHECK(*__errno(), 77);
+    CHECK(fclose(stream), 0);
+    CHECK(*__errno(), 77);
+    created = open(Path, 2);
+  } else {
+    const int flags = 0100 | 01000 | 2;
+    created =
+        mode == 0   ? open(Path, flags, 0666)
+        : mode == 1 ? openat(-1, Path, flags, 0666)
+        : mode == 2 ? syscall(OpenAt, -1UL, Path, (U64)flags, 0666UL)
+        : (mode == 4 || mode == 6)
+            ? ((int (*)(int, const char *, int, ...))function)(-1, Path, flags,
+                                                               0666)
+            : ((int (*)(const char *, int, ...))function)(Path, flags, 0666);
+  }
+  CHECK(created, 4);
+  CHECK(*__errno(), 77);
+  CHECK(creation_verify(old, created, &Before), 0);
+  if (library)
+    CHECK(dlclose(library), 0);
+  return 0;
+}
+
 #else
 void process_main(U64 *Stack) {
   if (Stack[0] != 2)
     __builtin_trap();
   char Mode = ((const char **)(Stack + 1))[1][0];
-  U64 Status = Mode == 'l'   ? files_links()
+  U64 Status = Mode == 'M'   ? files_creation_counted_raw()
+               : Mode == 'N' ? files_creation_raw()
+               : Mode == 'Q' ? files_rename_raw()
+               : Mode == 'T' ? files_rename_reuse(0)
+               : Mode == '1' ? files_rename_fdinfo(0)
+               : Mode == 'e' ? files_unlink_errors()
+               : Mode == 'E' ? files_unlink_pending(0)
+               : Mode == 'F' ? files_unlink_pending(1)
+               : Mode == 'G' ? files_unlink_pending(2)
+               : Mode == 'H' ? files_unlink_pending(3)
+               : Mode == 'I' ? files_unlink_pending(4)
+               : Mode == 'K' ? files_unlink_pending(5)
+               : Mode == 'l' ? files_links()
                : Mode == 's' ? files_sequence()
                : Mode == 'f' ? files_faults()
                : Mode == 'c' ? files_capacity()

@@ -27,6 +27,8 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 namespace med_variadic_detail {
@@ -86,13 +88,12 @@ struct VariadicValueIndex {
   }
 };
 
-// Byte offset of \p V relative to the entry stack pointer. Every SSA/PHI
+class VariadicScan;
 
 /// Byte offset of \p Root relative to the entry stack pointer.  Every
 /// SSA/PHI definition must be unique and every PHI arm must prove the same
-/// offset.
-std::optional<int64_t> entrySpDelta(const VariadicValueIndex &Index,
-                                    uint64_t SpOff, const MedVar &Root,
+/// offset. Definitions are indexed only when the query follows a definition.
+std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
                                     int Depth);
 
 /// Whether \p V is the x86-64 SysV va_start word ((fp_offset << 32) |
@@ -102,8 +103,6 @@ bool isX64VaStartWord(uint64_t V);
 /// Distinct live-in (SSA version 0) parameter registers from \p Regs that the
 /// function spills to the stack: the variadic prologue's register save area.
 int countParamRegSpills(const MedFunc &Func, llvm::ArrayRef<uint64_t> Regs);
-
-class VariadicScan;
 
 /// The integer argument register a register save area starts at: the
 /// prologue spills each argument register from the first unnamed one through
@@ -139,6 +138,13 @@ private:
 /// integer and vector registers carry named parameters.
 bool hasX64VariadicPrologue(VariadicScan &S, uint64_t &VaStartWord);
 
+/// How many general-purpose registers carry named parameters, as the
+/// gp_offset in \p VaStartWord counts them (gp_offset = 8 x that count):
+/// only where the function stores the word into a va_list's gp_offset and
+/// fp_offset fields, whole or in halves, and gp_offset counts whole
+/// registers within the six.  Nothing for any other evidence.
+std::optional<int> x64VaStartNamedGPRs(VariadicScan &S, uint64_t VaStartWord);
+
 /// Where a System V x86-64 va_start puts its va_list and register save area,
 /// as displacements from the entry stack pointer.
 struct X64VaStartGeometry {
@@ -153,6 +159,22 @@ struct X64VaStartGeometry {
 std::optional<X64VaStartGeometry>
 x64VaStartGeometry(VariadicScan &S, uint64_t VaStartWord, int64_t OverflowBase);
 std::optional<int> aapcs64FirstVariadicRegister(VariadicScan &S);
+
+/// The stores, as (block, operation) indices, that spill q0-q7 to the
+/// vector half of an AAPCS64 register save area no read observes.  The area
+/// is q(first) through q7 at entry in consecutive 16-byte slots, and one
+/// va_list's va_start points __vr_top just past it, __stack into the
+/// incoming arguments and __gr_top past the integer half from
+/// \p FirstVariadicRegister on, and sets both offsets.  No load may read the
+/// area, __vr_top or __vr_offs, which only va_arg of a floating or vector
+/// argument and a va_list copied or passed on read; and a frame address may
+/// reach memory only as one of va_start's pointers, and no call or return in
+/// an argument register.  Loads through the pointers va_arg reads from
+/// __stack and __gr_top are taken to stay in their areas, as the va_list
+/// convention keeps them.  Empty where any of this fails.
+std::vector<std::pair<size_t, size_t>>
+unreadAAPCS64VectorSpills(VariadicScan &S, int FirstVariadicRegister);
+
 std::optional<int> aapcs32FirstVariadicRegister(VariadicScan &S);
 bool hasI386VariadicPrologue(VariadicScan &S);
 bool hasAAPCS64VariadicPrologue(VariadicScan &S);

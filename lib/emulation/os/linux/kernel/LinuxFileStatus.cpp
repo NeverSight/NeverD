@@ -82,10 +82,13 @@ LinuxFiles::statusAt(uint32_t Directory, uint64_t PathAddress, uint64_t Address,
   case PathKind::File:
     break;
   }
-  auto Metadata = Options->Metadata.find(Path->Name);
-  if (Metadata == Options->Metadata.end())
+  const auto *Object = fileIdentity(Path->Name);
+  const auto &Identity = Object ? *Object : Path->Name;
+  auto Metadata = Options->Metadata.find(Identity);
+  if (Metadata == Options->Metadata.end() &&
+      !CreatedFileLimits.contains(Identity))
     return unsupported(Result, FileStatusMissing);
-  const auto *Current = fileMetadata(Path->Name);
+  const auto *Current = fileMetadata(Identity);
   if (!Current)
     return unsupported(Result,
                        "file mutation invalidated captured stat metadata");

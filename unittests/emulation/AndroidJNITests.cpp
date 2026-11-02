@@ -6,17 +6,21 @@
 /// \file
 /// Original guest callers across relocation packing and CPU transports.
 //===----------------------------------------------------------------------===//
+#include "AndroidEventLogTestData.h"
+#include "aarch64/AArch64FloatConversionCases.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <optional>
 #include <tuple>
 
 namespace neverd::emulation {
@@ -62,6 +66,377 @@ TEST_P(AndroidJNI, VMThreadAttachmentAndVersions) {
   EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
   EXPECT_EQ(R.ReturnValue, 0u);
 }
+TEST_P(AndroidJNI, ParcelDataAndPoolShareOrdinaryVAAndArrayCalls) {
+  for (unsigned form = 0; form != 3; ++form) {
+    SCOPED_TRACE(form);
+    Options.Android->Arguments = {form, 0};
+    auto result = run("jni_parcel_data");
+    EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+    EXPECT_EQ(result.ReturnValue, 0u);
+  }
+}
+TEST_P(AndroidJNI, ParcelInterfaceTokenUsesNewNativeThreadPolicy) {
+  Options.Android->ThreadLimit = 1;
+  for (unsigned form = 0; form != 3; ++form) {
+    SCOPED_TRACE(form);
+    Options.Android->Arguments = {form, 1};
+    auto result = run("jni_parcel_data");
+    EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+    EXPECT_EQ(result.ReturnValue, 0u);
+  }
+}
+TEST_P(AndroidJNI, BinderStrictModeIsNativeThreadLocalAcrossAttachments) {
+  for (unsigned threaded = 0; threaded != 2; ++threaded) {
+    Options.Android->ThreadLimit = threaded ? 3 : 1;
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(threaded);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, threaded};
+      auto result = run("jni_binder_strict_mode");
+      EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+  }
+}
+TEST_P(AndroidJNI, ParcelNativeStateAndUndefinedRangesRemainExplicit) {
+  const char *diagnostics[] = {"owned native state",
+                               "after recycle",
+                               "uninitialized bytes",
+                               "native abort",
+                               "native array range",
+                               "nonnull native String",
+                               "android/os/BinderProxy.transact"};
+  for (unsigned mode = 2; mode != 9; ++mode) {
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      auto result = run("jni_parcel_data");
+      EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+          << result.Diagnostic;
+      EXPECT_NE(result.Diagnostic.find(diagnostics[mode - 2]),
+                std::string::npos)
+          << result.Diagnostic;
+    }
+  }
+}
+TEST_P(AndroidJNI, EventLogOverloadsAndTruncationShareOneWriteTranscript) {
+  for (unsigned mode = 0; mode != 4; ++mode) {
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      Options.Android->EventLogWrites = test::androidEventLogWrites(mode);
+      auto result = run("jni_event_log");
+      ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+      EXPECT_EQ(result.EventLogWritesConsumed,
+                Options.Android->EventLogWrites->size());
+    }
+  }
+}
+
+TEST_P(AndroidJNI, EventLogFloatFieldDoesNotReturnBitsInAGeneralRegister) {
+  Options.Android->Arguments = {2, 4};
+  Options.Android->EventLogWrites.emplace();
+  auto result = run("jni_event_log");
+  EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+      << result.Diagnostic;
+  EXPECT_EQ(result.EventLogWritesConsumed, 0u);
+  EXPECT_NE(result.Diagnostic.find("JNIEnv.102"), std::string::npos);
+}
+
+TEST_P(AndroidJNI, EventLogPromotedFloatAcceptsBaselineFPControl) {
+  for (unsigned form = 0; form != 3; ++form) {
+    Options.Android->Arguments = {form, 5};
+    Options.Android->EventLogWrites = {
+        {{{0x78, 0x56, 0x34, 0x12, 4, 0, 0, 0x80, 0x3f}, -11}}};
+    auto result = run("jni_event_log");
+    EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+    EXPECT_EQ(result.EventLogWritesConsumed, 1u);
+  }
+}
+
+TEST_P(AndroidJNI, EventLogFloatRoundingAndStatusShareTheArchitectureModel) {
+  constexpr uint32_t Initial = 0x08000002; // Existing QC/DZC are cumulative.
+  for (const auto &Case : test::FloatNarrowingCases) {
+    SCOPED_TRACE(Case.Input);
+    SCOPED_TRACE(Case.Control);
+    for (unsigned Form = 0; Form != 3; ++Form) {
+      SCOPED_TRACE(Form);
+      // A-form jvalue bits are untouched by FPCR, including signaling NaNs.
+      const uint32_t Output = Form == 2 && (Case.Raised & 1)
+                                  ? Case.Output & ~0x00400000u
+                                  : Case.Output;
+      const uint64_t Input =
+          Form == 2 ? (0xabadbeef00000000ull | Output) : Case.Input;
+      for (unsigned Boxed : {0u, 1u}) {
+        SCOPED_TRACE(Boxed);
+        Options.Android->Arguments = {Form, Input, Case.Control, Initial,
+                                      Boxed};
+        std::vector<uint8_t> Payload = {0x78, 0x56, 0x34, 0x12, 4, 0, 0, 0, 0};
+        llvm::support::endian::write32le(Payload.data() + 5, Output);
+        Options.Android->EventLogWrites = {{{Payload, -11}}};
+        auto Result = run("jni_event_log_float_control");
+        ASSERT_EQ(Result.Stop, ProcessStopReason::Returned)
+            << Result.Diagnostic;
+        EXPECT_EQ(Result.ReturnValue, Initial | (Form == 2 ? 0 : Case.Raised));
+        EXPECT_EQ(Result.EventLogWritesConsumed, 1u);
+      }
+    }
+  }
+}
+
+TEST_P(AndroidJNI, EventLogFloatStatusSurvivesALaterServiceBoundary) {
+  Options.Android->ObserveCPUState = true;
+  for (unsigned Form : {0u, 1u}) {
+    Options.Android->Arguments = {Form, 0x3ff0000010000000, 0x00400000,
+                                  0x08000002, 0};
+    auto Result = run("jni_event_log_float_control");
+    EXPECT_EQ(Result.Stop, ProcessStopReason::UnsupportedService)
+        << Result.Diagnostic;
+    EXPECT_FALSE(Result.EventLogWritesConsumed);
+    ASSERT_TRUE(Result.CPUState);
+    ASSERT_TRUE(Result.CPUState->Registers) << Result.CPUState->Diagnostic;
+    unsigned Found = 0;
+    for (const auto &Register : *Result.CPUState->Registers) {
+      if (Register.Register == CPURegister::AArch64FPSR) {
+        EXPECT_EQ(Register.Value, (RegisterValue{0x08000012, 0}));
+        ++Found;
+      }
+      if (Register.Register == CPURegister::AArch64FPCR) {
+        EXPECT_EQ(Register.Value, (RegisterValue{0x00400000, 0}));
+        ++Found;
+      }
+    }
+    EXPECT_EQ(Found, 2u);
+  }
+}
+
+TEST_P(AndroidJNI, EventLogExplicitVAListKeepsIndependentScalarCursors) {
+  constexpr uint64_t Base = 0x22000000;
+  std::vector<uint8_t> bytes(4096, 0xc7);
+  Options.Android->ObserveMemoryOnFailure = true;
+  Options.Android->ReadMemory = {{Base, bytes.size()}};
+  Options.Android->Arguments = {Base, 0};
+  // Each FP and GP bank may be exhausted independently. Stack slots are
+  // shared, and neither va_list nor its save areas are written by the model.
+  for (unsigned stack = 0; stack != 4; ++stack) {
+    llvm::support::endian::write64le(bytes.data(), Base + 256);
+    llvm::support::endian::write64le(bytes.data() + 8, Base + 128);
+    llvm::support::endian::write64le(bytes.data() + 16, Base + 224);
+    llvm::support::endian::write32le(bytes.data() + 24,
+                                     stack & 1 ? 0 : uint32_t(-8));
+    llvm::support::endian::write32le(bytes.data() + 28,
+                                     stack & 2 ? 0 : uint32_t(-16));
+    llvm::support::endian::write64le(bytes.data() + (stack & 1 ? 256 : 120),
+                                     0x12345678);
+    // 1 + 2^-24 is exactly halfway; only rounding toward +inf yields 1+2^-23.
+    llvm::support::endian::write64le(
+        bytes.data() + (stack & 2 ? (stack & 1 ? 264 : 256) : 208),
+        0x3ff0000010000000);
+    Options.Android->Memory = {{Base, bytes.size(), bytes}};
+    for (unsigned Rounding = 0; Rounding != 4; ++Rounding) {
+      SCOPED_TRACE(stack);
+      SCOPED_TRACE(Rounding);
+      Options.Android->Arguments[1] = Rounding << 22;
+      Options.Android->EventLogWrites = {
+          {{{0x78, 0x56, 0x34, 0x12, 4, uint8_t(Rounding == 1), 0, 0x80, 0x3f},
+            -11}}};
+      auto result = run("jni_event_log_explicit_va");
+      ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0x08000012u);
+      EXPECT_EQ(result.EventLogWritesConsumed, 1u);
+      ASSERT_EQ(result.MemorySnapshots.size(), 1u);
+      EXPECT_EQ(result.MemorySnapshots[0].Bytes, bytes);
+    }
+  }
+  for (unsigned invalid = 0; invalid != 5; ++invalid) {
+    llvm::support::endian::write32le(bytes.data() + 24, -8);
+    llvm::support::endian::write32le(bytes.data() + 28, invalid == 0   ? -144
+                                                        : invalid == 1 ? -1
+                                                                       : -16);
+    llvm::support::endian::write64le(bytes.data() + 16, invalid == 2
+                                                            ? Base + 225
+                                                        : invalid == 3 ? 0
+                                                                       : 16);
+    Options.Android->Memory = {{Base, bytes.size(), bytes}};
+    auto result = run("jni_event_log_explicit_va");
+    EXPECT_EQ(result.Stop, ProcessStopReason::RuntimeFailure)
+        << result.Diagnostic;
+    EXPECT_EQ(result.EventLogWritesConsumed, 0u);
+    ASSERT_EQ(result.MemorySnapshots.size(), 1u);
+    EXPECT_EQ(result.MemorySnapshots[0].Bytes, bytes);
+  }
+}
+
+TEST_P(AndroidJNI, EventLogTranscriptFailurePreservesItsCursor) {
+  for (unsigned form = 0; form != 3; ++form) {
+    for (unsigned mode = 0; mode != 3; ++mode) {
+      Options.Android->Arguments = {form, 0};
+      Options.Android->EventLogWrites = test::androidEventLogWrites(0);
+      if (mode == 0)
+        Options.Android->EventLogWrites.reset();
+      else if (mode == 1)
+        Options.Android->EventLogWrites->resize(1);
+      else
+        Options.Android->EventLogWrites->at(1).Payload.back() ^= 1;
+      auto result = run("jni_event_log");
+      EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+          << result.Diagnostic;
+      if (mode)
+        EXPECT_EQ(result.EventLogWritesConsumed, 1u);
+      else
+        EXPECT_FALSE(result.EventLogWritesConsumed);
+    }
+  }
+}
+TEST_P(AndroidJNI, StatLoggerUsesSharedClockArraysAndRetainedLabels) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 987654321}}};
+  for (unsigned advance : {0u, 31u}) {
+    Options.LinuxTime->NanosecondsPerInstruction = advance;
+    for (unsigned mode : {0u, 1u}) {
+      Options.Android->Arguments = {mode};
+      auto result = run("jni_stat_logger");
+      ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+  }
+}
+TEST_P(AndroidJNI, StatLoggerReadsBootClockBeforeNullLabelsException) {
+  Options.Android->Arguments = {1};
+  auto missing = run("jni_stat_logger");
+  EXPECT_EQ(missing.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(missing.Diagnostic.find("no explicit linux_time input"),
+            std::string::npos);
+  Options.LinuxTime.emplace().Clocks = {{1, {10, 0}}};
+  auto wrong_clock = run("jni_stat_logger");
+  EXPECT_EQ(wrong_clock.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(wrong_clock.Diagnostic.find("no explicit linux_time input"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, StatLoggerMethodLookupNeedsNoClock) {
+  Options.Android->Arguments = {2};
+  auto result = run("jni_stat_logger");
+  EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+  EXPECT_EQ(result.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, StatLoggerRecordsThroughAllCallFormsAndSharedArrays) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  auto result = run("jni_stat_logger_record");
+  EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+  EXPECT_EQ(result.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, HashMapRetainsStringNullAndReferenceValuesAcrossDetach) {
+  auto result = run("jni_hash_map");
+  EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+  EXPECT_EQ(result.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, HashMapRefusesCustomKeysRawObjectsAndUnmodeledEquality) {
+  for (uint64_t mode : {1u, 2u, 3u}) {
+    Options.Android->Arguments = {mode};
+    auto result = run("jni_hash_map");
+    EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+        << result.Diagnostic;
+    EXPECT_NE(result.Diagnostic.find(mode == 1   ? "String and null keys"
+                                     : mode == 2 ? "contents are not supplied"
+                                                 : "equality, hashing"),
+              std::string::npos);
+  }
+}
+TEST_P(AndroidJNI, SystemPropertyIntegersShareNativeRecordsAndArtKeyEncoding) {
+  Options.Android->Properties = {{"test.valid", "28"},
+                                 {"test.hex", "0x1c"},
+                                 {"test.min", "-2147483648"},
+                                 {"test.max", "2147483647"},
+                                 {"test.octal", "028"},
+                                 {"test.sign", "\t -28"},
+                                 {"test.empty", ""},
+                                 {"test.overflow", "2147483648"},
+                                 {"test.underflow", "-2147483649"},
+                                 {"test.trailing", "28 "},
+                                 {"test.signedhex", "-0x1c"},
+                                 {"test.spacehex", " 0x1c"},
+                                 {"test.hexoverflow", "0x80000000"},
+                                 {"\xc0\x80\xed\xa0\x80"
+                                  "a\xf0\x9f\x98\x80",
+                                  "-7"}};
+  auto result = run("jni_property_int");
+  EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+  EXPECT_EQ(result.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, SystemPropertyIntegersRejectChangedOrUnmappedNativeRecords) {
+  Options.Android->Properties = {{"test.valid", "28"}};
+  for (uint64_t mode : {1u, 2u}) {
+    Options.Android->Arguments = {mode};
+    auto result = run("jni_property_int");
+    EXPECT_EQ(result.Stop, ProcessStopReason::RuntimeFailure)
+        << result.Diagnostic;
+    if (mode == 1)
+      EXPECT_NE(
+          result.Diagnostic.find("changed the immutable Android property"),
+          std::string::npos);
+  }
+}
+TEST_P(AndroidJNI, SystemPropertyReadProjectionDoesNotInventWrites) {
+  Options.Android->Arguments = {3};
+  auto result = run("jni_property_int");
+  EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+      << result.Diagnostic;
+  EXPECT_NE(result.Diagnostic.find("unmodeled Java method"), std::string::npos);
+}
+TEST_P(AndroidJNI, SystemClockSharesLinuxEpochsIdleAndInstructionTime) {
+  Options.LinuxTime.emplace();
+  Options.LinuxTime->Clocks = {{1, {10, 123456789}}, {7, {50, 987654321}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  for (unsigned mode : {0u, 5u}) {
+    Options.Android->Arguments = {mode};
+    Options.LinuxTime->NanosecondsPerInstruction = mode ? 31 : 0;
+    auto result = run("jni_system_clock");
+    ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+    EXPECT_EQ(result.ReturnValue, 0u);
+  }
+}
+TEST_P(AndroidJNI, SystemClockRequiresEachClockAndSignedNanosecondRange) {
+  for (unsigned mode : {1u, 2u, 3u}) {
+    Options.Android->Arguments = {mode};
+    Options.LinuxTime.reset();
+    auto absent = run("jni_system_clock");
+    EXPECT_EQ(absent.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(absent.Diagnostic.find("no explicit linux_time input"),
+              std::string::npos);
+    Options.LinuxTime.emplace().Clocks = {{mode == 1 ? 7 : 1, {10, 123456789}}};
+    auto other_clock = run("jni_system_clock");
+    EXPECT_EQ(other_clock.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(other_clock.Diagnostic.find("no explicit linux_time input"),
+              std::string::npos);
+    const int clock = mode == 1 ? 1 : 7;
+    for (auto time :
+         {LinuxTimespec{-1, 999999999}, LinuxTimespec{9223372036, 854775808}}) {
+      Options.LinuxTime->Clocks = {{clock, time}};
+      auto invalid = run("jni_system_clock");
+      EXPECT_EQ(invalid.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(invalid.Diagnostic,
+                mode == 1 ? "Android monotonic time exceeds its range"
+                          : "Android boot time exceeds its range");
+    }
+    Options.LinuxTime->Clocks = {{clock, {9223372036, 854775807}}};
+    auto maximum = run("jni_system_clock");
+    ASSERT_EQ(maximum.Stop, ProcessStopReason::Returned) << maximum.Diagnostic;
+    EXPECT_EQ(maximum.ReturnValue,
+              mode == 3 ? uint64_t(INT64_MAX) : uint64_t(INT64_MAX) / 1000000);
+    Options.LinuxTime->Clocks = {{clock, {0, 0}}};
+    auto zero = run("jni_system_clock");
+    ASSERT_EQ(zero.Stop, ProcessStopReason::Returned) << zero.Diagnostic;
+    EXPECT_EQ(zero.ReturnValue, 0u);
+  }
+}
+TEST_P(AndroidJNI, SystemClockDoesNotSupplyOtherNativeMethods) {
+  Options.Android->Arguments = {4};
+  auto result = run("jni_system_clock");
+  EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(result.Diagnostic.find("unmodeled Java method"), std::string::npos);
+}
 TEST_P(AndroidJNI,
        LoaderFailuresRetainExceptionsAcrossDetachWithoutClosingNamespaces) {
   using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
@@ -85,6 +460,30 @@ TEST_P(AndroidJNI,
   Options.Android->Arguments.clear();
   Options.Android->Application->class_lookup_failures.clear();
   auto Unknown = run("jni_loader_failure");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+}
+TEST_P(AndroidJNI, ExactQueryLookupFailuresPreserveSpacesAcrossDetach) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  using Loader = Snapshot::ClassLookupFailure::Loader;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Attached};
+  Options.Android->Application->class_lookup_failures = {
+      {Loader::Boot, {}, "declared missing", "fixture.Optional "}};
+  auto R = run("jni_loader_exact_query");
+  EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+  EXPECT_EQ(R.ReturnValue, 0u);
+  for (unsigned Mode : {1u, 2u, 3u}) {
+    Options.Android->Arguments = {Mode};
+    auto Unknown = run("jni_loader_exact_query");
+    EXPECT_EQ(Unknown.Stop, Mode == 2 ? ProcessStopReason::RuntimeFailure
+                                      : ProcessStopReason::UnsupportedService)
+        << Unknown.Diagnostic;
+    if (Mode == 2)
+      EXPECT_NE(Unknown.Diagnostic.find("unmodeled class: fixture/Optional "),
+                std::string::npos);
+  }
+  Options.Android->Arguments.clear();
+  Options.Android->Application->class_lookup_failures.clear();
+  auto Unknown = run("jni_loader_exact_query");
   EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
 }
 TEST_P(AndroidJNI, InstrumentationFieldAndGetterShareLifetimeAndWrites) {
@@ -272,6 +671,628 @@ TEST_P(AndroidJNI, ApplicationInputRequiresJNIAndValidPhaseMetadata) {
             std::string::npos);
 }
 TEST_P(AndroidJNI,
+       ApplicationContentResolverRetainsIdentityAcrossThreadsAndDetach) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto R = run("jni_content_resolver");
+  EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+  EXPECT_EQ(R.ReturnValue, 0u);
+  Options.Android->Arguments = {1};
+  auto Unknown = run("jni_content_resolver");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("unmodeled Java method"),
+            std::string::npos);
+  EXPECT_NE(Unknown.Diagnostic.find("ContentResolver.getType"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, ApplicationPackageManagerSharesExplicitStateAcrossThreads) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto Unknown = run("jni_package_manager");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("availability is not supplied"),
+            std::string::npos);
+  Options.Android->Arguments = {3};
+  auto NullReceiver = run("jni_package_manager");
+  EXPECT_EQ(NullReceiver.Stop, ProcessStopReason::RuntimeFailure)
+      << NullReceiver.Diagnostic;
+  EXPECT_FALSE(NullReceiver.ReturnValue);
+  EXPECT_NE(NullReceiver.Diagnostic.find("requires a nonnull receiver/class"),
+            std::string::npos);
+  Options.Android->Application->package_manager_available = true;
+  Options.Android->Arguments = {0};
+  auto Present = run("jni_package_manager");
+  EXPECT_EQ(Present.Stop, ProcessStopReason::Returned) << Present.Diagnostic;
+  EXPECT_EQ(Present.ReturnValue, 0u);
+  Options.Android->Arguments = {1};
+  auto Query = run("jni_package_manager");
+  EXPECT_EQ(Query.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Query.Diagnostic.find("package info query is not supplied"),
+            std::string::npos);
+  Options.Android->Arguments = {4};
+  auto Foreign = run("jni_package_manager");
+  EXPECT_EQ(Foreign.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Foreign.Diagnostic.find("unmodeled Android Context instance"),
+            std::string::npos);
+  Options.Android->Application->package_manager_available = false;
+  Options.Android->Arguments = {2};
+  auto Absent = run("jni_package_manager");
+  EXPECT_EQ(Absent.Stop, ProcessStopReason::Returned) << Absent.Diagnostic;
+  EXPECT_EQ(Absent.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, NamedUTF8ArraysPreserveGuardsAndReferenceLifetimes) {
+  auto Name = Path.filename().string();
+  ASSERT_EQ(Name.find("jni-"), 0u);
+  Path = Path.parent_path() / ("string_getbytes-" + Name.substr(4));
+  constexpr uint64_t Buffer = 0x20000000;
+  Options.Android->Memory = {{Buffer, 4096, std::vector<uint8_t>(4096, 0xa5)}};
+  Options.Android->ReadMemory = {{Buffer, 4096}};
+  Options.Android->ObserveMemoryOnFailure = true;
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    Options.Android->Arguments = {Buffer, Mode};
+    auto Result = run("string_getbytes");
+    ASSERT_EQ(Result.Stop, Mode == 2 ? ProcessStopReason::UnsupportedService
+                                     : ProcessStopReason::Returned)
+        << Result.Diagnostic;
+    if (Mode == 2) {
+      EXPECT_FALSE(Result.ReturnValue);
+      EXPECT_NE(Result.Diagnostic.find("charset is unmodeled"),
+                std::string::npos);
+    } else {
+      EXPECT_EQ(Result.ReturnValue, 0u);
+    }
+    std::vector<uint8_t> Expected(4096, 0xa5);
+    if (Mode == 0)
+      for (unsigned I = 0; I != 6; ++I)
+        llvm::support::endian::write64le(Expected.data() + I * 8, 1);
+    if (Mode == 1)
+      llvm::support::endian::write64le(Expected.data(), 17);
+    ASSERT_EQ(Result.MemorySnapshots.size(), 1u);
+    EXPECT_EQ(Result.MemorySnapshots[0].Bytes, Expected);
+  }
+}
+
+TEST_P(AndroidJNI, URLValuesPreserveTextAndOfflineBoundaries) {
+  for (unsigned mode : {0u, 4u, 5u}) {
+    SCOPED_TRACE(mode);
+    Options.Android->Arguments = {mode};
+    auto r = run("jni_url_values");
+    EXPECT_EQ(r.Stop, ProcessStopReason::Returned) << r.Diagnostic;
+    EXPECT_EQ(r.ReturnValue, 0u);
+  }
+  for (unsigned mode : {1u, 2u, 3u}) {
+    SCOPED_TRACE(mode);
+    Options.Android->Arguments = {mode};
+    auto r = run("jni_url_values");
+    EXPECT_EQ(r.Stop, ProcessStopReason::UnsupportedService) << r.Diagnostic;
+    EXPECT_FALSE(r.ReturnValue);
+    const char *reason = mode == 1   ? "bounded HTTP value contract"
+                         : mode == 2 ? "URL.openConnection"
+                                     : "handler-dependent equality";
+    EXPECT_NE(r.Diagnostic.find(reason), std::string::npos);
+  }
+  Options.Android->Arguments = {6};
+  auto r = run("jni_url_values");
+  EXPECT_EQ(r.Stop, ProcessStopReason::RuntimeFailure);
+  EXPECT_NE(
+      r.Diagnostic.find("nonvirtual method ID does not match class lookup"),
+      std::string::npos);
+}
+
+TEST_P(AndroidJNI, URLHandlerRetainsCheckedExceptionsAcrossOriginalABIRoutes) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  for (unsigned mode = 0; mode != 3; ++mode) {
+    std::optional<std::string> message;
+    if (mode)
+      message = mode == 1 ? "" : std::string("local\0", 6) + "离线";
+    Options.Android->Application = Snapshot{};
+    Options.Android->Application->url_open_failure_handlers = {
+        {"http", message}, {"https", message}};
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(std::to_string(mode) + "/" + std::to_string(form));
+      Options.Android->Arguments = {mode, form};
+      auto result = run("jni_url_handler");
+      EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+  }
+  Options.Android->Application->url_open_failure_handlers = {{"http", {}}};
+  Options.Android->Arguments = {0, 1};
+  auto missing = run("jni_url_handler");
+  EXPECT_EQ(missing.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(missing.Diagnostic.find("handler state is not supplied"),
+            std::string::npos);
+}
+
+TEST_P(AndroidJNI, MutableStringBuilderSharesUTF16ValuesWithJNI) {
+  auto R = run("jni_string_builder");
+  EXPECT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+  EXPECT_EQ(R.ReturnValue, 0u);
+  Options.Android->Arguments = {1};
+  auto Unknown = run("jni_string_builder");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("StringBuilder.capacity"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, PackageResourcePathRetainsContextValueAcrossThreads) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &Input = *Options.Android->Application;
+  Input.application_info = Snapshot::ApplicationInfo{"/mutable-source.apk"};
+  auto Unknown = run("jni_package_resource_path");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("package resource path is not supplied"),
+            std::string::npos);
+  Input.package_resource_path =
+      std::optional<std::string>{"/public//fixture.apk"};
+  auto Value = run("jni_package_resource_path");
+  EXPECT_EQ(Value.Stop, ProcessStopReason::Returned) << Value.Diagnostic;
+  EXPECT_EQ(Value.ReturnValue, 0u);
+  Input.package_resource_path = std::optional<std::string>{};
+  Options.Android->Arguments = {1};
+  auto Null = run("jni_package_resource_path");
+  EXPECT_EQ(Null.Stop, ProcessStopReason::Returned) << Null.Diagnostic;
+  EXPECT_EQ(Null.ReturnValue, 0u);
+  Options.Android->Arguments = {2};
+  auto Foreign = run("jni_package_resource_path");
+  EXPECT_EQ(Foreign.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Foreign.Diagnostic.find("unmodeled Android Context instance"),
+            std::string::npos);
+  Options.Android->Arguments = {3};
+  auto Receiver = run("jni_package_resource_path");
+  EXPECT_EQ(Receiver.Stop, ProcessStopReason::RuntimeFailure);
+}
+TEST_P(AndroidJNI, ApplicationLabelSharesMutableCharSequenceAcrossThreads) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &Input = *Options.Android->Application;
+  Input.package_manager_available = true;
+  Input.application_info.emplace();
+  auto UnknownMode = run("jni_application_label");
+  EXPECT_EQ(UnknownMode.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(
+      UnknownMode.Diagnostic.find("force-safe-labels state is not supplied"),
+      std::string::npos);
+  Input.package_item_force_safe_labels = true;
+  auto Safe = run("jni_application_label");
+  EXPECT_EQ(Safe.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Safe.Diagnostic.find("safe application labels are not modeled"),
+            std::string::npos);
+  Input.package_item_force_safe_labels = false;
+  auto UnknownField = run("jni_application_label");
+  EXPECT_EQ(UnknownField.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(UnknownField.Diagnostic.find("nonLocalizedLabel is not supplied"),
+            std::string::npos);
+  Input.application_info->non_localized_label =
+      std::optional<std::string>{"  fixture  "};
+  auto Known = run("jni_application_label");
+  EXPECT_EQ(Known.Stop, ProcessStopReason::Returned) << Known.Diagnostic;
+  EXPECT_EQ(Known.ReturnValue, 0u);
+  Input.package_item_force_safe_labels.reset();
+  Options.Android->Arguments = {1};
+  auto Null = run("jni_application_label");
+  EXPECT_EQ(Null.Stop, ProcessStopReason::Returned) << Null.Diagnostic;
+  EXPECT_EQ(Null.ReturnValue, 0u);
+  Input.package_item_force_safe_labels = false;
+  Options.Android->Arguments = {2};
+  auto Foreign = run("jni_application_label");
+  EXPECT_EQ(Foreign.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(
+      Foreign.Diagnostic.find("unmodeled Android ApplicationInfo instance"),
+      std::string::npos);
+  Input.application_info->non_localized_label = std::optional<std::string>{};
+  Options.Android->Arguments = {0};
+  auto Fallback = run("jni_application_label");
+  EXPECT_EQ(Fallback.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Fallback.Diagnostic.find("label fallback is not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI,
+       PackageApplicationInfoResponsesHaveIndependentMutableFields) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &Input = *Options.Android->Application;
+  Input.package_manager_available = true;
+  Input.application_info = Snapshot::ApplicationInfo{"/context.apk"};
+  auto Unknown = run("jni_package_application_info");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("query is not supplied"),
+            std::string::npos);
+  Input.application_info_queries = {
+      {"test.app", 0, {"/query.apk", std::optional<std::string>{}}}};
+  auto Known = run("jni_package_application_info");
+  EXPECT_EQ(Known.Stop, ProcessStopReason::Returned) << Known.Diagnostic;
+  EXPECT_EQ(Known.ReturnValue, 0u);
+  for (unsigned Mode : {1u, 3u, 4u}) {
+    Options.Android->Arguments = {Mode};
+    auto Refused = run("jni_package_application_info");
+    EXPECT_EQ(Refused.Stop, ProcessStopReason::UnsupportedService)
+        << Refused.Diagnostic;
+  }
+  Input.application_info_queries[0].info.native_library_dir.reset();
+  Options.Android->Arguments = {2};
+  auto Field = run("jni_package_application_info");
+  EXPECT_EQ(Field.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Field.Diagnostic.find("nativeLibraryDir is not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, HandlerPostSharesQueueClockAndThreadLifetime) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{};
+  auto &input = *Options.Android->Application;
+  input.main_looper_prepared = true;
+  input.initial_main_queue.emplace(Snapshot::EmptyMessageQueue{});
+  Options.Android->ObserveJavaState = true;
+  auto unknown = run("jni_handler_post");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_EQ(unknown.Diagnostic, "Android Message pool state is not supplied");
+  input.initial_message_pool_empty = true;
+  auto missing_clock = run("jni_handler_post");
+  EXPECT_EQ(missing_clock.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(missing_clock.Diagnostic.find("no explicit linux_time input"),
+            std::string::npos);
+  Options.LinuxTime.emplace();
+  Options.LinuxTime->Clocks = {{1, {10, 123456789}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  auto returned = run("jni_handler_post");
+  ASSERT_EQ(returned.Stop, ProcessStopReason::Returned) << returned.Diagnostic;
+  EXPECT_EQ(returned.ReturnValue, 0u);
+  ASSERT_TRUE(returned.JavaState);
+  ASSERT_TRUE(returned.JavaState->framework.main_message_queue);
+  const auto &queue = *returned.JavaState->framework.main_message_queue;
+  EXPECT_TRUE(queue.complete);
+  EXPECT_FALSE(queue.blocked);
+  ASSERT_EQ(queue.messages.size(), 3u);
+  for (unsigned i = 0; i != 3; ++i) {
+    EXPECT_EQ(queue.messages[i].when, i ? 10125 : 10123);
+    EXPECT_EQ(queue.messages[i].callback, 0u);
+    EXPECT_EQ(queue.messages[i].flags, 1u);
+    EXPECT_EQ(queue.messages[i].target, queue.messages[0].target);
+    EXPECT_EQ(queue.messages[i].next,
+              i == 2 ? 0u : queue.messages[i + 1].identity);
+  }
+  input.initial_main_queue->blocked = true;
+  auto blocked = run("jni_handler_post");
+  EXPECT_EQ(blocked.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_EQ(blocked.Diagnostic, "Android MessageQueue.nativeWake is unmodeled");
+  ASSERT_TRUE(blocked.JavaState->framework.main_message_queue);
+  EXPECT_EQ(blocked.JavaState->framework.main_message_queue->messages.size(),
+            1u);
+  input.initial_main_queue->blocked = false;
+  Options.Android->Arguments = {1};
+  auto null_queue = run("jni_handler_post");
+  EXPECT_EQ(null_queue.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_EQ(null_queue.Diagnostic,
+            "Android Handler null-queue warning requires logging");
+  Options.Android->Arguments = {0};
+  for (auto seconds : {int64_t(-1), int64_t(9223372037)}) {
+    Options.LinuxTime->Clocks.at(1).Seconds = seconds;
+    auto out_of_range = run("jni_handler_post");
+    EXPECT_EQ(out_of_range.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(out_of_range.Diagnostic,
+              "Android monotonic time exceeds its range");
+  }
+}
+TEST_P(AndroidJNI, MainLooperKeepsNullIdentityAndHandlerFieldsDistinct) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{};
+  auto &input = *Options.Android->Application;
+  auto unknown = run("jni_main_looper");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_EQ(unknown.Diagnostic, "Android main Looper state is not supplied");
+  input.main_looper_prepared = false;
+  Options.Android->Arguments = {1};
+  auto absent = run("jni_main_looper");
+  EXPECT_EQ(absent.Stop, ProcessStopReason::Returned) << absent.Diagnostic;
+  EXPECT_EQ(absent.ReturnValue, 0u);
+  input.main_looper_prepared = true;
+  for (unsigned mode : {0u, 2u}) {
+    Options.Android->Arguments = {mode};
+    auto prepared = run("jni_main_looper");
+    EXPECT_EQ(prepared.Stop, ProcessStopReason::Returned)
+        << prepared.Diagnostic;
+    EXPECT_EQ(prepared.ReturnValue, 0u);
+  }
+}
+TEST_P(AndroidJNI, ClassLoaderPathsKeepApplicationAndSystemStateSeparate) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &input = *Options.Android->Application;
+  auto unknown = run("jni_classloader_paths");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(
+      unknown.Diagnostic.find("application loader paths are not supplied"),
+      std::string::npos);
+  input.system_loader_paths =
+      Snapshot::ClassLoaderPaths{{}, {}, {"/system/lib"}};
+  auto system_only = run("jni_classloader_paths");
+  EXPECT_EQ(system_only.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(
+      system_only.Diagnostic.find("application loader paths are not supplied"),
+      std::string::npos);
+  input.application_loader_paths =
+      Snapshot::ClassLoaderPaths{{"/one.apk"}, {"/app/lib"}, {"/system/lib"}};
+  auto known = run("jni_classloader_paths");
+  EXPECT_EQ(known.Stop, ProcessStopReason::Returned) << known.Diagnostic;
+  EXPECT_EQ(known.ReturnValue, 0u);
+  Options.Android->Arguments = {1};
+  auto foreign = run("jni_classloader_paths");
+  EXPECT_EQ(foreign.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(
+      foreign.Diagnostic.find("unmodeled Android PathClassLoader instance"),
+      std::string::npos);
+  Options.Android->Arguments = {2};
+  input.system_loader_paths.reset();
+  auto app_only = run("jni_classloader_paths");
+  EXPECT_EQ(app_only.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(app_only.Diagnostic.find("system loader paths are not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, DefaultLocaleRequiresExplicitStateAndRetainsThreadIdentity) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{};
+  auto &input = *Options.Android->Application;
+  auto unknown = run("jni_default_locale");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(unknown.Diagnostic.find("default Locale is not supplied"),
+            std::string::npos);
+  input.default_locale.emplace();
+  auto component = run("jni_default_locale");
+  EXPECT_EQ(component.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(component.Diagnostic.find("Locale language is not supplied"),
+            std::string::npos);
+  input.default_locale = Snapshot::Locale{"en", "US"};
+  auto known = run("jni_default_locale");
+  EXPECT_EQ(known.Stop, ProcessStopReason::Returned) << known.Diagnostic;
+  EXPECT_EQ(known.ReturnValue, 0u);
+  for (unsigned mode : {2u, 3u}) {
+    Options.Android->Arguments = {mode};
+    auto refused = run("jni_default_locale");
+    EXPECT_EQ(refused.Stop, ProcessStopReason::UnsupportedService)
+        << refused.Diagnostic;
+  }
+  Options.Android->Arguments = {1};
+  input.default_locale = Snapshot::Locale{"", ""};
+  auto empty = run("jni_default_locale");
+  EXPECT_EQ(empty.Stop, ProcessStopReason::Returned) << empty.Diagnostic;
+  EXPECT_EQ(empty.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, TargetSdkVersionRetainsContextAndQueryFieldState) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &input = *Options.Android->Application;
+  auto unknown = run("jni_target_sdk");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(unknown.Diagnostic.find("targetSdkVersion is not supplied"),
+            std::string::npos);
+  input.package_manager_available = true;
+  input.application_info.emplace().target_sdk_version = 28;
+  Snapshot::ApplicationInfo query;
+  query.target_sdk_version = 29;
+  input.application_info_queries = {{"test.app", 0, query}};
+  auto known = run("jni_target_sdk");
+  EXPECT_EQ(known.Stop, ProcessStopReason::Returned) << known.Diagnostic;
+  EXPECT_EQ(known.ReturnValue, 0u);
+  Options.Android->Arguments = {1};
+  input.application_info->target_sdk_version = 0;
+  auto zero = run("jni_target_sdk");
+  EXPECT_EQ(zero.Stop, ProcessStopReason::Returned) << zero.Diagnostic;
+  EXPECT_EQ(zero.ReturnValue, 0u);
+  Options.Android->Arguments = {2};
+  auto foreign = run("jni_target_sdk");
+  EXPECT_EQ(foreign.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(
+      foreign.Diagnostic.find("unmodeled Android ApplicationInfo instance"),
+      std::string::npos);
+  Options.Android->Arguments = {3};
+  input.application_info->target_sdk_version = 28;
+  input.application_info_queries[0].info.target_sdk_version.reset();
+  auto query_unknown = run("jni_target_sdk");
+  EXPECT_EQ(query_unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(query_unknown.Diagnostic.find("targetSdkVersion is not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, PackageInfoQueriesRetainFieldsAcrossNativeThreads) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &input = *Options.Android->Application;
+  input.package_manager_available = true;
+  auto unknown = run("jni_package_info");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(unknown.Diagnostic.find("package info query is not supplied"),
+            std::string::npos);
+  Snapshot::PackageInfo info;
+  info.package_name = std::optional<std::string>{"result.app"};
+  info.version_name = std::optional<std::string>{"fixture-version"};
+  info.version_code = 7;
+  input.package_info_queries = {{"test.app", 0, info}};
+  auto known = run("jni_package_info");
+  EXPECT_EQ(known.Stop, ProcessStopReason::Returned) << known.Diagnostic;
+  EXPECT_EQ(known.ReturnValue, 0u);
+  for (unsigned mode : {1u, 2u, 3u, 6u}) {
+    Options.Android->Arguments = {mode};
+    auto refused = run("jni_package_info");
+    EXPECT_EQ(refused.Stop, ProcessStopReason::UnsupportedService)
+        << mode << ": " << refused.Diagnostic;
+  }
+  Options.Android->Arguments = {5};
+  input.package_info_queries[0].info.version_name =
+      std::optional<std::string>{};
+  auto null = run("jni_package_info");
+  EXPECT_EQ(null.Stop, ProcessStopReason::Returned) << null.Diagnostic;
+  EXPECT_EQ(null.ReturnValue, 0u);
+  input.package_info_queries[0].info.version_name.reset();
+  auto field = run("jni_package_info");
+  EXPECT_EQ(field.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(field.Diagnostic.find("versionName is not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, PackageInfoApplicationSharesReferencesAcrossThreads) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Arguments = {1};
+  auto declaration = run("jni_package_application");
+  EXPECT_EQ(declaration.Stop, ProcessStopReason::Returned)
+      << declaration.Diagnostic;
+  EXPECT_EQ(declaration.ReturnValue, 0u);
+  Options.Android->Arguments.clear();
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto &input = *Options.Android->Application;
+  input.package_manager_available = true;
+  input.application_info =
+      Snapshot::ApplicationInfo{std::string("context.apk")};
+  input.package_info_queries = {{"test.app", 0, {}}};
+  auto unknown = run("jni_package_application");
+  EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(unknown.Diagnostic.find("applicationInfo is not supplied"),
+            std::string::npos);
+  input.package_info_queries[0].info.application_info =
+      Snapshot::ApplicationInfo{std::string("parcel.apk")};
+  auto known = run("jni_package_application");
+  EXPECT_EQ(known.Stop, ProcessStopReason::Returned) << known.Diagnostic;
+  EXPECT_EQ(known.ReturnValue, 0u);
+  Options.Android->Arguments = {3};
+  auto foreign = run("jni_package_application");
+  EXPECT_EQ(foreign.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(foreign.Diagnostic.find("unmodeled Android PackageInfo instance"),
+            std::string::npos);
+  Options.Android->Arguments = {2};
+  input.package_info_queries[0].info.application_info.emplace();
+  auto null = run("jni_package_application");
+  EXPECT_EQ(null.Stop, ProcessStopReason::Returned) << null.Diagnostic;
+  EXPECT_EQ(null.ReturnValue, 0u);
+  Options.Android->Arguments = {4};
+  input.package_info_queries[0].info.application_info.reset();
+  auto written = run("jni_package_application");
+  EXPECT_EQ(written.Stop, ProcessStopReason::Returned) << written.Diagnostic;
+  EXPECT_EQ(written.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, SecureSettingsCachePreservesUnknownNullAndStringValues) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto Unknown = run("jni_secure_settings");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("cache is not supplied"),
+            std::string::npos);
+  Options.Android->Application->secure_settings_cache =
+      Snapshot::SecureSettingsCache{"fixture"};
+  auto Value = run("jni_secure_settings");
+  EXPECT_EQ(Value.Stop, ProcessStopReason::Returned) << Value.Diagnostic;
+  EXPECT_EQ(Value.ReturnValue, 0u);
+  Options.Android->Arguments = {2};
+  auto Key = run("jni_secure_settings");
+  EXPECT_EQ(Key.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Key.Diagnostic.find("unmodeled Settings.Secure key"),
+            std::string::npos);
+  Options.Android->Arguments = {3};
+  auto NullResolver = run("jni_secure_settings");
+  EXPECT_EQ(NullResolver.Stop, ProcessStopReason::Returned)
+      << NullResolver.Diagnostic;
+  EXPECT_EQ(NullResolver.ReturnValue, 0u);
+  Options.Android->Application->secure_settings_cache =
+      Snapshot::SecureSettingsCache{};
+  Options.Android->Arguments = {1};
+  auto NullValue = run("jni_secure_settings");
+  EXPECT_EQ(NullValue.Stop, ProcessStopReason::Returned)
+      << NullValue.Diagnostic;
+  EXPECT_EQ(NullValue.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, SecureKeyConstantsUseInternedStaticFieldStorage) {
+  auto Known = run("jni_secure_key_constants");
+  EXPECT_EQ(Known.Stop, ProcessStopReason::Returned) << Known.Diagnostic;
+  EXPECT_EQ(Known.ReturnValue, 0u);
+  Options.Android->Arguments = {1};
+  auto Unknown = run("jni_secure_key_constants");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("field declaration not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, SecureSettingsIntegersUseGlobalCacheAndCallerDefault) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  Options.Android->Application->secure_settings_cache =
+      Snapshot::SecureSettingsCache{"99"};
+  auto Unknown = run("jni_settings_int");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("global settings cache is not supplied"),
+            std::string::npos);
+  struct Case {
+    std::optional<std::string> text;
+    uint32_t value;
+  };
+  const Case cases[]{{"0", 0},
+                     {"1", 1},
+                     {"-2147483648", 2147483648u},
+                     {"2147483648", uint32_t(-23)},
+                     {" 1", uint32_t(-23)},
+                     {std::nullopt, uint32_t(-23)}};
+  for (const auto &test : cases) {
+    Options.Android->Application->global_settings_cache =
+        Snapshot::GlobalSettingsCache{test.text};
+    Options.Android->Arguments = {test.value, 0};
+    auto Value = run("jni_settings_int");
+    EXPECT_EQ(Value.Stop, ProcessStopReason::Returned) << Value.Diagnostic;
+    EXPECT_EQ(Value.ReturnValue, 0u);
+  }
+  Options.Android->Arguments = {0, 1};
+  auto Key = run("jni_settings_int");
+  EXPECT_EQ(Key.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Key.Diagnostic.find("unmodeled Settings.Secure key"),
+            std::string::npos);
+  Options.Android->Arguments = {0, 2};
+  auto NullResolver = run("jni_settings_int");
+  EXPECT_EQ(NullResolver.Stop, ProcessStopReason::Returned)
+      << NullResolver.Diagnostic;
+  EXPECT_EQ(NullResolver.ReturnValue, 0u);
+}
+TEST_P(AndroidJNI, ApplicationInfoSharesFieldsAcrossThreadsAndDetach) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  auto Unknown = run("jni_application_info");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("sourceDir is not supplied"),
+            std::string::npos);
+  for (unsigned Mode : {2u, 0u, 1u}) {
+    Options.Android->Arguments = {Mode};
+    if (Mode != 2)
+      Options.Android->Application->application_info =
+          Snapshot::ApplicationInfo{
+              Mode == 0 ? std::optional<std::string>{"/test/base.apk"}
+                        : std::nullopt};
+    auto Value = run("jni_application_info");
+    EXPECT_EQ(Value.Stop, ProcessStopReason::Returned) << Value.Diagnostic;
+    EXPECT_EQ(Value.ReturnValue, 0u);
+  }
+  Options.Android->Application->application_info =
+      Snapshot::ApplicationInfo{"/test/base.apk"};
+  Options.Android->Arguments = {3};
+  auto Field = run("jni_application_info");
+  EXPECT_EQ(Field.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Field.Diagnostic.find("field declaration not supplied"),
+            std::string::npos);
+}
+TEST_P(AndroidJNI, ApplicationInfoNativeLibraryDirectoryHasIndependentState) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+  Options.Android->Application->application_info =
+      Snapshot::ApplicationInfo{"/test/base.apk"};
+  Options.Android->Arguments = {0, 1};
+  auto Unknown = run("jni_application_info");
+  EXPECT_EQ(Unknown.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(Unknown.Diagnostic.find("nativeLibraryDir is not supplied"),
+            std::string::npos);
+  for (unsigned Mode : {2u, 0u, 1u}) {
+    Options.Android->Arguments = {Mode, 1};
+    if (Mode != 2)
+      Options.Android->Application->application_info->native_library_dir
+          .emplace(Mode == 0 ? std::optional<std::string>{"/test/lib/arm64"}
+                             : std::nullopt);
+    auto Value = run("jni_application_info");
+    EXPECT_EQ(Value.Stop, ProcessStopReason::Returned) << Value.Diagnostic;
+    EXPECT_EQ(Value.ReturnValue, 0u);
+  }
+}
+TEST_P(AndroidJNI,
        ApplicationFilesUseDeclaredDirectoryAndRetainedFileIdentity) {
   Options.Android->Application = mobile::dalvik::AndroidApplicationSnapshot{
       mobile::dalvik::AndroidApplicationSnapshot::Phase::Application,
@@ -381,6 +1402,263 @@ TEST_P(AndroidJNI, DexClassCapacityIsSeparateAndAggregate) {
   invoke({Small}, "", "Invalid DEX");
 #endif
 }
+TEST_P(AndroidJNI, ServiceManagerCacheAliasesSurviveCallsAndDetach) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 987654321}}};
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.binder_proxies = {{7, true}};
+  state.cache = std::vector<
+      mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::CacheEntry>{
+      {"alpha", 7}, {"beta", 7}};
+  Options.Android->ObserveJavaState = true;
+  auto result = run("jni_service_manager_cache");
+  ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+  EXPECT_EQ(result.ReturnValue, 0u);
+  ASSERT_TRUE(result.JavaState);
+  ASSERT_TRUE(result.JavaState->framework.service_manager);
+  const auto &snapshot = *result.JavaState->framework.service_manager;
+  EXPECT_TRUE(snapshot.initialized);
+  EXPECT_TRUE(snapshot.cache_known);
+  ASSERT_EQ(snapshot.entries.size(), 2u);
+  EXPECT_EQ(snapshot.entries[0].binder, snapshot.entries[1].binder);
+  ASSERT_EQ(snapshot.binder_proxies.size(), 1u);
+  EXPECT_EQ(snapshot.binder_proxies[0].warn_on_blocking, false);
+  EXPECT_FALSE(snapshot.manager);
+}
+TEST_P(AndroidJNI,
+       ServiceManagerCacheHitsKeepUnknownBinderStateAndFollowMapMutations) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.Android->ObserveJavaState = true;
+  auto &input =
+      Options.Android->Application.emplace().service_manager.emplace();
+  input.binder_proxies = {{7, std::nullopt}};
+  input.cache = std::vector<
+      mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::CacheEntry>{
+      {"alpha", 7}};
+  for (unsigned remove : {0u, 1u}) {
+    Options.Android->Arguments = {remove};
+    auto result = run("jni_service_manager_lookup");
+    if (remove) {
+      EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_EQ(result.Diagnostic,
+                "Android ServiceManager proxy state is not supplied");
+    } else {
+      EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+    ASSERT_TRUE(result.JavaState);
+    EXPECT_EQ(result.JavaState->terminal, bool(remove));
+    ASSERT_TRUE(result.JavaState->framework.service_manager);
+    const auto &state = *result.JavaState->framework.service_manager;
+    EXPECT_TRUE(state.initialized);
+    EXPECT_TRUE(state.cache_known);
+    EXPECT_EQ(state.entries.size(), remove ? 0u : 1u);
+    EXPECT_FALSE(state.manager);
+    ASSERT_EQ(state.binder_proxies.size(), 1u);
+    EXPECT_FALSE(state.binder_proxies[0].warn_on_blocking.has_value());
+  }
+}
+TEST_P(AndroidJNI, ServiceManagerMissingStateAndTransactionsStayExplicit) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.Android->Arguments = {1};
+  Options.Android->ObserveJavaState = true;
+  for (unsigned mode = 0; mode < 4; ++mode) {
+    auto &state =
+        Options.Android->Application.emplace().service_manager.emplace();
+    if (mode > 0)
+      state.cache.emplace();
+    if (mode > 1)
+      state.manager_proxy.emplace(std::nullopt);
+    if (mode > 2) {
+      state.binder_proxies = {{7, true}};
+      state.context_object.emplace(7);
+    }
+    auto result = run("jni_service_manager_cache");
+    EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService);
+    const char *messages[] = {"cache contents", "proxy state", "context object",
+                              "Binder transaction"};
+    EXPECT_NE(result.Diagnostic.find(messages[mode]), std::string::npos)
+        << result.Diagnostic;
+    ASSERT_TRUE(result.JavaState);
+    ASSERT_TRUE(result.JavaState->framework.service_manager);
+    EXPECT_TRUE(result.JavaState->framework.service_manager->initialized);
+    EXPECT_TRUE(result.JavaState->terminal);
+  }
+}
+TEST_P(AndroidJNI, ServiceManagerExplicitRepliesShareIdentityStatisticsAndUid) {
+  Options.LinuxTime.emplace().Clocks = {{1, {2, 0}}, {7, {50, 0}}};
+  Options.Android->ObserveJavaState = true;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace();
+  state.manager_proxy.emplace(std::nullopt);
+  state.context_object.emplace(7);
+  state.binder_proxies = {{7, true}, {8, true}};
+  using Query =
+      mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::LookupResult;
+  state.lookup_results = {{Query::Operation::Get, 7, "alpha", 8},
+                          {Query::Operation::Check, 7, "alpha", 8},
+                          {Query::Operation::Get, 7, "missing", {}},
+                          {Query::Operation::Check, 7, std::nullopt, {}}};
+  auto result = run("jni_service_manager_rpc");
+  ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+  EXPECT_EQ(result.ReturnValue, 0u);
+  ASSERT_TRUE(result.JavaState);
+  ASSERT_TRUE(result.JavaState->framework.service_manager);
+  const auto &observed = *result.JavaState->framework.service_manager;
+  EXPECT_TRUE(observed.entries.empty());
+  EXPECT_TRUE(observed.manager);
+  ASSERT_EQ(observed.binder_proxies.size(), 2u);
+  for (const auto &binder : observed.binder_proxies)
+    EXPECT_EQ(binder.warn_on_blocking, false);
+}
+TEST_P(AndroidJNI, ServiceManagerLogsAndNativeWritesShareOneExactTranscript) {
+  Options.LinuxTime.emplace().Clocks = {{1, {5, 0}}, {7, {50, 0}}};
+  Options.Android->Properties["debug.servicemanager.slow_call_ms"] = "0";
+  Options.Android->Properties["debug.servicemanager.slow_call_core_ms"] = "0";
+  Options.Android->ObserveJavaState = true;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace();
+  state.manager_proxy.emplace(std::nullopt);
+  state.context_object.emplace(7);
+  state.binder_proxies = {{7, true}, {8, true}};
+  using Query =
+      mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::LookupResult;
+  state.lookup_results = {{Query::Operation::Get, 7, "alpha", 8}};
+  const std::vector<NativeEventLogWrite> Writes = {
+      {{0x71, 0x82, 3, 0, 3, 2,   0,   0,   0,   0,  0,
+        2,    5,    0, 0, 0, 'a', 'l', 'p', 'h', 'a'},
+       -11},
+      {{0x70, 0x82, 3, 0, 3, 3, 0,    200,  0, 0, 0,
+        0,    1,    0, 0, 0, 0, 0x88, 0x13, 0, 0},
+       21},
+      {{123, 0, 0, 0, 0, 42, 0, 0, 0}, -11}};
+  for (unsigned Form : {0u, 1u, 2u}) {
+    Options.Android->Arguments = {Form};
+    Options.Android->EventLogWrites = Writes;
+    auto R = run("jni_service_manager_logs");
+    ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+    EXPECT_EQ(R.ReturnValue, 0u);
+    EXPECT_EQ(R.EventLogWritesConsumed, 3u);
+    ASSERT_TRUE(R.JavaState);
+    EXPECT_FALSE(R.JavaState->terminal);
+    for (const auto &Binder :
+         R.JavaState->framework.service_manager->binder_proxies)
+      EXPECT_EQ(Binder.warn_on_blocking, false);
+  }
+  for (unsigned Mode = 0; Mode != 4; ++Mode) {
+    Options.Android->EventLogWrites = Writes;
+    if (Mode == 0)
+      Options.Android->EventLogWrites.reset();
+    if (Mode == 1)
+      Options.Android->EventLogWrites->clear();
+    if (Mode == 2)
+      Options.Android->EventLogWrites->resize(1);
+    if (Mode == 3)
+      Options.Android->EventLogWrites->at(1).Payload.back() = 1;
+    auto R = run("jni_service_manager_logs");
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
+    if (Mode)
+      EXPECT_EQ(R.EventLogWritesConsumed, Mode >= 2 ? 1u : 0u);
+    else
+      EXPECT_FALSE(R.EventLogWritesConsumed);
+    ASSERT_TRUE(R.JavaState);
+    EXPECT_TRUE(R.JavaState->terminal);
+    EXPECT_EQ(R.JavaState->framework.service_manager->binder_proxies[1]
+                  .warn_on_blocking,
+              true);
+  }
+}
+
+TEST_P(AndroidJNI, ServiceManagerActiveUsesInitializeOnceWithSharedTime) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.Android->ObserveJavaState = true;
+  for (unsigned mode = 1; mode != 5; ++mode) {
+    Options.Android->Arguments = {mode};
+    auto result = run("jni_service_manager_metadata");
+    if (mode == 3) {
+      // Initialization completes before lookup reaches the separate,
+      // deliberately unsupported Object.toString value implementation.
+      EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService);
+      EXPECT_NE(result.Diagnostic.find("unmodeled Java method"),
+                std::string::npos);
+    } else {
+      EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+    ASSERT_TRUE(result.JavaState);
+    ASSERT_TRUE(result.JavaState->framework.service_manager);
+    EXPECT_TRUE(result.JavaState->framework.service_manager->initialized);
+    EXPECT_FALSE(result.JavaState->framework.service_manager->cache_known);
+  }
+}
+TEST_P(AndroidJNI, ServiceManagerLoggerRetainsIndependentBootEpochAcrossIdle) {
+  Options.LinuxTime.emplace().Clocks = {
+      {1, {10, 123456789}}, {4, {30, 500000000}}, {7, {50, 987654321}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  Options.Android->ObserveJavaState = true;
+  for (unsigned advance : {0u, 31u}) {
+    Options.LinuxTime->NanosecondsPerInstruction = advance;
+    Options.Android->Arguments = {advance};
+    auto result = run("jni_service_manager_clock");
+    ASSERT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+    EXPECT_EQ(result.ReturnValue, 0u);
+    ASSERT_TRUE(result.JavaState);
+    EXPECT_FALSE(result.JavaState->terminal);
+    ASSERT_TRUE(result.JavaState->framework.service_manager);
+    const auto &state = *result.JavaState->framework.service_manager;
+    EXPECT_TRUE(state.initialized);
+    EXPECT_NE(state.stat_logger, 0u);
+    EXPECT_FALSE(state.cache_known);
+    EXPECT_FALSE(state.manager);
+  }
+}
+TEST_P(AndroidJNI, ServiceManagerMetadataDoesNotInitializeTheClass) {
+  Options.Android->ObserveJavaState = true;
+  auto R = run("jni_service_manager_metadata");
+  ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+  EXPECT_EQ(R.ReturnValue, 0u);
+  ASSERT_TRUE(R.JavaState);
+  EXPECT_FALSE(R.JavaState->terminal);
+  bool Found = false;
+  for (const auto &C : R.JavaState->classes)
+    if (C.descriptor == "Landroid/os/ServiceManager;") {
+      Found = true;
+      EXPECT_NE(C.class_object, 0u);
+      EXPECT_FALSE(C.supplied);
+      EXPECT_EQ(C.initialization,
+                mobile::dalvik::JavaClassState::Initialization::NotStarted);
+    }
+  EXPECT_TRUE(Found);
+}
+TEST_P(AndroidJNI, ServiceManagerActiveUsesRequireElapsedRealtime) {
+  Options.Android->ObserveJavaState = true;
+  const char *Calls[] = {"JNIEnv.113", "JNIEnv.144", "JNIEnv.33", "JNIEnv.27"};
+  for (bool supplied : {false, true}) {
+    SCOPED_TRACE(supplied);
+    if (supplied)
+      Options.LinuxTime.emplace().Clocks = {
+          {0, {100, 0}}, {1, {10, 123456789}}, {4, {30, 500000000}}};
+    for (unsigned Mode = 1; Mode != 5; ++Mode) {
+      SCOPED_TRACE(Mode);
+      Options.Android->Arguments = {Mode};
+      auto R = run("jni_service_manager_metadata");
+      EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
+      EXPECT_EQ(R.Diagnostic, "Linux clock 7 has no explicit linux_time input");
+      ASSERT_FALSE(R.NativeCalls.empty());
+      EXPECT_EQ(R.NativeCalls.back().Name, Calls[Mode - 1]);
+      EXPECT_FALSE(R.NativeCalls.back().Result);
+      ASSERT_TRUE(R.JavaState);
+      EXPECT_TRUE(R.JavaState->terminal);
+      for (const auto &C : R.JavaState->classes)
+        if (C.descriptor == "Landroid/os/ServiceManager;")
+          EXPECT_EQ(
+              C.initialization,
+              mobile::dalvik::JavaClassState::Initialization::Initializing);
+    }
+  }
+}
 TEST_P(AndroidJNI, ExplicitClassLookupFailuresPreserveExceptionsAndUnknowns) {
   for (const std::string Type :
        {"java/lang/ClassNotFoundException", "java/lang/NoClassDefFoundError"}) {
@@ -404,9 +1682,9 @@ TEST_P(AndroidJNI, ExplicitClassLookupFailuresPreserveExceptionsAndUnknowns) {
 }
 TEST_P(AndroidJNI, RejectsContradictoryClassLoaderDeclarations) {
   for (const std::string Name : std::vector<std::string>{
-           "", "java/lang/String", "android/os/Build$VERSION", "bad.name",
-           "[Lfixture/Absent;", "/bad", "bad/", "bad//Name",
-           std::string("bad\0Name", 8)}) {
+           "", "java/lang/String", "android/os/Build$VERSION",
+           "android/os/ServiceManager", "bad.name", "[Lfixture/Absent;", "/bad",
+           "bad/", "bad//Name", std::string("bad\0Name", 8)}) {
     Options.Android->JNIClassLookupFailures = {
         {Name, "java/lang/ClassNotFoundException"}};
     Options.Android->EntrySymbol = "jni_vm_lifecycle";
@@ -735,6 +2013,65 @@ TEST_P(AndroidJNI, EnvironmentIsExplicitlyEnabled) {
   Options.Android->JNI = false;
   auto R = run("jni_vm_lifecycle");
   EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
+}
+TEST_P(AndroidJNI, SplitSourceDirsSharesMutableArraysAcrossThreads) {
+  using Snapshot = mobile::dalvik::AndroidApplicationSnapshot;
+  using Sources = Snapshot::ApplicationInfo::SplitSourceDirectories;
+  for (bool public_sources : {false, true}) {
+    SCOPED_TRACE(public_sources);
+    const char *entry = public_sources ? "jni_split_public_source_dirs"
+                                       : "jni_split_source_dirs";
+    Options.Android->Arguments = {1};
+    auto declaration = run(entry);
+    EXPECT_EQ(declaration.Stop, ProcessStopReason::Returned)
+        << declaration.Diagnostic;
+    EXPECT_EQ(declaration.ReturnValue, 0u);
+    Options.Android->Arguments.clear();
+    Options.Android->Application = Snapshot{Snapshot::Phase::Application};
+    auto &input = *Options.Android->Application;
+    input.package_manager_available = true;
+    input.application_info.emplace().source_dir = "base.apk";
+    auto unknown = run(entry);
+    EXPECT_EQ(unknown.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(unknown.Diagnostic.find(
+                  public_sources ? "splitPublicSourceDirs is not supplied"
+                                 : "splitSourceDirs is not supplied"),
+              std::string::npos);
+    auto &field = public_sources
+                      ? input.application_info->split_public_source_dirs
+                      : input.application_info->split_source_dirs;
+    auto &other = public_sources
+                      ? input.application_info->split_source_dirs
+                      : input.application_info->split_public_source_dirs;
+    other = Sources{"other.apk"};
+    field = Sources{"first.apk", std::nullopt, "", "first.apk"};
+    input.application_info_queries = {{"test.app", 0, *input.application_info}};
+    auto positive = run(entry);
+    EXPECT_EQ(positive.Stop, ProcessStopReason::Returned)
+        << positive.Diagnostic;
+    EXPECT_EQ(positive.ReturnValue, 0u);
+    Options.Android->Arguments = {6};
+    auto foreign = run(entry);
+    EXPECT_EQ(foreign.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_NE(
+        foreign.Diagnostic.find("unmodeled Android ApplicationInfo instance"),
+        std::string::npos);
+    Options.Android->Arguments = {2};
+    field.emplace();
+    auto null = run(entry);
+    EXPECT_EQ(null.Stop, ProcessStopReason::Returned) << null.Diagnostic;
+    EXPECT_EQ(null.ReturnValue, 0u);
+    Options.Android->Arguments = {3};
+    field = Sources{};
+    auto empty = run(entry);
+    EXPECT_EQ(empty.Stop, ProcessStopReason::Returned) << empty.Diagnostic;
+    EXPECT_EQ(empty.ReturnValue, 0u);
+    Options.Android->Arguments = {5};
+    field.reset();
+    auto written = run(entry);
+    EXPECT_EQ(written.Stop, ProcessStopReason::Returned) << written.Diagnostic;
+    EXPECT_EQ(written.ReturnValue, 0u);
+  }
 }
 INSTANTIATE_TEST_SUITE_P(
     Backends, AndroidJNI,

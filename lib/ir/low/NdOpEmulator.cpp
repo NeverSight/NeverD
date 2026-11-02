@@ -16,11 +16,20 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 
 #include "neverd/Limits.h"
-#include "neverd/ir/X87Constant.h"
-#include "neverd/ir/X87Context.h"
+#include "neverd/ir/X86/X87Constant.h"
+#include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/X86/X87GuardedValue.h"
+#include "neverd/ir/X86/X87Stack.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
+#include "neverd/ir/low/AArch64WritebackMemory.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <array>
@@ -243,6 +252,21 @@ uint64_t NdOpEmulator::readOperand(const NdVar &Op) const {
       return Truncate(It->second);
   }
   return 0;
+}
+
+bool NdOpEmulator::knownOperandBytes(const NdVar &Operand, uint64_t Offset,
+                                     uint64_t Bytes) const {
+  if (Offset > Operand.Size || Bytes > Operand.Size - Offset)
+    return false;
+  if (Operand.isConst())
+    return true;
+  if ((!Operand.isReg() && !Operand.isTemp()) ||
+      !Registers.contains(Operand.Offset))
+    return false;
+  const auto Wide = WideRegisters.find(Operand.Offset);
+  const uint64_t Available =
+      Wide == WideRegisters.end() ? sizeof(uint64_t) : Wide->second.size();
+  return Offset <= Available && Bytes <= Available - Offset;
 }
 
 std::vector<uint8_t> NdOpEmulator::readOperandBytes(const NdVar &Op) const {
@@ -475,8 +499,10 @@ void NdOpEmulator::clobberVolatileRegisters() {
   }
 }
 
-bool NdOpEmulator::step(const LowOp &Op) {
-  if (isLowRawEnvironmentRequirement(Op))
+bool NdOpEmulator::step(const LowOp &Op) { return stepImpl(Op, {}); }
+
+bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
+  if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
       ((Op.Output.Size == 10 && Op.Output.Offset >= x86reg::ST0 &&
@@ -490,15 +516,269 @@ bool NdOpEmulator::step(const LowOp &Op) {
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return false;
   if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
-      Op.Inputs[0].isConst() &&
-      (static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
-           Intrinsic::X86Invalidate ||
-       static_cast<Intrinsic>(Op.Inputs[0].Offset) ==
-           Intrinsic::X86MsrAccess)) {
+      Op.Inputs[0].isConst()) {
+    const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+    if (isAArch64WritebackMemoryIntrinsic(Id)) {
+      if (Img.Arch != Arch::AArch64 ||
+          !lowAArch64WritebackMemoryShapeIsValid(Op))
+        return false;
+      const auto Instruction = *aarch64WritebackMemoryInstruction(
+          Op.Inputs[kWritebackWordOperand + 1].Offset);
+      const auto &Base = Op.Inputs[kWritebackBaseOperand + 1];
+      if (!knownOperandBytes(Base, 0, Base.Size))
+        return false;
+      const uint64_t OriginalBase = readOperand(Base);
+      uint64_t Index = 0;
+      if (Instruction.isStructure() && Instruction.hasRegisterIndex()) {
+        const auto &Input = Op.Inputs[kStructureIndexOperand + 1];
+        if (!knownOperandBytes(Input, 0, Input.Size))
+          return false;
+        Index = readOperand(Input);
+      }
+      const auto Updated = Instruction.completedBase(OriginalBase, Index);
+      const auto Access = Instruction.accessAddress(OriginalBase);
+      if (!Updated || !Access ||
+          !Instruction.controlIndependentSpan(OriginalBase, Index))
+        return false;
+      const uint64_t Address = *Access;
+      if (Instruction.isStructure()) {
+        const auto Structure = Instruction.structure();
+        std::vector<std::vector<uint8_t>> Values(
+            Structure.vectors(),
+            std::vector<uint8_t>(kAddressMemoryVectorBytes, 0));
+        if (!Structure.isLoad() || Structure.laneLoad())
+          for (unsigned I = 0; I != Values.size(); ++I) {
+            const auto &Input = Op.Inputs[kStructureDataOperand + I + 1];
+            if (!knownOperandBytes(Input, 0, Input.Size))
+              return false;
+            Values[I] = readOperandBytes(Input);
+          }
+        const auto Outputs = Structure.isLoad()
+                                 ? lowAArch64WritebackOutputs(Op, Following)
+                                 : std::optional<std::vector<NdVar>>{};
+        if (Structure.isLoad() && !Outputs)
+          return false;
+        std::vector<uint8_t> Bytes(Structure.totalAccessBytes());
+        if (Structure.isLoad()) {
+          const auto Loaded = loadMemoryBytes(Address, Bytes.size());
+          if (!Loaded)
+            return false;
+          Bytes = *Loaded;
+        } else {
+          for (unsigned I = 0; I != Bytes.size(); ++I) {
+            const auto *Mapped = Img.getSegmentFor(Address + I);
+            if (!Mapped || !Mapped->isWritable() || Address + I < Mapped->VA ||
+                Address + I - Mapped->VA >= Mapped->Size)
+              return false;
+          }
+        }
+        for (unsigned I = 0; I != Bytes.size() / Structure.ElementBytes; ++I) {
+          auto Data = Values[Structure.memoryVector(I)].begin() +
+                      Structure.memoryVectorByte(I);
+          auto Memory = Bytes.begin() + I * Structure.ElementBytes;
+          if (Structure.isLoad())
+            std::copy_n(Memory, Structure.ElementBytes, Data);
+          else
+            std::copy_n(Data, Structure.ElementBytes, Memory);
+        }
+        std::array<uint8_t, kAddressMemoryPointerBytes> CompletedBase;
+        writeLE<uint64_t>(CompletedBase.data(), *Updated);
+        if (!Structure.isLoad()) {
+          if (!storeMemoryBytes(Address, Bytes))
+            return false;
+          writeOutputBytes(Op.Output, CompletedBase);
+          return true;
+        }
+        if (Structure.Replicate)
+          for (auto &Value : Values)
+            for (unsigned I = Structure.ElementBytes;
+                 I < Structure.vectorBytes(); I += Structure.ElementBytes)
+              std::copy_n(Value.begin(), Structure.ElementBytes,
+                          Value.begin() + I);
+        for (unsigned I = 0; I != Values.size(); ++I)
+          writeOutputBytes((*Outputs)[I], Values[I]);
+        writeOutputBytes((*Outputs)[Values.size()], CompletedBase);
+        if (CollectLoads &&
+            static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+          LoadLog.push_back({Address, static_cast<uint16_t>(Bytes.size())});
+        return true;
+      }
+      if (Instruction.isPair()) {
+        if (Instruction.isLoad()) {
+          const auto Outputs = lowAArch64WritebackOutputs(Op, Following);
+          if (!Outputs)
+            return false;
+          const auto Bytes =
+              loadMemoryBytes(Address, Instruction.totalAccessBytes());
+          if (!Bytes)
+            return false;
+          for (unsigned I = 0; I != kPairValues; ++I) {
+            const unsigned Begin = I * Instruction.accessBytes();
+            const auto First = Bytes->begin() + Begin;
+            const auto Last = First + Instruction.accessBytes();
+            std::vector<uint8_t> Value(
+                (*Outputs)[I].Size,
+                Instruction.operation().Signed &&
+                        (*(Last - 1) & kWritebackByteSignBit)
+                    ? kWritebackByteMask
+                    : 0);
+            std::copy(First, Last, Value.begin());
+            writeOutputBytes((*Outputs)[I], Value);
+          }
+          std::array<uint8_t, kAddressMemoryPointerBytes> CompletedBase;
+          writeLE<uint64_t>(CompletedBase.data(), *Updated);
+          writeOutputBytes((*Outputs)[kPairBaseIndex], CompletedBase);
+          if (CollectLoads &&
+              static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+            LoadLog.push_back({Address, static_cast<uint16_t>(
+                                            Instruction.totalAccessBytes())});
+          return true;
+        }
+        const auto &First = Op.Inputs[kWritebackDataOperand + 1];
+        const auto &Second = Op.Inputs[kPairSecondDataOperand + 1];
+        if (!knownOperandBytes(First, 0, First.Size) ||
+            !knownOperandBytes(Second, 0, Second.Size))
+          return false;
+        for (unsigned I = 0; I != Instruction.totalAccessBytes(); ++I) {
+          const auto *Mapped = Img.getSegmentFor(Address + I);
+          if (!Mapped || !Mapped->isWritable() || Address + I < Mapped->VA ||
+              Address + I - Mapped->VA >= Mapped->Size)
+            return false;
+        }
+        auto Bytes = readOperandBytes(First);
+        Bytes.resize(Instruction.accessBytes());
+        const auto Next = readOperandBytes(Second);
+        Bytes.insert(Bytes.end(), Next.begin(),
+                     Next.begin() + Instruction.accessBytes());
+        if (!storeMemoryBytes(Address, Bytes))
+          return false;
+        std::array<uint8_t, kAddressMemoryPointerBytes> CompletedBase;
+        writeLE<uint64_t>(CompletedBase.data(), *Updated);
+        writeOutputBytes(Op.Output, CompletedBase);
+        return true;
+      }
+      if (Instruction.isVector() && Instruction.isLoad()) {
+        const auto Outputs = lowAArch64WritebackOutputs(Op, Following);
+        if (!Outputs)
+          return false;
+        const auto Bytes = loadMemoryBytes(Address, Instruction.accessBytes());
+        if (!Bytes)
+          return false;
+        std::vector<uint8_t> Value(kAddressMemoryVectorBytes, 0);
+        std::copy(Bytes->begin(), Bytes->end(), Value.begin());
+        std::array<uint8_t, kAddressMemoryPointerBytes> CompletedBase;
+        writeLE<uint64_t>(CompletedBase.data(), *Updated);
+        writeOutputBytes((*Outputs)[kWritebackValueIndex], Value);
+        writeOutputBytes((*Outputs)[kWritebackBaseIndex], CompletedBase);
+        if (CollectLoads &&
+            static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+          LoadLog.push_back(
+              {Address, static_cast<uint16_t>(Instruction.accessBytes())});
+        return true;
+      }
+      std::vector<uint8_t> Result(Op.Output.Size, 0);
+      if (!Instruction.isLoad()) {
+        const auto &Data = Op.Inputs[kWritebackDataOperand + 1];
+        if (!knownOperandBytes(Data, 0, Data.Size))
+          return false;
+        for (unsigned I = 0; I != Instruction.accessBytes(); ++I) {
+          const auto *Mapped = Img.getSegmentFor(Address + I);
+          if (!Mapped || !Mapped->isWritable() || Address + I < Mapped->VA ||
+              Address + I - Mapped->VA >= Mapped->Size)
+            return false;
+        }
+        auto Bytes = readOperandBytes(Data);
+        Bytes.resize(Instruction.accessBytes());
+        if (!storeMemoryBytes(Address, Bytes))
+          return false;
+        writeLE<uint64_t>(Result.data(), *Updated);
+      } else {
+        const auto Bytes = loadMemoryBytes(Address, Instruction.accessBytes());
+        if (!Bytes)
+          return false;
+        const auto Operation = Instruction.adjustment().operation();
+        // The encoded W form zeroes the upper X half after its signed result.
+        std::fill_n(Result.begin(), Operation.ResultBytes,
+                    Operation.Signed && (Bytes->back() & kWritebackByteSignBit)
+                        ? kWritebackByteMask
+                        : 0);
+        std::copy(Bytes->begin(), Bytes->end(), Result.begin());
+        writeLE<uint64_t>(Result.data() + kAddressMemoryPointerBytes, *Updated);
+        if (CollectLoads &&
+            static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+          LoadLog.push_back(
+              {Address, static_cast<uint16_t>(Instruction.accessBytes())});
+      }
+      writeOutputBytes(Op.Output, Result);
+      return true;
+    }
+    if (isAArch64AddressMemoryIntrinsic(Id)) {
+      if (Img.Arch != Arch::AArch64 || !lowAArch64AddressMemoryShapeIsValid(Op))
+        return false;
+      const auto &Base = Op.Inputs[kAddressMemoryBaseOperand + 1];
+      const auto &Index = Op.Inputs[kAddressMemoryIndexOperand + 1];
+      const auto Known = [&](const NdVar &Input) {
+        return knownOperandBytes(Input, 0, Input.Size);
+      };
+      if (!Known(Base) || !Known(Index))
+        return false;
+      const auto Instruction = aarch64AddressMemoryInstruction(
+          Op.Inputs[kAddressMemoryWordOperand + 1].Offset);
+      const auto Address = Instruction->controlIndependentAddress(
+          readOperand(Base), readOperand(Index));
+      // Without the original alignment controls, an ordered unaligned access
+      // may fault. Do not publish bytes or a result from the finite snapshot.
+      if (!Address ||
+          (isAArch64OrderedUnscaledMemoryEncoding(Instruction->Word) &&
+           *Address % Instruction->accessBytes()))
+        return false;
+      if (!Instruction->isLoad()) {
+        const auto &Data = Op.Inputs[kAddressMemoryDataOperand + 1];
+        if (!Known(Data))
+          return false;
+        // Use the finite memory owner directly: lenient mode cannot turn a
+        // refused original store into a successful no-op.
+        for (unsigned I = 0; I != Instruction->accessBytes(); ++I) {
+          const auto *Mapped = Img.getSegmentFor(*Address + I);
+          if (!Mapped || !Mapped->isWritable() || *Address + I < Mapped->VA ||
+              *Address + I - Mapped->VA >= Mapped->Size)
+            return false;
+        }
+        return storeMemoryBytes(*Address, readOperandBytes(Data));
+      }
+      const auto Value = loadMemoryBytes(*Address, Instruction->accessBytes());
+      if (!Value)
+        return false;
+      if (CollectLoads &&
+          static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+        LoadLog.push_back(
+            {*Address, static_cast<uint16_t>(Instruction->accessBytes())});
+      writeOutputBytes(Op.Output, *Value);
+      return true;
+    }
+    if (isX86SystemStateIntrinsic(Id)) {
+      switch (x86SystemStateContract(Id).Kind) {
+      case X86SystemStateKind::Enqueue:
+      case X86SystemStateKind::DirectStore:
+      case X86SystemStateKind::DirectStore64B:
+      case X86SystemStateKind::StreamStore128:
+        // These bounded memory executors validate the shared operand contract,
+        // including FS/GS, before touching the ordinary BinaryImage projection.
+        return executeIntrinsic(Op);
+      default:
+        return false;
+      }
+    }
+    if (isX86CompactMemory(Id) || Id == Intrinsic::X86FourSourceMemory)
+      return executeIntrinsic(Op);
     // A scalar tracer has neither CPL/CR4/CPUID state nor a guest TLB.  Even a
     // structurally valid invalidation or MSR access must therefore stop here
     // rather than pretending the architectural state transition succeeded.
-    return false;
+    if (isX86BoundedLeafIntrinsic(Id) || isX86BoundedLeafPending(Id) ||
+        isX86SgxIntrinsic(Id) || Id == Intrinsic::X86Invalidate ||
+        Id == Intrinsic::X86MsrAccess || Id == Intrinsic::X86HleState ||
+        isX86VirtualizationIntrinsic(Id))
+      return false;
   }
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
     if (!opcodeSupportsMemoryAddressSpace(Op.Opcode))
@@ -558,13 +838,16 @@ bool NdOpEmulator::step(const LowOp &Op) {
       case Intrinsic::X86VP4DPWSSD:
       case Intrinsic::X86VP4DPWSSDS:
       case Intrinsic::RequireAligned:
+      case Intrinsic::X86LegacyRaoAdd:
+      case Intrinsic::X86LegacyRaoAnd:
+      case Intrinsic::X86LegacyRaoOr:
+      case Intrinsic::X86LegacyRaoXor:
+      case Intrinsic::X86LegacyCmpccXadd:
       case Intrinsic::ApxRaoAdd:
       case Intrinsic::ApxRaoAnd:
       case Intrinsic::ApxRaoOr:
       case Intrinsic::ApxRaoXor:
       case Intrinsic::ApxCmpccXadd:
-      case Intrinsic::Enqcmd:
-      case Intrinsic::Enqcmds:
         return executeIntrinsic(Op);
       default:
         // Segmented strings still require architectural REP/DF/flags state
@@ -609,6 +892,10 @@ bool NdOpEmulator::step(const LowOp &Op) {
   case NdOp::INTRINSIC:
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+      // The explicit portable x87 profile cannot silently skip an unmodeled
+      // state boundary, even when the surrounding scalar tracer is lenient.
+      if (X87PortableMode && x87ContextSynchronizesExternalState(Id))
+        return false;
       if (isX86FPStateIntrinsic(Id))
         return executeX86ScalarFPState(Op);
       if (Id == Intrinsic::CetRdSsp || Id == Intrinsic::CetIncSsp ||
@@ -617,11 +904,22 @@ bool NdOpEmulator::step(const LowOp &Op) {
         return executeIntrinsic(Op);
       if (isX87ContextIntrinsic(Id))
         return executeX87Context(Op);
+      // Guarded native values have no complete concrete stack/status model.
+      // Lenient tracing must not skip their operations or runtime guards.
+      if (isX87GuardedValueIntrinsic(Id))
+        return false;
+      // These value helpers require native x87. Skipping one would retain a
+      // stale status word for its following synthetic read, even if the
+      // tracer invalidated the numeric output.
+#define NEVERD_X87_VALUE_HELPER(ID, Name, Asm, Operands, PopsST1,              \
+                                SamplesStatus)                                 \
+  if (Id == Intrinsic::ID)                                                     \
+    return false;
+#include "neverd/ir/intrinsics/X86/X87ValueInstructions.def"
       if (Id == Intrinsic::X87Fprem || Id == Intrinsic::X87Fprem1 ||
           Id == Intrinsic::X87ReadStatus || Id == Intrinsic::X87Fninit ||
           Id == Intrinsic::X87Fnclex || Id == Intrinsic::X87Wait ||
-          Id == Intrinsic::X87Ffree || Id == Intrinsic::X87Fincstp ||
-          isX87ConstantControlIntrinsic(Id))
+          x87StackEffect(Id) || isX87ConstantControlIntrinsic(Id))
         return executeX87(Op);
       if (Id == Intrinsic::MaskedLoadB || Id == Intrinsic::MaskedLoadW ||
           Id == Intrinsic::MaskedLoadD || Id == Intrinsic::MaskedLoadQ ||
@@ -639,12 +937,13 @@ bool NdOpEmulator::step(const LowOp &Op) {
           Id == Intrinsic::AMXTileStore || Id == Intrinsic::AMXTileZero ||
           Id == Intrinsic::AMXClearStartRow ||
           Id == Intrinsic::AMXTileCompute || Id == Intrinsic::AMXTileRow ||
-          Id == Intrinsic::Pdep || Id == Intrinsic::Pext ||
-          Id == Intrinsic::Mpsadbw || Id == Intrinsic::Vdbpsadbw ||
-          Id == Intrinsic::X86FourFMA || Id == Intrinsic::F16CConvert ||
-          Id == Intrinsic::X86VP4DPWSSD || Id == Intrinsic::X86VP4DPWSSDS ||
-          Id == Intrinsic::X86ApproxFloat || Id == Intrinsic::X86FPClass ||
-          Id == Intrinsic::X86FPArith || Id == Intrinsic::X86FPConvert ||
+          Id == Intrinsic::X86AMXState || Id == Intrinsic::Pdep ||
+          Id == Intrinsic::Pext || Id == Intrinsic::Mpsadbw ||
+          Id == Intrinsic::Vdbpsadbw || Id == Intrinsic::X86FourFMA ||
+          Id == Intrinsic::F16CConvert || Id == Intrinsic::X86VP4DPWSSD ||
+          Id == Intrinsic::X86VP4DPWSSDS || Id == Intrinsic::X86ApproxFloat ||
+          Id == Intrinsic::X86FPClass || Id == Intrinsic::X86FPArith ||
+          Id == Intrinsic::X86FPConvert ||
           Id == Intrinsic::X86FPRoundTransform ||
           Id == Intrinsic::X86FPExtract || Id == Intrinsic::X86FPRange ||
           Id == Intrinsic::X86FPFixup || Id == Intrinsic::X86FPScale ||
@@ -652,10 +951,7 @@ bool NdOpEmulator::step(const LowOp &Op) {
           Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
-          Id == Intrinsic::ApxRaoAdd || Id == Intrinsic::ApxRaoAnd ||
-          Id == Intrinsic::ApxRaoOr || Id == Intrinsic::ApxRaoXor ||
-          Id == Intrinsic::ApxCmpccXadd || Id == Intrinsic::Enqcmd ||
-          Id == Intrinsic::Enqcmds)
+          isX86AtomicIntrinsic(Id))
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control
@@ -751,16 +1047,29 @@ bool NdOpEmulator::step(const LowOp &Op) {
   case NdOp::STORE:
     return executeStore(Op);
 
-  case NdOp::ATOMIC_XCHG:
-    // The constant-tracing emulator stores one host word per value and cannot
-    // represent the 128-bit exchanges this opcode exists for.  Stop instead
-    // of carrying stale memory or destination state past an observable RMW.
-    ++Skips.UnsupportedOps;
-    if (Op.Output.isReg() || Op.Output.isTemp()) {
-      Registers.erase(Op.Output.Offset);
-      WideRegisters.erase(Op.Output.Offset);
+  case NdOp::ATOMIC_XCHG: {
+    const LowMemoryOperandView Memory = lowMemoryOperands(Op);
+    if ((Img.Arch != Arch::X86 && Img.Arch != Arch::X64) || !Memory.Complete ||
+        Memory.AccessSize > sizeof(uint64_t)) {
+      ++Skips.UnsupportedOps;
+      if (Op.Output.isReg() || Op.Output.isTemp()) {
+        Registers.erase(Op.Output.Offset);
+        WideRegisters.erase(Op.Output.Offset);
+      }
+      return false;
     }
-    return false;
+    const auto Address = resolveMemoryAddress(Op, readOperand(*Memory.Address));
+    if (!Address || !canWriteMemoryBytes(*Address, Memory.AccessSize))
+      return false;
+    const auto Old = loadMemory(*Address, Memory.AccessSize);
+    if (!Old || !storeMemory(*Address, Memory.AccessSize,
+                             readOperand(*Memory.StoredValue)))
+      return false;
+    // The address and source may share the output register. Commit its old
+    // value only after the complete memory transaction succeeds.
+    writeOutput(Op.Output, *Old);
+    return true;
+  }
 
   case NdOp::ATOMIC_ADD: {
     const LowMemoryOperandView Memory = lowMemoryOperands(Op);
@@ -875,7 +1184,7 @@ NdOpEmulator::runImpl(llvm::ArrayRef<LowOp> Ops,
       ++I;
       continue;
     }
-    if (!step(Op)) {
+    if (!stepImpl(Op, Ops.drop_front(I + 1))) {
       if (Op.Opcode == NdOp::INDIR_BR) {
         if (const LowInstructionBoundary *Boundary =
                 boundaryForOp(Ops, Boundaries, I)) {

@@ -13,7 +13,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/solver/BitVectorSolver.h"
 #include "neverd/symbolic/SymExec.h"
 

@@ -262,13 +262,13 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
         "        self.0.syscall(hash, args).map_err(SbfErrorV2::from)\n"
         "    }\n"
         "}\n\n"
-        "const REGISTER_COUNT: usize = "
-     << kRegisterCount
-     << ";\nconst RETURN_REGISTER: usize = " << kReturnRegister
-     << ";\nconst INPUT_REGISTER: usize = " << kFirstArgumentRegister
-     << ";\nconst INSTRUCTION_DATA_REGISTER: usize = "
-     << kInstructionDataRegister
-     << ";\nconst FRAME_POINTER: usize = " << kFramePointerRegister << ";\n";
+        "// Every field is architectural state, including registers unused by\n"
+        "// this particular program. Field access avoids generic array "
+        "indexing.\n"
+        "#[derive(Default)]\n#[allow(dead_code)]\nstruct NdRegisters {\n";
+  for (unsigned Index = 0; Index < kRegisterCount; ++Index)
+    OS << "    r" << Index << ": u64,\n";
+  OS << "}\n\n";
   if (NeedsSyscall)
     OS << "const PROGRAM_RUNTIME_FEATURES: SbfRuntimeFeatures = "
           "SbfRuntimeFeatures::from_bits("
@@ -276,8 +276,7 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
               runtimeFeatureMask(Program.ActiveRuntimeFeatures))
        << ");\n";
   if (!Structured)
-    OS << "const FIRST_SAVED: usize = " << kFirstCalleeSavedRegister
-       << ";\nconst SAVED_REGISTERS: usize = " << kCalleeSavedRegisterCount
+    OS << "const SAVED_REGISTERS: usize = " << kCalleeSavedRegisterCount
        << ";\nconst MAX_CALL_DEPTH: usize = " << Program.Config.MaxCallDepth
        << ";\n";
   if (NeedsIndirectCall)
@@ -321,14 +320,26 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
           "}\n";
   };
 
+  if (!Structured && Options.PartitionDispatcher) {
+    auto Partition = partitionSource(Program);
+    if (!Partition)
+      return Partition.takeError();
+    emitPartitionedProgram(OS, Program, BySlot, *Partition);
+    EmitPublicEntrypoints();
+    return Buffer;
+  }
+
   // The loader hands the program the input buffer and, on a runtime that has
   // activated it, the instruction data. A callable that only takes the first
-  // cannot reproduce a program that reads the second.
+  // cannot reproduce a program that reads the second. Use the same borrowed
+  // register view as partitioned regions: VM writes remain explicit even when
+  // a terminal fault leaves their values unobservable to the caller.
   OS << "fn nd_program_impl<E: SbfEnvironmentV2>(env: &mut E, input: u64, "
         "instruction_data: u64) -> Result<u64, SbfErrorV2> "
         "{\n"
         "    let _ = &mut *env;\n"
-        "    let mut r = [0u64; REGISTER_COUNT];\n";
+        "    let mut registers = NdRegisters::default();\n"
+        "    let r = &mut registers;\n";
   if (!Structured) {
     OS << "    let ";
     if (NeedsCallFrames)
@@ -344,11 +355,13 @@ llvm::Expected<std::string> emitRust(const SBFProgram &Program,
     OS << "return_pc = [0usize; MAX_CALL_DEPTH];\n"
           "    let mut depth = 0usize;\n"
           "    let mut pc = "
-       << Program.Low.EntrySlot << "usize;\n";
+       << Program.Low.EntrySlot
+       << "usize;\n"
+          "    let _ = (&saved, &saved_fp, &return_pc, &mut depth, &mut pc);\n";
   }
-  OS << "    r[INPUT_REGISTER] = input; "
-        "r[INSTRUCTION_DATA_REGISTER] = instruction_data; "
-        "r[FRAME_POINTER] = STACK_START + "
+  OS << "    " << reg(kFirstArgumentRegister) << " = input; "
+     << reg(kInstructionDataRegister) << " = instruction_data; "
+     << reg(kFramePointerRegister) << " = STACK_START + "
      << (versionHasFeature(Program.Low.TheVersion,
                            VersionFeature::ManualStackFrames)
              ? "STACK_SIZE"

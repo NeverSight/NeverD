@@ -1,0 +1,26 @@
+//===- AArch64OriginalMemory.def - Original memory storage text -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Private byte storage for retained reads whose results are unobserved.
+/// NEVERD_A64_ORIGINAL_MEMORY_TEXT(Name, Text) defines the private C/LLVM text.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_ORIGINAL_MEMORY_TEXT
+#define NEVERD_A64_ORIGINAL_MEMORY_TEXT(Name, Text)
+#endif
+
+NEVERD_A64_ORIGINAL_MEMORY_TEXT(kOriginalMemorySourcePrefix,
+                                "neverd_original_memory_")
+NEVERD_A64_ORIGINAL_MEMORY_TEXT(kOriginalMemoryLLVMNamePrefix,
+                                "neverd.original.memory.")
+NEVERD_A64_ORIGINAL_MEMORY_TEXT(
+    kOriginalMemoryCStorage,
+    "_Alignas({0}) static unsigned char {1}[{2}] = {{ {3} };\n")
+NEVERD_A64_ORIGINAL_MEMORY_TEXT(kOriginalMemoryCByte, "{0:X2}, ")
+NEVERD_A64_ORIGINAL_MEMORY_TEXT(kOriginalMemoryCIndent, "\n  ")
+NEVERD_A64_ORIGINAL_MEMORY_TEXT(kOriginalMemoryCBase, "((uintptr_t)&{0}[{1}])")
+
+#undef NEVERD_A64_ORIGINAL_MEMORY_TEXT

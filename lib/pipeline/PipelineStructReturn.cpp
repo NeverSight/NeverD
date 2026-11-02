@@ -26,9 +26,158 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
+
+// A caller's field reads propose a shape. Each finite path to a return must
+// pass a complete, defined write, or preserve an observed argument. A loop
+// backedge alone supplies no initial value, and calls cut off older writes.
+// A caller that reads only the second word observed no argument passed
+// through: an untouched register is then what the caller itself left.
+bool returnsStructFields(const MedFunc &Function,
+                         llvm::ArrayRef<MedReturnReg> Shape, Arch Architecture,
+                         BinaryFormat Format, bool PreservedArguments) {
+  if (Function.SkippedSSA || Function.Blocks.empty())
+    return false;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  const auto Identity = [](const MedVar &V) -> Key {
+    return {V.Kind, V.Id, V.SSAVer};
+  };
+  std::map<int, const MedBlock *> Blocks;
+  std::set<Key> Definitions, Unknown;
+  std::map<Key, std::vector<Key>> Users;
+  for (const MedBlock &Block : Function.Blocks) {
+    Blocks.emplace(Block.Id, &Block);
+    for (const PhiNode &Phi : Block.Phis)
+      Definitions.insert(Identity(Phi.Output));
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Output.Size)
+        Definitions.insert(Identity(Op.Output));
+      for (const MedVar &Output : Op.IntrinsicOutputs)
+        Definitions.insert(Identity(Output));
+    }
+  }
+  for (const auto &Clobber : Function.CallClobbers)
+    Unknown.insert(Identity(Clobber.Value));
+  const auto Depend = [&](const MedVar &Output, const MedVar &Input) {
+    if (!Output.Size || Input.isConst() || Input.Kind == MedVar::Param)
+      return;
+    const Key Out = Identity(Output), In = Identity(Input);
+    if (Input.Kind == MedVar::Unspecified || !Definitions.count(In))
+      Unknown.insert(Out);
+    else
+      Users[In].push_back(Out);
+  };
+  for (const MedBlock &Block : Function.Blocks) {
+    for (const PhiNode &Phi : Block.Phis) {
+      if (Phi.Args.empty())
+        Unknown.insert(Identity(Phi.Output));
+      for (const auto &[Pred, Input] : Phi.Args)
+        Depend(Phi.Output, Input);
+      if (Phi.ExceptionalEntry)
+        Depend(Phi.Output, *Phi.ExceptionalEntry);
+    }
+    for (const MedOp &Op : Block.Ops) {
+      const bool Seed = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                        Op.Output == Op.Inputs[0];
+      if (Seed) {
+        const bool Parameter =
+            Op.Output.Kind == MedVar::Reg &&
+            ((Op.Output.RegOff == TRI.StackPointer &&
+              Op.Output.Size == TRI.PointerSize) ||
+             llvm::any_of(Function.Params, [&](const auto &P) {
+               return P.RegOff == Op.Output.RegOff && P.Size >= Op.Output.Size;
+             }));
+        if (!Parameter)
+          Unknown.insert(Identity(Op.Output));
+        continue;
+      }
+      for (unsigned I = 0; I != Op.NumInputs; ++I) {
+        Depend(Op.Output, Op.Inputs[I]);
+        for (const MedVar &Output : Op.IntrinsicOutputs)
+          Depend(Output, Op.Inputs[I]);
+      }
+    }
+  }
+  // Propagate missing inputs once through the SSA use graph, including PHIs
+  // and arithmetic. A copy cannot turn an implicit call clobber into a field.
+  std::vector<Key> Pending(Unknown.begin(), Unknown.end());
+  for (size_t I = 0; I < Pending.size(); ++I)
+    if (const auto Found = Users.find(Pending[I]); Found != Users.end())
+      for (const Key &User : Found->second)
+        if (Unknown.insert(User).second)
+          Pending.push_back(User);
+
+  bool SawReturn = false;
+  for (const auto &Field : Shape) {
+    if (PreservedArguments &&
+        returnsArgumentUnchanged(Function, Field, TRI, Format))
+      continue;
+    // A block end is checked once per field even when many returns share
+    // predecessors. The first visit enqueues every path before marking it.
+    std::set<int> SeenEnds;
+    std::vector<std::pair<const MedBlock *, size_t>> Work;
+    for (const MedBlock &Block : Function.Blocks)
+      for (size_t I = 0; I < Block.Ops.size(); ++I)
+        if (Block.Ops[I].Opcode == NdOp::RETURN) {
+          SawReturn = true;
+          Work.emplace_back(&Block, I);
+        }
+    while (!Work.empty()) {
+      const auto [Block, Before] = Work.back();
+      Work.pop_back();
+      if (Before == Block->Ops.size() && !SeenEnds.insert(Block->Id).second)
+        continue;
+      bool Written = false;
+      for (size_t I = Before; I-- > 0;) {
+        const MedOp &Op = Block->Ops[I];
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          return false;
+        const MedVar &Out = Op.Output;
+        if (Out.Kind != MedVar::Reg || !Out.Size ||
+            Out.RegOff >= Field.RegOff + Field.Size ||
+            Field.RegOff >= Out.RegOff + Out.Size)
+          continue;
+        // A synthetic low-byte view doesn't overwrite the full register.
+        if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+            isSameRegisterLowSlice(Out.RegOff, Out.Size, Op.Inputs[0].RegOff,
+                                   Op.Inputs[0].Size, Op.Inputs[1].ConstVal) &&
+            Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[1].isConst())
+          continue;
+        const bool SelfCopy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                              Op.Inputs[0].Kind == MedVar::Reg &&
+                              Op.Inputs[0].RegOff == Out.RegOff &&
+                              Op.Inputs[0].Size == Out.Size;
+        if (SelfCopy)
+          continue;
+        if (Out.RegOff != Field.RegOff || Out.Size < Field.Size ||
+            Unknown.count(Identity(Out)))
+          return false;
+        Written = true;
+        break;
+      }
+      if (Written)
+        continue;
+      if (Block->Preds.empty() || !Block->ExceptionalPreds.empty())
+        return false;
+      for (int Pred : Block->Preds) {
+        const auto Found = Blocks.find(Pred);
+        if (Found == Blocks.end())
+          return false;
+        Work.emplace_back(Found->second, Found->second->Ops.size());
+      }
+    }
+  }
+  // All fields may be unchanged parameters, with no walk needed above.
+  if (!SawReturn)
+    for (const MedBlock &Block : Function.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        SawReturn |= Op.Opcode == NdOp::RETURN;
+  return SawReturn;
+}
 
 // A small struct returned by value across multiple registers (x86-64 SysV
 // eightbytes / AArch64 HFA): the caller-side remodel (modelCallStructReturn,
@@ -388,6 +537,8 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
     // agrees on it and it names consecutive FP return registers of one width.
     std::map<va_t, std::vector<MedReturnReg>> CallerHFAShapes;
     std::set<va_t> ConflictingCallerShapes;
+    // Targets with a caller that read the first word as well.
+    std::set<va_t> FirstWordObserved;
     for (const auto &Caller : Result.MedFuncs)
       for (const MedStructReturnCandidate &Candidate :
            Caller.StructReturnCandidates) {
@@ -427,6 +578,8 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
         if (!Complete)
           continue;
         const va_t Target = Call->Inputs[0].ConstVal;
+        if (!Candidate.SecondWordOnly)
+          FirstWordObserved.insert(Target);
         auto [It, Inserted] = CallerHFAShapes.emplace(Target, Shape);
         if (!Inserted &&
             !std::equal(It->second.begin(), It->second.end(), Shape.begin(),
@@ -439,47 +592,14 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
       }
     for (va_t Target : ConflictingCallerShapes)
       CallerHFAShapes.erase(Target);
-    // The callee must itself leave every field: each field register has its
-    // own write, after the last call, before every RETURN, or is an argument
-    // register the callee never writes, which returns the argument.
-    auto writesEveryField = [&](const MedFunc &MF,
-                                const std::vector<MedReturnReg> &Shape) {
-      bool SawReturn = false;
-      for (const auto &Blk : MF.Blocks) {
-        for (size_t RetIdx = 0; RetIdx < Blk.Ops.size(); ++RetIdx) {
-          if (Blk.Ops[RetIdx].Opcode != NdOp::RETURN)
-            continue;
-          SawReturn = true;
-          for (const MedReturnReg &Field : Shape) {
-            if (returnsArgumentUnchanged(MF, Field, TRI, Img.abiFormat()))
-              continue;
-            bool Written = false;
-            for (size_t J = RetIdx; J-- > 0 && !Written;) {
-              const MedOp &O = Blk.Ops[J];
-              if (O.Opcode == NdOp::CALL || O.Opcode == NdOp::INDIR_CALL)
-                break;
-              const bool SelfCopy = O.Opcode == NdOp::COPY &&
-                                    O.NumInputs >= 1 &&
-                                    O.Inputs[0].Kind == MedVar::Reg &&
-                                    O.Inputs[0].RegOff == O.Output.RegOff;
-              Written = O.Output.Kind == MedVar::Reg &&
-                        O.Output.RegOff == Field.RegOff &&
-                        O.Output.Size >= Field.Size && !SelfCopy;
-            }
-            if (!Written)
-              return false;
-          }
-        }
-      }
-      return SawReturn;
-    };
 
     for (auto &MF : Result.MedFuncs) {
       if (!MF.MultiReturn.empty())
         continue;
       if (auto Shape = CallerHFAShapes.find(MF.Entry);
           Shape != CallerHFAShapes.end() &&
-          writesEveryField(MF, Shape->second)) {
+          returnsStructFields(MF, Shape->second, Img.Arch, Img.abiFormat(),
+                              FirstWordObserved.count(MF.Entry) != 0)) {
         MF.MultiReturn = Shape->second;
         continue;
       }

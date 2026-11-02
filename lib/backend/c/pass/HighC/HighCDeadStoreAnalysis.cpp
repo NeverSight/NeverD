@@ -169,7 +169,7 @@ bool matchesReducedAddr(const HighExpr &Expr, const ExprDefinitions &Defs,
 void collectExprVars(const HighExpr &E, std::set<std::string> &Out,
                      VarNameFn VarFn) {
   walkExprNodes(E, [&](const HighExpr &Ex) {
-    if (Ex.Kind == ExprKind::Var)
+    if (isNamedValueExpr(Ex))
       Out.insert(VarFn(Ex.Var));
   });
 }
@@ -473,18 +473,17 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (State.DeadStmts.count(&S))
         return;
+      const auto *Call = S.Kind == StmtKind::Call     ? S.CallExpr.get()
+                         : S.Kind == StmtKind::Assign ? S.Val.get()
+                                                      : nullptr;
+      if (Call && Call->Kind == ExprKind::Call &&
+          Call->IntrinsicId != Intrinsic::None)
+        for (const auto &Output : Call->IntrinsicOutputs)
+          if (!AliveVars.count(VarFn(Output)))
+            Changed |= State.DeadVars.insert(VarFn(Output)).second;
       if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var) {
         if (S.Val && S.Val->Kind == ExprKind::Call &&
             S.Val->IntrinsicId != Intrinsic::None) {
-          if (!S.Val->IntrinsicOutputs.empty()) {
-            for (auto &CO : S.Val->IntrinsicOutputs) {
-              std::string COName = VarFn(CO);
-              if (!AliveVars.count(COName)) {
-                if (State.DeadVars.insert(COName).second)
-                  Changed = true;
-              }
-            }
-          }
           std::string DstName = VarFn(S.Dst->Var);
           if (!AliveVars.count(DstName)) {
             if (State.DeadVars.insert(DstName).second)

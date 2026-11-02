@@ -12,6 +12,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -80,6 +81,10 @@ struct MemoryFaultExit {
   /// additional alignment.
   uint32_t RequiredAlignment = 0;
 };
+
+/// Largest byte extent whose bit width is losslessly represented in a fault.
+inline constexpr uint64_t kMemoryFaultMaxAccessBytes =
+    std::numeric_limits<decltype(MemoryFaultExit::AccessWidthBits)>::max() / 8;
 
 struct SelfModificationExit {
   uint64_t Address = 0;

@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <initializer_list>
+#include <utility>
 
 namespace neverd::emulation {
 namespace {
@@ -146,8 +147,9 @@ TEST_P(WindowsEnvironment, ValidatesUpdatesBeforePublishingGuestBytes) {
   auto Space = llvm::cantFail(AddressSpace::create(RAM, Options.MemoryLimit));
   win::VirtualMemory Virtual(*Space, Options);
   auto Budget = llvm::cantFail(ExecutionBudget::create(Options.Limits));
-  auto Program =
-      llvm::cantFail(win::loadProgram(Path, Options, *Budget, Virtual));
+  auto Loaded = win::loadProgram(Path, Options, *Budget, Virtual);
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto Program = std::move(*Loaded);
   auto Env = llvm::cantFail(win::prepareEnvironment(*Space, Program, Options));
   llvm::cantFail(Space->map(win::value::GateBase, ScratchSize,
                             Read | Write | UserAccessible));

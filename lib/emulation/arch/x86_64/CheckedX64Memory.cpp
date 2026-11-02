@@ -6,7 +6,7 @@
 #include "../../core/ExecutionDiagnostics.h"
 #include "CheckedX64Backend.h"
 
-#include "neverd/support/X86Addressing.h"
+#include "neverd/support/X86/X86Addressing.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/ErrorHandling.h"

@@ -1,0 +1,81 @@
+//===- AArch64ReturnAddressState.def - AArch64 CFI contracts ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Constants and diagnostics for Arm aadwarf64, including the newer N
+/// augmentation. Absolute set-ra-state is Alpha; reserved states are
+/// unsupported.
+/// https://github.com/ARM-software/abi-aa/blob/17f2cc8ee6645c1709088f4e0cb4438ce75a14ff/aadwarf64/aadwarf64.rst
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_DWARF_A64_VALUE
+#define NEVERD_DWARF_A64_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_DWARF_A64_TEXT
+#define NEVERD_DWARF_A64_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_DWARF_A64_LIMIT
+#define NEVERD_DWARF_A64_LIMIT(Type, Name, Value)
+#endif
+
+NEVERD_DWARF_A64_VALUE(uint8_t, kSetRAState, 0x2b)
+NEVERD_DWARF_A64_VALUE(uint8_t, kNegateRAStateWithPC, 0x2c)
+NEVERD_DWARF_A64_VALUE(uint8_t, kNegateRAState, 0x2d)
+NEVERD_DWARF_A64_VALUE(uint64_t, kRAStateRegister, 34)
+NEVERD_DWARF_A64_VALUE(uint64_t, kUnsigned, 0)
+NEVERD_DWARF_A64_VALUE(uint64_t, kSignedSP, 1)
+NEVERD_DWARF_A64_VALUE(uint64_t, kSignedSPPC, 2)
+NEVERD_DWARF_A64_VALUE(char, kBKeyAugmentation, 'B')
+NEVERD_DWARF_A64_VALUE(char, kNonHintAugmentation, 'N')
+NEVERD_DWARF_A64_TEXT(kSetRAStateName, "set-ra-state")
+NEVERD_DWARF_A64_TEXT(kUnsupportedArchitecture,
+                      "AArch64 return-address CFI requires an AArch64 image")
+NEVERD_DWARF_A64_TEXT(kZeroCodeAlignment,
+                      "zero DWARF CIE code alignment factor")
+NEVERD_DWARF_A64_TEXT(kTruncatedState, "truncated AArch64 return-address state")
+NEVERD_DWARF_A64_TEXT(kCodeOffsetOverflow,
+                      "AArch64 signing-PC displacement overflows")
+NEVERD_DWARF_A64_TEXT(kSigningPCOverflow, "AArch64 signing PC overflows")
+NEVERD_DWARF_A64_TEXT(kUnboundSetLoc,
+                      "CIE set_loc requires an FDE-specific location context")
+NEVERD_DWARF_A64_TEXT(kInvalidSetLoc,
+                      "DWARF set_loc does not advance its current FDE location")
+NEVERD_DWARF_A64_TEXT(
+    kInvalidIdentity,
+    "AArch64 return-address query has an invalid frame identity")
+NEVERD_DWARF_A64_TEXT(kOutOfRange,
+                      "AArch64 return-address query is outside its frame")
+NEVERD_DWARF_A64_TEXT(
+    kIncomplete,
+    "AArch64 return-address query requires complete frame decoding")
+NEVERD_DWARF_A64_TEXT(kBudget,
+                      "AArch64 return-address state query exceeds its budget")
+NEVERD_DWARF_A64_TEXT(kLocation,
+                      "AArch64 return-address CFI has an invalid code location")
+NEVERD_DWARF_A64_TEXT(
+    kInitialLocation,
+    "CIE return-address rules require an initial code location")
+NEVERD_DWARF_A64_TEXT(kRestore,
+                      "AArch64 return-address state restore has no saved state")
+NEVERD_DWARF_A64_TEXT(kReservedState,
+                      "reserved AArch64 return-address state is unsupported")
+NEVERD_DWARF_A64_TEXT(kToggleState,
+                      "AArch64 return-address toggle has an incompatible state")
+NEVERD_DWARF_A64_TEXT(
+    kMixedRules,
+    "AArch64 return-address toggles cannot mix with register rules")
+NEVERD_DWARF_A64_TEXT(kDynamicState,
+                      "AArch64 return-address state requires runtime values")
+NEVERD_DWARF_A64_TEXT(
+    kOpaque, "AArch64 return-address CFI includes an unknown operation")
+NEVERD_DWARF_A64_TEXT(
+    kUnsafeRewrite,
+    "AArch64 signing-PC CFI requires an explicit relocation contract")
+NEVERD_DWARF_A64_LIMIT(size_t, kAArch64RAStateMaxInstructions, 1u << 17)
+NEVERD_DWARF_A64_LIMIT(size_t, kAArch64RAStateMaxRememberDepth, 64)
+
+#undef NEVERD_DWARF_A64_VALUE
+#undef NEVERD_DWARF_A64_TEXT
+#undef NEVERD_DWARF_A64_LIMIT

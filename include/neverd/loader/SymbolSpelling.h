@@ -60,6 +60,11 @@ std::string displaySymbolName(llvm::StringRef Name);
 /// for malformed names, other languages and implementation-only symbols.
 std::string cxxSourceName(llvm::StringRef Name);
 
+/// Whether a complete Itanium function name encodes a constructor or
+/// destructor. This identifies the function; its target ABI decides whether
+/// it returns a machine value.
+bool isItaniumConstructorOrDestructor(llvm::StringRef Name);
+
 /// Simplify a type supplied by debug information using the same exact
 /// standard-library aliases as demangled symbols; custom template arguments
 /// remain visible.

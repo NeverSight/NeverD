@@ -62,7 +62,8 @@ inline constexpr SourceLimits RecoverySourceLimits{
     1600000,
     30};
 
-/// Recovery permits readable export only; semantic consumers reject its model.
+/// Recovery permits bounded source export only; semantic consumers reject its
+/// model. Recovery owners do not change semantic-consumer admission.
 SourceLimits sourceLimits(SourceAnalysisMode Mode);
 SourceLimits sourceLimits(const SourceAnalysis &Source);
 uint64_t sourceWorkLimit(const SourceAnalysis &Source, uint64_t Interactive);

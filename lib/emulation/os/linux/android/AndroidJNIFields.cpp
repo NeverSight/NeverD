@@ -60,6 +60,8 @@ BionicResult Bionic::jniFields(unsigned Slot, const NativeCallEvent &Call) {
       (Kind == 'L' ? !mobile::dalvik::referenceType(Type)
                    : Type != std::string(1, Kind)))
     return failure("JNI field accessor type or storage kind mismatch");
+  if (Kind == 'F' || Kind == 'D')
+    return unsupportedImport(Call);
   if (Static && ((*Receiver)->Type != JNIObject::Class ||
                  !JNI.Dex->assignable("L" + (*Receiver)->ClassName + ";",
                                       Field.reference.owner)))

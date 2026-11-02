@@ -118,6 +118,10 @@ LinuxServices::handle(ServiceKind Kind, const ProcessServiceEvent &Event,
   case ServiceKind::Getcwd:
   case ServiceKind::Open:
   case ServiceKind::OpenAt:
+  case ServiceKind::Unlink:
+  case ServiceKind::UnlinkAt:
+  case ServiceKind::Rename:
+  case ServiceKind::RenameAt:
   case ServiceKind::Access:
   case ServiceKind::FaccessAt:
   case ServiceKind::Mkdir:
@@ -183,6 +187,7 @@ LinuxServices::handle(ServiceKind Kind, const ProcessServiceEvent &Event,
   case ServiceKind::Madvise:
   case ServiceKind::Mincore:
   case ServiceKind::Brk:
+  case ServiceKind::Prctl:
     return Memory.handle(Kind, Event, Result);
   case ServiceKind::ArchPrctl:
     return archPrctl(CPU, Event, Layout, Result);

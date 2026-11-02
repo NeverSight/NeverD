@@ -35,14 +35,32 @@ CheckedAArch64Backend::create(std::unique_ptr<MemoryProjection> Memory,
     return E;
   return std::unique_ptr<ExecutionBackend>(std::move(B));
 }
-llvm::Expected<RegisterValue>
-CheckedAArch64Backend::readRegister(CPURegister R) {
-  if (!registerMatches(R, architecture()))
+namespace {
+llvm::Expected<RegisterValue> readStateRegister(const AArch64MachineState &CPU,
+                                                CPURegister R) {
+  if (!registerMatches(R, GuestArchitecture::AArch64))
     return error(diagnostic::Register);
   if (R >= CPURegister::AArch64V0 && R <= CPURegister::AArch64V31)
     return CPU.Vectors[unsigned(R) - unsigned(CPURegister::AArch64V0)];
   return RegisterValue{
       CPU.Registers[unsigned(R) - unsigned(CPURegister::AArch64X0)], 0};
+}
+} // namespace
+llvm::Expected<RegisterValue>
+CheckedAArch64Backend::readRegister(CPURegister R) {
+  return readStateRegister(CPU, R);
+}
+llvm::Expected<RegisterValue>
+CheckedAArch64Backend::readContextRegister(const BackendContext &C,
+                                           CPURegister R) const {
+  const auto *State = contextStorage(C);
+  if (!State || State->Owner.expired())
+    return error(diagnostic::ContextExpired);
+  if (State->Owner.lock() != Identity)
+    return error(diagnostic::ContextOwner);
+  if (State->Space.lock() != addressSpace())
+    return error(diagnostic::ContextSpace);
+  return readStateRegister(static_cast<const SavedState &>(*State).CPU, R);
 }
 llvm::Error CheckedAArch64Backend::writeRegister(CPURegister R,
                                                  const RegisterValue &V) {

@@ -188,7 +188,7 @@ TEST_P(AndroidScanning, PointersLegacyLengthsAndNarrowCountsKeepExactWidths) {
 
 TEST_P(AndroidScanning, UnsupportedFormatsAndOverflowPublishNoWrites) {
   for (const char *Format :
-       {"%u %f", "%u %s", "%u %[0-9]", "%u %c", "%u %ms", "%u %2$u", "%u %lp",
+       {"%u %f", "%u %ls", "%u %[0-9]", "%u %lc", "%u %ms", "%u %2$u", "%u %lp",
         "%u %*n", "%u %1n", "%u %0n", "%u %", "%u %18446744073709551616u"}) {
     SCOPED_TRACE(Format);
     auto R = scan("12 34", Format);
@@ -222,6 +222,54 @@ TEST_P(AndroidScanning, BadPointersAndInputAliasesDoNotPublishAssignments) {
   R = run("scan_supplied", {Buffer, UINT64_MAX, Buffer + 2048, 0});
   EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
   EXPECT_TRUE(R.MemorySnapshots.empty());
+}
+
+TEST_P(AndroidScanning, NarrowCharactersStringsWidthsAndCounts) {
+  for (unsigned Mode : {0u, 1u}) {
+    SCOPED_TRACE(Mode);
+    auto R = scan(" \tab cd!", "%2c%2s%n%c", Mode);
+    returned(R, 3);
+    memory(R, {{0, 2, 0x0920}, {16, 3, 0x6261}, {32, 4, 4}, {48, 1, ' '}});
+    R = scan("ab", "%5c%n", Mode);
+    returned(R, 1);
+    memory(R, {{0, 2, 0x6261}, {16, 4, 2}});
+    R = scan(" \talpha\n", "%3s%n%c", Mode);
+    returned(R, 2);
+    memory(R, {{0, 4, 0x706c61}, {16, 4, 5}, {32, 1, 'h'}});
+    R = scan(" ", "%c%c", Mode);
+    returned(R, 1);
+    memory(R, {{0, 1, ' '}});
+    R = scan(" \t", "%s", Mode);
+    returned(R, UINT32_MAX);
+    memory(R, {});
+    R = scan("x tail", "%*c %s%n", Mode);
+    returned(R, 1);
+    memory(R, {{0, 5, 0x6c696174}, {16, 4, 6}});
+    R = scan("x", "%*c%c", Mode);
+    returned(R, UINT32_MAX);
+    memory(R, {});
+  }
+}
+
+TEST_P(AndroidScanning, TextAssignmentsLargerThanIntegerAndAliasRefusal) {
+  auto R = scan(std::string(73, 'x'), "%s");
+  returned(R, 1);
+  auto Expected = Options.Android->Memory[0].Bytes;
+  std::fill_n(Expected.begin(), 73, 'x');
+  Expected[73] = 0;
+  ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+  EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+  for (const char *Format : {"%s", "%2c"}) {
+    SCOPED_TRACE(Format);
+    for (uint64_t Offset : {1024u, 2048u}) {
+      R = scan("ab", Format, 0, Buffer + Offset);
+      EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService) << R.Diagnostic;
+      memory(R, {});
+    }
+    R = scan("ab", Format, 0, Buffer + 8191);
+    EXPECT_EQ(R.Stop, ProcessStopReason::RuntimeFailure) << R.Diagnostic;
+    EXPECT_TRUE(R.MemorySnapshots.empty());
+  }
 }
 
 TEST_P(AndroidScanning,
@@ -311,14 +359,22 @@ TEST(AndroidScanningMemory, FaultsLimitsAndMalformedListsPreserveAllBytes) {
     WrappingStack,
     InputLimit,
     ExpiredDeadline,
-    UnterminatedInput
+    UnterminatedInput,
+    StringWriteDenied,
+    StringCrossingWrite,
+    CharacterWriteDenied,
+    CharacterCrossingWrite
   };
-  for (unsigned C = SecondWriteDenied; C <= UnterminatedInput; ++C) {
+  for (unsigned C = SecondWriteDenied; C <= CharacterCrossingWrite; ++C) {
     SCOPED_TRACE(C);
     std::array<uint8_t, 8192> Before;
     Before.fill(0xa5);
     std::copy_n("12 34", 6, Before.begin() + 1024);
     std::copy_n("%u %u", 6, Before.begin() + 2048);
+    if (C == StringWriteDenied || C == StringCrossingWrite)
+      std::copy_n("%s %s", 6, Before.begin() + 2048);
+    if (C == CharacterWriteDenied || C == CharacterCrossingWrite)
+      std::copy_n("%2c %2c", 8, Before.begin() + 2048);
     llvm::support::endian::write64le(Before.data() + 512, Buffer + 704);
     llvm::support::endian::write64le(Before.data() + 520, Buffer + 704);
     llvm::support::endian::write32le(Before.data() + 536, -8);
@@ -329,6 +385,8 @@ TEST(AndroidScanningMemory, FaultsLimitsAndMalformedListsPreserveAllBytes) {
     Call.Arguments = {Buffer + 1024, Buffer + 2048, Buffer, Buffer + 4096};
     if (C == CrossingWrite)
       Call.Arguments[2] = Buffer + 4094;
+    if (C == StringCrossingWrite || C == CharacterCrossingWrite)
+      Call.Arguments[2] = Buffer + 4095;
     if (C == BadInput)
       Call.Arguments[0] = UINT64_MAX;
     if (C == BadFormat)

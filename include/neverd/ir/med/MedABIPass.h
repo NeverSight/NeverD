@@ -13,6 +13,8 @@
 #ifndef NEVERD_IR_MED_MEDABIPASS_H
 #define NEVERD_IR_MED_MEDABIPASS_H
 
+#include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
@@ -27,6 +29,21 @@
 namespace neverd {
 
 int regToArgIdx(uint64_t RegOff, Arch TheArch);
+
+/// Validate the complete integer operand sequence retained from before SSA.
+bool hasBoundIntegerCallArguments(const MedOp &Op);
+
+/// A complete source-ordered scalar call bound before SSA. Recheck its stored
+/// placement and the surviving operands/result; HighC does not need a second
+/// argument-recovery pass for conventions with callee summaries.
+std::optional<FloatingCallArguments>
+boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F);
+
+/// A complete fixed scalar FP call established by ABI recovery. Bound mixed
+/// calls additionally require agreement with the recovered operand list.
+std::optional<FloatingCallArguments>
+recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
+                               BinaryFormat F);
 
 /// Entries whose leaf bodies only write below their own entry stack pointer.
 /// Compute before ABI recovery mutates the functions. Unknown effects fail
@@ -55,6 +72,8 @@ std::set<va_t> findFrameLocalLeafCallees(const std::vector<MedFunc> &Funcs,
 // FP. Such a call defines the FP return register, so its result must flow to
 // the post-call reads of that register.  ARM S0 and D0 share a register offset,
 // so the width is part of the authoritative call-clobber identity.
+// \p CalleeFPScalarBytes records the scalar lane consumed in each FP argument
+// register. Forwarded arguments retain these widths independently of returns.
 // \p CalleeHasSret marks callees that take a hidden indirect-result (sret)
 // pointer in the dedicated indirect-result register (AArch64 x8); such a call
 // must pass the result-buffer pointer set up before it as a trailing argument.
@@ -93,9 +112,11 @@ std::set<va_t> findFrameLocalLeafCallees(const std::vector<MedFunc> &Funcs,
 // register: when the result is read only by the next call's implicit XMM0/V0
 // argument, or only returned.  Once the callee is known to return \p Size
 // bytes through the vector register, promote the authoritative FP-return
-// clobber definition of the call at \p OpIdx of \p Blk into its output.
-// Existing SSA reads already name that definition.  A call already routed by
-// modelCallFPReturn, or one with an aggregate return, keeps its output; the
+// clobber definition of the call at \p OpIdx of \p Blk into its output. If the
+// FP return bank has no references at all, introduce its first SSA definition.
+// Existing SSA reads already name that definition. A call already routed by
+// modelCallFPReturn gains its scalar width without changing the output. One
+// with an aggregate return keeps its output; the
 // exact synthetic EDX:EAX/R1:R0 split is the one false aggregate this
 // scalar-FP certificate replaces.  Returns whether the call was rebound.
 bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OpIdx,
@@ -134,7 +155,9 @@ void recoverCallAbi(
     const std::map<va_t, PointerVariableCallee> *PointerCallees = nullptr,
     const std::set<va_t> *PrototypeArgumentCallees = nullptr,
     const RelocationSymbolIndex *RelocationSymbols = nullptr,
-    std::vector<va_t> *SummaryKeysRead = nullptr);
+    std::vector<va_t> *SummaryKeysRead = nullptr,
+    const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes =
+        nullptr);
 
 /// The integer argument layout \p Func takes its register arguments in: its
 /// own register order (MedFunc::IntegerArgumentRegisters) where it has one,

@@ -19,12 +19,13 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedRawEnvironment.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/symbolic/SymExec.h"
 
@@ -458,5 +459,7 @@ TEST(RawEnvironmentRequirement, OrdinaryOperationsKeepTheirExecution) {
   EXPECT_TRUE(static_cast<bool>(Wrapped))
       << llvm::toString(Wrapped.takeError());
 }
+
+#include "ArchitecturalValueRequirementTests.inc"
 
 } // namespace

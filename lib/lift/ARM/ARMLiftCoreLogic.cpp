@@ -12,7 +12,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -33,7 +33,7 @@ bool liftCoreLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     if (ARM.update_flags)
       L.emitLogicalOpCarry(S, Insn, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
@@ -47,7 +47,7 @@ bool liftCoreLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     if (ARM.update_flags)
       L.emitLogicalOpCarry(S, Insn, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
@@ -61,7 +61,7 @@ bool liftCoreLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     if (ARM.update_flags)
       L.emitLogicalOpCarry(S, Insn, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
@@ -77,7 +77,7 @@ bool liftCoreLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     if (ARM.update_flags)
       L.emitLogicalOpCarry(S, Insn, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
@@ -91,7 +91,7 @@ bool liftCoreLogic(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       break;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
     NdVar A = (ARM.op_count >= 3) ? L.operandRead(S, ARM.operands[1])
-                                    : NdVar::reg(Dst.Offset, 4);
+                                  : NdVar::reg(Dst.Offset, 4);
     NdVar B = L.operandRead(S, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);
     if (ARM.update_flags)
       L.emitLogicalOpCarry(S, Insn, ARM.operands[ARM.op_count >= 3 ? 2 : 1]);

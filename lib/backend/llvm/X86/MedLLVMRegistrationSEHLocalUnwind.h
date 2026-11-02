@@ -10,7 +10,7 @@
 #define NEVERD_MEDLLVMREGISTRATIONSEHLOCALUNWIND_H
 
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
-#include "neverd/ir/med/X86RegistrationSEHLocalUnwind.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
 
 #include <map>
 #include <optional>

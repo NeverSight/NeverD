@@ -6,9 +6,9 @@
 
 #include "X86FPStateAccuracyFixture.h"
 
-#include "neverd/backend/llvm/LLVMX86ShadowStackAsm.h"
-#include "neverd/ir/high/X86ShadowStackShape.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/backend/llvm/X86/LLVMX86ShadowStackAsm.h"
+#include "neverd/ir/high/X86/X86ShadowStackShape.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 namespace {
 

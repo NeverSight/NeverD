@@ -538,7 +538,7 @@ HighVariableEditResult neverd::editHighVariable(const HighFunc &Function,
   for (const auto &Observation : Sources) {
     if (Observation.Kind == HighSourceKind::Statement ||
         Observation.Kind == HighSourceKind::Store) {
-      // Statement observations have no expression handle. Keep their original
+      // Keep statement observations at their original
       // instruction identity only while the projection retains the statement
       // kind; scalarizing a stack store must not inherit its old store anchor.
       if (Observation.Function == Function.Entry && Observation.StatementKind &&

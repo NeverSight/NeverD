@@ -13,8 +13,10 @@
 
 #include "AArch64LiftDetail.h"
 
-#include "neverd/decode/AArch64NativeDecode.h"
-#include "neverd/lift/AArch64Lifter.h"
+#include "neverd/decode/AArch64/AArch64NativeDecode.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthLoad.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <cstring>
 
@@ -238,11 +240,29 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   }
   case AARCH64_INS_LDRAA:
   case AARCH64_INS_LDRAB: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    S.emit(NdOp::LOAD, Dst, {EA});
+    if (Insn->size != kPAuthLoadWordBytes)
+      return false;
+    const auto Instruction =
+        aarch64PAuthLoadInstruction(readLE<uint32_t>(Insn->bytes));
+    if (!Instruction)
+      return false;
+    // Preserve the original word, including SP provenance. Replacing this
+    // with AUT + LOAD changes architectural failure under FEAT_FPAC.
+    const auto BaseReg = a64native::gprSP(Instruction->base(), true);
+    const auto Destination = a64native::gpr(Instruction->destination(), true);
+    NdVar Base =
+        NdVar::reg(mapCapstoneReg(BaseReg).Offset, kPAuthLoadPointerBytes);
+    NdVar Pair = S.makeTemp(kPAuthLoadPairBytes);
+    S.emitIntrinsic(Instruction->Id, Pair,
+                    {Base, NdVar::cst(Instruction->Word, kPAuthLoadWordBytes)});
+    if (Instruction->destination() != kPAuthLoadRegisterMask)
+      S.emit(NdOp::SUBBYTES,
+             NdVar::reg(mapCapstoneReg(Destination).Offset,
+                        kPAuthLoadPointerBytes),
+             {Pair, NdVar::cst(0, kPAuthLoadWordBytes)});
+    if (Instruction->writeback())
+      S.emit(NdOp::SUBBYTES, Base,
+             {Pair, NdVar::cst(kPAuthLoadPointerBytes, kPAuthLoadWordBytes)});
     break;
   }
   case AARCH64_INS_LDIAPP: {
@@ -387,8 +407,7 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
 
     S.emit(NdOp::ATOMIC_XCHG, OldPair, {EA, NewPair}, Ordering);
     S.emit(NdOp::SUBBYTES, LowDst, {OldPair, NdVar::cst(0, 4)});
-    S.emit(NdOp::SUBBYTES, HighDst,
-           {OldPair, NdVar::cst(LowDst.Size, 4)});
+    S.emit(NdOp::SUBBYTES, HighDst, {OldPair, NdVar::cst(LowDst.Size, 4)});
     break;
   }
 

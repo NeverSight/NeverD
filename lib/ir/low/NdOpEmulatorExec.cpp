@@ -14,13 +14,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "X86ApproxReference.h"
-#include "X86FPConvertRounding.h"
+#include "X86/X86ApproxReference.h"
+#include "X86/X86FPConvertRounding.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/low/X86/X86CompactShape.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
@@ -30,6 +31,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <utility>
 
 namespace neverd {
@@ -571,6 +573,106 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
   if (Op.NumInputs < 1 || !Op.Inputs[0].isConst())
     return false;
   const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (Id == Intrinsic::X86AMXState) {
+    const auto Shape = x86AmxLowShape(Op, Img.Arch);
+    if (Img.Arch != Arch::X64 || !x86AmxShapeIsValid(Shape))
+      return false;
+    for (unsigned I : {1u, 3u})
+      if (I < Op.NumInputs && !Op.Inputs[I].isConst() &&
+          !Registers.contains(Op.Inputs[I].Offset))
+        return false;
+    const auto D = *Shape.Descriptor;
+    const auto K = x86AmxOperation(D);
+    const auto Config = NdVar::reg(x86reg::TileConfig, x86reg::TileConfigSize);
+    auto Tile = [&](unsigned I = 0) {
+      return NdVar::reg(x86reg::tileReg(x86AmxTile(D, I)),
+                        x86reg::TileRegStride);
+    };
+    auto Known = [&](NdVar V) {
+      auto B = getRegisterBytes(V.Offset);
+      return B && B->size() == V.Size;
+    };
+    auto ClearTiles = [&] {
+      for (unsigned I = 0; I < x86reg::TileRegCount; ++I)
+        writeOutputBytes(NdVar::reg(x86reg::tileReg(I), x86reg::TileRegStride),
+                         std::vector<uint8_t>(x86reg::TileRegStride, 0));
+    };
+    if (K == X86AmxOp::Release) {
+      writeOutputBytes(Config, std::vector<uint8_t>(x86reg::TileConfigSize, 0));
+      ClearTiles();
+      return true;
+    }
+    if (K != X86AmxOp::LoadConfig && !Known(Config))
+      return false;
+    LowOp Projected;
+    Projected.Addr = Op.Addr;
+    Projected.Opcode = NdOp::INTRINSIC;
+    Projected.MemoryAddressSpace = Op.MemoryAddressSpace;
+    auto Inputs = [&](Intrinsic I, std::initializer_list<NdVar> Values) {
+      Projected.addInput(NdVar::scalar(static_cast<uint16_t>(I), 2));
+      for (const auto &V : Values)
+        Projected.addInput(V);
+    };
+    const auto AddressSize = NdVar::scalar(D & X86AmxAddress32 ? 4 : 8, 1);
+    if (K == X86AmxOp::LoadConfig) {
+      Projected.Output = Config;
+      Inputs(Intrinsic::AMXLoadConfig, {Op.Inputs[1], AddressSize});
+      if (!executeIntrinsic(Projected))
+        return false;
+      ClearTiles();
+      return true;
+    }
+    if (K == X86AmxOp::StoreConfig) {
+      Inputs(Intrinsic::AMXStoreConfig, {Op.Inputs[1], Config, AddressSize});
+      return executeIntrinsic(Projected);
+    }
+    if (K == X86AmxOp::Zero) {
+      Projected.Output = Tile();
+      Inputs(Intrinsic::AMXTileZero, {Config});
+    } else if (x86AmxIsTileMemory(K)) {
+      NdVar OldTile = Tile();
+      if (!Known(OldTile)) {
+        if (K == X86AmxOp::Store || (*getRegisterBytes(Config.Offset))[1] != 0)
+          return false;
+        // start_row=0 zeroes the complete old tile before any row is read.
+        OldTile = NdVar::scalar(0, x86reg::TileRegStride);
+      }
+      if (K == X86AmxOp::Store) {
+        Projected.Output = Config;
+        Inputs(Intrinsic::AMXTileStore,
+               {Op.Inputs[1], Op.Inputs[3], Config, Tile(), AddressSize});
+        return executeIntrinsic(Projected);
+      }
+      Projected.Output = Tile();
+      Inputs(Intrinsic::AMXTileLoad,
+             {Op.Inputs[1], Op.Inputs[3], Config, OldTile, AddressSize});
+    } else if (x86AmxIsCompute(K)) {
+      if (!Known(Tile()) || !Known(Tile(1)) || !Known(Tile(2)))
+        return false;
+      Projected.Output = Tile();
+      Inputs(
+          Intrinsic::AMXTileCompute,
+          {NdVar::scalar(unsigned(K) - unsigned(X86AmxOp::Int8SignedSigned), 1),
+           Config, Tile(), Tile(1), Tile(2)});
+    } else {
+      Projected.Output = Op.Output;
+      Inputs(Intrinsic::AMXTileRow,
+             {NdVar::scalar(unsigned(K) - unsigned(X86AmxOp::MoveRow), 1),
+              Config, Tile(), Op.Inputs[3]});
+    }
+    if (!executeIntrinsic(Projected))
+      return false;
+    // Faulting transfers publish their partially completed tile and start_row
+    // inside the existing evaluator. Only normal completion clears progress.
+    LowOp Clear;
+    Clear.Addr = Op.Addr;
+    Clear.Opcode = NdOp::INTRINSIC;
+    Clear.Output = Config;
+    Clear.addInput(
+        NdVar::scalar(static_cast<uint16_t>(Intrinsic::AMXClearStartRow), 2));
+    Clear.addInput(Config);
+    return executeIntrinsic(Clear);
+  }
   if (Id == Intrinsic::CetRdSsp) {
     if (!x86ShadowStackReadShapeIsValid(
             x86ShadowStackReadLowShape(Op, Img.Arch)) ||
@@ -606,6 +708,9 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
        Id == Intrinsic::X86FPFixup || Id == Intrinsic::X86FPScale ||
        Id == Intrinsic::X86FPCompare))
     return false;
+  if (Id == Intrinsic::X86FourSourceMemory || Id == Intrinsic::X86FourFMA ||
+      isX86VP4DPIntrinsic(Id))
+    return executeX86FourSource(Op);
   if (Id == Intrinsic::X86FPArith)
     return executeX86FPArith(Op);
   if (Id == Intrinsic::X86FPConvert)
@@ -703,18 +808,63 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     return Address && ((*Address & (Alignment - 1)) == 0);
   }
 
+  if (Id == Intrinsic::X86StreamStore128) {
+    if (!x86SystemStateShapeIsValid(Id, x86SystemStateLowShape(Op, Img.Arch)) ||
+        !knownOperandBytes(Op.Inputs[1], 0, 8) ||
+        !knownOperandBytes(Op.Inputs[2], 0, 16))
+      return false;
+    const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    if (!Address || (*Address & 15) != 0)
+      return false;
+    for (unsigned I = 0; I != 16; ++I) {
+      const auto *Mapped = Img.getSegmentFor(*Address + I);
+      if (!Mapped || !Mapped->isWritable() || *Address + I < Mapped->VA ||
+          *Address + I - Mapped->VA >= Mapped->Size)
+        return false;
+    }
+    // Finite ordinary-memory projection only. Native output retains the
+    // original WC store and its ordering relative to actual fences.
+    return storeMemoryBytes(*Address, readOperandBytes(Op.Inputs[2]));
+  }
+
+  if (Id == Intrinsic::X86DirectStore || Id == Intrinsic::X86DirectStore64B) {
+    const auto Shape = x86SystemStateLowShape(Op, Img.Arch);
+    const auto IsKnownScalar = [&](const NdVar &Value) {
+      return Value.isConst() || ((Value.isReg() || Value.isTemp()) &&
+                                 Registers.contains(Value.Offset));
+    };
+    if ((Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
+        !x86SystemStateShapeIsValid(Id, Shape) ||
+        !IsKnownScalar(Op.Inputs[1]) || !IsKnownScalar(Op.Inputs[2]))
+      return false;
+    const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    if (!Address)
+      return false;
+    // This is the ordinary, single-threaded BinaryImage memory projection.
+    // Native execution owns CPUID, cache/WC protocol, concurrent visibility and
+    // device completion. Do not substitute this projection in native output.
+    if (Id == Intrinsic::X86DirectStore)
+      return storeMemory(*Address, Shape.InputSizes[1],
+                         readOperand(Op.Inputs[2]));
+    const auto Source = loadMemoryBytes(*Address, 64);
+    if (!Source)
+      return false;
+    if (CollectLoads &&
+        static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
+      LoadLog.push_back({*Address, 64});
+    // Snapshot the source before checking/storing the implicit ES destination.
+    // storeMemoryBytes validates the entire write before changing the overlay.
+    const uint64_t Destination = readOperand(Op.Inputs[2]);
+    return (Destination & 63) == 0 && storeMemoryBytes(Destination, *Source);
+  }
+
   if (Id == Intrinsic::Enqcmd || Id == Intrinsic::Enqcmds) {
     const auto IsKnownScalar = [&](const NdVar &Value) {
       return Value.isConst() || ((Value.isReg() || Value.isTemp()) &&
                                  Registers.contains(Value.Offset));
     };
-    if (Img.Arch != Arch::X64 || Op.MemoryOrdering != NdMemoryOrdering::None ||
-        Op.NumInputs != 3 || Op.Inputs[0].Size != 2 ||
-        (!Op.Output.isReg() && !Op.Output.isTemp()) ||
-        !intrinsicSupportsMemoryAddressSpace(Id) ||
-        !intrinsicMemoryAddressSpaceShapeIsValid(
-            Id, Op.NumInputs, Op.Output.Size, Op.Inputs[1].Size,
-            Op.Inputs[2].Size, 0) ||
+    if (Img.Arch != Arch::X64 ||
+        !x86SystemStateShapeIsValid(Id, x86SystemStateLowShape(Op, Img.Arch)) ||
         !IsKnownScalar(Op.Inputs[1]) || !IsKnownScalar(Op.Inputs[2]) ||
         !X86CurrentPrivilegeLevel || !X86IA32Pasid || !X86LinearAddressBits)
       return false;
@@ -763,15 +913,25 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     return true;
   }
 
-  const bool IsApxRao = Id == Intrinsic::ApxRaoAdd ||
-                        Id == Intrinsic::ApxRaoAnd ||
-                        Id == Intrinsic::ApxRaoOr || Id == Intrinsic::ApxRaoXor;
-  const bool IsApxCmpccXadd = Id == Intrinsic::ApxCmpccXadd;
+  const auto AtomicId = x86AtomicSemanticId(Id);
+  const bool IsApxRao =
+      AtomicId == Intrinsic::ApxRaoAdd || AtomicId == Intrinsic::ApxRaoAnd ||
+      AtomicId == Intrinsic::ApxRaoOr || AtomicId == Intrinsic::ApxRaoXor;
+  const bool IsApxCmpccXadd = AtomicId == Intrinsic::ApxCmpccXadd;
   if (IsApxRao || IsApxCmpccXadd) {
+    const auto Shape = apxAtomicLowShape(Op, Img.Arch);
     if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace) ||
         !intrinsicSupportsMemoryAddressSpace(Id) ||
-        !intrinsicApxAtomicShapeIsValid(Id, apxAtomicLowShape(Op, Img.Arch)))
+        !intrinsicApxAtomicShapeIsValid(Id, Shape))
       return false;
+    // Native execution owns CS/ES/SS descriptor checks. The concrete evaluator
+    // must not reinterpret an i386 segment offset as ordinary image memory.
+    if (Shape.segmentPrefix())
+      return false;
+
+    for (unsigned I = 1; I != Op.NumInputs; ++I)
+      if (!knownOperandBytes(Op.Inputs[I], 0, Op.Inputs[I].Size))
+        return false;
 
     const uint16_t Width = IsApxRao ? Op.Inputs[2].Size : Op.Output.Size;
 
@@ -810,11 +970,11 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     uint64_t Stored = Old;
     if (IsApxRao) {
       const uint64_t Source = readOperand(Op.Inputs[2]) & Mask;
-      if (Id == Intrinsic::ApxRaoAdd)
+      if (AtomicId == Intrinsic::ApxRaoAdd)
         Stored = (Old + Source) & Mask;
-      else if (Id == Intrinsic::ApxRaoAnd)
+      else if (AtomicId == Intrinsic::ApxRaoAnd)
         Stored = Old & Source;
-      else if (Id == Intrinsic::ApxRaoOr)
+      else if (AtomicId == Intrinsic::ApxRaoOr)
         Stored = Old | Source;
       else
         Stored = Old ^ Source;
@@ -987,334 +1147,6 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
         Result[Base + Word * 2] = static_cast<uint8_t>(Sum);
         Result[Base + Word * 2 + 1] = static_cast<uint8_t>(Sum >> 8);
       }
-    writeOutputBytes(Op.Output, Result);
-    return true;
-  }
-
-  if (Id == Intrinsic::X86FourFMA) {
-    if (Op.NumInputs != 6 || (Op.Output.Size != 16 && Op.Output.Size != 64) ||
-        Op.Inputs[1].Size == 0 || Op.Inputs[1].Size > 8 ||
-        Op.Inputs[2].Size != Op.Output.Size || !Op.Inputs[3].isConst() ||
-        Op.Inputs[3].Size != 1 ||
-        (Op.Inputs[4].Size != 1 && Op.Inputs[4].Size != 2) ||
-        !Op.Inputs[5].isConst() || Op.Inputs[5].Size != 1)
-      return false;
-    const uint8_t GroupBase = static_cast<uint8_t>(readOperand(Op.Inputs[3]));
-    const uint8_t Control = static_cast<uint8_t>(readOperand(Op.Inputs[5]));
-    if ((Control & ~7u) != 0)
-      return false;
-    const bool Scalar = (Control & 1) != 0;
-    const bool Negative = (Control & 2) != 0;
-    const bool ZeroMask = (Control & 4) != 0;
-    if (Scalar != (Op.Output.Size == 16) ||
-        Op.Inputs[4].Size != (Scalar ? 1 : 2) || GroupBase > 28 ||
-        (GroupBase & 3) != 0)
-      return false;
-    const uint64_t Mask = readOperand(Op.Inputs[4]);
-    const uint64_t ActiveMask = Mask & (Scalar ? 1 : 0xffff);
-    std::array<uint32_t, 4> MemoryWords{};
-    if (ActiveMask != 0) {
-      const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
-      if (!Address)
-        return false;
-      for (unsigned I = 0; I < 4; ++I) {
-        const auto Word = loadMemory(*Address + I * 4, 4);
-        if (!Word)
-          return false;
-        MemoryWords[I] = static_cast<uint32_t>(*Word);
-      }
-      if (CollectLoads &&
-          static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
-        LoadLog.push_back({*Address, 16});
-    }
-    const std::vector<uint8_t> Old = readOperandBytes(Op.Inputs[2]);
-    std::array<std::vector<uint8_t>, 4> Sources;
-    if (ActiveMask != 0)
-      for (unsigned I = 0; I < 4; ++I) {
-        const x86_reg Reg = static_cast<x86_reg>(
-            (Scalar ? X86_REG_XMM0 : X86_REG_ZMM0) + GroupBase + I);
-        const RegInfo Info = mapCapstoneReg(Reg);
-        const auto Value = getRegisterBytes(Info.Offset);
-        if (!Value || Value->size() < Op.Output.Size)
-          return false;
-        Sources[I].assign(Value->begin(), Value->begin() + Op.Output.Size);
-      }
-    std::vector<uint8_t> Result = Old;
-    const unsigned Lanes = Scalar ? 1 : 16;
-    std::vector<uint32_t> Accumulators(Lanes);
-    for (unsigned Lane = 0; Lane < Lanes; ++Lane) {
-      const unsigned Offset = Lane * 4;
-      if (((ActiveMask >> Lane) & 1) == 0) {
-        if (ZeroMask)
-          std::fill_n(Result.begin() + Offset, 4, 0);
-        continue;
-      }
-      std::memcpy(&Accumulators[Lane], Old.data() + Offset, 4);
-    }
-    auto Rounding = [&]() {
-      switch ((MXCSR >> 13) & 3U) {
-      case 1:
-        return llvm::APFloat::rmTowardNegative;
-      case 2:
-        return llvm::APFloat::rmTowardPositive;
-      case 3:
-        return llvm::APFloat::rmTowardZero;
-      default:
-        return llvm::APFloat::rmNearestTiesToEven;
-      }
-    }();
-    auto StatusFlags = [](llvm::APFloat::opStatus Status) {
-      const unsigned Raw = static_cast<unsigned>(Status);
-      uint32_t Flags = 0;
-      if (Raw & llvm::APFloat::opInvalidOp)
-        Flags |= 1U << 0;
-      if (Raw & llvm::APFloat::opDivByZero)
-        Flags |= 1U << 2;
-      if (Raw & llvm::APFloat::opOverflow)
-        Flags |= 1U << 3;
-      if (Raw & llvm::APFloat::opUnderflow)
-        Flags |= 1U << 4;
-      if (Raw & llvm::APFloat::opInexact)
-        Flags |= 1U << 5;
-      return Flags;
-    };
-    auto IsNaN = [](uint32_t V) {
-      return (V & 0x7f800000U) == 0x7f800000U && (V & 0x007fffffU) != 0;
-    };
-    auto IsSignalingNaN = [&](uint32_t V) {
-      return IsNaN(V) && (V & 0x00400000U) == 0;
-    };
-    auto IsInf = [](uint32_t V) { return (V & 0x7fffffffU) == 0x7f800000U; };
-    auto IsZero = [](uint32_t V) { return (V & 0x7fffffffU) == 0; };
-    auto IsDenormal = [](uint32_t V) {
-      return (V & 0x7f800000U) == 0 && (V & 0x007fffffU) != 0;
-    };
-    auto ApplyDaz = [&](uint32_t Bits) {
-      return (MXCSR & (1U << 6)) != 0 && IsDenormal(Bits) ? Bits & 0x80000000U
-                                                          : Bits;
-    };
-    for (unsigned I = 0; I < 4; ++I) {
-      uint32_t PreRaised = 0;
-      std::vector<uint32_t> ArithmeticSources(Lanes);
-      std::vector<uint32_t> Multipliers(Lanes);
-      std::vector<uint32_t> Addends(Lanes);
-      std::vector<uint8_t> NeedsPostComputation(Lanes, 0);
-      for (unsigned Lane = 0; Lane < Lanes; ++Lane) {
-        if (((ActiveMask >> Lane) & 1) == 0)
-          continue;
-        const unsigned Offset = Lane * 4;
-        uint32_t OriginalSource = 0;
-        std::memcpy(&OriginalSource, Sources[I].data() + Offset, 4);
-        const uint32_t OriginalMultiplier = MemoryWords[I];
-        const uint32_t OriginalAddend = Accumulators[Lane];
-
-        // Intel's pre-computation priority is NaN/other-invalid, then
-        // denormal.  Select a source NaN from its original architectural bits:
-        // V4FNMADD's arithmetic negation must not change its sign or payload.
-        if (IsNaN(OriginalSource) || IsNaN(OriginalMultiplier) ||
-            IsNaN(OriginalAddend)) {
-          if (IsSignalingNaN(OriginalSource) ||
-              IsSignalingNaN(OriginalMultiplier) ||
-              IsSignalingNaN(OriginalAddend))
-            PreRaised |= 1U << 0;
-          const uint32_t Selected = IsNaN(OriginalSource) ? OriginalSource
-                                    : IsNaN(OriginalMultiplier)
-                                        ? OriginalMultiplier
-                                        : OriginalAddend;
-          Accumulators[Lane] = Selected | 0x00400000U;
-          continue;
-        }
-
-        uint32_t SourceBits = ApplyDaz(OriginalSource);
-        const uint32_t MultiplierBits = ApplyDaz(OriginalMultiplier);
-        const uint32_t AddendBits = ApplyDaz(OriginalAddend);
-        if (Negative)
-          SourceBits ^= 0x80000000U;
-        if ((IsZero(SourceBits) && IsInf(MultiplierBits)) ||
-            (IsInf(SourceBits) && IsZero(MultiplierBits))) {
-          Accumulators[Lane] = 0xffc00000U;
-          PreRaised |= 1U << 0;
-          continue;
-        }
-        const bool InfiniteProduct = IsInf(SourceBits) || IsInf(MultiplierBits);
-        const uint32_t ProductInf =
-            0x7f800000U | ((SourceBits ^ MultiplierBits) & 0x80000000U);
-        if (InfiniteProduct && IsInf(AddendBits) &&
-            ((ProductInf ^ AddendBits) & 0x80000000U)) {
-          Accumulators[Lane] = 0xffc00000U;
-          PreRaised |= 1U << 0;
-          continue;
-        }
-
-        if ((MXCSR & (1U << 6)) == 0 &&
-            (IsDenormal(OriginalSource) || IsDenormal(OriginalMultiplier) ||
-             IsDenormal(OriginalAddend)))
-          PreRaised |= 1U << 1;
-        if (InfiniteProduct) {
-          Accumulators[Lane] = ProductInf;
-          continue;
-        }
-        if (IsInf(AddendBits)) {
-          Accumulators[Lane] = AddendBits;
-          continue;
-        }
-
-        ArithmeticSources[Lane] = SourceBits;
-        Multipliers[Lane] = MultiplierBits;
-        Addends[Lane] = AddendBits;
-        NeedsPostComputation[Lane] = 1;
-      }
-
-      // Packed lanes report the union of their pre-computation exceptions.
-      // An unmasked pre fault suppresses post-computation for every lane in
-      // this iteration, rather than allowing a different lane to add O/U/P.
-      MXCSR |= PreRaised;
-      if ((PreRaised & ~(MXCSR >> 7) & 0x03U) != 0)
-        return false;
-
-      uint32_t PostRaised = 0;
-      for (unsigned Lane = 0; Lane < Lanes; ++Lane) {
-        if (!NeedsPostComputation[Lane])
-          continue;
-        uint32_t Raised = 0;
-        llvm::APFloat Product(llvm::APFloat::IEEEsingle(),
-                              llvm::APInt(32, ArithmeticSources[Lane]));
-        const llvm::APFloat Multiplier(llvm::APFloat::IEEEsingle(),
-                                       llvm::APInt(32, Multipliers[Lane]));
-        const llvm::APFloat Addend(llvm::APFloat::IEEEsingle(),
-                                   llvm::APInt(32, Addends[Lane]));
-        Raised |=
-            StatusFlags(Product.fusedMultiplyAdd(Multiplier, Addend, Rounding));
-        Accumulators[Lane] =
-            static_cast<uint32_t>(Product.bitcastToAPInt().getZExtValue());
-        const bool Tiny = IsDenormal(Accumulators[Lane]);
-        const bool UnderflowMasked = (MXCSR & (1U << 11)) != 0;
-        if (Tiny && !UnderflowMasked) {
-          // Exact tiny results still fault when underflow is unmasked.  FTZ is
-          // ignored on this path and must not synthesize precision.
-          Raised |= 1U << 4;
-        } else if (Tiny && (MXCSR & (1U << 15)) != 0) {
-          // With underflow masked, FTZ flushes even an exact tiny result and
-          // reports both underflow and precision.
-          Accumulators[Lane] &= 0x80000000U;
-          Raised |= (1U << 4) | (1U << 5);
-        }
-        PostRaised |= Raised;
-      }
-      MXCSR |= PostRaised;
-      if ((PostRaised & ~(MXCSR >> 7) & 0x3fU) != 0)
-        return false;
-    }
-    for (unsigned Lane = 0; Lane < Lanes; ++Lane) {
-      if (((ActiveMask >> Lane) & 1) == 0)
-        continue;
-      const unsigned Offset = Lane * 4;
-      const uint32_t Bits = Accumulators[Lane];
-      Result[Offset] = static_cast<uint8_t>(Bits);
-      Result[Offset + 1] = static_cast<uint8_t>(Bits >> 8);
-      Result[Offset + 2] = static_cast<uint8_t>(Bits >> 16);
-      Result[Offset + 3] = static_cast<uint8_t>(Bits >> 24);
-    }
-    writeOutputBytes(Op.Output, Result);
-    return true;
-  }
-
-  if (isX86VP4DPIntrinsic(Id)) {
-    // [id, effective address, old ZMM destination, source-block base,
-    // compact k mask, zeroing bit].  The four-register source block and the
-    // m128 Tuple1_4X are architectural: do not model this as one vector add.
-    if (!intrinsicX86VP4DPShapeIsValid(Id, Op.NumInputs, Op.Output.Size,
-                                       Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
-                                       Op.NumInputs > 2 ? Op.Inputs[2].Size : 0,
-                                       Op.NumInputs > 3 ? Op.Inputs[3].Size : 0,
-                                       Op.NumInputs > 4 ? Op.Inputs[4].Size : 0,
-                                       Op.NumInputs > 5 ? Op.Inputs[5].Size
-                                                        : 0) ||
-        !Op.Inputs[3].isConst() ||
-        (!Op.Inputs[4].isConst() && !Op.Inputs[4].isReg()) ||
-        !Op.Inputs[5].isConst())
-      return false;
-    const uint64_t GroupBase = readOperand(Op.Inputs[3]);
-    const uint64_t Mask = readOperand(Op.Inputs[4]) & UINT64_C(0xffff);
-    const bool ZeroMask = (readOperand(Op.Inputs[5]) & 1) != 0;
-    if (GroupBase > 28 || (GroupBase & 3) != 0)
-      return false;
-
-    // Tuple1_4X is all-or-nothing: if any destination lane is active, read
-    // all four dwords before observing or publishing any destination result.
-    std::array<uint32_t, 4> MemoryWords{};
-    if (Mask != 0) {
-      const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
-      if (!Address)
-        return false;
-      const auto Bytes = loadMemoryBytes(*Address, 16);
-      if (!Bytes)
-        return false;
-      for (unsigned I = 0; I < 4; ++I)
-        std::memcpy(&MemoryWords[I], Bytes->data() + I * 4, 4);
-      if (CollectLoads &&
-          static_cast<int>(LoadLog.size()) < limits::kMaxLoadRecords)
-        LoadLog.push_back({*Address, 16});
-    }
-
-    const std::vector<uint8_t> Old = readOperandBytes(Op.Inputs[2]);
-    if (Old.size() != 64)
-      return false;
-    std::array<std::vector<uint8_t>, 4> Sources;
-    if (Mask != 0)
-      for (unsigned I = 0; I < 4; ++I) {
-        const RegInfo Info = mapCapstoneReg(static_cast<x86_reg>(
-            X86_REG_ZMM0 + static_cast<unsigned>(GroupBase) + I));
-        const auto Value = getRegisterBytes(Info.Offset);
-        if (Info.Offset == UINT64_C(0xffff) || !Value || Value->size() < 64)
-          return false;
-        Sources[I].assign(Value->begin(), Value->begin() + 64);
-      }
-
-    std::vector<uint8_t> Result = Old;
-    auto readDword = [](const std::vector<uint8_t> &Bytes, size_t Offset) {
-      uint32_t Value = 0;
-      std::memcpy(&Value, Bytes.data() + Offset, sizeof(Value));
-      return Value;
-    };
-    auto writeDword = [](std::vector<uint8_t> &Bytes, size_t Offset,
-                         uint32_t Value) {
-      std::memcpy(Bytes.data() + Offset, &Value, sizeof(Value));
-    };
-    auto readWord = [](const std::vector<uint8_t> &Bytes, size_t Offset) {
-      uint16_t Value = 0;
-      std::memcpy(&Value, Bytes.data() + Offset, sizeof(Value));
-      return static_cast<int32_t>(static_cast<int16_t>(Value));
-    };
-    const bool Saturating = Id == Intrinsic::X86VP4DPWSSDS;
-    for (unsigned Lane = 0; Lane < 16; ++Lane) {
-      if (((Mask >> Lane) & 1) == 0) {
-        if (ZeroMask)
-          writeDword(Result, Lane * 4, 0);
-        continue;
-      }
-      uint32_t Acc = readDword(Old, Lane * 4);
-      for (unsigned I = 0; I < 4; ++I) {
-        const int64_t Product =
-            static_cast<int64_t>(readWord(Sources[I], Lane * 4)) *
-                static_cast<int64_t>(
-                    static_cast<int16_t>(MemoryWords[I] & UINT32_C(0xffff))) +
-            static_cast<int64_t>(readWord(Sources[I], Lane * 4 + 2)) *
-                static_cast<int64_t>(
-                    static_cast<int16_t>(MemoryWords[I] >> 16));
-        const int64_t Sum =
-            static_cast<int64_t>(static_cast<int32_t>(Acc)) + Product;
-        if (Saturating) {
-          const int64_t Clamped = std::max<int64_t>(
-              -2147483648LL, std::min<int64_t>(2147483647LL, Sum));
-          Acc = static_cast<uint32_t>(static_cast<int32_t>(Clamped));
-        } else {
-          // VP4DPWSSD wraps after every one of the four sequential updates.
-          Acc = static_cast<uint32_t>(Sum);
-        }
-      }
-      writeDword(Result, Lane * 4, Acc);
-    }
     writeOutputBytes(Op.Output, Result);
     return true;
   }
@@ -1506,34 +1338,45 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
 
   if (Id == Intrinsic::EVEXCompressStore || Id == Intrinsic::EVEXExpandLoad) {
     const bool Expand = Id == Intrinsic::EVEXExpandLoad;
-    if (Op.NumInputs != 5 || !Op.Inputs[4].isConst() ||
-        Op.Inputs[1].Size != 8 || Op.Inputs[2].Size == 0 ||
-        Op.Inputs[2].Size > 8 ||
-        (Expand ? Op.Inputs[3].Size != Op.Output.Size : Op.Output.Size != 0))
+    if (!x86CompactShapeIsValid(Id, x86CompactLowShape(Op, Img.Arch)))
       return false;
-    const uint8_t Control = static_cast<uint8_t>(Op.Inputs[4].Offset);
-    const unsigned ElementBytes = Control & 0x0f;
-    if ((ElementBytes != 1 && ElementBytes != 2 && ElementBytes != 4 &&
-         ElementBytes != 8) ||
-        (!Expand && (Control & 0x80) != 0))
+    const auto Control = *x86CompactControl(Id, Op.Inputs[4].Offset);
+    const unsigned ElementBytes = Control.ElementBytes;
+    const uint16_t VectorBytes = Op.Inputs[3].Size;
+    const auto Known = [&](const NdVar &V) {
+      if (V.isConst())
+        return true;
+      if (V.Size <= sizeof(uint64_t))
+        return Registers.count(V.Offset) != 0;
+      const auto It = WideRegisters.find(V.Offset);
+      return It != WideRegisters.end() && It->second.size() >= V.Size;
+    };
+    if (!Known(Op.Inputs[2]))
       return false;
-    const uint16_t VectorBytes = Expand ? Op.Output.Size : Op.Inputs[3].Size;
-    if ((VectorBytes != 16 && VectorBytes != 32 && VectorBytes != 64) ||
-        VectorBytes % ElementBytes != 0)
+    const unsigned LaneCount = VectorBytes / ElementBytes;
+    const auto Use = x86CompactOperandUse(LaneCount, Expand, Control.Zero,
+                                          readOperand(Op.Inputs[2]));
+    const uint64_t Mask = readOperand(Op.Inputs[2]) & Use.LaneMask;
+    // The concrete evaluator has no CS/ES/SS descriptor environment. A masked
+    // off access needs none; an active access must not become a DS load/store.
+    if (Use.Address && Control.SegmentPrefix)
       return false;
-    const auto Base = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    if (Use.Address && !Known(Op.Inputs[1]))
+      return false;
+    const auto Base = Use.Address
+                          ? resolveMemoryAddress(Op, readOperand(Op.Inputs[1]))
+                          : std::optional<uint64_t>(0);
     if (!Base)
       return false;
-    const uint64_t Mask = readOperand(Op.Inputs[2]);
-    const unsigned LaneCount = VectorBytes / ElementBytes;
     uint64_t Cursor = *Base;
 
     if (Expand) {
-      std::vector<uint8_t> Result = readOperandBytes(Op.Inputs[3]);
-      if (Result.size() != VectorBytes)
-        return false;
-      if ((Control & 0x80) != 0)
-        std::fill(Result.begin(), Result.end(), 0);
+      std::vector<uint8_t> Result(VectorBytes, 0);
+      if (Use.Data) {
+        if (!Known(Op.Inputs[3]))
+          return false;
+        Result = readOperandBytes(Op.Inputs[3]);
+      }
       std::vector<LoadRecord> Records;
       for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
         if (((Mask >> Lane) & 1U) == 0)
@@ -1553,6 +1396,10 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return true;
     }
 
+    if (!Use.Data)
+      return true;
+    if (!Known(Op.Inputs[3]))
+      return false;
     const std::vector<uint8_t> Source = readOperandBytes(Op.Inputs[3]);
     if (Source.size() != VectorBytes)
       return false;
@@ -1988,20 +1835,23 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
 
       const uint32_t Selector =
           static_cast<uint32_t>(readOperand(Op.Inputs[4]));
-      const unsigned Row = Selector & 0xffff;
-      const unsigned Chunk = Selector >> 16;
-      const size_t RowOffset = static_cast<size_t>(Chunk) * 64;
-      if (Row >= Rows || RowOffset >= ColumnBytes)
-        return false;
-
+      // ISE 062 removed row chunks and selector #GP: both operand forms use
+      // only bits [3:0], and a row beyond the configured extent yields zeros.
+      const unsigned Row = Selector & 15;
       const auto Kind = static_cast<AMXTileRowKind>(RawKind);
-      const std::vector<uint8_t> Source = readOperandBytes(Op.Inputs[3]);
       std::vector<uint8_t> Result(x86reg::VectorRegStride, 0);
-      const size_t SourceRow = static_cast<size_t>(Row) * 64 + RowOffset;
+      if (Row >= Rows) {
+        writeOutputBytes(Op.Output, Result);
+        return true;
+      }
+      const auto KnownSource = getRegisterBytes(Op.Inputs[3].Offset);
+      if (!KnownSource || KnownSource->size() != x86reg::TileRegStride)
+        return false;
+      const auto &Source = *KnownSource;
+      const size_t SourceRow = static_cast<size_t>(Row) * 64;
       if (Kind == AMXTileRowKind::Move) {
         const size_t Bytes =
-            std::min<size_t>(x86reg::VectorRegStride,
-                             static_cast<size_t>(ColumnBytes) - RowOffset);
+            std::min<size_t>(x86reg::VectorRegStride, ColumnBytes);
         std::copy_n(Source.begin() + SourceRow, Bytes, Result.begin());
         writeOutputBytes(Op.Output, Result);
         return true;
@@ -2044,7 +1894,7 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       };
 
       for (unsigned Element = 0; Element < 16; ++Element) {
-        const size_t Byte = RowOffset + Element * 4;
+        const size_t Byte = Element * 4;
         if (Byte >= ColumnBytes)
           continue;
         const uint32_t Value =
@@ -2660,6 +2510,39 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
 bool NdOpEmulator::executeCopy(const LowOp &Op) {
   if (Op.NumInputs < 1)
     return false;
+  if (Op.Opcode == NdOp::SUBBYTES) {
+    if (Op.NumInputs != 2 ||
+        !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size) ||
+        !knownOperandBytes(Op.Inputs[0], readOperand(Op.Inputs[1]),
+                           Op.Output.Size))
+      return false;
+  }
+
+  // Pure reshaping cannot establish missing source bytes. Propagate unknown
+  // state so a later masked consumer can decide whether it observes the value.
+  // In particular, packing a four-register source group must not invent zeros
+  // for an unavailable member or retain a stale result from an earlier step.
+  // SUBBYTES keeps its stricter slice/offset proof above.
+  for (unsigned I = 0; Op.Opcode != NdOp::SUBBYTES && I < Op.NumInputs; ++I) {
+    const auto &Input = Op.Inputs[I];
+    uint64_t Needed = Input.Size;
+    if (Op.Opcode == NdOp::CONCAT && Op.NumInputs >= 2)
+      Needed = I == 0
+                   ? Op.Output.Size > Op.Inputs[1].Size
+                         ? std::min<unsigned>(Input.Size, Op.Output.Size -
+                                                              Op.Inputs[1].Size)
+                         : 0
+                   : std::min(Input.Size, Op.Output.Size);
+    else if (I == 0)
+      Needed = std::min(Input.Size, Op.Output.Size);
+    if (Needed && !knownOperandBytes(Input, 0, Needed)) {
+      if (Op.Output.isReg() || Op.Output.isTemp()) {
+        Registers.erase(Op.Output.Offset);
+        WideRegisters.erase(Op.Output.Offset);
+      }
+      return true;
+    }
+  }
 
   if (Op.Output.Size > 8 || Op.Inputs[0].Size > 8 ||
       (Op.Opcode == NdOp::CONCAT && Op.NumInputs >= 2 &&

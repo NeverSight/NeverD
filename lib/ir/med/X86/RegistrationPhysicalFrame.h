@@ -10,7 +10,7 @@
 #ifndef NEVERD_IR_MED_X86_REGISTRATIONPHYSICALFRAME_H
 #define NEVERD_IR_MED_X86_REGISTRATIONPHYSICALFRAME_H
 
-#include "neverd/ir/med/X86RegistrationPhysicalFrame.h"
+#include "neverd/ir/med/X86/X86RegistrationPhysicalFrame.h"
 
 #include <memory>
 

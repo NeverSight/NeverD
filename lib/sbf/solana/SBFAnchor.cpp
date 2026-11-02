@@ -6,6 +6,8 @@
 
 #include "neverd/sbf/solana/SBFAnchor.h"
 
+#include "SBFWordKey.h"
+
 #include "neverd/sbf/SBFConstants.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -157,14 +159,14 @@ const AnchorNameInfo *findAnchorName(const AnchorDiscriminator &Value) {
   // The dictionary is large enough that a scan per lookup would dominate
   // recovery, so it is indexed once. Building the index requires the table to
   // be injective, which SBFAnchorTests checks against the same derivation.
-  static const llvm::DenseMap<uint64_t, const AnchorNameInfo *> ByWord = [] {
-    llvm::DenseMap<uint64_t, const AnchorNameInfo *> Index;
+  static const llvm::DenseMap<WordKey, const AnchorNameInfo *> ByWord = [] {
+    llvm::DenseMap<WordKey, const AnchorNameInfo *> Index;
     for (const AnchorNameInfo &Info : anchorNameInfos())
-      Index.try_emplace(Info.Discriminator.toWord(), &Info);
+      Index.try_emplace(wordKey(Info.Discriminator.toWord()), &Info);
     return Index;
   }();
 
-  auto It = ByWord.find(Value.toWord());
+  auto It = ByWord.find(wordKey(Value.toWord()));
   return It == ByWord.end() ? nullptr : It->second;
 }
 

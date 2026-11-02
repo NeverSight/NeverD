@@ -1,0 +1,61 @@
+//===- AArch64PAuthLoad.def - Combined authenticated loads ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// LDRAA/B authenticate with is_combined=true, then access memory, then commit
+/// writeback. Standalone AUT cannot replace that operation under FEAT_FPAC.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_PAUTH_LOAD_VALUE
+#define NEVERD_A64_PAUTH_LOAD_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_A64_PAUTH_LOAD_TEXT
+#define NEVERD_A64_PAUTH_LOAD_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_A64_PAUTH_LOAD_OPERATION
+#define NEVERD_A64_PAUTH_LOAD_OPERATION(Id, Mnemonic, Encoding)
+#endif
+
+NEVERD_A64_PAUTH_LOAD_OPERATION(A64_Ldraa, "ldraa", 0xf8200400U)
+NEVERD_A64_PAUTH_LOAD_OPERATION(A64_Ldrab, "ldrab", 0xf8a00400U)
+NEVERD_A64_PAUTH_LOAD_VALUE(uint32_t, kPAuthLoadOpcodeMask, 0xffa00400U)
+NEVERD_A64_PAUTH_LOAD_VALUE(uint32_t, kPAuthLoadRegisterMask, 0x1fU)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadBaseShift, 5)
+NEVERD_A64_PAUTH_LOAD_VALUE(uint32_t, kPAuthLoadRegistersMask, 0x3ffU)
+NEVERD_A64_PAUTH_LOAD_VALUE(uint32_t, kPAuthLoadWritebackMask, 0x800U)
+NEVERD_A64_PAUTH_LOAD_VALUE(uint32_t, kPAuthLoadImmediateMask, 0x1ffU)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadImmediateShift, 12)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadSignShift, 22)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadSignBit, 9)
+NEVERD_A64_PAUTH_LOAD_VALUE(int64_t, kPAuthLoadImmediateModulus, 1024)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadPointerBytes, 8)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadWordBytes, 4)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadPairBytes, 16)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadPointerBits, 64)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadPairBits, 128)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadOperandCount, 2)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadValueIndex, 0)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadBaseIndex, 1)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadScratchBase, 16)
+NEVERD_A64_PAUTH_LOAD_VALUE(unsigned, kPAuthLoadScratchValue, 17)
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadAsm, ".inst ${3:c}")
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadConstraints,
+                           "=&{x17},={x16},1,i,~{memory}")
+NEVERD_A64_PAUTH_LOAD_TEXT(
+    kPAuthLoadSPAsm, "// neverd.pauth.load.sp\n\tmov x14, sp\n\tmov sp, x16\n\t"
+                     ".inst ${3:c}\n\tmov x16, sp\n\tmov sp, x14")
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadSPConstraints,
+                           "=&{x17},={x16},1,i,~{x14},~{memory}")
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadSPPrefix, "// neverd.pauth.load.sp")
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadResult, "pauth.load")
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadMalformed,
+                           "malformed AArch64 combined authenticated load")
+NEVERD_A64_PAUTH_LOAD_TEXT(kPAuthLoadSPUnsupported,
+                           "authenticated SP load requires the original SP "
+                           "alignment and memory-tagging environment")
+
+#undef NEVERD_A64_PAUTH_LOAD_OPERATION
+#undef NEVERD_A64_PAUTH_LOAD_TEXT
+#undef NEVERD_A64_PAUTH_LOAD_VALUE

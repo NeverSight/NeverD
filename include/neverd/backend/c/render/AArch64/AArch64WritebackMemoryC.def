@@ -1,0 +1,114 @@
+//===- AArch64WritebackMemoryC.def - Writeback C syntax ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Evaluate operands before binding fixed scratch registers. One original
+/// instruction supplies the load value and the completed base.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_WRITEBACK_C_TEXT
+#error "Define NEVERD_A64_WRITEBACK_C_TEXT before including this file"
+#endif
+
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCAsm, ".inst %c2")
+NEVERD_A64_WRITEBACK_C_TEXT(kPairCAsm, ".inst %c3")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kWritebackCSPAsm,
+    "mov x14, sp\\n\\tmov sp, x16\\n\\t.inst %c2\\n\\tmov x16, sp\\n\\t"
+    "mov sp, x14")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kPairCSPAsm,
+    "mov x14, sp\\n\\tmov sp, x16\\n\\t.inst %c3\\n\\tmov x16, sp\\n\\t"
+    "mov sp, x14")
+
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCValue, "__writeback_value")
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCBase, "__writeback_base")
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCData, "__writeback_data")
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCPair, "__writeback_pair")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kWritebackLoadCExpression,
+    "({{ register uint64_t {0} __asm__(\"x17\"); "
+    "register uint64_t {1} __asm__(\"x16\") = (uint64_t)({2}); "
+    "__asm__ volatile(\"{4}\" : \"=&r\"({0}), \"+r\"({1}) "
+    ": \"i\"({3}) : {5}); "
+    "(unsigned __int128){0} | ((unsigned __int128){1} << 64); })")
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackStoreCExpression,
+                            "({{ uint64_t {4} = (uint64_t)({2}); "
+                            "uint64_t {5} = (uint64_t)({6}); "
+                            "register uint64_t {1} __asm__(\"x16\") = {4}; "
+                            "register uint64_t {0} __asm__(\"x17\") = {5}; "
+                            "__asm__ volatile(\"{7}\" : \"+r\"({1}) "
+                            ": \"r\"({0}), \"i\"({3}) : {8}); {1}; })")
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCStructAssignment,
+                            "{{ unsigned __int128 {0} = {1}; "
+                            "{2}.field_0 = (uint64_t){0}; "
+                            "{2}.field_1 = (uint64_t)({0} >> 64); }\n")
+
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCAssignment, "{0} = {1};\n")
+
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kWritebackVectorStoreCExpression,
+    "({{ const uint64_t {4} = (uint64_t)({2}); "
+    "const unsigned __int128 {5} = (unsigned __int128)({6}); "
+    "register int64_t __attribute__((vector_size(16))) {0} __asm__(\"v17\") = "
+    "{7}; "
+    "register uint64_t {1} __asm__(\"x16\") = {4}; "
+    "__asm__ volatile(\"{8}\" : \"+r\"({1}) "
+    ": \"w\"({0}), \"i\"({3}) : {9}); {1}; })")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kWritebackVectorLoadCStatement,
+    "{{ const uint64_t {4} = (uint64_t)({2}); "
+    "register int64_t __attribute__((vector_size(16))) {0} __asm__(\"v17\"); "
+    "register uint64_t {1} __asm__(\"x16\") = {4}; "
+    "__asm__ volatile(\"{6}\" : \"=&w\"({0}), \"+r\"({1}) "
+    ": \"i\"({3}) : {7}); {5} }\n")
+
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCValueField, "{0}.field_0")
+NEVERD_A64_WRITEBACK_C_TEXT(kWritebackCBaseField, "{0}.field_1")
+
+NEVERD_A64_WRITEBACK_C_TEXT(kPairCSecond, "__pair_second")
+NEVERD_A64_WRITEBACK_C_TEXT(kPairCFirstInput, "__pair_first_input")
+NEVERD_A64_WRITEBACK_C_TEXT(kPairCSecondInput, "__pair_second_input")
+NEVERD_A64_WRITEBACK_C_TEXT(kPairCField, "{0}.field_{1}")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kPairLoadCStatement,
+    "{{ const uint64_t {3} = (uint64_t)({4}); "
+    "register uint64_t {0} __asm__(\"x17\"); "
+    "register uint64_t {1} __asm__(\"x15\"); "
+    "register uint64_t {2} __asm__(\"x16\") = {3}; "
+    "__asm__ volatile(\"{7}\" : \"=&r\"({0}), \"=&r\"({1}), \"+r\"({2}) "
+    ": \"i\"({5}) : {8}); {6} }\n")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kPairVectorLoadCStatement,
+    "{{ const uint64_t {3} = (uint64_t)({4}); "
+    "register int64_t __attribute__((vector_size(16))) {0} __asm__(\"v17\"); "
+    "register int64_t __attribute__((vector_size(16))) {1} __asm__(\"v15\"); "
+    "register uint64_t {2} __asm__(\"x16\") = {3}; "
+    "__asm__ volatile(\"{7}\" : \"=&w\"({0}), \"=&w\"({1}), \"+r\"({2}) "
+    ": \"i\"({5}) : {8}); {6} }\n")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kPairStoreCExpression,
+    "({{ const uint64_t {3} = (uint64_t)({6}); "
+    "const uint64_t {4} = (uint64_t)({7}); "
+    "const uint64_t {5} = (uint64_t)({8}); "
+    "register uint64_t {0} __asm__(\"x17\") = {4}; "
+    "register uint64_t {1} __asm__(\"x15\") = {5}; "
+    "register uint64_t {2} __asm__(\"x16\") = {3}; "
+    "__asm__ volatile(\"{10}\" : \"+r\"({2}) "
+    ": \"r\"({0}), \"r\"({1}), \"i\"({9}) : {11}); {2}; })")
+NEVERD_A64_WRITEBACK_C_TEXT(
+    kPairVectorStoreCExpression,
+    "({{ const uint64_t {3} = (uint64_t)({6}); "
+    "const unsigned __int128 {4} = (unsigned __int128)({7}); "
+    "const unsigned __int128 {5} = (unsigned __int128)({8}); "
+    "register int64_t __attribute__((vector_size(16))) {0} __asm__(\"v17\") = "
+    "{10}; "
+    "register int64_t __attribute__((vector_size(16))) {1} __asm__(\"v15\") = "
+    "{11}; "
+    "register uint64_t {2} __asm__(\"x16\") = {3}; "
+    "__asm__ volatile(\"{12}\" : \"+r\"({2}) "
+    ": \"w\"({0}), \"w\"({1}), \"i\"({9}) : {13}); {2}; })")
+
+#undef NEVERD_A64_WRITEBACK_C_TEXT

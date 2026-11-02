@@ -6,6 +6,7 @@
 #include "Session.h"
 #include "Theme.h"
 
+#include <QAction>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -17,6 +18,7 @@
 #include <QTextCursor>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <memory>
 
 namespace neverd::gui {
@@ -40,6 +42,14 @@ constexpr CommandWord Commands[] = {
     {"strref", "strref"},   {"strrefs", "strref"},
     {"t", "types"},         {"types", "types"},
 };
+
+/// The color the log writes a line of the given level in.
+QColor levelColor(int level) {
+  const auto &theme = Theme::instance();
+  return level >= 2   ? theme.color(ColorRole::ListingError)
+         : level == 1 ? theme.color(ColorRole::CodePreprocessor)
+                      : theme.color(ColorRole::CodeDefault);
+}
 } // namespace
 
 OutputWindow::OutputWindow(Session &session, QWidget *parent)
@@ -73,12 +83,15 @@ OutputWindow::OutputWindow(Session &session, QWidget *parent)
   layout->addLayout(row);
   history_ = QSettings().value(HistoryKey).toStringList();
   historyIndex_ = int(history_.size());
-  const auto applyFont = [this] {
+  const auto applyTheme = [this] {
     log_->setFont(Theme::instance().codeFont());
     command_->setFont(Theme::instance().codeFont());
+    // Lines already written keep the other theme's colors until recolored.
+    if (Theme::instance().dark() != coloredDark_)
+      recolor();
   };
-  applyFont();
-  connect(&Theme::instance(), &Theme::changed, this, applyFont);
+  applyTheme();
+  connect(&Theme::instance(), &Theme::changed, this, applyTheme);
   connect(command_, &QLineEdit::returnPressed, this, [this] {
     const auto line = command_->text().trimmed();
     command_->clear();
@@ -100,12 +113,14 @@ QMenu *OutputWindow::createLogMenu() {
   QAction *copy = menu->addAction(icon(QStringLiteral("copy")), tr("&Copy"));
   copy->setObjectName(QStringLiteral("outputCopy"));
   copy->setShortcut(QKeySequence::Copy);
+  copy->setShortcutVisibleInContextMenu(true);
   copy->setEnabled(log_->textCursor().hasSelection());
   connect(copy, &QAction::triggered, log_, &QPlainTextEdit::copy);
   QAction *all =
       menu->addAction(icon(QStringLiteral("select_all")), tr("Select &all"));
   all->setObjectName(QStringLiteral("outputSelectAll"));
   all->setShortcut(QKeySequence::SelectAll);
+  all->setShortcutVisibleInContextMenu(true);
   connect(all, &QAction::triggered, log_, &QPlainTextEdit::selectAll);
   menu->addSeparator();
   // The same as the command line's clear.
@@ -118,20 +133,34 @@ QMenu *OutputWindow::createLogMenu() {
 }
 
 void OutputWindow::append(const QString &text, int level) {
-  const auto &theme = Theme::instance();
   QTextCharFormat format;
-  format.setForeground(level >= 2   ? theme.color(ColorRole::ListingError)
-                       : level == 1 ? theme.color(ColorRole::CodePreprocessor)
-                                    : theme.color(ColorRole::CodeDefault));
+  format.setForeground(levelColor(level));
   auto *bar = log_->verticalScrollBar();
   const bool atBottom = bar->value() >= bar->maximum() - 4;
   QTextCursor cursor(log_->document());
   cursor.movePosition(QTextCursor::End);
   if (!log_->document()->isEmpty())
     cursor.insertBlock();
+  // The line keeps its level, so that another theme can color it again.
+  cursor.block().setUserState(level);
   cursor.insertText(text, format);
   if (atBottom)
     bar->setValue(bar->maximum());
+}
+
+void OutputWindow::recolor() {
+  coloredDark_ = Theme::instance().dark();
+  QTextCursor cursor(log_->document());
+  cursor.beginEditBlock();
+  for (auto block = log_->document()->begin(); block.isValid();
+       block = block.next()) {
+    QTextCharFormat format;
+    format.setForeground(levelColor(std::max(0, block.userState())));
+    cursor.setPosition(block.position());
+    cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+    cursor.mergeCharFormat(format);
+  }
+  cursor.endEditBlock();
 }
 
 void OutputWindow::run(const QString &line) {

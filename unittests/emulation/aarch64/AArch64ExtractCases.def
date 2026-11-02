@@ -1,0 +1,63 @@
+//===- AArch64ExtractCases.def - Independently assembled NEON extraction ===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Assembled with llvm-mc -triple=aarch64 -show-encoding. Every legal byte
+/// offset occurs for both baseline widths; sources are V1/V2, destination V31.
+/// Define NEVERD_AARCH64_EXTRACT_CASE(Word, VectorBytes, ByteOffset).
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_AARCH64_EXTRACT_CASE
+// ext v31.8b, v1.8b, v2.8b, #0
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02003f, 8, 0)
+// ext v31.8b, v1.8b, v2.8b, #1
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02083f, 8, 1)
+// ext v31.8b, v1.8b, v2.8b, #2
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02103f, 8, 2)
+// ext v31.8b, v1.8b, v2.8b, #3
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02183f, 8, 3)
+// ext v31.8b, v1.8b, v2.8b, #4
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02203f, 8, 4)
+// ext v31.8b, v1.8b, v2.8b, #5
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02283f, 8, 5)
+// ext v31.8b, v1.8b, v2.8b, #6
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02303f, 8, 6)
+// ext v31.8b, v1.8b, v2.8b, #7
+NEVERD_AARCH64_EXTRACT_CASE(0x2e02383f, 8, 7)
+// ext v31.16b, v1.16b, v2.16b, #0
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02003f, 16, 0)
+// ext v31.16b, v1.16b, v2.16b, #1
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02083f, 16, 1)
+// ext v31.16b, v1.16b, v2.16b, #2
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02103f, 16, 2)
+// ext v31.16b, v1.16b, v2.16b, #3
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02183f, 16, 3)
+// ext v31.16b, v1.16b, v2.16b, #4
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02203f, 16, 4)
+// ext v31.16b, v1.16b, v2.16b, #5
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02283f, 16, 5)
+// ext v31.16b, v1.16b, v2.16b, #6
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02303f, 16, 6)
+// ext v31.16b, v1.16b, v2.16b, #7
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02383f, 16, 7)
+// ext v31.16b, v1.16b, v2.16b, #8
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02403f, 16, 8)
+// ext v31.16b, v1.16b, v2.16b, #9
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02483f, 16, 9)
+// ext v31.16b, v1.16b, v2.16b, #10
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02503f, 16, 10)
+// ext v31.16b, v1.16b, v2.16b, #11
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02583f, 16, 11)
+// ext v31.16b, v1.16b, v2.16b, #12
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02603f, 16, 12)
+// ext v31.16b, v1.16b, v2.16b, #13
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02683f, 16, 13)
+// ext v31.16b, v1.16b, v2.16b, #14
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02703f, 16, 14)
+// ext v31.16b, v1.16b, v2.16b, #15
+NEVERD_AARCH64_EXTRACT_CASE(0x6e02783f, 16, 15)
+#endif

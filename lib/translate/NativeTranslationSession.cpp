@@ -12,6 +12,7 @@
 #include "neverd/translate/RuntimeSymbolRegistry.h"
 #include "neverd/translate/TranslationJITLinker.h"
 #include "neverd/translate/TranslationObjectRequest.h"
+#include "neverd/translate/X86/RuntimeX87Helpers.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Twine.h"
@@ -274,8 +275,11 @@ translationAccess(RuntimeMemoryAccessKindV1 Access) {
 }
 
 llvm::Expected<TranslationExit>
-translateRuntimeExit(const RuntimeControlBlockV1 &Control, uint64_t CurrentPC) {
-  if (llvm::Error Error = validateRuntimeControlBlockV1(Control))
+translateRuntimeExit(const RuntimeControlBlockV1 &Control, uint64_t CurrentPC,
+                     TranslationRuntimeProfileV1 Profile) {
+  if (llvm::Error Error = Profile == TranslationRuntimeProfileV1::PortableX87
+                              ? validateRuntimeControlBlockExactSpanV1(Control)
+                              : validateRuntimeControlBlockV1(Control))
     return failure(NativeTranslationSessionErrorCode::RuntimeExitRejected,
                    std::move(Error));
 
@@ -403,7 +407,8 @@ validateGenerationBindings(GuestMemoryRuntime &Memory,
 llvm::Expected<BlockExitV1>
 translateBlockExit(uint32_t Status,
                    const TranslationBlockDescriptorV1 &Descriptor,
-                   const RuntimeGuestStateX86_64V1 &RuntimeState) {
+                   const RuntimeGuestStateX86_64V1 &RuntimeState,
+                   const RuntimeX87LastStepV1 *X87Step = nullptr) {
   if (Descriptor.InstructionBoundaries.empty())
     return failure(NativeTranslationSessionErrorCode::RuntimeExitRejected,
                    "translated block manifest has no instruction boundary");
@@ -447,6 +452,28 @@ translateBlockExit(uint32_t Status,
     Exit.Kind = BlockExitKindV1::Return;
     Exit.TargetPC = RuntimeState.RIP;
     break;
+
+  case BlockExitKindV1::Continue:
+  case BlockExitKindV1::Unsupported: {
+    const bool Completed =
+        Status == static_cast<uint32_t>(BlockExitKindV1::Continue);
+    if (!X87Step ||
+        Descriptor.RuntimeProfile != TranslationRuntimeProfileV1::PortableX87 ||
+        Descriptor.Header.Terminator !=
+            TranslationBlockTerminatorKindV1::X87Runtime)
+      return failure(NativeTranslationSessionErrorCode::RuntimeExitRejected,
+                     "translated block returned a reason outside its manifest");
+    if (!X87Step->Attempted || X87Step->InstructionCompleted != Completed ||
+        X87Step->PC != Exit.PC ||
+        X87Step->NextPC != Descriptor.Header.FallthroughPC ||
+        RuntimeState.RIP != (Completed ? X87Step->NextPC : X87Step->PC))
+      return failure(NativeTranslationSessionErrorCode::RuntimeExitRejected,
+                     "x87 exit disagrees with its completed source boundary");
+    Exit.Kind = static_cast<BlockExitKindV1>(Status);
+    Exit.NextPC = X87Step->NextPC;
+    Exit.Detail = Completed ? 0 : static_cast<uint32_t>(X87Step->Status);
+    break;
+  }
 
   default:
     return failure(NativeTranslationSessionErrorCode::RuntimeExitRejected,
@@ -540,7 +567,7 @@ cancelledResult(const TranslationOptions &Options, uint64_t StartPC,
   const RuntimeControlBlockV1 Control =
       Memory.snapshotControlBlock(CurrentPC, 0);
   llvm::Expected<TranslationExit> Exit =
-      translateRuntimeExit(Control, CurrentPC);
+      translateRuntimeExit(Control, CurrentPC, Options.RuntimeProfile);
   if (!Exit)
     return Exit.takeError();
   TranslationResult Result =
@@ -558,6 +585,13 @@ llvm::Expected<BlockExitV1> detail::translateNativeBlockExitV1(
     uint32_t Status, const TranslationBlockDescriptorV1 &Descriptor,
     const RuntimeGuestStateX86_64V1 &RuntimeState) {
   return translateBlockExit(Status, Descriptor, RuntimeState);
+}
+
+llvm::Expected<BlockExitV1> detail::translateNativeX87BlockExitV1(
+    uint32_t Status, const TranslationBlockDescriptorV1 &Descriptor,
+    const RuntimeGuestStateX86_64X87V1 &RuntimeState) {
+  return translateBlockExit(Status, Descriptor, RuntimeState.Integer,
+                            &RuntimeState.LastStep);
 }
 
 llvm::Expected<TranslationResult>
@@ -600,7 +634,7 @@ NativeTranslationSessionV1::create(TranslationOptions Options, GuestState State,
       Options.DeterministicReplay != DeterministicReplayPolicy::Disabled)
     return failure(
         NativeTranslationSessionErrorCode::InvalidRequest,
-        "v1 requires native JIT, x86-64, fail-closed scalar lowering, the "
+        "v1 requires native JIT, x86-64, fail-closed block lowering, the "
         "composed optimizer, disabled cache, and disabled replay");
   if (llvm::Error Error = validateTranslationRequest(Options, State))
     return failure(NativeTranslationSessionErrorCode::InvalidRequest,
@@ -616,11 +650,24 @@ NativeTranslationSessionV1::create(TranslationOptions Options, GuestState State,
       (!Triple.isOSBinFormatELF() && !Triple.isOSBinFormatMachO()))
     return failure(NativeTranslationSessionErrorCode::UnsupportedProcessTarget,
                    Host->triple());
+
+  if (Options.RuntimeProfile == TranslationRuntimeProfileV1::PortableX87 &&
+      (!Triple.isOSLinux() || !Triple.isOSBinFormatELF()))
+    return failure(
+        NativeTranslationSessionErrorCode::UnsupportedProcessTarget,
+        "portable x87 translation currently qualifies only Linux AArch64 ELF");
   llvm::Expected<RuntimeGuestStateX86_64V1> RuntimeState =
       createRuntimeGuestStateX86_64V1(State);
   if (!RuntimeState)
     return failure(NativeTranslationSessionErrorCode::RuntimeStateRejected,
                    RuntimeState.takeError());
+
+  if (Options.RuntimeProfile == TranslationRuntimeProfileV1::PortableX87) {
+    auto X87 = createRuntimeGuestStateX86_64X87V1(State);
+    if (!X87)
+      return failure(NativeTranslationSessionErrorCode::RuntimeStateRejected,
+                     X87.takeError());
+  }
 
   llvm::Expected<uint64_t> SessionID = allocateSessionID();
   if (!SessionID)
@@ -652,6 +699,13 @@ llvm::Error NativeTranslationSessionV1::restoreState(GuestState NewState) {
     return failure(NativeTranslationSessionErrorCode::StateCommitFailed,
                    RuntimeState.takeError());
 
+  if (State->Options.RuntimeProfile ==
+      TranslationRuntimeProfileV1::PortableX87) {
+    auto X87 = createRuntimeGuestStateX86_64X87V1(NewState);
+    if (!X87)
+      return failure(NativeTranslationSessionErrorCode::StateCommitFailed,
+                     X87.takeError());
+  }
   std::lock_guard Lock(State->RunControl.Mutex);
   if (State->RunControl.Running)
     return failure(NativeTranslationSessionErrorCode::RestoreWhileRunning);
@@ -704,10 +758,21 @@ llvm::Expected<TranslationResult> NativeTranslationSessionV1::run() {
   if (!RuntimeStateOrErr)
     return failure(NativeTranslationSessionErrorCode::RuntimeStateRejected,
                    RuntimeStateOrErr.takeError());
-  RuntimeGuestStateX86_64V1 RuntimeState = *RuntimeStateOrErr;
+  const bool PortableX87 =
+      State->Options.RuntimeProfile == TranslationRuntimeProfileV1::PortableX87;
+  RuntimeGuestStateX86_64X87V1 X87RuntimeState;
+  X87RuntimeState.Integer = *RuntimeStateOrErr;
+  if (PortableX87) {
+    auto X87 = createRuntimeGuestStateX86_64X87V1(State->LogicalState);
+    if (!X87)
+      return failure(NativeTranslationSessionErrorCode::RuntimeStateRejected,
+                     X87.takeError());
+    X87RuntimeState = *X87;
+  }
+  auto &RuntimeState = X87RuntimeState.Integer;
 
   llvm::Expected<RuntimeSymbolRegistryV1> RegistryOrErr =
-      RuntimeSymbolRegistryV1::create();
+      RuntimeSymbolRegistryV1::create(State->Options.RuntimeProfile);
   if (!RegistryOrErr)
     return failure(NativeTranslationSessionErrorCode::RuntimeRegistryFailed,
                    RegistryOrErr.takeError());
@@ -1001,7 +1066,9 @@ llvm::Expected<TranslationResult> NativeTranslationSessionV1::run() {
       return FinishSuccessfulRun(std::move(Result), std::move(Candidate));
     }
 
-    llvm::Expected<uint32_t> StatusOrErr = Linked.invoke(RuntimeState, Frame);
+    llvm::Expected<uint32_t> StatusOrErr =
+        PortableX87 ? Linked.invokePortableX87(X87RuntimeState, Frame)
+                    : Linked.invoke(RuntimeState, Frame);
     if (!StatusOrErr)
       return FailAfterLink(
           failure(NativeTranslationSessionErrorCode::InvocationFailed,
@@ -1012,8 +1079,10 @@ llvm::Expected<TranslationResult> NativeTranslationSessionV1::run() {
     std::optional<BlockExitV1> ValidatedBlockExit;
     if (IsBlockExit) {
       llvm::Expected<BlockExitV1> BlockExit =
-          detail::translateNativeBlockExitV1(Status, Object.descriptor(),
-                                             RuntimeState);
+          PortableX87 ? detail::translateNativeX87BlockExitV1(
+                            Status, Object.descriptor(), X87RuntimeState)
+                      : detail::translateNativeBlockExitV1(
+                            Status, Object.descriptor(), RuntimeState);
       if (!BlockExit)
         return FailAfterLink(BlockExit.takeError());
       ValidatedBlockExit = *BlockExit;
@@ -1024,24 +1093,31 @@ llvm::Expected<TranslationResult> NativeTranslationSessionV1::run() {
         return FailAfterLink(
             failure(NativeTranslationSessionErrorCode::RuntimeExitRejected,
                     "runtime status disagrees with the sealed control block"));
-      llvm::Expected<TranslationExit> RuntimeExit =
-          translateRuntimeExit(Frame.Control, RuntimeState.RIP);
+      llvm::Expected<TranslationExit> RuntimeExit = translateRuntimeExit(
+          Frame.Control, RuntimeState.RIP, State->Options.RuntimeProfile);
       if (!RuntimeExit)
         return FailAfterLink(RuntimeExit.takeError());
       ValidatedRuntimeExit = std::move(*RuntimeExit);
     }
 
+    const bool X87Boundary =
+        PortableX87 && Object.descriptor().Header.Terminator ==
+                           TranslationBlockTerminatorKindV1::X87Runtime;
+    const bool CompletedBlock =
+        X87Boundary ? bool(X87RuntimeState.LastStep.InstructionCompleted)
+                    : IsBlockExit;
     const uint64_t CompletedInstructions =
-        IsBlockExit ? Object.descriptor().Header.GuestInstructionCount
-                    : Object.descriptor().Header.GuestInstructionCount - 1;
+        Object.descriptor().Header.GuestInstructionCount -
+        (CompletedBlock ? 0 : 1);
     const RuntimePollResult After =
-        Memory->poll(CompletedInstructions, IsBlockExit ? 1 : 0);
+        Memory->poll(CompletedInstructions, CompletedBlock ? 1 : 0);
     CurrentPC = RuntimeState.RIP;
 
     std::optional<TranslationExit> TerminalExit;
     if (Memory->cancellationRequested()) {
-      llvm::Expected<TranslationExit> ExitOrErr = translateRuntimeExit(
-          Memory->snapshotControlBlock(CurrentPC, 0), CurrentPC);
+      llvm::Expected<TranslationExit> ExitOrErr =
+          translateRuntimeExit(Memory->snapshotControlBlock(CurrentPC, 0),
+                               CurrentPC, State->Options.RuntimeProfile);
       if (!ExitOrErr)
         return FailAfterLink(ExitOrErr.takeError());
       TerminalExit = std::move(*ExitOrErr);
@@ -1057,6 +1133,22 @@ llvm::Expected<TranslationResult> NativeTranslationSessionV1::run() {
         Exit.Reason = TranslationStopReason::Returned;
         Exit.PC = ValidatedBlockExit->PC;
         Exit.NextPC = ValidatedBlockExit->TargetPC;
+        TerminalExit = std::move(Exit);
+      } else if (ValidatedBlockExit->Kind == BlockExitKindV1::Unsupported) {
+        TranslationExit Exit;
+        Exit.Reason = TranslationStopReason::UnsupportedInstruction;
+        Exit.PC = X87RuntimeState.LastStep.PC;
+        Exit.NextPC = CurrentPC;
+        Exit.Trap =
+            TrapExit{TranslationTrapKind::UnsupportedInstruction,
+                     kRuntimeX87RefusalTrapCodeV1,
+                     static_cast<uint32_t>(X87RuntimeState.LastStep.Status),
+                     Exit.PC, true};
+        Exit.Diagnostic =
+            std::string("portable-x87-v1: ") +
+            portableX87StepStatusNameV1(X87RuntimeState.LastStep.Status) +
+            "; selector=0x" +
+            llvm::utohexstr(X87RuntimeState.LastStep.Selector);
         TerminalExit = std::move(Exit);
       } else if (After.Status == RuntimePollStatus::BudgetExhausted) {
         if (!After.Budget)
@@ -1084,7 +1176,9 @@ llvm::Expected<TranslationResult> NativeTranslationSessionV1::run() {
     }
 
     if (llvm::Error Error =
-            applyRuntimeGuestStateX86_64V1(RuntimeState, Candidate))
+            PortableX87
+                ? applyRuntimeGuestStateX86_64X87V1(X87RuntimeState, Candidate)
+                : applyRuntimeGuestStateX86_64V1(RuntimeState, Candidate))
       return FailAfterLink(
           failure(NativeTranslationSessionErrorCode::StateCommitFailed,
                   std::move(Error)));

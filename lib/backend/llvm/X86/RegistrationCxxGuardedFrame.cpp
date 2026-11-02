@@ -12,7 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
 #include "neverd/backend/llvm/RegistrationFrameProof.h"
-#include "neverd/backend/llvm/X86RegistrationLayout.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/MedIR.h"

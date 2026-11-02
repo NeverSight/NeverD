@@ -32,6 +32,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -97,19 +98,13 @@ constexpr unsigned kX86FrameSlotBits = 3;
 /// The x86 encodings can name six registers, numbered from one.
 constexpr unsigned kX86NamedRegisterCount = 6;
 
-constexpr uint32_t kARM64ModeFrameless = 0x02000000u;
-constexpr uint32_t kARM64ModeDwarf = 0x03000000u;
-constexpr uint32_t kARM64ModeFrame = 0x04000000u;
-constexpr uint32_t kARM64FramelessStackSizeMask = 0x00fff000u;
-constexpr uint32_t kARM64FrameX19X20Pair = 0x00000001u;
-constexpr uint32_t kARM64FrameX21X22Pair = 0x00000002u;
-constexpr uint32_t kARM64FrameX23X24Pair = 0x00000004u;
-constexpr uint32_t kARM64FrameX25X26Pair = 0x00000008u;
-constexpr uint32_t kARM64FrameX27X28Pair = 0x00000010u;
-constexpr uint32_t kARM64FrameD8D9Pair = 0x00000100u;
-constexpr uint32_t kARM64FrameD10D11Pair = 0x00000200u;
-constexpr uint32_t kARM64FrameD12D13Pair = 0x00000400u;
-constexpr uint32_t kARM64FrameD14D15Pair = 0x00000800u;
+#define NEVERD_COMPACT_ARM64_VALUE(Type, Name, Value)                          \
+  inline constexpr Type Name = Value;
+#define NEVERD_COMPACT_ARM64_MODE(Name, Value, PayloadMask)                    \
+  inline constexpr uint32_t Name = Value;
+#define NEVERD_COMPACT_ARM64_TEXT(Name, Text)                                  \
+  inline constexpr char Name[] = Text;
+#include "neverd/loader/MachO/CompactUnwindARM64.def"
 
 constexpr uint32_t kARMModeFrame = 0x01000000u;
 constexpr uint32_t kARMModeFrameD = 0x02000000u;
@@ -247,6 +242,24 @@ llvm::Expected<CompactUnwindRawSection> parseCompactUnwindRaw(
 
 /// Decode the image's `__unwind_info` section.
 ParseResult parseCompactUnwind(const BinaryImage &Img);
+
+/// The low-24-bit payload allowed by an ARM64 encoding's mode. The linked
+/// DWARF mode includes its FDE offset; linker-input callers must additionally
+/// require that offset to be zero. Unknown modes have no payload contract.
+std::optional<uint32_t> getARM64EncodingPayloadMask(uint32_t Encoding);
+
+/// The byte offset to PACIBSPPC in an ARM64 PAuth_LR encoding. This reads the
+/// encoded field only; decodeEncoding validates reserved bits and
+/// isValidEncodingRange validates its position inside the recipe.
+std::optional<uint32_t> returnAddressSigningOffset(Arch TargetArch,
+                                                   uint32_t Encoding);
+
+/// Validate a nonempty semantic code range and any signing-PC constraint.
+/// ARM64 PAuth_LR requires an aligned, complete PACIBSPPC instruction within
+/// this exact recipe, without wrapping an address. Other modes impose no
+/// signing-PC constraint. ARM64 reserved payload bits are also rejected.
+bool isValidEncodingRange(Arch TargetArch, uint32_t Encoding,
+                          const ExceptionAddressRange &CodeRange);
 
 /// Decode into \p Entry everything one compact encoding word states on its
 /// own, which is every field but the frameless-indirect stack size: that one

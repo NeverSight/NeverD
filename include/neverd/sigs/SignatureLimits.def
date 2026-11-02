@@ -15,11 +15,13 @@
 #error "Define NEVERD_SIGS_LIMIT before including this file"
 #endif
 
-// The fewest bytes a module may state exactly and still identify a routine:
-// several instructions of one specific routine, which no unrelated function
-// reaches by coincidence.  Below that a pattern is mostly wildcards and
-// agrees with a great deal of code.
+// Minimum fixed-byte evidence for the context-gated recognizers. This rejects
+// mostly-wildcard patterns; byte count alone never proves function identity.
 NEVERD_SIGS_LIMIT(MinStatedBytes, 16)
+
+// Complete source code contributions queried through an existing strong root.
+NEVERD_SIGS_LIMIT(MaxCodeLayoutBytes, 64 * 1024)
+NEVERD_SIGS_LIMIT(MaxCodeLayoutPublicNames, 128)
 
 // A generated line states this many leading bytes one by one, as FLIRT's
 // lines do, and no function shorter than this has a line.

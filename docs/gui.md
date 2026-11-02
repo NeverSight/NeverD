@@ -64,17 +64,46 @@ loading binaries, companion PDB/MAP files, signatures and project sidecars.
 Chinese names, spaces and other Unicode characters are supported without
 changing the Windows system code page.
 
-Code views, the output window and text fields use the code font: Consolas at
-10 points when that family is installed, otherwise the system fixed-width font.
-Menus, tabs, lists, buttons and labels keep the system font, as in the classic
-disassembler's default font settings. A saved code-font choice overrides the
-default for code views and text fields.
+Menus, tabs, lists, buttons and labels use bundled Noto families at the
+platform's default interface size (`QFontDatabase::GeneralFont`). Code views
+and Output use bundled JetBrains Mono NL at that same reading size. These
+sizes come from macOS, Windows or the Linux desktop; they are not a shared
+hard-coded point size.
+Qt applies the screen's normal high-DPI scaling. A saved code-font choice
+overrides the code-view default. Text fields take that font's family at the
+platform's default reading size, independently of code-view zoom.
+Reset font size restores the current platform default and keeps the chosen
+family and style. Zoom preserves fractional point sizes and accepts fonts
+specified in logical pixels.
+
+Disassembly and source views preserve small wheel and trackpad movements,
+including horizontal scrolling in source views. Control plus the wheel changes
+the code font (Command on macOS); precision events accumulate until a font
+point is reached, and empty gesture begin/end events do not change the size.
+Menus and context menus show their action icons on every platform, including
+macOS, where Qt otherwise hides them by default.
+Menus taller than the screen's available area stay in a single column on all
+desktop platforms. Use the arrows at the top and bottom or the mouse wheel to
+scroll; keyboard navigation also brings offscreen commands into view.
 
 Double-clicking a function name in a code view follows it in that same window,
 keeping its C or LLVM C representation even when the window is locked. Back and
-forward navigation also stays in the active code window, and within a function
-takes its cursor to the row of the place it returns to. Imports and global
-objects continue to open at their addresses in the disassembly or hex view.
+forward navigation also stays in the active code window and returns it to where
+it left, as Hex-Rays' Esc does: Back from the function puts the cursor on the
+name that was double-clicked, with the view scrolled as it was, and Forward
+returns to the place the function was left; within a function the cursor goes
+to the row of the place it returns to. As in IDA, each jump adds one stop to
+the history, and the stop follows the cursor: clicks and keys after a jump, in
+the code or the disassembly, add none, so Back returns to where the jump began
+and Forward to where the user left. The arrow beside the Back or Forward
+toolbar button lists the stops it reaches, nearest first, as IDA's does: each
+names its place, `main+1DA (2A2A)` or a segment and address outside a
+function, then the instruction or data the listing shows there. With a code
+window in focus, a stop it left names the line Back returns it to, numbered as
+its margin numbers it: `main:83 (2A2A)`. Picking one goes that many steps at
+once, and the stops on both sides stay. Imports and
+global objects continue to open at their addresses in the disassembly or hex
+view.
 Double-clicking a goto's label (`goto L_14024FAB5;`) moves the cursor to the
 label and the disassembly to the block it labels, as IDA's labels do; Back
 returns to the goto. Pseudocode and C name a label after its block's address,
@@ -101,8 +130,8 @@ explicit restoration verifies the whole chain against the same assessment.
 Analysis uses the shared C++ backend and never launches the input. See the
 [workflow and limits](web-package-review-journal.md).
 
-A start without a file shows the quick start alone, as IDA does: the workbench
-appears once you choose how to start, and closing the quick start quits. The
+A start without a file shows the quick start alone: the workbench appears
+maximized once you choose how to start, and closing the quick start quits. The
 questions asked before a file loads, **Load a new file**, **Symbol table
 found**, **Load PDB file** and **DWARF info found**, greet alone too while the
 workbench has not shown yet, after the quick start or for a file named on the
@@ -122,13 +151,24 @@ and last-opened time. Long names retain both ends; hovering shows the full path
 and time. Delete or its context menu forgets it. A file dragged over the dialog
 shows that a drop opens it. **Display at startup** decides whether the next
 start shows it again; **File → Quick start** shows it any time, over the
-workbench. The workbench opens with the default desktop:
+workbench, restoring the existing Quick Start window if one is already open.
+Quick Start can be minimized and restored from the macOS Dock, and system Quit
+remains available while it is minimized. Reopening Quick Start over an already
+visible workbench preserves the workbench's size and window state.
+Application settings restore the main window's position, size and
+maximized state once at startup. F11 full screen lasts for the current run;
+restarting returns to the normal or maximized state from before F11, with the
+title-bar buttons visible. Older settings saved in full screen also reopen
+windowed. Automatic desktop and project restoration arranges the panes within
+that window; it does not move, resize, show or
+unmaximize it. Detached panes keep their saved positions. **Windows → Load
+desktop** explicitly restores the saved window geometry as well.
+The workbench opens with the default desktop:
 
 - the title bar the window draws itself, as Visual Studio Code does: the
   application icon, the menus, a command center that names the open file and
   opens the command palette (**Ctrl+Shift+P**), and the minimize, maximize and
-  close buttons (on macOS the menus stay in the menu bar and the system's
-  traffic lights take the buttons' place);
+  close buttons; the workbench owns this chrome on macOS too;
 - the navigation band across the top: the whole address space colored by
   library functions, regular functions, instructions, data, unexplored bytes
   and external symbols, with the current position; click or drag to navigate;
@@ -139,13 +179,43 @@ workbench. The workbench opens with the default desktop:
   **Exports** as tabs, and the status line under the listing;
 - **Output** across the bottom, with a command line for expressions and
   workbench commands;
-- the status bar with the background analysis indicator (`AU: idle` or busy
-  with progress), the search direction and free disk space. It shares the
-  windows' surface below a hairline, as in Visual Studio Code's Modern themes.
+- the status bar with the analysis indicator (`AU: idle`, or a slim bar beside
+  the current step and its progress), the search direction and free disk
+  space. It shares the windows' surface below a hairline, as in Visual Studio
+  Code's Modern themes.
+
+Opening a file never blocks the workbench with a wait box. While a file opens
+into the empty workbench, a card over **NeverD View-A** names the file, the
+current step with the engine's own words for it (for example `Parsing the
+format · PE/COFF code literals`), the seconds spent and a slim bar; it takes no
+input, a long file name loses its middle rather than its extension, a narrow
+window narrows the card, and an open that takes less than half a second never
+shows it. The status bar's indicator
+follows the same open and then the background analysis: `AU: loading`,
+`AU: finding functions`, `AU: indexing references` with a percentage, then
+`AU: analysis finished` for a few seconds, and **Output** records how long the
+initial analysis took. While busy, the indicator keeps room for its longest
+text, so the status texts after it stay in place; a narrow window narrows its
+bar before it cuts any text. A bar fills where the worker
+reports a fraction, such as hashing a large input or indexing references, and
+sweeps a segment where it reports only a step's start and end; both start at the
+right in right-to-left languages. A bar animates only while it is on screen and
+NeverD is the active application. Without idle-time analysis the indicator stays
+idle until a query builds the reference index.
 
 Every window is a dock: drag tabs to split, stack or float them. A tab shows
-its close button while it is current or under the pointer. Docked windows
-are one hairline apart; drag the line to resize its neighbors, or double-click
+its close button while it is current or under the pointer. Docking tabs use
+the same workbench style and close-button dimensions on every desktop.
+Floating windows
+keep an inner title bar: drag it onto a docking target, double-click it or
+click its dock button to return. A floating tab also offers **Dock back into
+main window** in its context menu. On Wayland the outer system title bar moves
+the window; use the inner bar to dock it. Menus and view dialogs belong to the
+floating window that opened them, and workbench shortcuts remain available.
+Closing a floating pane and opening it again from the workbench returns it to
+the main window, using its last embedded position when available. Selecting an
+already open pane keeps its current placement.
+Docked windows are one hairline apart; drag the line to resize its neighbors, or double-click
 it to share their space evenly. A window narrows to about the width of its tab:
 a status line or a row of buttons that no longer fits is cut at the window's
 edge. **Windows → Save desktop** remembers an
@@ -161,17 +231,34 @@ variables, unwind frame markers, `proc`/`endp`, `loc_` and `locret_` labels,
 data items, alignment and cross-reference comments, and the classic instruction
 spellings (`jz`, `retn`, `[rbp+var_30]`, sizes only where no operand implies
 them), with `segment:address` prefixes and optional opcode bytes (**Options →
-General**). Stack variables are named through the frame pointer and, in 64-bit
-code, through the stack pointer wherever every path agrees on its distance
-from the frame (`[rsp+48h+var_30]`); each is as wide as its widest access.
+General**). The x64 listing uses the shared LowIR stack analysis for each
+instruction's entry-SP and frame-pointer coordinates, including noncanonical
+prologues and recovered chunks. It names slots through either proven base
+(`var_s10`, `[rsp+48h+var_30]`); overwritten or conflicting frame aliases stay
+unformatted. Each slot is as wide as its widest observed access. Older engines
+and 32-bit code retain the existing bounded listing interpretation.
 A named object is as large as its symbol says (`stderr dq ?`), and data the
 code reads or writes is laid out as wide as those accesses, under the name its
 operands and the pseudocode use (`qword_A410 dq ?`, or `unk_` where the widths
 differ); other unwritten bytes run as `db N dup(?)` up to the next item. Only a window of lines around the viewport is held; the scroll bar
 maps to the linear address space. The arrow gutter draws branches, and clicking
-an identifier highlights every occurrence. Names the engine leaves generic take
+an identifier highlights every occurrence; a register brings the registers that
+share it along, `eax` and `al` with `rax` or `w0` with `x0`, as in IDA.
+**Search → Lock highlight** keeps up to eight words highlighted, each in its
+own color, in every disassembly and code window while the cursor's highlight
+moves on: Ctrl+Alt+1 through Ctrl+Alt+8 lock the word under the cursor in that
+color or free the color again, and Ctrl+Alt+0 locks it in the first free color
+or unlocks it. Closing the file frees every color. Names the engine leaves generic take
 their classic forms in the listing, function list, jumps and source views:
-import thunks after their import and the entry point `start`. The engine names
+import thunks after their import and the entry point `start` (`DllEntryPoint`
+for a PE DLL). Pure direct forwarders carry a thunk attribute; a DLL entry's
+generic destination receives a related name, while stated and user names win.
+Available platform, header and user prototypes appear above the function
+without requiring decompilation. Checked x64 PE runtime-function records are
+shown as structures with navigable RVA fields and typed offset references;
+exclusive range ends remain boundaries. Repeated bytes in code gaps fold as
+`db N dup(value)` up to object, metadata, reference and user-item boundaries.
+Their grouping changes no bytes or unwind ranges. The engine names
 the function the entry passes the C runtime's start routine `main`, and its
 pseudocode defines it as the runtime calls it, `int main(int argc, char **argv,
 char **envp)`; a rename of the function still wins over that name.
@@ -179,17 +266,30 @@ char **envp)`; a rename of the function still wins over that name.
 **Graph view** (Space) lays the current function out in layers with the
 conditional (green/red) and unconditional edges routed around blocks; panning
 and zooming are local, and text is dropped at low zoom. The graph overview
-shows the whole function and the visible area.
+shows the whole function and the visible area. As in IDA, a click on an edge
+selects it and draws it over the others until the next click, and resting the
+pointer on an edge shows the block at its far end: beside its arrow the block
+it comes from, named by its branching instruction, and elsewhere the block it
+goes to, a long block by its first and last rows.
 
-Opening a file or database starts with disassembly and does not generate
-pseudocode, including when a saved desktop had it open. **F5** or **Tab** opens
-Pseudocode on the right of disassembly. The cursors follow each other, as
+Opening a file or database starts with disassembly and keeps pseudocode and
+IR windows closed, including when a saved desktop had them open. Generate the
+desired representation to reopen its window. From disassembly, **F5** opens
+an independent pseudocode window for the current function; **Tab** reuses
+the last code window, creating one when needed. The first code window opens
+on the right of disassembly, and additional windows become tabs that can be
+split or floated independently. Repeated F5 from disassembly can open the
+same function in multiple windows. Inside a source window, F5 refreshes that
+window and preserves its chosen language. **Generate MedIR** and the other
+representation commands follow the same rule: refresh a focused window of
+that representation, otherwise open a new one for the originating view's
+function. The cursors follow each other, as
 Hex-Rays' synchronized views do: a click or arrow key on a code row mapped to
 an instruction moves the disassembly cursor there, keeping the focus in the
 code and adding no jump to the history, and a move in the disassembly takes a
 code window showing the same function to the instruction's rows and marks
 them. A code window showing another function stays on it rather than
-decompiling on every step; F5 or Tab opens the new one. The code window's
+decompiling on every step; F5 opens another window and Tab reuses one. The code window's
 context menu turns **Synchronize with disassembly** off to browse apart, and
 the choice is kept; beside it, **Jump to disassembly** shows Tab's key, as
 **Jump to pseudocode** does in the disassembly's menu. Following a cursor costs
@@ -303,9 +403,15 @@ operations in C can fold into one-line summaries too. Click a summary or press
 Keypad + on it to expand it; Keypad - folds the declarations again, and the
 context menu expands or collapses either kind. Hovering a type or macro the code
 declares, such as an unaligned access type, shows its declaration, and
-double-clicking it goes there. Double-clicking a function's name shows that
-function's pseudocode in place; an import's name opens its thunk, or its slot
-when it has none, in the disassembly, as do other names of data. Memory reads
+double-clicking it goes there. Hovering the name of an import a call names
+shows its type, as Hex-Rays' hint does, without the name the code already
+shows (`int32_t(char* __s1, char* __s2)` on `strcmp`), and under it each
+parameter after where it is passed (`rdi  char *__s1`); the hint goes once the
+mouse leaves the name. A function of the image shows no type there: only
+decompiling it types it, which could hold up the next jump for seconds.
+Double-clicking a function's name shows that function's pseudocode in place;
+an import's name opens its thunk, or its slot when it has none, in the
+disassembly, as do other names of data. Memory reads
 and writes print through the standard scalar types, `*(uint64_t *)p`. That C
 reads scalars at any address and through any type, so it is built for a target
 that allows unaligned access and with `-fno-strict-aliasing`, as its prelude
@@ -318,7 +424,11 @@ complete code. Text selects as in an editor: drag with the mouse, which scrolls
 while it is held beyond an edge, extend with Shift and the arrows or a Shift
 click, or press **Ctrl+A** (also **Select all** in the context menu) for the
 whole function; **Ctrl+C** or the context menu's **Copy** copies it, and a
-right click inside the selection keeps it.
+right click inside the selection keeps it. Without a selection they copy the
+highlighted word under the cursor (see **Edit → Copy**). As in Hex-Rays, the
+bracket the cursor is on stands boxed with its partner, nested or lines away:
+a parenthesis, square bracket or brace of the code, not one in a string or
+comment.
 
 Global data is declared the way C source declares it, with the value the image
 holds: a string the code reaches by its address is its array
@@ -403,13 +513,13 @@ global's `neverd.image` line names the symbol as the listing does
 double-clicking it goes to the function. A name an image spells with control
 characters, and that no scheme reads, is never copied into a comment.
 
-**Pseudocode** reads in the language the function was written in: a Rust
-function as Rust, a Go function as Go and any other as C. The choice is made
+**Pseudocode** reads in the language the function was written in: a C++
+function as C++, a Rust function as Rust, a Go function as Go and any other as C. The choice is made
 for each function, from its symbol, and for a function without one from the
 language the image was built in; the window says when it is not C
-(`Pseudocode-A (Rust)`). A program with Rust or Go code also offers **C** in
-the window's menu, to read every function as C; a C or C++ program's
-Pseudocode is C, so its menu offers no other language. The Rust and Go views
+(`Pseudocode-A (C++)` or `Pseudocode-A (Rust)`). A program with C++, Rust or Go
+code also offers **C** in the window's menu, to read every function as C; a
+C-only program does not need that duplicate choice. The Rust and Go views
 spell exactly what the C says. Each conversion C makes on its own is written out (`a as u32 + b as u32`,
 `uint32(a) + uint32(b)`), conditions compare with zero (`v != 0`,
 `!p.is_null()`, `p != nil`), memory is read and written through a pointer made
@@ -443,6 +553,13 @@ exporting includes the hidden code. Instruction and local-reference navigation
 and text search expand every fold hiding the target. Refreshing the same function
 preserves block folds while its brace structure is unchanged. Braces in comments
 and quoted strings do not define folding ranges; incomplete source stays expanded.
+
+New source windows also collapse the generated `frame_*` layout and complete
+exception metadata with no fallback regions. Their headers remain visible;
+the same arrows, keyboard controls, search and navigation reveal every hidden
+line. Exception warnings and fallback details stay expanded. Refresh preserves
+the user's expanded or collapsed choice. These folds only change presentation:
+copying and exporting still include the exact layout and exception records.
 
 Strings are found by default in ASCII, UTF-8, UTF-16LE and UTF-32LE (the
 `wchar_t` of Linux and macOS), and C strings that are not UTF-8 in the common
@@ -488,13 +605,27 @@ Strings, Ctrl+X lists the references to the selected string.
 jump (G or `g` on the command line) moves it and keeps it in front. Its
 context menu's **Text encoding** reads the text column as ASCII, UTF-8,
 UTF-16, UTF-32 or a code page; a character shows at its first byte, and wide
-characters take two columns. The choice is kept for later sessions.
+characters take two columns. The choice is kept for later sessions. A click
+on a row's address goes to the row and selects the address, which Ctrl+C or
+**Edit → Copy** then copies as shown; a click on a byte or a move with the
+keys makes Copy take bytes again.
 **Imports**, **Exports**, **Names**, **Strings**, **Segments** and
 **Bookmarks** are choosers with a quick filter and sortable columns. **Jump
 anywhere** (G) takes an address, a name or an expression such as `main+0x10`
-and suggests names as you type. Cross references (X, Ctrl+X, Ctrl+J) list call
+and suggests names as you type. Beside the suggestions a disassembly preview
+shows where Enter goes, the chosen suggestion or else the typed expression, as
+in IDA; text that names nothing yet leaves the preview empty, and the typing
+stays in the field. Cross references (X, Ctrl+X, Ctrl+J) list call
 (`p`), jump (`j`), read (`r`), write (`w`) and offset (`o`) references from the
 worker's reference index.
+
+Reference lists and jump browsers stay open while you use the workbench.
+Reference selections retain their originating code or disassembly view, and
+jump browsers keep their original navigation context when focus moves elsewhere.
+Relative expressions such as `here+0x10` use the address where the browser opened.
+Browsers follow their source pane when it floats or docks, and close with that
+pane. Project-specific browsers also close when the project closes. Reopening
+the same browser in a pane replaces its previous window.
 
 **View → Open subviews → Type libraries** (Shift+F11, as IDA's) lists the
 libraries of a system's headers whose types and prototypes join the
@@ -537,9 +668,15 @@ In a pseudocode, C or LLVM C window, X on a declared local variable or parameter
 lists its occurrences in the current function, with source line, column and
 code. The list uses the variable's identity from the complete loaded document,
 so similarly spelled names, member names, strings and comments are excluded.
-Selecting an occurrence stays in the originating code window, expands any fold
-that hides the row and selects the identifier. Renamed locals keep their
-original identity. A source reload or project close retires the old list.
+Single-clicking an occurrence or selecting it with the arrow keys immediately
+reveals it in the originating code window, expands any fold that hides the row
+and selects the identifier while the reference list stays open. Enter,
+double-click or **OK** closes the list; Escape closes it with the last selected
+occurrence still visible. The list is modeless: the code and disassembly remain
+usable, and the source pane can float, dock or switch tabs while the list is
+open. Selecting a reference reveals its source tab. Renamed locals keep their
+original identity. Reopening local references replaces the previous list; a
+source reload, source-pane close or project close retires it.
 
 The output window's command line evaluates expressions in hexadecimal by
 default (`#10` is decimal) and runs `g`, `x`, `n`, `c`, `d`, `f`, `graph`,
@@ -567,6 +704,11 @@ IDA's `ida://`, offering the one on the clipboard. A function link opens the
 function that holds its address, and a link that names another file is
 followed with a warning, as in IDA; a malformed link, another build, or an
 address, type or bookmark the program lacks is refused in the output window.
+String, import, export and name links require an actual row of that kind;
+segment links accept an address inside a mapped region and select that region.
+Numeric addresses reject embedded whitespace and overflowing relative addresses.
+Table links clear a filter hiding their destination and select the row even
+when its page has not been loaded yet, preserving the current sort order.
 
 Each workbench answers other programs, as IDA 9.4's IPC server answers hcli.
 `neverd-gui --list-instances` lists the running workbenches and their
@@ -574,7 +716,8 @@ programs, and `neverd-gui neverd://…` (or `--link URL`) sends the link to the
 workbench that has its program, matching the SHA-256 when supplied, otherwise
 the input's name, or the only workbench with a program open when neither is
 supplied. A mismatched hash does not fall back to a matching name. The selected
-workbench comes to the front.
+workbench comes to the front, leaving minimization if necessary while keeping
+its size and maximized/full-screen state.
 When none has it, a recently opened file the link names opens in a new
 workbench at the link, `neverd-gui FILE LINK` names the file, and
 `--no-launch` only sends. `neverd-gui --register-link-handler` makes a
@@ -590,6 +733,16 @@ and SHA-256, its analysis state and the cursor; `open_link` with `uri`; and
 in IDA as in NeverD: a team shares a project's edits through git (see
 *Working in a team through git*).
 
+A supplied hash also finds a renamed recent input. For a recent `.nddb`, the
+lookup uses the stored program's name and hash; unpacking still verifies its
+bytes before the link can open. Instance listing and `--no-launch` forwarding
+work without a display service. Instance probes run concurrently with one
+bounded deadline, and a named link stops probing once a matching window answers.
+Native operating-system URL events use the same routing while the receiving
+window continues serving requests, including requests routed back to itself.
+NeverD accepts IDA location links; it does not read IDA databases or download
+Knowledge Exchange assets, and it registers only the `neverd://` scheme.
+
 ## Keyboard
 
 | Key | Action |
@@ -598,7 +751,8 @@ in IDA as in NeverD: a team shares a project's edits through git (see
 | Esc / Ctrl+Enter | Previous / next position (mouse Back/Forward work too) |
 | Enter / Alt+Enter | Follow the operand / follow it in a new view |
 | Space | Toggle graph and text view |
-| F5 / Tab | Pseudocode in the function's own language / switch between disassembly and pseudocode |
+| F5 | Open an independent pseudocode window from disassembly; refresh the focused source window |
+| Tab | Switch between disassembly and the last code window, reusing it |
 | X / Ctrl+X / Ctrl+J | References to the operand / to the item / from the item |
 | N | Rename the name under the cursor, or the address: a function at its entry, data, a label in code |
 | P | Create a function at the address (**Edit → Functions** also deletes the current one) |
@@ -606,11 +760,12 @@ in IDA as in NeverD: a team shares a project's edits through git (see
 | T | Show the operand as a structure offset, the local types ranked by the code's accesses |
 | Y | Set the type of the local, parameter or global object under the pseudocode cursor, or the current function's declaration, checked as you type |
 | C | Define native instructions from the selected byte through a basic block |
-| : or ; | Comment the address |
+| ; or / | Enter or edit the comment at the current address or source line |
 | Alt+M / Ctrl+M | Mark a position / jump to a marked position |
 | Ctrl+P / Ctrl+L / Ctrl+S / Ctrl+E | Choose a function / name / segment / entry point |
 | Alt+T, Ctrl+T / Alt+B, Ctrl+B | Search text / bytes, and repeat |
 | Alt+Up / Alt+Down | Previous / next occurrence of the highlighted identifier |
+| Ctrl+Alt+1 … Ctrl+Alt+8 / Ctrl+Alt+0 | Lock or free a highlight color / lock or unlock in the first free color |
 | Ctrl+Shift+Up / Ctrl+Shift+Down | Previous / next function |
 | Shift+F3, Shift+F4, Shift+F7, Shift+F12 | Functions, Names, Segments, Strings |
 | Shift+F11 | Type libraries |
@@ -623,6 +778,11 @@ in IDA as in NeverD: a team shares a project's edits through git (see
 | Alt+A | String literal options |
 | Ctrl+W | Save the project |
 | Ctrl+Shift+P | Command palette |
+
+There is one comment command: **Enter comment...**. Both `;` and `/`
+open the same editor and edit the same saved comment; `:` has no binding.
+Menus show only the primary key `;` to keep the shortcut column compact.
+Tooltips, shortcut help and the command palette list both bindings.
 
 Single-key shortcuts apply only while an analysis view has the keyboard focus,
 so typing in a field or dialog keeps normal text editing. **Options →
@@ -640,8 +800,33 @@ A command IDA also has takes IDA's default key: the legacy scheme of IDA's
 workbench unit tests fail when a default drifts from IDA's or when a command of
 the workbench's own takes a key IDA gives another command. **File → Open**
 therefore has no key: IDA's Ctrl+O makes an operand an offset into the current
-segment. One difference is deliberate: in a disassembly, pseudocode or IR
-window Ctrl+F finds text, where IDA's disassembly goes to the next error.
+segment. Deliberate differences are the unified comment command above and
+Ctrl+F: in a disassembly, pseudocode or IR window it finds text, where IDA's
+disassembly goes to the next error.
+
+Buttons in Local Types, Type Libraries, Pathfinder, Declare and Find show
+shortcut hints. The main toolbars use icons only, with shortcuts in their tooltips.
+The title-bar command center shows only the filename; Ctrl+Shift+P still opens
+the command palette. Context menus show the same keys. **Options → Shortcuts**
+searches by action, key or scope, includes commands with no assigned key, and distinguishes
+workbench commands from analysis-view and list commands. In the Functions
+list Ctrl+E edits the selected function; in Local Types it edits the selected
+type. These list commands take priority over the workbench's Ctrl+E.
+
+**Jump → Jump to entry point** (Ctrl+E) opens an entry-point chooser, including
+exported entries and the program's start, without switching to the Exports
+dock. Enter or OK jumps to the selected entry; Escape or Cancel leaves the
+current position unchanged. Ctrl+P, Ctrl+L and Ctrl+S likewise choose a function,
+name or segment in a separate dialog. Typing filters a filterable list, and
+accepted jumps participate in the usual Escape / Ctrl+Enter navigation history.
+
+**Edit → Export data** (Shift+E) exports the selected items in the text listing
+or selected Hex View bytes; without a selection it uses the current item.
+The dialog shows editable inclusive address bounds, hexadecimal text, a C string
+literal or C byte arrays, with Copy and Save actions. Raw bytes save directly
+to a binary file. Export reads the whole range at one project revision before
+enabling either action; unreadable bytes reject the export. A range is limited
+to 1 MiB and the preview to 4 KiB; copying and saving use the complete range.
 
 `scripts/compare_gui_with_ida.py --ida <installation>` checks the table against
 an IDA installation and reports, menu by menu, which of IDA's commands the
@@ -652,9 +837,28 @@ workbench's Copy (Ctrl+C) and Create C file (Ctrl+F5) `CopyListingAsText` and
 `hx:BatchDecompile`, where 9.4 called them `EditCopy` and `hx:CreateCFile`.
 
 **Edit → Copy** (Ctrl+C) copies from the window that has the keyboard focus:
-the selected lines of a disassembly, pseudocode or IR window (the current line
-when nothing is selected), the selected rows of a list with their columns
-separated by tabs, or the text selected in a field.
+the selected text of a disassembly, pseudocode or IR window, the selected rows
+of a list with their columns separated by tabs, or the text selected in a
+field. Without a selection, a disassembly window, in text or graph view, and a
+pseudocode or IR window copy the word under the cursor, as IDA does: the name,
+register, variable or number the highlight marks. The highlight follows the
+cursor whether a click or a key moves it, so Copy takes the word it shows. On
+blank space Copy leaves the clipboard as it was, and a folded summary copies
+the code it stands for. Pseudocode, whether it reads in C, C++, Rust or Go,
+splits a member access or qualified name at its dot, so a click on `var_m8`
+in `stack_storage.var_m8` or on `Println` in `fmt.Println` copies just that
+word and a click on the variable highlights every use of it; a decimal
+number stays whole, and IR names such as `RSP.3` keep their dots. A click on a word in a
+disassembly line's `segment:address` prefix, with either button, selects that
+word: the segment name or the address. A prefix word copies only once a click
+selects it. A drag still selects characters, and a right click inside a
+selection keeps it.
+
+Export previews, Find, shortcut help, calculator results, connection and tool
+schema information, and the Pathfinder, type-library and comparison counterpart
+choosers also allow you to keep using their source windows. Type-library choices
+close when project edits make their catalogue stale. The command palette
+dismisses like a popup and runs its selection in the originating pane.
 
 GNOME attaches a modal dialog to its parent window, so dragging the dialog
 would drag the whole workbench. On GNOME the workbench keeps dialogs
@@ -665,10 +869,9 @@ like the rest of the workbench, because GTK's are another toolkit's windows,
 which GNOME attaches. A modal dialog still blocks the workbench until it
 closes.
 
-Without a remembered size the window opens centered at three quarters of the
-screen's width and four fifths of its height. GNOME maximizes a window that
-opens at nearly the size of the screen, and a maximized window does not resize
-from its edges; IDA opens that way.
+Without a remembered size, a workbench opened directly uses three quarters of
+the screen's width and four fifths of its height, centered on the screen. A
+workbench opened from the startup Quick Start is maximized instead.
 
 The workbench draws its own title bar. Drag the title bar's empty part to
 move the window, and double-click it to maximize or restore the window (on
@@ -693,10 +896,12 @@ How the rest of the frame is drawn depends on the system:
   corner, starting four pixels inside its visible edge. Under Wayland GNOME
   draws no shadow for such a window, so the window draws a ten-pixel shadow of
   its own, and that band resizes the window too, as GNOME's own windows allow;
-  under X11 GNOME draws the shadow.
-- On Windows the window keeps the system frame without its caption, so
-  Windows still draws its edges and shadow, snaps and animates it and resizes
-  it from its sides and bottom; the top edge resizes it through the title bar.
+  under X11 GNOME draws the shadow. Maximized edges remain inactive until
+  the window is restored.
+- On Windows native hit testing makes all edges and corners resizable, including
+  after a file loads. Dragging a maximized edge restores the window and resizes
+  it from its visible rectangle. The workbench paints its frame and shadow;
+  Windows handles the sizing gesture. Full-screen windows cannot be resized.
 - On macOS the window keeps its frame and traffic lights, and its title bar
   turns transparent with the workbench's own drawn under it.
 
@@ -838,9 +1043,13 @@ The command line searches the same stores, takes the search path as
 `--symbol-path`, and with `--download-symbols` downloads a missing PDB the same
 way before it loads the file, through the system's libcurl or WinHTTP.
 
-A project whose PDB no longer loads, and a file opened before anyone was asked,
-offer the same dialog once the file is open; a copy that has reached a store
-since then loads without asking.
+The question is shown only for a newly opened input. Existing project folders,
+packed databases and legacy sidecar projects reopen without another automatic
+PDB offer, including older projects that did not record an answer. **No**,
+Escape and closing the question keep the declined choice with the project's
+debug settings; reopening or reloading preserves it. To load symbols later,
+use **File → Load file → PDB file...**. A manually selected PDB replaces the
+declined choice.
 
 Opening an ELF or Mach-O image with DWARF asks **DWARF info found** — *Load
 DWARF debug information?* — as IDA does, before the file loads. When the DWARF
@@ -1163,9 +1372,18 @@ picks, as IDA's keys do: **Hexadecimal** (Q), **Decimal** (H), **Binary** (B),
 **Character** (R, `'ABCD'` when every byte is printable), **Offset** (O, the
 name of the address the number points at), **Change sign** (`_`, the two's
 complement with a minus) and **Bitwise negate** (`~`); **Number** (`#`) goes
-back to the listing's own choice. The number under the cursor changes; with
+back to the listing's own choice. Right-clicking an instruction offers the same
+forms under **Operand type**. The number under the cursor changes; with
 the cursor elsewhere on the line, the line's last number does, and a line
-without one is refused. Only x86 instructions show operand types so far. A form
+without one is refused. x86, ARM, Thumb, AArch64, SBF and EVM instructions show
+operand types; ARM-family immediates keep the decoder's `#` (`#0x1a`, `#-0x10`,
+`#0b11010`, `#'A'`, an enumerator as `#NAME`, a structure offset as
+`[x20, #_T.Size]`) and count in their first register's width, 32 bits for a
+`w` register. An SBF immediate counts in its operation's width, 32 bits for
+`mov32` and a store's data for `stb`, and a displacement takes a structure
+offset as `[r1 + _T.Size]`; a call target and a byte swap's width keep their
+numbers. EVM PUSH data counts in the PUSH's own width, up to the 256-bit word;
+an enumerator or a structure offset names at most 64 of its bits. A form
 the value cannot take, such as characters for unprintable bytes or an offset to
 an address with no name, leaves the listing's number. Each change is one step
 of undo history and is kept in the project folder's `operands.json`, which the command
@@ -1296,22 +1514,57 @@ in the context menu resets every call policy of this function. Undo/redo,
 database reopen and read-only replicas use the usual project history.
 
 This feature currently accepts scalar and pointer C ABIs on x64 PE/ELF/Mach-O
-and AArch64 ELF/Mach-O. Types declared in Local types can be used as pointer
-pointees. By-value aggregates, special conventions and Windows ARM64 require
-additional ABI support. An unproved register value, incomplete outgoing stack
+and AArch64 PE/ELF/Mach-O. Windows ARM64 accepts fixed and variadic scalar
+parameter lists, including floating arguments. Types declared in Local
+types can be used as pointer pointees. By-value aggregates and special
+conventions require additional ABI support. An unproved register value, incomplete outgoing stack
 write or unsupported variadic floating carrier refuses the edit and reports its
 reason in Output. No missing argument is filled with an invented value.
 
-## Languages, extensions and MCP
+## Languages, analysis queries and MCP
 
 The UI starts in English and bundles all 11 project languages; **Options →
 Language** switches immediately without reloading the analysis, and Arabic
 mirrors the window chrome while code and addresses stay left to right.
 
-**View → Open subviews → Extensions** imports versioned JSON manifests with namespaced
-read-only query contributions and runs them on the current address. Manifests
-cannot run scripts or register arbitrary engine operations. See the manifest
-schema in the [worker protocol](../tools/neverd-worker/PROTOCOL.md).
+**View → Open subviews → Analysis queries** runs the built-in image metadata,
+functions and strings queries. **Import queries…** adds query definitions from
+a versioned JSON file, and **Remove group** removes all queries belonging to
+the selected imported group. Address-based queries use the current address.
+These definitions describe read-only analysis operations; they cannot run
+scripts or register arbitrary engine operations. See the manifest schema in the
+[worker protocol](../tools/neverd-worker/PROTOCOL.md#declarative-contribution-manifests).
+
+### Analysis queries from the CLI
+
+The CLI exposes the same categories of analysis directly. Each command below
+accepts `--json` for scripts; its output schema and selection options belong to
+that command, rather than to the GUI query registry.
+
+| Query operation | CLI example |
+|---|---|
+| `metadata` | `neverd info binary --json` |
+| `functions` | `neverd funcs binary --json` |
+| `strings` | `neverd strings binary --json` |
+| `disasm` | `neverd disasm binary --func=main --json` |
+| `decompile` | `neverd decompile binary --func=main --json` |
+| `xrefs` | `neverd xrefs binary --addr=0xADDRESS --json` |
+
+Use `neverd <command> --help` for each command's options. To reuse a query,
+save its command and options in a text argument file, for example
+`functions.args`:
+
+```text
+funcs
+--json
+```
+
+Run it against any input with `neverd @functions.args binary`. Quote argument
+values containing spaces. Argument files contain CLI arguments, not the GUI's
+JSON query definitions; GUI manifests are imported through Analysis queries.
+The separate `neverd plugins` command lists or runs executable plugins.
+
+### MCP connections
 
 **View → Open subviews → MCP connections** starts connections only on
 request. It supports local
@@ -1361,3 +1614,100 @@ the [benchmark harness](../tools/neverd-gui/benchmarks/README.md).
 See the [packaging guide](../tools/neverd-gui/PACKAGING.md) for dependency and
 license inputs, and the [qualification record](gui-qualification.md) for
 measured evidence and remaining release criteria.
+
+## Interactive byte patches
+
+Press **J** in an analysis view or Hex to open Patch. Fixed second keys are J (NOP),
+A (assemble), B (bytes), F (fill a selected instruction range), G (always
+branch), N (never branch), I (invert), S (skip call), K (skip with a return
+value), C (immediate), W (rewrite function), R (restore), P (patched bytes),
+and E (export). They apply only while the menu is open. The same actions appear
+under Edit → Patch and in the context menu, filtered by engine evidence.
+IDA 9.5 Hex-Rays uses Z for `hx:JmpStrucDef`; J avoids that conflict.
+
+In disassembly and Hex, **JJ** applies NOP immediately; **JG**, **JN**, **JI**
+and **JS** also apply the selected single-instruction change after engine
+validation. **Ctrl+Z** undoes it; **Ctrl+Shift+Z** redoes it. Value edits,
+selected-range fills and source edits retain their confirmation preview.
+Fast second taps are retained while the menu loads its available actions;
+Escape cancels them, and holding a key does not repeat a patch. A session
+change closes the menu. **JR** restores the changed runs intersecting the
+current instruction, including changes confined to its operands.
+
+Keyboard Patch menus open beside the caret in the active listing, graph,
+pseudocode/IR or Hex pane, including floating panes. They do not follow a
+mouse pointer left in another pane. The originating view is retained while
+the worker prepares the menu or editor.
+
+Assembly edits appear in the listing with a live encoding and instruction
+coverage preview. Intel and AT&T syntax, the current PC and the loaded ARM or
+Thumb mode come from the engine. Shorter encodings are padded with NOPs;
+replacing following instructions requires the explicit overlap checkbox.
+Pasted frame-variable names use the listing’s explicit displacement bindings;
+unknown or ambiguous names are refused. SDK and Python callers can supply their
+own `symbols` map, and CLI callers can pass `--symbols` JSON.
+Enter applies, Escape cancels, and Up/Down moves between loaded listing rows.
+The blue Apply button uses the same primary-action style as Jump. The top-right
+Close button and Cancel discard the editor's uncommitted input and return focus
+to the originating view; Enter on either focused dismissal button also cancels.
+The editor opens below the current row when it fits, or above it near the
+bottom edge, and stays inside its pane. Drag its title to move it; preview
+updates retain that position, and resizing the pane keeps it within reach.
+The preview area is sized before the first paint and retains its size when
+results or errors arrive. Longer output scrolls inside it without resizing
+or moving the editor.
+The title, buttons and other controls use the ordinary arrow pointer; text
+fields and selectable preview text use the text cursor.
+In Hex, **F2** edits the current byte; Enter or F2 applies and advances.
+No editor commits a stale preview after the session revision changes.
+
+Patch commits, undo, redo and restore retain the Functions and Names tables
+while fresh pages are compared in the background. An unchanged inventory
+does not reset the table, selection or scroll position. Actual name, order or
+inventory changes are still published; opening another project discards the
+previous project's rows. Analysis caches remain revision-fenced.
+
+Patched listing rows have a marker and tint; patched hex bytes are underlined
+and tinted. The patch tint remains visible on the current row and selected
+bytes immediately after a successful edit. Output records the committed
+address, byte count, before/after bytes and available decoded instructions;
+restore, undo, redo and binary production also report their results. Previews
+and cancelled edits do not produce a success entry. Long byte and instruction
+summaries are bounded; the Patched bytes table retains the full details.
+**Ctrl+Alt+P** opens original/current bytes and the action kind.
+Select rows and use Delete or Restore selected original bytes to revert them
+as one history command. Undo/redo, reopening and NDDB packing retain the
+optional `patches.json` overlay. The input file remains unchanged.
+
+Pseudocode constant edits currently admit direct scalar assignments or returns from an x86 MOV immediate. Folded arithmetic, casts and lines with several literals are refused. Pseudocode literal edits require one canonical instruction, one encoded
+immediate and an exact value match. Branch actions require a unique mapped
+conditional transfer. NOP requires complete instruction-effect coverage;
+ambiguous, folded or unmapped source is refused. Source edits offer before and
+after C in the preview details, or the decompilation failure with machine bytes.
+
+Rewrite function in C prepares HighC, an entry mapping and original symbol
+bindings. Choose clang, NeverC or GCC and optionally its executable. An optional
+original-body binding names a declaration that calls the saved original
+function. Compilation produces a new binary and a receipt, with Open and
+Compare actions. Export and reopen existing byte patches before this operation.
+
+Produce patched binary replays the overlay from the immutable input snapshot
+into a new, exclusively created file. Existing destinations are refused. PE
+checksums are recomputed when originally present. Authenticode and Mach-O code
+signatures require explicit unsigned export, which removes their metadata;
+this operation does not re-sign. Relocations, zero-fill, ambiguous mappings,
+dyld shared-cache images and ELF load metadata are refused. The overlay limits
+are defined in `include/neverd/patch/Limits.h`; the worker also bounds its
+history payload. Edits made outside the worker require reloading its history.
+
+```sh
+neverd patch-bytes program --address 0x401000 --kind nop
+neverd patch-bytes program --address 0x401000 --kind nop --apply
+neverd patch-bytes program --address 0x401000 --revert
+neverd patch-bytes program --export -o program.patched
+```
+
+Python exposes `preview_byte_patch`, `apply_byte_patch`, `revert_byte_patch`,
+`byte_patches`, `save_byte_patches`, `load_byte_patches`, `assemble` and
+`export_byte_patches`. Applying changes memory; saving is explicit. Saving
+refuses an externally modified patch sidecar instead of overwriting it.

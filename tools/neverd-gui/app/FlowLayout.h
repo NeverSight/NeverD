@@ -5,8 +5,8 @@
 
 namespace neverd::gui {
 
-/// Lays its widgets out left to right at their own sizes, and starts a new
-/// row where the next would not fit, as the options of a narrow pane wrap.
+/// Lays widgets out in the reading direction at their own sizes, and starts a
+/// new row where the next would not fit, as the options of a narrow pane wrap.
 /// A box layout squeezes a row it cannot fit, so a widget that keeps its
 /// width overlaps the next one.  A hidden widget takes no place.
 class FlowLayout final : public QLayout {

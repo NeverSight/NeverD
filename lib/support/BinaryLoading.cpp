@@ -12,18 +12,22 @@
 #include "neverd/support/BinaryLoading.h"
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/DyldCacheLoad.h"
+#include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/ObjectFileUtils.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/TextEncoding.h"
 
 #include "llvm/Support/Error.h"
 
+#include <system_error>
+
 using namespace llvm;
 
 namespace neverd {
 
 void normalizeBinaryMetadata(BinaryImage &Img) {
-  auto Normalize = [](std::string &Text) { Text = escapeInvalidUTF8(Text); };
+  auto Normalize = [](std::string &Text) { escapeInvalidUTF8InPlace(Text); };
 
   for (auto &Seg : Img.Segments)
     Normalize(Seg.Name);
@@ -89,22 +93,31 @@ Error checkStaticSymbolChoice(const BinaryImage &Img,
 } // namespace
 
 Expected<BinaryImage> loadBinary(const std::filesystem::path &Path,
-                                 const BinaryLoadOptions &Opts) {
+                                 const BinaryLoadOptions &Opts) try {
+  Opts.Progress.report("identify", 0, 1);
   std::unique_ptr<Loader> TheLoader;
-  switch (Opts.Choice.Format) {
-  case BinaryFormat::Unknown:
-    TheLoader = Loader::create(Path);
-    if (!TheLoader)
-      return make_error<StringError>(Loader::describeRefusal(Path),
-                                     inconvertibleErrorCode());
-    break;
-  case BinaryFormat::Raw:
-    TheLoader = std::make_unique<RawLoader>(Opts.Choice.Raw);
-    break;
-  default:
-    TheLoader = Loader::create(Opts.Choice.Format);
-    break;
-  }
+  if (!Opts.Choice.MachOSharedCacheImage.empty()) {
+    if (Opts.Choice.Format != BinaryFormat::Unknown &&
+        Opts.Choice.Format != BinaryFormat::MachO)
+      return createStringError(inconvertibleErrorCode(),
+                               macho_loader::cache_load::kChoiceInvalid);
+    TheLoader =
+        std::make_unique<MachOLoader>(Opts.Choice.MachOSharedCacheImage);
+  } else
+    switch (Opts.Choice.Format) {
+    case BinaryFormat::Unknown:
+      TheLoader = Loader::create(Path);
+      if (!TheLoader)
+        return make_error<StringError>(Loader::describeRefusal(Path),
+                                       inconvertibleErrorCode());
+      break;
+    case BinaryFormat::Raw:
+      TheLoader = std::make_unique<RawLoader>(Opts.Choice.Raw);
+      break;
+    default:
+      TheLoader = Loader::create(Opts.Choice.Format);
+      break;
+    }
   if (!TheLoader)
     return make_error<StringError>("no loader reads the chosen format",
                                    inconvertibleErrorCode());
@@ -113,18 +126,29 @@ Expected<BinaryImage> loadBinary(const std::filesystem::path &Path,
   if (!Opts.ARMFunctionModes.empty())
     TheLoader->setARMFunctionModes(Opts.ARMFunctionModes);
   TheLoader->setReadsStaticSymbols(Opts.ReadStaticSymbols);
-  auto ImgOrErr = TheLoader->load(Path);
+  Opts.Progress.report("identify", 1, 1);
+  auto ImgOrErr = TheLoader->loadWithProgress(Path, Opts.Progress);
   if (!ImgOrErr)
     return ImgOrErr.takeError();
   if (Error E = checkStaticSymbolChoice(*ImgOrErr, Opts))
     return std::move(E);
+  Opts.Progress.report("metadata", 0, 1);
   normalizeBinaryMetadata(*ImgOrErr);
   ImgOrErr->numberSharedFunctionNames();
+  Opts.Progress.report("metadata", 1, 1);
   return std::move(*ImgOrErr);
+} catch (const LoadCancelled &) {
+  return make_error<StringError>(
+      LoadCancelled::Message,
+      std::make_error_code(std::errc::operation_canceled));
 }
 
 Expected<BinaryImage> loadBinaryBuffer(llvm::MemoryBufferRef Buffer,
-                                       const BinaryLoadOptions &Opts) {
+                                       const BinaryLoadOptions &Opts) try {
+  Opts.Progress.report("identify", 0, 1);
+  if (!Opts.Choice.MachOSharedCacheImage.empty())
+    return createStringError(inconvertibleErrorCode(),
+                             macho_loader::cache_load::kBufferUnavailable);
   if (Opts.Choice.Format != BinaryFormat::Unknown)
     return make_error<StringError>(
         "native buffer does not accept a loader choice",
@@ -141,14 +165,21 @@ Expected<BinaryImage> loadBinaryBuffer(llvm::MemoryBufferRef Buffer,
   TheLoader->restrictFunctions(Opts.OnlyFunctionEntries);
   TheLoader->setARMFunctionModes(Opts.ARMFunctionModes);
   TheLoader->setReadsStaticSymbols(Opts.ReadStaticSymbols);
-  auto Image = TheLoader->loadBuffer(Buffer);
+  Opts.Progress.report("identify", 1, 1);
+  auto Image = TheLoader->loadBufferWithProgress(Buffer, Opts.Progress);
   if (!Image)
     return Image.takeError();
   if (Error E = checkStaticSymbolChoice(*Image, Opts))
     return std::move(E);
+  Opts.Progress.report("metadata", 0, 1);
   normalizeBinaryMetadata(*Image);
   Image->numberSharedFunctionNames();
+  Opts.Progress.report("metadata", 1, 1);
   return std::move(*Image);
+} catch (const LoadCancelled &) {
+  return make_error<StringError>(
+      LoadCancelled::Message,
+      std::make_error_code(std::errc::operation_canceled));
 }
 
 } // namespace neverd

@@ -6,6 +6,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/ExecutionConfiguration.h"
+#include "neverd/emulation/Limits.h"
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -520,7 +521,7 @@ TEST_P(AndroidNative, MemoryAdviceSharesRawAndBionicRangeErrors) {
     }
   }
 }
-TEST_P(AndroidNative, MemoryAdviceRejectsUnmodeledContentChanges) {
+TEST_P(AndroidNative, MemoryAdviceRejectsUnknownBackingContentChanges) {
   for (uint64_t Route = 0; Route < 3; ++Route) {
     auto R = run("memory_advice", {Buffer, Buffer, 4096, 4, Route});
     EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
@@ -537,6 +538,78 @@ TEST_P(AndroidNative, MemoryAdviceRejectsUnmodeledContentChanges) {
     ASSERT_EQ(R.MemorySnapshots.size(), 1u);
     EXPECT_EQ(R.MemorySnapshots[0].Bytes, std::vector<uint8_t>(64));
   }
+}
+TEST_P(AndroidNative, DiscardPagesSharesRawBionicAndDynamicEffects) {
+  Options.OutputLimit = 4 * 1024 * 1024;
+  Options.Android->Initialize = false;
+  Options.Android->Memory[0].Size = 16384;
+  Options.Android->ReadMemory = {{Buffer, 16384}};
+  Options.Android->Libraries["libadvice.so"] = {"madvise"};
+  Options.Android->TraceLimit = 500000;
+  Options.Limits.Instructions = 500000;
+  Options.Limits.TimeoutMicroseconds = 30000000;
+  for (uint64_t Route = 0; Route != 4; ++Route) {
+    for (uint64_t Mode = 0; Mode != 7; ++Mode) {
+      SCOPED_TRACE(Route);
+      SCOPED_TRACE(Mode);
+      std::vector<uint8_t> Expected(16384, 0xa5);
+      Options.Android->Memory[0].Bytes = Expected;
+      const uint64_t Error = Mode == 2 ? 12 : Mode == 3 || Mode == 4 ? 22 : 0;
+      const uint64_t Value = Error ? (Route == 1 ? 0 - Error : UINT64_MAX) : 0;
+      const uint64_t Errno = Error && Route != 1 ? Error : 733;
+      auto R = run("discard_pages", {Buffer, Route, Mode});
+      returned(R, Value);
+      ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+      const uint64_t Header[] = {73, 0x100000000, Value, Errno, 0};
+      for (size_t I = 0; I != 5; ++I)
+        llvm::support::endian::write64le(Expected.data() + I * 8, Header[I]);
+      for (size_t I = 0; I != 12288; ++I) {
+        uint8_t Byte = uint8_t(0x31 + I / 4096);
+        if (Mode == 1 || (Mode == 2 && (I < 4096 || I >= 8192)) ||
+            ((Mode == 0 || Mode == 6) && I >= 4096 && I < 8192))
+          Byte = 0;
+        if (Mode == 2 && I >= 4096 && I < 8192)
+          Byte = 0xcc;
+        Expected[256 + I] = Byte;
+      }
+      EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+      if (Route == 1) {
+        ASSERT_EQ(R.Services.size(), 1u);
+        EXPECT_EQ(R.Services[0].Number, 233u);
+        EXPECT_EQ(R.Services[0].Result, Value);
+      } else {
+        auto C = llvm::find_if(R.NativeCalls, [&](const auto &Call) {
+          return Call.Name == (Route == 2 ? "syscall" : "madvise");
+        });
+        ASSERT_NE(C, R.NativeCalls.end());
+        EXPECT_EQ(C->Result, Value);
+        EXPECT_EQ(C->Library, Route == 3 ? "libadvice.so" : "");
+      }
+    }
+  }
+}
+TEST_P(AndroidNative, DiscardClosedProviderPreservesCallerOutput) {
+  Options.OutputLimit = 4 * 1024 * 1024;
+  Options.Android->Initialize = false;
+  Options.Android->Memory[0].Size = 16384;
+  Options.Android->ReadMemory = {{Buffer, 16384}};
+  Options.Android->Libraries["libadvice.so"] = {"madvise"};
+  Options.Android->TraceLimit = 500000;
+  std::vector<uint8_t> Bytes(16384, 0xa5);
+  Options.Android->Memory[0].Bytes = Bytes;
+  auto R = run("discard_pages", {Buffer, 4, 0});
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("inactive dynamic library"), std::string::npos);
+  EXPECT_FALSE(R.ReturnValue);
+  ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+  llvm::support::endian::write64le(Bytes.data(), 73);
+  llvm::support::endian::write64le(Bytes.data() + 8, 0x100000000);
+  EXPECT_EQ(R.MemorySnapshots[0].Bytes, Bytes);
+  // Dynamically allocated pages are not entry-valid ReadMemory snapshots.
+  // The stopped call cannot reach the fixture's post-call copy.
+  ASSERT_FALSE(R.NativeCalls.empty());
+  EXPECT_EQ(R.NativeCalls.back().Name, "madvise");
+  EXPECT_FALSE(R.NativeCalls.back().Result);
 }
 TEST_P(AndroidNative, DynamicMemoryAdviceRetainsProviderLifetimeAndNames) {
   returned(run("dynamic_memory_advice", {Buffer, 4096, 12, 0}), 100);
@@ -1056,6 +1129,61 @@ TEST_P(AndroidNative, DefaultScopeRejectsUnknownOrRepeatedProviders) {
               std::string::npos);
   }
 }
+TEST_P(AndroidNative, ResidencyObservationsShareRoutesBitsAndErrno) {
+  Options.Android->Initialize = false;
+  Options.LinuxKernel.emplace().ResidencyObservations =
+      std::vector<LinuxResidencyObservation>{{0x100000000, {0, 1, 0}},
+                                             {0x100000000, {1, 0, 1}}};
+  Options.Android->Libraries["libresidency.so"] = {"mincore"};
+  for (uint64_t Route : {0u, 1u, 2u, 3u}) {
+    auto R = run("residency_observe", {Buffer, Route, 8193, Buffer + 48, 4});
+    returned(R, 0);
+    ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+    std::vector<uint8_t> Expected(64);
+    llvm::support::endian::write64le(Expected.data(), 0x100000000);
+    llvm::support::endian::write64le(Expected.data() + 16, 733);
+    llvm::support::endian::write64le(Expected.data() + 32, 733);
+    Expected[49] = 1;
+    Expected[56] = 1;
+    Expected[58] = 1;
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes, Expected);
+  }
+}
+TEST_P(AndroidNative,
+       ResidencyMissingInputAndClosedProvidersRemainUnsupported) {
+  Options.Android->Initialize = false;
+  auto R = run("residency_observe", {Buffer, 0, 12288, Buffer + 48, 0});
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("page residency"), std::string::npos);
+  Options.LinuxKernel.emplace().ResidencyObservations.emplace();
+  R = run("residency_observe", {Buffer, 0, 12288, Buffer + 48, 0});
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("exhausted"), std::string::npos);
+  Options.LinuxKernel->ResidencyObservations->push_back(
+      {0x100000000, {1, 0, 1}});
+  Options.Android->Libraries["libresidency.so"] = {"mincore"};
+  R = run("residency_observe", {Buffer, 4, 12288, Buffer + 48, 0});
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  EXPECT_NE(R.Diagnostic.find("inactive dynamic library"), std::string::npos);
+  EXPECT_FALSE(R.NativeCalls.back().Result);
+}
+TEST_P(AndroidNative, ResidencyHolesAndCopyFaultsHaveKernelErrorOrdering) {
+  Options.Android->Initialize = false;
+  Options.LinuxKernel.emplace().ResidencyObservations =
+      std::vector<LinuxResidencyObservation>{{0x100000000, {1, 0, 1}}};
+  for (uint64_t Route : {0u, 1u, 2u}) {
+    auto R = run("residency_observe", {Buffer, Route, 12288, Buffer + 48, 1});
+    returned(R, Route == 2 ? uint64_t(-12) : UINT64_MAX);
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes[48], 1u);
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes[49], 0u);
+    EXPECT_EQ(
+        llvm::support::endian::read64le(R.MemorySnapshots[0].Bytes.data() + 16),
+        Route == 2 ? 733u : 12u);
+    R = run("residency_observe", {Buffer, Route, 12288, 0, 0});
+    returned(R, Route == 2 ? uint64_t(-14) : UINT64_MAX);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(Relocations, AndroidNative,
                          testing::Values("none", "android", "relr"));
 TEST(AndroidOptions, StrictWireTypesAndProfiles) {
@@ -1091,6 +1219,90 @@ TEST(AndroidOptions, StrictWireTypesAndProfiles) {
   EXPECT_FALSE(bool(Bad));
   EXPECT_NE(llvm::toString(Bad.takeError()).find("Android"), std::string::npos);
 }
+TEST(AndroidOptions, DladdrPositiveObservationsAreStrictAndOptional) {
+  auto Parse = [](llvm::StringRef Records) {
+    return processOptionsFromJSON("{\"android\":{\"entry_symbol\":\"entry\","
+                                  "\"dladdr_observations\":" +
+                                  Records.str() + "}}");
+  };
+  auto Empty = Parse("[]");
+  ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());
+  ASSERT_TRUE(Empty->Android->DladdrObservations);
+  EXPECT_TRUE(Empty->Android->DladdrObservations->empty());
+  const char *Record =
+      R"([{"address":"0x40001004","image_base":"0x40000000","image_name":"/guest/fixture.so","symbol_name":null,"symbol_address":0}])";
+  auto Good = Parse(Record);
+  ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());
+  const auto &O = Good->Android->DladdrObservations->front();
+  EXPECT_EQ(O.Address, 0x40001004u);
+  EXPECT_EQ(O.ImageBase, 0x40000000u);
+  EXPECT_EQ(O.ImageName, "/guest/fixture.so");
+  EXPECT_FALSE(O.SymbolName);
+  EXPECT_EQ(O.SymbolAddress, 0u);
+  for (
+      const char *Bad :
+      {"null", "{}", "[{}]",
+       R"([{"address":0,"image_base":0,"image_name":"x","symbol_name":null,"symbol_address":0}])",
+       R"([{"address":1,"image_base":2,"image_name":"x","symbol_name":null,"symbol_address":0}])",
+       R"([{"address":1,"image_base":0,"image_name":"","symbol_name":null,"symbol_address":0}])",
+       R"([{"address":1,"image_base":0,"image_name":"x","symbol_name":"s","symbol_address":0}])",
+       R"([{"address":1,"image_base":0,"image_name":"x","symbol_name":null,"symbol_address":1}])",
+       R"([{"address":1,"image_base":0,"image_name":"x","symbol_name":false,"symbol_address":0}])",
+       R"([{"address":1.5,"image_base":0,"image_name":"x","symbol_name":null,"symbol_address":0}])",
+       R"([{"address":1,"image_base":0,"image_name":"x","symbol_name":null,"symbol_address":0,"extra":0}])"}) {
+    SCOPED_TRACE(Bad);
+    auto Result = Parse(Bad);
+    EXPECT_FALSE(bool(Result));
+    llvm::consumeError(Result.takeError());
+  }
+}
+TEST_P(AndroidNative, DladdrTypedRecordsRejectInvalidStateBeforeGuestEntry) {
+  Options.Android->EntrySymbol = "add_arguments";
+  NativeDladdrObservation Good{0x40001004, 0x40000000, "/guest/fixture.so",
+                               "symbol", 0x40001000};
+  for (unsigned Mode = 0; Mode != 9; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto Bad = Good;
+    switch (Mode) {
+    case 0:
+      Bad.Address = 0;
+      break;
+    case 1:
+      Bad.ImageBase = Bad.Address + 1;
+      break;
+    case 2:
+      Bad.ImageName = std::string("x\0y", 3);
+      break;
+    case 3:
+      Bad.ImageName.assign(
+          ::neverd::limits::emulation::kAndroidDladdrStringBytes + 1, 'x');
+      break;
+    case 4:
+      Bad.SymbolName = "";
+      break;
+    case 5:
+      Bad.SymbolName.reset();
+      break;
+    case 6:
+      Bad.SymbolAddress = Bad.Address + 1;
+      break;
+    case 7:
+      Bad.SymbolAddress = Bad.ImageBase - 1;
+      break;
+    case 8:
+      break;
+    }
+    Options.Android->DladdrObservations = std::vector{Bad};
+    if (Mode == 8)
+      Options.Android->DladdrObservations->push_back(Bad);
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    EXPECT_FALSE(bool(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("dladdr"),
+              std::string::npos);
+  }
+}
+
 TEST(AndroidOptions, DefaultScopeDistinguishesUnspecifiedFromEmpty) {
   for (const char *Text :
        {R"({"android":{}})", R"({"android":{"default_scope":[]}})",

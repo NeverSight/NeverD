@@ -1,0 +1,90 @@
+//===- AArch64StackPAuthLoadFixtures.def - SP PAC load oracles --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Native signing and combined loads use independently assembled fixed words.
+/// The existing PAUTH load inventory supplies both boundary displacements.
+//===----------------------------------------------------------------------===//
+
+#ifndef STACK_PAUTH_VALUE
+#define STACK_PAUTH_VALUE(Type, Name, Value)
+#endif
+#ifndef STACK_PAUTH_TEXT
+#define STACK_PAUTH_TEXT(Name, Text)
+#endif
+STACK_PAUTH_VALUE(unsigned, kStackPAuthCaseCount, 7)
+STACK_PAUTH_TEXT(kStackPAuthName, "raw_sp_pauth_")
+STACK_PAUTH_TEXT(kStackPAuthArtifactEnvironment,
+                 "NEVERD_ARM64E_SP_PAUTH_ARTIFACT_DIR")
+STACK_PAUTH_TEXT(kStackPAuthArtifactProperty, "sp_pauth_artifact_dir")
+STACK_PAUTH_TEXT(kStackPAuthPrelude, R"c(
+#include <stdint.h>
+static uint64_t sign_sp_a(uint64_t input) {
+  register uint64_t value __asm__("x9") = input;
+  __asm__ volatile(".inst 0xdac12be9" : "+r"(value));
+  return value;
+}
+static uint64_t sign_sp_b(uint64_t input) {
+  register uint64_t value __asm__("x9") = input;
+  __asm__ volatile(".inst 0xdac12fe9" : "+r"(value));
+  return value;
+}
+)c")
+STACK_PAUTH_TEXT(kStackPAuthNative, R"c(
+extern unsigned __int128 {0}(uint64_t);
+static unsigned __int128 native_sp_pauth_{1}(uint64_t input) {{
+  register uint64_t base __asm__("x9") = input;
+  register uint64_t value __asm__("x17");
+  __asm__ volatile("mov x12, sp\n\tmov sp, x9\n\t.inst {2}\n\t"
+                   "mov x9, sp\n\tmov sp, x12"
+                   : "+r"(base), "=&r"(value) : : "x12", "memory");
+  return ((unsigned __int128)base << 64) | value;
+}
+)c")
+STACK_PAUTH_TEXT(kStackPAuthEntry,
+                 "{{{0}, native_sp_pauth_{1}, {2}, {3}, {4}},\n")
+STACK_PAUTH_TEXT(kStackPAuthTail, R"c(
+static const struct {{
+  unsigned __int128 (*projected)(uint64_t);
+  unsigned __int128 (*original)(uint64_t);
+  unsigned key_b, writeback;
+  int64_t displacement;
+} pauth_cases[] = {{{0}};
+int main(void) {{
+#if defined(SP_PAUTH_REQUIRE_ACTIVE)
+  unsigned signed_a = 0, signed_b = 0;
+#endif
+  for (unsigned c = 0; c < sizeof(pauth_cases) / sizeof(pauth_cases[0]); ++c) {{
+    _Alignas(16) unsigned char actual[8320], expected[8320];
+    for (unsigned i = 0; i < sizeof(actual); ++i)
+      actual[i] = expected[i] = (unsigned char)(i * 37 + c * 19 + 11);
+    uint64_t a = (uintptr_t)(actual + 4112), b = (uintptr_t)(expected + 4112);
+    uint64_t sa = pauth_cases[c].key_b ? sign_sp_b(a) : sign_sp_a(a);
+    uint64_t sb = pauth_cases[c].key_b ? sign_sp_b(b) : sign_sp_a(b);
+#if defined(SP_PAUTH_REQUIRE_ACTIVE)
+    if (pauth_cases[c].key_b) signed_b |= sa != a || sb != b;
+    else signed_a |= sa != a || sb != b;
+#endif
+    unsigned __int128 got = pauth_cases[c].projected(sa);
+    unsigned __int128 want = pauth_cases[c].original(sb);
+    uint64_t ga = pauth_cases[c].writeback ? a + pauth_cases[c].displacement : sa;
+    uint64_t gb = pauth_cases[c].writeback ? b + pauth_cases[c].displacement : sb;
+    if ((uint64_t)got != (uint64_t)want || (uint64_t)(got >> 64) != ga ||
+        (uint64_t)(want >> 64) != gb)
+      return 1;
+    for (unsigned i = 0; i < sizeof(actual); ++i)
+      if (actual[i] != (unsigned char)(i * 37 + c * 19 + 11) ||
+          expected[i] != actual[i])
+        return 2;
+  }
+#if defined(SP_PAUTH_REQUIRE_ACTIVE)
+  if (!signed_a || !signed_b) return 3;
+#endif
+  return 0;
+}
+)c")
+
+#undef STACK_PAUTH_VALUE
+#undef STACK_PAUTH_TEXT

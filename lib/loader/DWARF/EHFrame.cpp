@@ -16,6 +16,7 @@
 
 #include "EHFrameDetail.h"
 
+#include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
@@ -47,8 +48,8 @@ namespace {
 /// Parse one CIE body.  \p Cursor points just past the CIE id field.
 bool parseCIE(const uint8_t *Buf, size_t Size, size_t Cursor, size_t End,
               va_t BufVA, const PointerBases &Bases, unsigned PtrSize,
-              const BinaryImage *Img, const ParseLimits &Limits, DwarfCIE &CIE,
-              ExceptionParseStatus &Status,
+              const BinaryImage *Img, const ParseLimits &Limits, bool DecodeCFI,
+              DwarfCIE &CIE, ExceptionParseStatus &Status,
               std::vector<std::string> &Diagnostics) {
   auto fail = [&](const char *Message) {
     Status = mergeExceptionParseStatus(Status, ExceptionParseStatus::Malformed);
@@ -98,7 +99,7 @@ bool parseCIE(const uint8_t *Buf, size_t Size, size_t Cursor, size_t End,
   if (!readSLEB128(Buf, End, Cursor, CIE.DataAlignmentFactor))
     return fail("truncated DWARF CIE data alignment factor");
   if (CIE.CodeAlignmentFactor == 0)
-    return fail("zero DWARF CIE code alignment factor");
+    return fail(aarch64::kZeroCodeAlignment);
 
   if (CIE.Version == 1) {
     if (Cursor >= End)
@@ -155,8 +156,17 @@ bool parseCIE(const uint8_t *Buf, size_t Size, size_t Cursor, size_t End,
       case 'S':
         CIE.IsSignalFrame = true;
         break;
-      case 'B':
-        CIE.HasPointerAuth = true;
+      case aarch64::kBKeyAugmentation:
+      case aarch64::kNonHintAugmentation:
+        if (!Img || Img->Arch != Arch::AArch64) {
+          Status =
+              mergeExceptionParseStatus(Status, ExceptionParseStatus::Partial);
+          Diagnostics.emplace_back(aarch64::kUnsupportedArchitecture);
+        } else if (CIE.Augmentation[I] == aarch64::kBKeyAugmentation) {
+          CIE.HasPointerAuth = true;
+        } else {
+          CIE.UsesNonHintPAuthLR = true;
+        }
         break;
       case 'G':
         CIE.HasMTETaggedFrame = true;
@@ -187,16 +197,16 @@ bool parseCIE(const uint8_t *Buf, size_t Size, size_t Cursor, size_t End,
   // locations as absolute pointers, which is the psABI default.
   const uint8_t FDEEncoding =
       CIE.FDEPointerEncoding == Omit ? uint8_t(Absptr) : CIE.FDEPointerEncoding;
-  detail::decodeCFIProgram(Buf, Size, Cursor, End, CIE, FDEEncoding, BufVA,
-                           Bases, PtrSize, Img, Limits, CIE.InitialInstructions,
-                           Status, Diagnostics);
+  if (DecodeCFI)
+    detail::decodeCFIProgram(Buf, Size, Cursor, End, CIE, FDEEncoding, BufVA,
+                             Bases, PtrSize, std::nullopt, Img, Limits,
+                             CIE.InitialInstructions, Status, Diagnostics);
   return true;
 }
 
-} // namespace
-
-ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
-                         const PointerBases &Bases, const ParseLimits &Limits) {
+ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
+                              const PointerBases &Bases,
+                              const ParseLimits &Limits, bool DecodeCFI) {
   ParseResult Result;
   if (!Sec.Data || Sec.Size < 4)
     return Result;
@@ -257,8 +267,13 @@ ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
     if (Id == 0) {
       DwarfCIE CIE;
       CIE.SectionOffset = EntryStart;
-      if (parseCIE(Buf, Size, Offset, EntryEnd, Sec.VA, Bases, PtrSize, &Img,
-                   Limits, CIE, Result.ParseStatus, Result.Diagnostics))
+      CIE.UsesArm64eReturnAddressABI = Img.isArm64e();
+      const bool Decoded =
+          parseCIE(Buf, Size, Offset, EntryEnd, Sec.VA, Bases, PtrSize, &Img,
+                   Limits, DecodeCFI, CIE, CIE.ParseStatus, Result.Diagnostics);
+      Result.ParseStatus =
+          mergeExceptionParseStatus(Result.ParseStatus, CIE.ParseStatus);
+      if (Decoded)
         Result.CIEs.push_back(std::move(CIE));
       Offset = EntryEnd;
       continue;
@@ -300,6 +315,7 @@ ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
       continue;
     }
     FDE.InitialLocation = Initial;
+    FDE.ParseStatus = CIE->ParseStatus;
 
     // The address range uses the same value format but is never relative:
     // it is a length, so the application nibble must not be applied to it.
@@ -338,26 +354,48 @@ ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
         } else {
           Result.ParseStatus = mergeExceptionParseStatus(
               Result.ParseStatus, ExceptionParseStatus::Partial);
+          FDE.ParseStatus = mergeExceptionParseStatus(
+              FDE.ParseStatus, ExceptionParseStatus::Partial);
           Result.Diagnostics.emplace_back("unresolved DWARF FDE LSDA pointer");
         }
       }
       Offset = AugEnd;
     }
 
-    PointerBases FDEBases = Bases;
-    FDEBases.Func = FDE.InitialLocation;
-    detail::decodeCFIProgram(Buf, Size, ProgramStart, EntryEnd, *CIE, Encoding,
-                             Sec.VA, FDEBases, PtrSize, &Img, Limits,
-                             FDE.Instructions, Result.ParseStatus,
-                             Result.Diagnostics);
+    if (DecodeCFI) {
+      PointerBases FDEBases = Bases;
+      FDEBases.Func = FDE.InitialLocation;
+      detail::decodeCFIProgram(
+          Buf, Size, ProgramStart, EntryEnd, *CIE, Encoding, Sec.VA, FDEBases,
+          PtrSize, FDE.InitialLocation, &Img, Limits, FDE.Instructions,
+          FDE.ParseStatus, Result.Diagnostics);
+    }
+    Result.ParseStatus =
+        mergeExceptionParseStatus(Result.ParseStatus, FDE.ParseStatus);
 
     Result.FDEs.push_back(std::move(FDE));
     Offset = EntryEnd;
   }
 
-  LLVM_DEBUG(llvm::dbgs() << "dwarf-eh: decoded " << Result.CIEs.size()
-                          << " CIEs and " << Result.FDEs.size() << " FDEs\n");
+  LLVM_DEBUG(llvm::dbgs() << "dwarf-eh: "
+                          << (DecodeCFI ? "decoded " : "read headers for ")
+                          << Result.CIEs.size() << " CIEs and "
+                          << Result.FDEs.size() << " FDEs\n");
   return Result;
+}
+
+} // namespace
+
+ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
+                         const PointerBases &Bases, const ParseLimits &Limits) {
+  return parseFrameSection(Img, Sec, Bases, Limits, /*DecodeCFI=*/true);
+}
+
+ParseResult detail::parseFrameHeaders(const BinaryImage &Img,
+                                      const FrameSection &Sec,
+                                      const PointerBases &Bases,
+                                      const ParseLimits &Limits) {
+  return parseFrameSection(Img, Sec, Bases, Limits, /*DecodeCFI=*/false);
 }
 
 } // namespace neverd::dwarf_eh

@@ -7,6 +7,9 @@ on:
     paths:
       - '.github/workflows/native-pipeline.yml'
       - 'lib/ir/med/abi/**'
+      - 'lib/backend/c/LLVMC/LLVMCStmtWriter.cpp'
+      - 'unittests/lift/core/LLVMCValueTests.cpp'
+      - 'tools/neverd-worker/tests/call_site_types_test.py'
       - 'lib/ir/high/**'
       - 'lib/libc/**'
       - 'lib/loader/ObjectExterns.cpp'
@@ -47,6 +50,9 @@ on:
     paths:
       - '.github/workflows/native-pipeline.yml'
       - 'lib/ir/med/abi/**'
+      - 'lib/backend/c/LLVMC/LLVMCStmtWriter.cpp'
+      - 'unittests/lift/core/LLVMCValueTests.cpp'
+      - 'tools/neverd-worker/tests/call_site_types_test.py'
       - 'lib/ir/high/**'
       - 'lib/libc/**'
       - 'lib/loader/ObjectExterns.cpp'
@@ -172,14 +178,30 @@ jobs:
           names = [test['name'] for test in inventory['tests']]
           assert len(names) >= 83 and len(names) == len(set(names))
           assert {'unit_mcinst', 'unit_x86_buffer_bounds', 'unit_x86_far_immediate_encoding'} <= set(names)
-          targets = ['unit_test' if name == 'unit_cstest' else name.removeprefix('unit_') for name in names]
-          subprocess.run(['cmake', '--build', str(build), '--parallel', '3', '--target', *targets, 'cstest'], check=True)
+          # CTest also registers Python tests, whose names are not build targets.
+          # Build the configured decoder suite, then audit every discovered test.
+          subprocess.run(['cmake', '--build', str(build), '--parallel', '3'], check=True)
           subprocess.run(command + ['--no-tests=error', '--output-on-failure', '--output-junit', 'results.xml'], check=True)
           cases = list(ET.parse(build / 'results.xml').getroot().iter('testcase'))
           assert Counter(case.get('name') for case in cases) == Counter(names)
-          assert all(case.get('status') == 'run' and not any(child.tag in {'failure', 'error', 'skipped'} for child in case) for case in cases)
+          # This one native fault oracle requires x86-64 POSIX (see Capstone's
+          # tests/unit/x86_x87_environment_hardware.c). Keep it required on
+          # native x64 POSIX, and never count its explicit absence as a pass.
+          unavailable_x87_host = (os.environ['RUNNER_OS'], os.environ['RUNNER_ARCH']) in {
+              ('macOS', 'ARM64'), ('Linux', 'ARM64'), ('Windows', 'X64'), ('Windows', 'ARM64')}
+          skipped = 0
+          for case in cases:
+              assert not any(child.tag in {'failure', 'error'} for child in case)
+              missing = case.find('skipped')
+              if missing is None:
+                  assert case.get('status') == 'run'
+                  continue
+              assert unavailable_x87_host and case.get('name') == 'unit_x86_x87_environment_hardware'
+              assert case.get('status') == 'notrun' and missing.get('message') == 'SKIP_RETURN_CODE=77'
+              assert case.findtext('system-out', '').strip() == 'SKIP: x87 execution requires an x86-64 POSIX host'
+              skipped += 1
           (build / 'source.txt').write_text(subprocess.check_output(['git', '-C', 'third_party/capstone', 'rev-parse', 'HEAD'], text=True))
-          print(f'Capstone: {len(cases)} passed, zero failed, zero skipped')
+          print(f'Capstone: {len(cases) - skipped} passed, zero failed, {skipped} explicitly unavailable native-x87 tests')
           subprocess.run(['ctest', '--test-dir', str(build), '-R', '^integration_py_cstest$',
                           '--no-tests=error', '--output-on-failure',
                           '--output-junit', 'cstest-integration.xml'], check=True)
@@ -245,7 +267,7 @@ jobs:
                                   ('NeverDX86NativeStateAuditTests', 8),
                                   ('NeverDX86LegacyAlignedMoveTests', 7),
                                   ('NeverDX86UndefinedEffectsTests', 52),
-                                  ('NeverDSupportThreadTests', 12),
+                                  ('NeverDSupportThreadTests', 11),
                                   ('NeverDHighControlFlowTests', 420),
                                   ('NeverDAccelerationTests', 18),
                                   ('NeverDStringScanTests', 17),
@@ -274,6 +296,10 @@ jobs:
                   for name in ('FrameLocalLeafSummaryKeepsDefinitionIdentityAndDepth',
                                'FrameLocalLeafSummaryDoesNotReuseAnotherFunctionOrInvocation'):
                       assert 'MedABIPass.' + name in names
+              if owner == 'NeverDAccelerationTests':
+                  # The small-batch stack contract moved from support tests
+                  # to the scheduler owner; retain its explicit coverage.
+                  assert 'TaskScheduler.SmallAndSerialBatchesRetainTheWorkerStackContract' in names
               xml = output / (owner + '.xml')
               with (output / (owner + '.log')).open('w') as log:
                   result = subprocess.run([str(binary), '--gtest_output=xml:' + str(xml)],

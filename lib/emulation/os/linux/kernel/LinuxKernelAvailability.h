@@ -11,7 +11,8 @@ enum class IOVectorImportKind { CopyAll, SingleBuffer };
 std::optional<uint32_t> gkiPidFDFlags(AndroidGKIKernel Kernel);
 std::optional<uint32_t> gkiPidFDNonLeaderError(AndroidGKIKernel Kernel);
 std::optional<IOVectorImportKind> gkiIOVectorImport(AndroidGKIKernel Kernel);
-std::optional<bool> gkiXAttrNameFirst(AndroidGKIKernel Kernel);
+std::optional<LinuxXAttrQueryImport>
+xattrQueryImport(const LinuxKernelOptions &Options);
 llvm::Error validateKernelOptions(const LinuxKernelOptions &Options);
 llvm::Error validateKernelTaskInputs(const ProcessOptions &Options);
 bool unavailableKernelService(ServiceKind Kind,

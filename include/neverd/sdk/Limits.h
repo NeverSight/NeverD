@@ -24,9 +24,20 @@
 
 namespace neverd::sdk {
 
+// Session-owned analysis image additions.
+inline constexpr size_t kMaxAnalysisSectionBytes = 64u << 20;
+inline constexpr size_t kMaxAnalysisSections = 128;
+inline constexpr size_t kMaxAnalysisSectionStateBytes = 144u << 20;
+inline constexpr size_t kMaxAnalysisSectionDescriptionBytes = 1u << 20;
+inline constexpr unsigned kMaxAnalysisSectionJsonDepth = 64;
+inline constexpr size_t kMaxAnalysisSectionNameBytes = 512;
+inline constexpr size_t kMaxAnalysisSectionFunctions = 4096;
+
 /// Lines admitted by one C/IR view page, shared with transport adapters.
 inline constexpr int kMaxCodeViewPageLines = 2048;
 inline constexpr int kDecodeBenchmarkMaxRepetitions = 100;
+/// Maximum wait between cancellation probes while joining an owned discovery.
+inline constexpr unsigned kFunctionDiscoveryPollMilliseconds = 5;
 
 // Query paging and decoding.
 
@@ -208,6 +219,7 @@ inline constexpr int
 
 // lib/sdk/capi/NeverDCAPIDisasm.cpp
 inline constexpr int kNeverDCAPIDisasmNeverdDisasmJsonExLimitDefault = 256;
+inline constexpr int kMaxFunctionDisasmPage = 4096;
 
 // lib/sdk/capi/NeverDCAPIInfo.cpp
 inline constexpr int kNeverDCAPIInfoNeverdResolveAddrLenLimit = 256;

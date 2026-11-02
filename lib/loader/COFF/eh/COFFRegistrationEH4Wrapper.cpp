@@ -12,6 +12,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/ISAEncoding.h"
@@ -35,12 +36,7 @@ bool isCommonHandlerSlot(const BinaryImage &Image, va_t Slot) {
       !Image.readVA(Slot, 4) || Runtime->Name != "_except_handler4_common" ||
       !Image.isValidImportStorageSlot(Slot, Runtime->Name))
     return false;
-  const llvm::StringRef Module = Runtime->Module;
-  return Module.equals_insensitive("msvcrt.dll") ||
-         Module.equals_insensitive("msvcr100.dll") ||
-         Module.equals_insensitive("ucrtbase.dll") ||
-         Module.equals_insensitive("vcruntime140.dll") ||
-         Module.equals_insensitive("vcruntime140d.dll");
+  return isX86SEHHandlerProvider(Runtime->Module);
 }
 
 bool isCommonHandlerThunk(const BinaryImage &Image, va_t Address,

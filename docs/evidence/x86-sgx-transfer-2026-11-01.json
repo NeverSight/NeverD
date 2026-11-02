@@ -1,0 +1,1264 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "feature": "native SGX complete input state and original-site transfer",
+  "source_commit": "387781c7f64b9525794321d980a7fd97363e64be",
+  "llvm_commit": "f214fb7d50689e8667c020f23ae7a05d18148aca",
+  "neverc_commit": "19e532b5fbfa9812cc945e6b27d39d0a6ed459e5",
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "profile": "native-sgx-v13",
+  "state_bytes": 2464,
+  "regressions": [
+    {
+      "sdk": "native",
+      "passed": 206,
+      "failed": 0,
+      "skipped": 0,
+      "report": "neverd-native-final-tests.log",
+      "sha256": "ec607865daae9d8a953ab186f3bcc2ae50a45e553218e4a6d20aa0e7e50b8597"
+    },
+    {
+      "sdk": "r6",
+      "passed": 206,
+      "failed": 0,
+      "skipped": 0,
+      "report": "neverd-r6-final-tests.log",
+      "sha256": "b3959f892e36aeb424160c476506f25940818775ba3588e7ca0a170d8498dbf2"
+    }
+  ],
+  "virtualization_regressions": [
+    {
+      "sdk": "native",
+      "report": "neverd-native-sgx-contract.log",
+      "passed": 1,
+      "sha256": "eecaabeb198b53193cb66ae00ee366e3dc0c8deab6ab0969fe198b2e257ce005"
+    },
+    {
+      "sdk": "native",
+      "report": "neverd-native-virtualization.log",
+      "passed": 8,
+      "sha256": "c581af889468b6aa36a3dccc4746aa07a98ad5e4470444eb60844552dd1a44c0"
+    },
+    {
+      "sdk": "r6",
+      "report": "neverd-r6-sgx-contract.log",
+      "passed": 1,
+      "sha256": "d5bb1277c02e672a0ed60d7b7ac5d19eb8bd028d8c8c931e91ec47e53a92e209"
+    },
+    {
+      "sdk": "r6",
+      "report": "neverd-r6-virtualization.log",
+      "passed": 8,
+      "sha256": "d18ba2951cfb17fef93ede615fcc7aac1d10b212c8890ed8815ec018cd8ab52a"
+    }
+  ],
+  "source_artifacts": [
+    {
+      "name": "sgx-high.c",
+      "sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+      "identical_sdks": true
+    },
+    {
+      "name": "sgx-high.json",
+      "sha256": "b1072bbb9360d8686f58d14141713b119167594c4a0b518a1741ba469e71937e",
+      "identical_sdks": true
+    },
+    {
+      "name": "sgx-llvm.c",
+      "sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+      "identical_sdks": true
+    },
+    {
+      "name": "sgx-llvm.json",
+      "sha256": "342cad2ec5f9f8e27731138e1f2eab3b150080bd627a8e91120cfee5518b3d6a",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-high.c",
+      "sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-high.json",
+      "sha256": "316139ccba92a2560e8a866fd03afbde63bcb842be1a68e30afa47da652b7afa",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-llvm.c",
+      "sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-llvm.json",
+      "sha256": "9e7d6774f52f24e848829035ed85972c9c4aef3124c4a8cb6fe765727b304214",
+      "identical_sdks": true
+    }
+  ],
+  "source_files": [
+    {
+      "path": "include/neverd/analysis/InterpreterMachineStateProfile.h",
+      "sha256": "daae73e9daa8f82d2cdb6f3af310a7181491581cff813340518935715bf46d76"
+    },
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "c5a53ccce6610517d9293aee5ba7f582f2f2de25bad4718c799d12f6a1a752dd"
+    },
+    {
+      "path": "include/neverd/ir/intrinsics/Intrinsics.h",
+      "sha256": "c7021ae7a1ad638df5286729e18711666cd1f80ff3e57983db935c82a450f4bf"
+    },
+    {
+      "path": "include/neverd/ir/intrinsics/X86/X86Virtualization.h",
+      "sha256": "082ffd6a6629e108ff572ec2e6a2df19197ee7e22c91defe21bacb02cd8a0547"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/BinaryInterpreterSpecialization.cpp",
+      "sha256": "34121f3ffb888745c53c729b4100989e31e7f5e715aecdf70fd7a9e6fdc3c685"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "f040c4a6ed9e1d4b04b25dc3b98796ecf0e7be98c7e71cd6f89f2b68bcdb25c6"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSgx.h",
+      "sha256": "e735de60b8f7530b2137205d3edcc4b73351729073a105efdf757f5e1ac6b432"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationAvxImage.h",
+      "sha256": "ea66dd0b22dc9054223d1aa4a0151906e57ad5dd7b5980b713ae4a716d1e9c26"
+    },
+    {
+      "path": "lib/backend/c/render/X86/X86Virtualization.cpp",
+      "sha256": "8940700955140fb5020733f55152e56ecac7ea38178bc31ba77a1cb582176bfd"
+    },
+    {
+      "path": "lib/backend/llvm/X86/MedLLVMX86Virtualization.cpp",
+      "sha256": "15db7e8244cdacd6a2eec866920177ef1ecbc441d274f249df28788a14485bda"
+    },
+    {
+      "path": "lib/pipeline/X86/X64ContinuationExport.cpp",
+      "sha256": "f0ca6bd033123e7bed767246b5933db4396eed4f7638b041da65bfd6ee07e6e2"
+    },
+    {
+      "path": "lib/pipeline/X86/X64SpecialRegions.cpp",
+      "sha256": "35eba10bdd0c3e7f9d92f1342f062e069fca1e87f3d3c5d942879a7ecd1fc2f8"
+    },
+    {
+      "path": "lib/pipeline/X86/X64SpecialRegions.h",
+      "sha256": "999cf7b11eade8b225154f4d47b8be7d849a2769064d7b980b84cbd11a16364a"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64SmmContinuationExportTests.inc",
+      "sha256": "4f9f89b81b74f9d033b7fc651f84291b05308b57196d89a2f5eebe81d3a44f93"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64SgxContinuationExportTests.inc",
+      "sha256": "ab2714ccc88d6a6351b8b118616298b4f9e3b7639ce8b7fc2a04451ec834e132"
+    },
+    {
+      "path": "scripts/isa/x86/verify_sgx_transfer.py",
+      "sha256": "2a7a258c7f68c7e2cafed67e99d9974c50f36551a83e01ee52e1b6306b7b5073"
+    }
+  ],
+  "compiler_tests": {
+    "neverc_passed": 13,
+    "llvm_lit_passed": 6,
+    "generators_passed": 26,
+    "wide_original_site": "0x100001000 through NeverC x64 and LLVM code64/x32"
+  },
+  "compiler_qualification": {
+    "original-llvm": {
+      "profiles": [
+        {
+          "mode": "64",
+          "backend": "llvm-legacy",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "5472874180ca156badca805147d71b093297d0a7a08f33777f8eaa49e04252ab",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "llvm-legacy",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "950d3a9a377e33bf2e819a39bdff65e539837e0e9a39de04c9aa0a6e689e2b81",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "llvm-new",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "5472874180ca156badca805147d71b093297d0a7a08f33777f8eaa49e04252ab",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "llvm-new",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "483ac1612a8eabe6ee78bc198a1182a0dc6c536a4cf4d10763b0194b4a92f3d6",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-legacy",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "15004116a2f94d15f7de0b6882fa806b3d31fa4fbfffa9ff73c1f5f69e32562d",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-legacy",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "f7de1dc19dd25d7ea2aec32ca2cabeb2b8e01af647a50b613c66c82c1a199d73",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-new",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "15004116a2f94d15f7de0b6882fa806b3d31fa4fbfffa9ff73c1f5f69e32562d",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-new",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "3c517843eac21bc41a83fe5e992789ebd86106ed6058a4baa6b69c7fc7a4070a",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-legacy",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "75a0543f1216b35086dfed540cd113c7744a88e1d5a1d86adeaecba484d17c9a",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-legacy",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "0a707eb08a41d274da02035cd476181d824f27a900d362b0987273531ce6c0d8",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-new",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "75a0543f1216b35086dfed540cd113c7744a88e1d5a1d86adeaecba484d17c9a",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-new",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "f623e5aab3eab3af130b9d5b007452d9c9b2092887b950087927f23866bf8de2",
+          "source_sha256": "0f9714e64998ef0bc6129e9947e8bfb0b42f37bd21789f5058479a0f8437f803",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        }
+      ],
+      "input_state_observations": 110592,
+      "source_sha256": {
+        "verify_sgx_transfer_context.py": "3d10d707f12dbcec1f7763cc421e8cbb2c654b0588d0bc6967bb1a5ec62cc661",
+        "verify_frame_returns.py": "8c11fe3c130ada7f58ca2166ff65646e14f7bfd7f625feeb9ba9650ff754c0bd",
+        "sgx_transfer_context_kvm.c": "8f3ae2bea518444a012bdc2c224a02c6b06dd78a1de860596f43de17a2e60dd6",
+        "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+      },
+      "tools": {
+        "clang": {
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+        },
+        "opt": {
+          "sha256": "91fc3c539a9fb868f0451237548ad72e273fbccdb03424b7f69286cdab7f7ffb"
+        },
+        "llvm-objdump": {
+          "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+        }
+      },
+      "scope": "KVM instruction-boundary transport only; no EPC/SSA/AEX or successful enclave instruction execution"
+    },
+    "original-neverc": {
+      "profiles": [
+        {
+          "mode": "64",
+          "backend": "neverc",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "89b0e844e33837187d426d5ce1018f3b8c6f8ff91efe1be06f052dd9ab3ba6f0",
+          "source_sha256": "9515a0203c5538fe0f3c6969494e0f5f3edc72c0e45e5717471a333ae86ffc47",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "243d10588c9b6cff731318e33b5bff41417da2f4e39b80a4451daced7e8d5884",
+          "source_sha256": "9515a0203c5538fe0f3c6969494e0f5f3edc72c0e45e5717471a333ae86ffc47",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-legacy",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "ec0e55ff874438eb2891877c3d3c734ce155ea7f40ff89c9a79c0c82cf83756c",
+          "source_sha256": "9515a0203c5538fe0f3c6969494e0f5f3edc72c0e45e5717471a333ae86ffc47",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-legacy",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "2b349a1772043df4fba66562869a30e38aa624aa7f26e5c4eb257142a090ff85",
+          "source_sha256": "9515a0203c5538fe0f3c6969494e0f5f3edc72c0e45e5717471a333ae86ffc47",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-new",
+          "optimization": "O0",
+          "original_site": true,
+          "image_sha256": "ec0e55ff874438eb2891877c3d3c734ce155ea7f40ff89c9a79c0c82cf83756c",
+          "source_sha256": "9515a0203c5538fe0f3c6969494e0f5f3edc72c0e45e5717471a333ae86ffc47",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-new",
+          "optimization": "O2",
+          "original_site": true,
+          "image_sha256": "6152e6e2267ab6ef1d4c20ec59aa8db964c49b7ab85c02016f532a3a7a0d3e16",
+          "source_sha256": "9515a0203c5538fe0f3c6969494e0f5f3edc72c0e45e5717471a333ae86ffc47",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        }
+      ],
+      "input_state_observations": 55296,
+      "source_sha256": {
+        "verify_sgx_transfer_context.py": "3d10d707f12dbcec1f7763cc421e8cbb2c654b0588d0bc6967bb1a5ec62cc661",
+        "verify_frame_returns.py": "8c11fe3c130ada7f58ca2166ff65646e14f7bfd7f625feeb9ba9650ff754c0bd",
+        "sgx_transfer_context_kvm.c": "8f3ae2bea518444a012bdc2c224a02c6b06dd78a1de860596f43de17a2e60dd6",
+        "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+      },
+      "tools": {
+        "clang": {
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+        },
+        "opt": {
+          "sha256": "91fc3c539a9fb868f0451237548ad72e273fbccdb03424b7f69286cdab7f7ffb"
+        },
+        "llvm-objdump": {
+          "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+        },
+        "neverc": {
+          "sha256": "7b47834c100c215bbe1abe7bc18f1b3a978764fec62bfaf6cece5b65df27ed60"
+        }
+      },
+      "scope": "KVM instruction-boundary transport only; no EPC/SSA/AEX or successful enclave instruction execution"
+    },
+    "direct-llvm": {
+      "profiles": [
+        {
+          "mode": "64",
+          "backend": "llvm-legacy",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "ad2cb7d4694229a89348f0a7450f2b5b8bf8796d4b2a3d30ea130d164a81969a",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "llvm-legacy",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "c9f9683cfe21a3dc31d22bae808a916347641ebec801350506396968290f98b3",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "llvm-new",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "ad2cb7d4694229a89348f0a7450f2b5b8bf8796d4b2a3d30ea130d164a81969a",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "llvm-new",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "cc50c7c5aae37ae10df88ea39cdd8b6211e1c52b0484d57816d75616eebff8d1",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-legacy",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "8cf2e534b25f44994e745f28235951763ecf10214a719403a4e63c05c14724de",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-legacy",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "74591b5285d86875f82ad0acf9c2ad368b5acc8c0d4a010118dac4598f5ac043",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-new",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "8cf2e534b25f44994e745f28235951763ecf10214a719403a4e63c05c14724de",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "32",
+          "backend": "llvm-new",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "1826ace86529115c16f5cb60c439fed9e87ce4268d42f4e46e2d89713a4f36b4",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 32,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-legacy",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "0144d6d0e04d68aa742585adf52cf943876bab38d2d0ae3a7d8a0be8b11f4312",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-legacy",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "4356700b130888fd1b48db69c5f39c8d62fc22645201f541e5855b40217607b2",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-new",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "0144d6d0e04d68aa742585adf52cf943876bab38d2d0ae3a7d8a0be8b11f4312",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "x32",
+          "backend": "llvm-new",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "9e0702cd106bc091f735bc1f2d2155092b1649ad9019f99f865787468d8aa326",
+          "source_sha256": "700c79bcbcaa176a81243bfea2773e3bb1879b35a0a879ee3473b92838c0ddd4",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        }
+      ],
+      "input_state_observations": 110592,
+      "source_sha256": {
+        "verify_sgx_transfer_context.py": "3d10d707f12dbcec1f7763cc421e8cbb2c654b0588d0bc6967bb1a5ec62cc661",
+        "verify_frame_returns.py": "8c11fe3c130ada7f58ca2166ff65646e14f7bfd7f625feeb9ba9650ff754c0bd",
+        "sgx_transfer_context_kvm.c": "8f3ae2bea518444a012bdc2c224a02c6b06dd78a1de860596f43de17a2e60dd6",
+        "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+      },
+      "tools": {
+        "clang": {
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+        },
+        "opt": {
+          "sha256": "91fc3c539a9fb868f0451237548ad72e273fbccdb03424b7f69286cdab7f7ffb"
+        },
+        "llvm-objdump": {
+          "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+        }
+      },
+      "scope": "KVM instruction-boundary transport only; no EPC/SSA/AEX or successful enclave instruction execution"
+    },
+    "direct-neverc": {
+      "profiles": [
+        {
+          "mode": "64",
+          "backend": "neverc",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "9a93852e3bf714b7e63a17e0273828e343424c28f07981d45665dc9a9ebfcce7",
+          "source_sha256": "65ee16f1da5e74f4e0a5a2eaa9473557fcf33559096c50d522e512fdd5f8ead2",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "75960d18818d46529b43ae984948f3b1d6df9f78d0a264f647d21450eeecf38a",
+          "source_sha256": "65ee16f1da5e74f4e0a5a2eaa9473557fcf33559096c50d522e512fdd5f8ead2",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-legacy",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "e85918396734c071b336f5eb7e87cc26faa0f7256d26e84847315a82001ecf9d",
+          "source_sha256": "65ee16f1da5e74f4e0a5a2eaa9473557fcf33559096c50d522e512fdd5f8ead2",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-legacy",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "53c659b19e60b4801b839dd530310a7e9c0ad3ab0a4947c63640e4ae6d50d64f",
+          "source_sha256": "65ee16f1da5e74f4e0a5a2eaa9473557fcf33559096c50d522e512fdd5f8ead2",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-new",
+          "optimization": "O0",
+          "original_site": false,
+          "image_sha256": "e85918396734c071b336f5eb7e87cc26faa0f7256d26e84847315a82001ecf9d",
+          "source_sha256": "65ee16f1da5e74f4e0a5a2eaa9473557fcf33559096c50d522e512fdd5f8ead2",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        },
+        {
+          "mode": "64",
+          "backend": "neverc-ir-new",
+          "optimization": "O2",
+          "original_site": false,
+          "image_sha256": "2ae8b813beddbf8484f982472a4abd06de91a6e326034ccea8ddbf057b4649bb",
+          "source_sha256": "65ee16f1da5e74f4e0a5a2eaa9473557fcf33559096c50d522e512fdd5f8ead2",
+          "functions": 4,
+          "input_state_observations": 9216,
+          "invalid_leaves_rejected": 24,
+          "code_bits": 64,
+          "enclave_instructions_executed": 0
+        }
+      ],
+      "input_state_observations": 55296,
+      "source_sha256": {
+        "verify_sgx_transfer_context.py": "3d10d707f12dbcec1f7763cc421e8cbb2c654b0588d0bc6967bb1a5ec62cc661",
+        "verify_frame_returns.py": "8c11fe3c130ada7f58ca2166ff65646e14f7bfd7f625feeb9ba9650ff754c0bd",
+        "sgx_transfer_context_kvm.c": "8f3ae2bea518444a012bdc2c224a02c6b06dd78a1de860596f43de17a2e60dd6",
+        "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+      },
+      "tools": {
+        "clang": {
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+        },
+        "opt": {
+          "sha256": "91fc3c539a9fb868f0451237548ad72e273fbccdb03424b7f69286cdab7f7ffb"
+        },
+        "llvm-objdump": {
+          "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+        },
+        "neverc": {
+          "sha256": "7b47834c100c215bbe1abe7bc18f1b3a978764fec62bfaf6cece5b65df27ed60"
+        }
+      },
+      "scope": "KVM instruction-boundary transport only; no EPC/SSA/AEX or successful enclave instruction execution"
+    }
+  },
+  "export_qualification": {
+    "profiles": [
+      {
+        "route": "high",
+        "backend": "neverc",
+        "optimization": "O0",
+        "source_sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+        "image_sha256": "9b64277939c54e65558d7a7da5d54ba4614d50fbb5130501fc11309812830ea6",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "high",
+        "backend": "neverc",
+        "optimization": "O2",
+        "source_sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+        "image_sha256": "7a1146adaadd2b049e30d09c67864b75491f819598b85cc969e8c094eaacfc6e",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "high",
+        "backend": "llvm-legacy",
+        "optimization": "O0",
+        "source_sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+        "image_sha256": "94d0e5f7d100725e4111496769396744c2fe86c91dca972892dc0a24eda5a26a",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "high",
+        "backend": "llvm-legacy",
+        "optimization": "O2",
+        "source_sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+        "image_sha256": "2513aad01dc083dc9a254dac0ee3655be5739a4c5e1b47252632e9d03589f77d",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "high",
+        "backend": "llvm-new",
+        "optimization": "O0",
+        "source_sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+        "image_sha256": "94d0e5f7d100725e4111496769396744c2fe86c91dca972892dc0a24eda5a26a",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "high",
+        "backend": "llvm-new",
+        "optimization": "O2",
+        "source_sha256": "e95caffb92d08bb8f66da689312bc819b9aa0811fed1ba5a0498f56dfcd91683",
+        "image_sha256": "78ba4ad41f427b3746eba3d2d9a598364765c4f84bb95399abce080f583dd4bf",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "llvm",
+        "backend": "neverc",
+        "optimization": "O0",
+        "source_sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+        "image_sha256": "7a4a37af34727e55fe09541fc18e904a01edee06f2abec435fc2104d70ab7b45",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "llvm",
+        "backend": "neverc",
+        "optimization": "O2",
+        "source_sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+        "image_sha256": "bd92597f6a3b4f1067892d92ca65324c10b0deb27c87b73a8970fbc48485d12a",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "llvm",
+        "backend": "llvm-legacy",
+        "optimization": "O0",
+        "source_sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+        "image_sha256": "b69246a912ca704f3a570866c01fdc1848eb6a2d3e722cb8062e412b65c4f6e7",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "llvm",
+        "backend": "llvm-legacy",
+        "optimization": "O2",
+        "source_sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+        "image_sha256": "2ff3bfabacca1e8f47cf999a03e45f97c7f98169b1a850cccedbc8994b922c0d",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "llvm",
+        "backend": "llvm-new",
+        "optimization": "O0",
+        "source_sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+        "image_sha256": "b69246a912ca704f3a570866c01fdc1848eb6a2d3e722cb8062e412b65c4f6e7",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      },
+      {
+        "route": "llvm",
+        "backend": "llvm-new",
+        "optimization": "O2",
+        "source_sha256": "ac7bdf4d14d3b05b991611bd4b2ad13f0d5df1d7bf1e33718916cb90c2f85425",
+        "image_sha256": "7eb9ea4ba58902dbf143c5d9f687d2f40f87b591ffccb41ce15f749712b05a68",
+        "functions": 4,
+        "input_state_observations": 9216,
+        "invalid_leaves_rejected": 24,
+        "code_bits": 64,
+        "enclave_instructions_executed": 0
+      }
+    ],
+    "input_state_observations": 110592,
+    "tools": {
+      "neverc": {
+        "sha256": "7b47834c100c215bbe1abe7bc18f1b3a978764fec62bfaf6cece5b65df27ed60"
+      },
+      "llc": {
+        "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+      },
+      "opt": {
+        "sha256": "91fc3c539a9fb868f0451237548ad72e273fbccdb03424b7f69286cdab7f7ffb"
+      },
+      "llvm-objdump": {
+        "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+      },
+      "clang": {
+        "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "ld.lld": {
+        "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+      },
+      "objcopy": {
+        "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+      }
+    },
+    "source_sha256": {
+      "verify_sgx_transfer.py": "2a7a258c7f68c7e2cafed67e99d9974c50f36551a83e01ee52e1b6306b7b5073",
+      "sgx_transfer_context_kvm.c": "8f3ae2bea518444a012bdc2c224a02c6b06dd78a1de860596f43de17a2e60dd6",
+      "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+      "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c",
+      "verify_frame_returns.py": "8c11fe3c130ada7f58ca2166ff65646e14f7bfd7f625feeb9ba9650ff754c0bd"
+    },
+    "scope": "KVM original-ENCLU input boundary; zero enclave instructions executed; no successful EPC/SSA/AEX qualification"
+  },
+  "total_input_state_observations": 442368,
+  "adjacent_smm_regression": {
+    "compiler": {
+      "scope": "KVM-mediated SMM save/restore through native RSM",
+      "host": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+      "code_bits": 64,
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304,
+          "elf_sha256": "3d8252b222406f70e8b0baa530ceec859c66e0eb05ef258848833fc6c7b74ca9",
+          "negative_control": "wrong opcode rejected",
+          "negative_xstate_control": "missing XRSTOR rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304,
+          "elf_sha256": "23c8aeaad88b6f9fbbfb3c853cdc451a61dfb50a9f90b6e2ff6dd9145ce33f34",
+          "negative_control": "wrong opcode rejected",
+          "negative_xstate_control": "missing XRSTOR rejected"
+        },
+        {
+          "profile": "neverc-O0",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304,
+          "elf_sha256": "b4e5c134bb00e733fad81e5e4b249311824cfca6cef93778b2d43309170f9838",
+          "negative_control": "wrong opcode rejected",
+          "negative_xstate_control": "missing XRSTOR rejected"
+        },
+        {
+          "profile": "neverc-O2",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304,
+          "elf_sha256": "b3071c05a65181423a4d122b8a0080ed49095aa193e5e1a86897c7d8f8bfcd6c",
+          "negative_control": "wrong opcode rejected",
+          "negative_xstate_control": "missing XRSTOR rejected"
+        },
+        {
+          "profile": "neverc-ir-O0",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304,
+          "elf_sha256": "31a84c70cac89c73dd3fb02cfe1980372713be0099ec2106cb74d88313fadc86",
+          "negative_control": "wrong opcode rejected",
+          "negative_xstate_control": "missing XRSTOR rejected"
+        },
+        {
+          "profile": "neverc-ir-O2",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304,
+          "elf_sha256": "61eb31f806d1896fb0969c27c6a485c3571cfa27d11493217ec00554536ed6ea",
+          "negative_control": "wrong opcode rejected",
+          "negative_xstate_control": "missing XRSTOR rejected"
+        }
+      ],
+      "smm_software_context": true,
+      "source_sha256": {
+        "verify_frame_returns.py": "8c11fe3c130ada7f58ca2166ff65646e14f7bfd7f625feeb9ba9650ff754c0bd",
+        "frame_return_kvm.c": "ccc5a95cf7f9f88060d0cfaa777551a5750db455920519076d6df2776ca9b132",
+        "smm_return_kvm.c": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+        "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+      },
+      "tools": {
+        "clang": {
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+        },
+        "opt": {
+          "sha256": "91fc3c539a9fb868f0451237548ad72e273fbccdb03424b7f69286cdab7f7ffb"
+        },
+        "llvm-objdump": {
+          "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+        },
+        "neverc": {
+          "sha256": "7b47834c100c215bbe1abe7bc18f1b3a978764fec62bfaf6cece5b65df27ed60"
+        }
+      },
+      "reference": "Intel SDM Vol. 2 IRET/RET/SYSENTER; Vol. 3C 34.4.1 SMM state",
+      "reference_url": "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf",
+      "exclusions": [
+        "CET enabled",
+        "FRED and UIRET successful paths",
+        "bare-metal SMM implementation",
+        "NT task return",
+        "fault ordering",
+        "asynchronous unwind/interrupt delivery",
+        "other CPU models",
+        "architectural promises for compatibility GPR high halves"
+      ]
+    },
+    "exports": {
+      "profiles": [
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "neverc",
+          "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+          "ir_sha256": "bad44e439335b0ea84483ec43bc49c9bfd44627340e5e6e3103942418bbf1b96",
+          "image_sha256": "26ebce4519147e08f8528d7a8c3c4091f91d9362fe8eaa6cfc760bd1d18f2da1",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "llvm-legacy",
+          "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+          "ir_sha256": "bad44e439335b0ea84483ec43bc49c9bfd44627340e5e6e3103942418bbf1b96",
+          "image_sha256": "2ec743103253f11c78838e43240684bc8db2c08e62d9e43c72802b68e4d65382",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "high",
+          "optimization": "O0",
+          "backend": "llvm-new",
+          "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+          "ir_sha256": "bad44e439335b0ea84483ec43bc49c9bfd44627340e5e6e3103942418bbf1b96",
+          "image_sha256": "2ec743103253f11c78838e43240684bc8db2c08e62d9e43c72802b68e4d65382",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "neverc",
+          "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+          "ir_sha256": "20a48aea053052f77038e520a3d524130a146464c58456600ea526e7d9f25994",
+          "image_sha256": "9fd6adfb701ce27d891f527c3a622d9dc422cc87008d9e323c560217ba8f8083",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "llvm-legacy",
+          "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+          "ir_sha256": "20a48aea053052f77038e520a3d524130a146464c58456600ea526e7d9f25994",
+          "image_sha256": "97248c125dd5f35e219dd64e583e756f2b949a24dccfa180126246b9e224e849",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "high",
+          "optimization": "O2",
+          "backend": "llvm-new",
+          "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+          "ir_sha256": "20a48aea053052f77038e520a3d524130a146464c58456600ea526e7d9f25994",
+          "image_sha256": "db6489016f014e1315e9ff09acbec6e4911c497d04df68e9965cef29dc262b67",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "neverc",
+          "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+          "ir_sha256": "585ecf898d4509fcaba8f8b4bd2090077233688626a832f88241a08a03cf5c21",
+          "image_sha256": "d741d4c3a22295a52fdd77e84e511996f30356e38f74d43fd73e7483c327d21d",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "llvm-legacy",
+          "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+          "ir_sha256": "585ecf898d4509fcaba8f8b4bd2090077233688626a832f88241a08a03cf5c21",
+          "image_sha256": "b110142e006de0094ff71ceff2a6753014991ddb0b48ef5bd9662a6be7a7e0f4",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "llvm",
+          "optimization": "O0",
+          "backend": "llvm-new",
+          "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+          "ir_sha256": "585ecf898d4509fcaba8f8b4bd2090077233688626a832f88241a08a03cf5c21",
+          "image_sha256": "b110142e006de0094ff71ceff2a6753014991ddb0b48ef5bd9662a6be7a7e0f4",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "neverc",
+          "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+          "ir_sha256": "fb5bf4a5d175c6dd9d1dfadecf9566c2b105a7dbaf6c43b15bf400822c866b34",
+          "image_sha256": "f710bb65cd76989d327bf5796e99622845dc6d76f8dc8126f586cbd49b23092d",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "llvm-legacy",
+          "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+          "ir_sha256": "fb5bf4a5d175c6dd9d1dfadecf9566c2b105a7dbaf6c43b15bf400822c866b34",
+          "image_sha256": "0f443e7677173b964f51847e7b5abb13c248e035578a81defc948caaa45e638d",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        },
+        {
+          "route": "llvm",
+          "optimization": "O2",
+          "backend": "llvm-new",
+          "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+          "ir_sha256": "fb5bf4a5d175c6dd9d1dfadecf9566c2b105a7dbaf6c43b15bf400822c866b34",
+          "image_sha256": "8b2fec6825ff3d5f854cb62c5c8d7e7d2a122318faee0eb0ab5c5fdb84540fc6",
+          "functions": 4,
+          "complete_state_pairs": 3072,
+          "mapped_bytes_per_observation": 4194304
+        }
+      ],
+      "complete_state_pairs": 36864,
+      "fixture_sha256": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+      "fixture_header_sha256": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+      "xstate_fixture_header_sha256": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c",
+      "tools": {
+        "neverc": {
+          "sha256": "7b47834c100c215bbe1abe7bc18f1b3a978764fec62bfaf6cece5b65df27ed60"
+        },
+        "llc": {
+          "sha256": "336cb639a72f99e3173b658120b9ff6bdcfef174413d4edef3225678154b6d34"
+        },
+        "llvm-objdump": {
+          "sha256": "b605be9fc59dfd004c8f76a3ed2a78c1b5336659b2ccdabb0642e9907aa4f09f"
+        },
+        "clang": {
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        }
+      },
+      "scope": "KVM-mediated native SMM, code64, XCR0=7; software state plus ambient SMI image"
+    },
+    "total_complete_state_pairs": 55296
+  },
+  "oracle": {
+    "runtime": "Intel i9-13900H, native KVM, no SGX capability/device",
+    "executed_enclave_instructions": 0,
+    "boundary": "hardware execution breakpoint before original or generated ENCLU",
+    "xstate_reference": "independent original XRSTOR/XRSTOR64 bytes on a separate vCPU",
+    "source_projection": "independent xstate image retained before explicit SIMD import",
+    "cr0_am": true,
+    "ac": "both values; all flag inputs remain explicit",
+    "compare": [
+      "every GPR and RFLAGS",
+      "segment and system state",
+      "memory outside compiler storage and declared source projection outputs",
+      "architectural x87/SSE/AVX state",
+      "exact original instruction address"
+    ],
+    "negatives": [
+      "omitted XRSTOR rejected",
+      "wrong original-site target rejected",
+      "unaligned target literal fails with AC=1 and CR0.AM=1"
+    ]
+  },
+  "alignment_counterexample": {
+    "report": "alignment-before.log",
+    "sha256": "7e731697807e2cd68f1c726bb554b1db05a53ddf883bedd6c41fcb5a0be8c2c3",
+    "image_sha256": "2915f4a695739a470e8ed9536b58bb5c121aa2b44438336b653ed167d4ab3e7f"
+  },
+  "limits": [
+    "Native transport requires flat accessible disjoint storage and live XCR0=7",
+    "Original ENCLU/continuation/AEP retain immutable executable mappings",
+    "CET disabled; flags realizable by CPL3 POPF; untransported banks match the native environment",
+    "No faults, asynchronous interruption or concurrent writes during preparatory transport",
+    "Compiler frame is abandoned; hardware and original native runtime own the continuation",
+    "No EPC/SSA emulation or successful EENTER/ERESUME/EEXIT/AEX qualification",
+    "Code32 transport does not constitute a complete legacy i386 software dispatcher",
+    "General fault/restart/async ownership remains separate from this native transfer",
+    "No LLVM release, SDK pin or gitlink update"
+  ]
+}

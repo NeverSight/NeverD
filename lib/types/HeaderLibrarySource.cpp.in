@@ -16,11 +16,20 @@ namespace neverd::types::header_sources {
 
 extern const unsigned char @NEVERD_HEADER_LIBRARY@[];
 extern const std::size_t @NEVERD_HEADER_LIBRARY@Size;
+extern const unsigned char @NEVERD_HEADER_LIBRARY@Supplement[];
+extern const std::size_t @NEVERD_HEADER_LIBRARY@SupplementSize;
 
 const unsigned char @NEVERD_HEADER_LIBRARY@[] = {
 #include "@NEVERD_HEADER_LIBRARY@.inc"
 };
 const std::size_t @NEVERD_HEADER_LIBRARY@Size =
     sizeof(@NEVERD_HEADER_LIBRARY@);
+
+// The leading byte keeps an absent supplement a valid C++ array.
+const unsigned char @NEVERD_HEADER_LIBRARY@Supplement[] = {0,
+@NEVERD_HEADER_SUPPLEMENT@
+};
+const std::size_t @NEVERD_HEADER_LIBRARY@SupplementSize =
+    sizeof(@NEVERD_HEADER_LIBRARY@Supplement) - 1;
 
 } // namespace neverd::types::header_sources

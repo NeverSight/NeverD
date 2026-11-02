@@ -10,7 +10,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/RegistrationFrameAddress.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 
 #include "llvm/IR/Dominators.h"
 

@@ -1,5 +1,15 @@
+//===- InteractionMetrics.cpp - Painted interaction measurements ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Measure production views only after the requested content has arrived.
+//===----------------------------------------------------------------------===//
+
 #include "InteractionMetrics.h"
 
+#include "../QueryService.h"
 #include "../ResourceLimits.h"
 #include "CodeView.h"
 #include "DisassemblyView.h"
@@ -23,7 +33,7 @@
 
 namespace neverd::gui {
 namespace {
-constexpr int ReportSchema = 1;
+constexpr int ReportSchema = 2;
 /// Scroll ticks in one pass, one per 60 Hz frame.
 constexpr int ScrollTicks = 300;
 constexpr int FrameMs = 16;
@@ -56,14 +66,41 @@ InteractionMetrics::InteractionMetrics(MainWindow &window, Session &session,
     : QObject(parent), window_(window), session_(session), output_(output),
       timeoutMs_(timeoutMs) {
   clock_.start();
-  connect(&window_, &MainWindow::firstContentPainted, this,
-          [this] { QTimer::singleShot(0, this, [this] { begin(); }); });
+  connect(
+      &window_, &MainWindow::firstContentPainted, this,
+      [this] {
+        contentPainted_ = true;
+        begin();
+      },
+      Qt::QueuedConnection);
+  connect(&session_, &Session::stateChanged, this, &InteractionMetrics::begin,
+          Qt::QueuedConnection);
+  connect(&session_.queries(), &QueryService::analysisCompleted, this,
+          &InteractionMetrics::begin, Qt::QueuedConnection);
   QTimer::singleShot(timeoutMs_, this,
                      [this] { finish(false, QStringLiteral("timeout")); });
 }
 
 void InteractionMetrics::begin() {
-  const int count = session_.metadata().value("function_count").toInt();
+  if (finished_ || started_ || !contentPainted_ || !session_.analysisComplete())
+    return;
+  started_ = true;
+  // The first frame may precede discovery. Its loader guesses and count are
+  // not the completed function catalog, even after a later scroll warms it.
+  session_.read(
+      QStringLiteral("functions"), {{"limit", 1}, {"sort", "address"}}, this,
+      [this](const QJsonObject &payload) {
+        sampleFunctions(payload.value("total").toInt());
+      },
+      [this](const QString &code, const QString &) {
+        finish(false, QStringLiteral("functions: ") + code);
+      });
+}
+
+void InteractionMetrics::sampleFunctions(int count) {
+  if (finished_)
+    return;
+  functionCount_ = count;
   if (count <= 0) {
     finish(false, QStringLiteral("no functions"));
     return;
@@ -104,6 +141,8 @@ void InteractionMetrics::begin() {
           // follow every graph's function.
           runSteps({scrollStep("scroll_cold", 1), scrollStep("scroll_warm", -1),
                     jumpStep("jump_cold"), jumpStep("jump_warm"),
+                    jumpStep("link_addresses", LinkResource::Addresses),
+                    jumpStep("link_functions", LinkResource::Functions),
                     graphStep("graph_cold"), graphStep("graph_warm"),
                     pseudocodeStep("pseudocode_cold"),
                     pseudocodeStep("pseudocode_warm")});
@@ -175,18 +214,34 @@ InteractionMetrics::Step InteractionMetrics::scrollStep(const char *name,
   };
 }
 
-InteractionMetrics::Step InteractionMetrics::jumpStep(const char *name) {
-  return [this, name](Done done) {
+InteractionMetrics::Step
+InteractionMetrics::jumpStep(const char *name,
+                             std::optional<LinkResource> resource) {
+  return [this, name, resource](Done done) {
     auto *disassembly = window_.disassembly();
     disassembly->setGraphMode(false);
     auto *listing = disassembly->listing();
     auto series = std::make_shared<Series>();
+    const int count =
+        int(samples_.size()) *
+        (resource ? ::neverd::limits::gui::kInteractionMetricsLinkPasses : 1);
     auto next = std::make_shared<std::function<void(int)>>();
     *next = [=, this](int index) {
-      if (index == samples_.size()) {
+      if (index == count) {
         record(name, *series);
         done();
         return;
+      }
+      const Address address = samples_[index % samples_.size()];
+      QString uri;
+      if (resource) {
+        DeepLink link;
+        link.scheme = QStringLiteral("ida");
+        link.input = session_.fileName();
+        link.resource = *resource;
+        link.ea = address;
+        link.view = LinkView::Disasm;
+        uri = formatDeepLink(link);
       }
       const qint64 start = clock_.nsecsElapsed();
       auto over = std::make_shared<bool>(false);
@@ -200,7 +255,9 @@ InteractionMetrics::Step InteractionMetrics::jumpStep(const char *name) {
         disconnect(*settled);
         limit->stop();
         limit->deleteLater();
-        QJsonObject sample{{"address", hexAddress(samples_[index])}};
+        QJsonObject sample{{"address", hexAddress(address)}};
+        if (!uri.isEmpty())
+          sample["uri"] = uri;
         if (failure.isEmpty()) {
           const double ms = (clock_.nsecsElapsed() - start) / 1.0e6;
           series->ms.append(ms);
@@ -214,14 +271,30 @@ InteractionMetrics::Step InteractionMetrics::jumpStep(const char *name) {
       };
       *settled = connect(listing, &ListingView::jumpSettled, this, [=, this] {
         disconnect(*settled);
-        afterPaint(listing->viewport(), [complete] { complete({}); });
+        afterPaint(listing->viewport(), [=] {
+          complete(!listing->jumpPending() && listing->currentItem() == address
+                       ? QString()
+                       : QStringLiteral("listing did not reach the target"));
+        });
       });
       connect(limit, &QTimer::timeout, this,
               [complete] { complete(QStringLiteral("timeout")); });
       limit->start(::neverd::limits::gui::kInteractionMetricsSampleTimeoutMs);
       // What a jump does: navigate the disassembly, which the other views
       // follow.
-      window_.disassembly()->navigate(samples_[index]);
+      if (resource) {
+        const auto parsed = parseDeepLink(uri);
+        if (!parsed.link) {
+          complete(parsed.error);
+          return;
+        }
+        window_.openLink(*parsed.link, [complete](const QString &error) {
+          if (!error.isEmpty())
+            complete(error);
+        });
+      } else {
+        disassembly->navigate(address);
+      }
     };
     (*next)(0);
   };
@@ -290,12 +363,22 @@ InteractionMetrics::Step InteractionMetrics::graphStep(const char *name) {
 
 InteractionMetrics::Step InteractionMetrics::pseudocodeStep(const char *name) {
   return [this, name](Done done) {
-    // F5 opens the pseudocode window on the current function.
-    if (auto *action =
-            window_.findChild<QAction *>(QStringLiteral("ViewPseudocode")))
-      action->trigger();
-    QTimer::singleShot(0, this,
-                       [this, name, done] { measurePseudocode(name, done); });
+    const auto open = [this, name, done] {
+      // F5 opens the pseudocode window on the current function.
+      if (auto *action =
+              window_.findChild<QAction *>(QStringLiteral("ViewPseudocode")))
+        action->trigger();
+      QTimer::singleShot(0, this,
+                         [this, name, done] { measurePseudocode(name, done); });
+    };
+    // Leaving the graph starts a listing jump. F5 itself defers until that
+    // jump lands, so its window cannot be measured on the next timer yet.
+    auto *listing = window_.disassembly()->listing();
+    if (listing->jumpPending())
+      connect(listing, &ListingView::jumpSettled, this, open,
+              Qt::SingleShotConnection);
+    else
+      open();
   };
 }
 
@@ -346,16 +429,34 @@ void InteractionMetrics::measurePseudocode(const char *name, Done done) {
         series->detail.append(sample);
         QTimer::singleShot(0, this, [next, index] { (*next)(index + 1); });
       };
-      *status = connect(text, &CodeText::statusChanged, this, [=, this] {
-        if (text->loading())
+      auto issued = std::make_shared<bool>(false);
+      const auto observe = [=, this] {
+        // load() first cancels the preceding document, which emits a settled
+        // status before the new request exists. Only its terminal state counts.
+        if (!*issued || text->loading() || text->function() != samples_[index])
           return;
         disconnect(*status);
-        afterPaint(text->viewport(), [complete] { complete({}); });
-      });
+        if (!text->complete()) {
+          complete(text->status().isEmpty()
+                       ? QStringLiteral("pseudocode did not complete")
+                       : text->status());
+          return;
+        }
+        const quint64 version = text->documentVersion();
+        afterPaint(text->viewport(), [=, this] {
+          complete(text->function() == samples_[index] && text->complete() &&
+                           text->documentVersion() == version
+                       ? QString()
+                       : QStringLiteral("pseudocode changed before painting"));
+        });
+      };
+      *status = connect(text, &CodeText::statusChanged, this, observe);
       connect(limit, &QTimer::timeout, this,
               [complete] { complete(QStringLiteral("timeout")); });
       limit->start(::neverd::limits::gui::kInteractionMetricsSampleTimeoutMs);
       code->showFunction(samples_[index]);
+      *issued = true;
+      observe();
     };
     (*next)(0);
   }
@@ -384,6 +485,9 @@ bool InteractionMetrics::eventFilter(QObject *object, QEvent *event) {
 
 void InteractionMetrics::record(const char *name, const Series &series) {
   auto phase = summary(series.ms, series.missed);
+  phase["analysis_complete"] = session_.analysisComplete();
+  const auto *viewport = window_.disassembly()->listing()->viewport();
+  phase["listing_viewport"] = QJsonArray{viewport->width(), viewport->height()};
   if (!series.detail.isEmpty())
     phase["detail"] = series.detail;
   phases_.insert(QLatin1String(name), phase);
@@ -401,12 +505,15 @@ void InteractionMetrics::finish(bool success, const QString &reason) {
       {"success", success},
       {"failure_reason", reason},
       {"timeout_ms", timeoutMs_},
+      {"sample_timeout_ms",
+       ::neverd::limits::gui::kInteractionMetricsSampleTimeoutMs},
       {"qt_version", qVersion()},
       {"platform_plugin", QApplication::platformName()},
       {"os", QSysInfo::prettyProductName()},
       {"architecture", QSysInfo::currentCpuArchitecture()},
       {"file", session_.metadata().value("path")},
-      {"function_count", session_.metadata().value("function_count")},
+      {"input_sha256", session_.metadata().value("sha256")},
+      {"function_count", functionCount_},
       {"samples", samples},
       {"phases", phases_},
       {"error", session_.lastError()},

@@ -23,18 +23,25 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/ParameterSites.h"
+#include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
-#include "neverd/backend/llvm/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86SystemStateNative.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/AArch64/AArch64AuthenticatedCall.h"
 #include "neverd/ir/med/MedMutableSource.h"
-#include "neverd/loader/X86GetPcThunk.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
+#include "neverd/loader/X86/X86GetPcThunk.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
@@ -131,6 +138,25 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     return nullptr;
 
   CurMedFunc = &Func;
+  AArch64ReturnProtectionOps.clear();
+  AArch64ReturnProtectionPhis.clear();
+  AArch64AuthenticatedCalls.clear();
+  AArch64CallAuthentications.clear();
+  if (TargetArch == Arch::AArch64)
+    for (const auto &Call : findAArch64AuthenticatedCalls(Func)) {
+      AArch64AuthenticatedCalls.try_emplace(Call.Call, Call.Authentication);
+      AArch64CallAuthentications.insert(Call.Authentication);
+    }
+  const auto ReturnProtection =
+      TargetArch == Arch::AArch64
+          ? findAArch64ReturnProtection(Func, TargetFormat)
+          : std::nullopt;
+  if (ReturnProtection) {
+    AArch64ReturnProtectionOps.insert(ReturnProtection->Operations.begin(),
+                                      ReturnProtection->Operations.end());
+    AArch64ReturnProtectionPhis.insert(ReturnProtection->Phis.begin(),
+                                       ReturnProtection->Phis.end());
+  }
   const bool RegistrationSEH =
       Func.ExceptionMetadata &&
       classifyWindowsEHNativeSource(*Func.ExceptionMetadata, TargetArch,
@@ -152,8 +178,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     MutablePlan = &It->second;
     MutableReturnValue = MutablePlan->ReturnValue;
   }
-  PendingX87FpremStatus = nullptr;
-  PendingX87FpremBlock = nullptr;
+  PendingX87Status = nullptr;
+  PendingX87StatusBlock = nullptr;
 
   // A page fragment or truncated exact address is an incomplete relocation
   // relation, not a runtime value.
@@ -169,24 +195,12 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   auto IsDirectFragment = [&](const MedVar &V) {
     return V.isConst() && occurrenceHasAddressFragmentTaint(V);
   };
-  // Fragment taint needs an incomplete relocatable constant as its source.
-  // Without one anywhere in the function, no reaching-store edge can seed it.
-  const bool HasFragmentSeed =
-      llvm::any_of(Func.Blocks, [&](const MedBlock &Block) {
-        for (const MedOp &Op : Block.Ops)
-          for (uint8_t I = 0; I < Op.NumInputs; ++I)
-            if (IsDirectFragment(Op.Inputs[I]))
-              return true;
-        for (const PhiNode &Phi : Block.Phis)
-          for (const auto &[Pred, Arg] : Phi.Args)
-            if (IsDirectFragment(Arg))
-              return true;
-        return false;
-      });
   std::map<FragmentKey, std::vector<FragmentKey>> FragmentUses;
   AddressFragmentTaintFor = &Func;
   AddressFragmentTaint.clear();
   std::vector<FragmentKey> FragmentWork;
+  std::vector<const MedOp *> FragmentReloads;
+  bool HasFragmentConstant = false;
   auto SeedOutput = [&](const MedVar &Output) {
     if (!Output.isConst() && Output.Size > 0) {
       const FragmentKey Key = FragmentVarKey(Output);
@@ -208,6 +222,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     if (IsDeadBlock(Block.Id))
       continue;
     for (const MedOp &Op : Block.Ops) {
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        HasFragmentConstant |= IsDirectFragment(Op.Inputs[I]);
       // Track semantic value flow, not mere operand use.  A memory address
       // does not taint the value loaded from it, a call target/argument does
       // not taint the callee's return value, and SELECT's condition does not
@@ -216,15 +232,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       // tainted until LowToMed has replaced a canonical completion with an
       // exact-address COPY.
       switch (Op.Opcode) {
-      case NdOp::LOAD: {
-        if (!HasFragmentSeed)
-          break;
-        std::vector<MedVar> Sources;
-        if (collectFrameReloadSources(Op, Sources))
-          for (const MedVar &Source : Sources)
-            AddFlow(Source, Op.Output);
+      case NdOp::LOAD:
+        FragmentReloads.push_back(&Op);
         break;
-      }
       case NdOp::STORE:
       case NdOp::ATOMIC_XCHG:
       case NdOp::ATOMIC_ADD:
@@ -256,9 +266,23 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         if (classifyPhiIncomingEdge(Phi, Pred) ==
             PhiEdgeFeasibility::Infeasible)
           continue;
+        HasFragmentConstant |= IsDirectFragment(Arg);
         AddFlow(Arg, Phi.Output);
       }
   }
+  // No SSA value or frame reload can acquire an incomplete relocation when
+  // the function contains no such constant. Reaching-store analysis is a
+  // whole-CFG proof per reload; building thousands of those proofs merely to
+  // propagate an empty taint set made large scalar functions quadratic.
+  // Scan STORE inputs too: a fragment can first enter SSA through a reload.
+  if (HasFragmentConstant)
+    for (const MedOp *Load : FragmentReloads) {
+      ++AddressProvenanceWork.FragmentReloadProofs;
+      std::vector<MedVar> Sources;
+      if (collectFrameReloadSources(*Load, Sources))
+        for (const MedVar &Source : Sources)
+          AddFlow(Source, Load->Output);
+    }
   while (!FragmentWork.empty()) {
     const FragmentKey Current = FragmentWork.back();
     FragmentWork.pop_back();
@@ -342,6 +366,33 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     return nullptr;
 
   auto *LLVMFunc = declareFunc(Func);
+  if (ReturnProtection)
+    setLLVMAArch64ReturnProtection(*LLVMFunc, ReturnProtection->Protection);
+  if (Func.HasUnresolvedSEHFrame)
+    LLVMFunc->addFnAttr(windows_eh_md::UnresolvedSourceFrame);
+  if (Img && PreserveUnknownSourceValues && !Func.SourceTypeHint &&
+      !Func.AnalystStackFrame)
+    if (const auto Frame = x64DispatchFrame(*Img, Func.Entry)) {
+      // Source inspection keeps this physical interface intact. In particular,
+      // an inferred argument count cannot replace the dispatcher's live bank.
+      // Native reconstruction retains its independent admission rules.
+      LLVMFunc->addFnAttr(llvm::Attribute::Naked);
+      LLVMFunc->addFnAttr(llvm::Attribute::NoInline);
+      LLVMFunc->setCallingConv(llvm::CallingConv::Win64);
+      LLVMFunc->addFnAttr("neverd.x64_dispatch_frame",
+                          x64DispatchFrameAssembly(*Frame));
+      auto *Entry = LLVMFunc->empty()
+                        ? llvm::BasicBlock::Create(*Ctx, "entry", LLVMFunc)
+                        : &LLVMFunc->getEntryBlock();
+      llvm::IRBuilder<> Builder(Entry);
+      auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), false);
+      Builder.CreateCall(llvm::InlineAsm::get(
+          Type, x64DispatchFrameAssembly(*Frame, true), "~{memory}", true));
+      Builder.CreateUnreachable();
+      if (SourceMap)
+        SourceMap->Functions[Func.Entry] = LLVMFunc;
+      return LLVMFunc;
+    }
   if (Img)
     if (auto Reg = x86GetPcThunkRegister(*Img, Func.Entry)) {
       // These helpers return in a selected machine register, including
@@ -700,11 +751,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   // (which keys off `!HasLocalDef && SSAVer == 0`), and creating an alloca for
   // them would shadow the incoming argument with an uninitialized slot.
   //
-  // For op outputs we also zero-initialize the slot (like getVar's no-def
-  // fallback at the bottom of getVar): the previous wide-register fallback used
-  // to mask non-dominating cross-block reads by returning an already-defined
-  // wide register; reading a bare uninitialized alloca instead would yield
-  // poison and let the optimizer fold the whole function to `unreachable`.
+  // Unwritten output storage is unrecovered machine state. Source views keep
+  // a distinct entry seed, so a cross-block read cannot manufacture a zero or
+  // poison away real control flow. Native emission retains its existing
+  // refinement of unspecified state. Always-written seeds disappear in DCE.
+  llvm::SmallVector<llvm::StoreInst *, 32> EntrySeeds;
   auto preCreatePhiAlloca = [&](const MedVar &Out) {
     if (Out.isConst() || Out.Size == 0)
       return;
@@ -726,14 +777,21 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     llvm::IRBuilder<> AllocBuilder(&Entry, Entry.begin());
     auto *Ty = sizeToType(Out.Size);
     auto *Alloca = AllocBuilder.CreateAlloca(Ty, nullptr, Out.display());
-    AllocBuilder.CreateStore(llvm::ConstantInt::get(Ty, 0), Alloca);
+    llvm::Value *Initial =
+        PreserveUnknownSourceValues
+            ? llvm_source_unknown::createEntrySeed(
+                  AllocBuilder, llvm::cast<llvm::IntegerType>(Ty))
+            : llvm::ConstantInt::get(Ty, 0);
+    EntrySeeds.push_back(AllocBuilder.CreateStore(Initial, Alloca));
     VarAllocs[Key] = Alloca;
   };
   for (auto &Blk : Func.Blocks) {
     for (auto &Phi : Blk.Phis)
-      preCreatePhiAlloca(Phi.Output);
+      if (!AArch64ReturnProtectionPhis.contains(&Phi))
+        preCreatePhiAlloca(Phi.Output);
     for (auto &Op : Blk.Ops)
-      preCreateOpAlloca(Op.Output);
+      if (!AArch64ReturnProtectionOps.contains(&Op))
+        preCreateOpAlloca(Op.Output);
   }
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     preCreatePhiAlloca(Clobber.Value);
@@ -1048,6 +1106,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     };
     for (auto &Blk : Func.Blocks) {
       for (auto &Phi : Blk.Phis) {
+        if (AArch64ReturnProtectionPhis.contains(&Phi))
+          continue;
         for (auto &[PredId, Var] : Phi.Args) {
           // A throwing call never reaches its ordinary block terminator.
           // These copies are emitted immediately before the call when it is
@@ -1166,6 +1226,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     }
   }
 
+  // Exception edges are now complete. Remove only entry seeds that no read
+  // can observe, before LLVM's SSA promotion sees two definitions per slot.
+  discardOverwrittenMedLLVMSeeds(EntrySeeds);
+
   // Analysis IR retains the original value graph. Native registration bodies
   // use optnone and must not materialize unused, unavailable PHI inputs as
   // physical frame reads that a subsequent reconstruction cannot prove.
@@ -1178,6 +1242,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   if (FinalRegistrationFrameProof)
     FinalRegistrationFrameProofs.push_back(
         std::move(FinalRegistrationFrameProof));
+  if (TargetArch == Arch::X86 || TargetArch == Arch::X64)
+    applyX86SystemNativeTargetFeatures(*LLVMFunc);
   return LLVMFunc;
 }
 

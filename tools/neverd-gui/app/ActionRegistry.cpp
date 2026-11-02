@@ -1,6 +1,8 @@
 #include "ActionRegistry.h"
 
+#include "../Config.h"
 #include "Icons.h"
+#include "ShortcutHint.h"
 
 #include <QAction>
 #include <QCoreApplication>
@@ -39,9 +41,10 @@ ActionRegistry::ActionRegistry(QObject *parent) : QObject(parent) {
     auto *action = new QAction(this);
     action->setObjectName(QString::fromLatin1(spec.id));
     action->setIcon(icon(QString::fromLatin1(spec.icon)));
+    action->setShortcutVisibleInContextMenu(true);
     if (*spec.shortcut)
-      action->setShortcut(QKeySequence(QString::fromLatin1(spec.shortcut),
-                                       QKeySequence::PortableText));
+      action->setShortcuts(QKeySequence::listFromString(
+          QString::fromLatin1(spec.shortcut), QKeySequence::PortableText));
     if (spec.viewScoped) {
       action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
       viewActions_.append(action);
@@ -54,6 +57,12 @@ ActionRegistry::ActionRegistry(QObject *parent) : QObject(parent) {
 
 void ActionRegistry::attachViewShortcuts(QWidget *view) const {
   view->addActions(viewActions_);
+}
+
+void ActionRegistry::attachWindowShortcuts(QWidget *view) const {
+  for (auto *action : all_)
+    if (action->shortcutContext() == Qt::WindowShortcut)
+      view->addAction(action);
 }
 
 void ActionRegistry::buildMenus(QMenuBar *bar, const PlaceholderFiller &fill) {
@@ -115,6 +124,7 @@ QList<QToolBar *> ActionRegistry::buildToolbars(QMainWindow *window) {
     auto *toolbar = new QToolBar(window);
     toolbar->setObjectName(QStringLiteral("toolbar") + QString::fromLatin1(id));
     toolbar->setIconSize(QSize(16, 16));
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     toolbar->setMovable(true);
     window->addToolBar(Qt::TopToolBarArea, toolbar);
     byId.insert(QString::fromLatin1(id), toolbar);
@@ -138,6 +148,34 @@ QList<QToolBar *> ActionRegistry::buildToolbars(QMainWindow *window) {
   return result;
 }
 
+QToolBar *ActionRegistry::buildFocusToolbar(QWidget *parent) const {
+  auto *toolbar = new QToolBar(parent);
+  toolbar->setObjectName(QStringLiteral("focusToolbar"));
+  toolbar->setIconSize(
+      QSize(::neverd::limits::gui_config::kWorkbenchStyleSmallIconSize,
+            ::neverd::limits::gui_config::kWorkbenchStyleSmallIconSize));
+  toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  toolbar->setMovable(false);
+  toolbar->setFloatable(false);
+  toolbar->setFixedHeight(::neverd::limits::gui_config::kTitleBarHeight);
+  const auto *focus = action(ActionId::ViewFocusMode);
+  const auto describe = [toolbar, focus] {
+    QString title = focus->text();
+    title.remove(QLatin1Char('&'));
+    toolbar->setAccessibleName(title);
+  };
+  connect(focus, &QAction::changed, toolbar, describe);
+  describe();
+#define NEVERD_TOOLBAR(Id, Title)                                              \
+  if (!toolbar->actions().isEmpty())                                           \
+    toolbar->addSeparator();
+#define NEVERD_TOOLBAR_ITEM(Toolbar, Action)                                   \
+  toolbar->addAction(action(ActionId::Action));
+#define NEVERD_TOOLBAR_SEPARATOR(Toolbar) toolbar->addSeparator();
+#include "Toolbars.def"
+  return toolbar;
+}
+
 void ActionRegistry::retranslate() {
   for (std::size_t i = 0; i < std::size(Specs); ++i) {
     auto *action = actions_[i];
@@ -149,7 +187,7 @@ void ActionRegistry::retranslate() {
     plain.remove(QLatin1Char('&'));
     if (plain.endsWith(QStringLiteral("...")))
       plain.chop(3);
-    const QString keys = action->shortcut().toString(QKeySequence::NativeText);
+    const QString keys = shortcutHint(action->shortcuts());
     action->setToolTip(
         keys.isEmpty() ? plain : QStringLiteral("%1 (%2)").arg(plain, keys));
   }

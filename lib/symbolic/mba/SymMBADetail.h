@@ -36,11 +36,14 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -89,6 +92,10 @@ struct SolverLimits {
 };
 
 SolverLimits resolveLimits(const MBAOptions &Opts);
+
+/// Work bound for the complete small recipe lookup, or the larger runtime
+/// table construction when explicitly requested.
+size_t bitwiseSynthesisWork(unsigned NumVars);
 
 //===----------------------------------------------------------------------===//
 // Traversal and classification
@@ -270,6 +277,12 @@ SymRef cheapestOf(const SymContext &Ctx, llvm::ArrayRef<SymRef> Candidates);
 /// reason to reject a particular degree.  Exhaustive mode passes the largest
 /// size_t and therefore removes the budget without changing the representation
 /// or the set of degrees it can express.
+struct ArithmeticMemo;
+struct RegionMemo;
+struct AbstractionMemo;
+struct ParityMemo;
+struct ResidueMemo;
+
 class WorkBudget {
 public:
   explicit WorkBudget(size_t Limit)
@@ -297,9 +310,27 @@ public:
   bool exhausted() const { return Exhausted; }
   size_t used() const { return Used; }
   bool unlimited() const { return Unlimited; }
+  size_t available() const {
+    return Unlimited ? std::numeric_limits<size_t>::max() : Remaining;
+  }
   bool canConsume(size_t Units) const {
     return Unlimited || Units <= Remaining;
   }
+
+  // Enabled only by the deep entry point, whose context outlives this budget.
+  // The implementation retains completed arithmetic results, never refusals.
+  const SymContext *MemoOwner = nullptr;
+  size_t MemoCapacity = 0;
+  std::shared_ptr<ArithmeticMemo> Arithmetic;
+  std::shared_ptr<RegionMemo> Regions;
+  std::shared_ptr<AbstractionMemo> Abstractions;
+  std::shared_ptr<ParityMemo> Parities;
+  // Optional search attempts, including declines. A declined attempt grants
+  // no equality; it only avoids repeating the same search under fewer
+  // resources.
+  std::shared_ptr<ResidueMemo> Residues;
+  size_t MultipleResidueAttempts = 0;
+  size_t IncompleteAbstractions = 0;
 
 private:
   size_t Remaining;
@@ -440,15 +471,17 @@ void forEachMonomial(
   if (Selected.empty())
     return;
   llvm::SmallVector<size_t, 4> Pick(Selected.size(), 0);
+  // The visitor borrows the sorted key only for this combination. Reuse its
+  // storage across the Cartesian product, including degrees beyond inline
+  // capacity, and keep comparison of scalar indices inside the sort.
+  Monomial Key(Selected.size(), 0);
   for (;;) {
     if (!Budget.consume())
       return;
 
-    Monomial Key;
-    Key.reserve(Selected.size());
     for (size_t J = 0; J < Selected.size(); ++J)
-      Key.push_back(Selected[J][Pick[J]]);
-    llvm::sort(Key);
+      Key[J] = Selected[J][Pick[J]];
+    std::sort(Key.begin(), Key.end());
     if (!Visit(Key))
       return;
 
@@ -581,12 +614,75 @@ bool productCoefficientsFitScale(const HigherCoefficients &Higher,
                                  unsigned Degree, const llvm::APInt &Scale,
                                  WorkBudget &Budget);
 
+/// Prove modular zero products from complete low-bit residue partitions of
+/// factors sharing an additive base. Opaque bases need no independent inputs.
+SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                           size_t &Storage);
+
+/// A complete lower bound over every low-bit residue, capped at Ceiling.
+std::optional<unsigned>
+minimumProductResidueZeros(llvm::MutableArrayRef<llvm::APInt> Offsets,
+                           unsigned Width, unsigned Ceiling,
+                           WorkBudget &Budget);
+
+/// No value means the cheap affine hint declined; a value is a complete
+/// result or the original product when proof resources were insufficient.
+/// CompleteBase reports whether all factors share a proved full affine word,
+/// even when none of its candidate readings improves the product.
+std::optional<SymRef>
+foldAffineProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                          size_t &Storage,
+                          std::optional<bool> ProjectedHint = std::nullopt,
+                          bool *CompleteBase = nullptr);
+
+/// Cheap admission only; no equality follows from this structural hint.
+bool hasProjectedResidueFactors(const SymContext &Ctx, SymRef Root);
+
+/// Prove full-word product zero from complete affine maps of low prefixes.
+/// Admitted reuses a successful hint; it never authorizes a replacement.
+SymRef foldProjectedProductResidues(SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage,
+                                    bool Admitted = false);
+
+/// Recover nonzero products from complete cofactor precision proofs after
+/// the cheaper full-affine and projected-zero paths have declined.
+SymRef foldResidualProductResidues(SymContext &Ctx, SymRef Root,
+                                   WorkBudget &Budget, size_t &Storage);
+
+/// Multiplicative period of odd words. Width is in [1, 8], as established by
+/// the bounded residue readers before constructing or reducing a low word.
+inline size_t residueUnitPeriod(unsigned Width) {
+  return size_t(1) << (Width > 2 ? Width - 2 : Width - 1);
+}
+
+/// Complete bounded bit decisions over a product's observed low word.
+/// Complete, when supplied, records a finished search over free variables;
+/// it does not certify global minimality or an equivalence on its own.
+SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                            size_t &Storage, bool OddProductOnly = false,
+                            size_t MaxWork = std::numeric_limits<size_t>::max(),
+                            bool *StorageLimited = nullptr,
+                            bool *Complete = nullptr);
+
+/// Avoid rediscovering an emitted exact low-word reading. Original opaque
+/// inputs still participate in the deep walk. The canonical builder propagates
+/// their rewrites; changed original products remain eligible for analysis.
+void recordResidueReading(SymContext &Ctx, size_t First, WorkBudget &Budget,
+                          size_t &Storage);
+bool hasCompletedResidueReading(const SymContext &Ctx, SymRef Root,
+                                WorkBudget &Budget, bool GeneratedOnly = false);
+
 /// Only the low product bit survives a highest-bit scale.
 SymRef foldProductValuations(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                              size_t &Storage);
 
 SymRef foldProductParity(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                          size_t &Storage);
+
+/// Recognize a three-node reading whose free inputs rule out every cheaper
+/// same-width expression. Shared by deep and post-arithmetic region checks.
+bool isMinimalBinaryLeafExpression(const SymContext &Ctx, SymRef E,
+                                   const MBAOptions &Opts);
 
 /// Solve independent summand groups before measuring \p E as one region.
 /// This is the mask-free half of the region solver; \c solveMasked reduces to

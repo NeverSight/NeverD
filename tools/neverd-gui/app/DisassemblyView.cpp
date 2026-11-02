@@ -11,6 +11,8 @@
 #include <QLabel>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <iterator>
 
 namespace neverd::gui {
 namespace {
@@ -139,11 +141,21 @@ void DisassemblyView::remember(Address address) {
   emit historyChanged();
 }
 
+void DisassemblyView::moveStopToCursor() {
+  // A jump still on its way has not moved.
+  if (const auto current = currentAddress();
+      current && !history_.empty() && history_[historyIndex_] != *current &&
+      !listing_->jumpPending())
+    history_[historyIndex_] = *current;
+}
+
 void DisassemblyView::navigate(Address address, bool record,
                                std::optional<Address> from) {
   disconnect(graphNavigation_);
   if (record) {
-    // Record where we were, then where we go, so Esc returns here.
+    moveStopToCursor();
+    // Record where we were, then where we go, so Esc returns here. A code
+    // window pinned elsewhere supplies its own origin, a stop of its own.
     if (const auto current = from ? from : currentAddress()) {
       if (history_.empty() || history_[historyIndex_] != *current)
         remember(*current);
@@ -171,31 +183,35 @@ void DisassemblyView::navigate(Address address, bool record,
       emit locationChanged(address);
     }
   } else {
-    listing_->jumpTo(address);
+    if (!listing_->revealItem(address))
+      listing_->jumpTo(address);
   }
   updateStatus();
 }
 
-void DisassemblyView::goBack() {
-  if (!canGoBack())
-    return;
-  // The newest entry is the current position after an unrecorded scroll.
-  if (const auto current = currentAddress();
-      current && historyIndex_ + 1 == history_.size() &&
-      history_.back() != *current) {
-    remember(*current);
-  }
-  --historyIndex_;
-  restoring_ = true;
-  navigate(history_[historyIndex_], false);
-  restoring_ = false;
-  emit historyChanged();
+void DisassemblyView::goBack(std::size_t steps) {
+  if (steps > 0 && steps <= historyIndex_)
+    goToStop(historyIndex_ - steps);
 }
 
-void DisassemblyView::goForward() {
-  if (!canGoForward())
-    return;
-  ++historyIndex_;
+void DisassemblyView::goForward(std::size_t steps) {
+  if (steps > 0 && steps < history_.size() - historyIndex_)
+    goToStop(historyIndex_ + steps);
+}
+
+std::vector<Address> DisassemblyView::stops(bool forward) const {
+  if (forward)
+    return {history_.begin() + std::min(historyIndex_ + 1, history_.size()),
+            history_.end()};
+  return {std::make_reverse_iterator(history_.begin() + historyIndex_),
+          history_.rend()};
+}
+
+void DisassemblyView::goToStop(std::size_t index) {
+  // Back returns to where the jump began, and Forward to where the user left
+  // this stop, such as a row clicked in the code the jump opened.
+  moveStopToCursor();
+  historyIndex_ = index;
   restoring_ = true;
   navigate(history_[historyIndex_], false);
   restoring_ = false;
@@ -226,12 +242,28 @@ std::optional<int> DisassemblyView::currentOperand() const {
   return graphMode() ? std::nullopt : listing_->currentOperand();
 }
 
+bool DisassemblyView::onInstruction() const {
+  if (graphMode())
+    return graph_->currentAddress().has_value();
+  const auto *line = listing_->cursorLine();
+  return line && line->kind == QLatin1String("insn");
+}
+
+bool DisassemblyView::onData() const {
+  const auto *line = graphMode() ? nullptr : listing_->cursorLine();
+  return line && line->kind == QLatin1String("data");
+}
+
 QString DisassemblyView::currentToken() const {
   return graphMode() ? graph_->currentToken() : listing_->currentToken();
 }
 
 QString DisassemblyView::selectedText() const {
   return graphMode() ? graph_->currentRowText() : listing_->selectedText();
+}
+
+QString DisassemblyView::copyText() const {
+  return graphMode() ? graph_->copyText() : listing_->copyText();
 }
 
 void DisassemblyView::addressSpaceChanged() {

@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -21,7 +22,10 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTimer>
 #include <algorithm>
+#include <memory>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -46,6 +50,19 @@ QJsonObject failed(const QString &message) {
           {QStringLiteral("message"), message}};
 }
 
+std::optional<QJsonObject> parseReply(const QByteArray &text) {
+  const auto document = QJsonDocument::fromJson(text);
+  if (!document.isObject())
+    return std::nullopt;
+  const auto reply = document.object();
+  const auto status = reply.value(QStringLiteral("status")).toString();
+  if (status == QLatin1String("ok") ||
+      (status == QLatin1String("error") &&
+       !reply.value(QStringLiteral("message")).toString().isEmpty()))
+    return reply;
+  return std::nullopt;
+}
+
 /// A server's name: its process, and its serial among the process's.
 QString instanceName(qint64 pid, int serial) {
   return QStringLiteral("%1-%2").arg(pid).arg(serial);
@@ -58,7 +75,7 @@ int nextSerial() {
 
 #ifdef Q_OS_WIN
 QString pipeName(const QString &name) {
-  return QStringLiteral("neverd-instance-") + name;
+  return QStringLiteral("\\\\.\\pipe\\neverd-instance-") + name;
 }
 #endif
 
@@ -97,6 +114,43 @@ bool sameUser(qintptr descriptor) {
 #endif
 
 } // namespace
+
+struct InstanceServer::RequestBuffer {
+  QByteArray text;
+  qsizetype checked = 0;
+  int depth = 0;
+  bool quoted = false, escaped = false, container = false;
+
+  void resetProbe() {
+    checked = 0;
+    depth = 0;
+    quoted = escaped = container = false;
+  }
+
+  // This is only a completion hint. Qt still validates the complete JSON.
+  bool complete() {
+    for (; checked < text.size(); ++checked) {
+      const char c = text[checked];
+      if (quoted) {
+        if (escaped)
+          escaped = false;
+        else if (c == '\\')
+          escaped = true;
+        else if (c == '"')
+          quoted = false;
+      } else if (c == '"') {
+        quoted = true;
+      } else if (c == '{' || c == '[') {
+        ++depth;
+        container = true;
+      } else if (c == '}' || c == ']') {
+        --depth;
+        container = true;
+      }
+    }
+    return container && depth <= 0 && !quoted;
+  }
+};
 
 InstanceServer::InstanceServer(QObject *parent) : QObject(parent) {
   connect(&server_, &QLocalServer::newConnection, this,
@@ -179,45 +233,53 @@ void InstanceServer::accept() {
       continue;
     }
 #endif
+    socket->setReadBufferSize(
+        ::neverd::limits::gui::kInstanceServerMaxRequestBytes + 1);
+    auto request = std::make_shared<RequestBuffer>();
     connect(socket, &QLocalSocket::readyRead, this,
-            [this, socket] { read(socket); });
+            [this, socket, request] { read(socket, *request); });
     connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
+    if (socket->bytesAvailable())
+      read(socket, *request);
   }
 }
 
-void InstanceServer::read(QLocalSocket *socket) {
-  QByteArray buffer =
-      socket->property("neverdRequest").toByteArray() + socket->readAll();
-  const auto rejectOversized = [socket] {
+void InstanceServer::read(QLocalSocket *socket, RequestBuffer &request) {
+  QByteArray &buffer = request.text;
+  buffer += socket->readAll();
+  const auto rejectOversized = [&] {
     reply(socket,
           failed(
               QStringLiteral("Request exceeds %1 bytes")
                   .arg(::neverd::limits::gui::kInstanceServerMaxRequestBytes)));
     socket->disconnectFromServer();
-    socket->setProperty("neverdRequest", QByteArray());
+    buffer.clear();
+    request.resetProbe();
   };
-  for (qsizetype newline; (newline = buffer.indexOf('\n')) >= 0;) {
-    if (newline > ::neverd::limits::gui::kInstanceServerMaxRequestBytes)
+  qsizetype consumed = 0;
+  for (qsizetype newline; (newline = buffer.indexOf('\n', consumed)) >= 0;) {
+    const auto size = newline - consumed;
+    if (size > ::neverd::limits::gui::kInstanceServerMaxRequestBytes)
       return rejectOversized();
-    const QByteArray line = buffer.left(newline);
-    buffer.remove(0, newline + 1);
+    const QByteArray line = buffer.mid(consumed, size);
+    consumed = newline + 1;
     if (!line.trimmed().isEmpty())
       answer(socket, line);
+  }
+  if (consumed) {
+    buffer.remove(0, consumed);
+    request.resetProbe();
   }
   // Bound the request before parsing or dispatching it, including the
   // complete objects clients send without a newline.
   if (buffer.size() > ::neverd::limits::gui::kInstanceServerMaxRequestBytes)
     return rejectOversized();
   // IDA's hcli writes one object without a newline and waits.
-  if (!buffer.trimmed().isEmpty()) {
-    QJsonParseError error;
-    QJsonDocument::fromJson(buffer, &error);
-    if (error.error == QJsonParseError::NoError) {
-      answer(socket, buffer);
-      buffer.clear();
-    }
+  if (request.complete()) {
+    answer(socket, buffer);
+    buffer.clear();
+    request.resetProbe();
   }
-  socket->setProperty("neverdRequest", buffer);
 }
 
 void InstanceServer::answer(QLocalSocket *socket, const QByteArray &text) {
@@ -309,27 +371,117 @@ std::optional<QJsonObject> InstanceServer::request(const QString &server,
                                                    const QJsonObject &request,
                                                    int timeoutMs) {
   QLocalSocket socket;
+  socket.setReadBufferSize(::neverd::limits::gui::kInstanceServerMaxReplyBytes +
+                           1);
   socket.connectToServer(server);
   QDeadlineTimer deadline(timeoutMs);
   if (!socket.waitForConnected(int(deadline.remainingTime())))
     return std::nullopt;
   socket.write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
-  if (!socket.waitForBytesWritten(int(deadline.remainingTime())))
+  if (socket.bytesToWrite() &&
+      !socket.waitForBytesWritten(int(deadline.remainingTime())))
     return std::nullopt;
   QByteArray buffer;
   while (!buffer.contains('\n')) {
     if (deadline.hasExpired() ||
-        !socket.waitForReadyRead(int(deadline.remainingTime())))
+        (!socket.bytesAvailable() &&
+         !socket.waitForReadyRead(int(deadline.remainingTime()))))
       return std::nullopt;
     buffer += socket.readAll();
     if (buffer.size() > ::neverd::limits::gui::kInstanceServerMaxReplyBytes)
       return std::nullopt;
   }
-  const QJsonDocument document =
-      QJsonDocument::fromJson(buffer.left(buffer.indexOf('\n')));
-  if (!document.isObject())
-    return std::nullopt;
-  return document.object();
+  return parseReply(buffer.left(buffer.indexOf('\n')));
+}
+
+QList<std::optional<QJsonObject>> InstanceServer::requestMany(
+    const QStringList &servers, const QJsonObject &request, int timeoutMs,
+    std::function<bool(int, const QJsonObject &)> stop) {
+  QList<std::optional<QJsonObject>> replies(servers.size());
+  if (servers.isEmpty() || timeoutMs <= 0)
+    return replies;
+  struct Probe {
+    QLocalSocket socket;
+    QTimer deadline;
+    QByteArray buffer;
+    bool done = false;
+  };
+  std::vector<std::unique_ptr<Probe>> probes;
+  probes.reserve(servers.size());
+  // The event-loop context dies before the sockets, retiring their callbacks.
+  QEventLoop loop;
+  QTimer deadline;
+  deadline.setSingleShot(true);
+  QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+  const QByteArray wire =
+      QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n';
+  // Reserve time for every wave: an entire stalled first wave must not
+  // prevent queued healthy endpoints from being tried before the deadline.
+  const auto waves = 1 + (servers.size() - 1) /
+                             ::neverd::limits::gui::kInstanceProbeConcurrency;
+  const int probeTimeoutMs = std::max<qint64>(1, qint64(timeoutMs) / waves);
+  int next = 0, active = 0, finished = 0;
+  bool stopped = false;
+  std::function<void()> pump;
+  const auto complete = [&](int index, std::optional<QJsonObject> reply) {
+    if (stopped || probes[index]->done)
+      return;
+    probes[index]->done = true;
+    replies[index] = std::move(reply);
+    probes[index]->deadline.stop();
+    probes[index]->socket.abort();
+    --active;
+    ++finished;
+    if (replies[index] && stop && stop(index, *replies[index]))
+      stopped = true;
+    if (stopped || finished == servers.size())
+      loop.quit();
+    else
+      QTimer::singleShot(0, &loop, [&] { pump(); });
+  };
+  pump = [&] {
+    while (!stopped && next < servers.size() &&
+           active < ::neverd::limits::gui::kInstanceProbeConcurrency) {
+      const int index = next++;
+      probes.push_back(std::make_unique<Probe>());
+      auto &probe = *probes.back();
+      ++active;
+      probe.socket.setReadBufferSize(
+          ::neverd::limits::gui::kInstanceServerMaxReplyBytes + 1);
+      probe.deadline.setSingleShot(true);
+      QObject::connect(&probe.deadline, &QTimer::timeout, &loop,
+                       [&, index] { complete(index, std::nullopt); });
+      QObject::connect(&probe.socket, &QLocalSocket::connected, &loop,
+                       [&, index] {
+                         auto &socket = probes[index]->socket;
+                         if (socket.write(wire) != wire.size())
+                           complete(index, std::nullopt);
+                       });
+      QObject::connect(
+          &probe.socket, &QLocalSocket::readyRead, &loop, [&, index] {
+            auto &probe = *probes[index];
+            probe.buffer += probe.socket.readAll();
+            if (probe.buffer.size() >
+                ::neverd::limits::gui::kInstanceServerMaxReplyBytes)
+              return complete(index, std::nullopt);
+            const auto newline = probe.buffer.indexOf('\n');
+            if (newline < 0)
+              return;
+            complete(index, parseReply(probe.buffer.left(newline)));
+          });
+      QObject::connect(&probe.socket, &QLocalSocket::errorOccurred, &loop,
+                       [&, index] { complete(index, std::nullopt); });
+      QObject::connect(&probe.socket, &QLocalSocket::disconnected, &loop,
+                       [&, index] { complete(index, std::nullopt); });
+      probe.deadline.start(probeTimeoutMs);
+      probe.socket.connectToServer(servers[index]);
+    }
+  };
+  deadline.start(timeoutMs);
+  pump();
+  if (!stopped && finished < servers.size())
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+  return replies;
 }
 
 } // namespace neverd::gui

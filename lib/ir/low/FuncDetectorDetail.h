@@ -17,19 +17,46 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <atomic>
+#include <functional>
+#include <map>
 #include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 namespace func_detect_detail {
 
+/// Internal unwind marker; the public controlled detector translates it to
+/// nullopt only after every scan worker has joined.
+struct DiscoveryCancelled {};
+
+struct Cancellation {
+  const std::function<bool()> &Probe;
+  mutable std::atomic<bool> Requested{false};
+
+  void check() const {
+    if (Requested.load(std::memory_order_relaxed) || (Probe && Probe())) {
+      Requested.store(true, std::memory_order_relaxed);
+      throw DiscoveryCancelled{};
+    }
+  }
+};
+
+inline void checkCancellation(const Cancellation *Control) {
+  if (Control)
+    Control->check();
+}
+
 /// One step of the x86 call-target sweep: the instruction (or the byte that
 /// does not decode) at \p Addr, where the sweep goes next, and the direct
-/// call target it found there.
+/// call target and linked PE code address it found there.
 struct CallScanStep {
   va_t Addr = 0;
   va_t Next = 0;
   va_t Target = InvalidVA;
+  va_t CodeTarget = InvalidVA;
 };
 
 /// A stretch of an x86 image that one executable section of one executable
@@ -44,6 +71,14 @@ struct CodeInterval {
 /// The widest such stretch around \p Addr.
 CodeInterval codeIntervalAround(const BinaryImage &Img, va_t Addr);
 
+/// Tail targets of linked x64 PE adapters whose complete unwind record and
+/// entire instruction sequence prove a restored caller frame. Only existing
+/// entries may supply this evidence; targets still need ordinary verification.
+std::map<va_t, va_t>
+checkedUnwindTailTargetsX64(const BinaryImage &Img,
+                            const std::set<va_t> &Entries,
+                            const Cancellation *Control = nullptr);
+
 /// The step a sweep of [..., \p End) of \p Seg takes at \p Cur, or nothing
 /// where the segment's bytes end.  A sweep is these steps from its start, so
 /// two sweeps of one range that reach the same address agree from there on.
@@ -57,15 +92,18 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
 /// prologue, for the bounded decoder to verify.  For images with no other
 /// function metadata, binary files.
 void scanCodePointersX64(const BinaryImage &Img, Decoder &Dec,
-                         std::set<va_t> &Out);
+                         std::set<va_t> &Out,
+                         const Cancellation *Control = nullptr);
 
 /// The code an i386 instruction names through a relocated four-byte
 /// immediate, such as `push offset handler` or `mov [esi+10h], offset
 /// callback`: (instruction, target) pairs, in sweep order.  A relocated
 /// displacement names memory the instruction reads or writes, not code to
-/// run, and is left out.
+/// run, and is left out. Indexed dispatch storage is authenticated separately
+/// by the loader; ordinary data references do not grant table ownership.
 void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
-                                  std::vector<std::pair<va_t, va_t>> &Out);
+                                  std::vector<std::pair<va_t, va_t>> &Out,
+                                  const Cancellation *Control = nullptr);
 
 /// Whether the x86 instruction at \p Insn lets the code address its
 /// immediate names escape: `push imm32` passes it as an argument and
@@ -75,29 +113,35 @@ bool isX86EscapingCodeImmediate(const BinaryImage &Img, va_t Insn);
 
 void scanSegmentCallsX86(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
-                         std::set<va_t> &Out);
+                         std::set<va_t> &Out,
+                         std::vector<std::pair<va_t, va_t>> &CodeAddresses,
+                         const Cancellation *Control = nullptr);
 void scanSegmentCallsARM(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
-                         std::set<va_t> &Out);
+                         std::set<va_t> &Out,
+                         const Cancellation *Control = nullptr);
 void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
-                             va_t Start, va_t End, std::set<va_t> &Out);
+                             va_t Start, va_t End, std::set<va_t> &Out,
+                             const Cancellation *Control = nullptr);
 
 inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
                              const Segment *Seg, va_t Start, va_t End,
-                             std::set<va_t> &Out) {
+                             std::set<va_t> &Out,
+                             std::vector<std::pair<va_t, va_t>> &CodeAddresses,
+                             const Cancellation *Control = nullptr) {
   switch (Img.Arch) {
   case Arch::AArch64:
-    scanSegmentCallsAArch64(Img, Seg, Start, End, Out);
+    scanSegmentCallsAArch64(Img, Seg, Start, End, Out, Control);
     return;
   case Arch::ARM:
-    scanSegmentCallsARM(Img, Dec, Seg, Start, End, Out);
+    scanSegmentCallsARM(Img, Dec, Seg, Start, End, Out, Control);
     return;
   case Arch::X86:
   case Arch::X64:
-    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out);
+    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out, CodeAddresses, Control);
     return;
   default:
-    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out);
+    scanSegmentCallsX86(Img, Dec, Seg, Start, End, Out, CodeAddresses, Control);
     return;
   }
 }

@@ -109,6 +109,38 @@ TEST(COFFExceptionModel, QueriesOwningRuntimeFunction) {
   EXPECT_EQ(EI.findFunction(0x1800)->CodeRange.End, 0x3000u);
 }
 
+TEST(COFFExceptionParser, UnsortedDuplicateStartsKeepDirectoryOrder) {
+  ExceptionInfo Info;
+  auto Add = [&](va_t Begin, uint32_t UnwindRVA) {
+    ExceptionFunction F;
+    F.CodeRange = {Begin, Begin + 1};
+    F.UnwindInfoRVA = UnwindRVA;
+    F.Kind = RuntimeFunctionKind::Primary;
+    Info.Functions.push_back(std::move(F));
+  };
+  const va_t High = InvalidVA - 2;
+  Add(High, 0x3000);
+  Add(0x1000, 0x3100);
+  Add(High, 0x3200);
+  Add(0x2000, 0x3300);
+  Info.Functions.back().Kind = RuntimeFunctionKind::Chained;
+  Info.Functions.back().ChainedPrimaryRange = Info.Functions[0].CodeRange;
+
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+  ASSERT_TRUE(Info.Functions[3].PrimaryFunctionIndex);
+  EXPECT_EQ(*Info.Functions[3].PrimaryFunctionIndex, 0u);
+  ASSERT_EQ(Info.Functions[0].FragmentRanges.size(), 1u);
+  EXPECT_TRUE(Info.Functions[2].FragmentRanges.empty());
+
+  Info.Functions[3].ChainedUnwindInfoRVA = 0x3200;
+  Info.Functions[3].PrimaryFunctionIndex.reset();
+  coff_loader::unwind_detail::resolveX64UnwindChains(Info);
+  ASSERT_TRUE(Info.Functions[3].PrimaryFunctionIndex);
+  EXPECT_EQ(*Info.Functions[3].PrimaryFunctionIndex, 2u);
+  EXPECT_TRUE(Info.Functions[0].FragmentRanges.empty());
+  ASSERT_EQ(Info.Functions[2].FragmentRanges.size(), 1u);
+}
+
 TEST(COFFExceptionParser, ChainedFragmentsBelongToTheirChainsPrimary) {
   // ExIsResourceAcquiredSharedLite: the record at +0x7f chains to the one at
   // +0x79, which chains to the function's primary record.  Code in either

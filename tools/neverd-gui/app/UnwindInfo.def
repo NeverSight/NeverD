@@ -1,0 +1,110 @@
+//===- UnwindInfo.def - Unwind inspection vocabulary ----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Presentation text and geometry. The public query owns signing semantics.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_UI_TEXT
+#define NEVERD_UNWIND_UI_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_UNWIND_UI_VALUE
+#define NEVERD_UNWIND_UI_VALUE(Name, Value)
+#endif
+
+NEVERD_UNWIND_UI_VALUE(kWidthCharacters, 90)
+NEVERD_UNWIND_UI_VALUE(kHeightLines, 30)
+NEVERD_UNWIND_UI_TEXT(kContext, "UnwindInfoDialog")
+NEVERD_UNWIND_UI_TEXT(kOperation, "unwind_frame")
+NEVERD_UNWIND_UI_TEXT(kAddress, "address")
+NEVERD_UNWIND_UI_TEXT(kStatus, "status")
+NEVERD_UNWIND_UI_TEXT(kOK, "ok")
+NEVERD_UNWIND_UI_TEXT(kPayload, "payload")
+NEVERD_UNWIND_UI_TEXT(kError, "error")
+NEVERD_UNWIND_UI_TEXT(kMessage, "message")
+NEVERD_UNWIND_UI_TEXT(kBegin, "begin")
+NEVERD_UNWIND_UI_TEXT(kEnd, "end")
+NEVERD_UNWIND_UI_TEXT(kReturnAddress, "return_address")
+NEVERD_UNWIND_UI_TEXT(kQueryPC, "query_pc")
+NEVERD_UNWIND_UI_TEXT(kDwarfState, "dwarf_state_at_pc")
+NEVERD_UNWIND_UI_TEXT(kCompactRecipe, "compact_recipe")
+NEVERD_UNWIND_UI_TEXT(kKind, "kind")
+NEVERD_UNWIND_UI_TEXT(kKey, "key")
+NEVERD_UNWIND_UI_TEXT(kRecipe, "recipe")
+NEVERD_UNWIND_UI_TEXT(kSigningPC, "signing_pc")
+NEVERD_UNWIND_UI_TEXT(kDiagnostic, "diagnostic")
+NEVERD_UNWIND_UI_TEXT(kKnown, "known")
+NEVERD_UNWIND_UI_TEXT(kDialogObject, "unwindInformation")
+NEVERD_UNWIND_UI_TEXT(kStatusObject, "unwindStatus")
+NEVERD_UNWIND_UI_TEXT(kDwarfObject, "unwindDwarfState")
+NEVERD_UNWIND_UI_TEXT(kCompactObject, "unwindCompactRecipe")
+NEVERD_UNWIND_UI_TEXT(kRefreshObject, "unwindRefresh")
+NEVERD_UNWIND_UI_TEXT(kIcon, "view_details")
+NEVERD_UNWIND_UI_TEXT(kLineSeparator, "\n")
+NEVERD_UNWIND_UI_TEXT(kTitle, QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                                                "Unwind information at %1"))
+NEVERD_UNWIND_UI_TEXT(kDwarfTitle,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                                        "DWARF state at the selected PC"))
+NEVERD_UNWIND_UI_TEXT(
+    kCompactTitle,
+    QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                      "Compact unwind: completed-prologue recipe"))
+NEVERD_UNWIND_UI_TEXT(
+    kIntro, QT_TRANSLATE_NOOP(
+                "UnwindInfoDialog",
+                "The compact recipe describes the completed prologue; it does "
+                "not establish the return-address state at the selected PC."))
+NEVERD_UNWIND_UI_TEXT(kRefresh,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Refresh"))
+NEVERD_UNWIND_UI_TEXT(kLoading,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                                        "Loading unwind information…"))
+NEVERD_UNWIND_UI_TEXT(kDisconnected,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                                        "The analysis worker is disconnected."))
+NEVERD_UNWIND_UI_TEXT(
+    kUnavailable,
+    QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                      "This engine does not provide unwind information."))
+NEVERD_UNWIND_UI_TEXT(
+    kProgramChanged,
+    QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                      "The program changed. Open unwind information again at "
+                      "the desired address."))
+NEVERD_UNWIND_UI_TEXT(
+    kNoFrame, QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                                "No unwind frame contains this address."))
+NEVERD_UNWIND_UI_TEXT(
+    kLegacy,
+    QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                      "This frame has no return-address signing report."))
+NEVERD_UNWIND_UI_TEXT(kAbsentSource,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                                        "No metadata from this source."))
+NEVERD_UNWIND_UI_TEXT(
+    kInvalidReport,
+    QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                      "The engine returned an incompatible unwind report."))
+NEVERD_UNWIND_UI_TEXT(
+    kFailed, QT_TRANSLATE_NOOP("UnwindInfoDialog",
+                               "Could not load unwind information: %1"))
+NEVERD_UNWIND_UI_TEXT(kFrameRange,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Frame: [%1, %2)"))
+NEVERD_UNWIND_UI_TEXT(kStatusLine,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Status: %1"))
+NEVERD_UNWIND_UI_TEXT(kKindLine,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Signing kind: %1"))
+NEVERD_UNWIND_UI_TEXT(kKeyLine,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Key: %1"))
+NEVERD_UNWIND_UI_TEXT(kRecipeLine,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Recipe: %1"))
+NEVERD_UNWIND_UI_TEXT(kSigningPCLine,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Signing PC: %1"))
+NEVERD_UNWIND_UI_TEXT(kDiagnosticLine,
+                      QT_TRANSLATE_NOOP("UnwindInfoDialog", "Diagnostic: %1"))
+
+#undef NEVERD_UNWIND_UI_TEXT
+#undef NEVERD_UNWIND_UI_VALUE

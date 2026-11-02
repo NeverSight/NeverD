@@ -255,36 +255,22 @@ public:
 
   void run(HighFunc &Func) {
     FunctionEntry = Func.Entry;
-    auto HasLanguageEH = [](const auto &Metadata) {
-      return Metadata && (Metadata->hasLanguageTable() ||
-                          Metadata->Personality != ExceptionPersonality::None ||
-                          Metadata->PersonalityVA || Metadata->HandlerDataVA);
-    };
-    if (HasLanguageEH(Func.ExceptionMetadata) ||
-        (Med && HasLanguageEH(Med->ExceptionMetadata)))
+    if (hasExceptionFlow(Func, Med))
       return;
-    bool HasEH = false;
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.Addr && S.Addr != InvalidVA)
         ++Owners[S.Addr];
       if (S.Kind == StmtKind::Goto && S.GotoTarget && S.GotoTarget != InvalidVA)
         Targets.insert(S.GotoTarget);
-      HasEH |= S.Kind == StmtKind::SEHTry || S.Kind == StmtKind::CxxTry ||
-               S.Kind == StmtKind::ItaniumTry || !S.EHClauseBodies.empty() ||
-               !S.EHClauses.empty();
     });
     if (Med)
       for (const auto &Block : Med->Blocks) {
-        HasEH |=
-            !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty();
         const va_t Start =
             Block.StartAddr ? Block.StartAddr
                             : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
         if (Start && Start != InvalidVA)
           NativeEntries.insert(Start);
       }
-    if (HasEH)
-      return;
 
     // A dead entry assignment may leave an empty label immediately before a
     // return. Only a root-level, exact, unique label and a scalar value can be
@@ -312,6 +298,28 @@ static std::set<va_t> statementStarts(const std::vector<HighStmt> &Body) {
       Starts.insert(S.Addr);
   });
   return Starts;
+}
+
+bool hasExceptionFlow(const HighFunc &Func, const MedFunc *Med) {
+  const auto LanguageEH = [](const auto &Metadata) {
+    return Metadata && (Metadata->hasLanguageTable() ||
+                        Metadata->Personality != ExceptionPersonality::None ||
+                        Metadata->PersonalityVA || Metadata->HandlerDataVA);
+  };
+  if (LanguageEH(Func.ExceptionMetadata) ||
+      (Med && LanguageEH(Med->ExceptionMetadata)))
+    return true;
+  bool Found = false;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    Found |= S.Kind == StmtKind::SEHTry || S.Kind == StmtKind::CxxTry ||
+             S.Kind == StmtKind::ItaniumTry || !S.EHClauseBodies.empty() ||
+             !S.EHClauses.empty();
+  });
+  if (Med)
+    for (const auto &Block : Med->Blocks)
+      Found |=
+          !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty();
+  return Found;
 }
 
 void foldStructuredContinuations(HighFunc &Func, const MedFunc *Med) {
@@ -361,6 +369,47 @@ static bool exprHasObservableEffect(const HighExpr *E) {
     Effect |= exprHasObservableEffect(Child.get());
   });
   return Effect;
+}
+
+/// Whether running \p S only when a later test holds would be observable.
+static bool stmtHasObservableEffect(const HighStmt &S) {
+  if (S.Kind == StmtKind::Call || S.Kind == StmtKind::Store ||
+      (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind != ExprKind::Var))
+    return true;
+  bool Effect = false;
+  forEachRhsExpr(
+      S, [&](const ExprPtr &E) { Effect |= exprHasObservableEffect(E.get()); });
+  return Effect;
+}
+
+/// Call nodes \p E evaluates, counting each occurrence.
+static unsigned callOccurrences(const HighExpr *E) {
+  if (!E)
+    return 0;
+  unsigned Count = E->Kind == ExprKind::Call;
+  E->forEachChildExpr(
+      [&](const ExprPtr &Child) { Count += callOccurrences(Child.get()); });
+  return Count;
+}
+
+/// Whether every call in \p E runs whenever \p E is evaluated: none sits in
+/// a short-circuited operand of `&&` or `||` or in an arm of a select.
+static bool callsRunUnconditionally(const HighExpr *E) {
+  if (!E)
+    return true;
+  if ((E->Kind == ExprKind::BinOp &&
+       (E->Op == NdOp::BOOL_AND || E->Op == NdOp::BOOL_OR)) ||
+      E->Op == NdOp::SELECT) {
+    for (size_t I = 1; I < E->Operands.size(); ++I)
+      if (callOccurrences(E->Operands[I].get()))
+        return false;
+    return E->Operands.empty() || callsRunUnconditionally(E->Operands[0].get());
+  }
+  bool Runs = true;
+  E->forEachChildExpr([&](const ExprPtr &Child) {
+    Runs = Runs && callsRunUnconditionally(Child.get());
+  });
+  return Runs;
 }
 
 static bool stmtIsSkipResidue(const HighStmt &S) {
@@ -1580,6 +1629,45 @@ dropAndPrefix(const ExprPtr &Prefix, const ExprPtr &Inner,
   return dropAndPrefix(Prefix.get(), Inner, SameTempId, FieldLoads);
 }
 
+/// Whether the conjuncts of the composed \p Test that \p Outer does not
+/// imply gained no call from composing \p Original, so every prefix call
+/// still runs where it did.
+static bool remainderGainsNoCall(const HighExpr *Outer, const ExprPtr &Original,
+                                 const ExprPtr &Test, bool SameTempId) {
+  std::vector<const HighExpr *> Head, Before, After;
+  collectAndConjuncts(Outer, Head);
+  collectAndConjuncts(Original.get(), Before);
+  collectAndConjuncts(Test.get(), After);
+  if (Before.size() != After.size())
+    return false;
+  for (size_t I = 0; I < After.size(); ++I) {
+    const bool Implied = llvm::any_of(Head, [&](const HighExpr *O) {
+      return impliedCondMatch(After[I], O, SameTempId, nullptr);
+    });
+    if (!Implied && callOccurrences(After[I]) != callOccurrences(Before[I]))
+      return false;
+  }
+  return true;
+}
+
+/// Whether the \p Moved prefix calls that composing \p Original placed in
+/// \p Test still run once there, before anything can short-circuit them.
+static bool composedCallsRunFirst(const ExprPtr &Original, const ExprPtr &Test,
+                                  unsigned Moved) {
+  if (!Moved)
+    return true;
+  std::vector<const HighExpr *> Before, After;
+  collectAndConjuncts(Original.get(), Before);
+  collectAndConjuncts(Test.get(), After);
+  if (Moved != 1 || After.empty() || Before.size() != After.size())
+    return false;
+  for (size_t I = 1; I < After.size(); ++I)
+    if (callOccurrences(After[I]) != callOccurrences(Before[I]))
+      return false;
+  return !callOccurrences(Before[0]) && callOccurrences(After[0]) == 1 &&
+         callsRunUnconditionally(After[0]);
+}
+
 static bool isConstTrue(const ExprPtr &E) {
   const HighExpr *P = peelCond(E.get());
   return P && P->Kind == ExprKind::Const && P->ConstVal != 0;
@@ -1601,7 +1689,7 @@ static bool isEqNeTree(const HighExpr *E) {
   return isEqNeTree(E->Operands[0].get()) && isEqNeTree(E->Operands[1].get());
 }
 
-static ExprPtr invertHighCond(ExprPtr C) {
+ExprPtr invertHighCond(ExprPtr C) {
   if (!C)
     return C;
   const HighExpr *P = peelCond(C.get());
@@ -2580,29 +2668,51 @@ static bool stmtTreeUsesVar(const HighStmt &S, const MedVar &V) {
   return false;
 }
 
-static bool exprHasSameCall(const HighExpr *E, va_t Addr,
-                            const std::string &Target) {
+static bool exprHasCallOccurrence(const HighExpr *E, const HighExpr &Call) {
   if (!E)
     return false;
-  if (E->Kind == ExprKind::Call &&
-      ((Addr && E->CallAddr == Addr) ||
-       (!Target.empty() && E->CallTarget == Target)))
+  // A callee name or address identifies an implementation, not an execution.
+  // Only a copy of this exact instruction can replace the saved call effect.
+  // Merged/synthetic calls without a site retain their independent effects.
+  if (E->Kind == ExprKind::Call && Call.CallSiteAddr &&
+      Call.CallSiteAddr != InvalidVA && E->CallSiteAddr == Call.CallSiteAddr &&
+      E->structuralEq(Call))
     return true;
-  for (const auto &Op : E->Operands)
-    if (exprHasSameCall(Op.get(), Addr, Target))
-      return true;
-  return false;
+  bool Found = false;
+  E->forEachChildExpr([&](const ExprPtr &Child) {
+    if (!Found)
+      Found = exprHasCallOccurrence(Child.get(), Call);
+  });
+  return Found;
 }
 
-static bool isPredicateOrLoadAssign(const HighStmt &S, const ExprPtr &Pred) {
+/// Whether the call of Body[End] occurs in \p Pred as a predicate composed
+/// from Body[0, End) spells it. Composition substitutes earlier prefix values
+/// into the call's operands, so `t = f(u)` after `u = x + 1` appears as
+/// `f(x + 1)`: the same execution, which must not run again from the prefix.
+static bool predicateHasPrefixCall(const ExprPtr &Pred,
+                                   const std::vector<HighStmt> &Body,
+                                   size_t End, ExprPtr Call) {
+  for (size_t N = std::min(End, Body.size()); N > 0; --N) {
+    MedVar Dest;
+    ExprPtr Val;
+    if (isValueAssign(Body[N - 1], Dest, Val) && Val &&
+        exprUsesVar(Call.get(), Dest))
+      Call = replaceVarInExpr(Call, Dest, Val);
+  }
+  return exprHasCallOccurrence(Pred.get(), *Call);
+}
+
+static bool isPredicateOrLoadAssign(const std::vector<HighStmt> &Body, size_t K,
+                                    const ExprPtr &Pred) {
   MedVar Dest;
   ExprPtr Val;
-  if (!isValueAssign(S, Dest, Val) || !Val)
+  if (!isValueAssign(Body[K], Dest, Val) || !Val)
     return false;
   if (Val->Kind == ExprKind::Load)
     return true;
   return Val->Kind == ExprKind::Call &&
-         exprHasSameCall(Pred.get(), Val->CallAddr, Val->CallTarget);
+         predicateHasPrefixCall(Pred, Body, K, Val);
 }
 
 /// Marks the prefix assignments Body[0, End) folded into \p Pred that no
@@ -2610,13 +2720,24 @@ static bool isPredicateOrLoadAssign(const HighStmt &S, const ExprPtr &Pred) {
 /// earlier one, so drops are withdrawn until nothing kept reads a dropped
 /// value. With \p RefuseReadCalls, a call folded into \p Pred that still has
 /// a reader returns nothing: keeping its assignment would run the call twice.
+/// \p Substituted marks the prefixes whose values composition placed in the
+/// predicate. Their calls are folded whether or not they name a call site.
 static std::optional<std::vector<bool>>
 composedPrefixDrops(const std::vector<HighStmt> &Body, size_t End,
-                    const ExprPtr &Pred, bool RefuseReadCalls) {
+                    const ExprPtr &Pred, bool RefuseReadCalls,
+                    const std::vector<bool> &Substituted) {
   std::vector<bool> Drop(Body.size(), false);
   std::set<const HighStmt *> Dropped;
+  auto SubstitutedCall = [&](size_t K) {
+    MedVar Dest;
+    ExprPtr Val;
+    return K < Substituted.size() && Substituted[K] &&
+           isValueAssign(Body[K], Dest, Val) && Val &&
+           Val->Kind == ExprKind::Call;
+  };
   for (size_t K = 0; K < End && K < Body.size(); ++K)
-    if (prefixOkForChain(Body[K]) && isPredicateOrLoadAssign(Body[K], Pred)) {
+    if (prefixOkForChain(Body[K]) &&
+        (SubstitutedCall(K) || isPredicateOrLoadAssign(Body, K, Pred))) {
       Drop[K] = true;
       Dropped.insert(&Body[K]);
     }
@@ -2728,8 +2849,7 @@ static bool dropUnusedTrailingAssigns(std::vector<HighStmt> &Body, size_t End,
     --I;
     // A jump that enters a copied predicate call still runs it.
     if (Body[I].Kind == StmtKind::Call && Body[I].CallExpr &&
-        exprHasSameCall(Pred.get(), Body[I].CallExpr->CallAddr,
-                        Body[I].CallExpr->CallTarget) &&
+        predicateHasPrefixCall(Pred, Body, I, Body[I].CallExpr) &&
         !isFunctionJumpTarget(Body[I].Addr, Body)) {
       Body.erase(Body.begin() + static_cast<long>(I));
       Changed = true;
@@ -2744,9 +2864,8 @@ static bool dropUnusedTrailingAssigns(std::vector<HighStmt> &Body, size_t End,
         continue;
       break;
     }
-    const bool PredCall =
-        Val->Kind == ExprKind::Call &&
-        exprHasSameCall(Pred.get(), Val->CallAddr, Val->CallTarget);
+    const bool PredCall = Val->Kind == ExprKind::Call &&
+                          predicateHasPrefixCall(Pred, Body, I, Val);
     const bool IsLoad = Val->Kind == ExprKind::Load;
     // Only a predicate call or a load can be dropped; other values keep their
     // assignment whether or not anything reads it.
@@ -2797,14 +2916,19 @@ peelInnerAgainstOuter(const HighStmt &Stmt, size_t OuterI,
                        SameTempId);
 }
 
+/// \p Substituted, when given, marks each Body[I] whose value now stands in
+/// the returned condition.
 static std::optional<ExprPtr>
 composePrefixesIntoCond(const std::vector<HighStmt> &Body, size_t Begin,
-                        size_t End, ExprPtr Cond) {
+                        size_t End, ExprPtr Cond,
+                        std::vector<bool> *Substituted = nullptr) {
   if (!Cond || Begin > End)
     return std::nullopt;
   for (size_t I = Begin; I < End; ++I)
     if (!prefixOkForChain(Body[I]))
       return std::nullopt;
+  if (Substituted)
+    Substituted->assign(Body.size(), false);
   for (size_t N = End; N > Begin; --N) {
     const size_t I = N - 1;
     MedVar Dest;
@@ -2812,6 +2936,8 @@ composePrefixesIntoCond(const std::vector<HighStmt> &Body, size_t Begin,
     if (!isValueAssign(Body[I], Dest, Val) || !exprUsesVar(Cond.get(), Dest))
       continue;
     Cond = replaceVarInExpr(Cond, Dest, Val);
+    if (Substituted)
+      (*Substituted)[I] = true;
   }
   for (size_t I = Begin; I < End; ++I) {
     MedVar Dest;
@@ -5261,6 +5387,7 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
           const ExprPtr OriginalInnerCond = Inner.Cond;
           bool FoldPrefix = InnerI > 0;
           bool DidCompose = false;
+          std::vector<bool> Substituted;
           bool SideEffectPrefix = false;
           for (size_t K = 0; K < InnerI; ++K)
             if (Stmt.Body[K].Kind == StmtKind::Call ||
@@ -5276,14 +5403,23 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
                 UsedLater = true;
             }
             ExprPtr Before = Inner.Cond;
-            auto Folded =
-                composePrefixesIntoCond(Stmt.Body, 0, InnerI, Inner.Cond);
+            auto Folded = composePrefixesIntoCond(Stmt.Body, 0, InnerI,
+                                                  Inner.Cond, &Substituted);
             if (!Folded || UsedLater)
               FoldPrefix = false;
             else {
               Inner.Cond = std::move(*Folded);
               DidCompose = !condStructEq(Before.get(), Inner.Cond.get());
             }
+          }
+          // Calls of the prefix values that composition moved into the test.
+          unsigned MovedCalls = 0;
+          for (size_t K = 0; DidCompose && K < InnerI && K < Substituted.size();
+               ++K) {
+            MedVar Dest;
+            ExprPtr Val;
+            if (Substituted[K] && isValueAssign(Stmt.Body[K], Dest, Val))
+              MovedCalls += callOccurrences(Val.get());
           }
           const bool SameTempId = prefixesAllowSameTempId(Stmt.Body, 0, InnerI);
           ExprPtr OuterForPeel =
@@ -5295,11 +5431,41 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
             if (!DidCompose)
               return std::optional<std::vector<bool>>(
                   std::vector<bool>(Stmt.Body.size(), false));
-            return composedPrefixDrops(Stmt.Body, InnerI, Pred,
-                                       RefuseReadCalls);
+            return composedPrefixDrops(Stmt.Body, InnerI, Pred, RefuseReadCalls,
+                                       Substituted);
           };
           std::optional<std::vector<bool>> DropsB;
-          if (auto Rest = dropAndPrefix(OuterForPeel, Inner.Cond, SameTempId)) {
+          auto Rest = dropAndPrefix(OuterForPeel, Inner.Cond, SameTempId);
+          // A remainder the uncomposed test already leaves keeps reading the
+          // prefix, so every prefix call still runs where it did. Otherwise
+          // the dropped test held the outer test's own call: its prefix copy
+          // goes. A remainder that gained a prefix call, or a value with
+          // another reader, keeps the inner test uncomposed and unmerged.
+          std::optional<std::vector<bool>> DropsR;
+          bool KeepInnerTest = false;
+          if (Rest && !isConstTrue(*Rest) && DidCompose) {
+            auto Plain =
+                dropAndPrefix(OuterForPeel, OriginalInnerCond, SameTempId);
+            if (Plain && !isConstTrue(*Plain))
+              Rest = std::move(Plain);
+            else if (!remainderGainsNoCall(OuterForPeel.get(),
+                                           OriginalInnerCond, Inner.Cond,
+                                           SameTempId) ||
+                     !(DropsR = PrefixDrops(*Rest, true))) {
+              Rest.reset();
+              KeepInnerTest = true;
+            }
+          }
+          // The merged test also guards the prefix it keeps, which then must
+          // do nothing that a skipped run would lose.
+          auto KeptPrefixActs = [&](const std::vector<bool> &Drops) {
+            for (size_t K = 0; K < InnerI; ++K)
+              if (!(DidCompose && Drops[K]) &&
+                  stmtHasObservableEffect(Stmt.Body[K]))
+                return true;
+            return false;
+          };
+          if (Rest) {
             if (isConstTrue(*Rest)) {
               const std::vector<bool> DropsA = *PrefixDrops(PredForDce, false);
               std::vector<HighStmt> Prefix;
@@ -5316,13 +5482,30 @@ static bool structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
               Stmt.Body = std::move(Prefix);
             } else {
               Inner.Cond = std::move(*Rest);
-              Stmt.Body[InnerI] = std::move(Inner);
-              NestedChanged |=
-                  dropUnusedTrailingAssigns(Stmt.Body, InnerI, PredForDce, Med);
+              std::vector<HighStmt> Kept;
+              Kept.reserve(Stmt.Body.size());
+              size_t KeptInnerI = 0;
+              for (size_t K = 0; K < Stmt.Body.size(); ++K) {
+                if (K == InnerI) {
+                  KeptInnerI = Kept.size();
+                  Kept.push_back(std::move(Inner));
+                  continue;
+                }
+                if (DropsR && K < InnerI && (*DropsR)[K])
+                  continue;
+                Kept.push_back(std::move(Stmt.Body[K]));
+              }
+              Stmt.Body = std::move(Kept);
+              NestedChanged |= dropUnusedTrailingAssigns(Stmt.Body, KeptInnerI,
+                                                         PredForDce, Med);
             }
             Changed = true;
-          } else if (!SideEffectPrefix && (InnerI == 0 || FoldPrefix) &&
-                     (DropsB = PrefixDrops(Inner.Cond, true))) {
+          } else if (!KeepInnerTest && !SideEffectPrefix &&
+                     (InnerI == 0 || FoldPrefix) &&
+                     (DropsB = PrefixDrops(Inner.Cond, true)) &&
+                     !KeptPrefixActs(*DropsB) &&
+                     composedCallsRunFirst(OriginalInnerCond, Inner.Cond,
+                                           MovedCalls)) {
             std::vector<HighStmt> Prefix;
             Prefix.reserve(Stmt.Body.size() - 1 + Inner.Body.size());
             for (size_t K = 0; K < Stmt.Body.size(); ++K) {

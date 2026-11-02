@@ -11,7 +11,7 @@
 #define NEVERD_IR_MED_X86_REGISTRATIONSEH4PHYSICALFRAME_H
 
 #include "neverd/ir/low/LowIR.h"
-#include "neverd/ir/med/X86RegistrationPhysicalFrame.h"
+#include "neverd/ir/med/X86/X86RegistrationPhysicalFrame.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 

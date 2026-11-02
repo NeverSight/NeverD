@@ -16,38 +16,46 @@
 
 #include "neverd/backend/llvm/LLVMSyscallAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/ir/X86FPState.h"
-#include "neverd/ir/X87Constant.h"
+#include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/X86/X87BCD.h"
+#include "neverd/ir/X86/X87Constant.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
+#include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
+#include "neverd/ir/intrinsics/X86/X86Sgx.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X64Syscall.h"
+#include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedRawEnvironment.h"
 #include "neverd/ir/med/MedSyscallConvention.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
-#include "neverd/support/Diagnostic.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
+
+#include <stdexcept>
+#include <string>
 
 namespace neverd {
 
 std::optional<uint8_t>
 MedLLVMEmitter::atomicIntrinsicAddressInput(const MedOp &Op) const {
-  if (TargetArch != Arch::AArch64 || Op.NumInputs == 0 ||
-      !Op.Inputs[0].isConst())
+  if (!hasValidMedIntrinsicId(Op))
     return std::nullopt;
 
   using I = Intrinsic;
   const auto IC = static_cast<I>(Op.Inputs[0].ConstVal);
+  if (isX86AtomicIntrinsic(IC) &&
+      intrinsicApxAtomicShapeIsValid(IC, apxAtomicMedShape(Op, TargetArch)))
+    return 1;
+  if (TargetArch != Arch::AArch64)
+    return std::nullopt;
   switch (IC) {
   case I::A64_AtomicAnd:
   case I::A64_AtomicOr:
@@ -96,7 +104,7 @@ MedLLVMEmitter::atomicIntrinsicAddressInput(const MedOp &Op) const {
 
 llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
                                            llvm::IRBuilder<> &Builder) {
-  if (isMedRawEnvironmentRequirement(Op))
+  if (isMedRawEnvironmentRequirement(Op) || isMedArchitecturalValue(Op))
     llvm::report_fatal_error(
         "raw environment requirement has no LLVM runtime contract");
   if (!hasValidMedIntrinsicId(Op))
@@ -105,6 +113,40 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
 
   using I = Intrinsic;
   auto IC = static_cast<I>(IntrCode);
+  auto refuseUnhandled = [&]() -> llvm::Value * {
+    if (Op.Output.Size)
+      ++UnhandledValueIntrinsicCount;
+    // The module is still owned by emit(). Throwing prevents either a direct
+    // caller or a pipeline shard from publishing guessed values or effects.
+    throw std::runtime_error(
+        "unsupported LLVM intrinsic: code=" + std::to_string(IntrCode) + " (" +
+        intrinsicName(IC) + ") out_sz=" + std::to_string(Op.Output.Size) +
+        " n_in=" + std::to_string(Op.NumInputs) +
+        " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
+  };
+  if (isPortableX87Intrinsic(IC))
+    return emitPortableX87Intrinsic(Op, Builder);
+
+  if (isX86DescriptorStateIntrinsic(IC))
+    return emitX86DescriptorState(Op, IC, Builder);
+
+  if (IC == Intrinsic::X86AMXState)
+    return emitX86AmxState(Op, Builder);
+  if (isX86RepStateIntrinsic(IC))
+    return emitX86RepState(Op, IC, Builder);
+  if (isX86BoundedLeafIntrinsic(IC))
+    return emitX86BoundedLeaf(Op, IC, Builder);
+  if (isX86BoundedLeafPending(IC))
+    llvm::report_fatal_error(X86BoundedLeafUnproven);
+  if (isX86SgxIntrinsic(IC))
+    return emitX86Sgx(Op, IC, Builder);
+  if (isX86SystemStateIntrinsic(IC) || IC == I::X86MsrAccess)
+    return emitX86SystemState(Op, IC, Builder);
+
+  if (IC == Intrinsic::X86HleState)
+    return emitX86Hle(Op, Builder);
+  if (isX86VirtualizationIntrinsic(IC))
+    return emitX86Virtualization(Op, IC, Builder);
 
   if (x86_registration::isSEHRegisterIntrinsic(Op))
     return emitSEHRegisterIntrinsic(Op, Builder);
@@ -116,7 +158,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   }
 
   if (IC == I::CetRdSsp || isX86FPStateIntrinsic(IC) ||
-      isX87ConstantControlIntrinsic(IC)) {
+      isX87ConstantControlIntrinsic(IC) || isX87GuardedValueIntrinsic(IC) ||
+      x87ValueInfo(IC)) {
     if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
       llvm::report_fatal_error("x86 FP state requires an x86 target");
     return emitX86IntrinsicValue(Op, IC, Builder);
@@ -146,27 +189,22 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     llvm::report_fatal_error(
         "PDEP/PEXT intrinsic has an invalid operand/output contract");
 
-  // LLVM has no stable target-independent representation for the contiguous
-  // packed-address fault contract used by EVEX compress/expand in the LLVM
-  // version supported by this tree.  Never turn a memory effect into zero.
-  if (IC == I::EVEXCompressStore || IC == I::EVEXExpandLoad)
-    llvm::report_fatal_error(
-        "EVEX compress/expand memory lowering is not available");
+  if (IC == I::X86FourSourceMemory)
+    return emitX86FourSource(Op, Builder);
+
+  if (isX86CompactMemory(IC))
+    return emitX86CompressExpand(Op, IC, Builder);
 
   if (IC == I::Vdbpsadbw) {
     if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
       llvm::report_fatal_error("VDBPSADBW intrinsic requires an x86 target");
     return emitVdbpsadbwIntrinsic(Op, IC, Builder);
   }
-  if (IC == I::X86FourFMA)
+  if (IC == I::X86FourFMA || isX86VP4DPIntrinsic(IC))
     llvm::report_fatal_error(
-        "x86 four-iteration FMA lowering is not available");
-  if (isX86VP4DPIntrinsic(IC))
-    llvm::report_fatal_error(
-        "x86 VP4DP word dot-product lowering is not available");
-  if (IC == I::ApxRaoAdd || IC == I::ApxRaoAnd || IC == I::ApxRaoOr ||
-      IC == I::ApxRaoXor || IC == I::ApxCmpccXadd)
-    llvm::report_fatal_error("APX atomic LLVM lowering is not available");
+        "legacy x86 four-source lowering requires explicit source SSA values");
+  if (isX86AtomicIntrinsic(IC))
+    return emitX86APXAtomic(Op, IC, Builder);
 
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
     if (TargetArch != Arch::X86 && TargetArch != Arch::X64)
@@ -188,8 +226,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     return nullptr;
 
   // Masked stores are value-dispatch intrinsics with a void result.  They must
-  // be dispatched before the generic zero-output early return; otherwise the
-  // observable store is silently dropped.  The arity check also makes the
+  // be dispatched before refusing unhandled void operations. The arity check
+  // also makes the
   // handler's nullptr-success convention unambiguous.
   if ((TargetArch == Arch::X86 || TargetArch == Arch::X64) &&
       (IC == I::MaskedStoreB || IC == I::MaskedStoreW ||
@@ -202,8 +240,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   }
 
   // GFNI is an x86 value-producing family.  Dispatch it before the generic
-  // void early return so a malformed zero-width shape cannot be mistaken for
-  // a successfully handled side effect or a non-x86 zero fallback.
+  // void refusal so a malformed zero-width shape receives its own diagnostic.
   const bool IsGfni =
       IC == I::Gf2p8MulB || IC == I::Gf2p8AffineQb || IC == I::Gf2p8AffineInvQb;
   if (IsGfni) {
@@ -212,10 +249,11 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     return emitGfniIntrinsic(Op, IC, Builder);
   }
 
-  if (Op.Output.Size == 0)
-    return nullptr;
+  if (TargetArch == Arch::AArch64 && isAArch64WritebackAuxiliaryLoad(IC))
+    return emitAArch64IntrinsicValue(Op, IC, Builder);
 
-  auto *OutTy = sizeToType(Op.Output.Size);
+  if (Op.Output.Size == 0)
+    return refuseUnhandled();
 
   if (const SyscallConvention *Syscall = modeledSyscallConvention(IC))
     return emitLinuxSyscall(Op, *Syscall, Builder);
@@ -254,34 +292,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     llvm::report_fatal_error(
         "segmented-memory intrinsic was not handled by the target backend");
 
-  if (IC == I::Hlt) {
-    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
-        Mod, llvm::Intrinsic::debugtrap);
-    Builder.CreateCall(Fn, {});
-    return (Op.Output.Size > 0) ? llvm::ConstantInt::get(OutTy, 0) : nullptr;
-  }
-
-  {
-    // The bare-mnemonic inline-asm fallback is for VOID side-effect intrinsics
-    // only (dsb/isb/wfe/...).  A value-producing intrinsic (Output.Size > 0)
-    // reaching here has no real handler: emitting its mnemonic with bare `r`
-    // operands yields malformed asm (e.g. a 1-operand `sel`/`ssat`) that aborts
-    // codegen and crashes the whole process.  Fall through to the warning +
-    // safe 0 so it surfaces as a test mismatch instead (see #270d ArmSsat, #280
-    // ArmSel).
-    const char *AsmStr = intrinsicAsmMnemonic(IC);
-    if (AsmStr && Op.Output.Size == 0) {
-      emitVoidInlineAsm(AsmStr, Op, Builder);
-      return nullptr;
-    }
-  }
-
-  syncWarning() << "INTRINSIC unhandled intrinsic: code=" << IntrCode << " ("
-                << intrinsicName(IC) << ") out_sz=" << Op.Output.Size
-                << " n_in=" << static_cast<unsigned>(Op.NumInputs) << "\n";
-  if (Op.Output.Size > 0)
-    ++UnhandledValueIntrinsicCount;
-  return (Op.Output.Size > 0) ? llvm::ConstantInt::get(OutTy, 0) : nullptr;
+  return refuseUnhandled();
 }
 
 //===----------------------------------------------------------------------===//

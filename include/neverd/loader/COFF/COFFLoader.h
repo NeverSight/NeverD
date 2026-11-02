@@ -19,6 +19,8 @@
 
 #include "llvm/Support/Error.h"
 
+#include <cstddef>
+
 namespace neverd {
 
 class COFFLoader : public Loader {
@@ -29,6 +31,12 @@ public:
   /// loader reads (LoadCandidate.h), judged as load() judges the file.
   static void identify(llvm::MemoryBufferRef Buffer,
                        std::vector<LoadCandidate> &Rows);
+  /// Check the mapping inventory of a full PE image against its independently
+  /// validated section count. An optional appended header mapping must retain
+  /// its exact original bytes and read-only identity. This does not validate
+  /// the execution semantics of the real sections.
+  static bool hasExpectedPEMappingInventory(const BinaryImage &Image,
+                                            std::size_t SectionCount);
 };
 
 } // namespace neverd

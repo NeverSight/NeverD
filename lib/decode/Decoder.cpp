@@ -11,91 +11,28 @@
 
 #include "neverd/decode/Decoder.h"
 
-#include "neverd/decode/AArch64NativeDecode.h"
-#include "neverd/decode/Limits.h"
-#include "neverd/ir/X87Context.h"
+#include "DecoderDetail.h"
+
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/AArch64Lifter.h"
-#include "neverd/lift/ARMLifter.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/AArch64/AArch64Lifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 #include "neverd/support/Diagnostic.h"
 #include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/Support/raw_ostream.h"
 
-#include <cstring>
-#include <iterator>
-#include <mutex>
+#include <memory>
 #include <utility>
 #include <vector>
 
 namespace neverd {
 
 namespace {
-/// The x86 capstone handles decoders have closed, by mode.  Opening one
-/// builds capstone's instruction tables for that handle anew, which a
-/// decompile did for every decoder it opened: its run's, and each callee
-/// graph's.  Beyond the tables, which depend on the mode alone, a handle
-/// keeps nothing from one instruction to the next but the options a decoder
-/// sets (detail and text), which take() returns to a new handle's.
-class SpareX86Handles {
-public:
-  /// A closed handle of \p Mode as cs_open() with detail on leaves one, or
-  /// 0 when none is spare.
-  csh take(cs_mode Mode) {
-    csh Handle = 0;
-    {
-      std::lock_guard<std::mutex> Lock(Mutex);
-      for (size_t I = Handles.size(); I-- > 0;)
-        if (Handles[I].first == Mode) {
-          Handle = Handles[I].second;
-          Handles.erase(Handles.begin() + static_cast<std::ptrdiff_t>(I));
-          break;
-        }
-    }
-    if (Handle) {
-      cs_option(Handle, CS_OPT_DETAIL, CS_OPT_OFF);
-      cs_option(Handle, CS_OPT_DETAIL, CS_OPT_ON);
-      cs_option(Handle, CS_OPT_TEXT, CS_OPT_ON);
-    }
-    return Handle;
-  }
-  /// Keep \p Handle, of \p Mode, for a later decoder; close it when enough
-  /// are spare.
-  void give(cs_mode Mode, csh Handle) {
-    {
-      std::lock_guard<std::mutex> Lock(Mutex);
-      if (Handles.size() < MaxSpare) {
-        Handles.emplace_back(Mode, Handle);
-        return;
-      }
-    }
-    cs_close(&Handle);
-  }
-
-private:
-  /// More than the decoders a decompile has open at once.
-  static constexpr size_t MaxSpare = ::neverd::limits::decode::kDecoderMaxSpare;
-  std::mutex Mutex;
-  std::vector<std::pair<cs_mode, csh>> Handles;
-};
-
-/// Never destroyed: a decoder may close its handle after static destructors
-/// have run.
-SpareX86Handles &spareX86Handles() {
-  static SpareX86Handles *Spare = new SpareX86Handles;
-  return *Spare;
-}
-
-/// The mode an x86 handle of \p A decodes in.
-cs_mode x86HandleMode(Arch A) {
-  return A == Arch::X64 ? CS_MODE_64 : CS_MODE_32;
-}
-
-/// Close \p Handle, a decoder's for \p A, or keep an x86 one for another.
+/// Release a decoder handle using the active architecture's ownership rules.
 void closeHandle(csh &Handle, Arch A) {
   if (A == Arch::X64 || A == Arch::X86)
-    spareX86Handles().give(x86HandleMode(A), Handle);
+    decoder_detail::releaseX86Handle(Handle, A);
   else
     cs_close(&Handle);
   Handle = 0;
@@ -119,11 +56,12 @@ const char *ndOpName(NdOp Op) {
   return "???";
 }
 
-Decoder::Decoder() = default;
+Decoder::Decoder() : AArch64DecodeIdentity(nextAArch64DecodeIdentity()) {}
 
 Decoder::~Decoder() { reset(); }
 
 void Decoder::reset() {
+  advanceAArch64DecodeGeneration();
   if (InsnBuf)
     cs_free(InsnBuf, 1);
   if (Handle)
@@ -156,7 +94,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   case Arch::X64:
   case Arch::X86:
     CsArch = CS_ARCH_X86;
-    CsMode = (TheArch == Arch::X64) ? CS_MODE_64 : CS_MODE_32;
+    CsMode = decoder_detail::x86HandleMode(TheArch);
     NewX86 = std::make_unique<X86Lifter>(TheArch);
     NewX86->setStrict(Strict);
     break;
@@ -168,9 +106,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
     break;
   case Arch::ARM:
     CsArch = CS_ARCH_ARM;
-    CsMode = static_cast<cs_mode>(
-        (Mode == InstructionMode::Thumb ? CS_MODE_THUMB : CS_MODE_ARM) |
-        CS_MODE_V8);
+    CsMode = decoder_detail::armHandleMode(Mode);
     NewARM = std::make_unique<ARMLifter>(TheArch, Mode);
     NewARM->setStrict(Strict);
     break;
@@ -180,7 +116,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   }
 
   csh NewHandle =
-      CsArch == CS_ARCH_X86 ? spareX86Handles().take(CsMode) : csh(0);
+      CsArch == CS_ARCH_X86 ? decoder_detail::takeX86Handle(CsMode) : csh(0);
   if (!NewHandle) {
     if (cs_open(CsArch, CsMode, &NewHandle) != CS_ERR_OK) {
       syncError() << "failed to init capstone\n";
@@ -196,6 +132,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
     return false;
   }
 
+  advanceAArch64DecodeGeneration();
   if (InsnBuf)
     cs_free(InsnBuf, 1);
   if (Handle)
@@ -214,22 +151,12 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
 }
 
 void Decoder::configureFor(const BinaryImage &Img) {
-  if (!X86)
-    return;
-  // A PE image runs on Windows, whose system service convention an x64
-  // SYSCALL follows.
-  X86->setSyscallConvention(Img.abiFormat() == BinaryFormat::COFF
-                                ? X86Lifter::SyscallConvention::WindowsNT
-                                : X86Lifter::SyscallConvention::Linux);
-  // The calling convention also decides whether long double values cross
-  // calls, and so who owns the x87 register stack.
-  X86->setX87ContextOwnership(
-      x87ContextOwnsStack(Img.Arch, Img.abiFormat(), Img.X87ContextOverride));
-}
-
-void Decoder::setX87ContextOwnership(bool Owned) {
-  if (X86)
-    X86->setX87ContextOwnership(Owned);
+  configureX86For(Img);
+  if (AArch64)
+    AArch64->setPreserveImmediateMemory(
+        Img.isArm64e() &&
+        (Img.MachOCPUSubtype & ~uint32_t(llvm::MachO::CPU_SUBTYPE_MASK)) ==
+            macho_loader::arm64e::kCPUSubtypeX1);
 }
 
 bool Decoder::init(const BinaryImage &Img) {
@@ -239,19 +166,7 @@ bool Decoder::init(const BinaryImage &Img) {
     configureFor(Img);
     return true;
   }
-  if (Img.Arch != Arch::ARM)
-    return false;
-  if (Img.Entry != 0)
-    if (const auto EntryMode = Img.instructionModeAt(Img.Entry))
-      return init(Img.Arch, *EntryMode);
-  for (const auto &[Addr, Mode] : Img.ARMCodeModeEntries)
-    if (Img.instructionModeAt(Addr) == Mode)
-      return init(Img.Arch, Mode);
-  for (const ARMCodeRegion &Region : Img.ARMCodeRegions)
-    if (const auto Mode = Img.instructionModeAt(Region.Start))
-      return init(Img.Arch, *Mode);
-  syncError() << "mixed ARM/Thumb image has no authenticated code mode\n";
-  return false;
+  return initARMImageMode(Img);
 }
 
 bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
@@ -260,16 +175,21 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
   if (!Mode)
     return false;
   if (Img.Arch == Arch::ARM &&
-      (Addr % (*Mode == InstructionMode::Thumb ? 2 : 4)) != 0)
+      !decoder_detail::isARMInstructionAligned(Addr, *Mode))
     return false;
-  if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode)
+  if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode) {
+    if (AArch64)
+      configureFor(Img);
     return true;
+  }
   const bool WasDetail = Detail;
   const bool WasText = Text;
   if (!init(Img.Arch, *Mode))
     return false;
   setDetail(WasDetail);
   setText(WasText);
+  if (AArch64)
+    configureFor(Img);
   return true;
 }
 
@@ -283,17 +203,25 @@ void Decoder::setStrict(bool S) {
     ARM->setStrict(S);
 }
 
+bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
+                                         va_t Addr) {
+  return X86 && (decodePrefixedX86Fence(Bytes, Len, Addr) ||
+                 decodeX86MpxFallback(Bytes, Len, Addr));
+}
+
 int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
-  if (!Handle || !InsnBuf)
+  if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
   uint64_t A = Addr;
 
+  // Capstone records soft decode failures on the reused instruction object.
+  // Validity belongs to this occurrence, never the previously decoded bytes.
+  InsnBuf->illegal = false;
   if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
-      !decodePrefixedX86Fence(Bytes, Len, Addr) &&
-      !decodeUnprefixedX86MpxRegisterNop(Bytes, Len, Addr))
+      !decodeArchitectureFallback(Bytes, Len, Addr))
     return 0;
 
   fixupDecodedInsn(InsnBuf);
@@ -302,6 +230,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
+  if (AArch64)
+    recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   // The lift path and CFG classification read the mnemonic (when they need it
   // at all, e.g. x86 push/pop/VCMP width, ARM push/pop, NEON lane) directly
   // from Out.Raw->mnemonic, which capstone already filled.  Copying it into a
@@ -312,111 +242,35 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
 
 int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                               DecodedInsn &Out) {
-  // AArch64 is fixed 4-byte width and 4-byte aligned; the common instruction
-  // classes decode with a few mask+shift extractions straight into InsnBuf,
-  // bypassing Capstone's DFA (the front-end throughput ceiling).  The native
-  // decoder is a strict subset of Capstone's accept set and lifts identically
-  // (locked by AArch64_NativeDecodeParityTests); anything it declines falls
-  // back to the full Capstone decode below.  Detail must be on — the native
-  // path fills operand detail the lifter reads — and InsnBuf->detail is
-  // allocated whenever detail is on (see init()).
-  if (AArch64 && Detail && Len >= 4 && InsnBuf && InsnBuf->detail) {
-    uint32_t Word = static_cast<uint32_t>(Bytes[0]) |
-                    (static_cast<uint32_t>(Bytes[1]) << 8) |
-                    (static_cast<uint32_t>(Bytes[2]) << 16) |
-                    (static_cast<uint32_t>(Bytes[3]) << 24);
-    if (a64native::tryDecode(Word, Addr, *InsnBuf, *InsnBuf->detail)) {
-      Out.Addr = InsnBuf->address;
-      Out.Size = static_cast<uint16_t>(InsnBuf->size);
-      Out.Id = InsnBuf->id;
-      Out.Raw = InsnBuf;
-      return Out.Size;
-    }
-  }
+  if (!beginDecode(Out))
+    return 0;
+  if (AArch64)
+    if (const int Size = decodeAArch64ForLift(Bytes, Len, Addr, Out))
+      return Size;
   return decodeOne(Bytes, Len, Addr, Out);
 }
 
 int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                             DecodedInsn &Out) {
-  if (!Handle || !InsnBuf)
+  if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
   uint64_t A = Addr;
 
+  InsnBuf->illegal = false;
   if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
-      !decodePrefixedX86Fence(Bytes, Len, Addr) &&
-      !decodeUnprefixedX86MpxRegisterNop(Bytes, Len, Addr))
+      !decodeArchitectureFallback(Bytes, Len, Addr))
     return 0;
 
-  fixupDecodedInsnId(InsnBuf);
-  fixupX86DisplacementDetail(InsnBuf);
+  fixupX86DecodeMetadata(InsnBuf);
   Out.Addr = InsnBuf->address;
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
+  if (AArch64)
+    recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   return Out.Size;
-}
-
-bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,
-                                     va_t Addr) {
-  if (!X86 || !Bytes || !InsnBuf)
-    return false;
-
-  size_t PrefixCount = 0;
-  while (PrefixCount < Len && Bytes[PrefixCount] == 0x66)
-    ++PrefixCount;
-  if (PrefixCount == 0 || PrefixCount >= Len || PrefixCount >= 15)
-    return false;
-
-  const uint8_t *Code = Bytes + PrefixCount;
-  size_t Remaining = Len - PrefixCount;
-  uint64_t InnerAddr = Addr + PrefixCount;
-  if (!cs_disasm_iter(Handle, &Code, &Remaining, &InnerAddr, InsnBuf))
-    return false;
-  if (InsnBuf->id != X86_INS_LFENCE && InsnBuf->id != X86_INS_MFENCE &&
-      InsnBuf->id != X86_INS_SFENCE)
-    return false;
-
-  const size_t InnerSize = InsnBuf->size;
-  const size_t TotalSize = PrefixCount + InnerSize;
-  if (TotalSize > 15 || TotalSize > sizeof(InsnBuf->bytes))
-    return false;
-
-  std::memmove(InsnBuf->bytes + PrefixCount, InsnBuf->bytes, InnerSize);
-  std::memset(InsnBuf->bytes, 0x66, PrefixCount);
-  InsnBuf->address = Addr;
-  InsnBuf->size = static_cast<uint16_t>(TotalSize);
-  return true;
-}
-
-bool Decoder::decodeUnprefixedX86MpxRegisterNop(const uint8_t *Bytes,
-                                                size_t Len, va_t Addr) {
-  if (!X86 || !Bytes || !InsnBuf || Len < 3 || Bytes[0] != 0x0f ||
-      (Bytes[1] != 0x1a && Bytes[1] != 0x1b) || (Bytes[2] & 0xc0) != 0xc0)
-    return false;
-
-  // cs_malloc owns the detail allocation.  Preserve its pointer while
-  // replacing the failed decode result with a complete three-byte NOP.
-  cs_detail *SavedDetail = InsnBuf->detail;
-  std::memset(InsnBuf, 0, sizeof(*InsnBuf));
-  InsnBuf->detail = SavedDetail;
-  if (SavedDetail)
-    std::memset(SavedDetail, 0, sizeof(*SavedDetail));
-
-  InsnBuf->id = X86_INS_NOP;
-  InsnBuf->address = Addr;
-  InsnBuf->size = 3;
-  std::memcpy(InsnBuf->bytes, Bytes, InsnBuf->size);
-  std::memcpy(InsnBuf->mnemonic, "nop", 4);
-  if (SavedDetail) {
-    SavedDetail->x86.opcode[0] = Bytes[0];
-    SavedDetail->x86.opcode[1] = Bytes[1];
-    SavedDetail->x86.addr_size = TargetArch == Arch::X64 ? 8 : 4;
-    SavedDetail->x86.modrm = Bytes[2];
-    SavedDetail->x86.encoding.modrm_offset = 2;
-  }
-  return true;
 }
 
 void Decoder::setDetail(bool On) {
@@ -446,34 +300,16 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
     UndefinedEffects->Diagnostic =
         "architecture has no audited undefined-output contract";
   }
+  if ((AArch64 || Insn.AArch64Occurrence) && !hasAArch64OperandDetail(Insn))
+    throw UnliftedInstruction(Insn.Addr, aarch64_decode::kInvalidOccurrence,
+                              nullptr);
   if (X86) {
     X86->lift(Insn.Raw, Ops, Relocs, ScalarRelocs, UndefinedEffects,
               PreservedState);
   } else if (AArch64) {
-    bool ScalarWideImmediate = false;
-    if (Insn.Raw && Insn.Raw->size == 4) {
-      uint32_t Word = 0;
-      for (unsigned Byte = 0; Byte != 4; ++Byte)
-        Word |= uint32_t(Insn.Raw->bytes[Byte]) << (Byte * 8);
-      if ((Word & 0x1f800000u) == 0x12800000u)
-        for (const RelocatedScalarOperand &Scalar : ScalarRelocs)
-          ScalarWideImmediate |=
-              Scalar.Semantics ==
-                  RelocatedScalarOperand::Kind::AArch64ELFUnrelocatedWideMove &&
-              Scalar.FieldVA == Insn.Raw->address && Scalar.Width == 4 &&
-              Scalar.EncodedValue == Word;
-    }
-    AArch64->lift(Insn.Raw, Ops, ScalarWideImmediate);
+    liftAArch64ToLow(Insn, Ops, ScalarRelocs);
   } else if (ARM) {
-    bool Unrelocated = false;
-    if (Insn.Raw)
-      for (const RelocatedScalarOperand &Scalar : ScalarRelocs)
-        Unrelocated |=
-            Scalar.Semantics ==
-                RelocatedScalarOperand::Kind::ARMELFUnrelocatedInstruction &&
-            Scalar.FieldVA == Insn.Raw->address &&
-            Scalar.Width == Insn.Raw->size;
-    ARM->lift(Insn.Raw, Ops, Unrelocated);
+    liftARMToLow(Insn, Ops, ScalarRelocs);
   } else {
     LowOp Nop;
     Nop.Opcode = NdOp::NOP;
@@ -485,48 +321,10 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
     UndefinedEffects->OpCount = Ops.size() - OpsStart;
 }
 
-bool Decoder::liftX64MemoryCallToLow(
-    const DecodedInsn &Insn, std::vector<LowOp> &Ops,
-    LowInstructionUndefinedEffects *UndefinedEffects,
-    LowInstructionPreservedState *PreservedState) {
-  if (PreservedState)
-    *PreservedState = {};
-  if (UndefinedEffects) {
-    *UndefinedEffects = {};
-    UndefinedEffects->Diagnostic =
-        "instruction has no audited x64 memory-call projection";
-  }
-  return X86 && X86->liftX64MemoryCall(Insn.Raw, Ops, UndefinedEffects,
-                                       PreservedState);
-}
-
-int Decoder::getX86FpuTop() const { return X86 ? X86->getFpuTop() : 0; }
-
-void Decoder::resetX86FpuState() {
-  if (X86)
-    X86->resetFpuState();
-}
-
-bool Decoder::x86FpuDidReset() const { return X86 && X86->fpuDidReset(); }
-
-int Decoder::getX86RetPopBytes() const {
-  return X86 ? X86->getRetPopBytes() : 0;
-}
-
-std::optional<I386GetPcOccurrence> Decoder::getX86GetPcOccurrence() const {
-  return X86 ? X86->getLastGetPcOccurrence() : std::nullopt;
-}
-
-std::optional<RelocatedInstructionScalarOperandOccurrence>
-Decoder::getX86ScalarOperandOccurrence() const {
-  return X86 ? X86->getLastScalarOperandOccurrence() : std::nullopt;
-}
-
 void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;
-  fixupDecodedInsnId(I);
-  fixupX86DisplacementDetail(I);
+  fixupX86DecodeMetadata(I);
   if (X86)
     X86Lifter::fixupDecodedInsn(I);
   else if (AArch64)
@@ -535,73 +333,9 @@ void Decoder::fixupDecodedInsn(cs_insn *I) const {
     ARMLifter::fixupDecodedInsn(I);
 }
 
-void Decoder::fixupX86DisplacementDetail(cs_insn *I) const {
-  // The bundled decoder can initialize long-mode displacementSize from the
-  // operand-size override, although ModRM still consumes a complete disp32.
-  // Correct that metadata once, before relocation ownership and form audits
-  // consume it. Do not reinterpret genuine i386 disp16, moffs, compressed
-  // disp8 or an instruction decoded without populated operand detail.
-  if (TargetArch != Arch::X64 || !Detail || !Text || !I || !I->detail ||
-      !I->size || I->size > 15)
-    return;
-  auto &X = I->detail->x86;
-  auto &E = X.encoding;
-  if (E.disp_size != 2 || X.prefix[2] != 0x66 ||
-      (X.addr_size != 4 && X.addr_size != 8) || !E.modrm_offset ||
-      E.modrm_offset >= I->size || X.op_count > std::size(X.operands))
-    return;
-  const uint8_t ModRM = I->bytes[E.modrm_offset];
-  const unsigned Mod = ModRM >> 6, RM = ModRM & 7;
-  if (X.modrm != ModRM || Mod == 3 || Mod == 1)
-    return;
-  size_t Cursor = E.modrm_offset + 1;
-  bool HasDisp32 = Mod == 2 || RM == 5;
-  if (RM == 4) {
-    if (Cursor >= I->size || X.sib != I->bytes[Cursor])
-      return;
-    HasDisp32 = Mod == 2 || (I->bytes[Cursor] & 7) == 5;
-    ++Cursor;
-  }
-  if (!HasDisp32 || E.disp_offset != Cursor || Cursor + 4 > I->size)
-    return;
-  const size_t End = Cursor + 4;
-  if (E.imm_size ? E.imm_offset != End || End + E.imm_size != I->size
-                 : E.imm_offset != 0 || End != I->size)
-    return;
-  uint32_t Bits = 0;
-  for (unsigned N = 0; N != 4; ++N)
-    Bits |= uint32_t{I->bytes[Cursor + N]} << (N * 8);
-  const int64_t Displacement = static_cast<int32_t>(Bits);
-  if (X.disp != Displacement)
-    return;
-  bool HasMemory = false;
-  for (unsigned N = 0; N != X.op_count; ++N)
-    if (X.operands[N].type == X86_OP_MEM) {
-      if (X.operands[N].mem.disp != Displacement)
-        return;
-      HasMemory = true;
-    }
-  if (HasMemory)
-    E.disp_size = 4;
-}
-
-void Decoder::fixupDecodedInsnId(cs_insn *I) const {
-  if (!X86 || !I || (I->id != X86_INS_BNDLDX && I->id != X86_INS_BNDSTX))
-    return;
-
-  // The x86 compatibility profile treats no-mandatory-prefix 0F 1A/1B as the
-  // MPX-disabled form.  Retaining Capstone's BND ids would incorrectly
-  // introduce a memory effect during lifting.  Mandatory-prefix forms use
-  // distinct ids and remain untouched.
-  I->id = X86_INS_NOP;
-  std::memcpy(I->mnemonic, "nop", 4);
-  I->op_str[0] = '\0';
-  if (I->detail)
-    I->detail->x86.op_count = 0;
-}
-
 bool Decoder::isFunctionTerminator(const DecodedInsn &Insn) const {
-  if (!Insn.Raw)
+  if (!Insn.Raw || ((AArch64 || Insn.AArch64Occurrence) &&
+                    !hasAArch64DecodeOccurrence(Insn)))
     return false;
   if (X86)
     return X86Lifter::isFunctionTerminator(Insn.Raw);
@@ -613,16 +347,19 @@ bool Decoder::isFunctionTerminator(const DecodedInsn &Insn) const {
 }
 
 bool Decoder::isAlignmentNop(const DecodedInsn &Insn) const {
-  if (!Insn.Raw || !Insn.Size)
+  if (!Insn.Raw || !Insn.Size ||
+      ((AArch64 || Insn.AArch64Occurrence) &&
+       !hasAArch64DecodeOccurrence(Insn)))
     return false;
-  if (X86 && Insn.Id == X86_INS_NOP)
+  if (X86 && decoder_detail::isX86AlignmentNop(Insn))
     return true;
   return alignmentNopLength(TargetArch, Insn.Raw->bytes, Insn.Size,
                             currentMode()) == Insn.Size;
 }
 
 std::optional<bool> Decoder::returnsToCaller(const DecodedInsn &Insn) const {
-  if (!Insn.Raw)
+  if (!Insn.Raw || ((AArch64 || Insn.AArch64Occurrence) &&
+                    !hasAArch64DecodeOccurrence(Insn)))
     return std::nullopt;
   if (X86)
     return X86Lifter::isReturn(Insn.Raw);
@@ -634,7 +371,8 @@ std::optional<bool> Decoder::returnsToCaller(const DecodedInsn &Insn) const {
 }
 
 bool Decoder::isResumableTrap(const DecodedInsn &Insn) const {
-  if (!Insn.Raw)
+  if (!Insn.Raw || ((AArch64 || Insn.AArch64Occurrence) &&
+                    !hasAArch64DecodeOccurrence(Insn)))
     return false;
   if (X86)
     return X86Lifter::isResumableTrap(Insn.Raw);
@@ -644,7 +382,8 @@ bool Decoder::isResumableTrap(const DecodedInsn &Insn) const {
 }
 
 va_t Decoder::directCallTarget(const DecodedInsn &Insn) const {
-  if (!Insn.Raw)
+  if (!Insn.Raw || ((AArch64 || Insn.AArch64Occurrence) &&
+                    !hasAArch64DecodeOccurrence(Insn)))
     return InvalidVA;
   if (X86)
     return X86Lifter::directCallTarget(Insn.Raw);
@@ -652,32 +391,6 @@ va_t Decoder::directCallTarget(const DecodedInsn &Insn) const {
     return AArch64Lifter::directCallTarget(Insn.Raw);
   if (ARM)
     return ARMLifter::directCallTarget(Insn.Raw);
-  return InvalidVA;
-}
-
-std::optional<uint64_t>
-Decoder::returnImmediate(const DecodedInsn &Insn) const {
-  if (!Insn.Raw || !X86)
-    return std::nullopt;
-  return X86Lifter::returnImmediate(Insn.Raw);
-}
-
-LowInstructionTargetMode
-Decoder::controlTargetMode(const DecodedInsn &Insn,
-                           InstructionMode SourceMode) const {
-  if (!Insn.Raw || !ARM)
-    return LowInstructionTargetMode::Preserve;
-  return ARMLifter::controlTargetMode(Insn.Raw, SourceMode);
-}
-
-va_t Decoder::pcRelCodeRefTarget(const DecodedInsn &Insn) const {
-  if (!Insn.Raw)
-    return InvalidVA;
-  // Only x86/x64 has the relocation-free same-section `lea rip` address-of
-  // form; AArch64/ARM materialize code addresses through relocations the loader
-  // already records (adrp+add, GOTOFF, literal pool).
-  if (X86)
-    return X86Lifter::pcRelCodeRefTarget(Insn.Raw);
   return InvalidVA;
 }
 

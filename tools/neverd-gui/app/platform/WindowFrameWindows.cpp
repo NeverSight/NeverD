@@ -1,151 +1,127 @@
-// Windows: the window keeps the system frame, which draws its edges and
-// shadow and snaps, animates and resizes it, and loses only the caption, as
-// Visual Studio Code's custom title bar does there.
+//===- WindowFrameWindows.cpp - Windows frame integration ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Keep Windows window management without system-drawn edges or shadows.
+//===----------------------------------------------------------------------===//
 
-#include "../../Config.h"
 #include "WindowFramePlatform.h"
 
-#include <QAbstractNativeEventFilter>
+#include <QCoreApplication>
 #include <QGuiApplication>
-#include <QHash>
 #include <QPointer>
 #include <QWindow>
-#include <qpa/qplatformwindow_p.h>
-
+#include <QtMath>
+#include <utility>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <windowsx.h>
+
+// The DWM SDK header uses Windows types.
+#include <dwmapi.h>
 
 namespace neverd::gui::platform {
 namespace {
-constexpr char WindowsPlatform[] = "windows";
-/// The type of the messages Qt's Windows platform plugin filters.
-constexpr char WindowsMessage[] = "windows_generic_MSG";
+class ResizeFilter final : public QAbstractNativeEventFilter {
+  QPointer<QWindow> window_;
+  std::function<Qt::Edges(QPoint)> edgesAt_;
+  std::function<void()> prepareResize_;
 
-/// Qt applies a window's custom margins to every WM_NCCALCSIZE.  The margins
-/// that take a captionless window's client area over its caption push it
-/// past the screen's top when the window has no caption, which is how Qt
-/// makes a window full screen (WS_POPUP).  Such a window takes the system's
-/// client area, as Chromium's custom frames do; Qt reads the margins back
-/// from the result.  Only windows given these margins are handled: others,
-/// such as KDDockWidgets' floating windows, size their own client areas.
-class CaptionMarginFilter final : public QAbstractNativeEventFilter {
 public:
-  static CaptionMarginFilter &instance() {
-    static auto *filter = [] {
-      auto *created = new CaptionMarginFilter;
-      QCoreApplication::instance()->installNativeEventFilter(created);
-      return created;
-    }();
-    return *filter;
+  ResizeFilter(QWindow &window, std::function<Qt::Edges(QPoint)> edgesAt,
+               std::function<void()> prepareResize)
+      : window_(&window), edgesAt_(std::move(edgesAt)),
+        prepareResize_(std::move(prepareResize)) {
+    QCoreApplication::instance()->installNativeEventFilter(this);
   }
-
-  void add(QWindow &window) {
-    windows_.insert(reinterpret_cast<HWND>(window.winId()), &window);
+  ~ResizeFilter() override {
+    QCoreApplication::instance()->removeNativeEventFilter(this);
   }
-
   bool nativeEventFilter(const QByteArray &type, void *message,
                          qintptr *result) override {
-    if (type != WindowsMessage)
+    if (type != "windows_generic_MSG")
       return false;
     const auto *msg = static_cast<const MSG *>(message);
-    if (msg->message != WM_NCCALCSIZE || !msg->wParam || !owns(msg->hwnd))
+    if ((msg->message != WM_NCHITTEST && msg->message != WM_NCLBUTTONDOWN) ||
+        !window_ || !window_->handle() ||
+        msg->hwnd != reinterpret_cast<HWND>(window_->winId()))
       return false;
-    const LONG_PTR style = GetWindowLongPtrW(msg->hwnd, GWL_STYLE);
-    if ((style & WS_CAPTION) == WS_CAPTION)
+    POINT position{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+    if (!ScreenToClient(msg->hwnd, &position))
       return false;
-    *result = DefWindowProcW(msg->hwnd, msg->message, msg->wParam, msg->lParam);
+    const qreal scale = window_->devicePixelRatio();
+    const auto edges = edgesAt_(
+        QPoint(qFloor(position.x / scale), qFloor(position.y / scale)));
+    if (!edges)
+      return false;
+    if (msg->message == WM_NCLBUTTONDOWN) {
+      // Restore before DefWindowProc starts its native sizing loop. Edge
+      // presses are non-client messages and bypass the Qt mouse filter.
+      prepareResize_();
+      return false;
+    }
+    if (edges & Qt::TopEdge)
+      *result = edges & Qt::LeftEdge    ? HTTOPLEFT
+                : edges & Qt::RightEdge ? HTTOPRIGHT
+                                        : HTTOP;
+    else if (edges & Qt::BottomEdge)
+      *result = edges & Qt::LeftEdge    ? HTBOTTOMLEFT
+                : edges & Qt::RightEdge ? HTBOTTOMRIGHT
+                                        : HTBOTTOM;
+    else
+      *result = edges & Qt::LeftEdge ? HTLEFT : HTRIGHT;
     return true;
   }
-
-private:
-  /// Whether \p hwnd is still the native window of a window given margins;
-  /// a handle can return for another window once its own is destroyed.
-  bool owns(HWND hwnd) {
-    const auto found = windows_.constFind(hwnd);
-    if (found == windows_.cend())
-      return false;
-    const QWindow *window = found->data();
-    if (window && window->handle() &&
-        reinterpret_cast<HWND>(window->winId()) == hwnd)
-      return true;
-    windows_.erase(found);
-    return false;
-  }
-
-  QHash<HWND, QPointer<QWindow>> windows_;
 };
-
-/// Whether windows are the Windows platform plugin's, whose native handles
-/// are HWNDs.
-bool onWindows() {
-  return QGuiApplication::platformName() == QLatin1String(WindowsPlatform);
-}
-
-/// The frame the system gives \p window's styles at its DPI, in device
-/// pixels: negative left and top, positive right and bottom.  None off the
-/// Windows platform plugin.
-RECT systemFrame(QWindow &window) {
-  RECT frame{};
-  if (!onWindows())
-    return frame;
-  const auto hwnd = reinterpret_cast<HWND>(window.winId());
-  AdjustWindowRectExForDpi(
-      &frame, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
-      static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
-      GetDpiForWindow(hwnd));
-  return frame;
-}
 } // namespace
 
-FrameKind frameKind() {
-  return onWindows() ? FrameKind::Captionless : FrameKind::System;
+std::unique_ptr<QAbstractNativeEventFilter>
+createResizeFilter(QWindow &window, std::function<Qt::Edges(QPoint)> edgesAt,
+                   std::function<void()> prepareResize) {
+  if (QGuiApplication::platformName() != QLatin1String("windows"))
+    return {};
+  return std::make_unique<ResizeFilter>(window, std::move(edgesAt),
+                                        std::move(prepareResize));
 }
 
-bool drawsShadow() { return false; }
+void restoreForResize(QWindow &window) {
+  if (QGuiApplication::platformName() != QLatin1String("windows"))
+    return;
+  const auto hwnd = reinterpret_cast<HWND>(window.winId());
+  // Qt's frameless showNormal() restores geometry without clearing Windows'
+  // own maximized state, which would prevent the native sizing loop.
+  if (IsZoomed(hwnd))
+    ShowWindow(hwnd, SW_RESTORE);
+}
+
+void configureFrame(QWindow &window) {
+  if (QGuiApplication::platformName() != QLatin1String("windows"))
+    return;
+  const auto hwnd = reinterpret_cast<HWND>(window.winId());
+  // FramelessWindowHint removes WS_THICKFRAME as well as the decoration.
+  // Keep the native resize capability: Qt's frameless WM_NCCALCSIZE handling
+  // still leaves the complete rectangle available for our painted chrome.
+  if (!(window.flags() & Qt::MSWindowsFixedSizeDialogHint) &&
+      window.minimumSize() != window.maximumSize() &&
+      window.visibility() != QWindow::FullScreen) {
+    const auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (!(style & WS_THICKFRAME)) {
+      SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME);
+      SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                       SWP_NOACTIVATE);
+    }
+  }
+  const DWMNCRENDERINGPOLICY policy = DWMNCRP_DISABLED;
+  DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &policy,
+                        sizeof(policy));
+  const MARGINS margins{};
+  DwmExtendFrameIntoClientArea(hwnd, &margins);
+}
 
 void setShadowMargins(QWindow &, const QMargins &) {}
-
-void removeCaption(QWindow &window) {
-  auto *windows =
-      window.nativeInterface<QNativeInterface::Private::QWindowsWindow>();
-  if (!windows)
-    return;
-  CaptionMarginFilter::instance().add(window);
-  // A full-screen window has no caption to measure.  It keeps the margins of
-  // its captioned style, which Qt rescales as the window changes screens.
-  const auto hwnd = reinterpret_cast<HWND>(window.winId());
-  if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION)
-    return;
-  // The client area grows over the caption up to the frame's top edge; the
-  // window then resizes from that edge itself.
-  windows->setCustomMargins(QMargins(0, systemFrame(window).top, 0, 0));
-}
-
-QMargins maximizedInsets(QWindow &window) {
-  // A maximized window's border lies past the screen's top edge.
-  const double border = -systemFrame(window).left / window.devicePixelRatio();
-  return QMargins(0, qRound(border), 0, 0);
-}
-
-// Off the Windows platform plugin no system frame resizes the window.
-Qt::Edges ownResizeEdges() {
-  return onWindows()
-             ? Qt::Edges(Qt::TopEdge)
-             : Qt::LeftEdge | Qt::TopEdge | Qt::RightEdge | Qt::BottomEdge;
-}
-
-int titleBarHeight() {
-  return ::neverd::limits::gui_config::kWindowFrameWindowsTitleBarHeight;
-}
-
-int systemControlsWidth() { return 0; }
-
-bool drawsWindowControls() { return true; }
-
-bool showsWindowIcon() { return true; }
-
-bool doubleClickTitleBar(QWindow &) { return false; }
-
 } // namespace neverd::gui::platform

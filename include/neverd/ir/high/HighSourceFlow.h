@@ -77,6 +77,8 @@ std::vector<std::optional<uint64_t>> highSourceUnsignedUpperBounds(
 /// feasible emitted path. Unknown control flow or exhausted analysis budgets
 /// leave the function unchanged. This includes unused scalar unknowns, without
 /// defining any unknown bits. Retains addresses used as source labels.
+/// Terminal Itanium handlers permit liveness only; all locals their bodies or
+/// out-of-line landing-pad paths observe remain protected from copy removal.
 bool eliminateHighDeadPhiCopies(HighFunc &Function);
 /// Give the locals that same-register PHI copies join one name when their
 /// live ranges never overlap, and drop the copies that become self-copies.

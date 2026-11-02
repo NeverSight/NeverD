@@ -20,9 +20,14 @@ public:
   int styleHint(StyleHint hint, const QStyleOption *option = nullptr,
                 const QWidget *widget = nullptr,
                 QStyleHintReturn *returnData = nullptr) const override;
+  int pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr,
+                  const QWidget *widget = nullptr) const override;
   QIcon standardIcon(StandardPixmap pixmap,
                      const QStyleOption *option = nullptr,
                      const QWidget *widget = nullptr) const override;
+  QPixmap standardPixmap(StandardPixmap pixmap,
+                         const QStyleOption *option = nullptr,
+                         const QWidget *widget = nullptr) const override;
   using QProxyStyle::polish;
   using QProxyStyle::unpolish;
   void polish(QApplication *application) override;

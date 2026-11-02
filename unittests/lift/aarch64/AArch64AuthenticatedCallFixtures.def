@@ -1,0 +1,185 @@
+//===- AArch64AuthenticatedCallFixtures.def - Call ABI oracles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent BLRAA/B encodings, source compiler arguments and expectations.
+//===----------------------------------------------------------------------===//
+
+#ifndef A64_CALL_TEXT
+#define A64_CALL_TEXT(Name, Text)
+#endif
+#ifndef A64_CALL_VALUE
+#define A64_CALL_VALUE(Type, Name, Value)
+#endif
+#ifndef A64_CALL_WORD
+#define A64_CALL_WORD(Word, Key, Zero, TargetLR, ModifierLR)
+#endif
+#ifndef A64_CALL_TYPED_SHAPE
+#define A64_CALL_TYPED_SHAPE(Name, Parameters, ReturnKind, Fixed)
+#endif
+#ifndef A64_CALL_INTEGER_TYPE
+#define A64_CALL_INTEGER_TYPE(Kind, Bytes, Signed)
+#endif
+#ifndef A64_CALL_RECORD_TYPE
+#define A64_CALL_RECORD_TYPE(Kind, Fields)
+#endif
+#ifndef A64_CALL_TYPED_VARIANT
+#define A64_CALL_TYPED_VARIANT(Key, Zero, Raw)
+#endif
+
+A64_CALL_TEXT(kUnknownTypedKind, "unknown authenticated call fixture type")
+A64_CALL_TEXT(kFunction, "authenticated_dispatch")
+A64_CALL_TEXT(kTypedArgument, "value")
+A64_CALL_TEXT(kTypedDirectory, "typed-{0}-{1}-{2}-{3}")
+A64_CALL_TEXT(kNativeTypedDirectory, "native-typed-{0}-{1}-{2}")
+A64_CALL_TEXT(kResolvedCallback, "resolved_callback")
+A64_CALL_TEXT(kTemporaryPrefix, "neverd-authenticated-call")
+A64_CALL_TEXT(kSourceExtension, "c")
+A64_CALL_TEXT(kLLVMExtension, "ll")
+A64_CALL_TEXT(kErrorExtension, "err")
+A64_CALL_TEXT(kCompiler, "clang")
+A64_CALL_TEXT(kCompilerUnavailable,
+              "Clang is required for authenticated-call C ABI checks")
+A64_CALL_TEXT(kTargetOption, "-target")
+A64_CALL_TEXT(kTriple, "arm64e-apple-macos15")
+A64_CALL_TEXT(kFreestandingOption, "-ffreestanding")
+A64_CALL_TEXT(kResourceHeadersOption, "-nostdlibinc")
+A64_CALL_TEXT(kIncludeOption, "-I")
+A64_CALL_TEXT(kStandardOption, "-std=gnu11")
+A64_CALL_TEXT(kUnwindOption, "-funwind-tables")
+A64_CALL_TEXT(kAsyncUnwindOption, "-fasynchronous-unwind-tables")
+A64_CALL_TEXT(kAssemblyOption, "-S")
+A64_CALL_TEXT(kLLVMOption, "-emit-llvm")
+A64_CALL_TEXT(kOutputOption, "-o")
+A64_CALL_TEXT(kNoOptimize, "-O0")
+A64_CALL_TEXT(kOptimize, "-O2")
+A64_CALL_TEXT(kBundle, "ptrauth")
+A64_CALL_TEXT(kStandaloneAuthentication, "llvm.ptrauth.auth")
+A64_CALL_TEXT(kResignBuiltin, "__builtin_ptrauth_auth_and_resign")
+A64_CALL_TEXT(kRawCallMacro, "__neverd_aarch64_raw_call")
+A64_CALL_TEXT(kArtifactEnvironment, "NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR")
+A64_CALL_TEXT(kArtifactProperty, "authenticated_call_artifact_dir")
+A64_CALL_TEXT(kHighSource, "high.c")
+A64_CALL_TEXT(kLLVMSource, "llvm.c")
+A64_CALL_TEXT(kLLVMIR, "native.ll")
+A64_CALL_TEXT(kELFObject, "native.o")
+A64_CALL_TEXT(kMachOObject, "native-macho.o")
+A64_CALL_TEXT(kCaseDirectory, "{0}-{1}-{2}")
+A64_CALL_TEXT(kRawCaseDirectory, "raw-{0}")
+A64_CALL_TEXT(kHighRoute, "high")
+A64_CALL_TEXT(kLLVMRoute, "llvm")
+A64_CALL_TEXT(kCompiledObject, "{0}-{1}.o")
+A64_CALL_TEXT(kCompiledIR, "{0}-{1}.ll")
+A64_CALL_VALUE(unsigned, kCompilerTimeoutSeconds, 30)
+A64_CALL_VALUE(unsigned, kPathCapacity, 128)
+A64_CALL_VALUE(unsigned, kPointerBytes, 8)
+A64_CALL_VALUE(unsigned, kFloatBytes, 4)
+A64_CALL_VALUE(char, kFloatKind, 'f')
+A64_CALL_VALUE(char, kDoubleKind, 'd')
+A64_CALL_VALUE(char, kPointerKind, 'p')
+A64_CALL_VALUE(unsigned, kPromotedIntegerBytes, 4)
+A64_CALL_VALUE(unsigned, kBitsPerByte, 8)
+A64_CALL_VALUE(int, kTypedTemporaryId, 128)
+A64_CALL_VALUE(uint64_t, kEntryAddress, 0x1000U)
+A64_CALL_VALUE(int, kAuthenticationTemporaryId, 64)
+A64_CALL_VALUE(int, kCallResultId, 65)
+A64_CALL_VALUE(unsigned, kManyArguments, 10)
+A64_CALL_VALUE(uint32_t, kSaveFrame, 0xa9bf7bfdU)
+A64_CALL_VALUE(uint32_t, kRestoreFrame, 0xa8c17bfdU)
+A64_CALL_VALUE(uint32_t, kReturn, 0xd65f03c0U)
+A64_CALL_VALUE(uint32_t, kTargetX16, 0xaa0003f0U)
+A64_CALL_VALUE(uint32_t, kTargetX30, 0xaa0003feU)
+A64_CALL_VALUE(uint32_t, kModifierX17, 0xaa0103f1U)
+A64_CALL_VALUE(uint32_t, kModifierX30, 0xaa0103feU)
+A64_CALL_VALUE(uint32_t, kArgumentX0, 0xaa0203e0U)
+A64_CALL_VALUE(uint32_t, kAddFive, 0x91001400U)
+A64_CALL_WORD(0xd73f0a11U, 0, false, false, false)
+A64_CALL_WORD(0xd73f0e11U, 1, false, false, false)
+A64_CALL_WORD(0xd63f0a1fU, 0, true, false, false)
+A64_CALL_WORD(0xd63f0e1fU, 1, true, false, false)
+A64_CALL_WORD(0xd73f0bd1U, 0, false, true, false)
+A64_CALL_WORD(0xd73f0fd1U, 1, false, true, false)
+A64_CALL_WORD(0xd73f0a1eU, 0, false, false, true)
+A64_CALL_WORD(0xd73f0e1eU, 1, false, false, true)
+
+A64_CALL_INTEGER_TYPE('b', 1, true)
+A64_CALL_INTEGER_TYPE('B', 1, false)
+A64_CALL_INTEGER_TYPE('h', 2, true)
+A64_CALL_INTEGER_TYPE('H', 2, false)
+A64_CALL_INTEGER_TYPE('w', 4, true)
+A64_CALL_INTEGER_TYPE('W', 4, false)
+A64_CALL_INTEGER_TYPE('i', 8, true)
+A64_CALL_INTEGER_TYPE('q', 16, true)
+A64_CALL_INTEGER_TYPE('Q', 16, false)
+A64_CALL_RECORD_TYPE('a', "ii")
+A64_CALL_RECORD_TYPE('t', "ff")
+A64_CALL_RECORD_TYPE('u', "fff")
+A64_CALL_RECORD_TYPE('v', "ffff")
+A64_CALL_RECORD_TYPE('x', "dd")
+A64_CALL_RECORD_TYPE('y', "ddd")
+A64_CALL_RECORD_TYPE('z', "dddd")
+A64_CALL_RECORD_TYPE('n', "tt")
+A64_CALL_RECORD_TYPE('r', "wi")
+A64_CALL_RECORD_TYPE('A', "i")
+A64_CALL_RECORD_TYPE('o', "ip")
+A64_CALL_RECORD_TYPE('O', "pp")
+A64_CALL_RECORD_TYPE('s', "f")
+A64_CALL_RECORD_TYPE('S', "d")
+
+A64_CALL_TYPED_SHAPE("f64-one", "d", 'd', -1)
+A64_CALL_TYPED_SHAPE("f64-ten", "dddddddddd", 'd', -1)
+A64_CALL_TYPED_SHAPE("f32-ten", "ffffffffff", 'f', -1)
+A64_CALL_TYPED_SHAPE("mixed-ten", "ididididid", 'd', -1)
+A64_CALL_TYPED_SHAPE("variadic-double", "iddddddddd", 'd', 1)
+A64_CALL_TYPED_SHAPE("variadic-mixed", "dididididi", 'f', 1)
+A64_CALL_TYPED_SHAPE("signed-byte-ten", "bbbbbbbbbb", 'b', -1)
+A64_CALL_TYPED_SHAPE("unsigned-byte-ten", "BBBBBBBBBB", 'B', -1)
+A64_CALL_TYPED_SHAPE("signed-half-ten", "hhhhhhhhhh", 'h', -1)
+A64_CALL_TYPED_SHAPE("unsigned-half-ten", "HHHHHHHHHH", 'H', -1)
+A64_CALL_TYPED_SHAPE("word-ten", "wWwWwWwWwW", 'w', -1)
+A64_CALL_TYPED_SHAPE("pointer-ten", "pppppppppp", 'p', -1)
+A64_CALL_TYPED_SHAPE("mixed-narrow", "bBhHwpbBhp", 'W', -1)
+A64_CALL_TYPED_SHAPE("variadic-narrow", "bididididi", 'h', 1)
+A64_CALL_TYPED_SHAPE("variadic-packed-prefix", "bbbbbbbbbbidi", 'B', 10)
+A64_CALL_TYPED_SHAPE("wide-one", "q", 'q', -1)
+A64_CALL_TYPED_SHAPE("wide-odd", "iqi", 'Q', -1)
+A64_CALL_TYPED_SHAPE("wide-last-pair", "iiiiiiQi", 'q', -1)
+A64_CALL_TYPED_SHAPE("wide-whole-spill", "iiiiiiiqi", 'Q', -1)
+A64_CALL_TYPED_SHAPE("wide-packed-spill", "iiiiiiiibQbq", 'q', -1)
+A64_CALL_TYPED_SHAPE("word-pair", "ia", 'a', -1)
+A64_CALL_TYPED_SHAPE("word-pair-spill", "iiiiiiiiaa", 'a', -1)
+A64_CALL_TYPED_SHAPE("word-pair-packed", "iiiiiiiiba", 'a', -1)
+A64_CALL_TYPED_SHAPE("narrow-word-pair", "ir", 'r', -1)
+A64_CALL_TYPED_SHAPE("hfa-f32-two", "t", 't', -1)
+A64_CALL_TYPED_SHAPE("hfa-f32-three", "u", 'u', -1)
+A64_CALL_TYPED_SHAPE("hfa-f32-four", "v", 'v', -1)
+A64_CALL_TYPED_SHAPE("hfa-f64-two", "x", 'x', -1)
+A64_CALL_TYPED_SHAPE("hfa-f64-three", "y", 'y', -1)
+A64_CALL_TYPED_SHAPE("hfa-f64-four", "z", 'z', -1)
+A64_CALL_TYPED_SHAPE("hfa-nested", "n", 'n', -1)
+A64_CALL_TYPED_SHAPE("hfa-f32-exhausted", "ffffffuf", 'u', -1)
+A64_CALL_TYPED_SHAPE("hfa-f64-exhausted", "dddddddxd", 'x', -1)
+A64_CALL_TYPED_SHAPE("hfa-packed-spill", "iiiiiiiiifffffffvf", 'v', -1)
+A64_CALL_TYPED_SHAPE("wide-and-hfa", "qazn", 'z', -1)
+A64_CALL_TYPED_SHAPE("word-one", "A", 'A', -1)
+A64_CALL_TYPED_SHAPE("word-pointer-pair", "o", 'o', -1)
+A64_CALL_TYPED_SHAPE("pointer-pair", "O", 'O', -1)
+A64_CALL_TYPED_SHAPE("hfa-f32-one", "s", 's', -1)
+A64_CALL_TYPED_SHAPE("hfa-f64-one", "S", 'S', -1)
+A64_CALL_TYPED_VARIANT(0, false, false)
+A64_CALL_TYPED_VARIANT(0, true, false)
+A64_CALL_TYPED_VARIANT(1, false, false)
+A64_CALL_TYPED_VARIANT(1, true, false)
+A64_CALL_TYPED_VARIANT(0, false, true)
+
+#undef A64_CALL_TEXT
+#undef A64_CALL_VALUE
+#undef A64_CALL_WORD
+#undef A64_CALL_TYPED_SHAPE
+#undef A64_CALL_TYPED_VARIANT
+
+#undef A64_CALL_INTEGER_TYPE
+
+#undef A64_CALL_RECORD_TYPE

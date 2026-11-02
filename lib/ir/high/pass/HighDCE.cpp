@@ -20,6 +20,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -47,7 +48,9 @@ static bool isLocalExpr(const HighExpr &E) {
 // Expression cycle detection and breaking
 //===----------------------------------------------------------------------===//
 
-static void breakExprCycles(ExprPtr &Root, HighExprSet &KnownAcyclic) {
+// Returns whether a cycle was broken.
+static bool breakExprCycles(ExprPtr &Root, HighExprSet &KnownAcyclic) {
+  bool Broken = false;
   struct Frame {
     ExprPtr *Slot = nullptr;
     size_t NextOperand = 0;
@@ -71,6 +74,7 @@ static void breakExprCycles(ExprPtr &Root, HighExprSet &KnownAcyclic) {
       }
       if (!Path.insert(Expr).second) {
         *Current.Slot = HighExpr::makeConst(0, 8);
+        Broken = true;
         Work.pop_back();
         continue;
       }
@@ -91,6 +95,7 @@ static void breakExprCycles(ExprPtr &Root, HighExprSet &KnownAcyclic) {
         continue;
       if (Path.count(Operand.get())) {
         Operand = HighExpr::makeConst(0, 8);
+        Broken = true;
         continue;
       }
       Work.push_back({&Operand, 0, false});
@@ -101,13 +106,17 @@ static void breakExprCycles(ExprPtr &Root, HighExprSet &KnownAcyclic) {
     KnownAcyclic.insert(Expr);
     Work.pop_back();
   }
+  return Broken;
 }
 
-static void breakStmtCycles(std::vector<HighStmt> &Stmts) {
+// Returns whether a cycle was broken.
+static bool breakStmtCycles(std::vector<HighStmt> &Stmts) {
   HighExprSet Safe;
-  walkStmts(Stmts, [&Safe](HighStmt &S) {
-    forEachExpr(S, [&Safe](ExprPtr &EP) { breakExprCycles(EP, Safe); });
+  bool Broken = false;
+  walkStmts(Stmts, [&](HighStmt &S) {
+    forEachExpr(S, [&](ExprPtr &EP) { Broken |= breakExprCycles(EP, Safe); });
   });
+  return Broken;
 }
 
 //===----------------------------------------------------------------------===//
@@ -756,7 +765,8 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   // anchor at its start address before the first surviving statement, so the
   // entry keeps its code, its label, and its address range for the EH
   // structurer.
-  if (CurMed)
+  if (CurMed) {
+    std::optional<std::unordered_set<va_t>> AnchoredEntries;
     for (size_t B = 1; B < CurMed->Blocks.size(); ++B) {
       const MedBlock &Block = CurMed->Blocks[B];
       if (!Block.Preds.empty() || Block.StartAddr == 0 ||
@@ -765,11 +775,15 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
       Entries.insert(Block.StartAddr);
       // DCE runs repeatedly; an anchor from an earlier round, possibly
       // wrapped since, already carries the address.
-      bool Anchored = false;
-      walkStmts(Func.Body, [&](const HighStmt &S) {
-        Anchored |= S.Addr == Block.StartAddr;
-      });
-      if (Anchored)
+      // This loop only inserts anchors. Index the existing nested addresses
+      // once, on demand, and add each new anchor before checking another
+      // block. The index never survives a statement rewrite or DCE round.
+      if (!AnchoredEntries) {
+        AnchoredEntries.emplace();
+        walkStmts(Func.Body,
+                  [&](const HighStmt &S) { AnchoredEntries->insert(S.Addr); });
+      }
+      if (AnchoredEntries->count(Block.StartAddr))
         continue;
       auto First = std::find_if(
           Func.Body.begin(), Func.Body.end(), [&](const HighStmt &S) {
@@ -781,7 +795,9 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
       Anchor.Kind = StmtKind::Block;
       Anchor.Addr = Block.StartAddr;
       Func.Body.insert(First, std::move(Anchor));
+      AnchoredEntries->insert(Block.StartAddr);
     }
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 0: unreachable (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
@@ -844,9 +860,17 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 13: iterative DCE (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
   const auto TIter = Clock::now();
+  const bool ForwardedAcrossJoins =
+      forwardPrivateFrameLoads(Func, TargetArch, /*AcrossJoins=*/true);
   iterativeDCE(Func, Entries);
   const auto TPost = Clock::now();
 
+  // A shared epilogue can retain load temporaries and PHI chains for saved
+  // registers until DCE. Revisit home-slot preservation after those reads
+  // disappear, while addresses still have their original SSA identities.
+  stripPrologueEpilogue(Func);
+  if (Image)
+    elimUndefinedEntryScratchStores(Func, TargetArch, Image->abiFormat());
   elimUnreadPrivateFrameStores(Func, TargetArch);
   narrowSourceConcatLocals(Func);
   // Removing a vector carrier can expose a second, narrower scalar copy
@@ -857,7 +881,7 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 14: var rename (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
-  renameVars(Func.Body);
+  renameVars(Func);
 
   postRenameCleanup(Func);
 
@@ -869,10 +893,21 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 15: semantic simplify ("
                           << Func.Name << ", " << Func.Body.size()
                           << " stmts)\n");
-  forwardPrivateFrameLoads(Func, TargetArch);
+  // The proof across joins builds a flow graph per function. Repeat it only
+  // to follow up on rewrites its phase-13 run made: DCE and renaming alone
+  // rarely give it anything new.
+  forwardPrivateFrameLoads(Func, TargetArch,
+                           /*AcrossJoins=*/ForwardedAcrossJoins);
+  const bool Simplified = simplifyAllExprs(Func.Body);
   if (SymbolicSimplification)
     simplifyExprSemantics(Func.Body, SemanticThreadLimit);
-  breakStmtCycles(Func.Body);
+  const bool CyclesBroken = breakStmtCycles(Func.Body);
+  // Symbolic word arithmetic may publish a negated sum for a difference.
+  // Restore source comparisons without substituting any local definitions
+  // back into the shared expression graph. Expressions the pass above left
+  // unchanged, and nothing changed since, would come out unchanged again.
+  if (Simplified || SymbolicSimplification || CyclesBroken)
+    simplifyAllExprs(Func.Body);
   // Semantic rewriting can make the scalar definitions that held an MBA
   // expansion dead. Remove them without feeding the shared result back through
   // copy propagation, which could create a cycle in the expression DAG.

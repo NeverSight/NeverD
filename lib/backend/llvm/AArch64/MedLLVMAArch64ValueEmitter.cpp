@@ -11,19 +11,32 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../AArch64OriginalMemory.h"
+#include "AArch64SVEPredicate.h"
+
+#include "neverd/backend/llvm/AArch64StructureMemoryAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/loader/AArch64MemoryImage.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-aarch64-value"
+#include "neverd/ir/intrinsics/AArch64/AArch64CPA.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/Support/ErrorHandling.h"
+
+#include <algorithm>
+#include <vector>
 
 namespace neverd {
 
@@ -35,6 +48,458 @@ llvm::Value *
 MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                           llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
+
+  if (isAArch64AddressMemoryIntrinsic(IC)) {
+    if (!aarch64AddressMemoryMedShapeIsValid(Op))
+      llvm::report_fatal_error(kAddressMemoryMalformed);
+    const auto Instruction = *aarch64AddressMemoryInstruction(
+        Op.Inputs[kAddressMemoryWordOperand + 1].ConstVal);
+    const bool Immediate = !Instruction.hasRegisterIndex();
+    // Runtime bases already supply GPR bits. Image-derived immediate bases
+    // require a complete storage run below; register indices remain separate
+    // because the instruction owns their extension, scale and checked addition.
+    llvm::Value *Base = nullptr;
+    if (!Immediate && Instruction.isLoad() && OriginalImageStorageForSource &&
+        Img)
+      if (const auto *Table = recoveredJumpTableForLoad(Op);
+          Table && Table->HasBaseAddr && Table->HasDispatchSlotMap &&
+          !Table->SlotIndices.empty()) {
+        const uint32_t Last = *std::max_element(Table->SlotIndices.begin(),
+                                                Table->SlotIndices.end());
+        const auto Span =
+            Instruction.controlIndependentSpan(Table->BaseAddr, Last);
+        const auto Storage =
+            Span ? aarch64OriginalMemoryStorage(*Img, Span->Begin)
+                 : std::nullopt;
+        if (Storage && Span->Bytes <= Storage->Bytes.size()) {
+          // The result is consumed only by the authenticated switch. Keep
+          // the actual read, using original bytes rather than inventing
+          // callable identities for physical slots the switch cannot reach.
+          const auto Name =
+              kOriginalMemoryLLVMNamePrefix + llvm::utohexstr(Storage->Base);
+          std::vector<uint8_t> Bytes(Storage->Pad, 0);
+          Bytes.insert(Bytes.end(), Storage->Bytes.begin(),
+                       Storage->Bytes.end());
+          auto *Initializer = llvm::ConstantDataArray::get(*Ctx, Bytes);
+          auto *Global = new llvm::GlobalVariable(
+              *Mod, Initializer->getType(), false,
+              llvm::GlobalValue::PrivateLinkage, Initializer, Name);
+          Global->setAlignment(llvm::Align(limits::kMaxEmbeddedDataAlignment));
+          Base = Builder.CreateGEP(
+              Builder.getInt8Ty(), Global,
+              Builder.getInt64(Storage->Pad + Table->BaseAddr - Storage->Base));
+        }
+      }
+    if (!Instruction.stackBase() && !Immediate && !Base)
+      Base = resolveAtomicMemoryPtr(
+          Op.Inputs[kAddressMemoryBaseOperand + 1], Instruction.accessBytes(),
+          sizeToType(Instruction.accessBytes()), Builder);
+    if (Immediate && !Instruction.stackBase() && Img) {
+      uint64_t OriginalBase = 0;
+      uint64_t Owner = InvalidVA;
+      if (resolveMaterializableDataAddress(
+              Op.Inputs[kAddressMemoryBaseOperand + 1], OriginalBase, &Owner)) {
+        if (!aarch64ImmediateMemoryImageSpan(
+                *Img, Instruction, OriginalBase,
+                ConstantAddressProvenance::DataAddress, Owner))
+          llvm::report_fatal_error(kAddressMemoryImmediateImageUnsupported);
+        if (Owner == InvalidVA)
+          Owner = Img->layoutAddressOwner(OriginalBase);
+        // Resolve the raw base into one complete storage run, never a suffix
+        // copy of the accessed bytes. The original instruction still applies
+        // its displacement and performs the access-EL checked addition.
+        Base = tryResolveOwnedGlobalData(OriginalBase, Owner,
+                                         kAddressMemoryPointerBytes, true);
+        if (!Base)
+          llvm::report_fatal_error(kAddressMemoryImmediateImageUnsupported);
+      } else {
+        rejectEscapingAddressFragment(Op.Inputs[kAddressMemoryBaseOperand + 1],
+                                      kAddressMemoryImmediateImageUnsupported);
+      }
+    }
+    const auto &Machine = Instruction.machine();
+    auto Integer = [&](const MedVar &Input) -> llvm::Value * {
+      auto *Value = getVar(Input, Builder);
+      if (Value->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(Value, Builder.getInt64Ty());
+      if (!Value->getType()->isIntegerTy())
+        llvm::report_fatal_error(kAddressMemoryMalformed);
+      return Builder.CreateZExtOrTrunc(Value, Builder.getInt64Ty());
+    };
+    auto *BaseInteger = Base
+                            ? Builder.CreatePtrToInt(Base, Builder.getInt64Ty())
+                            : Integer(Op.Inputs[kAddressMemoryBaseOperand + 1]);
+    if (Instruction.isVector()) {
+      auto *VectorType = llvm::FixedVectorType::get(
+          Builder.getInt64Ty(),
+          kAddressMemoryVectorBytes / kAddressMemoryPointerBytes);
+      if (!Instruction.isLoad()) {
+        llvm::Value *Data =
+            getVar(Op.Inputs[kAddressMemoryDataOperand + 1], Builder);
+        if (!Data->getType()->isIntegerTy())
+          llvm::report_fatal_error(kAddressMemoryMalformed);
+        Data = Builder.CreateZExtOrTrunc(
+            Data, Builder.getIntNTy(kAddressMemoryVectorBits));
+        Data = Builder.CreateBitCast(Data, VectorType);
+        auto *Asm = llvm::InlineAsm::get(
+            llvm::FunctionType::get(Builder.getVoidTy(),
+                                    {Builder.getInt64Ty(), Builder.getInt64Ty(),
+                                     Builder.getInt32Ty(), VectorType},
+                                    false),
+            Machine.Asm, Machine.Constraints, true);
+        return Builder.CreateCall(
+            Asm,
+            {BaseInteger, Integer(Op.Inputs[kAddressMemoryIndexOperand + 1]),
+             Builder.getInt32(Instruction.scratchWord()), Data});
+      }
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(VectorType,
+                                  {Builder.getInt64Ty(), Builder.getInt64Ty(),
+                                   Builder.getInt32Ty()},
+                                  false),
+          Machine.Asm, Machine.Constraints, true);
+      auto *Result = Builder.CreateCall(
+          Asm,
+          {BaseInteger, Integer(Op.Inputs[kAddressMemoryIndexOperand + 1]),
+           Builder.getInt32(Instruction.scratchWord())},
+          kAddressLoadResult);
+      return Builder.CreateZExtOrTrunc(
+          Builder.CreateBitCast(Result,
+                                Builder.getIntNTy(kAddressMemoryVectorBits)),
+          sizeToType(Op.Output.Size));
+    }
+    if (!Instruction.isLoad()) {
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(Builder.getVoidTy(),
+                                  {Builder.getInt64Ty(), Builder.getInt64Ty(),
+                                   Builder.getInt32Ty(), Builder.getInt64Ty()},
+                                  false),
+          Machine.Asm, Machine.Constraints, /*hasSideEffects=*/true);
+      return Builder.CreateCall(
+          Asm, {BaseInteger, Integer(Op.Inputs[kAddressMemoryIndexOperand + 1]),
+                Builder.getInt32(Instruction.scratchWord()),
+                Integer(Op.Inputs[kAddressMemoryDataOperand + 1])});
+    }
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(
+            Builder.getInt64Ty(),
+            {Builder.getInt64Ty(), Builder.getInt64Ty(), Builder.getInt32Ty()},
+            false),
+        Machine.Asm, Machine.Constraints, /*hasSideEffects=*/true);
+    auto *Result = Builder.CreateCall(
+        Asm,
+        {BaseInteger, Integer(Op.Inputs[kAddressMemoryIndexOperand + 1]),
+         Builder.getInt32(Instruction.scratchWord())},
+        kAddressLoadResult);
+    return Builder.CreateZExtOrTrunc(Result, sizeToType(Op.Output.Size));
+  }
+
+  if (isAArch64WritebackMemoryIntrinsic(IC)) {
+    if (!aarch64WritebackMemoryMedShapeIsValid(Op))
+      llvm::report_fatal_error(kWritebackMalformed);
+    const auto Instruction = *aarch64WritebackMemoryInstruction(
+        Op.Inputs[kWritebackWordOperand + 1].ConstVal);
+    const auto &BaseInput = Op.Inputs[kWritebackBaseOperand + 1];
+    llvm::Value *Base = nullptr;
+    if (Img) {
+      uint64_t OriginalBase = 0;
+      uint64_t Owner = InvalidVA;
+      if (resolveMaterializableDataAddress(BaseInput, OriginalBase, &Owner)) {
+        if (!aarch64ImmediateMemoryImageSpan(
+                *Img, Instruction, OriginalBase,
+                ConstantAddressProvenance::DataAddress, Owner))
+          llvm::report_fatal_error(kAddressMemoryImmediateImageUnsupported);
+        if (Owner == InvalidVA)
+          Owner = Img->layoutAddressOwner(OriginalBase);
+        Base = tryResolveOwnedGlobalData(OriginalBase, Owner,
+                                         kAddressMemoryPointerBytes, true);
+        if (!Base)
+          llvm::report_fatal_error(kAddressMemoryImmediateImageUnsupported);
+      } else {
+        rejectEscapingAddressFragment(BaseInput,
+                                      kAddressMemoryImmediateImageUnsupported);
+      }
+    }
+    if (!Base)
+      Base = getVar(BaseInput, Builder);
+    if (Base->getType()->isPointerTy())
+      Base = Builder.CreatePtrToInt(Base, Builder.getInt64Ty());
+    if (!Base->getType()->isIntegerTy(kAddressMemoryPointerBits))
+      llvm::report_fatal_error(kWritebackMalformed);
+    if (Instruction.isStructure()) {
+      const auto Structure = Instruction.structure();
+      const auto Plan = aarch64StructureMemoryAsm(Structure);
+      auto *VectorType = llvm::FixedVectorType::get(
+          Builder.getInt64Ty(),
+          kAddressMemoryVectorBytes / kAddressMemoryPointerBytes);
+      std::vector<llvm::Type *> InputTypes{Builder.getInt64Ty(),
+                                           Builder.getInt64Ty()};
+      auto *Index = getVar(Op.Inputs[kStructureIndexOperand + 1], Builder);
+      std::vector<llvm::Value *> Inputs{
+          Base, Index->getType()->isPointerTy()
+                    ? Builder.CreatePtrToInt(Index, Builder.getInt64Ty())
+                    : Index};
+      if (!Structure.isLoad() || Structure.laneLoad())
+        for (unsigned I = 0; I != Structure.vectors(); ++I) {
+          InputTypes.push_back(VectorType);
+          Inputs.push_back(Builder.CreateBitCast(
+              getVar(Op.Inputs[kStructureDataOperand + I + 1], Builder),
+              VectorType));
+        }
+      InputTypes.push_back(Builder.getInt32Ty());
+      Inputs.push_back(Builder.getInt32(Structure.scratchWord()));
+      llvm::Type *ResultType = Builder.getInt64Ty();
+      if (Structure.isLoad()) {
+        std::vector<llvm::Type *> Outputs(Structure.vectors(), VectorType);
+        Outputs.push_back(Builder.getInt64Ty());
+        ResultType = llvm::StructType::get(*Ctx, Outputs);
+      }
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(ResultType, InputTypes, false), Plan.Text,
+          Plan.Constraints, true);
+      auto *Result = Builder.CreateCall(Asm, Inputs, kWritebackResult);
+      if (!Structure.isLoad())
+        return Result;
+      for (unsigned I = 0; I != Structure.vectors(); ++I)
+        PendingIntrinsicOutputs[I] =
+            Builder.CreateBitCast(Builder.CreateExtractValue(Result, {I}),
+                                  Builder.getIntNTy(kAddressMemoryVectorBits));
+      auto *Updated = Builder.CreateExtractValue(Result, {Structure.vectors()});
+      PendingIntrinsicOutputs[Structure.vectors()] = Updated;
+      PendingIntrinsicCount = intrinsicOutputCount(IC);
+      return Updated;
+    }
+    if (Instruction.isPair()) {
+      llvm::Type *ValueType = Builder.getInt64Ty();
+      if (Instruction.isVector())
+        ValueType = llvm::FixedVectorType::get(Builder.getInt64Ty(),
+                                               kAddressMemoryVectorBytes /
+                                                   kAddressMemoryPointerBytes);
+      if (!Instruction.isLoad()) {
+        auto *First = getVar(Op.Inputs[kWritebackDataOperand + 1], Builder);
+        auto *Second = getVar(Op.Inputs[kPairSecondDataOperand + 1], Builder);
+        const auto Data = [&](llvm::Value *Value) {
+          if (Instruction.isVector())
+            return Builder.CreateBitCast(Value, ValueType);
+          return Value->getType()->isPointerTy()
+                     ? Builder.CreatePtrToInt(Value, ValueType)
+                     : Value;
+        };
+        auto *Asm = llvm::InlineAsm::get(
+            llvm::FunctionType::get(Builder.getInt64Ty(),
+                                    {Builder.getInt64Ty(), ValueType, ValueType,
+                                     Builder.getInt32Ty()},
+                                    false),
+            Instruction.machine().Asm, Instruction.machine().Constraints, true);
+        return Builder.CreateCall(Asm,
+                                  {Base, Data(First), Data(Second),
+                                   Builder.getInt32(Instruction.scratchWord())},
+                                  kWritebackResult);
+      }
+      auto *ResultType = llvm::StructType::get(
+          *Ctx, {ValueType, ValueType, Builder.getInt64Ty()});
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(
+              ResultType, {Builder.getInt64Ty(), Builder.getInt32Ty()}, false),
+          Instruction.machine().Asm, Instruction.machine().Constraints, true);
+      auto *Result = Builder.CreateCall(
+          Asm, {Base, Builder.getInt32(Instruction.scratchWord())},
+          kWritebackResult);
+      for (unsigned I = 0; I != kPairValues; ++I) {
+        auto *Value = Builder.CreateExtractValue(Result, {I});
+        PendingIntrinsicOutputs[I] =
+            Instruction.isVector()
+                ? Builder.CreateBitCast(
+                      Value, Builder.getIntNTy(kAddressMemoryVectorBits))
+                : Value;
+      }
+      auto *Updated = Builder.CreateExtractValue(Result, {kPairBaseIndex});
+      PendingIntrinsicOutputs[kPairBaseIndex] = Updated;
+      PendingIntrinsicCount = intrinsicOutputCount(IC);
+      return Updated;
+    }
+    if (Instruction.isVector()) {
+      auto *VectorType = llvm::FixedVectorType::get(
+          Builder.getInt64Ty(),
+          kAddressMemoryVectorBytes / kAddressMemoryPointerBytes);
+      if (!Instruction.isLoad()) {
+        auto *Data = getVar(Op.Inputs[kWritebackDataOperand + 1], Builder);
+        if (!Data->getType()->isIntegerTy(kAddressMemoryVectorBits))
+          llvm::report_fatal_error(kWritebackMalformed);
+        auto *Asm = llvm::InlineAsm::get(
+            llvm::FunctionType::get(
+                Builder.getInt64Ty(),
+                {Builder.getInt64Ty(), VectorType, Builder.getInt32Ty()},
+                false),
+            Instruction.machine().Asm, Instruction.machine().Constraints, true);
+        return Builder.CreateCall(Asm,
+                                  {Base,
+                                   Builder.CreateBitCast(Data, VectorType),
+                                   Builder.getInt32(Instruction.scratchWord())},
+                                  kWritebackResult);
+      }
+      auto *ResultType =
+          llvm::StructType::get(*Ctx, {VectorType, Builder.getInt64Ty()});
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(
+              ResultType, {Builder.getInt64Ty(), Builder.getInt32Ty()}, false),
+          Instruction.machine().Asm, Instruction.machine().Constraints, true);
+      auto *Result = Builder.CreateCall(
+          Asm, {Base, Builder.getInt32(Instruction.scratchWord())},
+          kWritebackResult);
+      PendingIntrinsicOutputs[kWritebackValueIndex] = Builder.CreateBitCast(
+          Builder.CreateExtractValue(Result, {kWritebackValueIndex}),
+          Builder.getIntNTy(kAddressMemoryVectorBits));
+      auto *Updated = Builder.CreateExtractValue(Result, {kWritebackBaseIndex});
+      PendingIntrinsicOutputs[kWritebackBaseIndex] = Updated;
+      PendingIntrinsicCount = intrinsicOutputCount(IC);
+      return Updated;
+    }
+    if (!Instruction.isLoad()) {
+      auto *Data = getVar(Op.Inputs[kWritebackDataOperand + 1], Builder);
+      if (Data->getType()->isPointerTy())
+        Data = Builder.CreatePtrToInt(Data, Builder.getInt64Ty());
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(Builder.getInt64Ty(),
+                                  {Builder.getInt64Ty(), Builder.getInt64Ty(),
+                                   Builder.getInt32Ty()},
+                                  false),
+          Instruction.machine().Asm, Instruction.machine().Constraints, true);
+      return Builder.CreateCall(
+          Asm, {Base, Data, Builder.getInt32(Instruction.scratchWord())},
+          kWritebackResult);
+    }
+    auto *ResultType = llvm::StructType::get(
+        *Ctx, {Builder.getInt64Ty(), Builder.getInt64Ty()});
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(
+            ResultType, {Builder.getInt64Ty(), Builder.getInt32Ty()}, false),
+        Instruction.machine().Asm, Instruction.machine().Constraints, true);
+    auto *Result = Builder.CreateCall(
+        Asm, {Base, Builder.getInt32(Instruction.scratchWord())},
+        kWritebackResult);
+    auto *PairType = Builder.getIntNTy(kWritebackPairBits);
+    return Builder.CreateOr(
+        Builder.CreateZExt(
+            Builder.CreateExtractValue(Result, {kWritebackValueIndex}),
+            PairType),
+        Builder.CreateShl(Builder.CreateZExt(Builder.CreateExtractValue(
+                                                 Result, {kWritebackBaseIndex}),
+                                             PairType),
+                          kAddressMemoryPointerBits));
+  }
+
+  if (isAArch64PAuthLoadIntrinsic(IC)) {
+    if (!aarch64PAuthLoadMedShapeIsValid(Op))
+      llvm::report_fatal_error(kPAuthLoadMalformed);
+    const auto Instruction =
+        *aarch64PAuthLoadInstruction(Op.Inputs[2].ConstVal);
+    llvm::Value *Base = getVar(Op.Inputs[1], Builder);
+    if (Base->getType()->isPointerTy())
+      Base = Builder.CreatePtrToInt(Base, Builder.getInt64Ty());
+    auto *ResultType = llvm::StructType::get(
+        *Ctx, {Builder.getInt64Ty(), Builder.getInt64Ty()});
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(
+            ResultType, {Builder.getInt64Ty(), Builder.getInt32Ty()}, false),
+        Instruction.llvmAsm(), Instruction.llvmConstraints(),
+        /*hasSideEffects=*/true);
+    llvm::Value *Result = Builder.CreateCall(
+        Asm, {Base, Builder.getInt32(Instruction.scratchWord())},
+        kPAuthLoadResult);
+    auto *PairType = Builder.getIntNTy(kPAuthLoadPairBits);
+    return Builder.CreateOr(
+        Builder.CreateZExt(
+            Builder.CreateExtractValue(Result, {kPAuthLoadValueIndex}),
+            PairType),
+        Builder.CreateShl(Builder.CreateZExt(Builder.CreateExtractValue(
+                                                 Result, {kPAuthLoadBaseIndex}),
+                                             PairType),
+                          kPAuthLoadPointerBits));
+  }
+
+  if (const auto Auth = aarch64PAuthExtendedOperation(IC)) {
+    if (!aarch64PAuthMedShapeIsValid(Op))
+      llvm::report_fatal_error(kAArch64PAuthMalformedOperation);
+    llvm::SmallVector<llvm::Value *, 3> Args;
+    for (unsigned Index = 1; Index < Op.NumInputs; ++Index) {
+      llvm::Value *Value = getVar(Op.Inputs[Index], Builder);
+      if (Value->getType()->isPointerTy())
+        Value = Builder.CreatePtrToInt(Value, Builder.getInt64Ty());
+      Args.push_back(Value);
+    }
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(Builder.getInt64Ty(),
+                                llvm::SmallVector<llvm::Type *, 4>(
+                                    Auth->operandCount(), Builder.getInt64Ty()),
+                                false),
+        Auth->llvmAsm(), Auth->llvmConstraints(), /*hasSideEffects=*/true);
+    return Builder.CreateCall(Asm, Args, kAArch64PAuthResultName);
+  }
+
+  if (const auto Operation = aarch64CPAOperation(IC)) {
+    if (!aarch64CPAMedShapeIsValid(Op))
+      llvm::report_fatal_error(kAArch64CPAMalformedOperation);
+    llvm::SmallVector<llvm::Value *, 3> Args;
+    llvm::SmallVector<llvm::Type *, 3> Types;
+    for (unsigned Index = 1; Index < Op.NumInputs; ++Index) {
+      llvm::Value *Value = getVar(Op.Inputs[Index], Builder);
+      if (Value->getType()->isPointerTy())
+        Value = Builder.CreatePtrToInt(Value, Builder.getInt64Ty());
+      Args.push_back(Value);
+      Types.push_back(Builder.getInt64Ty());
+    }
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(Builder.getInt64Ty(), Types, false),
+        Operation->MachineAsm, Operation->llvmConstraints(),
+        /*hasSideEffects=*/true);
+    return Builder.CreateCall(Asm, Args, kAArch64CPAResultName);
+  }
+
+  if (const auto Auth = aarch64PAuthOperation(IC)) {
+    if (!aarch64PAuthMedShapeIsValid(Op))
+      llvm::report_fatal_error(kAArch64PAuthMalformedOperation);
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    llvm::SmallVector<llvm::Type *, 2> Types;
+    for (unsigned I = 1; I < Op.NumInputs; ++I) {
+      llvm::Value *V = getVar(Op.Inputs[I], Builder);
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, Builder.getInt64Ty());
+      Args.push_back(V);
+      Types.push_back(Builder.getInt64Ty());
+    }
+    // The tied output is the original pointer. In particular, AUT's poisoned
+    // result on failure is observable, unlike llvm.ptrauth.auth's trap
+    // contract.
+    auto *IA = llvm::InlineAsm::get(
+        llvm::FunctionType::get(Builder.getInt64Ty(), Types, false),
+        Auth->llvmAsm(), Auth->llvmConstraints(), /*hasSideEffects=*/true);
+    return Builder.CreateCall(IA, Args, kAArch64PAuthResultName);
+  }
+  if (IC == I::A64_AuthBranch) {
+    if (!aarch64PAuthMedShapeIsValid(Op))
+      llvm::report_fatal_error(kAArch64PAuthMalformedBranch);
+    auto integer = [&](const MedVar &V) {
+      llvm::Value *Value = getVar(V, Builder);
+      return Value->getType()->isPointerTy()
+                 ? Builder.CreatePtrToInt(Value, Builder.getInt64Ty())
+                 : Value;
+    };
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, llvm::Intrinsic::ptrauth_auth);
+    auto *Authenticated = Builder.CreateCall(
+        Fn,
+        {integer(Op.Inputs[1]), Builder.getInt32(Op.Inputs[2].ConstVal),
+         integer(Op.Inputs[3])},
+        kAArch64PAuthTargetName);
+    auto *Use = llvm::InlineAsm::get(
+        llvm::FunctionType::get(Builder.getVoidTy(), {Builder.getInt64Ty()},
+                                false),
+        kAArch64AuthenticatedTargetUseAsm, kAArch64PAuthTargetUseConstraints,
+        true);
+    Builder.CreateCall(Use, {Authenticated});
+    return Authenticated;
+  }
 
   auto getObservableValue = [&](uint8_t InputIndex) -> llvm::Value * {
     if (InputIndex >= Op.NumInputs)
@@ -77,18 +542,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     return Builder.CreateZExt(Value, Builder.getInt64Ty(), "wsp.value");
   }
 
-  auto sveElementSize = [&](unsigned InputIndex) -> unsigned {
-    if (InputIndex >= Op.NumInputs || !Op.Inputs[InputIndex].isConst())
-      return 1;
-    switch (Op.Inputs[InputIndex].ConstVal) {
-    case 2:
-    case 4:
-    case 8:
-      return static_cast<unsigned>(Op.Inputs[InputIndex].ConstVal);
-    default:
-      return 1;
-    }
-  };
+  if (aarch64_sve::vectorOperation(IC) && !aarch64VectorMedShapeIsValid(Op))
+    llvm::report_fatal_error(aarch64_sve::kMalformedVector);
   auto scalableToState = [&](llvm::Value *Value, unsigned StateBytes,
                              llvm::StringRef Name) -> llvm::Value * {
     auto *StateTy = llvm::IntegerType::get(*Ctx, StateBytes * 8);
@@ -108,23 +563,68 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     return Builder.CreateLoad(ScalableTy, Slot, Name);
   };
 
-  if (IC == I::A64_SvePtrue && Op.Output.Size == a64reg::PSize &&
-      Op.NumInputs >= 3) {
-    unsigned ElemBytes = sveElementSize(2);
-    auto *PredTy = llvm::ScalableVectorType::get(llvm::Type::getInt1Ty(*Ctx),
-                                                 16 / ElemBytes);
+  if (const auto CPA = aarch64_sve::cpaOperation(IC)) {
+    const auto Roles = aarch64_sve::cpaRoles(CPA->Form);
+    auto *VectorTy = llvm::ScalableVectorType::get(
+        Builder.getInt64Ty(), aarch64_sve::kCPAMinimumLanes);
+    std::vector<llvm::Type *> Types;
+    std::vector<llvm::Value *> Args;
+    const auto Operation = *aarch64_sve::vectorOperation(IC);
+    for (unsigned I = 0; I != Roles.Count; ++I) {
+      llvm::Type *Ty = Operation.consumesPredicate(I)
+                           ? aarch64_sve::svboolType(*Ctx)
+                           : VectorTy;
+      Types.push_back(Ty);
+      Args.push_back(stateToScalable(getVar(Op.Inputs[I + 1], Builder), Ty,
+                                     aarch64_sve::kCPAInputName));
+    }
+    auto *Type = llvm::FunctionType::get(VectorTy, Types, false);
+    auto *Asm =
+        llvm::InlineAsm::get(Type, CPA->MachineAsm, CPA->Constraints, true);
+    auto *Result = Builder.CreateCall(Asm, Args, aarch64_sve::kCPAValueName);
+    return scalableToState(Result, aarch64_sve::kVectorStorageBytes,
+                           aarch64_sve::kCPAValueName);
+  }
+
+  if (const auto Prefix = aarch64_sve::prefixOperation(IC)) {
+    using namespace aarch64_sve;
+    auto *VectorTy =
+        llvm::ScalableVectorType::get(Builder.getInt64Ty(), kCPAMinimumLanes);
+    auto *PredicateTy =
+        llvm::ScalableVectorType::get(Builder.getInt1Ty(), kCPAMinimumLanes);
+    auto Input = [&](unsigned Index, llvm::Type *Type) {
+      return stateToScalable(getVar(Op.Inputs[Index + 1], Builder), Type,
+                             kPrefixInputName);
+    };
+    auto *Predicate = fromSVBool(
+        Builder, Input(kPrefixPredicateInput, svboolType(*Ctx)), PredicateTy);
+    auto *Source = Input(kPrefixSourceInput, VectorTy);
+    auto *Inactive = Prefix->Form == PrefixForm::Merging
+                         ? Input(kPrefixMergeInput, VectorTy)
+                         : llvm::Constant::getNullValue(VectorTy);
+    auto *Result =
+        Builder.CreateSelect(Predicate, Source, Inactive, kPrefixResultName);
+    return scalableToState(Result, kVectorStorageBytes, kPrefixResultName);
+  }
+
+  if (IC == I::A64_SvePtrue) {
+    if (!aarch64PtrueMedShapeIsValid(Op))
+      llvm::report_fatal_error(aarch64_sve::kMalformedPtrue);
+    const unsigned ElemBytes = Op.Inputs[2].ConstVal;
+    auto *PredTy = llvm::ScalableVectorType::get(
+        llvm::Type::getInt1Ty(*Ctx),
+        aarch64_sve::kMinimumPredicateLanes / ElemBytes);
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::aarch64_sve_ptrue, {PredTy});
-    llvm::Value *Pattern = getVar(Op.Inputs[1], Builder);
-    if (!Pattern->getType()->isIntegerTy(32))
-      Pattern = Builder.CreateZExtOrTrunc(Pattern, Builder.getInt32Ty());
+    llvm::Value *Pattern = Builder.getInt32(Op.Inputs[1].ConstVal);
     llvm::Value *Pred = Builder.CreateCall(Fn, {Pattern}, "svptrue");
-    return scalableToState(Pred, a64reg::PSize, "sve.pred");
+    return scalableToState(aarch64_sve::toSVBool(Builder, Pred), a64reg::PSize,
+                           "sve.pred");
   }
 
   if (IC == I::A64_SveDup && Op.Output.Size == a64reg::ZSize &&
       Op.NumInputs >= 3) {
-    unsigned ElemBytes = sveElementSize(2);
+    unsigned ElemBytes = Op.Inputs[2].ConstVal;
     auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
     auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
@@ -138,7 +638,7 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
 
   if (IC == I::A64_SveIndex && Op.Output.Size == a64reg::ZSize &&
       Op.NumInputs >= 4) {
-    unsigned ElemBytes = sveElementSize(3);
+    unsigned ElemBytes = Op.Inputs[3].ConstVal;
     auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
     auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
@@ -154,14 +654,16 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
   }
 
   if (IC == I::A64_SveLastb && Op.Output.Size > 0 && Op.NumInputs >= 4) {
-    unsigned ElemBytes = sveElementSize(3);
+    unsigned ElemBytes = Op.Inputs[3].ConstVal;
     auto *ElemTy = llvm::IntegerType::get(*Ctx, ElemBytes * 8);
     auto *PredTy = llvm::ScalableVectorType::get(llvm::Type::getInt1Ty(*Ctx),
                                                  16 / ElemBytes);
     auto *VecTy = llvm::ScalableVectorType::get(ElemTy, 16 / ElemBytes);
     llvm::Value *PredState = getVar(Op.Inputs[1], Builder);
     llvm::Value *VecState = getVar(Op.Inputs[2], Builder);
-    llvm::Value *Pred = stateToScalable(PredState, PredTy, "sve.pred.value");
+    llvm::Value *Pred = stateToScalable(
+        PredState, aarch64_sve::svboolType(*Ctx), "sve.pred.value");
+    Pred = aarch64_sve::fromSVBool(Builder, Pred, PredTy);
     llvm::Value *Vec = stateToScalable(VecState, VecTy, "sve.vector.value");
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::aarch64_sve_lastb, {VecTy});
@@ -277,7 +779,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
                                    llvm::MaybeAlign(Op.Output.Size), Ordering);
   }
 
-  if (IC == I::A64_Pacga && Op.Output.Size > 0 && Op.NumInputs >= 3) {
+  if (IC == I::A64_Pacga) {
+    if (!aarch64PAuthMedShapeIsValid(Op))
+      llvm::report_fatal_error(kAArch64PAuthMalformedOperation);
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
     auto coerceI64 = [&](llvm::Value *Value) {
       if (Value->getType()->isPointerTy())
@@ -290,12 +794,8 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     llvm::Value *Discriminator = coerceI64(getVar(Op.Inputs[2], Builder));
     auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
         Mod, llvm::Intrinsic::ptrauth_sign_generic);
-    llvm::Value *Result =
-        Builder.CreateCall(Fn, {Value, Discriminator}, "pacga");
-    auto *OutTy = sizeToType(Op.Output.Size);
-    return Result->getType() == OutTy
-               ? Result
-               : Builder.CreateZExtOrTrunc(Result, OutTy);
+    return Builder.CreateCall(Fn, {Value, Discriminator},
+                              kAArch64PAuthResultName);
   }
 
   // Exclusive instructions can receive an ADRP+ADD-derived MedIR value for a

@@ -95,6 +95,18 @@ void cleanupGuardBeforeSwitch(HighFunc &Func);
 void structureIfElse(HighFunc &Func, int MaxPasses,
                      const MedFunc *Med = nullptr);
 
+/// Negate one condition without reevaluating its operands. Equality trees
+/// retain readable comparisons; other expressions keep an explicit Boolean NOT.
+ExprPtr invertHighCond(ExprPtr Condition);
+
+/// True when exceptions enter or leave \p Func in ways its statement tree does
+/// not spell: a language exception table, an exception statement or clause,
+/// or a MedIR block with exceptional edges. The unwinder enters catch
+/// continuations and landing pads without a goto, so a fold that deletes or
+/// moves statements because two copies compare equal leaves such a function
+/// unchanged. Defined in HighCFSimplifyIfElse.cpp.
+bool hasExceptionFlow(const HighFunc &Func, const MedFunc *Med);
+
 } // namespace neverd
 
 #endif // NEVERD_IR_HIGH_STRUCTURE_HIGHCFSIMPLIFYDETAIL_H

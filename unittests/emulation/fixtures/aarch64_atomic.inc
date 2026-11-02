@@ -22,5 +22,5 @@
           [resume] "r"(&ResumeSite)                                            \
         : "x0", "x1", "x2", "x3", "x4", "x5", "memory", "cc");                 \
   }
-#include "../AArch64AtomicCases.def"
+#include "../aarch64/AArch64AtomicCases.def"
 #undef NEVERD_ATOMIC_CASE

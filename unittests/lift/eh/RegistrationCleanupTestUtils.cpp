@@ -13,7 +13,7 @@
 
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"

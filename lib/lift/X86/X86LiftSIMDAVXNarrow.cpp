@@ -14,7 +14,7 @@
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -137,8 +137,7 @@ bool hasCanonicalNarrowEncoding(const cs_insn *Insn, const cs_x86 &X86,
       EncodedLength == 0 ? 16 : (EncodedLength == 0x20 ? 32 : 64);
   if (EncodedSourceSize != SourceOperand.size ||
       !isVectorRegisterOfSize(SourceOperand, EncodedSourceSize) ||
-      decodeEvexVectorRegIndex(Encoding.P0, Encoding.ModRM) !=
-          vectorRegisterIndex(SourceOperand))
+      Encoding.regIndex() != vectorRegisterIndex(SourceOperand))
     return false;
 
   const unsigned LaneCount = EncodedSourceSize / Spec.SourceElementSize;
@@ -168,8 +167,7 @@ bool hasCanonicalNarrowEncoding(const cs_insn *Insn, const cs_x86 &X86,
     const uint16_t DestinationSize =
         std::max<uint16_t>(16, ActiveDestinationSize);
     if (!isVectorRegisterOfSize(DestinationOperand, DestinationSize) ||
-        decodeEvexVectorRMIndex(Encoding.P0, Encoding.ModRM) !=
-            vectorRegisterIndex(DestinationOperand) ||
+        Encoding.rmIndex() != vectorRegisterIndex(DestinationOperand) ||
         !validateCanonicalEvexRegisterTail(Insn, X86, Encoding))
       return false;
   }

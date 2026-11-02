@@ -15,6 +15,8 @@
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -155,6 +157,22 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
   RewriteState State;
   State.Binary.assign((*BufOrErr)->getBufferStart(),
                       (*BufOrErr)->getBufferEnd());
+  if (Fmt == BinaryFormat::MachO) {
+    // Authenticate the exact snapshot being rewritten, not the caller's
+    // subtype metadata or a module annotation supplied by the lifting pipeline.
+    auto Loaded = MachOLoader().loadBuffer(llvm::MemoryBufferRef(
+        llvm::StringRef(reinterpret_cast<const char *>(State.Binary.data()),
+                        State.Binary.size()),
+        (*BufOrErr)->getBufferIdentifier()));
+    if (!Loaded) {
+      llvm::WithColor::error() << llvm::toString(Loaded.takeError()) << '\n';
+      return PatchResult{};
+    }
+    if (Loaded->isArm64e()) {
+      llvm::WithColor::error() << kArm64eRebuildUnsupported;
+      return PatchResult{};
+    }
+  }
   if (!parseTextSection(State.Binary, Image, State.TL))
     return PatchResult{};
 

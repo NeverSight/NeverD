@@ -1,0 +1,370 @@
+//===- AArch64PairMemoryFixtures.def - Independent pair fixtures -*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent LLVM MC 22.1.6 words, original X20/X21/X22 and scratch
+/// X16/X17/X15 (or the corresponding SIMD value registers). Each family
+/// samples signed imm7 endpoints, zero and both adjacent displacements.
+/// CASE owns words, per-value bytes, load/vector/sign flags, mode and offset.
+//===----------------------------------------------------------------------===//
+
+#ifdef PAIR_MEMORY_CASE
+PAIR_MEMORY_CASE(0x28605a95U, 0x28603e11U, 4, true, false, false, 0, -256)
+PAIR_MEMORY_CASE(0x287fda95U, 0x287fbe11U, 4, true, false, false, 0, -4)
+PAIR_MEMORY_CASE(0x28405a95U, 0x28403e11U, 4, true, false, false, 0, 0)
+PAIR_MEMORY_CASE(0x2840da95U, 0x2840be11U, 4, true, false, false, 0, 4)
+PAIR_MEMORY_CASE(0x285fda95U, 0x285fbe11U, 4, true, false, false, 0, 252)
+PAIR_MEMORY_CASE(0x28e05a95U, 0x28e03e11U, 4, true, false, false, 1, -256)
+PAIR_MEMORY_CASE(0x28ffda95U, 0x28ffbe11U, 4, true, false, false, 1, -4)
+PAIR_MEMORY_CASE(0x28c05a95U, 0x28c03e11U, 4, true, false, false, 1, 0)
+PAIR_MEMORY_CASE(0x28c0da95U, 0x28c0be11U, 4, true, false, false, 1, 4)
+PAIR_MEMORY_CASE(0x28dfda95U, 0x28dfbe11U, 4, true, false, false, 1, 252)
+PAIR_MEMORY_CASE(0x29605a95U, 0x29603e11U, 4, true, false, false, 2, -256)
+PAIR_MEMORY_CASE(0x297fda95U, 0x297fbe11U, 4, true, false, false, 2, -4)
+PAIR_MEMORY_CASE(0x29405a95U, 0x29403e11U, 4, true, false, false, 2, 0)
+PAIR_MEMORY_CASE(0x2940da95U, 0x2940be11U, 4, true, false, false, 2, 4)
+PAIR_MEMORY_CASE(0x295fda95U, 0x295fbe11U, 4, true, false, false, 2, 252)
+PAIR_MEMORY_CASE(0x29e05a95U, 0x29e03e11U, 4, true, false, false, 3, -256)
+PAIR_MEMORY_CASE(0x29ffda95U, 0x29ffbe11U, 4, true, false, false, 3, -4)
+PAIR_MEMORY_CASE(0x29c05a95U, 0x29c03e11U, 4, true, false, false, 3, 0)
+PAIR_MEMORY_CASE(0x29c0da95U, 0x29c0be11U, 4, true, false, false, 3, 4)
+PAIR_MEMORY_CASE(0x29dfda95U, 0x29dfbe11U, 4, true, false, false, 3, 252)
+PAIR_MEMORY_CASE(0xa8605a95U, 0xa8603e11U, 8, true, false, false, 0, -512)
+PAIR_MEMORY_CASE(0xa87fda95U, 0xa87fbe11U, 8, true, false, false, 0, -8)
+PAIR_MEMORY_CASE(0xa8405a95U, 0xa8403e11U, 8, true, false, false, 0, 0)
+PAIR_MEMORY_CASE(0xa840da95U, 0xa840be11U, 8, true, false, false, 0, 8)
+PAIR_MEMORY_CASE(0xa85fda95U, 0xa85fbe11U, 8, true, false, false, 0, 504)
+PAIR_MEMORY_CASE(0xa8e05a95U, 0xa8e03e11U, 8, true, false, false, 1, -512)
+PAIR_MEMORY_CASE(0xa8ffda95U, 0xa8ffbe11U, 8, true, false, false, 1, -8)
+PAIR_MEMORY_CASE(0xa8c05a95U, 0xa8c03e11U, 8, true, false, false, 1, 0)
+PAIR_MEMORY_CASE(0xa8c0da95U, 0xa8c0be11U, 8, true, false, false, 1, 8)
+PAIR_MEMORY_CASE(0xa8dfda95U, 0xa8dfbe11U, 8, true, false, false, 1, 504)
+PAIR_MEMORY_CASE(0xa9605a95U, 0xa9603e11U, 8, true, false, false, 2, -512)
+PAIR_MEMORY_CASE(0xa97fda95U, 0xa97fbe11U, 8, true, false, false, 2, -8)
+PAIR_MEMORY_CASE(0xa9405a95U, 0xa9403e11U, 8, true, false, false, 2, 0)
+PAIR_MEMORY_CASE(0xa940da95U, 0xa940be11U, 8, true, false, false, 2, 8)
+PAIR_MEMORY_CASE(0xa95fda95U, 0xa95fbe11U, 8, true, false, false, 2, 504)
+PAIR_MEMORY_CASE(0xa9e05a95U, 0xa9e03e11U, 8, true, false, false, 3, -512)
+PAIR_MEMORY_CASE(0xa9ffda95U, 0xa9ffbe11U, 8, true, false, false, 3, -8)
+PAIR_MEMORY_CASE(0xa9c05a95U, 0xa9c03e11U, 8, true, false, false, 3, 0)
+PAIR_MEMORY_CASE(0xa9c0da95U, 0xa9c0be11U, 8, true, false, false, 3, 8)
+PAIR_MEMORY_CASE(0xa9dfda95U, 0xa9dfbe11U, 8, true, false, false, 3, 504)
+PAIR_MEMORY_CASE(0x68e05a95U, 0x68e03e11U, 4, true, false, true, 1, -256)
+PAIR_MEMORY_CASE(0x68ffda95U, 0x68ffbe11U, 4, true, false, true, 1, -4)
+PAIR_MEMORY_CASE(0x68c05a95U, 0x68c03e11U, 4, true, false, true, 1, 0)
+PAIR_MEMORY_CASE(0x68c0da95U, 0x68c0be11U, 4, true, false, true, 1, 4)
+PAIR_MEMORY_CASE(0x68dfda95U, 0x68dfbe11U, 4, true, false, true, 1, 252)
+PAIR_MEMORY_CASE(0x69605a95U, 0x69603e11U, 4, true, false, true, 2, -256)
+PAIR_MEMORY_CASE(0x697fda95U, 0x697fbe11U, 4, true, false, true, 2, -4)
+PAIR_MEMORY_CASE(0x69405a95U, 0x69403e11U, 4, true, false, true, 2, 0)
+PAIR_MEMORY_CASE(0x6940da95U, 0x6940be11U, 4, true, false, true, 2, 4)
+PAIR_MEMORY_CASE(0x695fda95U, 0x695fbe11U, 4, true, false, true, 2, 252)
+PAIR_MEMORY_CASE(0x69e05a95U, 0x69e03e11U, 4, true, false, true, 3, -256)
+PAIR_MEMORY_CASE(0x69ffda95U, 0x69ffbe11U, 4, true, false, true, 3, -4)
+PAIR_MEMORY_CASE(0x69c05a95U, 0x69c03e11U, 4, true, false, true, 3, 0)
+PAIR_MEMORY_CASE(0x69c0da95U, 0x69c0be11U, 4, true, false, true, 3, 4)
+PAIR_MEMORY_CASE(0x69dfda95U, 0x69dfbe11U, 4, true, false, true, 3, 252)
+PAIR_MEMORY_CASE(0x28205a95U, 0x28203e11U, 4, false, false, false, 0, -256)
+PAIR_MEMORY_CASE(0x283fda95U, 0x283fbe11U, 4, false, false, false, 0, -4)
+PAIR_MEMORY_CASE(0x28005a95U, 0x28003e11U, 4, false, false, false, 0, 0)
+PAIR_MEMORY_CASE(0x2800da95U, 0x2800be11U, 4, false, false, false, 0, 4)
+PAIR_MEMORY_CASE(0x281fda95U, 0x281fbe11U, 4, false, false, false, 0, 252)
+PAIR_MEMORY_CASE(0x28a05a95U, 0x28a03e11U, 4, false, false, false, 1, -256)
+PAIR_MEMORY_CASE(0x28bfda95U, 0x28bfbe11U, 4, false, false, false, 1, -4)
+PAIR_MEMORY_CASE(0x28805a95U, 0x28803e11U, 4, false, false, false, 1, 0)
+PAIR_MEMORY_CASE(0x2880da95U, 0x2880be11U, 4, false, false, false, 1, 4)
+PAIR_MEMORY_CASE(0x289fda95U, 0x289fbe11U, 4, false, false, false, 1, 252)
+PAIR_MEMORY_CASE(0x29205a95U, 0x29203e11U, 4, false, false, false, 2, -256)
+PAIR_MEMORY_CASE(0x293fda95U, 0x293fbe11U, 4, false, false, false, 2, -4)
+PAIR_MEMORY_CASE(0x29005a95U, 0x29003e11U, 4, false, false, false, 2, 0)
+PAIR_MEMORY_CASE(0x2900da95U, 0x2900be11U, 4, false, false, false, 2, 4)
+PAIR_MEMORY_CASE(0x291fda95U, 0x291fbe11U, 4, false, false, false, 2, 252)
+PAIR_MEMORY_CASE(0x29a05a95U, 0x29a03e11U, 4, false, false, false, 3, -256)
+PAIR_MEMORY_CASE(0x29bfda95U, 0x29bfbe11U, 4, false, false, false, 3, -4)
+PAIR_MEMORY_CASE(0x29805a95U, 0x29803e11U, 4, false, false, false, 3, 0)
+PAIR_MEMORY_CASE(0x2980da95U, 0x2980be11U, 4, false, false, false, 3, 4)
+PAIR_MEMORY_CASE(0x299fda95U, 0x299fbe11U, 4, false, false, false, 3, 252)
+PAIR_MEMORY_CASE(0xa8205a95U, 0xa8203e11U, 8, false, false, false, 0, -512)
+PAIR_MEMORY_CASE(0xa83fda95U, 0xa83fbe11U, 8, false, false, false, 0, -8)
+PAIR_MEMORY_CASE(0xa8005a95U, 0xa8003e11U, 8, false, false, false, 0, 0)
+PAIR_MEMORY_CASE(0xa800da95U, 0xa800be11U, 8, false, false, false, 0, 8)
+PAIR_MEMORY_CASE(0xa81fda95U, 0xa81fbe11U, 8, false, false, false, 0, 504)
+PAIR_MEMORY_CASE(0xa8a05a95U, 0xa8a03e11U, 8, false, false, false, 1, -512)
+PAIR_MEMORY_CASE(0xa8bfda95U, 0xa8bfbe11U, 8, false, false, false, 1, -8)
+PAIR_MEMORY_CASE(0xa8805a95U, 0xa8803e11U, 8, false, false, false, 1, 0)
+PAIR_MEMORY_CASE(0xa880da95U, 0xa880be11U, 8, false, false, false, 1, 8)
+PAIR_MEMORY_CASE(0xa89fda95U, 0xa89fbe11U, 8, false, false, false, 1, 504)
+PAIR_MEMORY_CASE(0xa9205a95U, 0xa9203e11U, 8, false, false, false, 2, -512)
+PAIR_MEMORY_CASE(0xa93fda95U, 0xa93fbe11U, 8, false, false, false, 2, -8)
+PAIR_MEMORY_CASE(0xa9005a95U, 0xa9003e11U, 8, false, false, false, 2, 0)
+PAIR_MEMORY_CASE(0xa900da95U, 0xa900be11U, 8, false, false, false, 2, 8)
+PAIR_MEMORY_CASE(0xa91fda95U, 0xa91fbe11U, 8, false, false, false, 2, 504)
+PAIR_MEMORY_CASE(0xa9a05a95U, 0xa9a03e11U, 8, false, false, false, 3, -512)
+PAIR_MEMORY_CASE(0xa9bfda95U, 0xa9bfbe11U, 8, false, false, false, 3, -8)
+PAIR_MEMORY_CASE(0xa9805a95U, 0xa9803e11U, 8, false, false, false, 3, 0)
+PAIR_MEMORY_CASE(0xa980da95U, 0xa980be11U, 8, false, false, false, 3, 8)
+PAIR_MEMORY_CASE(0xa99fda95U, 0xa99fbe11U, 8, false, false, false, 3, 504)
+PAIR_MEMORY_CASE(0x2c605a95U, 0x2c603e11U, 4, true, true, false, 0, -256)
+PAIR_MEMORY_CASE(0x2c7fda95U, 0x2c7fbe11U, 4, true, true, false, 0, -4)
+PAIR_MEMORY_CASE(0x2c405a95U, 0x2c403e11U, 4, true, true, false, 0, 0)
+PAIR_MEMORY_CASE(0x2c40da95U, 0x2c40be11U, 4, true, true, false, 0, 4)
+PAIR_MEMORY_CASE(0x2c5fda95U, 0x2c5fbe11U, 4, true, true, false, 0, 252)
+PAIR_MEMORY_CASE(0x2ce05a95U, 0x2ce03e11U, 4, true, true, false, 1, -256)
+PAIR_MEMORY_CASE(0x2cffda95U, 0x2cffbe11U, 4, true, true, false, 1, -4)
+PAIR_MEMORY_CASE(0x2cc05a95U, 0x2cc03e11U, 4, true, true, false, 1, 0)
+PAIR_MEMORY_CASE(0x2cc0da95U, 0x2cc0be11U, 4, true, true, false, 1, 4)
+PAIR_MEMORY_CASE(0x2cdfda95U, 0x2cdfbe11U, 4, true, true, false, 1, 252)
+PAIR_MEMORY_CASE(0x2d605a95U, 0x2d603e11U, 4, true, true, false, 2, -256)
+PAIR_MEMORY_CASE(0x2d7fda95U, 0x2d7fbe11U, 4, true, true, false, 2, -4)
+PAIR_MEMORY_CASE(0x2d405a95U, 0x2d403e11U, 4, true, true, false, 2, 0)
+PAIR_MEMORY_CASE(0x2d40da95U, 0x2d40be11U, 4, true, true, false, 2, 4)
+PAIR_MEMORY_CASE(0x2d5fda95U, 0x2d5fbe11U, 4, true, true, false, 2, 252)
+PAIR_MEMORY_CASE(0x2de05a95U, 0x2de03e11U, 4, true, true, false, 3, -256)
+PAIR_MEMORY_CASE(0x2dffda95U, 0x2dffbe11U, 4, true, true, false, 3, -4)
+PAIR_MEMORY_CASE(0x2dc05a95U, 0x2dc03e11U, 4, true, true, false, 3, 0)
+PAIR_MEMORY_CASE(0x2dc0da95U, 0x2dc0be11U, 4, true, true, false, 3, 4)
+PAIR_MEMORY_CASE(0x2ddfda95U, 0x2ddfbe11U, 4, true, true, false, 3, 252)
+PAIR_MEMORY_CASE(0x6c605a95U, 0x6c603e11U, 8, true, true, false, 0, -512)
+PAIR_MEMORY_CASE(0x6c7fda95U, 0x6c7fbe11U, 8, true, true, false, 0, -8)
+PAIR_MEMORY_CASE(0x6c405a95U, 0x6c403e11U, 8, true, true, false, 0, 0)
+PAIR_MEMORY_CASE(0x6c40da95U, 0x6c40be11U, 8, true, true, false, 0, 8)
+PAIR_MEMORY_CASE(0x6c5fda95U, 0x6c5fbe11U, 8, true, true, false, 0, 504)
+PAIR_MEMORY_CASE(0x6ce05a95U, 0x6ce03e11U, 8, true, true, false, 1, -512)
+PAIR_MEMORY_CASE(0x6cffda95U, 0x6cffbe11U, 8, true, true, false, 1, -8)
+PAIR_MEMORY_CASE(0x6cc05a95U, 0x6cc03e11U, 8, true, true, false, 1, 0)
+PAIR_MEMORY_CASE(0x6cc0da95U, 0x6cc0be11U, 8, true, true, false, 1, 8)
+PAIR_MEMORY_CASE(0x6cdfda95U, 0x6cdfbe11U, 8, true, true, false, 1, 504)
+PAIR_MEMORY_CASE(0x6d605a95U, 0x6d603e11U, 8, true, true, false, 2, -512)
+PAIR_MEMORY_CASE(0x6d7fda95U, 0x6d7fbe11U, 8, true, true, false, 2, -8)
+PAIR_MEMORY_CASE(0x6d405a95U, 0x6d403e11U, 8, true, true, false, 2, 0)
+PAIR_MEMORY_CASE(0x6d40da95U, 0x6d40be11U, 8, true, true, false, 2, 8)
+PAIR_MEMORY_CASE(0x6d5fda95U, 0x6d5fbe11U, 8, true, true, false, 2, 504)
+PAIR_MEMORY_CASE(0x6de05a95U, 0x6de03e11U, 8, true, true, false, 3, -512)
+PAIR_MEMORY_CASE(0x6dffda95U, 0x6dffbe11U, 8, true, true, false, 3, -8)
+PAIR_MEMORY_CASE(0x6dc05a95U, 0x6dc03e11U, 8, true, true, false, 3, 0)
+PAIR_MEMORY_CASE(0x6dc0da95U, 0x6dc0be11U, 8, true, true, false, 3, 8)
+PAIR_MEMORY_CASE(0x6ddfda95U, 0x6ddfbe11U, 8, true, true, false, 3, 504)
+PAIR_MEMORY_CASE(0xac605a95U, 0xac603e11U, 16, true, true, false, 0, -1024)
+PAIR_MEMORY_CASE(0xac7fda95U, 0xac7fbe11U, 16, true, true, false, 0, -16)
+PAIR_MEMORY_CASE(0xac405a95U, 0xac403e11U, 16, true, true, false, 0, 0)
+PAIR_MEMORY_CASE(0xac40da95U, 0xac40be11U, 16, true, true, false, 0, 16)
+PAIR_MEMORY_CASE(0xac5fda95U, 0xac5fbe11U, 16, true, true, false, 0, 1008)
+PAIR_MEMORY_CASE(0xace05a95U, 0xace03e11U, 16, true, true, false, 1, -1024)
+PAIR_MEMORY_CASE(0xacffda95U, 0xacffbe11U, 16, true, true, false, 1, -16)
+PAIR_MEMORY_CASE(0xacc05a95U, 0xacc03e11U, 16, true, true, false, 1, 0)
+PAIR_MEMORY_CASE(0xacc0da95U, 0xacc0be11U, 16, true, true, false, 1, 16)
+PAIR_MEMORY_CASE(0xacdfda95U, 0xacdfbe11U, 16, true, true, false, 1, 1008)
+PAIR_MEMORY_CASE(0xad605a95U, 0xad603e11U, 16, true, true, false, 2, -1024)
+PAIR_MEMORY_CASE(0xad7fda95U, 0xad7fbe11U, 16, true, true, false, 2, -16)
+PAIR_MEMORY_CASE(0xad405a95U, 0xad403e11U, 16, true, true, false, 2, 0)
+PAIR_MEMORY_CASE(0xad40da95U, 0xad40be11U, 16, true, true, false, 2, 16)
+PAIR_MEMORY_CASE(0xad5fda95U, 0xad5fbe11U, 16, true, true, false, 2, 1008)
+PAIR_MEMORY_CASE(0xade05a95U, 0xade03e11U, 16, true, true, false, 3, -1024)
+PAIR_MEMORY_CASE(0xadffda95U, 0xadffbe11U, 16, true, true, false, 3, -16)
+PAIR_MEMORY_CASE(0xadc05a95U, 0xadc03e11U, 16, true, true, false, 3, 0)
+PAIR_MEMORY_CASE(0xadc0da95U, 0xadc0be11U, 16, true, true, false, 3, 16)
+PAIR_MEMORY_CASE(0xaddfda95U, 0xaddfbe11U, 16, true, true, false, 3, 1008)
+PAIR_MEMORY_CASE(0x2c205a95U, 0x2c203e11U, 4, false, true, false, 0, -256)
+PAIR_MEMORY_CASE(0x2c3fda95U, 0x2c3fbe11U, 4, false, true, false, 0, -4)
+PAIR_MEMORY_CASE(0x2c005a95U, 0x2c003e11U, 4, false, true, false, 0, 0)
+PAIR_MEMORY_CASE(0x2c00da95U, 0x2c00be11U, 4, false, true, false, 0, 4)
+PAIR_MEMORY_CASE(0x2c1fda95U, 0x2c1fbe11U, 4, false, true, false, 0, 252)
+PAIR_MEMORY_CASE(0x2ca05a95U, 0x2ca03e11U, 4, false, true, false, 1, -256)
+PAIR_MEMORY_CASE(0x2cbfda95U, 0x2cbfbe11U, 4, false, true, false, 1, -4)
+PAIR_MEMORY_CASE(0x2c805a95U, 0x2c803e11U, 4, false, true, false, 1, 0)
+PAIR_MEMORY_CASE(0x2c80da95U, 0x2c80be11U, 4, false, true, false, 1, 4)
+PAIR_MEMORY_CASE(0x2c9fda95U, 0x2c9fbe11U, 4, false, true, false, 1, 252)
+PAIR_MEMORY_CASE(0x2d205a95U, 0x2d203e11U, 4, false, true, false, 2, -256)
+PAIR_MEMORY_CASE(0x2d3fda95U, 0x2d3fbe11U, 4, false, true, false, 2, -4)
+PAIR_MEMORY_CASE(0x2d005a95U, 0x2d003e11U, 4, false, true, false, 2, 0)
+PAIR_MEMORY_CASE(0x2d00da95U, 0x2d00be11U, 4, false, true, false, 2, 4)
+PAIR_MEMORY_CASE(0x2d1fda95U, 0x2d1fbe11U, 4, false, true, false, 2, 252)
+PAIR_MEMORY_CASE(0x2da05a95U, 0x2da03e11U, 4, false, true, false, 3, -256)
+PAIR_MEMORY_CASE(0x2dbfda95U, 0x2dbfbe11U, 4, false, true, false, 3, -4)
+PAIR_MEMORY_CASE(0x2d805a95U, 0x2d803e11U, 4, false, true, false, 3, 0)
+PAIR_MEMORY_CASE(0x2d80da95U, 0x2d80be11U, 4, false, true, false, 3, 4)
+PAIR_MEMORY_CASE(0x2d9fda95U, 0x2d9fbe11U, 4, false, true, false, 3, 252)
+PAIR_MEMORY_CASE(0x6c205a95U, 0x6c203e11U, 8, false, true, false, 0, -512)
+PAIR_MEMORY_CASE(0x6c3fda95U, 0x6c3fbe11U, 8, false, true, false, 0, -8)
+PAIR_MEMORY_CASE(0x6c005a95U, 0x6c003e11U, 8, false, true, false, 0, 0)
+PAIR_MEMORY_CASE(0x6c00da95U, 0x6c00be11U, 8, false, true, false, 0, 8)
+PAIR_MEMORY_CASE(0x6c1fda95U, 0x6c1fbe11U, 8, false, true, false, 0, 504)
+PAIR_MEMORY_CASE(0x6ca05a95U, 0x6ca03e11U, 8, false, true, false, 1, -512)
+PAIR_MEMORY_CASE(0x6cbfda95U, 0x6cbfbe11U, 8, false, true, false, 1, -8)
+PAIR_MEMORY_CASE(0x6c805a95U, 0x6c803e11U, 8, false, true, false, 1, 0)
+PAIR_MEMORY_CASE(0x6c80da95U, 0x6c80be11U, 8, false, true, false, 1, 8)
+PAIR_MEMORY_CASE(0x6c9fda95U, 0x6c9fbe11U, 8, false, true, false, 1, 504)
+PAIR_MEMORY_CASE(0x6d205a95U, 0x6d203e11U, 8, false, true, false, 2, -512)
+PAIR_MEMORY_CASE(0x6d3fda95U, 0x6d3fbe11U, 8, false, true, false, 2, -8)
+PAIR_MEMORY_CASE(0x6d005a95U, 0x6d003e11U, 8, false, true, false, 2, 0)
+PAIR_MEMORY_CASE(0x6d00da95U, 0x6d00be11U, 8, false, true, false, 2, 8)
+PAIR_MEMORY_CASE(0x6d1fda95U, 0x6d1fbe11U, 8, false, true, false, 2, 504)
+PAIR_MEMORY_CASE(0x6da05a95U, 0x6da03e11U, 8, false, true, false, 3, -512)
+PAIR_MEMORY_CASE(0x6dbfda95U, 0x6dbfbe11U, 8, false, true, false, 3, -8)
+PAIR_MEMORY_CASE(0x6d805a95U, 0x6d803e11U, 8, false, true, false, 3, 0)
+PAIR_MEMORY_CASE(0x6d80da95U, 0x6d80be11U, 8, false, true, false, 3, 8)
+PAIR_MEMORY_CASE(0x6d9fda95U, 0x6d9fbe11U, 8, false, true, false, 3, 504)
+PAIR_MEMORY_CASE(0xac205a95U, 0xac203e11U, 16, false, true, false, 0, -1024)
+PAIR_MEMORY_CASE(0xac3fda95U, 0xac3fbe11U, 16, false, true, false, 0, -16)
+PAIR_MEMORY_CASE(0xac005a95U, 0xac003e11U, 16, false, true, false, 0, 0)
+PAIR_MEMORY_CASE(0xac00da95U, 0xac00be11U, 16, false, true, false, 0, 16)
+PAIR_MEMORY_CASE(0xac1fda95U, 0xac1fbe11U, 16, false, true, false, 0, 1008)
+PAIR_MEMORY_CASE(0xaca05a95U, 0xaca03e11U, 16, false, true, false, 1, -1024)
+PAIR_MEMORY_CASE(0xacbfda95U, 0xacbfbe11U, 16, false, true, false, 1, -16)
+PAIR_MEMORY_CASE(0xac805a95U, 0xac803e11U, 16, false, true, false, 1, 0)
+PAIR_MEMORY_CASE(0xac80da95U, 0xac80be11U, 16, false, true, false, 1, 16)
+PAIR_MEMORY_CASE(0xac9fda95U, 0xac9fbe11U, 16, false, true, false, 1, 1008)
+PAIR_MEMORY_CASE(0xad205a95U, 0xad203e11U, 16, false, true, false, 2, -1024)
+PAIR_MEMORY_CASE(0xad3fda95U, 0xad3fbe11U, 16, false, true, false, 2, -16)
+PAIR_MEMORY_CASE(0xad005a95U, 0xad003e11U, 16, false, true, false, 2, 0)
+PAIR_MEMORY_CASE(0xad00da95U, 0xad00be11U, 16, false, true, false, 2, 16)
+PAIR_MEMORY_CASE(0xad1fda95U, 0xad1fbe11U, 16, false, true, false, 2, 1008)
+PAIR_MEMORY_CASE(0xada05a95U, 0xada03e11U, 16, false, true, false, 3, -1024)
+PAIR_MEMORY_CASE(0xadbfda95U, 0xadbfbe11U, 16, false, true, false, 3, -16)
+PAIR_MEMORY_CASE(0xad805a95U, 0xad803e11U, 16, false, true, false, 3, 0)
+PAIR_MEMORY_CASE(0xad80da95U, 0xad80be11U, 16, false, true, false, 3, 16)
+PAIR_MEMORY_CASE(0xad9fda95U, 0xad9fbe11U, 16, false, true, false, 3, 1008)
+#undef PAIR_MEMORY_CASE
+#endif
+
+#ifdef PAIR_MEMORY_VALUE
+PAIR_MEMORY_VALUE(unsigned, kPairTestModes, 4)
+PAIR_MEMORY_VALUE(unsigned, kPairTestSamples, 5)
+PAIR_MEMORY_VALUE(unsigned, kPairTestPostMode, 1)
+PAIR_MEMORY_VALUE(unsigned, kPairTestPreMode, 3)
+PAIR_MEMORY_VALUE(unsigned, kPairTestImmediates, 128)
+PAIR_MEMORY_VALUE(unsigned, kPairTestLoadParameters, 2)
+PAIR_MEMORY_VALUE(unsigned, kPairTestScalarStoreParameters, 4)
+PAIR_MEMORY_VALUE(unsigned, kPairTestVectorStoreParameters, 6)
+PAIR_MEMORY_VALUE(unsigned, kPairTestOutputWords, 4)
+PAIR_MEMORY_VALUE(unsigned, kPairTestStorageBytes, 4096)
+PAIR_MEMORY_VALUE(unsigned, kPairTestBasePosition, 2048)
+PAIR_MEMORY_VALUE(unsigned, kPairTestOriginalBase, 20)
+PAIR_MEMORY_VALUE(unsigned, kPairTestFirstRegister, 21)
+PAIR_MEMORY_VALUE(unsigned, kPairTestSecondRegister, 22)
+PAIR_MEMORY_VALUE(uint64_t, kPairTestFirstLow, 0xf1e2d3c4b5a69788ULL)
+PAIR_MEMORY_VALUE(uint64_t, kPairTestFirstHigh, 0x8172635445362718ULL)
+PAIR_MEMORY_VALUE(uint64_t, kPairTestSecondLow, 0x1029384756abcdefULL)
+PAIR_MEMORY_VALUE(uint64_t, kPairTestSecondHigh, 0xa8b7c6d5e4f30219ULL)
+PAIR_MEMORY_VALUE(unsigned, kPairTestSeedMultiplier, 37)
+PAIR_MEMORY_VALUE(unsigned, kPairTestSeedBias, 19)
+PAIR_MEMORY_VALUE(unsigned, kPairTestLowMutations, 5)
+#undef PAIR_MEMORY_VALUE
+#endif
+
+#ifdef PAIR_MEMORY_TEXT
+PAIR_MEMORY_TEXT(kPairTestNamePrefix, "pair_memory_")
+PAIR_MEMORY_TEXT(kPairTestLoadDeclaration, "uint64_t {0}(uint64_t,uint64_t);\n")
+PAIR_MEMORY_TEXT(kPairTestScalarStoreDeclaration,
+                 "uint64_t {0}(uint64_t,uint64_t,uint64_t,uint64_t);\n")
+PAIR_MEMORY_TEXT(
+    kPairTestVectorStoreDeclaration,
+    "uint64_t {0}(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);\n")
+PAIR_MEMORY_TEXT(kPairTestLoadCall,
+                 "{0}((uintptr_t)(left+2048),(uintptr_t)out)")
+PAIR_MEMORY_TEXT(kPairTestScalarStoreCall,
+                 "{0}((uintptr_t)(left+2048),(uint64_t)data1,(uint64_t)data2,("
+                 "uintptr_t)out)")
+PAIR_MEMORY_TEXT(
+    kPairTestVectorStoreCall,
+    "{0}((uintptr_t)(left+2048),(uint64_t)data1,(uint64_t)(data1>>64),"
+    "(uint64_t)data2,(uint64_t)(data2>>64),(uintptr_t)out)")
+PAIR_MEMORY_TEXT(kPairTestVectorType, "pair_vector")
+PAIR_MEMORY_TEXT(kPairTestScalarType, "uint64_t")
+PAIR_MEMORY_TEXT(kPairTestFirstVectorBits,
+                 "(union pair_repr){ .vector=first }.bits")
+PAIR_MEMORY_TEXT(kPairTestSecondVectorBits,
+                 "(union pair_repr){ .vector=second }.bits")
+PAIR_MEMORY_TEXT(kPairTestFirstScalarBits, "(pair_bits)first")
+PAIR_MEMORY_TEXT(kPairTestSecondScalarBits, "(pair_bits)second")
+PAIR_MEMORY_TEXT(kPairTestFirstVectorInput,
+                 "(union pair_repr){ .bits=data1 }.vector")
+PAIR_MEMORY_TEXT(kPairTestSecondVectorInput,
+                 "(union pair_repr){ .bits=data2 }.vector")
+PAIR_MEMORY_TEXT(kPairTestFirstScalarInput, "(uint64_t)data1")
+PAIR_MEMORY_TEXT(kPairTestSecondScalarInput, "(uint64_t)data2")
+PAIR_MEMORY_TEXT(kPairTestScalarOutputConstraint, "=&r")
+PAIR_MEMORY_TEXT(kPairTestVectorOutputConstraint, "=&w")
+PAIR_MEMORY_TEXT(kPairTestScalarInputConstraint, "r")
+PAIR_MEMORY_TEXT(kPairTestVectorInputConstraint, "w")
+PAIR_MEMORY_TEXT(
+    kPairTestPrelude,
+    "#include <stdint.h>\ntypedef unsigned __int128 pair_bits;\n"
+    "typedef int64_t pair_vector __attribute__((vector_size(16)));\n"
+    "union pair_repr { pair_bits bits; pair_vector vector; };\n"
+    "struct pair_result { pair_bits first,second; uint64_t base; };\n")
+PAIR_MEMORY_TEXT(kPairTestNativeLoad,
+                 "static struct pair_result pair_original_{0}(uint64_t input, "
+                 "pair_bits data1, pair_bits data2) {{\n"
+                 "register {2} first __asm__(\"{3}21\");\n"
+                 "register {2} second __asm__(\"{3}22\");\n"
+                 "register uint64_t base __asm__(\"x20\") = input;\n"
+                 "__asm__ volatile(\"{7}.inst {1}{8}\" : \"{4}\"(first), "
+                 "\"{4}\"(second), \"+r\"(base) : : {9}\"memory\");\n"
+                 "return (struct pair_result){{ {5}, {6}, base };\n}\n")
+PAIR_MEMORY_TEXT(kPairTestNativeStore,
+                 "static struct pair_result pair_original_{0}(uint64_t input, "
+                 "pair_bits data1, pair_bits data2) {{\n"
+                 "register {2} first __asm__(\"{3}21\") = {7};\n"
+                 "register {2} second __asm__(\"{3}22\") = {8};\n"
+                 "register uint64_t base __asm__(\"x20\") = input;\n"
+                 "__asm__ volatile(\"{9}.inst {1}{10}\" : \"+r\"(base) : "
+                 "\"{4}\"(first), \"{4}\"(second) : {11}\"memory\");\n"
+                 "return (struct pair_result){{ {5}, {6}, base };\n}\n")
+PAIR_MEMORY_TEXT(kPairTestScalarBank, "x")
+PAIR_MEMORY_TEXT(kPairTestVectorBank, "v")
+PAIR_MEMORY_TEXT(
+    kPairTestReplay,
+    "static int pair_run_{0}(void) {{\n"
+    "_Alignas(16) unsigned char left[4096],right[4096],expected[4096];\n"
+    "for (unsigned j=0;j!=4096;++j) left[j]=right[j]=expected[j]=(unsigned "
+    "char)(j*37+19);\n"
+    "const pair_bits "
+    "data1=((pair_bits)UINT64_C(0x8172635445362718)<<64)|UINT64_C("
+    "0xf1e2d3c4b5a69788);\n"
+    "const pair_bits "
+    "data2=((pair_bits)UINT64_C(0xa8b7c6d5e4f30219)<<64)|UINT64_C("
+    "0x1029384756abcdef);\n"
+    "const pair_bits inputs[2]={{data1,data2}; pair_bits values[2]={{0,0};\n"
+    "const unsigned at=2048+({2} ? {1} : 0);\n"
+    "for (unsigned i=0;i!=2;++i) {{\n"
+    " if ({4}) {{\n"
+    "  for (unsigned j=0;j!={3};++j) "
+    "values[i]|=(pair_bits)left[at+i*{3}+j]<<(8*j);\n"
+    "  if ({6}) values[i]=(uint64_t)(int64_t)(int32_t)values[i];\n"
+    " } else {{\n"
+    "  values[i]={5} ? inputs[i] : (uint64_t)inputs[i];\n"
+    "  for (unsigned j=0;j!={3};++j) expected[at+i*{3}+j]=(unsigned "
+    "char)(inputs[i]>>(8*j));\n"
+    " }\n }\n"
+    "const struct pair_result "
+    "native=pair_original_{0}((uintptr_t)(right+2048),data1,data2);\n"
+    "uint64_t "
+    "out[4]={{UINT64_C(0xbad),UINT64_C(0xbad),UINT64_C(0xbad),UINT64_C(0xbad)};"
+    "\n"
+    "const uint64_t "
+    "base={8};\n"
+    "const pair_bits first=(pair_bits)out[0]|((pair_bits)out[1]<<64);\n"
+    "const pair_bits second=(pair_bits)out[2]|((pair_bits)out[3]<<64);\n"
+    "if(first!=values[0]||second!=values[1]||native.first!=values[0]||native."
+    "second!=values[1]) return 1;\n"
+    "if(base!=(uintptr_t)(left+2048+({7}?{1}:0))||native.base!=(uintptr_t)("
+    "right+2048+({7}?{1}:0))) return 2;\n"
+    "for(unsigned j=0;j!=4096;++j) "
+    "if(left[j]!=expected[j]||right[j]!=expected[j]) return 3;\n"
+    "return 0;\n}\n")
+PAIR_MEMORY_TEXT(kPairTestEntry, "pair_run_{0},\n")
+PAIR_MEMORY_TEXT(kPairTestTail,
+                 "static int (*const pair_cases[])(void) = {{ {0} };\n"
+                 "int main(void) {{ for(unsigned "
+                 "i=0;i!=sizeof(pair_cases)/sizeof(*pair_cases);++i) "
+                 "if(pair_cases[i]()) return (int)i+1; return 0; }\n")
+PAIR_MEMORY_TEXT(kPairTestArtifactEnvironment,
+                 "NEVERD_ARM64E_PAIR_MEMORY_ARTIFACT_DIR")
+PAIR_MEMORY_TEXT(kPairTestArtifactProperty,
+                 "arm64e_pair_memory_artifact_directory")
+#undef PAIR_MEMORY_TEXT
+#endif

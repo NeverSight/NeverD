@@ -130,6 +130,54 @@ TEST(ObjCCategories, RecoversInstanceAndClassMethodsWithCategoryIdentityOnce) {
   EXPECT_EQ(Fixture.Image.ObjCMethods.size(), 2U);
 }
 
+TEST(ObjCCategories, AuthenticatedMetadataRecoversMethodsWithoutPlainPointers) {
+  for (bool Chained : {false, true}) {
+    CategoryImage Fixture;
+    auto &Image = Fixture.Image;
+    Image.MachOCPUSubtype = 0x80000002;
+    Image.MachOHasChainedFixups = Chained;
+    const auto Slots = Image.MachOResolvedChainedPointerSlots;
+    for (va_t Slot : Slots) {
+      const uint64_t Target =
+          llvm::support::endian::read64le(Image.readVA(Slot, 8));
+      const uint64_t Recipe = 0x8005432100000000ULL | Target;
+      Fixture.pointer(Slot, Recipe);
+      MachOAuthenticatedPointer Auth;
+      Auth.Target = Target;
+      Auth.EncodedValue = Recipe;
+      Auth.Key = 2;
+      Auth.Diversity = 0x4321;
+      Auth.AddressDiversity = true;
+      Image.MachOAuthenticatedPointers.emplace(Slot, Auth);
+    }
+    Image.MachOResolvedChainedPointerSlots.clear();
+    parseObjCMethods(Image);
+    ASSERT_EQ(Image.ObjCClasses.size(), 1);
+    ASSERT_EQ(Image.ObjCMethods.size(), 2);
+    for (size_t I = 0; I < Image.ObjCMethods.size(); ++I) {
+      const auto &Method = Image.ObjCMethods[I];
+      EXPECT_EQ(Method.ClassName, "Container");
+      EXPECT_EQ(Method.CategoryName, "Extra");
+      EXPECT_EQ(Method.Status, "supported");
+      EXPECT_EQ(Method.Implementation, I ? 0x1110 : 0x1100);
+    }
+    EXPECT_TRUE(Image.MachOResolvedChainedPointerSlots.empty());
+    for (const auto &[Slot, Auth] : Image.MachOAuthenticatedPointers) {
+      EXPECT_EQ(llvm::support::endian::read64le(Image.readVA(Slot, 8)),
+                *Auth.EncodedValue);
+      EXPECT_FALSE(Image.CodePtrRelocSlots.count(Slot));
+      EXPECT_FALSE(Image.DataPtrRelocSlots.count(Slot));
+    }
+    // The method's raw bytes must still match the loader's signing recipe.
+    Fixture.pointer(0x2618, 0x1100);
+    Image.MachOResolvedChainedPointerSlots.clear();
+    parseObjCMethods(Image);
+    ASSERT_EQ(Image.ObjCMethods.size(), 2);
+    EXPECT_EQ(Image.ObjCMethods[0].Status, "invalid_implementation");
+    EXPECT_EQ(Image.ObjCMethods[1].Status, "supported");
+  }
+}
+
 TEST(ObjCCategories, NamesImplementationsAsClangDoes) {
   // A stripped image's implementations take the names clang gives them.
   CategoryImage Fixture;
@@ -147,6 +195,30 @@ TEST(ObjCCategories, NamesImplementationsAsClangDoes) {
   const Symbol *Placeholder = Hostile.Image.findSymbolAt(0x1100);
   ASSERT_TRUE(Placeholder);
   EXPECT_EQ(Placeholder->Name, "objc_imp_1100");
+}
+
+TEST(ObjCCategories, MetadataNamesReplaceOnlySynthesizedFunctionNames) {
+  for (NameOrigin Origin : {NameOrigin::Synthesized, NameOrigin::Analysis,
+                            NameOrigin::Stated, NameOrigin::User}) {
+    CategoryImage Fixture;
+    Symbol Existing = Symbol::makeFunc(0x1100, 16);
+    Existing.Origin = Origin;
+    Existing.IsBoundaryGuess = true;
+    Fixture.Image.Symbols.push_back(Existing);
+    parseObjCMethods(Fixture.Image);
+    EXPECT_EQ(Fixture.Image.getFunctionNameAt(0x1100),
+              Origin == NameOrigin::Synthesized ? "-[Container(Extra) step:]"
+                                                : Existing.Name);
+    EXPECT_EQ(Fixture.Image.Symbols.front().Size, 16U);
+    EXPECT_EQ(Fixture.Image.Symbols.front().IsBoundaryGuess,
+              Origin != NameOrigin::Synthesized);
+    EXPECT_EQ(Fixture.Image.Symbols.size(), 2U);
+    EXPECT_EQ(Fixture.Image.findSymbolAt(0x1100)->Name,
+              Fixture.Image.getFunctionNameAt(0x1100));
+    const size_t Count = Fixture.Image.Symbols.size();
+    parseObjCMethods(Fixture.Image);
+    EXPECT_EQ(Fixture.Image.Symbols.size(), Count);
+  }
 }
 
 TEST(ObjCCategories, DiscoversLocalOwnerWithoutAClassListEntry) {

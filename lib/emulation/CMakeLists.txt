@@ -23,6 +23,7 @@ add_neverd_component_library(NeverDEmulationArch
   arch/x86_64/X64MachineProbe.cpp
   arch/aarch64/AArch64PageTables.cpp
   arch/aarch64/AArch64State.cpp
+  arch/aarch64/AArch64FloatConversion.cpp
   arch/aarch64/AArch64MachineProbe.cpp
   arch/aarch64/AArch64InstructionEffects.cpp
   arch/aarch64/AArch64Atomic.cpp

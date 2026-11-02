@@ -36,7 +36,7 @@ std::optional<unsigned> registerIndex(x86_reg Register) {
 #define NEVERD_X64_REGISTER(Name, DecoderID, BackendID)                        \
   case DecoderID:                                                              \
     return unsigned(X64Register::Name);
-#include "neverd/emulation/X64Registers.def"
+#include "neverd/emulation/arch/x86_64/X64Registers.def"
 #undef NEVERD_X64_REGISTER
   default:
     return {};

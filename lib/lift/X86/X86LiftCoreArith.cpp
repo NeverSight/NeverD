@@ -14,9 +14,10 @@
 
 #include "X86LiftAPXValidation.h"
 #include "X86LiftDetail.h"
+#include "X86MultiplyUndefined.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/X86Lifter.h"
+#include "neverd/lift/X86/X86Lifter.h"
 
 #include <iterator>
 
@@ -501,6 +502,11 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       Value.Provenance = ConstantAddressProvenance::Scalar;
     return Value;
   };
+  auto SameRegister = [&](unsigned First, unsigned Second) {
+    return X86.operands[First].type == X86_OP_REG &&
+           X86.operands[Second].type == X86_OP_REG &&
+           X86.operands[First].reg == X86.operands[Second].reg;
+  };
   unsigned InsnId = Insn->id;
 
   const ApxBinaryArithmetic ApxBinary = decodeApxBinaryArithmetic(Insn, X86);
@@ -517,6 +523,92 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     if (!ApxImul.Valid)
       return false;
     InsnId = X86_INS_IMUL;
+  }
+
+  if (X86.prefix[0] == X86_PREFIX_LOCK) {
+    const bool Unary = InsnId == X86_INS_INC || InsnId == X86_INS_DEC;
+    const bool Logical =
+        InsnId == X86_INS_AND || InsnId == X86_INS_OR || InsnId == X86_INS_XOR;
+    const bool Subtract = InsnId == X86_INS_SUB || InsnId == X86_INS_DEC;
+    if ((!Unary && !Logical && InsnId != X86_INS_ADD &&
+         InsnId != X86_INS_SUB) ||
+        ApxBinary.Present || ApxUnary.Present || ApxImul.Present ||
+        X86.op_count != (Unary ? 1 : 2))
+      return false;
+    const auto &Memory = X86.operands[0];
+    if (Memory.type != X86_OP_MEM ||
+        (Memory.size != 1 && Memory.size != 2 && Memory.size != 4 &&
+         Memory.size != 8) ||
+        (Memory.size == 8 && L.targetArch() != Arch::X64) ||
+        (!Unary && ((X86.operands[1].type != X86_OP_REG &&
+                     X86.operands[1].type != X86_OP_IMM) ||
+                    X86.operands[1].size != Memory.size)))
+      return false;
+    const NdVar Source = Unary ? NdVar::scalar(1, Memory.size)
+                               : readArithmeticOperand(X86.operands[1]);
+    const uint64_t Mask = UINT64_MAX >> (64 - Memory.size * 8);
+    const bool NeutralLogic =
+        Logical && X86.operands[1].type == X86_OP_IMM && Source.isConst() &&
+        Source.Provenance == ConstantAddressProvenance::Scalar &&
+        (Source.Offset & Mask) == (InsnId == X86_INS_AND ? Mask : 0);
+    if (Logical && !NeutralLogic && L.targetArch() != Arch::X64)
+      return false;
+    if (NeutralLogic) {
+      // Neutral logic still writes memory and orders other accesses. The
+      // shared atomic add of zero keeps that transaction, including faults;
+      // only its value result is used to publish the logical status flags.
+      const NdVar Address = S.computeEA(Memory);
+      const NdVar Old = S.makeTemp(Memory.size);
+      S.emit(NdOp::ATOMIC_ADD, Old, {Address, NdVar::scalar(0, Memory.size)},
+             NdMemoryOrdering::SequentiallyConsistent,
+             X86Lifter::LiftState::memoryAddressSpace(Memory));
+      L.emitFlagsLogic(S, Old);
+      return true;
+    }
+    const NdVar Address = S.computeEA(Memory);
+    const NdVar Value = S.makeTemp(Memory.size);
+    S.emit(NdOp::COPY, Value, {Source});
+    if (Logical) {
+      const auto Id = InsnId == X86_INS_AND  ? Intrinsic::X86LockedAnd
+                      : InsnId == X86_INS_OR ? Intrinsic::X86LockedOr
+                                             : Intrinsic::X86LockedXor;
+      const NdVar Flags = S.makeTemp(4);
+      S.emit(NdOp::INTRINSIC, Flags,
+             {NdVar::cst(uint64_t(Id), 2), Address, Value},
+             NdMemoryOrdering::SequentiallyConsistent,
+             X86Lifter::LiftState::memoryAddressSpace(Memory));
+      const unsigned Registers[] = {x86reg::PF, x86reg::ZF, x86reg::SF};
+      for (unsigned I = 0; I != std::size(Registers); ++I)
+        S.emit(NdOp::SUBBYTES, NdVar::reg(Registers[I], 1),
+               {Flags, NdVar::scalar(I, 8)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {NdVar::scalar(0, 1)});
+      S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::scalar(0, 1)});
+      S.recordUndefinedBits(NdVar::reg(x86reg::AF, 1), 0, 1);
+      return true;
+    }
+    NdVar Addend = Value;
+    if (Subtract) {
+      Addend = S.makeTemp(Memory.size);
+      S.emit(NdOp::INT_NEG2, Addend, {Value});
+    }
+    // One RMW owns both the old value and the memory update. Computing flags
+    // from that old value afterward also keeps faults before flag publication.
+    const NdVar Old = S.makeTemp(Memory.size);
+    S.emit(NdOp::ATOMIC_ADD, Old, {Address, Addend},
+           NdMemoryOrdering::SequentiallyConsistent,
+           X86Lifter::LiftState::memoryAddressSpace(Memory));
+    const NdVar Result = S.makeTemp(Memory.size);
+    S.emit(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, Result, {Old, Value});
+    if (Unary) {
+      // INC and DEC preserve the incoming carry, including at overflow.
+      L.emitZSPF(S, Result);
+      L.emitAF(S, Result, Old, Value);
+      S.emit(Subtract ? NdOp::INT_SBOR : NdOp::INT_SOVF,
+             NdVar::reg(x86reg::OF, 1), {Old, Value});
+    } else {
+      L.emitFlagsArith(S, Result, Old, Value, Subtract);
+    }
+    return true;
   }
 
   if (ApxBinary.Valid && (InsnId == X86_INS_ADC || InsnId == X86_INS_SBB)) {
@@ -575,12 +667,19 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // ADD, OR, AND, SUB and XOR in any promoted form: the destination is the
     // NDD register or the first source, which may be memory.
     const cs_x86_op &DestinationOperand = X86.operands[0];
+    const bool SelfSubtract =
+        InsnId == X86_INS_SUB &&
+        SameRegister(ApxBinary.FirstSource, ApxBinary.SecondSource);
     NdVar First = S.makeTemp(DestinationOperand.size);
     S.emit(NdOp::COPY, First,
-           {readArithmeticOperand(X86.operands[ApxBinary.FirstSource])});
+           {SelfSubtract
+                ? NdVar::scalar(0, First.Size)
+                : readArithmeticOperand(X86.operands[ApxBinary.FirstSource])});
     NdVar Second = S.makeTemp(DestinationOperand.size);
     S.emit(NdOp::COPY, Second,
-           {readArithmeticOperand(X86.operands[ApxBinary.SecondSource])});
+           {SelfSubtract
+                ? NdVar::scalar(0, Second.Size)
+                : readArithmeticOperand(X86.operands[ApxBinary.SecondSource])});
     const bool MemoryDestination = DestinationOperand.type == X86_OP_MEM;
     const NdVar Destination = MemoryDestination
                                   ? S.makeTemp(First.Size)
@@ -636,8 +735,12 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_SUB: {
     if (X86.op_count < 2)
       break;
-    NdVar Src = readArithmeticOperand(X86.operands[1]);
-    NdVar DstR = readArithmeticOperand(X86.operands[0]);
+    // A register subtracted from itself has the result and arithmetic flags
+    // of 0 - 0. Do not introduce an incoming value through the flag snapshots.
+    const bool SelfSubtract = SameRegister(0, 1);
+    NdVar Src = SelfSubtract ? NdVar::scalar(0, X86.operands[0].size)
+                             : readArithmeticOperand(X86.operands[1]);
+    NdVar DstR = SelfSubtract ? Src : readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar FlagA = S.makeTemp(DstR.Size);
     S.emit(NdOp::COPY, FlagA, {DstR});
@@ -656,8 +759,10 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_CMP: {
     if (X86.op_count < 2)
       break;
-    NdVar A = readArithmeticOperand(X86.operands[0]);
-    NdVar B = readArithmeticOperand(X86.operands[1]);
+    const bool SelfCompare = SameRegister(0, 1);
+    NdVar A = SelfCompare ? NdVar::scalar(0, X86.operands[0].size)
+                          : readArithmeticOperand(X86.operands[0]);
+    NdVar B = SelfCompare ? A : readArithmeticOperand(X86.operands[1]);
     NdVar TmpR = S.makeTemp(A.Size);
     S.emit(NdOp::INT_SUB, TmpR, {A, B});
     L.emitFlagsArith(S, TmpR, A, B, true);
@@ -684,9 +789,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       break;
 
     // Idiom: xor reg, reg → COPY reg = 0 (avoids false live-in)
-    if (InsnId == X86_INS_XOR && X86.operands[0].type == X86_OP_REG &&
-        X86.operands[1].type == X86_OP_REG &&
-        X86.operands[0].reg == X86.operands[1].reg) {
+    if (InsnId == X86_INS_XOR && SameRegister(0, 1)) {
       NdVar DstW = L.operandWrite(X86.operands[0]);
       S.emit(NdOp::COPY, DstW, {NdVar::scalar(0, DstW.Size)});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::ZF, 1), {NdVar::scalar(1, 1)});
@@ -872,6 +975,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                  {NdVar::reg(x86reg::CF, 1)});
         }
       }
+      if (!SuppressFlags)
+        multiplyundefined::record(S);
       break;
     }
     NdVar Dst{}, MulA{}, MulB{};
@@ -924,6 +1029,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::INT_SLESS, NdVar::reg(x86reg::SF, 1),
            {Result, NdVar::scalar(0, Dst.Size)});
     emitZeroUpperWriteback();
+    multiplyundefined::record(S);
     break;
   }
 
@@ -983,6 +1089,8 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                {NdVar::reg(x86reg::CF, 1)});
       }
     }
+    if (!SuppressFlags)
+      multiplyundefined::record(S);
     break;
   }
 
@@ -993,9 +1101,7 @@ bool liftCoreArith(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     // Idiom: `sbb reg, reg` -> reg = -CF.  A register minus itself is zero
     // whatever it holds, so every result and flag is that of 0 - (0 + CF)
     // and the old value is not an input.
-    const bool SelfBorrow = X86.operands[0].type == X86_OP_REG &&
-                            X86.operands[1].type == X86_OP_REG &&
-                            X86.operands[0].reg == X86.operands[1].reg;
+    const bool SelfBorrow = SameRegister(0, 1);
     NdVar DstR = SelfBorrow ? NdVar{} : readArithmeticOperand(X86.operands[0]);
     NdVar DstW = L.operandWrite(X86.operands[0]);
     NdVar Src = SelfBorrow ? NdVar{} : readArithmeticOperand(X86.operands[1]);

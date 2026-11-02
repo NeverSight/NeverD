@@ -23,6 +23,13 @@ namespace {
 #undef NEVERD_CPU_TEST_CODE
 #undef NEVERD_CPU_TEST_VALUE
 #undef NEVERD_CPU_TEST_TEXT
+
+template <typename T, typename U>
+void expectValue(llvm::Expected<T> Actual, const U &Expected) {
+  ASSERT_TRUE(bool(Actual)) << llvm::toString(Actual.takeError());
+  EXPECT_EQ(*Actual, Expected);
+}
+
 llvm::Error code(ExecutionBackend &CPU, llvm::ArrayRef<uint32_t> Words,
                  uint64_t Address = Code) {
   std::vector<uint8_t> Bytes(Words.size() * sizeof(uint32_t));
@@ -81,37 +88,37 @@ protected:
 TEST_P(AArch64CPU, ExecutesIntegerBranchAndMemoryAtHighAddresses) {
   ASSERT_EQ(llvm::toString(code(*CPU, Arithmetic)), "");
   ASSERT_EQ(llvm::toString(steps(*CPU, 7)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::X0), ArithmeticValue);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X2), ArithmeticValue);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X3), 0u);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X4), 7u);
-  EXPECT_EQ(*CPU->reg(AArch64Register::NZCV), ArithmeticFlags);
-  EXPECT_EQ(*CPU->readInteger(Data, sizeof(uint64_t)), ArithmeticValue);
+  expectValue(CPU->reg(AArch64Register::X0), ArithmeticValue);
+  expectValue(CPU->reg(AArch64Register::X2), ArithmeticValue);
+  expectValue(CPU->reg(AArch64Register::X3), 0u);
+  expectValue(CPU->reg(AArch64Register::X4), 7u);
+  expectValue(CPU->reg(AArch64Register::NZCV), ArithmeticFlags);
+  expectValue(CPU->readInteger(Data, sizeof(uint64_t)), ArithmeticValue);
 }
 TEST_P(AArch64CPU, PreservesLinkRegisterAndReturnControlFlow) {
   ASSERT_EQ(llvm::toString(code(*CPU, Call)), "");
   ASSERT_EQ(llvm::toString(steps(*CPU, 5)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::X0), 12u);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X30), Code + 2 * sizeof(uint32_t));
-  EXPECT_EQ(*CPU->reg(AArch64Register::PC), Code + 5 * sizeof(uint32_t));
+  expectValue(CPU->reg(AArch64Register::X0), 12u);
+  expectValue(CPU->reg(AArch64Register::X30), Code + 2 * sizeof(uint32_t));
+  expectValue(CPU->reg(AArch64Register::PC), Code + 5 * sizeof(uint32_t));
 }
 TEST_P(AArch64CPU, PairWritebackAndZeroExtendedRegisters) {
   ASSERT_EQ(llvm::toString(code(*CPU, PairStack)), "");
   ASSERT_EQ(llvm::toString(CPU->setReg(AArch64Register::X0, Value)), "");
   ASSERT_EQ(llvm::toString(CPU->setReg(AArch64Register::X2, Updated)), "");
   ASSERT_EQ(llvm::toString(steps(*CPU, 2)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::SP), Stack + PageSize);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X3), Value);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X4), Updated);
+  expectValue(CPU->reg(AArch64Register::SP), Stack + PageSize);
+  expectValue(CPU->reg(AArch64Register::X3), Value);
+  expectValue(CPU->reg(AArch64Register::X4), Updated);
 }
 TEST_P(AArch64CPU, IndexedMemoryUsesTheArchitecturalAddress) {
   ASSERT_EQ(llvm::toString(code(*CPU, Indexed)), "");
   ASSERT_EQ(llvm::toString(CPU->setReg(AArch64Register::X0, Value)), "");
   ASSERT_EQ(llvm::toString(CPU->setReg(AArch64Register::X2, 3)), "");
   ASSERT_EQ(llvm::toString(steps(*CPU, 2)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::X3), uint32_t(Value));
-  EXPECT_EQ(*CPU->readInteger(Data + 3 * sizeof(uint32_t), sizeof(uint32_t)),
-            uint32_t(Value));
+  expectValue(CPU->reg(AArch64Register::X3), uint32_t(Value));
+  expectValue(CPU->readInteger(Data + 3 * sizeof(uint32_t), sizeof(uint32_t)),
+              uint32_t(Value));
 }
 TEST_P(AArch64CPU, SignedLoadsPreserveRegisterWidthSemantics) {
   ASSERT_EQ(llvm::toString(code(*CPU, SignedLoads)), "");
@@ -119,9 +126,9 @@ TEST_P(AArch64CPU, SignedLoadsPreserveRegisterWidthSemantics) {
       llvm::toString(CPU->writeInteger(Data, UINT64_MAX, sizeof(uint64_t))),
       "");
   ASSERT_EQ(llvm::toString(steps(*CPU, 3)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::X0), UINT64_MAX);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X2), UINT32_MAX);
-  EXPECT_EQ(*CPU->reg(AArch64Register::X3), UINT64_MAX);
+  expectValue(CPU->reg(AArch64Register::X0), UINT64_MAX);
+  expectValue(CPU->reg(AArch64Register::X2), UINT32_MAX);
+  expectValue(CPU->reg(AArch64Register::X3), UINT64_MAX);
 }
 TEST_P(AArch64CPU, ObserverStopsStoreBeforeEffects) {
   ASSERT_EQ(llvm::toString(code(*CPU, Store)), "");
@@ -135,8 +142,8 @@ TEST_P(AArch64CPU, ObserverStopsStoreBeforeEffects) {
   };
   ASSERT_EQ(llvm::toString(CPU->installHooks(std::move(H))), "");
   ASSERT_EQ(llvm::toString(CPU->run(Code, Timeout)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::PC), Code);
-  EXPECT_EQ(*CPU->readInteger(Data, sizeof(uint64_t)), 0u);
+  expectValue(CPU->reg(AArch64Register::PC), Code);
+  expectValue(CPU->readInteger(Data, sizeof(uint64_t)), 0u);
 }
 TEST_P(AArch64CPU, PairFaultPrecedesBothWritesAndCannotBeRestoredAway) {
   ASSERT_EQ(llvm::toString(code(*CPU, PairStore)), "");
@@ -173,7 +180,7 @@ TEST_P(AArch64CPU, ContextRestoresRegistersAgainstCurrentAliasMappings) {
               "");
     ASSERT_EQ(llvm::toString(CPU->restoreContext(**Saved)), "");
     ASSERT_EQ(llvm::toString(steps(*CPU, 1)), "");
-    EXPECT_EQ(*CPU->reg(AArch64Register::X0), N % 2 ? Updated : Value);
+    expectValue(CPU->reg(AArch64Register::X0), N % 2 ? Updated : Value);
   }
 }
 TEST_P(AArch64CPU, ChangedCodeInvalidatesCachedInstructions) {
@@ -181,13 +188,13 @@ TEST_P(AArch64CPU, ChangedCodeInvalidatesCachedInstructions) {
   ASSERT_EQ(llvm::toString(steps(*CPU, 1)), "");
   ASSERT_EQ(llvm::toString(code(*CPU, Modified)), "");
   ASSERT_EQ(llvm::toString(steps(*CPU, 1)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::X0), 123u);
+  expectValue(CPU->reg(AArch64Register::X0), 123u);
 }
 TEST_P(AArch64CPU, UnsupportedSystemInstructionStopsBeforeEffect) {
   ASSERT_EQ(llvm::toString(code(*CPU, System)), "");
   ASSERT_EQ(llvm::toString(CPU->setReg(AArch64Register::X0, Value)), "");
   EXPECT_NE(llvm::toString(CPU->run(Code, Timeout)), "");
-  EXPECT_EQ(*CPU->reg(AArch64Register::X0), Value);
+  expectValue(CPU->reg(AArch64Register::X0), Value);
   ASSERT_TRUE(CPU->fault());
   EXPECT_EQ(CPU->fault()->Kind, BackendFaultKind::InvalidInstruction);
 }
@@ -296,16 +303,16 @@ TEST(UnicornAArch64, ExecutesSIMDAndTLSAndRestoresCPUOnly) {
   ASSERT_EQ(llvm::toString(CPU.map(Data, PageSize, Read | Write)), "");
   ASSERT_EQ(llvm::toString(code(CPU, CurrentEL)), "");
   ASSERT_EQ(llvm::toString(steps(CPU, 1)), "");
-  EXPECT_EQ(*CPU.reg(AArch64Register::X0), 4u);
+  expectValue(CPU.reg(AArch64Register::X0), 4u);
   ASSERT_EQ(llvm::toString(code(CPU, SIMD)), "");
   ASSERT_EQ(llvm::toString(CPU.setReg(AArch64Register::X3, Value)), "");
   ASSERT_EQ(llvm::toString(CPU.setReg(AArch64Register::TPIDR_EL0, Data)), "");
   ASSERT_EQ(llvm::toString(steps(CPU, 4)), "");
   ASSERT_FALSE(CPU.fault()) << std::hex << (CPU.fault() ? CPU.fault()->PC : 0);
-  EXPECT_EQ(*CPU.vector(0), (RegisterValue{SIMDPattern, SIMDPattern}));
-  EXPECT_EQ(*CPU.vector(1), (RegisterValue{}));
-  EXPECT_EQ(*CPU.vector(2), (RegisterValue{Value, 0}));
-  EXPECT_EQ(*CPU.reg(AArch64Register::X4), Data);
+  expectValue(CPU.vector(0), (RegisterValue{SIMDPattern, SIMDPattern}));
+  expectValue(CPU.vector(1), (RegisterValue{}));
+  expectValue(CPU.vector(2), (RegisterValue{Value, 0}));
+  expectValue(CPU.reg(AArch64Register::X4), Data);
   auto Saved = CPU.saveContext();
   ASSERT_TRUE(bool(Saved));
   ASSERT_EQ(llvm::toString(CPU.setVector(0, {})), "");
@@ -313,9 +320,9 @@ TEST(UnicornAArch64, ExecutesSIMDAndTLSAndRestoresCPUOnly) {
   ASSERT_EQ(llvm::toString(CPU.writeInteger(Data, Updated, sizeof(uint64_t))),
             "");
   ASSERT_EQ(llvm::toString(CPU.restoreContext(**Saved)), "");
-  EXPECT_EQ(*CPU.vector(0), (RegisterValue{SIMDPattern, SIMDPattern}));
-  EXPECT_EQ(*CPU.reg(AArch64Register::TPIDR_EL0), Data);
-  EXPECT_EQ(*CPU.readInteger(Data, sizeof(uint64_t)), Updated);
+  expectValue(CPU.vector(0), (RegisterValue{SIMDPattern, SIMDPattern}));
+  expectValue(CPU.reg(AArch64Register::TPIDR_EL0), Data);
+  expectValue(CPU.readInteger(Data, sizeof(uint64_t)), Updated);
   auto Invalid = CPU.reg(X64Register::AX);
   EXPECT_FALSE(bool(Invalid));
   llvm::consumeError(Invalid.takeError());

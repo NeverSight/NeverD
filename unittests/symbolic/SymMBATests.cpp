@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <random>
 
 using namespace neverd::symbolic;
 
@@ -160,6 +161,23 @@ TEST(SymMBA, HasNoArityAtWhichItStopsWritingTheAnswerDown) {
                "a ^ b ^ c ^ d ^ e ^ f ^ g ^ h ^ i ^ j");
 }
 
+TEST(SymMBA, AtomColumnsMatchEveryAssignmentAcrossStorageWords) {
+  EXPECT_TRUE(atomTruthTable(0, 0).isZero());
+  for (unsigned Arity = 1; Arity <= 18; ++Arity) {
+    for (unsigned Index = 0; Index < Arity; ++Index) {
+      SCOPED_TRACE(::testing::Message() << Arity << ":" << Index);
+      const auto Table = atomTruthTable(Index, Arity);
+      ASSERT_EQ(Table.numVars(), Arity);
+      ASSERT_EQ(Table.entries(), size_t(1) << Arity);
+      EXPECT_EQ(Table.count(), Table.entries() / 2);
+      for (size_t Assignment = 0; Assignment < Table.entries(); ++Assignment)
+        ASSERT_EQ(Table.at(Assignment), bool((Assignment >> Index) & 1))
+            << Assignment;
+    }
+    EXPECT_TRUE(atomTruthTable(Arity, Arity).isZero());
+  }
+}
+
 TEST(SymMBA, HoldsATableWiderThanTheWordThatUsedToBeOne) {
   // The container on its own, below the solver that drives it.  Every arity
   // ceiling in the solver used to trace back to this one object being a
@@ -266,6 +284,70 @@ TEST(SymMBA, StillPrefersAUnionOfCubesWhereThatIsShorter) {
   simplifiesTo("(a | b | c) + (d | e | f | g) - "
                "((a | b | c) & (d | e | f | g))",
                "a | b | c | d | e | f | g");
+}
+
+TEST(SymMBA, DenseCoversKeepEveryCornerAndWholeWord) {
+  std::mt19937_64 Random(0x636f766572);
+  for (unsigned Count : {4u, 6u, 8u}) {
+    for (unsigned Mode = 0; Mode != 3; ++Mode) {
+      auto Table = TruthTable::zero(Count);
+      for (size_t Pattern = 0; Pattern < Table.entries(); ++Pattern) {
+        auto input = [&](unsigned I) {
+          return bool(Pattern & (size_t(1) << I)) ^ (Mode == 1 && I % 3 == 0);
+        };
+        bool Value = false;
+        for (unsigned I = 0; I < Count; ++I)
+          Value |= input(I) && input((I + 1) % Count);
+        if (Mode == 2 && Pattern + 1 == Table.entries())
+          Value = !Value;
+        Table.setValue(Pattern, Value);
+      }
+      for (unsigned Width : {1u, 8u, 64u, 257u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Count << ':' << Mode << ':' << Width);
+        SymContext Ctx;
+        llvm::SmallVector<SymRef, 8> Atoms;
+        for (unsigned I = 0; I < Count; ++I)
+          Atoms.push_back(Ctx.mkVar("v" + std::to_string(I), Width));
+        auto Result = synthesizeBitwise(Ctx, Table, Atoms);
+        ASSERT_TRUE(Result);
+        SymEvalPlan Plan(Ctx, *Result);
+        for (size_t Pattern = 0; Pattern < Table.entries(); ++Pattern) {
+          llvm::SmallVector<llvm::APInt, 8> Values;
+          for (unsigned I = 0; I < Count; ++I)
+            Values.push_back(Pattern & (size_t(1) << I)
+                                 ? llvm::APInt::getAllOnes(Width)
+                                 : llvm::APInt::getZero(Width));
+          EXPECT_EQ(Plan.eval(Values), Table.at(Pattern)
+                                           ? llvm::APInt::getAllOnes(Width)
+                                           : llvm::APInt::getZero(Width));
+        }
+        for (unsigned Trial = 0; Trial != 32; ++Trial) {
+          llvm::SmallVector<llvm::APInt, 8> Values;
+          for (unsigned I = 0; I < Count; ++I) {
+            llvm::SmallVector<uint64_t, 5> Words;
+            for (unsigned J = 0; J < (Width + 63) / 64; ++J)
+              Words.push_back(Random());
+            Values.emplace_back(Width, Words);
+          }
+          auto Expected = llvm::APInt::getZero(Width);
+          for (unsigned Bit = 0; Bit < Width; ++Bit) {
+            size_t Pattern = 0;
+            for (unsigned I = 0; I < Count; ++I)
+              Pattern |= size_t(Values[I][Bit]) << I;
+            if (Table.at(Pattern))
+              Expected.setBit(Bit);
+          }
+          EXPECT_EQ(Plan.eval(Values), Expected);
+        }
+        BitwiseSynthesisLimits Limits;
+        Limits.MaxWork = 0;
+        const auto Before = Ctx.numNodes();
+        EXPECT_FALSE(synthesizeBitwise(Ctx, Table, Atoms, Limits));
+        EXPECT_EQ(Ctx.numNodes(), Before);
+      }
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

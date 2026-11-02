@@ -1,0 +1,41 @@
+//===- AArch64PAuthNative.def - Active signing-key probe ---------*- C++
+//-*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// An executable target name alone cannot prove that pointer signing is active.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PAUTH_NATIVE_TEXT
+#define NEVERD_PAUTH_NATIVE_TEXT(Name, Value)
+#endif
+
+NEVERD_PAUTH_NATIVE_TEXT(kSigningKeyTarget, "arm64e-apple-macos")
+NEVERD_PAUTH_NATIVE_TEXT(kSigningKeysUnavailable,
+                         "this host cannot execute arm64e with all four active "
+                         "pointer signing keys and generic signatures")
+NEVERD_PAUTH_NATIVE_TEXT(kSigningKeyProbe, R"(
+#include <stdint.h>
+int main(void) {
+  unsigned changed = 0;
+  int generic = 0;
+  for (uint64_t i = 0; i != 64; ++i) {
+    uint64_t pointer = 0x12340 + i * 16;
+    uint64_t a = pointer, b = pointer, c = pointer, d = pointer, signature;
+    __asm__ volatile("pacia %0, %1" : "+r"(a) : "r"(i));
+    __asm__ volatile("pacib %0, %1" : "+r"(b) : "r"(i));
+    __asm__ volatile("pacda %0, %1" : "+r"(c) : "r"(i));
+    __asm__ volatile("pacdb %0, %1" : "+r"(d) : "r"(i));
+    __asm__ volatile("pacga %0, %1, %2"
+                     : "=r"(signature) : "r"(pointer), "r"(i));
+    changed |= (a != pointer) | ((b != pointer) << 1) |
+               ((c != pointer) << 2) | ((d != pointer) << 3);
+    generic |= signature != 0;
+  }
+  return changed != 15 || !generic;
+}
+)")
+
+#undef NEVERD_PAUTH_NATIVE_TEXT

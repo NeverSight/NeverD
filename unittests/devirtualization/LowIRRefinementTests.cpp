@@ -9,6 +9,7 @@
 
 #include "neverd/analysis/LowIRRefinement.h"
 
+#include <iterator>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -2028,8 +2029,10 @@ TEST(LowIRLoopInference, MalformedGraphsAndAbsentCutsHaveNoPlan) {
       P.Function.Blocks[1].Id = P.Function.Blocks[0].Id;
     if (Kind == 3)
       P.Function.Blocks[0].InstructionBoundaries[0].FirstOp = SIZE_MAX;
-    if (Kind == 4)
-      P.Function.Blocks[0].Ops[0].NumInputs = 7;
+    if (Kind == 4) {
+      auto &Malformed = P.Function.Blocks[0].Ops[0];
+      Malformed.NumInputs = std::size(Malformed.Inputs) + 1;
+    }
     if (Kind == 5)
       P.Function.Blocks.clear();
     const auto R = inferLowIRLoopRefinementPlan(P.Function, P.Contract);

@@ -9,6 +9,7 @@
 #include "../os/linux/kernel/LinuxKernelAvailability.h"
 #include "ProcessJSONInteger.h"
 
+#include "neverd/emulation/Limits.h"
 #include "neverd/emulation/ProcessReportFields.h"
 namespace neverd::emulation {
 namespace {
@@ -54,6 +55,52 @@ linuxKernelOptionsFromJSON(const llvm::json::Value &Value) {
       auto Name = Entry.getAsString();
       if (!Name || !(Out.GKI = gkiKernel(*Name)))
         return invalid(field::GKI);
+    } else if (Key == field::XAttrQueryImport) {
+      auto Name = Entry.getAsString();
+      if (!Name)
+        return invalid(field::XAttrQueryImport);
+      if (*Name == "target-before-name")
+        Out.XAttrQueryImport = LinuxXAttrQueryImport::TargetBeforeName;
+      else if (*Name == "name-before-target")
+        Out.XAttrQueryImport = LinuxXAttrQueryImport::NameBeforeTarget;
+      else
+        return invalid(field::XAttrQueryImport);
+    } else if (Key == field::AnonymousVMANames) {
+      auto Name = Entry.getAsString();
+      if (!Name || *Name != "android-user-pointer")
+        return invalid(field::AnonymousVMANames);
+      Out.AnonymousVMANames = LinuxAnonymousVMANames::AndroidUserPointer;
+    } else if (Key == field::ResidencyObservations) {
+      using namespace neverd::limits::emulation;
+      const auto *Queries = Entry.getAsArray();
+      if (!Queries || Queries->size() > kMaxLinuxResidencyObservations)
+        return invalid(Key);
+      auto &Observations = Out.ResidencyObservations.emplace();
+      uint64_t Total = 0;
+      for (const auto &Query : *Queries) {
+        const auto *Object = Query.getAsObject();
+        if (!Object || Object->size() != 2 || !Object->get(field::Address) ||
+            !Object->getArray(field::ResidencyPages))
+          return invalid(Key);
+        auto Address =
+            process_json::integer<uint64_t>(*Object->get(field::Address));
+        const auto *Pages = Object->getArray(field::ResidencyPages);
+        if (!Address || Pages->empty() ||
+            Pages->size() > kMaxLinuxResidencyPages ||
+            Pages->size() > kMaxLinuxResidencyObservationBytes - Total)
+          return invalid(Key);
+        LinuxResidencyObservation Observation;
+        Observation.Address = *Address;
+        Observation.Pages.reserve(Pages->size());
+        for (const auto &Page : *Pages) {
+          auto State = Page.getAsInteger();
+          if (!State || *State < 0 || *State > 1)
+            return invalid(Key);
+          Observation.Pages.push_back(uint8_t(*State));
+        }
+        Total += Pages->size();
+        Observations.push_back(std::move(Observation));
+      }
     } else if (Key == field::KernelTasks) {
       const auto *Tasks = Entry.getAsArray();
       if (!Tasks || Tasks->size() > linux_model::KernelTaskLimit)

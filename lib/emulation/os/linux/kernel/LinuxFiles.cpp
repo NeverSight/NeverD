@@ -79,9 +79,20 @@ LinuxFiles::handle(ServiceKind Kind, const ProcessServiceEvent &Event,
   case ServiceKind::FaccessAt:
     return access(A1, A2, Result);
   case ServiceKind::Open:
-    return open(A0, A1, Result);
+    return open(A0, A1, A2, Result);
   case ServiceKind::OpenAt:
-    return open(A1, A2, Result, A0);
+    return open(A1, A2, A3, Result, A0);
+  case ServiceKind::Unlink:
+    return unlinkPath(A0, 0, Result);
+  case ServiceKind::UnlinkAt:
+    // This bounded path contract admits absolute paths only. Linux ignores
+    // dirfd for those paths; relative walks remain unsupported in unlinkPath.
+    return unlinkPath(A1, A2, Result);
+  case ServiceKind::Rename:
+    return renameFile(A0, A1, Result);
+  case ServiceKind::RenameAt:
+    // The admitted paths are absolute, so both dirfd values are ignored.
+    return renameFile(A1, A3, Result);
   case ServiceKind::Close:
     return close(A0, Result);
   case ServiceKind::Dup:

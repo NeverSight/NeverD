@@ -164,8 +164,16 @@ and never builds or loads `tbbmalloc` or its allocator proxy. Large-stack caller
 reuse their available headroom; small callers receive a native coordinator. Hosts that fork
 after first use or dynamically unload the SDK must use the native-thread
 baseline (`NEVERD_ENABLE_TBB=OFF`); these lifecycles remain unsupported by the
-retained scheduler. It does not finalize a host's shared TBB
-scheduler. Distribute its runtime DLL/shared library with enabled builds.
+retained scheduler. oneTBB is statically linked into the shared core, with its
+symbols private to that core. CLI component calls and GUI worker requests use
+that same scheduler; no TBB DLL/shared library is distributed. Targets linking
+`neverd_shared` select the shared scheduler automatically. Clients that reach
+the SDK through another target and also link component archives must use
+`neverd_use_shared_task_scheduler` on their final target. Standalone component
+tools retain their own runtime.
+This constrained integration avoids multiple NeverD schedulers in one process;
+upstream still describes [static oneTBB builds](https://uxlfoundation.github.io/oneTBB/main/intro/static_linking.html)
+as unsupported and discourages them for general use.
 
 See [acceleration validation](docs/testing.md#acceleration-libraries) for
 native tests, opt-out comparisons and the scheduler compatibility limits.
@@ -189,6 +197,12 @@ prebuilt channel supports macOS arm64 only. Intel Macs and universal builds
 must use the default local LLVM build. Advanced overrides such as
 `NEVERD_LLVM_PREBUILT_TAG`, mirror URL, cache directory, and an explicit
 checksum are documented in `cmake/NeverDLLVMPrebuilt.cmake`.
+
+LLVM fixes belong in the [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project).
+Commit and merge them there, then update NeverD's LLVM submodule revision.
+Integrated builds compile that source directly; do not add LLVM patch files or
+build-directory source overlays to NeverD. Prebuilt packages must be rebuilt
+from the corrected fork before they can qualify the same behavior.
 
 <!-- i18n-section: workflow -->
 ## Branch and pull-request workflow

@@ -88,6 +88,79 @@ analyzeProgram(Version TheVersion,
   return Program ? std::move(*Program) : SBFProgram{};
 }
 
+TEST(SBFSemantics, EvaluatesConditionalWidthsAndSignedness) {
+  struct Case {
+    Operation Op;
+    uint64_t Left;
+    uint64_t Right;
+    bool WordTaken;
+    bool DoubleWordTaken;
+  };
+  const uint64_t HighWord = UINT64_C(1) << kWordBitWidth;
+  const uint64_t SignWord = UINT64_C(1) << (kWordBitWidth - 1);
+  const uint64_t SignDoubleWord = UINT64_C(1) << (kDoubleWordBitWidth - 1);
+  const Case Cases[] = {{Operation::Eq, HighWord, 0, true, false},
+                        {Operation::Ne, HighWord, 0, false, true},
+                        {Operation::UGt, HighWord, 1, false, true},
+                        {Operation::UGe, HighWord, 1, false, true},
+                        {Operation::ULt, HighWord, 1, true, false},
+                        {Operation::ULe, HighWord, 1, true, false},
+                        {Operation::SGt, SignWord, 0, false, true},
+                        {Operation::SGe, SignWord, 0, false, true},
+                        {Operation::SLt, SignWord, 0, true, false},
+                        {Operation::SLe, SignWord, 0, true, false},
+                        {Operation::Set, HighWord, HighWord, false, true},
+                        {Operation::SGe, SignDoubleWord, 0, true, false},
+                        {Operation::SLt, SignDoubleWord, 0, false, true},
+                        {Operation::SGt, 0, UINT64_MAX, true, true},
+                        {Operation::SLe, 0, UINT64_MAX, false, false}};
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(static_cast<unsigned>(C.Op));
+    EXPECT_EQ(evaluateBranchCondition(C.Op, kWordBitWidth, C.Left, C.Right),
+              C.WordTaken);
+    EXPECT_EQ(
+        evaluateBranchCondition(C.Op, kDoubleWordBitWidth, C.Left, C.Right),
+        C.DoubleWordTaken);
+  }
+}
+
+TEST(SBFSemantics, EvaluatesScalarWidthsWrappingAndShiftMasks) {
+  struct Case {
+    Operation Op;
+    unsigned Width;
+    uint64_t Left;
+    uint64_t Right;
+    bool Swap;
+    uint64_t Expected;
+  };
+  const Case Cases[] = {
+      {Operation::Add, 32, UINT32_MAX, 1, false, 0},
+      {Operation::Add, 64, UINT64_MAX, 1, false, 0},
+      {Operation::Sub, 32, 3, 10, true, 7},
+      {Operation::Sub, 64, 3, 10, false, UINT64_MAX - 6},
+      {Operation::Mul, 32, 0x40000000, 3, false, 0xc0000000},
+      {Operation::Mul, 64, 15, UINT64_MAX - 6, false, UINT64_MAX - 104},
+      {Operation::Or, 64, 0, 0, false, 0},
+      {Operation::And, 32, UINT64_MAX, 0x80000000, false, 0x80000000},
+      {Operation::Xor, 64, UINT64_MAX, UINT64_MAX, false, 0},
+      {Operation::LSh, 32, 1, 63, false, 0x80000000},
+      {Operation::RSh, 64, UINT64_MAX, 65, false, UINT64_MAX >> 1},
+      {Operation::ARSh, 32, 0x80000000, 33, false, 0xc0000000},
+      {Operation::ARSh, 64, UINT64_C(1) << 63, 127, false, UINT64_MAX},
+      {Operation::ARSh, 32, 0x80000000, 32, false, 0x80000000},
+      {Operation::Neg, 32, 1, 0, false, UINT32_MAX},
+      {Operation::Neg, 64, 1, 0, false, UINT64_MAX}};
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(static_cast<unsigned>(C.Op));
+    EXPECT_EQ(evaluateScalarALU(C.Op, C.Width, C.Left, C.Right, C.Swap),
+              C.Expected);
+  }
+  EXPECT_FALSE(evaluateScalarALU(Operation::Load, 64, 0, 0));
+  EXPECT_FALSE(evaluateScalarALU(Operation::UDiv, 64, 1, 0));
+  EXPECT_FALSE(evaluateScalarALU(Operation::SDiv, 64, 1, 0));
+  EXPECT_FALSE(evaluateScalarALU(Operation::Add, 8, 1, 1));
+}
+
 TEST(SBFSemantics, NormalizesVersionedOperandsAndResults) {
   const OpcodeInfo &UnsignedPQR = *getOpcodeInfo(Opcode::UDIV64_IMM);
   const OpcodeInfo &SignedPQR = *getOpcodeInfo(Opcode::SDIV64_IMM);

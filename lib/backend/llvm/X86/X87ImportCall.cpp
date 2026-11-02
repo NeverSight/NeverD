@@ -5,7 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/llvm/X86X87ImportCall.h"
+#include "neverd/backend/llvm/X86/X86X87ImportCall.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"

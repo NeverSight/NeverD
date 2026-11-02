@@ -21,6 +21,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
 #include <algorithm>
@@ -198,6 +199,11 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(
         }
         case NdOp::LOAD:
           if (!addCount(MemoryReads))
+            return false;
+          break;
+        case NdOp::INTRINSIC:
+          if (Img.Arch == Arch::AArch64 &&
+              lowAArch64AddressLoadShapeIsValid(Op) && !addCount(MemoryReads))
             return false;
           break;
         case NdOp::STORE:
@@ -570,11 +576,14 @@ std::optional<uint64_t> CFGBuilder::foldRegConstant(
       switch (Op.Opcode) {
       case NdOp::CALL:
       case NdOp::INDIR_CALL:
-      case NdOp::INTRINSIC:
       case NdOp::BRANCH:
       case NdOp::COND_BR:
       case NdOp::INDIR_BR:
         IsTerm = true;
+        break;
+      case NdOp::INTRINSIC:
+        IsTerm |=
+            Img.Arch != Arch::AArch64 || !lowAArch64AddressLoadShapeIsValid(Op);
         break;
       default:
         break;

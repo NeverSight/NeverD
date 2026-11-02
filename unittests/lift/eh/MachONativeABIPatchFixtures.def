@@ -1,0 +1,40 @@
+//===- MachONativeABIPatchFixtures.def - Rewrite admission -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Raw Mach-O subtype words independently exercise the authenticated native
+/// patch boundary, including capability bits and the arm64e.x1 subtype.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_NATIVE_ABI_CASE
+#define NEVERD_NATIVE_ABI_CASE(Name, Subtype)
+#endif
+#ifndef NEVERD_NATIVE_ABI_VALUE
+#define NEVERD_NATIVE_ABI_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_NATIVE_ABI_TEXT
+#define NEVERD_NATIVE_ABI_TEXT(Name, Value)
+#endif
+
+NEVERD_NATIVE_ABI_CASE(Arm64e, 0x00000002)
+NEVERD_NATIVE_ABI_CASE(Arm64eCapability, 0x80000002)
+NEVERD_NATIVE_ABI_CASE(Arm64eV2, 0x82000002)
+NEVERD_NATIVE_ABI_CASE(Arm64eX1, 0x0000000c)
+NEVERD_NATIVE_ABI_CASE(Arm64eX1Capability, 0x8000000c)
+NEVERD_NATIVE_ABI_CASE(Arm64eX1V2, 0x8200000c)
+
+NEVERD_NATIVE_ABI_VALUE(uint32_t, kNativeABIOrdinarySubtype, 0)
+NEVERD_NATIVE_ABI_VALUE(size_t, kNativeABICompactCapacity, 0x2000)
+NEVERD_NATIVE_ABI_VALUE(unsigned, kNativeABIPathBytes, 128)
+NEVERD_NATIVE_ABI_TEXT(kNativeABIInputPrefix, "neverd-macho-native-abi-input")
+NEVERD_NATIVE_ABI_TEXT(kNativeABIOutputPrefix, "neverd-macho-native-abi-output")
+NEVERD_NATIVE_ABI_TEXT(kNativeABIExtension, "macho")
+NEVERD_NATIVE_ABI_TEXT(kNativeABIOutputSentinel, "ABI")
+NEVERD_NATIVE_ABI_TEXT(kNativeABIFunction, "lifted_source_function")
+NEVERD_NATIVE_ABI_TEXT(kNativeABIPersonality, "test_personality")
+
+#undef NEVERD_NATIVE_ABI_CASE
+#undef NEVERD_NATIVE_ABI_VALUE
+#undef NEVERD_NATIVE_ABI_TEXT

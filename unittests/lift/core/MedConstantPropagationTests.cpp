@@ -1,3 +1,13 @@
+//===- MedConstantPropagationTests.cpp - Stable MedIR value propagation ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file Checks SSA value identity, widths, and bounded propagation.
+///
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/ir/TargetRegInfo.h"
@@ -6,7 +16,12 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <limits>
+#include <set>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 using namespace neverd;
 namespace {
@@ -24,6 +39,53 @@ MedOp operation(NdOp Opcode, MedVar Output, std::vector<MedVar> Inputs) {
   for (const auto &Input : Inputs)
     Op.addInput(Input);
   return Op;
+}
+
+TEST(MedConstantPropagation, SelfComparisonNeedsOneStableObservation) {
+  for (auto Kind : {MedVar::Reg, MedVar::Temp, MedVar::Param, MedVar::Const})
+    for (uint16_t Width : {1, 2, 4, 8}) {
+      auto A = Kind == MedVar::Const ? MedVar::makeConst(19, Width)
+                                     : variable(7, Width);
+      A.Kind = Kind;
+      for (NdOp Opcode :
+           {NdOp::INT_EQUAL, NdOp::INT_LESSEQUAL, NdOp::INT_SLESSEQUAL})
+        EXPECT_EQ(selfComparisonConstant(Opcode, A, A), true);
+      for (NdOp Opcode : {NdOp::INT_NOTEQUAL, NdOp::INT_LESS, NdOp::INT_SLESS,
+                          NdOp::INT_SBOR})
+        EXPECT_EQ(selfComparisonConstant(Opcode, A, A), false);
+      for (NdOp Opcode :
+           {NdOp::INT_CARRY, NdOp::INT_SOVF, NdOp::INT_AND, NdOp::FLOAT_EQUAL})
+        EXPECT_FALSE(selfComparisonConstant(Opcode, A, A));
+    }
+
+  const auto A = variable(7);
+  for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+    auto Left = A;
+    auto Right = A;
+    switch (Mutation) {
+    case 0:
+      Left.Kind = Right.Kind = MedVar::Unspecified;
+      break;
+    case 1:
+      Left.Id = Right.Id = -1;
+      break;
+    case 2:
+      ++Right.SSAVer;
+      break;
+    case 3:
+      Right.Kind = MedVar::Reg;
+      Left.Kind = MedVar::Temp;
+      break;
+    case 4:
+      Right.Size = 4;
+      break;
+    case 5:
+      Left.Size = Right.Size = 0;
+      break;
+    }
+    EXPECT_FALSE(selfComparisonConstant(NdOp::INT_EQUAL, Left, Right));
+    EXPECT_FALSE(selfComparisonConstant(NdOp::INT_SBOR, Left, Right));
+  }
 }
 
 MedFunc loop(MedVar Seed) {
@@ -151,6 +213,83 @@ TEST(MedConstantPropagation,
   EXPECT_FALSE(result(Func).isConst());
 }
 
+TEST(MedConstantPropagation, PhiInputsRequireOneArgumentPerIncomingEdge) {
+  for (int Count : {1, 2, 4, 5, 17})
+    for (bool Reverse : {false, true})
+      for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Reverse);
+        SCOPED_TRACE(Mutation);
+        MedBlock Block;
+        PhiNode Phi;
+        Phi.Output = variable(1);
+        std::set<int> Incoming;
+        for (int I = 0; I != Count; ++I) {
+          const int Pred = std::numeric_limits<int>::max() - I;
+          Block.Preds.push_back(Pred);
+          Phi.Args.emplace_back(Pred, MedVar::makeConst(73, 8));
+          Incoming.insert(Pred);
+        }
+        if (Reverse)
+          std::reverse(Phi.Args.begin(), Phi.Args.end());
+        switch (Mutation) {
+        case 0:
+          break;
+        case 1:
+          Block.Preds.back() = Count == 1 ? -1 : Block.Preds.front();
+          break;
+        case 2:
+          Phi.Args.back().first = Count == 1 ? -1 : Phi.Args.front().first;
+          break;
+        case 3:
+          Phi.Args.pop_back();
+          break;
+        case 4:
+          Phi.Args.push_back(Phi.Args.front());
+          break;
+        case 5:
+          Phi.Args.back().second.Size = 4;
+          break;
+        case 6:
+          Phi.Output.Size = 0;
+          break;
+        case 7:
+          Phi.ExceptionalEntry = variable(2);
+          break;
+        case 8:
+          Block.Preds.clear();
+          break;
+        case 9:
+          Incoming.erase(Incoming.begin());
+          Incoming.insert(-1);
+          break;
+        }
+        EXPECT_EQ(hasCompleteOrdinaryPhiInputs(Block, Phi, Incoming),
+                  Mutation == 0);
+      }
+}
+
+TEST(MedConstantPropagation, CompletePredecessorsDoNotCompleteAnotherPhi) {
+  for (bool Reverse : {false, true}) {
+    auto Func = loop(MedVar::makeConst(73, 8));
+    auto &Header = block(Func, 1);
+    auto Incomplete = Header.Phis.front();
+    Incomplete.Output = variable(10);
+    Incomplete.Args.pop_back();
+    Header.Phis.push_back(Incomplete);
+    if (Reverse)
+      std::reverse(Header.Phis.begin(), Header.Phis.end());
+    auto &Exit = block(Func, 3);
+    Exit.Ops.insert(Exit.Ops.begin(), operation(NdOp::INT_ADD, variable(11),
+                                                {variable(10), variable(2)}));
+    ASSERT_TRUE(propagateInvariantConstants(Func));
+    EXPECT_EQ(Exit.Ops.front().Inputs[0], variable(10));
+    EXPECT_EQ(Exit.Ops.front().Inputs[1].ConstVal, 73U);
+    EXPECT_TRUE(Exit.Ops.front().Inputs[1].isConst());
+    EXPECT_EQ(result(Func), MedVar::makeConst(73, 8));
+  }
+}
+
 TEST(MedConstantPropagation, EffectsAndOperandRolesSurviveConstantTransport) {
   auto Func = loop(MedVar::makeConst(73, 8));
   auto &Exit = block(Func, 3);
@@ -172,6 +311,78 @@ TEST(MedConstantPropagation, EffectsAndOperandRolesSurviveConstantTransport) {
   EXPECT_EQ(Exit.Ops[2].Inputs[0].Provenance,
             ConstantAddressProvenance::Unknown);
   EXPECT_EQ(Exit.Ops[2].Inputs[1], variable(9));
+}
+
+TEST(MedConstantPropagation, IndirectCallValuesCannotBecomeStorageAddresses) {
+  for (auto Provenance :
+       {ConstantAddressProvenance::Unknown, ConstantAddressProvenance::Scalar,
+        ConstantAddressProvenance::CodeAddress}) {
+    SCOPED_TRACE(unsigned(Provenance));
+    const auto Value = MedVar::makeConst(0x2000, 8, Provenance);
+    auto Func = loop(Value);
+    auto &Exit = block(Func, 3);
+    Exit.Ops = {
+        operation(NdOp::INDIR_CALL, variable(5), {variable(2), variable(2)}),
+        operation(NdOp::INDIR_CALL, variable(6), {Value, variable(2)}),
+        operation(NdOp::CALL, variable(7), {variable(2), variable(2)}),
+        operation(NdOp::RETURN, {}, {variable(7)})};
+    ASSERT_TRUE(propagateInvariantConstants(Func));
+    EXPECT_EQ(Exit.Ops[0].Inputs[0], variable(2));
+    EXPECT_EQ(Exit.Ops[0].Inputs[1], Value);
+    EXPECT_EQ(Exit.Ops[1].Inputs[0], Value);
+    EXPECT_EQ(Exit.Ops[1].Inputs[1], Value);
+    EXPECT_EQ(Exit.Ops[2].Inputs[0], Value);
+    EXPECT_EQ(Exit.Ops[2].Inputs[1], Value);
+    EXPECT_FALSE(propagateInvariantConstants(Func));
+  }
+}
+
+TEST(MedConstantPropagation, CallValueRoleSurvivesLowConversionAndCopyFolding) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Architecture) << ':' << unsigned(Format));
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Target = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      Low.Name = "indirect_call_value";
+      Low.Blocks.resize(2);
+      for (unsigned I = 0; I != Low.Blocks.size(); ++I) {
+        auto &Block = Low.Blocks[I];
+        Block.Id = I;
+        Block.StartAddr = Low.Entry + I * 0x10;
+        Block.EndAddr = Block.StartAddr + 0x10;
+      }
+      Low.Blocks[0].Succs = {1};
+      Low.Blocks[1].Preds = {0};
+      const auto Add = [&](unsigned Block, NdOp Opcode, NdVar Output,
+                           std::initializer_list<NdVar> Inputs) {
+        LowOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        Op.Addr = Low.Blocks[Block].StartAddr;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        Low.Blocks[Block].Ops.push_back(Op);
+      };
+      Add(0, NdOp::COPY, Target, {NdVar::cst(0x2000, TRI.PointerSize)});
+      Add(0, NdOp::BRANCH, {}, {NdVar::cst(0x1010, TRI.PointerSize)});
+      Add(1, NdOp::INDIR_CALL, Target, {Target});
+      Add(1, NdOp::RETURN, {}, {Target});
+      const auto Med = LowToMedConverter().convert(Low, Architecture, Format);
+      ASSERT_TRUE(verifyMedFunc(Med, "indirect-call-value"));
+      unsigned Calls = 0;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::INDIR_CALL) {
+            ++Calls;
+            ASSERT_GE(Op.NumInputs, 1U);
+            EXPECT_FALSE(Op.Inputs[0].isConst());
+          }
+      EXPECT_EQ(Calls, 1U);
+    }
 }
 
 TEST(MedConstantPropagation, BudgetExhaustionLeavesAllOperandsUnchanged) {
@@ -217,7 +428,7 @@ TEST(MedConstantPropagation,
   EXPECT_EQ(Block.Ops.back().Inputs[0], MedVar::makeConst(13, 8));
 }
 
-TEST(MedConstantPropagation, ReverseWidthChainKeepsAtomicBudgetRefusal) {
+TEST(MedConstantPropagation, ReverseWidthChainsFitTheLinearWorkBudget) {
   for (const int Count : {600, 2000}) {
     SCOPED_TRACE(Count);
     MedFunc Func;
@@ -230,13 +441,98 @@ TEST(MedConstantPropagation, ReverseWidthChainKeepsAtomicBudgetRefusal) {
           {Id == Count ? MedVar::makeConst(7, 1) : variable(Id + 1, 4)}));
     Block.Ops.push_back(operation(NdOp::RETURN, {}, {variable(0, 4)}));
     const auto Original = Block.Ops;
-    const bool Complete = Count == 600;
+    ASSERT_TRUE(propagateInvariantConstants(Func));
+    EXPECT_EQ(Block.Ops.back().Inputs[0], MedVar::makeConst(7, 4));
+    // The return can use the constant, but each copy keeps its width origin.
+    for (size_t I = 0; I + 1 < Block.Ops.size(); ++I)
+      EXPECT_EQ(Block.Ops[I].Inputs[0], Original[I].Inputs[0]);
+  }
+}
+
+TEST(MedConstantPropagation, WidthOriginsSurviveCyclesAndStayLocalToTheirUses) {
+  for (auto View : {NdOp::INT_ZEXT, NdOp::INT_SEXT, NdOp::SUBBYTES})
+    for (bool ReverseBlocks : {false, true})
+      for (bool ReverseArguments : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << unsigned(View) << ':' << ReverseBlocks << ':'
+                     << ReverseArguments);
+        const auto Value = MedVar::makeConst(7, 4);
+        auto Func = loop(Value);
+        auto &Seed = block(Func, 0).Ops.front();
+        Seed =
+            operation(View, variable(1, 4),
+                      {MedVar::makeConst(7, View == NdOp::SUBBYTES ? 8 : 1)});
+        if (View == NdOp::SUBBYTES)
+          Seed.addInput(MedVar::makeConst(0, 1));
+        auto &Exit = block(Func, 3);
+        Exit.Ops = {
+            operation(NdOp::COPY, variable(10, 4), {Value}),
+            operation(NdOp::COPY, variable(11, 4), {variable(2, 4)}),
+            operation(NdOp::CALL, {}, {variable(11, 4), variable(10, 4)}),
+            operation(NdOp::INT_ADD, variable(12, 4), {variable(11, 4), Value}),
+            operation(NdOp::STORE, {}, {variable(99), variable(11, 4)}),
+            operation(NdOp::RETURN, {}, {variable(11, 4)})};
+        auto &Arguments = block(Func, 1).Phis.front().Args;
+        if (ReverseArguments)
+          std::reverse(Arguments.begin(), Arguments.end());
+        if (ReverseBlocks)
+          std::reverse(Func.Blocks.begin(), Func.Blocks.end());
+        ASSERT_TRUE(propagateInvariantConstants(Func));
+        const auto &Ops = block(Func, 3).Ops;
+        EXPECT_EQ(Ops[1].Inputs[0], variable(2, 4));
+        EXPECT_EQ(Ops[2].Inputs[0], variable(11, 4));
+        EXPECT_EQ(Ops[2].Inputs[1], Value);
+        EXPECT_EQ(Ops[3].Inputs[0],
+                  MedVar::makeConst(7, 4, ConstantAddressProvenance::Scalar));
+        EXPECT_EQ(Ops[4].Inputs[0], variable(99));
+        EXPECT_EQ(Ops[4].Inputs[1], Value);
+        EXPECT_EQ(Ops[5].Inputs[0], Value);
+      }
+}
+
+TEST(MedConstantPropagation,
+     WidthOriginWorkExhaustionLeavesEveryOperandIntact) {
+  // All PHIs are complete and agree on the seed. The larger join fits the
+  // definition cap and value solver, but its width-origin use edges exhaust
+  // the remaining shared work budget before any operands may be replaced.
+  for (int Fanout : {8, 512}) {
+    SCOPED_TRACE(Fanout);
+    MedFunc Func;
+    Func.Blocks.resize(Fanout + 2);
+    for (int Id = 0; Id < Fanout + 2; ++Id)
+      Func.Blocks[Id].Id = Id;
+    auto &Entry = Func.Blocks.front();
+    Entry.Ops.push_back(
+        operation(NdOp::INT_ZEXT, variable(0, 4), {MedVar::makeConst(7, 1)}));
+    auto &Join = Func.Blocks.back();
+    for (int Id = 1; Id <= Fanout; ++Id) {
+      Entry.Succs.push_back(Id);
+      Func.Blocks[Id].Preds = {0};
+      Func.Blocks[Id].Succs = {Join.Id};
+      Join.Preds.push_back(Id);
+    }
+    for (int Id = 1; Id <= Fanout; ++Id) {
+      PhiNode Phi;
+      Phi.Output = variable(Id, 4);
+      for (int Pred : Join.Preds)
+        Phi.Args.emplace_back(Pred, variable(0, 4));
+      Join.Phis.push_back(std::move(Phi));
+    }
+    Join.Ops.push_back(operation(NdOp::RETURN, {}, {variable(1, 4)}));
+    const auto Original = Func;
+    const bool Complete = Fanout == 8;
     EXPECT_EQ(propagateInvariantConstants(Func), Complete);
-    EXPECT_EQ(Block.Ops.back().Inputs[0],
-              Complete ? MedVar::makeConst(7, 4) : variable(0, 4));
+    EXPECT_EQ(Join.Ops.back().Inputs[0],
+              Complete ? MedVar::makeConst(7, 4) : variable(1, 4));
     if (!Complete)
-      for (size_t I = 0; I < Block.Ops.size(); ++I)
-        EXPECT_EQ(Block.Ops[I].Inputs[0], Original[I].Inputs[0]);
+      for (size_t B = 0; B < Func.Blocks.size(); ++B) {
+        const auto &Before = Original.Blocks[B];
+        const auto &After = Func.Blocks[B];
+        for (size_t I = 0; I < After.Phis.size(); ++I)
+          EXPECT_EQ(After.Phis[I].Args, Before.Phis[I].Args);
+        for (size_t I = 0; I < After.Ops.size(); ++I)
+          EXPECT_EQ(After.Ops[I].Inputs, Before.Ops[I].Inputs);
+      }
   }
 }
 
@@ -293,5 +589,335 @@ TEST(MedConstantPropagation,
       ASSERT_EQ(Return.NumInputs, 1U);
       EXPECT_EQ(Return.Inputs[0], MedVar::makeConst(73, TRI.PointerSize));
     }
+}
+
+TEST(MedConstantPropagation,
+     DefaultWordAbsorptionRequiresTheSameSSAValueAndWidth) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (auto Outer : {NdOp::INT_AND, NdOp::INT_OR})
+        for (bool Reverse : {false, true})
+          for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+            SCOPED_TRACE(testing::Message()
+                         << unsigned(Architecture) << ':' << unsigned(Format)
+                         << ':' << unsigned(Outer) << ':' << Reverse << ':'
+                         << Mutation);
+            const auto &TRI = getTargetRegInfo(Architecture);
+            const auto Width = TRI.PointerSize;
+            const auto Arguments = TRI.integerArgumentLayout(Format).Registers;
+            const auto Input = NdVar::reg(Arguments.empty() ? TRI.IntReturnReg
+                                                            : Arguments.front(),
+                                          Width);
+            const auto Result = NdVar::reg(TRI.IntReturnReg, Width);
+            LowFunc Low;
+            Low.Entry = 0x1000;
+            Low.Name = "word_absorption";
+            Low.Blocks.resize(1);
+            auto &Block = Low.Blocks.front();
+            Block.Id = 0;
+            Block.StartAddr = Low.Entry;
+            Block.EndAddr = Low.Entry + 4;
+            const auto Add = [&](NdOp Opcode, NdVar Output,
+                                 std::initializer_list<NdVar> Inputs) {
+              LowOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              Op.Addr = Low.Entry;
+              for (const auto &Value : Inputs)
+                Op.addInput(Value);
+              Block.Ops.push_back(Op);
+            };
+            const auto Other = NdVar::tmp(0, Width);
+            const auto Nested = NdVar::tmp(1, Width);
+            Add(NdOp::INT_ADD, Other, {Input, Input});
+            Add(Outer == NdOp::INT_AND ? NdOp::INT_OR : NdOp::INT_AND, Nested,
+                {Reverse ? Other : Input, Reverse ? Input : Other});
+            auto NestedOperand = Nested;
+            if (Mutation == 1)
+              Add(NdOp::INT_XOR, Input, {Input, NdVar::cst(0x55, Width)});
+            if (Mutation == 2) {
+              const auto Narrow = NdVar::tmp(2, Width / 2);
+              NestedOperand = NdVar::tmp(3, Width);
+              Add(NdOp::SUBBYTES, Narrow, {Nested, NdVar::cst(0, Width)});
+              Add(NdOp::INT_ZEXT, NestedOperand, {Narrow});
+            }
+            Add(Outer, Result,
+                {Reverse ? Input : NestedOperand,
+                 Reverse ? NestedOperand : Input});
+            Add(NdOp::RETURN, {}, {Result});
+            const auto Med =
+                LowToMedConverter().convert(Low, Architecture, Format);
+            ASSERT_TRUE(verifyMedFunc(Med, "default-word-absorption"));
+            bool RetainsOuter = false;
+            for (const auto &B : Med.Blocks)
+              for (const auto &Op : B.Ops)
+                if (!Op.Dead)
+                  RetainsOuter |= Op.Opcode == Outer;
+            EXPECT_EQ(RetainsOuter, Mutation != 0);
+          }
+}
+
+void checkUnaryPairs(bool Negation) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (uint16_t Width : {1, 2, 4, 8, 16})
+        for (unsigned Depth : {2u, 3u, 4u})
+          for (unsigned Barrier : {0u, 1u}) {
+            if (Barrier && Depth != 2)
+              continue;
+            SCOPED_TRACE(testing::Message()
+                         << unsigned(Architecture) << ':' << unsigned(Format)
+                         << ':' << Width << ':' << Depth << ':' << Barrier);
+            const auto &TRI = getTargetRegInfo(Architecture);
+            const auto Registers = TRI.integerArgumentLayout(Format).Registers;
+            const auto Address = NdVar::reg(
+                Registers.empty() ? TRI.IntReturnReg : Registers.front(),
+                TRI.PointerSize);
+            LowFunc Low;
+            Low.Entry = 0x1000;
+            Low.Name = Negation ? "negation_chain" : "complement_chain";
+            Low.Blocks.resize(1);
+            auto &Block = Low.Blocks.front();
+            Block.Id = 0;
+            Block.StartAddr = Low.Entry;
+            Block.EndAddr = Low.Entry + 4;
+            const auto Add = [&](NdOp Opcode, NdVar Output,
+                                 std::initializer_list<NdVar> Inputs) {
+              LowOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              Op.Addr = Low.Entry;
+              for (const auto &Input : Inputs)
+                Op.addInput(Input);
+              Block.Ops.push_back(Op);
+            };
+            auto Value = NdVar::tmp(0, Width);
+            Add(NdOp::LOAD, Value, {Address});
+            for (unsigned I = 0; I < Depth; ++I) {
+              const auto Next = NdVar::tmp(I + 1, Width);
+              // Retain the operation width even beyond a host word. The
+              // two complement spellings have the same bit semantics.
+              Add(Negation
+                      ? NdOp::INT_NEG2
+                      : (I % 2 || Width > sizeof(uint64_t) ? NdOp::INT_NOT
+                                                           : NdOp::INT_NEGATE),
+                  Next, {Value});
+              Value = Next;
+              if (Barrier && I == 0) {
+                const auto Narrow = NdVar::tmp(20, Width / 2);
+                const auto Extended = NdVar::tmp(21, Width);
+                if (Width > 1) {
+                  Add(NdOp::SUBBYTES, Narrow,
+                      {Value, NdVar::cst(0, TRI.PointerSize)});
+                  Add(NdOp::INT_ZEXT, Extended, {Narrow});
+                } else {
+                  Add(NdOp::INT_AND, Extended,
+                      {Value, NdVar::scalar(0x7f, Width)});
+                }
+                Value = Extended;
+              }
+            }
+            Add(NdOp::STORE, {}, {Address, Value});
+            Add(NdOp::RETURN, {}, {NdVar::cst(0, TRI.PointerSize)});
+            const auto Med =
+                LowToMedConverter().convert(Low, Architecture, Format);
+            ASSERT_TRUE(verifyMedFunc(Med, "complement-chain"));
+            unsigned UnaryOps = 0, Loads = 0, Stores = 0;
+            std::vector<MedVar> Values;
+            for (const auto &B : Med.Blocks)
+              for (const auto &Op : B.Ops) {
+                if (Op.Dead)
+                  continue;
+                Loads += Op.Opcode == NdOp::LOAD;
+                Stores += Op.Opcode == NdOp::STORE;
+                if (Op.Opcode == NdOp::STORE)
+                  Values.push_back(Op.Inputs[1]);
+              }
+            // RISC conversion need not run the late flags DCE. Check the
+            // expression actually stored, not unconsumed pure producers.
+            std::set<std::tuple<int, int, int>> Seen;
+            while (!Values.empty()) {
+              const auto Value = Values.back();
+              Values.pop_back();
+              if (Value.isConst() || Value.Id < 0 ||
+                  !Seen.emplace(Value.Kind, Value.Id, Value.SSAVer).second)
+                continue;
+              for (const auto &B : Med.Blocks)
+                for (const auto &Op : B.Ops)
+                  if (!Op.Dead && Op.Output == Value &&
+                      Op.Output.Size == Value.Size) {
+                    UnaryOps += Negation ? Op.Opcode == NdOp::INT_NEG2
+                                         : (Op.Opcode == NdOp::INT_NOT ||
+                                            Op.Opcode == NdOp::INT_NEGATE);
+                    Values.insert(Values.end(), Op.Inputs.begin(),
+                                  Op.Inputs.begin() + Op.NumInputs);
+                  }
+            }
+            EXPECT_EQ(UnaryOps, Barrier ? 2u : Depth % 2);
+            EXPECT_EQ(Loads, 1u);
+            EXPECT_EQ(Stores, 1u);
+          }
+}
+TEST(MedConstantPropagation,
+     DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects) {
+  checkUnaryPairs(false);
+}
+TEST(MedConstantPropagation,
+     DefaultNegationsCancelWithoutLosingWidthOrMemoryEffects) {
+  checkUnaryPairs(true);
+}
+
+void checkUnaryAddressPairs(bool Negation, bool Mixed = false) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool Redefine : {false, true}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Architecture) << ':'
+                                        << unsigned(Format) << ':' << Redefine);
+        const auto &TRI = getTargetRegInfo(Architecture);
+        const auto Width = TRI.PointerSize;
+        const auto Register = NdVar::reg(TRI.IntReturnReg, Width);
+        const auto First = NdVar::tmp(0, Width);
+        const auto Last = NdVar::tmp(1, Width);
+        const auto Address = NdVar::codeAddress(0x120020, Width, 0x120000);
+        LowFunc Low;
+        Low.Entry = 0x1000;
+        Low.Name = Negation ? "negation_identity" : "complement_identity";
+        Low.Blocks.resize(1);
+        auto &Block = Low.Blocks.front();
+        Block.Id = 0;
+        Block.StartAddr = Low.Entry;
+        Block.EndAddr = Low.Entry + 4;
+        const auto Add = [&](NdOp Opcode, NdVar Output,
+                             std::initializer_list<NdVar> Inputs) {
+          LowOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = Output;
+          Op.Addr = Low.Entry;
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          Block.Ops.push_back(Op);
+        };
+        Add(Negation ? NdOp::INT_NEG2 : NdOp::INT_NOT, First, {Address});
+        Add(NdOp::COPY, Register, {First});
+        if (Redefine)
+          Add(NdOp::INT_XOR, Register, {Register, NdVar::scalar(0x55, Width)});
+        Add(Negation != Mixed ? NdOp::INT_NEG2 : NdOp::INT_NEGATE, Last,
+            {Register});
+        Add(NdOp::RETURN, {}, {Last});
+        const auto Med = LowToMedConverter().convert(Low, Architecture, Format);
+        ASSERT_TRUE(verifyMedFunc(Med, "complement-identity"));
+        const auto &Return = Med.Blocks.front().Ops.back();
+        ASSERT_EQ(Return.Opcode, NdOp::RETURN);
+        ASSERT_EQ(Return.NumInputs, 1u);
+        if (!Redefine && !Mixed) {
+          EXPECT_EQ(Return.Inputs[0],
+                    MedVar::makeConst(Address.Offset, Width, Address.Provenance,
+                                      Address.AddressOwnerVA));
+        } else {
+          // A changed SSA value or a different unary operation cannot
+          // recover the original code-address identity.
+          EXPECT_NE(Return.Inputs[0],
+                    MedVar::makeConst(Address.Offset, Width, Address.Provenance,
+                                      Address.AddressOwnerVA));
+          if (!Mixed)
+            EXPECT_FALSE(Return.Inputs[0].isConst());
+        }
+      }
+}
+TEST(MedConstantPropagation, ComplementPairsKeepAddressOriginsAndSSAChanges) {
+  checkUnaryAddressPairs(false);
+}
+TEST(MedConstantPropagation, NegationPairsKeepAddressOriginsAndSSAChanges) {
+  checkUnaryAddressPairs(true);
+}
+
+TEST(MedConstantPropagation, NegationAndComplementDoNotCancelEachOther) {
+  checkUnaryAddressPairs(false, true);
+  checkUnaryAddressPairs(true, true);
+}
+
+TEST(MedConstantPropagation, AnnihilatingMaskKeepsMemoryEffectsAndProvenance) {
+  for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool Reverse : {false, true})
+        for (bool CopyMask : {false, true})
+          for (auto Provenance : {ConstantAddressProvenance::Scalar,
+                                  ConstantAddressProvenance::DataAddress}) {
+            SCOPED_TRACE(testing::Message()
+                         << unsigned(Architecture) << ':' << unsigned(Format)
+                         << ':' << Reverse << ':' << CopyMask << ':'
+                         << unsigned(Provenance));
+            const auto &TRI = getTargetRegInfo(Architecture);
+            const auto Width = TRI.PointerSize;
+            const auto Address = NdVar::reg(TRI.IntParamRegs.front(), Width);
+            const auto Loaded = NdVar::tmp(0, Width);
+            const auto Result = NdVar::reg(TRI.IntReturnReg, Width);
+            auto Mask = NdVar::cst(0, Width);
+            Mask.Provenance = Provenance;
+            LowFunc Low;
+            Low.Entry = 0x1000;
+            Low.Name = "annihilating_mask";
+            Low.Blocks.resize(1);
+            auto &Block = Low.Blocks.front();
+            Block.Id = 0;
+            Block.StartAddr = Low.Entry;
+            Block.EndAddr = Low.Entry + 4;
+            const auto Add = [&](NdOp Opcode, NdVar Output,
+                                 std::initializer_list<NdVar> Inputs) {
+              LowOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              Op.Addr = Low.Entry;
+              for (const auto &Value : Inputs)
+                Op.addInput(Value);
+              Block.Ops.push_back(Op);
+            };
+            Add(NdOp::LOAD, Loaded, {Address});
+            Block.Ops.back().MemoryOrdering = NdMemoryOrdering::Acquire;
+            if (CopyMask) {
+              const auto Temporary = NdVar::tmp(1, Width);
+              Add(NdOp::COPY, Temporary, {Mask});
+              Mask = Temporary;
+            }
+            Add(NdOp::INT_AND, Result,
+                {Reverse ? Mask : Loaded, Reverse ? Loaded : Mask});
+            Add(NdOp::STORE, {}, {Address, Result});
+            Add(NdOp::RETURN, {}, {NdVar::cst(0, Width)});
+            const auto Med =
+                LowToMedConverter().convert(Low, Architecture, Format);
+            ASSERT_TRUE(verifyMedFunc(Med, "annihilating-mask"));
+            const auto &Ops = Med.Blocks.front().Ops;
+            const auto Store =
+                std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+                  return Op.Opcode == NdOp::STORE;
+                });
+            ASSERT_NE(Store, Ops.end());
+            const MedVar *Stored = &Store->Inputs[1];
+            // A fold can leave one named COPY until the next substitution
+            // phase. Its scalar result must no longer depend on the load.
+            if (!Stored->isConst())
+              for (const auto &Op : Ops)
+                if (Op.Output == *Stored && Op.Opcode == NdOp::COPY &&
+                    Op.NumInputs == 1 && Op.Output.Size == Op.Inputs[0].Size) {
+                  Stored = &Op.Inputs[0];
+                  break;
+                }
+            EXPECT_EQ(Stored->isConst(),
+                      Provenance == ConstantAddressProvenance::Scalar);
+            if (Stored->isConst()) {
+              EXPECT_EQ(Stored->ConstVal, 0U);
+              EXPECT_EQ(Stored->Size, Width);
+              EXPECT_EQ(Stored->Provenance, ConstantAddressProvenance::Scalar);
+            }
+            EXPECT_TRUE(
+                std::any_of(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+                  return Op.Opcode == NdOp::LOAD &&
+                         Op.MemoryOrdering == NdMemoryOrdering::Acquire;
+                }));
+          }
 }
 } // namespace

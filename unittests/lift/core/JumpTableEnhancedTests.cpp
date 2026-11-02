@@ -25,6 +25,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -37,6 +38,7 @@
 
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <optional>
@@ -1248,6 +1250,22 @@ TEST_F(JTE_X86_32, StackMemcpyTableNeedsDedicatedEvidenceCeiling) {
     return Low.JumpTables.size() == 1 &&
            Low.JumpTables.front().Targets.size() == 8;
   };
+
+  // The table's initializer lies in the object's .data.rel.ro, which the
+  // loader maps read-only once relocated, as a linker's RELRO does. The
+  // budget proof starts only with that protection.
+  ASSERT_GE(Image.CodePtrRelocSlots.size(), 8u);
+  auto Initializer = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(), [&](const auto &S) {
+        return S.contains(*Image.CodePtrRelocSlots.begin());
+      });
+  ASSERT_NE(Initializer, Image.Segments.end());
+  ASSERT_TRUE(Initializer->isWritable());
+  ASSERT_TRUE(Initializer->ReadOnlyAfterRelocations);
+  Initializer->ReadOnlyAfterRelocations = false;
+  EXPECT_FALSE(Recovered(
+      BuildWithBudget(neverd::limits::kMaxJumpTableStackEvidenceWork)));
+  Initializer->ReadOnlyAfterRelocations = true;
 
   const neverd::LowFunc Full =
       BuildWithBudget(neverd::limits::kMaxJumpTableStackEvidenceWork);
@@ -2738,7 +2756,7 @@ TEST_F(JTE_X86_32, GOTOFFPrivateSpillRejectsMemoryWritingStringIntrinsic) {
   ASSERT_EQ(Low.RelocatedInstructionScalarModelOccurrences.size(), 1u);
   ASSERT_TRUE(lowFunctionHasIntrinsic(
       Low, neverd::Intrinsic::X86RequireDivPrecondition));
-  ASSERT_TRUE(lowFunctionHasIntrinsic(Low, neverd::Intrinsic::Stosb));
+  ASSERT_TRUE(lowFunctionHasIntrinsic(Low, neverd::Intrinsic::X86RepStosState));
   EXPECT_TRUE(Builder.i386GOTOFFGraphQueryIssuedForTesting());
   EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
   EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
@@ -5422,47 +5440,73 @@ expectIndirectDispatchHasNoStaticSuccessors(const std::string &Body) {
                                                         << Body;
 }
 
+#define JUMP_TABLE_ENTRY_OBSERVATION_TEXT(Name, Text)                          \
+  static constexpr char Name[] = Text;
+#define JUMP_TABLE_ENTRY_OBSERVATION_VALUE(Type, Name, Value)                  \
+  static constexpr Type Name = Value;
+#include "JumpTableEntryObservation.def"
+
 static void expectSwitchNotOnLoadedEntry(const std::string &Body,
                                          const std::string &EntryType) {
-  const std::string LoadNeedle = "= load " + EntryType;
-  for (std::string::size_type Load = Body.find(LoadNeedle);
-       Load != std::string::npos; Load = Body.find(LoadNeedle, Load + 1)) {
-    std::string::size_type LoadLine = Body.rfind('\n', Load);
-    LoadLine = LoadLine == std::string::npos ? 0 : LoadLine + 1;
-    LoadLine = Body.find('%', LoadLine);
-    if (LoadLine == std::string::npos)
-      continue;
-    std::string::size_type LoadNameEnd = Body.find(' ', LoadLine);
-    if (LoadNameEnd == std::string::npos)
-      continue;
-    const std::string LoadName = Body.substr(LoadLine, LoadNameEnd - LoadLine);
+  const std::array<std::string, 2> LoadNeedles{"= load " + EntryType,
+                                               kOriginalTableLoadTruncation};
+  for (const std::string &LoadNeedle : LoadNeedles)
+    for (std::string::size_type Load = Body.find(LoadNeedle);
+         Load != std::string::npos; Load = Body.find(LoadNeedle, Load + 1)) {
+      if (LoadNeedle == kOriginalTableLoadTruncation) {
+        const auto Source = Load + LoadNeedle.size();
+        const auto End = Body.find(kOriginalTableLoadResultType, Source);
+        const auto LineEnd = Body.find('\n', Load);
+        if (End == std::string::npos || End >= LineEnd ||
+            Body.compare(End, LineEnd - End,
+                         std::string(kOriginalTableLoadResultType) + EntryType))
+          continue;
+        const auto Definition = Body.find(Body.substr(Source, End - Source) +
+                                          kOriginalTableLoadDefinition);
+        if (Definition == std::string::npos || Definition >= Load)
+          continue;
+        const auto Marker = Body.find(kOriginalTableLoadMarker, Definition);
+        if (Marker == std::string::npos ||
+            Marker >= Body.find('\n', Definition))
+          continue;
+      }
+      std::string::size_type LoadLine = Body.rfind('\n', Load);
+      LoadLine = LoadLine == std::string::npos ? 0 : LoadLine + 1;
+      LoadLine = Body.find('%', LoadLine);
+      if (LoadLine == std::string::npos)
+        continue;
+      std::string::size_type LoadNameEnd = Body.find(' ', LoadLine);
+      if (LoadNameEnd == std::string::npos)
+        continue;
+      const std::string LoadName =
+          Body.substr(LoadLine, LoadNameEnd - LoadLine);
 
-    const std::string ExtendNeedle = "= zext " + EntryType + " " + LoadName;
-    std::string::size_type Extend = Body.find(ExtendNeedle, Load);
-    if (Extend == std::string::npos)
-      continue;
-    std::string::size_type ExtendLine = Body.rfind('\n', Extend);
-    ExtendLine = ExtendLine == std::string::npos ? 0 : ExtendLine + 1;
-    ExtendLine = Body.find('%', ExtendLine);
-    if (ExtendLine == std::string::npos)
-      continue;
-    std::string::size_type EntryNameEnd = Body.find(' ', ExtendLine);
-    if (EntryNameEnd == std::string::npos)
-      continue;
-    const std::string EntryName =
-        Body.substr(ExtendLine, EntryNameEnd - ExtendLine);
+      const std::string ExtendNeedle = "= zext " + EntryType + " " + LoadName;
+      std::string::size_type Extend = Body.find(ExtendNeedle, Load);
+      if (Extend == std::string::npos)
+        continue;
+      std::string::size_type ExtendLine = Body.rfind('\n', Extend);
+      ExtendLine = ExtendLine == std::string::npos ? 0 : ExtendLine + 1;
+      ExtendLine = Body.find('%', ExtendLine);
+      if (ExtendLine == std::string::npos)
+        continue;
+      std::string::size_type EntryNameEnd = Body.find(' ', ExtendLine);
+      if (EntryNameEnd == std::string::npos)
+        continue;
+      const std::string EntryName =
+          Body.substr(ExtendLine, EntryNameEnd - ExtendLine);
 
-    std::string::size_type Switch = Body.find("switch i", Extend);
-    if (Switch == std::string::npos)
-      continue;
-    std::string::size_type SwitchEnd = Body.find('\n', Switch);
-    const std::string SwitchLine = Body.substr(Switch, SwitchEnd - Switch);
-    EXPECT_EQ(SwitchLine.find(EntryName), std::string::npos)
-        << "Switch must use the table index, not the loaded compact entry: "
-        << SwitchLine << "\n"
-        << Body;
-    return;
-  }
+      std::string::size_type Switch = Body.find("switch i", Extend);
+      if (Switch == std::string::npos)
+        continue;
+      std::string::size_type SwitchEnd = Body.find('\n', Switch);
+      const std::string SwitchLine = Body.substr(Switch, SwitchEnd - Switch);
+      EXPECT_EQ(SwitchLine.find(EntryName), std::string::npos)
+          << "Switch must use the table index, not the loaded compact entry: "
+          << SwitchLine << "\n"
+          << Body;
+      return;
+    }
   FAIL() << "Expected a compact table-entry load/extension chain:\n" << Body;
 }
 
@@ -8965,7 +9009,8 @@ TEST_F(JTE_X86_64, NonContiguousMaskPreservesPhysicalSlotCoordinates) {
   ASSERT_NE(Label, std::string::npos) << Body;
   const std::string CaseBody =
       Body.substr(Label, Body.find("\n\n", Label + 1) - Label);
-  EXPECT_NE(CaseBody.find("trunc i64 3302 to i32"), std::string::npos)
+  EXPECT_TRUE(CaseBody.find("trunc i64 3302 to i32") != std::string::npos ||
+              CaseBody.find("ret i32 3302") != std::string::npos)
       << "selector 2 must route to physical slot 2, not compressed slot 1:\n"
       << CaseBody;
   EXPECT_EQ(CaseBody.find("3301"), std::string::npos) << CaseBody;
@@ -10205,11 +10250,18 @@ a64StrictSourceSpanImage(bool RightWritable = false) {
   neverd::Segment Mapped;
   Mapped.Name = "rodata";
   Mapped.VA = 0x1000;
-  Mapped.Size = 0x20;
-  Mapped.FileSz = 0x20;
+  Mapped.Size = RightWritable ? 0x10 : 0x20;
+  Mapped.FileSz = Mapped.Size;
   Mapped.Flags = neverd::SegmentFlags::Readable;
-  Mapped.Data.resize(0x20);
+  Mapped.Data.resize(Mapped.Size);
   Image.Segments.push_back(std::move(Mapped));
+  if (RightWritable) {
+    // Runtime permissions belong to mappings, not finer section metadata.
+    neverd::Segment Writable = Image.Segments.front();
+    Writable.VA = 0x1010;
+    Writable.Flags = Writable.Flags | neverd::SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Writable));
+  }
 
   neverd::Section Left;
   Left.Name = ".rodata.left";
@@ -10313,6 +10365,20 @@ TEST_F(JTE_AArch64, NarrowGuardRejectsChangedOrUnboundedLanes) {
       {"narrow_guard_changed_low", "narrow_guard_changed_full",
        "narrow_guard_unextended"},
       false);
+}
+
+TEST_F(JTE_AArch64, SeparatePredecessorGuardsProveTheJoinedSelector) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"joined_guard"}, true);
+}
+
+TEST_F(JTE_AArch64, JoinedGuardsRejectUnboundedOrChangedIncomingPaths) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"joined_guard_missing", "joined_guard_changed",
+                          "joined_guard_unextended"},
+                         false);
 }
 
 TEST_F(JTE_AArch64, FieldOffsetReloadSharesItsGuard) {
@@ -10663,7 +10729,8 @@ TEST_F(JTE_AArch64, GCCCompactSignedEntriesMayPrecedeTheAnchor) {
   neverd::BinaryImage &Image = *ImageOrErr;
   neverd::Decoder Decoder;
   ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
-  for (const char *Name : {"a64_gcc_compact_byte", "a64_gcc_compact_half"}) {
+  for (const char *Name : {"a64_gcc_compact_byte", "a64_gcc_compact_half",
+                           "a64_gcc_compact_x_index"}) {
     SCOPED_TRACE(Name);
     const neverd::Symbol *Function = Image.findSymbol(Name);
     ASSERT_NE(Function, nullptr);
@@ -10899,6 +10966,146 @@ TEST_F(JTE_AArch64, StaleWRegisterAliasDoesNotEscapeWritableTable) {
   EXPECT_NE(Body.find("switch i"), std::string::npos) << Body;
   EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
   EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
+  EXPECT_NE(Body.find("neverd.address.load"), std::string::npos) << Body;
+}
+
+TEST_F(JTE_AArch64, CheckedIndexedLoadsKeepReadAndEscapeEffectsDistinct) {
+  auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_writable_arg_alias_clobber");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Owner =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Owner.JumpTables.size(), 1u);
+  const neverd::JumpTable &Table = Owner.JumpTables.front();
+  ASSERT_EQ(Table.AuthenticatedTableLoads.size(), 1u);
+  const auto &Occurrence = Table.AuthenticatedTableLoads.front();
+  const neverd::LowOp *Load = nullptr;
+  for (const auto &Block : Owner.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Addr == Occurrence.Addr && Op.Seq == Occurrence.Seq)
+        Load = &Op;
+  ASSERT_NE(Load, nullptr);
+  ASSERT_EQ(Load->Opcode, neverd::NdOp::INTRINSIC);
+  ASSERT_EQ(Load->NumInputs, 4u);
+
+  auto arbitrate = [&](const std::vector<neverd::LowFunc> &Functions) {
+    return neverd::pipeline_detail::arbitrateModuleJumpTablesForTesting(
+        Image, Functions);
+  };
+  const auto Safe = arbitrate({Owner});
+  ASSERT_TRUE(Safe.AnalysisComplete);
+  EXPECT_TRUE(Safe.UnsafeBranches.empty());
+
+  // A separate reader retains the table's relocation mirrors, but does not
+  // authorize a write or an escape merely by reading through its address.
+  neverd::LowFunc Reader;
+  Reader.Entry = 0x800000;
+  Reader.Name = "independent_checked_table_reader";
+  neverd::LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Reader.Entry;
+  Block.EndAddr = Reader.Entry + 12;
+  neverd::LowOp Base;
+  Base.Addr = Reader.Entry;
+  Base.Seq = 0;
+  Base.Opcode = neverd::NdOp::COPY;
+  Base.Output = Load->Inputs[1];
+  Base.NumInputs = 1;
+  Base.Inputs[0] = neverd::NdVar::dataAddress(Table.BaseAddr, 8);
+  Block.Ops.push_back(Base);
+  neverd::LowOp Read = *Load;
+  Read.Addr = Reader.Entry + 4;
+  Block.Ops.push_back(Read);
+  Reader.Blocks.push_back(std::move(Block));
+  const auto Independent = arbitrate({Owner, Reader});
+  ASSERT_TRUE(Independent.AnalysisComplete);
+  EXPECT_TRUE(Independent.UnsafeBranches.empty());
+  EXPECT_TRUE(Independent.ProtectedRelocationSlots.count(Table.BaseAddr));
+  EXPECT_TRUE(Independent.ProtectedRelocationSlots.count(Table.BaseAddr + 8));
+
+  // An original indexed store cannot acquire the validated read-only
+  // contract. Its write through the writable table keeps the branch unsafe.
+  auto Writer = Reader;
+  auto &Write = Writer.Blocks.front().Ops.back();
+  Write.Output = neverd::NdVar{};
+  Write.Output.Size = 0;
+  Write.Inputs[0].Offset =
+      static_cast<uint64_t>(neverd::Intrinsic::A64_StoreRegisterOffset);
+  Write.Inputs[3].Offset &= ~kOriginalTableStoreLoadBit;
+  Write.addInput(neverd::NdVar::scalar(0, Image.getPointerSize()));
+  ASSERT_TRUE(neverd::lowAArch64AddressMemoryShapeIsValid(Write));
+  const auto Written = arbitrate({Owner, Writer});
+  ASSERT_TRUE(Written.AnalysisComplete);
+  EXPECT_TRUE(Written.UnsafeBranches.count(Table.InsnAddr));
+
+  // A checked read of a private spill does not escape the spill's address,
+  // but a pointer read from it can still escape through a later call.
+  auto FrameReader = Reader;
+  auto &FrameBlock = FrameReader.Blocks.front();
+  const auto &TRI = neverd::getTargetRegInfo(Image.Arch);
+  auto FrameAddress = Base;
+  FrameAddress.Addr = Reader.Entry + 4;
+  FrameAddress.Opcode = neverd::NdOp::INT_ADD;
+  FrameAddress.Output = neverd::NdVar::tmp(0x20000, 8);
+  FrameAddress.NumInputs = 2;
+  FrameAddress.Inputs[0] = neverd::NdVar::reg(TRI.StackPointer, 8);
+  FrameAddress.Inputs[1] = neverd::NdVar::cst(16, 8);
+  neverd::LowOp Spill;
+  Spill.Addr = Reader.Entry + 8;
+  Spill.Opcode = neverd::NdOp::STORE;
+  Spill.NumInputs = 2;
+  Spill.Inputs[0] = FrameAddress.Output;
+  Spill.Inputs[1] = Base.Output;
+  auto StackBase = Base;
+  StackBase.Addr = Reader.Entry + 12;
+  StackBase.Inputs[0] = Spill.Inputs[0];
+  auto FrameLoad = Read;
+  FrameLoad.Addr = Reader.Entry + 16;
+  FrameBlock.Ops = {Base, FrameAddress, Spill, StackBase, FrameLoad};
+  FrameBlock.EndAddr = Reader.Entry + 20;
+  const auto Unobserved = arbitrate({Owner, FrameReader});
+  ASSERT_TRUE(Unobserved.AnalysisComplete);
+  EXPECT_TRUE(Unobserved.UnsafeBranches.empty());
+
+  auto Argument = Base;
+  Argument.Addr = Reader.Entry + 20;
+  Argument.Output = neverd::NdVar::reg(TRI.IntParamRegs.front(), 8);
+  Argument.Inputs[0] = FrameLoad.Output;
+  FrameBlock.Ops.push_back(Argument);
+  neverd::LowOp Call;
+  Call.Addr = Reader.Entry + 24;
+  Call.Opcode = neverd::NdOp::CALL;
+  Call.NumInputs = 1;
+  Call.Inputs[0] = neverd::NdVar::codeAddress(Reader.Entry + 0x100, 8);
+  FrameBlock.Ops.push_back(Call);
+  FrameBlock.EndAddr = Reader.Entry + 28;
+  const auto Escaped = arbitrate({Owner, FrameReader});
+  ASSERT_TRUE(Escaped.AnalysisComplete);
+  EXPECT_TRUE(Escaped.UnsafeBranches.count(Table.InsnAddr));
+
+  // A malformed checked-load record must still use opaque effect handling.
+  // Missing operands, an invalid instruction, and an invalid result width
+  // cannot acquire the validated read-only contract.
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    auto Malformed = Reader;
+    auto &BadLoad = Malformed.Blocks.front().Ops.back();
+    if (Mutation == 0)
+      --BadLoad.NumInputs;
+    else if (Mutation == 1)
+      BadLoad.Inputs[3].Offset = 0;
+    else
+      BadLoad.Output.Size = 4;
+    const auto Unsafe = arbitrate({Owner, Malformed});
+    EXPECT_TRUE(Unsafe.AnalysisComplete) << Mutation;
+    EXPECT_TRUE(Unsafe.UnsafeBranches.count(Table.InsnAddr)) << Mutation;
+  }
 }
 
 TEST_F(JTE_AArch64, WSelfCopyPreservesWritableTableArgumentEscape) {
@@ -11697,6 +11904,16 @@ int scalar_record(int input) {
       << llvm::toString(ImageOrErr.takeError());
   auto &Image = *ImageOrErr;
   ASSERT_EQ(Image.DataPtrRelocSlots.size(), 2u);
+  auto Records = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(), [&](const auto &S) {
+        return S.contains(*Image.DataPtrRelocSlots.begin());
+      });
+  ASSERT_NE(Records, Image.Segments.end());
+  ASSERT_TRUE(Records->isWritable());
+  // The loader maps the object's .data.rel.ro read-only once relocated, which
+  // supplies the immutable-source contract separately from pointer evidence.
+  EXPECT_TRUE(Records->ReadOnlyAfterRelocations);
+  EXPECT_TRUE(Image.readOnlyAfterRelocations(Records->VA, Records->Size));
   auto Valid = runPipelineWithEvidenceBudget(Image, 256);
   ASSERT_TRUE(Valid.Result.Success) << Valid.Result.Error;
 

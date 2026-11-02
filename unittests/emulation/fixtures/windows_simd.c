@@ -26,7 +26,7 @@ extern LONG CALLBACK ContinueEntry(EXCEPTION_POINTERS *);
 #define NEVERD_SIMD_CASE(Name, ...)                                            \
   NEVERD_WINDOWS_SIMD_LEAF(Register##Name)                                     \
   NEVERD_WINDOWS_SIMD_LEAF(Memory##Name)
-#include "../X64SIMDExceptionCases.def"
+#include "../x86_64/X64SIMDExceptionCases.def"
 #undef NEVERD_SIMD_CASE
 #undef NEVERD_WINDOWS_SIMD_LEAF
 
@@ -51,7 +51,7 @@ static const Operation Operations[] = {
    RepairedResult,                                                             \
    {NEVERD_WINDOWS_SIMD_LEAF(Register##Name),                                  \
     NEVERD_WINDOWS_SIMD_LEAF(Memory##Name)}},
-#include "../X64SIMDExceptionCases.def"
+#include "../x86_64/X64SIMDExceptionCases.def"
 #undef NEVERD_SIMD_CASE
 #undef NEVERD_WINDOWS_SIMD_LEAF
 };

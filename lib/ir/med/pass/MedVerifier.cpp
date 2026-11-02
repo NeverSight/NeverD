@@ -16,13 +16,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedStackAlignment.h"
-#include "neverd/ir/med/X86RegistrationCallback.h"
-#include "neverd/ir/med/X86RegistrationFrame.h"
-#include "neverd/ir/med/X86RegistrationSEHRegisters.h"
+#include "neverd/ir/med/X86/X86CompactShape.h"
+#include "neverd/ir/med/X86/X86FourSourceShape.h"
+#include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationFrame.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
@@ -65,6 +69,31 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
         else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
                  Op.Inputs[0].isConst()) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+          if (isAArch64ExceptionReturnIntrinsic(Id))
+            Err(kAArch64ExceptionReturnUnsupported, Blk.Id, Op.Addr);
+          if (const char *Reason = x86NonlocalControlTransferReason(Id))
+            Err(Reason, Blk.Id, Op.Addr);
+          if (isAArch64AddressMemoryIntrinsic(Id) &&
+              !aarch64AddressMemoryMedShapeIsValid(Op))
+            Err(kAddressMemoryMalformed, Blk.Id, Op.Addr);
+          if (isAArch64WritebackMemoryIntrinsic(Id) &&
+              !aarch64WritebackMemoryMedShapeIsValid(Op))
+            Err(kWritebackMalformed, Blk.Id, Op.Addr);
+          if (isAArch64PAuthLoadIntrinsic(Id) &&
+              !aarch64PAuthLoadMedShapeIsValid(Op))
+            Err(kPAuthLoadMalformed, Blk.Id, Op.Addr);
+          if (isAArch64PAuthIntrinsic(Id) && !aarch64PAuthMedShapeIsValid(Op))
+            Err(kAArch64PAuthMalformedOperation, Blk.Id, Op.Addr);
+          if (aarch64CPAOperation(Id) && !aarch64CPAMedShapeIsValid(Op))
+            Err(kAArch64CPAMalformedOperation, Blk.Id, Op.Addr);
+          if (aarch64_sve::vectorOperation(Id) &&
+              !aarch64VectorMedShapeIsValid(Op))
+            Err(aarch64_sve::kMalformedVector, Blk.Id, Op.Addr);
+          if (Id == Intrinsic::A64_SvePtrue && !aarch64PtrueMedShapeIsValid(Op))
+            Err(aarch64_sve::kMalformedPtrue, Blk.Id, Op.Addr);
+          if (isPortableX87Intrinsic(Id) && !portableX87MedShapeIsValid(Op))
+            Err("portable x87 helper has an invalid exact ABI shape", Blk.Id,
+                Op.Addr);
           if (isX87ContextIntrinsic(Id) &&
               !x87ContextMedShapeIsValid(Op, Arch::Unknown))
             Err("x87 context intrinsic has an invalid state/operand contract",
@@ -73,6 +102,15 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               !x87ConstantControlShapeIsValid(
                   Id, x87ConstantControlMedShape(Op, Arch::Unknown)))
             Err("x87 constant/control intrinsic has an invalid contract",
+                Blk.Id, Op.Addr);
+          if (isX87GuardedValueIntrinsic(Id) &&
+              !x87GuardedValueShapeIsValid(
+                  x87GuardedValueMedShape(Op, Arch::Unknown)))
+            Err("guarded x87 intrinsic has an invalid value/control contract",
+                Blk.Id, Op.Addr);
+          if (x87ValueInfo(Id) &&
+              !x87ValueShapeIsValid(x87ValueMedShape(Op, Arch::Unknown)))
+            Err("x87 scalar intrinsic has an invalid value/status contract",
                 Blk.Id, Op.Addr);
           if (Id == Intrinsic::CetRdSsp &&
               !x86ShadowStackReadShapeIsValid(x86ShadowStackReadMedShape(Op)))
@@ -83,10 +121,49 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
             Err("x86 FP state intrinsic has an invalid numerical/state "
                 "contract",
                 Blk.Id, Op.Addr);
-          const bool IsApxAtomic = isApxAtomicIntrinsic(Id);
+          if (Id == Intrinsic::X86FourSourceMemory &&
+              !x86FourSourceShapeIsValid(x86FourSourceMedShape(Op)))
+            Err(X86FourSourceMalformed, Blk.Id, Op.Addr);
+          if (isX86CompactMemory(Id) &&
+              !x86CompactShapeIsValid(Id, x86CompactMedShape(Op)))
+            Err(X86CompactMalformed, Blk.Id, Op.Addr);
+          const bool IsApxAtomic = isX86AtomicIntrinsic(Id);
           if (IsApxAtomic &&
               !intrinsicApxAtomicShapeIsValid(Id, apxAtomicMedShape(Op)))
             Err("APX atomic intrinsic has an invalid operand/output contract",
+                Blk.Id, Op.Addr);
+          if (Id == Intrinsic::X86HleState &&
+              !x86HleShapeIsValid(x86HleMedShape(Op)))
+            Err("invalid x86 HLE state contract", Blk.Id, Op.Addr);
+          const bool IsVirtualization = isX86VirtualizationIntrinsic(Id);
+          if (IsVirtualization &&
+              !x86VirtualizationShapeIsValid(Id, x86VirtualizationMedShape(Op)))
+            Err("x86 virtualization intrinsic has an invalid operand/output "
+                "contract",
+                Blk.Id, Op.Addr);
+          if (isX86RepStateIntrinsic(Id) &&
+              !x86RepShapeIsValid(Id, x86RepMedShape(Op)))
+            Err("invalid x86 REP completion contract", Blk.Id, Op.Addr);
+          if (isX86BoundedLeafPending(Id) ||
+              (isX86BoundedLeafIntrinsic(Id) &&
+               !x86BoundedLeafShapeIsValid(Id, x86BoundedLeafMedShape(Op))))
+            Err(X86BoundedLeafUnproven, Blk.Id, Op.Addr);
+          if (isX86SgxIntrinsic(Id) &&
+              !x86SgxShapeIsValid(Id, x86SgxMedShape(Op)))
+            Err("x86 SGX intrinsic has an invalid completion contract", Blk.Id,
+                Op.Addr);
+          const bool IsDescriptorState = isX86DescriptorStateIntrinsic(Id);
+          if (IsDescriptorState && !x86DescriptorStateMedShapeIsValid(Op))
+            Err("x86 descriptor state intrinsic has an invalid shape", Blk.Id,
+                Op.Addr);
+          const bool IsAmxState = Id == Intrinsic::X86AMXState;
+          if (IsAmxState && !x86AmxShapeIsValid(x86AmxMedShape(Op)))
+            Err("invalid AMX architectural bank operation", Blk.Id, Op.Addr);
+          const bool IsSystemState = isX86SystemStateIntrinsic(Id);
+          if (IsSystemState &&
+              !x86SystemStateShapeIsValid(Id, x86SystemStateMedShape(Op)))
+            Err("x86 system state intrinsic has an invalid operand/output "
+                "contract",
                 Blk.Id, Op.Addr);
           const bool IsX86Invalidate = Id == Intrinsic::X86Invalidate;
           if (IsX86Invalidate && !intrinsicX86InvalidateShapeIsValid(
@@ -140,7 +217,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
                   Id, Op.NumInputs, Op.Output.Size,
                   Op.NumInputs > 1 ? Op.Inputs[1].Size : 0);
           if (IsMemoryIntrinsic && !IsDefaultString && !IsDefaultRegisterForm &&
-              !IsApxAtomic && !IsX86Invalidate &&
+              !IsApxAtomic && !IsX86Invalidate && !IsVirtualization &&
+              !IsSystemState && !IsAmxState && !IsDescriptorState &&
+              !isX86CompactMemory(Id) &&
               !intrinsicMemoryAddressSpaceShapeIsValid(
                   Id, Op.NumInputs, Op.Output.Size,
                   Op.NumInputs > 1 ? Op.Inputs[1].Size : 0,
@@ -156,6 +235,10 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
           Op.Opcode != NdOp::INDIR_CALL)
         Err("no-return marker is attached to a non-call operation", Blk.Id,
             Op.Addr);
+      if (Op.IsTailCall && Op.Opcode != NdOp::CALL &&
+          Op.Opcode != NdOp::INDIR_CALL && Op.Opcode != NdOp::RETURN)
+        Err("tail-transfer marker is attached to a non-transfer operation",
+            Blk.Id, Op.Addr);
       if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None) {
         if (!hasValidRegistrationRootShape(Op))
           Err("registration runtime root has an invalid carrier", Blk.Id,

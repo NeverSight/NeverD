@@ -14,7 +14,7 @@
 #include "ARMLiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/lift/ARMLifter.h"
+#include "neverd/lift/ARM/ARMLifter.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -49,7 +49,8 @@ bool liftSIMDNEONSat(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Acc = S.makeTemp(0);
       for (unsigned I = 0; I < NLanes; ++I) {
         NdVar L = S.makeTemp(LaneSz);
-        S.emit(NdOp::SUBBYTES, L, {Src, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
+        S.emit(NdOp::SUBBYTES, L,
+               {Src, NdVar::cst(static_cast<uint64_t>(I) * LaneSz, 4)});
         NdVar Neg = S.makeTemp(LaneSz);
         S.emit(NdOp::INT_NEG2, Neg, {L});
         NdVar R = Neg;
@@ -201,18 +202,15 @@ bool liftSIMDNEONSat(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
           NdVar C1 = S.makeTemp(WideSz);
           if (IsAdd) {
             NdVar TooHi = S.makeTemp(1);
-            S.emit(NdOp::INT_LESS, TooHi,
-                   {NdVar::cst(MaxV, WideSz), Wide});
-            S.emit(NdOp::SELECT, C1,
-                   {TooHi, NdVar::cst(MaxV, WideSz), Wide});
+            S.emit(NdOp::INT_LESS, TooHi, {NdVar::cst(MaxV, WideSz), Wide});
+            S.emit(NdOp::SELECT, C1, {TooHi, NdVar::cst(MaxV, WideSz), Wide});
           } else {
             // Detect unsigned underflow from the widened operands.  Testing
             // the wrapped subtraction result after an upper clamp loses the
             // sign and incorrectly saturates underflow to MaxV instead of 0.
             NdVar Underflow = S.makeTemp(1);
             S.emit(NdOp::INT_LESS, Underflow, {Wa, Wb});
-            S.emit(NdOp::SELECT, C1,
-                   {Underflow, NdVar::cst(0, WideSz), Wide});
+            S.emit(NdOp::SELECT, C1, {Underflow, NdVar::cst(0, WideSz), Wide});
           }
           S.emit(NdOp::SUBBYTES, Clamped, {C1, NdVar::cst(0, 4)});
         }
@@ -408,17 +406,14 @@ bool liftSIMDNEONSat(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
         NdVar Dbl = S.makeTemp(Wide);
         S.emit(NdOp::INT_LEFT, Dbl, {P2, NdVar::cst(1, Wide)});
         NdVar TooHi = S.makeTemp(1);
-        S.emit(NdOp::INT_SLESS, TooHi,
-               {NdVar::cst((uint64_t)MaxV, Wide), Dbl});
+        S.emit(NdOp::INT_SLESS, TooHi, {NdVar::cst((uint64_t)MaxV, Wide), Dbl});
         NdVar C1 = S.makeTemp(Wide);
         S.emit(NdOp::SELECT, C1,
                {TooHi, NdVar::cst((uint64_t)MaxV, Wide), Dbl});
         NdVar TooLo = S.makeTemp(1);
-        S.emit(NdOp::INT_SLESS, TooLo,
-               {C1, NdVar::cst((uint64_t)MinV, Wide)});
+        S.emit(NdOp::INT_SLESS, TooLo, {C1, NdVar::cst((uint64_t)MinV, Wide)});
         NdVar C2 = S.makeTemp(Wide);
-        S.emit(NdOp::SELECT, C2,
-               {TooLo, NdVar::cst((uint64_t)MinV, Wide), C1});
+        S.emit(NdOp::SELECT, C2, {TooLo, NdVar::cst((uint64_t)MinV, Wide), C1});
         NdVar Narrowed = S.makeTemp(DstLane);
         S.emit(NdOp::SUBBYTES, Narrowed, {C2, NdVar::cst(0, 4)});
         Prod = Narrowed;

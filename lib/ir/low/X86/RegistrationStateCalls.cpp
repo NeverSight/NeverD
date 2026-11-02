@@ -11,7 +11,7 @@
 
 #include "RegistrationStateSolver.h"
 
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd::registration_state {
 std::optional<RegistrationStateSolver::CallTransfer>

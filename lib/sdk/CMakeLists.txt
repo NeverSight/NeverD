@@ -5,7 +5,12 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIWeb.cpp
     capi/NeverDCAPIBytecode.cpp
     capi/NeverDCAPI.cpp
+    capi/NeverDCAPISections.cpp
+    capi/NeverDCAPIBytePatch.cpp
+    capi/NeverDCAPIBytePatchSource.cpp
     capi/NeverDCAPICPU.cpp
+    capi/NeverDCAPIX87.cpp
+    capi/NeverDCAPIContinuation.cpp
     capi/NeverDCAPIProcess.cpp
     capi/NeverDCAPIBench.cpp
     capi/NeverDCAPIBenchDecode.cpp
@@ -19,8 +24,17 @@ set(NEVERD_SDK_SOURCES
     capi/ResourceHandles.cpp
     capi/NeverDCAPIObjC.cpp
     capi/NeverDCAPISwift.cpp
+    capi/BytecodeOperands.cpp
     capi/NeverDCAPIDisasm.cpp
     capi/InstructionFlow.cpp
+    capi/BinaryComparison.cpp
+    capi/ComparisonInitializers.cpp
+    capi/X86/ComparisonStackRoles.cpp
+    capi/ComparisonDataFlow.cpp
+    capi/ComparisonScalarValidation.cpp
+    capi/ComparisonSource.cpp
+    capi/NeverDCAPIDiff.cpp
+    capi/NeverDCAPILineage.cpp
     capi/ProgramMain.cpp
     capi/ImageStrings.cpp
     capi/LLVMFunctionView.cpp
@@ -28,10 +42,12 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIGraph.cpp
     capi/NeverDCAPIHexDump.cpp
     capi/NeverDCAPIInfo.cpp
+    capi/NeverDCAPIDyldCache.cpp
     capi/NeverDCAPILocalTypes.cpp
     capi/NeverDCAPITypeFit.cpp
     capi/LocalTypesDebugContext.cpp
     capi/SessionSidecar.cpp
+    capi/ProjectInput.cpp
     capi/NeverDCAPIOptimize.cpp
     capi/NeverDCAPIPatch.cpp
     capi/NeverDCAPISourcePatch.cpp
@@ -73,6 +89,8 @@ if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
         plugin/PythonPluginRuntime.cpp)
 endif()
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDProjectDatabase.cmake)
+neverd_add_project_database()
 add_library(neverd_shared SHARED ${NEVERD_SDK_SOURCES})
 if(BUILD_TESTING)
     target_sources(neverd_shared PRIVATE capi/SessionTestAccess.cpp)
@@ -108,7 +126,9 @@ target_compile_features(neverd_shared PUBLIC cxx_std_20)
 # Tools that need LLVM command-line infra (InitLLVM, cl::opt, WithColor)
 # resolve those symbols from libneverd.dylib at link time.
 target_link_libraries(neverd_shared PRIVATE
+    NeverDProjectDatabase
     NeverDPipeline
+    NeverDPatch
     NeverDBackendC
     NeverDBackendSwift
     NeverDBackendLLVM
@@ -128,6 +148,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDSafety
     NeverDTranslate
     NeverDSigs
+    NeverDDiff
     NeverDSBF
     NeverDTypes
     NeverDUnpack
@@ -204,7 +225,7 @@ if(APPLE AND TARGET LLVMSupport)
 endif()
 
 target_compile_definitions(neverd_shared PRIVATE NEVERD_EXPORTS)
-neverd_stage_task_runtime(neverd_shared)
+neverd_own_task_scheduler(neverd_shared)
 neverd_stage_performance_notices(neverd_shared)
 
 set_target_properties(neverd_shared PROPERTIES
@@ -224,18 +245,23 @@ endif()
 # header so consumers can compile with `-I<libneverd_dir>/sdk` without reaching
 # back into the source tree, including with multi-configuration generators.
 set(NEVERD_SDK_HEADERS
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIBytePatch.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIWeb.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIBytecode.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPI.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPICPU.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIX87.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIContinuation.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIProcess.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPITypes.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISession.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIDisasm.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIDevirtualize.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIDiff.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIEmulation.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIExecution.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIQuery.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPILineage.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPILocalTypes.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIModules.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISymbolic.h
@@ -294,6 +320,60 @@ add_custom_command(TARGET neverd_shared POST_BUILD
         "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
         "${NEVERD_STAGED_SDK_DIRECTORY}"
     COMMENT "Copying SDK headers and legal notices next to libneverd")
+
+if(NEVERD_ENABLE_CPU_EMULATION OR NEVERD_ENABLE_DRIVER_EMULATION)
+  foreach(_neverd_bionic_notices_dir
+      "$<TARGET_FILE_DIR:neverd_shared>/licenses/android-bionic"
+      "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/android-bionic")
+    add_custom_command(TARGET neverd_shared POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/LICENSES/android-bionic"
+          "${_neverd_bionic_notices_dir}"
+      COMMENT "Copying pinned Android error catalog notices"
+      VERBATIM)
+  endforeach()
+  install(DIRECTORY "${CMAKE_SOURCE_DIR}/LICENSES/android-bionic/"
+    DESTINATION share/neverd/licenses/android-bionic)
+endif()
+
+foreach(_neverd_sqlite_notices_dir
+    "$<TARGET_FILE_DIR:neverd_shared>/licenses/sqlite"
+    "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/sqlite")
+  add_custom_command(TARGET neverd_shared POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_neverd_sqlite_notices_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_SOURCE_DIR}/LICENSES/sqlite/SOURCE.md" "${_neverd_sqlite_notices_dir}")
+endforeach()
+
+foreach(_neverd_windows_type_notices_dir
+    "$<TARGET_FILE_DIR:neverd_shared>/licenses/windows-types"
+    "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/windows-types")
+  add_custom_command(TARGET neverd_shared POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${_neverd_windows_type_notices_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/LICENSES/mingw-w64-headers.txt"
+        "${CMAKE_SOURCE_DIR}/LICENSES/phnt.txt"
+        "${CMAKE_SOURCE_DIR}/LICENSES/reactos-ddk.txt"
+        "${_neverd_windows_type_notices_dir}"
+    COMMENT "Copying Windows type library notices"
+    VERBATIM)
+endforeach()
+
+if(NEVERD_WINDOWS_TYPES_DIRECTORY)
+  foreach(_neverd_microsoft_type_dir
+      "$<TARGET_FILE_DIR:neverd_shared>" "${NEVERD_STAGED_SDK_DIRECTORY}")
+  add_custom_command(TARGET neverd_shared POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${NEVERD_WINDOWS_TYPES_DIRECTORY}/licenses"
+        "${_neverd_microsoft_type_dir}/licenses/microsoft-windows-types"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_BINARY_DIR}/neverd-windows-types-inputs.json"
+        "${_neverd_microsoft_type_dir}/neverd-windows-types-inputs.json"
+    COMMENT "Copying the local Microsoft type library provenance and notices"
+    VERBATIM)
+  endforeach()
+endif()
 
 if(NEVERD_ENABLE_Z3)
   foreach(_neverd_z3_notices_dir

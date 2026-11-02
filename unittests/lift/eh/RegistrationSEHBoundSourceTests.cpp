@@ -14,8 +14,8 @@
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
-#include "neverd/ir/med/X86RegistrationSEHBoundCall.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/IR/Module.h"

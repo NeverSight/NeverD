@@ -8,7 +8,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
-#include "neverd/loader/X86GetPcThunk.h"
+#include "neverd/loader/X86/X86GetPcThunk.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 

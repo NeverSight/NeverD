@@ -109,6 +109,13 @@ enum class TranslationCapabilityStatus : uint8_t {
   ContractDefined = 1,
 };
 
+/// Explicit backend state and runtime protocol. A capability bit alone does
+/// not select the larger state ABI or authorize portable x87 execution.
+enum class TranslationRuntimeProfileV1 : uint8_t {
+  ScalarInteger = 1,
+  PortableX87 = 2,
+};
+
 struct TranslationOptions {
   GuestArchitecture Guest = GuestArchitecture::X86_64;
   HostTarget Target;
@@ -125,10 +132,12 @@ struct TranslationOptions {
       DeterministicReplayPolicy::Disabled;
   bool VerifyGeneratedIR = true;
   bool PreserveExceptionState = true;
-  /// The v1 contract defines scalar-integer state transitions only.  FP, SIMD,
-  /// x87, atomics, and system instructions are explicitly unsupported.
-  /// GuestState preserves only its modeled baseline; additional machine state
-  /// requires named extension registers or a new state-schema version.
+  /// ScalarInteger retains the original v1 state and helper boundary.
+  /// PortableX87 explicitly selects the source-x64 owned, masked arithmetic
+  /// slice with an explicit trusted state extension and exact-span memory.
+  /// Other floating, SIMD, atomics and system operations remain unsupported.
+  TranslationRuntimeProfileV1 RuntimeProfile =
+      TranslationRuntimeProfileV1::ScalarInteger;
   TranslationCapability RequiredCapabilities =
       TranslationCapability::ScalarInteger;
 

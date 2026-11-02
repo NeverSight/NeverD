@@ -1,16 +1,29 @@
-// Unit tests of workbench building blocks that need no worker.
+//===- WorkbenchUnitTests.cpp - Workbench component contracts ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Workbench building blocks that need no worker.
+//===----------------------------------------------------------------------===//
+
 #include "ActionRegistry.h"
 #include "Address.h"
 #include "AddressSpace.h"
+#include "AnalysisProgress.h"
 #include "DeepLink.h"
 #include "DialogReturnKey.h"
 #include "Docking.h"
 #include "Expression.h"
 #include "FlowLayout.h"
+#include "HighlightLocks.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "LinkDispatch.h"
 #include "LoadFileDialog.h"
+#include "ModelessDialog.h"
+#include "NativeWindowStates.h"
+#include "PatchMenu.h"
 #include "ProjectDatabase.h"
 #include "StyledText.h"
 #include "SymbolTablePromptDialog.h"
@@ -18,7 +31,6 @@
 #include "TitleBar.h"
 #include "TypeSourceHighlighter.h"
 #include "WindowFrame.h"
-#include "WindowFramePlatform.h"
 
 #include <QAbstractButton>
 #include <QAction>
@@ -45,14 +57,17 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScreen>
 #include <QSet>
+#include <QSignalSpy>
 #include <QSplitter>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QStatusBar>
 #include <QStyleOptionButton>
 #include <QStyleOptionComboBox>
 #include <QTabBar>
@@ -62,17 +77,48 @@
 #include <QTextDocument>
 #include <QTextLayout>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <kddockwidgets/KDDockWidgets.h>
 #include <kddockwidgets/qtwidgets/views/DockWidget.h>
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
 #include <kddockwidgets/qtwidgets/views/Separator.h>
+#include <limits>
 #include <memory>
+#include <qpa/qwindowsysteminterface.h>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 using namespace neverd::gui;
 
 namespace {
+class ReparentedDialogSource final : public QWidget {
+public:
+  using QWidget::QWidget;
+  QPointer<QDialog> Dialog;
+  bool SawParentChange = false;
+  bool DetachedBeforeChange = false;
+  bool NativeDetachedBeforeChange = false;
+
+protected:
+  bool event(QEvent *event) override {
+    if (event->type() == QEvent::ParentAboutToChange && Dialog &&
+        Dialog->windowHandle()) {
+      SawParentChange = true;
+      DetachedBeforeChange = !Dialog->windowHandle()->transientParent();
+#ifdef Q_OS_WIN
+      if (QGuiApplication::platformName() == QStringLiteral("windows"))
+        NativeDetachedBeforeChange =
+            !GetWindow(reinterpret_cast<HWND>(Dialog->winId()), GW_OWNER);
+#endif
+    }
+    return QWidget::event(event);
+  }
+};
+
 /// Two docks side by side in a main window, each filled with a plain color.
 struct DockPair {
   static constexpr QColor LeftColor{0x10, 0x20, 0x30};
@@ -110,8 +156,10 @@ struct DockPair {
   }
   /// Column \p x of the window's middle row.
   QColor pixel(int x) {
-    return window.grab().toImage().pixelColor(x,
-                                              contentRect(left).center().y());
+    const auto image = window.grab().toImage();
+    const qreal scale = image.devicePixelRatio();
+    return image.pixelColor(qRound(x * scale),
+                            qRound(contentRect(left).center().y() * scale));
   }
 };
 
@@ -151,42 +199,66 @@ QList<QKeySequence> idaKeys(QLatin1StringView spelling) {
     return {};
   return {key};
 }
-/// The window states the window system confirmed on a native window, which
-/// it reports with a WindowStateChange event there.
-class AppliedStates final : public QObject {
-public:
-  Qt::WindowStates states;
-  int count = 0;
-
-protected:
-  bool eventFilter(QObject *object, QEvent *event) override {
-    if (event->type() == QEvent::WindowStateChange) {
-      states = static_cast<QWindow *>(object)->windowStates();
-      ++count;
-    }
-    return false;
-  }
-};
-
-/// The state a window shows, of several it holds at once.
-Qt::WindowState effectiveState(Qt::WindowStates states) {
-  if (states & Qt::WindowMinimized)
-    return Qt::WindowMinimized;
-  if (states & Qt::WindowFullScreen)
-    return Qt::WindowFullScreen;
-  if (states & Qt::WindowMaximized)
-    return Qt::WindowMaximized;
-  return Qt::WindowNoState;
-}
-
 } // namespace
 
 class WorkbenchUnitTests : public QObject {
   Q_OBJECT
+public:
+  static void initMain() { WindowFrame::prepareNativeWindows(); }
 private slots:
+  void modelessBrowsersDetachBeforeTheirNativeOwnerChanges_data() {
+    QTest::addColumn<bool>("ancestor");
+    QTest::newRow("source") << false;
+    QTest::newRow("ancestor") << true;
+  }
+
+  void modelessBrowsersDetachBeforeTheirNativeOwnerChanges() {
+    QFETCH(bool, ancestor);
+    auto origin = std::make_unique<QWidget>();
+    QWidget destination;
+    origin->show();
+    destination.show();
+    auto *moving = new ReparentedDialogSource(origin.get());
+    auto *source = ancestor ? new QWidget(moving) : moving;
+    moving->show();
+    source->show();
+    const QPointer<QDialog> dialog = new QDialog(source);
+    showModelessDialog(dialog, source);
+    QVERIFY(dialog->windowHandle());
+    QCOMPARE(dialog->windowHandle()->transientParent(), origin->windowHandle());
+    moving->Dialog = dialog;
+
+    // A native owner can disappear before the queued ParentChange callback.
+    // Inspect this boundary synchronously, while the old owner still exists.
+    moving->setParent(&destination);
+    QVERIFY(moving->SawParentChange);
+    QVERIFY(moving->DetachedBeforeChange);
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows"))
+      QVERIFY(moving->NativeDetachedBeforeChange);
+#endif
+    origin.reset();
+    moving->show();
+    source->show();
+    QTRY_VERIFY(dialog && dialog->isVisible());
+    QTRY_COMPARE(dialog->windowHandle()->transientParent(),
+                 destination.windowHandle());
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+      QVERIFY(IsWindow(reinterpret_cast<HWND>(dialog->winId())));
+      // Qt can publish its logical parent before the queued native update.
+      QTRY_COMPARE(GetWindow(reinterpret_cast<HWND>(dialog->winId()), GW_OWNER),
+                   reinterpret_cast<HWND>(destination.winId()));
+    }
+#endif
+    dialog->close();
+    QTRY_VERIFY(!dialog);
+  }
+
   void initTestCase() {
     // As the workbench starts.
     WindowFrame::prepareNativeWindows();
+    Theme::instance().apply();
     // Docking chrome is fixed before the first dock exists.
     configureDocking();
   }
@@ -255,11 +327,19 @@ private slots:
              theme.color(ColorRole::ListingComment));
   }
 
+  void flowLayoutWrapsRatherThanOverlaps_data() {
+    QTest::addColumn<bool>("RightToLeft");
+    QTest::newRow("left-to-right") << false;
+    QTest::newRow("right-to-left") << true;
+  }
+
   void flowLayoutWrapsRatherThanOverlaps() {
+    QFETCH(bool, RightToLeft);
     // A combo box that keeps its width and the checkboxes after it, as the
     // Local Types options are: narrow, they wrap to rows of their own, each
     // at its own size and none over another; wide, they share one row.
     QWidget row;
+    row.setLayoutDirection(RightToLeft ? Qt::RightToLeft : Qt::LeftToRight);
     auto *flow = new FlowLayout(&row);
     auto *combo = new QComboBox(&row);
     combo->addItem(QStringLiteral("C keywords (unsigned long)"));
@@ -280,6 +360,7 @@ private slots:
     for (int first = 0; first < widgets.size(); ++first) {
       const QRect at = widgets[first]->geometry();
       QCOMPARE(at.size(), widgets[first]->sizeHint());
+      QVERIFY(row.rect().contains(at));
       for (int second = first + 1; second < widgets.size(); ++second)
         QVERIFY2(!at.intersects(widgets[second]->geometry()),
                  qPrintable(widgets[first]->objectName()));
@@ -292,15 +373,21 @@ private slots:
     layOut(wide);
     for (QWidget *widget : widgets)
       QCOMPARE(widget->geometry().center().y(), combo->geometry().center().y());
+    for (int i = 1; i < widgets.size(); ++i)
+      QVERIFY(RightToLeft ? widgets[i]->geometry().right() <
+                                widgets[i - 1]->geometry().left()
+                          : widgets[i]->geometry().left() >
+                                widgets[i - 1]->geometry().right());
     QVERIFY(flow->heightForWidth(wide) < wrapped);
     // A hidden widget takes no place: the one after it moves over by its
     // width.
-    const int before = widgets[3]->geometry().left();
+    const int leading = RightToLeft ? widgets[2]->geometry().right()
+                                    : widgets[2]->geometry().left();
     widgets[2]->hide();
     layOut(wide);
-    QCOMPARE(widgets[3]->geometry().left(),
-             before - widgets[2]->sizeHint().width() -
-                 (before - widgets[2]->geometry().right() - 1));
+    QCOMPARE(RightToLeft ? widgets[3]->geometry().right()
+                         : widgets[3]->geometry().left(),
+             leading);
   }
 
   void flowLayoutCentersOddAndEvenHeights_data() {
@@ -446,9 +533,105 @@ private slots:
     QCOMPARE(copy.spans.size(), line.spans.size());
   }
 
+  void registerFamiliesShareTheirParts() {
+    const auto family = [](const char *word) {
+      QStringList members = registerFamily(QString::fromLatin1(word));
+      members.sort();
+      return members;
+    };
+    const QStringList rax{"ah", "al", "ax", "eax", "rax"};
+    QCOMPARE(family("rax"), rax);
+    QCOMPARE(family("al"), rax);
+    QCOMPARE(family("r8d"), (QStringList{"r8", "r8b", "r8d", "r8w"}));
+    QCOMPARE(family("w5"), (QStringList{"w5", "x5"}));
+    QCOMPARE(family("d3"), (QStringList{"b3", "d3", "h3", "q3", "s3", "v3"}));
+    // x86's sp and AArch64's join; a listing spells only its own.
+    QVERIFY(family("sp").contains(QStringLiteral("rsp")));
+    QVERIFY(family("sp").contains(QStringLiteral("wsp")));
+    QVERIFY(family("main").isEmpty());
+  }
+
+  void highlightsCoverRegistersSharingTheWord() {
+    // "mov eax, [rax+8] ; rax": registers in spans, the last in a comment.
+    StyledLine line;
+    line.text = QStringLiteral("mov eax, [rax+8] ; rax");
+    constexpr int Register = 2, Comment = 13;
+    line.spans = {{4, 3, Register, std::nullopt},
+                  {10, 3, Register, std::nullopt},
+                  {17, 5, Comment, std::nullopt}};
+    auto ranges = highlightRanges(line, QStringLiteral("rax"), Register);
+    std::sort(ranges.begin(), ranges.end());
+    QCOMPARE(ranges,
+             (QVector<std::pair<int, int>>{{4, 7}, {10, 13}, {19, 22}}));
+    // Outside register spans only the word itself matches.
+    QCOMPARE(highlightRanges(line, QStringLiteral("rax"), std::nullopt),
+             (QVector<std::pair<int, int>>{{10, 13}, {19, 22}}));
+    QCOMPARE(highlightRanges(line, QStringLiteral("ax"), Register),
+             (QVector<std::pair<int, int>>{{4, 7}, {10, 13}}));
+  }
+
+  void highlightLocksToggleAsIdaDoes() {
+    HighlightLocks locks;
+    QSignalSpy changed(&locks, &HighlightLocks::changed);
+    // Ctrl+Alt+0 locks in the first free color and unlocks a locked word,
+    // a register by any of its names.
+    locks.toggle(QStringLiteral("rbp"));
+    QCOMPARE(locks.word(0), QStringLiteral("rbp"));
+    locks.toggle(QStringLiteral("rax"));
+    QCOMPARE(locks.word(1), QStringLiteral("rax"));
+    QCOMPARE(locks.slotOf(QStringLiteral("eax")), std::optional<int>(1));
+    locks.toggle(QStringLiteral("eax"));
+    QVERIFY(locks.word(1).isEmpty());
+    // Ctrl+Alt+N unlocks a taken color whatever the word, or locks the word
+    // in a free one, moving it from another color.
+    locks.toggleColor(0, QStringLiteral("rbx"));
+    QVERIFY(locks.word(0).isEmpty());
+    locks.toggleColor(2, QStringLiteral("rbx"));
+    QCOMPARE(locks.word(2), QStringLiteral("rbx"));
+    locks.toggleColor(4, QStringLiteral("rbx"));
+    QVERIFY(locks.word(2).isEmpty());
+    QCOMPARE(locks.word(4), QStringLiteral("rbx"));
+    locks.toggleColor(5, QString());
+    QVERIFY(locks.word(5).isEmpty());
+    // With every color taken another word stays unlocked.
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+      if (locks.word(slot).isEmpty())
+        locks.toggleColor(slot, QStringLiteral("w%1").arg(slot));
+    const int before = int(changed.count());
+    locks.toggle(QStringLiteral("rcx"));
+    QCOMPARE(int(changed.count()), before);
+    QVERIFY(!locks.slotOf(QStringLiteral("rcx")));
+    locks.clear();
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+      QVERIFY(locks.word(slot).isEmpty());
+    QCOMPARE(highlightLockRole(0), ColorRole::HighlightLock1);
+    QCOMPARE(highlightLockRole(HighlightLocks::Colors - 1),
+             ColorRole::HighlightLock8);
+  }
+
+  void pseudocodeWordsSplitMemberAccessesAtTheirDot() {
+    const QString access = QStringLiteral("stack_storage.var_m8 = 1.5;");
+    // A listing's or IR's names keep their dots.
+    QCOMPARE(tokenRange(access, 3), (std::pair{0, 20}));
+    QVERIFY(tokenOccurrences(access, QStringLiteral("var_m8")).isEmpty());
+    // Pseudocode splits a member access and keeps a decimal number whole.
+    QCOMPARE(tokenRange(access, 3, TokenDots::Split), (std::pair{0, 13}));
+    QCOMPARE(tokenRange(access, 16, TokenDots::Split), (std::pair{14, 20}));
+    QCOMPARE(tokenRange(access, 24, TokenDots::Split), (std::pair{23, 26}));
+    QCOMPARE(tokenOccurrences(access, QStringLiteral("stack_storage"),
+                              TokenDots::Split),
+             (QVector<int>{0}));
+    QCOMPARE(
+        tokenOccurrences(access, QStringLiteral("var_m8"), TokenDots::Split),
+        (QVector<int>{14}));
+    StyledLine line;
+    line.text = access;
+    QCOMPARE(line.tokenAt(16), QStringLiteral("stack_storage.var_m8"));
+    QCOMPARE(line.tokenAt(16, TokenDots::Split), QStringLiteral("var_m8"));
+  }
+
   void unicodeCommentsKeepTheCodePrefixOnItsGrid() {
-    // The code views' font: Consolas where it exists, else the system's
-    // fixed font.
+    // Use the same bundled fixed-width font as code views.
     QFont font = Theme::defaultCodeFont();
     font.setPointSize(10);
     const auto color = [](int role) {
@@ -498,25 +681,23 @@ private slots:
     registry.buildMenus(window.menuBar(), [](QMenu *, const QString &) {});
     registry.buildToolbars(&window);
     QSet<QString> ids;
-    QHash<QString, QString> globalKeys, viewKeys;
-    const auto &views = registry.viewActions();
+    QHash<QString, QString> keys;
     for (auto *action : registry.allActions()) {
       QVERIFY2(!ids.contains(action->objectName()),
                qPrintable(action->objectName()));
       ids.insert(action->objectName());
       QVERIFY2(!action->text().isEmpty(), qPrintable(action->objectName()));
       QVERIFY2(!action->icon().isNull(), qPrintable(action->objectName()));
-      const auto key = action->shortcut().toString(QKeySequence::PortableText);
-      if (key.isEmpty())
-        continue;
-      auto &keys = views.contains(action) ? viewKeys : globalKeys;
-      QVERIFY2(!keys.contains(key),
-               qPrintable(key + QStringLiteral(": ") + keys.value(key) +
-                          QStringLiteral(" and ") + action->objectName()));
-      keys.insert(key, action->objectName());
-      // A view shortcut must not also be a window-wide one.
-      if (views.contains(action))
-        QVERIFY2(!globalKeys.contains(key), qPrintable(key));
+      // Check aliases too: a view shortcut and a window shortcut can both
+      // be active while an analysis view has focus.
+      for (const auto &shortcut : action->shortcuts()) {
+        const auto key = shortcut.toString(QKeySequence::PortableText);
+        QVERIFY2(!key.isEmpty(), qPrintable(action->objectName()));
+        QVERIFY2(!keys.contains(key),
+                 qPrintable(key + QStringLiteral(": ") + keys.value(key) +
+                            QStringLiteral(" and ") + action->objectName()));
+        keys.insert(key, action->objectName());
+      }
     }
     QCOMPARE(ids.size(), int(ActionId::Count));
     // Every command is reachable from a menu.
@@ -531,8 +712,112 @@ private slots:
     for (auto *action : window.menuBar()->actions())
       if (action->menu())
         walk(action->menu());
+    // Patch is populated from the engine when opened. Its popup action and
+    // dynamic inventory share the production table; fixed keys/filtering are
+    // exercised by patchMenuUsesEngineChoicesAndFixedKeys below.
+    reachable.insert(registry.action(ActionId::EditPatchMenu));
+#define NEVERD_PATCH_ITEM(Id, Key, Kind)                                       \
+  reachable.insert(registry.action(ActionId::Id));
+#include "PatchMenu.def"
     for (auto *action : registry.allActions())
       QVERIFY2(reachable.contains(action), qPrintable(action->objectName()));
+  }
+
+  void toolbarButtonsKeepKeysInTooltips() {
+    QMainWindow window;
+    ActionRegistry registry;
+    const auto toolbars = registry.buildToolbars(&window);
+    int hinted = 0;
+    for (auto *toolbar : toolbars)
+      for (auto *action : toolbar->actions()) {
+        auto *button =
+            qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
+        if (!button)
+          continue;
+        QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+        if (action->shortcut().isEmpty())
+          continue;
+        ++hinted;
+        QVERIFY(button->toolTip().contains(
+            action->shortcut().toString(QKeySequence::NativeText)));
+        QVERIFY(action->isShortcutVisibleInContextMenu());
+      }
+    QVERIFY(hinted > 10);
+    auto *action = registry.action(ActionId::JumpEntry);
+    QToolButton *entry = nullptr;
+    for (auto *toolbar : toolbars)
+      if (auto *button =
+              qobject_cast<QToolButton *>(toolbar->widgetForAction(action)))
+        entry = button;
+    QVERIFY(entry);
+    QVERIFY(entry->toolTip().contains(
+        action->shortcut().toString(QKeySequence::NativeText)));
+    // Translation and action updates preserve the compact toolbar.
+    action->setShortcut(QKeySequence(Qt::Key_F12));
+    registry.retranslate();
+    action->setEnabled(false);
+    QVERIFY(entry->toolTip().contains(QStringLiteral("F12")));
+    QCOMPARE(entry->toolButtonStyle(), Qt::ToolButtonIconOnly);
+    action->setShortcut({});
+    QCOMPARE(entry->toolButtonStyle(), Qt::ToolButtonIconOnly);
+  }
+
+  void commentKeysShareOneViewScopedAction() {
+    QMainWindow window;
+    auto *view = new QWidget(&window);
+    view->setFocusPolicy(Qt::StrongFocus);
+    auto *layout = new QVBoxLayout(view);
+    auto *input = new QLineEdit(view);
+    auto *editor = new QPlainTextEdit(view);
+    layout->addWidget(input);
+    layout->addWidget(editor);
+    window.setCentralWidget(view);
+    ActionRegistry registry;
+    registry.buildMenus(window.menuBar(), [](QMenu *, const QString &) {});
+    registry.attachViewShortcuts(view);
+    auto *comment = registry.action(ActionId::EditRepeatableComment);
+    QCOMPARE(comment->shortcuts(), QList({QKeySequence(Qt::Key_Semicolon),
+                                          QKeySequence(Qt::Key_Slash)}));
+    QCOMPARE(comment->shortcutContext(), Qt::WidgetWithChildrenShortcut);
+    QVERIFY(comment->toolTip().contains(QStringLiteral(";, /")));
+    QVERIFY(!registry.findChild<QAction *>(QStringLiteral("EditComment")));
+    for (auto *action : registry.allActions())
+      QVERIFY(!action->shortcuts().contains(QKeySequence(Qt::Key_Colon)));
+    auto *menu = window.findChild<QMenu *>(QStringLiteral("menuComments"));
+    QVERIFY(menu);
+    QCOMPARE(menu->actions(), QList({comment}));
+    QSignalSpy triggered(comment, &QAction::triggered);
+    window.show();
+    window.raise();
+    window.activateWindow();
+    const bool active = QTest::qWaitForWindowActive(&window);
+    if (!active && QGuiApplication::platformName() == QLatin1String("cocoa"))
+      QSKIP("Comment key dispatch requires a foreground Cocoa window.");
+    QVERIFY(active);
+    view->setFocus();
+    QTRY_VERIFY(view->hasFocus());
+    auto *handle = window.windowHandle();
+    QTest::keyClick(handle, Qt::Key_Semicolon);
+    QCOMPARE(triggered.size(), 1);
+    QTest::keyClick(handle, Qt::Key_Slash);
+    QCOMPARE(triggered.size(), 2);
+    QTest::keyClick(handle, Qt::Key_Colon, Qt::ShiftModifier);
+    QCOMPARE(triggered.size(), 2);
+    input->setFocus();
+    QTRY_VERIFY(input->hasFocus());
+    QTest::keyClicks(input, ";/:");
+    QCOMPARE(input->text(), QStringLiteral(";/:"));
+    editor->setFocus();
+    QTRY_VERIFY(editor->hasFocus());
+    QTest::keyClicks(editor, ";/:");
+    QCOMPARE(editor->toPlainText(), QStringLiteral(";/:"));
+    QCOMPARE(triggered.size(), 2);
+    view->setFocus();
+    QTRY_VERIFY(view->hasFocus());
+    comment->setEnabled(false);
+    QTest::keyClick(handle, Qt::Key_Semicolon);
+    QTest::keyClick(handle, Qt::Key_Slash);
+    QCOMPARE(triggered.size(), 2);
   }
 
   void deepLinksTakeIdasFormAndRefuseWhatTheyCannotName() {
@@ -675,6 +960,28 @@ private slots:
         1);
   }
 
+  void relativeLinksDoNotWrap() {
+    DeepLink relative;
+    relative.rva = std::numeric_limits<Address>::max();
+    QVERIFY(!relative.address(1));
+    QCOMPARE(relative.address(0), relative.rva);
+    relative.rva = 0;
+    QCOMPARE(relative.address(std::numeric_limits<Address>::max()),
+             std::optional<Address>(std::numeric_limits<Address>::max()));
+  }
+
+  void linkNumbersContainOnlyDigits() {
+    for (const QString &number :
+         {QStringLiteral("%091"), QStringLiteral("1%09"),
+          QStringLiteral("%0a1"), QStringLiteral("1%0d"),
+          QStringLiteral("0x%091")}) {
+      const auto parsed =
+          parseDeepLink(QStringLiteral("neverd:///addresses?ea=") + number);
+      QVERIFY2(!parsed.link, qPrintable(number));
+      QVERIFY(!parsed.error.isEmpty());
+    }
+  }
+
   void commandsKeepIdasShortcuts() {
     ActionRegistry registry;
     QSet<QAction *> shared;
@@ -701,7 +1008,12 @@ private slots:
   for (const auto &key : idaKeys(QLatin1StringView(Shortcut)))                 \
     idaCommands.insert(key, QStringLiteral(IdaAction));
 #include "IdaActions.def"
-    QVERIFY(shared.size() > int(ActionId::Count) * 3 / 4);
+    int patchOnly = 1; // NeverD's menu opener, whose free key is tested below.
+#define NEVERD_PATCH_ITEM(Id, Key, Kind)                                       \
+  if (!shared.contains(registry.action(ActionId::Id)))                         \
+    ++patchOnly;
+#include "PatchMenu.def"
+    QVERIFY(shared.size() > (int(ActionId::Count) - patchOnly) * 3 / 4);
     for (auto *action : registry.allActions())
       if (!shared.contains(action) && !action->shortcut().isEmpty())
         QVERIFY2(!idaCommands.contains(action->shortcut()),
@@ -715,6 +1027,61 @@ private slots:
              QList{QKeySequence(Qt::Key_Return)});
     QCOMPARE(idaKeys(QLatin1StringView("sys(ZoomOut)")),
              QKeySequence::keyBindings(QKeySequence::ZoomOut));
+  }
+
+  void patchShortcutsDoNotTakeHexRaysKeys() {
+    ActionRegistry registry;
+    QSet<QKeySequence> keys;
+#define NEVERD_HEXRAYS_KEY(Name, Key)                                          \
+  keys.insert(QKeySequence(QStringLiteral(Key)));
+#include "HexRaysShortcuts.def"
+    QVERIFY(keys.contains(QKeySequence("Z")));
+    const auto patch = registry.action(ActionId::EditPatchMenu)->shortcut();
+    QCOMPARE(patch, QKeySequence("J"));
+    QVERIFY(!keys.contains(patch));
+    QCOMPARE(registry.action(ActionId::EditPatchedBytes)->shortcut(),
+             QKeySequence("Ctrl+Alt+P"));
+    QVERIFY(registry.action(ActionId::EditPatchAssemble)->shortcut().isEmpty());
+  }
+
+  void patchMenuUsesEngineChoicesAndFixedKeys() {
+    ActionRegistry registry;
+    QMenu menu;
+    PatchMenu binding(&menu);
+    registry.action(ActionId::EditPatchNop)
+        ->setText(QString::fromUtf8("填充空指令"));
+    QSignalSpy nop(registry.action(ActionId::EditPatchNop),
+                   &QAction::triggered);
+    QSignalSpy rename(registry.action(ActionId::EditRename),
+                      &QAction::triggered);
+    binding.fill(registry, {"nop", "bytes"});
+    QCOMPARE(menu.actions().size(), 2);
+    menu.show();
+    QTest::keyClick(&menu, Qt::Key_N);
+    QCOMPARE(rename.size(), 0);
+    QTest::keyClick(&menu, Qt::Key_J);
+    QCOMPARE(nop.size(), 1);
+    QMenu pending;
+    PatchMenu waiting(&pending);
+    pending.show();
+    QTest::keyClick(&pending, Qt::Key_J);
+    waiting.fill(registry, {"nop"});
+    QCOMPARE(nop.size(), 2);
+  }
+
+  void cancelledPatchMenuDiscardsItsPendingKey() {
+    ActionRegistry registry;
+    QMenu menu;
+    PatchMenu binding(&menu);
+    menu.addAction(QStringLiteral("Checking available patches"));
+    QSignalSpy nop(registry.action(ActionId::EditPatchNop),
+                   &QAction::triggered);
+    menu.show();
+    QTest::keyClick(&menu, Qt::Key_J);
+    QTest::keyClick(&menu, Qt::Key_Escape);
+    QVERIFY(!menu.isVisible());
+    binding.fill(registry, {"nop"});
+    QCOMPARE(nop.size(), 0);
   }
 
   void everyIconRenders() {
@@ -1013,6 +1380,9 @@ private slots:
     QVERIFY(write(binary + ".neverd/debug.json", R"({"pdb":{"mode":"none"}})"));
     QVERIFY(write(binary + ".neverd/types.json", R"({"types":["struct T"]})"));
     QVERIFY(write(binary + ".neverd/items.json", "[]"));
+    QVERIFY(write(
+        binary + ".neverd/patches.json",
+        R"([{"addr":"0x0","file_off":"0x0","va":"0x0","size":1,"original":"90","current":"cc","kind":"bytes"}])"));
     // A workbench file is the user's own; a database keeps its own state.
     QVERIFY(write(binary + ".neverd/local/workbench.json", "{}"));
 
@@ -1040,6 +1410,8 @@ private slots:
              read(binary + ".neverd/bookmarks.json"));
     QCOMPARE(read(unpacked + ".neverd/debug.json"),
              read(binary + ".neverd/debug.json"));
+    QCOMPARE(read(unpacked + ".neverd/patches.json"),
+             read(binary + ".neverd/patches.json"));
 
     // A database written before it named the files it packs packed no local
     // types: unpacking it keeps the types beside the input, while a table it
@@ -1141,8 +1513,7 @@ private slots:
                                          "'1')")}));
     const auto foreignBytes = contents(foreign);
     QVERIFY(!ProjectDatabase::read(foreign, &error));
-    QCOMPARE(error,
-             QStringLiteral("%1 is not a NeverD database.").arg(foreign));
+    QCOMPARE(error, QStringLiteral("NDDB: not a NeverD database"));
     QVERIFY(!ProjectDatabase::saveState(foreign, {}).isEmpty());
     QVERIFY(!ProjectDatabase::save(foreign, binary, {}).isEmpty());
     QCOMPARE(contents(foreign), foreignBytes);
@@ -1506,8 +1877,13 @@ private slots:
     QWidget *window = dock->QWidget::window();
     QVERIFY(window != dock.get());
     QVERIFY(QTest::qWaitForWindowExposed(window));
-    QCOMPARE(window->grab().toImage().pixelColor(0, window->height() / 2),
-             theme.chrome(QStringLiteral("FloatingWindowBorder")));
+    const auto capture = window->grab().toImage();
+    const int edge = window->contentsMargins().left();
+    QVERIFY(edge > 0);
+    const int row = capture.height() / 2;
+    QVERIFY(capture.pixelColor(0, row).alpha() <
+            capture.pixelColor(qRound(edge * capture.devicePixelRatio()), row)
+                .alpha());
   }
 
   void tabsShowCloseButtonsWhenCurrentOrHovered() {
@@ -1601,7 +1977,8 @@ private slots:
     QCOMPARE(at(200, 150), Qt::Edges());
     QCOMPARE(at(2, 150), Qt::Edges(Qt::LeftEdge));
     QCOMPARE(at(12, 150), Qt::Edges(Qt::LeftEdge));
-    QCOMPARE(at(14, 150), Qt::Edges());
+    QCOMPARE(at(16, 150), Qt::Edges(Qt::LeftEdge));
+    QCOMPARE(at(18, 150), Qt::Edges());
     QCOMPARE(at(395, 150), Qt::Edges(Qt::RightEdge));
     QCOMPARE(at(200, 5), Qt::Edges(Qt::TopEdge));
     QCOMPARE(at(200, 292), Qt::Edges(Qt::BottomEdge));
@@ -1612,7 +1989,9 @@ private slots:
     // Without a shadow the edges lie just inside the window.
     QCOMPARE(WindowFrame::edgesAt(QPoint(1, 150), size, QMargins()),
              Qt::Edges(Qt::LeftEdge));
-    QCOMPARE(WindowFrame::edgesAt(QPoint(5, 150), size, QMargins()),
+    QCOMPARE(WindowFrame::edgesAt(QPoint(6, 150), size, QMargins()),
+             Qt::Edges(Qt::LeftEdge));
+    QCOMPARE(WindowFrame::edgesAt(QPoint(8, 150), size, QMargins()),
              Qt::Edges());
   }
 
@@ -1627,7 +2006,11 @@ private slots:
     QCOMPARE(menus->parentWidget(), bar);
     QAction palette;
     int runs = 0;
-    connect(&palette, &QAction::triggered, &window, [&runs] { ++runs; });
+    QWidget *clicked = nullptr;
+    connect(&palette, &QAction::triggered, &window, [&] {
+      ++runs;
+      clicked = bar->clickedCommandCenter();
+    });
     bar->setCommandCenterAction(&palette);
     bar->setCommandCenterText(QStringLiteral("xxd"),
                               QStringLiteral("NeverD - xxd /tmp"));
@@ -1646,12 +2029,18 @@ private slots:
     QCOMPARE(button("maximizeButton")->accessibleName(),
              QStringLiteral("Maximize"));
 
-    // The command center names the file and runs its command.
+    // The command center names the file and runs its command, which can tell
+    // a click on the field, which it drops from, from its key.
     auto *center = button("commandCenter");
     QVERIFY(center && center->isVisible());
     QCOMPARE(center->text(), QStringLiteral("xxd"));
     QTest::mouseClick(center, Qt::LeftButton);
     QCOMPARE(runs, 1);
+    QCOMPARE(clicked, static_cast<QWidget *>(center));
+    QVERIFY(!bar->clickedCommandCenter());
+    palette.trigger();
+    QCOMPARE(runs, 2);
+    QVERIFY(!clicked);
 
     // The maximize button and a double click on the bar's empty part toggle
     // the maximized state, and the button then offers to restore.
@@ -1669,6 +2058,42 @@ private slots:
     QTRY_VERIFY(!button("closeButton")->isVisible());
     window.showNormal();
     QTRY_VERIFY(button("closeButton")->isVisible());
+  }
+
+  void titleBarControlsRepaintOnPointerLeave() {
+    // A native-window handoff can deliver Leave without HoverLeave. Clearing
+    // underMouse must also repaint the close button's previous red highlight.
+    QWidget window;
+    auto *bar = new TitleBar(window);
+    window.resize(500, 300);
+    bar->setGeometry(0, 0, 500, bar->sizeHint().height());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto *close = bar->findChild<QAbstractButton *>("closeButton");
+    QVERIFY(close && close->isVisible());
+    const QPoint center = close->rect().center();
+    QEnterEvent enter(center, close->mapTo(&window, center),
+                      close->mapToGlobal(center));
+    QCoreApplication::sendEvent(close, &enter);
+    QHoverEvent hover(QEvent::HoverEnter, center, close->mapToGlobal(center),
+                      QPointF(-1, -1));
+    QCoreApplication::sendEvent(close, &hover);
+    QVERIFY(close->underMouse());
+    QCoreApplication::processEvents();
+    class PaintCounter final : public QObject {
+    public:
+      int paints = 0;
+      bool eventFilter(QObject *, QEvent *event) override {
+        if (event->type() == QEvent::Paint)
+          ++paints;
+        return false;
+      }
+    } counter;
+    close->installEventFilter(&counter);
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(close, &leave);
+    QVERIFY(!close->underMouse());
+    QTRY_VERIFY(counter.paints > 0);
   }
 
   void loadQuestionFitsTheFontsItShowsWith() {
@@ -1759,17 +2184,404 @@ private slots:
     }
   }
 
+  void restoredGeometrySurvivesHiddenNativeEvents_data() {
+    QTest::addColumn<bool>("maximized");
+    QTest::newRow("normal") << false;
+    QTest::newRow("maximized") << true;
+  }
+
+  void restoredGeometrySurvivesHiddenNativeEvents() {
+    QFETCH(bool, maximized);
+    // Keep the saved size on X11's resize grid at 150% scale as well.
+    const QSize normal(704, 448);
+    QByteArray geometry;
+    {
+      QWidget previous;
+      previous.setGeometry(QRect(QPoint(60, 60), normal));
+      if (maximized)
+        previous.setWindowState(Qt::WindowMaximized);
+      geometry = previous.saveGeometry();
+    }
+
+    QWidget window;
+    auto *frame = WindowFrame::attach(window);
+    QVERIFY(frame);
+    QVERIFY(frame->restoreWindowedGeometry(geometry));
+    // Startup can run the event loop for Quick Start or the worker before
+    // showing this already-created native window. Its old size must not win.
+    QCoreApplication::processEvents();
+    QVERIFY(!window.isVisible());
+    QCOMPARE(window.size(), normal);
+    test::NativeWindowStates applied(*window.windowHandle());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_COMPARE(window.isMaximized(), maximized);
+    if (maximized) {
+      QTRY_VERIFY(applied.is(Qt::WindowMaximized));
+      frame->setWindowState(Qt::WindowNoState);
+      QTRY_VERIFY(applied.is(Qt::WindowNoState));
+      if (QGuiApplication::platformName() == QLatin1String("offscreen"))
+        QSKIP("Restored native geometry needs a window manager; hidden "
+              "geometry and window states were checked above.");
+    }
+    QTRY_COMPARE(window.size(), normal);
+  }
+
+  void fullScreenRetainsTheRestoreState_data() {
+    QTest::addColumn<bool>("maximized");
+    QTest::newRow("normal") << false;
+    QTest::newRow("maximized") << true;
+  }
+
+  void fullScreenRetainsTheRestoreState() {
+    if (QGuiApplication::platformName() != QLatin1String("offscreen"))
+      QSKIP("Native transitions are covered by the native frame regression");
+    QFETCH(bool, maximized);
+    QWidget window;
+    auto *frame = WindowFrame::attach(window);
+    QVERIFY(frame);
+    window.resize(900, 600);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    if (maximized)
+      window.showMaximized();
+    for (int round = 0; round < 2; ++round) {
+      frame->toggleFullScreen();
+      QVERIFY(window.isFullScreen());
+      // Some platforms report full screen alone. Losing the maximized bit
+      // must not change where the user's second F11 returns the window.
+      window.setWindowState(Qt::WindowFullScreen);
+      frame->toggleFullScreen();
+      QVERIFY(!window.isFullScreen());
+      QCOMPARE(window.isMaximized(), maximized);
+    }
+  }
+
+  void analysisProgressFollowsOpeningAndBackground() {
+    using Stage = AnalysisProgress::Stage;
+    AnalysisProgress progress;
+    QSignalSpy finished(&progress, &AnalysisProgress::finished);
+    QCOMPARE(progress.stage(), Stage::Idle);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: idle"));
+    // An open into the empty workbench, step by step.
+    progress.update(true, false, true, QStringLiteral("/data/input.exe"), {});
+    QCOMPARE(progress.stage(), Stage::Loading);
+    QVERIFY(progress.firstLoad());
+    QCOMPARE(progress.fileName(), QStringLiteral("input.exe"));
+    QVERIFY(progress.fraction() < 0);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: loading"));
+    progress.loadProgress(QStringLiteral("hash"), 0.5, QString());
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: loading 50%"));
+    QCOMPARE(progress.stepText(), QStringLiteral("Reading the file"));
+    // A step of the whole file has the file's name as detail.
+    progress.loadProgress(QStringLiteral("read"), -1,
+                          QStringLiteral("/data/input.exe"));
+    QVERIFY(progress.detail().isEmpty());
+    progress.loadProgress(QStringLiteral("parse"), -1,
+                          QStringLiteral("PE/COFF code literals"));
+    QCOMPARE(progress.stepText(), QStringLiteral("Parsing the format"));
+    QCOMPARE(progress.detail(), QStringLiteral("PE/COFF code literals"));
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: loading"));
+    // Loaded: the worker reports its background work after the open, finds
+    // functions, then indexes their references.
+    progress.update(false, true, true, QString(), {});
+    QCOMPARE(progress.stage(), Stage::Discovering);
+    QVERIFY(!progress.firstLoad());
+    progress.update(false, true, true, QString(),
+                    {{"state", "pending"}, {"discovery_complete", false}});
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: finding functions"));
+    progress.update(false, true, true, QString(),
+                    {{"state", "pending"}, {"discovery_complete", true}});
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: indexing references"));
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"},
+                     {"discovery_complete", true},
+                     {"done", 25},
+                     {"total", 100}});
+    QCOMPARE(progress.statusText(),
+             QStringLiteral("AU: indexing references 25%"));
+    QCOMPARE(finished.size(), 0);
+    progress.update(false, true, true, QString(),
+                    {{"state", "ready"}, {"discovery_complete", true}});
+    QCOMPARE(progress.stage(), Stage::Finished);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: analysis finished"));
+    QCOMPARE(finished.size(), 1);
+    QVERIFY(finished.at(0).at(0).toString().startsWith(
+        QStringLiteral("Analysis finished in ")));
+    // Later replies report nothing again; the indicator then rests.
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(finished.size(), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(progress.stage(), Stage::Idle, 10000);
+    QCOMPARE(progress.statusText(), QStringLiteral("AU: idle"));
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    QCOMPARE(finished.size(), 1);
+  }
+
+  void analysisProgressRestsWithoutBackgroundWork() {
+    using Stage = AnalysisProgress::Stage;
+    AnalysisProgress progress;
+    QSignalSpy finished(&progress, &AnalysisProgress::finished);
+    // Without idle-time analysis the worker indexes references only for a
+    // query that needs them.
+    progress.update(true, false, false, QStringLiteral("input"), {});
+    progress.update(false, true, false, QString(), {{"state", "pending"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    progress.update(false, true, false, QString(),
+                    {{"state", "building"}, {"done", 1}, {"total", 4}});
+    QCOMPARE(progress.statusText(),
+             QStringLiteral("AU: indexing references 25%"));
+    progress.update(false, true, false, QString(), {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    // Opening another file leaves the loaded one in view.
+    progress.update(true, true, true, QStringLiteral("other"),
+                    {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Loading);
+    QVERIFY(!progress.firstLoad());
+    // An index the worker cannot build, and progress after the open.
+    progress.update(false, true, true, QString(), {{"state", "unavailable"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    progress.loadProgress(QStringLiteral("parse"), -1, QString());
+    QCOMPARE(progress.stage(), Stage::Idle);
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    // A failed open.
+    progress.update(true, false, true, QStringLiteral("broken"), {});
+    progress.update(false, false, true, QString(), {});
+    QCOMPARE(progress.stage(), Stage::Idle);
+    // A worker that reports no background work leaves the indicator idle once
+    // its first report is overdue.
+    progress.update(true, false, true, QStringLiteral("quiet"), {});
+    progress.update(false, true, true, QString(), {});
+    QCOMPARE(progress.stage(), Stage::Discovering);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        [&] {
+          progress.update(false, true, true, QString(), {});
+          return progress.stage();
+        }(),
+        Stage::Idle, 10000);
+    QCOMPARE(finished.size(), 0);
+  }
+
+  void analysisProgressReportsOnlyShownChanges() {
+    AnalysisProgress progress;
+    QSignalSpy changed(&progress, &AnalysisProgress::changed);
+    const QJsonObject building{
+        {"state", "building"}, {"done", 100}, {"total", 1000}};
+    progress.update(false, true, true, QString(), building);
+    const auto first = changed.size();
+    QVERIFY(first > 0);
+    // Every query reply refreshes the status bar.
+    for (int reply = 0; reply < 100; ++reply)
+      progress.update(false, true, true, QString(), building);
+    // Less than a percent shows nothing new.
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"}, {"done", 105}, {"total", 1000}});
+    QCOMPARE(changed.size(), first);
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"}, {"done", 110}, {"total", 1000}});
+    QCOMPARE(changed.size(), first + 1);
+  }
+
+  void progressStripAnimatesOnlyWhileSweepingOnScreen() {
+    const auto setState = [](Qt::ApplicationState state) {
+      QWindowSystemInterface::handleApplicationStateChanged<
+          QWindowSystemInterface::SynchronousDelivery>(state);
+    };
+    setState(Qt::ApplicationActive);
+    QWidget window;
+    auto *strip = new ProgressStrip(&window);
+    strip->setFraction(-1);
+    QVERIFY(!strip->animating());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    setState(Qt::ApplicationActive);
+    QVERIFY(strip->animating());
+    strip->setFraction(0.5);
+    QVERIFY(!strip->animating());
+    strip->setFraction(-1);
+    QVERIFY(strip->animating());
+    // While the user works in another application the bar rests.
+    setState(Qt::ApplicationInactive);
+    QVERIFY(!strip->animating());
+    setState(Qt::ApplicationActive);
+    QVERIFY(strip->animating());
+    window.hide();
+    QVERIFY(!strip->animating());
+  }
+
+  void progressStripFillsFromTheStartOfTheLine() {
+    const QColor accent = Theme::instance().chrome(QStringLiteral("Accent"));
+    ProgressStrip strip;
+    strip.resize(100, strip.sizeHint().height());
+    strip.setFraction(0.25);
+    strip.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&strip));
+    const auto filled = [&](int x) {
+      return strip.grab().toImage().pixelColor(x, strip.height() / 2) == accent;
+    };
+    QVERIFY(filled(10));
+    QVERIFY(!filled(90));
+    strip.setLayoutDirection(Qt::RightToLeft);
+    QVERIFY(!filled(10));
+    QVERIFY(filled(90));
+  }
+
+  void analysisIndicatorKeepsTheStatusTextsInPlace() {
+    AnalysisProgress progress;
+    // The status bar's own padding around its texts.
+    QStatusBar bar;
+    auto *indicator = new AnalysisIndicator(progress, &bar);
+    bar.addWidget(indicator);
+    bar.addWidget(new QLabel(QStringLiteral("Down"), &bar));
+    bar.resize(900, bar.sizeHint().height());
+    bar.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&bar));
+    const int idle = indicator->sizeHint().width();
+    progress.update(true, false, true, QStringLiteral("input"), {});
+    const int busy = indicator->sizeHint().width();
+    QVERIFY(busy > idle);
+    // A narrow status bar may still shrink it to the text it shows.
+    QVERIFY(indicator->minimumSizeHint().width() < busy);
+    // Every stage and percent fits the room the first one took.
+    progress.loadProgress(QStringLiteral("hash"), 1, QString());
+    QCOMPARE(indicator->text(), QStringLiteral("AU: loading 100%"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    progress.update(false, true, true, QString(), {{"state", "pending"}});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: finding functions"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    progress.update(false, true, true, QString(),
+                    {{"state", "building"}, {"done", 4}, {"total", 4}});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: indexing references 100%"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    progress.update(false, true, true, QString(), {{"state", "ready"}});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: analysis finished"));
+    QCOMPARE(indicator->sizeHint().width(), busy);
+    // Idle, it takes no more room than its text.
+    progress.update(false, false, true, QString(), {});
+    QCOMPARE(indicator->text(), QStringLiteral("AU: idle"));
+    QCOMPARE(indicator->sizeHint().width(), idle);
+  }
+
+  void analysisIndicatorFitsANarrowStatusBar() {
+    AnalysisProgress progress;
+    QStatusBar bar;
+    auto *indicator = new AnalysisIndicator(progress, &bar);
+    bar.addWidget(indicator);
+    bar.addWidget(new QLabel(QStringLiteral("Down"), &bar));
+    progress.update(true, false, true, QStringLiteral("input"), {});
+    // As narrow as the status bar gets: the bar narrows, the texts stay whole.
+    bar.resize(bar.minimumSizeHint().width(), bar.sizeHint().height());
+    bar.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&bar));
+    QVERIFY(indicator->strip()->width() <
+            indicator->strip()->sizeHint().width());
+    for (const auto *label : bar.findChildren<QLabel *>())
+      if (label->isVisible())
+        QVERIFY2(label->width() >= label->sizeHint().width(),
+                 qPrintable(label->text()));
+  }
+
+  void loadCardShortensALongName() {
+    QWidget window;
+    window.resize(800, 600);
+    AnalysisProgress progress;
+    auto *card = new LoadProgressCard(progress, window);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    const QString name = QString(200, u'n') + QStringLiteral(".exe");
+    progress.update(true, false, true, QStringLiteral("/data/") + name, {});
+    QTRY_VERIFY(card->isVisible());
+    // The middle goes; the start and the extension stay.
+    const auto title = card->title();
+    QVERIFY(title.startsWith(QStringLiteral("Opening nnn")));
+    QVERIFY(title.endsWith(QStringLiteral("nnn.exe")));
+    QVERIFY(!title.contains(name));
+    const auto *label =
+        card->findChild<QLabel *>(QStringLiteral("loadProgressTitle"));
+    QVERIFY(label);
+    QVERIFY(label->fontMetrics().horizontalAdvance(title) <=
+            label->contentsRect().width());
+  }
+
+  void loadCardFitsANarrowWindow() {
+    QWidget window;
+    window.resize(300, 400);
+    auto *view = new QWidget(&window);
+    view->setGeometry(100, 0, 200, 300);
+    AnalysisProgress progress;
+    auto *card = new LoadProgressCard(progress, window);
+    card->setAnchor(view);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    progress.update(true, false, true, QStringLiteral("/data/large.exe"), {});
+    QTRY_VERIFY(card->isVisible());
+    // Narrower than the window by a margin on each side, and inside it.
+    QVERIFY(card->width() < 300);
+    const QRect inside = window.rect().adjusted(8, 8, -8, -8);
+    QVERIFY2(inside.contains(card->geometry()),
+             qPrintable(QStringLiteral("card at %1,%2 %3x%4")
+                            .arg(card->x())
+                            .arg(card->y())
+                            .arg(card->width())
+                            .arg(card->height())));
+    // Wider again, it takes its own width back.
+    window.resize(900, 600);
+    QTRY_VERIFY(card->width() > 300);
+    QVERIFY(window.rect().contains(card->geometry()));
+  }
+
+  void loadCardShowsOnlyOverAnEmptyWorkbench() {
+    QWidget window;
+    window.resize(800, 600);
+    auto *view = new QWidget(&window);
+    view->setGeometry(200, 0, 600, 500);
+    AnalysisProgress progress;
+    auto *card = new LoadProgressCard(progress, window);
+    card->setAnchor(view);
+    AnalysisIndicator indicator(progress);
+    // An open can begin while the workbench waits behind a question; the card
+    // then shows with it.  A quick load finishes before the card appears.
+    progress.update(true, false, true, QStringLiteral("/data/large.exe"), {});
+    QVERIFY(card->isHidden());
+    QTRY_VERIFY(!card->isHidden());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QVERIFY(card->isVisible());
+    QCOMPARE(card->title(), QStringLiteral("Opening large.exe"));
+    QVERIFY(card->testAttribute(Qt::WA_TransparentForMouseEvents));
+    const QPoint center = view->geometry().center();
+    QVERIFY(qAbs(card->geometry().center().x() - center.x()) <= 1);
+    QVERIFY(qAbs(card->geometry().center().y() - center.y()) <= 1);
+    progress.loadProgress(QStringLiteral("parse"), -1,
+                          QStringLiteral("ELF tables"));
+    QCOMPARE(card->step(), QStringLiteral("Parsing the format · ELF tables"));
+    QCOMPARE(indicator.text(), QStringLiteral("AU: loading"));
+    QVERIFY(indicator.strip()->isVisibleTo(&indicator));
+    progress.update(false, true, true, QString(), {});
+    QVERIFY(!card->isVisible());
+    QCOMPARE(indicator.text(), QStringLiteral("AU: finding functions"));
+    // Opening another file keeps the loaded one in view; the status bar
+    // alone reports it.
+    progress.update(true, true, true, QStringLiteral("/data/next.exe"), {});
+    QTest::qWait(600);
+    QVERIFY(!card->isVisible());
+    QCOMPARE(indicator.text(), QStringLiteral("AU: loading"));
+    progress.update(false, false, true, QString(), {});
+    QCOMPARE(indicator.text(), QStringLiteral("AU: idle"));
+    QVERIFY(!indicator.strip()->isVisibleTo(&indicator));
+  }
+
   void nativeFrameKeepsTheTitleBarOnScreen() {
-    // Windows and macOS keep the system frame without its caption, so the
-    // window system decides where a maximized or full-screen window's client
-    // area lies; CI runs this with their native platforms.
-    if (platform::frameKind() != platform::FrameKind::Captionless)
-      QSKIP("The platform has no captionless system frame");
+    // The drawn frame must survive native state transitions on every desktop.
+    if (QGuiApplication::platformName() == QLatin1String("offscreen"))
+      QSKIP("Needs a native window manager");
     QWidget window;
     auto *menus = new QMenuBar;
     menus->addMenu(QStringLiteral("&File"));
     auto *bar = new TitleBar(window, menus);
-    QVERIFY(WindowFrame::attach(window, bar));
+    auto *frame = WindowFrame::attach(window, bar);
+    QVERIFY(frame);
     // Small CI screens (1024x768) leave the default placement partly off
     // screen; start inside the available area.
     window.resize(900, 600);
@@ -1777,17 +2589,26 @@ private slots:
                 QPoint(40, 40));
     window.show();
     QVERIFY(QTest::qWaitForWindowExposed(&window));
-    AppliedStates applied;
-    window.windowHandle()->installEventFilter(&applied);
+    if (QGuiApplication::platformName() == QLatin1String("cocoa")) {
+      // AppKit cannot complete a native full-screen transition for this
+      // background test process when the desktop refuses activation.
+      window.raise();
+      window.activateWindow();
+      if (!QTest::qWaitForWindowActive(&window))
+        QSKIP("Cocoa full-screen validation requires a foreground window.");
+    }
+    test::NativeWindowStates applied(*window.windowHandle());
     QScreen *screen = window.screen();
     const auto barRect = [&] {
       return QRect(bar->mapToGlobal(QPoint(0, 0)), bar->size());
     };
     const auto report = [&](const char *step) {
-      qInfo() << step << "applied" << applied.states << "frame"
-              << window.frameGeometry() << "client" << window.geometry()
-              << "contents" << window.contentsMargins() << "bar" << barRect()
-              << "screen" << screen->geometry() << "available"
+      qInfo() << step << "applied" << applied.states << "handle"
+              << window.windowHandle()->windowStates() << "widget"
+              << window.windowState() << "frame" << window.frameGeometry()
+              << "client" << window.geometry() << "contents"
+              << window.contentsMargins() << "bar" << barRect() << "screen"
+              << screen->geometry() << "available"
               << screen->availableGeometry();
     };
     // Each step waits until the window system confirms the state on the
@@ -1795,24 +2616,36 @@ private slots:
     // before an animation ends, and reports full screen alone over maximized.
     const auto request = [&](Qt::WindowStates states, const char *step) {
       const int before = applied.count;
-      window.setWindowState(states);
+      bool nativeFinished = true;
+      const auto apply = [&] {
+        if (states.testFlag(Qt::WindowFullScreen) != window.isFullScreen())
+          frame->toggleFullScreen();
+        else
+          frame->setWindowState(states);
+      };
+#ifdef Q_OS_MACOS
+      if (QGuiApplication::platformName() == QLatin1String("cocoa"))
+        nativeFinished = test::setNativeWindowState(window, states, apply);
+      else
+#endif
+        apply();
       const bool confirmed = QTest::qWaitFor(
-          [&] {
-            return applied.count > before &&
-                   effectiveState(applied.states) == effectiveState(states);
-          },
-          10000);
+          [&] { return applied.count > before && applied.is(states); }, 10000);
       QTest::qWait(300);
       report(step);
-      return confirmed;
+      return nativeFinished && confirmed && applied.is(states) &&
+             test::NativeWindowStates::same(window.windowState(), states);
     };
     report("normal");
     const QSize normal = window.size();
     QVERIFY(screen->geometry().contains(barRect()));
 
     QVERIFY(request(Qt::WindowMaximized, "maximized"));
+    QCOMPARE(window.contentsMargins().left(), 0);
+    QCOMPARE(window.contentsMargins().right(), 0);
     QVERIFY(screen->availableGeometry().contains(barRect()));
     QVERIFY(request(Qt::WindowNoState, "restored"));
+    QVERIFY(window.contentsMargins().left() > 0);
     QCOMPARE(window.size(), normal);
 
     // Full screen twice: its client area must not lose the title bar, and a
@@ -1829,18 +2662,27 @@ private slots:
     // inset there, and leaving full screen returns to the maximized size.
     QVERIFY(request(Qt::WindowMaximized, "maximized"));
     const QSize maximized = window.size();
-    QVERIFY(request(Qt::WindowMaximized | Qt::WindowFullScreen,
-                    "full screen from maximized"));
-    QVERIFY(screen->geometry().contains(barRect()));
-    QCOMPARE(barRect().top(), screen->geometry().top());
-    QVERIFY(request(Qt::WindowMaximized, "maximized again"));
-    QCOMPARE(window.size(), maximized);
-    QVERIFY(screen->availableGeometry().contains(barRect()));
+    for (int round = 0; round < 2; ++round) {
+      QVERIFY(request(Qt::WindowMaximized | Qt::WindowFullScreen,
+                      "full screen from maximized"));
+      QVERIFY(screen->geometry().contains(barRect()));
+      QCOMPARE(barRect().top(), screen->geometry().top());
+      QVERIFY(request(Qt::WindowMaximized, "maximized again"));
+      QCOMPARE(window.size(), maximized);
+      QVERIFY(screen->availableGeometry().contains(barRect()));
+    }
     QVERIFY(request(Qt::WindowNoState, "restored"));
     QCOMPARE(window.size(), normal);
   }
 
+  void dialogTitleBarOffersTheButtonsItsFlagsAskFor_data() {
+    QTest::addColumn<bool>("customized");
+    QTest::newRow("default-dialog-flags") << false;
+    QTest::newRow("customized-flags") << true;
+  }
+
   void dialogTitleBarOffersTheButtonsItsFlagsAskFor() {
+    QFETCH(bool, customized);
     QDialog dialog;
     dialog.setWindowTitle(QStringLiteral("Jump anywhere"));
     auto *bar = new TitleBar(dialog);
@@ -1863,9 +2705,12 @@ private slots:
     QTRY_VERIFY(!dialog.isVisible());
 
     // A dialog whose flags ask for Maximize offers it.
-    QDialog resizable(
-        nullptr, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
-                     Qt::WindowCloseButtonHint | Qt::WindowMaximizeButtonHint);
+    Qt::WindowFlags flags = Qt::Dialog | Qt::WindowTitleHint |
+                            Qt::WindowCloseButtonHint |
+                            Qt::WindowMinMaxButtonsHint;
+    if (customized)
+      flags |= Qt::CustomizeWindowHint;
+    QDialog resizable(nullptr, flags);
     auto *second = new TitleBar(resizable);
     resizable.resize(500, 300);
     second->setGeometry(0, 0, 500, second->sizeHint().height());
@@ -1875,6 +2720,12 @@ private slots:
     QVERIFY(maximize->isVisible());
     QTest::mouseClick(maximize, Qt::LeftButton);
     QTRY_VERIFY(resizable.isMaximized());
+    QTest::mouseClick(maximize, Qt::LeftButton);
+    QTRY_VERIFY(!resizable.isMaximized());
+    QAbstractButton *minimize = button(second, "minimizeButton");
+    QVERIFY(minimize->isVisible());
+    QTest::mouseClick(minimize, Qt::LeftButton);
+    QTRY_VERIFY(resizable.isMinimized());
   }
 
   void returnOpensTheCurrentItemOnce() {
@@ -1939,6 +2790,53 @@ private slots:
     QVERIFY(alone.isChecked());
   }
 
+  void returnOnAListOfChoicesPressesTheDefaultButton() {
+    // The GNOME theme makes Return open a combo box's list as well, so
+    // Return after choosing a theme opened the list again.
+    class ReturnOpenedComboBox final : public QComboBox {
+    public:
+      using QComboBox::QComboBox;
+      int opened = 0;
+
+    protected:
+      void keyPressEvent(QKeyEvent *event) override {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+          ++opened;
+        else
+          QComboBox::keyPressEvent(event);
+      }
+    };
+    const std::unique_ptr<QObject> filter(acceptDialogsOnReturn(*qApp));
+    QDialog dialog;
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *choices = new ReturnOpenedComboBox(&dialog);
+    choices->addItems({QStringLiteral("Dark"), QStringLiteral("Light")});
+    auto *typed = new ReturnOpenedComboBox(&dialog);
+    typed->setEditable(true);
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    for (QWidget *widget :
+         {static_cast<QWidget *>(choices), static_cast<QWidget *>(typed),
+          static_cast<QWidget *>(buttons)})
+      layout->addWidget(widget);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    // A combo box that takes typing keeps Return for its text.
+    typed->setFocus();
+    QTest::keyClick(typed, Qt::Key_Return);
+    QCOMPARE(typed->opened, 1);
+    QVERIFY(dialog.isVisible());
+    choices->setFocus();
+    QTest::keyClick(choices, Qt::Key_Down);
+    QCOMPARE(choices->currentText(), QStringLiteral("Light"));
+    QTest::keyClick(choices, Qt::Key_Return);
+    QCOMPARE(choices->opened, 0);
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QVERIFY(!dialog.isVisible());
+  }
+
   void themeDrawsFlatControls() {
     auto &theme = Theme::instance();
     for (const auto mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
@@ -1963,7 +2861,9 @@ private slots:
       QVERIFY(QTest::qWaitForWindowExposed(&dialog));
       const QImage image = dialog.grab().toImage();
       const auto pixel = [&](QWidget *widget, QPoint point) {
-        return image.pixelColor(widget->mapTo(&dialog, point));
+        const QPoint at = widget->mapTo(&dialog, point);
+        const qreal scale = image.devicePixelRatio();
+        return image.pixelColor(qRound(at.x() * scale), qRound(at.y() * scale));
       };
 
       // An unchecked box stands out from the dialog behind it.

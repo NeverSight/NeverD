@@ -46,12 +46,16 @@ private:
   void evaluate(const QString &text,
                 std::function<void(std::optional<Address>, QString)> done);
   void printHelp();
+  /// Color every line again for its level in the current theme.
+  void recolor();
   Session &session_;
   QPlainTextEdit *log_;
   QLineEdit *command_;
   QToolButton *language_;
   QStringList history_;
   int historyIndex_ = 0;
+  /// Whether the log's lines are colored for the dark theme.
+  bool coloredDark_ = false;
   std::function<std::optional<Address>()> location_;
 };
 

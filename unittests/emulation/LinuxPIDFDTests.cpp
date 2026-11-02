@@ -238,11 +238,11 @@ TEST(LinuxPIDFD, ClosedTaskCatalogueInputsRejectAmbiguityBeforeLoading) {
     if (!Bad)
       llvm::consumeError(Bad.takeError());
   }
-  auto MissingKernel =
-      processOptionsFromJSON(R"({"linux_kernel":{"tasks":[]}})");
-  EXPECT_FALSE(bool(MissingKernel));
-  if (!MissingKernel)
-    llvm::consumeError(MissingKernel.takeError());
+  auto WithoutGKI = processOptionsFromJSON(R"({"linux_kernel":{"tasks":[]}})");
+  ASSERT_TRUE(bool(WithoutGKI)) << llvm::toString(WithoutGKI.takeError());
+  EXPECT_FALSE(WithoutGKI->LinuxKernel->GKI);
+  ASSERT_TRUE(WithoutGKI->LinuxKernel->Tasks);
+  EXPECT_TRUE(WithoutGKI->LinuxKernel->Tasks->empty());
   ProcessOptions O;
   auto &K = O.LinuxKernel.emplace();
   K.GKI = AndroidGKIKernel::Android17_6_18;
@@ -268,6 +268,46 @@ TEST(LinuxPIDFD, ClosedTaskCatalogueInputsRejectAmbiguityBeforeLoading) {
   ASSERT_FALSE(bool(Bad));
   EXPECT_EQ(llvm::toString(Bad.takeError()), KernelOptions);
 }
+TEST(LinuxPIDFD, IndependentTaskCatalogueRetainsTypedAndWireValidation) {
+  for (const char *Tasks :
+       {"null", "{}", R"([{"id":0,"group_leader":true}])",
+        R"([{"id":2147483648,"group_leader":true}])",
+        R"([{"id":1000,"group_leader":false}])",
+        R"([{"id":1,"group_leader":0}])",
+        R"([{"id":1,"group_leader":true,"extra":0}])",
+        R"([{"id":1,"group_leader":true},{"id":1,"group_leader":false}])"}) {
+    auto Bad = processOptionsFromJSON(
+        std::string("{\"linux_kernel\":{\"tasks\":") + Tasks + "}}");
+    EXPECT_FALSE(bool(Bad)) << Tasks;
+    if (!Bad)
+      llvm::consumeError(Bad.takeError());
+  }
+  LinuxKernelOptions Kernel;
+  Kernel.Tasks.emplace();
+  for (uint32_t I = 0; I != KernelTaskLimit; ++I)
+    Kernel.Tasks->emplace(I + 1, LinuxKernelTask{true});
+  ASSERT_FALSE(bool(validateKernelOptions(Kernel)));
+  Kernel.Tasks->emplace(KernelTaskLimit + 1, LinuxKernelTask{true});
+  auto TooMany = validateKernelOptions(Kernel);
+  ASSERT_TRUE(bool(TooMany));
+  EXPECT_EQ(llvm::toString(std::move(TooMany)), KernelOptions);
+
+  ProcessOptions Options;
+  Options.Android.emplace().ThreadLimit = 3;
+  auto &Tasks = Options.LinuxKernel.emplace().Tasks.emplace();
+  Tasks.emplace(ThreadID + 1, LinuxKernelTask{true});
+  auto Collision = validateKernelTaskInputs(Options);
+  ASSERT_TRUE(bool(Collision));
+  EXPECT_EQ(llvm::toString(std::move(Collision)), KernelOptions);
+  Tasks.clear();
+  Options.LinuxPriority.emplace().Tasks.emplace(2000, 0);
+  auto Missing = validateKernelTaskInputs(Options);
+  ASSERT_TRUE(bool(Missing));
+  EXPECT_EQ(llvm::toString(std::move(Missing)), KernelOptions);
+  Tasks.emplace(2000, LinuxKernelTask{true});
+  EXPECT_FALSE(bool(validateKernelTaskInputs(Options)));
+}
+
 TEST_P(LinuxPIDFDProcess, ProcessCPUClocksRetainIdentityAndIdleSeparation) {
   for (const auto &K : Kernels) {
     SCOPED_TRACE(K.Label);
@@ -286,6 +326,30 @@ TEST_P(LinuxPIDFDProcess, ProcessCPUClocksRetainIdentityAndIdleSeparation) {
       EXPECT_EQ(R.ExitStatus, 0u);
     }
   }
+}
+TEST_P(LinuxPIDFDProcess, ProcessCPUClocksAdmitIndependentTaskObservations) {
+  auto &Kernel = Options.LinuxKernel.emplace();
+  Kernel.UnavailableSyscalls.insert(LinuxUnavailableSyscall::PidFDOpen);
+  Kernel.Tasks.emplace().emplace(2000, LinuxKernelTask{true});
+  Kernel.Tasks->emplace(3000, LinuxKernelTask{false});
+  auto &Time = Options.LinuxTime.emplace();
+  Time.AdvanceOnIdle = true;
+  Time.Clocks = {{1, {10, 999999999}}, {2, {3, 4}},       {-16006, {7, 9}},
+                 {-16007, {8, 10}},    {-16008, {9, 11}}, {-8, {13, 15}},
+                 {-8007, {16, 17}}};
+  for (const char *Opt : {"O0", "O2"}) {
+    auto R = run('p', Opt);
+    ASSERT_EQ(R.Stop, ProcessStopReason::Exited) << R.Diagnostic;
+    EXPECT_EQ(R.ExitStatus, 0u);
+  }
+}
+TEST_P(LinuxPIDFDProcess, TaskCatalogueDoesNotSelectPIDFDKernelSemantics) {
+  Options.LinuxKernel.emplace().Tasks.emplace();
+  auto R = run('t', "O2");
+  EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+  ASSERT_FALSE(R.Services.empty());
+  EXPECT_EQ(R.Services.back().Number, 434u);
+  EXPECT_FALSE(R.Services.back().Result);
 }
 TEST_P(LinuxPIDFDProcess, ZeroTimeoutPollRetainsReadinessAndOrderedCopies) {
   for (const auto &K : Kernels) {
@@ -356,7 +420,9 @@ TEST_P(LinuxPIDFDProcess, ProcessCPUClocksKeepMissingObservationBoundaries) {
 TEST(LinuxPIDFD, ProcessCPUClockValuesRequireLiveObservedGroupsBeforeLoading) {
   for (
       const char *Value :
-      {R"({"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})",
+      {R"({"linux_kernel":{"tasks":[]},"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})",
+       R"({"linux_kernel":{"tasks":[{"id":1,"group_leader":false}]},"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})",
+       R"({"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})",
        R"({"linux_kernel":{"gki":"android17-6.18"},"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})",
        R"({"linux_kernel":{"gki":"android17-6.18","tasks":[]},"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})",
        R"({"linux_kernel":{"gki":"android17-6.18","tasks":[{"id":1,"group_leader":false}]},"linux_time":{"clocks":[{"id":-14,"seconds":0,"nanoseconds":0}]}})"}) {

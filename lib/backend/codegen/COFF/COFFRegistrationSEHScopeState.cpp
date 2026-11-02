@@ -10,8 +10,8 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
 #include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
-#include "neverd/ir/med/X86RegistrationSEHStateStore.h"
 
 #include <functional>
 #include <tuple>

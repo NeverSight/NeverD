@@ -89,29 +89,27 @@ LinuxFiles::procRecords(const OpenProcFile &File, ProcessResult &Result,
     }
     uint64_t Position = 0;
     uint32_t Flags = 0;
-    std::string Path;
     if (const auto *F = std::get_if<OpenFile>(I->second.get())) {
       Position = F->Offset;
       Flags = F->Flags;
-      Path = F->Path;
     } else if (const auto *D = std::get_if<OpenDirectory>(I->second.get())) {
       Position = D->Offset;
       Flags = D->Flags;
-      Path = D->Path;
     } else if (const auto *P = std::get_if<OpenProcFile>(I->second.get())) {
       Position = P->Offset;
       Flags = P->Flags;
-      Path = P->Path;
     } else if (const auto *D = std::get_if<OpenDevice>(I->second.get())) {
       Flags = (*D)->OpenFlags;
-      auto Name = descriptorPath(FD);
-      if (!Name)
-        return Unsupported("device fdinfo has no catalogue identity");
-      Path = *Name;
     } else {
       return Unsupported(
           "fdinfo requires modeled inode and file-operation state");
     }
+    // The open file stores an object key, while inode() consumes a live name.
+    // Share the same namespace projection as /proc/pid/fd symlink reads.
+    auto Name = descriptorPath(FD);
+    if (!Name)
+      return Unsupported("fdinfo descriptor has no live catalogue identity");
+    const auto &Path = *Name;
     Flags &= ~(OpenCreate | OpenExclusive | OpenTruncate | OpenCloseOnExec);
     Flags |= CPU.architecture() == GuestArchitecture::X64 ? OpenLargeFileX64
                                                           : OpenLargeFileARM64;
@@ -155,15 +153,22 @@ LinuxFiles::procRecords(const OpenProcFile &File, ProcessResult &Result,
       << llvm::format_hex_no_prefix(M.Offset, 8) << ' '
       << llvm::format_hex_no_prefix(Major, 2) << ':'
       << llvm::format_hex_no_prefix(Minor, 2) << ' ' << Inode << ' ';
-    if (!M.Path.empty()) {
+    if (!M.Path.empty() || M.AnonymousName) {
       if (Line.size() < 72)
         Line.resize(72, ' ');
       L << ' ';
-      for (char C : M.Path)
-        if (C == '\n')
-          L << "\\012";
-        else
-          L << C;
+      if (!M.Path.empty()) {
+        for (char C : M.Path)
+          if (C == '\n')
+            L << "\\012";
+          else
+            L << C;
+      } else {
+        auto Name = Memory->procAnonymousName(M.AnonymousName);
+        if (!Name)
+          return Name.takeError();
+        L << *Name; // Legacy anonymous names do not escape newline bytes.
+      }
     }
     L << '\n';
     Records.emplace_back(M.Address, std::move(Line));

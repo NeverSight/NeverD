@@ -19,6 +19,9 @@ public:
     QJsonObject payload;
     enum RevisionPolicy { Latest, Exact } policy = Latest;
     QString expectedRevision;
+    // Visible content precedes ordinary reads within the same command fence.
+    // This affects scheduling only, never read identity or command order.
+    enum Priority { Normal, Visible } priority = Normal;
   };
   struct Limits {
     qsizetype maxJobs = 48;
@@ -83,6 +86,8 @@ public:
   bool available() const;
   QString projectId() const;
   QString revision() const;
+  /// The current context change is a confirmed local display-name commit.
+  bool localNamesOnly() const;
   quint64 sessionEpoch() const;
   // Monotonic within an open project; ordinary edit revisions do not reset it.
   bool analysisComplete() const;
@@ -106,6 +111,9 @@ signals:
   void pendingChanged();
   void idle();
   void loadProgress(const QJsonObject &payload);
+  /// Validated executor state, after subscribers have installed the reply.
+  /// Cached reads never republish an older snapshot.
+  void backgroundSnapshotReady(const QJsonObject &snapshot);
 
 private:
   struct State;

@@ -229,6 +229,17 @@ private:
     case ExprKind::Offsetof:
       return Printed{text(E->Begin, E->End), PrecAtom};
     case ExprKind::CompoundLiteral:
+      if (Opts.Dialect == SourceDialect::Cpp && E->Written->isRecord() &&
+          E->Written->Record->Anonymous) {
+        // C++ cannot define a record in a type specifier. Name the type
+        // through an unevaluated lambda; the initializer stays outside it.
+        const size_t TypeBegin = E->Text.data() - T.Source.data();
+        return Printed{"(decltype([] { " +
+                           text(TypeBegin, TypeBegin + E->Text.size()) +
+                           " __neverd_value{}; return __neverd_value; }()))" +
+                           expr(E->Ops.front()).Text,
+                       PrecAtom};
+      }
       return Printed{text(E->Begin, E->Ops.front()->Begin) + " " +
                          expr(E->Ops.front()).Text,
                      PrecAtom};

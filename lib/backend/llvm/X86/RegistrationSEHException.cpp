@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
-#include "neverd/backend/llvm/X86RegistrationSEHException.h"
+#include "neverd/backend/llvm/X86/X86RegistrationSEHException.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include <set>

@@ -75,6 +75,9 @@ struct RenderOptions {
   /// How builtins are named; the language's default when unset, or when
   /// the language does not take it.
   std::optional<BuiltinSpelling> Spelling;
+  /// Portable C prototypes retain integer keyword identity when the host has
+  /// the target width; otherwise they select the target's exact-width type.
+  bool PrototypeIntegerIdentity = false;
   /// A comment with each member's offset.
   bool Offsets = true;
   /// Offsets in hexadecimal rather than decimal.
@@ -122,6 +125,8 @@ struct EmbeddedC {
   std::vector<std::string> Types;
   /// The library's records Text only declares, by their names.
   std::vector<std::string> DeclaredTypes;
+  /// The library's types taken from the system headers instead of defined.
+  std::vector<std::string> HeaderTypes;
   /// The records the system's headers name by a typedef alone, which Text
   /// takes from them (`typedef struct {...} pthread_mutex_t;`), by their C
   /// names: a unit spells each by its name and declares no typedef of it,

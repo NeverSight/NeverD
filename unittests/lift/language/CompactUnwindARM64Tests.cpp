@@ -4,15 +4,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "CompactUnwindTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::macho_unwind;
 using namespace neverd::compact_unwind_test;
+
+namespace fixture {
+#define NEVERD_COMPACT_ARM64_FIXTURE_VALUE(Type, Name, Value)                  \
+  [[maybe_unused]] constexpr Type Name = Value;
+#include "CompactUnwindARM64Fixtures.def"
+} // namespace fixture
 
 //===----------------------------------------------------------------------===//
 // ARM64
@@ -77,6 +82,108 @@ TEST(CompactUnwindARM64, DwarfModeCarriesNoRegisters) {
   EXPECT_EQ(Entry.DwarfFDEOffset, 0x1234u);
   EXPECT_TRUE(Entry.SavedRegisterSlots.empty());
   EXPECT_FALSE(Entry.HasStackSize);
+}
+
+TEST(CompactUnwindARM64, PAuthLRPreservesSigningOffsetAndEveryRegisterPair) {
+  CompactUnwindEntry Entry;
+  ASSERT_TRUE(decodeEncoding(Arch::AArch64, fixture::kPAuthLRAllPairs, Entry));
+  EXPECT_EQ(Entry.Kind, CompactUnwindKind::FramePointer);
+  ASSERT_TRUE(Entry.ReturnAddressSigningOffset);
+  EXPECT_EQ(*Entry.ReturnAddressSigningOffset, fixture::kAllPairsSigningOffset);
+  const std::vector<int> ExpectedRegisters = {
+#define NEVERD_COMPACT_ARM64_FIXTURE_REGISTER(Number) Number,
+#include "CompactUnwindARM64Fixtures.def"
+  };
+  EXPECT_EQ(slotRegisters(Entry), ExpectedRegisters);
+  EXPECT_EQ(Entry.SavedGPRMask, fixture::kAllPairsGPRMask);
+  EXPECT_EQ(Entry.SavedFPRMask, fixture::kAllPairsFPRMask);
+  EXPECT_EQ(Entry.SemanticStatus, CompactUnwindSemanticStatus::Complete);
+  EXPECT_FALSE(Entry.HasStackSize);
+}
+
+TEST(CompactUnwindARM64, PAuthLRZeroSigningOffsetDiffersFromAbsent) {
+  CompactUnwindEntry Entry;
+  ASSERT_TRUE(decodeEncoding(Arch::AArch64, fixture::kPAuthLRFirst, Entry));
+  ASSERT_TRUE(Entry.ReturnAddressSigningOffset);
+  EXPECT_EQ(*Entry.ReturnAddressSigningOffset, fixture::kFirstSigningOffset);
+  ASSERT_TRUE(
+      decodeEncoding(Arch::AArch64, fixture::kFrameWithoutSigning, Entry));
+  EXPECT_FALSE(Entry.ReturnAddressSigningOffset);
+  EXPECT_FALSE(returnAddressSigningOffset(Arch::X64, fixture::kPAuthLRFirst));
+}
+
+TEST(CompactUnwindARM64, PAuthLRMaximumSigningOffsetUsesFourByteInstructions) {
+  CompactUnwindEntry Entry;
+  ASSERT_TRUE(decodeEncoding(Arch::AArch64, fixture::kPAuthLRMaxOffset, Entry));
+  ASSERT_TRUE(Entry.ReturnAddressSigningOffset);
+  EXPECT_EQ(*Entry.ReturnAddressSigningOffset, fixture::kMaxSigningOffset);
+  EXPECT_TRUE(isValidEncodingRange(
+      Arch::AArch64, fixture::kPAuthLRMaxOffset,
+      {fixture::kRangeBegin, fixture::kMaximumOffsetRangeEnd}));
+  EXPECT_FALSE(isValidEncodingRange(
+      Arch::AArch64, fixture::kPAuthLRMaxOffset,
+      {fixture::kRangeBegin, fixture::kTruncatedMaximumOffsetRangeEnd}));
+}
+
+TEST(CompactUnwindARM64, PAuthLRRequiresACompleteAlignedSigningInstruction) {
+  struct RangeCase {
+    const char *Name;
+    uint32_t Encoding;
+    ExceptionAddressRange Range;
+    bool Valid;
+  };
+  const RangeCase Cases[] = {
+#define NEVERD_COMPACT_ARM64_FIXTURE_RANGE_CASE(Name, Encoding, Begin, End,    \
+                                                Valid)                         \
+  {#Name, Encoding, {Begin, End}, Valid},
+#include "CompactUnwindARM64Fixtures.def"
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    EXPECT_EQ(isValidEncodingRange(Arch::AArch64, Case.Encoding, Case.Range),
+              Case.Valid);
+  }
+}
+
+TEST(CompactUnwindARM64, ReservedPayloadCannotAcquireSigningOrRegisterFacts) {
+  const uint32_t Encodings[] = {
+#define NEVERD_COMPACT_ARM64_FIXTURE_INVALID_ENCODING(Encoding) Encoding,
+#include "CompactUnwindARM64Fixtures.def"
+  };
+  for (uint32_t Encoding : Encodings) {
+    SCOPED_TRACE(Encoding);
+    CompactUnwindEntry Entry;
+    ASSERT_TRUE(
+        decodeEncoding(Arch::AArch64, fixture::kPAuthLRNextPair, Entry));
+    ASSERT_TRUE(Entry.ReturnAddressSigningOffset);
+    ASSERT_FALSE(Entry.SavedRegisterSlots.empty());
+    EXPECT_FALSE(decodeEncoding(Arch::AArch64, Encoding, Entry));
+    EXPECT_EQ(Entry.Kind, CompactUnwindKind::Unknown);
+    EXPECT_EQ(Entry.SemanticStatus, CompactUnwindSemanticStatus::Partial);
+    EXPECT_FALSE(Entry.ReturnAddressSigningOffset);
+    EXPECT_TRUE(Entry.SavedRegisterSlots.empty());
+    EXPECT_EQ(Entry.SavedGPRMask, fixture::kNoSavedRegisters);
+    EXPECT_EQ(Entry.SavedFPRMask, fixture::kNoSavedRegisters);
+    EXPECT_FALSE(isValidEncodingRange(
+        Arch::AArch64, Encoding, {fixture::kRangeBegin, fixture::kRangeEnd}));
+  }
+}
+
+TEST(CompactUnwindARM64, SharedPayloadContractIncludesOnlyPublishedBits) {
+  struct PayloadCase {
+    uint32_t Encoding;
+    uint32_t Mask;
+  };
+  const PayloadCase Cases[] = {
+#define NEVERD_COMPACT_ARM64_FIXTURE_PAYLOAD_CASE(Encoding, Mask)              \
+  {Encoding, Mask},
+#include "CompactUnwindARM64Fixtures.def"
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Encoding);
+    EXPECT_EQ(getARM64EncodingPayloadMask(Case.Encoding), Case.Mask);
+  }
+  EXPECT_FALSE(getARM64EncodingPayloadMask(fixture::kUnknownMode));
 }
 
 } // namespace

@@ -1,0 +1,52 @@
+//===- AArch64AddressMemoryOperations.def - Memory identities -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Frozen legacy, vector and immediate lists keep their serialized append
+/// positions independent. Specialized hooks default to the common metadata
+/// hook so shape, effect and spelling consumers share one operation inventory.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_A64_ADDRESS_MEMORY_OPERATION
+#define NEVERD_A64_ADDRESS_MEMORY_OPERATION(Id, Mnemonic, Store, Vector)
+#endif
+#ifndef NEVERD_A64_ADDRESS_VECTOR_MEMORY_OPERATION
+#define NEVERD_A64_ADDRESS_VECTOR_MEMORY_OPERATION(Id, Mnemonic, Store)        \
+  NEVERD_A64_ADDRESS_MEMORY_OPERATION(Id, Mnemonic, Store, true)
+#endif
+
+#ifndef NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION
+#define NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION(Id, Mnemonic, Store,     \
+                                                      Vector)                  \
+  NEVERD_A64_ADDRESS_MEMORY_OPERATION(Id, Mnemonic, Store, Vector)
+#endif
+
+NEVERD_A64_ADDRESS_MEMORY_OPERATION(A64_Load64RegisterOffset, "ldr", false,
+                                    false)
+NEVERD_A64_ADDRESS_MEMORY_OPERATION(A64_LoadRegisterOffset, "scalar.load",
+                                    false, false)
+NEVERD_A64_ADDRESS_MEMORY_OPERATION(A64_StoreRegisterOffset, "scalar.store",
+                                    true, false)
+NEVERD_A64_ADDRESS_VECTOR_MEMORY_OPERATION(A64_VectorLoadRegisterOffset,
+                                           "vector.load", false)
+NEVERD_A64_ADDRESS_VECTOR_MEMORY_OPERATION(A64_VectorStoreRegisterOffset,
+                                           "vector.store", true)
+
+NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION(A64_LoadImmediate,
+                                              "scalar.load.immediate", false,
+                                              false)
+NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION(A64_StoreImmediate,
+                                              "scalar.store.immediate", true,
+                                              false)
+NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION(A64_VectorLoadImmediate,
+                                              "vector.load.immediate", false,
+                                              true)
+NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION(A64_VectorStoreImmediate,
+                                              "vector.store.immediate", true,
+                                              true)
+
+#undef NEVERD_A64_ADDRESS_IMMEDIATE_MEMORY_OPERATION
+#undef NEVERD_A64_ADDRESS_VECTOR_MEMORY_OPERATION
+#undef NEVERD_A64_ADDRESS_MEMORY_OPERATION

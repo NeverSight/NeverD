@@ -1,4 +1,4 @@
-//===- COFFStackProbe.cpp - Checked PE32 allocating probes --------------===//
+//===- COFFStackProbe.cpp - Checked PE stack probes ---------------------===//
 //
 // NeverD Decompiler
 //
@@ -46,6 +46,36 @@ getCheckedX86AllocatingStackProbeCall(const BinaryImage &Image, va_t CallVA) {
       !std::equal(std::begin(Bytes), std::end(Bytes), Code->begin()))
     return std::nullopt;
   return X86AllocatingStackProbeCall{Prefix, Helper, CallVA, Allocation};
+}
+
+std::optional<X64StackProbeCall>
+getCheckedX64StackProbeCall(const BinaryImage &Image, va_t CallVA) {
+  if (Image.Arch != Arch::X64 || Image.Bits != Bitness::Bits64 ||
+      Image.Format != BinaryFormat::COFF || CallVA > InvalidVA - 5)
+    return std::nullopt;
+  const auto Caller = readImmutableCodeBytes(Image, CallVA, 5);
+  if (!Caller || (*Caller)[0] != 0xe8)
+    return std::nullopt;
+  const auto Target = registration_detail::addSignedOffset(
+      CallVA + 5, readLE<int32_t>(Caller->data() + 1));
+  // Save RCX/RAX, walk down by 4096 while unsigned RAX exceeds one page,
+  // touch the final partial page, and restore both registers. Authenticate
+  // both branches, both memory touches and the only return, not a prefix or
+  // a symbol spelling. In particular a signed comparison gives no bound.
+  static constexpr uint8_t Bytes[] = {
+      0x51, 0x50, 0x48, 0x3d, 0x00, 0x10, 0x00, 0x00, 0x48, 0x8d,
+      0x4c, 0x24, 0x18, 0x72, 0x19, 0x48, 0x81, 0xe9, 0x00, 0x10,
+      0x00, 0x00, 0x48, 0x83, 0x09, 0x00, 0x48, 0x2d, 0x00, 0x10,
+      0x00, 0x00, 0x48, 0x3d, 0x00, 0x10, 0x00, 0x00, 0x77, 0xe7,
+      0x48, 0x29, 0xc1, 0x48, 0x83, 0x09, 0x00, 0x58, 0x59, 0xc3};
+  if (!Target || *Target > InvalidVA - sizeof(Bytes))
+    return std::nullopt;
+  const auto Code = readImmutableCodeBytes(Image, *Target, sizeof(Bytes));
+  const ExceptionAddressRange Helper{*Target, *Target + sizeof(Bytes)};
+  if (!Code || Helper.overlaps({CallVA, CallVA + 5}) ||
+      !std::equal(std::begin(Bytes), std::end(Bytes), Code->begin()))
+    return std::nullopt;
+  return X64StackProbeCall{Helper};
 }
 
 } // namespace neverd::coff_loader

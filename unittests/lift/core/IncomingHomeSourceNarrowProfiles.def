@@ -1,0 +1,63 @@
+//===- IncomingHomeSourceNarrowProfiles.def - Narrow matrix ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// The unchanged narrow stack matrix, in bounded independent test cases.
+//===----------------------------------------------------------------------===//
+
+#ifndef INCOMING_HOME_NARROW_PROFILE
+#define INCOMING_HOME_NARROW_PROFILE(Name, Architecture, Format, Bytes, Signed)
+#endif
+
+INCOMING_HOME_NARROW_PROFILE(X64COFFByteUnsigned, Arch::X64, BinaryFormat::COFF,
+                             1, false)
+INCOMING_HOME_NARROW_PROFILE(X64COFFByteSigned, Arch::X64, BinaryFormat::COFF,
+                             1, true)
+INCOMING_HOME_NARROW_PROFILE(X64COFFHalfUnsigned, Arch::X64, BinaryFormat::COFF,
+                             2, false)
+INCOMING_HOME_NARROW_PROFILE(X64COFFHalfSigned, Arch::X64, BinaryFormat::COFF,
+                             2, true)
+INCOMING_HOME_NARROW_PROFILE(X64COFFWordUnsigned, Arch::X64, BinaryFormat::COFF,
+                             4, false)
+INCOMING_HOME_NARROW_PROFILE(X64COFFWordSigned, Arch::X64, BinaryFormat::COFF,
+                             4, true)
+INCOMING_HOME_NARROW_PROFILE(X64ELFByteUnsigned, Arch::X64, BinaryFormat::ELF,
+                             1, false)
+INCOMING_HOME_NARROW_PROFILE(X64ELFByteSigned, Arch::X64, BinaryFormat::ELF, 1,
+                             true)
+INCOMING_HOME_NARROW_PROFILE(X64ELFHalfUnsigned, Arch::X64, BinaryFormat::ELF,
+                             2, false)
+INCOMING_HOME_NARROW_PROFILE(X64ELFHalfSigned, Arch::X64, BinaryFormat::ELF, 2,
+                             true)
+INCOMING_HOME_NARROW_PROFILE(X64ELFWordUnsigned, Arch::X64, BinaryFormat::ELF,
+                             4, false)
+INCOMING_HOME_NARROW_PROFILE(X64ELFWordSigned, Arch::X64, BinaryFormat::ELF, 4,
+                             true)
+INCOMING_HOME_NARROW_PROFILE(A64COFFByteUnsigned, Arch::AArch64,
+                             BinaryFormat::COFF, 1, false)
+INCOMING_HOME_NARROW_PROFILE(A64COFFByteSigned, Arch::AArch64,
+                             BinaryFormat::COFF, 1, true)
+INCOMING_HOME_NARROW_PROFILE(A64COFFHalfUnsigned, Arch::AArch64,
+                             BinaryFormat::COFF, 2, false)
+INCOMING_HOME_NARROW_PROFILE(A64COFFHalfSigned, Arch::AArch64,
+                             BinaryFormat::COFF, 2, true)
+INCOMING_HOME_NARROW_PROFILE(A64COFFWordUnsigned, Arch::AArch64,
+                             BinaryFormat::COFF, 4, false)
+INCOMING_HOME_NARROW_PROFILE(A64COFFWordSigned, Arch::AArch64,
+                             BinaryFormat::COFF, 4, true)
+INCOMING_HOME_NARROW_PROFILE(A64ELFByteUnsigned, Arch::AArch64,
+                             BinaryFormat::ELF, 1, false)
+INCOMING_HOME_NARROW_PROFILE(A64ELFByteSigned, Arch::AArch64, BinaryFormat::ELF,
+                             1, true)
+INCOMING_HOME_NARROW_PROFILE(A64ELFHalfUnsigned, Arch::AArch64,
+                             BinaryFormat::ELF, 2, false)
+INCOMING_HOME_NARROW_PROFILE(A64ELFHalfSigned, Arch::AArch64, BinaryFormat::ELF,
+                             2, true)
+INCOMING_HOME_NARROW_PROFILE(A64ELFWordUnsigned, Arch::AArch64,
+                             BinaryFormat::ELF, 4, false)
+INCOMING_HOME_NARROW_PROFILE(A64ELFWordSigned, Arch::AArch64, BinaryFormat::ELF,
+                             4, true)
+
+#undef INCOMING_HOME_NARROW_PROFILE

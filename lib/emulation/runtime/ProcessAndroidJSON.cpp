@@ -5,9 +5,11 @@
 //===----------------------------------------------------------------------===//
 #include "ProcessAndroidJSON.h"
 
+#include "../os/linux/android/AndroidDlfcn.h"
 #include "../os/linux/android/AndroidJavaLibrary.h"
 #include "../os/linux/android/AndroidLog.h"
 #include "../os/linux/android/AndroidObservation.h"
+#include "ProcessJSONInteger.h"
 #include "ProcessNetworkJSON.h"
 
 #include "neverd/dalvik/Budget.h"
@@ -16,6 +18,12 @@
 #include "neverd/emulation/ProcessReportFields.h"
 
 #include "llvm/ADT/StringExtras.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace neverd::emulation {
 namespace {
@@ -44,6 +52,243 @@ llvm::Expected<std::string> string(const llvm::json::Value &V,
   return S->str();
 }
 std::string bits(uint64_t V) { return llvm::utohexstr(V, true); }
+llvm::Expected<int32_t> integer32(const llvm::json::Value &Value,
+                                  llvm::StringRef Name) {
+  auto Integer = process_json::integer<int32_t>(Value);
+  if (!Integer)
+    return invalid(Name);
+  return *Integer;
+}
+llvm::Expected<mobile::dalvik::AndroidApplicationSnapshot::ServiceManager>
+serviceManager(const llvm::json::Value &Value) {
+  using State = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager;
+  const auto *Object = Value.getAsObject();
+  if (!Object)
+    return invalid(field::ApplicationServiceManager);
+  State Result;
+  auto Key = [](const llvm::json::Value &Value)
+      -> llvm::Expected<std::optional<uint32_t>> {
+    if (Value.kind() == llvm::json::Value::Null)
+      return std::optional<uint32_t>{};
+    auto Number = process_json::integer<uint32_t>(Value);
+    if (!Number)
+      return invalid(field::ApplicationServiceManager);
+    return std::optional<uint32_t>(*Number);
+  };
+  for (const auto &[Name, Value] : *Object) {
+    if (Name == "binder_proxies") {
+      const auto *Array = Value.getAsArray();
+      if (!Array ||
+          Array->size() > ::neverd::limits::dalvik::kMaxAndroidBinderProxies)
+        return invalid(field::ApplicationServiceManager);
+      for (const auto &Value : *Array) {
+        const auto *Proxy = Value.getAsObject();
+        if (!Proxy || !Proxy->get("key"))
+          return invalid(field::ApplicationServiceManager);
+        auto Number = Key(*Proxy->get("key"));
+        if (!Number)
+          return Number.takeError();
+        if (!*Number)
+          return invalid(field::ApplicationServiceManager);
+        State::BinderProxy Entry;
+        Entry.key = **Number;
+        for (const auto &[Name, Value] : *Proxy) {
+          if (Name == "key")
+            continue;
+          if (Name != "warn_on_blocking" || !Value.getAsBoolean())
+            return invalid(field::ApplicationServiceManager);
+          Entry.warn_on_blocking = *Value.getAsBoolean();
+        }
+        Result.binder_proxies.push_back(std::move(Entry));
+      }
+    } else if (Name == "cache") {
+      const auto *Array = Value.getAsArray();
+      if (!Array ||
+          Array->size() >
+              ::neverd::limits::dalvik::kMaxAndroidServiceCacheEntries)
+        return invalid(field::ApplicationServiceManager);
+      auto &Cache = Result.cache.emplace();
+      for (const auto &Value : *Array) {
+        const auto *Pair = Value.getAsObject();
+        if (!Pair || Pair->size() != 2 || !Pair->get("name") ||
+            !Pair->get("binder"))
+          return invalid(field::ApplicationServiceManager);
+        State::CacheEntry Entry;
+        const auto &Name = *Pair->get("name");
+        if (auto Text = Name.getAsString())
+          Entry.name = Text->str();
+        else if (Name.kind() != llvm::json::Value::Null)
+          return invalid(field::ApplicationServiceManager);
+        auto Binder = Key(*Pair->get("binder"));
+        if (!Binder)
+          return Binder.takeError();
+        Entry.binder = *Binder;
+        Cache.push_back(std::move(Entry));
+      }
+    } else if (Name == "lookup_results") {
+      const auto *Array = Value.getAsArray();
+      if (!Array ||
+          Array->size() >
+              ::neverd::limits::dalvik::kMaxAndroidServiceLookupResults)
+        return invalid(field::ApplicationServiceManager);
+      for (const auto &Value : *Array) {
+        const auto *Query = Value.getAsObject();
+        if (!Query || Query->size() != 4 || !Query->get("operation") ||
+            !Query->get("manager") || !Query->get("name") ||
+            !Query->get("binder"))
+          return invalid(field::ApplicationServiceManager);
+        State::LookupResult Entry;
+        auto Operation = Query->getString("operation");
+        if (!Operation || (*Operation != "get" && *Operation != "check"))
+          return invalid(field::ApplicationServiceManager);
+        Entry.operation = *Operation == "get"
+                              ? State::LookupResult::Operation::Get
+                              : State::LookupResult::Operation::Check;
+        auto Manager = Key(*Query->get("manager"));
+        if (!Manager)
+          return Manager.takeError();
+        if (!*Manager)
+          return invalid(field::ApplicationServiceManager);
+        Entry.manager = **Manager;
+        const auto &Name = *Query->get("name");
+        if (auto Text = Name.getAsString())
+          Entry.name = Text->str();
+        else if (Name.kind() != llvm::json::Value::Null)
+          return invalid(field::ApplicationServiceManager);
+        auto Binder = Key(*Query->get("binder"));
+        if (!Binder)
+          return Binder.takeError();
+        Entry.binder = *Binder;
+        Result.lookup_results.push_back(std::move(Entry));
+      }
+    } else if (Name == "manager_proxy" || Name == "context_object") {
+      auto Binder = Key(Value);
+      if (!Binder)
+        return Binder.takeError();
+      (Name == "manager_proxy" ? Result.manager_proxy : Result.context_object)
+          .emplace(*Binder);
+    } else {
+      return invalid(field::ApplicationServiceManager);
+    }
+  }
+  return Result;
+}
+llvm::Expected<mobile::dalvik::AndroidApplicationSnapshot::ApplicationInfo>
+applicationInfo(const llvm::json::Value &Value) {
+  const auto *Info = Value.getAsObject();
+  if (!Info || !Info->get("source_dir"))
+    return invalid(field::ApplicationInfo);
+  for (const auto &[Key, Entry] : *Info)
+    if (Key != "source_dir" && Key != "native_library_dir" &&
+        Key != "non_localized_label" && Key != "target_sdk_version" &&
+        Key != "split_source_dirs" && Key != "split_public_source_dirs")
+      return invalid(field::ApplicationInfo);
+  mobile::dalvik::AndroidApplicationSnapshot::ApplicationInfo Result;
+  const auto &Entry = *Info->get("source_dir");
+  if (auto Text = Entry.getAsString())
+    Result.source_dir = Text->str();
+  else if (Entry.kind() != llvm::json::Value::Null)
+    return invalid(field::ApplicationInfo);
+  for (auto [Name, Destination] :
+       {std::pair{"native_library_dir", &Result.native_library_dir},
+        {"non_localized_label", &Result.non_localized_label}}) {
+    if (const auto *Initial = Info->get(Name)) {
+      auto &Value = Destination->emplace();
+      if (auto Text = Initial->getAsString())
+        Value = Text->str();
+      else if (Initial->kind() != llvm::json::Value::Null)
+        return invalid(field::ApplicationInfo);
+    }
+  }
+  for (auto [Name, Destination] :
+       {std::pair{"split_source_dirs", &Result.split_source_dirs},
+        {"split_public_source_dirs", &Result.split_public_source_dirs}}) {
+    const auto *Initial = Info->get(Name);
+    if (!Initial)
+      continue;
+    auto &Values = Destination->emplace();
+    if (Initial->kind() != llvm::json::Value::Null) {
+      const auto *Array = Initial->getAsArray();
+      if (!Array ||
+          Array->size() >
+              ::neverd::limits::dalvik::kMaxAndroidApplicationSplitSources)
+        return invalid(field::ApplicationInfo);
+      Values.emplace();
+      for (const auto &Element : *Array) {
+        if (auto Text = Element.getAsString())
+          Values->emplace_back(Text->str());
+        else if (Element.kind() == llvm::json::Value::Null)
+          Values->emplace_back();
+        else
+          return invalid(field::ApplicationInfo);
+      }
+    }
+  }
+  if (const auto *Initial = Info->get("target_sdk_version")) {
+    auto Value = integer32(*Initial, field::ApplicationInfo);
+    if (!Value)
+      return Value.takeError();
+    Result.target_sdk_version = *Value;
+  }
+  return Result;
+}
+llvm::Expected<mobile::dalvik::AndroidApplicationSnapshot::PackageInfo>
+packageInfo(const llvm::json::Value &Value) {
+  const auto *Info = Value.getAsObject();
+  if (!Info)
+    return invalid(field::PackageInfoQueries);
+  mobile::dalvik::AndroidApplicationSnapshot::PackageInfo Result;
+  for (const auto &[Key, Entry] : *Info) {
+    if (Key == field::ApplicationInfo) {
+      auto &Nested = Result.application_info.emplace();
+      if (Entry.kind() != llvm::json::Value::Null) {
+        auto Decoded = applicationInfo(Entry);
+        if (!Decoded)
+          return Decoded.takeError();
+        Nested = std::move(*Decoded);
+      }
+    } else if (Key == "version_code") {
+      auto Code = integer32(Entry, field::PackageInfoQueries);
+      if (!Code)
+        return Code.takeError();
+      Result.version_code = *Code;
+    } else if (Key == "package_name" || Key == "version_name") {
+      auto &Text =
+          (Key == "package_name" ? Result.package_name : Result.version_name)
+              .emplace();
+      if (auto String = Entry.getAsString())
+        Text = String->str();
+      else if (Entry.kind() != llvm::json::Value::Null)
+        return invalid(field::PackageInfoQueries);
+    } else
+      return invalid(field::PackageInfoQueries);
+  }
+  return Result;
+}
+template <class Query, class Decode>
+llvm::Error packageQueries(const llvm::json::Value &Value, llvm::StringRef Key,
+                           std::vector<Query> &Result, size_t Maximum,
+                           Decode decode) {
+  const auto *Queries = Value.getAsArray();
+  if (!Queries || Queries->size() > Maximum)
+    return invalid(Key);
+  for (const auto &Entry : *Queries) {
+    const auto *Record = Entry.getAsObject();
+    if (!Record || Record->size() != 3 || !Record->getString("package_name") ||
+        !Record->get("flags") || !Record->get("info"))
+      return invalid(Key);
+    auto Flags = process_json::integer<int32_t>(*Record->get("flags"));
+    if (!Flags)
+      return invalid(Key);
+    auto Info = decode(*Record->get("info"));
+    if (!Info)
+      return Info.takeError();
+    Result.push_back(
+        {Record->getString("package_name")->str(), *Flags, std::move(*Info)});
+  }
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::vector<NativeMemoryRead>>
 memoryReads(const llvm::json::Value &Value) {
   const auto *Array = Value.getAsArray();
@@ -218,6 +463,33 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
       (Name == field::Initialize ? Out.Initialize
        : Name == field::JNI      ? Out.JNI
                                  : Out.DrainThreads) = *B;
+    } else if (Name == field::EventLogWrites) {
+      const auto *Writes = V.getAsArray();
+      if (!Writes || Writes->size() > android_model::LogRecordLimit)
+        return invalid(Name);
+      Out.EventLogWrites.emplace();
+      uint64_t Remaining = android_model::LogSnapshotLimit;
+      for (const auto &Item : *Writes) {
+        const auto *Write = Item.getAsObject();
+        if (!Write || Write->size() != 2)
+          return invalid(Name);
+        const auto Payload = Write->getString(field::LogPayload);
+        const auto *Result = Write->get(field::Result);
+        if (!Payload || !Result || Payload->size() % 2 ||
+            Payload->size() / 2 > android_model::LogPayloadLimit ||
+            !llvm::all_of(*Payload, llvm::isHexDigit))
+          return invalid(Name);
+        auto Returned = integer32(*Result, field::Result);
+        if (!Returned)
+          return Returned.takeError();
+        const uint64_t Size = Payload->size() / 2 + sizeof(int32_t);
+        if (Size > Remaining)
+          return invalid(Name);
+        Remaining -= Size;
+        const auto Bytes = llvm::fromHex(*Payload);
+        Out.EventLogWrites->push_back(
+            {{Bytes.begin(), Bytes.end()}, *Returned});
+      }
     } else if (Name == field::LogRecords) {
       const auto *Records = V.getAsArray();
       if (!Records || Records->size() > android_model::LogRecordLimit)
@@ -270,7 +542,163 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
       mobile::dalvik::AndroidApplicationSnapshot Snapshot;
       bool HasPhase = false;
       for (const auto &[Key, Value] : *Input) {
-        if (Key == field::ApplicationLoaderEstablished) {
+        if (Key == field::ApplicationServiceManager) {
+          auto State = serviceManager(Value);
+          if (!State)
+            return State.takeError();
+          Snapshot.service_manager = std::move(*State);
+          continue;
+        } else if (Key == field::ApplicationURLFailureHandlers) {
+          const auto *Handlers = Value.getAsArray();
+          if (!Handlers ||
+              Handlers->size() >
+                  ::neverd::limits::dalvik::kMaxAndroidURLFailureHandlers)
+            return invalid(Key);
+          for (const auto &Entry : *Handlers) {
+            const auto *Handler = Entry.getAsObject();
+            if (!Handler || Handler->size() != 2 ||
+                !Handler->getString("scheme") || !Handler->get("message"))
+              return invalid(Key);
+            mobile::dalvik::AndroidApplicationSnapshot::URLHandlerFailure H;
+            H.scheme = Handler->getString("scheme")->str();
+            const auto &Message = *Handler->get("message");
+            if (auto Text = Message.getAsString())
+              H.message = Text->str();
+            else if (Message.kind() != llvm::json::Value::Null)
+              return invalid(Key);
+            Snapshot.url_open_failure_handlers.push_back(std::move(H));
+          }
+          continue;
+        } else if (Key == field::ApplicationInitialMainQueue) {
+          const auto *Queue = Value.getAsObject();
+          if (!Queue || !Queue->getBoolean("blocked"))
+            return invalid(Key);
+          for (const auto &Member : *Queue)
+            if (Member.first != "blocked" &&
+                Member.first != field::ApplicationQueueNativeCallbacksEmpty)
+              return invalid(Key);
+          auto &State = Snapshot.initial_main_queue.emplace(
+              mobile::dalvik::AndroidApplicationSnapshot::EmptyMessageQueue{});
+          State.blocked = *Queue->getBoolean("blocked");
+          if (const auto *Callbacks =
+                  Queue->get(field::ApplicationQueueNativeCallbacksEmpty)) {
+            const auto Empty = Callbacks->getAsBoolean();
+            if (!Empty)
+              return invalid(Key);
+            State.native_callbacks_empty = *Empty;
+          }
+          continue;
+        } else if (Key == field::ApplicationMessagePoolEmpty) {
+          auto Empty = Value.getAsBoolean();
+          if (!Empty)
+            return invalid(Key);
+          Snapshot.initial_message_pool_empty = *Empty;
+          continue;
+        } else if (Key == field::ApplicationMainLooperPrepared) {
+          auto Prepared = Value.getAsBoolean();
+          if (!Prepared)
+            return invalid(Key);
+          Snapshot.main_looper_prepared = *Prepared;
+          continue;
+        } else if (Key == field::ApplicationLoaderPaths ||
+                   Key == field::SystemLoaderPaths) {
+          const auto *Paths = Value.getAsObject();
+          if (!Paths || Paths->size() != 3)
+            return invalid(Key);
+          auto &State = Key == field::ApplicationLoaderPaths
+                            ? Snapshot.application_loader_paths.emplace()
+                            : Snapshot.system_loader_paths.emplace();
+          for (const auto &[Kind, Entry] : *Paths) {
+            auto *Destination = Kind == "dex_zip_files" ? &State.dex_zip_files
+                                : Kind == "native_library_directories"
+                                    ? &State.native_library_directories
+                                : Kind == "system_native_library_directories"
+                                    ? &State.system_native_library_directories
+                                    : nullptr;
+            const auto *List = Entry.getAsArray();
+            if (!Destination || !List ||
+                List->size() >
+                    ::neverd::limits::dalvik::kMaxAndroidClassLoaderPaths)
+              return invalid(Key);
+            for (const auto &Element : *List) {
+              auto Text = Element.getAsString();
+              if (!Text)
+                return invalid(Key);
+              Destination->push_back(Text->str());
+            }
+          }
+          continue;
+        } else if (Key == field::ApplicationDefaultLocale) {
+          const auto *Locale = Value.getAsObject();
+          if (!Locale)
+            return invalid(Key);
+          auto &State = Snapshot.default_locale.emplace();
+          for (const auto &[Component, Entry] : *Locale) {
+            auto Text = Entry.getAsString();
+            if (!Text || (Component != "language" && Component != "country"))
+              return invalid(Key);
+            (Component == "language" ? State.language : State.country) =
+                Text->str();
+          }
+          continue;
+        } else if (Key == field::ApplicationSecureSettingsCache ||
+                   Key == field::ApplicationGlobalSettingsCache) {
+          const bool Secure = Key == field::ApplicationSecureSettingsCache;
+          const char *Setting = Secure ? "android_id" : "adb_enabled";
+          const auto *Cache = Value.getAsObject();
+          if (!Cache || Cache->size() != 1 || !Cache->get(Setting))
+            return invalid(Key);
+          const auto &Entry = *Cache->get(Setting);
+          auto &CachedValue =
+              Secure ? Snapshot.secure_settings_cache.emplace().android_id
+                     : Snapshot.global_settings_cache.emplace().adb_enabled;
+          if (auto Text = Entry.getAsString())
+            CachedValue = Text->str();
+          else if (Entry.kind() != llvm::json::Value::Null)
+            return invalid(Key);
+          continue;
+        } else if (Key == field::ApplicationInfo) {
+          auto Info = applicationInfo(Value);
+          if (!Info)
+            return Info.takeError();
+          Snapshot.application_info = std::move(*Info);
+          continue;
+        } else if (Key == field::ApplicationInfoQueries ||
+                   Key == field::PackageInfoQueries) {
+          auto Error =
+              Key == field::ApplicationInfoQueries
+                  ? packageQueries(Value, Key,
+                                   Snapshot.application_info_queries,
+                                   ::neverd::limits::dalvik::
+                                       kMaxAndroidApplicationInfoQueries,
+                                   applicationInfo)
+                  : packageQueries(
+                        Value, Key, Snapshot.package_info_queries,
+                        ::neverd::limits::dalvik::kMaxAndroidPackageInfoQueries,
+                        packageInfo);
+          if (Error)
+            return std::move(Error);
+          continue;
+        } else if (Key == field::ApplicationPackageResourcePath) {
+          auto &Path = Snapshot.package_resource_path.emplace();
+          if (auto Text = Value.getAsString())
+            Path = Text->str();
+          else if (Value.kind() != llvm::json::Value::Null)
+            return invalid(Key);
+          continue;
+        } else if (Key == field::PackageItemForceSafeLabels) {
+          auto Force = Value.getAsBoolean();
+          if (!Force)
+            return invalid(Key);
+          Snapshot.package_item_force_safe_labels = *Force;
+          continue;
+        } else if (Key == field::ApplicationPackageManagerAvailable) {
+          auto Available = Value.getAsBoolean();
+          if (!Available)
+            return invalid(Key);
+          Snapshot.package_manager_available = *Available;
+          continue;
+        } else if (Key == field::ApplicationLoaderEstablished) {
           auto Established = Value.getAsBoolean();
           if (!Established)
             return invalid(Key);
@@ -287,8 +715,11 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
           for (const auto &Entry : *Failures) {
             const auto *Failure = Entry.getAsObject();
             if (!Failure || Failure->size() != 3 ||
-                !Failure->getString("loader") ||
-                !Failure->getString("binary_name") || !Failure->get("message"))
+                !Failure->getString("loader") || !Failure->get("message"))
+              return invalid(Key);
+            auto BinaryName = Failure->getString("binary_name");
+            auto ExactQuery = Failure->getString("exact_query");
+            if (bool(BinaryName) == bool(ExactQuery))
               return invalid(Key);
             using Outcome =
                 mobile::dalvik::AndroidApplicationSnapshot::ClassLookupFailure;
@@ -302,7 +733,10 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
               Result.loader = Outcome::Loader::Application;
             else
               return invalid(Key);
-            Result.binary_name = Failure->getString("binary_name")->str();
+            if (ExactQuery)
+              Result.exact_query = ExactQuery->str();
+            else
+              Result.binary_name = BinaryName->str();
             const auto &Message = *Failure->get("message");
             if (auto Text = Message.getAsString())
               Result.message = Text->str();
@@ -372,6 +806,57 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
       } catch (const mobile::Error &) {
         return invalid(field::ApplicationClassLookupFailures);
       }
+      try {
+        mobile::dalvik::validateAndroidSecureSettingsCache(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationSecureSettingsCache);
+      }
+      try {
+        mobile::dalvik::validateAndroidGlobalSettingsCache(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationGlobalSettingsCache);
+      }
+      try {
+        mobile::dalvik::validateAndroidApplicationInfo(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationInfo);
+      }
+      try {
+        mobile::dalvik::validateAndroidApplicationInfoQueries(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationInfoQueries);
+      }
+      try {
+        mobile::dalvik::validateAndroidPackageResourcePath(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationPackageResourcePath);
+      }
+      try {
+        mobile::dalvik::validateAndroidPackageInfoQueries(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::PackageInfoQueries);
+      }
+      try {
+        mobile::dalvik::validateAndroidDefaultLocale(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationDefaultLocale);
+      }
+      try {
+        mobile::dalvik::validateAndroidClassLoaderPaths(Snapshot);
+        mobile::dalvik::validateAndroidMessageQueue(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationSnapshot);
+      }
+      try {
+        mobile::dalvik::validateAndroidServiceManager(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationServiceManager);
+      }
+      try {
+        mobile::dalvik::validateAndroidURLHandlers(Snapshot);
+      } catch (const mobile::Error &) {
+        return invalid(field::ApplicationURLFailureHandlers);
+      }
       Out.Application = std::move(Snapshot);
     } else if (Name == field::JNIClassLookupFailures) {
       const auto *Failures = V.getAsObject();
@@ -423,6 +908,11 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
           return invalid(Name);
         Out.Properties.emplace(Key.str(), std::move(*S));
       }
+    } else if (Name == field::EnvironmentVector) {
+      auto Address = number(V, Name);
+      if (!Address)
+        return Address.takeError();
+      Out.EnvironmentVector = *Address;
     } else if (Name == field::AuxiliaryVector) {
       const auto *Entries = V.getAsArray();
       if (!Entries)
@@ -455,6 +945,43 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
         return Label.takeError();
       Out.FixedTimeZone =
           AndroidFixedTimeZone{int32_t(*Offset), std::move(*Label)};
+    } else if (Name == field::DladdrObservations) {
+      const auto *Entries = V.getAsArray();
+      if (!Entries ||
+          Entries->size() > android_model::dladdr_model::MaximumRecords)
+        return invalid(Name);
+      Out.DladdrObservations.emplace();
+      for (const auto &Entry : *Entries) {
+        const auto *Record = Entry.getAsObject();
+        if (!Record || Record->size() != 5 || !Record->get(field::Address) ||
+            !Record->get(field::DladdrImageBase) ||
+            !Record->get(field::DladdrImageName) ||
+            !Record->get(field::DladdrSymbolName) ||
+            !Record->get(field::DladdrSymbolAddress))
+          return invalid(Name);
+        NativeDladdrObservation O;
+        for (auto [Key, Destination] :
+             {std::pair{field::Address, &O.Address},
+              {field::DladdrImageBase, &O.ImageBase},
+              {field::DladdrSymbolAddress, &O.SymbolAddress}}) {
+          auto N = number(*Record->get(Key), Name);
+          if (!N)
+            return N.takeError();
+          *Destination = *N;
+        }
+        auto Text = string(*Record->get(field::DladdrImageName), Name);
+        if (!Text)
+          return Text.takeError();
+        O.ImageName = std::move(*Text);
+        if (Record->get(field::DladdrSymbolName)->kind() !=
+            llvm::json::Value::Null) {
+          auto Symbol = string(*Record->get(field::DladdrSymbolName), Name);
+          if (!Symbol)
+            return Symbol.takeError();
+          O.SymbolName = std::move(*Symbol);
+        }
+        Out.DladdrObservations->push_back(std::move(O));
+      }
     } else if (Name == field::DefaultScope) {
       const auto *Scope = V.getAsArray();
       if (!Scope)
@@ -498,11 +1025,24 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
         return invalid(Name);
       }
       Out.JavaLibrary = std::move(*S);
-    } else if (Name == field::ObserveJavaState) {
+    } else if (Name == field::ObserveJavaState ||
+               Name == field::ObserveCPUState ||
+               Name == field::ObserveThreadCPUStates ||
+               Name == field::ObserveMemoryAtStop ||
+               Name == field::ObserveMemoryOnFailure) {
       auto B = V.getAsBoolean();
       if (!B)
         return invalid(Name);
-      Out.ObserveJavaState = *B;
+      if (Name == field::ObserveJavaState)
+        Out.ObserveJavaState = *B;
+      else if (Name == field::ObserveCPUState)
+        Out.ObserveCPUState = *B;
+      else if (Name == field::ObserveThreadCPUStates)
+        Out.ObserveThreadCPUStates = *B;
+      else if (Name == field::ObserveMemoryAtStop)
+        Out.ObserveMemoryAtStop = *B;
+      else
+        Out.ObserveMemoryOnFailure = *B;
     } else if (Name == field::ReadMemory) {
       auto Reads = memoryReads(V);
       if (!Reads)
@@ -553,7 +1093,12 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
     } else
       return invalid(Name);
   }
+  if (auto E =
+          android_model::validateDladdrObservations(Out.DladdrObservations))
+    return std::move(E);
   if (auto E = android_model::validateLogRecords(Out.LogRecords))
+    return std::move(E);
+  if (auto E = android_model::validateEventLogWrites(Out.EventLogWrites))
     return std::move(E);
   if (Out.ObserveJavaState && !Out.JNI)
     return invalid(field::ObserveJavaState);
@@ -583,15 +1128,45 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
   }
   for (uint64_t PC : Result.Trace)
     Trace.push_back(bits(PC));
-  for (const auto &Snapshot : Result.MemorySnapshots)
-    Memory.push_back(
-        llvm::json::Object{{field::Address, bits(Snapshot.Address)},
-                           {field::Bytes, llvm::toHex(Snapshot.Bytes, true)}});
+  for (const auto &Snapshot : Result.MemorySnapshots) {
+    llvm::json::Object Value{{field::Address, bits(Snapshot.Address)},
+                             {field::Bytes, llvm::toHex(Snapshot.Bytes, true)}};
+    if (!Snapshot.Diagnostic.empty())
+      Value[field::Diagnostic] = Snapshot.Diagnostic;
+    Memory.push_back(std::move(Value));
+  }
   llvm::json::Object Out{{field::Initialize, Result.InitializersEnabled},
                          {field::NativeCalls, std::move(Calls)},
                          {field::Trace, std::move(Trace)},
                          {field::TraceTruncated, Result.TraceTruncated},
                          {field::Memory, std::move(Memory)}};
+  if (Result.EventLogWritesConsumed)
+    Out[field::EventLogWritesConsumed] = *Result.EventLogWritesConsumed;
+  auto CPUStateJSON = [](const NativeCPUState &State) {
+    llvm::json::Value Registers = nullptr;
+    if (State.Registers) {
+      llvm::json::Object Values;
+      for (const auto &R : *State.Registers)
+        Values[registerName(R.Register)] =
+            llvm::json::Array{bits(R.Value[0]), bits(R.Value[1])};
+      Registers = std::move(Values);
+    }
+    return llvm::json::Object{
+        {field::ThreadID, State.ThreadID},
+        {field::ObservationRegisters, std::move(Registers)},
+        {field::Diagnostic, State.Diagnostic}};
+  };
+  if (Result.CPUState)
+    Out[field::CPUState] = CPUStateJSON(*Result.CPUState);
+  if (Result.ThreadCPUStates) {
+    llvm::json::Array States;
+    for (const auto &Thread : *Result.ThreadCPUStates) {
+      auto State = CPUStateJSON(Thread.State);
+      State[field::CurrentCPU] = Thread.Current;
+      States.push_back(std::move(State));
+    }
+    Out[field::ThreadCPUStates] = std::move(States);
+  }
   if (!Result.JNIRegistrations.empty()) {
     llvm::json::Array Bindings;
     for (const auto &Binding : Result.JNIRegistrations)
@@ -664,6 +1239,46 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
         {field::ApplicationInstrumentation,
          F.instrumentation ? llvm::json::Value(bits(*F.instrumentation))
                            : nullptr}};
+    if (F.main_message_queue) {
+      const auto &Queue = *F.main_message_queue;
+      llvm::json::Array Messages;
+      for (const auto &Message : Queue.messages)
+        Messages.push_back(
+            llvm::json::Object{{"identity", bits(Message.identity)},
+                               {"target", bits(Message.target)},
+                               {"callback", bits(Message.callback)},
+                               {"next", bits(Message.next)},
+                               {"when", Message.when},
+                               {"flags", Message.flags}});
+      Framework[field::JavaMainMessageQueue] =
+          llvm::json::Object{{"identity", bits(Queue.identity)},
+                             {"blocked", Queue.blocked},
+                             {"complete", Queue.complete},
+                             {"messages", std::move(Messages)}};
+    }
+    if (F.service_manager) {
+      const auto &State = *F.service_manager;
+      llvm::json::Array Entries, Proxies;
+      for (const auto &Entry : State.entries)
+        Entries.push_back(llvm::json::Object{{"name", bits(Entry.name)},
+                                             {"binder", bits(Entry.binder)}});
+      for (const auto &Proxy : State.binder_proxies)
+        Proxies.push_back(llvm::json::Object{
+            {"key", Proxy.key},
+            {"identity", bits(Proxy.identity)},
+            {"warn_on_blocking",
+             Proxy.warn_on_blocking ? llvm::json::Value(*Proxy.warn_on_blocking)
+                                    : nullptr}});
+      Framework[field::ApplicationServiceManager] = llvm::json::Object{
+          {"initialized", State.initialized},
+          {"cache", bits(State.cache)},
+          {"cache_known", State.cache_known},
+          {"entries", std::move(Entries)},
+          {"stat_logger", bits(State.stat_logger)},
+          {"manager",
+           State.manager ? llvm::json::Value(bits(*State.manager)) : nullptr},
+          {"binder_proxies", std::move(Proxies)}};
+    }
     llvm::json::Array Classes;
     for (const auto &C : State.classes)
       Classes.push_back(llvm::json::Object{

@@ -424,6 +424,13 @@ void dictionaryLoop(Fixture &F) {
 TEST(SwiftOpaqueValueConsumer, CollisionBackedgeAndEmptyExitReplayCompletely) {
   Fixture F;
   dictionaryLoop(F);
+  const auto Contracts = nativeSourceCalleeContracts(F.Image, F.Result);
+  EXPECT_TRUE(validateSwiftValueConstructorBindings(F.Image, F.low(), *F.med(),
+                                                    &Contracts));
+  EXPECT_TRUE(
+      validateSwiftOpaqueValueBindings(F.Image, F.low(), *F.med(), &Contracts));
+  EXPECT_TRUE(validateSwiftConsumedInputBindings(F.Image, F.low(), *F.med()));
+  EXPECT_TRUE(validateSwiftWitnessFrameBindings(F.Image, F.low(), *F.med()));
   std::string Error;
   auto EntryHint = inferFixture(F, Error, true);
   ASSERT_TRUE(EntryHint) << Error;

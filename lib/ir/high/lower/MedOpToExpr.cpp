@@ -12,7 +12,8 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
-#include "neverd/ir/high/X86RegistrationFrame.h"
+#include "neverd/ir/high/X86/X86RegistrationFrame.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
@@ -129,8 +130,17 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
       if (Op.NumInputs != 1 || !CFloatBytes(Op.Inputs[0].Size) ||
           (!IntegerResult && !CFloatBytes(Op.Output.Size)))
         return HighExpr::makeUndef(Op.Output.Size);
-      auto Value = HighExpr::makeUnary(
-          Op.Opcode, sourceFloatValue(Op.Inputs[0], Op.Inputs[0].Size));
+      auto Input = sourceFloatValue(Op.Inputs[0], Op.Inputs[0].Size);
+      if (Op.Opcode == NdOp::FLOAT_FLOAT2FLOAT &&
+          Op.Inputs[0].Size > Op.Output.Size &&
+          Input->Kind == ExprKind::UnaryOp &&
+          Input->Op == NdOp::FLOAT_FLOAT2FLOAT && Input->Operands.size() == 1 &&
+          Input->Operands[0]->Type &&
+          Input->Operands[0]->Type->Kind == NdTypeKind::Float &&
+          Input->Operands[0]->Type->Size == Op.Output.Size)
+        return HighExpr::makeBitCast(Input->Operands[0],
+                                     NdType::makeInt(Op.Output.Size, false));
+      auto Value = HighExpr::makeUnary(Op.Opcode, Input);
       if (IntegerResult) {
         Value->Type = NdType::makeInt(Op.Output.Size,
                                       Op.Opcode != NdOp::FLOAT_FLOAT2UINT &&
@@ -155,8 +165,15 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
     if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None)
       return CurMed ? lowerX86RegistrationRoot(*CurMed, Op)
                     : HighExpr::makeUndef(Op.Output.Size);
-    if (Op.NumInputs >= 1)
-      return medvarToExpr(Op.Inputs[0]);
+    if (Op.NumInputs >= 1) {
+      auto Value = medvarToExpr(Op.Inputs[0]);
+      // COPY writes only the destination's bytes. Keep its truncation in
+      // the expression before inlining or copy propagation removes the
+      // assignment (for example, KMOVW from a 32-bit general register).
+      if (Op.Output.Size && Op.Output.Size < Op.Inputs[0].Size)
+        return sourceBitSlice(Value, 0, Op.Output.Size);
+      return Value;
+    }
     break;
 
   case NdOp::INT_ADD:
@@ -295,6 +312,7 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
       Expr->MemoryOrdering = Op.MemoryOrdering;
       Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
+      Expr->SourceReturnSlotOffset = Op.SourceReturnSlotOffset;
       return Expr;
     }
     break;
@@ -370,6 +388,8 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
     auto Call =
         HighExpr::makeCall(calleeDisplayName(CallTarget), CallTarget, {});
     Call->CallSiteAddr = Op.Addr;
+    if (Op.Output.Size)
+      Call->Type = sourceCallResultType(Op);
     return Call;
   }
 
@@ -384,6 +404,8 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
     Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
     if (Op.Output.Size > 0)
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
+    else if (isAArch64WritebackAuxiliaryLoad(IID))
+      Expr->Type = NdType::makeVoid();
     return Expr;
   }
 

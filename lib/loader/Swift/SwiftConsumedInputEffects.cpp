@@ -3,7 +3,7 @@
 #include "../MachO/ImmutableNativeFrame.h"
 #include "../MachO/SourceLocalCall.h"
 
-#include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"

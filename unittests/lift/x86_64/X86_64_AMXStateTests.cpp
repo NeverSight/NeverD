@@ -1,11 +1,14 @@
 //===- X86_64_AMXStateTests.cpp - AMX state semantics -------------------===//
 
+#include "X86AMXFixtures.h"
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+
+#include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
 #include <array>
@@ -64,8 +67,7 @@ BinaryImage makeImage(std::vector<Segment> Segments) {
   return Image;
 }
 
-std::array<uint8_t, x86reg::TileConfigSize>
-makeConfig(uint8_t StartRow = 0) {
+std::array<uint8_t, x86reg::TileConfigSize> makeConfig(uint8_t StartRow = 0) {
   std::array<uint8_t, x86reg::TileConfigSize> Config{};
   Config[0] = 1;
   Config[1] = StartRow;
@@ -80,8 +82,8 @@ void configureTile(std::array<uint8_t, x86reg::TileConfigSize> &Config,
   Config[48 + Tile] = Rows;
 }
 
-void writeImageBytes(BinaryImage &Image, uint64_t Address,
-                     const uint8_t *Bytes, size_t Size) {
+void writeImageBytes(BinaryImage &Image, uint64_t Address, const uint8_t *Bytes,
+                     size_t Size) {
   for (Segment &Seg : Image.Segments) {
     if (Address >= Seg.VA && Address - Seg.VA <= Seg.Data.size() &&
         Size <= Seg.Data.size() - (Address - Seg.VA)) {
@@ -129,8 +131,7 @@ TEST(X86AMXState, ConfigLoadStoreAndReleasePreserveExactArchitecturalState) {
   configureTile(Config, 7, 12, 2);
 
   BinaryImage Image = makeImage({makeSegment(
-      ConfigAddress, 0x1100,
-      SegmentFlags::Readable | SegmentFlags::Writable)});
+      ConfigAddress, 0x1100, SegmentFlags::Readable | SegmentFlags::Writable)});
   writeImageBytes(Image, ConfigAddress, Config.data(), Config.size());
 
   const LiftedInstruction Load =
@@ -204,8 +205,8 @@ TEST(X86AMXState, InvalidConfigFaultsBeforeChangingConfigOrTileData) {
   std::vector<uint8_t> OriginalConfig(x86reg::TileConfigSize, 0x3c);
   std::vector<uint8_t> OriginalTile(x86reg::TileRegStride, 0x96);
   for (const auto &Candidate : Invalid) {
-    BinaryImage Image = makeImage({makeSegment(
-        ConfigAddress, Candidate.size(), SegmentFlags::Readable)});
+    BinaryImage Image = makeImage(
+        {makeSegment(ConfigAddress, Candidate.size(), SegmentFlags::Readable)});
     writeImageBytes(Image, ConfigAddress, Candidate.data(), Candidate.size());
     NdOpEmulator Emulator(Image);
     Emulator.setStrictMode(true);
@@ -241,8 +242,8 @@ TEST(X86AMXState, IntegerDotProductsHonorSignednessAndDwordWrap) {
   constexpr uint32_t Initial = 0xfffffff0U;
 
   for (const ComputeCase &Case : Cases) {
-    const LiftedInstruction Compute = liftX64(
-        std::vector<uint8_t>(Case.Bytes.begin(), Case.Bytes.end()));
+    const LiftedInstruction Compute =
+        liftX64(std::vector<uint8_t>(Case.Bytes.begin(), Case.Bytes.end()));
     ASSERT_EQ(Compute.Id, Case.Id);
     ASSERT_FALSE(Compute.Ops.empty());
 
@@ -263,13 +264,12 @@ TEST(X86AMXState, IntegerDotProductsHonorSignednessAndDwordWrap) {
     ASSERT_EQ(Emulator.run(Compute.Ops), Compute.Ops.size());
 
     const auto Result = Emulator.getRegisterBytes(x86reg::TMM1);
-    const auto ResultConfig =
-        Emulator.getRegisterBytes(x86reg::TileConfig);
+    const auto ResultConfig = Emulator.getRegisterBytes(x86reg::TileConfig);
     ASSERT_TRUE(Result);
     ASSERT_TRUE(ResultConfig);
-    EXPECT_EQ(readDword(*Result, 0, 0),
-              static_cast<uint32_t>(static_cast<int64_t>(Initial) +
-                                    Case.DotProduct));
+    EXPECT_EQ(
+        readDword(*Result, 0, 0),
+        static_cast<uint32_t>(static_cast<int64_t>(Initial) + Case.DotProduct));
     EXPECT_TRUE(std::all_of(Result->begin() + 4, Result->end(),
                             [](uint8_t Byte) { return Byte == 0; }));
     EXPECT_EQ(Emulator.getRegisterBytes(x86reg::TMM2), Source1);
@@ -280,8 +280,7 @@ TEST(X86AMXState, IntegerDotProductsHonorSignednessAndDwordWrap) {
 }
 
 TEST(X86AMXState, IntegerDotProductsRejectMismatchedTileShapesBeforeEffect) {
-  const LiftedInstruction Compute =
-      liftX64({0xc4, 0xe2, 0x63, 0x5e, 0xca});
+  const LiftedInstruction Compute = liftX64({0xc4, 0xe2, 0x63, 0x5e, 0xca});
   ASSERT_EQ(Compute.Id, X86_INS_TDPBSSD);
   ASSERT_FALSE(Compute.Ops.empty());
 
@@ -316,24 +315,51 @@ TEST(X86AMXState, FloatingTileComputesUseInstructionDefinedFormats) {
     uint32_t Expected;
   };
   const std::array<ComputeCase, 9> Cases = {{
-      {{{0xc4, 0xe2, 0x62, 0x5c, 0xca}}, X86_INS_TDPBF16PS,
-       0x40003f80U, 0x40804040U, 0x41800000U},
-      {{{0xc4, 0xe2, 0x63, 0x5c, 0xca}}, X86_INS_TDPFP16PS,
-       0x40003c00U, 0x44004200U, 0x41800000U},
-      {{{0xc4, 0xe2, 0x61, 0x6c, 0xca}}, X86_INS_TCMMIMFP16PS,
-       0x40003c00U, 0x44004200U, 0x41700000U},
-      {{{0xc4, 0xe2, 0x60, 0x6c, 0xca}}, X86_INS_TCMMRLFP16PS,
-       0x40003c00U, 0x44004200U, 0x00000000U},
-      {{{0xc4, 0xe5, 0x60, 0xfd, 0xca}}, X86_INS_TDPBF8PS,
-       0x403c403cU, 0x44424442U, 0x41d80000U},
-      {{{0xc4, 0xe5, 0x63, 0xfd, 0xca}}, X86_INS_TDPBHF8PS,
-       0x403c403cU, 0x48444844U, 0x41d80000U},
-      {{{0xc4, 0xe5, 0x62, 0xfd, 0xca}}, X86_INS_TDPHBF8PS,
-       0x40384038U, 0x44424442U, 0x41d80000U},
-      {{{0xc4, 0xe5, 0x61, 0xfd, 0xca}}, X86_INS_TDPHF8PS,
-       0x40384038U, 0x48444844U, 0x41d80000U},
-      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}}, X86_INS_TMMULTF32PS,
-       0x3fc00000U, 0x40000000U, 0x41000000U},
+      {{{0xc4, 0xe2, 0x62, 0x5c, 0xca}},
+       X86_INS_TDPBF16PS,
+       0x40003f80U,
+       0x40804040U,
+       0x41800000U},
+      {{{0xc4, 0xe2, 0x63, 0x5c, 0xca}},
+       X86_INS_TDPFP16PS,
+       0x40003c00U,
+       0x44004200U,
+       0x41800000U},
+      {{{0xc4, 0xe2, 0x61, 0x6c, 0xca}},
+       X86_INS_TCMMIMFP16PS,
+       0x40003c00U,
+       0x44004200U,
+       0x41700000U},
+      {{{0xc4, 0xe2, 0x60, 0x6c, 0xca}},
+       X86_INS_TCMMRLFP16PS,
+       0x40003c00U,
+       0x44004200U,
+       0x00000000U},
+      {{{0xc4, 0xe5, 0x60, 0xfd, 0xca}},
+       X86_INS_TDPBF8PS,
+       0x403c403cU,
+       0x44424442U,
+       0x41d80000U},
+      {{{0xc4, 0xe5, 0x63, 0xfd, 0xca}},
+       X86_INS_TDPBHF8PS,
+       0x403c403cU,
+       0x48444844U,
+       0x41d80000U},
+      {{{0xc4, 0xe5, 0x62, 0xfd, 0xca}},
+       X86_INS_TDPHBF8PS,
+       0x40384038U,
+       0x44424442U,
+       0x41d80000U},
+      {{{0xc4, 0xe5, 0x61, 0xfd, 0xca}},
+       X86_INS_TDPHF8PS,
+       0x40384038U,
+       0x48444844U,
+       0x41d80000U},
+      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}},
+       X86_INS_TMMULTF32PS,
+       0x3fc00000U,
+       0x40000000U,
+       0x41000000U},
   }};
 
   auto Config = makeConfig(1);
@@ -341,8 +367,8 @@ TEST(X86AMXState, FloatingTileComputesUseInstructionDefinedFormats) {
   configureTile(Config, 2, 4, 1);
   configureTile(Config, 3, 4, 1);
   for (const ComputeCase &Case : Cases) {
-    const LiftedInstruction Compute = liftX64(
-        std::vector<uint8_t>(Case.Bytes.begin(), Case.Bytes.end()));
+    const LiftedInstruction Compute =
+        liftX64(std::vector<uint8_t>(Case.Bytes.begin(), Case.Bytes.end()));
     ASSERT_EQ(Compute.Id, Case.Id);
     ASSERT_FALSE(Compute.Ops.empty());
 
@@ -362,8 +388,7 @@ TEST(X86AMXState, FloatingTileComputesUseInstructionDefinedFormats) {
     Emulator.setRegisterBytes(x86reg::TMM3, Source2);
     ASSERT_EQ(Emulator.run(Compute.Ops), Compute.Ops.size());
     const auto Result = Emulator.getRegisterBytes(x86reg::TMM1);
-    const auto ResultConfig =
-        Emulator.getRegisterBytes(x86reg::TileConfig);
+    const auto ResultConfig = Emulator.getRegisterBytes(x86reg::TileConfig);
     ASSERT_TRUE(Result);
     ASSERT_TRUE(ResultConfig);
     EXPECT_EQ(readDword(*Result, 0, 0), Case.Expected);
@@ -383,22 +408,46 @@ TEST(X86AMXState, FloatingTileComputesHonorSpecialValueRules) {
     uint32_t Expected;
   };
   const std::array<ComputeCase, 8> Cases = {{
-      {{{0xc4, 0xe2, 0x62, 0x5c, 0xca}}, 0, 0x00000001U,
-       0x00003f80U, 0x00000000U},
-      {{{0xc4, 0xe2, 0x63, 0x5c, 0xca}}, 0, 0x00000001U,
-       0x00003c00U, 0x33800000U},
-      {{{0xc4, 0xe5, 0x60, 0xfd, 0xca}}, 0, 0x0000007dU,
-       0x3c3c3c3cU, 0xffc00000U},
-      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}}, 0, 0x3f801fffU,
-       0x3f800000U, 0x3f800000U},
-      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}}, 0, 0x007fe000U,
-       0x7e800000U, 0x3f7fc000U},
-      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}}, 0, 0x7f800001U,
-       0x3f800000U, 0x7fc00000U},
-      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}}, 0, 0x7fc12345U,
-       0x3f800000U, 0x7fc12000U},
-      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}}, 0, 0x7f800000U,
-       0x00000000U, 0xffc00000U},
+      {{{0xc4, 0xe2, 0x62, 0x5c, 0xca}},
+       0,
+       0x00000001U,
+       0x00003f80U,
+       0x00000000U},
+      {{{0xc4, 0xe2, 0x63, 0x5c, 0xca}},
+       0,
+       0x00000001U,
+       0x00003c00U,
+       0x33800000U},
+      {{{0xc4, 0xe5, 0x60, 0xfd, 0xca}},
+       0,
+       0x0000007dU,
+       0x3c3c3c3cU,
+       0xffc00000U},
+      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}},
+       0,
+       0x3f801fffU,
+       0x3f800000U,
+       0x3f800000U},
+      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}},
+       0,
+       0x007fe000U,
+       0x7e800000U,
+       0x3f7fc000U},
+      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}},
+       0,
+       0x7f800001U,
+       0x3f800000U,
+       0x7fc00000U},
+      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}},
+       0,
+       0x7fc12345U,
+       0x3f800000U,
+       0x7fc12000U},
+      {{{0xc4, 0xe2, 0x61, 0x48, 0xca}},
+       0,
+       0x7f800000U,
+       0x00000000U,
+       0xffc00000U},
   }};
 
   auto Config = makeConfig(1);
@@ -407,8 +456,8 @@ TEST(X86AMXState, FloatingTileComputesHonorSpecialValueRules) {
   configureTile(Config, 3, 4, 1);
   BinaryImage Image = makeImage({});
   for (const ComputeCase &Case : Cases) {
-    const LiftedInstruction Compute = liftX64(
-        std::vector<uint8_t>(Case.Bytes.begin(), Case.Bytes.end()));
+    const LiftedInstruction Compute =
+        liftX64(std::vector<uint8_t>(Case.Bytes.begin(), Case.Bytes.end()));
     ASSERT_FALSE(Compute.Ops.empty());
     std::vector<uint8_t> Destination(x86reg::TileRegStride, 0xa5);
     std::vector<uint8_t> Source1(x86reg::TileRegStride, 0x5a);
@@ -424,8 +473,7 @@ TEST(X86AMXState, FloatingTileComputesHonorSpecialValueRules) {
     Emulator.setRegisterBytes(x86reg::TMM3, Source2);
     ASSERT_EQ(Emulator.run(Compute.Ops), Compute.Ops.size());
     const auto Result = Emulator.getRegisterBytes(x86reg::TMM1);
-    const auto ResultConfig =
-        Emulator.getRegisterBytes(x86reg::TileConfig);
+    const auto ResultConfig = Emulator.getRegisterBytes(x86reg::TileConfig);
     ASSERT_TRUE(Result);
     ASSERT_TRUE(ResultConfig);
     EXPECT_EQ(readDword(*Result, 0, 0), Case.Expected);
@@ -470,10 +518,8 @@ TEST(X86AMXState, TileZeroRequiresAValidTileAndClearsRestartState) {
 }
 
 TEST(X86AMXState, TileTransfersRejectInvalidRuntimeShapeBeforeAnyEffect) {
-  const LiftedInstruction Load =
-      liftX64({0xc4, 0xe2, 0x7b, 0x4b, 0x0c, 0x18});
-  const LiftedInstruction Store =
-      liftX64({0xc4, 0x82, 0x7a, 0x4b, 0x3c, 0xbe});
+  const LiftedInstruction Load = liftX64({0xc4, 0xe2, 0x7b, 0x4b, 0x0c, 0x18});
+  const LiftedInstruction Store = liftX64({0xc4, 0x82, 0x7a, 0x4b, 0x3c, 0xbe});
   ASSERT_FALSE(Load.Ops.empty());
   ASSERT_FALSE(Store.Ops.empty());
 
@@ -491,8 +537,7 @@ TEST(X86AMXState, TileTransfersRejectInvalidRuntimeShapeBeforeAnyEffect) {
   const std::vector<uint8_t> OriginalTile(x86reg::TileRegStride, 0x69);
   for (const auto &Config : Invalid) {
     BinaryImage Image = makeImage({makeSegment(
-        0x9000, 0x100,
-        SegmentFlags::Readable | SegmentFlags::Writable)});
+        0x9000, 0x100, SegmentFlags::Readable | SegmentFlags::Writable)});
     std::fill(Image.Segments[0].Data.begin(), Image.Segments[0].Data.end(),
               0x42);
     NdOpEmulator Emulator(Image);
@@ -532,10 +577,8 @@ TEST(X86AMXState, TileLoadAndStoreHonorShapeStrideAndRestartProgress) {
     writeImageBytes(Image, LoadAddress + Row * 16, Data.data(), Data.size());
   }
 
-  const LiftedInstruction Load =
-      liftX64({0xc4, 0xe2, 0x7b, 0x4b, 0x0c, 0x18});
-  const LiftedInstruction Store =
-      liftX64({0xc4, 0x82, 0x7a, 0x4b, 0x3c, 0xbe});
+  const LiftedInstruction Load = liftX64({0xc4, 0xe2, 0x7b, 0x4b, 0x0c, 0x18});
+  const LiftedInstruction Store = liftX64({0xc4, 0x82, 0x7a, 0x4b, 0x3c, 0xbe});
   ASSERT_EQ(Load.Id, X86_INS_TILELOADD);
   ASSERT_EQ(Store.Id, X86_INS_TILESTORED);
   ASSERT_FALSE(Load.Ops.empty());
@@ -575,21 +618,19 @@ TEST(X86AMXState, TileLoadAndStoreHonorShapeStrideAndRestartProgress) {
                           0x71000000 + Row * 16 + I),
                 StoredTile[Row * 64 + I]);
 
-  BinaryImage LoadFaultImage = makeImage(
-      {makeSegment(0x7000, 8, SegmentFlags::Readable)});
+  BinaryImage LoadFaultImage =
+      makeImage({makeSegment(0x7000, 8, SegmentFlags::Readable)});
   for (unsigned I = 0; I < 8; ++I)
     LoadFaultImage.Segments[0].Data[I] = static_cast<uint8_t>(0xe0 + I);
   NdOpEmulator LoadFault(LoadFaultImage);
   LoadFault.setStrictMode(true);
   LoadFault.setRegisterBytes(x86reg::TileConfig, Config);
-  LoadFault.setRegisterBytes(x86reg::TMM1,
-                             std::vector<uint8_t>(1024, 0x77));
+  LoadFault.setRegisterBytes(x86reg::TMM1, std::vector<uint8_t>(1024, 0x77));
   LoadFault.setRegister(x86reg::RAX, 0x7000);
   LoadFault.setRegister(x86reg::RBX, 8);
   EXPECT_LT(LoadFault.run(Load.Ops), Load.Ops.size());
   const auto PartialLoad = LoadFault.getRegisterBytes(x86reg::TMM1);
-  const auto LoadFaultConfig =
-      LoadFault.getRegisterBytes(x86reg::TileConfig);
+  const auto LoadFaultConfig = LoadFault.getRegisterBytes(x86reg::TileConfig);
   ASSERT_TRUE(PartialLoad);
   ASSERT_TRUE(LoadFaultConfig);
   EXPECT_EQ((*LoadFaultConfig)[1], 1);
@@ -607,13 +648,11 @@ TEST(X86AMXState, TileLoadAndStoreHonorShapeStrideAndRestartProgress) {
   StoreFault.setRegister(x86reg::R14, 0x8000);
   StoreFault.setRegister(x86reg::R15, 2); // encoded scale 4 => 8-byte stride
   EXPECT_LT(StoreFault.run(Store.Ops), Store.Ops.size());
-  const auto StoreFaultConfig =
-      StoreFault.getRegisterBytes(x86reg::TileConfig);
+  const auto StoreFaultConfig = StoreFault.getRegisterBytes(x86reg::TileConfig);
   ASSERT_TRUE(StoreFaultConfig);
   EXPECT_EQ((*StoreFaultConfig)[1], 1);
   for (unsigned I = 0; I < 8; ++I)
-    EXPECT_EQ(probeByte(StoreFault, 0x8000 + I, 0x72000000 + I),
-              StoredTile[I]);
+    EXPECT_EQ(probeByte(StoreFault, 0x8000 + I, 0x72000000 + I), StoredTile[I]);
   EXPECT_FALSE(Emulator.skips().any());
   EXPECT_FALSE(LoadFault.skips().any());
   EXPECT_FALSE(StoreFault.skips().any());
@@ -638,14 +677,12 @@ TEST(X86AMXState, ReadSharedTileLoadsPreserveExactTileLoadValueSemantics) {
     NdOpEmulator Emulator(Image);
     Emulator.setStrictMode(true);
     Emulator.setRegisterBytes(x86reg::TileConfig, Config);
-    Emulator.setRegisterBytes(x86reg::TMM4,
-                              std::vector<uint8_t>(x86reg::TileRegStride,
-                                                   0xa5));
+    Emulator.setRegisterBytes(
+        x86reg::TMM4, std::vector<uint8_t>(x86reg::TileRegStride, 0xa5));
     Emulator.setRegister(x86reg::R12, 0x9000);
     ASSERT_EQ(Emulator.run(Load.Ops), Load.Ops.size());
     const auto Result = Emulator.getRegisterBytes(x86reg::TMM4);
-    const auto ResultConfig =
-        Emulator.getRegisterBytes(x86reg::TileConfig);
+    const auto ResultConfig = Emulator.getRegisterBytes(x86reg::TileConfig);
     ASSERT_TRUE(Result);
     ASSERT_TRUE(ResultConfig);
     for (unsigned Row = 0; Row < 2; ++Row) {
@@ -731,8 +768,7 @@ TEST(X86AMXState, RowOperationsConvertRoundAndZeroExactly) {
     ASSERT_EQ(Emulator.run(Row.Ops), Row.Ops.size());
     const auto Result =
         Emulator.getRegisterBytes(x86reg::vectorReg(Case.Destination));
-    const auto ResultConfig =
-        Emulator.getRegisterBytes(x86reg::TileConfig);
+    const auto ResultConfig = Emulator.getRegisterBytes(x86reg::TileConfig);
     ASSERT_TRUE(Result);
     ASSERT_TRUE(ResultConfig);
     EXPECT_EQ(readDword(*Result, 0, 0), Case.Expected[0]);
@@ -744,38 +780,9 @@ TEST(X86AMXState, RowOperationsConvertRoundAndZeroExactly) {
   }
 }
 
-TEST(X86AMXState, RowOperationsRejectInvalidStateBeforeAnyEffect) {
-  const std::array<std::vector<uint8_t>, 2> Cases = {{
-      {0x62, 0x63, 0x7d, 0x48, 0x07, 0xf8, 0xa5},
-      {0x62, 0xe2, 0x46, 0x40, 0x4a, 0xce},
-  }};
-  auto Config = makeConfig(1);
-  configureTile(Config, 0, 8, 2);
-  configureTile(Config, 6, 8, 2);
+TEST(X86AMXState, RowOperationsRejectInvalidTileShapeBeforeAnyEffect) {
   const std::vector<uint8_t> OriginalDestination(64, 0x6d);
   BinaryImage Image = makeImage({});
-  for (const std::vector<uint8_t> &Bytes : Cases) {
-    const LiftedInstruction Row = liftX64(Bytes);
-    ASSERT_FALSE(Row.Ops.empty());
-    const unsigned Destination = Row.Id == X86_INS_TILEMOVROW ? 31 : 17;
-    NdOpEmulator Emulator(Image);
-    Emulator.setStrictMode(true);
-    Emulator.setRegisterBytes(x86reg::TileConfig, Config);
-    Emulator.setRegisterBytes(x86reg::TMM0,
-                              std::vector<uint8_t>(x86reg::TileRegStride));
-    Emulator.setRegisterBytes(x86reg::TMM6,
-                              std::vector<uint8_t>(x86reg::TileRegStride));
-    Emulator.setRegisterBytes(x86reg::vectorReg(Destination),
-                              OriginalDestination);
-    Emulator.setRegister(x86reg::R23, UINT64_C(1) << 16);
-    EXPECT_LT(Emulator.run(Row.Ops), Row.Ops.size());
-    EXPECT_EQ(Emulator.getRegisterBytes(x86reg::vectorReg(Destination)),
-              OriginalDestination);
-    EXPECT_EQ(Emulator.getRegisterBytes(x86reg::TileConfig),
-              std::vector<uint8_t>(Config.begin(), Config.end()));
-    EXPECT_FALSE(Emulator.skips().any());
-  }
-
   auto InvalidShape = makeConfig(1);
   configureTile(InvalidShape, 0, 6, 2);
   const LiftedInstruction Move =
@@ -786,14 +793,221 @@ TEST(X86AMXState, RowOperationsRejectInvalidStateBeforeAnyEffect) {
   InvalidShapeEmulator.setRegisterBytes(x86reg::TileConfig, InvalidShape);
   InvalidShapeEmulator.setRegisterBytes(
       x86reg::TMM0, std::vector<uint8_t>(x86reg::TileRegStride));
-  InvalidShapeEmulator.setRegisterBytes(x86reg::XMM31,
-                                        OriginalDestination);
+  InvalidShapeEmulator.setRegisterBytes(x86reg::XMM31, OriginalDestination);
   EXPECT_LT(InvalidShapeEmulator.run(Move.Ops), Move.Ops.size());
   EXPECT_EQ(InvalidShapeEmulator.getRegisterBytes(x86reg::XMM31),
             OriginalDestination);
   EXPECT_EQ(InvalidShapeEmulator.getRegisterBytes(x86reg::TileConfig),
             std::vector<uint8_t>(InvalidShape.begin(), InvalidShape.end()));
   EXPECT_FALSE(InvalidShapeEmulator.skips().any());
+}
+
+TEST(X86AMXState, DescriptorsRetainAllNativeEncodingDistinctions) {
+  for (const auto &E : neverd::test::amxEncodings()) {
+    SCOPED_TRACE(E.Assembly);
+    const auto Lifted = liftX64(E.Bytes);
+    ASSERT_FALSE(Lifted.Ops.empty());
+    unsigned Effects = 0;
+    for (const auto &Op : Lifted.Ops) {
+      if (Op.Opcode != NdOp::INTRINSIC)
+        continue;
+      ++Effects;
+      const auto S = x86AmxLowShape(Op, Arch::X64);
+      ASSERT_TRUE(x86AmxShapeIsValid(S));
+      const auto D = *S.Descriptor;
+      EXPECT_EQ(unsigned(x86AmxOperation(D)), E.Kind);
+      const llvm::StringRef Assembly(E.Assembly);
+      EXPECT_EQ(bool(D & X86AmxEvexMemory), Assembly.contains("{evex}"));
+      EXPECT_EQ(bool(D & X86AmxImmediateRow), Assembly.contains("$1"));
+      EXPECT_EQ(bool(D & X86AmxExtendedRow), Assembly.contains("%r16d"));
+      EXPECT_EQ(bool(D & X86AmxAddress32), Assembly.contains("(%eax"));
+      EXPECT_EQ(bool(D & X86AmxStackSegment), Assembly.contains("%ss:"));
+      EXPECT_EQ(S.MemoryAddressSpace,
+                Assembly.contains("%fs:")   ? NdMemoryAddressSpace::X86FS
+                : Assembly.contains("%gs:") ? NdMemoryAddressSpace::X86GS
+                                            : NdMemoryAddressSpace::Default);
+      EXPECT_EQ(S.OutputSize, E.Kind >= 22 ? 64 : 0);
+      EXPECT_EQ(S.InputSizes[1], 4);
+    }
+    EXPECT_EQ(Effects, 1u);
+  }
+}
+
+TEST(X86AMXState, UnknownBankCannotBeSilentlyReplacedWithZeros) {
+  auto Image = makeImage({});
+  NdOpEmulator Emulator(Image);
+  const auto Zero = liftX64({0xc4, 0xe2, 0x7b, 0x49, 0xc0});
+  const auto Release = liftX64({0xc4, 0xe2, 0x78, 0x49, 0xc0});
+  ASSERT_FALSE(Zero.Ops.empty());
+  ASSERT_FALSE(Emulator.getRegisterBytes(x86reg::TileConfig));
+  EXPECT_LT(Emulator.run(Zero.Ops), Zero.Ops.size());
+  EXPECT_FALSE(Emulator.getRegisterBytes(x86reg::tileReg(0)));
+  EXPECT_EQ(Emulator.run(Release.Ops), Release.Ops.size());
+  EXPECT_EQ(Emulator.getRegisterBytes(x86reg::TileConfig),
+            std::vector<uint8_t>(x86reg::TileConfigSize, 0));
+  for (unsigned I = 0; I != x86reg::TileRegCount; ++I)
+    EXPECT_EQ(Emulator.getRegisterBytes(x86reg::tileReg(I)),
+              std::vector<uint8_t>(x86reg::TileRegStride, 0));
+}
+
+TEST(X86AMXState, InvalidBankDescriptorsFailBeforeChangingState) {
+  const auto Release = liftX64({0xc4, 0xe2, 0x78, 0x49, 0xc0});
+  ASSERT_EQ(Release.Ops.size(), 1u);
+  const auto Original = Release.Ops.front();
+  auto Image = makeImage({});
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Op = Original;
+    switch (Mutation) {
+    case 0:
+      Op.Inputs[2].Offset &= ~X86AmxStateVersion;
+      break;
+    case 1:
+      Op.Inputs[2].Offset |= 1u << 26;
+      break;
+    case 2:
+      Op.Inputs[2].Offset |= X86AmxAddress32;
+      break;
+    case 3:
+      Op.Inputs[2].Offset |= X86AmxImmediateRow;
+      break;
+    case 4:
+      Op.Inputs[2].Offset |= 1u << 5;
+      break;
+    case 5:
+      Op.Inputs[1].Offset = 1;
+      break;
+    case 6:
+      Op.Inputs[2].Size = 8;
+      break;
+    case 7:
+      Op.Output = NdVar::reg(x86reg::TileConfig, 64);
+      break;
+    case 8:
+      Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 9:
+      Op.NumInputs = 2;
+      break;
+    }
+    EXPECT_FALSE(x86AmxShapeIsValid(x86AmxLowShape(Op, Arch::X64)));
+    NdOpEmulator Emulator(Image);
+    const std::vector<uint8_t> Sentinel(x86reg::TileConfigSize, 0x5a);
+    Emulator.setRegisterBytes(x86reg::TileConfig, Sentinel);
+    EXPECT_FALSE(Emulator.step(Op));
+    EXPECT_EQ(Emulator.getRegisterBytes(x86reg::TileConfig), Sentinel);
+  }
+}
+
+TEST(X86AMXState, FreshLoadDefinesUnknownTileButResumeRequiresItsPriorRows) {
+  auto Image = makeImage({makeSegment(0x4000, 128, SegmentFlags::Readable)});
+  for (unsigned I = 0; I != 128; ++I)
+    Image.Segments.front().Data[I] = static_cast<uint8_t>(3 * I + 1);
+  const auto Load = liftX64({0xc4, 0xe2, 0x7b, 0x4b, 0x04, 0x08});
+  ASSERT_FALSE(Load.Ops.empty());
+  for (unsigned Start : {0u, 1u}) {
+    auto Config = makeConfig(Start);
+    configureTile(Config, 0, 8, 2);
+    NdOpEmulator Emulator(Image);
+    Emulator.setRegisterBytes(x86reg::TileConfig, Config);
+    Emulator.setRegister(x86reg::RAX, 0x4000);
+    Emulator.setRegister(x86reg::RCX, 64);
+    const auto Completed = Emulator.run(Load.Ops);
+    if (Start) {
+      EXPECT_LT(Completed, Load.Ops.size());
+      EXPECT_FALSE(Emulator.getRegisterBytes(x86reg::tileReg(0)));
+      EXPECT_EQ(Emulator.getRegisterBytes(x86reg::TileConfig),
+                std::vector<uint8_t>(Config.begin(), Config.end()));
+    } else {
+      EXPECT_EQ(Completed, Load.Ops.size());
+      const auto Tile = Emulator.getRegisterBytes(x86reg::tileReg(0));
+      ASSERT_TRUE(Tile);
+      ASSERT_EQ(Tile->size(), x86reg::TileRegStride);
+      for (unsigned I = 0; I < Tile->size(); ++I)
+        EXPECT_EQ((*Tile)[I],
+                  I < 128 && I % 64 < 8 ? static_cast<uint8_t>(3 * I + 1) : 0);
+    }
+  }
+}
+
+TEST(X86AMXState, RowSelectorsIgnoreHighBitsAndZeroOutOfRangeRows) {
+  // ISE 062: the immediate and GPR forms share row_index = selector & 15.
+  // Every conversion has an independent exact-value oracle for rows 0 and 1.
+  struct Values {
+    std::array<uint32_t, 2> Input0, Input1, Output0, Output1;
+  };
+  const std::array<Values, 6> Oracle = {{
+      {{0x01234567, 0x89abcdef},
+       {0x11223344, 0x55667788},
+       {0x01234567, 0x89abcdef},
+       {0x11223344, 0x55667788}},
+      {{1, UINT32_MAX},
+       {2, UINT32_MAX - 1},
+       {0x3f800000, 0xbf800000},
+       {0x40000000, 0xc0000000}},
+      {{0x3f800000, 0xbf800000},
+       {0x40000000, 0xc0000000},
+       {0x3f800000, 0xbf800000},
+       {0x40000000, 0xc0000000}},
+      {{0x3f800000, 0xbf800000},
+       {0x40000000, 0xc0000000},
+       {0x3f80, 0xbf80},
+       {0x4000, 0xc000}},
+      {{0x3f800000, 0xbf800000},
+       {0x40000000, 0xc0000000},
+       {0x3c000000, 0xbc000000},
+       {0x40000000, 0xc0000000}},
+      {{0x3f800000, 0xbf800000},
+       {0x40000000, 0xc0000000},
+       {0x3c00, 0xbc00},
+       {0x4000, 0xc000}},
+  }};
+  auto Image = makeImage({});
+  for (unsigned Kind = 0; Kind != Oracle.size(); ++Kind)
+    for (bool Immediate : {false, true})
+      for (uint32_t Selector :
+           {0u, 1u, 15u, 16u, 17u, 0xa5u, 0xf1u, 0xffff0001u, UINT32_MAX}) {
+        SCOPED_TRACE(Kind);
+        SCOPED_TRACE(Immediate);
+        SCOPED_TRACE(Selector);
+        const auto &E = test::amxEncodings()[22 + Kind + (Immediate ? 6 : 0)];
+        auto Bytes = E.Bytes;
+        if (Immediate)
+          Bytes.back() = static_cast<uint8_t>(Selector);
+        const auto Row = liftX64(Bytes);
+        ASSERT_FALSE(Row.Ops.empty());
+        auto Config = makeConfig(1);
+        configureTile(Config, 0, 8, 2);
+        std::vector<uint8_t> Tile(x86reg::TileRegStride, 0xa5);
+        for (unsigned I = 0; I != 2; ++I) {
+          writeDword(Tile, 0, I, Oracle[Kind].Input0[I]);
+          writeDword(Tile, 1, I, Oracle[Kind].Input1[I]);
+        }
+        NdOpEmulator Emulator(Image);
+        Emulator.setStrictMode(true);
+        Emulator.setRegisterBytes(x86reg::TileConfig, Config);
+        Emulator.setRegister(x86reg::RAX, Selector);
+        // An out-of-range row does not read unknown tile bytes.
+        const unsigned Index = Selector & 15;
+        if (Index < 2)
+          Emulator.setRegisterBytes(x86reg::tileReg(0), Tile);
+        Emulator.setRegisterBytes(x86reg::vectorReg(0),
+                                  std::vector<uint8_t>(64, 0x5a));
+        ASSERT_EQ(Emulator.run(Row.Ops), Row.Ops.size());
+        const auto Result = Emulator.getRegisterBytes(x86reg::vectorReg(0));
+        ASSERT_TRUE(Result);
+        for (unsigned I = 0; I != 2; ++I)
+          EXPECT_EQ(readDword(*Result, 0, I), Index >= 2 ? 0u
+                                              : Index
+                                                  ? Oracle[Kind].Output1[I]
+                                                  : Oracle[Kind].Output0[I]);
+        EXPECT_TRUE(std::all_of(Result->begin() + 8, Result->end(),
+                                [](uint8_t V) { return V == 0; }));
+        Config[1] = 0;
+        EXPECT_EQ(Emulator.getRegisterBytes(x86reg::TileConfig),
+                  std::vector<uint8_t>(Config.begin(), Config.end()));
+        EXPECT_FALSE(Emulator.skips().any());
+      }
 }
 
 } // namespace

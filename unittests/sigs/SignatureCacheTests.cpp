@@ -37,7 +37,8 @@ namespace {
 /// at one offset, and references, alternatives among them.
 constexpr llvm::StringLiteral Lines =
     "40534883EC2033D2488BD94881C1EC000000448D4206E8........48837B4000 0F 6061 "
-    "0041 :0000 ?ResetKey@CMFCAcceleratorKeyAssignCtrl@@QEAAXXZ ^0017 memset "
+    "0041 !refs :0000 ?ResetKey@CMFCAcceleratorKeyAssignCtrl@@QEAAXXZ ^0017 "
+    "memset "
     "^0037 ?SetWindowTextA@CWnd@@QEAAXPEBD@Z ^0037 "
     "?SetWindowTextW@CWnd@@QEAAXPEB_W@Z ........488BCBE8........4883C4205BC3\n"
     "0330010023000000........0228........0A062D170228........2C0C0228 00 0000 "
@@ -122,6 +123,11 @@ void expectSameModules(llvm::ArrayRef<StoredModule> Expected,
     EXPECT_EQ(E.TotalLen, A.TotalLen) << "module " << I;
     EXPECT_EQ(E.CRC16, A.CRC16) << "module " << I;
     EXPECT_EQ(E.CRCLen, A.CRCLen) << "module " << I;
+    EXPECT_EQ(E.RequireReferences, A.RequireReferences) << "module " << I;
+    EXPECT_EQ(E.IsVTable, A.IsVTable) << "module " << I;
+    EXPECT_EQ(E.IsLoadConfig, A.IsLoadConfig) << "module " << I;
+    EXPECT_EQ(E.IsCodeLayout, A.IsCodeLayout) << "module " << I;
+    EXPECT_EQ(E.RequireCaller, A.RequireCaller) << "module " << I;
     const size_t Count = E.LeadingCount + E.TailCount;
     for (size_t B = 0; B < Count; ++B) {
       ASSERT_EQ(E.isStated(B), A.isStated(B))
@@ -134,6 +140,9 @@ void expectSameModules(llvm::ArrayRef<StoredModule> Expected,
     for (size_t N = 0; N < E.PublicNameCount + E.ReferenceCount; ++N) {
       EXPECT_EQ(E.Names[N].Offset, A.Names[N].Offset) << "module " << I;
       EXPECT_EQ(E.Names[N].Name, A.Names[N].Name) << "module " << I;
+      EXPECT_EQ(E.Names[N].IsData, A.Names[N].IsData) << "module " << I;
+      EXPECT_EQ(E.Names[N].IsLocalData, A.Names[N].IsLocalData)
+          << "module " << I;
     }
   }
 }
@@ -159,6 +168,65 @@ TEST_F(SignatureCacheTest, AnEntryMapsTheModulesItsSourceParsesTo) {
   expectSameModules(Expected.Modules, Moved.Modules);
 }
 
+TEST_F(SignatureCacheTest, LocalDataKindsAndAnchorSyntaxSurviveReversePieces) {
+  write(Source, "488D05........C3 00 0000 0008 !refs :0000 getter "
+                "%0003 00000013:anchor %0003 00000013-00000008:anchor\n");
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  const auto Cache = cache();
+  const Parsed Expected = parse();
+  Cache.store(Source, *Identity, Expected.Modules);
+  auto Pending = Cache.open(Source, *Identity);
+  ASSERT_TRUE(Pending);
+  for (size_t I = Pending->pieces(); I; --I)
+    ASSERT_TRUE(Pending->run(I - 1));
+  const auto Entry = std::move(*Pending).take();
+  expectSameModules(Expected.Modules, Entry.Modules);
+  EXPECT_TRUE(Entry.Modules.front().references().front().IsLocalData);
+  for (unsigned Case = 0; Case < 5; ++Case) {
+    auto Broken = parse();
+    auto &Mod = Broken.Modules.front();
+    auto *Names = const_cast<StoredName *>(Mod.Names);
+    if (Case == 0)
+      Names[1].IsData = false;
+    else if (Case == 1)
+      Names[1].Name = "13:anchor";
+    else if (Case == 2)
+      Names[0].IsLocalData = true;
+    else if (Case == 4)
+      Names[1].Name = "00000013+00000000:anchor";
+    else
+      Mod.RequireReferences = false;
+    Cache.store(Source, *Identity, Broken.Modules);
+    EXPECT_FALSE(Cache.load(Source, *Identity)) << Case;
+  }
+}
+
+TEST_F(SignatureCacheTest, MalformedDataKindsCannotBypassTheTextContract) {
+  write(Source, "488D05........C3 00 0000 0008 !caller :0000 anchor "
+                "^0003 first ^0003 second\n");
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  for (unsigned Case = 0; Case < 3; ++Case) {
+    Parsed ParsedSource = parse();
+    auto &Mod = ParsedSource.Modules.front();
+    // Construct invalid writer input to check the mapped-reader boundary.
+    auto *Names = const_cast<StoredName *>(Mod.Names);
+    if (Case == 0)
+      Names[0].IsData = true;
+    else {
+      Names[1].IsData = true;
+      if (Case == 2) {
+        Names[2].IsData = true;
+        Mod.RequireCaller = false;
+      }
+    }
+    const auto Cache = cache();
+    Cache.store(Source, *Identity, ParsedSource.Modules);
+    EXPECT_FALSE(Cache.load(Source, *Identity)) << Case;
+  }
+}
+
 TEST_F(SignatureCacheTest, AChangedSourceIsAMiss) {
   const SignatureCache Cache = cache();
   const std::optional<SignatureCache::SourceIdentity> Before =
@@ -179,6 +247,29 @@ TEST_F(SignatureCacheTest, AChangedSourceIsAMiss) {
   // Nor is an entry kept for a source that changed after it was parsed.
   Cache.store(Source, *Before, parse().Modules);
   EXPECT_FALSE(Cache.load(Source, *After));
+}
+
+TEST_F(SignatureCacheTest, DataReferenceKindsSurviveReversedCachePieces) {
+  write(Source,
+        "488D05........E8........C3 00 0000 000D !caller :0000 anchor "
+        "&0003 global ^0008 callee\n"
+        "488D05........C3 00 0000 0008 !refs :0000 getter &0003 global\n"
+        "................................ 00 0000 0010 !vtable "
+        ":0000 ??_7Widget@@6B@ ^0000 destroy ^0008 action\n");
+  const Parsed Expected = parse();
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  const auto Cache = cache();
+  Cache.store(Source, *Identity, Expected.Modules);
+  auto Pending = Cache.open(Source, *Identity);
+  ASSERT_TRUE(Pending);
+  for (size_t I = Pending->pieces(); I != 0; --I)
+    ASSERT_TRUE(Pending->run(I - 1));
+  auto Entry = std::move(*Pending).take();
+  expectSameModules(Expected.Modules, Entry.Modules);
+  ASSERT_TRUE(Entry.Modules[0].references()[0].IsData);
+  ASSERT_FALSE(Entry.Modules[0].references()[1].IsData);
+  ASSERT_TRUE(Entry.Modules[2].IsVTable);
 }
 
 TEST_F(SignatureCacheTest, ADamagedEntryIsAMiss) {
@@ -334,4 +425,179 @@ TEST(SignatureCacheEnvironment, TheEnvironmentMovesOrTurnsOffTheCache) {
     EXPECT_NE(Default->directory(), "elsewhere");
 
   ASSERT_EQ(set(Saved ? Saved->c_str() : nullptr), 0);
+}
+
+TEST_F(SignatureCacheTest, CallerContextSurvivesCachedLoading) {
+  write(Source, "E8........C3 00 0000 0006 !caller :0000 forward ^0001 zero\n");
+  const auto Parsed = parse();
+  ASSERT_EQ(Parsed.Modules.size(), 1u);
+  ASSERT_TRUE(Parsed.Modules.front().RequireCaller);
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  const auto Cache = cache();
+  Cache.store(Source, *Identity, Parsed.Modules);
+  auto Loaded = Cache.load(Source, *Identity);
+  ASSERT_TRUE(Loaded);
+  expectSameModules(Parsed.Modules, Loaded->Modules);
+}
+
+TEST_F(SignatureCacheTest, ContextValidationIsIndependentOfPieceOrder) {
+  write(Source, "E8........C3 00 0000 0006 !caller :0000 forward ^0001 zero\n");
+  auto Parsed = parse();
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  const auto Cache = cache();
+  for (uint32_t Offset : {0u, 1u}) {
+    // The cache is checksummed, but the module's context contract must still
+    // be validated independently of the order its pieces are materialized.
+    std::vector<StoredName> Names(Parsed.Modules.front().Names,
+                                  Parsed.Modules.front().Names + 2);
+    Names.front().Offset = Offset;
+    Parsed.Modules.front().Names = Names.data();
+    Cache.store(Source, *Identity, Parsed.Modules);
+    for (bool Reverse : {false, true}) {
+      auto Pending = Cache.open(Source, *Identity);
+      ASSERT_TRUE(Pending);
+      bool Accepted = true;
+      for (size_t P = 0; P < Pending->pieces(); ++P)
+        Accepted &= Pending->run(Reverse ? Pending->pieces() - P - 1 : P);
+      EXPECT_EQ(Accepted, Offset == 0) << "reverse=" << Reverse;
+    }
+    Parsed.Modules.front().Names = Parsed.Chunks.front().Modules.front().Names;
+  }
+}
+
+TEST_F(SignatureCacheTest, ContextBodiesRetainParserCoverageRequirements) {
+  write(Source, "E8........C3 00 0000 0006 !caller :0000 forward ^0001 zero\n");
+  auto Parsed = parse();
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  const auto Cache = cache();
+  const StoredModule Original = Parsed.Modules.front();
+  for (bool Caller : {false, true})
+    for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+      StoredModule &M = Parsed.Modules.front();
+      M = Original;
+      M.RequireCaller = Caller;
+      M.RequireReferences = !Caller;
+      if (Mutation == 0)
+        M.TotalLen = 0;
+      else if (Mutation == 1)
+        M.CRCLen = 1; // A CRC after a body already covered by leading bytes.
+      else {
+        --M.LeadingCount;
+        M.CRCLen = 2; // A CRC crossing the declared function end.
+      }
+      Cache.store(Source, *Identity, Parsed.Modules);
+      EXPECT_FALSE(Cache.load(Source, *Identity))
+          << "caller=" << Caller << " mutation=" << Mutation;
+    }
+}
+
+TEST_F(SignatureCacheTest, InvalidTableRecordsCannotBypassTheTextContract) {
+  write(Source, "................................ 00 0000 0010 !vtable "
+                ":0000 ??_7Widget@@6B@ ^0000 destroy ^0008 action\n");
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  for (unsigned Case = 0; Case < 6; ++Case) {
+    Parsed ParsedSource = parse();
+    auto &Mod = ParsedSource.Modules.front();
+    auto *Names = const_cast<StoredName *>(Mod.Names);
+    switch (Case) {
+    case 0:
+      Names[0].Name = "not_a_table";
+      break;
+    case 1:
+      Names[1].IsData = true;
+      break;
+    case 2:
+      Names[2].Offset = 1;
+      break;
+    case 3:
+      Mod.ReferenceCount = 1;
+      break;
+    case 4:
+      Mod.TotalLen = 24;
+      break;
+    case 5:
+      Mod.CRC16 = 1;
+      break;
+    }
+    const auto Cache = cache();
+    Cache.store(Source, *Identity, ParsedSource.Modules);
+    EXPECT_FALSE(Cache.load(Source, *Identity)) << Case;
+  }
+}
+
+TEST_F(SignatureCacheTest,
+       RuntimePointerMetadataSurvivesReversePiecesAndRejectsBadKinds) {
+  write(Source, std::string(0x80 * 2, '.') +
+                    " 00 0000 0080 !loadcfg :0000 _load_config_used &0078 "
+                    "storage ^0078 target\n");
+  const auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  const auto Cache = cache();
+  const Parsed Expected = parse();
+  Cache.store(Source, *Identity, Expected.Modules);
+  auto Pending = Cache.open(Source, *Identity);
+  ASSERT_TRUE(Pending);
+  for (size_t I = Pending->pieces(); I; --I)
+    ASSERT_TRUE(Pending->run(I - 1));
+  auto Entry = std::move(*Pending).take();
+  expectSameModules(Expected.Modules, Entry.Modules);
+  EXPECT_TRUE(Entry.Modules.front().IsLoadConfig);
+  for (unsigned Case = 0; Case < 6; ++Case) {
+    auto Broken = parse();
+    auto &Mod = Broken.Modules.front();
+    auto *Names = const_cast<StoredName *>(Mod.Names);
+    switch (Case) {
+    case 0:
+      Names[1].IsData = false;
+      break;
+    case 1:
+      Names[2].Offset = 8;
+      break;
+    case 2:
+      Mod.ReferenceCount = 1;
+      break;
+    case 3:
+      Mod.TotalLen = 0x78;
+      break;
+    case 4:
+      Names[0].Name = "made_up";
+      break;
+    case 5:
+      Mod.CRC16 = 1;
+      break;
+    }
+    Cache.store(Source, *Identity, Broken.Modules);
+    EXPECT_FALSE(Cache.load(Source, *Identity)) << Case;
+  }
+}
+
+TEST_F(SignatureCacheTest, CodeLayoutCacheRetainsItsStructuralContract) {
+  write(Source, "488B05........C34883EC28FF15........4885C0488905........"
+                "0F95C04883C428C3488B05........C3 00 0000 002C !layout "
+                ":0000 left :0008 root :0024 right &0003 data "
+                "^000E __imp_Allocate &0018 data &0027 data\n");
+  auto Parsed = parse();
+  auto Cache = cache();
+  auto Identity = SignatureCache::identify(Source);
+  ASSERT_TRUE(Identity);
+  Cache.store(Source, *Identity, Parsed.Modules);
+  auto Loaded = Cache.load(Source, *Identity);
+  ASSERT_TRUE(Loaded);
+  ASSERT_EQ(Loaded->Modules.size(), 1u);
+  EXPECT_TRUE(Loaded->Modules.front().IsCodeLayout);
+  for (unsigned Case = 0; Case < 3; ++Case) {
+    auto Broken = parse();
+    if (Case == 0)
+      Broken.Modules.front().TotalLen++;
+    if (Case == 1)
+      Broken.Modules.front().ReferenceCount--;
+    if (Case == 2)
+      Broken.Modules.front().CRCLen = 1;
+    Cache.store(Source, *Identity, Broken.Modules);
+    EXPECT_FALSE(Cache.load(Source, *Identity)) << Case;
+  }
 }

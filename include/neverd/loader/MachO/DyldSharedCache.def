@@ -1,0 +1,163 @@
+//===- DyldSharedCache.def - Cache layout and reader contracts -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// File offsets and field widths from Apple's dyld_cache_format.h and
+/// fixup-chains.h. These describe serialized layouts, not host C structures.
+/// VALUE defines typed constants, FIELD defines pointer bit fields, and TEXT
+/// defines diagnostics. LIMIT owns this reader's resource ceilings.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_DYLD_CACHE_VALUE
+#define NEVERD_DYLD_CACHE_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_DYLD_CACHE_FIELD
+#define NEVERD_DYLD_CACHE_FIELD(Name, Low, Width)
+#endif
+#ifndef NEVERD_DYLD_CACHE_TEXT
+#define NEVERD_DYLD_CACHE_TEXT(Name, Text)
+#endif
+#ifndef NEVERD_DYLD_CACHE_LIMIT
+#define NEVERD_DYLD_CACHE_LIMIT(Type, Name, Value)
+#endif
+
+NEVERD_DYLD_CACHE_TEXT(kMagic, "dyld_v1  arm64e")
+NEVERD_DYLD_CACHE_VALUE(size_t, kMagicBytes, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kUUIDBytes, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMinimumHeaderBytes, 104)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMappingOffset, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMappingCount, 20)
+NEVERD_DYLD_CACHE_VALUE(size_t, kOldImagesOffset, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kOldImagesCount, 28)
+NEVERD_DYLD_CACHE_VALUE(size_t, kOldSlideOffset, 56)
+NEVERD_DYLD_CACHE_VALUE(size_t, kOldSlideSize, 64)
+NEVERD_DYLD_CACHE_VALUE(size_t, kUUIDOffset, 88)
+NEVERD_DYLD_CACHE_VALUE(size_t, kRegionStart, 224)
+NEVERD_DYLD_CACHE_VALUE(size_t, kRegionSize, 232)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideMappingOffset, 312)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideMappingCount, 316)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSubcacheOffset, 392)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSubcacheCount, 396)
+NEVERD_DYLD_CACHE_VALUE(size_t, kImagesOffset, 448)
+NEVERD_DYLD_CACHE_VALUE(size_t, kImagesCount, 452)
+NEVERD_DYLD_CACHE_VALUE(size_t, kCacheSubtype, 456)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCOptsOffset, 464)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCOptsSize, 472)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kObjCOptsV1, 1)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kObjCOptsV2, 2)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCOptsV1Bytes, 56)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCOptsV2Bytes, 72)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCSelectorBaseOffset, 48)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCHeaderInfoOffset, 8)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCLegacyHeaderInfoOffset, 12)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCHeaderInfoHeaderBytes, 8)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCHeaderInfoStrideOffset, 4)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCHeaderInfoRowBytes, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCHeaderInfoDyldRowBytes, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCLegacySelectorBaseOffset, 40)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCLegacyV16Bytes, 48)
+NEVERD_DYLD_CACHE_VALUE(size_t, kObjCLegacyV15Bytes, 32)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kObjCLegacyV15, 15)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kObjCLegacyV16, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMappingBytes, 32)
+NEVERD_DYLD_CACHE_VALUE(size_t, kLegacySlideMapping, 1)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideMappingBytes, 56)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapAddress, 0)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapSize, 8)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapFileOffset, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapMaxProtection, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapInitialProtection, 28)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapSlideOffset, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapSlideSize, 32)
+NEVERD_DYLD_CACHE_VALUE(size_t, kMapFlags, 40)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideMapMaxProtection, 48)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideMapInitialProtection, 52)
+NEVERD_DYLD_CACHE_VALUE(size_t, kOldSubcacheBytes, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSubcacheBytes, 56)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSubcacheVMOffset, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSubcacheSuffix, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSubcacheSuffixBytes, 32)
+NEVERD_DYLD_CACHE_VALUE(size_t, kImageBytes, 32)
+NEVERD_DYLD_CACHE_VALUE(size_t, kImageAddress, 0)
+NEVERD_DYLD_CACHE_VALUE(size_t, kImagePathOffset, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideHeaderBytes, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideVersion, 0)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlidePageSize, 4)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlidePageCount, 8)
+NEVERD_DYLD_CACHE_VALUE(size_t, kSlideValueAdd, 16)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kSlideV3, 3)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kSlideV5, 5)
+NEVERD_DYLD_CACHE_VALUE(uint32_t, kSlideV2, 2)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2HeaderBytes, 40)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2StartsOffset, 8)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2StartsCount, 12)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2ExtrasOffset, 16)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2ExtrasCount, 20)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2DeltaMask, 24)
+NEVERD_DYLD_CACHE_VALUE(size_t, kV2ValueAdd, 32)
+NEVERD_DYLD_CACHE_VALUE(uint16_t, kV2NoRebase, 0x4000)
+NEVERD_DYLD_CACHE_VALUE(uint16_t, kV2Extra, 0x8000)
+NEVERD_DYLD_CACHE_VALUE(uint16_t, kV2End, 0x8000)
+NEVERD_DYLD_CACHE_VALUE(uint16_t, kV2IndexMask, 0x3fff)
+NEVERD_DYLD_CACHE_VALUE(unsigned, kV2Stride, 4)
+NEVERD_DYLD_CACHE_VALUE(unsigned, kV2StrideLog2, 2)
+NEVERD_DYLD_CACHE_VALUE(uint16_t, kNoRebase, 0xffff)
+NEVERD_DYLD_CACHE_VALUE(unsigned, kChainStride, 8)
+NEVERD_DYLD_CACHE_VALUE(unsigned, kDataKey, 2)
+NEVERD_DYLD_CACHE_FIELD(kV3Unused, 62, 1)
+NEVERD_DYLD_CACHE_FIELD(kV5Target, 0, 34)
+NEVERD_DYLD_CACHE_FIELD(kV5High8, 34, 8)
+NEVERD_DYLD_CACHE_FIELD(kV5Unused, 42, 10)
+NEVERD_DYLD_CACHE_FIELD(kV5Diversity, 34, 16)
+NEVERD_DYLD_CACHE_FIELD(kV5AddressDiversity, 50, 1)
+NEVERD_DYLD_CACHE_FIELD(kV5KeyIsData, 51, 1)
+NEVERD_DYLD_CACHE_FIELD(kV5Next, 52, 11)
+
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxFiles, 256)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxMappings, 4096)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxImages, 65536)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxPathBytes, 4096)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxFixups, 1u << 24)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxSlidePages, 1u << 22)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxImageCommands, 65536)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxImageCommandBytes, 4u << 20)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxPreparedImageBytes, 512u << 20)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxImageSymbols, 1u << 24)
+NEVERD_DYLD_CACHE_LIMIT(size_t, kMaxImageSymbolBytes, 1u << 20)
+NEVERD_DYLD_CACHE_VALUE(unsigned, kMaxSectionAlignmentExponent, 31)
+
+NEVERD_DYLD_CACHE_TEXT(kMalformedHeader, "dyld cache: malformed arm64e header")
+NEVERD_DYLD_CACHE_TEXT(kMalformedMappings,
+                       "dyld cache: invalid or overlapping mappings")
+NEVERD_DYLD_CACHE_TEXT(kMalformedSubcaches,
+                       "dyld cache: invalid subcache table, UUID or placement")
+NEVERD_DYLD_CACHE_TEXT(kMalformedImages,
+                       "dyld cache: invalid image address or path")
+NEVERD_DYLD_CACHE_TEXT(kMalformedImageLayout,
+                       "dyld cache: invalid cached Mach-O segment or section")
+NEVERD_DYLD_CACHE_TEXT(
+    kAmbiguousImageFileRange,
+    "dyld cache: missing or ambiguous cached image file range")
+NEVERD_DYLD_CACHE_TEXT(kMalformedSlides, "dyld cache: malformed slide chain")
+NEVERD_DYLD_CACHE_TEXT(kUnsupportedSlides,
+                       "dyld cache: unsupported arm64e slide version")
+NEVERD_DYLD_CACHE_TEXT(kLimitExceeded,
+                       "dyld cache: reader resource limit exceeded")
+NEVERD_DYLD_CACHE_TEXT(kMissingFile, "dyld cache: cannot open ")
+NEVERD_DYLD_CACHE_TEXT(kObjCLibraryPath, "/usr/lib/libobjc.A.dylib")
+NEVERD_DYLD_CACHE_TEXT(kObjCLegacyOptSection, "__objc_opt_ro")
+NEVERD_DYLD_CACHE_TEXT(
+    kMalformedObjCOpts,
+    "dyld cache: malformed Objective-C optimization metadata")
+NEVERD_DYLD_CACHE_TEXT(
+    kUnsupportedObjCOpts,
+    "dyld cache: unsupported Objective-C optimization version")
+NEVERD_DYLD_CACHE_TEXT(kLegacySuffix, ".{0}")
+NEVERD_DYLD_CACHE_TEXT(kForbiddenSuffixBytes, "/\\")
+
+#undef NEVERD_DYLD_CACHE_VALUE
+#undef NEVERD_DYLD_CACHE_FIELD
+#undef NEVERD_DYLD_CACHE_TEXT
+#undef NEVERD_DYLD_CACHE_LIMIT
