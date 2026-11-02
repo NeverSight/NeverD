@@ -504,6 +504,17 @@ this elementwise binding does not predict a physical CPU's internal grouping.
 Arrival and eligibility remain producer-owned. INS/OUTS still require a
 device-side-effect contract and retain explicit native boundaries.
 
+The [REP qualification](evidence/x86-paged-rep-2026-11-02.json) records 759
+passing checks across the fork and r6 SDKs, with two unavailable LA57 checks
+and one r6-only native-interface check explicitly skipped. Its 827,562
+original-CPU comparisons include 201,312 REP comparisons, 59,776 REP fault
+cases and 14,208 partially completed fault cases; the latter two are subsets.
+The 1,280 REP policy/backing checks are separate. Both SDKs emit identical
+680-file paged captures; all 112 REP captures also match across P/E cores,
+including 56 source files without inline assembly. Existing IRET #AC VMX/NMI
+differences remain separately counted. These results qualify the declared
+profiles, not every x86 environment or physical interrupt arrival schedule.
+
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
 volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/PUSH/POP/REP,
 volume 3A paging, exception priority
