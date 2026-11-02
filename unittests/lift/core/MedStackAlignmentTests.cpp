@@ -1487,6 +1487,42 @@ TEST(MedStackAlignment, EntryLiveInQueriesKeepExactRegisterOccurrences) {
   }
 }
 
+TEST(MedStackAlignment, VersionZeroPhiCyclesDoNotInventAnEntryOrigin) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(testing::Message() << static_cast<int>(Architecture) << ":"
+                                      << static_cast<int>(Format));
+      auto Func = frameWithEntrySP(Architecture);
+      auto &Block = Func.Blocks.front();
+      Block.Ops.clear();
+      PhiNode First;
+      First.Output = reg(0, Architecture);
+      First.Args = {{0, reg(1, Architecture)}};
+      PhiNode Second;
+      Second.Output = reg(1, Architecture);
+      Second.Args = {{0, reg(0, Architecture)}};
+      Block.Phis = {First, Second};
+      const std::vector<MedVar> Values{First.Output, Second.Output};
+      const std::vector<std::optional<int64_t>> Missing(Values.size());
+      EXPECT_EQ(entryStackOffsets(Func, Values, Architecture, Format), Missing);
+      EXPECT_EQ(entryStackOffsetUpperBounds(Func, Values, Architecture, Format),
+                Missing);
+      for (const auto &Range :
+           entryStackOffsetRanges(Func, Values, Architecture, Format))
+        EXPECT_FALSE(Range);
+      for (const auto &Residue :
+           entryStackOffsetResidues(Func, Values, Architecture, Format, 16))
+        EXPECT_FALSE(Residue);
+
+      // Removing the definitions leaves a genuine unversioned SSA live-in.
+      Block.Phis.clear();
+      EXPECT_EQ(entryStackOffsets(Func, Values, Architecture, Format),
+                (std::vector<std::optional<int64_t>>{0, std::nullopt}));
+    }
+  }
+}
+
 TEST(MedStackAlignment, EntryStackQueriesRejectUnauthenticatedMarkers) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
     SCOPED_TRACE(static_cast<int>(Architecture));
@@ -1544,7 +1580,8 @@ TEST(MedStackAlignment, EntryStackQueriesRejectUnauthenticatedMarkers) {
   }
 }
 
-TEST(MedStackAlignment, EntryStackQueriesPreserveUndefinedIncomingSP) {
+TEST(MedStackAlignment,
+     EntryStackQueriesDistinguishUndefinedSPFromPhiDefinitions) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
     SCOPED_TRACE(static_cast<int>(Architecture));
     for (BinaryFormat Format :
@@ -1561,9 +1598,29 @@ TEST(MedStackAlignment, EntryStackQueriesPreserveUndefinedIncomingSP) {
           Join.Args = {{0, temp(20, Architecture)}};
           Func.Blocks[0].Phis.push_back(std::move(Join));
         }
-        EXPECT_EQ(entryStackOffset(Func, Entry, Architecture, Format), 0);
+        // A PHI is a first definition, even at SSA version zero. Its unknown
+        // input cannot establish the entry stack pointer.
+        const std::optional<int64_t> Expected =
+            WithJoin ? std::nullopt : std::optional<int64_t>{0};
+        EXPECT_EQ(entryStackOffset(Func, Entry, Architecture, Format),
+                  Expected);
         EXPECT_EQ(entryStackOffsets(Func, {Entry, Entry}, Architecture, Format),
-                  (std::vector<std::optional<int64_t>>{0, 0}));
+                  (std::vector<std::optional<int64_t>>{Expected, Expected}));
+        EXPECT_EQ(
+            entryStackOffsetUpperBounds(Func, {Entry}, Architecture, Format),
+            (std::vector<std::optional<int64_t>>{Expected}));
+        const auto Ranges =
+            entryStackOffsetRanges(Func, {Entry}, Architecture, Format);
+        ASSERT_EQ(Ranges.size(), 1u);
+        EXPECT_EQ(bool(Ranges.front()), !WithJoin);
+        if (Ranges.front()) {
+          EXPECT_EQ(Ranges.front()->Min, 0);
+          EXPECT_EQ(Ranges.front()->Max, 0);
+        }
+        EXPECT_EQ(
+            entryStackOffsetResidues(Func, {Entry}, Architecture, Format, 16),
+            (std::vector<std::optional<uint64_t>>{
+                WithJoin ? std::nullopt : std::optional<uint64_t>{0}}));
       }
     }
   }

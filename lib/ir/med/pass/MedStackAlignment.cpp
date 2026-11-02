@@ -300,9 +300,7 @@ public:
       // ways share is visited once instead of proved again for each way in.
       if (!OnlySeededRoots && Current.Kind == MedVar::Reg &&
           Current.RegOff == TRI.StackPointer &&
-          (authenticatedEntryLiveIn(Current, Definition) ||
-           (FollowJoins && Current.SSAVer == 0 &&
-            (!Definition || !Definition->Op)))) {
+          authenticatedEntryLiveIn(Current, Definition)) {
         N.Bound = 0;
         N.Exact = true;
         continue;
@@ -565,8 +563,7 @@ private:
     if (Definition && Definition->Ambiguous)
       return std::nullopt;
     if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.StackPointer &&
-        (authenticatedEntryLiveIn(Value, Definition) ||
-         (Value.SSAVer == 0 && !Definition)))
+        authenticatedEntryLiveIn(Value, Definition))
       return 0;
     if (!Definition || !RangeActive.insert(key(Value)).second)
       return std::nullopt;
@@ -835,7 +832,11 @@ private:
     // offset queries reuse authentication, and only for the exact occurrence.
     if (!FollowJoins)
       return safety::detail::isAuthenticatedEntryRegisterLiveIn(Func, Value);
-    if (!Definition || !Definition->Op)
+    // An undefined version-zero value is an SSA live-in. A PHI remains a
+    // definition even at version zero; a closed cycle cannot seed itself.
+    if (!Definition)
+      return Value.SSAVer == 0;
+    if (!Definition->Op)
       return false;
     if (!Definition->EntryChecked) {
       Definition->EntryLiveIn =
@@ -924,8 +925,7 @@ private:
       const MedOp *Op = Definition ? Definition->Op : nullptr;
       const bool EntryOrigin = !OnlySeededRoots && Value.Kind == MedVar::Reg &&
                                Value.RegOff == TRI.StackPointer &&
-                               (authenticatedEntryLiveIn(Value, Definition) ||
-                                (Value.SSAVer == 0 && !Op));
+                               authenticatedEntryLiveIn(Value, Definition);
       const bool Copy =
           Op && sameOccurrence(Op->Output, Value) && !Op->Dead &&
           Op->Opcode == NdOp::COPY && Op->NumInputs == 1 &&
@@ -1134,9 +1134,7 @@ private:
       }
       if (!OnlySeededRoots && Value.Kind == MedVar::Reg &&
           Value.RegOff == TRI.StackPointer &&
-          (authenticatedEntryLiveIn(Value, Definition) ||
-           (FollowJoins && Value.SSAVer == 0 &&
-            (!Definition || !Definition->Op))))
+          authenticatedEntryLiveIn(Value, Definition))
         return Replay(0);
       if (Definition && Definition->ProvenOffset && Definition->Op &&
           sameOccurrence(Definition->Op->Output, Value))

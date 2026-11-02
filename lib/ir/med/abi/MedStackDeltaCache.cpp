@@ -18,9 +18,14 @@ std::optional<int64_t> MedStackDeltaCache::query(const MedVar &Value,
     return stackPtrDelta(Func, TRI, Value, Depth, &Definitions, Format);
   const auto Key = std::make_tuple(static_cast<int>(Value.Kind), Value.Id,
                                    Value.SSAVer, Value.RegOff);
-  if (const auto It = Answers.find(Key); It != Answers.end()) {
+  // The entry-offset fallback validates the exact value occurrence, even
+  // when the local ABI walk only uses its SSA definition identity.
+  if (const auto It = Answers.find(Key);
+      It != Answers.end() && It->second.Size == Value.Size &&
+      It->second.TheArch == Value.TheArch &&
+      It->second.RenameTag == Value.RenameTag) {
     ++Stats.Hits;
-    return It->second;
+    return It->second.Delta;
   }
   const auto Site = Definitions.find(Value);
   const auto Result =
@@ -29,7 +34,8 @@ std::optional<int64_t> MedStackDeltaCache::query(const MedVar &Value,
   // Keeping only actual definitions bounds retention by the source graph,
   // even when a caller asks about arbitrary absent value identities.
   if (Site.Op || Site.Phi)
-    Answers.try_emplace(Key, Result);
+    Answers.insert_or_assign(
+        Key, Answer{Value.Size, Value.TheArch, Value.RenameTag, Result});
   return Result;
 }
 

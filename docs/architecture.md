@@ -5118,8 +5118,11 @@ offset queries during one call-ABI recovery. It retains only depth-zero
 answers for values with actual definitions, bounding storage by that function's
 definition inventory. Deeper queries use the original bounded worker; a warm
 root answer cannot supply another query's depth allowance. The owner is local
-to one function and target, and adding a PHI invalidates both the index and
-answers. Floating-result normalization also invalidates every definition and
+to one function, target and binary format. A retained answer also matches the
+query's width, architecture and rename tag, as required by the entry-offset
+fallback. A different occurrence replaces the one retained answer for that
+definition. Adding a PHI invalidates both the index and answers.
+Floating-result normalization also invalidates every definition and
 value cache when it replaces a result or removes its synthetic integer halves.
 Operation insertion is deferred until queries have finished. Any
 future operand, operation or CFG mutation during recovery must invalidate this
@@ -8284,6 +8287,9 @@ Read-only offset queries lazily reuse the shared entry-register authenticator's
 answer for the canonical defining occurrence. Every use still checks exact
 register metadata; the fact lasts only for that immutable proof. Alignment
 rewrites continue to authenticate against the current entry COPY prefix.
+Exact offsets, upper bounds, ranges and alignment residues share this entry
+rule. An undefined version-zero SP is an SSA live-in; a version-zero PHI is
+still a definition and cannot give an unanchored cycle an entry origin.
 
 HighIR's call-result set uses the shared variable key for stores and indirect
 calls as well as definition indexing. Logical parameter numbers occupy a

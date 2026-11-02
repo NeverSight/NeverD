@@ -387,4 +387,68 @@ TEST(MedStackDelta, SharedAnswersKeepTheirStackPointerReference) {
   }
 }
 
+TEST(MedStackDelta, EntryProofRetainsOccurrenceAndFormatIdentity) {
+  const auto &TRI = getTargetRegInfo(Arch::X86);
+  MedFunc F;
+  F.Entry = 0x1000;
+  auto SP = rsp(0);
+  SP.TheArch = Arch::X86;
+  SP.RegOff = TRI.StackPointer;
+  SP.Size = 4;
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = F.Entry;
+  MedOp LiveIn;
+  LiveIn.Opcode = NdOp::COPY;
+  LiveIn.Output = SP;
+  LiveIn.addInput(SP);
+  Entry.Ops.push_back(LiveIn);
+  F.Blocks.push_back(std::move(Entry));
+  MedVar FP = SP;
+  FP.Id = 2;
+  FP.SSAVer = 1;
+  FP.RegOff = TRI.FramePointer;
+  MedVar Incoming = FP;
+  Incoming.SSAVer = 0;
+  MedBlock Runtime;
+  Runtime.Id = 1;
+  Runtime.StartAddr = 0x1100;
+  MedOp Frame;
+  Frame.Opcode = NdOp::COPY;
+  Frame.Output = FP;
+  Frame.addInput(Incoming);
+  Frame.RegistrationRoot = MedOp::RegistrationRootKind::EstablishedFramePointer;
+  Runtime.Ops.push_back(Frame);
+  F.Blocks.push_back(std::move(Runtime));
+
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
+    const std::optional<int64_t> Expected = Format == BinaryFormat::COFF
+                                                ? std::optional<int64_t>(-4)
+                                                : std::nullopt;
+    for (unsigned Mutation : {0u, 1u, 2u}) {
+      MedVar Other = FP;
+      if (Mutation == 0)
+        Other.Size = 2;
+      else if (Mutation == 1)
+        Other.TheArch = Arch::X64;
+      else
+        ++Other.RenameTag;
+      ASSERT_EQ(stackPtrDelta(F, TRI, FP, 0, nullptr, Format), Expected);
+      ASSERT_FALSE(stackPtrDelta(F, TRI, Other, 0, nullptr, Format));
+      for (bool Reversed : {false, true}) {
+        SCOPED_TRACE(testing::Message() << static_cast<int>(Format) << ":"
+                                        << Mutation << ":" << Reversed);
+        MedStackDeltaCache Cache(F, TRI, Format);
+        if (Reversed)
+          EXPECT_FALSE(Cache.query(Other));
+        for (unsigned Repeat = 0; Repeat != 3; ++Repeat) {
+          EXPECT_EQ(Cache.query(FP), Expected);
+          EXPECT_FALSE(Cache.query(Other));
+        }
+        EXPECT_EQ(Cache.retainedAnswers(), 1u);
+      }
+    }
+  }
+}
+
 } // namespace

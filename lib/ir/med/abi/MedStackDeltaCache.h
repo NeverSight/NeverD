@@ -45,12 +45,17 @@ public:
   size_t retainedAnswers() const { return Answers.size(); }
 
 private:
+  struct Answer {
+    uint16_t Size;
+    Arch TheArch;
+    int16_t RenameTag;
+    std::optional<int64_t> Delta;
+  };
   const MedFunc &Func;
   const TargetRegInfo &TRI;
   BinaryFormat Format;
   MedDefSiteIndex Definitions;
-  llvm::DenseMap<std::tuple<int, int, int, uint64_t>, std::optional<int64_t>>
-      Answers;
+  llvm::DenseMap<std::tuple<int, int, int, uint64_t>, Answer> Answers;
   Statistics Stats;
 };
 

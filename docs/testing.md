@@ -6834,7 +6834,10 @@ stub's fifth on the stack too, together with any its body reads past them.
 `NeverDMedStackDeltaTests` isolates the shared entry-stack offset worker and its
 per-recovery root cache. It checks equal and conflicting PHI chains, both query
 orders at the depth limit, cyclic and overflowing roots, separate functions
-and targets, and bounded retention of absent values. Invalidation cases edit
+and targets, and bounded retention of absent values. The entry-proof regression
+alternates valid and changed width, architecture or rename-tag occurrences in
+both query orders, while preserving the distinct PE and ELF frame contracts.
+Invalidation cases edit
 PHIs, operands and the reaching store of a saved-stack load. A call-recovery
 regression primes the index before floating-result normalization moves later
 definitions, then requires the following call's stack argument and exact
@@ -10773,6 +10776,10 @@ and malformed entry markers must refuse; an undefined incoming SP retains its
 existing SSA rule. Mutating the marker or function entry between calls must
 invalidate authentication. Run these batched and standalone checks across
 x86, x64, ARM32 and AArch64 in COFF, ELF and Mach-O.
+`VersionZeroPhiCyclesDoNotInventAnEntryOrigin` applies the same matrix to an
+unanchored version-zero SP cycle. Exact offsets, upper bounds, ranges and
+alignment residues must refuse, while removing the PHIs restores the genuine
+undefined live-in.
 
 Read-only stack-offset queries may reuse a successful join proof only for an
 exact occurrence when it did not depend on a loop assumption or active definition.
