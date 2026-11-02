@@ -199,7 +199,7 @@ public:
   template <typename Edit> void edit(Edit &&Action) {
     if (!Storage)
       Storage = std::make_shared<Map>();
-    else if (!Storage.unique())
+    else if (Storage.use_count() != 1)
       Storage = std::make_shared<Map>(*Storage);
     Action(*Storage);
   }
