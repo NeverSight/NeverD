@@ -1012,6 +1012,62 @@ static unsigned readsOf(const HighExpr *E, const VarKey &K) {
   return N;
 }
 
+namespace {
+/// The reads of one statement list, by run: a run ends at a return or a jump,
+/// that statement included, or at the end of the list.  One walk over the
+/// list answers how often a variable is read later in a run, instead of a
+/// rescan of the rest of the list for every assignment.  Each statement counts
+/// the reads its expression trees print, saturated at two; a shared operand
+/// is walked at most twice.
+class RunReads {
+public:
+  explicit RunReads(const std::vector<HighStmt> &Stmts)
+      : RunEnd(Stmts.size() + 1, Stmts.size()) {
+    for (size_t M = Stmts.size(); M-- > 0;)
+      RunEnd[M] =
+          Stmts[M].Kind == StmtKind::Return || Stmts[M].Kind == StmtKind::Goto
+              ? M
+              : RunEnd[M + 1];
+    for (size_t M = 0; M < Stmts.size(); ++M) {
+      VarKeyMap<int> Counts;
+      std::unordered_map<const HighExpr *, uint8_t> Visits;
+      forEachExpr(Stmts[M], [&](const ExprPtr &E) {
+        countExprVarUsesUpToTwo(E, Counts, Visits);
+      });
+      for (const auto &[Key, Count] : Counts)
+        Reads[Key].push_back({M, Count});
+    }
+  }
+
+  /// Whether \p K is read exactly once by the statements from \p From to the
+  /// end of their run.
+  bool readOnce(size_t From, const VarKey &K) const {
+    auto It = Reads.find(K);
+    if (It == Reads.end() || From + 1 >= RunEnd.size())
+      return false;
+    const size_t Last = RunEnd[From];
+    const std::vector<StmtReads> &Uses = It->second;
+    auto Use = std::lower_bound(
+        Uses.begin(), Uses.end(), From,
+        [](const StmtReads &R, size_t Index) { return R.Index < Index; });
+    int Total = 0;
+    for (; Use != Uses.end() && Use->Index <= Last && Total < 2; ++Use)
+      Total += Use->Count;
+    return Total == 1;
+  }
+
+private:
+  struct StmtReads {
+    size_t Index;
+    int Count;
+  };
+  /// The statement ending each statement's run, or the list size.
+  std::vector<size_t> RunEnd;
+  /// The statements reading each variable, in list order.
+  VarKeyMap<std::vector<StmtReads>> Reads;
+};
+} // namespace
+
 bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
                                const std::set<va_t> &DispatcherEntries) {
   constexpr size_t kMaxTailAssigns = limits::kMaxReturnTailStatements;
@@ -1024,6 +1080,9 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
   const LabelStarts Starts(Body);
   std::map<va_t, std::vector<HighStmt>> Tails;
   std::map<va_t, TryContext> TailContexts;
+  // Built on first use for each list; nothing changes the lists until every
+  // tail is collected.
+  std::map<const std::vector<HighStmt> *, RunReads> ListReads;
   // The tail that runs from Stmts[I]: a few pure assignments ending in a
   // return, in a jump to a known tail in the same protection \p Ctx, or at
   // the end of the list followed by \p Cont (what runs after the construct
@@ -1048,16 +1107,9 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
       if (S.Kind != StmtKind::Assign || !S.Dst ||
           S.Dst->Kind != ExprKind::Var || S.Dst->Var.Kind != MedVar::Temp)
         return Count;
-      const VarKey K = varKey(S.Dst->Var);
-      unsigned Uses = 0;
-      for (size_t M = N + 1; M < Stmts.size(); ++M) {
-        forEachExpr(Stmts[M],
-                    [&](const ExprPtr &E) { Uses += readsOf(E.get(), K); });
-        if (Stmts[M].Kind == StmtKind::Return ||
-            Stmts[M].Kind == StmtKind::Goto)
-          break;
-      }
-      return Uses == 1 ? 0 : Count;
+      const RunReads &Reads =
+          ListReads.try_emplace(&Stmts, Stmts).first->second;
+      return Reads.readOnce(N + 1, varKey(S.Dst->Var)) ? 0 : Count;
     };
     size_t J = First;
     size_t Assigns = 0, Statements = 0;
@@ -1154,6 +1206,7 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
     if (Tails.size() == Before)
       break;
   }
+  ListReads.clear();
   if (Tails.empty())
     return false;
   // A tail that cannot raise an exception runs the same in any protection

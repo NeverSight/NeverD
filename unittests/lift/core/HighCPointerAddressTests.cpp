@@ -10,6 +10,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
+#include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -45460,6 +45461,78 @@ TEST(HighCPointerAddresses, ReturnTailContinuesPastTheEndOfAnArm) {
   ASSERT_EQ(Body[0].Body.size(), 2u);
   EXPECT_EQ(Body[0].Body[0].Val->ConstVal, 1u);
   EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
+}
+
+TEST(HighCPointerAddresses, PrintedReturnTailWeighsReadsInItsOwnRun) {
+  // if (c) goto T; return; T: t1 = 1; t2 = t1; ... tN = tN-1; return tN;
+  // By printed size a temporary read once later in its run prints inside
+  // that read, so N assignments, one more than the limit, fit it.  The run
+  // ends at its return or jump: later reads do not count.  A shared operand
+  // read twice counts twice, as it prints twice.
+  constexpr int N = static_cast<int>(limits::kMaxReturnTailStatements) + 1;
+  auto Temp = [](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 8;
+    return HighExpr::makeVar(V);
+  };
+  auto Assign = [](va_t Addr, ExprPtr Dst, ExprPtr Val) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Addr;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Val);
+    return S;
+  };
+  auto Read = [&](int Id, bool Twice) {
+    ExprPtr V = Temp(Id);
+    return Twice ? HighExpr::makeBinop(NdOp::INT_ADD, V, V) : V;
+  };
+  auto Tail = [&](bool Twice) {
+    std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1100),
+                                  returnAt(0x1010)};
+    Body.push_back(Assign(0x1100, Temp(1), HighExpr::makeConst(1, 8)));
+    for (int I = 2; I <= N; ++I)
+      Body.push_back(Assign(0x1100 + 4 * (I - 1), Temp(I), Read(I - 1, Twice)));
+    return Body;
+  };
+  const va_t End = 0x1100 + 4 * N;
+  auto ReturnOf = [&](int Id, bool Twice, va_t Addr) {
+    HighStmt S = returnAt(Addr);
+    S.RetVal = Read(Id, Twice);
+    return S;
+  };
+  // Dead code reading every temporary again.
+  auto ReadAll = [&]() {
+    ExprPtr Sum = Temp(1);
+    for (int I = 2; I <= N; ++I)
+      Sum = HighExpr::makeBinop(NdOp::INT_ADD, Sum, Temp(I));
+    return Assign(0x2000, Temp(N + 1), Sum);
+  };
+  auto Copied = [](std::vector<HighStmt> Body, bool PrintedSize) {
+    duplicateSmallReturnTails(Body, PrintedSize);
+    return countGotos(Body[0].Body) == 0;
+  };
+
+  std::vector<HighStmt> Returning = Tail(false);
+  Returning.push_back(ReturnOf(N, false, End));
+  EXPECT_TRUE(Copied(Returning, /*PrintedSize=*/true));
+  EXPECT_FALSE(Copied(Returning, /*PrintedSize=*/false));
+  Returning.push_back(ReadAll());
+  EXPECT_TRUE(Copied(Returning, /*PrintedSize=*/true));
+
+  // `goto E; <reads>; E: return tN;` composes the tail; its run ends at the
+  // jump.
+  std::vector<HighStmt> Jumping = Tail(false);
+  Jumping.push_back(gotoAt(End, 0x3000));
+  Jumping.push_back(ReadAll());
+  Jumping.push_back(ReturnOf(N, false, 0x3000));
+  EXPECT_TRUE(Copied(Jumping, /*PrintedSize=*/true));
+
+  std::vector<HighStmt> Shared = Tail(true);
+  Shared.push_back(ReturnOf(N, true, End));
+  EXPECT_FALSE(Copied(Shared, /*PrintedSize=*/true));
 }
 
 TEST(HighCPointerAddresses, ReduceGotosUnrotatesAJumpIntoTheLoopTest) {
