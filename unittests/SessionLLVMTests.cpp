@@ -529,6 +529,23 @@ TEST_F(SessionLLVMTest, SourceOnlyStackLimitSurvivesModulePreparation) {
     }
 }
 
+TEST_F(SessionLLVMTest, TentativeSourceCacheCannotAuthorizeNativeLLVM) {
+  auto Function = sourceFunction();
+  Function.AnalysisOnly = true;
+  State.PipeResult.MedFuncs.push_back(Function);
+  for (bool NoOpt : {false, true}) {
+    State.clearError();
+    const auto *Source = State.ensureFunctionLlvmModule(0x1000, NoOpt, true);
+    ASSERT_TRUE(Source) << State.LastError;
+    EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, NoOpt, true), Source);
+    EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, NoOpt, false), nullptr);
+    EXPECT_NE(State.LastError.find("Tentative analysis recovery"),
+              std::string::npos);
+    EXPECT_FALSE(State.ensureLlvmModule(NoOpt));
+    EXPECT_TRUE(State.PipeResult.Success);
+  }
+}
+
 TEST_F(SessionLLVMTest, MissingIdentityNeverFallsBackToSymbolSpelling) {
   addFunction("sub_1000", std::nullopt);
   addFunction("sub_100", 0x2000);

@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDBackendC
   CSourceRecorder.cpp
   CSourceEvidence.cpp
+  CAnalysisDispatch.cpp
   DebugParamBinding.cpp
   dialect/CDialect.cpp
   dialect/CSyntaxLexer.cpp
@@ -39,6 +40,7 @@ add_neverd_component_library(NeverDBackendC
   LLVMC/LLVMCScalarRegions.cpp
   LLVMC/LLVMCScalarExpressions.cpp
   LLVMC/LLVMCStmtWriter.cpp
+  LLVMC/LLVMCAnalysisDispatch.cpp
   LLVMC/LLVMCStackAllocation.cpp
   pass/HighC/HighCDeadStoreAnalysis.cpp
   pass/HighC/HighCHiLoCollapse.cpp

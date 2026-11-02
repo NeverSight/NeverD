@@ -232,8 +232,8 @@ struct PipelineOptions {
   /// Display recovery may use tentative control-flow and stack relationships.
   /// Binary output and specialization always request independent evidence.
   bool allowsAnalysisRecovery() const {
-    return !PatchMode && !LiftMode && !DumpLlvm && !MedAnalysisOnly &&
-           !InterpreterSpecialization.has_value();
+    return !PatchMode && (!LiftMode || SourceProjection) && !DumpLlvm &&
+           !MedAnalysisOnly && !InterpreterSpecialization.has_value();
   }
 
   /// Machine analysis and rewriting exclude presentation-only source hints.
@@ -858,7 +858,7 @@ private:
       const std::set<va_t> *PrototypeArgumentCallees = nullptr,
       bool PreserveUnknownSourceValues = false,
       llvm::ArrayRef<MedFunc> SourceCalleeDeclarations = {},
-      bool OmitRefusedBodies = false);
+      bool OmitRefusedBodies = false, bool AnalysisRecoveryForSource = false);
 
   /// Execute the common shard lifecycle. The emitter creates each module in
   /// its worker's context; only a complete linked module is returned in the

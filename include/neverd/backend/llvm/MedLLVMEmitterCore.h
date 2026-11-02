@@ -99,6 +99,11 @@ public:
   void setAnalystSourceProjection(bool Enabled) {
     AnalystSourceProjection = Enabled;
   }
+  /// Display tentative control flow only in a private LLVM-to-C module.
+  /// Native LLVM, patching and runtime reconstruction retain strict admission.
+  void setAnalysisRecoveryForSource(bool Enabled) {
+    AnalysisRecoveryForSource = Enabled;
+  }
   using SourceTargetSignatures =
       std::map<std::string, std::pair<llvm::FunctionType *, unsigned>>;
   void setSourceTargetSignatures(const SourceTargetSignatures *Signatures) {
@@ -194,6 +199,7 @@ private:
   llvm::Value *emitPortableX87Intrinsic(const MedOp &Op,
                                         llvm::IRBuilder<> &Builder);
   bool AnalystSourceProjection = false;
+  bool AnalysisRecoveryForSource = false;
   bool PreserveUnknownSourceValues = false;
   bool OriginalImageStorageForSource = false;
   bool usesOriginalImageStorage() const;
@@ -584,6 +590,9 @@ private:
   bool emitJumpTableSwitch(const MedBlock &Blk, const MedOp &BrOp,
                            std::map<int, llvm::BasicBlock *> &BBMap,
                            llvm::IRBuilder<> &Builder);
+  bool emitAnalysisDispatch(const MedBlock &Block, const MedOp &Branch,
+                            const std::map<int, llvm::BasicBlock *> &BBMap,
+                            llvm::IRBuilder<> &Builder);
 
   /// Synthesize the byte-offset switch selector for a two-table dispatch
   /// (`base = cond ? A : B; jmp *base[idx]`, see JumpTable::TwoTableSelect):

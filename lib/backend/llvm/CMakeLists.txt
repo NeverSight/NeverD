@@ -48,6 +48,7 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
 
 add_neverd_component_library(NeverDBackendLLVM
   LLVMSourceMap.cpp
+  emit/MedLLVMAnalysisDispatch.cpp
   AArch64/MedLLVMAArch64Sideeffect.cpp
   AArch64/MedLLVMAArch64ValueEmitter.cpp
   ARM/MedLLVMARMSideeffect.cpp

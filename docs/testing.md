@@ -582,8 +582,13 @@ settings. Malformed analysis call operands are rejected separately.
 An unproved dispatch selector retains both case bodies and an unknown-target
 arm in HighIR while preserving the native refusal. Damaged, oversized or
 unmarked tables cannot use that display route.
-HighC checks the unknown-target exit's original address and indirect jump
-annotation, including suppression when comments are disabled.
+HighC and LLVMC check the unknown-target exit's original address and indirect
+jump annotation, including suppression when comments are disabled. Private
+LLVM source tests keep distinct exit sites through optimization, retain a
+generic unresolved-jump comment without image bytes and reject malformed
+display markers. Both optimized and unoptimized source pipeline requests
+exercise the original machine-byte fixture. The session LLVM suite checks
+that a cached tentative source module cannot authorize native LLVM output.
 The ELF control leaves the PE32 strategy disabled. These fixtures only decode
 bytes; they do not run the input program. Pair them with pipeline-outcome and
 registration-callee suites, then measure complete GOF2 analysis separately.
