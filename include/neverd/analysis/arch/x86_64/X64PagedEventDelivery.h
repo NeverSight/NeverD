@@ -46,6 +46,13 @@ enum class X64PagedFarReturnProfile : uint8_t {
 /// Qualified on both local hybrid core types, never inferred from the host.
 enum class X64PagedFarPointerProfile : uint8_t { OffsetFirst };
 
+/// Selector word, descriptor validation, then conditional qword accessed
+/// update. POP reads two bytes and publishes its two/eight-byte stack increment
+/// only with the cache. The scheduler starts MOV-SS inhibition unless an
+/// incoming MOV-SS window is already active; STI does not prevent that start.
+/// Processor observations require explicit target qualification.
+enum class X64PagedSegmentMoveProfile : uint8_t { SelectorFirst };
+
 enum class X64PagedEventStatus : uint8_t {
   Delivered,
   Deferred,
@@ -133,6 +140,18 @@ loadX64PagedFarPointer(X64ContinuationStateV6 &State,
                        X64PagedAlignmentPriority AlignmentPriority,
                        X64PagedFarPointerProfile Profile,
                        std::optional<X64NullSegmentBasePolicy> NullBasePolicy);
+
+/// Execute an authenticated long-mode selector MOV/POP over explicit state.
+/// The caller owns MOV-SS interruptibility; generated source uses its
+/// persistent scheduler. Fault delivery and instruction-budget accounting
+/// belong to the executor, not this descriptor/operand transition.
+llvm::Expected<X64PagedInstructionTransitionResult>
+moveX64PagedSegment(X64ContinuationStateV6 &State,
+                    translate::X86PagedMemory &Memory,
+                    llvm::ArrayRef<uint8_t> Instruction,
+                    X64PagedAlignmentPriority AlignmentPriority,
+                    X64PagedSegmentMoveProfile Profile,
+                    std::optional<X64NullSegmentBasePolicy> NullBasePolicy);
 
 } // namespace neverd::analysis
 

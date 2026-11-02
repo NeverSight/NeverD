@@ -12,6 +12,7 @@
 
 #include "X64ContinuationDelivery.h"
 #include "X64ContinuationEvents.h"
+#include "X64ContinuationSegmentMoves.h"
 #include "X64FarPointerEncoding.h"
 
 #include "neverd/ir/TargetRegInfo.h"
@@ -314,10 +315,22 @@ private:
       for (unsigned I = 0; I != Size; ++I)
         Bytes[I] = Value >> (I * 8);
     }
-    auto R = Write
-                 ? Memory.store(Access, llvm::ArrayRef(Bytes).take_front(Size))
-                 : Memory.load(Access,
-                               llvm::MutableArrayRef(Bytes).take_front(Size));
+    auto AccessMemory =
+        [&]() -> llvm::Expected<translate::X86MemoryAccessResult> {
+      if (!Write)
+        return Memory.load(Access,
+                           llvm::MutableArrayRef(Bytes).take_front(Size));
+      auto Prepared = Memory.prepareStore(Access, Size);
+      if (!Prepared)
+        return Prepared.takeError();
+      // A post-translation #AC must retain page-walk effects without
+      // publishing the explicit selector store.
+      if (Prepared->Status == X86PageWalkStatus::Completed && !AlignmentFault)
+        Memory.commitStore(*Prepared, llvm::ArrayRef(Bytes).take_front(Size));
+      return std::move(
+          static_cast<translate::X86MemoryAccessResult &>(*Prepared));
+    };
+    auto R = AccessMemory();
     if (!R) {
       Error = R.takeError();
       Stopped = true;
@@ -506,6 +519,38 @@ loadX64PagedFarPointer(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   Transfer.farPointerLoad(*Pointer,
                           State.Core.Core.Core.Core.PC + Instruction.size(),
                           NullBasePolicy);
+  if (W.Error)
+    return std::move(*W.Error);
+  X64PagedInstructionTransitionResult Result;
+  Result.Exception = W.Fault;
+  Result.BackingFault = W.Result.BackingFault;
+  Result.Completed = W.Exit == X64ContinuationExitV1::Continue;
+  Result.InstructionAttempted =
+      Result.Completed || bool(Result.Exception) || W.InstructionEffects;
+  if (Result.Completed)
+    State = Next;
+  return Result;
+}
+
+llvm::Expected<X64PagedInstructionTransitionResult>
+moveX64PagedSegment(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                    llvm::ArrayRef<uint8_t> Instruction,
+                    X64PagedAlignmentPriority AlignmentPriority,
+                    X64PagedSegmentMoveProfile Profile,
+                    std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
+  const auto Move = detail::x64SegmentMove(Instruction);
+  if (!Move)
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "invalid paged selector MOV/POP encoding");
+  assert(Profile == X64PagedSegmentMoveProfile::SelectorFirst);
+  auto Next = State;
+  const X64ContinuationEventV1 Event{};
+  TransitionWriter W(Next, Memory, Event, 0);
+  W.AlignmentPriority = AlignmentPriority;
+  detail::X64ContinuationSegmentMoves<TransitionWriter> Transfer(
+      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
+  Transfer.execute(*Move, State.Core.Core.Core.Core.PC + Instruction.size(),
+                   NullBasePolicy);
   if (W.Error)
     return std::move(*W.Error);
   X64PagedInstructionTransitionResult Result;

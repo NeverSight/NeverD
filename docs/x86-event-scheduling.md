@@ -86,8 +86,10 @@ dispatch setting. It does not poll inside REP, native services, HLE or other
 partial instructions. Native RTM region bindings are rejected: their checkpoint
 cannot be split into these source boundaries. Selected steps retain their
 existing mode/privilege/flags domains. The event function's compatibility-entry
-domain does not create an i386 dispatcher. MOV/POP SS remain native boundaries;
-tracking supplied inhibition does not implement their descriptor-load execution.
+domain does not create an i386 dispatcher. MOV/POP SS remain native boundaries
+in this successful-RAM interface. The [paged MOV SS binding](x86-paged-execution.md#faultable-selector-mov-and-pop)
+owns long-mode descriptor loads and persistent inhibition through this shared
+scheduler; legacy POP SS is still outside that binding.
 This successful-RAM interface does not own restartable page faults or nested
 delivery faults; the paged binding now owns those interactions with scheduling.
 APIC/devices, SGX AEX, SMI entry and CET/FRED routing remain unfinished boundaries.
@@ -136,5 +138,6 @@ The LSS subset contributes 46,080 comparisons. All 484 captured C/header/JSON
 exports match between SDKs; eight historical scheduling samples intentionally
 expand their selected instruction set, and the other 178 earlier outputs remain
 unchanged. The previously documented 544 IRET #AC VMX/NMI discrepancies remain
-separate from matching hardware fields. This validates existing LSS semantics;
-paged segment-load support remains outside the scalar/return admission contract.
+separate from matching hardware fields. This historical qualification validates
+LSS event semantics; the later paged binding now also owns faultable LSS/LFS/LGS
+and selector MOV/POP, as documented in the paged execution contract.

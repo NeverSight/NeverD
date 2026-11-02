@@ -136,93 +136,15 @@ public:
         op(NdOp::INT_ZEXT, {op(NdOp::LOAD, {SelectorAddress}, 2)});
     if constexpr (Writer::FaultableMemory)
       W.instructionAccess(false);
-    const bool SS = F.DestinationSegment == X64FarPointerSegment::SS;
-    const bool GS = F.DestinationSegment == X64FarPointerSegment::GS;
-    const uint64_t Offset = SS   ? offsetof(V5, SS)
-                            : GS ? offsetof(V6, GS)
-                                 : offsetof(V6, FS);
-    const uint64_t SelectorOffset =
-        Offset +
-        (SS ? offsetof(Segment, Selector) : offsetof(Metadata, Selector));
-    const uint64_t BaseOffset =
-        GS ? offsetof(State, GSBase) : offsetof(State, FSBase);
-    const unsigned UnusableBit = SS ? 2 : GS ? 32 : 16;
-    const auto Null = eq(masked(Selector, 0xfffc), k(0));
-    NdVar CPL = k(0);
-    if constexpr (Writer::FaultableMemory)
-      CPL = masked(load(offsetof(V5, CS) + offsetof(Segment, Selector), 2), 3);
-    if (SS || NullBasePolicy) {
-      // Null SS is permitted at CPL0..2 with RPL=CPL. A null load never
-      // consults the GDT/LDT, even when their addresses are unmapped or
-      // noncanonical.
-      if (SS) {
-        if constexpr (Writer::FaultableMemory)
-          faultIf(both(Null, either(eq(CPL, k(3)), ne(Selector, CPL))), 13,
-                  k(0));
-        else
-          W.rejectIf(both(Null, ne(Selector, k(0))));
-      }
-      W.exitIf(Null, [&] {
-        if (!SS && *NullBasePolicy == X64NullSegmentBasePolicy::Clear)
-          W.store(BaseOffset, k(0));
-        W.store(SelectorOffset, narrow(Selector, 2));
-        W.store(offsetof(V6, Unusable),
-                narrow(op(NdOp::INT_OR,
-                          {load(offsetof(V6, Unusable), 1), k(UnusableBit)}),
-                       1));
-        W.write(NdVar::reg(F.Destination * 8, F.Bytes), Value);
-        W.leave(Exit::Continue, k(NextPC));
-      });
-    } else {
-      W.rejectIf(Null);
-    }
-    const auto D = descriptor(Selector);
-    const auto Access = shifted(D.Value, 40);
-    if constexpr (Writer::FaultableMemory) {
-      const auto Error = masked(Selector, 0xfffc);
-      const auto DPL = masked(shifted(Access, 5), 3);
-      if (SS) {
-        faultIf(either(ne(masked(Selector, 3), CPL),
-                       either(ne(masked(Access, 0x1a), k(0x12)), ne(DPL, CPL))),
-                13, Error);
-      } else {
-        faultIf(either(eq(masked(Access, 0x10), k(0)),
-                       eq(masked(Access, 0x0a), k(8))),
-                13, Error);
-        faultIf(both(ne(masked(Access, 12), k(12)),
-                     either(less(DPL, masked(Selector, 3)), less(DPL, CPL))),
-                13, Error);
-      }
-      faultIf(eq(masked(Access, 0x80), k(0)), SS ? 12 : 11, Error);
-    } else if (SS) {
-      W.rejectIf(ne(masked(Selector, 3), k(0)));
-      // Present writable data, DPL=CPL=0; expand-down and A are independent.
-      W.rejectIf(ne(masked(Access, 0xfa), k(0x92)));
-    } else {
-      W.rejectIf(ne(masked(Access, 0x90), k(0x90)));
-      W.rejectIf(eq(masked(Access, 0x0a), k(8))); // Execute-only code.
-      const auto DPL = masked(shifted(Access, 5), 3);
-      W.rejectIf(
-          both(ne(masked(Access, 12), k(12)), less(DPL, masked(Selector, 3))));
-    }
-    // Both pointer fields are captured before the descriptor's A-bit write.
-    // In particular the loaded offset can alias that very descriptor byte.
-    accessed(D);
-    if (SS) {
-      segment(Offset, Selector, D.Value);
-    } else {
-      W.store(BaseOffset, segmentBase(D.Value));
-      W.store(Offset + offsetof(Metadata, Limit),
-              narrow(segmentLimit(D.Value), 4));
-      W.store(SelectorOffset, narrow(Selector, 2));
-      W.store(Offset + offsetof(Metadata, Attributes),
-              narrow(segmentAttributes(D.Value), 2));
-    }
-    W.store(
-        offsetof(V6, Unusable),
-        narrow(masked(load(offsetof(V6, Unusable), 1), 0xff ^ UnusableBit), 1));
-    W.write(NdVar::reg(F.Destination * 8, F.Bytes), Value);
-    W.leave(Exit::Continue, k(NextPC));
+    const auto Register = F.DestinationSegment == X64FarPointerSegment::SS
+                              ? X86SegmentRegister::SS
+                          : F.DestinationSegment == X64FarPointerSegment::GS
+                              ? X86SegmentRegister::GS
+                              : X86SegmentRegister::FS;
+    this->loadDataSegment(Register, Selector, NullBasePolicy, [&] {
+      W.write(NdVar::reg(F.Destination * 8, F.Bytes), Value);
+      W.leave(Exit::Continue, k(NextPC));
+    });
   }
 
   std::vector<X64ContinuationCompatibilityChoice> iret(uint16_t Bytes) {

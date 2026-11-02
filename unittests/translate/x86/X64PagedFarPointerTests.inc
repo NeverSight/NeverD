@@ -8,56 +8,6 @@
 //===----------------------------------------------------------------------===//
 
 #if defined(__linux__) && defined(__x86_64__)
-void expectFarPointerCPU(const X64ContinuationStateV6 &State,
-                         const X64ContinuationStateV6 &Native,
-                         X86PagedMemory &Memory, const X64PagedNativeCPU &CPU,
-                         unsigned PageTableEnd = 0x14000) {
-  const auto &Core = State.Core.Core.Core.Core;
-  EXPECT_EQ(State.NMIBlocked, Native.NMIBlocked);
-  const auto &Want = Native.Core.Core.Core.Core;
-  EXPECT_EQ(Core.PC, Want.PC);
-  EXPECT_EQ(Core.RFlags, Want.RFlags);
-  for (unsigned I = 0; I != 16; ++I)
-    EXPECT_EQ(Core.GPR[I], Want.GPR[I]) << I;
-  EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
-  EXPECT_EQ(State.Unusable, Native.Unusable);
-  const auto CheckSegment = [&](const X64ContinuationSegment &A,
-                                const X64ContinuationSegment &B,
-                                unsigned Unusable) {
-    EXPECT_EQ(A.Selector, B.Selector);
-    if (!(Native.Unusable & Unusable)) {
-      EXPECT_EQ(A.Base, B.Base);
-      EXPECT_EQ(A.Limit, B.Limit);
-      EXPECT_EQ(A.Attributes, B.Attributes);
-    }
-  };
-  CheckSegment(State.Core.CS, Native.Core.CS, 1);
-  CheckSegment(State.Core.SS, Native.Core.SS, 2);
-  CheckSegment(State.DS, Native.DS, 4);
-  CheckSegment(State.ES, Native.ES, 8);
-  CheckSegment(
-      {Core.FSBase, State.FS.Limit, State.FS.Selector, State.FS.Attributes},
-      {Want.FSBase, Native.FS.Limit, Native.FS.Selector, Native.FS.Attributes},
-      16);
-  CheckSegment(
-      {Core.GSBase, State.GS.Limit, State.GS.Selector, State.GS.Attributes},
-      {Want.GSBase, Native.GS.Limit, Native.GS.Selector, Native.GS.Attributes},
-      32);
-  EXPECT_EQ(Core.FSBase, Want.FSBase);
-  EXPECT_EQ(Core.GSBase, Want.GSBase);
-  auto Actual = Memory.physicalMemory().snapshotMemoryRegions().front().Bytes;
-  auto WantRAM = std::vector<uint8_t>(CPU.RAM, CPU.RAM + CPU.Size);
-  std::fill(Actual.begin() + 0x10000, Actual.begin() + PageTableEnd, 0);
-  std::fill(WantRAM.begin() + 0x10000, WantRAM.begin() + PageTableEnd, 0);
-  if (Actual != WantRAM) {
-    const auto Difference =
-        std::mismatch(Actual.begin(), Actual.end(), WantRAM.begin());
-    ADD_FAILURE() << "RAM differs at " << (Difference.first - Actual.begin())
-                  << " actual=" << unsigned(*Difference.first)
-                  << " native=" << unsigned(*Difference.second);
-  }
-}
-
 TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
@@ -321,8 +271,9 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
             EXPECT_EQ(Exit, Handler ? 7u : 9u);
             EXPECT_EQ(Budget, 0u);
             EXPECT_EQ(Context.lastResult().InstructionCompleted, !Handler);
-            expectFarPointerCPU(State, Native, *Memory, CPU,
-                                Case == 146 || Case == 147 ? 0x17000 : 0x14000);
+            expectPagedSegmentCPU(State, Native, *Memory, CPU,
+                                  Case == 146 || Case == 147 ? 0x17000
+                                                             : 0x14000);
             ++Comparisons;
             Faults += Handler;
             if (HasFailure())
@@ -428,7 +379,7 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerWrapsFieldsAndCapturesOldBases) {
                 Handler ? 7u : 9u);
             EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
             EXPECT_EQ(Budget, 0u);
-            expectFarPointerCPU(State, Native, *Memory, CPU, 0x16000);
+            expectPagedSegmentCPU(State, Native, *Memory, CPU, 0x16000);
             ++Comparisons;
             if (HasFailure())
               return;
@@ -612,7 +563,7 @@ TEST_F(X64PagedExecutionTest, PagedLssComposesWithScheduledIRQAndNMI) {
           EXPECT_EQ(Shadow.SSBlocked, 0);
           EXPECT_EQ(P.Polls, 2u);
           EXPECT_EQ(P.Acks, 1u);
-          expectFarPointerCPU(State, Native, *Memory, CPU);
+          expectPagedSegmentCPU(State, Native, *Memory, CPU);
           ++Comparisons;
         }
     }
@@ -683,7 +634,7 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerHandlerRepairsMappingAndRetries) {
                                                 : Phase == 1 ? 0x1000u
                                                              : 0x1004u);
       }
-      expectFarPointerCPU(State, Native, *Memory, CPU);
+      expectPagedSegmentCPU(State, Native, *Memory, CPU);
       ++Comparisons;
     }
   RecordProperty("cpu_comparisons", Comparisons);

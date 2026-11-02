@@ -3409,6 +3409,18 @@ far-pointer encoding test also checks permutations of all six segment prefixes
 and refuses duplicate groups. Qualify both the full fork SDK and pinned r6
 library SDK, and compare their captured source/header/manifest artifacts.
 
+`X64PagedSegmentMoveTests.inc` and `X64PagedSegmentMoveBoundaryTests.inc`
+extend that same target with `*PagedSegment*:*PagedSelector*:*PagedMovSS*`.
+The CPU matrices cover selector MOV reads/writes and both POP targets, including
+exact two-byte access with an eight-byte POP increment, all selector privileges,
+old FS/GS bases, address32/SIB/EIP wrapping, null caches and descriptor faults.
+MOV SS checks consecutive loads, a following RSP switch, incoming STI/MOV-SS
+shadows, deferred IRQ/NMI and budget-stop persistence. Fault handlers repair
+a mapping, IRET and retry without a second POP increment. Separate software
+checks cover post-paging #AC store publication, malformed bytes, missing
+profiles, backing stops and instruction-only MOV-SS refusal. All new exports
+retain their test name so unrelated fixtures cannot overwrite the evidence.
+
 Faultable IRET is covered by `X64PagedExecutionTest.PagedInterruptReturnsMatchOriginalCPU`,
 `PagedIretComposesWithScheduledIRQAndNMI`,
 `PagedReturnFaultHandlerRepairsMappingAndRetries` and

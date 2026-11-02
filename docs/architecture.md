@@ -50,8 +50,15 @@ that evaluator and the existing far-pointer template: explicit operand access
 keeps its current CPL and original stack/data fault class, while descriptor
 access remains implicit supervisor. A qualified offset-first profile controls
 reads and qword accessed writes; both destinations publish together. The raw
-byte grammar also owns ignored long-mode segment prefixes. Device arrival remains
-producer-owned. See [paged RAM](x86-paged-memory.md) and
+byte grammar also owns ignored long-mode segment prefixes.
+`X64SegmentEncoding` now shares that prefix/address grammar with selector
+MOV/POP. `X64ContinuationSegments::loadDataSegment` owns their common descriptor
+checks and cache publication, while `X64ContinuationSegmentMoves` owns selector
+operand widths and POP's staged RSP update. The paged selector-store path
+prepares translation before publication so a post-paging #AC retains page-walk
+effects without a data write. MOV SS requires the scheduler's persistent shadow;
+the instruction-only driver refuses it. Device arrival remains producer-owned.
+See [paged RAM](x86-paged-memory.md) and
 [generated execution](x86-paged-execution.md); the default generated-C dispatcher
 retains its separate no-fault memory binding.
 

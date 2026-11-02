@@ -13,6 +13,7 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/translate/X86/X86PagedMemory.h"
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,7 @@ public:
   kvm_sregs Initial{};
   uint8_t PhysicalBits = 0;
   bool SMAP = false;
+  uint8_t InterruptShadow = 0;
   unsigned ReturnCoreType = 0;
   int ReturnProcessor = -1;
   std::optional<cpu_set_t> OriginalAffinity;
@@ -134,7 +136,8 @@ public:
           neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault,
           bool DisableDebugStop = false,
           const neverd::analysis::X64ContinuationEventV1 *Pending = nullptr,
-          uint64_t CR4 = 0x20, bool CaptureReturn = false) {
+          uint64_t CR4 = 0x20, bool CaptureReturn = false,
+          bool NormalizeReturnBreakpoint = true, bool InjectPending = true) {
     ASSERT_EQ(Input.size(), Size);
     std::copy(Input.begin(), Input.end(), RAM);
     const auto &Core = State.Core.Core.Core.Core;
@@ -206,7 +209,7 @@ public:
     }
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
     Run->request_interrupt_window = 0;
-    if (Pending) {
+    if (Pending && InjectPending) {
       if (Pending->Kind == neverd::analysis::X64ContinuationEventKind::NMI) {
         ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
       } else {
@@ -229,7 +232,7 @@ public:
         << "KVM exit " << Run->exit_reason;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);
-    if (CaptureReturn && R.rip == 0x1801) {
+    if (CaptureReturn && NormalizeReturnBreakpoint && R.rip == 0x1801) {
       // Restored RF suppresses the first execution breakpoint. The original
       // target NOP advances RIP and clears RF, with no other architectural
       // effect. The second breakpoint recovers that measured return state.
@@ -238,6 +241,7 @@ public:
     }
     Fault = Run->exit_reason == KVM_EXIT_HLT;
     ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &Events), 0);
+    InterruptShadow = Events.interrupt.shadow;
     Output = State;
     Output.NMIBlocked = Events.nmi.masked;
     auto &Out = Output.Core.Core.Core.Core;
@@ -270,6 +274,58 @@ public:
     }
   }
 };
+void expectPagedSegmentCPU(
+    const neverd::analysis::X64ContinuationStateV6 &State,
+    const neverd::analysis::X64ContinuationStateV6 &Native,
+    neverd::translate::X86PagedMemory &Memory, const X64PagedNativeCPU &CPU,
+    unsigned PageTableEnd = 0x14000) {
+  const auto &Core = State.Core.Core.Core.Core;
+  EXPECT_EQ(State.NMIBlocked, Native.NMIBlocked);
+  const auto &Want = Native.Core.Core.Core.Core;
+  EXPECT_EQ(Core.PC, Want.PC);
+  EXPECT_EQ(Core.RFlags, Want.RFlags);
+  for (unsigned I = 0; I != 16; ++I)
+    EXPECT_EQ(Core.GPR[I], Want.GPR[I]) << I;
+  EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
+  EXPECT_EQ(State.Unusable, Native.Unusable);
+  const auto CheckSegment =
+      [&](const neverd::analysis::X64ContinuationSegment &A,
+          const neverd::analysis::X64ContinuationSegment &B,
+          unsigned Unusable) {
+        EXPECT_EQ(A.Selector, B.Selector);
+        if (!(Native.Unusable & Unusable)) {
+          EXPECT_EQ(A.Base, B.Base);
+          EXPECT_EQ(A.Limit, B.Limit);
+          EXPECT_EQ(A.Attributes, B.Attributes);
+        }
+      };
+  CheckSegment(State.Core.CS, Native.Core.CS, 1);
+  CheckSegment(State.Core.SS, Native.Core.SS, 2);
+  CheckSegment(State.DS, Native.DS, 4);
+  CheckSegment(State.ES, Native.ES, 8);
+  CheckSegment(
+      {Core.FSBase, State.FS.Limit, State.FS.Selector, State.FS.Attributes},
+      {Want.FSBase, Native.FS.Limit, Native.FS.Selector, Native.FS.Attributes},
+      16);
+  CheckSegment(
+      {Core.GSBase, State.GS.Limit, State.GS.Selector, State.GS.Attributes},
+      {Want.GSBase, Native.GS.Limit, Native.GS.Selector, Native.GS.Attributes},
+      32);
+  EXPECT_EQ(Core.FSBase, Want.FSBase);
+  EXPECT_EQ(Core.GSBase, Want.GSBase);
+  auto Actual = Memory.physicalMemory().snapshotMemoryRegions().front().Bytes;
+  auto WantRAM = std::vector<uint8_t>(CPU.RAM, CPU.RAM + CPU.Size);
+  std::fill(Actual.begin() + 0x10000, Actual.begin() + PageTableEnd, 0);
+  std::fill(WantRAM.begin() + 0x10000, WantRAM.begin() + PageTableEnd, 0);
+  if (Actual != WantRAM) {
+    const auto Difference =
+        std::mismatch(Actual.begin(), Actual.end(), WantRAM.begin());
+    ADD_FAILURE() << "RAM differs at " << (Difference.first - Actual.begin())
+                  << " actual=" << unsigned(*Difference.first)
+                  << " native=" << unsigned(*Difference.second);
+  }
+}
+
 } // namespace
 #endif
 #endif // NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDNATIVECPU_H
