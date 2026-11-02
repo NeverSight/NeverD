@@ -521,15 +521,15 @@ bool divisionArithmetic(const LowOp &Op) {
   return Op.Opcode == NdOp::INT_OR;
 }
 
-// Integer widening is not specific to DIV: scalar vector loads and full-width
-// products use the same checked bit-vector operations and existing emitters.
+// Integer widening is not specific to DIV: scalar vector loads, full-width
+// products and vector masks use the same bit-vector operations and emitters.
 bool wideIntegerOperation(const LowOp &Op) {
   if ((Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) &&
       Op.Output.Size == 16 && Op.NumInputs == 1)
     return Op.Inputs[0].Size && Op.Inputs[0].Size <= 8;
   if (Op.NumInputs != 2 || Op.Inputs[0].Size != 16 || Op.Inputs[1].Size != 16)
     return false;
-  if (Op.Opcode == NdOp::INT_MULT)
+  if (Op.Opcode == NdOp::INT_MULT || Op.Opcode == NdOp::INT_AND)
     return Op.Output.Size == 16;
   return (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL) &&
          Op.Output.Size == 1;

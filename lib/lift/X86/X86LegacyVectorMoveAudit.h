@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Undefined-output admission for legacy vector moves and register XOR.
+/// Undefined-output admission for legacy vector moves and register logic.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_LIFT_X86_X86LEGACYVECTORMOVEAUDIT_H
@@ -95,21 +95,26 @@ inline bool byteShiftForm(const cs_insn *Insn, Arch Target) {
          !X.operands[1].avx_zero_opmask;
 }
 
-// Canonical register PSHUFD and MOVMSKPD have different destination widths
-// and immediate layouts. Bind both to bytes before admitting their effects.
+// Canonical register PSHUFD/SHUFPS and MOVMSKPD/MOVMSKPS have different
+// prefixes, destination widths and immediate layouts. Bind each to bytes.
 inline bool selectionForm(const cs_insn *Insn, Arch Target) {
-  const bool Shuffle = Insn->id == X86_INS_PSHUFD;
+  const bool Shuffle = Insn->id == X86_INS_PSHUFD || Insn->id == X86_INS_SHUFPS;
+  const uint8_t RequiredPrefix =
+      Insn->id == X86_INS_SHUFPS || Insn->id == X86_INS_MOVMSKPS ? 0 : 0x66;
   if ((Target != Arch::X86 && Target != Arch::X64) ||
-      (!Shuffle && Insn->id != X86_INS_MOVMSKPD) || Insn->size < 4 ||
-      Insn->size > 6 || Insn->bytes[0] != 0x66)
+      (!Shuffle && Insn->id != X86_INS_MOVMSKPD &&
+       Insn->id != X86_INS_MOVMSKPS) ||
+      Insn->size < 3 || Insn->size > 6 ||
+      (RequiredPrefix && Insn->bytes[0] != RequiredPrefix))
     return false;
   const auto &X = Insn->detail->x86;
-  size_t Pos = 1;
+  size_t Pos = RequiredPrefix ? 1 : 0;
   uint8_t Rex = 0;
   if (Target == Arch::X64 && Insn->bytes[Pos] >= 0x40 &&
       Insn->bytes[Pos] <= 0x4f)
     Rex = Insn->bytes[Pos++];
-  const uint8_t Opcode = Shuffle ? 0x70 : 0x50;
+  const uint8_t Opcode =
+      Insn->id == X86_INS_SHUFPS ? 0xc6 : (Shuffle ? 0x70 : 0x50);
   if ((Rex & 0x0a) || Pos + 3 + unsigned(Shuffle) != Insn->size ||
       Insn->bytes[Pos] != 0x0f || Insn->bytes[Pos + 1] != Opcode)
     return false;
@@ -118,7 +123,7 @@ inline bool selectionForm(const cs_insn *Insn, Arch Target) {
       X.opcode[0] != 0x0f || X.opcode[1] != Opcode || X.opcode[2] ||
       X.opcode[3] || X.modrm != ModRM || X.rex != Rex ||
       X.addr_size != (Target == Arch::X64 ? 8 : 4) || X.prefix[0] ||
-      X.prefix[1] || X.prefix[2] != 0x66 || X.prefix[3] ||
+      X.prefix[1] || X.prefix[2] != RequiredPrefix || X.prefix[3] ||
       X.encoding.modrm_offset != Pos + 2 || X.encoding.disp_offset ||
       X.encoding.disp_size || X.disp || X.sib ||
       X.encoding.imm_offset != (Shuffle ? Pos + 3 : 0) ||
@@ -245,6 +250,15 @@ inline bool form(const cs_insn *Insn, Arch Target) {
       llvm_unreachable("audited packed integer operation");
     }
     StoreOpcode = LoadOpcode;
+    break;
+  case X86_INS_ANDPS:
+  case X86_INS_ANDPD:
+    // Intel SDM: all 128 bits participate, with no floating-point exceptions
+    // or flag changes. Memory forms require their own alignment audit.
+    if (X.operands[1].type != X86_OP_REG || X.eflags)
+      return false;
+    RequiredPrefix = Insn->id == X86_INS_ANDPS ? 0 : 0x66;
+    LoadOpcode = StoreOpcode = 0x54;
     break;
   case X86_INS_XORPS:
   case X86_INS_XORPD:
