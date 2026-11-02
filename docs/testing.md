@@ -6854,6 +6854,9 @@ orders at the depth limit, cyclic and overflowing roots, separate functions
 and targets, and bounded retention of absent values. The entry-proof regression
 alternates valid and changed width, architecture or rename-tag occurrences in
 both query orders, while preserving the distinct PE and ELF frame contracts.
+The complete fallback's shared index is compared against independent queries
+through closed cycles and depth-limited joins in both orders. Invalidation
+also rechecks the entry kind, alignment operands and duplicate definitions.
 Invalidation cases edit
 PHIs, operands and the reaching store of a saved-stack load. A call-recovery
 regression primes the index before floating-result normalization moves later

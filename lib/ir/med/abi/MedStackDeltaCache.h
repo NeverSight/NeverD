@@ -10,6 +10,7 @@
 #ifndef NEVERD_IR_MED_ABI_MEDSTACKDELTACACHE_H
 #define NEVERD_IR_MED_ABI_MEDSTACKDELTACACHE_H
 
+#include "../pass/MedEntryStackOffsets.h"
 #include "MedABIPassDetail.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -29,7 +30,8 @@ class MedStackDeltaCache {
 public:
   MedStackDeltaCache(const MedFunc &Func, const TargetRegInfo &TRI,
                      BinaryFormat Format = BinaryFormat::Unknown)
-      : Func(Func), TRI(TRI), Format(Format), Definitions(Func) {}
+      : Func(Func), TRI(TRI), Format(Format), Definitions(Func),
+        EntryOffsets(Func, TRI.TheArch, Format) {}
   MedStackDeltaCache(const MedStackDeltaCache &) = delete;
   MedStackDeltaCache &operator=(const MedStackDeltaCache &) = delete;
 
@@ -55,6 +57,7 @@ private:
   const TargetRegInfo &TRI;
   BinaryFormat Format;
   MedDefSiteIndex Definitions;
+  MedEntryStackOffsets EntryOffsets;
   llvm::DenseMap<std::tuple<int, int, int, uint64_t>, Answer> Answers;
   Statistics Stats;
 };

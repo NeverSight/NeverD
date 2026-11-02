@@ -12,6 +12,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 
 #include "../../../safety/StackSlotFlow.h"
+#include "MedEntryStackOffsets.h"
 #include "MedScalarSelectRange.h"
 #include "MedStackRecurrence.h"
 
@@ -236,6 +237,16 @@ public:
   std::optional<int64_t> offset(const MedVar &Value) {
     Steps = 0;
     return resolve(Value, 0);
+  }
+
+  std::optional<int64_t> independentOffset(const MedVar &Value) {
+    // Keep a root query's budget and cycle state independent of earlier roots.
+    // Active definitions and assumptions are restored by the traversal itself.
+    Completed.clear();
+    ContextUses = 0;
+    Deepest = 0;
+    CycleHit = false;
+    return offset(Value);
   }
 
   std::optional<EntryStackOffsetRange> range(const MedVar &Value) {
@@ -1233,6 +1244,32 @@ private:
 };
 
 } // namespace
+
+struct MedEntryStackOffsets::Impl {
+  StackOffsetProof Proof;
+
+  Impl(const MedFunc &Func, Arch Architecture, BinaryFormat Format)
+      : Proof(Func, Architecture, Format, Func.EntryKind,
+              /*FollowJoins=*/true) {}
+};
+
+MedEntryStackOffsets::MedEntryStackOffsets(const MedFunc &Func,
+                                           Arch Architecture,
+                                           BinaryFormat Format)
+    : Func(Func), Architecture(Architecture), Format(Format) {}
+
+MedEntryStackOffsets::~MedEntryStackOffsets() = default;
+
+std::optional<int64_t> MedEntryStackOffsets::query(const MedVar &Value) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if ((TRI.PointerSize != 4 && TRI.PointerSize != 8) || Func.Blocks.empty())
+    return std::nullopt;
+  if (!Index)
+    Index = std::make_unique<Impl>(Func, Architecture, Format);
+  return Index->Proof.independentOffset(Value);
+}
+
+void MedEntryStackOffsets::invalidate() { Index.reset(); }
 
 std::optional<MedIntegerReturnRange>
 integerReturnRange(const MedFunc &Func, const LowFunc &Source,

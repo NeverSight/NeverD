@@ -9,16 +9,20 @@
 
 #include "../../../lib/ir/med/abi/MedABIPassDetail.h"
 #include "../../../lib/ir/med/abi/MedStackDeltaCache.h"
+#include "../../../lib/ir/med/pass/MedEntryStackOffsets.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace neverd;
@@ -449,6 +453,68 @@ TEST(MedStackDelta, EntryProofRetainsOccurrenceAndFormatIdentity) {
       }
     }
   }
+}
+
+TEST(MedStackDelta, FallbackIndexKeepsFreshProofsAcrossQueryOrder) {
+  MedFunc F;
+  const MedVar Last = joinChain(F, 65, {16, 16});
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  MedVar Closed = rsp(200);
+  PhiNode Cycle;
+  Cycle.Output = Closed;
+  Cycle.Args.emplace_back(F.Blocks.back().Id, Closed);
+  F.Blocks.back().Phis.push_back(Cycle);
+  for (bool Reversed : {false, true}) {
+    MedEntryStackOffsets Index(F, Arch::X64, BinaryFormat::ELF);
+    MedStackDeltaCache Cache(F, TRI, BinaryFormat::ELF);
+    std::vector<MedVar> Queries{Closed, Last, rsp(0)};
+    for (const auto &Block : F.Blocks)
+      for (const auto &Phi : Block.Phis)
+        Queries.push_back(Phi.Output);
+    if (Reversed)
+      std::reverse(Queries.begin(), Queries.end());
+    for (const auto &Value : Queries) {
+      EXPECT_EQ(Index.query(Value),
+                entryStackOffset(F, Value, Arch::X64, BinaryFormat::ELF,
+                                 F.EntryKind));
+      EXPECT_EQ(Cache.query(Value),
+                stackPtrDelta(F, TRI, Value, 0, nullptr, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MedStackDelta, FallbackInvalidationIncludesEntryAndOperandChanges) {
+  MedFunc F;
+  F.Entry = 0x1000;
+  F.Blocks.emplace_back().StartAddr = F.Entry;
+  MedOp LiveIn;
+  LiveIn.Opcode = NdOp::COPY;
+  LiveIn.Output = rsp(0);
+  LiveIn.addInput(rsp(0));
+  MedOp Align;
+  Align.Opcode = NdOp::INT_AND;
+  Align.Output = rsp(1);
+  Align.addInput(rsp(0));
+  Align.addInput(MedVar::makeConst(~uint64_t{15}, 8));
+  F.Blocks.front().Ops = {LiveIn, Align};
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  MedStackDeltaCache Cache(F, TRI, BinaryFormat::ELF);
+  ASSERT_EQ(Cache.query(Align.Output), -8);
+  F.EntryKind = StackEntryKind::ProcessEntry;
+  Cache.invalidate();
+  EXPECT_EQ(Cache.query(Align.Output), 0);
+  F.EntryKind = StackEntryKind::Call;
+  Cache.invalidate();
+  EXPECT_EQ(Cache.query(Align.Output), -8);
+  F.Blocks.front().Ops.back().Inputs[1] = MedVar::makeConst(~uint64_t{31}, 8);
+  Cache.invalidate();
+  EXPECT_FALSE(Cache.query(Align.Output));
+  F.Blocks.front().Ops.back().Inputs[1] = Align.Inputs[1];
+  Cache.invalidate();
+  EXPECT_EQ(Cache.query(Align.Output), -8);
+  F.Blocks.front().Ops.push_back(Align);
+  Cache.invalidate();
+  EXPECT_FALSE(Cache.query(Align.Output));
 }
 
 } // namespace

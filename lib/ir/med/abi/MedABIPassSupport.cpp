@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../safety/StackSlotFlow.h"
+#include "../pass/MedEntryStackOffsets.h"
 #include "MedABIPassDetail.h"
 
 #include "neverd/Common.h"
@@ -1171,7 +1172,8 @@ static StackDeltaWalk stackPtrDeltaAt(const MedFunc &Func,
 std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
                                      const TargetRegInfo &TRI, const MedVar &V,
                                      int Depth, MedDefSiteIndex *Defs,
-                                     BinaryFormat Format) {
+                                     BinaryFormat Format,
+                                     MedEntryStackOffsets *EntryOffsets) {
   StackDeltaMemo Memo;
   const auto Delta = stackPtrDeltaAt(Func, TRI, V, Depth, Defs, Memo).Delta;
   if (Delta || Depth)
@@ -1179,7 +1181,9 @@ std::optional<int64_t> stackPtrDelta(const MedFunc &Func,
   // Reuse the entry-offset owner's complete loop proof when the local ABI
   // walk cannot resolve mutually dependent stack PHIs. Calls and outgoing
   // stores must share that origin instead of losing later stack arguments.
-  return entryStackOffset(Func, V, TRI.TheArch, Format, Func.EntryKind);
+  return EntryOffsets
+             ? EntryOffsets->query(V)
+             : entryStackOffset(Func, V, TRI.TheArch, Format, Func.EntryKind);
 }
 
 static StackDeltaWalk stackPtrDeltaUncached(const MedFunc &Func,

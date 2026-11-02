@@ -5121,7 +5121,11 @@ root answer cannot supply another query's depth allowance. The owner is local
 to one function, target and binary format. A retained answer also matches the
 query's width, architecture and rename tag, as required by the entry-offset
 fallback. A different occurrence replaces the one retained answer for that
-definition. Adding a PHI invalidates both the index and answers.
+definition. The complete entry-offset fallback lazily owns one
+`pass/MedEntryStackOffsets` index per recovery, instead of rebuilding the
+function's definitions for every unresolved address. Each fallback root gets
+fresh proof state and its original work and depth allowance. Adding a PHI
+invalidates both definition indexes and all answers.
 Floating-result normalization also invalidates every definition and
 value cache when it replaces a result or removes its synthetic integer halves.
 Operation insertion is deferred until queries have finished. Any
