@@ -75,7 +75,9 @@ void prepareMedStackAccesses(MedFunc &Func, const LowFunc &Source,
                              bool WaitForCalleeFacts,
                              bool CallFreeMachineSource) {
   Func.EntryKind = functionEntryKind(Func, Image.stackEntryKindAt(Func.Entry));
-  if (Projection != MedStackProjection::Source)
+  // Tentative display bodies retain their physical operations. Native source
+  // frame proofs cannot reject that view or turn it into an executable ABI.
+  if (Projection != MedStackProjection::Source || Func.AnalysisOnly)
     return;
   simplifyProvenStackAlignment(Func, Image.Arch, Image.abiFormat(),
                                Func.EntryKind);
@@ -417,8 +419,9 @@ std::map<va_t, unsigned> settledCalleeIntegerArity(
       getTargetRegInfo(Image.Arch).integerParamRegs(Image.abiFormat());
   std::map<va_t, unsigned> Arity;
   for (const MedFunc &Callee : Result.MedFuncs) {
-    if (!Targets.count(Callee.Entry) || !Callee.CallReturnReads.empty() ||
-        Callee.IsVariadic || Callee.SourceTypeHint)
+    if (Callee.AnalysisOnly || !Targets.count(Callee.Entry) ||
+        !Callee.CallReturnReads.empty() || Callee.IsVariadic ||
+        Callee.SourceTypeHint)
       continue;
     unsigned Count = 0;
     for (const MedVar &Param : Callee.Params)
@@ -615,6 +618,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
                   << "\n";
     const LowFunc &LF = Result.LowFuncs[I];
     MedFunc Fallback;
+    Fallback.AnalysisOnly = LF.AnalysisOnly;
     Fallback.Name = LF.Name;
     Fallback.Entry = LF.Entry;
     Fallback.OriginalSize = LF.OriginalSize;

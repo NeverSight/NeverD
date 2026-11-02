@@ -11,12 +11,13 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/RegistrationImageProof.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHBoundCall.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 
 namespace neverd::coff_registration {
 
-llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
+llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
     const MedFunc &Source, const llvm::Function &Parent,
     const RegistrationFrame &Frame,
     const std::map<va_t, const llvm::AllocaInst *> &Buffers,
@@ -24,7 +25,7 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
   const auto Expected = getX86RegistrationSEHBoundCalls(Source);
   if (!Expected)
     return rejectIR("preserved SEH helper has no complete argument contract");
-  std::set<const llvm::CallBase *> Result;
+  RegistrationSEHJumpContract Result;
   std::set<va_t> Seen;
   const auto &Layout = Parent.getParent()->getDataLayout();
   size_t Work = 0;
@@ -70,8 +71,10 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
             !Callee->isDeclaration() || !Callee->hasExternalLinkage() ||
             Callee->getCallingConv() != Convention ||
             Call->getCallingConv() != Convention ||
-            Callee->hasDLLImportStorageClass() != !Import.empty() ||
-            (!Import.empty() && Callee->getName() != Import) ||
+            Callee->hasDLLImportStorageClass() !=
+                usesX86RegistrationSEHImportSlot(Bound) ||
+            (usesX86RegistrationSEHImportSlot(Bound) &&
+             Callee->getName() != Import) ||
             Callee->getFunctionType() !=
                 getX86RegistrationSEHBoundType(Receipt, Parent.getContext()) ||
             Call->arg_size() != Receipt.Arguments.size() ||
@@ -81,8 +84,7 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
             Call->hasFnAttr(llvm::Attribute::NoCallback) ||
             Call->hasFnAttr(llvm::Attribute::WillReturn) ||
             Call->hasFnAttr(llvm::Attribute::ReturnsTwice) ||
-            (!Call->use_empty() &&
-             Receipt.CalleeKind != RegistrationSEHBoundCall::Kind::ControlFP) ||
+            (!Call->use_empty() && !Bound.ObservesScalarReturn) ||
             Call->doesNotReturn() == Receipt.HasOrdinaryReturn)
           return rejectIR("preserved SEH helper changed its invocation ABI");
         auto Identity = rewrite_source::getOriginalVA(*Callee);
@@ -119,6 +121,17 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
               return rejectIR("unused SEH helper argument gained a value");
             continue;
           }
+          if (Arg.ArgumentKind == Kind::ConstantScalar) {
+            if (integer(Value, 32) != Arg.ScalarValue)
+              return rejectIR("SEH runtime changed its exact scalar argument");
+            continue;
+          }
+          if (Arg.ArgumentKind == Kind::ImagePointer) {
+            if (registration_frame::originalImagePointerArgumentAddress(
+                    *Call, Index, Work) != Arg.ImageVA)
+              return rejectIR("SEH runtime changed its original image pointer");
+            continue;
+          }
           if (Arg.ArgumentKind == Kind::JumpBuffer) {
             const auto Buffer = Buffers.find(Arg.Capture);
             if (Buffer == Buffers.end() || !Buffer->second ||
@@ -142,10 +155,13 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
           const auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(Value);
           llvm::APInt Offset(32, 0);
           const int64_t ExpectedOffset = Base + Arg.Offset;
+          const auto Width = Arg.ArgumentKind == Kind::Object
+                                 ? Receipt.borrowedObjectBytes()
+                                 : 4;
           if (!GEP || GEP->getPointerOperand() != Storage ||
               !GEP->accumulateConstantOffset(Layout, Offset) ||
               ExpectedOffset < 0 || !Bytes || Bytes->isScalable() ||
-              uint64_t(ExpectedOffset) + 4 > Bytes->getFixedValue() ||
+              uint64_t(ExpectedOffset) + Width > Bytes->getFixedValue() ||
               Offset.getZExtValue() != uint64_t(ExpectedOffset))
             return rejectIR("preserved SEH helper changed its parent argument");
           Arguments.insert(GEP);
@@ -170,9 +186,24 @@ llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
             return rejectIR(
                 "preserved SEH scalar moved across source execution");
         }
-        Result.insert(Call);
+        Result.Calls.insert(Call);
+        if (Receipt.CalleeKind ==
+            RegistrationSEHBoundCall::Kind::GetStartupInfoW)
+          Result.RuntimeOutputs.emplace(
+              Call, RegistrationSEHJumpContract::Output{
+                        Storage, Base + Receipt.Arguments.front().Offset,
+                        Receipt.borrowedObjectBytes()});
+        if (Receipt.CalleeKind ==
+                RegistrationSEHBoundCall::Kind::HeapTermination ||
+            Receipt.CalleeKind ==
+                RegistrationSEHBoundCall::Kind::InterlockedCompareExchange ||
+            Receipt.CalleeKind == RegistrationSEHBoundCall::Kind::Sleep ||
+            (Receipt.CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP &&
+             Receipt.Arguments.front().ArgumentKind ==
+                 RegistrationSEHBoundArgument::Kind::NullPointer))
+          Result.NoFrameBorrowCalls.insert(Call);
       }
-  if (Result.size() != Expected->size())
+  if (Result.Calls.size() != Expected->size())
     return rejectIR("preserved SEH helper call set is incomplete");
   return Result;
 }

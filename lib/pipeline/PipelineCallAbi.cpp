@@ -21,6 +21,8 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -33,6 +35,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
@@ -555,7 +558,9 @@ class CalleeReader {
 public:
   /// \p Result's memo, where it has one, has adopted \p Img.
   CalleeReader(const BinaryImage &Img, const PipelineResult &Result)
-      : Img(Img), Result(Result), Memo(Result.CalleeSignatureMemo.get()) {
+      : Img(Img), Result(Result), Memo(Result.CalleeSignatureMemo.get()),
+        ReadScope(Img), StackPops(Img), StackPopScope(StackPops),
+        LeafPrefixes(Img), LeafPrefixScope(LeafPrefixes) {
     if (!Memo)
       OwnEntries = calleeLiftEntries(Img);
     Entries = Memo ? &Memo->functionEntries() : &OwnEntries;
@@ -571,9 +576,15 @@ public:
   }
   /// Whether \p Target is a callee the read takes: a function of this image.
   bool reads(va_t Target) const {
+    // Only actual calls enqueue these targets. Like CFGBuilder's explicit
+    // transfers, they may enter a symbol initially found after padding.
+    // Such guesses still never delimit ordinary fallthrough or become roots
+    // merely because they occur in the symbol inventory.
     return Img.isFunctionEntryCandidateAt(Target) &&
            !Img.findImportAt(Target) && !Img.isImportStubAt(Target) &&
-           (Entries->count(Target) || Img.hasKnownFunctionEntryAt(Target)) &&
+           (Entries->count(Target) || Img.hasKnownFunctionEntryAt(Target) ||
+            Img.hasFunctionSymbolAt(Target,
+                                    Memo ? &Memo->codeOwners() : nullptr)) &&
            Img.hasExecutableCodeOwnerAt(Target);
   }
   /// Where \p Target's reading is kept: the memo's, or \p Local where the
@@ -761,6 +772,14 @@ private:
   const BinaryImage &Img;
   const PipelineResult &Result;
   OmittedCalleeMemo *Memo;
+  // Every supplemental lift reads this unchanged image. Keep the same
+  // immutable fixup inventory and independently charged stack answers across
+  // its callees, as the ordinary LowIR worker does across its functions.
+  ReadOnlyBytesScope ReadScope;
+  RegistrationStackPopMemo StackPops;
+  RegistrationStackPopMemoScope StackPopScope;
+  RegistrationLeafPrefixMemo LeafPrefixes;
+  RegistrationLeafPrefixMemoScope LeafPrefixScope;
   std::set<va_t> OwnEntries;
   const std::set<va_t> *Entries = nullptr;
   Decoder Dec;

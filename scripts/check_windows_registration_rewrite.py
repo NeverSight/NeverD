@@ -33,7 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "unittests/lift/eh/fixtures"
 OBSERVATION = re.compile(
     r"neverd-registration-rewrite: value=(\d+) caller=([0-9a-fA-F]{8}) "
-    r"entry=([0-9a-fA-F]{8}) chain=(\d+) iterations=(\d+) trace=(\d+)\s*")
+    r"entry=([0-9a-fA-F]{8}) chain=(\d+) iterations=(\d+) trace=(\d+)"
+    r"(?: fp=([0-9a-fA-F]{8}))?\s*")
+CONTROL_FP_MODES = ("output-word", "null-query", "precision-24", "precision-53",
+                    "precision-64")
 CASES = {"filter": (0, 0), "nested-finally": (1, 123),
          "continue-search": (2, 123), "continue-execution": (3, 1),
          "normal-finally": (4, 2), "cdecl-parameter": (5, 7),
@@ -264,7 +267,8 @@ class PE32:
 
 
 def observe(image: Path, generated: bool, launcher: list[str],
-            environment: dict[str, str], timeout: float, expected_trace: int) -> dict:
+            environment: dict[str, str], timeout: float, expected_trace: int,
+            control_fp_mode: str = "output-word") -> dict:
     pe = PE32(image.read_bytes())
     config_rva, config_size = pe.directory(10)
     config = pe.raw(config_rva, config_size)
@@ -283,7 +287,14 @@ def observe(image: Path, generated: bool, launcher: list[str],
     if result.get("exit_code") != 0 or not match:
         raise ValueError(f"exception execution failed: {result}")
     value, caller, entry, chain, iterations, trace = (int(v, 16 if i in (1, 2) else 10)
-                                              for i, v in enumerate(match.groups()))
+                                              for i, v in enumerate(match.groups()[:6]))
+    control_word = int(match[7], 16) if match[7] is not None else None
+    if (control_word is None) != (control_fp_mode == "output-word"):
+        raise ValueError("floating-point control observation is missing or unexpected")
+    precision = {"precision-24": 0x20000, "precision-53": 0x10000,
+                 "precision-64": 0}.get(control_fp_mode)
+    if precision is not None and control_word & 0x30000 != precision:
+        raise ValueError("native floating-point precision differs from the source request")
     runtime_base = entry - pe.entry()
     if ((value, chain, iterations, trace) != (7, 1, 4, expected_trace) or
             runtime_base != pe.base):
@@ -305,7 +316,7 @@ def observe(image: Path, generated: bool, launcher: list[str],
             "guard_cf_count": count, "guard_cf_pointer_relocated": config_rva + 80 in fields,
             "caller_rva": caller - runtime_base, "value": value,
             "chain_restored": bool(chain), "iterations": iterations,
-            "trace": trace, "runtime": result}
+            "trace": trace, "control_fp_word": control_word, "runtime": result}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -322,6 +333,27 @@ def main(argv: list[str] | None = None) -> int:
                         help="captured Microsoft x86 CRT directory with runtime.json")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--case", choices=CASES, default="filter")
+    parser.add_argument("--shared-seh4", action="store_true",
+                        help="use the authored shared SEH4 entry and exit helpers")
+    parser.add_argument("--parent-pop", type=int, choices=(0, 4, 16, 20), default=0,
+                        help="use a stdcall parent with this RET cleanup; callbacks remain cdecl")
+    parser.add_argument("--startup-info", action="store_true",
+                        help="compare a private STARTUPINFOW output with an independent runtime observation")
+    parser.add_argument("--heap-termination", action="store_true",
+                        help="retain the exact process heap terminate-on-corruption request")
+    parser.add_argument("--synchronization", action="store_true",
+                        help="observe native atomic success, failure, return values and Sleep")
+    parser.add_argument("--thread-stack-base", action="store_true",
+                        help="compare the source thread-block StackBase read with an independent observer")
+    parser.add_argument("--control-fp-mode", choices=CONTROL_FP_MODES,
+                        default="output-word",
+                        help="use a private output word, null query or independently observed x87 precision setting")
+    parser.add_argument("--control-fp-veneer", action="store_true",
+                        help="call _controlfp_s through an authored near CALL and FF25 import veneer")
+    parser.add_argument("--observe-callee-result", action="store_true",
+                        help="use the returning authored helper's EAX as the longjmp value")
+    parser.add_argument("--state-write", choices=("literal", "register", "bitwise"),
+                        default="literal", help="source encoding of ordinary SEH state writes")
     args = parser.parse_args(argv)
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
@@ -332,8 +364,40 @@ def main(argv: list[str] | None = None) -> int:
     gs = args.case.startswith("eh4-gs-")
     helper_gs = gs != args.case.endswith("-mixed-gs")
     jump = "longjmp-" in args.case
+    if args.observe_callee_result and case != 21:
+        parser.error("--observe-callee-result requires a returning-callee case")
+    if args.shared_seh4 and (not eh4 or gs or case not in range(9)):
+        parser.error("--shared-seh4 requires an ordinary EH4 case without GS")
+    if args.parent_pop and case not in (0, 4, 5):
+        parser.error("--parent-pop requires a filter, normal-finally or cdecl-parameter case")
+    if args.startup_info and case not in (0, 4):
+        parser.error("--startup-info requires a filter or normal-finally case")
+    if args.heap_termination and case not in (0, 4):
+        parser.error("--heap-termination requires a filter or normal-finally case")
+    if args.synchronization and case not in (0, 4):
+        parser.error("--synchronization requires a filter or normal-finally case")
+    if args.thread_stack_base and case not in (0, 4):
+        parser.error("--thread-stack-base requires a filter or normal-finally case")
+    if args.control_fp_mode != "output-word" and case != 24:
+        parser.error("--control-fp-mode requires longjmp-control-fp")
+    if args.control_fp_veneer and (case != 24 or eh4):
+        parser.error("--control-fp-veneer requires the SEH3 longjmp-control-fp case")
+    if args.state_write != "literal" and case not in (*range(9), 43, 44):
+        parser.error("--state-write requires an ordinary filter/finally or shared byte-state case")
+    if args.state_write == "bitwise" and case in (1, 2, 4):
+        parser.error("--state-write bitwise requires a zero-activation case")
     report = {"schema": 2, "evidence": f"reconstructed-source-registration-{'seh4' if eh4 else 'seh3'}",
               "case": args.case, "expected_trace": expected_trace,
+              "shared_seh4": args.shared_seh4,
+              "parent_pop": args.parent_pop,
+              "startup_info": args.startup_info,
+              "heap_termination": args.heap_termination,
+              "synchronization": args.synchronization,
+              "thread_stack_base": args.thread_stack_base,
+              "control_fp_mode": args.control_fp_mode,
+              "control_fp_veneer": args.control_fp_veneer,
+              "observe_callee_result": args.observe_callee_result,
+              "state_write": args.state_write,
               "passed": False, "steps": [], "observations": []}
     environment = os.environ.copy()
     try:
@@ -356,7 +420,10 @@ def main(argv: list[str] | None = None) -> int:
         if jump:
             runtime_exports += "_setjmp3\n_longjmpex\n"
             runtime_exports += "_seh_longjmp_unwind4\n" if eh4 else "_seh_longjmp_unwind\n"
-        definitions = [("kernel32", KERNEL32)]
+        definitions = [("kernel32", KERNEL32 +
+                        ("_GetStartupInfoW@4\n" if args.startup_info else "") +
+                        ("_HeapSetInformation@16\n" if args.heap_termination else "") +
+                        ("_InterlockedCompareExchange@12\n_Sleep@4\n" if args.synchronization else ""))]
         if args.runtime_root:
             runtime, report["seh_runtime"] = load_runtime(args.runtime_root.resolve())
             shutil.copy2(runtime, output / runtime.name)
@@ -396,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
                              "registration_filter_state.s" if case >= 36 else
                              "registration_state.s" if case >= 30 else
                              "registration_jump.s" if jump else "registration_seh3.s"])
+        if args.shared_seh4:
+            sources = ["registration_seh4_shared.s", "registration_eh4_runtime.c"]
         sources.append("registration_observer.c")
         if case in (49, 51):
             sources.append("registration_private_graph.s")
@@ -405,6 +474,15 @@ def main(argv: list[str] | None = None) -> int:
         for source in sources:
             compile_command = [compiler, "--target=i686-pc-windows-msvc", "-O0",
                              f"-DREGISTRATION_CASE={case}",
+                             f"-DREGISTRATION_PARENT_POP={args.parent_pop}",
+                             f"-DREGISTRATION_STARTUP_INFO={int(args.startup_info)}",
+                             f"-DREGISTRATION_HEAP_TERMINATION={int(args.heap_termination)}",
+                             f"-DREGISTRATION_SYNCHRONIZATION={int(args.synchronization)}",
+                             f"-DREGISTRATION_THREAD_STACK_BASE={int(args.thread_stack_base)}",
+                             f"-DREGISTRATION_CONTROL_FP_MODE={CONTROL_FP_MODES.index(args.control_fp_mode)}",
+                             f"-DREGISTRATION_CONTROL_FP_VENEER={int(args.control_fp_veneer)}",
+                             f"-DREGISTRATION_OBSERVE_CALLEE_RESULT={int(args.observe_callee_result)}",
+                             f"-DREGISTRATION_STATE_WRITE={('literal', 'register', 'bitwise').index(args.state_write)}",
                              f"-DREGISTRATION_LOOP_EH4={int(eh4)}",
                              f"-DREGISTRATION_PARENT_EH4={int(eh4)}",
                              "-DREGISTRATION_FORWARD_ONLY=1", f"-DREGISTRATION_EXPECT_GS={int(gs)}",
@@ -428,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
         link_command = [linker, "/entry:mainCRTStartup", "/nodefaultlib",
                          "/machine:x86", "/subsystem:console", "/dynamicbase:no",
                          "/export:registration_entry",
+                         *([f"/alternatename:_registration_entry@{args.parent_pop}=_registration_entry"]
+                           if args.parent_pop else []),
                          *( ["/export:registration_eh4_personality=_except_handler4"] if eh4 else []),
                          f"/out:{original}",
                          *(str(output / (name + ".obj")) for name in sources),
@@ -463,7 +543,11 @@ def main(argv: list[str] | None = None) -> int:
             if result.returncode:
                 raise ValueError(f"fixture build or reconstruction failed: {command[0]}")
             if index == 0:
-                undecorate_kernel32_imports(output / "kernel32.lib")
+                undecorate_kernel32_imports(
+                    output / "kernel32.lib",
+                    ((b"_GetStartupInfoW@4",) if args.startup_info else ()) +
+                    ((b"_HeapSetInformation@16",) if args.heap_termination else ()) +
+                    ((b"_InterlockedCompareExchange@12", b"_Sleep@4") if args.synchronization else ()))
         tests = ET.parse(output / "rewrite.xml").getroot()
         if int(tests.get("tests", "0")) != 1 or tests.findall(".//skipped"):
             raise ValueError("source reconstruction was not executed")
@@ -493,11 +577,13 @@ def main(argv: list[str] | None = None) -> int:
                     images.append((destination, True))
         for image, generated in images:
             report["observations"].append(observe(image, generated, launcher,
-                                                 environment, args.timeout, expected_trace))
+                                                 environment, args.timeout, expected_trace,
+                                                 args.control_fp_mode))
             rebased = image.with_name(image.stem + "-rebased.exe")
             rebased.write_bytes(PE32(image.read_bytes()).rebase(0x18000000))
             report["observations"].append(observe(rebased, generated, launcher,
-                                                 environment, args.timeout, expected_trace))
+                                                 environment, args.timeout, expected_trace,
+                                                 args.control_fp_mode))
         report["passed"] = True
     except (OSError, ValueError, struct.error, ET.ParseError, subprocess.TimeoutExpired) as error:
         report["error"] = str(error)

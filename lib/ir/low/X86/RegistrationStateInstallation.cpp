@@ -20,7 +20,7 @@ bool RegistrationStateSolver::registrationInstallationReady(
                0 &&
            Frame.load(*Chain.RegistrationOffset - 4, 4).Offset == SP &&
            Frame.load(*Chain.RegistrationOffset, 4).PreviousChain &&
-           Frame.load(*Chain.RegistrationOffset + 4, 4).Constant ==
+           Frame.load(*Chain.RegistrationOffset + 4, 4).preferredAddress() ==
                Chain.HandlerVA &&
            Frame.load(*Chain.TryLevelOffset, 4).Constant ==
                uint32_t(*Chain.SeededTryLevel);
@@ -28,6 +28,16 @@ bool RegistrationStateSolver::registrationInstallationReady(
   if (!Chain.RealignedFrame)
     return true;
   const auto &Layout = *Chain.RealignedFrame;
+  if (Layout.BaseRegister == 4)
+    return Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride]
+                   .EntryOffset == 0 &&
+           Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset ==
+               Layout.BaseOffset &&
+           Frame.load(*Chain.RegistrationOffset, 4).PreviousChain &&
+           Frame.load(*Chain.RegistrationOffset + 4, 4).preferredAddress() ==
+               Chain.HandlerVA &&
+           Frame.load(*Chain.TryLevelOffset, 4).Constant ==
+               uint32_t(*Chain.SeededTryLevel);
   const auto Parent = Frame.load(Layout.SavedParentFrameOffset, 4);
   const auto Stack = Frame.load(*Chain.RegistrationOffset - 4, 4);
   return Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride].EntryOffset ==
@@ -38,7 +48,7 @@ bool RegistrationStateSolver::registrationInstallationReady(
              Layout.BaseOffset &&
          Parent.EntryOffset == 0 && Stack.Offset == Layout.BaseOffset &&
          Frame.load(*Chain.RegistrationOffset, 4).PreviousChain &&
-         Frame.load(*Chain.RegistrationOffset + 4, 4).Constant ==
+         Frame.load(*Chain.RegistrationOffset + 4, 4).preferredAddress() ==
              Chain.HandlerVA &&
          Frame.load(*Chain.TryLevelOffset, 4).Constant ==
              uint32_t(*Chain.SeededTryLevel);

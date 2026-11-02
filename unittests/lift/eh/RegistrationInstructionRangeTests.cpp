@@ -9,12 +9,22 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/loader/COFF/eh/COFFRegistrationEHDetail.h"
+#include "../../../lib/loader/ReadOnlyBytesIndex.h"
 #include "../core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 namespace {
 using namespace neverd;
 using namespace neverd::coff_loader::registration_detail;
+
+bool ownsClosedBodyInstruction(const BinaryImage &Image,
+                               const ExceptionAddressRange &Range, va_t Entry,
+                               va_t Instruction, size_t &Work) {
+  IndexedPE32CodeBytes CodeBytes(Image, Work,
+                                 limits::kMaxRegistrationEHStateWork);
+  return checkedRegistrationBodyOwnsInstruction(Image, Range, Entry,
+                                                Instruction, Work, CodeBytes);
+}
 
 BinaryImage codeImage(std::vector<uint8_t> Bytes) {
   BinaryImage Image;
@@ -287,6 +297,104 @@ TEST(RegistrationInstructionRange, BodyExtentIncludesEveryRuntimeEntry) {
     EXPECT_FALSE(checkedRegistrationRangeEnd(
         Bad, {Bad.Entry, Bad.Entry + C.Bytes.size()}, C.Roots, Work));
   }
+}
+
+TEST(RegistrationInstructionRange,
+     ClosedBodyWitnessRequiresAnExactReachedImmutableInstruction) {
+  // xor eax,eax; add eax,1; jne back to ADD; ret; unreachable NOP.
+  const auto Original =
+      codeImage({0x31, 0xc0, 0x83, 0xc0, 1, 0x75, 0xfb, 0xc3, 0x90});
+  const ExceptionAddressRange Range{Original.Entry, Original.Entry + 9};
+  size_t Work = 0;
+  ASSERT_TRUE(ownsClosedBodyInstruction(Original, Range, Original.Entry,
+                                        Original.Entry + 5, Work));
+  const size_t RequiredWork = Work;
+  Work = limits::kMaxRegistrationEHStateWork - RequiredWork;
+  EXPECT_TRUE(ownsClosedBodyInstruction(Original, Range, Original.Entry,
+                                        Original.Entry + 5, Work));
+  Work = limits::kMaxRegistrationEHStateWork - RequiredWork + 1;
+  EXPECT_FALSE(ownsClosedBodyInstruction(Original, Range, Original.Entry,
+                                         Original.Entry + 5, Work));
+  EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = Original;
+    va_t Query = Image.Entry + 5;
+    if (Mutation == 0)
+      Query = Image.Entry + 3; // Instruction operand, not a boundary.
+    if (Mutation == 1)
+      Query = Image.Entry + 8; // Unreached bytes after RET.
+    if (Mutation == 2)
+      Image.Segments.front().Flags =
+          Image.Segments.front().Flags | SegmentFlags::Writable;
+    if (Mutation == 3)
+      Image.Sections.front().Flags =
+          Image.Sections.front().Flags | SegmentFlags::Writable;
+    if (Mutation == 4)
+      Image.BaseRelocations.push_back({Image.Entry + 5, 3});
+    if (Mutation == 5)
+      Image.IsRelocatable = true;
+    if (Mutation == 6)
+      Image.Segments.front().Data[6] = 4; // Escapes the body.
+    Work = 0;
+    EXPECT_FALSE(
+        ownsClosedBodyInstruction(Image, Range, Image.Entry, Query, Work));
+  }
+}
+
+TEST(RegistrationInstructionRange,
+     ClosedBodyWitnessAuthenticatesAbsoluteInstructionOperands) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    // MOV's immediate and the indirect CALL's slot can carry HIGHLOW fixups.
+    // A direct control displacement cannot carry that authority.
+    auto Image =
+        codeImage({0xb8, 0, 0x10, 0, 0, 0xff, 0x15, 0, 0x20, 0, 0, 0xc3});
+    Image.BaseRelocations = {{Image.Entry + 1, 3}, {Image.Entry + 7, 3}};
+    if (Mutation == 1)
+      Image.BaseRelocations.back().Address = Image.Entry + 6;
+    if (Mutation == 2)
+      Image.BaseRelocations.back().Address = Image.Entry + 5;
+    if (Mutation == 3) {
+      auto &Bytes = Image.Segments.front().Data;
+      Bytes[5] = 0xe8;
+      Bytes[10] = 0x90;
+      Image.BaseRelocations.back().Address = Image.Entry + 6;
+    }
+    size_t Work = 0;
+    EXPECT_EQ(ownsClosedBodyInstruction(Image, {Image.Entry, Image.Entry + 12},
+                                        Image.Entry, Image.Entry + 11, Work),
+              Mutation == 0);
+  }
+}
+
+TEST(RegistrationInstructionRange, ClosedBodyWitnessSharesTheFixupIndex) {
+  auto Image = codeImage({0xb8, 0, 0x10, 0, 0, 0xc3});
+  Image.BaseRelocations.push_back({Image.Entry + 1, 3});
+  for (unsigned I = 0; I != 64; ++I)
+    Image.BaseRelocations.push_back({Image.Entry + 0x100 + 4 * I, 3});
+  const ExceptionAddressRange Range{Image.Entry, Image.Entry + 6};
+  size_t Work = 0;
+  IndexedPE32CodeBytes CodeBytes(Image, Work,
+                                 limits::kMaxRegistrationEHStateWork);
+  const size_t IndexWork = Work;
+  ASSERT_GT(IndexWork, 0u);
+  ASSERT_TRUE(checkedRegistrationBodyOwnsInstruction(
+      Image, Range, Image.Entry, Image.Entry + 5, Work, CodeBytes));
+  const size_t QueryWork = Work - IndexWork;
+  ASSERT_GT(QueryWork, 0u);
+  EXPECT_TRUE(checkedRegistrationBodyOwnsInstruction(
+      Image, Range, Image.Entry, Image.Entry + 5, Work, CodeBytes));
+  EXPECT_EQ(Work, IndexWork + 2 * QueryWork);
+  // The caller has already paid for this immutable index. The remaining
+  // allowance needs to fit the body query, not another global index build.
+  Work = limits::kMaxRegistrationEHStateWork - QueryWork;
+  EXPECT_TRUE(checkedRegistrationBodyOwnsInstruction(
+      Image, Range, Image.Entry, Image.Entry + 5, Work, CodeBytes));
+  Work = limits::kMaxRegistrationEHStateWork - QueryWork + 1;
+  EXPECT_FALSE(checkedRegistrationBodyOwnsInstruction(
+      Image, Range, Image.Entry, Image.Entry + 5, Work, CodeBytes));
+  EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
 }
 
 TEST(RegistrationInstructionRange, ClosedCallbackOwnsItsLocalBranchTargets) {

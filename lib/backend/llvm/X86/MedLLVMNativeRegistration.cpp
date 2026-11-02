@@ -23,11 +23,16 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHScope.h"
+#include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
+#include "neverd/backend/llvm/X86RegistrationSEHThread.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86/X86RegistrationCallback.h"
+#include "neverd/ir/med/X86/X86RegistrationEntry.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -63,8 +68,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
     const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges) {
   if (TargetArch != Arch::X86 || TargetFormat != BinaryFormat::COFF ||
       !Func.ExceptionMetadata || !Func.RegistrationStates || Func.SkippedSSA ||
-      Func.CalleePopBytes || !Func.RegistrationCallerCleanupABIComplete ||
-      !FrameAlloca || FrameEntrySPOffset < 24 || Parent.hasPersonalityFn())
+      !hasX86RegistrationSEHEntryContract(Func) || !FrameAlloca ||
+      FrameEntrySPOffset < 24 || Parent.hasPersonalityFn())
+    return false;
+  const auto EntryABI =
+      Func.RegistrationSEHEntryPopBytes
+          ? getX86RegistrationEntryABI(Func, Parent)
+          : std::optional<llvm::CallingConv::ID>(llvm::CallingConv::C);
+  if (!EntryABI || (Parent.getCallingConv() != llvm::CallingConv::C &&
+                    Parent.getCallingConv() != *EntryABI))
     return false;
   const ExceptionFunction &EH = *Func.ExceptionMetadata;
   const auto Source = classifyWindowsEHNativeSource(
@@ -73,7 +85,12 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
       Source.Model != WindowsEHNativeSourceModel::X86RegistrationSEH)
     return false;
   const RegistrationChainInfo &Chain = *EH.Registration;
-  const RegistrationStateAnalysis &States = *Func.RegistrationStates;
+  const auto *PhysicalStates = getX86RegistrationSEHPhysicalStates(Func);
+  if (!PhysicalStates ||
+      (Img ? !hasCheckedX86RegistrationSEHPhysicalFrame(*Img, Func)
+           : bool(Func.RegistrationSEH4PhysicalFrame)))
+    return false;
+  const RegistrationStateAnalysis &States = *PhysicalStates;
   const bool EH4 = EH.Personality == ExceptionPersonality::ExceptHandler4;
   if (Img && !EH4 &&
       !coff_loader::isCheckedX86SEH3Personality(*Img, EH.PersonalityVA))
@@ -204,8 +221,15 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
     return It == BlocksAt.end() ? nullptr : OriginalBlockMap.at(It->second->Id);
   };
 
+  const std::map<std::pair<va_t, int>, const llvm::Instruction *>
+      ThreadOperations(RegistrationMemoryIR.begin(),
+                       RegistrationMemoryIR.end());
+  const auto ThreadReads =
+      getCheckedX86SEHThreadReads(Func, Parent, ThreadOperations, false);
+  if (!ThreadReads)
+    return false;
   auto ChainProof = x86_registration::getCheckedSEHChainInstructions(
-      Parent, States, RegistrationChainIR);
+      Parent, States, RegistrationChainIR, *ThreadReads);
   if (!ChainProof)
     return false;
   auto &ChainInstructions = *ChainProof;
@@ -360,6 +384,14 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
   auto SourceProof = x86_registration::getCheckedSEHSourceOperations(
       Func, OriginalBlockMap, RegistrationMemoryIR, CallSiteAddrs);
   if (!SourceProof)
+    return false;
+  if (!hasCheckedX86RegistrationSEHComputedStores(
+          Func, Parent, *FrameAlloca, FrameEntrySPOffset,
+          [&](va_t Address, int Seq) -> const llvm::Instruction * {
+            const auto Found = RegistrationMemoryIR.find({Address, Seq});
+            return Found == RegistrationMemoryIR.end() ? nullptr
+                                                       : Found->second;
+          }))
     return false;
   auto JumpPlan = x86_registration::prepareSEHJumps(
       Func, Parent, *FrameAlloca, FrameEntrySPOffset, CallSiteAddrs);
@@ -609,6 +641,7 @@ bool MedLLVMEmitter::emitNativeX86RegistrationSEH(
   }
 
   // Commit. All source occurrences, callbacks and control edges are closed.
+  Parent.setCallingConv(*EntryABI);
   ParentProjection.commit();
   IncomingProjection.commit();
   if (!StateWrites->empty() || !ParentExits->Sources.empty()) {

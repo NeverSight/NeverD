@@ -12,6 +12,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 
 #include "../../../safety/StackSlotFlow.h"
+#include "MedEntryStackOffsets.h"
 #include "MedScalarSelectRange.h"
 #include "MedStackRecurrence.h"
 
@@ -238,6 +239,16 @@ public:
     return resolve(Value, 0);
   }
 
+  std::optional<int64_t> independentOffset(const MedVar &Value) {
+    // Keep a root query's budget and cycle state independent of earlier roots.
+    // Active definitions and assumptions are restored by the traversal itself.
+    Completed.clear();
+    ContextUses = 0;
+    Deepest = 0;
+    CycleHit = false;
+    return offset(Value);
+  }
+
   std::optional<EntryStackOffsetRange> range(const MedVar &Value) {
     Steps = 0;
     return resolveRange(Value, 0);
@@ -300,9 +311,7 @@ public:
       // ways share is visited once instead of proved again for each way in.
       if (!OnlySeededRoots && Current.Kind == MedVar::Reg &&
           Current.RegOff == TRI.StackPointer &&
-          (authenticatedEntryLiveIn(Current, Definition) ||
-           (FollowJoins && Current.SSAVer == 0 &&
-            (!Definition || !Definition->Op)))) {
+          authenticatedEntryLiveIn(Current, Definition)) {
         N.Bound = 0;
         N.Exact = true;
         continue;
@@ -354,6 +363,10 @@ public:
       }
       if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1) {
         Follow(Op->Inputs[0], 0);
+        continue;
+      }
+      if (const MedVar *Native = nativeAddressRoundTrip(*Op)) {
+        Follow(*Native, 0);
         continue;
       }
       // Clearing low bits only lowers the address.
@@ -462,6 +475,28 @@ private:
     return Op;
   }
 
+  const MedVar *nativeAddressRoundTrip(const MedOp &Op) {
+    if (!FollowJoins || TRI.PointerSize != 4 || Op.Dead ||
+        Op.Opcode != NdOp::SUBBYTES || Op.NumInputs != 2 ||
+        Op.Output.Size != TRI.PointerSize ||
+        Op.Inputs[0].Size != sizeof(uint64_t) ||
+        !stableScalarConstant(Op.Inputs[1]) || Op.Inputs[1].ConstVal != 0 ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op.IntrinsicOutputs.empty())
+      return nullptr;
+    const auto Carrier = scalarDefinition(Op.Inputs[0]);
+    if (!Carrier || !*Carrier || (*Carrier)->Opcode != NdOp::INT_ZEXT ||
+        (*Carrier)->NumInputs != 1 ||
+        (*Carrier)->Inputs[0].Size != TRI.PointerSize ||
+        ++Steps > kMaxProofSteps)
+      return nullptr;
+    // LEA returns the low native pointer from a zero-extended address
+    // container. Charge the skipped extension and use this same relation in
+    // exact, component and one-sided proofs, including loop backedges.
+    return &(*Carrier)->Inputs[0];
+  }
+
   llvm::ConstantRange scalarSlice(const MedVar &Value, unsigned Offset,
                                   unsigned Bytes, unsigned Depth) {
     const unsigned Bits = Bytes * 8;
@@ -565,8 +600,7 @@ private:
     if (Definition && Definition->Ambiguous)
       return std::nullopt;
     if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.StackPointer &&
-        (authenticatedEntryLiveIn(Value, Definition) ||
-         (Value.SSAVer == 0 && !Definition)))
+        authenticatedEntryLiveIn(Value, Definition))
       return 0;
     if (!Definition || !RangeActive.insert(key(Value)).second)
       return std::nullopt;
@@ -835,7 +869,11 @@ private:
     // offset queries reuse authentication, and only for the exact occurrence.
     if (!FollowJoins)
       return safety::detail::isAuthenticatedEntryRegisterLiveIn(Func, Value);
-    if (!Definition || !Definition->Op)
+    // An undefined version-zero value is an SSA live-in. A PHI remains a
+    // definition even at version zero; a closed cycle cannot seed itself.
+    if (!Definition)
+      return Value.SSAVer == 0;
+    if (!Definition->Op)
       return false;
     if (!Definition->EntryChecked) {
       Definition->EntryLiveIn =
@@ -924,8 +962,7 @@ private:
       const MedOp *Op = Definition ? Definition->Op : nullptr;
       const bool EntryOrigin = !OnlySeededRoots && Value.Kind == MedVar::Reg &&
                                Value.RegOff == TRI.StackPointer &&
-                               (authenticatedEntryLiveIn(Value, Definition) ||
-                                (Value.SSAVer == 0 && !Op));
+                               authenticatedEntryLiveIn(Value, Definition);
       const bool Copy =
           Op && sameOccurrence(Op->Output, Value) && !Op->Dead &&
           Op->Opcode == NdOp::COPY && Op->NumInputs == 1 &&
@@ -934,7 +971,11 @@ private:
           Op->MemoryOrdering == NdMemoryOrdering::None &&
           Op->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           Op->IntrinsicOutputs.empty();
-      if (!Definition || (!Definition->Join && !Copy) || Assumed.count(K) ||
+      const MedVar *RoundTrip = Op && sameOccurrence(Op->Output, Value)
+                                    ? nativeAddressRoundTrip(*Op)
+                                    : nullptr;
+      const MedVar *Forward = Copy ? &Op->Inputs[0] : RoundTrip;
+      if (!Definition || (!Definition->Join && !Forward) || Assumed.count(K) ||
           Definition->ProvenOffset || Definition->ProvenRange || EntryOrigin ||
           (RangeQuery && K != RootKey && Definition->Join &&
            sameOccurrence(Definition->Join->Output, Value) &&
@@ -965,7 +1006,7 @@ private:
             return false;
         }
       } else {
-        if (!Self(Self, Op->Inputs[0], AtDepth + 1, K))
+        if (!Self(Self, *Forward, AtDepth + (RoundTrip ? 2 : 1), K))
           return false;
       }
       Active.erase(K);
@@ -1134,9 +1175,7 @@ private:
       }
       if (!OnlySeededRoots && Value.Kind == MedVar::Reg &&
           Value.RegOff == TRI.StackPointer &&
-          (authenticatedEntryLiveIn(Value, Definition) ||
-           (FollowJoins && Value.SSAVer == 0 &&
-            (!Definition || !Definition->Op))))
+          authenticatedEntryLiveIn(Value, Definition))
         return Replay(0);
       if (Definition && Definition->ProvenOffset && Definition->Op &&
           sameOccurrence(Definition->Op->Output, Value))
@@ -1175,6 +1214,8 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
+          } else if (const MedVar *Native = nativeAddressRoundTrip(Op)) {
+            Result = resolve(*Native, Depth + 2);
           } else if ((Op.Opcode == NdOp::INT_ADD ||
                       Op.Opcode == NdOp::INT_SUB) &&
                      Op.NumInputs == 2) {
@@ -1236,11 +1277,37 @@ private:
 
 } // namespace
 
+struct MedEntryStackOffsets::Impl {
+  StackOffsetProof Proof;
+
+  Impl(const MedFunc &Func, Arch Architecture, BinaryFormat Format)
+      : Proof(Func, Architecture, Format, Func.EntryKind,
+              /*FollowJoins=*/true) {}
+};
+
+MedEntryStackOffsets::MedEntryStackOffsets(const MedFunc &Func,
+                                           Arch Architecture,
+                                           BinaryFormat Format)
+    : Func(Func), Architecture(Architecture), Format(Format) {}
+
+MedEntryStackOffsets::~MedEntryStackOffsets() = default;
+
+std::optional<int64_t> MedEntryStackOffsets::query(const MedVar &Value) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if ((TRI.PointerSize != 4 && TRI.PointerSize != 8) || Func.Blocks.empty())
+    return std::nullopt;
+  if (!Index)
+    Index = std::make_unique<Impl>(Func, Architecture, Format);
+  return Index->Proof.independentOffset(Value);
+}
+
+void MedEntryStackOffsets::invalidate() { Index.reset(); }
+
 std::optional<MedIntegerReturnRange>
 integerReturnRange(const MedFunc &Func, const LowFunc &Source,
                    const BinaryImage &Image) {
   const auto &TRI = getTargetRegInfo(Image.Arch);
-  if (!TRI.ReturnOperandIsValue ||
+  if (Func.AnalysisOnly || Source.AnalysisOnly || !TRI.ReturnOperandIsValue ||
       (TRI.PointerSize != 4 && TRI.PointerSize != 8) ||
       Func.Entry != Source.Entry || !Source.hasCompleteLiftCoverage() ||
       !Source.UnsafeIndirectBranchAddresses.empty() ||

@@ -50,6 +50,21 @@ struct RegistrationCalleeStackContract {
   va_t Target = InvalidVA;
   uint32_t StackPopBytes = 0;
   bool Indirect = false;
+  /// Current immutable MOV occurrences that read this eager IAT slot. The
+  /// load's instruction address and LowOp sequence bind an opaque callable,
+  /// not the slot address or its initial file bytes as a runtime value.
+  std::vector<std::pair<va_t, int>> Loads;
+  /// A direct callee's transitive eager-IAT dependencies. Its returning stack
+  /// proof assumes these bindings still hold at entry. Sorted and unique;
+  /// an indirect contract instead depends on Target itself.
+  std::vector<va_t> RequiredImports;
+  /// An exact immutable FF25 tail veneer to RequiredImports' single slot.
+  /// Under that binding it inherits the import's nonvolatile register ABI.
+  bool ImportVeneer = false;
+  /// A separate normal-return effect: existing eager-IAT bindings survive.
+  /// Imports, veneers and closed ordinary helpers never restore lost bindings
+  /// or grant frame access, result provenance, native EH or no-throw facts.
+  bool PreservesImportBindings = false;
 };
 
 /// Runtime identity alone grants no frame effect. The state solver must bind
@@ -108,7 +123,8 @@ struct RegistrationCalleeFrameContract {
     PrivateThrow,
     PrivateRethrow,
     RuntimeThrow,
-    Initializer
+    Initializer,
+    CxxParent
   } CalleeKind = Kind::Leaf;
   va_t Target = InvalidVA;
   uint32_t StackPopBytes = 0;
@@ -120,6 +136,10 @@ struct RegistrationCalleeFrameContract {
   va_t ThrownTypeVA = 0;
   uint32_t ThrownObjectSize = 0;
   std::vector<RegistrationRuntimeThrowInfo> RuntimeThrowInfos;
+  /// Eager import bindings required by this complete invocation, including
+  /// nested language dispatch. Sorted and unique; the caller must keep them
+  /// live before using any of this contract's effects.
+  std::vector<va_t> RequiredImports;
   std::vector<RegistrationObjectExtent> ECXReads;
   std::vector<RegistrationObjectExtent> ECXWrites;
   /// Bytes initialized on every normal return from an ordinary constructor.
@@ -137,6 +157,7 @@ struct RegistrationCalleeFrameContract {
   bool isRethrow() const { return CalleeKind == Kind::PrivateRethrow; }
   bool isRuntimeThrow() const { return CalleeKind == Kind::RuntimeThrow; }
   bool isInitializer() const { return CalleeKind == Kind::Initializer; }
+  bool isCxxParent() const { return CalleeKind == Kind::CxxParent; }
 };
 
 /// An ordinary member call borrows a still-live reference catch's exception

@@ -1,24 +1,23 @@
-//===- COFFRegistrationFrameProof.cpp - PE32 private frame proof ----------===//
+//===- RegistrationFrameProof.cpp - PE32 private frame proof ----------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Validate the complete current frame use closure for every native consumer.
+//===----------------------------------------------------------------------===//
 
-#include "COFFRegistrationFrameProof.h"
-
-#include "COFFRegistrationFrameBits.h"
-#include "COFFRegistrationFrameStores.h"
-#include "COFFRegistrationFrameTaint.h"
-#include "COFFRegistrationSEHDynamicScope.h"
-#include "COFFRegistrationSEHException.h"
-#include "COFFRegistrationSEHJump.h"
-#include "COFFRegistrationSEHLocalUnwind.h"
-#include "COFFRegistrationSEHParentExit.h"
+#include "neverd/backend/llvm/RegistrationFrameProof.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/llvm/RegistrationFrameAddress.h"
+#include "neverd/backend/llvm/RegistrationFrameBits.h"
+#include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
+#include "neverd/backend/llvm/RegistrationFrameRuntime.h"
+#include "neverd/backend/llvm/RegistrationFrameStores.h"
+#include "neverd/backend/llvm/RegistrationFrameTaint.h"
+#include "neverd/backend/llvm/RegistrationImageProof.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
@@ -60,7 +59,8 @@ llvm::Error validateFramePrivacy(
     const RegistrationSEHJumpContract *Jumps,
     const RegistrationSEHScopeState *Scopes,
     const RegistrationSEHParentExitContract *ParentExits,
-    const RegistrationSEHLocalUnwindContract *LocalUnwinds) {
+    const RegistrationSEHLocalUnwindContract *LocalUnwinds,
+    const std::set<const llvm::LoadInst *> &ThreadReads) {
   const llvm::Instruction *CurrentInstruction = nullptr;
   auto Reject = [&](llvm::StringRef Detail = {}) {
     std::string Message = "coff registration patch: synthetic frame has an "
@@ -75,16 +75,7 @@ llvm::Error validateFramePrivacy(
     return llvm::createStringError(llvm::errc::invalid_argument, "%s",
                                    Message.c_str());
   };
-  struct Cell {
-    const llvm::Value *Root;
-    int64_t Offset;
-    bool operator==(const Cell &) const = default;
-    bool operator<(const Cell &Other) const {
-      return Root != Other.Root
-                 ? std::less<const llvm::Value *>{}(Root, Other.Root)
-                 : Offset < Other.Offset;
-    }
-  };
+  using registration_frame::Cell;
   const auto &Layout = Parent.getParent()->getDataLayout();
   std::vector<const llvm::Function *> Functions{&Parent};
   Functions.insert(Functions.end(), Callbacks.begin(), Callbacks.end());
@@ -157,242 +148,43 @@ llvm::Error validateFramePrivacy(
   bool Exhausted = false;
   RegistrationFrameStores Stores;
   if (!Stores.build(Functions, Work))
-    return Reject("private store index exhausted its work budget");
-  std::map<const llvm::Value *, std::optional<Cell>> Located;
-  std::function<std::optional<Cell>(const llvm::Value *, unsigned)> Locate,
-      LocateImpl;
-  Locate = [&](const llvm::Value *Value,
-               unsigned Depth) -> std::optional<Cell> {
-    if (++Work > limits::kMaxRegistrationEHStateWork ||
-        Depth >
-            ::neverd::limits::backend::
-                kCOFFRegistrationFrameProofValidateFramePrivacyLocateDepthLimit) {
-      Exhausted = true;
-      return std::nullopt;
+    return Reject("private store/lifetime index has unsupported storage or "
+                  "exhausted its work budget");
+  std::set<const llvm::CallBase *> CookieCalls;
+  std::vector<registration_frame::CookieDispatch> CookieDispatches;
+  const bool HasCookies =
+      Cxx && (!Cxx->CookieCalls.empty() || !Cxx->CookieDispatches.empty());
+  if (HasCookies) {
+    if (!SecurityCookieVA || SecurityCookieVA > UINT32_MAX - 3 || SEH ||
+        Jumps || Scopes || ParentExits || LocalUnwinds)
+      return Reject("cookie protocol has no independent C++ frame domain");
+    for (const auto &Check : Cxx->CookieCalls) {
+      if (++Work > limits::kMaxRegistrationEHStateWork || !Check.Call ||
+          !Check.Call->getParent() || Check.Call->getFunction() != &Parent ||
+          !Stores.contains(*Check.Call) ||
+          !registration_frame::hasExactCookieCallABI(*Check.Call,
+                                                     Check.CheckVA) ||
+          Cxx->Borrows.count(Check.Call) ||
+          Cxx->ImageWrites.count(Check.Call) ||
+          !CookieCalls.insert(Check.Call).second)
+        return Reject("cookie call has no unique current conditional ABI");
     }
-    auto Found = Located.find(Value);
-    if (Found != Located.end())
-      return Found->second;
-    auto Where = LocateImpl(Value, Depth);
-    // Address ownership depends only on this immutable LLVM graph. Repeated
-    // scalar queries must not replay the same reaching-definition walk.
-    if (!Exhausted)
-      Located.emplace(Value, Where);
-    return Where;
-  };
-  LocateImpl = [&](const llvm::Value *Value,
-                   unsigned Depth) -> std::optional<Cell> {
-    if (++Work > limits::kMaxRegistrationEHStateWork ||
-        Depth >
-            ::neverd::limits::backend::
-                kCOFFRegistrationFrameProofValidateFramePrivacyLocateImplDepthLimit) {
-      Exhausted = true;
-      return std::nullopt;
+    for (const auto &[Before, Guards] : Cxx->CookieDispatches) {
+      const auto *Call = llvm::dyn_cast_or_null<llvm::CallBase>(Before);
+      if (++Work > limits::kMaxRegistrationEHStateWork || !Call ||
+          !Call->getParent() || Call->getFunction() != &Parent ||
+          !Stores.contains(*Call) || CookieCalls.count(Call) || Guards.empty())
+        return Reject("cookie dispatch has no current ordinary call");
+      std::set<std::tuple<Cell, Cell, va_t>> Unique;
+      for (const auto &Guard : Guards)
+        if (++Work > limits::kMaxRegistrationEHStateWork ||
+            Guard.Slot.Root != LogicalFrame ||
+            Guard.XORBase.Root != LogicalFrame ||
+            !Unique.emplace(Guard.Slot, Guard.XORBase, Guard.CheckVA).second)
+          return Reject("cookie guard has no unique logical frame coordinate");
+      CookieDispatches.push_back({Before, Guards});
     }
-    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(Value))
-      return Cell{Slot, 0};
-    if (const auto *Freeze = llvm::dyn_cast<llvm::FreezeInst>(Value))
-      return Locate(Freeze->getOperand(0), Depth + 1);
-    if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Value);
-        Global &&
-        (parseNdDataSymbol(Global->getName()) ||
-         parseNdCodePtrSymbol(Global->getName()) ||
-         (SecurityCookieVA && Global->getName() == "__security_cookie")))
-      return Cell{Global, 0};
-    if (const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(Value);
-        Call && Call->getIntrinsicID() == llvm::Intrinsic::localrecover &&
-        Escape && Call->arg_size() == 3 && Call->getArgOperand(0) == &Parent) {
-      const auto *Index =
-          llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(2));
-      if (Index && Index->getValue().ult(Escape->arg_size()))
-        return Locate(Escape->getArgOperand(Index->getZExtValue()), Depth + 1);
-    }
-    if (const auto *Cast = llvm::dyn_cast<llvm::Operator>(Value);
-        Cast && llvm::Instruction::isCast(Cast->getOpcode())) {
-      if (const auto *Instruction = llvm::dyn_cast<llvm::CastInst>(Value);
-          Instruction && Instruction->hasPoisonGeneratingFlags())
-        return std::nullopt;
-      const auto *From = Cast->getOperand(0)->getType();
-      const auto *To = Value->getType();
-      auto FullInteger = [](const llvm::Type *Type) {
-        return Type->isIntegerTy() && Type->getIntegerBitWidth() >= 32;
-      };
-      auto PE32Pointer = [](const llvm::Type *Type) {
-        return Type->isPointerTy() && Type->getPointerAddressSpace() == 0;
-      };
-      switch (Cast->getOpcode()) {
-      case llvm::Instruction::PtrToInt:
-        if (!PE32Pointer(From) || !FullInteger(To))
-          return std::nullopt;
-        break;
-      case llvm::Instruction::IntToPtr:
-        if (!FullInteger(From) || !PE32Pointer(To))
-          return std::nullopt;
-        break;
-      case llvm::Instruction::Trunc:
-      case llvm::Instruction::ZExt:
-      case llvm::Instruction::SExt:
-        if (!FullInteger(From) || !FullInteger(To))
-          return std::nullopt;
-        break;
-      case llvm::Instruction::BitCast:
-        if (!PE32Pointer(From) || !PE32Pointer(To))
-          return std::nullopt;
-        break;
-      default:
-        return std::nullopt;
-      }
-      return Locate(Cast->getOperand(0), Depth + 1);
-    }
-    if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Value)) {
-      auto Offset = registration_frame::checkedByteGEPOffset(GEP);
-      auto Base = Locate(GEP->getPointerOperand(), Depth + 1);
-      if (Base && llvm::isa<llvm::GlobalVariable>(Base->Root)) {
-        llvm::APInt Bytes(32, 0);
-        if (GEP->getPointerAddressSpace() == 0 &&
-            GEP->accumulateConstantOffset(Layout, Bytes))
-          Offset = Bytes.getSExtValue();
-      }
-      if (Base && Offset) {
-        Base->Offset += *Offset;
-        return Base;
-      }
-    }
-    if (const auto *Binary = llvm::dyn_cast<llvm::BinaryOperator>(Value)) {
-      const auto *Amount =
-          llvm::dyn_cast<llvm::ConstantInt>(Binary->getOperand(1));
-      if (Amount && Amount->getBitWidth() == 32 &&
-          Binary->getOpcode() == llvm::Instruction::And &&
-          !Binary->hasPoisonGeneratingFlags()) {
-        auto Base = Locate(Binary->getOperand(0), Depth + 1);
-        const auto *Root =
-            Base ? llvm::dyn_cast<llvm::AllocaInst>(Base->Root) : nullptr;
-        auto Offset = Root ? alignX86RegistrationOffset(
-                                 Base->Offset, Root->getAlign().value(),
-                                 uint32_t(Amount->getZExtValue()))
-                           : std::nullopt;
-        if (Offset)
-          return Cell{Root, *Offset};
-      }
-      if (Amount && Amount->getBitWidth() <= 64 &&
-          (Binary->getOpcode() == llvm::Instruction::Add ||
-           Binary->getOpcode() == llvm::Instruction::Sub)) {
-        auto Base = Locate(Binary->getOperand(0), Depth + 1);
-        const int64_t Delta = Amount->getSExtValue();
-        if (Base && Delta >= -int64_t(UINT32_MAX) &&
-            Delta <= int64_t(UINT32_MAX) &&
-            Base->Offset >= -int64_t(UINT32_MAX) &&
-            Base->Offset <= int64_t(UINT32_MAX)) {
-          // Integer address arithmetic is reduced only at the eventual
-          // PE32 pointer boundary. A zero-extended -4 is 0xfffffffc, whose
-          // effective byte displacement is still -4, without no-wrap flags.
-          const uint32_t Next = uint32_t(Base->Offset) +
-                                (Binary->getOpcode() == llvm::Instruction::Add
-                                     ? uint32_t(Delta)
-                                     : uint32_t(0) - uint32_t(Delta));
-          Base->Offset = int64_t(llvm::APInt(32, Next).getSExtValue());
-          return Base;
-        }
-      }
-    }
-    // Follow every reaching definition of an SSA register/PHI spill. All
-    // normal paths must establish the same address before this exact load;
-    // an entry zero or an unwritten path cannot stand in for a frame address.
-    if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Value)) {
-      // This is a candidate identity only. Every such load must independently
-      // pass the address, width and invocation checks in the use closure.
-      if (SEH)
-        if (const auto *Root = SEH->pointerResult(*Load))
-          return Cell{Root, 0};
-      auto Slot = Locate(Load->getPointerOperand(), Depth + 1);
-      const auto *Catch = CatchAt(*Load);
-      const auto *Home = Slot && Slot->Root == LogicalFrame
-                             ? activeCxxReferenceHome(Cxx, Catch, Slot->Offset)
-                             : nullptr;
-      if (Home && Load->getType()->isIntegerTy(32) && !Load->isAtomic() &&
-          Dominators.at(&Parent)->dominates(Home->Catch, Load))
-        return Cell{Home->Catch, 0};
-      if (!Slot || !llvm::isa<llvm::AllocaInst>(Slot->Root))
-        return std::nullopt;
-      std::vector<
-          std::pair<const llvm::BasicBlock *, const llvm::Instruction *>>
-          Pending{{Load->getParent(), Load->getPrevNode()}};
-      std::set<std::pair<const llvm::BasicBlock *, const llvm::Instruction *>>
-          Seen;
-      std::optional<Cell> Common;
-      while (!Pending.empty()) {
-        auto [Block, Last] = Pending.back();
-        Pending.pop_back();
-        // The initial prefix ends immediately before the load. A backedge
-        // revisits the same block's suffix, which may overwrite this cell.
-        if (!Seen.emplace(Block, Last).second)
-          continue;
-        const auto Candidates =
-            Stores.candidates(Slot->Root, Block, Last, Work);
-        if (!Candidates) {
-          Exhausted = true;
-          return std::nullopt;
-        }
-        bool Found = false;
-        for (const auto *Store : llvm::reverse(*Candidates)) {
-          if (++Work > limits::kMaxRegistrationEHStateWork) {
-            Exhausted = true;
-            return std::nullopt;
-          }
-          auto Destination = Locate(Store->getPointerOperand(), Depth + 1);
-          if (!Destination || Destination->Root != Slot->Root)
-            continue;
-          const auto Written =
-              Layout.getTypeStoreSize(Store->getValueOperand()->getType());
-          const auto Read = Layout.getTypeStoreSize(Load->getType());
-          if (Written.isScalable() || Read.isScalable())
-            return std::nullopt;
-          if (Destination->Offset >=
-                  Slot->Offset + int64_t(Read.getFixedValue()) ||
-              Slot->Offset >=
-                  Destination->Offset + int64_t(Written.getFixedValue()))
-            continue;
-          if (*Destination != *Slot || Written != Read || Store->isAtomic())
-            return std::nullopt;
-          auto Address = Locate(Store->getValueOperand(), Depth + 1);
-          if (!Address || (Common && *Common != *Address))
-            return std::nullopt;
-          Common = Address;
-          Found = true;
-          break;
-        }
-        if (Found)
-          continue;
-        if (llvm::pred_empty(Block))
-          return std::nullopt;
-        for (const auto *Pred : llvm::predecessors(Block)) {
-          // A SjLj resume preserves the logical values last written by the
-          // exiting callback. Its apparent LLVM predecessor is the capture
-          // at machine entry; replay the authenticated transfer edge instead.
-          if (ParentExits && ParentExits->Dispatch &&
-              Pred == ParentExits->Dispatch->getParent()) {
-            const auto Resumes =
-                ParentExits->ResumptionPredecessors.find(Block);
-            if (Resumes == ParentExits->ResumptionPredecessors.end())
-              return std::nullopt;
-            for (const auto *Transfer : Resumes->second)
-              Pending.emplace_back(Transfer, Transfer->getTerminator());
-          } else
-            Pending.emplace_back(Pred, Pred->getTerminator());
-        }
-      }
-      return Common;
-    }
-    return std::nullopt;
-  };
-  RegistrationFrameTaint TaintedMemory;
-  std::set<const llvm::StoreInst *> TaintedStores;
-  auto Size = [&](llvm::Type *Type) -> uint64_t {
-    if (!Type->isSized())
-      return UINT64_MAX;
-    const auto Bytes = Layout.getTypeStoreSize(Type);
-    return Bytes.isScalable() ? UINT64_MAX : Bytes.getFixedValue();
-  };
+  }
   auto Bounded = [&](const Cell &Where, uint64_t Bytes) {
     if (const auto Found = RuntimeObjects.find(Where.Root);
         Found != RuntimeObjects.end()) {
@@ -408,23 +200,242 @@ llvm::Error validateFramePrivacy(
            uint64_t(Where.Offset) <= Extent->getFixedValue() &&
            Bytes <= Extent->getFixedValue() - Where.Offset;
   };
+  auto ProjectLoad = [&](const llvm::LoadInst &Load,
+                         registration_frame::AddressProof::Lookup Lookup)
+      -> std::optional<Cell> {
+    if (SEH)
+      if (const auto *Root = SEH->pointerResult(Load))
+        return Cell{Root, 0};
+    auto Slot = Lookup(Load.getPointerOperand());
+    const auto *Catch = CatchAt(Load);
+    const auto *Home = Slot && Slot->Root == LogicalFrame
+                           ? activeCxxReferenceHome(Cxx, Catch, Slot->Offset)
+                           : nullptr;
+    if (Home && Load.getType()->isIntegerTy(32) && !Load.isAtomic() &&
+        Dominators.at(&Parent)->dominates(Home->Catch, &Load))
+      return Cell{Home->Catch, 0};
+    return std::nullopt;
+  };
+  auto Predecessors =
+      [&](const llvm::BasicBlock *Block, const llvm::BasicBlock *Pred,
+          llvm::SmallVectorImpl<const llvm::BasicBlock *> &Edges) {
+        if (ParentExits && ParentExits->Dispatch &&
+            Pred == ParentExits->Dispatch->getParent()) {
+          const auto Resumes = ParentExits->ResumptionPredecessors.find(Block);
+          if (Resumes == ParentExits->ResumptionPredecessors.end())
+            return false;
+          for (const auto *Transfer : Resumes->second)
+            Edges.push_back(Transfer);
+        } else
+          Edges.push_back(Pred);
+        return true;
+      };
+  auto ObjectBounds = [&](const Cell &Where) {
+    if (llvm::isa<llvm::AllocaInst>(Where.Root) ||
+        RuntimeObjects.count(Where.Root))
+      return Bounded(Where, 0);
+    // Opaque image symbols denote mapped storage whose bounds are checked
+    // independently below, rather than a compiler allocation's declared type.
+    return llvm::isa<llvm::GlobalVariable>(Where.Root);
+  };
+  std::function<bool(const Cell &, uint64_t)> SEHCallbacksPreserve;
+  auto PreservesMemory = [&](const llvm::Instruction &I, const Cell &Slot,
+                             uint64_t Bytes) {
+    auto Disjoint = [&](const llvm::Value *Root, int64_t Offset,
+                        uint64_t Width) {
+      if (Offset < -int64_t(UINT32_MAX) || Offset > int64_t(UINT32_MAX) ||
+          Width > UINT32_MAX)
+        return false;
+      return Root != Slot.Root || Offset >= Slot.Offset + int64_t(Bytes) ||
+             Slot.Offset >= Offset + int64_t(Width);
+    };
+    if (const auto *Pad = llvm::dyn_cast<llvm::CatchPadInst>(&I)) {
+      const auto Found = RuntimeObjects.find(Pad);
+      if (Found == RuntimeObjects.end()) {
+        const auto *Filter =
+            Pad->arg_size() == 1
+                ? llvm::dyn_cast<llvm::Function>(Pad->getArgOperand(0))
+                : nullptr;
+        return !Cxx && SEH && Scopes && Scopes->CatchReturns.count(Pad) &&
+               Pad->getFunction() == &Parent && Filter &&
+               llvm::is_contained(Callbacks, Filter) && SEHCallbacksPreserve &&
+               SEHCallbacksPreserve(Slot, Bytes);
+      }
+      const auto &Catch = *Found->second;
+      return Slot.Root != Catch.CallbackStack &&
+             (!Catch.ObjectSize ||
+              Disjoint(LogicalFrame, Catch.HomeOffset,
+                       Catch.Reference ? 4 : Catch.ObjectSize));
+    }
+    if (const auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&I)) {
+      if (Cxx) {
+        // The independently replayed continuation restores this exact word
+        // after runtime dispatch. Keep its reaching pointer definition across
+        // catchret without lending that guarantee to any other frame cell or
+        // to exception-object destruction's image effects.
+        const auto *Restore =
+            llvm::dyn_cast_or_null<llvm::StoreInst>(Return->getPrevNode());
+        const auto Found = RuntimeObjects.find(Return->getCatchPad());
+        if (Return->getFunction() != &Parent ||
+            !Cxx->CatchReturns.count(Return) || Found == RuntimeObjects.end() ||
+            Slot.Root != LogicalFrame)
+          return false;
+        // A fresh source ThrowInfo proof may separately exclude every
+        // destruction callback for this type. Ordinary callback stores and
+        // calls are still visited at their actual reaching occurrences.
+        return Found->second->TrivialDestruction ||
+               (Restore && Cxx->SavedStackRestores.count(Restore) &&
+                Slot.Offset == Cxx->SavedStackOffset && Bytes == 4);
+      }
+      // The checked x86 SEH personality lowers this return to a branch.
+      // Do not extend that property to C++ exception-object destruction or
+      // to an unbound pad. Actual dispatch/callback writes are checked at
+      // their own occurrences in this same reaching-definition walk.
+      if (!SEH || !Scopes || Return->getFunction() != &Parent)
+        return false;
+      const auto Found = Scopes->CatchReturns.find(Return->getCatchPad());
+      return Found != Scopes->CatchReturns.end() && Found->second == Return;
+    }
+    const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+    if (const auto *Jump = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+        Jump && Jump->getIntrinsicID() == llvm::Intrinsic::eh_sjlj_longjmp) {
+      const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Slot.Root);
+      // A bound parent exit reads its private context and resumes the same
+      // parent activation. Callback allocations do not survive that jump.
+      return ParentExits && ParentExits->Calls.count(Jump) && Root &&
+             Root->isStaticAlloca() && Root->getFunction() == &Parent;
+    }
+    if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
+        llvm::isa<llvm::IntrinsicInst>(Call))
+      return false;
+    // This conditional frame-use assumption is discharged by the complete
+    // cookie protocol below. Its fresh queries override every known checker:
+    // unresolved checks cannot preserve memory merely through this hook.
+    if (CookieCalls.count(Call))
+      return true;
+    if (Cxx) {
+      const auto Found = Cxx->Borrows.find(Call);
+      if (Found != Cxx->Borrows.end()) {
+        const auto &Borrow = Found->second;
+        if (Borrow.Offset < -int64_t(UINT32_MAX) ||
+            Borrow.Offset > int64_t(UINT32_MAX))
+          return false;
+        const auto *Root = Borrow.Root ? Borrow.Root : LogicalFrame;
+        for (const auto *Effects : {&Borrow.Writes, &Borrow.Initialized})
+          for (const auto &Write : *Effects) {
+            if (Work >= limits::kMaxRegistrationEHStateWork) {
+              Exhausted = true;
+              return false;
+            }
+            ++Work;
+            if (Write.Begin >= Write.End ||
+                !Disjoint(Root, Borrow.Offset + int64_t(Write.Begin),
+                          uint64_t(int64_t(Write.End) - Write.Begin)))
+              return false;
+          }
+        return true;
+      }
+    }
+    if (Jumps) {
+      if (Jumps->NoFrameBorrowCalls.count(Call))
+        return !Cxx && SEH && Jumps->Calls.count(Call) &&
+               SEHCallbacksPreserve && SEHCallbacksPreserve(Slot, Bytes);
+      if (const auto Found = Jumps->RuntimeOutputs.find(Call);
+          Found != Jumps->RuntimeOutputs.end()) {
+        const auto &Output = Found->second;
+        return !Cxx && Output.Frame == LogicalFrame && Output.Bytes &&
+               Disjoint(Output.Frame, Output.Offset, Output.Bytes) &&
+               SEHCallbacksPreserve && SEHCallbacksPreserve(Slot, Bytes);
+      }
+    }
+    if ((LocalUnwinds && LocalUnwinds->Calls.count(Call)) ||
+        (Jumps && Jumps->Calls.count(Call)) ||
+        (ParentExits && ParentExits->Calls.count(Call)))
+      return false;
+    if (llvm::is_contained(Callbacks, Call->getCalledFunction()))
+      return !Cxx && SEH && SEHCallbacksPreserve &&
+             SEHCallbacksPreserve(Slot, Bytes);
+    if (Scopes && Scopes->PhysicalWrites.count(Call))
+      return false;
+    // This is conditional on the complete use closure below: an ordinary
+    // call cannot receive or retain any frame address. Calls admitted by a
+    // separate frame protocol need that protocol's write projection instead.
+    // Do not consult the growing Addresses set here: memoized answers must
+    // not depend on the order of the taint fixed point.
+    return true;
+  };
+  registration_frame::AddressProof AddressOwner(
+      Parent, Escape, SecurityCookieVA, Stores, Work, Exhausted, ProjectLoad,
+      Predecessors, ObjectBounds, PreservesMemory);
+  auto Locate = [&](const llvm::Value *Value, unsigned Depth) {
+    return AddressOwner.locate(Value, Depth);
+  };
+  std::map<std::pair<Cell, uint64_t>, bool> CallbackPreservation;
+  SEHCallbacksPreserve = [&](const Cell &Slot, uint64_t Bytes) {
+    const auto [Result, New] =
+        CallbackPreservation.emplace(std::make_pair(Slot, Bytes), false);
+    if (!New)
+      return Result->second;
+    // SEH dispatch and explicit finally calls can reach filters or termination
+    // callbacks. Close over every current callback, not just the chosen one.
+    // The use closure below independently checks the parent-frame call ABI.
+    // In-progress queries stay false, so a cyclic memory dependency
+    // cannot prove its own preservation. Unknown calls require a separate
+    // transitive callback write contract.
+    for (const auto *Callback : Callbacks)
+      for (const auto &Block : *Callback)
+        for (const auto &I : Block) {
+          if (Work >= limits::kMaxRegistrationEHStateWork) {
+            Exhausted = true;
+            return false;
+          }
+          ++Work;
+          if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+            const auto Destination = Locate(Store->getPointerOperand(), 0);
+            const auto Written =
+                Layout.getTypeStoreSize(Store->getValueOperand()->getType());
+            if (!Destination || Store->isAtomic() || Written.isScalable() ||
+                Written.getFixedValue() > UINT32_MAX || Bytes > UINT32_MAX ||
+                Destination->Offset < -int64_t(UINT32_MAX) ||
+                Destination->Offset > int64_t(UINT32_MAX) ||
+                Slot.Offset < -int64_t(UINT32_MAX) ||
+                Slot.Offset > int64_t(UINT32_MAX))
+              return false;
+            if (Destination->Root == Slot.Root &&
+                Destination->Offset < Slot.Offset + int64_t(Bytes) &&
+                Slot.Offset <
+                    Destination->Offset + int64_t(Written.getFixedValue()))
+              return false;
+          } else if (!llvm::isa<llvm::LoadInst>(I) &&
+                     (llvm::isa<llvm::CallBase, llvm::CatchPadInst>(I) ||
+                      I.mayWriteToMemory())) {
+            if (!llvm::isa<llvm::IntrinsicInst>(I) ||
+                !AddressOwner.preservesMemory(I, Slot, Bytes))
+              return false;
+          }
+        }
+    Result->second = true;
+    return true;
+  };
+  auto LiveAt = [&](const Cell &Where, const llvm::Instruction &Access) {
+    const auto *Root = llvm::dyn_cast<llvm::AllocaInst>(Where.Root);
+    return !Root || AddressOwner.isAliveAt(*Root, Access);
+  };
+  RegistrationFrameTaint TaintedMemory;
+  std::set<const llvm::StoreInst *> TaintedStores;
+  auto Size = [&](llvm::Type *Type) -> uint64_t {
+    if (!Type->isSized())
+      return UINT64_MAX;
+    const auto Bytes = Layout.getTypeStoreSize(Type);
+    return Bytes.isScalable() ? UINT64_MAX : Bytes.getFixedValue();
+  };
   auto IsAddress = [&](const llvm::Value *Value) {
     return Addresses.count(Value);
   };
   auto CheckImageAccess = [&](const Cell &Where, uint64_t Bytes, bool Write) {
-    const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Where.Root);
-    auto Base = Global ? parseNdDataSymbol(Global->getName())
-                       : std::optional<uint64_t>{};
-    if (!Base && Global)
-      Base = parseNdCodePtrSymbol(Global->getName());
-    if (!Base || *Base > UINT32_MAX || Where.Offset < -int64_t(*Base))
-      return false;
-    const int64_t Address = int64_t(*Base) + Where.Offset;
-    if (Address < 0 || Address > UINT32_MAX ||
-        Bytes > uint64_t(UINT32_MAX) + 1 - uint64_t(Address) ||
-        !Global->isDeclaration() || !Global->hasExternalLinkage() ||
-        Global->isThreadLocal() || Global->getAddressSpace() ||
-        Global->hasDLLImportStorageClass())
+    const auto Access =
+        registration_frame::imageRange(Where, Bytes, SecurityCookieVA);
+    if (!Access)
       return false;
     const Segment *Owner = nullptr;
     for (const auto &Segment : Cxx->Image->Segments) {
@@ -432,11 +443,10 @@ llvm::Error validateFramePrivacy(
           Segment.VA > UINT32_MAX ||
           Segment.Size > uint64_t(UINT32_MAX) + 1 - Segment.VA)
         return false;
-      if (uint64_t(Address) < Segment.VA + Segment.Size &&
-          Segment.VA < uint64_t(Address) + Bytes) {
-        if (Owner || Address < int64_t(Segment.VA) ||
-            uint64_t(Address) - Segment.VA > Segment.Size ||
-            Bytes > Segment.Size - (uint64_t(Address) - Segment.VA) ||
+      if (Access->Begin < Segment.VA + Segment.Size &&
+          Segment.VA < Access->End) {
+        if (Owner || Access->Begin < Segment.VA ||
+            Access->End > Segment.VA + Segment.Size ||
             (Write &&
              (!Segment.isWritable() || Segment.ReadOnlyAfterRelocations)))
           return false;
@@ -456,11 +466,17 @@ llvm::Error validateFramePrivacy(
           if (++Work > limits::kMaxRegistrationEHStateWork)
             return Reject();
           if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&I)) {
+            auto Where = Locate(Load->getPointerOperand(), 0);
+            if (Where && !LiveAt(*Where, *Load))
+              return Reject("frame read is outside its allocation lifetime");
+            // The caller binds these exact reads to freshly replayed source
+            // and checks their real Self-derived addresses independently.
+            if (ThreadReads.count(Load))
+              continue;
             if (ChainProtocolReads.count(Load))
               continue;
             if (SEH && SEH->NullReads.count(Load))
               continue;
-            auto Where = Locate(Load->getPointerOperand(), 0);
             if (SEH && (SEH->Reads.count(Load) ||
                         (Where && SEH->Roots.count(Where->Root)))) {
               if (!Where || !SEH->validRead(*Load, Where->Root, Where->Offset))
@@ -502,30 +518,18 @@ llvm::Error validateFramePrivacy(
                 !CheckImageAccess(*Where, Size(Load->getType()), false))
               return Reject("image read lost its original storage identity");
             if (!Private && Where) {
-              const auto *Global =
-                  llvm::cast<llvm::GlobalVariable>(Where->Root);
-              auto Base = parseNdDataSymbol(Global->getName());
-              if (!Base)
-                Base = parseNdCodePtrSymbol(Global->getName());
-              if (!Base && SecurityCookieVA &&
-                  Global->getName() == "__security_cookie")
-                Base = SecurityCookieVA;
-              if (!Base || *Base > UINT32_MAX)
-                return Reject();
-              const int64_t Address = int64_t(*Base) + Where->Offset;
-              const uint64_t Bytes = Size(Load->getType());
+              const auto Read = registration_frame::imageRange(
+                  *Where, Size(Load->getType()), SecurityCookieVA);
               if (!I.getMetadata(
                       windows_eh_md::RegistrationOperationAttachment) ||
-                  Address < 0 || Address > UINT32_MAX ||
-                  Bytes > uint64_t(UINT32_MAX) + 1 - uint64_t(Address))
+                  !Read)
                 return Reject("unindexed or wrapping image read");
               auto Write =
-                  llvm::lower_bound(CallerPCWrites, uint64_t(Address),
+                  llvm::lower_bound(CallerPCWrites, Read->Begin,
                                     [](const auto &Range, uint64_t Begin) {
                                       return Range.End <= Begin;
                                     });
-              if (Write != CallerPCWrites.end() &&
-                  Write->Begin < uint64_t(Address) + Bytes)
+              if (Write != CallerPCWrites.end() && Write->Begin < Read->End)
                 return Reject("caller-PC image slot is read");
             }
             if (!Where &&
@@ -575,9 +579,11 @@ llvm::Error validateFramePrivacy(
             continue;
           }
           if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+            auto Where = Locate(Store->getPointerOperand(), 0);
+            if (Where && !LiveAt(*Where, *Store))
+              return Reject("frame write is outside its allocation lifetime");
             if (ParentExits && ParentExits->ChainWrites.count(Store))
               continue;
-            auto Where = Locate(Store->getPointerOperand(), 0);
             const uint64_t Bytes = Size(Store->getValueOperand()->getType());
             if (Scopes && Scopes->CallbackWrites.count(Store) &&
                 (!Where || Where->Root != LogicalFrame ||
@@ -655,30 +661,18 @@ llvm::Error validateFramePrivacy(
                     : nullptr;
             if (Home && Dominators.at(&Parent)->dominates(Home->Catch, Store))
               return Reject("runtime reference home was overwritten");
-            if (!ImmutableImageRanges.empty() &&
+            if (!Cxx && !ImmutableImageRanges.empty() &&
                 !IncomingAccesses.count(Store) &&
                 (!Where || llvm::isa<llvm::GlobalVariable>(Where->Root))) {
-              const auto *Global =
-                  Where ? llvm::dyn_cast<llvm::GlobalVariable>(Where->Root)
-                        : nullptr;
-              auto Base = Global ? parseNdDataSymbol(Global->getName())
-                                 : std::optional<uint64_t>{};
-              if (!Base && Global)
-                Base = parseNdCodePtrSymbol(Global->getName());
-              if (!Base && Global && SecurityCookieVA &&
-                  Global->getName() == "__security_cookie")
-                Base = SecurityCookieVA;
-              if (!Base || *Base > UINT32_MAX)
+              const auto Written = Where ? registration_frame::imageRange(
+                                               *Where, Bytes, SecurityCookieVA)
+                                         : std::nullopt;
+              if (!Written)
                 return Reject("unproved registration image write");
-              const int64_t Address = int64_t(*Base) + Where->Offset;
-              if (Address < 0 || Address > UINT32_MAX ||
-                  Bytes > uint64_t(UINT32_MAX) + 1 - uint64_t(Address))
-                return Reject("wrapping registration image write");
               for (const auto &Range : ImmutableImageRanges) {
                 if (++Work > limits::kMaxRegistrationEHStateWork)
                   return Reject("image closure exhausted its work budget");
-                if (uint64_t(Address) < Range.End &&
-                    Range.Begin < uint64_t(Address) + Bytes)
+                if (Written->overlaps(Range))
                   return Reject(
                       "registration scope table or cookie is written");
               }
@@ -717,6 +711,10 @@ llvm::Error validateFramePrivacy(
                 Call->isMustTailCall() ||
                 Call->hasFnAttr(llvm::Attribute::ReturnsTwice))
               return Reject();
+            // Defer only this exact source-bound sink. Its encoded/decoded
+            // operands remain tainted in every store, call and other use.
+            if (CookieCalls.count(Call))
+              continue;
             const auto *Callee = Call->getCalledFunction();
             if (Cxx) {
               const auto Borrow = Cxx->Borrows.find(Call);
@@ -780,6 +778,9 @@ llvm::Error validateFramePrivacy(
                                  uint64_t(int64_t(Effect.End) - Effect.Begin)))
                       return Reject(
                           "callee borrow leaves its allocated source frame");
+                    if (!LiveAt(Access, *Call))
+                      return Reject(
+                          "callee borrow is outside its allocation lifetime");
                     if (Effects == &Borrow->second.Reads &&
                         !Checked.Initializer) {
                       const auto Tainted = TaintedMemory.overlaps(
@@ -881,8 +882,14 @@ llvm::Error validateFramePrivacy(
           if (llvm::isa<llvm::AtomicRMWInst>(I) ||
               llvm::isa<llvm::AtomicCmpXchgInst>(I))
             return Reject();
-          if (RuntimeObjects.count(&I))
+          if (RuntimeObjects.count(&I)) {
+            const auto &Catch = *RuntimeObjects.at(&I);
+            if (Catch.ObjectSize &&
+                !LiveAt({LogicalFrame, Catch.HomeOffset}, I))
+              return Reject(
+                  "runtime catch write is outside its allocation lifetime");
             continue;
+          }
           if (I.isTerminator()) {
             if (llvm::any_of(I.operands(), [&](const auto &Use) {
                   return IsAddress(Use.get());
@@ -922,6 +929,76 @@ llvm::Error validateFramePrivacy(
   if (Exhausted)
     return Reject("address proof exhausted its work budget");
   if (Cxx) {
+    // The complete use closure above proves these runtime stores stay within
+    // their original stack/exception objects. Image effects of calls require
+    // their separate source replay; the frame-preservation hook is
+    // insufficient.
+    auto SourcePreservesImage = [&](const llvm::Instruction &I,
+                                    const ExceptionAddressRange &Range) {
+      // localescape records compiler frame offsets; the checked C++ frame
+      // and complete callback closure own its escaped storage, not the image.
+      if (&I == Escape)
+        return true;
+      if (llvm::isa<llvm::StoreInst>(I))
+        return IncomingAccesses.count(&I) || Cxx->RuntimeAccesses.count(&I);
+      if (llvm::isa<llvm::CatchPadInst>(I))
+        return RuntimeObjects.count(&I) != 0;
+      // A source-bound catch return completes the checked runtime invocation.
+      // Its exception copy/destruction effects are included in the throw call
+      // summaries, which the whole-image query still checks independently.
+      if (const auto *Return = llvm::dyn_cast<llvm::CatchReturnInst>(&I))
+        return Cxx->CatchReturns.count(Return) &&
+               RuntimeObjects.count(Return->getCatchPad());
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (!Call || Call->isInlineAsm() || llvm::isa<llvm::CallBrInst>(Call) ||
+          llvm::isa<llvm::IntrinsicInst>(Call))
+        return false;
+      const auto Effects = Cxx->ImageWrites.find(Call);
+      if (Effects == Cxx->ImageWrites.end())
+        return false;
+      for (const auto &Write : Effects->second) {
+        if (Work >= limits::kMaxRegistrationEHStateWork) {
+          Exhausted = true;
+          return false;
+        }
+        ++Work;
+        if (!Write.isValid() || Write.End > uint64_t(UINT32_MAX) + 1 ||
+            Write.overlaps(Range))
+          return false;
+      }
+      return true;
+    };
+    if (HasCookies) {
+      registration_frame::CookieProofContext Context{
+          Parent,           Escape,
+          Stores,           Functions,
+          SecurityCookieVA, ProjectLoad,
+          Predecessors,     ObjectBounds,
+          PreservesMemory,  SourcePreservesImage};
+      CurrentInstruction = nullptr;
+      if (!registration_frame::proveCookieProtocol(
+              *Cxx->Image, Context, Cxx->CookieCalls, CookieDispatches, Work,
+              Exhausted))
+        return Reject("C++ current cookie protocol is not established");
+    }
+    // Only the completed protocol above authorizes successful checker effects
+    // for the remaining immutable runtime image. Ordinary calls retain their
+    // independently replayed source summaries.
+    auto PreservesImage = [&](const llvm::Instruction &I,
+                              const ExceptionAddressRange &Range) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      return (Call && CookieCalls.count(Call)) ||
+             SourcePreservesImage(I, Range);
+    };
+    registration_frame::ImageProof ImageOwner(AddressOwner, Functions,
+                                              SecurityCookieVA, Work, Exhausted,
+                                              PreservesImage);
+    for (const auto &Range : ImmutableImageRanges) {
+      CurrentInstruction = nullptr;
+      if (!ImageOwner.preserves(Range))
+        return Reject("C++ current writes do not preserve the original "
+                      "runtime image");
+    }
     // Recompute definite initialization from actual LLVM stores and the CRT
     // catch write. Only independently proved constructor must-writes seed
     // bytes after calls; ordinary callee write summaries remain may-effects.
@@ -1019,14 +1096,24 @@ llvm::Error validateFramePrivacy(
       return State;
     };
     auto Seed = [&](Initialized &State, const llvm::Instruction &I) {
-      const auto Found = RuntimeObjects.find(&I);
-      if (Found != RuntimeObjects.end() && Found->second->CallbackStack)
+      auto Reset = [&](const llvm::Value *Root) {
         for (const auto &[Byte, Index] : Indices) {
           if (++Work > limits::kMaxRegistrationEHStateWork)
             return false;
-          if (Byte.Root == Found->second->CallbackStack)
+          if (Byte.Root == Root)
             State.reset(Index);
         }
+        return true;
+      };
+      // A start creates uninitialized contents even if the object was already
+      // alive. Ending and starting it again cannot revive an old must-write.
+      if (const auto *Lifetime = llvm::dyn_cast<llvm::LifetimeIntrinsic>(&I))
+        if (!Reset(Lifetime->getArgOperand(0)))
+          return false;
+      const auto Found = RuntimeObjects.find(&I);
+      if (Found != RuntimeObjects.end() && Found->second->CallbackStack)
+        if (!Reset(Found->second->CallbackStack))
+          return false;
       const auto Write = Writes.find(&I);
       if (Write == Writes.end())
         return true;

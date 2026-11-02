@@ -61,7 +61,9 @@ bool hasSEHBoundFrameArguments(const RegistrationSEHBoundCall &Source,
     if (Arg.ArgumentKind != Kind::Scalar && Arg.ArgumentKind != Kind::Object)
       continue;
     const int64_t Offset = int64_t(EntrySP) - 4 + Arg.Offset;
-    if (Offset < 0 || uint64_t(Offset) + 4 > Bytes->getFixedValue())
+    const auto Width =
+        Arg.ArgumentKind == Kind::Object ? Source.borrowedObjectBytes() : 4;
+    if (Offset < 0 || uint64_t(Offset) + Width > Bytes->getFixedValue())
       return false;
   }
   return true;
@@ -71,13 +73,20 @@ llvm::SmallVector<llvm::Value *, 8>
 projectSEHBoundArguments(const RegistrationSEHBoundCall &Source,
                          llvm::IRBuilder<> &B, llvm::AllocaInst &Frame,
                          uint64_t EntrySP,
-                         const std::map<va_t, llvm::AllocaInst *> &Buffers) {
+                         const std::map<va_t, llvm::AllocaInst *> &Buffers,
+                         const std::map<va_t, llvm::Value *> &ImagePointers) {
   llvm::SmallVector<llvm::Value *, 8> Arguments;
   for (const auto &Arg : Source.Arguments) {
     using Kind = RegistrationSEHBoundArgument::Kind;
     switch (Arg.ArgumentKind) {
     case Kind::Unused:
       Arguments.push_back(B.getInt32(0));
+      break;
+    case Kind::ConstantScalar:
+      Arguments.push_back(B.getInt32(Arg.ScalarValue));
+      break;
+    case Kind::ImagePointer:
+      Arguments.push_back(ImagePointers.at(Arg.ImageVA));
       break;
     case Kind::NullPointer:
       Arguments.push_back(llvm::ConstantPointerNull::get(B.getPtrTy()));

@@ -17,7 +17,7 @@
 namespace neverd::registration_state {
 
 void RegistrationStateSolver::invalidateJumpRuntimeBindings(
-    Domain &State, const FrameValue &Address, uint16_t Width) {
+    Domain &State, const FrameValue &Address, uint64_t Width) {
   if ((!JumpRuntime && LocalUnwindImportSlots.empty()) || Address.Offset ||
       Address.EntryOffset || Address.CallbackAddress)
     return;
@@ -25,12 +25,13 @@ void RegistrationStateSolver::invalidateJumpRuntimeBindings(
               LocalUnwindImportSlots.size() + 1))
     return;
   const auto Overlaps = [&](va_t Slot) {
-    return !Address.Constant || (uint64_t(*Address.Constant) < Slot + 4 &&
-                                 Slot < uint64_t(*Address.Constant) + Width);
+    return !Address.preferredAddress() ||
+           (uint64_t(*Address.preferredAddress()) < Slot + 4 &&
+            Slot < uint64_t(*Address.preferredAddress()) + Width);
   };
   // Captures and local unwinds share the same live runtime binding invariant.
   // An immutable veneer does not preserve an import slot overwritten earlier.
-  if (!Address.Constant ||
+  if (!Address.preferredAddress() ||
       (JumpRuntime && llvm::any_of(JumpRuntime->ImportSlots, Overlaps)) ||
       llvm::any_of(LocalUnwindImportSlots, Overlaps)) {
     State.JumpBindingsIntact = false;

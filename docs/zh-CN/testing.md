@@ -1679,6 +1679,10 @@ bulk-attributes 检查完整组、名称/类型集合、未使用字节保护区
 
 `RegistrationTryLevel.EH4Publication*` 和 `EH4CookieStoresMustOwnDistinctPrivateBytes` 检查 PE32 EH4 直接栈帧，覆盖 ADD/SUB 分配、保存寄存器、压入 cookie 及 disp8/disp32 cookie 存储。改变来源或偏移、cookie 重叠，以及覆盖保存寄存器或运行时管理字段的写入必须被拒绝；共享 LowIR 独立验证值和生命周期。
 
+`RegistrationRealignedLayout.ProvesStackBasedMSVCNodeIndependentlyOfEBP` 覆盖对齐值、分配编码、保存寄存器、可选 cookie 及两种注册链发布编码；节点、坐标和归属变更必须拒绝。`RegistrationRealignment.StackAlignedLocalsKeepEntryEBPIndependent` 重放独立的入口帧与对齐局部帧，反例覆盖来源指令和 catch 续接。帧测试及 `COFFExceptionIR.LLVMCRealignedFrameKeepsItsEstablisherCoordinates` 检查消费者，ESP 注释不得虚构保存父帧的槽位。 cleanup-only PE32 验证脚本的 `--stack-aligned` 生成独立汇编的 ESP 父函数；普通状态写入和寄存器状态写入必须通过 LLVM 与 COFF 安装验证，并可在 O0/O1、原址及重定位地址下通过 Wine 检查，错误清理轨迹的反例仍须失败。
+
+`RegistrationTryLevel.CxxPhysicalEntryDoesNotRequireTheRemainingStateGraph` 在 24 种共享 C++ 序言后写入运行时状态，验证局部机器码证明仍能建立首个栈参数的物理来源，同时保留不完整的状态、父函数 ABI 和原生帧资格。`CxxEAXHelperProjectionRechecksTheCurrentEntry` 检查当前字节、分配、处理器、cookie、重定位、LowIR、边界及入口归属；仅缺失或过期的整函数凭据不影响局部序言展开，原生资格仍被拒绝。
+
 `PipelineOutcome.SourceEHRefusalsAgreeAcrossSingleAndShardedEmission` 检查 x86、x64、AArch64 上 PE32、ELF 和 Mach-O 的优化与未优化源码投影。单函数和分片 LLVM 发射保留相同的不完整原生 EH 显式契约；二进制重写仍拒绝该契约。
 
 `RegistrationCallNoReturn` 拒绝改变的指令范围、目标、操作范围、条件调用，以及错误架构或格式下的使用。对齐栈 PE32 用例同时检查已独立证明终止的调用和依赖当前证明删除的普通后继边；内存证据失效不能重新生成已不存在的普通边。

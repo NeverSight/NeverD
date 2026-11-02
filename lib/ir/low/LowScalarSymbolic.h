@@ -23,11 +23,11 @@ namespace neverd {
 /// semantics used by complete-domain jump-table proofs.  Inputs are coerced
 /// exactly as the production emitter coerces them; unsupported or
 /// architecture-dependent width combinations return nullopt rather than
-/// authorizing a range from an approximate expression.
-std::optional<symbolic::SymRef>
-symbolizeJumpTableIntegerOperation(symbolic::SymContext &Ctx, NdOp Opcode,
-                                   uint16_t OutputSize,
-                                   llvm::ArrayRef<symbolic::SymRef> RawInputs);
+/// authorizing a range from an approximate expression. Double-width words
+/// are reserved for structural modulo recipes, never general SAT queries.
+std::optional<symbolic::SymRef> symbolizeJumpTableIntegerOperation(
+    symbolic::SymContext &Ctx, NdOp Opcode, uint16_t OutputSize,
+    llvm::ArrayRef<symbolic::SymRef> RawInputs, bool AllowDoubleWidth = false);
 
 } // namespace neverd
 

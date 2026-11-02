@@ -16,10 +16,55 @@ namespace neverd::registration_state {
 
 bool RegistrationStateSolver::validateRealignedLayout() {
   const auto &Layout = *Chain.RealignedFrame;
-  if (!KnownCxx || Layout.BaseRegister != 6 ||
-      Function.Entry > UINT32_MAX - 17 ||
-      Layout.DefinitionVA != Function.Entry + 15 || Layout.Alignment < 4 ||
-      Layout.Alignment > 128 || (Layout.Alignment & (Layout.Alignment - 1)) ||
+  const bool StackBased = Layout.BaseRegister == 4;
+  if (!KnownCxx || (!StackBased && Layout.BaseRegister != 6) ||
+      Layout.Alignment < limits::kMinRegistrationFrameAlignment ||
+      Layout.Alignment > limits::kMaxRegistrationFrameAlignment ||
+      (Layout.Alignment & (Layout.Alignment - 1)) ||
+      Layout.AllocationBytes > limits::kMaxSourceCallBorrowedBytes ||
+      Chain.RegistrationOffset != -12 || Chain.TryLevelOffset != -4 ||
+      Chain.SeededTryLevel != -1)
+    return false;
+  if (StackBased) {
+    // A catch continuation would also have to restore the independent entry
+    // EBP. This layout has no saved-parent cell in the aligned frame, so its
+    // coordinate proof currently admits cleanup-only functions.
+    if (!EH.Cxx->TryBlocks.empty() || Function.Entry > UINT32_MAX - 8 ||
+        (Layout.DefinitionVA != Function.Entry + 3 &&
+         Layout.DefinitionVA != Function.Entry + 5) ||
+        Layout.AllocationBytes < 12 ||
+        int64_t(Layout.BaseOffset) != -int64_t(Layout.AllocationBytes) ||
+        Layout.SavedParentFrameOffset != 0)
+      return false;
+    const auto Entry = llvm::find_if(Function.Blocks, [&](const LowBlock &B) {
+      return B.StartAddr == Function.Entry;
+    });
+    if (Entry == Function.Blocks.end() ||
+        Entry->EndAddr < Layout.DefinitionVA + 3)
+      return false;
+    const va_t Prefix = Layout.DefinitionVA - 3;
+    for (const auto &[Address, Size] :
+         {std::pair{Prefix, 1u}, std::pair{Prefix + 1, 2u},
+          std::pair{Layout.DefinitionVA, 0u}}) {
+      unsigned Matches = 0;
+      for (const auto &Boundary : Entry->InstructionBoundaries) {
+        if (!charge(1))
+          return false;
+        const bool ExpectedSize =
+            Size ? Boundary.Size == Size
+                 : Boundary.Size == 3 || Boundary.Size == 6;
+        if (Boundary.Address == Address && ExpectedSize &&
+            Boundary.Size <= Entry->EndAddr - Address &&
+            Boundary.Control == LowInstructionControl::None)
+          ++Matches;
+      }
+      if (Matches != 1)
+        return false;
+    }
+    return true;
+  }
+  if (Function.Entry > UINT32_MAX - 17 ||
+      Layout.DefinitionVA != Function.Entry + 15 ||
       Layout.AllocationBytes < 20 ||
       Layout.AllocationBytes > limits::kMaxSourceCallBorrowedBytes ||
       Layout.BaseOffset > -20 ||
@@ -57,7 +102,8 @@ bool RegistrationStateSolver::realignedMemoryIsDisjoint(
   if (!Chain.RealignedFrame)
     return true;
   if (Address.EntryOffset)
-    return *Address.EntryOffset >= -12;
+    return *Address.EntryOffset >=
+           (Chain.RealignedFrame->BaseRegister == 4 ? 0 : -12);
   if (Address.Offset) {
     const auto &Layout = *Chain.RealignedFrame;
     const int64_t AlignedTop =

@@ -213,9 +213,11 @@ private:
     uint64_t StableOffsetNodes = 0;
     uint64_t ClosedScalarNodes = 0;
     uint64_t IndexedBaseProofs = 0;
+    uint64_t IndexConstraintNodes = 0;
     uint64_t IndexedBaseNodes = 0;
     uint64_t FragmentReloadProofs = 0;
     uint64_t FrameSlotNodes = 0;
+    uint64_t FrameSlotEvaluatedNodes = 0;
     uint64_t FrameSlotCacheHits = 0;
     uint64_t FrameSlotReplays = 0;
   };
@@ -274,7 +276,8 @@ private:
   bool emitNativeX86RegistrationCxx(
       const MedFunc &Func, llvm::Function &LLVMFunc,
       const std::map<int, llvm::BasicBlock *> &OriginalBlockMap,
-      const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges);
+      const std::map<llvm::BasicBlock *, std::pair<int, int>> &PHICopyEdges,
+      std::function<llvm::Error()> &FinalFrameProof);
   llvm::Function *resolveX86RegistrationHandlerReference(va_t Address);
   void declareX86RegistrationJumpRuntimes(const MedFunc &Func);
   void declareX86RegistrationLocalUnwinds(const MedFunc &Func);
@@ -283,6 +286,10 @@ private:
                                         llvm::IRBuilder<> &Builder,
                                         std::vector<llvm::Value *> &Arguments);
   llvm::Function *getX86RegistrationSEHRuntimeTarget(const MedOp &Op);
+  llvm::Function *
+  prepareX86RegistrationCookieCall(const MedOp &Op, int BlockId, int OpIdx,
+                                   llvm::IRBuilder<> &Builder,
+                                   std::vector<llvm::Value *> &Arguments);
   llvm::Function *
   prepareX86RegistrationSEHRuntimeCall(const MedOp &Op,
                                        llvm::IRBuilder<> &Builder,
@@ -821,6 +828,14 @@ private:
   /// functions.
   bool preservesRegistrationImageStorage(uint64_t Begin, uint64_t End) const;
 
+  struct PointerRunStorageContract {
+    bool OriginalStorage = false;
+    bool OriginalCodeTargets = false;
+  };
+  PointerRunStorageContract pointerRunStorageContract(uint64_t Begin,
+                                                      uint64_t End) const;
+  bool pointerRunHasOriginalStorage(uint64_t RunStart) const;
+
   /// True when segment \p S is read-only after relocation — a true read-only
   /// segment (.rodata) or a `.data.rel.ro` (writable in section flags but a
   /// relocated, read-only-after-reloc pointer table).  A genuinely mutable
@@ -917,11 +932,18 @@ private:
   /// overlapping writes, ambiguous frame addresses, and cycles without a
   /// proven definition.  The returned values are provenance candidates only;
   /// callers must still prove what each value represents.
-  bool collectFrameReloadSources(const MedOp &Load,
-                                 std::vector<MedVar> &Sources) const;
+  /// Runtime mode additionally admits an escaped, initialized slot. Its
+  /// sources describe visible possible writes only: arbitrary callee writes
+  /// remain live runtime values. Only an original-image displacement consumer
+  /// may use this mode, never exact recovery, scalar bounds or call targets.
+  enum class FrameReloadSourceMode { Exact, Runtime };
+  bool collectFrameReloadSources(
+      const MedOp &Load, std::vector<MedVar> &Sources,
+      FrameReloadSourceMode Mode = FrameReloadSourceMode::Exact) const;
 
   bool collectFrameReloadSourcesUncached(const MedOp &Load,
-                                         std::vector<MedVar> &Sources) const;
+                                         std::vector<MedVar> &Sources,
+                                         FrameReloadSourceMode Mode) const;
 
   /// Prove a full-width STORE precedes this exact LOAD on every path.
   /// This proves initialization only; intervening writes still require a
@@ -1146,7 +1168,8 @@ private:
   /// establishes neither an index bound nor a callable slot domain. An address
   /// consumer additionally needs a complete pointer mirror and one uniform
   /// symbolized address model before using it as an unbounded offset.
-  bool valueIsOpaqueRuntimeOffset(const MedVar &V) const;
+  bool valueIsOpaqueRuntimeOffset(const MedVar &V,
+                                  bool AllowEscapedFrame = false) const;
   /// A runtime word read with no frame or relocatable image address dependency.
   /// A consumer must separately prove its bound or complete mirror ownership.
   bool isOpaqueRuntimeWordLoad(const MedOp &Op) const;
@@ -1490,9 +1513,10 @@ private:
   /// lookup-or-compute wrappers around these *Impl bodies (which hold the
   /// unchanged analysis).
   void ensureConstClassCache() const;
-  /// Resolve one occurrence-sensitive address operand through bit-preserving
-  /// COPYs. Numeric membership in a mapped segment is insufficient: the leaf
-  /// must carry architectural address origin or exact loader provenance.
+  /// Resolve one occurrence-sensitive address operand through the shared
+  /// pointer-preserving transports, retaining a complete target pointer at
+  /// every step. Numeric membership in a mapped segment is insufficient: the
+  /// leaf must carry architectural address origin or exact loader provenance.
   bool resolveMaterializableDataAddress(const MedVar &V, uint64_t &Value,
                                         uint64_t *OwnerVA = nullptr) const;
   bool constUsedAsPointerImpl(uint64_t Val) const;
@@ -2033,6 +2057,7 @@ private:
     bool IsStore = false;
   };
   struct FrameReloadBlock {
+    bool EntryReachable = false;
     std::vector<int> Successors;
     std::set<int> StructuralPreds;
     std::vector<FrameReloadWrite> Writes;
@@ -2071,7 +2096,8 @@ private:
   mutable FrameReloadCacheState FrameReloadSourceState =
       FrameReloadCacheState::Empty;
   mutable bool FrameReloadBuildSawReentrantQuery = false;
-  mutable std::map<FrameReloadOccurrenceKey, FrameReloadSourceResult>
+  mutable std::map<std::pair<FrameReloadOccurrenceKey, FrameReloadSourceMode>,
+                   FrameReloadSourceResult>
       FrameReloadSourceCache;
   // Immutable per-function write/CFG facts reused by every occurrence proof.
   // Result cache identity remains the upstream stable occurrence key.
@@ -2121,12 +2147,20 @@ private:
           llvm::hash_combine_range(Bindings.begin(), Bindings.end()));
     }
   };
-  // Only completed default-budget, unbound top-level frame-slot queries.
-  // Nested path assumptions and externally shared budgets remain query-local.
+  struct ClosedFrameSlotProof {
+    std::optional<med_llvm::SlotKey> Slot;
+    // The recursive walk precedes the top-level affine fallback. Nested
+    // queries may replay only that walk's failure, with its original charge.
+    size_t WalkNodes = 0;
+    uint64_t WalkCacheHits = 0;
+    bool WalkFailed = false;
+    bool Complete = false;
+  };
+  // Default-budget top-level queries. Independent failed prefixes retain
+  // their work charge; recursive path assumptions stay query-local.
   mutable const MedFunc *ClosedFrameSlotCacheFor = nullptr;
   mutable std::unordered_map<std::pair<AddressProvenanceVarKey, bool>,
-                             std::optional<med_llvm::SlotKey>,
-                             FrameSlotQueryHash>
+                             ClosedFrameSlotProof, FrameSlotQueryHash>
       ClosedFrameSlotCache;
   // Unbound shared-budget queries. The budget only decides where a walk
   // stops: a walk that needs Nodes takes the same path under any budget that
@@ -2144,8 +2178,8 @@ private:
                              SharedBudgetFrameSlotProof, FrameSlotQueryHash>
       SharedBudgetFrameSlotCache;
   mutable const MedFunc *BoundFrameSlotCacheFor = nullptr;
-  mutable std::unordered_map<
-      BoundFrameSlotQuery, std::optional<med_llvm::SlotKey>, FrameSlotQueryHash>
+  mutable std::unordered_map<BoundFrameSlotQuery, ClosedFrameSlotProof,
+                             FrameSlotQueryHash>
       BoundFrameSlotCache;
   /// The slot key of each value an affine chain from a frame root reaches on
   /// every feasible path of the function being emitted (affineFrameKey).
@@ -2200,6 +2234,25 @@ private:
   mutable std::map<int, const MedBlock *> UniqueBlockIndex;
   mutable bool UniqueBlockIds = true;
 
+  // Implicit call definitions share the immutable per-function def/phi
+  // transaction. A value lookup retains MedVar's identity and first-record
+  // behavior; provenance queries separately require a unique record/owner.
+  struct IndexedCallClobber {
+    const MedCallClobber *First = nullptr;
+    bool Ambiguous = false;
+  };
+  mutable llvm::DenseMap<std::pair<int64_t, int>, IndexedCallClobber>
+      CallClobberIndex;
+  mutable llvm::DenseMap<uint64_t, std::vector<const MedCallClobber *>>
+      CallSiteClobberIndex;
+  mutable llvm::DenseMap<uint64_t, const MedOp *> CallOperationIndex;
+  mutable uint64_t CallClobberRecordsIndexed = 0;
+  const MedCallClobber *lookupCallClobber(const MedVar &V,
+                                          bool RequireUnique = false) const;
+  llvm::ArrayRef<const MedCallClobber *>
+  clobbersAtCall(uint32_t CallSiteId) const;
+  const MedOp *lookupUniqueCallOperation(uint32_t CallSiteId) const;
+
   // Occurrence-level proof that a value graph contains an emitted function
   // identity. Integer emission asks this for many operands, so solve each
   // uncached dependency subgraph to a fixed point and memoize its stable
@@ -2249,6 +2302,11 @@ private:
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameDerivedCache;
   mutable const MedFunc *FrameAddressCacheFor = nullptr;
   mutable llvm::DenseMap<std::pair<int64_t, int>, bool> FrameAddressCache;
+  mutable const MedFunc *FrameDependencyIndexFor = nullptr;
+  mutable llvm::DenseMap<std::pair<int64_t, int>, size_t>
+      FrameDependencyComponents;
+  bool mayCloseFrameRecurrence(const MedVar &Dependency,
+                               const MedVar &Anchor) const;
   mutable const MedFunc *FrameReloadCacheFor = nullptr;
   mutable uint64_t FrameReloadCacheGeneration = 0;
   mutable std::map<FrameReloadCacheKey, FrameReloadCacheEntry> FrameReloadCache;
@@ -2268,10 +2326,11 @@ private:
   mutable std::map<med_llvm::SlotKey, bool> SlotAddressEscapesCache;
   mutable std::map<med_llvm::SlotKey, bool> SlotMatchingKeyLoadCache;
   // The slot keys of every call argument and stored value of
-  // AddrPredCacheFor, and of every default-space load address, each found
-  // once rather than rescanned for every slot asked about.
+  // AddrPredCacheFor, and the values of every default-space load indexed
+  // by its slot key. Matching-key and local-use queries share this scan.
   mutable std::optional<std::set<med_llvm::SlotKey>> EscapingSlotKeys;
-  mutable std::optional<std::set<med_llvm::SlotKey>> LoadedSlotKeys;
+  mutable std::optional<std::map<med_llvm::SlotKey, std::vector<MedVar>>>
+      LoadedSlotValues;
   mutable std::map<med_llvm::SlotKey, bool> SlotReloadUsedLocallyCache;
   // writableDataSegOf result per (Kind,Id,SSAVer,RequireRelocBase).  The
   // writable-base search descends the whole address DAG (and chases stack
@@ -2441,6 +2500,9 @@ private:
   // Sticky hard failure: a relocation-proven executable pointer must never
   // degrade to an embedded original VA.  emit() discards the module when set.
   bool FatalCodePointerResolution = false;
+  /// Validate committed registration candidates after every body and call
+  /// normalization has finished. A rejection suppresses the complete module.
+  std::vector<std::function<llvm::Error()>> FinalRegistrationFrameProofs;
   // Sticky hard failure for any data-address contract violation: mixed or
   // incomplete provenance, an unmaterializable trusted pointer/relocation, or
   // a canonical run that cannot be represented. Mutable because some

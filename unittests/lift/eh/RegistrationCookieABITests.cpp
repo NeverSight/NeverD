@@ -9,8 +9,25 @@
 #include "../../../lib/ir/med/abi/MedABIPassDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/IR/Verifier.h"
+
+#include <algorithm>
+#include <initializer_list>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <tuple>
 
 namespace {
 using namespace neverd;
@@ -98,6 +115,46 @@ struct CookieFixture {
     for (unsigned I = 0; I != Count; ++I)
       States.CxxCookieConditions.push_back({-20 - int32_t(I) * 4, 0});
   }
+
+  void addPhysicalChecker() {
+    Image.Bits = Bitness::Bits32;
+    Image.DynInfo.SecurityCookieRVA = 0x4000;
+    Function.Name = "cookie_parent";
+    Function.RegistrationStates->SecurityCookieVA = 0x4000;
+    Segment Text;
+    Text.VA = 0x1000;
+    Text.Size = Text.FileSz = 0x1100;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(Text.Size, 0xcc);
+    Text.Data[0x10] = 0xe8;
+    writeLE<uint32_t>(Text.Data.data() + 0x11, 0x2000 - 0x1015);
+    const uint8_t Checker[] = {0x3b, 0x0d, 0, 0x40, 0, 0, 0x75, 0x10, 0xc3};
+    std::copy(std::begin(Checker), std::end(Checker),
+              Text.Data.begin() + 0x1000);
+    Image.Segments.push_back(std::move(Text));
+    Section Code;
+    Code.VA = 0x1000;
+    Code.Size = Code.FileSz = 0x1100;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Sections.push_back(Code);
+    Segment Data;
+    Data.VA = 0x4000;
+    Data.Size = Data.FileSz = 4;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(4);
+    writeLE<uint32_t>(Data.Data.data(), 0x12345678);
+    Image.Segments.push_back(std::move(Data));
+    Image.BaseRelocations.push_back(
+        {0x2002, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    auto &Block = Function.Blocks.front();
+    Block.Ops.back().PreservesCallerSaved = true;
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = 0x1015;
+    Return.OriginSeq = 0;
+    Return.addInput(MedVar::makeConst(7, 4));
+    Block.Ops.push_back(Return);
+  }
 };
 
 void checkCookieArgument(const CookieFixture &Fixture) {
@@ -115,6 +172,223 @@ TEST(RegistrationCookieABI, CheckedECXOverridesIncidentalAndInferredArguments) {
   for (unsigned Pass = 0; Pass != 2; ++Pass) {
     Fixture.recover();
     checkCookieArgument(Fixture);
+  }
+}
+
+TEST(RegistrationCookieABI, RetainedCheckerUsesPhysicalFastcallAndVoidResult) {
+  for (bool Cxx : {false, true}) {
+    SCOPED_TRACE(Cxx);
+    CookieFixture Fixture;
+    if (Cxx)
+      Fixture.useCxxCookies(1);
+    Fixture.addPhysicalChecker();
+    Fixture.recover();
+    const auto ABI = registrationCookieCallABI(
+        Fixture.Image, Fixture.Function, Fixture.Function.Blocks.front(), 4);
+    ASSERT_TRUE(ABI);
+    EXPECT_EQ(ABI->Argument, Fixture.Cookie);
+    EXPECT_EQ(ABI->CheckVA, 0x2000u);
+    EXPECT_EQ(ABI->SecurityCookieVA, 0x4000u);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Fixture.Function}, Context, "cookie", Arch::X86,
+                              {}, &Fixture.Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const auto *Checker = Module->getFunction("__nd_registration_cookie_2000");
+    ASSERT_TRUE(Checker);
+    EXPECT_TRUE(hasX86RegistrationSecurityCheckABI(*Checker));
+    auto Identity = rewrite_source::getOriginalVA(*Checker);
+    ASSERT_TRUE(bool(Identity)) << llvm::toString(Identity.takeError());
+    ASSERT_TRUE(*Identity);
+    EXPECT_EQ(**Identity, 0x2000u);
+    ASSERT_TRUE(Checker->hasOneUse());
+    const auto *Call = llvm::dyn_cast<llvm::CallInst>(*Checker->user_begin());
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->getCallingConv(), llvm::CallingConv::X86_FastCall);
+    EXPECT_TRUE(Call->getType()->isVoidTy());
+    ASSERT_EQ(Call->arg_size(), 1u);
+    EXPECT_TRUE(Call->paramHasAttr(0, llvm::Attribute::InReg));
+  }
+}
+
+TEST(RegistrationCookieABI, PhysicalCheckerRechecksCurrentImageAndOccurrence) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CookieFixture Fixture;
+    Fixture.useCxxCookies(1);
+    Fixture.addPhysicalChecker();
+    auto &States = *Fixture.Function.RegistrationStates;
+    auto &Block = Fixture.Function.Blocks.front();
+    ASSERT_TRUE(
+        registrationCookieCallABI(Fixture.Image, Fixture.Function, Block, 4));
+    switch (Mutation) {
+    case 0:
+      ++Fixture.Image.Segments.front().Data[0x11];
+      break;
+    case 1:
+      Fixture.Image.Segments.front().Data[0x1006] = 0x74;
+      break;
+    case 2:
+      ++Fixture.Image.Segments.front().Data[0x1002];
+      break;
+    case 3:
+      Fixture.Image.BaseRelocations.front().Address = 0x2000;
+      break;
+    case 4:
+      Fixture.Image.Segments.front().Flags = SegmentFlags::Readable |
+                                             SegmentFlags::Writable |
+                                             SegmentFlags::Executable;
+      break;
+    case 5:
+      ++States.CookieChecks.front().EndAddress;
+      break;
+    case 6:
+      ++Block.Ops[4].OriginSeq;
+      break;
+    case 7:
+      ++States.SecurityCookieVA;
+      break;
+    case 8:
+      Block.Ops.push_back(Block.Ops[4]);
+      break;
+    case 9:
+      Fixture.Image.BaseRelocations.push_back(
+          {0x1011, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+      break;
+    }
+    EXPECT_FALSE(
+        registrationCookieCallABI(Fixture.Image, Fixture.Function, Block, 4));
+  }
+}
+
+TEST(RegistrationCookieABI, ChangedPhysicalCookieCallHasNoGenericFallback) {
+  for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    CookieFixture Fixture;
+    Fixture.addPhysicalChecker();
+    Fixture.recover();
+    switch (Mutation) {
+    case 0:
+      Fixture.Function.CallInfos.front().Args.front() =
+          MedVar::makeConst(99, 4);
+      break;
+    case 1:
+      Fixture.Image.Segments.front().Data[0x1006] = 0x74;
+      break;
+    case 2:
+      Fixture.Function.Blocks.front().Ops[4].PreservesCallerSaved = false;
+      break;
+    case 3:
+      Fixture.Function.Blocks.front().Ops[4].Output = reg(9, x86reg::RAX);
+      break;
+    case 4:
+      ++Fixture.Function.CallInfos.front().TargetAddr;
+      break;
+    case 5:
+      Fixture.Function.CallInfos.front().IsIndirect = true;
+      break;
+    }
+    llvm::LLVMContext Context;
+    EXPECT_FALSE(MedLLVMEmitter().emit({Fixture.Function}, Context,
+                                       "changed-cookie", Arch::X86, {},
+                                       &Fixture.Image, BinaryFormat::COFF));
+  }
+}
+
+TEST(RegistrationCookieABI, SuccessEffectsReachSSAWithEveryVolatileGPRIntact) {
+  for (bool Proven : {false, true}) {
+    SCOPED_TRACE(Proven);
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    auto &State = Low.RegistrationStates.emplace();
+    State.SecurityCookiesComplete = Proven;
+    State.CookieCheckVA = 0x2000;
+    State.CookieChecks.push_back({0x1010, 0x1015, 0});
+    auto &Block = Low.Blocks.emplace_back();
+    Block.Id = 0;
+    Block.StartAddr = 0x1000;
+    Block.EndAddr = 0x1021;
+    auto Emit = [&](va_t Address, NdOp Opcode, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = 0;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.Inputs[Op.NumInputs++] = Input;
+      Block.Ops.push_back(Op);
+    };
+    const auto AX = NdVar::reg(x86reg::RAX, 4);
+    const auto CX = NdVar::reg(x86reg::RCX, 4);
+    const auto DX = NdVar::reg(x86reg::RDX, 4);
+    Emit(0x1000, NdOp::COPY, AX, {NdVar::scalar(11, 4)});
+    Emit(0x1000, NdOp::COPY, CX, {NdVar::scalar(13, 4)});
+    Emit(0x1000, NdOp::COPY, DX, {NdVar::scalar(17, 4)});
+    for (uint64_t Flag : {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF,
+                          x86reg::SF, x86reg::OF})
+      Emit(0x1000, NdOp::COPY, NdVar::reg(Flag, 1),
+           {NdVar::scalar(Flag != x86reg::PF && Flag != x86reg::ZF, 1)});
+    Emit(0x1000, NdOp::COPY, NdVar::reg(x86reg::DF, 1), {NdVar::scalar(1, 1)});
+    Emit(0x1010, NdOp::CALL, AX, {NdVar::codeAddress(0x2000, 4)});
+    Emit(0x1015, NdOp::INT_ADD, AX, {AX, CX});
+    Emit(0x1015, NdOp::INT_ADD, AX, {AX, DX});
+    unsigned NextTemp = 0;
+    for (uint64_t Flag : {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF,
+                          x86reg::SF, x86reg::OF, x86reg::DF}) {
+      const auto Wide = NdVar::tmp(NextTemp++, 4);
+      Emit(0x1015, NdOp::INT_ZEXT, Wide, {NdVar::reg(Flag, 1)});
+      Emit(0x1015, NdOp::INT_ADD, AX, {AX, Wide});
+    }
+    Emit(0x1020, NdOp::RETURN, {}, {AX});
+    LowToMedConverter Converter;
+    const auto Med = Converter.convert(Low, Arch::X86, BinaryFormat::COFF);
+    const MedOp *Call = nullptr, *Return = nullptr;
+    for (const auto &B : Med.Blocks)
+      for (const auto &Op : B.Ops) {
+        if (Op.Opcode == NdOp::CALL)
+          Call = &Op;
+        if (Op.Opcode == NdOp::RETURN)
+          Return = &Op;
+      }
+    ASSERT_TRUE(Call && Return);
+    EXPECT_EQ(Call->PreservesCallerSaved, Proven);
+    if (Proven) {
+      EXPECT_EQ(Call->Output.Size, 0u);
+      EXPECT_TRUE(Med.CallClobbers.empty());
+      ASSERT_EQ(Return->NumInputs, 1u);
+      // Conversion need not fold arithmetic. Evaluate the surviving scalar
+      // SSA expression rather than requiring a particular optimized shape.
+      using Key = std::tuple<int, int, int>;
+      auto KeyOf = [](const MedVar &V) {
+        return Key{int(V.Kind), V.Id, V.SSAVer};
+      };
+      std::map<Key, std::optional<uint64_t>> Values;
+      auto ValueOf = [&](const MedVar &V) -> std::optional<uint64_t> {
+        if (V.isConst())
+          return V.ConstVal;
+        const auto It = Values.find(KeyOf(V));
+        return It == Values.end() ? std::nullopt : It->second;
+      };
+      for (const auto &B : Med.Blocks)
+        for (const auto &Op : B.Ops) {
+          if (Op.Output.Size == 0)
+            continue;
+          LowOp Scalar;
+          Scalar.Opcode = Op.Opcode;
+          Scalar.Output = NdVar::tmp(0, Op.Output.Size);
+          for (unsigned I = 0; I != Op.NumInputs; ++I)
+            Scalar.Inputs[Scalar.NumInputs++] =
+                NdVar::tmp(I, Op.Inputs[I].Size);
+          Values[KeyOf(Op.Output)] =
+              lowScalarConstantResult(Scalar, [&](const NdVar &V) {
+                return ValueOf(Op.Inputs[V.Offset]);
+              });
+        }
+      EXPECT_EQ(ValueOf(Return->Inputs[0]), std::optional<uint64_t>{44});
+    } else
+      EXPECT_FALSE(Med.CallClobbers.empty());
   }
 }
 

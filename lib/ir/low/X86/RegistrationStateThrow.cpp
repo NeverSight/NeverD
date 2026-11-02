@@ -39,12 +39,13 @@ RegistrationStateSolver::runtimeThrowArguments(
   if (Object.Constant == 0 && Table.Constant == 0 && !Object.MayBeFrame &&
       !Table.MayBeFrame)
     return RegistrationRuntimeThrow{};
-  if (!Table.Constant || !*Table.Constant || Table.MayBeFrame ||
-      Object.ReturnPC || Object.FrameOnlyFromCall || Object.EntryOffset ||
+  if (!Table.preferredAddress() || !*Table.preferredAddress() ||
+      Table.MayBeFrame || Object.ReturnPC || Object.FrameOnlyFromCall ||
+      Object.EntryOffset ||
       !charge(Callee.RuntimeThrowInfos.size() + Frame.cellCount()))
     return std::nullopt;
   const auto Info = llvm::find_if(Callee.RuntimeThrowInfos, [&](const auto &I) {
-    return I.Address == *Table.Constant;
+    return I.Address == *Table.preferredAddress();
   });
   if (Info == Callee.RuntimeThrowInfos.end() || !Info->ObjectSize ||
       Info->ObjectSize > UINT16_MAX)

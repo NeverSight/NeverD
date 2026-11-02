@@ -18,6 +18,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCxxState.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -34,6 +35,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 using namespace neverd;
@@ -277,6 +279,163 @@ TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsNestedSearch) {
 
 TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsSecondarySearch) {
   reconstructNestedSearch(true);
+}
+
+TEST(WindowsRegistrationNestedTry, InputPE32DispatchRequiresCurrentSources) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32");
+  if (!Path)
+    GTEST_SKIP() << "set NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32";
+  auto Loaded = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Loaded));
+  const auto EH =
+      llvm::find_if(Loaded->ExceptionMetadata.Functions,
+                    [](const auto &F) { return F.Cxx && F.Registration; });
+  ASSERT_NE(EH, Loaded->ExceptionMetadata.Functions.end());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Loaded));
+  const auto Source = CFGBuilder().build(*Loaded, Dec, EH->CodeRange.Begin,
+                                         "dispatch-binding-source");
+  ASSERT_TRUE(Source.RegistrationStates);
+  const auto &States = *Source.RegistrationStates;
+  ASSERT_TRUE(States.SourceCallFrameEffectsComplete);
+  const auto Secondary =
+      llvm::find_if(States.CallFrameEffects, [&](const auto &Call) {
+        return Call.DoesNotReturn &&
+               llvm::any_of(States.Blocks, [&](const auto &Block) {
+                 return Block.CallbackOnly &&
+                        Block.Range.contains(Call.Address);
+               });
+      });
+  if (Secondary == States.CallFrameEffects.end())
+    GTEST_SKIP() << "requires a scalar secondary-throw fixture";
+  const auto Primary =
+      llvm::find_if(States.CalleeContracts, [](const auto &Call) {
+        return Call.CalleeKind ==
+               RegistrationCalleeFrameContract::Kind::PrivateThrow;
+      });
+  ASSERT_NE(Primary, States.CalleeContracts.end());
+  const auto Throw =
+      getCheckedX86RegistrationThrowCalleeABI(*Loaded, Primary->Target);
+  ASSERT_TRUE(Throw);
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = *Loaded;
+    auto Changed = Source;
+    Changed.RegistrationStates.reset();
+    auto ChangeByte = [&](va_t Address) {
+      auto Segment = llvm::find_if(Image.Segments, [&](const auto &S) {
+        return Address >= S.VA && Address - S.VA < S.Data.size();
+      });
+      ASSERT_NE(Segment, Image.Segments.end());
+      Segment->Data[Address - Segment->VA] ^= 1;
+    };
+    if (Mutation == 1)
+      ChangeByte(Source.Entry);
+    if (Mutation == 2)
+      Changed.Blocks.front().Ops.front().Opcode = NdOp::NOP;
+    if (Mutation == 3)
+      Changed.ExceptionMetadata->Cxx->IsSynchronous = false;
+    if (Mutation == 4)
+      ChangeByte(Throw->ThrowInfo.Address + 4); // Changed destructor metadata.
+    if (Mutation == 5)
+      for (auto &Import : Image.Imports)
+        if (Import.Name == "__CxxFrameHandler3")
+          Import.Module = "application.dll";
+    if (Mutation == 6)
+      for (auto &Segment : Image.Segments)
+        if (Segment.isWritable())
+          Segment.Flags = SegmentFlags::Readable;
+    if (Mutation == 7)
+      for (auto &Segment : Image.Segments)
+        if (Segment.isExecutable())
+          Segment.Flags = Segment.Flags | SegmentFlags::Writable;
+    if (Mutation == 8)
+      std::reverse(Changed.Blocks.begin(), Changed.Blocks.end());
+    const auto Current = analyzeCheckedX86CxxStates(
+        Image, Changed, &States.CalleeContracts, &States.CleanupContracts);
+    EXPECT_EQ(llvm::any_of(Current.CallFrameEffects,
+                           [&](const auto &Call) {
+                             return Call.Address == Secondary->Address;
+                           }),
+              Mutation == 0 || Mutation == 8);
+  }
+}
+
+TEST(WindowsRegistrationNestedTry,
+     InputPE32CleanupDispatchRequiresCurrentEffects) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32");
+  if (!Path)
+    GTEST_SKIP() << "set NEVERD_REGISTRATION_REALIGNED_NATIVE_PE32";
+  auto Loaded = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Loaded));
+  const auto EH =
+      llvm::find_if(Loaded->ExceptionMetadata.Functions,
+                    [](const auto &F) { return F.Cxx && F.Registration; });
+  ASSERT_NE(EH, Loaded->ExceptionMetadata.Functions.end());
+  if (llvm::none_of(EH->Cxx->UnwindMap,
+                    [](const auto &A) { return A.ActionVA != 0; }))
+    GTEST_SKIP() << "requires a catch-cleanup fixture";
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Loaded));
+  const auto Source = CFGBuilder().build(*Loaded, Dec, EH->CodeRange.Begin,
+                                         "cleanup-dispatch-source");
+  ASSERT_TRUE(Source.RegistrationStates);
+  const auto &States = *Source.RegistrationStates;
+  ASSERT_TRUE(States.SourceCallFrameEffectsComplete);
+  ASSERT_TRUE(States.CleanupFrameEffectsComplete);
+  ASSERT_FALSE(States.CleanupContracts.empty());
+  const auto &Cleanup = States.CleanupContracts.front();
+  ASSERT_FALSE(Cleanup.Calls.empty());
+  const auto &Leaf = Cleanup.Calls.front().Leaf;
+  ASSERT_FALSE(Leaf.ImageWrites.empty());
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = *Loaded;
+    auto Changed = Source;
+    Changed.RegistrationStates.reset();
+    auto Cleanups = States.CleanupContracts;
+    auto ChangeByte = [&](va_t Address) {
+      auto Segment = llvm::find_if(Image.Segments, [&](const auto &S) {
+        return Address >= S.VA && Address - S.VA < S.Data.size();
+      });
+      ASSERT_NE(Segment, Image.Segments.end());
+      Segment->Data[Address - Segment->VA] ^= 1;
+    };
+    if (Mutation == 1)
+      ChangeByte(Cleanup.RelayTarget);
+    if (Mutation == 2)
+      ChangeByte(Leaf.Target);
+    if (Mutation == 3)
+      ++Cleanups.front().Calls.front().ObjectFrameOffset;
+    if (Mutation == 4)
+      Cleanups.front().Calls.front().Leaf.ECXReads.clear();
+    if (Mutation == 5)
+      for (auto &Section : Image.Sections)
+        if (Section.VA <= Leaf.ImageWrites.front().Begin &&
+            Leaf.ImageWrites.front().Begin - Section.VA < Section.Size)
+          Section.Flags = SegmentFlags::Readable;
+    if (Mutation == 6) {
+      Import Other;
+      Other.Module = "application.dll";
+      Other.Name = "callback";
+      Other.IATAddr = Leaf.ImageWrites.front().Begin;
+      Image.Imports.push_back(Other);
+    }
+    if (Mutation == 7)
+      Cleanups.front().Calls.front().Leaf.ImageWrites.clear();
+    if (Mutation == 8)
+      for (auto &Segment : Image.Segments)
+        if (Segment.isExecutable())
+          Segment.Flags = Segment.Flags | SegmentFlags::Writable;
+    if (Mutation == 9)
+      std::reverse(Changed.Blocks.begin(), Changed.Blocks.end());
+    if (Mutation == 10)
+      Cleanups.front().ActionState = UINT32_MAX;
+    const auto Current = analyzeCheckedX86CxxStates(
+        Image, Changed, &States.CalleeContracts, &Cleanups);
+    EXPECT_EQ(Current.SourceCallFrameEffectsComplete,
+              Mutation == 0 || Mutation == 9);
+  }
 }
 
 TEST(WindowsRegistrationNestedTry, InputPE32ReconstructsRethrow) {

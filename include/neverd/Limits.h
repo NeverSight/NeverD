@@ -886,6 +886,10 @@ constexpr unsigned kMaxRegistrationEHFixedPoint = 16;
 /// Shared limit on x86 registration language-table records and state domains.
 constexpr uint32_t kMaxRegistrationEHRecords = 4096;
 
+/// Supported power-of-two alignment of a checked x86 registration frame.
+constexpr uint32_t kMinRegistrationFrameAlignment = 4;
+constexpr uint32_t kMaxRegistrationFrameAlignment = 128;
+
 /// Total registration-state propagation work, including state/edge pairs.
 /// Exhaustion invalidates the whole result rather than truncating a domain.
 /// Includes the shared decoded-callee closure; large nested EH3 functions

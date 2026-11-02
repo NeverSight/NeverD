@@ -7,6 +7,8 @@
 #include "../../ReadOnlyBytesIndex.h"
 #include "COFFRegistrationEHDetail.h"
 
+#include "neverd/loader/Limits.h"
+
 #include "llvm/ADT/ScopeExit.h"
 
 #include <capstone/capstone.h>
@@ -34,6 +36,10 @@ std::set<va_t> checkedRegistrationCallBoundaries(
   };
   if (!Charge(PhysicalEntries.size() + Candidates.size() + 1))
     return {};
+  std::vector<PhysicalRegistrationEntry> KnownEntries;
+  for (va_t Entry : PhysicalEntries)
+    KnownEntries.push_back({Entry, std::nullopt});
+  const FunctionRangeMap Boundaries(Img, KnownEntries);
   auto Roots = PhysicalEntries;
   if (isExecutableAddress(Img, Img.Entry))
     Roots.insert(Img.Entry);
@@ -166,7 +172,8 @@ std::set<va_t> checkedRegistrationCallBoundaries(
                         N.AbsoluteOperands.end());
         ++I;
       } while (I < Path.size() && Path[I] == End &&
-               Decoded.at(Path[I]).End - Begin <= 1024 * 1024);
+               Decoded.at(Path[I]).End - Begin <=
+                   ::neverd::limits::loader::kMaxImageReadBytes);
       if (!CodeBytes.read(Begin, uint32_t(End - Begin), Operands)) {
         CheckedPaths[Source] = false;
         return false;
@@ -182,12 +189,29 @@ std::set<va_t> checkedRegistrationCallBoundaries(
       break;
     auto Interior = Decoded.upper_bound(Guess);
     const auto Sources = Calls.find(Entry);
-    if (Interior == Decoded.begin() || Sources == Calls.end() ||
-        !Decoded.count(Entry))
+    if (Sources == Calls.end() || !Decoded.count(Entry))
       continue;
-    --Interior;
-    if (Interior->first >= Guess || Interior->second.End <= Guess ||
-        !CheckPath(Interior->first))
+    bool Explained = false;
+    if (Interior != Decoded.begin()) {
+      --Interior;
+      Explained = Interior->first < Guess && Interior->second.End > Guess &&
+                  CheckPath(Interior->first);
+    }
+    if (!Explained && Decoded.count(Guess)) {
+      // An exact loop instruction need not decode as a closed body when
+      // falsely treated as its own entry: its backedge can precede the guess.
+      // Start only at an earlier independently accepted physical entry and
+      // require the complete immutable body to close before the candidate.
+      const auto Previous = PhysicalEntries.upper_bound(Guess);
+      if (Previous != PhysicalEntries.begin()) {
+        const va_t Owner = *std::prev(Previous);
+        Explained =
+            Owner < Guess && !Boundaries.hasIndependentEntry(Owner, Entry) &&
+            checkedRegistrationBodyOwnsInstruction(Img, {Owner, Entry}, Owner,
+                                                   Guess, Work, CodeBytes);
+      }
+    }
+    if (!Explained)
       continue;
     for (va_t Source : Sources->second)
       if (CheckPath(Source)) {

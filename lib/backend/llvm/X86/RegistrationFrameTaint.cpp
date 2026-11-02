@@ -1,4 +1,4 @@
-//===- COFFRegistrationFrameTaint.cpp - Indexed PE32 frame taint ----------===//
+//===- RegistrationFrameTaint.cpp - Indexed PE32 frame taint ----------===//
 //
 // NeverD Decompiler
 //
@@ -7,7 +7,7 @@
 /// Bound pointer-taint queries by their owning allocation and byte interval.
 //===----------------------------------------------------------------------===//
 
-#include "COFFRegistrationFrameTaint.h"
+#include "neverd/backend/llvm/RegistrationFrameTaint.h"
 
 #include "neverd/Limits.h"
 

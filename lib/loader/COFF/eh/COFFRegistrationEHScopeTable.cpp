@@ -4,11 +4,17 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Recover SEH scope records and revalidate their typed immutable storage.
+//===----------------------------------------------------------------------===//
+
+#include "../../ReadOnlyBytesIndex.h"
 #include "COFFRegistrationEHDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -69,8 +75,11 @@ findFrameSlotStores(const BinaryImage &Img, const ExceptionAddressRange &Range,
     const unsigned Mod = ModRM >> 6;
     const uint64_t DispBytes = Mod == 1 ? 1 : Mod == 2 ? 4 : 0;
     const uint64_t ImmediateBytes = RegisterZero ? 0 : Width;
+    const uint64_t SIBBytes = BaseRegister == 4 ? 1 : 0;
     if ((!RegisterZero && (ModRM & 0x38)) || (ModRM & 7) != BaseRegister ||
-        !DispBytes || Opcode + 2 + DispBytes + ImmediateBytes > End)
+        !DispBytes ||
+        Opcode + 2 + SIBBytes + DispBytes + ImmediateBytes > End ||
+        (SIBBytes && Data[Opcode + 2] != 0x24))
       continue;
     if (RegisterZero) {
       const unsigned Register = (ModRM >> 3) & 7;
@@ -83,11 +92,12 @@ findFrameSlotStores(const BinaryImage &Img, const ExceptionAddressRange &Range,
           (I >= Begin + 3 && Data[I - 3] == 0x66))
         continue;
     }
-    const uint64_t Immediate = Opcode + 2 + DispBytes;
+    const uint64_t DisplacementAt = Opcode + 2 + SIBBytes;
+    const uint64_t Immediate = DisplacementAt + DispBytes;
     const int64_t Displacement =
         int64_t(BaseOffset) + (DispBytes == 1
-                                   ? int8_t(Data[Opcode + 2])
-                                   : readLE<int32_t>(Data + Opcode + 2));
+                                   ? int8_t(Data[DisplacementAt])
+                                   : readLE<int32_t>(Data + DisplacementAt));
     if (Displacement < INT32_MIN || Displacement > INT32_MAX)
       continue;
     const int32_t Value = RegisterZero ? 0
@@ -272,5 +282,57 @@ getX86RegistrationSEHScopeTableRange(const ExceptionFunction &Function) {
   if (Bytes > uint64_t(UINT32_MAX) + 1 - Chain.ScopeTableVA)
     return std::nullopt;
   return ExceptionAddressRange{Chain.ScopeTableVA, Chain.ScopeTableVA + Bytes};
+}
+
+std::optional<std::vector<uint8_t>> getCheckedX86SEHScopeTableBytes(
+    const BinaryImage &Img, const ExceptionFunction &Function, size_t &Work) {
+  const auto Range = getX86RegistrationSEHScopeTableRange(Function);
+  if (!Range || Img.Arch != Arch::X86 || Img.Bits != Bitness::Bits32 ||
+      Img.Format != BinaryFormat::COFF || Img.IsRelocatable)
+    return std::nullopt;
+  auto Charge = [&](size_t Amount) {
+    if (Amount > limits::kMaxRegistrationEHStateWork -
+                     std::min(Work, limits::kMaxRegistrationEHStateWork)) {
+      Work = limits::kMaxRegistrationEHStateWork;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  const auto &Chain = *Function.Registration;
+  const bool EH4 = Function.Personality == ExceptionPersonality::ExceptHandler4;
+  if (!Charge(Chain.Scopes.size() + Range->size()) ||
+      !hasValidRegistrationScopeGraph(Chain, EH4) ||
+      Chain.SeededTryLevel != registrationOutsideTryLevel(EH4) ||
+      Chain.HasSecurityCookies != (EH4 && Chain.GSCookieOffset != -2))
+    return std::nullopt;
+  std::vector<uint32_t> Words;
+  Words.reserve(Range->size() / 4);
+  if (EH4)
+    Words = {uint32_t(Chain.GSCookieOffset), uint32_t(Chain.GSCookieXOROffset),
+             uint32_t(Chain.EHCookieOffset), uint32_t(Chain.EHCookieXOROffset)};
+  for (const auto &Scope : Chain.Scopes) {
+    Words.push_back(uint32_t(Scope.EnclosingLevel));
+    Words.push_back(uint32_t(Scope.FilterVA));
+    Words.push_back(uint32_t(Scope.HandlerVA));
+  }
+  std::vector<uint8_t> Bytes(Range->size());
+  for (size_t I = 0; I != Words.size(); ++I) {
+    const va_t Address = Range->Begin + I * 4;
+    if (const auto Target = Chain.scopePointerTarget(Address)) {
+      if (*Target != Words[I] ||
+          readImmutablePE32CodePointerStorage(
+              Img, Address, Work, limits::kMaxRegistrationEHStateWork) !=
+              *Target)
+        return std::nullopt;
+    } else {
+      const auto Scalar = readImmutableImageBytes(
+          Img, Address, 4, Work, limits::kMaxRegistrationEHStateWork);
+      if (!Scalar || readLE<uint32_t>(Scalar->data()) != Words[I])
+        return std::nullopt;
+    }
+    writeLE<uint32_t>(Bytes.data() + I * 4, Words[I]);
+  }
+  return Bytes;
 }
 } // namespace neverd::coff_loader

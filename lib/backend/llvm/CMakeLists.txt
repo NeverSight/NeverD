@@ -11,11 +11,24 @@ add_neverd_component_library(NeverDLLVMFloatConvertLowering
 
 add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationFrameLayout.cpp
+  X86/RegistrationFrameProof.cpp
+  X86/RegistrationFrameProofAddress.cpp
+  X86/RegistrationFrameRuntime.cpp
+  X86/RegistrationFrameStores.cpp
+  X86/RegistrationFrameBits.cpp
+  X86/RegistrationFrameTaint.cpp
+  X86/RegistrationCxxLifetime.cpp
+  X86/RegistrationFrameXor.cpp
+  X86/RegistrationImageProof.cpp
+  X86/RegistrationCookieProof.cpp
+  X86/RegistrationCxxCookieBindings.cpp
+  X86/RegistrationCxxGuardedFrame.cpp
   X86/RegistrationCatch.cpp
   X86/RegistrationCatchBlocks.cpp
   X86/RegistrationEntry.cpp
   X86/RegistrationSEHControl.cpp
   X86/RegistrationSEHException.cpp
+  X86/RegistrationSEHThread.cpp
   X86/RegistrationSEHBoundABI.cpp
   X86/RegistrationSEHJumpCallbackFrame.cpp
   X86/RegistrationSEHJumpStack.cpp
@@ -29,6 +42,8 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   LINK_COMPONENTS
   IR
   IRMed
+  IRLow
+  Loader
 )
 
 add_neverd_component_library(NeverDBackendLLVM
@@ -100,6 +115,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMRegistrationCopyBlocks.cpp
   X86/MedLLVMRegistrationCxxBlocks.cpp
   X86/MedLLVMRegistrationCxxCall.cpp
+  X86/MedLLVMRegistrationCookieCall.cpp
   X86/MedLLVMRegistrationCxxObjectCall.cpp
   X86/MedLLVMRegistrationCallResult.cpp
   emit/MedLLVMCall.cpp

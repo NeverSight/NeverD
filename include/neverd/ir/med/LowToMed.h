@@ -244,13 +244,15 @@ public:
   /// Registration frame facts that an earlier conversion of the same LowFunc
   /// against the same image proved
   /// (MedFunc::RegistrationCallerCleanupABIComplete and
-  /// RegistrationCxxEntryPopBytes).  They depend on nothing else, so a
+  /// RegistrationCxxEntryPopBytes / RegistrationSEHEntryPopBytes).
+  /// They depend on nothing else, so a
   /// re-conversion of Entry reuses them instead of proving them again.
   /// Optional; unset = prove them.
   struct RegistrationFrameFacts {
     va_t Entry = 0;
     bool CallerCleanupABIComplete = false;
     std::optional<uint16_t> CxxEntryPopBytes;
+    std::optional<uint16_t> SEHEntryPopBytes;
   };
   void setRegistrationFrameFacts(const RegistrationFrameFacts &Facts) {
     KnownRegistrationFrameFacts = Facts;

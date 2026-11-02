@@ -328,9 +328,8 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
       OptimizationOptions Options;
       OptimizationResult Result = optimizeModule(Warm, Options);
       if (isFatalOptimizationStop(Result.Stop))
-        llvm::WithColor::warning()
-            << "pipeline: LLVM optimizer warmup failed: "
-            << optimizationStopReasonName(Result.Stop) << "\n";
+        llvm::WithColor::warning() << "pipeline: LLVM optimizer warmup failed: "
+                                   << optimizationStopMessage(Result) << "\n";
       promoteScaffoldingAllocas(Warm);
     });
 
@@ -377,7 +376,7 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
             // already promoted its temporary allocas.
           } else if (isFatalOptimizationStop(Optimization.Stop)) {
             Shard.LLVMVerifierFailed = true;
-            fail(optimizationStopReasonName(Optimization.Stop));
+            fail(optimizationStopMessage(Optimization));
             return;
           }
         } else {

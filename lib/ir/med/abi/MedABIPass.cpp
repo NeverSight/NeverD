@@ -13,6 +13,7 @@
 
 #include "../../../safety/StackSlotFlow.h"
 #include "MedABIPassDetail.h"
+#include "MedStackDeltaCache.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
@@ -270,10 +271,9 @@ struct ReachingStackPtrResult {
 
 ReachingStackPtrResult
 findReachingStackPtr(const MedFunc &Func, const TargetRegInfo &TRI, int BlockId,
-                     int BeforeIdx, MedDefSiteIndex *Defs = nullptr,
+                     int BeforeIdx, MedStackDeltaCache &StackDeltas,
                      const MedBlockIdIndex *Index = nullptr,
-                     size_t *Remaining = nullptr, bool ComputeDelta = true,
-                     BinaryFormat Format = BinaryFormat::Unknown) {
+                     size_t *Remaining = nullptr, bool ComputeDelta = true) {
   // Walk transparent predecessors once and collect every boundary at which the
   // reaching SP becomes concrete: a local SP definition, an SP PHI, or a
   // function-entry block.  The former recursive walk only marked the current
@@ -319,7 +319,7 @@ findReachingStackPtr(const MedFunc &Func, const TargetRegInfo &TRI, int BlockId,
   auto MergeBoundary = [&](const MedVar &Value) {
     MergeBasis(Value);
     if (ComputeDelta)
-      MergeDelta(stackPtrDelta(Func, TRI, Value, 0, Defs, Format));
+      MergeDelta(StackDeltas.query(Value));
   };
 
   while (!Worklist.empty()) {
@@ -1053,12 +1053,13 @@ void recoverCallAbi(
     if (P.Id >= FreshId)
       FreshId = P.Id + 1;
 
-  // Operations are inserted only after the loop below, so the index stays
-  // valid in it. DefSites also covers PHIs, so a PHI added in the loop resets
-  // it. Scanning the function for each stack-pointer chain link made call ABI
-  // recovery quadratic in a 12k-block function.
+  // Operation insertion is deferred until after this loop. Result
+  // normalization can erase operations, so it invalidates every definition
+  // and value cache below. PHI insertion resets the stack-query owner too.
+  // Indexing avoids rescanning the function for each stack-chain link.
   MedDefinitionIndex Definitions(Func);
-  MedDefSiteIndex DefSites(Func);
+  MedStackDeltaCache StackDeltas(Func, TRI, Fmt);
+  MedDefSiteIndex &DefSites = StackDeltas.definitions();
   // The loop adds no blocks, so one index serves every call's walks.
   const MedBlockIdIndex BlockIds(Func);
   auto lookupDefinition = [&](const MedVar &V) { return Definitions.find(V); };
@@ -1287,16 +1288,15 @@ void recoverCallAbi(
       if (!SEHStackCall && !CI.IsIndirect && !IsRelocExtern &&
           !IsDirectImport && CalleeFPReturnSize)
         if (auto SizeIt = CalleeFPReturnSize->find(CI.TargetAddr);
-            SizeIt != CalleeFPReturnSize->end()) {
-          const MedVar PreviousOutput = Op.Output;
-          const size_t PreviousClobbers = Func.CallClobbers.size();
+            SizeIt != CalleeFPReturnSize->end())
           if (promoteFloatCallResult(Func, Blk, OI, SizeIt->second, TheArch)) {
             BoundFPResult = true;
-            if (Op.Output != PreviousOutput ||
-                Func.CallClobbers.size() != PreviousClobbers)
-              LeftByCalls.reset();
+            Definitions.invalidate();
+            StackDeltas.invalidate();
+            DefinedValues.clear();
+            DefinedValuesBuilt = false;
+            LeftByCalls.reset();
           }
-        }
 
       const Section *TargetSection =
           !CI.IsIndirect && Img ? Img->getSectionFor(CI.TargetAddr) : nullptr;
@@ -1305,9 +1305,14 @@ void recoverCallAbi(
           TargetSection->Name == section_names::macho::ObjCStubs;
       // The integer arguments the call's summary counts, where it counts
       // them: a prototype's (importPrototypeArguments, LowToMed).
-      const bool IntegerSummary = Op.CalleeRegisterArgs >= 0 &&
-                                  Op.CalleeVectorSlots == 0 &&
-                                  Op.CalleeVectorArgs <= 0;
+      // A stack-only import prototype on i386 publishes its stack count
+      // without a register count. That is still its complete integer ABI;
+      // an unknown import has neither summary.
+      const bool IntegerSummary =
+          (Op.CalleeRegisterArgs >= 0 ||
+           (Convention && Convention->RegparmOnlyForInternalCalls &&
+            Op.CalleeStackArgs >= 0)) &&
+          Op.CalleeVectorSlots == 0 && Op.CalleeVectorArgs <= 0;
       const bool HeaderVariadic = Op.CalleeVariadicFrom >= 0;
       // An import whose prototype the user declares takes what that prototype
       // declares, as its summary counts it, not what the tables give a
@@ -1406,6 +1411,12 @@ void recoverCallAbi(
       const bool UseExternalArity =
           !SEHStackCall && ExternalArity.has_value() &&
           (IsDirectImport || IsRelocExtern || CalleeRegArgs < 0);
+      // A variadic import's summary describes the fixed register prefix,
+      // not a complete list. An explicit local declaration overrides the
+      // library tables, as it did when choosing ExternalArity above.
+      CI.ArgumentsFromPrototype =
+          UseExternalArity &&
+          (PrototypeArguments || !libc::varArgFixedCount(CI.TargetName, LibC));
       if (UseExternalArity) {
         // Where only internal functions take regparm register arguments, an
         // external call passes everything on the stack.  Do not promote
@@ -1449,12 +1460,16 @@ void recoverCallAbi(
                                     ? registrationCallABI(Func, Blk, Op)
                                     : std::nullopt;
       const bool RuntimeThrow = Registration && Registration->RuntimeThrow;
-      // Checked capture, resume and local-unwind protocols own their exact
-      // stack-only arities. Incidental registers cannot become arguments.
-      const bool CheckedStackCall = RuntimeThrow || SEHStackCall;
+      // Checked private registration callees take no incoming words unless
+      // the runtime-throw protocol supplies its exact two-word stack ABI.
+      // Local object stores cannot become arguments to a private callee.
+      // Capture, resume and local-unwind protocols likewise own their arity.
+      const bool RegistrationStackCall =
+          Registration && !Registration->BorrowsECX;
+      const bool CheckedStackCall = RegistrationStackCall || SEHStackCall;
       if (CheckedStackCall) {
         CalleeRegArgs = 0;
-        CalleeArgs = SEHStackCall ? SEHStackABI->second : 2;
+        CalleeArgs = SEHStackCall ? SEHStackABI->second : RuntimeThrow ? 2 : 0;
       }
       // Checked ordinary members and constructors own exactly one ECX
       // receiver plus their proved scalar stack words. Other live registers
@@ -1672,8 +1687,7 @@ void recoverCallAbi(
         auto &Prev = Blk.Ops[J];
         if (Prev.Output.Kind == MedVar::Reg &&
             Prev.Output.RegOff == TRI.StackPointer) {
-          if (auto D =
-                  stackPtrDelta(Func, TRI, Prev.Output, 0, &DefSites, Fmt)) {
+          if (auto D = StackDeltas.query(Prev.Output)) {
             CallSpDelta = *D;
             HaveCallSpDelta = true;
           }
@@ -1687,9 +1701,8 @@ void recoverCallAbi(
         }
       }
       if (!HaveCallSpBasis || !HaveCallSpDelta) {
-        ReachingStackPtrResult Reaching =
-            findReachingStackPtr(Func, TRI, Blk.Id, static_cast<int>(OI),
-                                 &DefSites, &BlockIds, nullptr, true, Fmt);
+        ReachingStackPtrResult Reaching = findReachingStackPtr(
+            Func, TRI, Blk.Id, static_cast<int>(OI), StackDeltas, &BlockIds);
         if (!HaveCallSpBasis && Reaching.Basis) {
           buildCallSpOffsets(Func, TRI, *Reaching.Basis, 0, CallSpOffsets, 0,
                              &DefSites);
@@ -1706,7 +1719,7 @@ void recoverCallAbi(
       auto CallRelativeStackOffset =
           [&](const MedVar &Address) -> std::optional<int64_t> {
         if (HaveCallSpDelta)
-          if (auto Delta = stackPtrDelta(Func, TRI, Address, 0, &DefSites, Fmt))
+          if (auto Delta = StackDeltas.query(Address))
             return safety::detail::checkedStackOffset(*Delta, CallSpDelta,
                                                       /*Subtract=*/true);
         return relStackOff(Func, TRI, Address, CallSpOffsets, 0, &DefSites);
@@ -2337,12 +2350,13 @@ void recoverCallAbi(
         // `push {r11, lr}`), is no argument, and neither is the undefined
         // incoming value of a scratch register (an alignment `push rax`).
         if (CI.IsIndirect &&
-            (isIncomingRegisterSave(TRI, Prev.Inputs[1]) ||
+            (isIncomingRegisterSave(TRI, Prev.Inputs[1], &Func) ||
              isUndefinedIncomingScratch(TRI, TheArch, Convention,
                                         DefaultIntegerLayout.Registers,
                                         Prev.Inputs[1])))
           continue;
-        if (!CI.IsIndirect && isIncomingRegisterSave(TRI, Prev.Inputs[1])) {
+        if (!CI.IsIndirect &&
+            isIncomingRegisterSave(TRI, Prev.Inputs[1], &Func)) {
           // A prologue register save spills the callee-save register's
           // *incoming* (live-in, SSA version 0) value, as `push {r11, lr}`
           // spills the return address.  A non-zero version is a computed or
@@ -2467,7 +2481,7 @@ void recoverCallAbi(
         // As in the block's own scan: a saved or undefined incoming register
         // is no argument of an indirect call.
         if (CI.IsIndirect &&
-            (isIncomingRegisterSave(TRI, Value) ||
+            (isIncomingRegisterSave(TRI, Value, &Func) ||
              isUndefinedIncomingScratch(TRI, TheArch, Convention,
                                         DefaultIntegerLayout.Registers, Value)))
           continue;
@@ -2514,7 +2528,7 @@ void recoverCallAbi(
         MaterializedJoin = true;
       }
       if (MaterializedJoin)
-        DefSites.invalidate();
+        StackDeltas.invalidate();
 
       // A call that takes every argument from the stack is passed nothing by
       // what a scratch register held at entry where this function takes no
@@ -2694,8 +2708,7 @@ void recoverCallAbi(
               if (Candidate.Opcode != NdOp::STORE || Candidate.NumInputs < 2 ||
                   Candidate.MemoryAddressSpace != NdMemoryAddressSpace::Default)
                 continue;
-              auto D = stackPtrDelta(Func, TRI, Candidate.Inputs[0], 0,
-                                     &DefSites, Fmt);
+              auto D = StackDeltas.query(Candidate.Inputs[0]);
               if (D && *D == *TargetOffset) {
                 MedVar Value = Candidate.Inputs[1];
                 Active.erase(BlockId);
@@ -2734,7 +2747,7 @@ void recoverCallAbi(
               Merge.Output = Merged;
               Merge.Args = std::move(Incoming);
               Block->Phis.push_back(std::move(Merge));
-              DefSites.invalidate();
+              StackDeltas.invalidate();
             }
             Active.erase(BlockId);
             return Merged;

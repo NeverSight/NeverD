@@ -4,8 +4,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Authenticate registration handler identities and retained code dependencies.
+//===----------------------------------------------------------------------===//
+
+#include "../../ReadOnlyBytesIndex.h"
 #include "COFFRegistrationEHDetail.h"
 
+#include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/RuntimeProviders.h"
@@ -66,42 +72,157 @@ getCheckedX86CookieCheckSuccessPath(const BinaryImage &Img, va_t CheckVA) {
       !Img.readVA(va_t(Failure), 1) ||
       (uint64_t(Failure) >= CheckVA && uint64_t(Failure) < CheckVA + Extent))
     return std::nullopt;
-  return X86CookieCheckSuccessPath{
-      Cookie, va_t(Failure), {CheckVA, CheckVA + Extent}};
+  return X86CookieCheckSuccessPath{Cookie,
+                                   va_t(Failure),
+                                   {CheckVA, CheckVA + Extent},
+                                   {{CheckVA + 2, Cookie}}};
 }
 
 bool hasCheckedX86CookieCheckSuccessPath(const BinaryImage &Img, va_t CheckVA) {
   return getCheckedX86CookieCheckSuccessPath(Img, CheckVA).has_value();
 }
 
-bool isCheckedX86SEH3Personality(const BinaryImage &Img, va_t HandlerVA) {
+namespace {
+std::optional<X86SEHPersonalityABI>
+getSEH3Personality(const BinaryImage &Img, va_t HandlerVA, bool Immutable) {
   if (Img.Arch != Arch::X86 || Img.Format != BinaryFormat::COFF)
-    return false;
+    return std::nullopt;
+  if (Immutable && (Img.Bits != Bitness::Bits32 || Img.IsRelocatable ||
+                    Img.Base > UINT32_MAX))
+    return std::nullopt;
+  X86SEHPersonalityABI Result;
   std::set<va_t> Seen;
   for (unsigned Hop = 0;
        Hop != ::neverd::limits::loader::kMaxRegistrationHandlerHops; ++Hop) {
-    if (!Seen.insert(HandlerVA).second)
-      return false;
+    if (!Seen.insert(HandlerVA).second ||
+        (Immutable && (!HandlerVA || HandlerVA > UINT32_MAX - 6)))
+      return std::nullopt;
     const auto *Code = Img.readVA(HandlerVA, 5);
     if (!Code || !Img.hasExecutableCodeOwnerRange(HandlerVA, 5))
-      return false;
+      return std::nullopt;
     if (Code[0] == 0xe9) {
+      if (Immutable && !readImmutableCodeBytes(Img, HandlerVA, 5))
+        return std::nullopt;
       const int64_t Target = int64_t(HandlerVA) + 5 + readLE<int32_t>(Code + 1);
       if (Target <= 0 || Target > UINT32_MAX)
-        return false;
+        return std::nullopt;
+      Result.CodeRanges.push_back({HandlerVA, HandlerVA + 5});
       HandlerVA = va_t(Target);
       continue;
     }
     Code = Img.readVA(HandlerVA, 6);
     if (!Code || !Img.hasExecutableCodeOwnerRange(HandlerVA, 6) ||
         Code[0] != 0xff || Code[1] != 0x25)
-      return false;
-    const auto *Import = Img.findImportAt(readLE<uint32_t>(Code + 2));
-    return Import && Import->Name == "_except_handler3" &&
-           Img.readVA(Import->IATAddr, 4) &&
-           isX86SEHHandlerProvider(Import->Module);
+      return std::nullopt;
+    const va_t Slot = readLE<uint32_t>(Code + 2);
+    const auto *Import = Img.findImportAt(Slot);
+    if (!Import || Import->Name != "_except_handler3" ||
+        !Img.readVA(Import->IATAddr, 4) ||
+        !isX86SEHHandlerProvider(Import->Module))
+      return std::nullopt;
+    if (Immutable) {
+      if (Import->IATAddr != Slot || !isFileBackedPEImportSlot(Img, Slot) ||
+          !readImmutablePE32CodeBytes(Img, HandlerVA, 6, {HandlerVA + 2}))
+        return std::nullopt;
+      for (const auto &Other : Img.Imports)
+        if (&Other != Import && Other.IATAddr == Import->IATAddr)
+          return std::nullopt;
+    }
+    Result.CodeRanges.push_back({HandlerVA, HandlerVA + 6});
+    Result.AbsoluteOperands.emplace(HandlerVA + 2, Slot);
+    Result.IATVA = Import->IATAddr;
+    return Result;
   }
-  return false;
+  return std::nullopt;
+}
+} // namespace
+
+bool isCheckedX86SEH3Personality(const BinaryImage &Img, va_t HandlerVA) {
+  return getSEH3Personality(Img, HandlerVA, false).has_value();
+}
+
+std::optional<X86SEHPersonalityABI>
+getCheckedX86SEH3PersonalityABI(const BinaryImage &Img, va_t HandlerVA) {
+  return getSEH3Personality(Img, HandlerVA, true);
+}
+
+std::optional<X86SEHRuntimeCode>
+getCheckedX86SEHRuntimeCode(const BinaryImage &Img,
+                            const ExceptionFunction &Function, size_t &Work) {
+  const auto Charge = [&](size_t Amount) {
+    if (Amount > limits::kMaxRegistrationEHStateWork -
+                     std::min(Work, limits::kMaxRegistrationEHStateWork)) {
+      Work = limits::kMaxRegistrationEHStateWork;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  if (!Charge(1) || Function.Cxx || !Function.Registration ||
+      Function.Registration->HandlerVA != Function.PersonalityVA ||
+      Function.ParseStatus != ExceptionParseStatus::Complete)
+    return std::nullopt;
+  const bool EH4 = Function.Personality == ExceptionPersonality::ExceptHandler4;
+  if (!EH4 && Function.Personality != ExceptionPersonality::ExceptHandler3)
+    return std::nullopt;
+  const auto ABI =
+      EH4 ? getCheckedX86EH4PersonalityABI(Img, Function.PersonalityVA)
+          : getCheckedX86SEH3PersonalityABI(Img, Function.PersonalityVA);
+  if (!ABI || !ABI->ImageReads.empty() || !Charge(Img.Imports.size()))
+    return std::nullopt;
+  const auto *Import = Img.findImportAt(ABI->IATVA);
+  if (!Import || Import->IATAddr != ABI->IATVA)
+    return std::nullopt;
+  X86SEHRuntimeCode Result;
+  Result.IATVA = ABI->IATVA;
+  Result.ImportModule = Import->Module;
+  Result.ImportName = Import->Name;
+  Result.SecurityCookieVA = ABI->SecurityCookieVA;
+  Result.CookieCheckVA = ABI->CookieCheckVA;
+  if (!Charge(ABI->AbsoluteOperands.size()) || !Charge(ABI->CodeRanges.size()))
+    return std::nullopt;
+  Result.AbsoluteOperands = ABI->AbsoluteOperands;
+  auto Ranges = ABI->CodeRanges;
+  if (EH4) {
+    const auto Cookie =
+        getCheckedX86CookieCheckSuccessPath(Img, ABI->CookieCheckVA);
+    if (!Cookie || Cookie->SecurityCookieVA != ABI->SecurityCookieVA ||
+        !Charge(Cookie->AbsoluteOperands.size() + 1))
+      return std::nullopt;
+    Result.CookieFailureVA = Cookie->FailureVA;
+    Ranges.push_back(Cookie->CodeRange);
+    for (const auto &[Address, Target] : Cookie->AbsoluteOperands)
+      if (!Result.AbsoluteOperands.emplace(Address, Target).second)
+        return std::nullopt;
+  }
+  size_t Covered = 0;
+  for (const auto &Range : Ranges) {
+    if (!Range.isValid() || Range.size() > UINT32_MAX ||
+        !Charge(Result.AbsoluteOperands.size() + Result.Code.size() + 1))
+      return std::nullopt;
+    for (const auto &[Begin, Bytes] : Result.Code)
+      if (Range.overlaps({Begin, Begin + Bytes.size()}))
+        return std::nullopt;
+    std::vector<va_t> Operands;
+    for (const auto &[Address, Target] : Result.AbsoluteOperands)
+      if (Range.contains(Address))
+        Operands.push_back(Address);
+    auto Bytes =
+        readRelocatedPE32CodeBytes(Img, Range.Begin, Range.size(), Operands,
+                                   Work, limits::kMaxRegistrationEHStateWork);
+    if (!Bytes)
+      return std::nullopt;
+    for (va_t Address : Operands) {
+      if (readLE<uint32_t>(Bytes->data() + (Address - Range.Begin)) !=
+          Result.AbsoluteOperands.at(Address))
+        return std::nullopt;
+      ++Covered;
+    }
+    Result.Code.emplace(Range.Begin, std::move(*Bytes));
+  }
+  if (Covered != Result.AbsoluteOperands.size() || Result.Code.empty())
+    return std::nullopt;
+  return Result;
 }
 
 } // namespace neverd::coff_loader

@@ -6279,7 +6279,8 @@ std::string HighCWriter::callStatementText(const HighExpr &Call) {
   std::string Text = statementCallText(Call);
   if (aarch64PointerCRequiresDiscard(Call.IntrinsicId))
     Text = llvm::formatv(kAArch64PointerCDiscardExpression, Text).str();
-  return Text + ";" + intrinsicInstructionComment(Call);
+  return Text + ";" + intrinsicInstructionComment(Call) +
+         analysisDispatchComment(Call);
 }
 
 const HighExpr *HighCWriter::unwrapIntegerView(const HighExpr *E) const {

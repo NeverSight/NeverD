@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
+#include "neverd/backend/llvm/RegistrationCxxGuardedFrame.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 
@@ -19,10 +20,15 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       coff_registration::getCheckedCxxControlIRProof(Function, Source, Image);
   if (!Proof)
     return Proof.takeError();
+  if (const auto &Guarded = Proof->Guarded)
+    return registration_frame::validateCxxGuardedFrame(
+        Image, Guarded->Source, Function, *Proof->Frame.Slot, Guarded->Layout,
+        Guarded->Calls, Guarded->Cleanups, Proof->ChainReads);
   const auto &States = *Proof->Source.RegistrationStates;
   coff_registration::RegistrationCxxFrameContract Contract;
   Contract.Image = &Image;
   Contract.SavedStackRestores = Proof->SavedStackRestores;
+  Contract.CatchReturns = Proof->CatchReturns;
   std::map<X86RegistrationCatchIdentity, size_t> CatchIndices;
   for (const auto &[Identity, Catch] : Proof->Catches) {
     CatchIndices.emplace(Identity, Contract.Catches.size());
@@ -48,6 +54,13 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
                    Runtime->CodeRanges.end());
   Immutable.push_back({Runtime->IATVA, Runtime->IATVA + 4});
   size_t Work = 0;
+  std::map<va_t, bool> TrivialDestruction;
+  auto RecordDestruction = [&](const auto &Info) {
+    const auto [It, New] =
+        TrivialDestruction.emplace(Info.TypeDescriptorVA, !Info.DestructorVA);
+    if (!New)
+      It->second &= !Info.DestructorVA;
+  };
   for (const auto &Segment : Image.Segments) {
     if (++Work > limits::kMaxRegistrationEHStateWork ||
         Segment.VA > UINT32_MAX ||
@@ -58,6 +71,24 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       Immutable.push_back({Segment.VA, Segment.VA + Segment.Size});
   }
   for (const auto &[Call, Checked] : Proof->Calls) {
+    Contract.ImageWrites.emplace(Call, Checked.Contract.ImageWrites);
+    for (va_t Slot : Checked.Contract.RequiredImports) {
+      if (++Work > limits::kMaxRegistrationEHStateWork)
+        return coff_registration::rejectIR("C++ import closure exceeds budget");
+      Immutable.push_back({Slot, Slot + 4});
+    }
+    if (Checked.Contract.isCxxParent())
+      for (const auto &Info : Checked.Contract.RuntimeThrowInfos) {
+        const auto Object =
+            getCheckedX86RegistrationThrowObjectABI(Image, Info.Address, &Work);
+        if (!Object)
+          return coff_registration::rejectIR(
+              "C++ parent throw metadata changed");
+        RecordDestruction(Object->Info);
+        Immutable.insert(Immutable.end(), Object->Info.ReadOnlyRanges.begin(),
+                         Object->Info.ReadOnlyRanges.end());
+        Immutable.push_back(Object->Info.TypeDescriptorRange);
+      }
     if (Checked.RuntimeObject)
       if (auto Error = coff_registration::bindCxxRuntimeObjectBorrow(
               *Proof, *Call, Checked, Contract))
@@ -77,6 +108,14 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
       if (auto Error = coff_registration::bindCxxRuntimeThrow(
               *Proof, *Call, Checked, Image, Contract, Immutable, Work))
         return Error;
+      if (Checked.RuntimeThrow && !Checked.RuntimeThrow->isRethrow()) {
+        const auto Object = getCheckedX86RegistrationThrowObjectABI(
+            Image, Checked.RuntimeThrow->ThrowInfoVA, &Work);
+        if (!Object)
+          return coff_registration::rejectIR(
+              "C++ runtime throw destruction metadata changed");
+        RecordDestruction(Object->Info);
+      }
     } else if (Checked.Contract.isThrow()) {
       auto Throw = getCheckedX86RegistrationThrowCalleeABI(
           Image, Checked.Contract.Target, &Work);
@@ -85,12 +124,24 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
             "C++ private throw lost its original runtime ABI");
       Immutable.push_back({Throw->ImportIATVA, Throw->ImportIATVA + 4});
       if (!Throw->IsRethrow) {
+        RecordDestruction(Throw->ThrowInfo);
         Immutable.insert(Immutable.end(),
                          Throw->ThrowInfo.ReadOnlyRanges.begin(),
                          Throw->ThrowInfo.ReadOnlyRanges.end());
         Immutable.push_back(Throw->ThrowInfo.TypeDescriptorRange);
       }
     }
+  }
+  for (const auto &[Identity, Index] : CatchIndices) {
+    if (++Work > limits::kMaxRegistrationEHStateWork)
+      return coff_registration::rejectIR(
+          "C++ catch destruction closure exceeds budget");
+    const auto &Catch =
+        Source.Cxx->TryBlocks[Identity.first].Handlers[Identity.second];
+    const auto Found = TrivialDestruction.find(Catch.TypeDescriptorVA);
+    Contract.Catches[Index].TrivialDestruction =
+        Catch.TypeDescriptorVA && Found != TrivialDestruction.end() &&
+        Found->second;
   }
   std::map<std::pair<va_t, uint32_t>, const llvm::Instruction *> Operations;
   for (const auto &Block : Function)
@@ -124,20 +175,24 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
     if (!Range.isValid() || Range.End > uint64_t(UINT32_MAX) + 1)
       return coff_registration::rejectIR(
           "C++ immutable runtime range is malformed");
-  // A preserved call must obey the same image closure as the edited parent.
-  for (const auto &[Call, Checked] : Proof->Calls)
-    for (const auto &Write : Checked.Contract.ImageWrites)
-      for (const auto &Range : Immutable) {
-        if (++Work > limits::kMaxRegistrationEHStateWork)
-          return coff_registration::rejectIR(
-              "C++ runtime image proof exhausted its work budget");
-        if (Write.overlaps(Range))
-          return coff_registration::rejectIR(
-              "C++ preserved callee mutates language metadata or runtime "
-              "dispatch");
-      }
   return coff_registration::validateFramePrivacy(
       Function, {}, Proof->Frame.Slot, {}, Proof->IncomingAccesses,
       Proof->CallerPCWrites, Proof->ChainReads, 0, Immutable, &Contract);
 }
 } // namespace neverd
+
+namespace neverd::coff_registration {
+llvm::Expected<coff_loader::X86CxxPersonalityABI>
+getCheckedCxxRuntimeIR(const llvm::Function &Function,
+                       const ExceptionFunction &Source,
+                       const BinaryImage &Image) {
+  if (auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, Source))
+    return *Runtime;
+  const auto Handler = coff_loader::getCheckedX86CxxHandlerABI(Image, Source);
+  if (!Handler || Handler->CookieGuards.empty())
+    return rejectIR("C++ runtime has no checked original dispatch");
+  if (auto Error = validateCOFFRegistrationCxxIR(Function, Source, Image))
+    return std::move(Error);
+  return Handler->Dispatch;
+}
+} // namespace neverd::coff_registration

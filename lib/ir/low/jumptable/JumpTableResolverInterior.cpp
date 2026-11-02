@@ -11,17 +11,21 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../X86/RegistrationStackOwner.h"
 #include "JumpTableResolverDetail.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/CodePointerSources.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <utility>
@@ -40,9 +44,14 @@ void visitAbsoluteRelocationSources(const BinaryImage &Img, Visitor Visit) {
 
 } // namespace
 
+struct detail::AbsoluteRelocationRootIndex::RuntimeRoleCache {
+  std::once_flag Once;
+  std::map<va_t, va_t> Sources;
+};
+
 detail::AbsoluteRelocationRootIndex::AbsoluteRelocationRootIndex(
     const BinaryImage &Image)
-    : Image(&Image) {
+    : Image(&Image), RuntimeRoles(std::make_shared<RuntimeRoleCache>()) {
   Sources.reserve(Image.CodePtrRelocSlots.size());
   visitAbsoluteRelocationSources(Image, [&](va_t Target, va_t Slot) {
     Sources.emplace_back(Target, Slot);
@@ -53,6 +62,18 @@ detail::AbsoluteRelocationRootIndex::AbsoluteRelocationRootIndex(
 bool detail::AbsoluteRelocationRootIndex::collectSources(
     const BinaryImage &Img, va_t Begin, va_t End,
     std::map<va_t, std::set<va_t>> &RootSources) const {
+  return collectSources(Img, Begin, End, RootSources, false);
+}
+
+bool detail::AbsoluteRelocationRootIndex::collectOrdinarySources(
+    const BinaryImage &Img, va_t Begin, va_t End,
+    std::map<va_t, std::set<va_t>> &RootSources) const {
+  return collectSources(Img, Begin, End, RootSources, true);
+}
+
+bool detail::AbsoluteRelocationRootIndex::collectSources(
+    const BinaryImage &Img, va_t Begin, va_t End,
+    std::map<va_t, std::set<va_t>> &RootSources, bool OrdinaryOnly) const {
   if (Image != &Img)
     return false;
   if (Begin >= End)
@@ -67,9 +88,41 @@ bool detail::AbsoluteRelocationRootIndex::collectSources(
                        [](const std::pair<va_t, va_t> &Source, va_t Address) {
                          return Source.first < Address;
                        });
-  for (auto It = First; It != Last; ++It)
+  if (First == Last)
+    return true;
+  // Raw ownership arbitration needs no runtime-role parsing. Publish this
+  // immutable image-only result once, including a bounded refusal, before
+  // concurrent ordinary-source queries inspect it.
+  if (OrdinaryOnly)
+    std::call_once(RuntimeRoles->Once, [&] {
+      if (auto Roles = coff_loader::getCheckedX86RegistrationPointerRoles(Img))
+        RuntimeRoles->Sources = std::move(Roles->Sources);
+    });
+  for (auto It = First; It != Last; ++It) {
+    if (OrdinaryOnly) {
+      const auto Runtime = RuntimeRoles->Sources.find(It->second);
+      if (Runtime != RuntimeRoles->Sources.end() &&
+          Runtime->second == It->first)
+        continue;
+    }
     RootSources[It->first].insert(It->second);
+  }
   return true;
+}
+
+const detail::AbsoluteRelocationRootIndex &
+CFGBuilder::absoluteRelocationRootIndex(const BinaryImage &Img) {
+  if (AbsoluteRelocationRoots && AbsoluteRelocationRoots->ownsImage(Img))
+    return *AbsoluteRelocationRoots;
+  if (const auto *Roots =
+          registration_abi::StackProofOwnerScope::relocationRoots(Img))
+    return *Roots;
+  if (BorrowedRegistrationCallees &&
+      BorrowedRegistrationCallees->ownsImage(Img))
+    return BorrowedRegistrationCallees->absoluteRelocationRoots();
+  if (!LocalAbsoluteRelocationRoots)
+    LocalAbsoluteRelocationRoots.emplace(Img);
+  return *LocalAbsoluteRelocationRoots;
 }
 
 void CFGBuilder::establishCurrentFuncRange(const BinaryImage &Img,
@@ -155,27 +208,18 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   if (!CurrentFuncRange)
     return;
 
-  // The operation index shares only absolute pointer bytes. This function's
-  // range and all source aliases remain local; instruction ownership is
-  // checked below after any newly decoded instructions.
+  // Runtime metadata can name callbacks outside its installing function.
+  // Those exact fields cannot seed an unrelated function whose conservative
+  // decode envelope happens to contain the callback. The shared loader role
+  // proof excludes only checked sources, preserving every ordinary alias.
+  // Function ownership remains local and is checked after each graph extension.
   std::set<va_t> RelocationCandidates;
   std::map<va_t, std::set<va_t>> RelocationSources;
-  if (!AbsoluteRelocationRoots ||
-      !AbsoluteRelocationRoots->collectSources(Img, CurrentFuncRange->first,
-                                               CurrentFuncRange->second,
-                                               RelocationSources))
-    visitAbsoluteRelocationSources(Img, [&](va_t Target, va_t Slot) {
-      if (Target > CurrentFuncRange->first && Target < CurrentFuncRange->second)
-        RelocationSources[Target].insert(Slot);
-    });
+  absoluteRelocationRootIndex(Img).collectOrdinarySources(
+      Img, CurrentFuncRange->first, CurrentFuncRange->second,
+      RelocationSources);
   const ExceptionFunction *Exception =
       Img.ExceptionMetadata.findFunction(CurrentFuncEntry);
-  const auto CxxCallbackSources =
-      Exception
-          ? coff_loader::getCheckedX86CxxCallbackPointerSources(Img, *Exception)
-          : std::nullopt;
-  const auto SafeSEHPointer =
-      coff_loader::getCheckedX86SafeSEHTablePointer(Img);
   for (auto &[Target, Sources] : RelocationSources) {
     // A pointer table among the code is read by the function dispatching
     // through it, whose jump-table resolver recovers what it names; it roots
@@ -190,13 +234,6 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
       std::erase_if(Sources, [&](va_t Slot) {
         return Exception->Registration->scopePointerTarget(Slot) == Target;
       });
-    if (CxxCallbackSources)
-      std::erase_if(Sources, [&](va_t Slot) {
-        const auto It = CxxCallbackSources->find(Slot);
-        return It != CxxCallbackSources->end() && It->second == Target;
-      });
-    if (SafeSEHPointer && SafeSEHPointer->second == Target)
-      Sources.erase(SafeSEHPointer->first);
     if (!Sources.empty())
       RelocationCandidates.insert(Target);
   }

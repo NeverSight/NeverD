@@ -17,6 +17,7 @@
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/PEHeaderMapping.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/types/CodeViewCallingConvention.h"
 
@@ -117,8 +118,11 @@ bool isPostLinkRewrittenSection(llvm::StringRef Name) {
 bool pdb_loader_detail::recordedSectionsMatch(
     const BinaryImage &Image, llvm::ArrayRef<RecordedSection> Recorded) {
   llvm::ArrayRef<Section> Sections = Image.Sections;
-  if (!Sections.empty() && Sections.back().IsImageHeader)
+  if (!Sections.empty() && Sections.back().IsImageHeader) {
+    if (!coff_loader::hasCheckedPEHeaderMapping(Image, Recorded.size()))
+      return false;
     Sections = Sections.drop_back();
+  }
   if (Recorded.size() != Sections.size())
     return false;
   // Sections from FirstMovable on may be re-laid out; see the declaration.

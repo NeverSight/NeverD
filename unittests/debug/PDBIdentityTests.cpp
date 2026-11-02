@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../loader/PEHeaderFixture.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Common.h"
@@ -11,8 +12,11 @@
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/ir/NdTypes.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/loader/COFF/PEHeaderMapping.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
@@ -1050,6 +1054,56 @@ TEST(PDBSectionTable, TrailingResourceRelayoutStillMatches) {
   EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, AtLink));
 }
 
+TEST(PDBSectionTable, HeaderMappingKeepsNativeSectionsAndTheirChecks) {
+  for (bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    COFFLoader Loader;
+    if (Restricted)
+      Loader.restrictFunctions({0x140001000});
+    auto Loaded = Loader.load(safetyFixture("safety_cases_pe_x64.exe"));
+    ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+    const auto &Image = *Loaded;
+    const size_t Count = Image.Sections.size() - 1;
+    ASSERT_TRUE(coff_loader::hasCheckedPEHeaderMapping(Image, Count));
+    std::vector<pdb_loader_detail::RecordedSection> Recorded;
+    for (size_t I = 0; I != Count; ++I) {
+      const auto &S = Image.Sections[I];
+      Recorded.push_back({S.Name, uint32_t(S.VA - Image.Base), uint32_t(S.Size),
+                          uint32_t(S.FileOff), uint32_t(S.FileSz), S.Type});
+    }
+    EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+    if (Recorded.back().Name == ".reloc") {
+      auto AtLink = Recorded;
+      AtLink.back().VirtualAddress += 0x1000;
+      AtLink.back().PointerToRawData += 0x200;
+      EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, AtLink));
+    }
+    for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto Changed = Image;
+      if (Mutation == 0)
+        ++Changed.Sections.front().Size;
+      if (Mutation == 1)
+        ++Changed.Sections.front().VA;
+      if (Mutation == 2)
+        Changed.Sections.front().Type ^= llvm::COFF::IMAGE_SCN_MEM_WRITE;
+      if (Mutation == 3)
+        Changed.Segments.back().Data[0] = 0;
+      if (Mutation == 4)
+        Changed.Sections.back().Flags =
+            Changed.Sections.back().Flags | SegmentFlags::Writable;
+      if (Mutation == 5)
+        Changed.Sections.push_back(Changed.Sections.back());
+      EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Changed, Recorded));
+    }
+    auto Context =
+        PDBDebugContext::load(safetyFixture("safety_cases_pe_x64.pdb"), Image);
+    ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+    EXPECT_TRUE((*Context)->hasAuthenticatedImageIdentity());
+    EXPECT_FALSE((*Context)->resolveFunction(Image.Base + 0x40));
+  }
+}
+
 TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
   const BinaryImage Image = imageWithSections({
       {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
@@ -1084,7 +1138,7 @@ TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
       pdb_loader_detail::recordedSectionsMatch(Trailing, Recharacterized));
 }
 
-TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
+TEST(PDBSectionTable, UnbackedHeaderTagsCannotHideASection) {
   const pdb_loader_detail::RecordedSection Recorded[] = {
       {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
       {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
@@ -1097,11 +1151,12 @@ TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
   Image.Sections.push_back(Headers);
   // A name alone cannot hide an extra section from the PDB check.
   EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  // A normalized tag also needs its original header mapping and bytes.
   Image.Sections.back().IsImageHeader = true;
-  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   Image.Sections.back().Name = "renamed header storage";
   Image.Sections[1].Size += 0x1000;
-  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   ++Image.Sections.front().Size;
   EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   --Image.Sections.front().Size;
@@ -1706,7 +1761,48 @@ TEST(PDB20IdentityIntegration, MatchingNB10LoadsLengthPrefixedProcName) {
   EXPECT_EQ(Fn->Size, 0x20u);
 }
 
-TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
+TEST(PDB20IdentityIntegration, MappedHeadersSupplyNoAdditionalSegmentNumber) {
+  constexpr uint32_t Signature = 0x11223344;
+  constexpr uint32_t Age = 1;
+  for (bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    COFFLoader Loader;
+    if (Restricted)
+      Loader.restrictFunctions({0x401000});
+    const auto Bytes =
+        test::peHeaderImage(false, llvm::COFF::IMAGE_FILE_MACHINE_I386);
+    auto Image = Loader.loadBuffer(llvm::MemoryBufferRef(Bytes, "header.exe"));
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(coff_loader::hasCheckedPEHeaderMapping(*Image, 1));
+    Image->DynInfo.CodeViewPDBIdentityState = PDBIdentityState::Unique;
+    Image->DynInfo.CodeViewPDBIdentity = makeNB10Identity(Signature, Age);
+    auto Module = makeLegacyProcStream("legacy_target", 0, 1, 6);
+    const auto HeaderProc =
+        makeLegacyProcStream("header_impostor", 0x40, 2, 16);
+    Module.insert(Module.end(), HeaderProc.begin() + 4, HeaderProc.end());
+    const auto &Text = Image->Sections.front();
+    std::vector<std::vector<uint8_t>> Streams(6);
+    Streams[1] = makeLegacyInfo(Signature, Age);
+    Streams[3] = makeLegacyDbi(Age, 5, uint32_t(Module.size()), 4);
+    Streams[4] = makeLegacySectionHdr(
+        Text.Name, uint32_t(Text.VA - Image->Base), uint32_t(Text.Size),
+        uint32_t(Text.FileSz), uint32_t(Text.FileOff), Text.Type);
+    Streams[5] = Module;
+    ScratchDir Dir;
+    const auto PdbPath = writePdb(writeJgPdb(Streams), Dir);
+    auto Context = PDBDebugContext::load(PdbPath, *Image);
+    ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+    const auto Target = (*Context)->resolveFunction(Image->Base + 0x1000);
+    ASSERT_TRUE(Target);
+    EXPECT_EQ(Target->Name, "legacy_target");
+    EXPECT_FALSE((*Context)->resolveFunction(Image->Base + 0x40));
+    EXPECT_TRUE(llvm::none_of((*Context)->allFunctions(), [](const auto &F) {
+      return F.Name == "header_impostor";
+    }));
+  }
+}
+
+TEST(PDB20IdentityIntegration, UnbackedHeaderStorageRejectsSectionIdentity) {
   constexpr uint32_t Signature = 0x12345678;
   constexpr uint32_t Age = 1;
   constexpr uint32_t Chars = 0x60000020;
@@ -1728,12 +1824,10 @@ TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
   Headers.IsImageHeader = true;
   Image.Sections.push_back(Headers);
   auto Context = PDBDebugContext::load(Path, Image);
-  ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
-  const auto Function = (*Context)->resolveFunction(0x401100);
-  ASSERT_TRUE(Function);
-  EXPECT_EQ(Function->Name, "code_target");
-  EXPECT_FALSE((*Context)->resolveFunction(0x400100));
-  EXPECT_EQ((*Context)->allFunctions().size(), 1u);
+  ASSERT_FALSE(bool(Context));
+  EXPECT_NE(llvm::toString(Context.takeError())
+                .find("section table does not match loaded PE image"),
+            std::string::npos);
 }
 
 TEST(PDB20IdentityIntegration, SignatureOrAgeMismatchRejectsTheCompanion) {

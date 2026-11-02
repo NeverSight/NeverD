@@ -1189,31 +1189,104 @@ TEST(COFFExceptionIR, LLVMCExceptionAnnotationReadsCanonicalStringsOnly) {
 }
 
 TEST(COFFExceptionIR, LLVMCRealignedFrameKeepsItsEstablisherCoordinates) {
-  llvm::LLVMContext Context;
-  llvm::Module Module("realigned-cxx-frame", Context);
-  Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
-  auto *Function = llvm::Function::Create(
-      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
-      llvm::GlobalValue::ExternalLinkage, "realigned", Module);
-  llvm::IRBuilder<> Builder(
-      llvm::BasicBlock::Create(Context, "entry", Function));
-  Builder.CreateRetVoid();
-  ExceptionFunction EH;
-  EH.CodeRange = {0x401000, 0x401100};
-  EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
-  EH.Registration.emplace().RealignedFrame =
-      RegistrationRealignedFrame{6, 0x40100f, 16, 0x270, -0x26c, -20};
-  Function->setMetadata(windows_eh_md::FunctionAttachment,
-                        windows_eh_md::getCanonicalFunctionMetadata(
-                            Context, EH, Arch::X86, BinaryFormat::COFF));
-  const auto Source = emitLLVMC(Module);
-  EXPECT_NE(
-      Source.find("registration.frame: base=esi, definition=0x40100F, "
-                  "alignment=16, allocation=624, establisher_offset=-620, "
-                  "saved_parent_offset=-20"),
-      std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("metadata-invalid"), std::string::npos) << Source;
+  for (bool StackBased : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("realigned-cxx-frame", Context);
+    Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
+        llvm::GlobalValue::ExternalLinkage, "realigned", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRetVoid();
+    ExceptionFunction EH;
+    EH.CodeRange = {0x401000, 0x401100};
+    EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
+    EH.Registration.emplace().RealignedFrame =
+        StackBased
+            ? RegistrationRealignedFrame{4, 0x401003, 16, 0x40, -0x40, 0}
+            : RegistrationRealignedFrame{6, 0x40100f, 16, 0x270, -0x26c, -20};
+    Function->setMetadata(windows_eh_md::FunctionAttachment,
+                          windows_eh_md::getCanonicalFunctionMetadata(
+                              Context, EH, Arch::X86, BinaryFormat::COFF));
+    const auto Source = emitLLVMC(Module);
+    const auto *Expected =
+        StackBased ? "registration.frame: base=esp, definition=0x401003, "
+                     "alignment=16, allocation=64, establisher_offset=-64, "
+                     "entry_frame=ebp"
+                   : "registration.frame: base=esi, definition=0x40100F, "
+                     "alignment=16, allocation=624, establisher_offset=-620, "
+                     "saved_parent_offset=-20";
+    EXPECT_NE(Source.find(Expected), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("metadata-invalid"), std::string::npos) << Source;
+    if (StackBased)
+      EXPECT_EQ(Source.find("saved_parent_offset="), std::string::npos)
+          << Source;
+  }
+}
+
+TEST(COFFExceptionIR, HighCRealignedSegmentReadsCollectTheirActualHelpers) {
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  Options.Image = &Image;
+  const auto Word = NdType::makeInt(4, false);
+  HighFunc Ordinary;
+  Ordinary.Name = "ordinary_segment_read";
+  Ordinary.Entry = 0x401000;
+  Ordinary.ReturnType = Word;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeLoad(HighExpr::makeConst(0, 4), Word,
+                         NdMemoryOrdering::None, NdMemoryAddressSpace::X86FS);
+  Ordinary.Body.push_back(Return);
+  // Deliberately share the expression with the ordinary function. Its
+  // declaration requirements belong to each function's registration mode.
+  HighFunc Realigned = Ordinary;
+  Realigned.Name = "realigned_segment_read";
+  Realigned.Entry = 0x402000;
+  Realigned.ExceptionMetadata.emplace().Encoding =
+      ExceptionEncoding::X86CxxFuncInfo;
+  Realigned.ExceptionMetadata->Registration.emplace().RealignedFrame =
+      RegistrationRealignedFrame{4, 0x402003, 16, 0x40, -0x40, 0};
+  auto Emit = [&](std::vector<HighFunc> Functions) {
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    EXPECT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+    return Source;
+  };
+  const auto AlignedSource = Emit({Realigned});
+  EXPECT_EQ(AlignedSource.find("<intrin.h>"), std::string::npos)
+      << AlignedSource;
+  EXPECT_EQ(AlignedSource.find("__readfsdword"), std::string::npos)
+      << AlignedSource;
+  EXPECT_NE(AlignedSource.find("static inline uint32_t neverd_mem_load_fs_u32"),
+            std::string::npos)
+      << AlignedSource;
+  for (const auto &Functions : {std::vector<HighFunc>{Ordinary},
+                                std::vector<HighFunc>{Ordinary, Realigned},
+                                std::vector<HighFunc>{Realigned, Ordinary}}) {
+    const auto Source = Emit(Functions);
+    EXPECT_NE(Source.find("<intrin.h>"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("__readfsdword("), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("static inline uint32_t neverd_mem_load_fs_u32") !=
+                  std::string::npos,
+              Functions.size() == 2)
+        << Source;
+  }
+#ifdef NEVERD_TEST_CLANG
+  if (NEVERD_TEST_CLANG[0] != '\0') {
+    const auto Syntax =
+        runCCompiler(AlignedSource, {"-std=c11", "-fsyntax-only",
+                                     "-Werror=implicit-function-declaration"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << AlignedSource;
+  }
+#endif
 }
 
 TEST(COFFExceptionIR, LLVMCProjectsCanonicalWindowsEHAsCommentsOnly) {

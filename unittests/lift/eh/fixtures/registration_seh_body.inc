@@ -1,16 +1,68 @@
 // clang-format off: this include contains x86 assembly.
 // Shared semantic cases for the SEH3 and EH4 runtime probes.
-#if REGISTRATION_CASE == 1 || REGISTRATION_CASE == 2 || REGISTRATION_CASE == 4
-  mov dword ptr [ebp-4],1
+.macro registration_set_state level
+#if REGISTRATION_STATE_WRITE == 1
+  mov ecx,\level
+  nop
+  mov dword ptr [ebp-4],ecx
+#elif REGISTRATION_STATE_WRITE == 2
+  .if \level == 0
+    and dword ptr [ebp-4],0
+  .elseif \level == -1
+    or dword ptr [ebp-4],-1
+  .else
+    mov dword ptr [ebp-4],\level
+  .endif
 #else
-  mov dword ptr [ebp-4],0
+  mov dword ptr [ebp-4],\level
+#endif
+.endm
+#if REGISTRATION_CASE == 1 || REGISTRATION_CASE == 2 || REGISTRATION_CASE == 4
+  registration_set_state 1
+#else
+  registration_set_state 0
+#endif
+#if REGISTRATION_STARTUP_INFO
+#include "registration_startup_info.inc"
+#endif
+#if REGISTRATION_HEAP_TERMINATION
+  push 0
+  push 0
+  push 1
+  push 0
+  call dword ptr ["__imp__HeapSetInformation@16"]
+#endif
+#if REGISTRATION_THREAD_STACK_BASE
+  mov eax,fs:[0x18]
+  mov eax,[eax+4]
+  mov dword ptr [_registration_thread_stack_base],eax
+#endif
+#if REGISTRATION_SYNCHRONIZATION
+  push 17
+#if REGISTRATION_THREAD_STACK_BASE
+  push eax
+#else
+  push dword ptr [_registration_atomic_exchange]
+#endif
+  .byte 0x68
+  .long _registration_atomic_word
+  call dword ptr ["__imp__InterlockedCompareExchange@12"]
+  mov dword ptr [_registration_atomic_results], eax
+  push 17
+  push 91
+  .byte 0x68
+  .long _registration_atomic_word
+  call dword ptr ["__imp__InterlockedCompareExchange@12"]
+  mov dword ptr [_registration_atomic_results+4], eax
+  push 0
+  call dword ptr ["__imp__Sleep@4"]
 #endif
 #if REGISTRATION_CASE == 4
   call _registration_no_raise
 #else
   call _registration_raise
 #endif
-  mov dword ptr [ebp-4],REGISTRATION_SENTINEL
+  registration_set_state REGISTRATION_SENTINEL
 #if REGISTRATION_CASE == 4
   call .Lfinally
 #endif
@@ -84,11 +136,14 @@
   xor eax,eax
   ret
 .Linnerhandler:
-  mov dword ptr [ebp-4],REGISTRATION_SENTINEL
+  registration_set_state REGISTRATION_SENTINEL
   mov eax,91
   jmp .Lfinish
 #endif
 .Lhandler:
+#if REGISTRATION_SHARED_SEH4
+  mov esp,[ebp-24]
+#endif
 #if REGISTRATION_CASE == 1 || REGISTRATION_CASE == 2
   mov eax,[_registration_trace]
   imul eax,eax,10
@@ -107,6 +162,10 @@
   mov eax,7
 #endif
 .Lfinish:
+#if REGISTRATION_SHARED_SEH4
+  registration_set_state REGISTRATION_SENTINEL
+  call __seh_epilog4
+#else
 #if REGISTRATION_EXPECT_GS
   mov ecx, dword ptr [ebp - 32]
   xor ecx, ebp
@@ -116,7 +175,12 @@
   mov fs:[0],ecx
   mov esp,ebp
   pop ebp
+#endif
+#if REGISTRATION_PARENT_POP
+  ret REGISTRATION_PARENT_POP
+#else
   ret
+#endif
 #if REGISTRATION_CASE == 6
 .globl _registration_call_entry
 _registration_call_entry:

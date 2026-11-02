@@ -479,7 +479,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
             Optimization.Stop == OptimizationStopReason::InputInvalid)) {
         Result.LLVMVerifierFailed = true;
         Result.Error = std::string("LLVM optimization failed: ") +
-                       optimizationStopReasonName(Optimization.Stop);
+                       optimizationStopMessage(Optimization);
         return false;
       }
     } else {

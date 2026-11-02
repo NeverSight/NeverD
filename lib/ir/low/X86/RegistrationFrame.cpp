@@ -6,10 +6,17 @@
 
 #include "RegistrationFrame.h"
 
+#include "RegistrationAddress.h"
+#include "RegistrationFrameEffects.h"
+
+#include "neverd/ir/RegistrationState.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/lift/X86/X86Regs.h"
+
+#include <algorithm>
 
 namespace neverd::registration_state {
 
@@ -17,6 +24,23 @@ bool hasX86ScalarCallOutput(const LowOp &Op) {
   return Op.Opcode == NdOp::CALL && Op.Output.Size == 4 &&
          (Op.Output.isTemp() ||
           (Op.Output.isReg() && Op.Output.Offset == x86reg::RAX));
+}
+
+bool isX86VolatileFrameRegister(unsigned Index) {
+  return Index == x86reg::RAX / x86reg::GeneralRegStride ||
+         Index == x86reg::RCX / x86reg::GeneralRegStride ||
+         Index == x86reg::RDX / x86reg::GeneralRegStride;
+}
+
+FrameValue projectX86CallReturnValue(const FrameValue &Value) {
+  if (Value == FrameValue{} ||
+      (Value.Constant && Value == FrameValue::constant(*Value.Constant)) ||
+      (Value.ImageAddress &&
+       Value == FrameValue::imageAddress(*Value.ImageAddress)))
+    return Value;
+  auto Opaque = FrameValue::taint(true);
+  Opaque.FrameOnlyFromCall = true;
+  return Opaque;
 }
 
 FrameValue join(FrameValue Left, const FrameValue &Right) {
@@ -37,39 +61,50 @@ FrameValue join(FrameValue Left, const FrameValue &Right) {
 }
 
 namespace {
-bool mergeCells(std::map<int32_t, FrameValue> &Cells,
-                const std::map<int32_t, FrameValue> &Other) {
+bool mergeCells(FrameCells &Snapshot, const FrameCells &Other) {
+  if (Snapshot.empty() && Other.empty())
+    return false;
+  // Shared snapshots are already equal. Explicit empty cells still need the
+  // canonical erasure below; equality alone must not retain those dead facts.
+  if (Snapshot == Other &&
+      std::none_of(Snapshot.begin(), Snapshot.end(), [](const auto &Cell) {
+        return Cell.second == FrameValue{};
+      }))
+    return false;
   bool Changed = false;
-  for (auto Cell = Cells.begin(); Cell != Cells.end();) {
-    const auto It = Other.find(Cell->first);
-    const FrameValue Merged =
-        join(Cell->second, It == Other.end() ? FrameValue{} : It->second);
-    Changed |= Merged != Cell->second;
-    // An absent cell already means no exact value and no frame taint. Keep
-    // that canonical representation: dead local values must not accumulate
-    // in every subsequent CFG state or consume the proof work budget.
-    if (Merged == FrameValue{})
-      Cell = Cells.erase(Cell);
-    else {
-      Cell->second = Merged;
-      ++Cell;
-    }
-  }
-  for (const auto &[Offset, Value] : Other)
-    if (!Cells.count(Offset)) {
-      const FrameValue Merged = join({}, Value);
-      if (Merged != FrameValue{}) {
-        Cells.emplace(Offset, Merged);
-        Changed = true;
+  Snapshot.edit([&](FrameCells::Map &Cells) {
+    for (auto Cell = Cells.begin(); Cell != Cells.end();) {
+      const auto It = Other.find(Cell->first);
+      const FrameValue Merged =
+          join(Cell->second, It == Other.end() ? FrameValue{} : It->second);
+      Changed |= Merged != Cell->second;
+      // An absent cell already means no exact value and no frame taint. Keep
+      // that canonical representation: dead local values must not accumulate
+      // in every subsequent CFG state or consume the proof work budget.
+      if (Merged == FrameValue{})
+        Cell = Cells.erase(Cell);
+      else {
+        Cell->second = Merged;
+        ++Cell;
       }
     }
+    for (const auto &[Offset, Value] : Other)
+      if (!Cells.count(Offset)) {
+        const FrameValue Merged = join({}, Value);
+        if (Merged != FrameValue{}) {
+          Cells.emplace(Offset, Merged);
+          Changed = true;
+        }
+      }
+  });
   return Changed;
 }
 
 } // namespace
 
 bool FrameState::merge(const FrameState &Other) {
-  bool Changed = false;
+  bool Changed = ImportBindingsIntact && !Other.ImportBindingsIntact;
+  ImportBindingsIntact &= Other.ImportBindingsIntact;
   for (size_t I = 0; I < Registers.size(); ++I) {
     const FrameValue Merged = join(Registers[I], Other.Registers[I]);
     Changed |= Merged != Registers[I];
@@ -122,15 +157,21 @@ bool FrameState::merge(const FrameState &Other) {
 
 void FrameState::forgetCellValues() {
   for (auto *Space : {&Cells, &EntryCells, &CallbackCells})
-    for (auto It = Space->begin(); It != Space->end();) {
-      const auto Value = join(It->second, {});
-      if (Value == FrameValue{})
-        It = Space->erase(It);
-      else {
-        It->second = Value;
-        ++It;
-      }
-    }
+    if (std::any_of(Space->begin(), Space->end(), [](const auto &Cell) {
+          return Cell.second == FrameValue{} ||
+                 join(Cell.second, {}) != Cell.second;
+        }))
+      Space->edit([](FrameCells::Map &Cells) {
+        for (auto It = Cells.begin(); It != Cells.end();) {
+          const auto Value = join(It->second, {});
+          if (Value == FrameValue{})
+            It = Cells.erase(It);
+          else {
+            It->second = Value;
+            ++It;
+          }
+        }
+      });
 }
 
 void FrameTransfer::beginInstruction(va_t Address) {
@@ -141,6 +182,10 @@ void FrameTransfer::beginInstruction(va_t Address) {
 }
 
 FrameValue FrameTransfer::read(const NdVar &Value) const {
+  if (Value.isConst() && isAddressProvenance(Value.Provenance)) {
+    const auto Address = imageAddressConstant(Value);
+    return Address ? FrameValue::imageAddress(*Address) : FrameValue{};
+  }
   if (Value.isConst())
     return FrameValue::constant(static_cast<uint32_t>(Value.Offset));
   if (Value.isReg() && Value.Offset < 8 * x86reg::GeneralRegStride) {
@@ -181,15 +226,47 @@ FrameValue FrameTransfer::read(const NdVar &Value) const {
   if (Value.isTemp()) {
     auto It = Temps.find(Value.Offset);
     if (It != Temps.end()) {
-      if (It->second.SEHException && Value.Size < 4)
-        return {{}, {}, false, true};
+      if ((It->second.SEHException || It->second.ThreadAddress) &&
+          Value.Size < 4)
+        return FrameValue::taint(It->second.MayBeFrame);
       return It->second;
     }
   }
   return {};
 }
 
-FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
+void FrameTransfer::invalidateImportBindings(
+    const LowOp &Op, const std::set<va_t> &ImportSlots) {
+  if (!State.ImportBindingsIntact || ImportSlots.empty())
+    return;
+  const auto Memory = lowMemoryOperands(Op);
+  if (!Memory.Address || !Memory.StoredValue)
+    return;
+  const auto Address = read(*Memory.Address);
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+    // Only the exact PE32 exception-chain word is known to be outside the
+    // image. Other segment-relative stores have no proved IAT alias bound.
+    if (Op.MemoryAddressSpace != NdMemoryAddressSpace::X86FS ||
+        Address.Constant != uint32_t{0} || Memory.AccessSize != 4)
+      State.ImportBindingsIntact = false;
+    return;
+  }
+  if (Address.Offset || Address.EntryOffset || Address.CallbackAddress)
+    return;
+  const auto VA = Address.preferredAddress();
+  if (!VA) {
+    State.ImportBindingsIntact = false;
+    return;
+  }
+  for (va_t Slot : ImportSlots)
+    if (uint64_t(*VA) < Slot + 4 && Slot < uint64_t(*VA) + Memory.AccessSize) {
+      State.ImportBindingsIntact = false;
+      return;
+    }
+}
+
+FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed,
+                                   std::optional<va_t> ImportLoad) const {
   FrameValue Result;
   for (unsigned I = 0; I < Op.NumInputs; ++I) {
     const FrameValue Input = read(Op.Inputs[I]);
@@ -227,7 +304,28 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       Op.Inputs[1].isConst() && Op.Inputs[1].Offset == 0 && Op.Output.Size == 4)
     return read(Op.Inputs[0]);
   if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) {
+    if (ImportLoad && *ImportLoad <= UINT32_MAX && State.ImportBindingsIntact &&
+        Op.Output.Size == 4 &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        Op.MemoryOrdering == NdMemoryOrdering::None)
+      return FrameValue::importTarget(uint32_t(*ImportLoad));
     const FrameValue Address = read(Op.Inputs[0]);
+    using Thread = RegistrationSEHThreadAccess;
+    if (Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS &&
+        Address.Constant == Thread::SelfOffset &&
+        Thread::isAddressWidth(Op.Inputs[0].Size) &&
+        Op.Output.Size == Thread::WordBytes &&
+        Op.MemoryOrdering == NdMemoryOrdering::None && Op.Seq >= 0)
+      return FrameValue::threadBlock({Op.Addr, Op.Seq, 0});
+    if (Address.ThreadAddress) {
+      if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Address.ThreadAddress->Offset == Thread::StackBaseOffset &&
+          Thread::isAddressWidth(Op.Inputs[0].Size) &&
+          Op.Output.Size == Thread::WordBytes &&
+          Op.MemoryOrdering == NdMemoryOrdering::None)
+        return FrameValue::taint(true, true);
+      return FrameValue::taint(true);
+    }
     if (Address.SEHException) {
       if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
         if (const auto Value =
@@ -241,7 +339,7 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
                        : FrameValue::previousChain();
     if (SecurityCookieVA &&
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-        Address.Constant == SecurityCookieVA && Op.Output.Size == 4) {
+        Address.preferredAddress() == SecurityCookieVA && Op.Output.Size == 4) {
       FrameValue Cookie;
       Cookie.SecurityCookie = true;
       return Cookie;
@@ -268,8 +366,18 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       std::swap(Left, Right);
     if (Left.SecurityCookie) {
       if (Right.SecurityCookie &&
-          Left.CookieFrameOffset == Right.CookieFrameOffset)
+          Left.CookieFrameOffset == Right.CookieFrameOffset &&
+          Left.CookieImageXOR == Right.CookieImageXOR)
         return FrameValue::constant(Left.CookieXOR ^ Right.CookieXOR);
+      if (Right.ImageAddress) {
+        if (!Left.CookieImageXOR)
+          Left.CookieImageXOR = Right.ImageAddress;
+        else if (Left.CookieImageXOR == Right.ImageAddress)
+          Left.CookieImageXOR.reset();
+        else
+          return Result;
+        return Left;
+      }
       if (Right.Constant) {
         Left.CookieXOR ^= *Right.Constant;
         return Left;
@@ -292,6 +400,15 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       Op.NumInputs == 2) {
     const FrameValue Left = read(Op.Inputs[0]);
     const FrameValue Right = read(Op.Inputs[1]);
+    if (Op.Output.Size == 4 && Op.Inputs[0].Size == 4 &&
+        Op.Inputs[1].Size == 4) {
+      if (Left.ImageAddress && Right.Constant)
+        return FrameValue::imageAddress(
+            *Left.ImageAddress +
+            (Op.Opcode == NdOp::INT_ADD ? *Right.Constant : -*Right.Constant));
+      if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.ImageAddress)
+        return FrameValue::imageAddress(*Left.Constant + *Right.ImageAddress);
+    }
     auto AddExceptionOffset = [&](const FrameValue &Base,
                                   int64_t Delta) -> std::optional<FrameValue> {
       if (!Base.SEHException || Op.Output.Size < 4)
@@ -303,6 +420,23 @@ FrameValue FrameTransfer::evaluate(const LowOp &Op, bool Installed) const {
       Address.Offset = int32_t(Offset);
       return FrameValue::sehException(Address);
     };
+    auto AddThreadOffset = [&](const FrameValue &Base, int64_t Delta) {
+      if (Op.Output.Size != 4 || Op.Inputs[0].Size != 4 ||
+          Op.Inputs[1].Size != 4)
+        return FrameValue{};
+      auto Address = *Base.ThreadAddress;
+      const int64_t Offset = int64_t(Address.Offset) + Delta;
+      if (Offset < INT32_MIN || Offset > INT32_MAX)
+        return FrameValue{};
+      Address.Offset = int32_t(Offset);
+      return FrameValue::threadBlock(Address);
+    };
+    if (Left.ThreadAddress && Right.Constant)
+      return AddThreadOffset(Left, Op.Opcode == NdOp::INT_ADD
+                                       ? int64_t(int32_t(*Right.Constant))
+                                       : -int64_t(int32_t(*Right.Constant)));
+    if (Op.Opcode == NdOp::INT_ADD && Left.Constant && Right.ThreadAddress)
+      return AddThreadOffset(Right, int32_t(*Left.Constant));
     if (Left.SEHException && Right.Constant)
       if (auto Value = AddExceptionOffset(
               Left, Op.Opcode == NdOp::INT_ADD
@@ -356,19 +490,27 @@ bool FrameTransfer::isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const {
          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
          Op.Inputs[0].Offset == CookieCheckVA && Cookie.SecurityCookie &&
          !Cookie.CookieFrameOffset && !Cookie.MayBeFrame &&
-         Cookie.CookieXOR == 0;
+         !Cookie.CookieImageXOR && Cookie.CookieXOR == 0;
 }
 
-void FrameTransfer::write(const LowOp &Op, FrameValue Value,
-                          va_t CookieCheckVA) {
+void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
+                          bool PreserveImportedTargets,
+                          bool PreserveImportBindings) {
   if (isCookieCheck(Op, CookieCheckVA)) {
-    // The authenticated success path changes flags, but no GPR or stack
-    // cell. In particular the lifter's generic EAX result is not a write.
-    State.OtherRegisterBytes.clear();
-    State.OtherRegistersMayBeFrame = true;
+    // The authenticated success path compares equal values, then returns
+    // without changing another register. The generic EAX result is no write.
+    for (const auto &[Flag, Bit] : kX86EqualComparisonFlags)
+      State.OtherRegisterBytes[Flag] = FrameValue::constant(Bit);
     return;
   }
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+    State.ImportBindingsIntact &= PreserveImportBindings;
+    if (!PreserveImportedTargets) {
+      for (auto &Register : State.Registers)
+        Register.ImportTarget.reset();
+      for (auto &[Offset, Temporary] : Temps)
+        Temporary.ImportTarget.reset();
+    }
     State.Registers[x86reg::RAX / x86reg::GeneralRegStride] = {
         {}, {}, false, true, true};
     State.Registers[x86reg::RCX / x86reg::GeneralRegStride] = {
@@ -382,6 +524,15 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value,
     State.OtherRegisterBytes.clear();
     State.OtherRegistersMayBeFrame = true;
     Value = {{}, {}, false, true, true};
+  }
+  if (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)) {
+    State.ImportBindingsIntact = false;
+    for (auto &Register : State.Registers)
+      if (Register.ImportTarget)
+        Register = {};
+    for (auto &[Offset, Temporary] : Temps)
+      if (Temporary.ImportTarget)
+        Temporary = {};
   }
   if (Op.Output.isTemp())
     Temps[Op.Output.Offset] = Value;

@@ -35,6 +35,7 @@
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
@@ -44,6 +45,7 @@
 #include "neverd/ir/med/MedRawEnvironment.h"
 #include "neverd/ir/med/X86/X86CompactShape.h"
 #include "neverd/ir/med/X86/X86FourSourceShape.h"
+#include "neverd/ir/med/X86/X86RegistrationEntry.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -57,6 +59,7 @@
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/IR/Constants.h"
@@ -731,6 +734,13 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  // The physical source entry is independent of native EH admission. Assign
+  // its checked stack convention before any earlier caller sees the symbol.
+  if (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
+      Func.RegistrationSEHEntryPopBytes &&
+      hasX86RegistrationSEHEntryContract(Func))
+    if (const auto ABI = getX86RegistrationEntryABI(Func, *LLVMFunc))
+      LLVMFunc->setCallingConv(*ABI);
   if (HaveTypes)
     for (auto &Argument : LLVMFunc->args())
       if (Argument.getArgNo() < Func.TypedParams.size())
@@ -793,11 +803,18 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                      const std::vector<char> *BodyMask) {
 
   RefusedBodies.clear();
-  if (!AnalystSourceProjection)
-    for (const auto &F : Funcs)
+  if (!AnalystSourceProjection) {
+    for (const auto &F : Funcs) {
+      if (F.AnalysisOnly ||
+          std::any_of(F.JumpTables.begin(), F.JumpTables.end(),
+                      [](const auto &T) { return T.AnalysisOnly; }))
+        throw std::runtime_error(
+            "Tentative analysis recovery cannot authorize binary output");
       if (F.AnalystStackFrame)
         throw std::runtime_error(
             "Analyst stack corrections require a private source projection");
+    }
+  }
   MutableSourcePlans.clear();
   MutableReturnValue.reset();
   EmittingMutableBody = false;
@@ -1010,26 +1027,32 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                                           JT.StorageRanges.end());
     }
   // Decide shared image identity before any function can cache a private run.
-  // Native C++ calls preserve immutable input helpers, whose image footprints
-  // are supplied by the same state/ABI owner as their exact call occurrences.
+  // Native registration frames and their preserved input helpers must share
+  // the original image storage, including SEH cookies and writable globals.
   // Inspect masked bodies too, so every shard agrees on storage identity.
   PreservedRegistrationImageStorageRanges.clear();
   if (TheArch == Arch::X86 && Fmt == BinaryFormat::COFF && Img) {
     for (size_t I = 0; I != Funcs.size(); ++I) {
       const auto &Func = Funcs[I];
       if (!Func.ExceptionMetadata || !Func.RegistrationStates ||
-          Func.SkippedSSA || !Func.RegistrationCxxEntryPopBytes)
+          Func.SkippedSSA)
         continue;
       const auto Classification =
           classifyWindowsEHNativeSource(*Func.ExceptionMetadata, TheArch, Fmt,
                                         WindowsEHNativeCapability::IRLowering);
       const auto &States = *Func.RegistrationStates;
-      if (!Classification.canLowerNativeIR() ||
-          Classification.Model !=
-              WindowsEHNativeSourceModel::X86RegistrationCxx ||
-          !States.Complete || !States.RegistrationLifetimeComplete ||
-          !States.CallFrameEffectsComplete ||
-          !States.CleanupFrameEffectsComplete)
+      const bool Cxx = Classification.Model ==
+                       WindowsEHNativeSourceModel::X86RegistrationCxx;
+      if (!Classification.canLowerNativeIR() || !States.Complete ||
+          !States.RegistrationLifetimeComplete ||
+          (Cxx ? !Func.RegistrationCxxEntryPopBytes ||
+                     !States.CallFrameEffectsComplete ||
+                     !States.CleanupFrameEffectsComplete
+               : Classification.Model !=
+                         WindowsEHNativeSourceModel::X86RegistrationSEH ||
+                     !hasX86RegistrationSEHEntryContract(Func) ||
+                     !States.CallbackStatesComplete ||
+                     !States.ChainOperationsComplete))
         continue;
       auto Preserve = [&](const RegistrationCalleeFrameContract &Contract) {
         for (const auto *Ranges : {&Contract.ImageReads, &Contract.ImageWrites,
@@ -1061,11 +1084,13 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
           PreservedRegistrationImageStorageRanges.push_back(
               {Segment.VA, Segment.VA + Segment.Size});
         }
-      for (const auto &Contract : States.CalleeContracts)
-        Complete &= Preserve(Contract);
-      for (const auto &Contract : States.CleanupContracts)
-        for (const auto &Call : Contract.Calls)
-          Complete &= Preserve(Call.Leaf);
+      if (Cxx) {
+        for (const auto &Contract : States.CalleeContracts)
+          Complete &= Preserve(Contract);
+        for (const auto &Contract : States.CleanupContracts)
+          for (const auto &Call : Contract.Calls)
+            Complete &= Preserve(Call.Leaf);
+      }
       if (!Complete) {
         llvm::WithColor::error() << "med_llvm_emitter: malformed preserved "
                                     "registration image footprint\n";
@@ -1160,6 +1185,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   DefPhiIndexFor = nullptr;
   DefIndex.clear();
   PhiIndex.clear();
+  CallClobberIndex.clear();
+  CallSiteClobberIndex.clear();
+  CallOperationIndex.clear();
+  CallClobberRecordsIndexed = 0;
   CodeIdentityOccurrenceCacheFor = nullptr;
   CodeIdentityOccurrenceCache.clear();
   FeasibleEdgesFor = nullptr;
@@ -1176,6 +1205,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   FrameDerivedCache.clear();
   FrameAddressCacheFor = nullptr;
   FrameAddressCache.clear();
+  FrameDependencyIndexFor = nullptr;
+  FrameDependencyComponents.clear();
   invalidateFrameReloadSourceCache();
   AddrPredCacheFor = nullptr;
   SlotAddressEscapesCache.clear();
@@ -1187,6 +1218,9 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   ConstUsedAsPointerCache.clear();
   ConstValueUsedAsIntegerCache.clear();
   FatalCodePointerResolution = false;
+  FinalRegistrationFrameProofs.clear();
+  llvm::scope_exit ClearFrameProofs(
+      [&] { FinalRegistrationFrameProofs.clear(); });
   FatalDataPointerResolution = false;
   ImportedSymbolPlaceholders.clear();
   StringDataAddrs.clear();
@@ -1675,6 +1709,15 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   llvm::raw_string_ostream VES(VerifyErr);
   if (llvm::verifyModule(*Mod_, &VES))
     syncWarning() << "med_llvm_emitter: verification: " << VerifyErr << "\n";
+
+  for (const auto &Proof : FinalRegistrationFrameProofs)
+    if (auto Error = Proof()) {
+      syncError() << "med_llvm_emitter: final registration frame rejected: "
+                  << llvm::toString(std::move(Error)) << '\n';
+      // Calls and runtime edges have already changed. Ordinary fallback must
+      // never consume a partially committed guarded candidate.
+      return nullptr;
+    }
 
   LLVM_DEBUG(llvm::dbgs() << "med_llvm_emitter: emitted " << Funcs.size()
                           << " functions\n");

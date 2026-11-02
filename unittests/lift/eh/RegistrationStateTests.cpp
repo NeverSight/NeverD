@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/ir/low/X86/RegistrationFrame.h"
+#include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "RegistrationStateTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -14,12 +15,119 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include <algorithm>
 #include <tuple>
 
 namespace {
 
 using namespace neverd;
 using namespace neverd::registration_test;
+
+TEST(RegistrationState, CxxDispatchBindingsCannotOutliveAnUnclosedOrigin) {
+  for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = makeCxxCatchContinuation();
+    auto &Stores = Function.ExceptionMetadata->Registration->TryLevelStores;
+    std::erase_if(Stores,
+                  [](const auto &Store) { return Store.StoreVA == 0x1020; });
+    for (unsigned Index : {2u, 5u}) {
+      auto &Block = Function.Blocks[Index];
+      Block.Ops.clear();
+      Block.Succs.clear();
+      Block.EndAddr = Block.StartAddr + 5;
+      Block.InstructionBoundaries = {{Block.StartAddr, 5}};
+      auto &Call = Block.InstructionBoundaries.front();
+      Call.Control = LowInstructionControl::Call;
+      Call.ControlFlags =
+          LowInstructionControlFlag::Call | LowInstructionControlFlag::NoReturn;
+      emitOp(Block, Block.StartAddr, NdOp::CALL, NdVar::reg(x86reg::RAX, 4),
+             {NdVar::cst(0x2100, 4)});
+    }
+    std::vector<RegistrationCalleeFrameContract> Callees(1);
+    auto &Throw = Callees.front();
+    Throw.Target = 0x2100;
+    Throw.CalleeKind = RegistrationCalleeFrameContract::Kind::PrivateThrow;
+    Throw.DoesNotReturn = true;
+    Throw.ThrownTypeVA = 0x4000;
+    Throw.ThrownObjectSize = 4;
+    Throw.RequiredImports = {0x3000};
+    registration_state::CxxCallerProof Proof;
+    Proof.ImportSlots.insert(0x3000);
+    if (Mutation != 1)
+      Proof.ProveDispatchCall = [&](const LowOp &,
+                                    const RegistrationCalleeFrameContract &,
+                                    const RegistrationCallFrameEffect &,
+                                    size_t &) { return Mutation != 2; };
+    Proof.ProveDispatchMemory = [](const LowOp &Op, const auto &, size_t &) {
+      return Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
+    };
+    std::vector<RegistrationCleanupFrameContract> Cleanups;
+    if (Mutation >= 9) {
+      Function.ExceptionMetadata->Cxx->UnwindMap[0] = {
+          -1, 0x2200, CxxUnwindAction::ActionKind::Direct};
+      auto &Cleanup = Cleanups.emplace_back();
+      Cleanup.ActionState = 0;
+      Cleanup.RelayTarget = 0x2200;
+      auto &Borrow = Cleanup.Calls.emplace_back();
+      Borrow.ObjectFrameOffset = Mutation == 13 ? -16 : -24;
+      Borrow.Leaf.Target = 0x2300;
+      Borrow.Leaf.ECXReads = {{0, Mutation == 12 ? 12 : 4}};
+      if (Mutation == 14)
+        Borrow.Leaf.ECXWrites = {{0, 16}};
+      if (Mutation != 10)
+        Proof.ClosedDispatchCleanups.insert(0);
+      if (Mutation != 11) {
+        LowBlock Initialize;
+        emitOp(Initialize, 0x1013, NdOp::INT_ADD, NdVar::tmp(92, 4),
+               {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-24), 4)});
+        emitOp(Initialize, 0x1013, NdOp::STORE, {},
+               {NdVar::tmp(92, 4), NdVar::cst(7, Mutation == 16 ? 1 : 4)});
+        auto &Body = Function.Blocks[1];
+        Body.Ops.insert(Body.Ops.begin() + 3, Initialize.Ops.begin(),
+                        Initialize.Ops.end());
+      }
+    }
+    if (Mutation >= 3 && Mutation <= 6) {
+      LowBlock Extra;
+      if (Mutation == 3 || Mutation == 6)
+        emitOp(Extra, 0x1013, NdOp::LOAD, NdVar::tmp(91, 4),
+               {NdVar::cst(Mutation == 3 ? 0 : 0x4000, 4)});
+      if (Mutation == 4)
+        emitOp(Extra, 0x1013, NdOp::STORE, {},
+               {NdVar::cst(0x3001, 4), NdVar::cst(0, 1)});
+      if (Mutation == 5)
+        emitOp(Extra, 0x1013, NdOp::INT_DIV, NdVar::tmp(91, 4),
+               {NdVar::reg(x86reg::RAX, 4), NdVar::reg(x86reg::RCX, 4)});
+      // Faults before the later state store must remain visible to the
+      // following throw block; a closed later block cannot repair the proof.
+      auto &Body = Function.Blocks[1];
+      Body.Ops.insert(Body.Ops.begin() + 3, Extra.Ops.begin(), Extra.Ops.end());
+    }
+    if (Mutation == 8) {
+      LowBlock Extra;
+      emitOp(Extra, 0x1800, NdOp::LOAD, NdVar::tmp(91, 4), {NdVar::cst(0, 4)});
+      auto &Handler = Function.Blocks[5];
+      Handler.Ops.insert(Handler.Ops.begin(), Extra.Ops.front());
+      Handler.Ops.back().Seq = 1;
+    }
+    if (Mutation == 7 || Mutation == 15)
+      std::reverse(Function.Blocks.begin(), Function.Blocks.end());
+    registration_state::RegistrationStateSolver Solver(
+        Function, 0, 0, &Callees, Mutation >= 9 ? &Cleanups : nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, &Proof);
+    const auto States = Solver.run();
+    const bool Closed =
+        Mutation == 0 || Mutation == 7 || Mutation == 9 || Mutation == 15;
+    if (Closed)
+      ASSERT_TRUE(States.Complete)
+          << (States.Diagnostics.empty() ? "" : States.Diagnostics.front());
+    EXPECT_EQ(
+        llvm::any_of(States.CallFrameEffects,
+                     [](const auto &Call) { return Call.Address == 0x1800; }),
+        Closed);
+  }
+}
 
 TEST(RegistrationState, DeadFrameValuesDoNotAccumulateAcrossJoins) {
   using registration_state::FrameState;
@@ -754,6 +862,318 @@ TEST(RegistrationState, StackCleanupDoesNotGrantMemoryBorrowAuthority) {
   }
 }
 
+TEST(RegistrationState,
+     CachedImportCleanupRequiresItsCurrentLoadAndReachingValue) {
+  for (bool EH4 : {false, true})
+    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+      SCOPED_TRACE(EH4);
+      SCOPED_TRACE(Mutation);
+      auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+      LowBlock Load;
+      Load.Id = 4;
+      Load.StartAddr = 0x1100;
+      Load.EndAddr = 0x1106;
+      Load.Succs = {5};
+      Load.InstructionBoundaries = {{0x1100, 6, 0, 4}};
+      emitOp(Load, 0x1100, NdOp::COPY, NdVar::tmp(0, 4),
+             {NdVar::cst(0x2100, 4)});
+      emitOp(Load, 0x1100, NdOp::INT_ZEXT, NdVar::tmp(8, 8),
+             {NdVar::tmp(0, 4)});
+      emitOp(Load, 0x1100, NdOp::LOAD, NdVar::tmp(16, 4), {NdVar::tmp(8, 8)});
+      emitOp(Load, 0x1100, NdOp::COPY, NdVar::reg(x86reg::RSI, 4),
+             {NdVar::tmp(16, 4)});
+      LowBlock Call;
+      Call.Id = 5;
+      Call.StartAddr = 0x1110;
+      Call.EndAddr = 0x1117;
+      Call.Succs = {1, 2};
+      Call.InstructionBoundaries = {
+          {0x1110, 2, 0, 1}, {0x1112, 3, 1, 1}, {0x1115, 2, 2, 1}};
+      Call.InstructionBoundaries[0].Control = LowInstructionControl::Call;
+      emitOp(Call, 0x1110, NdOp::INDIR_CALL, {}, {NdVar::reg(x86reg::RSI, 4)});
+      emitOp(Call, 0x1112, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+      emitOp(Call, 0x1115, NdOp::STORE, {},
+             {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+      F.Blocks[0].Succs = {4};
+      std::vector<RegistrationCalleeStackContract> Stacks{
+          {0x2100, 0, true, {{0x1100, 2}}}};
+      if (Mutation == 1)
+        Stacks[0].Loads.clear();
+      if (Mutation == 2)
+        Stacks[0].Loads[0].second = 3;
+      if (Mutation == 3)
+        Stacks[0].Target += 4;
+      if (Mutation == 4)
+        Load.Ops[2].Output.Size = 2;
+      if (Mutation == 5)
+        Stacks[0].Loads.push_back(Stacks[0].Loads[0]);
+      if (Mutation == 6)
+        Load.Ops[0].Inputs[0].Offset += 4;
+      if (Mutation == 7)
+        Load.Ops[2].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      if (Mutation == 8)
+        Call.Ops[0].Inputs[0] = NdVar::reg(x86reg::RCX, 4);
+      if (Mutation == 9)
+        Load.Ops[3].Output.Size = 2;
+      if (Mutation == 10)
+        F.Blocks[0].Succs.push_back(5); // One reaching path never loaded ESI.
+      if (Mutation == 11)
+        Stacks[0].Indirect = false;
+      if (Mutation == 12)
+        Call.Ops[0].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      if (Mutation == 13)
+        Call.Ops[0].MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation >= 14) {
+        LowBlock Intermediary;
+        Intermediary.Id = 6;
+        Intermediary.StartAddr = 0x1120;
+        Intermediary.EndAddr = 0x1136;
+        Intermediary.Succs = {5};
+        Load.Succs = {6};
+        const va_t CalledSlot = Mutation >= 17 ? 0x2200 : 0x2100;
+        if (Mutation >= 17)
+          Stacks.push_back({CalledSlot, 0, true, {}});
+        if (Mutation == 15 || Mutation == 17 || Mutation == 19) {
+          Intermediary.InstructionBoundaries.push_back({0x1120, 10, 0, 1});
+          emitOp(Intermediary, 0x1120, NdOp::STORE, {},
+                 {NdVar::cst(Mutation == 19 ? 0x2300 : CalledSlot, 4),
+                  NdVar::cst(0, 4)});
+        }
+        if (Mutation == 16) {
+          Intermediary.InstructionBoundaries.push_back({0x1120, 6, 0, 1});
+          Intermediary.InstructionBoundaries.back().Control =
+              LowInstructionControl::Call;
+          emitOp(Intermediary, 0x1120, NdOp::INDIR_CALL, {},
+                 {NdVar::cst(0x2100, 4)});
+        }
+        Intermediary.InstructionBoundaries.push_back(
+            {0x1130, 6, Intermediary.Ops.size(), 1});
+        Intermediary.InstructionBoundaries.back().Control =
+            LowInstructionControl::Call;
+        emitOp(Intermediary, 0x1130, NdOp::INDIR_CALL, {},
+               {NdVar::cst(CalledSlot, 4)});
+        F.Blocks.push_back(std::move(Intermediary));
+      }
+      F.Blocks.push_back(std::move(Load));
+      F.Blocks.push_back(std::move(Call));
+      const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0, nullptr,
+                                               nullptr, &Stacks);
+      EXPECT_EQ(A.Complete, Mutation == 0 || Mutation == 14 || Mutation >= 18);
+      EXPECT_FALSE(A.CallFrameEffectsComplete);
+      EXPECT_TRUE(A.CallFrameEffects.empty());
+      EXPECT_TRUE(A.CalleeContracts.empty());
+    }
+}
+
+TEST(RegistrationState, ImportedStackCleanupRequiresItsCurrentBinding) {
+  for (bool EH4 : {false, true})
+    for (bool Indirect : {false, true})
+      for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+        SCOPED_TRACE(EH4);
+        SCOPED_TRACE(Indirect);
+        SCOPED_TRACE(Mutation);
+        auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+        LowBlock Call;
+        Call.Id = 4;
+        Call.StartAddr = 0x1100;
+        Call.EndAddr = 0x1136;
+        Call.Succs = {1, 2};
+        const va_t Target = Indirect ? 0x2200 : 0x2100;
+        std::vector<RegistrationCalleeStackContract> Stacks{
+            {Target,
+             0,
+             Indirect,
+             {},
+             Indirect ? std::vector<va_t>{} : std::vector<va_t>{0x2200}}};
+        if (Mutation >= 1 && Mutation <= 4) {
+          Call.InstructionBoundaries.push_back({0x1100, 10, 0, 1});
+          const auto Address = Mutation == 4
+                                   ? NdVar::reg(x86reg::RCX, 4)
+                                   : NdVar::cst(Mutation == 2   ? 0x2300
+                                                : Mutation == 3 ? 0x2203
+                                                                : 0x2200,
+                                                4);
+          emitOp(Call, 0x1100, NdOp::STORE, {},
+                 {Address, NdVar::cst(0, Mutation == 3 ? 1 : 4)});
+        }
+        if (Mutation == 5) {
+          Call.InstructionBoundaries.push_back({0x1100, 5, 0, 1});
+          Call.InstructionBoundaries.back().Control =
+              LowInstructionControl::Call;
+          emitOp(Call, 0x1100, NdOp::CALL, {}, {NdVar::cst(0x2300, 4)});
+          Stacks.push_back({0x2300, 0, false});
+        }
+        if (Mutation == 6)
+          Stacks[0].RequiredImports = {0x2200, 0x2200};
+        Call.InstructionBoundaries.push_back(
+            {0x1110, uint16_t(Indirect ? 6 : 5), Call.Ops.size(), 1});
+        Call.InstructionBoundaries.back().Control = LowInstructionControl::Call;
+        emitOp(Call, 0x1110, Indirect ? NdOp::INDIR_CALL : NdOp::CALL, {},
+               {NdVar::cst(Target, 4)});
+        if (Mutation == 7) {
+          Call.InstructionBoundaries.push_back(
+              {0x1120, 10, Call.Ops.size(), 1});
+          emitOp(Call, 0x1120, NdOp::STORE, {},
+                 {NdVar::cst(0x2200, 4), NdVar::cst(0, 4)});
+        }
+        Call.InstructionBoundaries.push_back({0x1130, 3, Call.Ops.size(), 1});
+        emitOp(Call, 0x1130, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+               {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+        Call.InstructionBoundaries.push_back({0x1133, 3, Call.Ops.size(), 1});
+        emitOp(Call, 0x1133, NdOp::STORE, {},
+               {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+        F.Blocks[0].Succs = {4};
+        F.Blocks.push_back(std::move(Call));
+        const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0,
+                                                 nullptr, nullptr, &Stacks);
+        EXPECT_EQ(A.Complete, Mutation == 0 || Mutation == 2 || Mutation == 7);
+        EXPECT_FALSE(A.CallFrameEffectsComplete);
+        EXPECT_TRUE(A.CallFrameEffects.empty());
+      }
+}
+
+TEST(RegistrationState, ImportBindingAndRegisterEffectsRemainIndependent) {
+  for (bool EH4 : {false, true})
+    for (bool Veneer : {false, true})
+      for (bool PreservesBindings : {false, true})
+        for (bool CachedCall : {false, true})
+          for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+            SCOPED_TRACE(::testing::Message()
+                         << EH4 << ' ' << Veneer << ' ' << PreservesBindings
+                         << ' ' << CachedCall << ' ' << Mutation);
+            auto F = EH4 ? makeCookieFrame() : makeBranchingFrame();
+            LowBlock Calls;
+            Calls.Id = 4;
+            Calls.StartAddr = 0x1100;
+            Calls.EndAddr = 0x1156;
+            Calls.Succs = {1, 2};
+            const auto Boundary = [&](va_t Address, uint16_t Size,
+                                      bool IsCall = false) {
+              Calls.InstructionBoundaries.push_back(
+                  {Address, Size, Calls.Ops.size(), 1});
+              if (IsCall)
+                Calls.InstructionBoundaries.back().Control =
+                    LowInstructionControl::Call;
+            };
+            Boundary(0x1100, 6);
+            Calls.InstructionBoundaries.back().OpCount = 4;
+            emitOp(Calls, 0x1100, NdOp::COPY, NdVar::tmp(0, 4),
+                   {NdVar::cst(0x2100, 4)});
+            emitOp(Calls, 0x1100, NdOp::INT_ZEXT, NdVar::tmp(8, 8),
+                   {NdVar::tmp(0, 4)});
+            emitOp(Calls, 0x1100, NdOp::LOAD, NdVar::tmp(16, 4),
+                   {NdVar::tmp(8, 8)});
+            emitOp(Calls, 0x1100, NdOp::COPY, NdVar::reg(x86reg::RSI, 4),
+                   {NdVar::tmp(16, 4)});
+            std::vector<RegistrationCalleeStackContract> Stacks{
+                {0x2100, 0, true, {{0x1100, 2}}}};
+            Stacks[0].PreservesImportBindings = PreservesBindings;
+            if (Veneer) {
+              Stacks.push_back({0x2200, 0, false, {}, {0x2100}});
+              Stacks.back().ImportVeneer = true;
+              Stacks.back().PreservesImportBindings = PreservesBindings;
+            }
+            if (Mutation == 1) {
+              Boundary(0x1110, 10);
+              emitOp(Calls, 0x1110, NdOp::STORE, {},
+                     {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
+            }
+            if (Mutation == 2 || Mutation == 6 || Mutation == 7) {
+              Boundary(0x1110, 5, true);
+              emitOp(Calls, 0x1110, NdOp::CALL, {}, {NdVar::cst(0x2300, 4)});
+              Stacks.push_back({0x2300, 0, false});
+              Stacks.back().PreservesImportBindings = Mutation == 6;
+            }
+            if (Mutation == 3) {
+              if (Veneer)
+                Stacks.back().RequiredImports.clear();
+              else
+                Stacks[0].ImportVeneer = true;
+            }
+            if (Mutation == 5) {
+              Stacks.push_back({0x2300, uint32_t(UINT16_MAX) + 1, false});
+              Stacks.back().PreservesImportBindings = true;
+            }
+            Boundary(0x1120, Veneer ? 5 : 6, true);
+            emitOp(Calls, 0x1120, Veneer ? NdOp::CALL : NdOp::INDIR_CALL, {},
+                   {NdVar::cst(Veneer ? 0x2200 : 0x2100, 4)});
+            if (Mutation == 4) {
+              Boundary(0x1130, 10);
+              emitOp(Calls, 0x1130, NdOp::STORE, {},
+                     {NdVar::cst(0x2100, 4), NdVar::cst(0, 4)});
+            }
+            Boundary(0x1140, CachedCall ? 2 : 6, true);
+            emitOp(Calls, 0x1140, NdOp::INDIR_CALL, {},
+                   {CachedCall ? NdVar::reg(x86reg::RSI, 4)
+                               : NdVar::cst(0x2100, 4)});
+            Boundary(0x1150, 3);
+            emitOp(Calls, 0x1150, NdOp::INT_SUB, NdVar::reg(x86reg::RSP, 4),
+                   {NdVar::reg(x86reg::RSP, 4), NdVar::cst(4, 4)});
+            Boundary(0x1153, 3);
+            emitOp(Calls, 0x1153, NdOp::STORE, {},
+                   {NdVar::reg(x86reg::RSP, 4), NdVar::cst(7, 4)});
+            F.Blocks[0].Succs = {4};
+            F.Blocks.push_back(std::move(Calls));
+            const auto A = analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0,
+                                                     nullptr, nullptr, &Stacks);
+            EXPECT_EQ(A.Complete,
+                      (Mutation == 0 && (CachedCall || PreservesBindings)) ||
+                          (Mutation == 4 && CachedCall) ||
+                          (Mutation == 6 && !CachedCall && PreservesBindings));
+            EXPECT_FALSE(A.CallFrameEffectsComplete);
+            EXPECT_TRUE(A.CallFrameEffects.empty());
+            EXPECT_TRUE(A.SEHBoundCalls.empty());
+          }
+}
+
+TEST(RegistrationState, CxxCalleeEffectsRequireLiveTransitiveImports) {
+  for (bool EH4 : {false, true})
+    for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << EH4 << ' ' << Mutation);
+      auto F = makeSEHObjectCall(EH4, false, -32, 4, false);
+      auto &Calls = F.Blocks.back();
+      RegistrationCalleeFrameContract First;
+      First.Target = 0x2100;
+      if (Mutation == 1)
+        First.ImageWrites = {{0x2200, 0x2204}};
+      if (Mutation == 2)
+        First.ImageWrites = {{0x2203, 0x2204}};
+      if (Mutation == 3)
+        First.ImageWrites = {{0x21ff, 0x2201}};
+      if (Mutation == 4)
+        First.ImageWrites = {{0x2204, 0x2208}};
+      RegistrationCalleeFrameContract Parent;
+      Parent.Target = 0x2400;
+      Parent.CalleeKind = RegistrationCalleeFrameContract::Kind::CxxParent;
+      Parent.RequiredImports = {0x2200};
+      Parent.HasIndependentScalarReturn = true;
+      if (Mutation == 6)
+        Parent.RequiredImports.clear();
+      if (Mutation == 7)
+        Parent.RequiredImports.push_back(0x2200);
+      const auto AppendCall = [&](va_t Target) {
+        const va_t At = Calls.EndAddr;
+        Calls.InstructionBoundaries.push_back({At, 5, Calls.Ops.size(), 1});
+        Calls.InstructionBoundaries.back().Control =
+            LowInstructionControl::Call;
+        emitOp(Calls, At, NdOp::CALL, {}, {NdVar::cst(Target, 4)});
+        Calls.EndAddr += 5;
+      };
+      if (Mutation == 5)
+        AppendCall(0x2500); // Unknown effects lose bindings.
+      AppendCall(Parent.Target);
+      AppendCall(Parent.Target); // A complete first invocation retains them.
+      const std::vector Callees{First, Parent};
+      const auto A =
+          analyzeRegistrationStates(F, EH4 ? 0x4000 : 0, 0, &Callees);
+      EXPECT_EQ(A.CallFrameEffectsComplete, Mutation == 0 || Mutation == 4);
+      EXPECT_EQ(A.callFrameEffect(Calls.Ops.back().Addr,
+                                  Calls.Ops.back().Seq) != nullptr,
+                Mutation == 0 || Mutation == 4);
+    }
+}
+
 namespace {
 LowFunc makeCxxObjectCleanup() {
   auto F = makeCxxObjectCall();
@@ -792,6 +1212,52 @@ TEST(RegistrationState, ProjectsInitializedCleanupObjectsAtEveryDispatch) {
     ASSERT_GE(Effect.BlockId, 0);
     EXPECT_EQ(Effect.Range.Begin, F.Blocks[Effect.BlockId].StartAddr);
   }
+}
+
+TEST(RegistrationState, CleanupObjectsStayCorrelatedWithTheirLiveState) {
+  for (bool Reverse : {false, true})
+    for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Reverse << ' ' << Mutation);
+      auto F = makeCxxObjectCleanup();
+      auto &EH = *F.ExceptionMetadata;
+      EH.Cxx->TryBlocks.clear();
+      // The object-free branch joins the live-object branch immediately
+      // before resetting its state. Only state zero owns a cleanup borrow.
+      auto Skip = F.Blocks[1];
+      Skip.Id = 8;
+      Skip.StartAddr += 0x200;
+      Skip.EndAddr += 0x200;
+      Skip.Succs = {2};
+      std::erase_if(Skip.Ops, [](const auto &Op) {
+        return Op.Addr == 0x1013 &&
+               (Op.Output == NdVar::reg(x86reg::RCX, 4) ||
+                (Op.Opcode == NdOp::STORE &&
+                 Op.Inputs[0] == NdVar::reg(x86reg::RCX, 4)));
+      });
+      const int32_t Level = Mutation == 1 ? 0 : -1;
+      Skip.Ops.back().Inputs[1] = NdVar::cst(uint32_t(Level), 4);
+      for (size_t I = 0; I != Skip.Ops.size(); ++I) {
+        Skip.Ops[I].Addr += 0x200;
+        Skip.Ops[I].Seq = I;
+      }
+      for (auto &Boundary : Skip.InstructionBoundaries)
+        Boundary.Address += 0x200;
+      EH.Registration->TryLevelStores.push_back({0x1216, 0x121d, Level});
+      F.Blocks[0].Succs = {1, Skip.Id};
+      F.Blocks.push_back(std::move(Skip));
+      if (Mutation == 2)
+        for (auto &Op : F.Blocks[1].Ops)
+          if (Op.Opcode == NdOp::STORE &&
+              Op.Inputs[0] == NdVar::reg(x86reg::RCX, 4))
+            Op.Inputs[1] = NdVar::cst(7, 1);
+      if (Reverse)
+        std::reverse(F.Blocks.begin(), F.Blocks.end());
+      const std::vector Calls{objectLeafContract()};
+      const std::vector Cleanups{objectCleanupContract()};
+      const auto A = analyzeRegistrationStates(F, 0, 0, &Calls, &Cleanups);
+      EXPECT_EQ(A.Complete, Mutation != 2);
+      EXPECT_EQ(A.CleanupFrameEffectsComplete, Mutation == 0);
+    }
 }
 
 TEST(RegistrationState, SharedUnwindTailsKeepEachSourceLevelProof) {

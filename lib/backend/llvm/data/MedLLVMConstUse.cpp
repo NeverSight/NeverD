@@ -22,6 +22,8 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/DenseSet.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -54,10 +56,14 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
     return false;
 
   MedVar Cur = V;
-  std::set<std::tuple<int, int, int, uint16_t>> Seen;
+  // Only membership is observed; the value kind keeps sentinel keys outside
+  // the valid key domain without reserving any SSA ID or version.
+  llvm::SmallDenseSet<std::tuple<int, int, int, uint16_t>, 16> Seen;
   for (;;) {
-    // COPY may preserve an address bit pattern, but widening a narrow scalar
-    // never creates address provenance.
+    // The target's pointer transport rules also cover widened address
+    // temporaries and their low pointer-width slices. Every intermediate must
+    // retain a complete target pointer; widening a narrow scalar cannot
+    // restore provenance that an earlier operation discarded.
     if (!IsPointerWidth(Cur))
       return false;
     if (Cur.isConst())
@@ -67,10 +73,13 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
     if (!Seen.insert(Key).second)
       return false;
     const MedOp *Def = lookupDef(Cur);
-    if (!Def || Def->Opcode != NdOp::COPY || Def->NumInputs != 1 ||
-        Def->Output.Size != Def->Inputs[0].Size)
+    if (!Def ||
+        addressProvenanceVarKey(Def->Output) != addressProvenanceVarKey(Cur))
       return false;
-    Cur = Def->Inputs[0];
+    const auto Forwarded = pointerPreservingInput(*Def);
+    if (!Forwarded)
+      return false;
+    Cur = *Forwarded;
   }
 
   // Loader sets are value-global upper bounds and cannot establish the role

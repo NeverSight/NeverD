@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bind source call effects while retaining independent native call receipts.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationStateSolver.h"
 
@@ -21,6 +26,12 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
                               Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4
                           ? CalleeIndices.find(Op.Inputs[0].Offset)
                           : CalleeIndices.end();
+  // A private conditional query needs exact invocation return facts. Root
+  // calls retain an existing native contract; only a missing contract may
+  // fall back to source-only effects without inventing a native call receipt.
+  if (Conditional || Callee == CalleeIndices.end())
+    if (auto Call = transferConditionalCxxCall(After, Op, Facts))
+      return Call;
   auto StackPointer =
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   std::optional<FrameValue> CallResult;
@@ -33,12 +44,14 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
   RegistrationCallFrameEffect Effect;
   if (Valid) {
     const auto &Contract = Result.CalleeContracts[Callee->second];
+    Valid &=
+        Contract.RequiredImports.empty() || After.Frame.ImportBindingsIntact;
     // A rethrow carries the CRT's current exception, not an initialized new
     // object. It is valid only in a proved live catch invocation.
     if (Contract.isRuntimeThrow()) {
       Effect.RuntimeThrow =
           runtimeThrowArguments(After, Contract, Effect.FrameReads);
-      Valid = Effect.RuntimeThrow.has_value();
+      Valid &= Effect.RuntimeThrow.has_value();
     }
     if (Contract.isRethrow() ||
         (Effect.RuntimeThrow && Effect.RuntimeThrow->isRethrow()))
@@ -118,8 +131,26 @@ RegistrationStateSolver::transferCall(size_t I, Domain &After, const LowOp &Op,
       After.Frame.forgetCellValues();
     return std::nullopt;
   }
-  return CallTransfer{StackPointer, Effect.DoesNotReturn, Effect.EndAddress,
-                      CallResult};
+  // A checked frame borrow can still overwrite image storage. Use the same
+  // binding owner as explicit stores, without narrowing a merged write range
+  // to one instruction's access width.
+  for (const auto &Write :
+       Result.CalleeContracts[Effect.CalleeIndex].ImageWrites) {
+    if (!charge(StackImportSlots.size() + 1))
+      return std::nullopt;
+    for (va_t Slot : StackImportSlots)
+      if (Write.Begin < Slot + 4 && Slot < Write.End)
+        After.Frame.ImportBindingsIntact = false;
+    invalidateJumpRuntimeBindings(After, FrameValue::constant(Write.Begin),
+                                  Write.End - Write.Begin);
+  }
+  const bool ClosedDispatch =
+      CxxCalls && CxxCalls->ProveDispatchCall &&
+      CxxCalls->ProveDispatchCall(
+          Op, Result.CalleeContracts[Effect.CalleeIndex], Effect, WorkUsed);
+  return CallTransfer{
+      StackPointer, Effect.DoesNotReturn, Effect.EndAddress, CallResult, {},
+      true,         ClosedDispatch};
 }
 
 } // namespace neverd::registration_state

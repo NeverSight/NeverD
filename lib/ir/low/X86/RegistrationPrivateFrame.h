@@ -26,6 +26,7 @@ struct PrivateFrameState {
   std::set<int32_t> ObjectInitialized;
   std::set<int32_t> Initialized;
 
+  bool operator==(const PrivateFrameState &) const = default;
   bool merge(const PrivateFrameState &Other);
 };
 

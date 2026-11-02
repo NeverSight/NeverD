@@ -53,7 +53,7 @@ CFGBuilder::proveInstructionLocalTableSource(
   };
   const uint16_t PointerSize = Img.getPointerSize();
   if (!Take(32) || (Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
-      !F.hasCompleteInstructionLift() || F.Blocks.empty() ||
+      F.AnalysisOnly || !F.hasCompleteInstructionLift() || F.Blocks.empty() ||
       !F.FunctionTemporaries.empty() || F.JumpTables.size() != 1 ||
       Source.Authority != RelocatedInstructionAddressProofKind::LoaderField ||
       Source.FieldVA == InvalidVA || Source.DefinesOutput ||
@@ -747,6 +747,13 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
       continue;
     if (Rec.JumpTableTargets.empty())
       continue;
+
+    if (auto Analysis = AnalysisTables.find(Addr);
+        Analysis != AnalysisTables.end()) {
+      Func.JumpTables.push_back(Analysis->second);
+      Func.AnalysisOnly = true;
+      continue;
+    }
 
     JumpTable JT;
     JT.InsnAddr = Addr;

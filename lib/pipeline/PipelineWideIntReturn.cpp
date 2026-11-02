@@ -592,7 +592,8 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
         Reconv.setRegistrationFrameFacts(
             {Result.MedFuncs[I].Entry,
              Result.MedFuncs[I].RegistrationCallerCleanupABIComplete,
-             Result.MedFuncs[I].RegistrationCxxEntryPopBytes});
+             Result.MedFuncs[I].RegistrationCxxEntryPopBytes,
+             Result.MedFuncs[I].RegistrationSEHEntryPopBytes});
         MedFunc NewMF =
             Reconv.convert(Result.LowFuncs[I], Img.Arch, Img.abiFormat());
         NewMF.OriginalSize = Result.LowFuncs[I].OriginalSize;

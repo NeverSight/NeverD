@@ -11,6 +11,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 
 #include "llvm/IR/Instructions.h"
 
@@ -27,6 +28,9 @@ bool bindSEHLocalUnwindFrameReads(
   if (Source.SkippedSSA || !Source.RegistrationStates ||
       !Source.RegistrationStates->Complete || EntrySP < 4 ||
       EntrySP > UINT32_MAX)
+    return false;
+  const auto *States = getX86RegistrationSEHPhysicalStates(Source);
+  if (!States)
     return false;
   using Key = std::tuple<MedVar::VarKind, int, int>;
   const auto Identity = [](const MedVar &Value) {
@@ -95,7 +99,7 @@ bool bindSEHLocalUnwindFrameReads(
       if (Definition == Definitions.end() || Definition->second != Read)
         return false;
       unsigned Receipts = 0;
-      for (const auto &Value : Source.RegistrationStates->FrameValues) {
+      for (const auto &Value : States->FrameValues) {
         if (++Work > limits::kMaxRegistrationEHStateWork)
           return false;
         if (Value.Address != Read->Addr || Value.OpSeq != Read->OriginSeq)

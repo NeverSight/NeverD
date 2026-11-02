@@ -7,6 +7,7 @@
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
 
@@ -93,18 +94,16 @@ bool RegistrationStateSolver::transferCxxEpilogue(
   }
   // Model the helper's moved PC separately from the incoming parent's PC.
   // The final push overwrites the old EBP slot, below the returned ESP.
-  const auto PC = FrameValue::constant(uint32_t(Call.Caller.End));
+  const auto PC = FrameValue::imageAddress(uint32_t(Call.Caller.End));
   State.Frame.store(*SP - 4, 4, PC);
   if (Call.CookieCheck) {
-    State.Frame.store(*SP - 8, 4,
-                      FrameValue::constant(uint32_t(Call.Helper.Begin + 10)));
+    State.Frame.store(
+        *SP - 8, 4, FrameValue::imageAddress(uint32_t(Call.Helper.Begin + 10)));
     ImageReads.emplace(SecurityCookieVA, SecurityCookieVA + 4);
-    for (const auto Flag : {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF,
-                            x86reg::SF, x86reg::OF}) {
+    for (const auto &[Flag, Bit] : kX86EqualComparisonFlags) {
       // Equal four-byte operands make CMP produce 0 without borrow,
       // carry or overflow. Other flag/register provenance is unchanged.
-      State.Frame.OtherRegisterBytes[Flag] =
-          FrameValue::constant(Flag == x86reg::PF || Flag == x86reg::ZF);
+      State.Frame.OtherRegisterBytes[Flag] = FrameValue::constant(Bit);
       if (CheckRuntimeObjects)
         State.RuntimeObject.OtherRegisterBytes[Flag] = {};
     }

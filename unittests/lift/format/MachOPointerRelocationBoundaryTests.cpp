@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/decode/Decoder.h"
@@ -53,6 +54,45 @@ public:
 
 class MedLLVMProvenanceTestPeer {
 public:
+  static const MedCallClobber *callClobber(MedLLVMEmitter &Emitter,
+                                           const MedFunc &Func,
+                                           const MedVar &Value,
+                                           bool Unique = false) {
+    Emitter.CurMedFunc = &Func;
+    return Emitter.lookupCallClobber(Value, Unique);
+  }
+
+  static std::vector<const MedCallClobber *>
+  callClobbers(MedLLVMEmitter &Emitter, const MedFunc &Func, uint32_t Call) {
+    Emitter.CurMedFunc = &Func;
+    const auto Records = Emitter.clobbersAtCall(Call);
+    return {Records.begin(), Records.end()};
+  }
+
+  static const MedOp *callOperation(MedLLVMEmitter &Emitter,
+                                    const MedFunc &Func, uint32_t Call) {
+    Emitter.CurMedFunc = &Func;
+    return Emitter.lookupUniqueCallOperation(Call);
+  }
+
+  static uint64_t callClobberRecordsIndexed(const MedLLVMEmitter &Emitter) {
+    return Emitter.CallClobberRecordsIndexed;
+  }
+
+  static bool guardedScalarOffset(MedLLVMEmitter &Emitter, const MedFunc &Func,
+                                  const BinaryImage &Image,
+                                  const MedVar &Value) {
+    Emitter.CurMedFunc = &Func;
+    Emitter.TargetArch = Image.Arch;
+    Emitter.TargetFormat = Image.Format;
+    Emitter.Img = &Image;
+    return Emitter.valueIsGuardedScalarOffset(Value);
+  }
+
+  static uint64_t indexConstraintNodes(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.IndexConstraintNodes;
+  }
+
   using WorkCounts = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
   using FrameReloadWorkCounts =
       std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
@@ -255,6 +295,8 @@ public:
       Emitter.FrameDerivedCache[{1, 1}] = true;
       Emitter.FrameAddressCacheFor = Emitter.CurMedFunc;
       Emitter.FrameAddressCache[{2, 2}] = true;
+      Emitter.FrameDependencyIndexFor = Emitter.CurMedFunc;
+      Emitter.FrameDependencyComponents[{3, 3}] = 0;
       Emitter.FrameReloadCacheFor = Emitter.CurMedFunc;
       Emitter.FrameReloadCache[MedLLVMEmitter::FrameReloadCacheKey{}] = {};
 
@@ -286,6 +328,8 @@ public:
            Emitter.FrameDerivedCache.empty() &&
            Emitter.FrameAddressCacheFor == nullptr &&
            Emitter.FrameAddressCache.empty() &&
+           Emitter.FrameDependencyIndexFor == nullptr &&
+           Emitter.FrameDependencyComponents.empty() &&
            Emitter.FrameReloadCacheFor == nullptr &&
            Emitter.FrameReloadCache.empty();
   }
@@ -297,6 +341,12 @@ public:
 
   static bool runtimeOffset(MedLLVMEmitter &Emitter, const MedVar &Value) {
     return Emitter.valueIsOpaqueRuntimeOffset(Value);
+  }
+
+  static bool originalImageRuntimeOffset(MedLLVMEmitter &Emitter,
+                                         const MedVar &Value) {
+    return Emitter.valueIsOpaqueRuntimeOffset(Value,
+                                              /*AllowEscapedFrame=*/true);
   }
 
   static std::pair<uint64_t, uint64_t>
@@ -368,6 +418,30 @@ public:
   frameSlotWork(const MedLLVMEmitter &Emitter) {
     return {Emitter.AddressProvenanceWork.FrameSlotNodes,
             Emitter.AddressProvenanceWork.FrameSlotCacheHits};
+  }
+
+  static uint64_t frameSlotEvaluatedNodes(const MedLLVMEmitter &Emitter) {
+    return Emitter.AddressProvenanceWork.FrameSlotEvaluatedNodes;
+  }
+
+  static bool frameAddress(MedLLVMEmitter &Emitter, const MedFunc &Func,
+                           Arch TargetArch, const MedVar &Value) {
+    Emitter.TargetArch = TargetArch;
+    Emitter.CurMedFunc = &Func;
+    Emitter.ensureFeasibleEdgeCache();
+    return Emitter.varMayBeFrameAddress(Value);
+  }
+
+  static std::pair<bool, size_t> frameAddressWalk(MedLLVMEmitter &Emitter,
+                                                  const MedVar &Value) {
+    llvm::DenseSet<std::pair<int64_t, int>> Visited;
+    const bool Result = Emitter.frameAddressRec(Value, Visited);
+    return {Result, Visited.size()};
+  }
+
+  static bool slotReloadUsedLocally(MedLLVMEmitter &Emitter,
+                                    const MedVar &Address) {
+    return Emitter.frameSlotReloadUsedLocally(Address);
   }
 
   static uint64_t frameSlotReplays(const MedLLVMEmitter &Emitter) {
@@ -11651,6 +11725,542 @@ TEST(MachOLLVMDataPointerBoundary,
   }
 }
 
+TEST(MachOLLVMDataPointerBoundary,
+     DenseReachingStoresRetainSourcesAndInitialization) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 512u})
+      for (unsigned Poison : {0u, 1u, 2u})
+        for (bool Reset : {false, true})
+          for (bool Reverse : {false, true}) {
+            SCOPED_TRACE(static_cast<unsigned>(A));
+            SCOPED_TRACE(Count);
+            SCOPED_TRACE(Poison);
+            SCOPED_TRACE(Reset);
+            SCOPED_TRACE(Reverse);
+            const auto &TRI = getTargetRegInfo(A);
+            const uint16_t Width = TRI.PointerSize;
+            auto value = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+              MedVar V;
+              V.Kind = Kind;
+              V.TheArch = A;
+              V.Id = Id;
+              V.SSAVer = 1;
+              V.Size = Size;
+              return V;
+            };
+            MedVar SP = value(MedVar::Reg, 100, Width);
+            SP.RegOff = TRI.StackPointer;
+            const MedVar Slot = value(MedVar::Temp, 101, Width);
+            MedVar Condition = value(MedVar::Param, 0, 1);
+            Condition.RegOff = kNoParamReg;
+            const MedVar Reload = value(MedVar::Temp, 102, Width);
+            MedFunc Func;
+            Func.Entry = 0x1000;
+            Func.FrameSize = 32;
+            Func.Params = {Condition};
+            Func.Blocks.resize(2 * Count + 1);
+            for (unsigned I = 0; I < Func.Blocks.size(); ++I) {
+              Func.Blocks[I].Id = I;
+              Func.Blocks[I].StartAddr = Func.Entry + I * 16;
+              Func.Blocks[I].EndAddr = Func.Blocks[I].StartAddr + 16;
+            }
+            auto op = [&](unsigned Block, NdOp Opcode, MedVar Output,
+                          std::initializer_list<MedVar> Inputs) {
+              MedOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              for (const auto &Input : Inputs)
+                Op.addInput(Input);
+              Func.Blocks[Block].Ops.push_back(Op);
+            };
+            auto scalar = [&](uint64_t Bits) {
+              return MedVar::makeConst(Bits, Width,
+                                       ConstantAddressProvenance::Scalar);
+            };
+            op(0, NdOp::COPY, SP, {SP});
+            op(0, NdOp::INT_ADD, Slot, {SP, scalar(uint64_t(-16))});
+            std::vector<MedVar> Expected{scalar(0)};
+            if (Poison != 1)
+              op(0, NdOp::STORE, {}, {Slot, Expected.front()});
+            for (unsigned I = 0; I != Count; ++I) {
+              const unsigned Header = 2 * I, Store = Header + 1,
+                             Join = Header + 2;
+              Func.Blocks[Header].Succs = {int(Store), int(Join)};
+              Func.Blocks[Store].Preds = {int(Header)};
+              Func.Blocks[Store].Succs = {int(Join)};
+              Func.Blocks[Join].Preds = {int(Header), int(Store)};
+              op(Header, NdOp::COND_BR, {},
+                 {scalar(Func.Blocks[Store].StartAddr), Condition});
+              const auto Provenance =
+                  I % 2 ? ConstantAddressProvenance::Scalar
+                        : ConstantAddressProvenance::DataAddress;
+              MedVar Source = MedVar::makeConst(I / 2 + 1, Width, Provenance);
+              if (Poison == 2 && I == Count / 2)
+                Source.Size = Width / 2;
+              Expected.push_back(Source);
+              op(Store, NdOp::STORE, {}, {Slot, Source});
+              op(Store, NdOp::BRANCH, {},
+                 {scalar(Func.Blocks[Join].StartAddr)});
+            }
+            if (Reset) {
+              Expected = {scalar(0x777)};
+              op(2 * Count, NdOp::STORE, {}, {Slot, Expected.front()});
+            }
+            op(2 * Count, NdOp::LOAD, Reload, {Slot});
+            op(2 * Count, NdOp::RETURN, {}, {Reload});
+            if (Reverse)
+              std::reverse(Func.Blocks.begin() + 1, Func.Blocks.end());
+            const auto Exit = std::find_if(
+                Func.Blocks.begin(), Func.Blocks.end(),
+                [&](const MedBlock &B) { return B.Id == int(2 * Count); });
+            ASSERT_NE(Exit, Func.Blocks.end());
+            MedLLVMEmitter Emitter;
+            std::vector<MedVar> Sources;
+            EXPECT_EQ(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                          Emitter, Func, A, Exit->Ops[Reset ? 1 : 0], Sources),
+                      Poison == 0 || Reset);
+            const auto [Nodes, Hits] =
+                MedLLVMProvenanceTestPeer::frameSlotWork(Emitter);
+            EXPECT_LE(Nodes + Hits, 16u * (Count + 1));
+            if (Poison != 0 && !Reset) {
+              EXPECT_TRUE(Sources.empty());
+              continue;
+            }
+            ASSERT_EQ(Sources.size(), Expected.size());
+            for (const MedVar &Source : Expected)
+              EXPECT_NE(std::find(Sources.begin(), Sources.end(), Source),
+                        Sources.end());
+            std::vector<MedVar> Repeated;
+            ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                Emitter, Func, A, Exit->Ops[Reset ? 1 : 0], Repeated));
+            EXPECT_EQ(Repeated, Sources);
+          }
+}
+
+TEST(MachOLLVMDataPointerBoundary, ReloadSourcesIgnoreNonReturningSuffixes) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 512u})
+      for (unsigned Backedge : {0u, 1u, 2u})
+        for (bool Partial : {false, true})
+          for (bool Reverse : {false, true}) {
+            SCOPED_TRACE(unsigned(A));
+            SCOPED_TRACE(Count);
+            SCOPED_TRACE(Backedge);
+            SCOPED_TRACE(Partial);
+            SCOPED_TRACE(Reverse);
+            const auto &TRI = getTargetRegInfo(A);
+            const uint16_t Width = TRI.PointerSize;
+            auto value = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+              MedVar V;
+              V.Kind = Kind;
+              V.TheArch = A;
+              V.Id = Id;
+              V.SSAVer = 1;
+              V.Size = Size;
+              return V;
+            };
+            auto scalar = [&](uint64_t Bits) {
+              return MedVar::makeConst(Bits, Width,
+                                       ConstantAddressProvenance::Scalar);
+            };
+            MedVar SP = value(MedVar::Reg, 100, Width);
+            SP.RegOff = TRI.StackPointer;
+            const MedVar Slot = value(MedVar::Temp, 101, Width);
+            const MedVar Reload = value(MedVar::Temp, 102, Width);
+            MedFunc F;
+            F.Entry = 0x1000;
+            F.FrameSize = 32;
+            F.Blocks.resize(Count + 2);
+            for (unsigned I = 0; I < F.Blocks.size(); ++I) {
+              auto &B = F.Blocks[I];
+              B.Id = I;
+              B.StartAddr = F.Entry + 16 * I;
+              B.EndAddr = B.StartAddr + 16;
+              if (I + 1 < F.Blocks.size())
+                B.Succs = {int(I + 1)};
+              if (I)
+                B.Preds = {int(I - 1)};
+            }
+            auto op = [&](unsigned B, NdOp Code, MedVar Out,
+                          std::initializer_list<MedVar> Ins) {
+              MedOp O;
+              O.Opcode = Code;
+              O.Output = Out;
+              for (auto &I : Ins)
+                O.addInput(I);
+              F.Blocks[B].Ops.push_back(O);
+            };
+            op(0, NdOp::COPY, SP, {SP});
+            op(0, NdOp::INT_ADD, Slot, {SP, scalar(uint64_t(-16))});
+            op(0, NdOp::STORE, {}, {Slot, scalar(0x11)});
+            op(0, NdOp::BRANCH, {}, {scalar(F.Blocks[1].StartAddr)});
+            op(1, NdOp::LOAD, Reload, {Slot});
+            op(1, NdOp::BRANCH, {}, {scalar(F.Blocks[2].StartAddr)});
+            MedVar Stored = scalar(0x22);
+            if (Partial)
+              Stored.Size = Width / 2;
+            for (unsigned I = 2; I < F.Blocks.size(); ++I) {
+              op(I, NdOp::STORE, {}, {Slot, Stored});
+              if (I + 1 < F.Blocks.size())
+                op(I, NdOp::BRANCH, {}, {scalar(F.Blocks[I + 1].StartAddr)});
+            }
+            if (Backedge == 1) {
+              F.Blocks.back().Succs = {1};
+              F.Blocks[1].Preds.push_back(F.Blocks.back().Id);
+              op(Count + 1, NdOp::BRANCH, {}, {scalar(F.Blocks[1].StartAddr)});
+            } else if (Backedge == 2) {
+              F.Blocks.back().ExceptionalSuccs.push_back(
+                  {1, F.Blocks[1].StartAddr});
+              F.Blocks[1].ExceptionalPreds.push_back(
+                  {F.Blocks.back().Id, F.Blocks.back().StartAddr});
+              op(Count + 1, NdOp::RETURN, {}, {});
+            } else
+              op(Count + 1, NdOp::RETURN, {}, {});
+            if (Reverse)
+              std::reverse(F.Blocks.begin(), F.Blocks.end());
+            const auto Site =
+                std::find_if(F.Blocks.begin(), F.Blocks.end(),
+                             [](const MedBlock &B) { return B.Id == 1; });
+            ASSERT_NE(Site, F.Blocks.end());
+            MedLLVMEmitter E;
+            std::vector<MedVar> Sources;
+            const bool Proven =
+                MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                    E, F, A, Site->Ops[0], Sources);
+            EXPECT_EQ(Proven, !Backedge || !Partial);
+            const auto [N, H] = MedLLVMProvenanceTestPeer::frameSlotWork(E);
+            if (!Backedge)
+              EXPECT_LE(N + H, 32u);
+            if (!Proven) {
+              EXPECT_TRUE(Sources.empty());
+              continue;
+            }
+            ASSERT_EQ(Sources.size(), Backedge ? 2u : 1u);
+            EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(0x11)),
+                      Sources.end());
+            if (Backedge)
+              EXPECT_NE(std::find(Sources.begin(), Sources.end(), Stored),
+                        Sources.end());
+          }
+}
+
+TEST(MachOLLVMDataPointerBoundary, LocalOverwriteCutsOffReachingStoreHistory) {
+  enum class Scenario {
+    Full,
+    Partial,
+    UnknownAfter,
+    UnknownBefore,
+    DisjointAfter,
+    AtomicAfter,
+    Unreachable,
+    Loop
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (const auto &[Count, Suffix] :
+         {std::pair{32u, 0u}, std::pair{32u, 1u}, std::pair{32u, 8u},
+          std::pair{512u, 0u}, std::pair{512u, 1u}, std::pair{512u, 8u}})
+      for (bool Reverse : {false, true})
+        for (Scenario Case :
+             {Scenario::Full, Scenario::Partial, Scenario::UnknownAfter,
+              Scenario::UnknownBefore, Scenario::DisjointAfter,
+              Scenario::AtomicAfter, Scenario::Unreachable, Scenario::Loop}) {
+          SCOPED_TRACE(unsigned(A));
+          SCOPED_TRACE(Count);
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(Suffix);
+          SCOPED_TRACE(unsigned(Case));
+          const auto &TRI = getTargetRegInfo(A);
+          const uint16_t Width = TRI.PointerSize;
+          auto value = [&](MedVar::VarKind Kind, int Id) {
+            MedVar V;
+            V.Kind = Kind;
+            V.TheArch = A;
+            V.Id = Id;
+            V.SSAVer = 1;
+            V.Size = Width;
+            V.RegOff = kNoParamReg;
+            return V;
+          };
+          auto scalar = [&](uint64_t Bits) {
+            return MedVar::makeConst(Bits, Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          MedVar SP = value(MedVar::Reg, 100);
+          SP.RegOff = TRI.StackPointer;
+          const MedVar Slot = value(MedVar::Temp, 101);
+          const MedVar Other = value(MedVar::Temp, 102);
+          const MedVar Dynamic = value(MedVar::Temp, 103);
+          const MedVar Reload = value(MedVar::Temp, 104);
+          MedFunc F;
+          F.Entry = 0x1000;
+          F.FrameSize = 64;
+          F.Params = {value(MedVar::Param, 0)};
+          const unsigned LoadBlock = Count + Suffix;
+          F.Blocks.resize(LoadBlock + 1);
+          for (unsigned I = 0; I < F.Blocks.size(); ++I) {
+            auto &B = F.Blocks[I];
+            B.Id = I;
+            B.StartAddr = F.Entry + 64 * I;
+            B.EndAddr = B.StartAddr + 64;
+            if (I)
+              B.Preds = {int(I - 1)};
+            if (I < LoadBlock)
+              B.Succs = {int(I + 1)};
+          }
+          auto append = [&](unsigned B, NdOp Code, MedVar Out,
+                            std::initializer_list<MedVar> Ins) {
+            MedOp Op;
+            Op.Opcode = Code;
+            Op.Output = Out;
+            Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+            for (const auto &I : Ins)
+              Op.addInput(I);
+            F.Blocks[B].Ops.push_back(Op);
+          };
+          append(0, NdOp::COPY, SP, {SP});
+          append(0, NdOp::INT_ADD, Slot, {SP, scalar(uint64_t(-16))});
+          append(0, NdOp::INT_ADD, Other, {SP, scalar(uint64_t(-32))});
+          append(0, NdOp::INT_ADD, Dynamic, {SP, F.Params[0]});
+          for (unsigned I = 0; I < Count; ++I) {
+            append(I, NdOp::STORE, {}, {Slot, scalar(I)});
+            append(I, NdOp::BRANCH, {}, {scalar(F.Blocks[I + 1].StartAddr)});
+          }
+          if (Case == Scenario::UnknownBefore)
+            append(Count, NdOp::STORE, {}, {Dynamic, scalar(0x44)});
+          MedVar Stored = scalar(0x33);
+          if (Case == Scenario::Partial)
+            Stored.Size = Width / 2;
+          append(Count, NdOp::STORE, {}, {Slot, Stored});
+          if (Case == Scenario::UnknownAfter)
+            append(Count, NdOp::STORE, {}, {Dynamic, scalar(0x44)});
+          if (Case == Scenario::DisjointAfter)
+            append(Count, NdOp::STORE, {}, {Other, scalar(0x55)});
+          if (Case == Scenario::AtomicAfter)
+            append(Count, NdOp::ATOMIC_XCHG, value(MedVar::Temp, 105),
+                   {Slot, scalar(0x66)});
+          for (unsigned I = Count; I < LoadBlock; ++I) {
+            append(I, NdOp::BRANCH, {}, {scalar(F.Blocks[I + 1].StartAddr)});
+            // The suffix can write another slot while preserving this one.
+            append(I + 1, NdOp::STORE, {}, {Other, scalar(0x77)});
+          }
+          const size_t LoadIndex = F.Blocks[LoadBlock].Ops.size();
+          append(LoadBlock, NdOp::LOAD, Reload, {Slot});
+          if (Case == Scenario::Loop) {
+            F.Blocks[LoadBlock].Succs = {1};
+            F.Blocks[1].Preds.push_back(LoadBlock);
+            append(LoadBlock, NdOp::BRANCH, {},
+                   {scalar(F.Blocks[1].StartAddr)});
+          } else {
+            append(LoadBlock, NdOp::RETURN, {}, {Reload});
+          }
+          if (Case == Scenario::Unreachable) {
+            F.Blocks[Count - 1].Succs.clear();
+            F.Blocks[Count - 1].Ops.pop_back();
+            append(Count - 1, NdOp::RETURN, {}, {});
+            F.Blocks[Count].Preds.clear();
+          }
+          if (Reverse)
+            std::reverse(F.Blocks.begin(), F.Blocks.end());
+          const auto Site = std::find_if(
+              F.Blocks.begin(), F.Blocks.end(),
+              [&](const MedBlock &B) { return B.Id == int(LoadBlock); });
+          ASSERT_NE(Site, F.Blocks.end());
+          MedLLVMEmitter E;
+          std::vector<MedVar> Sources;
+          const bool Expected =
+              Case == Scenario::Full || Case == Scenario::UnknownBefore ||
+              Case == Scenario::DisjointAfter || Case == Scenario::Loop;
+          const bool Proven =
+              MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                  E, F, A, Site->Ops[LoadIndex], Sources);
+          EXPECT_EQ(Proven, Expected);
+          EXPECT_EQ(Sources, Expected ? std::vector<MedVar>{Stored}
+                                      : std::vector<MedVar>{});
+          if (Case == Scenario::Full || Case == Scenario::DisjointAfter ||
+              Case == Scenario::Loop || Case == Scenario::Partial ||
+              Case == Scenario::UnknownAfter || Case == Scenario::AtomicAfter) {
+            const auto [Nodes, Hits] =
+                MedLLVMProvenanceTestPeer::frameSlotWork(E);
+            EXPECT_LE(Nodes + Hits, 48u);
+          }
+        }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     UniquePredecessorWalkRetainsEntryHomesAndBackedges) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Backedge : {false, true})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(unsigned(A));
+        SCOPED_TRACE(Backedge);
+        SCOPED_TRACE(Reverse);
+        MedFunc F = makeIncomingParameterHomeReload(A);
+        const MedOp Load = F.Blocks.front().Ops[2];
+        const MedVar Slot = Load.Inputs[0];
+        const uint16_t Width = getTargetRegInfo(A).PointerSize;
+        auto scalar = [&](uint64_t V) {
+          return MedVar::makeConst(V, Width, ConstantAddressProvenance::Scalar);
+        };
+        F.Blocks.front().Ops.resize(2);
+        F.Blocks.resize(4);
+        for (int I = 1; I < 4; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = F.Entry + 16 * I;
+          F.Blocks[I].EndAddr = F.Blocks[I].StartAddr + 16;
+        }
+        auto append = [&](unsigned B, NdOp Code,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Code;
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[B].Ops.push_back(std::move(Op));
+        };
+        F.Blocks[0].Succs = {1};
+        F.Blocks[1].Preds = {0};
+        append(0, NdOp::BRANCH, {scalar(F.Blocks[1].StartAddr)});
+        F.Blocks[1].Ops.push_back(Load);
+        if (Backedge) {
+          // Entry has a predecessor, but its implicit home is also an input.
+          // Following that predecessor alone would lose the first iteration.
+          F.Blocks[0].Preds = {2};
+          F.Blocks[1].Succs = {2, 3};
+          F.Blocks[2].Preds = F.Blocks[3].Preds = {1};
+          F.Blocks[2].Succs = {0};
+          append(1, NdOp::COND_BR,
+                 {scalar(F.Blocks[2].StartAddr), F.Params[1]});
+          append(2, NdOp::STORE, {Slot, scalar(42)});
+          append(2, NdOp::BRANCH, {scalar(F.Blocks[0].StartAddr)});
+        } else {
+          F.Blocks[1].Succs = {3};
+          F.Blocks[3].Preds = {1};
+          append(1, NdOp::BRANCH, {scalar(F.Blocks[3].StartAddr)});
+          append(2, NdOp::RETURN, {});
+        }
+        append(3, NdOp::RETURN, {Load.Output});
+        if (Reverse)
+          std::reverse(F.Blocks.begin(), F.Blocks.end());
+        const auto Site =
+            std::find_if(F.Blocks.begin(), F.Blocks.end(),
+                         [](const MedBlock &B) { return B.Id == 1; });
+        ASSERT_NE(Site, F.Blocks.end());
+        MedLLVMEmitter E;
+        std::vector<MedVar> Sources;
+        ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+            E, F, A, Site->Ops.front(), Sources));
+        ASSERT_EQ(Sources.size(), Backedge ? 2u : 1u);
+        EXPECT_NE(std::find(Sources.begin(), Sources.end(), F.Params[0]),
+                  Sources.end());
+        if (Backedge)
+          EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(42)),
+                    Sources.end());
+      }
+}
+
+TEST(LLVMFrameSlotProof, CompletedFrameAddressWalksRetainClosedDependencies) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 1024u})
+      for (bool Rooted : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Rooted);
+        const auto &TRI = getTargetRegInfo(A);
+        auto value = [&](int Id) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.TheArch = A;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = TRI.PointerSize;
+          return V;
+        };
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(1);
+        F.Blocks.front().Id = 0;
+        F.Blocks.front().StartAddr = F.Entry;
+        MedVar Root = value(1);
+        Root.Kind = Rooted ? MedVar::Reg : MedVar::Param;
+        Root.RegOff = Rooted ? TRI.StackPointer : kNoParamReg;
+        MedVar Previous = Root;
+        std::vector<MedVar> Values;
+        for (unsigned I = 0; I < Count; ++I) {
+          MedVar V = value(I + 2);
+          MedOp Copy;
+          Copy.Opcode = NdOp::COPY;
+          Copy.Output = V;
+          Copy.addInput(Previous);
+          F.Blocks.front().Ops.push_back(Copy);
+          Values.push_back(V);
+          Previous = V;
+        }
+        MedLLVMEmitter Emitter;
+        ASSERT_EQ(
+            MedLLVMProvenanceTestPeer::frameAddress(Emitter, F, A, Previous),
+            Rooted);
+        size_t Visits = 0;
+        for (const MedVar &V : Values) {
+          const auto [Result, Nodes] =
+              MedLLVMProvenanceTestPeer::frameAddressWalk(Emitter, V);
+          EXPECT_EQ(Result, Rooted);
+          Visits += Nodes;
+        }
+        EXPECT_LE(Visits, 4u * Count);
+        MedLLVMProvenanceTestPeer::invalidateFeasibleEdgeDependentCaches(
+            Emitter);
+        const auto [Result, Nodes] =
+            MedLLVMProvenanceTestPeer::frameAddressWalk(Emitter, Previous);
+        EXPECT_EQ(Result, Rooted);
+        EXPECT_GE(Nodes, Count);
+      }
+
+  // A nested DFS cutoff is not a closed failure: B -> A can reach the root
+  // through A's second operand after the active A -> B edge has been cut.
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Rooted : {false, true})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(Rooted);
+        SCOPED_TRACE(Reverse);
+        const auto &TRI = getTargetRegInfo(A);
+        auto value = [&](int Id) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.TheArch = A;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = TRI.PointerSize;
+          return V;
+        };
+        MedFunc F;
+        F.Entry = 0x1000;
+        F.Blocks.resize(1);
+        F.Blocks.front().Id = 0;
+        F.Blocks.front().StartAddr = F.Entry;
+        MedVar Root = value(10);
+        Root.Kind = Rooted ? MedVar::Reg : MedVar::Param;
+        Root.RegOff = Rooted ? TRI.StackPointer : kNoParamReg;
+        const MedVar X = value(11), Y = value(12);
+        MedOp Add;
+        Add.Opcode = NdOp::INT_ADD;
+        Add.Output = X;
+        Add.addInput(Y);
+        Add.addInput(Root);
+        MedOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Output = Y;
+        Copy.addInput(X);
+        F.Blocks.front().Ops = {Add, Copy};
+        MedLLVMEmitter Emitter;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::frameAddress(Emitter, F, A,
+                                                          Reverse ? Y : X),
+                  Rooted);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::frameAddress(Emitter, F, A,
+                                                          Reverse ? X : Y),
+                  Rooted);
+      }
+}
+
 TEST(MachOLLVMDataPointerBoundary, ReusesPositiveAndNegativeFrameReloadProofs) {
   constexpr uint64_t QueryCount = 64;
   auto findReload = [](const MedFunc &Func) -> const MedOp * {
@@ -15308,6 +15918,74 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     FatalPointerResolutionStopsLaterEmissionAndAllowsReuse) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr uint64_t MissingTarget = 0xfffffffffffffff0ULL;
+  for (Arch TargetArch : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool CodeSlot : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << static_cast<int>(TargetArch) << "/"
+                     << static_cast<int>(Format) << "/" << CodeSlot);
+        BinaryImage Image = makeMixedPointerRecordImage(TargetArch, Format);
+        Image.CodePtrRelocSlots.clear();
+        Image.DataPtrRelocSlots.clear();
+        (CodeSlot ? Image.CodePtrRelocSlots : Image.DataPtrRelocSlots)
+            .insert(DataVA + SlotOffset);
+        writeObject(Image.Segments[1].Data, SlotOffset, MissingTarget);
+        MedFunc Caller =
+            makeExactMixedPointerSlotIndirectCaller(TargetArch, SlotOffset);
+        auto &Ops = Caller.Blocks.front().Ops;
+        Ops.erase(Ops.begin() + 2); // Only read the pointer; never call data.
+        for (MedOp &Op : Ops)
+          Op.OriginSeq = 0;
+        MedFunc Later = makeReturnFunction("later_pointer_owner", CodeVA);
+        Later.Blocks.front().Ops.front().OriginSeq = 0;
+
+        LLVMSourceMap FailedSource;
+        MedLLVMEmitter Emitter;
+        Emitter.setSourceMap(&FailedSource);
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Failed =
+            Emitter.emit({Caller, Later}, Context, "fatal-pointer-stops-work",
+                         TargetArch, {}, &Image, Format);
+        const std::string Diagnostic = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(Failed, nullptr);
+        EXPECT_NE(Diagnostic.find(CodeSlot ? "relocation-proven code pointer"
+                                           : "relocation-proven data pointer"),
+                  std::string::npos)
+            << Diagnostic;
+        EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                  std::string::npos)
+            << Diagnostic;
+        // The LOAD requests this mirror. A doomed module must not lower the
+        // following RETURN or any later function body. Source handles for
+        // the failed operation itself become null when the module is dropped.
+        EXPECT_TRUE(FailedSource.Functions.count(CallerVA));
+        EXPECT_FALSE(FailedSource.Functions.count(CodeVA));
+        ASSERT_EQ(FailedSource.Observations.size(), 1u);
+        EXPECT_EQ(FailedSource.Observations.front().Occurrence.Address,
+                  CallerVA + 4);
+        EXPECT_EQ(FailedSource.Observations.front().Value, nullptr);
+
+        writeObject(Image.Segments[1].Data, SlotOffset,
+                    CodeSlot ? CodeVA : CStringVA);
+        LLVMSourceMap ReusedSource;
+        Emitter.setSourceMap(&ReusedSource);
+        auto Reused =
+            Emitter.emit({Caller, Later}, Context, "reuse-after-fatal-pointer",
+                         TargetArch, {}, &Image, Format);
+        ASSERT_NE(Reused, nullptr);
+        expectValidModule(*Reused);
+        EXPECT_TRUE(ReusedSource.Functions.count(CallerVA));
+        EXPECT_TRUE(ReusedSource.Functions.count(CodeVA));
+        EXPECT_EQ(ReusedSource.Observations.size(), 3u);
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      MixedPointerTableImportLaneRemainsCallable) {
   BinaryImage Image = makeMixedPointerRecordImage(Arch::AArch64);
   Image.CodePtrRelocSlots.clear();
@@ -15999,6 +16677,297 @@ TEST(LLVMDataPointerInvariantBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
+     OriginalImageDisplacementsKeepEscapedFrameReadsLive) {
+  enum class Case {
+    Initialized,
+    RuntimeWrite,
+    PointerWrite,
+    PartialRuntimeWrite,
+    PartialPointerWrite,
+    MissingStore,
+    PartialStore,
+    LaterStore,
+    PointerInitializer,
+    RawBase,
+    NarrowBase,
+    RuntimeLoop,
+    UninitializedLoop,
+    PointerLoop,
+    CallableLoad,
+    SpilledPointer,
+    WidenedSpilledPointer,
+    WidenedGlobalSource,
+    InternalContinuation
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (bool OriginalStorage : {false, true})
+        for (Case C :
+             {Case::Initialized, Case::RuntimeWrite, Case::PointerWrite,
+              Case::PartialRuntimeWrite, Case::PartialPointerWrite,
+              Case::MissingStore, Case::PartialStore, Case::LaterStore,
+              Case::PointerInitializer, Case::RawBase, Case::NarrowBase,
+              Case::RuntimeLoop, Case::UninitializedLoop, Case::PointerLoop,
+              Case::CallableLoad, Case::SpilledPointer,
+              Case::WidenedSpilledPointer, Case::WidenedGlobalSource,
+              Case::InternalContinuation}) {
+          SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                       formatTraceName(Format) + "/" +
+                       std::to_string(OriginalStorage) + "/" +
+                       std::to_string(static_cast<int>(C)));
+          const uint16_t Width = getTargetRegInfo(A).PointerSize;
+          BinaryImage Image =
+              makeSpilledConstTableImage(A, Format, /*PointerTable=*/true);
+          Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+          // Every fixture address must fit the architecture's pointer width.
+          // The common image uses high 64-bit VAs; rebase its pointer payloads
+          // and metadata together for the 32-bit cases.
+          const va_t Delta = Width == 4 ? TextVA - 0x400000 : 0;
+          const va_t TableVA = SpilledConstTableVA - Delta;
+          if (Delta) {
+            Image.Base -= Delta;
+            for (auto &Segment : Image.Segments) {
+              for (va_t SlotVA : Image.DataPtrRelocSlots)
+                if (Segment.contains(SlotVA)) {
+                  const size_t Offset = SlotVA - Segment.VA;
+                  uint64_t Target = 0;
+                  std::memcpy(&Target, Segment.Data.data() + Offset,
+                              sizeof(Target));
+                  writeObject(Segment.Data, Offset, Target - Delta);
+                }
+              Segment.VA -= Delta;
+            }
+            for (auto &Section : Image.Sections)
+              Section.VA -= Delta;
+            for (auto &Symbol : Image.Symbols)
+              Symbol.Addr -= Delta;
+            const auto Slots = Image.DataPtrRelocSlots;
+            Image.DataPtrRelocSlots.clear();
+            for (va_t SlotVA : Slots)
+              Image.DataPtrRelocSlots.insert(SlotVA - Delta);
+            const auto Targets = Image.RelocDataAddrs;
+            Image.RelocDataAddrs.clear();
+            for (va_t TargetVA : Targets)
+              Image.RelocDataAddrs.insert(TargetVA - Delta);
+          }
+          if (OriginalStorage) {
+            const va_t Slot = TableVA + 0x10;
+            Image.RuntimeCallablePointerSlots.push_back({Slot});
+          }
+          constexpr va_t GlobalVA = 0x700000;
+          if (C == Case::WidenedGlobalSource) {
+            Segment Global;
+            Global.Name = ".data";
+            Global.VA = GlobalVA;
+            Global.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+            Global.Size = Global.FileSz = 64;
+            Global.Data.resize(Global.Size);
+            Image.Segments.push_back(std::move(Global));
+          }
+          MedFunc F;
+          F.Name = "escaped_runtime_displacement";
+          F.Entry = CallerVA - Delta;
+          F.FrameSize = 32;
+          F.ReturnType = NdType::makeInt(Width);
+          MedBlock B;
+          B.Id = 0;
+          B.StartAddr = F.Entry;
+          B.EndAddr = F.Entry + 0x100;
+          int Next = 0;
+          auto temp = [&](uint16_t Size = 0) {
+            MedVar V;
+            V.Kind = MedVar::Temp;
+            V.Id = Next++;
+            V.SSAVer = 1;
+            V.TheArch = A;
+            V.Size = Size ? Size : Width;
+            return V;
+          };
+          auto number = [&](uint64_t N) {
+            return MedVar::makeConst(N, Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          auto address = [&] {
+            return MedVar::makeConst(TableVA, Width,
+                                     ConstantAddressProvenance::DataAddress);
+          };
+          auto append = [&](NdOp Opcode, MedVar Out,
+                            std::initializer_list<MedVar> Inputs) {
+            MedOp Op;
+            Op.Opcode = Opcode;
+            Op.Output = Out;
+            Op.Addr = B.StartAddr + B.Ops.size();
+            for (const auto &V : Inputs)
+              Op.addInput(V);
+            B.Ops.push_back(Op);
+          };
+          MedVar Input = temp(), SP = temp(), Slot = temp(), Reload = temp();
+          Input.Kind = MedVar::Param;
+          SP.Kind = MedVar::Reg;
+          SP.RegOff = getTargetRegInfo(A).StackPointer;
+          SP.SSAVer = 0;
+          F.Params = {Input};
+          append(NdOp::INT_ADD, Slot, {SP, number(uint64_t(-16))});
+          if (C != Case::MissingStore && C != Case::LaterStore &&
+              C != Case::UninitializedLoop) {
+            MedVar Initial =
+                C == Case::PointerInitializer || C == Case::PointerLoop
+                    ? address()
+                    : number(0);
+            if (C == Case::WidenedGlobalSource) {
+              MedVar GlobalAddress = temp(8), Object = temp(), Field = temp();
+              append(
+                  NdOp::INT_ZEXT, GlobalAddress,
+                  {MedVar::makeConst(GlobalVA, Width,
+                                     ConstantAddressProvenance::DataAddress)});
+              append(NdOp::LOAD, Object, {GlobalAddress});
+              append(NdOp::INT_ADD, Field, {Object, number(8)});
+              Initial = temp();
+              append(NdOp::LOAD, Initial, {Field});
+            }
+            if (C == Case::PartialStore)
+              Initial.Size = Width / 2;
+            append(NdOp::STORE, {}, {Slot, Initial});
+          }
+          // The runtime owner receives the address. Even a full initializer
+          // cannot authorize recovering an exact value after this escape.
+          MedCallInfo Call;
+          Call.BlockId = B.Id;
+          Call.OpIdx = B.Ops.size();
+          Call.TargetAddr = 0x1100;
+          Call.TargetName = "capture_frame_word";
+          Call.Args = {Slot};
+          F.CallInfos.push_back(Call);
+          append(NdOp::CALL, {}, {number(Call.TargetAddr)});
+          if (C == Case::RuntimeWrite || C == Case::PointerWrite ||
+              C == Case::PartialRuntimeWrite ||
+              C == Case::PartialPointerWrite) {
+            MedVar Written =
+                C == Case::PointerWrite || C == Case::PartialPointerWrite
+                    ? address()
+                    : number(Width);
+            if (C == Case::PartialRuntimeWrite ||
+                C == Case::PartialPointerWrite) {
+              MedVar Fragment = temp(Width / 2);
+              append(NdOp::SUBBYTES, Fragment, {Written, number(0)});
+              Written = Fragment;
+            }
+            append(NdOp::STORE, {}, {Input, Written});
+          }
+          if (C == Case::RuntimeLoop || C == Case::UninitializedLoop ||
+              C == Case::PointerLoop) {
+            append(NdOp::BRANCH, {}, {number(F.Entry + 0x40)});
+            B.Succs = {1};
+            B.EndAddr = F.Entry + 0x40;
+            F.Blocks.push_back(std::move(B));
+            B = {};
+            B.Id = 1;
+            B.StartAddr = F.Entry + 0x40;
+            B.EndAddr = F.Entry + 0x80;
+            B.Preds = {0, 1};
+            B.Succs = {1, 2};
+            MedVar Previous = temp(), NextValue = temp();
+            append(NdOp::LOAD, Previous, {Slot});
+            append(NdOp::INT_ADD, NextValue, {Previous, number(Width)});
+            append(NdOp::STORE, {}, {Slot, NextValue});
+            append(NdOp::COND_BR, {}, {number(B.StartAddr), Input});
+            F.Blocks.push_back(std::move(B));
+            B = {};
+            B.Id = 2;
+            B.StartAddr = F.Entry + 0x80;
+            B.EndAddr = F.Entry + 0xc0;
+            B.Preds = {1};
+          }
+          append(NdOp::LOAD, Reload, {Slot});
+          if (C == Case::LaterStore)
+            append(NdOp::STORE, {}, {Slot, number(0)});
+          MedVar Base = address();
+          if (C == Case::RawBase)
+            Base.Provenance = ConstantAddressProvenance::Address;
+          if (C == Case::NarrowBase) {
+            MedVar Byte = temp(1), Wide = temp();
+            append(NdOp::SUBBYTES, Byte, {Base, number(0)});
+            append(NdOp::INT_ZEXT, Wide, {Byte});
+            Base = Wide;
+          }
+          MedVar Selected = temp(), Pointer = temp(), Result = temp();
+          append(NdOp::INT_ADD, Pointer, {Base, Reload});
+          append(NdOp::SELECT, Selected, {Input, Pointer, Base});
+          if (C == Case::SpilledPointer || C == Case::WidenedSpilledPointer ||
+              C == Case::WidenedGlobalSource) {
+            MedVar PointerSlot = temp(), Saved = temp();
+            append(NdOp::INT_ADD, PointerSlot, {SP, number(uint64_t(-24))});
+            if (C == Case::WidenedSpilledPointer && Width == 4) {
+              MedVar Wide = temp(8), Narrow = temp();
+              append(NdOp::INT_ZEXT, Wide, {Selected});
+              append(NdOp::SUBBYTES, Narrow, {Wide, number(0)});
+              Selected = Narrow;
+            }
+            append(NdOp::STORE, {}, {PointerSlot, Selected});
+            append(NdOp::LOAD, Saved, {PointerSlot});
+            Selected = Saved;
+            if (C == Case::WidenedSpilledPointer && Width == 4) {
+              MedVar Wide = temp(8);
+              append(NdOp::INT_ZEXT, Wide, {Selected});
+              Selected = Wide;
+            }
+          }
+          append(NdOp::LOAD, Result, {Selected});
+          if (C == Case::CallableLoad)
+            append(NdOp::INDIR_CALL, {}, {Result});
+          append(NdOp::RETURN, {}, {Result});
+          F.Blocks.push_back(std::move(B));
+          if (C == Case::InternalContinuation) {
+            const ExceptionalEdge Edge{
+                0, F.Entry, ExceptionalEdgeKind::CxxCatch, 0, 0, F.Entry + 2};
+            F.Blocks.front().ExceptionalSuccs = {Edge};
+            F.Blocks.front().ExceptionalPreds = {Edge};
+          }
+          MedLLVMEmitter Classifier;
+          MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Classifier, F, Image,
+                                                          A, Format);
+          EXPECT_FALSE(
+              MedLLVMProvenanceTestPeer::runtimeOffset(Classifier, Reload));
+          EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+              Classifier, Reload, nullptr));
+          EXPECT_FALSE(
+              MedLLVMProvenanceTestPeer::pointerTableLoadIsCallableOnly(
+                  Classifier, Result));
+          const bool RuntimeSource =
+              C == Case::Initialized || C == Case::RuntimeWrite ||
+              C == Case::PartialRuntimeWrite || C == Case::RawBase ||
+              C == Case::NarrowBase || C == Case::RuntimeLoop ||
+              C == Case::CallableLoad || C == Case::SpilledPointer ||
+              C == Case::WidenedSpilledPointer ||
+              C == Case::WidenedGlobalSource;
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::originalImageRuntimeOffset(
+                        Classifier, Reload),
+                    RuntimeSource);
+          // Runtime-source memoization cannot grant exact or bounded recovery.
+          EXPECT_FALSE(
+              MedLLVMProvenanceTestPeer::runtimeOffset(Classifier, Reload));
+          EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+              Classifier, Reload, nullptr));
+          llvm::LLVMContext Context;
+          testing::internal::CaptureStderr();
+          auto Module = MedLLVMEmitter().emit(
+              {F}, Context, "escaped-displacement", A,
+              {{0x1100, "capture_frame_word"}}, &Image, Format);
+          const auto Diagnostic = testing::internal::GetCapturedStderr();
+          const bool Expected =
+              OriginalStorage &&
+              (C == Case::Initialized || C == Case::RuntimeWrite ||
+               C == Case::PartialRuntimeWrite || C == Case::RuntimeLoop ||
+               C == Case::SpilledPointer || C == Case::WidenedSpilledPointer ||
+               C == Case::WidenedGlobalSource);
+          EXPECT_EQ(Module != nullptr, Expected) << Diagnostic;
+          if (Module)
+            expectValidModule(*Module);
+        }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
      RuntimeOffsetSourcesRequireCompleteMemoryAndMergeProofs) {
   enum class Case {
     Single,
@@ -16180,6 +17149,9 @@ TEST(LLVMDataPointerInvariantBoundary,
         if (C != Case::SegmentLoad)
           EXPECT_FALSE(
               MedLLVMProvenanceTestPeer::stableOffset(Proof, Scaled, nullptr));
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::originalImageRuntimeOffset(Proof,
+                                                                        Scaled),
+                  Expected);
         // Reusing the source proof must not change its result after the
         // ordinary scalar analysis has populated its own caches.
         EXPECT_EQ(MedLLVMProvenanceTestPeer::runtimeOffset(Proof, Scaled),
@@ -16192,6 +17164,18 @@ TEST(LLVMDataPointerInvariantBoundary,
   enum class Case {
     Direct,
     Nested,
+    WidenedAddress,
+    RoundTripAddress,
+    NarrowedAddress,
+    SignedAddress,
+    ShiftedAddress,
+    ScalarAddress,
+    FragmentAddress,
+    CodeAddress,
+    WrappedForeignOwner,
+    ExtraCopyInput,
+    ExtraExtensionInput,
+    ExtraSliceInput,
     ZeroFilled,
     Nonzero,
     ReadOnly,
@@ -16218,6 +17202,18 @@ TEST(LLVMDataPointerInvariantBoundary,
          {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
       for (Case C : {Case::Direct,
                      Case::Nested,
+                     Case::WidenedAddress,
+                     Case::RoundTripAddress,
+                     Case::NarrowedAddress,
+                     Case::SignedAddress,
+                     Case::ShiftedAddress,
+                     Case::ScalarAddress,
+                     Case::FragmentAddress,
+                     Case::CodeAddress,
+                     Case::WrappedForeignOwner,
+                     Case::ExtraCopyInput,
+                     Case::ExtraExtensionInput,
+                     Case::ExtraSliceInput,
                      Case::ZeroFilled,
                      Case::Nonzero,
                      Case::ReadOnly,
@@ -16247,8 +17243,9 @@ TEST(LLVMDataPointerInvariantBoundary,
                      formatTraceName(Format) + "/" +
                      std::to_string(static_cast<int>(C)));
         const uint16_t Width = getTargetRegInfo(A).PointerSize;
-        constexpr va_t GlobalVA = SpilledConstTableVA + 0x1000;
-        constexpr va_t SlotVA = GlobalVA + 16;
+        const va_t GlobalVA =
+            Width == 4 ? 0x500000 : SpilledConstTableVA + 0x1000;
+        const va_t SlotVA = GlobalVA + 16;
         BinaryImage Image =
             makeSpilledConstTableImage(A, Format, /*PointerTable=*/true);
         Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
@@ -16338,11 +17335,50 @@ TEST(LLVMDataPointerInvariantBoundary,
             Op.addInput(V);
           Block.Ops.push_back(Op);
         };
+        MedVar Address = MedVar::makeConst(
+            SlotVA, Width, ConstantAddressProvenance::DataAddress,
+            C == Case::ForeignOwner || C == Case::WrappedForeignOwner
+                ? SpilledConstTableVA
+                : GlobalVA);
+        if (C == Case::ScalarAddress)
+          Address.Provenance = ConstantAddressProvenance::Scalar;
+        if (C == Case::FragmentAddress)
+          Address.Provenance = ConstantAddressProvenance::AddressFragment;
+        if (C == Case::CodeAddress)
+          Address.Provenance = ConstantAddressProvenance::CodeAddress;
+        const bool Wrapped =
+            C == Case::WidenedAddress || C == Case::RoundTripAddress ||
+            C == Case::NarrowedAddress || C == Case::SignedAddress ||
+            C == Case::ShiftedAddress || C == Case::ScalarAddress ||
+            C == Case::FragmentAddress || C == Case::CodeAddress ||
+            C == Case::WrappedForeignOwner || C == Case::ExtraCopyInput ||
+            C == Case::ExtraExtensionInput || C == Case::ExtraSliceInput;
+        if (Wrapped) {
+          if (C == Case::NarrowedAddress) {
+            MedVar Narrow = temp(Width / 2);
+            append(NdOp::SUBBYTES, Narrow, {Address, number(0)});
+            Address = Narrow;
+          }
+          MedVar Wide = temp(2 * Width);
+          append(C == Case::SignedAddress ? NdOp::INT_SEXT : NdOp::INT_ZEXT,
+                 Wide, {Address});
+          if (C == Case::ExtraCopyInput || C == Case::ExtraExtensionInput) {
+            if (C == Case::ExtraCopyInput)
+              Block.Ops.back().Opcode = NdOp::COPY;
+            Block.Ops.back().addInput(number(1));
+          }
+          Address = Wide;
+          if (C != Case::WidenedAddress) {
+            MedVar Low = temp();
+            append(NdOp::SUBBYTES, Low,
+                   {Address, number(C == Case::ShiftedAddress ? 1 : 0)});
+            if (C == Case::ExtraSliceInput)
+              Block.Ops.back().addInput(number(1));
+            Address = Low;
+          }
+        }
         MedVar Word = temp(C == Case::WideLoad ? 2 * Width : Width);
-        append(NdOp::LOAD, Word,
-               {MedVar::makeConst(
-                   SlotVA, Width, ConstantAddressProvenance::DataAddress,
-                   C == Case::ForeignOwner ? SpilledConstTableVA : GlobalVA)});
+        append(NdOp::LOAD, Word, {Address});
         if (C == Case::SegmentLoad)
           Block.Ops.back().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
         if (C == Case::Nested) {
@@ -16354,15 +17390,20 @@ TEST(LLVMDataPointerInvariantBoundary,
         MedVar Scaled = temp();
         append(NdOp::INT_MULT, Scaled, {Word, number(Width)});
         append(NdOp::RETURN, {}, {Scaled});
-        const bool Expected = C == Case::Direct || C == Case::Nested ||
-                              C == Case::ZeroFilled || C == Case::Nonzero ||
-                              C == Case::ReadOnlySection ||
-                              C == Case::ObjectFootprint;
+        const bool Expected =
+            C == Case::Direct || C == Case::Nested ||
+            C == Case::WidenedAddress || C == Case::RoundTripAddress ||
+            C == Case::ZeroFilled || C == Case::Nonzero ||
+            C == Case::ReadOnlySection || C == Case::ObjectFootprint;
         MedLLVMEmitter Proof;
         MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Proof, F, Image, A,
                                                         Format);
         EXPECT_EQ(MedLLVMProvenanceTestPeer::runtimeOffset(Proof, Scaled),
                   Expected);
+        if (Wrapped && C != Case::WrappedForeignOwner)
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::materializableDataAddress(
+                        Proof, Address),
+                    Expected);
         if (Expected) {
           EXPECT_FALSE(
               MedLLVMProvenanceTestPeer::stableOffset(Proof, Scaled, nullptr));
@@ -22513,6 +23554,75 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     OversizedIndexConstraintsDoNotRepeatDoomedGraphBuilds) {
+  const size_t Limit = static_cast<size_t>(limits::kMaxSSANodes);
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (size_t BlockCount : {Limit / 2, Limit + 1, Limit * 2}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(BlockCount);
+      BinaryImage Image;
+      Image.Arch = A;
+      Image.Format = BinaryFormat::ELF;
+      const uint16_t Width = getTargetRegInfo(A).PointerSize;
+      auto value = [&](int Id, uint16_t Size) {
+        MedVar V;
+        V.Kind = MedVar::Temp;
+        V.TheArch = A;
+        V.Id = Id;
+        V.SSAVer = 1;
+        V.Size = Size;
+        return V;
+      };
+      MedVar Address = value(9, Width);
+      Address.Kind = MedVar::Param;
+      Address.RegOff = kNoParamReg;
+      const MedVar Index = value(10, Width);
+      const MedVar Condition = value(11, 1);
+      const MedVar Scaled = value(12, Width);
+      MedFunc Func;
+      Func.Entry = 0x1000;
+      Func.Blocks.resize(BlockCount);
+      for (size_t I = 0; I != BlockCount; ++I) {
+        auto &Block = Func.Blocks[I];
+        Block.Id = static_cast<int>(I);
+        Block.StartAddr = Func.Entry + I * 16;
+        Block.EndAddr = Block.StartAddr + 16;
+      }
+      Func.Blocks[0].Succs = {1, 2};
+      Func.Blocks[1].Preds = {0};
+      Func.Blocks[2].Preds = {0};
+      auto op = [&](unsigned Block, NdOp Opcode, const MedVar &Output,
+                    std::initializer_list<MedVar> Inputs) {
+        MedOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        Func.Blocks[Block].Ops.push_back(Op);
+      };
+      const auto Scalar = ConstantAddressProvenance::Scalar;
+      op(0, NdOp::LOAD, Index, {Address});
+      op(0, NdOp::INT_LESS, Condition,
+         {Index, MedVar::makeConst(8, Width, Scalar)});
+      op(0, NdOp::COND_BR, {},
+         {MedVar::makeConst(Func.Blocks[1].StartAddr, Width), Condition});
+      op(1, NdOp::INT_MULT, Scaled,
+         {Index, MedVar::makeConst(4, Width, Scalar)});
+      MedLLVMEmitter Emitter;
+      for (unsigned Query = 0; Query != 64; ++Query)
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::guardedScalarOffset(Emitter, Func,
+                                                                 Image, Scaled),
+                  BlockCount < Limit);
+      const uint64_t Visits =
+          MedLLVMProvenanceTestPeer::indexConstraintNodes(Emitter);
+      if (BlockCount > Limit)
+        EXPECT_LE(Visits, 2 * BlockCount);
+      else
+        EXPECT_GT(Visits, 0u);
+    }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      PostTestedCounterPreservesExactRecordStrideAndRejectsBypasses) {
   enum class Case {
     Valid,
@@ -23114,6 +24224,175 @@ TEST(LLVMCodePointerInvariantBoundary,
         auto Calls = callsIn(*Module->getFunction(F.Name));
         ASSERT_EQ(Calls.size(), SlotCase ? 1u : 2u);
         EXPECT_EQ(Calls.back()->getCalledFunction(), nullptr);
+      }
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
+     NullableCallsKeepGuardsAcrossCompleteControlFlow) {
+  enum class Case {
+    Diamond,
+    InterveningCall,
+    Loop,
+    EveryArm,
+    UnguardedArm,
+    Bypass,
+    IndependentRoot,
+    ImageRoot,
+    ExceptionalEntry,
+    MissingPredecessor,
+    DuplicateDefinition,
+    Reload,
+    UnguardedSecondCall
+  };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (Case C :
+           {Case::Diamond, Case::InterveningCall, Case::Loop, Case::EveryArm,
+            Case::UnguardedArm, Case::Bypass, Case::IndependentRoot,
+            Case::ImageRoot, Case::ExceptionalEntry, Case::MissingPredecessor,
+            Case::DuplicateDefinition, Case::Reload,
+            Case::UnguardedSecondCall}) {
+        SCOPED_TRACE(std::to_string(static_cast<int>(A)) + "/" +
+                     formatTraceName(Format) + "/" +
+                     std::to_string(static_cast<int>(C)));
+        const unsigned Width = getTargetRegInfo(A).PointerSize;
+        BinaryImage Image;
+        Image.Arch = A;
+        Image.Format = Format;
+        Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+        Segment Data;
+        Data.VA = 0x4000;
+        Data.Size = Data.FileSz = 4 * Width;
+        Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+        Data.Data.resize(Data.Size);
+        Image.Segments.push_back(Data);
+        // An adjacent data pointer makes the zero slot's role nontrivial.
+        Image.DataPtrRelocSlots.insert(Data.VA + Width);
+        Image.DataPtrRelocTargetOwners[Data.VA + Width] = Data.VA;
+        MedFunc F;
+        F.Entry = 0x100;
+        F.Name = "guarded_callback_paths";
+        F.ReturnType = NdType::makeInt(Width);
+        auto value = [&](int Id, unsigned Size = 0) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = Size ? Size : Width;
+          V.TheArch = A;
+          return V;
+        };
+        auto number = [&](uint64_t N, unsigned Size = 0) {
+          return MedVar::makeConst(N, Size ? Size : Width,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        MedVar Choose = value(0, 1);
+        Choose.Kind = MedVar::Param;
+        F.Params = {Choose};
+        const MedVar Target = value(1), Selected = value(2);
+        F.Blocks.resize(8);
+        for (int I = 0; I != 8; ++I) {
+          auto &Block = F.Blocks[I];
+          Block.Id = I;
+          Block.StartAddr = F.Entry + I * 0x40;
+          Block.EndAddr = Block.StartAddr + 0x40;
+        }
+        auto append = [&](int B, NdOp Code, MedVar Out,
+                          std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Code;
+          Op.Output = Out;
+          Op.Addr = F.Blocks[B].StartAddr + F.Blocks[B].Ops.size();
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[B].Ops.push_back(Op);
+        };
+        auto jump = [&](int From, int To) {
+          append(From, NdOp::BRANCH, {}, {number(F.Blocks[To].StartAddr)});
+          F.Blocks[From].Succs = {To};
+        };
+        auto branch = [&](int From, MedVar Condition, int Yes, int No) {
+          append(From, NdOp::COND_BR, {},
+                 {number(F.Blocks[Yes].StartAddr), Condition});
+          F.Blocks[From].Succs = {No, Yes};
+        };
+        append(0, NdOp::CALL, Target, {number(0x800)});
+        MedCallInfo Factory;
+        Factory.BlockId = 0;
+        Factory.OpIdx = 0;
+        Factory.TargetAddr = 0x800;
+        Factory.TargetName = "get_runtime_callback";
+        F.CallInfos.push_back(Factory);
+        append(0, NdOp::SELECT, Selected, {Choose, Target, number(0)});
+        if (C == Case::EveryArm || C == Case::UnguardedArm)
+          jump(0, 1);
+        else {
+          append(0, NdOp::INT_NOTEQUAL, value(3, 1), {Selected, number(0)});
+          branch(0, value(3, 1), 1, C == Case::Bypass ? 4 : 7);
+        }
+        if (C == Case::InterveningCall) {
+          append(1, NdOp::CALL, value(4), {number(0x900)});
+          MedCallInfo Check;
+          Check.BlockId = 1;
+          Check.OpIdx = 0;
+          Check.TargetAddr = 0x900;
+          Check.TargetName = "check_callback_context";
+          F.CallInfos.push_back(Check);
+        }
+        if (C == Case::DuplicateDefinition)
+          append(1, NdOp::SELECT, Selected, {Choose, Target, number(0)});
+        MedVar Called = Selected;
+        if (C == Case::Reload) {
+          Called = value(5);
+          append(1, NdOp::LOAD, Called,
+                 {MedVar::makeConst(Data.VA, Width,
+                                    ConstantAddressProvenance::DataAddress)});
+        }
+        jump(1, 2);
+        branch(2, Choose, 3, 4);
+        for (int B : {3, 4}) {
+          if (C == Case::EveryArm || (C == Case::UnguardedArm && B == 3)) {
+            const MedVar Condition = value(10 + B, 1);
+            append(B, NdOp::INT_NOTEQUAL, Condition, {Selected, number(0)});
+            branch(B, Condition, 5, 7);
+          } else
+            jump(B, 5);
+        }
+        append(5, NdOp::INDIR_CALL, value(6), {Called});
+        jump(5, 6);
+        if (C == Case::Loop)
+          branch(6, Choose, 1, 7);
+        else
+          jump(6, 7);
+        if (C == Case::UnguardedSecondCall)
+          append(7, NdOp::INDIR_CALL, value(7), {Selected});
+        append(7, NdOp::RETURN, {}, {number(0)});
+        for (const auto &Block : F.Blocks)
+          for (int Successor : Block.Succs)
+            F.Blocks[Successor].Preds.push_back(Block.Id);
+        if (C == Case::IndependentRoot)
+          F.ModuleAnalysisRoots.insert(F.Blocks[2].StartAddr);
+        if (C == Case::ImageRoot)
+          Image.CodeRefTargets.insert(F.Blocks[2].StartAddr + 1);
+        if (C == Case::ExceptionalEntry) {
+          ExceptionalEdge Edge;
+          Edge.BlockId = 2;
+          F.Blocks[7].ExceptionalSuccs.push_back(Edge);
+        }
+        if (C == Case::MissingPredecessor)
+          F.Blocks[5].Preds.pop_back();
+        llvm::LLVMContext Context;
+        testing::internal::CaptureStderr();
+        auto Module = MedLLVMEmitter().emit({F}, Context, "guarded-callback", A,
+                                            {}, &Image, Format);
+        const auto Diagnostic = testing::internal::GetCapturedStderr();
+        const bool Expected = C == Case::Diamond ||
+                              C == Case::InterveningCall || C == Case::Loop ||
+                              C == Case::EveryArm;
+        EXPECT_EQ(Module != nullptr, Expected) << Diagnostic;
+        if (Module)
+          expectValidModule(*Module);
       }
 }
 
@@ -24684,6 +25963,96 @@ TEST(LLVMDataPointerInvariantBoundary,
 }
 
 TEST(LLVMDataPointerInvariantBoundary,
+     ScalarFrameLoadsNeedNoFragmentSourceProofWithoutASeed) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64, Arch::X86})
+      for (unsigned LoadCount : {1u, 64u}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(unsigned(TargetArch));
+        SCOPED_TRACE(LoadCount);
+        const auto &TRI = getTargetRegInfo(TargetArch);
+        const uint16_t Width = TRI.PointerSize;
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        Image.Bits = Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        auto Var = [&](MedVar::VarKind Kind, int Id) {
+          MedVar V;
+          V.Kind = Kind;
+          V.TheArch = TargetArch;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = Width;
+          return V;
+        };
+        MedFunc Func;
+        Func.Entry = CallerVA;
+        Func.Name = "scalar_frame_loads";
+        Func.ReturnType = NdType::makeInt(Width);
+        Func.FrameSize = 16;
+        auto &Block = Func.Blocks.emplace_back();
+        Block.Id = 0;
+        Block.StartAddr = CallerVA;
+        Block.EndAddr = CallerVA + 4;
+        MedVar SP = Var(MedVar::Reg, 5000);
+        SP.SSAVer = 0;
+        SP.RegOff = TRI.StackPointer;
+        const MedVar Slot = Var(MedVar::Temp, 5001);
+        MedVar ReturnReg = Var(MedVar::Reg, 5003);
+        ReturnReg.RegOff = TRI.IntReturnReg;
+        MedOp Address;
+        Address.Opcode = NdOp::INT_ADD;
+        Address.Output = Slot;
+        Address.addInput(SP);
+        Address.addInput(MedVar::makeConst(uint64_t(-8), Width,
+                                           ConstantAddressProvenance::Scalar));
+        Block.Ops.push_back(Address);
+        {
+          MedOp Store;
+          Store.Opcode = NdOp::STORE;
+          Store.addInput(Slot);
+          Store.addInput(
+              MedVar::makeConst(100, Width, ConstantAddressProvenance::Scalar));
+          Block.Ops.push_back(Store);
+        }
+        for (unsigned I = 0; I < LoadCount; ++I) {
+          MedOp Load;
+          Load.Opcode = NdOp::LOAD;
+          Load.Output = Var(MedVar::Temp, 6000 + I);
+          Load.addInput(Slot);
+          Block.Ops.push_back(Load);
+        }
+        MedOp Result;
+        Result.Opcode = NdOp::COPY;
+        Result.Output = ReturnReg;
+        Result.addInput(
+            MedVar::makeConst(7, Width, ConstantAddressProvenance::Scalar));
+        Block.Ops.push_back(Result);
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Block.Ops.push_back(Return);
+        MedLLVMEmitter Emitter;
+        llvm::LLVMContext Context;
+        auto Module = Emitter.emit({Func}, Context, "scalar-frame-loads",
+                                   TargetArch, {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        expectValidModule(*Module);
+        const auto [Queries, Builds, Hits, IndexBuilds] =
+            MedLLVMProvenanceTestPeer::frameReloadSourceWork(Emitter);
+        // These reads remain observable even though their values do not
+        // escape. With no incomplete address seed, the fragment audit must
+        // not start a reaching-store proof for each of them.
+        EXPECT_EQ(Queries, 0u);
+        EXPECT_EQ(Builds, 0u);
+        size_t Loads = 0;
+        for (const auto &Function : *Module)
+          for (const auto &IRBlock : Function)
+            for (const auto &Instruction : IRBlock)
+              Loads += llvm::isa<llvm::LoadInst>(Instruction);
+        EXPECT_GE(Loads, LoadCount);
+      }
+}
+
+TEST(LLVMDataPointerInvariantBoundary,
      AddressFragmentMaySpillLocallyButReloadStillCarriesTaint) {
   for (BinaryFormat Format :
        {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
@@ -25233,6 +26602,338 @@ struct FrameSlotProofFixture {
   }
 };
 
+TEST(LLVMFrameSlotProof, EscapedDomainStopsBeforeAuditingUnrelatedStores) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool ThroughCall : {false, true})
+      for (unsigned Stores : {1u, 128u}) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(ThroughCall);
+        SCOPED_TRACE(Stores);
+        FrameSlotProofFixture F(TargetArch);
+        F.SP.SSAVer = 0;
+        MedVar Index = F.temp(), External = F.temp();
+        Index.Kind = External.Kind = MedVar::Param;
+        Index.SSAVer = External.SSAVer = 0;
+        F.Func.Params = {Index, External};
+        const MedVar Address = F.temp();
+        MedVar Loaded = F.temp();
+        Loaded.Size = 1;
+        auto Scalar = [&](uint64_t Value) {
+          return MedVar::makeConst(Value, F.Width,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        F.op(0, NdOp::COPY, F.SP, {F.SP});
+        F.op(0, NdOp::INT_ADD, Address, {F.SP, Index});
+        F.op(0, NdOp::LOAD, Loaded, {Address});
+        if (ThroughCall) {
+          MedCallInfo Call;
+          Call.BlockId = 0;
+          Call.OpIdx = F.Func.Blocks[0].Ops.size();
+          Call.TargetAddr = 0x4000;
+          Call.TargetName = "opaque_frame_consumer";
+          Call.Args = {F.SP};
+          F.op(0, NdOp::CALL, {},
+               {MedVar::makeConst(Call.TargetAddr, F.Width)});
+          F.Func.CallInfos.push_back(std::move(Call));
+        } else {
+          // Publishing the frame pointer to an external owner is just as
+          // decisive as passing it to an opaque callee.
+          F.op(0, NdOp::STORE, {}, {External, F.SP});
+        }
+        for (unsigned I = 0; I < Stores; ++I) {
+          const MedVar Slot = F.temp();
+          F.op(0, NdOp::INT_ADD, Slot, {F.SP, Scalar(16 + I * F.Width)});
+          F.op(0, NdOp::STORE, {}, {Slot, Scalar(I)});
+        }
+        F.op(0, NdOp::RETURN, {}, {Loaded});
+        BinaryImage Image;
+        Image.Arch = TargetArch;
+        Image.Format = BinaryFormat::COFF;
+        Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+        MedLLVMEmitter Emitter;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+            Emitter, F.Func, Image, TargetArch, Image.Format);
+        EXPECT_FALSE(
+            MedLLVMProvenanceTestPeer::stableOffset(Emitter, Loaded, nullptr));
+        // Later stores cannot repair the escaped domain. A proof that already
+        // refused must not spend an alias-proof budget on each of them.
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::recurrenceNodeWork(Emitter).second,
+                  0u);
+      }
+}
+
+TEST(LLVMFrameSlotProof, LocalReloadQueriesShareTheLoadAddressIndex) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF}) {
+      SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      FrameSlotProofFixture F(TargetArch);
+      constexpr unsigned SlotCount = 128;
+      std::vector<MedVar> Addresses;
+      for (unsigned I = 0; I < SlotCount * 2; ++I) {
+        const MedVar Address = F.temp();
+        F.op(0, NdOp::INT_ADD, Address,
+             {F.SP, MedVar::makeConst(I * F.Width, F.Width)});
+        Addresses.push_back(Address);
+        if (I >= SlotCount)
+          continue;
+        const MedVar Loaded = F.temp(), Forwarded = F.temp();
+        F.op(0, NdOp::LOAD, Loaded, {Address});
+        F.op(0, NdOp::COPY, Forwarded, {Loaded});
+        if (I % 2 == 0)
+          F.op(0, NdOp::INT_ADD, F.temp(),
+               {Forwarded, MedVar::makeConst(1, F.Width)});
+        else
+          F.op(0, NdOp::RETURN, {}, {Forwarded});
+      }
+      BinaryImage Image;
+      Image.Arch = TargetArch;
+      Image.Format = Format;
+      Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+      MedLLVMEmitter Emitter;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, F.Func, Image,
+                                                      TargetArch, Format);
+      for (unsigned I = 0; I < Addresses.size(); ++I)
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+                      Emitter, Addresses[I]),
+                  I < SlotCount && I % 2 == 0);
+      const auto [Nodes, Hits] =
+          MedLLVMProvenanceTestPeer::frameSlotWork(Emitter);
+      // Each load address is classified once. Distinct stores, including
+      // slots without a load, must not rescan the whole function's loads.
+      EXPECT_LT(Nodes + Hits, SlotCount * 16u);
+
+      // The index belongs to the same proof phase as its canonical keys.
+      // Segment-relative memory cannot reuse an earlier default-space load.
+      for (auto &Op : F.Func.Blocks[0].Ops)
+        if (Op.Opcode == NdOp::LOAD) {
+          Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+          break;
+        }
+      MedLLVMProvenanceTestPeer::invalidateFeasibleEdgeDependentCaches(Emitter);
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+          Emitter, Addresses.front()));
+
+      // Reusing an emitter for a different function must discard the index,
+      // even when the new function uses the same SSA identities and slots.
+      MedFunc Other = F.Func;
+      for (auto &Op : Other.Blocks[0].Ops)
+        if (Op.Opcode == NdOp::LOAD)
+          Op.Opcode = NdOp::COPY;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, Other, Image,
+                                                      TargetArch, Format);
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+          Emitter, Addresses.front()));
+    }
+}
+
+TEST(LLVMFrameSlotProof, LocalReloadUsesKeepForwardingAndValueIdentity) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF}) {
+      SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      FrameSlotProofFixture F(TargetArch);
+      // The CFG runs opposite to vector order, so forwarding cannot depend
+      // on a single lexical sweep through the blocks.
+      constexpr unsigned Stages = 16;
+      for (unsigned I = 0; I < Stages; ++I)
+        F.addBlock();
+      const int Consumer = F.addBlock();
+      F.edge(0, Stages);
+      for (unsigned I = Stages; I > 1; --I)
+        F.edge(I, I - 1);
+      F.edge(1, Consumer);
+      std::vector<MedVar> Addresses;
+      const bool Expected[] = {false, true,  true,  false, true,
+                               false, false, false, true};
+      for (unsigned Kind = 0; Kind < std::size(Expected); ++Kind) {
+        const MedVar Address = F.temp();
+        F.op(0, NdOp::INT_ADD, Address,
+             {F.SP, MedVar::makeConst(Kind * F.Width, F.Width)});
+        Addresses.push_back(Address);
+        MedVar Value = F.temp();
+        F.op(0, NdOp::LOAD, Value, {Address});
+        for (unsigned I = Stages; I > 0; --I) {
+          const MedVar Forwarded = F.temp();
+          F.op(I, NdOp::COPY, Forwarded, {Value});
+          Value = Forwarded;
+        }
+        if (Kind == 2 || Kind == 3) {
+          MedVar Extended = F.temp();
+          Extended.Size = F.Width * 2;
+          F.op(Consumer, Kind == 2 ? NdOp::INT_ZEXT : NdOp::INT_SEXT, Extended,
+               {Value});
+          Value = Extended;
+        } else if (Kind == 4 || Kind == 5) {
+          MedVar Slice = F.temp();
+          Slice.Size = F.Width / 2;
+          F.op(Consumer, NdOp::SUBBYTES, Slice,
+               {Value, MedVar::makeConst(Kind == 4 ? 0 : 1, 1)});
+          Value = Slice;
+        } else if (Kind == 6) {
+          ++Value.SSAVer;
+          F.op(Consumer, NdOp::COPY, Value, {MedVar::makeConst(0, Value.Size)});
+        } else if (Kind == 7) {
+          Value.Kind = MedVar::Reg;
+          F.op(Consumer, NdOp::COPY, Value, {MedVar::makeConst(0, Value.Size)});
+        } else if (Kind == 8) {
+          Value.Size = F.Width / 2;
+        }
+        if (Kind == 0 || Kind == 3)
+          F.op(Consumer, NdOp::RETURN, {}, {Value});
+        else {
+          MedVar Used = F.temp();
+          Used.Size = Value.Size;
+          F.op(Consumer, NdOp::INT_ADD, Used,
+               {Value, MedVar::makeConst(1, Value.Size)});
+        }
+      }
+      BinaryImage Image;
+      Image.Arch = TargetArch;
+      Image.Format = Format;
+      Image.Bits = F.Width == 4 ? Bitness::Bits32 : Bitness::Bits64;
+      MedLLVMEmitter Emitter;
+      MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, F.Func, Image,
+                                                      TargetArch, Format);
+      for (unsigned I = 0; I < Addresses.size(); ++I) {
+        SCOPED_TRACE(I);
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::slotReloadUsedLocally(
+                      Emitter, Addresses[I]),
+                  Expected[I]);
+      }
+    }
+}
+
+TEST(LLVMCallClobberIndex, RepeatedQueriesVisitEachRecordOnce) {
+  MedFunc Func;
+  constexpr unsigned Records = 4096, Calls = 64;
+  for (unsigned I = 0; I != Records; ++I) {
+    MedVar Value;
+    Value.Kind = MedVar::Reg;
+    Value.Id = I;
+    Value.SSAVer = 1;
+    Value.Size = 8;
+    Func.CallClobbers.push_back({Value, I % Calls + 1});
+  }
+  MedLLVMEmitter Emitter;
+  for (unsigned Pass = 0; Pass != 4; ++Pass) {
+    for (unsigned I = 0; I != Records; ++I) {
+      const auto &Record = Func.CallClobbers[I];
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobber(Emitter, Func,
+                                                       Record.Value, true),
+                &Record);
+      MedVar Missing = Record.Value;
+      Missing.SSAVer = 2;
+      EXPECT_FALSE(
+          MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, Missing));
+    }
+    for (unsigned Call = 1; Call <= Calls; ++Call) {
+      const auto Found =
+          MedLLVMProvenanceTestPeer::callClobbers(Emitter, Func, Call);
+      ASSERT_EQ(Found.size(), Records / Calls);
+      for (unsigned I = 0; I != Found.size(); ++I)
+        EXPECT_EQ(Found[I], &Func.CallClobbers[Call - 1 + I * Calls]);
+    }
+    EXPECT_TRUE(
+        MedLLVMProvenanceTestPeer::callClobbers(Emitter, Func, 0).empty());
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter),
+              Records);
+  }
+}
+
+TEST(LLVMCallClobberIndex, KeepsViewsDuplicatesAndFullWidthCallIds) {
+  MedVar Wide;
+  Wide.Kind = MedVar::Reg;
+  Wide.Id = 1;
+  Wide.SSAVer = 1;
+  Wide.Size = 16;
+  MedVar Narrow = Wide;
+  Narrow.Size = 8;
+  MedVar OtherKind = Wide;
+  OtherKind.Kind = MedVar::Temp;
+  const uint32_t Last = std::numeric_limits<uint32_t>::max();
+  MedFunc Func;
+  Func.CallClobbers = {{Wide, Last, Narrow, 8},
+                       {OtherKind, Last - 1},
+                       {Narrow, Last},
+                       {MedVar::makeConst(7, 4), 0}};
+  Func.Blocks.resize(1);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.CallSiteId = Last;
+  Func.Blocks[0].Ops.push_back(Call);
+  Func.Blocks[0].Ops.push_back(Call);
+  Call.CallSiteId = Last - 1;
+  Func.Blocks[0].Ops.push_back(Call);
+  MedLLVMEmitter Emitter;
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, Narrow),
+            &Func.CallClobbers[0]);
+  EXPECT_FALSE(
+      MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, Wide, true));
+  EXPECT_EQ(
+      MedLLVMProvenanceTestPeer::callClobber(Emitter, Func, OtherKind, true),
+      &Func.CallClobbers[1]);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callClobber(Emitter, Func,
+                                                      MedVar::makeConst(7, 4)));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobbers(Emitter, Func, Last),
+            (std::vector<const MedCallClobber *>{&Func.CallClobbers[0],
+                                                 &Func.CallClobbers[2]}));
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callOperation(Emitter, Func, Last));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, Func, Last - 1),
+            &Func.Blocks[0].Ops[2]);
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callOperation(Emitter, Func, 1));
+}
+
+TEST(LLVMCallClobberIndex, SwitchingFunctionsRebuildsRecordAndOwnerIndexes) {
+  MedVar Value;
+  Value.Kind = MedVar::Reg;
+  Value.Id = Value.SSAVer = 1;
+  Value.Size = 8;
+  MedFunc First, Second;
+  First.CallClobbers.push_back({Value, 1});
+  Second.CallClobbers.push_back({Value, 2, Value, 4});
+  for (auto *Func : {&First, &Second}) {
+    Func->Blocks.resize(1);
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.CallSiteId = Func->CallClobbers[0].CallSiteId;
+    Func->Blocks[0].Ops.push_back(Call);
+  }
+  MedLLVMEmitter Emitter;
+  unsigned Visits = 0;
+  for (const auto *Func : {&First, &Second, &First}) {
+    const auto &Record = Func->CallClobbers[0];
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobber(Emitter, *Func, Value),
+              &Record);
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, *Func,
+                                                       Record.CallSiteId),
+              &Func->Blocks[0].Ops[0]);
+    EXPECT_TRUE(MedLLVMProvenanceTestPeer::callClobbers(
+                    Emitter, *Func, Record.CallSiteId == 1 ? 2 : 1)
+                    .empty());
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter),
+              ++Visits);
+  }
+  // Re-emitting starts a fresh transaction even if the caller reuses the
+  // same MedFunc storage with changed records and operation identities.
+  First.CallClobbers[0].CallSiteId = 3;
+  First.Blocks[0].Ops[0].CallSiteId = 3;
+  llvm::LLVMContext Context;
+  auto Module = Emitter.emit({}, Context, "clobber-index-reset", Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+  EXPECT_TRUE(
+      MedLLVMProvenanceTestPeer::callClobbers(Emitter, First, 1).empty());
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobbers(Emitter, First, 3),
+            (std::vector<const MedCallClobber *>{&First.CallClobbers[0]}));
+  EXPECT_FALSE(MedLLVMProvenanceTestPeer::callOperation(Emitter, First, 1));
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callOperation(Emitter, First, 3),
+            &First.Blocks[0].Ops[0]);
+  EXPECT_EQ(MedLLVMProvenanceTestPeer::callClobberRecordsIndexed(Emitter), 1u);
+}
+
 TEST(LLVMDataPointerInvariantBoundary,
      ScalarFrameReloadsDoNotBuildAnEmptyFragmentClosure) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64}) {
@@ -25317,8 +27018,54 @@ TEST(LLVMFrameSlotProof, SharedDiamondsRetainExactCoordinatesWithinBudget) {
       EXPECT_LT(Nodes, 4096u);
       if (!Conflict)
         EXPECT_GE(Hits, 20u);
+      MedLLVMEmitter DefaultEmitter;
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                    DefaultEmitter, Fixture.Func, TargetArch, Fixture.Address),
+                Slot);
     }
   }
+}
+
+TEST(LLVMFrameSlotProof, AcyclicJoinsDoNotRepeatRecurrenceSearches) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 128u, 512u})
+      for (bool Reverse : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Reverse);
+        FrameSlotProofFixture Fixture(TargetArch);
+        Fixture.diamonds(Count);
+        if (Reverse)
+          for (auto &Block : Fixture.Func.Blocks)
+            for (auto &Phi : Block.Phis)
+              std::reverse(Phi.Args.begin(), Phi.Args.end());
+        MedLLVMEmitter Emitter;
+        const auto Slot = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+            Emitter, Fixture.Func, TargetArch, Fixture.Address);
+        ASSERT_TRUE(Slot);
+        EXPECT_EQ(Slot->first,
+                  std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
+        EXPECT_EQ(Slot->second, 0);
+        // Every join shares one proved predecessor coordinate. Looking for
+        // a cycle through each entire acyclic prefix is unnecessary work.
+        EXPECT_LE(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first,
+                  8u * Count + 1);
+        MedLLVMEmitter SharedEmitter;
+        size_t Remaining = 8192;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                      SharedEmitter, Fixture.Func, TargetArch, Fixture.Address,
+                      false, nullptr, &Remaining),
+                  Slot);
+        EXPECT_LE(8192u - Remaining, 8u * Count + 1);
+        MedLLVMEmitter ExplicitEmitter;
+        EXPECT_EQ(
+            MedLLVMProvenanceTestPeer::canonicalFrameSlot(
+                ExplicitEmitter, Fixture.Func, TargetArch, Fixture.Address),
+            Slot);
+        EXPECT_LE(
+            MedLLVMProvenanceTestPeer::frameSlotWork(ExplicitEmitter).first,
+            8u * Count + 1);
+      }
 }
 
 TEST(LLVMFrameSlotProof, RepeatedClosedQueriesDoNotRepeatProofWork) {
@@ -25446,6 +27193,160 @@ TEST(LLVMFrameSlotProof, SharedBudgetProofsReplayTheirNodes) {
   }
 }
 
+TEST(LLVMFrameSlotProof, CompletedPrefixesAvoidRepeatedIndependentWalks) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Rooted : {false, true})
+      for (bool Bound : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+        SCOPED_TRACE(Rooted);
+        SCOPED_TRACE(Bound);
+        FrameSlotProofFixture Fixture(TargetArch);
+        MedVar Previous = Rooted ? Fixture.SP : Fixture.temp();
+        const MedVar Index = Fixture.temp();
+        const std::vector<std::pair<MedVar, uint64_t>> Bindings = {{Index, 8}};
+        if (Bound) {
+          const MedVar Adjusted = Fixture.temp();
+          Fixture.op(0, NdOp::INT_ADD, Adjusted, {Previous, Index});
+          Previous = Adjusted;
+        }
+        std::vector<MedVar> Addresses;
+        constexpr unsigned Count = 1024;
+        for (unsigned I = 0; I != Count; ++I) {
+          const MedVar Next = Fixture.temp();
+          Fixture.op(0, NdOp::COPY, Next, {Previous});
+          Addresses.push_back(Next);
+          Previous = Next;
+        }
+        MedLLVMEmitter Emitter;
+        unsigned PrefixLength = 0;
+        for (const MedVar &Address : Addresses) {
+          const auto Before =
+              MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first;
+          const auto Slot = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+              Emitter, Fixture.Func, TargetArch, Address, false,
+              Bound ? &Bindings : nullptr);
+          ASSERT_EQ(Slot.has_value(), Rooted);
+          if (Slot) {
+            EXPECT_EQ(Slot->first,
+                      std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
+            EXPECT_EQ(Slot->second, Bound ? 8 : 0);
+          }
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first -
+                        Before,
+                    ++PrefixLength + 1u + unsigned(Bound));
+        }
+        if (!Rooted)
+          EXPECT_LE(MedLLVMProvenanceTestPeer::frameSlotEvaluatedNodes(Emitter),
+                    3u * Count);
+        // Explicitly shared budgets still perform their own bounded proof.
+        MedLLVMEmitter Cold;
+        size_t Budget = 8192;
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                      Cold, Fixture.Func, TargetArch, Previous, false,
+                      Bound ? &Bindings : nullptr, &Budget)
+                      .has_value(),
+                  Rooted);
+        EXPECT_GE(8192u - Budget, Count);
+      }
+}
+
+TEST(LLVMFrameSlotProof, ExhaustedPrefixesAreNotIndependentProofs) {
+  FrameSlotProofFixture Fixture(Arch::X86);
+  MedVar Previous = Fixture.SP, Prefix;
+  for (unsigned I = 0; I != 8192; ++I) {
+    const MedVar Next = Fixture.temp();
+    Fixture.op(0, NdOp::COPY, Next, {Previous});
+    Previous = Next;
+    if (I == 299)
+      Prefix = Next;
+  }
+  const MedVar Outer = Fixture.temp();
+  Fixture.op(0, NdOp::COPY, Outer, {Previous});
+  for (bool Bound : {false, true}) {
+    const std::vector<std::pair<MedVar, uint64_t>> Bindings;
+    MedLLVMEmitter Emitter;
+    // A completed positive prefix must not let a longer request bypass the
+    // original budget merely because this emitter has seen that prefix.
+    ASSERT_TRUE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, Arch::X86, Prefix, false,
+        Bound ? &Bindings : nullptr));
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, Arch::X86, Previous, false,
+        Bound ? &Bindings : nullptr));
+    const auto Before = MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first;
+    EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Emitter, Fixture.Func, Arch::X86, Outer, false,
+        Bound ? &Bindings : nullptr));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first - Before,
+              8192u);
+  }
+}
+
+TEST(LLVMFrameSlotProof, CompletedQueriesKeepRecurrenceContextsSeparate) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Variant = 0; Variant != 6; ++Variant)
+      for (bool Reverse : {false, true}) {
+        FrameSlotProofFixture Fixture(TargetArch);
+        Fixture.recurrence(24, Variant);
+        std::vector<MedVar> Values{Fixture.Address};
+        for (const MedBlock &Block : Fixture.Func.Blocks)
+          for (const MedOp &Op : Block.Ops)
+            Values.push_back(Op.Output);
+        if (Reverse)
+          std::reverse(Values.begin(), Values.end());
+        MedLLVMEmitter Warm;
+        for (const MedVar &Value : Values) {
+          MedLLVMEmitter Cold;
+          EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                        Warm, Fixture.Func, TargetArch, Value),
+                    MedLLVMProvenanceTestPeer::canonicalFrameSlot(
+                        Cold, Fixture.Func, TargetArch, Value));
+        }
+      }
+}
+
+TEST(LLVMFrameSlotProof, BoundAddRetryRetainsTheFirstArmsLocalProofs) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    FrameSlotProofFixture Fixture(TargetArch);
+    MedVar Base = Fixture.SP;
+    for (unsigned I = 0; I != 128; ++I) {
+      const MedVar Next = Fixture.temp();
+      Fixture.op(0, NdOp::COPY, Next, {Base});
+      Base = Next;
+    }
+    const int Left = Fixture.addBlock(), Right = Fixture.addBlock(),
+              Join = Fixture.addBlock();
+    Fixture.edge(0, Left);
+    Fixture.edge(0, Right);
+    Fixture.edge(Left, Join);
+    Fixture.edge(Right, Join);
+    const MedVar Mixed = Fixture.temp(), Unknown = Fixture.temp(),
+                 Address = Fixture.temp();
+    PhiNode Phi;
+    Phi.Output = Mixed;
+    Phi.Args = {{Left, Base}, {Right, Unknown}};
+    Fixture.Func.Blocks[Join].Phis.push_back(Phi);
+    Fixture.op(Join, NdOp::INT_ADD, Address, {Mixed, Base});
+    const std::vector<std::pair<MedVar, uint64_t>> Bindings = {{Mixed, 8},
+                                                               {Base, 16}};
+    MedLLVMEmitter Warm, Cold;
+    for (unsigned I = 0; I != 2; ++I)
+      EXPECT_FALSE(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+          Warm, Fixture.Func, TargetArch, Mixed, false, &Bindings));
+    const uint64_t Before =
+        MedLLVMProvenanceTestPeer::frameSlotWork(Warm).first;
+    const auto Result = MedLLVMProvenanceTestPeer::defaultFrameSlot(
+        Warm, Fixture.Func, TargetArch, Address, false, &Bindings);
+    ASSERT_TRUE(Result);
+    EXPECT_EQ(Result->second, 8);
+    EXPECT_EQ(Result,
+              MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                  Cold, Fixture.Func, TargetArch, Address, false, &Bindings));
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Warm).first - Before,
+              MedLLVMProvenanceTestPeer::frameSlotWork(Cold).first);
+  }
+}
+
 // A bound query's answer is reused only for the same bindings.
 TEST(LLVMFrameSlotProof, BoundQueriesReuseOnlyTheirBindings) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
@@ -25538,6 +27439,10 @@ TEST(LLVMFrameSlotProof, SharedRecurrenceRequiresEveryArmAndAnExactRoot) {
       EXPECT_LT(Nodes, 256u);
       if (Variant == 0 || Variant == 5)
         EXPECT_GE(Hits, 20u);
+      MedLLVMEmitter DefaultEmitter;
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                    DefaultEmitter, Fixture.Func, TargetArch, Fixture.Address),
+                Slot);
     }
   }
 }
@@ -25584,6 +27489,10 @@ TEST(LLVMFrameSlotProof, ParallelStackPointerPhisAnchorOnlyInOneBlock) {
       EXPECT_EQ(Slot->first, std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
       EXPECT_EQ(Slot->second, 0);
     }
+    MedLLVMEmitter DefaultEmitter;
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::defaultFrameSlot(
+                  DefaultEmitter, Fixture.Func, Arch::X86, Guest),
+              Slot);
   }
 }
 
@@ -25702,6 +27611,111 @@ TEST(LLVMFrameSlotProof, NarrowArithmeticCannotRetainFullPointerCoordinates) {
                 !Narrow);
     }
   }
+}
+
+TEST(LLVMFrameSlotProof, ReachingSourcesStopEachJoinArmAtItsNearestWrite) {
+  enum class Scenario { Full, Partial, Unknown, Empty, Loop, Unreachable };
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Count : {32u, 512u})
+      for (bool Reverse : {false, true})
+        for (Scenario Case :
+             {Scenario::Full, Scenario::Partial, Scenario::Unknown,
+              Scenario::Empty, Scenario::Loop, Scenario::Unreachable}) {
+          SCOPED_TRACE(unsigned(A));
+          SCOPED_TRACE(Count);
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(unsigned(Case));
+          FrameSlotProofFixture F(A);
+          F.SP.SSAVer = 0;
+          MedVar Condition = F.temp();
+          Condition.Kind = MedVar::Param;
+          Condition.RegOff = kNoParamReg;
+          F.Func.Params = {Condition};
+          const MedVar Slot = F.temp(), Dynamic = F.temp(), Loaded = F.temp();
+          auto scalar = [&](uint64_t V) {
+            return MedVar::makeConst(V, F.Width,
+                                     ConstantAddressProvenance::Scalar);
+          };
+          auto target = [&](int Id) {
+            return scalar(F.Func.Blocks[Id].StartAddr);
+          };
+          F.op(0, NdOp::COPY, F.SP, {F.SP});
+          F.op(0, NdOp::INT_ADD, Slot, {F.SP, scalar(uint64_t(-16))});
+          F.op(0, NdOp::INT_ADD, Dynamic, {F.SP, Condition});
+          int Fork = 0;
+          for (unsigned I = 0; I < Count; ++I) {
+            F.op(Fork, NdOp::STORE, {}, {Slot, scalar(0x100 + I)});
+            const int Next = F.addBlock();
+            F.edge(Fork, Next);
+            F.op(Fork, NdOp::BRANCH, {}, {target(Next)});
+            Fork = Next;
+          }
+          const int Left = F.addBlock(), Right = F.addBlock(),
+                    Join = F.addBlock();
+          F.edge(Fork, Left);
+          F.edge(Fork, Right);
+          F.edge(Left, Join);
+          F.edge(Right, Join);
+          F.op(Fork, NdOp::COND_BR, {}, {target(Left), Condition});
+          F.op(Left, NdOp::STORE, {}, {Slot, scalar(1)});
+          F.op(Left, NdOp::BRANCH, {}, {target(Join)});
+          MedVar Written = scalar(2);
+          if (Case == Scenario::Partial)
+            Written.Size = F.Width / 2;
+          if (Case != Scenario::Empty && Case != Scenario::Loop)
+            F.op(Right, NdOp::STORE, {},
+                 {Case == Scenario::Unknown ? Dynamic : Slot, Written});
+          F.op(Right, NdOp::BRANCH, {}, {target(Join)});
+          F.op(Join, NdOp::LOAD, Loaded, {Slot});
+          if (Case == Scenario::Loop) {
+            const int Exit = F.addBlock();
+            F.edge(Join, Fork);
+            F.edge(Join, Exit);
+            // A later write matters only because this edge returns to LOAD.
+            F.op(Join, NdOp::STORE, {}, {Slot, scalar(3)});
+            F.op(Join, NdOp::COND_BR, {}, {target(Fork), Condition});
+            F.op(Exit, NdOp::RETURN, {}, {Loaded});
+          } else
+            F.op(Join, NdOp::RETURN, {}, {Loaded});
+          if (Case == Scenario::Unreachable) {
+            const int Detached = F.addBlock();
+            F.edge(Detached, Join);
+            F.op(Detached, NdOp::STORE, {}, {Dynamic, scalar(4)});
+            F.op(Detached, NdOp::BRANCH, {}, {target(Join)});
+          }
+          if (Reverse)
+            std::reverse(F.Func.Blocks.begin(), F.Func.Blocks.end());
+          const auto Site =
+              std::find_if(F.Func.Blocks.begin(), F.Func.Blocks.end(),
+                           [&](const MedBlock &B) { return B.Id == Join; });
+          ASSERT_NE(Site, F.Func.Blocks.end());
+          MedLLVMEmitter E;
+          std::vector<MedVar> Sources;
+          const bool Expected =
+              Case != Scenario::Partial && Case != Scenario::Unknown;
+          ASSERT_EQ(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                        E, F.Func, A, Site->Ops.front(), Sources),
+                    Expected);
+          if (!Expected)
+            EXPECT_TRUE(Sources.empty());
+          else {
+            ASSERT_EQ(Sources.size(), Case == Scenario::Loop ? 3u : 2u);
+            EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(1)),
+                      Sources.end());
+            const MedVar Other =
+                Case == Scenario::Empty || Case == Scenario::Loop
+                    ? scalar(0x100 + Count - 1)
+                    : scalar(2);
+            EXPECT_NE(std::find(Sources.begin(), Sources.end(), Other),
+                      Sources.end());
+            if (Case == Scenario::Loop)
+              EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(3)),
+                        Sources.end());
+          }
+          const auto [Nodes, Hits] =
+              MedLLVMProvenanceTestPeer::frameSlotWork(E);
+          EXPECT_LE(Nodes + Hits, 64u);
+        }
 }
 
 TEST(LLVMFrameSlotProof, ReachingStoreIterationsReuseOnlyIdenticalFootprints) {

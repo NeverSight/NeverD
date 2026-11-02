@@ -16,6 +16,7 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -764,7 +765,9 @@ void recoverFPStackReads(
 /// copied from it) is consumed ONLY by those scratch idioms and never as a
 /// genuine value, so it must not be recovered as a parameter (doing so injects
 /// a phantom leading argument that shifts every real stack argument).
-bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
+static bool liveInOnlyFeedsScratchImpl(const MedFunc &Func,
+                                       uint64_t ParamRegOff,
+                                       bool IgnoreStoredValues) {
   if (Func.Blocks.empty())
     return false;
 
@@ -926,6 +929,13 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
     if (!HasTaint)
       return true;
 
+    // When looking outside the ordinary argument registers, saving an
+    // incoming value is not enough to call it an argument. A separate value
+    // use must establish it; the address of a store is still such a use.
+    if (IgnoreStoredValues && Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+        InputMasks[0] == 0)
+      return true;
+
     // BSR/BSF's old-destination operand is architecturally undefined when
     // selected.  It must not make a scratch destination into an argument.
     if (isBsrBsfPreserve(Op, 1)) {
@@ -1036,9 +1046,14 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
   return true; // all surviving incoming lanes feed scratch reconstruction only
 }
 
-bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
+bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
+  return liveInOnlyFeedsScratchImpl(Func, ParamRegOff, false);
+}
+
+static bool liveInReachesUse(const MedFunc &Func, uint64_t RegOff,
+                             bool IncludeReturns, bool IgnoreStoredValues) {
   if (Func.Blocks.empty())
-    return true;
+    return !IgnoreStoredValues;
   llvm::SmallVector<MedVar, 2> Seeds;
   for (const MedOp &Op : Func.Blocks.front().Ops) {
     if (Op.Opcode != NdOp::COPY)
@@ -1050,7 +1065,7 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
       Seeds.push_back(Op.Inputs[0]);
   }
   if (Seeds.empty())
-    return true;
+    return !IgnoreStoredValues;
   // The operations that carry the value's bytes without reading them.
   auto Carries = [](const MedOp &Op) {
     switch (Op.Opcode) {
@@ -1072,7 +1087,7 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
         continue;
       // A return reads the integer return register whatever the function
       // returns (a float in XMM0 leaves EAX untouched).
-      if (Op.Opcode == NdOp::RETURN)
+      if (!IncludeReturns && Op.Opcode == NdOp::RETURN)
         continue;
       // A push stores at the stack pointer itself; a spill to a frame slot,
       // read back later, is a use.
@@ -1081,10 +1096,40 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
                         Op.Inputs[0].RegOff ==
                             getTargetRegInfo(Op.Inputs[0].TheArch).StackPointer;
       for (unsigned I = 0; I < Op.NumInputs; ++I)
-        if (containsValue(Reached, Op.Inputs[I]) && !(Push && I == 1))
+        if (containsValue(Reached, Op.Inputs[I]) && !(Push && I == 1) &&
+            !(IgnoreStoredValues && Op.Opcode == NdOp::STORE && I == 1))
           return true;
     }
   return false;
+}
+
+bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
+  return liveInReachesUse(Func, RegOff, false, false);
+}
+
+std::vector<uint64_t> additionalI386ParameterRegisters(const MedFunc &Func) {
+  std::vector<uint64_t> Registers;
+  if (Func.Blocks.empty())
+    return Registers;
+  for (uint64_t Register : i386NonstandardArgumentRegisters()) {
+    // Compilers can give private callees inputs in normally preserved
+    // registers. Keep that exact machine carrier in the recovered order;
+    // this does not declare an external platform calling convention.
+    if (llvm::none_of(
+            Func.Blocks.front().Ops,
+            [&](const MedOp &Op) { return isEntryLiveInCopy(Op, Register); }) ||
+        !liveInReachesUse(Func, Register, true, true) ||
+        liveInOnlyFeedsScratchImpl(Func, Register, true))
+      continue;
+    Registers.push_back(Register);
+  }
+  return Registers;
+}
+
+llvm::ArrayRef<uint64_t> i386NonstandardArgumentRegisters() {
+  static constexpr uint64_t Registers[] = {x86reg::RBX, x86reg::RSI,
+                                           x86reg::RDI};
+  return Registers;
 }
 
 } // namespace med_calling_conv_detail

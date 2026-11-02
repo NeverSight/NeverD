@@ -42,9 +42,7 @@ bool RegistrationStateSolver::transferScalarArguments(
         return false;
     }
     for (auto *Frame : {&After.Frame, &After.RuntimeObject}) {
-      Frame->CallbackCells.erase(
-          Frame->CallbackCells.begin(),
-          Frame->CallbackCells.lower_bound(int32_t(End)));
+      discardFrameCellsBelow(Frame->CallbackCells, int32_t(End));
       Frame->InitializedCallbackBytes.erase(
           Frame->InitializedCallbackBytes.begin(),
           Frame->InitializedCallbackBytes.lower_bound(int32_t(End)));
@@ -77,7 +75,7 @@ bool RegistrationStateSolver::transferScalarArguments(
       After.InitializedFrameBytes.begin(),
       After.InitializedFrameBytes.lower_bound(AfterSP));
   for (auto *Frame : {&After.Frame, &After.RuntimeObject})
-    Frame->Cells.erase(Frame->Cells.begin(), Frame->Cells.lower_bound(AfterSP));
+    discardFrameCellsBelow(Frame->Cells, AfterSP);
   StackPointer = FrameValue::frame(AfterSP);
   return true;
 }

@@ -24,24 +24,30 @@ static hash_code hash_value(const SEHExceptionAddress &Address) {
   return hash_combine(Address.Storage, Address.Filter, Address.Offset);
 }
 
+static hash_code hash_value(const SEHThreadAddress &Address) {
+  return hash_combine(Address.RootAddress, Address.RootOpSeq, Address.Offset);
+}
+
 static hash_code hash_value(const FrameValue &Value) {
   return hash_combine(
       Value.Offset, Value.Constant, Value.PreviousChain, Value.MayBeFrame,
       Value.FrameOnlyFromCall, Value.SavedRegister, Value.ReturnPC,
       Value.SecurityCookie, Value.CookieFrameOffset, Value.CookieXOR,
       Value.EntryOffset, Value.CallbackAddress, Value.ExceptionObject,
-      Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar);
+      Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar,
+      Value.ImageAddress, Value.CookieImageXOR, Value.ImportTarget,
+      Value.ThreadAddress);
 }
 
 static hash_code hash_value(const FrameState &Frame) {
-  return hash_combine(hash_combine_range(Frame.Registers),
-                      hash_combine_range(Frame.OtherRegisterBytes),
-                      Frame.OtherRegistersMayBeFrame,
-                      hash_combine_range(Frame.Cells),
-                      hash_combine_range(Frame.EntryCells),
-                      hash_combine_range(Frame.CallbackCells),
-                      hash_combine_range(Frame.InitializedCallbackBytes),
-                      Frame.CallbackEntry, Frame.SEHFilterEntry);
+  return hash_combine(
+      hash_combine_range(Frame.Registers), Frame.ImportBindingsIntact,
+      hash_combine_range(Frame.OtherRegisterBytes),
+      Frame.OtherRegistersMayBeFrame, hash_combine_range(Frame.Cells),
+      hash_combine_range(Frame.EntryCells),
+      hash_combine_range(Frame.CallbackCells),
+      hash_combine_range(Frame.InitializedCallbackBytes), Frame.CallbackEntry,
+      Frame.SEHFilterEntry);
 }
 
 size_t FrameState::snapshotHash() const { return hash_value(*this); }
@@ -85,8 +91,8 @@ size_t Domain::snapshotHash() const {
                       RuntimeObject, hash_combine_range(InitializedFrameBytes),
                       Reached, Unknown, Parent, Callback, OtherCallback,
                       Catches, Uninstalled, Installed, AbandonedSEHGuard,
-                      CanDispatch, OrdinaryCallStack, StackRestore,
-                      hash_combine_range(JumpCaptures),
+                      CanDispatch, CxxDispatchBindingsIntact, OrdinaryCallStack,
+                      StackRestore, hash_combine_range(JumpCaptures),
                       hash_combine_range(SEHCallers), JumpBindingsIntact);
 }
 

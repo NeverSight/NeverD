@@ -143,7 +143,7 @@ def main() -> int:
     env = os.environ.copy()
     env["WINEDEBUG"] = "-all"
     if args.wine_prefix:
-        env.update(WINEARCH="win32", WINEPREFIX=str(args.wine_prefix.resolve()))
+        env.update(WINEPREFIX=str(args.wine_prefix.resolve()))
     report = {"schema": 1, "evidence": "realigned-source-reconstruction",
               "passed": False, "commands": [], "cases": []}
 

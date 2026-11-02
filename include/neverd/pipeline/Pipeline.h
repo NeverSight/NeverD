@@ -229,6 +229,13 @@ struct PipelineOptions {
   /// invalidation contract; nullptr preserves independent analysis.
   PipelineAnalysisCache *AnalysisCache = nullptr;
 
+  /// Display recovery may use tentative control-flow and stack relationships.
+  /// Binary output and specialization always request independent evidence.
+  bool allowsAnalysisRecovery() const {
+    return !PatchMode && !LiftMode && !DumpLlvm && !MedAnalysisOnly &&
+           !InterpreterSpecialization.has_value();
+  }
+
   /// Machine analysis and rewriting exclude presentation-only source hints.
   bool usesMachineMedIR() const {
     return PatchMode || LiftMode || MedAnalysisOnly;
@@ -495,7 +502,13 @@ struct FunctionOptimizationResult {
 /// reached by any definition, and Stop uses the documented severity order.
 struct OptimizationResult : FunctionOptimizationResult {
   uint64_t FunctionsVisited = 0;
+  /// The verifier or exception-contract refusal that stopped this transaction.
+  /// A failed candidate leaves the original module unchanged.
+  std::string Diagnostic;
 };
+
+/// Stable stop name followed by the available rejection detail.
+std::string optimizationStopMessage(const OptimizationResult &Result);
 
 class Pipeline {
 public:

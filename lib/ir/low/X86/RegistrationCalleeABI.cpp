@@ -5,9 +5,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTData.h"
+#include "RegistrationCRTFrame.h"
+#include "RegistrationImportLoad.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/RuntimeProviders.h"
@@ -37,6 +43,13 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
 
 } // namespace
 
+bool isPlainRegistrationCalleeEntry(const BinaryImage &Image, va_t Target) {
+  return Image.Arch == Arch::X86 && Image.Bits == Bitness::Bits32 &&
+         Image.Format == BinaryFormat::COFF && Target <= UINT32_MAX &&
+         Image.isCodeAddress(Target) &&
+         !Image.ExceptionMetadata.findFunction(Target);
+}
+
 const Import *checkedImportSlot(const BinaryImage &Image, va_t Target) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
       Image.Format != BinaryFormat::COFF)
@@ -58,21 +71,191 @@ const Import *checkedImportSlot(const BinaryImage &Image, va_t Target) {
   return Import;
 }
 
+namespace {
+const Import *checkedRuntimeImportSlot(const BinaryImage &Image, va_t Target) {
+  const auto *Import = checkedImportSlot(Image, Target);
+  return Import && isFileBackedPEImportSlot(Image, Target) ? Import : nullptr;
+}
+
+bool isRaiseExceptionProvider(const Import &Import) {
+  return Import.Name == "RaiseException" &&
+         coff_loader::isRaiseExceptionProvider(Import.Module);
+}
+
+bool isStartupInfoProvider(const Import &Import) {
+  return Import.Name == "GetStartupInfoW" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
+bool isHeapTerminationProvider(const Import &Import) {
+  return Import.Name == "HeapSetInformation" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
+bool isInterlockedProvider(const Import &Import) {
+  return Import.Name == "InterlockedCompareExchange" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
+bool isSleepProvider(const Import &Import) {
+  return Import.Name == "Sleep" &&
+         llvm::StringRef(Import.Module).equals_insensitive("kernel32.dll");
+}
+
+bool checkedDirectRuntimeCall(const BinaryImage &Image, const LowOp &Op,
+                              size_t &Work, bool (*Provider)(const Import &)) {
+  if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs != 1 || Op.Seq < 0 ||
+      !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Op.MemoryOrdering != NdMemoryOrdering::None || Op.Addr > UINT32_MAX - 6 ||
+      !chargeCalleeWork(Work, 10))
+    return false;
+  const auto *Import = checkedRuntimeImportSlot(Image, Op.Inputs[0].Offset);
+  if (!Import || !Provider(*Import))
+    return false;
+  const auto Bytes =
+      readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
+  return Bytes && (*Bytes)[0] == 0xff && (*Bytes)[1] == 0x15 &&
+         readLE<uint32_t>(Bytes->data() + 2) == Op.Inputs[0].Offset;
+}
+} // namespace
+
+bool isCheckedRegistrationRaiseSlot(const BinaryImage &Image, va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isRaiseExceptionProvider(*Import);
+}
+
+bool isCheckedRegistrationStartupInfoSlot(const BinaryImage &Image,
+                                          va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isStartupInfoProvider(*Import);
+}
+
+bool isCheckedRegistrationStartupInfoCall(const BinaryImage &Image,
+                                          const LowOp &Op, size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isStartupInfoProvider);
+}
+
+bool isCheckedRegistrationHeapTerminationSlot(const BinaryImage &Image,
+                                              va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isHeapTerminationProvider(*Import);
+}
+
+bool isCheckedRegistrationHeapTerminationCall(const BinaryImage &Image,
+                                              const LowOp &Op, size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isHeapTerminationProvider);
+}
+
+bool isCheckedRegistrationInterlockedSlot(const BinaryImage &Image,
+                                          va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isInterlockedProvider(*Import);
+}
+
+bool isCheckedRegistrationInterlockedCall(const BinaryImage &Image,
+                                          const LowOp &Op, size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isInterlockedProvider);
+}
+
+bool isCheckedRegistrationSleepSlot(const BinaryImage &Image, va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  return Import && isSleepProvider(*Import);
+}
+
+bool isCheckedRegistrationSleepCall(const BinaryImage &Image, const LowOp &Op,
+                                    size_t &Work) {
+  return checkedDirectRuntimeCall(Image, Op, Work, isSleepProvider);
+}
+
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
-  const auto *Named = Image.findImportAt(Target);
-  const auto *Import =
-      Named ? checkedImportSlot(Image, Named->IATAddr) : nullptr;
-  // These authenticated C-runtime entries use caller cleanup on PE32.
-  // This is a returning ESP fact only: allocation, deallocation, callbacks,
-  // errno and floating-point effects need separate memory/runtime contracts.
-  if (Import && !Import->IsDelayImport && isCallerCleanupCRTImport(*Import) &&
-      isFileBackedPEImportSlot(Image, Import->IATAddr))
+  // This owner proves an actual IAT slot. A registered veneer name cannot
+  // replace the separate current-instruction proof for a direct call.
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  // Cleanup is independent of the callee's memory, callback and FP effects.
+  if (Import && !Import->IsDelayImport && isCallerCleanupCRTImport(*Import))
     return 0;
-  if (!Import || Import->Name != "RaiseException" ||
-      !coff_loader::isRaiseExceptionProvider(Import->Module))
+  if (!Import)
     return std::nullopt;
-  return 16;
+  // These are returning ESP facts only. Dispatch, allocation, memory writes,
+  // pointer results, callbacks and FP state need separate effect contracts.
+  if (isRaiseExceptionProvider(*Import))
+    return 16;
+  if (isStartupInfoProvider(*Import))
+    return 4;
+  if (registration_state::isCheckedControlFPSlot(Image, Target))
+    return 0;
+  const llvm::StringRef Module = Import->Module;
+  const llvm::StringRef Name = Import->Name;
+  if (Module.equals_insensitive("kernel32.dll")) {
+    // The SDK's PE32 WINAPI declarations use 32-bit stack carriers. Exact
+    // exports matter: neither similarly named APIs nor other DLLs inherit it.
+    if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep" ||
+        Name == "IsProcessorFeaturePresent" ||
+        Name == "SetUnhandledExceptionFilter")
+      return 4;
+    if (Name == "InterlockedExchange")
+      return 8;
+    if (Name == "InterlockedCompareExchange")
+      return 12;
+    if (Name == "HeapSetInformation")
+      return 16;
+  }
+  return std::nullopt;
+}
+
+bool preservesRegistrationImportBindings(const BinaryImage &Image,
+                                         va_t Target) {
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
+  if (!Import)
+    return false;
+  const llvm::StringRef Module = Import->Module;
+  // The legacy MSVCR100 setters retain an int or encoded callback pointer in
+  // CRT state without replacing the caller image's IAT. __setusermatherr does
+  // not invoke that callback while setting it. Keep the write and runtime
+  // values opaque: this is no frame, callback, result or no-throw contract.
+  // Other CRT providers and the modern _set_app_type have separate contracts.
+  if (Module.equals_insensitive("msvcr100.dll") &&
+      (Import->Name == "__set_app_type" || Import->Name == "__setusermatherr"))
+    return true;
+  // These APIs transform pointer bits with a process-specific secret, without
+  // replacing the caller image's import slots. Keep the runtime result opaque;
+  // in particular, decoding does not establish frame-independent provenance.
+  return Module.equals_insensitive("kernel32.dll") &&
+         (Import->Name == "DecodePointer" || Import->Name == "EncodePointer");
+}
+
+std::optional<RegistrationImportLoad>
+checkedRegistrationImportLoad(const BinaryImage &Image, const LowBlock &Block,
+                              const LowInstructionBoundary &Boundary,
+                              size_t &Work,
+                              RegistrationImportLoadPolicy Policy) {
+  if (!chargeCalleeWork(Work, 1) ||
+      (Boundary.OpCount != 3 && Boundary.OpCount != 4) ||
+      !chargeCalleeWork(Work, 16))
+    return std::nullopt;
+  auto Load = registrationImportLoad(Block, Boundary);
+  if (!Load || (Boundary.Size != 5 && Boundary.Size != 6) ||
+      Boundary.Address > UINT32_MAX - Boundary.Size)
+    return std::nullopt;
+  if (!checkedRegistrationImportStackPop(Image, Load->Slot)) {
+    if (Policy != RegistrationImportLoadPolicy::IncludeCRTData ||
+        !isCheckedRegistrationCRTDataSlot(Image, Load->Slot))
+      return std::nullopt;
+    Load->Storage = RegistrationImportLoad::Kind::CRTData;
+  }
+  const unsigned Field = Boundary.Size - 4;
+  const auto Bytes = readImmutablePE32CodeBytes(
+      Image, Boundary.Address, Boundary.Size, {Boundary.Address + Field});
+  if (!Bytes || readLE<uint32_t>(Bytes->data() + Field) != Load->Slot)
+    return std::nullopt;
+  const unsigned Register = Load->Register / x86reg::GeneralRegStride;
+  if (Boundary.Size == 5
+          ? (*Bytes)[0] != 0xa1 || Register != 0
+          : (*Bytes)[0] != 0x8b || (*Bytes)[1] != uint8_t(0x05 + Register * 8))
+    return std::nullopt;
+  return Load;
 }
 
 bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {
@@ -83,16 +266,6 @@ bool callerPCIsNotReadBack(const ImageFrameEffects &Effects) {
     if (Read != Effects.Reads.end() && Read->first < End)
       return false;
   }
-  return true;
-}
-
-bool chargeCalleeWork(size_t &Work, size_t Amount) {
-  if (Work > limits::kMaxRegistrationEHStateWork ||
-      Amount > limits::kMaxRegistrationEHStateWork - Work) {
-    Work = limits::kMaxRegistrationEHStateWork;
-    return false;
-  }
-  Work += Amount;
   return true;
 }
 
@@ -188,6 +361,43 @@ bool retainLeafEntryBlocks(LowFunc &Function, size_t &Work,
 
 } // namespace
 
+namespace {
+thread_local RegistrationLeafPrefixMemo *CurrentLeafPrefixRefusals = nullptr;
+} // namespace
+
+RegistrationLeafPrefixMemoScope::RegistrationLeafPrefixMemoScope(
+    RegistrationLeafPrefixMemo &Memo)
+    : Previous(CurrentLeafPrefixRefusals) {
+  CurrentLeafPrefixRefusals = &Memo;
+}
+
+RegistrationLeafPrefixMemoScope::~RegistrationLeafPrefixMemoScope() {
+  CurrentLeafPrefixRefusals = Previous;
+}
+
+std::optional<size_t> RegistrationLeafPrefixMemo::find(const BinaryImage &Other,
+                                                       va_t Target,
+                                                       uint32_t Pop,
+                                                       bool ClosedCalls,
+                                                       unsigned Level) {
+  if (&Other != &Image)
+    return std::nullopt;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  const auto It = Refusals.find({Target, Pop, ClosedCalls, Level});
+  return It == Refusals.end() ? std::nullopt
+                              : std::optional<size_t>{It->second};
+}
+
+void RegistrationLeafPrefixMemo::record(const BinaryImage &Other, va_t Target,
+                                        uint32_t Pop, bool ClosedCalls,
+                                        unsigned Level, size_t Work) {
+  if (&Other != &Image || Work >= limits::kMaxRegistrationEHStateWork)
+    return;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  if (Refusals.size() < limits::ir::kMaxRegistrationLeafPrefixRefusals)
+    Refusals.emplace(std::make_tuple(Target, Pop, ClosedCalls, Level), Work);
+}
+
 std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
     const BinaryImage &Image, va_t Target, size_t &Work,
     RegistrationLeafResult ResultKind, uint32_t CopyObjectSize,
@@ -198,11 +408,23 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
       (Callbacks && (Initializer || CopyObjectSize)) ||
       (!Callbacks && CallbackStackPopBytes))
     return std::nullopt;
-  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
-      Image.Format != BinaryFormat::COFF || Target > UINT32_MAX ||
-      !Image.isCodeAddress(Target) ||
-      Image.ExceptionMetadata.findFunction(Target))
+  if (!registration_abi::isPlainRegistrationCalleeEntry(Image, Target))
     return std::nullopt;
+  const uint32_t Pop = Initializer      ? Initializer->StackPopBytes
+                       : CopyObjectSize ? 4
+                       : Callbacks      ? CallbackStackPopBytes
+                                        : 0;
+  const bool ClosedCalls = Context || Callbacks;
+  const unsigned Level = x86SEHStateAnalysisLevel();
+  RegistrationLeafPrefixMemo *Memo = Work <= limits::kMaxRegistrationEHStateWork
+                                         ? CurrentLeafPrefixRefusals
+                                         : nullptr;
+  if (Memo)
+    if (const auto Known = Memo->find(Image, Target, Pop, ClosedCalls, Level)) {
+      chargeCalleeWork(Work, *Known);
+      return std::nullopt;
+    }
+  const size_t Before = Work;
   if (!chargeCalleeWork(Work, 1))
     return std::nullopt;
   Decoder Decoder;
@@ -211,29 +433,40 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   CFGBuilder Builder;
   LowFunc Callee =
       Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-leaf");
-  const uint32_t Pop = Initializer      ? Initializer->StackPopBytes
-                       : CopyObjectSize ? 4
-                       : Callbacks      ? CallbackStackPopBytes
-                                        : 0;
+  bool ReadChildContext = false;
+  auto RefusePrefix = [&]() -> std::optional<RegistrationLeafCalleeABI> {
+    // The fresh raw integer graph reads no enclosing callee proof. Only its
+    // image-only checks before the first child query can be shared. Every
+    // caller still pays the same work, including a shorter-budget refusal.
+    if (Memo && !ReadChildContext && !Callee.ExceptionMetadata &&
+        Work < limits::kMaxRegistrationEHStateWork)
+      Memo->record(Image, Target, Pop, ClosedCalls, Level, Work - Before);
+    return std::nullopt;
+  };
   if (!chargeDecodedCallee(Work, Callee) || !Callee.hasCompleteLiftCoverage() ||
       Callee.Blocks.empty() || Callee.ExceptionMetadata ||
       !retainLeafEntryBlocks(Callee, Work, Pop))
-    return std::nullopt;
+    return RefusePrefix();
   InitializerCalls Initializers;
   ObjectCallbackCalls ObjectCallbacks;
   for (const auto &Block : Callee.Blocks) {
     if (Block.Succs.empty() &&
         (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN))
-      return std::nullopt;
+      return RefusePrefix();
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      if ((!Context && !Callbacks) || Op.Opcode != NdOp::CALL ||
-          Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
-          Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
+      // The private-frame interpreter rejects every reached ordinary leaf
+      // call. Do not reject a call on a proved infeasible edge before that
+      // shared traversal. Object graphs retain their separate closure check.
+      if (!Context && !Callbacks)
+        continue;
+      if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
+          !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 || Op.Seq < 0 ||
           Initializers.size() + ObjectCallbacks.size() >=
               kMaxObjectCallbackNodes)
-        return std::nullopt;
+        return RefusePrefix();
+      ReadChildContext = true;
       if (Context) {
         auto Nested = checkedInitializerCalleeABI(Image, Op.Inputs[0].Offset,
                                                   Work, *Context);
@@ -255,6 +488,7 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   }
   ImageFrameEffects Effects;
   bool IndependentScalarReturn = false;
+  bool ClosedIntegerEffects = false;
   const PrivateFrameOptions Frame{
       .BorrowECX = true,
       .IndependentScalarReturn = &IndependentScalarReturn,
@@ -263,7 +497,8 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
       .Initializer = Initializer,
       .Initializers = Initializer ? &Initializers : nullptr,
       .ObjectCallbacks = Callbacks ? &ObjectCallbacks : nullptr,
-      .CallbackStackPopBytes = CallbackStackPopBytes};
+      .CallbackStackPopBytes = CallbackStackPopBytes,
+      .ClosedIntegerEffects = &ClosedIntegerEffects};
   if (!hasPrivateCallerFrame(Callee, Image, Work, Effects, Frame))
     return std::nullopt;
   if (!callerPCIsNotReadBack(Effects))
@@ -272,6 +507,11 @@ std::optional<RegistrationLeafCalleeABI> registration_abi::checkedLeafCalleeABI(
   Result.Target = Target;
   Result.StackPopBytes = Pop;
   Result.HasIndependentScalarReturn = IndependentScalarReturn;
+  Result.PreservesBoundDispatchBindings =
+      ClosedIntegerEffects && !Initializer && !Callbacks && !CopyObjectSize;
+  Result.PreservesDispatchBindings = Result.PreservesBoundDispatchBindings &&
+                                     Effects.ECXReads.empty() &&
+                                     Effects.ECXWrites.empty();
   if (!collectCalleeCodeRanges(Callee, Image, Work, Result.CodeRanges))
     return std::nullopt;
   std::set<std::pair<va_t, va_t>> Code;

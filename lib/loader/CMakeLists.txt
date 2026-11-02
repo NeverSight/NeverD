@@ -54,6 +54,7 @@ add_neverd_component_library(NeverDLoader
   COFF/eh/COFFRegistrationEHPersonality.cpp
   COFF/eh/COFFRegistrationEHScan.cpp
   COFF/eh/COFFRegistrationEHCxxHelper.cpp
+  COFF/eh/COFFSEH4Entry.cpp
   COFF/eh/COFFStackProbe.cpp
   COFF/eh/COFFCxxEpilogue.cpp
   COFF/eh/COFFRegistrationEHAlignedEntry.cpp

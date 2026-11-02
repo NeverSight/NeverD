@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Solve registration lifetimes, caller-frame ownership and invocation effects.
+///
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_LOW_X86_REGISTRATIONSTATESOLVER_H
 #define NEVERD_IR_LOW_X86_REGISTRATIONSTATESOLVER_H
@@ -21,7 +26,9 @@
 
 namespace neverd::coff_loader {
 struct X86CxxEpilogueCall;
-}
+struct X86SEH4PrologueCall;
+struct X86SEH4EpilogueCall;
+} // namespace neverd::coff_loader
 
 namespace neverd::registration_state {
 
@@ -34,7 +41,7 @@ struct CxxCatchContext {
   std::optional<CallbackFrameAddress> SavedCallback;
   std::optional<va_t> SuspendedCallback;
   std::optional<int32_t> SuspendedStackOffset;
-  std::map<int32_t, FrameValue> SuspendedCells;
+  FrameCells SuspendedCells;
   std::set<int32_t> SuspendedInitializedBytes;
   size_t cellCount() const {
     return 1 + SuspendedCells.size() + SuspendedInitializedBytes.size();
@@ -64,9 +71,9 @@ struct SEHActivation {
   auto operator<=>(const SEHActivation &) const = default;
 };
 
-/// Keep a live buffer's saved unwind bound correlated with the reaching state.
-/// Other frame facts still join and can invalidate the buffer; this key grants
-/// no initialization or value authority of its own.
+/// Keep C++ cleanup ownership and a live SEH buffer's saved unwind bound
+/// correlated with the reaching state. Other facts still join at the same
+/// state; this key grants no initialization or value authority of its own.
 struct SEHFlowKey {
   SEHActivation Activation;
   std::vector<int32_t> Levels;
@@ -93,6 +100,9 @@ struct Domain {
   /// The parent must reconnect its own node or remove the chain before calls.
   bool AbandonedSEHGuard = false;
   bool CanDispatch = false;
+  /// All possible exception origins so far have closed integer effects and
+  /// closed C++ callbacks. Distinct from ordinary-return IAT liveness.
+  bool CxxDispatchBindingsIntact = true;
   std::optional<int32_t> OrdinaryCallStack;
   struct ParentStackRestore {
     va_t Address = InvalidVA;
@@ -220,11 +230,16 @@ public:
       const coff_loader::X86CxxHandlerABI *CxxHandler = nullptr,
       const coff_loader::X86CxxPrologueCall *CxxPrologue = nullptr,
       const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues =
-          nullptr);
-  RegistrationStateAnalysis run();
+          nullptr,
+      const coff_loader::X86SEH4PrologueCall *SEH4Prologue = nullptr,
+      const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues =
+          nullptr,
+      const CxxCallerProof *CxxCalls = nullptr);
+  RegistrationStateAnalysis run(size_t InitialWork = 0);
   size_t workUsed() const { return WorkUsed; }
 
 private:
+  bool stopRefusedConditional(const LowOp *Op = nullptr);
   bool initialize();
   bool initializeOrder();
   bool extendSEHParentOwnership();
@@ -233,6 +248,12 @@ private:
                                  uint16_t Width) const;
   bool registrationInstallationReady(const FrameState &Frame) const;
   bool validateCxxPrologue() const;
+  bool validateSEH4Prologue() const;
+  bool transferSEH4Prologue(size_t I, Domain &State, const LowOp &Op,
+                            BlockFacts &Facts);
+  bool transferSEH4Epilogue(size_t I, Domain &State, const LowOp &Op,
+                            BlockFacts &Facts,
+                            const coff_loader::X86SEH4EpilogueCall &Call);
   bool transferCxxPrologue(size_t I, Domain &State, const LowOp &Op,
                            BlockFacts &Facts);
   bool transferCxxEpilogue(size_t I, Domain &State, const LowOp &Op,
@@ -265,10 +286,19 @@ private:
     bool DoesNotReturn;
     va_t EndAddress;
     std::optional<FrameValue> Result;
+    /// Invocation-bound writes may also precede exceptional dispatch.
+    std::vector<RegistrationObjectExtent> MayWrites;
+    /// Complete image may-writes have already invalidated affected bindings.
+    /// This does not authorize retaining cached callable register identities.
+    bool PreservesImportBindings = false;
+    bool PreservesDispatchBindings = false;
   };
   std::optional<CallTransfer> transferCall(size_t I, Domain &After,
                                            const LowOp &Op,
                                            const BlockFacts &Facts);
+  std::optional<CallTransfer>
+  transferConditionalCxxCall(Domain &After, const LowOp &Op,
+                             const BlockFacts &Facts);
   bool transferScalarArguments(Domain &After,
                                const RegistrationCalleeFrameContract &Callee,
                                FrameValue &StackPointer,
@@ -358,13 +388,16 @@ private:
   bool recordSEHExceptionMemory(size_t I, Domain &After, const LowOp &Op,
                                 const FrameTransfer &Transfer,
                                 BlockFacts &Facts);
+  bool recordSEHThreadMemory(size_t I, Domain &After, const LowOp &Op,
+                             const FrameTransfer &Transfer, BlockFacts &Facts);
   bool runtimeObjectIsLive(const Domain &State,
                            std::pair<uint32_t, uint32_t> Identity);
   bool transferBlock(size_t I, const Domain &Before, BlockFacts &Facts);
   bool transferBoundSEHCallee(size_t I, const Domain &Before, Domain &After,
                               const LowOp &Op, BlockFacts &Facts,
                               std::optional<FrameValue> &CallSP,
-                              std::optional<Domain> &CallException);
+                              std::optional<Domain> &CallException,
+                              std::optional<FrameValue> &CallResult);
   bool transferJumpCapture(size_t I, Domain &After, const LowOp &Op,
                            const BlockFacts &Facts,
                            std::optional<FrameValue> &CallSP);
@@ -377,22 +410,39 @@ private:
   transferControlFP(const Domain &Before, Domain &After, const LowOp &Op,
                     const BlockFacts &Facts,
                     std::optional<Domain> &CallException);
+  std::optional<FrameValue>
+  transferStartupInfo(const Domain &Before, Domain &After, const LowOp &Op,
+                      const BlockFacts &Facts,
+                      std::optional<Domain> &CallException);
+  std::optional<FrameValue> transferHeapTermination(const Domain &State,
+                                                    const LowOp &Op,
+                                                    const BlockFacts &Facts);
+  std::optional<FrameValue>
+  transferSynchronization(const Domain &State, const LowOp &Op,
+                          const BlockFacts &Facts,
+                          std::optional<FrameValue> &CallResult);
   void recordSEHRuntimeCall(const Domain &State, const LowOp &Op,
                             RegistrationSEHBoundCall::Kind Kind,
-                            std::optional<int32_t> Output = std::nullopt);
+                            std::optional<int32_t> Output = std::nullopt,
+                            va_t ImageOutput = 0);
   bool resumeJumpCapture(Domain &After, BlockFacts &Facts, const LowOp &Op,
                          const SEHJumpCapture &Saved, const FrameValue &Value,
                          va_t CalleeVA = 0, va_t ResumeVA = 0);
   void invalidateJumpCaptures(Domain &State, const FrameValue &Address,
                               uint16_t Width);
   void invalidateJumpRuntimeBindings(Domain &State, const FrameValue &Address,
-                                     uint16_t Width);
+                                     uint64_t Width);
   bool checkConditionalMemory(const FrameState &State, const LowOp &Op,
                               const FrameTransfer &Transfer,
                               const std::set<int32_t> *Initialized = nullptr);
   bool conditionalReturn(const Domain &State, const LowOp &Op);
-  bool conditionalCall(const FrameState &State, const LowOp &Op);
-  void dispatchBlock(size_t I, const Domain &Before, const BlockFacts &Facts);
+  bool conditionalCall(const Domain &State, const LowOp &Op,
+                       std::optional<FrameValue> &ReturnValue);
+  bool preservesCxxDispatchBindings(const Domain &State, const LowOp &Op,
+                                    const FrameTransfer &Transfer,
+                                    bool RuntimeMemory);
+  void dispatchBlock(size_t I, const Domain &Before, const BlockFacts &Facts,
+                     bool PreserveBindings = false);
   bool dispatchUnknownCxxCleanups(const Domain &Before);
   void queueSEHScopes(const Domain &Before, bool Invalid);
   void flushSEHScopes();
@@ -412,11 +462,14 @@ private:
   /// saved-stack, exception-pointer, realigned-anchor or cookie storage.
   bool frameObjectIsDisjointFromAdministration(int64_t Begin,
                                                int64_t End) const;
+  std::optional<RegistrationObjectExtent>
+  cxxBorrowedStorage(const Domain &State, int32_t Begin);
   bool projectFrameObject(const Domain &State, int32_t Object,
                           std::optional<int32_t> SP,
                           llvm::ArrayRef<RegistrationObjectExtent> Extents,
                           std::vector<RegistrationObjectExtent> &Projected,
-                          bool Reads);
+                          bool Reads, bool RecordBorrowedEffects = true,
+                          bool RequireInitializedReads = true);
   std::optional<int32_t> cookieSlot(int32_t Displacement) const;
   bool cookiesReady(const FrameState &Frame) const;
   bool cxxCookiesReady(const Domain &State) const;
@@ -424,10 +477,12 @@ private:
   void recordChainAccess(const LowOp &Op, const LowBlock &Block,
                          RegistrationChainAccess::Kind Kind);
   void merge(size_t Target, const Domain &Source);
-  void dispatch(
-      va_t Address, std::set<int32_t> Levels, const Domain &Source,
-      bool Unknown = false, bool Callback = false, bool SearchFilter = false,
-      std::optional<std::pair<uint32_t, uint32_t>> CxxCatch = std::nullopt);
+  void
+  dispatch(va_t Address, std::set<int32_t> Levels, const Domain &Source,
+           bool Unknown = false, bool Callback = false,
+           bool SearchFilter = false,
+           std::optional<std::pair<uint32_t, uint32_t>> CxxCatch = std::nullopt,
+           bool PreserveBindings = false);
 
   const LowFunc &Function;
   const ExceptionFunction &EH;
@@ -436,6 +491,9 @@ private:
   va_t CookieCheckVA;
   const coff_loader::X86CxxHandlerABI *CxxHandler;
   const coff_loader::X86CxxPrologueCall *CxxPrologue;
+  const coff_loader::X86SEH4PrologueCall *SEH4Prologue;
+  const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues;
+  std::map<va_t, const coff_loader::X86SEH4EpilogueCall *> SEH4EpilogueIndex;
   const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues;
   std::map<va_t, const coff_loader::X86CxxEpilogueCall *> CxxEpilogueIndex;
   const std::vector<RegistrationCalleeFrameContract> *Callees;
@@ -446,12 +504,18 @@ private:
   ConditionalFrame *Conditional;
   const BoundCalleeProver *BoundCallees;
   const SEHJumpRuntime *JumpRuntime;
+  const CxxCallerProof *CxxCalls;
   const bool KnownCxx;
   const bool EH4;
   const bool CheckCalls;
+  const bool TrackRuntimeArguments;
   const bool CheckRuntimeObjects;
   const bool CheckCleanups;
   RegistrationStateAnalysis Result;
+
+  /// One entry seed owns both invocation refinements and opaque identities.
+  /// Shared prologues must preserve this seed through their decoded prefix.
+  decltype(FrameState::Registers) ParentEntryRegisters;
 
   std::map<int, size_t> Index;
   std::map<va_t, size_t> Entries;
@@ -480,6 +544,7 @@ private:
   bool Exhausted = false;
   bool ProvenInstallation = false;
   std::optional<RegistrationCxxPrologueEffect> CxxPrologueEffect;
+  std::optional<RegistrationSEH4PrologueEffect> SEH4PrologueEffect;
   bool CompleteChainOperations = true;
   std::map<std::pair<va_t, int>, RegistrationChainAccess> ChainAccesses;
   std::map<va_t, std::pair<int, LowInstructionBoundary>> Boundaries;
@@ -488,6 +553,11 @@ private:
 
   std::map<va_t, uint32_t> CalleeIndices;
   std::map<std::pair<va_t, bool>, uint32_t> StackPops;
+  std::map<std::pair<va_t, int>, va_t> StackImportLoads;
+  std::set<va_t> StackImportSlots;
+  std::set<va_t> StackBindingCallees;
+  std::set<va_t> StackImportVeneers;
+  std::set<std::pair<va_t, bool>> StackBindingPreservers;
   std::map<std::pair<va_t, bool>, RegistrationLocalUnwindContract>
       LocalUnwindTargets;
   std::set<va_t> LocalUnwindImportSlots;
@@ -499,6 +569,9 @@ private:
   std::set<SEHExitKey> InvalidSEHExits;
   std::map<SEHExitKey, RegistrationSEHJumpResume> JumpResumptions;
   std::map<std::pair<va_t, int>, RegistrationSEHBoundCall> BoundCalls;
+  /// A runtime occurrence must retain its binding on every reaching visit,
+  /// including later loop iterations and distinct callback activations.
+  std::set<std::pair<va_t, int>> InvalidRuntimeBindings;
   std::map<std::pair<va_t, int>, RegistrationSEHJumpCapture>
       JumpCaptureOccurrences;
   std::set<va_t> ModifiedCallbackCaptures;
@@ -507,6 +580,7 @@ private:
   // Each source still supplies its own frame to every callback transfer.
   std::optional<std::vector<std::pair<va_t, int32_t>>> UnknownCxxCleanupRoots;
   bool CompleteCalls;
+  bool HasSourceOnlyCallEffects = false;
   bool CompleteCleanups;
   bool CompleteCatchObjects;
   bool CompleteRuntimeObjects;
@@ -531,6 +605,8 @@ private:
   std::set<std::pair<va_t, va_t>> ImageReads;
   std::map<std::pair<va_t, int>, std::optional<RegistrationSEHExceptionAccess>>
       SEHExceptionAccesses;
+  std::map<std::pair<va_t, int>, std::optional<RegistrationSEHThreadAccess>>
+      SEHThreadAccesses;
 
   bool CompleteCookies = false;
   bool CxxCookies = false;

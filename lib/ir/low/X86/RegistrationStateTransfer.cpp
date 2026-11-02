@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Transfer ordinary x86 operations through registration and frame state.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationFrameEffects.h"
 #include "RegistrationStateSolver.h"
@@ -11,6 +16,7 @@
 #include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -35,6 +41,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     return true;
   Domain After = Before;
   std::optional<Domain> CallException;
+  bool UnprovedExceptionalBindings = false;
   FrameTransfer Transfer(
       After.Frame, *Chain.RegistrationOffset,
       EH4 || CxxCookies || CxxPrologue ? SecurityCookieVA : 0,
@@ -76,6 +83,29 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       RegisterBytes += Op.Inputs[Input].Size;
     if (!charge(1 + RegisterBytes + MemoryWork))
       break;
+    const bool SEH4Entry = SEH4Prologue && Op.Addr == SEH4Prologue->CallVA;
+    const auto SEH4Exit = SEH4EpilogueIndex.find(Op.Addr);
+    if (SEH4Entry || SEH4Exit != SEH4EpilogueIndex.end()) {
+      const bool Applied = SEH4Entry ? transferSEH4Prologue(I, After, Op, Facts)
+                                     : transferSEH4Epilogue(I, After, Op, Facts,
+                                                            *SEH4Exit->second);
+      if (!Applied) {
+        Invalidate();
+        CompleteCalls = CompleteChainOperations = CompleteCookies = false;
+      } else {
+        const auto Value =
+            After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+        LowOp Returned;
+        Returned.Opcode = NdOp::COPY;
+        Returned.Output = Op.Output;
+        Transfer.write(Returned, Value);
+        auto [It, New] =
+            FrameValues.emplace(std::make_pair(Op.Addr, Op.Seq), Value);
+        if (!New)
+          It->second = registration_state::join(It->second, Value);
+      }
+      continue;
+    }
     if (CxxPrologue && Op.Addr == CxxPrologue->CallVA) {
       if (!transferCxxPrologue(I, After, Op, Facts)) {
         Invalidate();
@@ -118,8 +148,19 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
       continue;
     }
-    FrameValue Value = Transfer.evaluate(Op, After.Installed);
+    const auto ImportLoad = StackImportLoads.find({Op.Addr, Op.Seq});
+    FrameValue Value =
+        Transfer.evaluate(Op, After.Installed,
+                          ImportLoad == StackImportLoads.end()
+                              ? std::nullopt
+                              : std::optional<va_t>{ImportLoad->second});
+    std::optional<FrameValue> CallResult;
     if (Conditional) {
+      if (Conditional->EvaluateOriginalImage)
+        if (const auto Original = Conditional->EvaluateOriginalImage(
+                Op, Transfer, WorkUsed, Value.SecurityCookie);
+            Original && !Value.SecurityCookie)
+          Value = *Original;
       // The caller's physical registration address changes during native
       // reconstruction. Preserve its provenance through arithmetic and spills
       // while retaining the exact identity for chain install/remove checks.
@@ -130,11 +171,13 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
       invalidateJumpRuntimeBindings(After, Transfer.read(*Memory.Address),
                                     Memory.AccessSize);
-    if (Conditional &&
-        (!checkConditionalMemory(After.Frame, Op, Transfer,
-                                 &After.InitializedFrameBytes) ||
-         !conditionalReturn(After, Op) || !conditionalCall(After.Frame, Op)))
+    if (Conditional && (!checkConditionalMemory(After.Frame, Op, Transfer,
+                                                &After.InitializedFrameBytes) ||
+                        !conditionalReturn(After, Op) ||
+                        !conditionalCall(After, Op, CallResult)))
       Invalidate();
+    if (stopRefusedConditional(&Op))
+      return false;
     FrameValue RuntimeValue;
     if (CheckRuntimeObjects) {
       if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) {
@@ -191,8 +234,31 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     RuntimeMemory =
         recordRuntimeMemory(I, After, Op, Transfer, RuntimeTransfer, Facts);
     RuntimeMemory |= recordSEHExceptionMemory(I, After, Op, Transfer, Facts);
+    RuntimeMemory |= recordSEHThreadMemory(I, After, Op, Transfer, Facts);
     if (Exhausted)
       break;
+    const bool ProveCxxDispatch =
+        KnownCxx && CxxCalls && bool(CxxCalls->ProveDispatchCall);
+    if (!StackImportSlots.empty()) {
+      if (!charge(StackImportSlots.size() + 1))
+        break;
+      // A checked live exception allocation is disjoint from every IAT slot.
+      // This preserves only existing bindings; unknown object accesses keep
+      // the ordinary conservative invalidation below.
+      if (!(ProveCxxDispatch && RuntimeMemory))
+        Transfer.invalidateImportBindings(Op, StackImportSlots);
+    }
+    if (ProveCxxDispatch && Op.Opcode != NdOp::CALL &&
+        Op.Opcode != NdOp::INDIR_CALL) {
+      const bool Closed =
+          preservesCxxDispatchBindings(After, Op, Transfer, RuntimeMemory);
+      After.CxxDispatchBindingsIntact &= Closed;
+      // A continuing fault can also change the next ordinary slot call.
+      // Losing only the exceptional-edge fact would let a catch keep using
+      // a runtime binding after its own unproved access.
+      if (!Closed)
+        After.Frame.ImportBindingsIntact = false;
+    }
 
     if ((EH4 || CxxCookies) && Op.Opcode == NdOp::INTRINSIC &&
         !isFramePreservingIntrinsic(Op))
@@ -203,7 +269,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       if (!Memory.Complete)
         CompleteCookies = false;
       if (After.Installed && !RuntimeMemory && !Address.CallbackAddress &&
-          (!Address.Offset && Address.MayBeFrame))
+          !Address.EntryOffset && (!Address.Offset && Address.MayBeFrame))
         CompleteCookies = false;
       if (After.Installed && Address.Offset) {
         auto Touches = [&](std::optional<int32_t> Slot) {
@@ -233,16 +299,18 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       if (Memory.StoredValue) {
         const uint64_t TableEnd =
             Chain.ScopeTableVA + 16 + uint64_t(Chain.Scopes.size()) * 12;
-        // The callback-memory owner above proves its private stack disjoint
-        // from the establisher and image. It cannot overwrite either cookie.
-        if (!Address.Offset && !Address.CallbackAddress &&
-            (!Address.Constant ||
-             (uint64_t(*Address.Constant) < SecurityCookieVA + 4 &&
+        // The callback and realignment owners above prove their separate
+        // stack coordinates disjoint from the establisher and image. Neither
+        // the callback stack nor the saved entry registers alias a cookie.
+        if (!Address.Offset && !Address.EntryOffset &&
+            !Address.CallbackAddress &&
+            (!Address.preferredAddress() ||
+             (uint64_t(*Address.preferredAddress()) < SecurityCookieVA + 4 &&
               SecurityCookieVA <
-                  uint64_t(*Address.Constant) + Memory.AccessSize) ||
-             (EH4 && uint64_t(*Address.Constant) < TableEnd &&
+                  uint64_t(*Address.preferredAddress()) + Memory.AccessSize) ||
+             (EH4 && uint64_t(*Address.preferredAddress()) < TableEnd &&
               Chain.ScopeTableVA <
-                  uint64_t(*Address.Constant) + Memory.AccessSize)))
+                  uint64_t(*Address.preferredAddress()) + Memory.AccessSize)))
           CompleteCookies = false;
       }
     }
@@ -294,9 +362,10 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       else if (Address.Offset || Address.EntryOffset ||
                Address.CallbackAddress || RuntimeMemory) {
         // The established private frame cannot alias an image allocation.
-      } else if (Address.Constant && !Address.MayBeFrame)
-        ImageReads.emplace(*Address.Constant,
-                           va_t(*Address.Constant) + Memory.AccessSize);
+      } else if (Address.preferredAddress() && !Address.MayBeFrame)
+        ImageReads.emplace(*Address.preferredAddress(),
+                           va_t(*Address.preferredAddress()) +
+                               Memory.AccessSize);
       else
         CompleteImageReads = false;
     }
@@ -437,7 +506,8 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
             (Address.Offset != int64_t(*Chain.RegistrationOffset) - 4 ||
              Width != 4))
           Invalidate();
-        if (After.Installed && Chain.RealignedFrame && Address.Offset &&
+        if (After.Installed && Chain.RealignedFrame &&
+            Chain.RealignedFrame->hasSavedParentFrame() && Address.Offset &&
             overlaps(*Address.Offset, Width,
                      Chain.RealignedFrame->SavedParentFrameOffset, 4))
           Invalidate();
@@ -445,12 +515,22 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
           if (!charge(After.Frame.memoryAccessWork(Address, Width, true) + 1))
             break;
           After.Frame.store(*Address.Offset, Width, Stored);
-          if (CheckCalls || Conditional) {
+          if (CheckCalls || Conditional || TrackRuntimeArguments) {
             auto SP = parentStackOffset(After);
             if (Conditional && !SP && After.Frame.CallbackEntry)
               SP = After.Frame.load(*Chain.RegistrationOffset - 8, 4).Offset;
             const int64_t End = int64_t(*Address.Offset) + Width;
-            if (SP && *Address.Offset >= *SP && End <= (Conditional ? 4 : 0)) {
+            bool Borrowed = false;
+            if (KnownCxx && Conditional && *Address.Offset >= 8 &&
+                End <= INT32_MAX) {
+              if (!charge(Conditional->Objects.size()))
+                break;
+              Borrowed = llvm::any_of(Conditional->Objects, [&](const auto &R) {
+                return R.Begin <= *Address.Offset && End <= R.End;
+              });
+            }
+            if (Borrowed || (SP && *Address.Offset >= *SP &&
+                             End <= (Conditional ? 4 : 0))) {
               if (!charge(Width))
                 break;
               for (int64_t Byte = *Address.Offset; Byte < End; ++Byte)
@@ -459,8 +539,9 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
           }
           if (Address.Offset == Chain.TryLevelOffset &&
               ProvenStores.count(Op.Addr) && After.Levels.size() == 1)
-            After.Frame.Cells[*Chain.TryLevelOffset] =
-                FrameValue::constant(uint32_t(*After.Levels.begin()));
+            After.Frame.Cells.set(
+                *Chain.TryLevelOffset,
+                FrameValue::constant(uint32_t(*After.Levels.begin())));
         } else if (Address.CallbackAddress) {
           if (!After.Frame.callbackMemoryIsPrivate(*Address.CallbackAddress,
                                                    Width) ||
@@ -479,24 +560,33 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
             Invalidate();
           else
             After.Frame.storeEntry(*Address.EntryOffset, Width, Stored);
-        } else if (Stored.MayBeFrame) {
-          // A frame pointer escaped to storage whose future aliases cannot
-          // be bounded by this frame-value domain.
+        } else if (!Stored.isFrameIndependentScalar()) {
+          // A frame-derived value escaped to storage whose future aliases
+          // cannot be bounded here. Opaque runtime scalars remain independent
+          // of frame placement; their address bits supply no dereference proof.
           Invalidate();
         }
-        if (CheckCalls && !RuntimeMemory && !Address.Offset &&
-            !Address.EntryOffset && !Address.CallbackAddress &&
-            !Address.Constant) {
+        if ((CheckCalls || TrackRuntimeArguments) && !RuntimeMemory &&
+            !Address.Offset && !Address.EntryOffset &&
+            !Address.CallbackAddress && !Address.preferredAddress()) {
           After.InitializedFrameBytes.clear();
-          if (!charge(After.Frame.cellCount()))
-            break;
-          After.Frame.forgetCellValues();
+          if (CheckCalls) {
+            if (!charge(After.Frame.cellCount()))
+              break;
+            After.Frame.forgetCellValues();
+          }
         }
       }
     }
     std::optional<FrameValue> CallSP;
-    std::optional<FrameValue> CallResult;
     bool CheckedCall = false;
+    bool CallPreservesImportBindings = false;
+    if (!KnownCxx && !After.JumpBindingsIntact &&
+        (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+      if (!charge(1))
+        break;
+      InvalidRuntimeBindings.emplace(Op.Addr, Op.Seq);
+    }
     const bool JumpCapture = transferJumpCapture(I, After, Op, Facts, CallSP);
     const bool JumpResume = transferJumpResume(I, After, Op, Facts);
     const auto LocalSP = !JumpCapture && !JumpResume
@@ -506,18 +596,53 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       CallSP = *LocalSP;
     if (CheckedCxxCookieCall)
       CallSP = After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+    bool ClosedCallDispatch = false;
     if (!CheckedCxxCookieCall && !JumpCapture && !JumpResume && !LocalSP &&
         !transferOrdinaryFinally(I, After, Op, Facts, CallSP))
       if (auto Call = transferCall(I, After, Op, Facts)) {
         CheckedCall = true;
+        CallPreservesImportBindings = Call->PreservesImportBindings;
+        ClosedCallDispatch = Call->PreservesDispatchBindings;
         CallSP = Call->StackPointer;
         CallResult = Call->Result;
+        if (!Call->MayWrites.empty()) {
+          if (!charge(Before.Frame.cellCount() + 1))
+            break;
+          if (!CallException)
+            CallException = Before;
+          for (const auto &Write : Call->MayWrites) {
+            if (!charge(CallException->Frame.cellCount() + 1))
+              break;
+            CallException->Frame.forgetCellValues(
+                Write.Begin, uint32_t(Write.End - Write.Begin));
+          }
+        }
         NoReturnAtExit = Call->DoesNotReturn;
         if (NoReturnAtExit)
           NoReturnEnd = Call->EndAddress;
       }
     if (!CallSP)
       CallSP = transferControlFP(Before, After, Op, Facts, CallException);
+    if (!CallSP)
+      if (auto StartupSP =
+              transferStartupInfo(Before, After, Op, Facts, CallException)) {
+        CallSP = *StartupSP;
+        // This invocation's complete output lies in the private frame. Its
+        // possible writes cannot replace image import slots. Retain only
+        // bindings that were still live before the checked call.
+        CallPreservesImportBindings = true;
+      }
+    if (!CallSP)
+      if (auto HeapSP = transferHeapTermination(After, Op, Facts)) {
+        CallSP = *HeapSP;
+        CallPreservesImportBindings = true;
+      }
+    if (!CallSP)
+      if (auto RuntimeSP =
+              transferSynchronization(After, Op, Facts, CallResult)) {
+        CallSP = *RuntimeSP;
+        CallPreservesImportBindings = true;
+      }
     if (!CallSP && JumpRuntime && JumpRuntime->Raise &&
         After.JumpBindingsIntact && !After.Unknown && !Facts.Invalid &&
         After.Installed && !After.Uninstalled &&
@@ -544,17 +669,23 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       }
     }
     if (!transferBoundSEHCallee(I, Before, After, Op, Facts, CallSP,
-                                CallException))
+                                CallException, CallResult))
       break;
     if (!CallSP && !JumpCapture && !JumpResume)
       CallSP = transferPrivateSEHCall(After, Op, Facts);
-    if (!JumpCapture && !JumpResume && !CallSP && !Facts.InvocationAtExit &&
+    const bool UnprovedCallEffects =
+        !JumpCapture && !JumpResume && !CallSP && !Facts.InvocationAtExit &&
         (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-         (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)))) {
+         (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)));
+    if (TrackRuntimeArguments &&
+        (UnprovedCallEffects || JumpCapture || JumpResume))
+      After.InitializedFrameBytes.clear();
+    if (UnprovedCallEffects) {
       if (After.Callback)
         for (const auto &[Offset, Capture] : After.JumpCaptures)
           ModifiedCallbackCaptures.insert(Capture.Call);
       After.JumpCaptures.clear();
+      UnprovedExceptionalBindings = true;
     }
     if (!JumpResume && !CallSP && !Facts.InvocationAtExit && SEHControls &&
         !KnownCxx && Before.Callback && Before.Activation.Entry &&
@@ -593,25 +724,54 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     // Stack balance alone does not discharge transferCall's memory, object
     // initialization or no-return obligations. Retain their refusal while
     // recovering the independent register coordinate for ordinary flow.
-    if (!CallSP && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-        Op.NumInputs == 1 && Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4) {
+    bool ImportedCall = false;
+    bool PreserveImportBindings = false;
+    if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+        Op.NumInputs == 1 && Op.Inputs[0].Size == 4 &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        Op.MemoryOrdering == NdMemoryOrdering::None) {
+      const auto Target =
+          Op.Inputs[0].isConst() ? std::optional<va_t>{Op.Inputs[0].Offset}
+          : Op.Opcode == NdOp::INDIR_CALL
+              ? std::optional<va_t>{Transfer.read(Op.Inputs[0]).ImportTarget}
+              : std::nullopt;
       const auto It =
-          StackPops.find({Op.Inputs[0].Offset, Op.Opcode == NdOp::INDIR_CALL});
+          Target ? StackPops.find({*Target, Op.Opcode == NdOp::INDIR_CALL})
+                 : StackPops.end();
       const auto Boundary = Boundaries.find(Op.Addr);
       if (It != StackPops.end() && Op.Seq >= 0 &&
+          (!Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact ||
+           (Op.Opcode == NdOp::CALL && !StackBindingCallees.count(*Target))) &&
           Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
           Boundary->second.second.Control == LowInstructionControl::Call) {
-        LowOp Adjust;
-        Adjust.Opcode = NdOp::INT_ADD;
-        Adjust.Output = NdVar::reg(x86reg::RSP, 4);
-        Adjust.NumInputs = 2;
-        Adjust.Inputs[0] = Adjust.Output;
-        Adjust.Inputs[1] = NdVar::cst(It->second, 4);
-        CallSP = Transfer.evaluate(Adjust, After.Installed);
+        ImportedCall =
+            Op.Opcode == NdOp::INDIR_CALL || StackImportVeneers.count(*Target);
+        PreserveImportBindings = StackBindingPreservers.count(It->first);
+        if (!CallSP) {
+          LowOp Adjust;
+          Adjust.Opcode = NdOp::INT_ADD;
+          Adjust.Output = NdVar::reg(x86reg::RSP, 4);
+          Adjust.NumInputs = 2;
+          Adjust.Inputs[0] = Adjust.Output;
+          Adjust.Inputs[1] = NdVar::cst(It->second, 4);
+          CallSP = Transfer.evaluate(Adjust, After.Installed);
+        }
       }
     }
+    // Stack cleanup does not preserve a future runtime target. A separate
+    // imported normal-return effect may retain a still-live binding, but it
+    // cannot repair earlier loss or authorize the exceptional path above.
+    if (UnprovedCallEffects && !(ImportedCall && PreserveImportBindings))
+      After.JumpBindingsIntact = false;
     recordSEHStackRestore(Op, After, Transfer, Value);
-    Transfer.write(Op, Value, CookieCheckVA);
+    if (ProveCxxDispatch &&
+        (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+      After.CxxDispatchBindingsIntact &= ClosedCallDispatch;
+      if (!ClosedCallDispatch)
+        After.Frame.ImportBindingsIntact = false;
+    }
+    Transfer.write(Op, Value, CookieCheckVA, ImportedCall,
+                   PreserveImportBindings || CallPreservesImportBindings);
     if (JumpCapture)
       After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
           FrameValue::constant(0);
@@ -638,8 +798,20 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         break;
       After.Frame.trimCallbackCells();
     }
-    if (CallSP)
+    if (CallSP) {
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
+      if (TrackRuntimeArguments) {
+        if (!CallSP->Offset)
+          After.InitializedFrameBytes.clear();
+        else {
+          if (!charge(After.InitializedFrameBytes.size()))
+            break;
+          After.InitializedFrameBytes.erase(
+              After.InitializedFrameBytes.begin(),
+              After.InitializedFrameBytes.lower_bound(*CallSP->Offset));
+        }
+      }
+    }
     if (CallResult) {
       After.Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
           *CallResult;
@@ -653,7 +825,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     if (const auto SP = parentStackOffset(After))
       std::erase_if(After.JumpCaptures,
                     [&](const auto &Capture) { return *SP > Capture.first; });
-    if ((CheckCalls || Conditional) &&
+    if ((CheckCalls || Conditional || TrackRuntimeArguments) &&
         !(Conditional &&
           After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
               .CallbackAddress) &&
@@ -710,7 +882,22 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
   }
   if (CatchReturn)
     resumeCxxCatch(After, *CatchReturn);
-  dispatchBlock(I, CallException ? *CallException : Before, Facts);
+  // A call or explicit image write can change a runtime binding before a
+  // fault dispatches this block. Do not lend the pre-block binding or capture
+  // to a filter/finally after that possible effect.
+  if (Before.JumpBindingsIntact &&
+      (UnprovedExceptionalBindings || !After.JumpBindingsIntact)) {
+    if (!CallException) {
+      if (!charge(Before.snapshotWork()))
+        return true;
+      CallException = Before;
+    }
+    CallException->JumpBindingsIntact = false;
+    CallException->JumpCaptures.clear();
+  }
+  dispatchBlock(I, CallException ? *CallException : Before, Facts,
+                After.CxxDispatchBindingsIntact &&
+                    After.Frame.ImportBindingsIntact);
   return true;
 }
 

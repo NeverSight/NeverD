@@ -73,8 +73,10 @@ bool calleeNeverReturns(const BinaryImage &Img, va_t Target,
 
 namespace detail {
 struct ResolverGraphCacheTestAccess;
+struct RegistrationFrameQueryTestAccess;
 struct X87CallGraphCacheTestAccess;
 struct NoReturnProofTestAccess;
+struct AnalysisRecoveryTestAccess;
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
 using I386GOTOFFAmbiguityReplayKey = std::tuple<va_t, va_t, int, int, va_t>;
@@ -642,20 +644,34 @@ void mergeRelativeRelocationRootSources(
     const std::vector<std::pair<va_t, va_t>> &SortedSources,
     const std::set<va_t> &Roots, std::map<va_t, std::set<va_t>> &RootSources);
 
-/// Absolute relocation bytes for one unchanged image operation. All aliases
-/// remain distinct; current-function ownership is checked by each CFG build.
+/// Absolute relocation bytes and checked runtime pointer roles for one
+/// unchanged image operation. All aliases remain distinct; current-function
+/// ownership is checked by each CFG build.
 class AbsoluteRelocationRootIndex {
 public:
   explicit AbsoluteRelocationRootIndex(const BinaryImage &Image);
+  bool ownsImage(const BinaryImage &Other) const { return Image == &Other; }
 
   /// Merge sources strictly between Begin and End. A different image returns
   /// false without changing RootSources, so the caller can scan live input.
   bool collectSources(const BinaryImage &Image, va_t Begin, va_t End,
                       std::map<va_t, std::set<va_t>> &RootSources) const;
 
+  /// As above, excluding exact loader-checked runtime-only source fields.
+  /// Independent aliases to the same target retain their ordinary role.
+  bool
+  collectOrdinarySources(const BinaryImage &Image, va_t Begin, va_t End,
+                         std::map<va_t, std::set<va_t>> &RootSources) const;
+
 private:
+  bool collectSources(const BinaryImage &Image, va_t Begin, va_t End,
+                      std::map<va_t, std::set<va_t>> &RootSources,
+                      bool OrdinaryOnly) const;
+
   const BinaryImage *Image;
   std::vector<std::pair<va_t, va_t>> Sources;
+  struct RuntimeRoleCache;
+  std::shared_ptr<RuntimeRoleCache> RuntimeRoles;
 };
 } // namespace detail
 
@@ -708,6 +724,11 @@ class CFGBuilder {
   friend class InternalNoReturnIndex;
 
 public:
+  /// Opt in to bounded PE32 display recovery. Results carry AnalysisOnly;
+  /// integer-frame proofs and default builders never consume these guesses.
+  void setAnalysisRecoveryEnabled(bool Enabled) {
+    AnalysisRecoveryEnabled = Enabled;
+  }
   /// Build CFG for a single function starting at EntryAddr.
   LowFunc build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                 const std::string &FuncName = "");
@@ -1146,8 +1167,10 @@ public:
 
 private:
   friend struct detail::ResolverGraphCacheTestAccess;
+  friend struct detail::RegistrationFrameQueryTestAccess;
   friend struct detail::X87CallGraphCacheTestAccess;
   friend struct detail::NoReturnProofTestAccess;
+  friend struct detail::AnalysisRecoveryTestAccess;
   std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;
   std::array<size_t, 5> x87CallGraphFlightStatsForTesting() const;
   bool waitForX87CallGraphWaitersForTesting(size_t Count) const;
@@ -1231,6 +1254,17 @@ private:
 
     bool operator==(const InsnRecord &Other) const = default;
   };
+
+  bool usesAnalysisRecovery() const;
+  std::optional<uint32_t> analysisCallStackPop(va_t Target) const;
+  std::optional<int64_t> analysisCallStackDelta(const LowOp &Call) const;
+  void recoverAnalysisTables(const BinaryImage &Img, Decoder &Dec,
+                             LowFunc &Func);
+  bool AnalysisRecoveryEnabled = false;
+  mutable bool AnalysisRecoveryUsed = false;
+  mutable size_t AnalysisStackWork = 0;
+  mutable std::map<va_t, std::optional<uint32_t>> AnalysisCallPops;
+  std::map<va_t, JumpTable> AnalysisTables;
 
   void explore(const BinaryImage &Img, Decoder &Dec, va_t Addr);
   /// Complete an AArch64 ADRP occurrence whose unmodified page-base register
@@ -1449,6 +1483,8 @@ private:
   /// Decode relocation-proven and same-function-discovered address-taken
   /// blocks as disconnected CFG roots, without splitting decoded instructions.
   void exploreAddressTakenRoots(const BinaryImage &Img, Decoder &Dec);
+  const detail::AbsoluteRelocationRootIndex &
+  absoluteRelocationRootIndex(const BinaryImage &Img);
   bool isOwnedInteriorTarget(const BinaryImage &Img, va_t Target) const;
 
   //===--------------------------------------------------------------------===//
@@ -3111,6 +3147,8 @@ private:
   const NoReturnCalleeProver *NoReturnCallees = nullptr;
   unsigned NoReturnCalleeDepth = 0;
   const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
+  std::optional<detail::AbsoluteRelocationRootIndex>
+      LocalAbsoluteRelocationRoots;
   const ExecutableCodeOwnerIndex *ExecutableCodeOwners = nullptr;
   /// Sorted normalized addresses of \ref BinaryImage function symbols, so a
   /// jump-table target check is a lookup, not a scan of every symbol.  Rebuilt

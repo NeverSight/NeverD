@@ -1886,25 +1886,31 @@ void LLVMCWriter::writeExceptionAnnotation(const llvm::Function &Fn) {
       DetailOS << " * registration.frame: base=";
       if (Base == 6)
         DetailOS << "esi";
+      else if (Base == 4)
+        DetailOS << "esp";
       else
         DetailOS << "x86-register-" << Base;
-      DetailOS
-          << ", definition=0x"
-          << llvm::utohexstr(*ehAnnotationUInt(
-                 *Frame, windows_eh_md::RegistrationFrameDefinitionVA, 64))
-          << ", alignment="
-          << *ehAnnotationUInt(*Frame,
-                               windows_eh_md::RegistrationFrameAlignment, 32)
-          << ", allocation="
-          << *ehAnnotationUInt(
-                 *Frame, windows_eh_md::RegistrationFrameAllocationBytes, 32)
-          << ", establisher_offset="
-          << int32_t(*ehAnnotationUInt(
-                 *Frame, windows_eh_md::RegistrationFrameBaseOffset, 32))
-          << ", saved_parent_offset="
-          << int32_t(*ehAnnotationUInt(
-                 *Frame, windows_eh_md::RegistrationFrameSavedParentOffset, 32))
-          << "\n";
+      DetailOS << ", definition=0x"
+               << llvm::utohexstr(*ehAnnotationUInt(
+                      *Frame, windows_eh_md::RegistrationFrameDefinitionVA, 64))
+               << ", alignment="
+               << *ehAnnotationUInt(
+                      *Frame, windows_eh_md::RegistrationFrameAlignment, 32)
+               << ", allocation="
+               << *ehAnnotationUInt(
+                      *Frame, windows_eh_md::RegistrationFrameAllocationBytes,
+                      32)
+               << ", establisher_offset="
+               << int32_t(*ehAnnotationUInt(
+                      *Frame, windows_eh_md::RegistrationFrameBaseOffset, 32));
+      if (Base == 4)
+        DetailOS << ", entry_frame=ebp";
+      else
+        DetailOS << ", saved_parent_offset="
+                 << int32_t(*ehAnnotationUInt(
+                        *Frame,
+                        windows_eh_md::RegistrationFrameSavedParentOffset, 32));
+      DetailOS << "\n";
       if (!WithinBudget()) {
         Invalid("annotation size limit");
         return;

@@ -19,6 +19,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
+#include "AnalysisCall.h"
 #include "HighEntryStackOffsets.h"
 #include "MedMutableToHigh.h"
 
@@ -1509,7 +1510,8 @@ void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
 void MedToHighConverter::validateCallContracts(const MedFunc &Med) {
   for (const MedBlock &Block : Med.Blocks)
     for (const MedOp &Op : Block.Ops)
-      if (Op.X87ImportArguments)
+      if (Op.X87ImportArguments &&
+          !(Med.AnalysisOnly && high_detail::hasAnalysisX87CallShape(Op)))
         throw std::runtime_error(
             "C source output requires a native x87 import call adapter");
 }
@@ -1658,6 +1660,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   Func.VaListCalls = Med.VaListCalls;
   Func.EntryKind = Med.EntryKind;
   Func.ExceptionMetadata = Med.ExceptionMetadata;
+  Func.AnalysisOnly = Med.AnalysisOnly;
   Func.HasUnresolvedSEHFrame = Med.HasUnresolvedSEHFrame;
   Func.SEHTerminationFrameBytes = Med.SEHTerminationFrameBytes;
   Func.SEHFuncletRegisters = Med.SEHFuncletRegisters;

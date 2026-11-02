@@ -9,6 +9,7 @@
 #include "MedLLVMRegistrationCxxCall.h"
 
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
@@ -105,14 +106,15 @@ std::optional<RegistrationCxxCallABI> getCheckedRegistrationCxxCallABI(
     } else {
       const auto Proof =
           getCheckedX86RegistrationThrowCalleeABI(Image, Effect.Target, &Work);
-      if (!Proof || Proof->IsRethrow != Contract.isRethrow())
+      if (!Proof || !hasSameX86RegistrationThrowEffects(Contract, *Proof, Work))
         return std::nullopt;
       ABI.Type = llvm::FunctionType::get(Void, false);
     }
   } else if (Contract.isInitializer()) {
     const auto Proof = getCheckedX86RegistrationInitializerCalleeABI(
         Image, Effect.Target, &Work);
-    if (!Proof || Proof->Object.StackPopBytes != Effect.StackPopBytes ||
+    if (!Proof ||
+        !hasSameX86RegistrationLeafEffects(Contract, Proof->Object, Work) ||
         Proof->Initialized != Contract.ECXInitialized || Effect.DoesNotReturn ||
         !Effect.ECXFrameOffset || Effect.ECXRuntimeObject ||
         Call.arg_size() != 1 + Effect.StackPopBytes / 4 ||
@@ -133,11 +135,25 @@ std::optional<RegistrationCxxCallABI> getCheckedRegistrationCxxCallABI(
     ABI.Type = llvm::FunctionType::get(Void, Arguments, false);
     ABI.Convention = llvm::CallingConv::X86_ThisCall;
     ABI.BorrowsECX = ABI.Initializer = true;
+  } else if (Contract.isCxxParent()) {
+    const auto Proof =
+        getCheckedX86RegistrationCxxCalleeABI(Image, Effect.Target, &Work);
+    if (!Proof || !hasSameX86RegistrationCxxEffects(Contract, *Proof, Work) ||
+        Effect.ECXFrameOffset || Effect.ECXRuntimeObject || !Call.arg_empty() ||
+        (Effect.DoesNotReturn && !Call.use_empty()) ||
+        (!Call.getType()->isIntegerTy(32) && !Call.getType()->isIntegerTy(64) &&
+         !(Effect.DoesNotReturn && Call.getType()->isVoidTy())) ||
+        (!Effect.DoesNotReturn && !Proof->HasIndependentScalarReturn &&
+         !ResultUnused))
+      return std::nullopt;
+    ABI.DiscardResult =
+        !Effect.DoesNotReturn && !Proof->HasIndependentScalarReturn;
+    ABI.Type = llvm::FunctionType::get(
+        Effect.DoesNotReturn || ABI.DiscardResult ? Void : I32, false);
   } else {
     const auto Proof = getCheckedX86RegistrationMemberCalleeABI(
         Image, Effect.Target, &Work, RegistrationLeafResult::Discarded);
-    if (!Proof || Proof->ECXReads != Contract.ECXReads ||
-        Proof->ECXWrites != Contract.ECXWrites ||
+    if (!Proof || !hasSameX86RegistrationLeafEffects(Contract, *Proof, Work) ||
         Proof->HasIndependentScalarReturn !=
             Contract.HasIndependentScalarReturn ||
         (!Proof->HasIndependentScalarReturn && !ResultUnused) ||
