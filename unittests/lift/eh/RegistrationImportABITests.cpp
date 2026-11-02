@@ -851,7 +851,7 @@ TEST(RegistrationImportABI, ImportVeneersPreserveCachedNonvolatileTargets) {
 
 TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
   for (bool AccumulatorForm : {false, true})
-    for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+    for (unsigned Mutation = 0; Mutation != 24; ++Mutation) {
       SCOPED_TRACE(::testing::Message() << AccumulatorForm << ' ' << Mutation);
       ImportImage F({"DecodePointer", 1}, false);
       auto &Image = F.Image;
@@ -870,8 +870,11 @@ TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
           Image, Dec, ImportImage::TextVA, "cached-import");
       ASSERT_FALSE(Function.Blocks.empty());
       auto &Block = Function.Blocks.front();
-      ASSERT_GE(Block.Ops.size(), 4u);
       auto &Boundary = Block.InstructionBoundaries.front();
+      ASSERT_EQ(Boundary.OpCount, 3u);
+      ASSERT_GE(Block.Ops.size(), Boundary.OpCount);
+      auto &Load = Block.Ops[1];
+      auto &Destination = Block.Ops[2];
       if (Mutation == 1)
         Text.Data[0] = 0x90;
       if (Mutation == 2)
@@ -881,17 +884,17 @@ TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
       if (Mutation == 4)
         Block.Ops[0].Inputs[0].Offset += 4;
       if (Mutation == 5)
-        Block.Ops[3].Output = NdVar::reg(x86reg::RDI, 4);
+        Destination.Output = NdVar::reg(x86reg::RDI, 4);
       if (Mutation == 6)
-        Block.Ops[2].Output.Size = 2;
+        Load.Output.Size = 2;
       if (Mutation == 7)
-        Block.Ops[2].Opcode = NdOp::COPY;
+        Load.Opcode = NdOp::COPY;
       if (Mutation == 8)
-        Block.Ops[2].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+        Load.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
       if (Mutation == 9)
-        Block.Ops[2].MemoryOrdering = NdMemoryOrdering::Acquire;
+        Load.MemoryOrdering = NdMemoryOrdering::Acquire;
       if (Mutation == 10)
-        Boundary.OpCount = 3;
+        --Boundary.OpCount;
       if (Mutation == 11)
         Block.InstructionBoundaries.push_back(Boundary);
       if (Mutation == 12)
@@ -903,13 +906,22 @@ TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
       if (Mutation == 15)
         Image.ImportStorageSlots.at(ImportImage::IATVA).Name = "Sleep";
       if (Mutation == 16)
-        Block.Ops[3].Inputs[0] = NdVar::tmp(0x1234, 4);
+        Destination.Inputs[0] = NdVar::tmp(0x1234, 4);
       if (Mutation == 17)
-        ++Block.Ops[2].Seq;
+        ++Load.Seq;
       if (Mutation == 18)
         Boundary.ControlFlags = LowInstructionControlFlag::Conditional;
       if (Mutation == 19)
         Image.Bits = Bitness::Bits64;
+      if (Mutation == 20)
+        Block.Ops[0].Inputs[0].Offset += uint64_t{1} << 32;
+      if (Mutation == 21)
+        Block.Ops[0].Inputs[0].Provenance = ConstantAddressProvenance::Scalar;
+      if (Mutation == 22)
+        Block.Ops[0].Inputs[0].Size = 4;
+      if (Mutation == 23)
+        Block.Ops[0].Inputs[0].Provenance =
+            ConstantAddressProvenance::AddressFragment;
       RegistrationCallCalleeIndex Index(Image);
       const auto Contracts = Index.stackContracts(Function);
       ASSERT_TRUE(Contracts);
@@ -919,7 +931,7 @@ TEST(RegistrationImportABI, CachedLoadReceiptsBindCurrentBytesAndLowIR) {
         EXPECT_EQ(Contracts->front().StackPopBytes, 4u);
         EXPECT_TRUE(Contracts->front().Indirect);
         EXPECT_EQ(Contracts->front().Loads, (std::vector<std::pair<va_t, int>>{
-                                                {ImportImage::TextVA, 2}}));
+                                                {ImportImage::TextVA, 1}}));
       }
     }
 }
@@ -1104,19 +1116,23 @@ TEST(RegistrationImportABI, RaiseCleanupRequiresRealImportDirectoryStorage) {
 TEST(RegistrationImportABI, ImportAliasesCannotReplaceCurrentVeneerBytes) {
   for (const auto &C :
        {ImportCase{"RaiseException", 4}, ImportCase{"HeapSetInformation", 4},
-        ImportCase{"GetStartupInfoW", 1}}) {
+        ImportCase{"GetStartupInfoW", 1}, ImportCase{"_initterm_e", 2}}) {
     SCOPED_TRACE(C.Name);
-    ImportImage F(C, true);
+    const bool CallerCleanup = llvm::StringRef(C.Name) == "_initterm_e";
+    ImportImage F(C, true, CallerCleanup);
+    if (CallerCleanup)
+      F.Image.Imports[0].Module = "msvcr100.dll";
+    const unsigned StackPop = CallerCleanup ? 0 : C.Arguments * 4;
     ASSERT_TRUE(F.Image.recordImportStub(ImportImage::StubVA, 0));
     EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(
                   F.Image, ImportImage::IATVA),
-              C.Arguments * 4);
+              StackPop);
     EXPECT_FALSE(registration_abi::checkedRegistrationImportStackPop(
         F.Image, ImportImage::StubVA));
     EXPECT_FALSE(registration_abi::isCheckedRegistrationRaiseSlot(
         F.Image, ImportImage::StubVA));
     EXPECT_EQ(getCheckedX86CalleeStackPop(F.Image, ImportImage::StubVA),
-              C.Arguments * 4);
+              StackPop);
     Decoder Dec;
     ASSERT_TRUE(Dec.init(F.Image));
     const auto Function = CFGBuilder().buildIntegerFrameProof(
@@ -1126,7 +1142,7 @@ TEST(RegistrationImportABI, ImportAliasesCannotReplaceCurrentVeneerBytes) {
     ASSERT_TRUE(Contracts);
     ASSERT_EQ(Contracts->size(), 1u);
     EXPECT_EQ(Contracts->front().Target, ImportImage::StubVA);
-    EXPECT_EQ(Contracts->front().StackPopBytes, C.Arguments * 4);
+    EXPECT_EQ(Contracts->front().StackPopBytes, StackPop);
     EXPECT_FALSE(Contracts->front().Indirect);
     // A stale registered alias cannot restore the old slot's contract after
     // the current veneer was redirected to an unrelated address.

@@ -6,6 +6,7 @@
 
 #include "RegistrationFrame.h"
 
+#include "RegistrationAddress.h"
 #include "RegistrationFrameEffects.h"
 
 #include "neverd/ir/RegistrationState.h"
@@ -181,11 +182,10 @@ void FrameTransfer::beginInstruction(va_t Address) {
 }
 
 FrameValue FrameTransfer::read(const NdVar &Value) const {
-  if (Value.isConst() && isAddressProvenance(Value.Provenance))
-    return isExactAddressProvenance(Value.Provenance) && Value.Size == 4 &&
-                   Value.Offset <= UINT32_MAX
-               ? FrameValue::imageAddress(uint32_t(Value.Offset))
-               : FrameValue{};
+  if (Value.isConst() && isAddressProvenance(Value.Provenance)) {
+    const auto Address = imageAddressConstant(Value);
+    return Address ? FrameValue::imageAddress(*Address) : FrameValue{};
+  }
   if (Value.isConst())
     return FrameValue::constant(static_cast<uint32_t>(Value.Offset));
   if (Value.isReg() && Value.Offset < 8 * x86reg::GeneralRegStride) {

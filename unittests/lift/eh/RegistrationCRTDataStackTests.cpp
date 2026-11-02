@@ -279,9 +279,12 @@ TEST(RegistrationCRTDataStack, TypedLoadRequiresCurrentBytesLowIRAndStorage) {
                   Image, Dec, Image.Entry, "crt-data-receipt");
               ASSERT_FALSE(Function.Blocks.empty());
               auto &Block = Function.Blocks.front();
-              ASSERT_GE(Block.Ops.size(), 4u);
               ASSERT_FALSE(Block.InstructionBoundaries.empty());
               auto &Boundary = Block.InstructionBoundaries.front();
+              ASSERT_EQ(Boundary.OpCount, 3u);
+              ASSERT_GE(Block.Ops.size(), Boundary.OpCount);
+              auto &LoadOp = Block.Ops[1];
+              auto &Destination = Block.Ops[2];
               auto &Text = Image.Segments.front();
               if (Mutation == 1)
                 Text.Data[0] = Moffs ? 0xb8 : 0x89;
@@ -292,18 +295,18 @@ TEST(RegistrationCRTDataStack, TypedLoadRequiresCurrentBytesLowIRAndStorage) {
               if (Mutation == 4)
                 Block.Ops[0].Inputs[0].Offset += 4;
               if (Mutation == 5)
-                Block.Ops[3].Output = NdVar::reg(
+                Destination.Output = NdVar::reg(
                     ((Register + 1) % 8) * x86reg::GeneralRegStride, 4);
               if (Mutation == 6)
-                Block.Ops[2].Output.Size = 2;
+                LoadOp.Output.Size = 2;
               if (Mutation == 7)
-                Block.Ops[1].Opcode = NdOp::INT_SEXT;
+                Block.Ops[0].Opcode = NdOp::INT_SEXT;
               if (Mutation == 8)
-                Block.Ops[2].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+                LoadOp.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
               if (Mutation == 9)
-                Block.Ops[2].MemoryOrdering = NdMemoryOrdering::Acquire;
+                LoadOp.MemoryOrdering = NdMemoryOrdering::Acquire;
               if (Mutation == 10)
-                Boundary.OpCount = 3;
+                --Boundary.OpCount;
               if (Mutation == 11)
                 ++Boundary.FirstOp;
               if (Mutation == 12)
@@ -315,9 +318,9 @@ TEST(RegistrationCRTDataStack, TypedLoadRequiresCurrentBytesLowIRAndStorage) {
               if (Mutation == 15)
                 Image.ImportStorageSlots.at(Base + 0x3000).Name = "Sleep";
               if (Mutation == 16)
-                Block.Ops[3].Inputs[0] = NdVar::tmp(0x1234, 4);
+                Destination.Inputs[0] = NdVar::tmp(0x1234, 4);
               if (Mutation == 17)
-                ++Block.Ops[2].Seq;
+                ++LoadOp.Seq;
               if (Mutation == 18)
                 Boundary.ControlFlags = LowInstructionControlFlag::Conditional;
               if (Mutation == 19)
@@ -328,7 +331,7 @@ TEST(RegistrationCRTDataStack, TypedLoadRequiresCurrentBytesLowIRAndStorage) {
                 Image.Imports.push_back(Conflict);
               }
               if (Mutation == 22)
-                ++Block.Ops[2].Addr;
+                ++LoadOp.Addr;
               if (Mutation == 23)
                 --Boundary.Size;
               size_t Work = 0;
@@ -344,7 +347,7 @@ TEST(RegistrationCRTDataStack, TypedLoadRequiresCurrentBytesLowIRAndStorage) {
                 EXPECT_EQ(Load->Storage, RegistrationImportLoad::Kind::CRTData);
                 EXPECT_EQ(Load->Slot, Base + 0x3000);
                 EXPECT_EQ(Load->Register, Register * x86reg::GeneralRegStride);
-                EXPECT_EQ(Load->OpSeq, 2);
+                EXPECT_EQ(Load->OpSeq, 1);
               }
             }
           }

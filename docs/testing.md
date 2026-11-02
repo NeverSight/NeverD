@@ -16519,6 +16519,11 @@ image writes at two bases, including stable address arithmetic. Disjoint writes
 retain the imported stack adjustment; full and partial IAT overlaps, duplicate
 or malformed fixups and conflicting address receipts reject it. Cached import
 tests apply the same alias rule before and after loading a callable target.
+`Native32AddressCarriersKeepExactProvenance` checks native and normalized
+address widths, scalar and fragment counterexamples, and values beyond the
+32-bit address domain. `CachedLoadReceiptsBindCurrentBytesAndLowIR` checks the
+current three-operation absolute MOV packet, its load sequence, and mutations
+of bytes, address width/provenance, destination, memory ordering and storage.
 `RegistrationImportABI` covers the nine checked Kernel32 startup imports,
 including `IsProcessorFeaturePresent` and `SetUnhandledExceptionFilter`,
 through direct IAT calls and decoded jump veneers. Wrong providers, delay

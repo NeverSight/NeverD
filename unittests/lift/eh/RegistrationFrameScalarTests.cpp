@@ -168,11 +168,34 @@ TEST(RegistrationFrameScalar, AddressBitsAreNotAffineScalarConstants) {
     Input.Provenance = ConstantAddressProvenance::AddressFragment;
     EXPECT_EQ(Transfer.read(Input), FrameValue{});
     Input.Provenance = ConstantAddressProvenance::DataAddress;
-    for (uint16_t Size : {1, 2, 8}) {
+    for (uint16_t Size : {1, 2, 16}) {
       Input.Size = Size;
       EXPECT_EQ(Transfer.read(Input), FrameValue{});
     }
   }
+}
+
+TEST(RegistrationFrameScalar, Native32AddressCarriersKeepExactProvenance) {
+  FrameState State;
+  FrameTransfer Transfer(State, -16);
+  for (uint16_t Size : {1, 2, 4, 8, 16})
+    for (uint64_t Address : {uint64_t{0x403000}, uint64_t{0x100403000}})
+      for (auto Provenance : {ConstantAddressProvenance::Address,
+                              ConstantAddressProvenance::DataAddress,
+                              ConstantAddressProvenance::CodeAddress,
+                              ConstantAddressProvenance::AddressFragment,
+                              ConstantAddressProvenance::Scalar}) {
+        SCOPED_TRACE(testing::Message() << Size << ':' << Address << ':'
+                                        << static_cast<int>(Provenance));
+        auto Value = NdVar::cst(Address, Size);
+        Value.Provenance = Provenance;
+        const auto Expected = (Size == 4 || Size == 8) &&
+                                      Address <= UINT32_MAX &&
+                                      isExactAddressProvenance(Provenance)
+                                  ? std::optional<uint32_t>{uint32_t(Address)}
+                                  : std::nullopt;
+        EXPECT_EQ(Transfer.read(Value).ImageAddress, Expected);
+      }
 }
 
 TEST(RegistrationFrameScalar, IdenticalImageAddressesHaveExactRelations) {

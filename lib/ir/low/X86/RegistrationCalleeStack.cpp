@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationAddress.h"
 #include "RegistrationCRTData.h"
 #include "RegistrationCRTFrame.h"
 #include "RegistrationFrame.h"
@@ -218,10 +219,11 @@ struct StackBody {
         // receipt below. A literal matching an IAT address proves nothing.
         if (!HasCRTData && OrdinaryEntry != InvalidVA &&
             !Function.ExceptionMetadata && Op.Opcode == NdOp::COPY &&
-            Op.NumInputs == 1 && Op.Inputs[0].isConst() &&
-            Op.Inputs[0].Size == 4)
-          HasCRTData = registration_abi::isCheckedRegistrationCRTDataSlot(
-              Image, Op.Inputs[0].Offset);
+            Op.NumInputs == 1)
+          if (const auto Address =
+                  registration_state::imageAddressConstant(Op.Inputs[0]))
+            HasCRTData = registration_abi::isCheckedRegistrationCRTDataSlot(
+                Image, *Address);
       }
     }
     if (HasCachedCall || HasCRTData)

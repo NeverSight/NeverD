@@ -170,9 +170,9 @@ bool isCheckedRegistrationSleepCall(const BinaryImage &Image, const LowOp &Op,
 
 std::optional<uint32_t>
 checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
-  const auto *Named = Image.findImportAt(Target);
-  const auto *Import =
-      Named ? checkedRuntimeImportSlot(Image, Named->IATAddr) : nullptr;
+  // This owner proves an actual IAT slot. A registered veneer name cannot
+  // replace the separate current-instruction proof for a direct call.
+  const auto *Import = checkedRuntimeImportSlot(Image, Target);
   // Cleanup is independent of the callee's memory, callback and FP effects.
   if (Import && !Import->IsDelayImport && isCallerCleanupCRTImport(*Import))
     return 0;
@@ -231,7 +231,8 @@ checkedRegistrationImportLoad(const BinaryImage &Image, const LowBlock &Block,
                               const LowInstructionBoundary &Boundary,
                               size_t &Work,
                               RegistrationImportLoadPolicy Policy) {
-  if (!chargeCalleeWork(Work, 1) || Boundary.OpCount != 4 ||
+  if (!chargeCalleeWork(Work, 1) ||
+      (Boundary.OpCount != 3 && Boundary.OpCount != 4) ||
       !chargeCalleeWork(Work, 16))
     return std::nullopt;
   auto Load = registrationImportLoad(Block, Boundary);

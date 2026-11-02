@@ -5984,6 +5984,14 @@ physical GPR context. An earlier resident callable remains a separate identity.
 The guard stays in LowIR with its original divide faults. This local rule does
 not change the shared frame privacy, memory-effect, finally-return or native EH
 policies.
+`RegistrationAddress` owns complete PE32 image constants at native four-byte
+or normalized eight-byte carrier width. Both require exact address provenance
+and a value within the native 32-bit domain. Frame transfer, CRT-data candidate
+selection and import-load receipts reuse this rule. The receipt matcher accepts
+both the normalized COPY/LOAD/COPY and the narrow COPY/ZEXT/LOAD/COPY packets;
+current code bytes, exact load occurrence, destination and import storage
+remain mandatory.
+
 An ordinary returning-stack query collects direct callees, cached import loads
 and IAT dependencies only from the ordinary graph reachable from its requested
 entry. Disconnected address-taken entries remain in the source CFG and receive
