@@ -37,8 +37,10 @@ llvm::Error invalid(const char *Message) {
 struct Transaction {
   X86PagedMemory &Memory;
   uint8_t CPL;
+  X64PagedAlignmentPriority AlignmentPriority;
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
+  std::optional<X64ContinuationEventV1> Event;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
 
@@ -70,6 +72,13 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & 7);
+  if (Kind == X64PagedAccess::SoftwareInterrupt) {
+    T.Event.emplace();
+    T.Event->SavedPC = Size;
+    T.Event->Vector = uint8_t(Address);
+    T.Event->Kind = X64ContinuationEventKind::Software;
+    return 1;
+  }
   if (Kind == X64PagedAccess::Fault) {
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = X86MemoryException{uint8_t(Address), 0, std::nullopt};
@@ -80,6 +89,15 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
          "source admission owns scalar widths and the final store boundary");
   X86LinearAccess A{Address, MemoryAccessKind::Read, T.CPL, false,
                     bool(Flags & kX64PagedStackAccess)};
+  if (T.AlignmentPriority == X64PagedAlignmentPriority::BeforePaging &&
+      T.alignmentFault(Address, Size)) {
+    auto Check = translate::checkX86LinearAccess(T.Memory.controls(), A, Size);
+    if (!Check)
+      T.Error = Check.takeError();
+    else if (*Check)
+      T.Access.Exception = *Check;
+    return 1;
+  }
   if (Kind != X64PagedAccess::Load) {
     A.Kind = MemoryAccessKind::Write;
     auto Prepared = T.Memory.prepareStore(A, Size);
@@ -129,8 +147,15 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   auto &Original = State.Core.Core.Core.Core;
   if (Original.PC != Address)
     return Last;
+  const auto CPL = uint8_t(State.Core.CS.Selector & 3);
+  if (CPL == 3 && (Controls.CR0 & 0x40000) && (Original.RFlags & 0x40000) &&
+      !Options.AlignmentPriority)
+    return invalid(
+        "active scalar alignment checks require bound fault priority");
   auto Next = State;
-  Transaction T{Memory, uint8_t(State.Core.CS.Selector & 3)};
+  Transaction T{Memory, CPL,
+                Options.AlignmentPriority.value_or(
+                    X64PagedAlignmentPriority::AfterPaging)};
   X64PagedExchange Exchange{0, &T};
   auto *NextBytes = reinterpret_cast<uint8_t *>(&Next);
   auto *ExchangeBytes = reinterpret_cast<uint8_t *>(&Exchange);
@@ -162,22 +187,27 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     Last.BackingFault = T.Access.BackingFault;
     return Last;
   }
-  if (T.Access.Status == X86PageWalkStatus::Exception) {
+  if (T.Event || T.Access.Status == X86PageWalkStatus::Exception) {
     Last.Exception = T.Access.Exception;
-    X64ContinuationEventV1 Event;
-    Event.SavedPC = Address;
-    Event.Vector = T.Access.Exception->Vector;
-    Event.Kind = X64ContinuationEventKind::Fault;
-    Event.ErrorCode = T.Access.Exception->ErrorCode;
-    Event.FaultAddress = T.Access.Exception->CR2.value_or(0);
+    X64ContinuationEventV1 Event = T.Event.value_or(X64ContinuationEventV1{});
+    if (!T.Event) {
+      Event.SavedPC = Address;
+      Event.Vector = T.Access.Exception->Vector;
+      Event.Kind = X64ContinuationEventKind::Fault;
+      Event.ErrorCode = T.Access.Exception->ErrorCode;
+      Event.FaultAddress = T.Access.Exception->CR2.value_or(0);
+    }
     auto Delivered = deliverX64PagedEvent(State, Memory, Event, MXCSRMask);
     if (!Delivered)
       return Delivered.takeError();
     Last.Delivery = *Delivered;
     Last.BackingFault = Delivered->BackingFault;
+    if (T.Event)
+      Last.Exception = Delivered->LastException;
     switch (Delivered->Status) {
     case X64PagedEventStatus::Delivered:
       Last.Exit = uint64_t(X64ContinuationExitV1::Exception);
+      Last.InstructionCompleted = T.Event && !Delivered->LastException;
       break;
     case X64PagedEventStatus::Deferred:
       Last.Exit = uint64_t(X64ContinuationExitV1::EventDeferred);

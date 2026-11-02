@@ -135,7 +135,14 @@ public:
              [&] { W.leave(Exit::EventDeferred); });
 
     const auto SavedPC = event(Pointer, offsetof(Event, SavedPC), 8);
-    canonical(SavedPC);
+    if constexpr (Writer::FaultableMemory) {
+      // INT/INT3 may end at the last canonical instruction byte. Their saved
+      // fallthrough is data, not a fetch or transfer to that address. Retain
+      // the separate no-fault source event API's narrower input contract.
+      canonical(choose(Software, k(0), SavedPC));
+    } else {
+      canonical(SavedPC);
+    }
     W.rejectIf(both(
         eq(masked(Attributes, 0x2000), k(0)),
         less(load(offsetof(V5, CS) + offsetof(Segment, Limit), 4), SavedPC)));

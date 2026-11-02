@@ -30,7 +30,14 @@ enum class X64PagedExit : uint64_t {
 inline constexpr uint64_t kX64PagedAccessAddress = UINT64_MAX - 1;
 inline constexpr const char *kX64PagedAccessName = "neverd_x64_paged_access_v1";
 inline constexpr uint64_t kX64PagedStackAccess = 8;
-enum class X64PagedAccess : uint64_t { Load, Store, ReadModifyWrite, Fault };
+enum class X64PagedAccess : uint64_t {
+  Load,
+  Store,
+  ReadModifyWrite,
+  Fault,
+  /// Address is the vector; the size argument transports the original next PC.
+  SoftwareInterrupt,
+};
 
 struct X64PagedExchange {
   uint64_t Value = 0;

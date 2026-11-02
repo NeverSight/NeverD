@@ -26,6 +26,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -82,7 +83,7 @@ protected:
     put(0x5020, 0x00cff3000000ffffULL);
     put(0x8004, 0x1e000);
     put(0x8024, 0x1f000);
-    for (unsigned V : {0u, 6u, 8u, 12u, 13u, 14u, 17u}) {
+    for (unsigned V = 0; V != 256; ++V) {
       put(0x6000 + V * 16,
           (0x4000 + V * 16) | (uint64_t(8) << 16) | (uint64_t(0x8e) << 40));
       RAM.Memory.front().Bytes[0x4000 + V * 16] = 0xf4; // Original handler HLT.
@@ -109,15 +110,15 @@ protected:
       RAM.Memory.front().Bytes[Address + I] = Value >> (I * 8);
   }
 
-  static BinaryImage image(std::vector<uint8_t> Code) {
+  static BinaryImage image(std::vector<uint8_t> Code, uint64_t Base = 0x1000) {
     BinaryImage Image;
     Image.Arch = Arch::X64;
     Image.Bits = Bitness::Bits64;
     Image.Format = BinaryFormat::ELF;
-    Image.Base = Image.Entry = 0x1000;
+    Image.Base = Image.Entry = Base;
     Segment S;
     S.Name = ".text";
-    S.VA = 0x1000;
+    S.VA = Base;
     S.Size = S.FileSz = Code.size();
     S.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
     S.Data = std::move(Code);
@@ -128,7 +129,8 @@ protected:
   void compile(const std::vector<uint8_t> &Code, bool LLVM,
                const std::string &Optimization, Run &Driver,
                const std::vector<uint64_t> &Addresses = {0x1000},
-               const std::string &Compiler = NEVERD_TEST_CLANG) {
+               const std::string &Compiler = NEVERD_TEST_CLANG,
+               uint64_t Base = 0x1000) {
     llvm::json::Array PCs;
     for (auto PC : Addresses)
       PCs.push_back(PC);
@@ -140,13 +142,15 @@ protected:
                                    {"paging_address_bits", 48},
                                    {"paged_memory", true},
                                    {"instructions", std::move(PCs)}}));
-    auto Export = exportX64Continuation(image(Code), Request, LLVM);
+    auto Export = exportX64Continuation(image(Code, Base), Request, LLVM);
     ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
     ASSERT_EQ(Export->Source.find("unknown value"), std::string::npos);
     const auto Parsed = llvm::cantFail(llvm::json::parse(Export->Manifest));
     ASSERT_EQ(Parsed.getAsObject()->getInteger("native_requests"), 0);
-    const auto Name = (LLVM ? "llvm" : "high") + Optimization +
-                      (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc");
+    auto Name = (LLVM ? "llvm" : "high") + Optimization +
+                (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc");
+    if (Base != 0x1000)
+      Name += "-at-" + std::to_string(Addresses.front());
     const auto Source = tmpFile(Name + ".c"), Library = tmpFile(Name + ".so");
     std::ofstream File(Source);
     File << Export->Source << R"C(
@@ -359,7 +363,122 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
   llvm::consumeError(Bad.takeError());
 }
 
+TEST_F(X64PagedExecutionTest, AlignmentPriorityRequiresAnExplicitCPUContract) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  const std::vector<uint8_t> Code{0x48, 0x8b, 0x07};
+  for (bool LLVM : {false, true}) {
+    Run Driver = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
+    for (auto Priority :
+         {std::optional<X64PagedAlignmentPriority>{},
+          std::optional{X64PagedAlignmentPriority::BeforePaging},
+          std::optional{X64PagedAlignmentPriority::AfterPaging}}) {
+      reset(Code);
+      auto &Core = State.Core.Core.Core.Core;
+      Core.GPR[7] = 0x20001;
+      Core.RFlags |= 0x40000;
+      Controls.CR0 |= 0x40000;
+      State.Core.CS = {0, UINT32_MAX, 27, 0xa0fb};
+      State.Core.SS = {0, UINT32_MAX, 35, 0xc0f3};
+      State.Core.Core.CR2 = 0x1234;
+      put(0x13100, 0);
+      const auto Before = State;
+      Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+      X64PagedExecution Context(*Memory, {Priority});
+      uint64_t Budget = 1;
+      const auto Exit =
+          Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
+      if (!Priority) {
+        EXPECT_EQ(Exit, 5u);
+        EXPECT_EQ(Budget, 1u);
+        EXPECT_NE(Context.lastError().find("bound fault priority"),
+                  std::string::npos);
+        EXPECT_EQ(std::memcmp(&State, &Before, sizeof(State)), 0);
+        EXPECT_EQ(
+            Memory->physicalMemory().snapshotMemoryRegions().front().Bytes,
+            RAM.Memory.front().Bytes);
+      } else {
+        EXPECT_TRUE(Context.lastError().empty());
+        EXPECT_EQ(Exit, 7u);
+        EXPECT_EQ(Budget, 0u);
+        const bool First = *Priority == X64PagedAlignmentPriority::BeforePaging;
+        EXPECT_EQ(Core.PC, First ? 0x4110u : 0x40e0u);
+        EXPECT_EQ(State.Core.Core.CR2, First ? 0x1234u : 0x20001u);
+        EXPECT_EQ(Core.GPR[0], Before.Core.Core.Core.Core.GPR[0]);
+      }
+    }
+  }
+}
+
 #if defined(__linux__) && defined(__x86_64__)
+TEST_F(X64PagedExecutionTest, SoftwareEntryAtTheLastCanonicalInstructionByte) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  X64PagedNativeCPU CPU;
+  ASSERT_NO_FATAL_FAILURE(CPU.initialize());
+  if (IsSkipped())
+    return;
+  Features.PhysicalAddressBits = CPU.PhysicalBits;
+  constexpr uint64_t Base = 0x7ffffffff000;
+  unsigned Comparisons = 0;
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.push_back(NeverC);
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0xcc}, {0xcd, 0x80}})
+    for (const auto &Compiler : Compilers)
+      for (bool LLVM : {false, true})
+        for (const std::string O : {"-O0", "-O2"}) {
+          SCOPED_TRACE(testing::Message() << Bytes.size() << ' ' << Compiler
+                                          << ' ' << LLVM << ' ' << O);
+          std::vector<uint8_t> Code(4096, 0x90);
+          std::copy(Bytes.begin(), Bytes.end(), Code.end() - Bytes.size());
+          const uint64_t PC = Base + Code.size() - Bytes.size();
+          Run Driver = nullptr;
+          ASSERT_NO_FATAL_FAILURE(
+              compile(Code, LLVM, O, Driver, {PC}, Compiler, Base));
+          reset(Code);
+          State.Core.Core.Core.Core.PC = PC;
+          put(0x107f8, 0x14007);
+          put(0x14ff8, 0x15007);
+          put(0x15ff8, 0x16007);
+          put(0x16ff8, 0x1007);
+          X64ContinuationStateV6 Native;
+          bool Handler = false;
+          ASSERT_NO_FATAL_FAILURE(CPU.execute(RAM.Memory.front().Bytes, State,
+                                              Controls.CR0, Bytes.size(),
+                                              Native, Handler, true));
+          ASSERT_TRUE(Handler);
+          Memory =
+              llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+          X64PagedExecution Context(*Memory);
+          uint64_t Budget = 1;
+          const auto Exit =
+              Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
+          EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
+          EXPECT_EQ(Exit, 7u);
+          EXPECT_EQ(Budget, 0u);
+          EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+          const auto &Core = State.Core.Core.Core.Core;
+          const auto &Expected = Native.Core.Core.Core.Core;
+          EXPECT_EQ(Core.PC, Expected.PC);
+          EXPECT_EQ(Core.RFlags, Expected.RFlags);
+          for (unsigned I = 0; I != 16; ++I)
+            EXPECT_EQ(Core.GPR[I], Expected.GPR[I]);
+          EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
+          const auto Actual = Memory->physicalMemory().snapshotMemoryRegions();
+          EXPECT_EQ(std::memcmp(Actual.front().Bytes.data(), CPU.RAM, 0x10000),
+                    0);
+          EXPECT_EQ(std::memcmp(Actual.front().Bytes.data() + 0x17000,
+                                CPU.RAM + 0x17000,
+                                X64PagedNativeCPU::Size - 0x17000),
+                    0);
+          ++Comparisons;
+        }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
 TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
@@ -372,50 +491,60 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
     const char *Name;
     std::vector<uint8_t> Bytes;
     bool Target = false;
+    bool Software = false;
   };
-  const std::vector<Case> Cases{
-      {"load64", {0x48, 0x8b, 0x07}},
-      {"load8", {0x8a, 0x07}},
-      {"load16", {0x66, 0x8b, 0x07}},
-      {"load32", {0x8b, 0x07}},
-      {"store64", {0x48, 0x89, 0x07}},
-      {"add-memory", {0x48, 0x01, 0x07}},
-      {"xadd-memory", {0x48, 0x0f, 0xc1, 0x07}},
-      {"div-memory", {0x48, 0xf7, 0x37}},
-      {"idiv-memory", {0x48, 0xf7, 0x3f}},
-      {"stack-reference", {0x48, 0x8b, 0x45, 0}},
-      {"fs-base", {0x64, 0x48, 0x8b, 0x07}},
-      {"address32", {0x67, 0x48, 0x8b, 0x07}},
-      {"push-register", {0x50}},
-      {"pop-register", {0x58}},
-      {"push-memory", {0xff, 0x37}},
-      {"pop-memory", {0x8f, 0x07}},
-      {"call-register", {0xff, 0xd0}, true},
-      {"call-memory", {0xff, 0x17}, true},
-      {"return", {0xc3}, true},
-      {"jump", {0xff, 0xe0}, true},
-      {"address-only", {0x48, 0x8d, 0x07}},
-      {"undefined", {0x0f, 0x0b}},
-      {"add-register", {0x48, 0x01, 0xd8}},
-      {"conditional-memory", {0x48, 0x0f, 0x44, 0x07}},
-      {"store8", {0x88, 0x07}},
-      {"store-high-byte", {0x88, 0x27}},
-      {"store16", {0x66, 0x89, 0x07}},
-      {"store32", {0x89, 0x07}},
-      {"add-memory8", {0x00, 0x07}},
-      {"add-memory16", {0x66, 0x01, 0x07}},
-      {"add-memory32", {0x01, 0x07}},
-      {"div-memory8", {0xf6, 0x37}},
-      {"idiv-memory8", {0xf6, 0x3f}},
-      {"div-memory16", {0x66, 0xf7, 0x37}},
-      {"idiv-memory16", {0x66, 0xf7, 0x3f}},
-      {"div-memory32", {0xf7, 0x37}},
-      {"idiv-memory32", {0xf7, 0x3f}},
-      {"split-fetch", {0x48, 0x8b, 0x07}}};
+  std::vector<Case> Cases{{"load64", {0x48, 0x8b, 0x07}},
+                          {"load8", {0x8a, 0x07}},
+                          {"load16", {0x66, 0x8b, 0x07}},
+                          {"load32", {0x8b, 0x07}},
+                          {"store64", {0x48, 0x89, 0x07}},
+                          {"add-memory", {0x48, 0x01, 0x07}},
+                          {"xadd-memory", {0x48, 0x0f, 0xc1, 0x07}},
+                          {"div-memory", {0x48, 0xf7, 0x37}},
+                          {"idiv-memory", {0x48, 0xf7, 0x3f}},
+                          {"stack-reference", {0x48, 0x8b, 0x45, 0}},
+                          {"fs-base", {0x64, 0x48, 0x8b, 0x07}},
+                          {"address32", {0x67, 0x48, 0x8b, 0x07}},
+                          {"push-register", {0x50}},
+                          {"pop-register", {0x58}},
+                          {"push-memory", {0xff, 0x37}},
+                          {"pop-memory", {0x8f, 0x07}},
+                          {"call-register", {0xff, 0xd0}, true},
+                          {"call-memory", {0xff, 0x17}, true},
+                          {"return", {0xc3}, true},
+                          {"jump", {0xff, 0xe0}, true},
+                          {"address-only", {0x48, 0x8d, 0x07}},
+                          {"undefined", {0x0f, 0x0b}},
+                          {"add-register", {0x48, 0x01, 0xd8}},
+                          {"conditional-memory", {0x48, 0x0f, 0x44, 0x07}},
+                          {"store8", {0x88, 0x07}},
+                          {"store-high-byte", {0x88, 0x27}},
+                          {"store16", {0x66, 0x89, 0x07}},
+                          {"store32", {0x89, 0x07}},
+                          {"add-memory8", {0x00, 0x07}},
+                          {"add-memory16", {0x66, 0x01, 0x07}},
+                          {"add-memory32", {0x01, 0x07}},
+                          {"div-memory8", {0xf6, 0x37}},
+                          {"idiv-memory8", {0xf6, 0x3f}},
+                          {"div-memory16", {0x66, 0xf7, 0x37}},
+                          {"idiv-memory16", {0x66, 0xf7, 0x3f}},
+                          {"div-memory32", {0xf7, 0x37}},
+                          {"idiv-memory32", {0xf7, 0x3f}},
+                          {"int3", {0xcc}, false, true},
+                          {"int0", {0xcd, 0x00}, false, true},
+                          {"int8", {0xcd, 0x08}, false, true},
+                          {"int14", {0xcd, 0x0e}, false, true},
+                          {"int128", {0xcd, 0x80}, false, true},
+                          {"split-fetch", {0x48, 0x8b, 0x07}}};
+  // Exercise every original software vector, including service-shaped LowIR,
+  // without interpreting its number as an architectural fault class.
+  for (unsigned V = 0; V != 256; ++V)
+    if (V != 0 && V != 8 && V != 14 && V != 128)
+      Cases.insert(Cases.end() - 1, {"int-n", {0xcd, uint8_t(V)}, false, true});
   std::vector<uint8_t> Code(0x1001, 0x90);
   std::vector<uint64_t> PCs;
   for (unsigned I = 0; I != Cases.size(); ++I) {
-    const uint64_t PC = I + 1 == Cases.size() ? 0x1ffe : 0x1000 + I * 32;
+    const uint64_t PC = I + 1 == Cases.size() ? 0x1ffe : 0x1000 + I * 8;
     PCs.push_back(PC);
     std::copy(Cases[I].Bytes.begin(), Cases[I].Bytes.end(),
               Code.begin() + PC - 0x1000);
@@ -433,17 +562,19 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
   std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
   if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
     Compilers.push_back(NeverC);
-  unsigned Comparisons = 0, FaultComparisons = 0;
+  unsigned Comparisons = 0, FaultComparisons = 0, HandlerComparisons = 0;
+  unsigned SoftwareComparisons = 0, SoftwareCompletions = 0;
   for (const auto &Compiler : Compilers)
     for (bool LLVM : {false, true})
       for (const std::string O : {"-O0", "-O2"}) {
         Run Driver = nullptr;
         ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, O, Driver, PCs, Compiler));
         for (unsigned I = 0; I != Cases.size(); ++I)
-          for (unsigned Variant = 0; Variant != 10; ++Variant) {
+          for (unsigned Variant = 0; Variant != 15; ++Variant) {
             SCOPED_TRACE(testing::Message()
                          << Compiler << ' ' << LLVM << ' ' << O << ' '
-                         << Cases[I].Name << " variant=" << Variant);
+                         << Cases[I].Name << " case=" << I
+                         << " variant=" << Variant);
             reset(Code);
             auto &Core = State.Core.Core.Core.Core;
             Core.PC = PCs[I];
@@ -458,7 +589,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
               Core.GPR[7] = Core.GPR[5] = 0x20fff;
               put(0x13108, 0);
             }
-            if (Variant == 4) {
+            if (Variant == 4 || Variant >= 12 ||
+                (Variant == 10 && Cases[I].Software)) {
               Core.GPR[7] = Core.GPR[5] = 0x20001;
               Core.RFlags |= 0x40000;
               Controls.CR0 |= 0x40000;
@@ -472,7 +604,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
               Core.GPR[7] = Core.GPR[5] = 0x800000000000;
             if (Variant == 6) {
               put(0x13000 + 0x1d * 8, 0);
-              for (unsigned V : {0u, 6u, 8u, 12u, 13u, 14u, 17u})
+              for (unsigned V = 0; V != 256; ++V)
                 put(0x6000 + V * 16, (0x4000 + V * 16) | (uint64_t(8) << 16) |
                                          (uint64_t(1) << 32) |
                                          (uint64_t(0x8e) << 40));
@@ -483,6 +615,44 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
               put(0x13000 + (PCs[I] / 4096) * 8, 0);
             if (Variant == 9)
               put(0x13010, 0);
+            if (Variant == 10)
+              Core.RFlags |= 0x10000;
+            if (Variant == 11 && !Cases[I].Software)
+              put(0x13000 + (PCs[I] / 4096) * 8,
+                  (PCs[I] & ~uint64_t(4095)) | 7 | (uint64_t(1) << 63));
+            if (Variant == 12)
+              put(0x13100, 0); // Competing #PF and scalar alignment check.
+            if (Variant == 13)
+              Core.GPR[7] = Core.GPR[5] = 0x800000000001;
+            if (Variant == 14) {
+              Core.GPR[7] = Core.GPR[5] = 0x20fff;
+              put(0x13108, 0);
+            }
+            if (Cases[I].Software) {
+              const unsigned V =
+                  Cases[I].Bytes.size() == 1 ? 3 : Cases[I].Bytes.back();
+              if (Variant == 10 || Variant == 11)
+                put(0x6000 + V * 16,
+                    (0x4000 + V * 16) |
+                        (uint64_t(Variant == 11 && V == 11 ? 0 : 8) << 16) |
+                        (uint64_t(Variant == 10 || V == 11 ? 0xee : 0x0e)
+                         << 40));
+              if (Variant == 12) {
+                if (V == 128) {
+                  // Only this high software vector's gate crosses into the
+                  // absent page. #PF's gate and handler stack remain present.
+                  std::memmove(RAM.Memory.front().Bytes.data() + 0x6800,
+                               RAM.Memory.front().Bytes.data() + 0x6000, 4096);
+                  State.IDTR.Base = 0x6800;
+                  put(0x13038, 0);
+                } else if (V == 13)
+                  put(0x6000 + V * 16, (0x4000 + V * 16) | (uint64_t(8) << 16) |
+                                           (uint64_t(0x6e) << 40));
+                else
+                  put(0x6000 + V * 16,
+                      (0x4000 + V * 16) | (uint64_t(0xee) << 40));
+              }
+            }
             if (Cases[I].Target) {
               const auto Target = Variant == 5 || Variant == 6
                                       ? uint64_t(0x800000000000)
@@ -499,9 +669,9 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
               Core.GPR[7] |= 0x1234000000000000;
             X64ContinuationStateV6 Native;
             bool Fault = false;
-            ASSERT_NO_FATAL_FAILURE(
-                CPU.execute(RAM.Memory.front().Bytes, State, Controls.CR0,
-                            Cases[I].Bytes.size(), Native, Fault));
+            ASSERT_NO_FATAL_FAILURE(CPU.execute(
+                RAM.Memory.front().Bytes, State, Controls.CR0,
+                Cases[I].Bytes.size(), Native, Fault, Cases[I].Software));
             // Bind only architecturally arbitrary outputs, using this original
             // instruction run. Undefined flags do not become fixed semantics.
             for (unsigned E = 0; E != (*Units)[I].UndefinedEffects.size();
@@ -521,7 +691,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
             }
             Memory =
                 llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-            X64PagedExecution Context(*Memory);
+            X64PagedExecution Context(
+                *Memory, {X64PagedAlignmentPriority::BeforePaging});
             uint64_t Budget = 1;
             const auto Exit =
                 Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
@@ -529,7 +700,11 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
             ASSERT_NE(Exit, 5u);
             EXPECT_EQ(Budget, 0u);
             EXPECT_EQ(Exit == 7, Fault);
-            EXPECT_EQ(Context.lastResult().InstructionCompleted, !Fault);
+            const bool SoftwareCompleted = Cases[I].Software && Variant != 4 &&
+                                           Variant != 8 && Variant != 11 &&
+                                           Variant < 12;
+            EXPECT_EQ(Context.lastResult().InstructionCompleted,
+                      !Fault || SoftwareCompleted);
             const auto &Expected = Native.Core.Core.Core.Core;
             EXPECT_EQ(Core.PC, Expected.PC);
             EXPECT_EQ(Core.RFlags, Expected.RFlags);
@@ -550,11 +725,17 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
                                   X64PagedNativeCPU::Size - 0x14000),
                       0);
             ++Comparisons;
-            FaultComparisons += Fault;
+            HandlerComparisons += Fault;
+            FaultComparisons += Fault && !SoftwareCompleted;
+            SoftwareComparisons += Cases[I].Software;
+            SoftwareCompletions += SoftwareCompleted;
           }
       }
   RecordProperty("cpu_comparisons", Comparisons);
   RecordProperty("fault_cpu_comparisons", FaultComparisons);
+  RecordProperty("handler_cpu_comparisons", HandlerComparisons);
+  RecordProperty("software_interrupt_cpu_comparisons", SoftwareComparisons);
+  RecordProperty("software_completion_cpu_comparisons", SoftwareCompletions);
 }
 #endif
 } // namespace

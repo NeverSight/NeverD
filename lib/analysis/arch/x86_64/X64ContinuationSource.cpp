@@ -1511,12 +1511,12 @@ buildInstruction(SpecializationInstruction Instruction,
   if (Options.PagedMemory) {
     PagedRoles = detail::x64PagedMemoryRoles(Instruction);
     if (!PagedRoles.Supported || Sysret || Sysenter || Sysexit || Iret ||
-        FarReturn || Interrupt || FarPointer)
+        FarReturn || FarPointer)
       RequireNative(
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
-          !alignmentIntrinsic(Op) && !UndefinedInstruction)
+          !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt)
         RequireNative(
             "paged execution has no binding for this native intrinsic");
       const auto RegisterAllowed = [](NdVar V) {
@@ -1833,6 +1833,10 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (UserInterrupt) {
     detail::X64ContinuationUserInterrupts<Writer>(W, Options)
         .execute(*UserInterrupt, Instruction.Fallthrough.Address);
+  } else if (Options.PagedMemory && Interrupt) {
+    W.pagedAccess(constant(*Interrupt), Instruction.Fallthrough.Address,
+                  X64PagedAccess::SoftwareInterrupt, false);
+    W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
     if (Iret)

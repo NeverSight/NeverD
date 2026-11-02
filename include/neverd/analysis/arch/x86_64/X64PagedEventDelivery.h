@@ -44,6 +44,10 @@ struct X64PagedEventResult {
 /// the handler privilege. CR2 is published whenever #PF is detected, including
 /// a fault while delivering #DF. Already completed descriptor/page-table/frame
 /// RAM writes remain visible. Shutdown is reported, never implemented as reset.
+/// For Software events, State.PC identifies the original INT/INT3 while
+/// Event.SavedPC supplies its successful fallthrough. Delivery faults restart
+/// State.PC, not that fallthrough; the numeric vector does not imply an error
+/// code or a fault exception class.
 ///
 /// This entry stops before executing the handler. It does not provide legacy
 /// i386 task gates, FRED/CET entry, VMX event routing, SMM or SGX AEX. A #DF

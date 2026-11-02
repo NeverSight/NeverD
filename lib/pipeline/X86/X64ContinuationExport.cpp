@@ -939,7 +939,8 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
       {"whole_function_coverage", false}};
   if (Request->Options.PagedMemory) {
     Report["domain"] =
-        "CPL0..3 64-bit scalar GPR/flags steps; owned ordinary physical RAM, "
+        "CPL0..3 64-bit scalar GPR/flags steps and canonical INT/INT3; "
+        "owned ordinary physical RAM, "
         "one CPU and fresh page walks; declared paging width and MXCSR mask; "
         "original-byte fetch verification, failure-atomic instruction state "
         "and operand data, retained paging effects and recursive IDT faults; "
@@ -947,8 +948,13 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
         "asynchronous events, MMIO, CET/FRED, SMM or enclave execution; "
         "state, context and budgets are disjoint from guest RAM";
     Report["event_delivery_domain"] =
-        "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD; shared paged IA-32e "
-        "IDT entry, recursive faults, #DF and shutdown; stop at handler entry";
+        "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD and software "
+        "interrupts; shared paged IA-32e IDT entry, recursive faults, #DF and "
+        "shutdown; software entry faults restart INT/INT3; stop at handler "
+        "entry";
+    Report["alignment_fault_priority"] =
+        "explicit runtime CPU binding when CPL3 AC and CR0.AM are set; "
+        "canonical checks first; no host-policy inference";
   }
   if (Request->NativeRtmAbortRegions)
     Report["native_rtm_abort_environment"] = llvm::json::Object{

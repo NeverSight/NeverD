@@ -63,6 +63,11 @@ vector. Contributory/page-fault combinations select #DF according to the
 architectural exception classes; another relevant fault during #DF reports
 shutdown. No reset or instruction skipping is substituted for shutdown.
 
+For a software event, the state PC identifies the original INT/INT3 and the
+input saved PC identifies its successful fallthrough. A fault during entry
+uses the original instruction PC. The common paged event owner preserves this
+distinction for generated source and direct C++ callers.
+
 CR2 changes on every detected page fault, including one during #DF delivery.
 Already completed descriptor, page-table and frame writes remain visible.
 NMI blocking survives a fault during NMI delivery. The executor stops at handler

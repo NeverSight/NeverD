@@ -306,6 +306,12 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     return std::move(Error);
   X64PagedEventResult Result;
   auto Event = Input;
+  // Software entry saves its fallthrough only when entry completes. A fault
+  // while executing INT/INT3 restarts the original instruction, including a
+  // second fault while delivering that exception.
+  const uint64_t FaultPC = Input.Kind == X64ContinuationEventKind::Software
+                               ? State.Core.Core.Core.Core.PC
+                               : Input.SavedPC;
   for (;;) {
     EventWriter W(State, Memory, Event, MXCSRMask);
     detail::X64ContinuationDelivery<EventWriter>(W, Controls.CR4 & 0x1000 ? 57
@@ -339,7 +345,7 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
         ((contributory(Event.Vector) && SecondContributory) ||
          (pageFault(Event.Vector) && (SecondContributory || SecondPage)));
     Event = {};
-    Event.SavedPC = Input.SavedPC;
+    Event.SavedPC = FaultPC;
     Event.Vector = Double ? 8 : W.Fault->Vector;
     Event.Kind = Double ? X64ContinuationEventKind::Abort
                         : X64ContinuationEventKind::Fault;

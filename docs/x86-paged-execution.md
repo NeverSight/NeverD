@@ -32,6 +32,17 @@ must come from the same export. Their adapters preserve actual function types
 across both C routes. This internal embedding contract is not a stable C SDK
 runtime-construction interface.
 
+When CPL3 alignment checking is active (`CR0.AM` and `RFLAGS.AC`), construct
+the context with an explicit `X64PagedExecutionOptions::AlignmentPriority`.
+`BeforePaging` checks scalar alignment after canonicality but before page walks;
+`AfterPaging` checks it after successful translation and backing access. An
+unspecified priority refuses that entry before fetch or RAM effects. The bound
+CPU supplies this choice; it is never inferred from the host. The local KVM CPU
+qualifies `BeforePaging`, including unaligned absent pages, noncanonical
+operands and page-crossing operands. The other order has a separate software
+contract check. Intel's boundary-event priority table does not prescribe the
+order of competing faults during instruction execution.
+
 ## Instruction and fault ownership
 
 The existing decoded LowIR owns arithmetic, flags, register slices, original
@@ -56,6 +67,18 @@ CALL checks its stack write before a noncanonical target: a missing stack page
 therefore produces #PF, while successful preflight followed by #GP publishes
 neither the return address nor register changes.
 
+Canonical INT n and both INT3 encodings also enter the shared paged IDT owner.
+Successful software entry saves the original fallthrough and never infers an
+error code from the vector number. A gate, descriptor or memory fault while
+executing the instruction instead saves its original PC. The common delivery
+layer owns this distinction, including recursive faults. Service-shaped INT
+vectors such as 0x29, 0x2d and 0x80 remain physical IDT transfers in this explicit
+machine-state domain. They do not invoke host OS services.
+The last canonical instruction byte is also valid for INT/INT3: the saved
+fallthrough may be noncanonical, because entry does not execute it. The shared
+faultable owner validates the handler target independently. Original CPU tests
+cover this boundary through both C routes and compilers.
+
 #PF, #GP, #SS, #AC, #DE and canonical UD2's #UD retain the original restart PC.
 The [shared paged event owner](x86-paged-memory.md) performs IDT entry, including
 nested faults, #DF, CR2 updates, partial handler-frame writes and shutdown.
@@ -79,13 +102,18 @@ Linux x64; other hosts explicitly skip it. Supply `NEVERD_TEST_NEVERC` to
 compile each source route with NeverC as well as Clang, at O0/O2. Set
 `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to preserve actual C and manifests.
 
-An independent KVM CPU executes 38 original instruction forms across ten input
-and memory configurations for every compiler profile. Checks compare all GPRs,
+An independent KVM CPU executes 38 scalar forms, all 256 INT n vectors and
+single-byte INT3 across fifteen input and memory configurations for every
+compiler profile. Software cases execute without host debug interception.
+Checks compare all GPRs,
 RFLAGS, PC, CR2, CS/SS and physical RAM outside paging-table pages, including
 fault frames. Only architectural undefined arithmetic flags use witnesses from
 that original CPU run. Fault-time A/D updates are not equated because their
 publication can depend on the CPU. Additional checks cover self-modification,
 backing failure, invalid binding, write-fault restart and refusal boundaries.
+The software-vector matrix avoids deliberately recursive #NP/#GP gates whose
+#DF saved program state is undefined; the separate paging suite qualifies #DF
+and shutdown with its explicit undefined-state exclusions.
 
 The [November 1 qualification](evidence/x86-paged-execution-2026-11-01.json)
 records 534 passing tests across the native-intrinsic and pinned r6 SDKs, with

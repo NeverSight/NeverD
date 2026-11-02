@@ -23,8 +23,19 @@ namespace neverd::analysis {
 
 using X64PagedBody = uint64_t (*)(void *State, void *Exchange);
 
+/// Canonical-address checks precede either order. Concurrent data-fault
+/// priority is processor-specific, not specified by the boundary-event table.
+enum class X64PagedAlignmentPriority : uint8_t { BeforePaging, AfterPaging };
+
+struct X64PagedExecutionOptions {
+  /// Required when CPL3 alignment checking is active. Absence refuses the
+  /// entry before fetch or RAM effects instead of inferring a host CPU policy.
+  std::optional<X64PagedAlignmentPriority> AlignmentPriority;
+};
+
 struct X64PagedExecutionResult {
   uint64_t Exit = uint64_t(X64ContinuationExitV1::InvalidState);
+  /// Includes successful software interrupt entry; a delivery fault is false.
   bool InstructionCompleted = false;
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
@@ -38,8 +49,9 @@ struct X64PagedExecutionResult {
 /// export; passing unrelated or arbitrary function pointers violates this ABI.
 class X64PagedExecution final {
 public:
-  explicit X64PagedExecution(translate::X86PagedMemory &Memory)
-      : Memory(Memory) {}
+  explicit X64PagedExecution(translate::X86PagedMemory &Memory,
+                             const X64PagedExecutionOptions &Options = {})
+      : Memory(Memory), Options(Options) {}
 
   llvm::Expected<X64PagedExecutionResult>
   execute(X64ContinuationStateV6 &State, uint64_t Address,
@@ -54,6 +66,7 @@ public:
 
 private:
   translate::X86PagedMemory &Memory;
+  X64PagedExecutionOptions Options;
   X64PagedExecutionResult Last;
   std::string Error;
 };

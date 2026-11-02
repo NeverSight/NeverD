@@ -3470,3 +3470,13 @@ scalar loads/stores, RMW, full-dividend division, conditional memory reads and
 near stack/control transfers. Partial instructions, complete legacy i386
 dispatch, SMI/SGX AEX and the documented external-device domains remain open.
 LLVM release and pin completion are not inferred from this qualification.
+
+The paged source binding also executes canonical INT n and both INT3 encodings
+through the shared IDT owner. Its original-CPU matrix covers every vector,
+including software invocations of exception-numbered and OS-service-shaped
+vectors, user and supervisor entry, missing gates and faults reading a gate.
+Failed software entry restarts INT itself; successful entry saves fallthrough
+without a vector-inferred error code. Active CPL3 scalar alignment checks now
+require an explicit CPU priority binding, with canonicality checked first;
+the local CPU qualifies alignment before paging. These changes retain the
+separate partial-instruction and external-event boundaries above.

@@ -101,7 +101,8 @@ public:
   void execute(const std::vector<uint8_t> &Input,
                const neverd::analysis::X64ContinuationStateV6 &State,
                uint64_t CR0, unsigned InstructionBytes,
-               neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault) {
+               neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault,
+               bool SoftwareInterrupt = false) {
     ASSERT_EQ(Input.size(), Size);
     std::copy(Input.begin(), Input.end(), RAM);
     const auto &Core = State.Core.Core.Core.Core;
@@ -140,7 +141,8 @@ public:
     R.rflags = Core.RFlags;
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &R), 0);
     kvm_guest_debug Debug{};
-    Debug.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
+    Debug.control =
+        SoftwareInterrupt ? 0 : KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
     Debug.arch.debugreg[0] = Core.PC + InstructionBytes;
     Debug.arch.debugreg[1] = 0x1800;
     Debug.arch.debugreg[2] = 0;
