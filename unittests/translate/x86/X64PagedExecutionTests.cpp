@@ -816,5 +816,6 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedScheduleTests.inc"
 #include "X64PagedSegmentMoveBoundaryTests.inc"
 #include "X64PagedSegmentMoveTests.inc"
+#include "X64PagedSegmentPushTests.inc"
 
 } // namespace

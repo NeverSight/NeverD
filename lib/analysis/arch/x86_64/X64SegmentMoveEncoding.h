@@ -1,10 +1,10 @@
-//===- X64SegmentMoveEncoding.h - Selector MOV/POP bytes -------*- C++ -*-===//
+//===- X64SegmentMoveEncoding.h - Selector transfer bytes -----*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Authenticate long-mode selector moves and FS/GS stack loads.
+/// Authenticate long-mode selector moves and FS/GS stack transfers.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64SEGMENTMOVEENCODING_H
@@ -28,6 +28,7 @@ struct X64SegmentMove : X64SegmentMemoryOperand {
   unsigned Bytes = 2;
   bool Read = false;
   bool Pop = false;
+  bool Push = false;
 };
 
 inline std::optional<X64SegmentMove>
@@ -38,10 +39,12 @@ x64SegmentMove(llvm::ArrayRef<uint8_t> Bytes) {
     return std::nullopt;
   X64SegmentMove F;
   if (P + 2 == Bytes.size() && Bytes[P] == 0x0f &&
-      (Bytes[P + 1] == 0xa1 || Bytes[P + 1] == 0xa9)) {
-    F.Pop = true;
+      (Bytes[P + 1] == 0xa0 || Bytes[P + 1] == 0xa1 || Bytes[P + 1] == 0xa8 ||
+       Bytes[P + 1] == 0xa9)) {
+    F.Pop = Bytes[P + 1] & 1;
+    F.Read = F.Push = !F.Pop;
     F.SegmentRegister =
-        Bytes[P + 1] == 0xa1 ? X86SegmentRegister::FS : X86SegmentRegister::GS;
+        Bytes[P + 1] & 8 ? X86SegmentRegister::GS : X86SegmentRegister::FS;
     F.Base = 4;
     F.Bytes = Prefix.Rex & 8 ? 8 : Prefix.Operand16 ? 2 : 8;
     return F;

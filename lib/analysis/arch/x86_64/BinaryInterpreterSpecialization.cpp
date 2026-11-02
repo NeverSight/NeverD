@@ -384,7 +384,7 @@ public:
         Result.ProfileProjection =
             InterpreterProfileProjection::X64SegmentMoveV1;
         Result.UndefinedEffects.Diagnostic =
-            "selector MOV/POP requires explicit descriptor and stack ownership";
+            "selector transfer requires explicit descriptor and stack ownership";
       } else {
         if (Options.ExplicitMachineState && Options.X64CetDisabled)
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(

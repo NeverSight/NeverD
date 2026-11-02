@@ -48,7 +48,9 @@ enum class X64PagedFarPointerProfile : uint8_t { OffsetFirst };
 
 /// Selector word, descriptor validation, then conditional qword accessed
 /// update. POP reads two bytes and publishes its two/eight-byte stack increment
-/// only with the cache. The scheduler starts MOV-SS inhibition unless an
+/// only with the cache. PUSH stores the full two/eight-byte zero-extended
+/// selector before publishing its stack decrement, without reading a
+/// descriptor. The scheduler starts MOV-SS inhibition unless an
 /// incoming MOV-SS window is already active; STI does not prevent that start.
 /// Processor observations require explicit target qualification.
 enum class X64PagedSegmentMoveProfile : uint8_t { SelectorFirst };
@@ -141,7 +143,7 @@ loadX64PagedFarPointer(X64ContinuationStateV6 &State,
                        X64PagedFarPointerProfile Profile,
                        std::optional<X64NullSegmentBasePolicy> NullBasePolicy);
 
-/// Execute an authenticated long-mode selector MOV/POP over explicit state.
+/// Execute an authenticated long-mode selector MOV/PUSH/POP over explicit state.
 /// The caller owns MOV-SS interruptibility; generated source uses its
 /// persistent scheduler. Fault delivery and instruction-budget accounting
 /// belong to the executor, not this descriptor/operand transition.

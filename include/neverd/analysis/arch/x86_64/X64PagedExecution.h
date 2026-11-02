@@ -36,7 +36,7 @@ struct X64PagedExecutionOptions {
   std::optional<X64PagedFarReturnProfile> FarReturnProfile;
   /// Required before LSS/LFS/LGS reads either pointer field or descriptor.
   std::optional<X64PagedFarPointerProfile> FarPointerProfile;
-  /// Required before selector MOV/POP effects. MOV SS also requires the
+  /// Required before selector MOV/PUSH/POP effects. MOV SS also requires the
   /// generated scheduler's persistent interruptibility cells.
   std::optional<X64PagedSegmentMoveProfile> SegmentMoveProfile;
 };
@@ -56,7 +56,7 @@ struct X64PagedExecutionResult {
 /// instruction succeeds. IRET/RETF retain ordered descriptor writes, and IRET
 /// also retains NMI unblocking on failure. LSS/LFS/LGS stage both destinations
 /// until their pointer reads, descriptor checks and accessed writes succeed.
-/// Selector MOV/POP share those checks; POP stages its stack increment too.
+/// Selector MOV/PUSH/POP share those checks and stage stack updates too.
 /// This is not a REP/gather/XSAVE
 /// progress model. Generated bodies/validators and original bytes belong to the
 /// same source export; passing unrelated or arbitrary function pointers

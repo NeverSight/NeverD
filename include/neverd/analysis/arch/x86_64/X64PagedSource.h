@@ -53,7 +53,7 @@ enum class X64PagedAccess : uint64_t {
   /// source null-base policy: 0 unbound, 1 clear, 2 preserve; size is zero.
   /// Bit 3 remains the scalar stack-access flag, so new kinds start at 16.
   FarPointerLoad = 16,
-  /// Selector MOV/POP uses the same null-base policy and authenticated bytes.
+  /// Selector MOV/PUSH/POP shares null-base policy and authenticated bytes.
   SegmentMove = 17,
 };
 

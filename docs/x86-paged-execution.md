@@ -173,12 +173,16 @@ native intrinsics; they are not added to the CPU totals.
 ## Faultable selector MOV and POP
 
 The paged V6 path owns `MOV r/m16,Sreg`, register-width selector reads,
-`MOV Sreg,r/m16`, and long-mode `POP FS/GS`. Bind
+`MOV Sreg,r/m16`, and long-mode `PUSH/POP FS/GS`. Bind
 `X64PagedExecutionOptions::SegmentMoveProfile` to `SelectorFirst`. Memory
-selector operands access exactly two bytes. On the qualified processor, even
+MOV and POP selector operands access exactly two bytes. On the qualified processor, even
 the default eight-byte POP reads only that word; its successful RSP increment
 is eight bytes, or two with an operand-size override. REX.W selects eight.
-Address-size and segment overrides do not redirect POP's implicit RSP access.
+PUSH writes the full zero-extended selector at its operand width, two or eight
+bytes, then publishes the matching RSP decrement. It does not read the GDT/LDT,
+even for an unusable segment cache. Address-size and segment overrides do not
+redirect either stack instruction's implicit 64-bit RSP access. The original
+RSP survives faults; a cross-page backing stop cannot publish a partial store.
 Native compiler builtins remain a separate ambient-machine execution path.
 
 The original-byte parser shares prefix, ModRM, SIB and displacement ownership
@@ -206,13 +210,13 @@ The original-CPU checks include all privilege pairs, present/type violations,
 GDT/LDT and accessed-bit faults, operand/store faults, exact word page bounds,
 FS/GS and address32 wrapping, pending IRQ/NMI, consecutive MOV SS and a following
 RSP switch. Generated fault handlers repair the page table, discard the error
-code, IRET and retry MOV loads/stores and both POP targets. Complete usable
+code, IRET and retry MOV loads/stores and both PUSH/POP targets. Complete usable
 segment caches, GPRs, flags, CR2, restart frames and ordinary RAM are compared.
 Page-table A/D effects are excluded from hardware byte equality; the software
 alignment-order check separately proves a post-translation #AC cannot publish
 a selector store. Duplicate prefixes, LOCK/REP, invalid segment registers and
 incomplete encodings remain explicit refusals. This is a long-mode contract;
-legacy POP DS/ES/SS and i386 segment/task dispatch are not added here.
+legacy PUSH CS/DS/ES/SS, POP DS/ES/SS and i386 segment/task dispatch are not added here.
 
 The [selector-move qualification](evidence/x86-paged-segment-moves-2026-11-02.json)
 records 636 passing broad regression runs and two unavailable LA57 skips across
@@ -222,6 +226,15 @@ The 1,080 captured C/header/manifest files match across SDKs. A final paged
 rerun additionally checks the unbound MOV-SS native status and unique dynamic
 library names; its results and repeated comparisons are recorded separately
 from those broad totals. Existing IRET #AC VMX/NMI discrepancies remain explicit.
+
+The subsequent [PUSH qualification](evidence/x86-paged-segment-push-2026-11-02.json)
+adds both FS/GS targets at word/qword widths, empty/unusable selectors, ignored
+prefixes, alignment and cross-page faults, canonical boundary wrap, PUSH/POP
+round trips and mapping repair/retry. Across both SDKs and core classes, 104
+test runs pass with 781,210 CPU comparisons; 12,864 exercise PUSH directly,
+including 3,712 fault cases. The 568 captured source/header/manifest files match
+between SDKs, and all 280 selector exports also match between core classes.
+The 272 inherited IRET #AC VMX/NMI discrepancies are recorded separately.
 
 ## Faultable IRET, IRETD and IRETQ
 
@@ -429,7 +442,7 @@ comparisons overall. The RETF subset contains 27,648 comparisons, including
 SDKs; each SDK's 44 efficient-core exports also match its performance-core
 outputs. The 186 earlier no-fault C/header outputs remain byte-identical.
 
-This binding owns scalar commits, long-mode selector MOV/POP and far-pointer
+This binding owns scalar commits, long-mode selector MOV/PUSH/POP and far-pointer
 loads, and faultable long-mode interrupt/far returns.
 REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
@@ -441,6 +454,6 @@ or RTM regions is explicitly rejected. The [no-fault scheduler](x86-event-schedu
 retains its separate successful-RAM contract. LLVM release/pin completion is not implied.
 
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
-volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/POP, volume 3A paging, exception priority
+volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/PUSH/POP, volume 3A paging, exception priority
 and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

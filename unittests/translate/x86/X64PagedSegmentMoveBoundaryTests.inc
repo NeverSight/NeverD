@@ -258,44 +258,58 @@ TEST_F(X64PagedExecutionTest,
        PagedSelectorStoreDoesNotPublishBeforeAlignmentFault) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
-  const std::vector<uint8_t> Code{0x8c, 0x1f};
-  for (bool LLVM : {false, true}) {
-    Run Driver = nullptr;
-    ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
-    for (auto Priority : {X64PagedAlignmentPriority::BeforePaging,
-                          X64PagedAlignmentPriority::AfterPaging})
-      for (bool Present : {false, true}) {
-        reset(Code);
-        auto &Core = State.Core.Core.Core.Core;
-        Core.GPR[7] = 0x20001;
-        Core.RFlags |= 0x40000;
-        Controls.CR0 |= 0x40000;
-        State.Core.CS = {0, UINT32_MAX, 27, 0xa0fb};
-        State.Core.SS = State.DS = {0, UINT32_MAX, 35, 0xc0f3};
-        State.Core.Core.CR2 = 0x1234;
-        if (!Present)
-          put(0x13100, 0);
-        Memory =
-            llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-        X64PagedExecution Context(
-            *Memory,
-            {.AlignmentPriority = Priority,
-             .SegmentMoveProfile = X64PagedSegmentMoveProfile::SelectorFirst});
-        uint64_t Budget = 1;
-        EXPECT_EQ(
-            Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget), 7u);
-        EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
-        EXPECT_EQ(Budget, 0u);
-        const bool AC =
-            Present || Priority == X64PagedAlignmentPriority::BeforePaging;
-        EXPECT_EQ(Core.PC, AC ? 0x4110u : 0x40e0u);
-        EXPECT_EQ(State.Core.Core.CR2, AC ? 0x1234u : 0x20001u);
-        EXPECT_EQ(Memory->physicalMemory()
-                      .loadScalar(0x30000, GuestScalarWidth::I64)
-                      .Value,
-                  0x8877665544332211ULL);
-      }
-  }
+  unsigned Checks = 0;
+  for (const std::vector<uint8_t> Code : std::vector<std::vector<uint8_t>>{
+           {0x8c, 0x1f}, {0x0f, 0xa0}, {0x66, 0x0f, 0xa8}})
+    for (bool LLVM : {false, true}) {
+      Run Driver = nullptr;
+      ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
+      for (auto Priority : {X64PagedAlignmentPriority::BeforePaging,
+                            X64PagedAlignmentPriority::AfterPaging})
+        for (bool Present : {false, true}) {
+          reset(Code);
+          auto &Core = State.Core.Core.Core.Core;
+          Core.GPR[7] = 0x20001;
+          Core.GPR[4] = 0x20001 + (Code.size() == 3 ? 2 : 8);
+          // Deliver on a separate IST so a saved fault frame cannot overwrite
+          // the operand bytes or obscure the unchanged original stack pointer.
+          for (unsigned V : {14, 17})
+            RAM.Memory.front().Bytes[0x6004 + V * 16] = 1;
+          Core.RFlags |= 0x40000;
+          Controls.CR0 |= 0x40000;
+          State.Core.CS = {0, UINT32_MAX, 27, 0xa0fb};
+          State.Core.SS = State.DS = {0, UINT32_MAX, 35, 0xc0f3};
+          State.Core.Core.CR2 = 0x1234;
+          if (!Present)
+            put(0x13100, 0);
+          Memory =
+              llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+          X64PagedExecution Context(
+              *Memory, {.AlignmentPriority = Priority,
+                        .SegmentMoveProfile =
+                            X64PagedSegmentMoveProfile::SelectorFirst});
+          uint64_t Budget = 1;
+          EXPECT_EQ(
+              Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
+              7u);
+          EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
+          EXPECT_EQ(Budget, 0u);
+          const bool AC =
+              Present || Priority == X64PagedAlignmentPriority::BeforePaging;
+          EXPECT_EQ(Core.PC, AC ? 0x4110u : 0x40e0u);
+          EXPECT_EQ(State.Core.Core.CR2, AC ? 0x1234u : 0x20001u);
+          EXPECT_EQ(Memory->physicalMemory()
+                        .loadScalar(0x1eff0, GuestScalarWidth::I64)
+                        .Value,
+                    0x20001u + (Code.size() == 3 ? 2 : 8));
+          EXPECT_EQ(Memory->physicalMemory()
+                        .loadScalar(0x30000, GuestScalarWidth::I64)
+                        .Value,
+                    0x8877665544332211ULL);
+          ++Checks;
+        }
+    }
+  RecordProperty("policy_backing_checks", Checks);
 }
 
 TEST_F(X64PagedExecutionTest, PagedSegmentMoveRejectsUnauthenticatedForms) {
@@ -318,6 +332,17 @@ TEST_F(X64PagedExecutionTest, PagedSegmentMoveRejectsUnauthenticatedForms) {
                                          {0x64, 0x65, 0x0f, 0xa1},
                                          {0x67, 0x67, 0x0f, 0xa9},
                                          {0x0f, 0xa1, 0x90},
+                                         {0xf0, 0x0f, 0xa0},
+                                         {0xf2, 0x0f, 0xa8},
+                                         {0xf3, 0x0f, 0xa0},
+                                         {0x66, 0x66, 0x0f, 0xa0},
+                                         {0x48, 0x66, 0x0f, 0xa8},
+                                         {0x64, 0x65, 0x0f, 0xa0},
+                                         {0x0f, 0xa8, 0x90},
+                                         {0x06},
+                                         {0x0e},
+                                         {0x16},
+                                         {0x1e},
                                          {0x17},
                                          {0x1f},
                                          {0x07}}) {
@@ -393,7 +418,7 @@ TEST_F(X64PagedExecutionTest, PagedSegmentMoveHandlerRepairsMappingAndRetries) {
   std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
   if (const char *Compiler = std::getenv("NEVERD_TEST_NEVERC"))
     Compilers.emplace_back(Compiler);
-  for (unsigned Kind = 0; Kind != 5; ++Kind)
+  for (unsigned Kind = 0; Kind != 7; ++Kind)
     for (const auto &Compiler : Compilers)
       for (bool LLVM : {false, true}) {
         std::vector<uint8_t> Code(0x1012, 0x90);
@@ -402,7 +427,9 @@ TEST_F(X64PagedExecutionTest, PagedSegmentMoveHandlerRepairsMappingAndRetries) {
                   : Kind == 1 ? 0x17
                   : Kind == 2 ? 0x27
                   : Kind == 3 ? 0xa1
-                              : 0xa9;
+                  : Kind == 4 ? 0xa9
+                  : Kind == 5 ? 0xa0
+                              : 0xa8;
         Code[0x1010] = 0x48;
         Code[0x1011] = 0xcf;
         const uint8_t HandlerCode[] = {0x48, 0xc7, 0x04, 0x25, 0x00, 0x31,
@@ -420,7 +447,7 @@ TEST_F(X64PagedExecutionTest, PagedSegmentMoveHandlerRepairsMappingAndRetries) {
         State.DS = State.ES = State.Core.SS;
         State.FS = State.GS = {UINT32_MAX, 16, 0xc093};
         if (Kind >= 3)
-          State.Core.Core.Core.Core.GPR[4] = 0x20000;
+          State.Core.Core.Core.Core.GPR[4] = Kind >= 5 ? 0x20008 : 0x20000;
         put(0x30000, 40);
         put(0x5028, 0x00cf92000000ffffULL);
         put(0x13100, 0);
@@ -460,7 +487,8 @@ TEST_F(X64PagedExecutionTest, PagedSegmentMoveHandlerRepairsMappingAndRetries) {
                                                       ? 0x1000u
                                                       : 0x1000u + Length);
           if (Phase == 1 && Kind >= 3)
-            EXPECT_EQ(State.Core.Core.Core.Core.GPR[4], 0x20000u);
+            EXPECT_EQ(State.Core.Core.Core.Core.GPR[4],
+                      Kind >= 5 ? 0x20008u : 0x20000u);
         }
         expectPagedSegmentCPU(State, Native, *Memory, CPU);
         ++Comparisons;

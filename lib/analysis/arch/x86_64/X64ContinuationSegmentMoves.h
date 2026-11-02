@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Bind selector MOV/POP operands to the shared descriptor and cache owner.
+/// Bind selector MOV/PUSH/POP to the shared descriptor and cache owner.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSEGMENTMOVES_H
@@ -66,8 +66,11 @@ public:
         Address = op(NdOp::INT_ADD,
                      {Address, load(F.Segment == 1 ? offsetof(State, FSBase)
                                                    : offsetof(State, GSBase))});
+      if (F.Push)
+        Address = op(NdOp::INT_SUB, {Address, k(F.Bytes)});
     }
-    const bool Stack = F.Pop || (!F.Segment && (F.Base == 4 || F.Base == 5));
+    const bool Stack =
+        F.Pop || F.Push || (!F.Segment && (F.Base == 4 || F.Base == 5));
     if (F.Read) {
       const auto SelectorOffset = [&] {
         switch (F.SegmentRegister) {
@@ -92,8 +95,13 @@ public:
                 F.Bytes == 8 ? Selector : narrow(Selector, F.Bytes));
       else {
         W.instructionAccess(true, Stack);
-        W.emit(NdOp::STORE, {}, {Address, narrow(Selector, 2)});
+        // Unlike POP's selector read, a qword PUSH stores all eight bytes.
+        const auto Value =
+            F.Push && F.Bytes == 8 ? Selector : narrow(Selector, 2);
+        W.emit(NdOp::STORE, {}, {Address, Value});
         W.instructionAccess(false);
+        if (F.Push)
+          W.store(offsetof(State, GPR) + x86reg::RSP, Address);
       }
       W.leave(Exit::Continue, k(NextPC));
       return;

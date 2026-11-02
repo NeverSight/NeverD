@@ -3421,6 +3421,19 @@ checks cover post-paging #AC store publication, malformed bytes, missing
 profiles, backing stops and instruction-only MOV-SS refusal. All new exports
 retain their test name so unrelated fixtures cannot overwrite the evidence.
 
+`X64PagedSegmentPushTests.inc` adds `*PagedSegmentPush*`: all long-mode FS/GS
+PUSH widths, ignored address/segment prefixes, REX.W precedence, unusable
+selectors, noncanonical/unaligned and split-page stack faults, both canonical
+boundaries and an unmapped GDT. The full usable state and ordinary RAM are
+compared with original CPU execution through both compilers/routes at O0/O2.
+PUSH/POP round trips and pending IRQ/NMI cover all privilege levels and incoming
+SS/STI shadows. The common page-repair/IRET test now retries both PUSH targets.
+Software checks separately exercise missing profiles, changed bytes, missing
+physical backing on either page, read-only physical RAM, and pre/post-paging
+#AC without prematurely publishing stack bytes or RSP. Qualify both SDKs and
+both local core classes; record source/header/manifest equality and real XML
+comparison counts.
+
 Faultable IRET is covered by `X64PagedExecutionTest.PagedInterruptReturnsMatchOriginalCPU`,
 `PagedIretComposesWithScheduledIRQAndNMI`,
 `PagedReturnFaultHandlerRepairsMappingAndRetries` and

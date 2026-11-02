@@ -140,4 +140,4 @@ expand their selected instruction set, and the other 178 earlier outputs remain
 unchanged. The previously documented 544 IRET #AC VMX/NMI discrepancies remain
 separate from matching hardware fields. This historical qualification validates
 LSS event semantics; the later paged binding now also owns faultable LSS/LFS/LGS
-and selector MOV/POP, as documented in the paged execution contract.
+and selector MOV/PUSH/POP, as documented in the paged execution contract.

@@ -52,9 +52,11 @@ access remains implicit supervisor. A qualified offset-first profile controls
 reads and qword accessed writes; both destinations publish together. The raw
 byte grammar also owns ignored long-mode segment prefixes.
 `X64SegmentEncoding` now shares that prefix/address grammar with selector
-MOV/POP. `X64ContinuationSegments::loadDataSegment` owns their common descriptor
+MOV/PUSH/POP. `X64ContinuationSegments::loadDataSegment` owns their common descriptor
 checks and cache publication, while `X64ContinuationSegmentMoves` owns selector
-operand widths and POP's staged RSP update. The paged selector-store path
+operand widths and staged RSP updates. PUSH stores the full two/eight-byte
+zero-extended selector without descriptor access; POP reads only its word.
+The paged selector-store path
 prepares translation before publication so a post-paging #AC retains page-walk
 effects without a data write. MOV SS requires the scheduler's persistent shadow;
 the instruction-only driver refuses it. Device arrival remains producer-owned.

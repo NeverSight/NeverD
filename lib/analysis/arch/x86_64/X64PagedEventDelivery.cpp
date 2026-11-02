@@ -541,7 +541,7 @@ moveX64PagedSegment(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   const auto Move = detail::x64SegmentMove(Instruction);
   if (!Move)
     return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "invalid paged selector MOV/POP encoding");
+                                   "invalid paged selector transfer encoding");
   assert(Profile == X64PagedSegmentMoveProfile::SelectorFirst);
   auto Next = State;
   const X64ContinuationEventV1 Event{};

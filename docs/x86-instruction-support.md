@@ -194,7 +194,7 @@ widths, pointer address spaces and the legacy assembly signature. The existing
 ordinary lifter still represents memory selector moves through scalar operands;
 this compiler bridge does not certify fault/restart equivalence for that split.
 The separate [paged V6 binding](x86-paged-execution.md#faultable-selector-mov-and-pop)
-authenticates the original MOV/POP bytes and owns long-mode descriptor/cache,
+authenticates the original MOV/PUSH/POP bytes and owns long-mode descriptor/cache,
 operand-fault, stack-retry and MOV-SS interruptibility semantics as one instruction.
 
 The full LLVM fork accepts i386/x64 code and ELF/COFF/Mach-O; NeverC targets x64.
