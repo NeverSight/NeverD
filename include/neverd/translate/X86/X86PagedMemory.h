@@ -51,6 +51,14 @@ public:
   llvm::Expected<X86MemoryAccessResult> store(const X86LinearAccess &Access,
                                               llvm::ArrayRef<uint8_t> Input);
 
+  /// A successful plan retains translations and physical write permission.
+  /// Commit before rebinding controls or mutating physical RAM; page-table A/D
+  /// effects of preparation remain visible even if the instruction faults.
+  struct PreparedStore;
+  llvm::Expected<PreparedStore> prepareStore(const X86LinearAccess &Access,
+                                             uint64_t Bytes);
+  void commitStore(const PreparedStore &Store, llvm::ArrayRef<uint8_t> Input);
+
 private:
   struct Fragment {
     uint64_t PhysicalAddress;
@@ -61,6 +69,16 @@ private:
     std::vector<Fragment> Fragments;
   };
 
+public:
+  struct PreparedStore : X86MemoryAccessResult {
+  private:
+    friend class X86PagedMemory;
+    std::vector<Fragment> Fragments;
+    const X86PagedMemory *Owner = nullptr;
+    uint64_t Bytes = 0;
+  };
+
+private:
   X86PagedMemory(std::unique_ptr<GuestMemoryRuntime> Physical,
                  const X86PagingFeatures &Features,
                  const X86PagingState &Controls);

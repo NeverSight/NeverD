@@ -1,5 +1,13 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+`NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
+through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
+scalar instruction completion and faults with independent original KVM CPU
+execution. Preserve C/manifests with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`.
+It also checks code changes, restart, backing failures and admission. Its
+execution fixture requires Linux x64; missing KVM is an explicit oracle skip.
+See [the generated execution contract](x86-paged-execution.md).
+
 `NeverDX86PagingTests` checks the owned x86 paging and paged V6 event interfaces.
 Its KVM oracle executes original loads, stores and instruction fetches in
 legacy i386, PAE and IA-32e modes, including cross-page faults and failures

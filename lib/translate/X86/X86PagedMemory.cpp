@@ -126,24 +126,37 @@ X86PagedMemory::load(const X86LinearAccess &Access,
   return P->Result;
 }
 
-llvm::Expected<X86MemoryAccessResult>
-X86PagedMemory::store(const X86LinearAccess &Access,
-                      llvm::ArrayRef<uint8_t> Input) {
+llvm::Expected<X86PagedMemory::PreparedStore>
+X86PagedMemory::prepareStore(const X86LinearAccess &Access, uint64_t Bytes) {
   if (Access.Kind != MemoryAccessKind::Write)
     return invalid("x86 paged store requires write access");
-  auto P = plan(Access, Input.size());
+  auto P = plan(Access, Bytes);
   if (!P)
     return P.takeError();
-  if (P->Result.Status != X86PageWalkStatus::Completed)
-    return P->Result;
+  PreparedStore Store;
+  static_cast<X86MemoryAccessResult &>(Store) = std::move(P->Result);
+  if (Store.Status != X86PageWalkStatus::Completed)
+    return Store;
   for (const auto &Fragment : P->Fragments) {
     const auto R =
         Physical->validateStoreBytes(Fragment.PhysicalAddress, Fragment.Size);
-    if (R.Status == GuestMemoryAccessStatus::Fault)
-      return backingFault(R);
+    if (R.Status == GuestMemoryAccessStatus::Fault) {
+      static_cast<X86MemoryAccessResult &>(Store) = backingFault(R);
+      return Store;
+    }
   }
+  Store.Fragments = std::move(P->Fragments);
+  Store.Owner = this;
+  Store.Bytes = Bytes;
+  return Store;
+}
+
+void X86PagedMemory::commitStore(const PreparedStore &Store,
+                                 llvm::ArrayRef<uint8_t> Input) {
+  assert(Store.Status == X86PageWalkStatus::Completed && Store.Owner == this &&
+         Store.Bytes == Input.size() && "commit the successful original plan");
   size_t Offset = 0;
-  for (const auto &Fragment : P->Fragments) {
+  for (const auto &Fragment : Store.Fragments) {
     // No callbacks, concurrent writers, permission changes or executable
     // generation increments can intervene between validation and commit.
     const auto R = Physical->storeBytes(Fragment.PhysicalAddress,
@@ -153,7 +166,17 @@ X86PagedMemory::store(const X86LinearAccess &Access,
     (void)R;
     Offset += Fragment.Size;
   }
-  return P->Result;
+}
+
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::store(const X86LinearAccess &Access,
+                      llvm::ArrayRef<uint8_t> Input) {
+  auto Store = prepareStore(Access, Input.size());
+  if (!Store)
+    return Store.takeError();
+  if (Store->Status == X86PageWalkStatus::Completed)
+    commitStore(*Store, Input);
+  return static_cast<X86MemoryAccessResult &&>(*Store);
 }
 
 } // namespace neverd::translate

@@ -499,6 +499,11 @@ struct X64ContinuationSourceOptions {
   /// DIV/IDIV at 8/16/32/64 bits directly deliver #UD/#DE; other domains
   /// remain.
   bool EventDelivery = false;
+  /// V6 scalar source uses an explicit second pointer and the paged executor.
+  /// Memory, #DE/#UD/#GP/#SS/#PF/#AC, fetch authentication and restart state
+  /// belong to that executor. Native environment bindings and the no-fault
+  /// event/scheduler interface cannot be combined with this memory binding.
+  bool PagedMemory = false;
   /// Export instruction-entry validation and interrupt-shadow attribution for
   /// the optional bounded IRQ/NMI scheduler. Requires the V6 event interface.
   /// External producers still own interrupt-controller selection and priority.

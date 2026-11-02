@@ -72,6 +72,14 @@ struct X64ContinuationExport {
 /// It requires MXCSR mask and no paging/Intel-return bindings. A bounds fault
 /// stops with status 14 at its original PC before exception delivery; original
 /// near transfers own conditional bounds initialization.
+/// V6 paged_memory selects the owned-RAM scalar instruction executor and
+/// neverd_x64_run_paged_v6. Its explicit context is X64PagedExecution; guest
+/// memory and synchronous faults use that C++ component's bridge. It cannot
+/// be combined with the host-RAM native providers, RTM regions, direct dispatch
+/// or scheduled_events. Fetch verification reports changed code as status 20;
+/// backing failure and shutdown are statuses 18 and 19. Partial-completion
+/// instructions retain a native boundary. This bridge is not a stable C SDK
+/// runtime interface.
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug = nullptr);

@@ -3463,6 +3463,10 @@ C++ binding from generated source. Both SDKs pass the 440 existing continuation
 regressions plus the paged-memory/event checks. Each SDK executes 900 original
 CPU comparisons, including 292 fault/event comparisons within that total;
 five-level native execution is explicitly skipped on the non-LA57 host.
-Generated-C memory-context/commit integration, complete legacy i386 dispatch,
-SMI/SGX AEX and the documented external-device domains remain open. LLVM release
-and pin completion are not inferred from this qualification.
+The subsequent [generated scalar executor](x86-paged-execution.md) integrates
+both C routes with the paged memory context, byte-fetch authentication, scalar
+instruction commit and synchronous fault/restart state. Its CPU matrix covers
+scalar loads/stores, RMW, full-dividend division, conditional memory reads and
+near stack/control transfers. Partial instructions, complete legacy i386
+dispatch, SMI/SGX AEX and the documented external-device domains remain open.
+LLVM release and pin completion are not inferred from this qualification.

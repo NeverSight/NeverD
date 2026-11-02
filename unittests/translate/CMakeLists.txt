@@ -1,3 +1,12 @@
+add_neverd_unittest(NeverDX64PagedExecutionTests
+  x86/X64PagedExecutionTests.cpp
+  LINK_COMPONENTS Pipeline X64PagedEventDelivery
+)
+target_compile_definitions(NeverDX64PagedExecutionTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}"
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../lift")
+
 add_neverd_unittest(NeverDX86PagingTests
   x86/X86PagingTests.cpp
   x86/X86PagingNativeTests.cpp

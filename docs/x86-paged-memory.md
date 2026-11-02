@@ -1,8 +1,10 @@
 # x86 paged RAM and faultable IDT delivery
 
 `X86Paging`, `X86PagedMemory` and `X64PagedEventDelivery` provide an explicit
-owned-RAM execution path. They are internal C++ embedding interfaces, separate
-from the existing generated-C continuation's successful-host-RAM contract.
+owned-RAM execution path. They are internal C++ embedding interfaces. The
+optional [paged source binding](x86-paged-execution.md) uses them for generated
+scalar instruction execution; the default source binding retains its separate
+successful-host-RAM contract.
 Guest linear addresses are never cast to host pointers.
 
 ## Ownership
@@ -90,11 +92,11 @@ comparisons within that total), and the existing 440 continuation regressions.
 The only hardware-mode skip is LA57 on the local CPU. The same 282 generated
 C/header/manifest artifacts are byte-identical across the SDKs.
 
-This does **not** bind the existing generated HighC/LLVM-to-C instruction
-dispatchers to paged RAM. That integration still needs an explicit memory
-context, instruction commit boundaries and restart state. It must also preserve
-partial completion for REP, gather/scatter, XSAVE and related instructions;
-the failure-atomic operand primitive alone is not their instruction model.
+The subsequent [generated scalar executor](x86-paged-execution.md) binds both
+C routes through an explicit memory context, instruction commit boundaries and
+restart state. Partial completion for REP, gather/scatter, XSAVE and related
+instructions remains separate; the failure-atomic operand primitive alone is
+not their instruction model.
 
 Other remaining domains include legacy i386 segment/task-gate execution,
 SMI entry, SGX AEX/enclave execution, APIC/device arrival, MMIO, EPT/NPT/HLAT,

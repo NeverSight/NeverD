@@ -35,9 +35,13 @@ restartable operands without turning physical backing failures into #PF.
 `X64PagedEventDelivery` evaluates the existing continuation event templates
 with exact scalar values and this memory binding; source and concrete execution
 share descriptor/frame decisions. Recursive delivery owns #DF classification,
-CR2 publication and shutdown, while caller state owns instruction restart and
-device arrival. See [the paged RAM contract](x86-paged-memory.md); the existing
-generated-C dispatcher still uses its separate no-fault memory binding.
+CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
+to that memory, authenticates instruction fetches, stages restart state and
+commits prepared stores. The existing LowIR remains the arithmetic authority;
+both C routes share an explicit imported-call ABI. Device arrival remains
+producer-owned. See [paged RAM](x86-paged-memory.md) and
+[generated execution](x86-paged-execution.md); the default generated-C dispatcher
+retains its separate no-fault memory binding.
 
 `ir/intrinsics/X86/X86Hle.h` owns HLE's native ABI and original-register
 publication map. LowIR, Low-to-Med, Med verification and the C/LLVM adapters

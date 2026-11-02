@@ -19,6 +19,7 @@
 #include "X64ContinuationHle.h"
 #include "X64ContinuationMpx.h"
 #include "X64ContinuationNativeRegisters.h"
+#include "X64ContinuationPaged.h"
 #include "X64ContinuationSgx.h"
 #include "X64ContinuationSmm.h"
 #include "X64ContinuationSvm.h"
@@ -30,6 +31,7 @@
 #include "X64Recovery.h"
 #include "X64TaskPriority.h"
 
+#include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -75,6 +77,7 @@ using Segment = X64ContinuationSegment;
 using Exit = X64ContinuationExitV1;
 using Flags = detail::X64MachineFlags;
 constexpr uint64_t StatePointer = uint64_t{1} << 32;
+constexpr uint64_t PagedContextPointer = StatePointer + 8;
 constexpr uint64_t ScratchBase = uint64_t{1} << 61;
 
 bool hasSgxState(const X64ContinuationSourceOptions &Options) {
@@ -636,6 +639,7 @@ struct Writer {
   LowBlock *Block;
   const X64ContinuationSourceOptions &Options;
   uint64_t Next = ScratchBase;
+  detail::X64PagedMemoryRoles PagedRoles;
 
   NdVar temporary(uint16_t Bytes = 8) {
     const NdVar V = NdVar::tmp(Next, Bytes);
@@ -691,9 +695,16 @@ struct Writer {
     Block = &Function.Blocks[NextId];
   }
 
+  NdVar statePointer() const {
+    // Runtime calls clobber physical registers. These explicit source inputs
+    // are SSA values whose lifetime spans the callback, not machine registers.
+    return Options.PagedMemory ? NdVar::tmp(StatePointer, 8)
+                               : NdVar::reg(StatePointer, 8);
+  }
+
   NdVar address(uint64_t Offset) {
     const NdVar V = temporary();
-    emit(NdOp::INT_ADD, V, {NdVar::reg(StatePointer, 8), constant(Offset)});
+    emit(NdOp::INT_ADD, V, {statePointer(), constant(Offset)});
     return V;
   }
 
@@ -937,7 +948,7 @@ struct Writer {
     }
     const auto StateAccess = [&] {
       const NdVar Address = temporary();
-      emit(NdOp::INT_ADD, Address, {NdVar::reg(StatePointer, 8), Offset});
+      emit(NdOp::INT_ADD, Address, {statePointer(), Offset});
       if (Write)
         emit(NdOp::STORE, {}, {Address, Op.Inputs[2]});
       else
@@ -976,6 +987,30 @@ struct Writer {
     }
   }
 
+  void pagedAccess(NdVar Address, uint64_t Bytes, X64PagedAccess Kind,
+                   bool Stack) {
+    emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8),
+         {NdVar::tmp(PagedContextPointer, 8)});
+    emit(NdOp::COPY, NdVar::reg(x86reg::RSI, 8), {Address});
+    emit(NdOp::COPY, NdVar::reg(x86reg::RDX, 8), {constant(Bytes)});
+    emit(NdOp::COPY, NdVar::reg(x86reg::RCX, 8),
+         {constant(uint64_t(Kind) | (Stack ? kX64PagedStackAccess : 0))});
+    emit(NdOp::CALL, {}, {constant(kX64PagedAccessAddress)});
+    const auto Bad = temporary(1);
+    emit(NdOp::INT_NOTEQUAL, Bad, {NdVar::reg(x86reg::RAX, 8), constant(0)});
+    exitIf(Bad, [&] { leave(static_cast<Exit>(X64PagedExit::AccessFault)); });
+  }
+
+  void codeTarget(NdVar PC) {
+    const auto Left = temporary(), Canonical = temporary();
+    const auto Bad = temporary(1);
+    const auto Shift = constant(64 - *Options.PagingAddressBits);
+    emit(NdOp::INT_LEFT, Left, {PC, Shift});
+    emit(NdOp::INT_ASHR, Canonical, {Left, Shift});
+    emit(NdOp::INT_NOTEQUAL, Bad, {PC, Canonical});
+    exitIf(Bad, [&] { fault(13); });
+  }
+
   void operation(LowOp Op) {
     const NdVar NativeOutput = Op.Output;
     const bool LowSlice =
@@ -998,13 +1033,27 @@ struct Writer {
       Op.Inputs[AddressInput] = Linear;
       Op.MemoryAddressSpace = NdMemoryAddressSpace::Default;
     }
-    if (divisionPreconditionIntrinsic(Op)) {
+    if (Options.PagedMemory &&
+        (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE)) {
+      const bool Write = Op.Opcode == NdOp::STORE;
+      const auto Context = NdVar::tmp(PagedContextPointer, 8);
+      const auto Bytes = Write ? Op.Inputs[1].Size : Op.Output.Size;
+      if (Write)
+        emit(NdOp::STORE, {}, {Context, Op.Inputs[1]});
+      pagedAccess(Op.Inputs[0], Bytes,
+                  Write                        ? X64PagedAccess::Store
+                  : PagedRoles.ReadModifyWrite ? X64PagedAccess::ReadModifyWrite
+                                               : X64PagedAccess::Load,
+                  Write ? PagedRoles.StackWrite : PagedRoles.StackRead);
+      if (!Write)
+        emit(NdOp::LOAD, Op.Output, {Context});
+    } else if (divisionPreconditionIntrinsic(Op)) {
       // Reject a faulting invocation before any architectural write. Check the
       // complete double-width dividend and signedness for both DIV and IDIV.
       // Retain the original precondition below:
       // the native intrinsic remains the authority for division execution.
       const NdVar Bad = detail::x64DivisionError(*this, Op);
-      if (Options.EventDelivery)
+      if (Options.EventDelivery || Options.PagedMemory)
         exitIf(Bad, [&] { fault(0); });
       else
         rejectIf(Bad);
@@ -1085,6 +1134,13 @@ struct Writer {
   }
 
   void fault(uint8_t Vector) {
+    if (Options.PagedMemory) {
+      pagedAccess(constant(Vector), 0, X64PagedAccess::Fault, false);
+      // The runtime always reports a fault for this request. Retain an exit
+      // even if a malformed callback returns success.
+      leave(static_cast<Exit>(X64PagedExit::AccessFault));
+      return;
+    }
     const auto SavedFlags = temporary();
     emit(NdOp::INT_OR, SavedFlags,
          {load(offsetof(State, RFlags)), constant(0x10000)});
@@ -1110,6 +1166,15 @@ void finishBlock(LowBlock &Block) {
                                   : LowInstructionControlFlag::None);
   if (!Block.Succs.empty())
     B.Immediate = Block.Ops.back().Inputs[0].Offset;
+  for (const auto &Op : Block.Ops)
+    if (Op.Opcode == NdOp::CALL) {
+      // The explicit runtime call is followed by its conditional fault exit.
+      // Keep both controls in the synthetic source boundary; no original
+      // native instruction boundary is inferred from this helper call.
+      B.Control = LowInstructionControl::ConditionalCall;
+      B.ControlFlags = B.ControlFlags | LowInstructionControlFlag::Call;
+      B.Immediate = Op.Inputs[0].Offset;
+    }
   Block.InstructionBoundaries.push_back(B);
   Block.EndAddr = Block.StartAddr + 1;
   for (size_t I = 0; I < Block.Ops.size(); ++I) {
@@ -1118,7 +1183,7 @@ void finishBlock(LowBlock &Block) {
   }
 }
 
-SourceFunctionTypeHint sourceABI() {
+SourceFunctionTypeHint sourceABI(bool Paged = false) {
   SourceFunctionTypeHint ABI;
   ABI.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
   ABI.Architecture = Arch::X64;
@@ -1131,6 +1196,14 @@ SourceFunctionTypeHint sourceABI() {
   P.Type = NdType::makePtr(NdType::makeInt(1, false));
   P.Location = {SourceABICarrierKind::IntegerRegister, x86reg::RDI, 0, 8};
   ABI.Parameters.push_back(std::move(P));
+  if (Paged) {
+    SourceParameterTypeHint Context;
+    Context.Name = "memory_exchange";
+    Context.Type = NdType::makePtr(NdType::makeInt(1, false));
+    Context.Location = {SourceABICarrierKind::IntegerRegister, x86reg::RSI, 0,
+                        8};
+    ABI.Parameters.push_back(std::move(Context));
+  }
   return ABI;
 }
 
@@ -1141,7 +1214,7 @@ buildInstruction(SpecializationInstruction Instruction,
   X64ContinuationInstructionSource Result;
   Result.Address = Instruction.Origin.Address;
   Result.Bytes = Instruction.NativeBytes;
-  Result.SourceABI = sourceABI();
+  Result.SourceABI = sourceABI(Options.PagedMemory);
   auto &Function = Result.Function;
   Function.Entry = Result.Address;
   const bool Controls = hasControlState(Options);
@@ -1196,6 +1269,8 @@ buildInstruction(SpecializationInstruction Instruction,
                    : Controls           ? "neverd_step_v2_"
                                         : "neverd_step_") +
                   llvm::utohexstr(Result.Address);
+  if (Options.PagedMemory)
+    Function.Name = "neverd_paged_" + Function.Name;
   Exit Kind = Exit::Continue;
   if (Instruction.NativeStackControl !=
       SpecializationNativeStackControl::None) {
@@ -1252,7 +1327,8 @@ buildInstruction(SpecializationInstruction Instruction,
           NdVar::reg(x86reg::RCX, Instruction.Ops.front().Inputs[1].Size) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
   const bool UndefinedInstruction =
-      Options.EventDelivery && Instruction.NativeBytes.size() == 2 &&
+      (Options.EventDelivery || Options.PagedMemory) &&
+      Instruction.NativeBytes.size() == 2 &&
       Instruction.NativeBytes[0] == 0x0f &&
       Instruction.NativeBytes[1] == 0x0b && Instruction.Ops.size() == 1 &&
       eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
@@ -1431,13 +1507,35 @@ buildInstruction(SpecializationInstruction Instruction,
         RequireNative("instruction requires a different flags domain");
     }
   }
+  detail::X64PagedMemoryRoles PagedRoles;
+  if (Options.PagedMemory) {
+    PagedRoles = detail::x64PagedMemoryRoles(Instruction);
+    if (!PagedRoles.Supported || Sysret || Sysenter || Sysexit || Iret ||
+        FarReturn || Interrupt || FarPointer)
+      RequireNative(
+          "paged execution requires a scalar instruction commit model");
+    for (const auto &Op : Instruction.Ops) {
+      if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
+          !alignmentIntrinsic(Op) && !UndefinedInstruction)
+        RequireNative(
+            "paged execution has no binding for this native intrinsic");
+      const auto RegisterAllowed = [](NdVar V) {
+        return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V));
+      };
+      if (!RegisterAllowed(Op.Output))
+        RequireNative("paged scalar execution requires a GPR or flags output");
+      for (unsigned I = 0; I != Op.NumInputs; ++I)
+        if (!RegisterAllowed(Op.Inputs[I]))
+          RequireNative("paged scalar execution requires GPR or flags inputs");
+    }
+  }
   // Admission belongs to the original semantic operations, before state
   // rewriting hides a system-register update behind ordinary RAM stores.
   // Alignment checks only validate the existing nonfaulting RAM domain.
   // DF and other nonstatus flags have implementation-dependent RTM behavior;
   // virtualizing their writes must not turn a native abort into a commit.
   Result.SupportsRtmBody =
-      !Result.RequiresNativeExecution &&
+      !Options.PagedMemory && !Result.RequiresNativeExecution &&
       Instruction.ProfileProjection == InterpreterProfileProjection::None &&
       Kind <= Exit::Return &&
       std::all_of(Instruction.Ops.begin(), Instruction.Ops.end(),
@@ -1482,8 +1580,10 @@ buildInstruction(SpecializationInstruction Instruction,
   Body.Preds = {0};
   Rejected.Preds = {0};
   Writer Guard{Function, &Entry, Options};
-  Guard.emit(NdOp::COPY, NdVar::reg(StatePointer, 8),
-             {NdVar::reg(x86reg::RDI, 8)});
+  Guard.emit(NdOp::COPY, Guard.statePointer(), {NdVar::reg(x86reg::RDI, 8)});
+  if (Options.PagedMemory)
+    Guard.emit(NdOp::COPY, NdVar::tmp(PagedContextPointer, 8),
+               {NdVar::reg(x86reg::RSI, 8)});
   const NdVar PCBad = Guard.temporary(1), FlagBits = Guard.temporary();
   const NdVar FlagsBad = Guard.temporary(1), Fixed = Guard.temporary();
   const NdVar FixedBad = Guard.temporary(1), Bad0 = Guard.temporary(1);
@@ -1492,7 +1592,9 @@ buildInstruction(SpecializationInstruction Instruction,
              {Guard.load(offsetof(State, PC)), constant(Result.Address)});
   const NdVar Packed = Guard.load(offsetof(State, RFlags));
   const uint64_t EntryFlags =
-      SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
+      Options.PagedMemory ? Flags::EntryMask | Flags::AlignmentCheckMask |
+                                Flags::ResumeMask | Flags::IOPLMask
+      : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
       : (Interrupt || FredReturn || UndefinedInstruction ||
          UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
@@ -1530,7 +1632,8 @@ buildInstruction(SpecializationInstruction Instruction,
         NdOp::INT_AND, RPL,
         {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Selector), 2),
          constant(3, 2)});
-    if (Sysenter || UserInterrupt || UndefinedInstruction) {
+    if (Sysenter || UserInterrupt || UndefinedInstruction ||
+        Options.PagedMemory) {
       // Conforming code retains the caller's CPL even when CS.DPL is lower.
       const NdVar Shifted = Guard.temporary(2), DPL = Guard.temporary(2);
       const NdVar ConformingBits = Guard.temporary(2);
@@ -1551,10 +1654,11 @@ buildInstruction(SpecializationInstruction Instruction,
     }
     Guard.emit(
         NdOp::INT_AND, SegmentBits,
-        {Attributes,
-         constant((Sysenter || UserInterrupt || UndefinedInstruction) ? 0x6098
-                                                                      : 0x60f8,
-                  2)});
+        {Attributes, constant((Sysenter || UserInterrupt ||
+                               UndefinedInstruction || Options.PagedMemory)
+                                  ? 0x6098
+                                  : 0x60f8,
+                              2)});
     const NdVar LongModeBad =
         CompatibilityFastEntry ? Guard.temporary(1) : ModeBad;
     Guard.emit(NdOp::INT_NOTEQUAL, LongModeBad,
@@ -1646,7 +1750,7 @@ buildInstruction(SpecializationInstruction Instruction,
   Guard.emit(NdOp::COND_BR, {}, {NdVar::cst(Rejected.StartAddr, 8), Bad});
   Writer Reject{Function, &Rejected, Options};
   Reject.leave(Exit::InvalidState);
-  if (Options.ScheduledEvents) {
+  if (Options.ScheduledEvents || Options.PagedMemory) {
     // Copy the actual entry guard rather than recreating its flags, mode and
     // state checks in the C scheduler. No instruction or guest RAM is read.
     Result.EntryValidation = Function;
@@ -1666,6 +1770,7 @@ buildInstruction(SpecializationInstruction Instruction,
       finishBlock(Block);
   }
   Writer W{Function, &Body, Options};
+  W.PagedRoles = PagedRoles;
   if (MpxState)
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
@@ -1788,6 +1893,8 @@ buildInstruction(SpecializationInstruction Instruction,
     }
     if (MpxBranch)
       detail::X64ContinuationMpx<Writer>(W).completeBranch(*MpxBranch);
+    if (Options.PagedMemory && Kind != Exit::Continue)
+      W.codeTarget(NextPC);
     W.leave(Kind, NextPC);
   }
   if (Function.Blocks.size() > Options.MaxOperations ||
@@ -1807,6 +1914,17 @@ buildX64ContinuationSource(const BinaryImage &Image,
                            llvm::ArrayRef<va_t> Addresses,
                            const X64ContinuationSourceOptions &Options) {
   const bool Controls = hasControlState(Options);
+  if (Options.PagedMemory &&
+      (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+       Options.EventDelivery || Options.ScheduledEvents ||
+       Options.NativeTimestampReads || Options.NativeWritePrefetch ||
+       Options.NativeSpeculationControlMsrs ||
+       Options.NativeDescriptorQueries || Options.NativePageTableAccess ||
+       Options.NativeDebugRegisterAccess || Options.NativePageGlobalAccess ||
+       Options.NativeKvmHypercalls || Options.NativeHyperVHypercallEntry ||
+       Options.NativeSnpInstructions || Options.NativeHleSteps ||
+       Options.NativeSevGuestExit || Options.SegmentBaseMSRAddressBits))
+    return invalid("paged V6 requires its owned memory and fault environment");
   if (Options.ScheduledEvents && !Options.EventDelivery)
     return invalid("scheduled events require event delivery");
   if (Options.EventDelivery &&
@@ -1902,7 +2020,7 @@ buildX64ContinuationSource(const BinaryImage &Image,
   // an ordinary value and remains bound to the actual instruction address.
   va_t ValidationAddress = InvalidVA - 3;
   for (auto &Instruction : *Instructions) {
-    if (Options.ScheduledEvents)
+    if (Options.ScheduledEvents || Options.PagedMemory)
       while (Unique.count(ValidationAddress))
         ValidationAddress -= 3;
     auto Unit =

@@ -1469,4 +1469,26 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
 
+TEST_F(X64ContinuationExportTest,
+       PagedMemoryExportsItsExplicitRuntimeContract) {
+  load({0x48, 0x8b, 0x07});
+  const auto Request =
+      request("\"instructions\":[\"0x1000\"],\"paged_memory\":true");
+  for (bool LLVM : {false, true}) {
+    const char *Report = nullptr;
+    const auto Source = take(neverd_x64_continuation_source_v1(
+        Session, Request.data(), Request.size(), LLVM, &Report));
+    ASSERT_FALSE(Source.empty()) << take(neverd_last_error(Session));
+    auto Manifest = llvm::json::parse(take(Report));
+    ASSERT_TRUE(bool(Manifest)) << llvm::toString(Manifest.takeError());
+    ASSERT_TRUE(Manifest->getAsObject());
+    EXPECT_EQ(Manifest->getAsObject()->getBoolean("paged_memory"), true);
+    EXPECT_EQ(Manifest->getAsObject()->getString("environment_driver"),
+              "neverd_x64_run_paged_v6");
+    EXPECT_EQ(Manifest->getAsObject()->getInteger("native_requests"), 0);
+    EXPECT_NE(Source.find("neverd_x64_paged_access_v1"), std::string::npos);
+    EXPECT_EQ(Source.find("unknown value"), std::string::npos);
+  }
+}
+
 } // namespace

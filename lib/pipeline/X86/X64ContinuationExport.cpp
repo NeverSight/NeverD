@@ -10,6 +10,7 @@
 #include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "X64ContinuationEnvironment.h"
+#include "X64ContinuationPagedDriver.h"
 #include "X64ContinuationSchedule.h"
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
@@ -17,11 +18,13 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -37,6 +40,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -109,6 +113,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_snp_instructions",
                                        "native_sev_guest_exit",
                                        "event_delivery",
+                                       "paged_memory",
                                        "scheduled_events",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
@@ -211,6 +216,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_snp_instructions", &Options.NativeSnpInstructions},
       {"native_sev_guest_exit", &Options.NativeSevGuestExit},
       {"event_delivery", &Options.EventDelivery},
+      {"paged_memory", &Options.PagedMemory},
       {"scheduled_events", &Options.ScheduledEvents},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
@@ -542,7 +548,15 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   auto Units = buildX64ContinuationSource(Image, Addresses, Request->Options);
   if (!Units)
     return Units.takeError();
+  if (Request->Options.PagedMemory &&
+      (Request->NativeRtmAbortRegions || Request->NativeRtmRegions ||
+       Request->DirectDispatch))
+    return invalid("paged memory requires its bounded paged dispatcher");
   std::vector<MedFunc> Functions;
+  const std::map<va_t, SourceFunctionTypeHint> PagedCallees{
+      {kX64PagedAccessAddress, x64PagedAccessSourceABI()}};
+  const std::map<va_t, std::string> PagedNames{
+      {kX64PagedAccessAddress, kX64PagedAccessName}};
   llvm::json::Array Manifest;
   size_t Native = 0;
   uint64_t Work = Units->size();
@@ -558,9 +572,22 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, ABI}};
     Converter.setSourceCallHintsEnabled(true);
     Converter.setSourceEntryTypeHints(&Hints);
+    if (Request->Options.PagedMemory)
+      Converter.setSourceCalleeTypeHints(&PagedCallees);
     auto Function = Converter.convert(Low, Arch::X64);
+    if (Request->Options.PagedMemory)
+      for (auto &Block : Function.Blocks)
+        for (auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.SourceCallHint) {
+            auto Hint =
+                std::make_shared<SourceCallTypeHint>(*Op.SourceCallHint);
+            Hint->TargetName = PagedNames.at(Hint->TargetAddress);
+            Op.SourceCallHint = std::move(Hint);
+          }
     Function.SourceTypeHint = ABI;
     inferMedTypes(Function, Arch::X64);
+    if (Request->Options.PagedMemory)
+      recoverCallAbi(Function, Arch::X64, PagedNames);
     if (!verifyMedFunc(Function, "x64-continuation-export"))
       return invalid("x64 continuation source failed MedIR verification");
     Functions.push_back(std::move(Function));
@@ -611,16 +638,45 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   Options.TheArch = Arch::X64;
   Options.Format = BinaryFormat::ELF;
   Options.UseUnalignedPointers = false;
+  Options.PreserveLLVMFunctionTypes = Request->Options.PagedMemory;
   if (UseLLVM) {
     llvm::LLVMContext Context;
-    auto Module = MedLLVMEmitter().emit(Functions, Context);
+    std::vector<char> Bodies(Functions.size(), 1);
+    if (Request->Options.PagedMemory) {
+      const auto &ABI = PagedCallees.begin()->second;
+      MedFunc Import;
+      Import.Entry = kX64PagedAccessAddress;
+      Import.Name = kX64PagedAccessName;
+      Import.ReturnType = ABI.ReturnType;
+      Import.SourceTypeHint = ABI;
+      for (const auto &P : ABI.Parameters) {
+        MedVar V;
+        V.Kind = MedVar::Param;
+        V.TheArch = Arch::X64;
+        V.Id = Import.Params.size();
+        V.Size = P.Location.ValueBytes;
+        V.RegOff = P.Location.RegisterOffset;
+        Import.Params.push_back(V);
+        Import.TypedParams.push_back({P.Name, P.Type});
+      }
+      Functions.push_back(std::move(Import));
+      Bodies.push_back(0);
+    }
+    auto Module =
+        Request->Options.PagedMemory
+            ? MedLLVMEmitter().emit(Functions, Context, "paged", Arch::X64, {},
+                                    nullptr, BinaryFormat::ELF, false, &Bodies)
+            : MedLLVMEmitter().emit(Functions, Context);
     if (!Module || llvm::verifyModule(*Module, &llvm::errs()) ||
         !LLVMCEmitter().emit(*Module, OS, Options))
       return invalid("x64 continuation LLVM C emission failed");
   } else {
     std::vector<HighFunc> High;
+    MedToHighConverter Converter;
+    if (Request->Options.PagedMemory)
+      Converter.setFuncNames(&PagedNames);
     for (const auto &Function : Functions)
-      High.push_back(MedToHighConverter().convert(Function, Arch::X64));
+      High.push_back(Converter.convert(Function, Arch::X64));
     if (!HighCEmitter().emit(High, OS, Options))
       return invalid("x64 continuation HighC emission failed");
   }
@@ -667,11 +723,16 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
     EVENT_FIELD(Reserved);
 #undef EVENT_FIELD
   }
-  if (Request->DirectDispatch)
-    emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
-  else
-    driver(OS, *Units, Request->FollowInternalCalls);
-  emitX64ContinuationEnvironment(OS, Version);
+  if (Request->Options.PagedMemory) {
+    emitX64PagedDriver(OS, *Units, Request->Options,
+                       Request->FollowInternalCalls);
+  } else {
+    if (Request->DirectDispatch)
+      emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
+    else
+      driver(OS, *Units, Request->FollowInternalCalls);
+    emitX64ContinuationEnvironment(OS, Version);
+  }
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls);
   llvm::json::Array RtmAborts;
@@ -696,8 +757,12 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
       {"schema_version", 2},
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
-      {"environment_driver", "neverd_x64_run_v" + std::to_string(Version)},
+      {"environment_driver",
+       Request->Options.PagedMemory
+           ? "neverd_x64_run_paged_v6"
+           : "neverd_x64_run_v" + std::to_string(Version)},
       {"event_delivery", Request->Options.EventDelivery},
+      {"paged_memory", Request->Options.PagedMemory},
       {"scheduled_events", Request->Options.ScheduledEvents},
       {"scheduled_event_driver", Request->Options.ScheduledEvents
                                      ? "neverd_x64_continue_events_v6"
@@ -719,7 +784,10 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
              "produce #UD/#DE"
            : "disabled"},
       {"environment_binding",
-       "explicit full-state callback; separately bounded"},
+       Request->Options.PagedMemory
+           ? "owned paged RAM; scalar instruction commit; recursive fault "
+             "delivery"
+           : "explicit full-state callback; separately bounded"},
       {"call_return_policy",
        Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},
       {"coverage",
@@ -869,6 +937,19 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
       {"ordinary_source_abi", false},
       {"ordinary_source_validation", "not-run"},
       {"whole_function_coverage", false}};
+  if (Request->Options.PagedMemory) {
+    Report["domain"] =
+        "CPL0..3 64-bit scalar GPR/flags steps; owned ordinary physical RAM, "
+        "one CPU and fresh page walks; declared paging width and MXCSR mask; "
+        "original-byte fetch verification, failure-atomic instruction state "
+        "and operand data, retained paging effects and recursive IDT faults; "
+        "no TF, native providers, REP/gather/XSAVE partial completion, LOCK, "
+        "asynchronous events, MMIO, CET/FRED, SMM or enclave execution; "
+        "state, context and budgets are disjoint from guest RAM";
+    Report["event_delivery_domain"] =
+        "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD; shared paged IA-32e "
+        "IDT entry, recursive faults, #DF and shutdown; stop at handler entry";
+  }
   if (Request->NativeRtmAbortRegions)
     Report["native_rtm_abort_environment"] = llvm::json::Object{
         {"provider", "neverd_x64_rtm_abort_environment_v6"},
