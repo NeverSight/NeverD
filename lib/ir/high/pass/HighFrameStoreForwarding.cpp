@@ -1442,11 +1442,14 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
         !LearnAlias(S, EntryAliases))
       break;
   }
+  // Returns whether control can enter \p Body other than at its start: a goto
+  // target anywhere in it, or a subtree too deep to walk.
   const auto Forward = [&](auto &&Self, std::vector<HighStmt> &Body,
                            FrameAliases VisibleAliases,
-                           unsigned Depth) -> void {
+                           unsigned Depth) -> bool {
     if (Depth > ::neverd::limits::ir::kMaxPrivateFrameLeafDepth)
-      return;
+      return true;
+    bool Entered = false;
     size_t First = 0;
     FrameAliases RegionAliases = VisibleAliases;
     const auto Flush = [&](size_t End, HighStmt *Call = nullptr) {
@@ -1537,6 +1540,7 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
     for (size_t I = 0; I < Body.size() && Remaining; ++I) {
       auto &S = Body[I];
       if (Entries.count(S.Addr) && (&Body != &Func.Body || I != 0)) {
+        Entered = true;
         Flush(I);
         First = I;
         VisibleAliases = RegionAliases = EntryAliases;
@@ -1561,16 +1565,22 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
       }
       Flush(I, &S);
       First = I + 1;
-      Self(Self, S.Body, VisibleAliases, Depth + 1);
-      Self(Self, S.ElseBody, VisibleAliases, Depth + 1);
-      Self(Self, S.DefaultBody, VisibleAliases, Depth + 1);
+      bool Nested = Self(Self, S.Body, VisibleAliases, Depth + 1);
+      Nested |= Self(Self, S.ElseBody, VisibleAliases, Depth + 1);
+      Nested |= Self(Self, S.DefaultBody, VisibleAliases, Depth + 1);
       for (auto &Case : S.Cases)
-        Self(Self, Case.Body, VisibleAliases, Depth + 1);
+        Nested |= Self(Self, Case.Body, VisibleAliases, Depth + 1);
+      // A jump to a label inside the statement can skip this scope's earlier
+      // definitions, and control then falls out of it to what follows.
+      if (Nested)
+        VisibleAliases = EntryAliases;
+      Entered |= Nested;
       RegionAliases = VisibleAliases;
     }
     Flush(Body.size());
+    return Entered;
   };
-  Forward(Forward, Func.Body, FrameAliases{}, 0);
+  (void)Forward(Forward, Func.Body, FrameAliases{}, 0);
   return AcrossJoins &&
          FrameWritebacks(Func, Architecture, Remaining, Entries).run();
 }

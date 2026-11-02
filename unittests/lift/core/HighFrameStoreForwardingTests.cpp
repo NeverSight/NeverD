@@ -487,6 +487,32 @@ TEST(HighFrameStoreForwarding,
     }
 }
 
+TEST(HighFrameStoreForwarding,
+     NestedLabelsEndScopedAddressesAfterTheirStatement) {
+  // A jump to a label inside a later compound statement skips the scoped
+  // definition before that statement. Control falls out of it to the store,
+  // so the address is unknown there too.
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(static_cast<int>(A));
+    auto F = scopedFrameAlias(A, false);
+    HighStmt Jump;
+    Jump.Kind = StmtKind::Goto;
+    Jump.GotoTarget = F.Body[1].Body[1].Body[0].Addr = 0x5000;
+    F.Body.insert(F.Body.begin(), Jump);
+    forwardPrivateFrameLoads(F, A);
+    const auto &Result = F.Body[2].Body;
+    EXPECT_TRUE(hasLoad(Result[3].CallExpr->Operands[0]));
+    EXPECT_TRUE(hasLoad(Result[4].Val));
+  }
+  // Without the jump the same nested statement keeps the scoped address.
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(static_cast<int>(A));
+    auto F = scopedFrameAlias(A, false);
+    forwardPrivateFrameLoads(F, A);
+    EXPECT_FALSE(hasLoad(F.Body[1].Body[3].CallExpr->Operands[0]));
+  }
+}
+
 TEST(HighFrameStoreForwarding, ValidSelectsKeepPrecedingFrameFacts) {
   for (Arch A : Architectures) {
     SCOPED_TRACE(static_cast<int>(A));
