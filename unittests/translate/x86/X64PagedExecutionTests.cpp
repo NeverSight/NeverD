@@ -421,7 +421,7 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
   O.PagingAddressBits = 48;
   O.PagedMemory = true;
   for (const auto &Code : std::vector<std::vector<uint8_t>>{
-           {0xf3, 0x48, 0xa5}, // REP MOVSQ retains partial progress.
+           {0xf3, 0x6c}, // REP INS still needs device-side-effect ownership.
            {0xf0, 0x48, 0x01,
             0x07},             // Native LOCK is not a host-pointer operation.
            {0x0f, 0x20, 0xd8}, // Native CR3 needs its architectural transition.
@@ -431,6 +431,16 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
     EXPECT_TRUE(Units->front().RequiresNativeExecution);
   }
+  auto Repeated =
+      buildX64ContinuationSource(image({0xf3, 0x67, 0x48, 0xa5}), {0x1000}, O);
+  ASSERT_TRUE(bool(Repeated)) << llvm::toString(Repeated.takeError());
+  EXPECT_FALSE(Repeated->front().RequiresNativeExecution);
+  auto Ordinary = O;
+  Ordinary.PagedMemory = false;
+  auto Unbound = buildX64ContinuationSource(image({0xf3, 0x67, 0x48, 0xa5}),
+                                            {0x1000}, Ordinary);
+  ASSERT_TRUE(bool(Unbound)) << llvm::toString(Unbound.takeError());
+  EXPECT_TRUE(Unbound->front().RequiresNativeExecution);
   O.NativePageTableAccess = true;
   auto Bad = buildX64ContinuationSource(image({0x90}), {0x1000}, O);
   ASSERT_FALSE(bool(Bad));
