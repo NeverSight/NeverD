@@ -94,7 +94,7 @@ protected:
                                 Shadows *, uint64_t *,
                                 decltype(&Producer::peek),
                                 decltype(&Producer::accepted), void *);
-  unsigned ScheduledCompilation = 0;
+  unsigned Compilation = 0;
 
   void reset(const std::vector<uint8_t> &Code) {
     State = {};
@@ -158,13 +158,14 @@ protected:
     return Image;
   }
 
-  void compile(
-      const std::vector<uint8_t> &Code, bool LLVM,
-      const std::string &Optimization, Run &Driver,
-      const std::vector<uint64_t> &Addresses = {0x1000},
-      const std::string &Compiler = NEVERD_TEST_CLANG, uint64_t Base = 0x1000,
-      Schedule *Scheduled = nullptr,
-      std::optional<X64NullSegmentBasePolicy> NullBasePolicy = std::nullopt) {
+  void
+  compile(const std::vector<uint8_t> &Code, bool LLVM,
+          const std::string &Optimization, Run &Driver,
+          const std::vector<uint64_t> &Addresses = {0x1000},
+          const std::string &Compiler = NEVERD_TEST_CLANG,
+          uint64_t Base = 0x1000, Schedule *Scheduled = nullptr,
+          std::optional<X64NullSegmentBasePolicy> NullBasePolicy = std::nullopt,
+          bool ExpectNative = false) {
     llvm::json::Array PCs;
     for (auto PC : Addresses)
       PCs.push_back(PC);
@@ -186,15 +187,12 @@ protected:
     ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
     ASSERT_EQ(Export->Source.find("unknown value"), std::string::npos);
     const auto Parsed = llvm::cantFail(llvm::json::parse(Export->Manifest));
-    ASSERT_EQ(Parsed.getAsObject()->getInteger("native_requests"), 0);
+    ASSERT_EQ(Parsed.getAsObject()->getInteger("native_requests"),
+              unsigned(ExpectNative));
     auto Name = (LLVM ? "llvm" : "high") + Optimization +
-                (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc");
-    if (Scheduled)
-      Name +=
-          "-" +
-          std::string(
-              testing::UnitTest::GetInstance()->current_test_info()->name()) +
-          "-" + std::to_string(ScheduledCompilation++);
+                (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc") + "-" +
+                testing::UnitTest::GetInstance()->current_test_info()->name() +
+                "-" + std::to_string(Compilation++);
     if (Base != 0x1000)
       Name += "-at-" + std::to_string(Addresses.front());
     const auto Source = tmpFile(Name + ".c"), Library = tmpFile(Name + ".so");
@@ -816,5 +814,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedFarReturnTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"
+#include "X64PagedSegmentMoveBoundaryTests.inc"
+#include "X64PagedSegmentMoveTests.inc"
 
 } // namespace

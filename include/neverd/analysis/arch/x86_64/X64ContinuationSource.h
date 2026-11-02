@@ -537,6 +537,8 @@ struct X64ContinuationInstructionSource {
   /// A successfully completed canonical STI starts a one-instruction shadow
   /// only if its original IF was zero. A rejected/native step starts none.
   bool IsSti = false;
+  /// Successful MOV SS starts an inhibition window in the paged scheduler.
+  bool IsMovSS = false;
   SourceFunctionTypeHint SourceABI;
   /// The arbitrary-value slot order and original instruction-local timing.
   /// Empty for a native request, where no source instruction has executed.

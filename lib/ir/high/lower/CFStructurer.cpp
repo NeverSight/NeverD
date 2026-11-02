@@ -813,17 +813,33 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
   for (size_t B = 1; B < Med.Blocks.size(); ++B)
     if (Med.Blocks[B].Preds.empty())
       BranchEntries.insert(Med.Blocks[B].StartAddr);
-  for (auto It = MissingEntries.rbegin(); It != MissingEntries.rend(); ++It) {
-    if (!BranchEntries.count(It->second))
-      continue;
-    // Inlining a block's initial argument copies must not erase its branch
-    // entry. An empty block carries that exact label through DCE and emission,
-    // even when the surviving call lies after a return in physical layout.
-    HighStmt Label;
-    Label.Kind = StmtKind::Block;
-    Label.Addr = It->second;
-    Func.Body.insert(Func.Body.begin() + It->first, std::move(Label));
+  if (std::none_of(MissingEntries.begin(), MissingEntries.end(),
+                   [&](const std::pair<size_t, va_t> &Missing) {
+                     return BranchEntries.count(Missing.second) != 0;
+                   }))
+    return;
+  // Each label goes before the statements of its block.  Func.Body only grew
+  // while the positions were recorded, so they ascend.
+  std::vector<HighStmt> Labeled;
+  Labeled.reserve(Func.Body.size() + MissingEntries.size());
+  auto Missing = MissingEntries.begin();
+  for (size_t I = 0; I <= Func.Body.size(); ++I) {
+    for (; Missing != MissingEntries.end() && Missing->first == I; ++Missing) {
+      if (!BranchEntries.count(Missing->second))
+        continue;
+      // Inlining a block's initial argument copies must not erase its branch
+      // entry. An empty block carries that exact label through DCE and
+      // emission, even when the surviving call lies after a return in
+      // physical layout.
+      HighStmt Label;
+      Label.Kind = StmtKind::Block;
+      Label.Addr = Missing->second;
+      Labeled.push_back(std::move(Label));
+    }
+    if (I < Func.Body.size())
+      Labeled.push_back(std::move(Func.Body[I]));
   }
+  Func.Body = std::move(Labeled);
 }
 
 } // namespace neverd

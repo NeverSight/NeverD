@@ -8,8 +8,8 @@
 /// Recovery of the transform that turns a switch variable into a table index:
 /// the `sub base` / right-shift normalization anchored at the table load, and
 /// the power-of-two stride implied by an AND mask on the switch variable.  The
-/// recovered normalization is what pullBackBound inverts on a guard bound and
-/// what recoverCaseLabels inverts on the resolved case labels.
+/// recovered normalization is what recoverCaseLabels inverts on the resolved
+/// case labels. Selector-domain proofs already use the final table index.
 ///
 /// Part of the CFGBuilder jump-table resolver; see JumpTableResolver.cpp for
 /// top-level strategy dispatch and JumpTableResolverDetail.h for shared

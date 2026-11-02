@@ -11,6 +11,7 @@
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSEGMENTS_H
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86/X86Regs.h"
 
@@ -352,6 +353,107 @@ protected:
     Unusable = returnedData(offsetof(V6, FS), false, 16, CPL, Unusable);
     Unusable = returnedData(offsetof(V6, GS), false, 32, CPL, Unusable);
     W.store(offsetof(V6, Unusable), narrow(Unusable, 1));
+  }
+
+  /// Shared descriptor validation and final cache publication. Completion
+  /// publishes the instruction's coupled GPR/stack state only after success.
+  template <class Completion>
+  void loadDataSegment(X86SegmentRegister Register, NdVar Selector,
+                       std::optional<X64NullSegmentBasePolicy> NullBasePolicy,
+                       Completion Complete) {
+    const bool SS = Register == X86SegmentRegister::SS;
+    const bool GS = Register == X86SegmentRegister::GS;
+    const bool FS = Register == X86SegmentRegister::FS;
+    const bool FullCache = !GS && !FS;
+    const uint64_t Offset = SS   ? offsetof(V5, SS)
+                            : GS ? offsetof(V6, GS)
+                            : FS ? offsetof(V6, FS)
+                            : Register == X86SegmentRegister::DS
+                                ? offsetof(V6, DS)
+                                : offsetof(V6, ES);
+    const uint64_t SelectorOffset =
+        Offset + (FullCache ? offsetof(Segment, Selector)
+                            : offsetof(Metadata, Selector));
+    const uint64_t BaseOffset =
+        GS ? offsetof(State, GSBase) : offsetof(State, FSBase);
+    const unsigned UnusableBit = SS                                   ? 2
+                                 : GS                                 ? 32
+                                 : FS                                 ? 16
+                                 : Register == X86SegmentRegister::DS ? 4
+                                                                      : 8;
+    const auto Null = eq(masked(Selector, 0xfffc), k(0));
+    NdVar CPL = k(0);
+    if constexpr (Writer::FaultableMemory)
+      CPL = masked(load(offsetof(V5, CS) + offsetof(Segment, Selector), 2), 3);
+    if (FullCache || NullBasePolicy) {
+      // Null SS is permitted at CPL0..2 with RPL=CPL. A null load never
+      // consults the GDT/LDT, even when their addresses are unmapped or
+      // noncanonical.
+      if (SS) {
+        if constexpr (Writer::FaultableMemory)
+          faultIf(both(Null, either(eq(CPL, k(3)), ne(Selector, CPL))), 13,
+                  k(0));
+        else
+          W.rejectIf(both(Null, ne(Selector, k(0))));
+      }
+      W.exitIf(Null, [&] {
+        if (!FullCache && *NullBasePolicy == X64NullSegmentBasePolicy::Clear)
+          W.store(BaseOffset, k(0));
+        W.store(SelectorOffset, narrow(Selector, 2));
+        W.store(offsetof(V6, Unusable),
+                narrow(op(NdOp::INT_OR,
+                          {load(offsetof(V6, Unusable), 1), k(UnusableBit)}),
+                       1));
+        Complete();
+      });
+    } else {
+      W.rejectIf(Null);
+    }
+    const auto D = descriptor(Selector);
+    const auto Access = shifted(D.Value, 40);
+    if constexpr (Writer::FaultableMemory) {
+      const auto Error = masked(Selector, 0xfffc);
+      const auto DPL = masked(shifted(Access, 5), 3);
+      if (SS) {
+        faultIf(either(ne(masked(Selector, 3), CPL),
+                       either(ne(masked(Access, 0x1a), k(0x12)), ne(DPL, CPL))),
+                13, Error);
+      } else {
+        faultIf(either(eq(masked(Access, 0x10), k(0)),
+                       eq(masked(Access, 0x0a), k(8))),
+                13, Error);
+        faultIf(both(ne(masked(Access, 12), k(12)),
+                     either(less(DPL, masked(Selector, 3)), less(DPL, CPL))),
+                13, Error);
+      }
+      faultIf(eq(masked(Access, 0x80), k(0)), SS ? 12 : 11, Error);
+    } else if (SS) {
+      W.rejectIf(ne(masked(Selector, 3), k(0)));
+      // Present writable data, DPL=CPL=0; expand-down and A are independent.
+      W.rejectIf(ne(masked(Access, 0xfa), k(0x92)));
+    } else {
+      W.rejectIf(ne(masked(Access, 0x90), k(0x90)));
+      W.rejectIf(eq(masked(Access, 0x0a), k(8))); // Execute-only code.
+      const auto DPL = masked(shifted(Access, 5), 3);
+      W.rejectIf(
+          both(ne(masked(Access, 12), k(12)), less(DPL, masked(Selector, 3))));
+    }
+    // Explicit operands are captured before the conditional descriptor write.
+    accessed(D);
+    if (FullCache) {
+      segment(Offset, Selector, D.Value);
+    } else {
+      W.store(BaseOffset, segmentBase(D.Value));
+      W.store(Offset + offsetof(Metadata, Limit),
+              narrow(segmentLimit(D.Value), 4));
+      W.store(SelectorOffset, narrow(Selector, 2));
+      W.store(Offset + offsetof(Metadata, Attributes),
+              narrow(segmentAttributes(D.Value), 2));
+    }
+    W.store(
+        offsetof(V6, Unusable),
+        narrow(masked(load(offsetof(V6, Unusable), 1), 0xff ^ UnusableBit), 1));
+    Complete();
   }
 
   X64ContinuationSegments(Writer &Output, unsigned Bits)

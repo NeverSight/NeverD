@@ -29,7 +29,8 @@ inline void emitX64PagedDriver(
  * Architectural faults consume one attempt, including failed fault entry.
  * Refused steps, changed code and scalar operand backing stops consume none.
  * An authenticated IRET that begins frame access consumes an attempt even if
- * backing fails: NMI unblocking and earlier descriptor writes are retained. */
+ * backing fails: NMI unblocking and earlier descriptor writes are retained.
+ * MOV SS requires the scheduled entry, whose shadow persists across calls. */
 typedef uint64_t (*neverd_x64_paged_body_v1)(void *, void *);
 extern uint64_t neverd_x64_paged_step_v1(
     uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,
@@ -66,10 +67,15 @@ uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
         uint64_t status;
         switch (state->PC) {
 )C";
-  for (const auto &Unit : Units)
-    OS << "        case 0x" << llvm::utohexstr(Unit.Address)
-       << "ULL: status = " << Unit.Function.Name
-       << "_paged_step(state, context); break;\n";
+  for (const auto &Unit : Units) {
+    OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL: ";
+    if (Unit.IsMovSS && !Unit.RequiresNativeExecution)
+      OS << "return 5; /* Persistent MOV-SS inhibition needs the scheduler. "
+            "*/\n";
+    else
+      OS << "status = " << Unit.Function.Name
+         << "_paged_step(state, context); break;\n";
+  }
   OS << R"C(
         default: return last == 2 ? 2 : 8;
         }

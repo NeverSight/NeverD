@@ -50,8 +50,15 @@ that evaluator and the existing far-pointer template: explicit operand access
 keeps its current CPL and original stack/data fault class, while descriptor
 access remains implicit supervisor. A qualified offset-first profile controls
 reads and qword accessed writes; both destinations publish together. The raw
-byte grammar also owns ignored long-mode segment prefixes. Device arrival remains
-producer-owned. See [paged RAM](x86-paged-memory.md) and
+byte grammar also owns ignored long-mode segment prefixes.
+`X64SegmentEncoding` now shares that prefix/address grammar with selector
+MOV/POP. `X64ContinuationSegments::loadDataSegment` owns their common descriptor
+checks and cache publication, while `X64ContinuationSegmentMoves` owns selector
+operand widths and POP's staged RSP update. The paged selector-store path
+prepares translation before publication so a post-paging #AC retains page-walk
+effects without a data write. MOV SS requires the scheduler's persistent shadow;
+the instruction-only driver refuses it. Device arrival remains producer-owned.
+See [paged RAM](x86-paged-memory.md) and
 [generated execution](x86-paged-execution.md); the default generated-C dispatcher
 retains its separate no-fault memory binding.
 
@@ -5724,6 +5731,30 @@ checks its lifetime and allows a parent bridge only through SavedESP. Its memory
 proof tracks initialization by allocation identity and resets callback bytes at
 every catch entry. Shared mask folding requires actual alloca alignment and
 cannot infer a constant displacement for an arbitrary source entry ESP.
+
+A completely lifted closed cycle can seed the LowIR and MedIR no-return
+proofs. The Low-to-Med boundary retains lift coverage, and unresolved indirect
+branches still prevent a cycle from establishing the contract. The PE leaf
+pre-screen follows direct branches within its decoded-byte budget; it does not
+infer a call effect from an adjacent entry marker and does not follow data as
+executable code.
+
+AArch64 packed-function discovery admits entry-marker candidates after a block
+end and excludes forward conditional targets collected in the same executable
+scan. The branch exclusion has no fixed look-behind distance. A NOP alone does
+not end a block, and a frame push must allocate below SP. These markers are
+heuristic discovery evidence, not proof that a call never returns.
+
+AArch64 x18 is reserved only by the modeled Darwin and Windows conventions;
+generic AAPCS64 retains its scratch-register behavior. The shared target
+register model owns both preservation queries and range enumeration so SSA
+and call-result analysis agree. HighC reads the reserved register through the
+Windows `__getReg` intrinsic or Darwin inline assembly; an unknown generic
+AAPCS64 live-in still fails at use. These choices follow the
+[Apple ARM64 ABI](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms),
+[Windows ARM64 ABI](https://learn.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions)
+and [AAPCS64 register contract](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst).
+
 The LowIR no-return path proof lives in the low validation component, so call
 ABI checks do not depend on aggregate IR or MedIR. LowIR and MedIR consume the
 same architectural intrinsic-termination definition; both follow exceptional
@@ -7357,6 +7388,10 @@ and their full bank effects remain intact. The emitter does not invent a void
 return value or perform this proof itself.
 
 Native jump-table selector domains are proved in the shared LowIR resolver.
+Their bounds describe the exact index occurrence used by the table load,
+including any subtraction or shift already performed. Source-label
+normalization must not adjust those bounds again: it belongs only to case-label
+recovery. Reapplying it can silently remove a reachable final case.
 A loader-normalized absolute table may use the same exact, point-sensitive
 finite-domain proof as a relative table. The physical pointer run supplies a
 read ceiling, not a selector bound. A long physical run may use the bounded

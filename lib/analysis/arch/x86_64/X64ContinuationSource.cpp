@@ -29,6 +29,7 @@
 #include "X64FredReturnEncoding.h"
 #include "X64MachineFlags.h"
 #include "X64Recovery.h"
+#include "X64SegmentMoveEncoding.h"
 #include "X64TaskPriority.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
@@ -520,15 +521,15 @@ bool divisionArithmetic(const LowOp &Op) {
   return Op.Opcode == NdOp::INT_OR;
 }
 
-// Integer widening is not specific to DIV: scalar vector loads and full-width
-// products use the same checked bit-vector operations and existing emitters.
+// Integer widening is not specific to DIV: scalar vector loads, full-width
+// products and vector masks use the same bit-vector operations and emitters.
 bool wideIntegerOperation(const LowOp &Op) {
   if ((Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) &&
       Op.Output.Size == 16 && Op.NumInputs == 1)
     return Op.Inputs[0].Size && Op.Inputs[0].Size <= 8;
   if (Op.NumInputs != 2 || Op.Inputs[0].Size != 16 || Op.Inputs[1].Size != 16)
     return false;
-  if (Op.Opcode == NdOp::INT_MULT)
+  if (Op.Opcode == NdOp::INT_MULT || Op.Opcode == NdOp::INT_AND)
     return Op.Output.Size == 16;
   return (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL) &&
          Op.Output.Size == 1;
@@ -1362,6 +1363,12 @@ buildInstruction(SpecializationInstruction Instruction,
                     InterpreterProfileProjection::X64FarPointerLoadV1
           ? detail::x64FarPointerLoad(Instruction.NativeBytes)
           : std::nullopt;
+  const auto SegmentMove =
+      Options.PagedMemory && Events &&
+              Instruction.ProfileProjection ==
+                  InterpreterProfileProjection::X64SegmentMoveV1
+          ? detail::x64SegmentMove(Instruction.NativeBytes)
+          : std::nullopt;
   const auto UserInterrupt =
       UserInterruptState && Instruction.ProfileProjection ==
                                 InterpreterProfileProjection::X64UserInterruptV1
@@ -1431,8 +1438,8 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer && !UserInterrupt && !FredReturn && !Vmrun && !Mpx &&
-       !Hypercall && !Snp && !Hle && !SmmReturn && !SgxTransfer &&
+  if ((!FarPointer && !SegmentMove && !UserInterrupt && !FredReturn && !Vmrun &&
+       !Mpx && !Hypercall && !Snp && !Hle && !SmmReturn && !SgxTransfer &&
        !UndefinedInstruction &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
@@ -1462,6 +1469,10 @@ buildInstruction(SpecializationInstruction Instruction,
                     return eventIntrinsic(Op, Intrinsic::Sti, 1);
                   }))
     RequireNative("scheduled STI requires its canonical shadow encoding");
+  Result.IsMovSS = SegmentMove && !SegmentMove->Read &&
+                   SegmentMove->SegmentRegister == X86SegmentRegister::SS;
+  if (Result.IsMovSS && !Options.ScheduledEvents)
+    RequireNative("MOV SS requires persistent interrupt scheduling");
   const auto Timestamp =
       Options.NativeTimestampReads
           ? x64::runtimeTimestampRegisters(Instruction,
@@ -1522,24 +1533,25 @@ buildInstruction(SpecializationInstruction Instruction,
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
     PagedRoles = detail::x64PagedMemoryRoles(Instruction);
-    if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer) ||
+    if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
+         !SegmentMove) ||
         Sysret || Sysenter || Sysexit)
       RequireNative(
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
-          !Iret && !FarReturn && !FarPointer &&
+          !Iret && !FarReturn && !FarPointer && !SegmentMove &&
           !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
       const auto RegisterAllowed = [](NdVar V) {
         return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V));
       };
-      if (!FarPointer && !RegisterAllowed(Op.Output))
+      if (!FarPointer && !SegmentMove && !RegisterAllowed(Op.Output))
         RequireNative("paged scalar execution requires a GPR or flags output");
       for (unsigned I = 0; I != Op.NumInputs; ++I)
-        if (!FarPointer && !RegisterAllowed(Op.Inputs[I]))
+        if (!FarPointer && !SegmentMove && !RegisterAllowed(Op.Inputs[I]))
           RequireNative("paged scalar execution requires GPR or flags inputs");
     }
     if (!Options.ScheduledEvents &&
@@ -1616,7 +1628,7 @@ buildInstruction(SpecializationInstruction Instruction,
       Options.PagedMemory
           ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
                 Flags::IOPLMask | Flags::VirtualInterruptMask |
-                ((Iret || FarReturn || FarPointer) ? 0x4000 : 0)
+                ((Iret || FarReturn || FarPointer || SegmentMove) ? 0x4000 : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
       : (Interrupt || FredReturn || UndefinedInstruction ||
          UserInterrupt == detail::X64UserInterrupt::Return)
@@ -1867,12 +1879,15 @@ buildInstruction(SpecializationInstruction Instruction,
     W.pagedAccess(constant(*Interrupt), Instruction.Fallthrough.Address,
                   X64PagedAccess::SoftwareInterrupt, false);
     W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
-  } else if (Options.PagedMemory && FarPointer) {
+  } else if (Options.PagedMemory && (FarPointer || SegmentMove)) {
     const uint64_t NullBase =
         !Options.NullSegmentBasePolicy                                      ? 0
         : *Options.NullSegmentBasePolicy == X64NullSegmentBasePolicy::Clear ? 1
                                                                             : 2;
-    W.pagedAccess(constant(NullBase), 0, X64PagedAccess::FarPointerLoad, false);
+    W.pagedAccess(constant(NullBase), 0,
+                  FarPointer ? X64PagedAccess::FarPointerLoad
+                             : X64PagedAccess::SegmentMove,
+                  false);
     W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);

@@ -6,8 +6,9 @@
 ///
 /// \file
 /// The encodings of the ARM and A64 direct branches, and of the linker thunks
-/// such a branch may enter: what decodeDirectBranch reads, and what signature
-/// matching follows through a thunk.  x86's rel32 call and jump are in
+/// such a branch may enter: what decodeDirectBranch reads, what signature
+/// matching follows through a thunk, and the A64 conditional branches function
+/// discovery reads.  x86's rel32 call and jump are in
 /// neverd/support/ISAEncoding.def.  Define the macros a consumer reads before
 /// including this file; the others expand to nothing.
 ///
@@ -107,6 +108,14 @@ NEVERD_BRANCH_FORM(A64BranchOrLink, 0x7C000000, 0x14000000)
 NEVERD_BRANCH_FORM(A64Branch, 0xFC000000, 0x14000000)
 NEVERD_BRANCH_FORM(A64BranchLink, 0xFC000000, 0x94000000)
 NEVERD_BRANCH_FIELD(A64BranchOffset, 0, 26)
+
+// The A64 conditional branches: B.cond and BC.cond, CBZ and CBNZ, which share
+// B.cond's offset field, and TBZ and TBNZ.  The offsets are in instructions.
+NEVERD_BRANCH_FORM(A64ConditionalBranch, 0xFF000000, 0x54000000)
+NEVERD_BRANCH_FORM(A64CompareBranch, 0x7E000000, 0x34000000)
+NEVERD_BRANCH_FORM(A64TestBranch, 0x7E000000, 0x36000000)
+NEVERD_BRANCH_FIELD(A64ConditionalBranchOffset, 5, 19)
+NEVERD_BRANCH_FIELD(A64TestBranchOffset, 5, 14)
 
 // The A64 range thunks: `adrp x16, page; add x16, x16, #lo12; br x16`, and
 // `ldr x16, #8; br x16` with the target in the doubleword after them.

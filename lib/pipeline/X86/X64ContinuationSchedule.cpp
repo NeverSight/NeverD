@@ -41,8 +41,8 @@ void emitX64ContinuationSchedule(
  * 16=poll budget exhausted. Other statuses retain the continuation contract.
  * Successful event entry consumes no instruction budget and stops at the handler.
  * Shadows survive all rejected/unexecuted steps and expire on completion or
- * delivered exceptions. Incoming MOV-SS inhibition may be supplied explicitly;
- * unsupported MOV/POP SS still stop at their native boundary. */
+ * delivered exceptions. Paged MOV SS can start a new inhibition window;
+ * an already active MOV-SS window is consumed, not renewed. */
 typedef struct neverd_x64_interruptibility_v1 {
     uint8_t STIBlocked, SSBlocked, NMIBlockedBySTI, Reserved[5];
 } neverd_x64_interruptibility_v1;
@@ -81,7 +81,7 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
         if (shadows->Reserved[i]) return 5;
     while (*budget) {
         uint64_t status;
-        int sti;
+        int sti, mov_ss;
         switch (state->PC) {
 )C";
   for (const auto &Unit : Units) {
@@ -94,7 +94,8 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
          << *Options.PagingAddressBits << ")";
     else
       OS << Unit.EntryValidation->Name << "((uint8_t *)state)";
-    OS << "; sti = " << unsigned(Unit.IsSti) << "; break;\n";
+    OS << "; sti = " << unsigned(Unit.IsSti)
+       << "; mov_ss = " << unsigned(Unit.IsMovSS) << "; break;\n";
   }
   OS << R"C(        default: return last == 2 ? 2 : 8;
         }
@@ -155,7 +156,7 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
   OS << "        shadows->STIBlocked = (status == 0 && sti && !(old_flags & "
         "512)"
      << (Paged ? " && (state->RFlags & 512)" : "") << ");\n";
-  OS << R"C(        shadows->SSBlocked = 0;
+  OS << R"C(        shadows->SSBlocked = (status == 0 && mov_ss && !shadows->SSBlocked);
 )C";
   if (FollowInternalCalls)
     OS << R"C(        if (status == 1 || status == 3) {

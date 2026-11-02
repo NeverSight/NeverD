@@ -46,10 +46,10 @@ struct Transaction {
     bool Interrupt;
   };
   std::optional<FrameReturn> Return;
-  struct FarPointerLoad {
+  struct SegmentLoad {
     std::optional<X64NullSegmentBasePolicy> NullBasePolicy;
   };
-  std::optional<FarPointerLoad> FarPointer;
+  std::optional<SegmentLoad> FarPointer, SegmentMove;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
 
@@ -81,12 +81,15 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & ~kX64PagedStackAccess);
-  if (Kind == X64PagedAccess::FarPointerLoad) {
-    T.FarPointer.emplace();
+  if (Kind == X64PagedAccess::FarPointerLoad ||
+      Kind == X64PagedAccess::SegmentMove) {
+    auto &Transfer =
+        Kind == X64PagedAccess::FarPointerLoad ? T.FarPointer : T.SegmentMove;
+    Transfer.emplace();
     if (Address)
-      T.FarPointer->NullBasePolicy = Address == 1
-                                         ? X64NullSegmentBasePolicy::Clear
-                                         : X64NullSegmentBasePolicy::Preserve;
+      Transfer->NullBasePolicy = Address == 1
+                                     ? X64NullSegmentBasePolicy::Clear
+                                     : X64NullSegmentBasePolicy::Preserve;
     return 1;
   }
   if (Kind == X64PagedAccess::InterruptReturn ||
@@ -312,12 +315,17 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = Returned->Exception;
   }
-  if (T.FarPointer) {
-    if (!Options.FarPointerProfile)
-      return invalid("paged far-pointer load requires bound access order");
-    auto Loaded = loadX64PagedFarPointer(
-        Next, Memory, Bytes, T.AlignmentPriority, *Options.FarPointerProfile,
-        T.FarPointer->NullBasePolicy);
+  if (T.FarPointer || T.SegmentMove) {
+    if (T.FarPointer ? !Options.FarPointerProfile : !Options.SegmentMoveProfile)
+      return invalid("paged segment transition requires bound access order");
+    auto Loaded =
+        T.FarPointer
+            ? loadX64PagedFarPointer(Next, Memory, Bytes, T.AlignmentPriority,
+                                     *Options.FarPointerProfile,
+                                     T.FarPointer->NullBasePolicy)
+            : moveX64PagedSegment(Next, Memory, Bytes, T.AlignmentPriority,
+                                  *Options.SegmentMoveProfile,
+                                  T.SegmentMove->NullBasePolicy);
     if (!Loaded)
       return Loaded.takeError();
     Last.InstructionAttempted = Loaded->InstructionAttempted;

@@ -327,6 +327,13 @@ void AArch64Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
   auto *Detail = Insn->detail;
 
   auto &ARM64 = Detail->aarch64;
+  // The lift has no ZA state, and Capstone gives SME forms the ids of the
+  // NEON and SVE instructions they resemble (umlsl, fmla, ld1b, ...), whose
+  // handlers would read a ZA operand as a vector register.  Refuse them even
+  // in permissive mode, before any handler emits operations.
+  for (unsigned I = 0; I < ARM64.op_count; ++I)
+    if (ARM64.operands[I].type == AARCH64_OP_SME)
+      throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
   S.ScalarWideImmediate = ScalarWideImmediate;
   S.FollowingWord = FollowingWord;

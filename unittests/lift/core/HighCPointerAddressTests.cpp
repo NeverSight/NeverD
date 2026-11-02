@@ -10,6 +10,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
+#include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -24,6 +25,7 @@
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -2917,7 +2919,7 @@ TEST(LLVMCPointerAddresses, DataOnlyAddressedIsDeclared) {
 }
 
 /// Expect \p Source to be C a compiler accepts.
-void expectCSyntax(const std::string &Source) {
+void expectCSyntax(const std::string &Source, llvm::StringRef Target = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -2940,6 +2942,8 @@ void expectCSyntax(const std::string &Source) {
   }
   llvm::SmallVector<llvm::StringRef, 4> Arguments{Compiler, "-std=c11",
                                                   "-fsyntax-only", SourcePath};
+  if (!Target.empty())
+    Arguments.append({"-target", Target, "-ffreestanding"});
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
   std::string Error;
@@ -11023,12 +11027,20 @@ TEST(HighCPointerAddresses, X86CallPushStoresAreHidden) {
   S3.StoreVal = HighExpr::makeVar(Code);
   HighStmt Raise;
   Raise.Kind = StmtKind::Call;
-  Raise.CallExpr =
-      HighExpr::makeCall("RaiseException", 0x401200, {HighExpr::makeVar(Code)});
+  Raise.CallExpr = HighExpr::makeCall(
+      "RaiseException", 0x401200,
+      {HighExpr::makeVar(Code), HighExpr::makeConst(0, 4),
+       HighExpr::makeConst(0, 4), HighExpr::makeConst(0, 4)});
   Func.Body = {A8, S0, A9, S1, S2, LoadCode, S3, Raise};
   const std::string Source = emitFunctions({Func}, Arch::X86);
   EXPECT_NE(Source.find("RaiseException("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("*("), std::string::npos) << Source;
+  // Loading the exception code is observable; only the outgoing stack stores
+  // are redundant once the call carries all four arguments.
+  EXPECT_NE(Source.find("= *(int32_t *)0x403120;"), std::string::npos)
+      << Source;
+  EXPECT_FALSE(std::regex_search(Source, std::regex(R"((^|\n)\s*\*[^;\n]*=)")))
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, X86SehRegistrationSlotIsHidden) {
@@ -45451,6 +45463,78 @@ TEST(HighCPointerAddresses, ReturnTailContinuesPastTheEndOfAnArm) {
   EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
 }
 
+TEST(HighCPointerAddresses, PrintedReturnTailWeighsReadsInItsOwnRun) {
+  // if (c) goto T; return; T: t1 = 1; t2 = t1; ... tN = tN-1; return tN;
+  // By printed size a temporary read once later in its run prints inside
+  // that read, so N assignments, one more than the limit, fit it.  The run
+  // ends at its return or jump: later reads do not count.  A shared operand
+  // read twice counts twice, as it prints twice.
+  constexpr int N = static_cast<int>(limits::kMaxReturnTailStatements) + 1;
+  auto Temp = [](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 8;
+    return HighExpr::makeVar(V);
+  };
+  auto Assign = [](va_t Addr, ExprPtr Dst, ExprPtr Val) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Addr;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Val);
+    return S;
+  };
+  auto Read = [&](int Id, bool Twice) {
+    ExprPtr V = Temp(Id);
+    return Twice ? HighExpr::makeBinop(NdOp::INT_ADD, V, V) : V;
+  };
+  auto Tail = [&](bool Twice) {
+    std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1100),
+                                  returnAt(0x1010)};
+    Body.push_back(Assign(0x1100, Temp(1), HighExpr::makeConst(1, 8)));
+    for (int I = 2; I <= N; ++I)
+      Body.push_back(Assign(0x1100 + 4 * (I - 1), Temp(I), Read(I - 1, Twice)));
+    return Body;
+  };
+  const va_t End = 0x1100 + 4 * N;
+  auto ReturnOf = [&](int Id, bool Twice, va_t Addr) {
+    HighStmt S = returnAt(Addr);
+    S.RetVal = Read(Id, Twice);
+    return S;
+  };
+  // Dead code reading every temporary again.
+  auto ReadAll = [&]() {
+    ExprPtr Sum = Temp(1);
+    for (int I = 2; I <= N; ++I)
+      Sum = HighExpr::makeBinop(NdOp::INT_ADD, Sum, Temp(I));
+    return Assign(0x2000, Temp(N + 1), Sum);
+  };
+  auto Copied = [](std::vector<HighStmt> Body, bool PrintedSize) {
+    duplicateSmallReturnTails(Body, PrintedSize);
+    return countGotos(Body[0].Body) == 0;
+  };
+
+  std::vector<HighStmt> Returning = Tail(false);
+  Returning.push_back(ReturnOf(N, false, End));
+  EXPECT_TRUE(Copied(Returning, /*PrintedSize=*/true));
+  EXPECT_FALSE(Copied(Returning, /*PrintedSize=*/false));
+  Returning.push_back(ReadAll());
+  EXPECT_TRUE(Copied(Returning, /*PrintedSize=*/true));
+
+  // `goto E; <reads>; E: return tN;` composes the tail; its run ends at the
+  // jump.
+  std::vector<HighStmt> Jumping = Tail(false);
+  Jumping.push_back(gotoAt(End, 0x3000));
+  Jumping.push_back(ReadAll());
+  Jumping.push_back(ReturnOf(N, false, 0x3000));
+  EXPECT_TRUE(Copied(Jumping, /*PrintedSize=*/true));
+
+  std::vector<HighStmt> Shared = Tail(true);
+  Shared.push_back(ReturnOf(N, true, End));
+  EXPECT_FALSE(Copied(Shared, /*PrintedSize=*/true));
+}
+
 TEST(HighCPointerAddresses, ReduceGotosUnrotatesAJumpIntoTheLoopTest) {
   // goto X; do { a = 1; X: } while (c); return;
   HighStmt Anchor;
@@ -46109,14 +46193,15 @@ TEST(HighCPointerAddresses, IntegerVectorIntrinsicsTakeVectorOperands) {
 }
 
 TEST(HighCPointerAddresses, FloatVectorIntrinsicsTakeTheirVectorTypes) {
-  // `_mm_shuffle_ps` takes __m128 and `_mm_unpacklo_pd` __m128d, which C
-  // does not convert from an integer vector.
+  // VEX shuffle still uses `_mm_shuffle_ps` with __m128 operands, while the
+  // legacy register shuffle lowers to lane copies. `_mm_unpacklo_pd` takes
+  // __m128d; C does not convert either type from an integer vector.
   constexpr va_t Entry = 0x140001000;
   const std::vector<uint8_t> Code = {
-      0x0f, 0xc6, 0xc1, 0x1b, // shufps xmm0, xmm1, 0x1b
-      0x0f, 0x11, 0x01,       // movups [rcx], xmm0
-      0x66, 0x0f, 0x14, 0xd3, // unpcklpd xmm2, xmm3
-      0x66, 0x0f, 0x11, 0x12, // movupd [rdx], xmm2
+      0xc5, 0xf8, 0xc6, 0xc1, 0x1b, // vshufps xmm0, xmm0, xmm1, 0x1b
+      0x0f, 0x11, 0x01,             // movups [rcx], xmm0
+      0x66, 0x0f, 0x14, 0xd3,       // unpcklpd xmm2, xmm3
+      0x66, 0x0f, 0x11, 0x12,       // movupd [rdx], xmm2
       0xc3};
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
@@ -50265,4 +50350,42 @@ TEST(LLVMCPointerAddresses, HeaderImportsKeepScalarTypesAndVoidEffects) {
       )c",
                                 true);
     }
+}
+
+TEST(HighCPointerAddresses, PlatformRegisterReadRequiresAReservingABI) {
+  HighFunc Func;
+  Func.Name = "read_platform_register";
+  Func.ReturnType = NdType::makeInt(8, false);
+  MedVar Register;
+  Register.Kind = MedVar::Reg;
+  Register.Id = 18;
+  Register.Size = 8;
+  Register.RegOff = a64reg::X18;
+  Register.TheArch = Arch::AArch64;
+  returnValue(Func, HighExpr::makeVar(Register, Func.ReturnType));
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::Unknown,
+                              BinaryFormat::MachO, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = Format;
+    ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+    const bool Reserved =
+        Format == BinaryFormat::MachO || Format == BinaryFormat::COFF;
+    EXPECT_EQ(Source.find("__builtin_trap") == std::string::npos, Reserved)
+        << Source;
+    if (Format == BinaryFormat::MachO) {
+      EXPECT_NE(Source.find("mov %0, x18"), std::string::npos) << Source;
+      expectCSyntax(Source, "arm64-apple-macos");
+    }
+    if (Format == BinaryFormat::COFF) {
+      EXPECT_NE(Source.find("__getReg(18)"), std::string::npos) << Source;
+      EXPECT_NE(Source.find("#include <intrin.h>"), std::string::npos)
+          << Source;
+      EXPECT_EQ(Source.find("__asm__"), std::string::npos) << Source;
+      expectCSyntax(Source, "aarch64-pc-windows-msvc");
+    }
+  }
 }

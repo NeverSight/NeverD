@@ -71,6 +71,8 @@ enum class InterpreterProfileProjection : uint8_t {
   /// environment admission. Prefixed forms retain an unsupported boundary.
   X64SmmReturnV1,
   X64SgxTransferV1,
+  /// Selector MOV/POP requires the explicit descriptor and stack-state owner.
+  X64SegmentMoveV1,
 };
 
 } // namespace neverd::analysis

@@ -18,6 +18,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/libc/LibCNames.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
@@ -157,8 +158,8 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
   }
   // An x64, ARM or ARM64 image unwinds through a table entry for each
   // function but a leaf, so no metadata may give a leaf routine its range;
-  // its straight-line flow can still end where nothing resumes it. An x86
-  // image has no such table, and no entry there marks a leaf.
+  // its paths can still all end where nothing resumes them. An x86 image has
+  // no such table, and no entry there marks a leaf.
   if (screenedEnd(Target) == InvalidVA && Img.Format == BinaryFormat::COFF &&
       Img.Arch != Arch::X86) {
     const bool Ends = entryFlowNeverResumes(Target);
@@ -212,45 +213,68 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
 }
 
 bool InternalNoReturnIndex::entryFlowNeverResumes(va_t Target) const {
-  const Segment *Seg = Img.getSegmentFor(Target);
   Decoder Dec;
-  if (!Seg || Target < Seg->VA || Target - Seg->VA >= Seg->Data.size() ||
-      !Dec.init(Img))
+  if (!Dec.init(Img))
     return false;
-  const va_t Limit =
-      Target + std::min<uint64_t>(limits::kMaxNoReturnScreenBytes,
-                                  Seg->VA + Seg->Data.size() - Target);
-  for (va_t At = Target; At < Limit;) {
-    DecodedInsn Insn;
-    const int Size =
-        Dec.selectMode(Img, At)
-            ? Dec.decodeOne(Seg->Data.data() + (At - Seg->VA),
-                            static_cast<size_t>(Limit - At), At, Insn)
-            : 0;
-    if (Size <= 0)
+  std::vector<va_t> Pending{Target};
+  llvm::DenseSet<va_t> Visited;
+  uint64_t Screened = 0;
+  while (!Pending.empty()) {
+    const va_t At = Pending.back();
+    Pending.pop_back();
+    if (!Visited.insert(At).second)
+      continue;
+    const Segment *Seg = Img.getSegmentFor(At);
+    if (!Seg || At < Seg->VA || At - Seg->VA >= Seg->Data.size())
       return false;
+    const size_t Off = static_cast<size_t>(At - Seg->VA);
+    DecodedInsn Insn;
+    const int Size = Dec.selectMode(Img, At)
+                         ? Dec.decodeOne(Seg->Data.data() + Off,
+                                         Seg->Data.size() - Off, At, Insn)
+                         : 0;
+    if (Size <= 0 || !Img.hasExecutableCodeOwnerRange(At, Size))
+      return false;
+    Screened += static_cast<uint64_t>(Size);
+    if (Screened > limits::kMaxNoReturnScreenBytes)
+      return false;
+    const va_t Next = At + static_cast<va_t>(Size);
+    // Only a callee's stated or named contract ends a call's path here.
+    // Entry markers may also occur in a returning caller's continuation.
     const va_t Callee = Dec.directCallTarget(Insn);
     if (Callee != InvalidVA && callNeverReturns(Img, Callee, NoReturnTargets))
-      return true;
+      continue;
     std::vector<LowOp> Ops;
     try {
       Dec.liftToLow(Insn, Ops);
     } catch (const UnliftedInstruction &) {
       return false;
     }
+    bool Ends = false, Branches = false;
     for (const LowOp &Op : Ops) {
-      if (isArchitecturalNoReturn(Op))
-        return true;
-      if (Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
-          Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR)
+      if (isArchitecturalNoReturn(Op)) {
+        Ends = true;
+        break;
+      }
+      if (Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::INDIR_BR)
         return false;
+      if (Op.Opcode != NdOp::BRANCH && Op.Opcode != NdOp::COND_BR)
+        continue;
+      if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
+        return false;
+      Pending.push_back(Op.Inputs[0].Offset);
+      if (Op.Opcode == NdOp::COND_BR)
+        Pending.push_back(Next);
+      Branches = true;
     }
+    if (Ends || Branches)
+      continue;
     // A resumable trap, or a terminator no lifted branch names.
     if (Dec.isFunctionTerminator(Insn))
       return false;
-    At += static_cast<va_t>(Size);
+    Pending.push_back(Next);
   }
-  return false;
+  return true;
 }
 
 const std::vector<InternalNoReturnIndex::ScreenedInstruction> &

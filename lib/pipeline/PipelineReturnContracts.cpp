@@ -318,6 +318,9 @@ public:
       if (!Func.Name.empty())
         Names.emplace(Func.Entry, Func.Name);
     }
+    for (const auto &[Entry, Caller] : Facts)
+      for (const auto &[Callee, Results] : Caller.CallResults)
+        CallsTo[Callee].push_back({Entry, &Caller, &Results});
   }
 
   void settle() {
@@ -346,6 +349,16 @@ private:
   const DebugContext *Dbg;
   const TargetRegInfo &TRI;
   std::map<va_t, FunctionFacts> Facts;
+  /// A function's calls to one callee: its entry, its facts, and the results
+  /// of those calls.
+  struct CallsByCaller {
+    va_t Entry;
+    const FunctionFacts *Facts;
+    const std::vector<ValueKey> *Results;
+  };
+  /// The calls to each function of this image, caller by caller in address
+  /// order.
+  std::map<va_t, std::vector<CallsByCaller>> CallsTo;
   std::map<va_t, bool> NoValue;
   /// The numbers the i386 PC-rooted proof gives each function's values
   /// (MedToHighConverter::i386PcRootedNumbers), computed on first use.
@@ -699,18 +712,19 @@ private:
 
   /// Whether a caller reads what a call to \p Func returns.
   bool callerReadsResult(const MedFunc &Func) const {
-    for (const auto &[Entry, Caller] : Facts)
-      if (const auto Calls = Caller.CallResults.find(Func.Entry);
-          Calls != Caller.CallResults.end())
-        for (const ValueKey &Result : Calls->second) {
-          if (Caller.Read.count(Result))
+    const auto Calls = CallsTo.find(Func.Entry);
+    if (Calls == CallsTo.end())
+      return false;
+    for (const CallsByCaller &Caller : Calls->second)
+      for (const ValueKey &Result : *Caller.Results) {
+        if (Caller.Facts->Read.count(Result))
+          return true;
+        // A caller that hands it back on reads it when it returns a value.
+        if (Caller.Facts->Returned.count(Result))
+          if (const auto Known = NoValue.find(Caller.Entry);
+              Known == NoValue.end() || !Known->second)
             return true;
-          // A caller that hands it back on reads it when it returns a value.
-          if (Caller.Returned.count(Result))
-            if (const auto Known = NoValue.find(Entry);
-                Known == NoValue.end() || !Known->second)
-              return true;
-        }
+      }
     return false;
   }
 

@@ -645,9 +645,9 @@ struct MedFunc {
   /// 0 otherwise.  The bytes above belong to no result.
   uint16_t DefinedReturnBytes = 0;
 
-  /// Every reachable path is proven to terminate without returning.  This is
-  /// derived from explicit architectural traps and no-return callees, never
-  /// from the function name or from an unexplained missing return.
+  /// No reachable path returns to the caller. This is
+  /// derived from architectural traps, no-return callees or fully lifted
+  /// closed cycles, never from a name or an unexplained missing return.
   bool DoesNotReturn = false;
 
   /// The function returns no value a caller could rely on
@@ -770,6 +770,9 @@ struct MedFunc {
   /// separately from JumpTables so HighIR never turns a rejected table back
   /// into an indirect call merely because the CFG has no static successors.
   std::set<va_t> UnsafeIndirectBranchAddresses;
+  /// The LowIR function lifted every instruction it reaches and kept every
+  /// path inside the image (LowFunc::hasCompleteLiftCoverage).
+  bool CompleteLiftCoverage = false;
   std::optional<ExceptionFunction> ExceptionMetadata;
   /// Source analysis retained unknown machine entries instead of asserting a
   /// common SEH invocation frame. This function cannot be lowered to LLVM.

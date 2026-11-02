@@ -996,6 +996,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   Func.ModuleAnalysisRoots = Low.ModuleAnalysisRoots;
   Func.CxxContinuationEntries = Low.CxxContinuationEntries;
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
+  Func.CompleteLiftCoverage = Low.hasCompleteLiftCoverage();
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
   Func.RegistrationStates = Low.RegistrationStates;

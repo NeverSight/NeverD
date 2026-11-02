@@ -10,6 +10,8 @@
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64FARPOINTERENCODING_H
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64FARPOINTERENCODING_H
 
+#include "X64SegmentEncoding.h"
+
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstddef>
@@ -20,18 +22,10 @@ namespace neverd::analysis::detail {
 
 enum class X64FarPointerSegment : uint8_t { SS, FS, GS };
 
-struct X64FarPointerLoad {
+struct X64FarPointerLoad : X64SegmentMemoryOperand {
   unsigned Destination = 0;
   unsigned Bytes = 4;
-  unsigned AddressBytes = 8;
   X64FarPointerSegment DestinationSegment = X64FarPointerSegment::FS;
-  // Zero for ordinary addressing, 1 for FS, 2 for GS.
-  unsigned Segment = 0;
-  std::optional<unsigned> Base;
-  std::optional<unsigned> Index;
-  unsigned Scale = 1;
-  bool Relative = false;
-  int64_t Displacement = 0;
 };
 
 /// Decode raw bytes rather than Capstone's normalized prefix/operand fields.
@@ -39,70 +33,26 @@ struct X64FarPointerLoad {
 /// operand are admitted. This is not an ordinary LowIR lifting certificate.
 inline std::optional<X64FarPointerLoad>
 x64FarPointerLoad(llvm::ArrayRef<uint8_t> Bytes) {
-  if (Bytes.empty() || Bytes.size() > 15)
-    return std::nullopt;
   X64FarPointerLoad F;
   size_t P = 0;
-  bool Operand16 = false, Address32 = false, SegmentPrefix = false;
-  while (P < Bytes.size()) {
-    if (Bytes[P] == 0x66 && !Operand16)
-      Operand16 = true;
-    else if (Bytes[P] == 0x67 && !Address32)
-      Address32 = true;
-    else if ((Bytes[P] == 0x26 || Bytes[P] == 0x2e || Bytes[P] == 0x36 ||
-              Bytes[P] == 0x3e || Bytes[P] == 0x64 || Bytes[P] == 0x65) &&
-             !SegmentPrefix) {
-      SegmentPrefix = true;
-      // Long mode ignores CS/DS/ES/SS overrides, including for the default
-      // stack operand's canonical-address fault class.
-      F.Segment = Bytes[P] >= 0x64 ? Bytes[P] - 0x63 : 0;
-    } else
-      break;
-    ++P;
-  }
-  uint8_t Rex = 0;
-  if (P < Bytes.size() && (Bytes[P] & 0xf0) == 0x40)
-    Rex = Bytes[P++];
+  X64SegmentPrefixes Prefix;
+  if (!x64SegmentPrefixes(Bytes, P, Prefix))
+    return std::nullopt;
+  F.AddressBytes = Prefix.AddressBytes;
+  F.Segment = Prefix.Segment;
+  const uint8_t Rex = Prefix.Rex;
   if (P + 3 > Bytes.size() || Bytes[P] != 0x0f ||
       (Bytes[P + 1] != 0xb2 && Bytes[P + 1] != 0xb4 && Bytes[P + 1] != 0xb5))
     return std::nullopt;
   F.DestinationSegment = Bytes[P + 1] == 0xb2   ? X64FarPointerSegment::SS
                          : Bytes[P + 1] == 0xb4 ? X64FarPointerSegment::FS
                                                 : X64FarPointerSegment::GS;
-  F.Bytes = Rex & 8 ? 8 : Operand16 ? 2 : 4;
-  F.AddressBytes = Address32 ? 4 : 8;
+  F.Bytes = Rex & 8 ? 8 : Prefix.Operand16 ? 2 : 4;
   const uint8_t ModRM = Bytes[P + 2];
   P += 3;
-  const unsigned Mod = ModRM >> 6, RM = ModRM & 7;
-  if (Mod == 3)
-    return std::nullopt;
   F.Destination = ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0);
-  unsigned DispBytes = Mod == 1 ? 1 : Mod == 2 ? 4 : 0;
-  if (RM == 4) {
-    if (P == Bytes.size())
-      return std::nullopt;
-    const uint8_t SIB = Bytes[P++];
-    F.Scale = 1u << (SIB >> 6);
-    const unsigned Index = (SIB >> 3) & 7, Base = SIB & 7;
-    if (Index != 4 || (Rex & 2))
-      F.Index = Index + ((Rex & 2) ? 8 : 0);
-    if (Mod == 0 && Base == 5)
-      DispBytes = 4;
-    else
-      F.Base = Base + ((Rex & 1) ? 8 : 0);
-  } else if (Mod == 0 && RM == 5) {
-    F.Relative = true;
-    DispBytes = 4;
-  } else {
-    F.Base = RM + ((Rex & 1) ? 8 : 0);
-  }
-  if (P + DispBytes != Bytes.size())
+  if (!x64SegmentMemoryOperand(Bytes, P, ModRM, Rex, F))
     return std::nullopt;
-  uint32_t Displacement = 0;
-  for (unsigned I = 0; I != DispBytes; ++I)
-    Displacement |= uint32_t(Bytes[P + I]) << (I * 8);
-  F.Displacement =
-      DispBytes == 1 ? int8_t(Displacement) : int32_t(Displacement);
   return F;
 }
 

@@ -288,6 +288,68 @@ TEST(JumpTableHighSelector, MissingExactSelectorRemainsAnUnresolvedGoto) {
 
 class JTE_X86_32 : public NeverDLiftTest {};
 
+// A guard over the final index has already accounted for subtraction and
+// shifting. Applying source-label normalization again truncates live cases.
+TEST_F(JTE_X86_32, NormalizedGuardKeepsEveryProvenTableSlot) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Clang unavailable";
+  for (unsigned Shift : {0u, 1u}) {
+    SCOPED_TRACE(Shift);
+    const fs::path Source = tmpFile("normalized_guard.s");
+    const fs::path Object = tmpFile("normalized_guard.o");
+    {
+      std::ofstream File(Source);
+      File << R"(.text
+.globl normalized_guard
+.type normalized_guard,@function
+normalized_guard:
+  movl 4(%esp), %eax
+  subl $1, %eax
+)";
+      if (Shift)
+        File << "  shrl $1, %eax\n";
+      File << R"(  cmpl $4, %eax
+  ja default_case
+  jmp *case_table(,%eax,4)
+default_case:
+  movl $-1, %eax
+  ret
+)";
+      for (unsigned Case = 0; Case != 5; ++Case)
+        File << "case" << Case << ":\n  movl $" << 11 + Case
+             << ", %eax\n  ret\n";
+      File << ".size normalized_guard, .-normalized_guard\n"
+              ".section .rodata\n.p2align 2\ncase_table:\n";
+      for (unsigned Case = 0; Case != 5; ++Case)
+        File << "  .long case" << Case << "\n";
+    }
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {"-target", "i386-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    auto ImageOrErr = neverd::loadBinary(Object);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("normalized_guard");
+    ASSERT_NE(Function, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    const auto &Table = Low.JumpTables.front();
+    ASSERT_EQ(Table.Targets.size(), 5u);
+    for (unsigned Case = 0; Case != 5; ++Case) {
+      const auto *Label = Image.findSymbol("case" + std::to_string(Case));
+      ASSERT_NE(Label, nullptr);
+      EXPECT_EQ(Table.Targets[Case], Label->Addr);
+    }
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
 static fs::path frameLaneX86Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_frame_lane32.o";
 }
