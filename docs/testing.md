@@ -11918,6 +11918,15 @@ mutable/truncated storage, independent roots and budget refusal. Pointer tests
 cover nested recurrences, shared expression DAGs, role-neutral address leaves
 and independently materialized SELECT arms. Both suites retain ambiguous
 relocatable comparisons and distinguish adjacent objects' one-past addresses.
+`NeverDMedPhiRecompositionTests` owns correlated word-PHI regressions
+alongside the existing constant-propagation cases. Reordered edges,
+loop carries, complete complementary slices, retained partial reads,
+exceptional/incomplete inputs, fresh IDs including intrinsic outputs,
+and unchanged call/memory effects have independent controls. The default
+LowIR conversion case verifies pipeline integration. Run this target,
+the shared ABI suite and HighIR/control-flow regressions after changing
+the recomposition owner.
+
 `MedConstantPropagation` also checks full SSA identities at maximum integer
 IDs/versions, linear-budget propagation along reverse-ordered width chains,
 and width origins through seeded cycles and independent values. A complete
