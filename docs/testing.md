@@ -1905,6 +1905,14 @@ controls, positional floating inputs and overlapping integer/vector reads.
 Independent providers compile and execute both C routes at O0/O2 with UBSan.
 Run the SysV, AAPCS64, i386 and FP-parameter suites alongside this shared ABI
 change; it does not recover unknown state that a callee actually observes.
+`ConsecutiveIntegerBanksEndAtTheFirstLeftover` ends a System V register list at
+its first call leftover even when a later register is written; only Win64's
+shared positions let later setup keep an earlier unknown position.
+`DataSymbolBindingTest.VariadicCallsPassOnlyWhatTheirCallerSets` covers the
+same rule on real clang output, where an alignment `pop rcx` precedes the tail
+call. `LiveRegistersAfterALeftoverSetNoWin64Position` counts a later Win64
+position as setup only where the call's own block writes it, not where a join
+merely carries a live value, as in capstone's custom-mnemonic lookup.
 `FloatingCallLeftovers.*` in the same target checks speculative FP recovery
 against the shared call-leftover proof. Direct and indirect calls on x64 and
 AArch64 across COFF/ELF/Mach-O drop wholly clobbered joins, while mixed values,
@@ -1921,6 +1929,13 @@ indirect calls, local/cross-block flows, declared FP outputs and unrelated
 or later integer values have separate controls. These are verified MedIR
 projection tests, not proof of an unknown callee's declaration. Run the
 FP-parameter and floating-call-leftover owners alongside this target.
+`SysVCallContract.ABoolCallersTestIsNoFloatALeftoverReturns` checks the
+promoted FP result's shared SSA identity at a merged epilogue: each path writes
+EAX after the double it leaves in XMM0, so the integer remains the result.
+`MedTypePass.MergedEpiloguesReturnTheRegisterWrittenLast` (in the FP-parameter
+target) checks the same rule on MedIR and keeps a floating result beside an
+integer loop counter that a branch decides on.
+
 `Win64CallContract.LocalPointerQualifiersAgreeWithIndependentDefinitions`
 checks the same contract for explicit local declarations.
 `LLVMCValues.AtomicStoresKeepTheirOrder` writes release, sequentially
@@ -8634,7 +8649,14 @@ domain before publishing a quotient.
 executes retained calls and recovered division/remainder at O0/O2 over 100,000
 inputs each. `ConstantDivisorProofKeepsTrapsAndOperandEffects` retains dynamic,
 zero, truncated-zero and signed divisors, as well as nested call effects.
-Run both focused owners after changing this proof or its HighIR publication.
+`RecoveredDivisionKeepsTheFactsOfItsProduct` checks that a recovered quotient
+or remainder keeps the bounds and low bits its product had, that a remainder
+inside a longer sum takes one spelling and that power-of-two products stay
+shifts. `SymKnownBits.LiteralDivisionAndRemainderBoundTheirResults` checks the
+bounds of literal divisions exhaustively over byte pairs, including SymContext's
+total zero-divisor results. Run both focused owners after changing this proof
+or its HighIR publication, and compare the MBA differential fuzzer's per-input
+sizes against the previous library.
 
 `SymExpr.ScaledUnsignedProductSlicesUseOnlyTheirRequiredWidth` and
 `ScaledProductWindowsCoverEveryBytePairAndWideCarriers` check non-low windows
@@ -8861,6 +8883,8 @@ argument cases cover assignment, expression, call and return statements, keep
 the original stores and invalidate memory facts after each call. Nested calls
 and indirect targets retain their reads. Same-width signed/unsigned views
 execute at O0/O2 with UBSan against an independent byte-copy reference.
+`NestedLabelsEndScopedAddressesAfterTheirStatement` checks that a goto into a
+later nested statement ends the scoped frame addresses learned before it.
 `UnchangedCallInputsRetainSourceIdentity` and
 `UnchangedCallsKeepTheirInstructionNavigation` check direct and indirect calls,
 with and without a result assignment, across all four architectures and repeated
@@ -11961,8 +11985,9 @@ relocatable comparisons and distinguish adjacent objects' one-past addresses.
 `NeverDMedPhiRecompositionTests` owns correlated word-PHI regressions
 alongside the existing constant-propagation cases. Reordered edges,
 loop carries, complete complementary slices, retained partial reads,
-exceptional/incomplete inputs, fresh IDs including intrinsic outputs,
-and unchanged call/memory effects have independent controls. The default
+exceptional/incomplete inputs, fresh IDs including intrinsic outputs and
+the converter's later allocations, and unchanged call/memory effects have
+independent controls. The default
 LowIR conversion case verifies pipeline integration. Run this target,
 the shared ABI suite and HighIR/control-flow regressions after changing
 the recomposition owner.
