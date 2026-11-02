@@ -1906,6 +1906,14 @@ Known FP consumers retain unavailable operands. Floating result producers
 remain inputs even when their blocks follow the consumer in storage order.
 Independent providers execute both C routes on both branch paths at O0/O2
 with UBSan; native Windows and Apple ARM64 execution are separate coverage.
+
+`NeverDMedCallResultControlTests` checks that an exact Win64 integer CALL
+result feeding a branch retains its primary source projection while the
+vector observation stays available as its post-call clobber. Direct and
+indirect calls, local/cross-block flows, declared FP outputs and unrelated
+or later integer values have separate controls. These are verified MedIR
+projection tests, not proof of an unknown callee's declaration. Run the
+FP-parameter and floating-call-leftover owners alongside this target.
 `Win64CallContract.LocalPointerQualifiersAgreeWithIndependentDefinitions`
 checks the same contract for explicit local declarations.
 `LLVMCValues.AtomicStoresKeepTheirOrder` writes release, sequentially
