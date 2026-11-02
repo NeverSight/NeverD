@@ -285,7 +285,9 @@ llvm::Error readTLS(const View &R, Image &Out, bool DeferredCallbacks = false) {
       return failure(text::TLS);
   if (!TLS.AddressOfCallBacks)
     return llvm::Error::success();
-  if (TLS.AddressOfCallBacks < Out.Base || TLS.AddressOfCallBacks % PointerSize)
+  // The array is byte-addressable storage. Only its callback targets have
+  // instruction alignment requirements, checked below for their architecture.
+  if (TLS.AddressOfCallBacks < Out.Base)
     return failure(text::TLS);
   for (uint64_t I = 0; I <= MaxCallbacks; ++I) {
     const uint64_t Offset = TLS.AddressOfCallBacks - Out.Base;
