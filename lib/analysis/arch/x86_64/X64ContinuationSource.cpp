@@ -29,6 +29,7 @@
 #include "X64FredReturnEncoding.h"
 #include "X64MachineFlags.h"
 #include "X64Recovery.h"
+#include "X64RepeatedString.h"
 #include "X64SegmentMoveEncoding.h"
 #include "X64TaskPriority.h"
 
@@ -990,6 +991,11 @@ struct Writer {
 
   void pagedAccess(NdVar Address, uint64_t Bytes, X64PagedAccess Kind,
                    bool Stack) {
+    if (Address.Size < 8) {
+      const auto Wide = temporary();
+      emit(NdOp::INT_ZEXT, Wide, {Address});
+      Address = Wide;
+    }
     emit(NdOp::COPY, NdVar::reg(x86reg::RDI, 8),
          {NdVar::tmp(PagedContextPointer, 8)});
     emit(NdOp::COPY, NdVar::reg(x86reg::RSI, 8), {Address});
@@ -1230,6 +1236,15 @@ buildInstruction(SpecializationInstruction Instruction,
   Result.SourceABI = sourceABI(Options.PagedMemory);
   auto &Function = Result.Function;
   Function.Entry = Result.Address;
+  const auto Repeated =
+      Options.PagedMemory && Instruction.ProfileProjection ==
+                                 InterpreterProfileProjection::None
+          ? detail::x64RepeatedString(Instruction.NativeBytes, Result.Address)
+          : std::nullopt;
+  if (Repeated) {
+    Instruction.Ops = Repeated->Operations;
+    Instruction.UndefinedEffects = Repeated->Undefined;
+  }
   const bool Controls = hasControlState(Options);
   const bool Smap =
       Options.Profile == X64ContinuationProfile::KernelSmapNoFaultV3;
@@ -1438,9 +1453,9 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer && !SegmentMove && !UserInterrupt && !FredReturn && !Vmrun &&
-       !Mpx && !Hypercall && !Snp && !Hle && !SmmReturn && !SgxTransfer &&
-       !UndefinedInstruction &&
+  if ((!FarPointer && !SegmentMove && !Repeated && !UserInterrupt &&
+       !FredReturn && !Vmrun && !Mpx && !Hypercall && !Snp && !Hle &&
+       !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
@@ -1532,7 +1547,8 @@ buildInstruction(SpecializationInstruction Instruction,
   }
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
-    PagedRoles = detail::x64PagedMemoryRoles(Instruction);
+    PagedRoles = Repeated ? detail::X64PagedMemoryRoles{.Supported = true}
+                          : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
          !SegmentMove) ||
         Sysret || Sysenter || Sysexit)
@@ -1628,7 +1644,9 @@ buildInstruction(SpecializationInstruction Instruction,
       Options.PagedMemory
           ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
                 Flags::IOPLMask | Flags::VirtualInterruptMask |
-                ((Iret || FarReturn || FarPointer || SegmentMove) ? 0x4000 : 0)
+                ((Iret || FarReturn || FarPointer || SegmentMove || Repeated)
+                     ? 0x4000
+                     : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
       : (Interrupt || FredReturn || UndefinedInstruction ||
          UserInterrupt == detail::X64UserInterrupt::Return)
@@ -1868,6 +1886,9 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (UserInterrupt) {
     detail::X64ContinuationUserInterrupts<Writer>(W, Options)
         .execute(*UserInterrupt, Instruction.Fallthrough.Address);
+  } else if (Repeated) {
+    detail::emitX64RepeatedString(W, *Repeated, Result.Address,
+                                  Instruction.Fallthrough.Address);
   } else if (Options.PagedMemory && (Iret || FarReturn)) {
     W.pagedAccess(constant(Return->Bytes), Return->Discard,
                   Iret ? X64PagedAccess::InterruptReturn

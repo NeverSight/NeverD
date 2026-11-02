@@ -92,6 +92,12 @@ owns long-mode descriptor loads and persistent inhibition through this shared
 scheduler; legacy POP SS is still outside that binding.
 This successful-RAM interface does not own restartable page faults or nested
 delivery faults; the paged binding now owns those interactions with scheduling.
+The [paged REP binding](x86-paged-execution.md#restartable-rep-memory-strings)
+also polls between committed memory-string elements. Its budget counts
+element attempts, and a failed element preserves earlier progress. Unfinished
+comparisons retain their entry flags. The producer owns arrival/eligibility;
+native qualification replays observed interruption indices without promising
+identical hardware fast-string grouping.
 APIC/devices, SGX AEX, SMI entry and CET/FRED routing remain unfinished boundaries.
 
 `ScheduledEvents*` checks persistent shadows, budgets, invalid entry, producer

@@ -158,6 +158,9 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
      << (Paged ? " && (state->RFlags & 512)" : "") << ");\n";
   OS << R"C(        shadows->SSBlocked = (status == 0 && mov_ss && !shadows->SSBlocked);
 )C";
+  if (Paged)
+    OS << "        if (status == "
+       << uint64_t(analysis::X64PagedExit::RepeatContinue) << ") status = 0;\n";
   if (FollowInternalCalls)
     OS << R"C(        if (status == 1 || status == 3) {
             if (!neverd_x64_scheduled_pc_v6(state->PC)) return status;

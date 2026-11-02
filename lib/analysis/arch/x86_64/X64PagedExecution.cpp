@@ -38,6 +38,10 @@ struct Transaction {
   X86PagedMemory &Memory;
   uint8_t CPL;
   X64PagedAlignmentPriority AlignmentPriority;
+  std::optional<X64PagedRepeatProfile> RepeatProfile;
+  X64ContinuationStateV6 &StagedState;
+  bool Repeated = false;
+  uint8_t RepeatRegisters = 0, RepeatAddressBytes = 0;
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
   std::optional<X64ContinuationEventV1> Event;
@@ -52,6 +56,22 @@ struct Transaction {
   std::optional<SegmentLoad> FarPointer, SegmentMove;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
+
+  void normalizeRepeatEntry(X64ContinuationStateV6 &State) {
+    if (!Repeated || RepeatAddressBytes != 4)
+      return;
+    auto &GPR = State.Core.Core.Core.Core.GPR;
+    if (RepeatRegisters & kX64PagedRepeatCompare) {
+      GPR[1] = uint32_t(GPR[1]);
+    } else if (RepeatRegisters & kX64PagedRepeatDestination) {
+      GPR[1] = uint32_t(GPR[1]);
+      GPR[7] = uint32_t(GPR[7]);
+      if (RepeatRegisters & kX64PagedRepeatSource)
+        GPR[6] = uint32_t(GPR[6]);
+    } else if (*RepeatProfile == X64PagedRepeatProfile::ClearLodsCountHigh) {
+      GPR[1] = uint32_t(GPR[1]);
+    }
+  }
 
   bool alignmentFault(uint64_t Address, unsigned Bytes) {
     const auto &Controls = Memory.controls();
@@ -81,6 +101,26 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & ~kX64PagedStackAccess);
+  if (Kind == X64PagedAccess::BeginRepeat) {
+    if (!T.RepeatProfile ||
+        (*T.RepeatProfile != X64PagedRepeatProfile::ClearLodsCountHigh &&
+         *T.RepeatProfile != X64PagedRepeatProfile::PreserveLodsCountHigh)) {
+      T.Error = invalid("paged REP requires a bound element-progress profile");
+      return 1;
+    }
+    if ((Size != 4 && Size != 8) ||
+        !(Address & (kX64PagedRepeatSource | kX64PagedRepeatDestination)) ||
+        (Address & ~(kX64PagedRepeatSource | kX64PagedRepeatDestination |
+                     kX64PagedRepeatCompare))) {
+      T.Error = invalid("invalid paged REP entry binding");
+      return 1;
+    }
+    T.Repeated = true;
+    T.RepeatRegisters = Address;
+    T.RepeatAddressBytes = Size;
+    T.normalizeRepeatEntry(T.StagedState);
+    return 0;
+  }
   if (Kind == X64PagedAccess::FarPointerLoad ||
       Kind == X64PagedAccess::SegmentMove) {
     auto &Transfer =
@@ -250,7 +290,8 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   auto Next = State;
   Transaction T{Memory, CPL,
                 Options.AlignmentPriority.value_or(
-                    X64PagedAlignmentPriority::AfterPaging)};
+                    X64PagedAlignmentPriority::AfterPaging),
+                Options.RepeatProfile, Next};
   X64PagedExchange Exchange{0, &T};
   auto *NextBytes = reinterpret_cast<uint8_t *>(&Next);
   auto *ExchangeBytes = reinterpret_cast<uint8_t *>(&Exchange);
@@ -352,6 +393,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     return Last;
   }
   if (T.Event || T.Access.Status == X86PageWalkStatus::Exception) {
+    T.normalizeRepeatEntry(State);
     Last.Exception = T.Access.Exception;
     X64ContinuationEventV1 Event = T.Event.value_or(X64ContinuationEventV1{});
     if (!T.Event) {
@@ -372,7 +414,9 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     }
     return Last;
   }
-  if (Exit > uint64_t(X64ContinuationExitV1::Return)) {
+  const bool Partial =
+      T.Repeated && Exit == uint64_t(X64PagedExit::RepeatContinue);
+  if (Exit > uint64_t(X64ContinuationExitV1::Return) && !Partial) {
     if (Exit != uint64_t(X64ContinuationExitV1::NativeInstruction) &&
         Exit != uint64_t(X64ContinuationExitV1::InvalidState))
       return invalid("paged body returned an unowned execution status");
@@ -381,13 +425,23 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   }
   if (T.Store)
     Memory.commitStore(*T.Store, T.Bytes);
+  const auto EntryFlags = State.Core.Core.Core.Core.RFlags;
   State = Next;
-  State.Core.Core.Core.Core.RFlags &= ~uint64_t(0x10000); // Completed RF.
+  // The bound processor retains the pre-instruction flags during unfinished
+  // CMPS/SCAS, including interrupt entry. Only a terminal comparison publishes
+  // its arithmetic flags; fault delivery already uses the prior state.
+  if (Partial && (T.RepeatRegisters & kX64PagedRepeatCompare))
+    State.Core.Core.Core.Core.RFlags = EntryFlags;
+  if (Partial)
+    State.Core.Core.Core.Core.RFlags |=
+        0x10000; // Restart skips the execute BP.
+  else
+    State.Core.Core.Core.Core.RFlags &= ~uint64_t(0x10000); // Completed RF.
   Controls.RFlags = State.Core.Core.Core.Core.RFlags;
   if (auto Failure = Memory.bindControls(Controls))
     return std::move(Failure);
   Last.InstructionAttempted = true;
-  Last.InstructionCompleted = true;
+  Last.InstructionCompleted = !Partial;
   Last.Exit = Exit;
   return Last;
 }

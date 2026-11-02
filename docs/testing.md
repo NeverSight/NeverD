@@ -3434,6 +3434,22 @@ physical backing on either page, read-only physical RAM, and pre/post-paging
 both local core classes; record source/header/manifest equality and real XML
 comparison counts.
 
+`X64PagedRepeatedStringTests.inc` exercises faultable MOVS/STOS/LODS and
+REPE/REPNE CMPS/SCAS across
+element and address widths, source FS/GS, CPL, DF, zero/live counts, overlaps,
+competing faults and completed prefixes before #PF. The oracle records the
+pinned core type because addr32 LODS entry has different RCX-high behavior on
+the qualified P/E cores. Run `*PagedRepeated*` through both C routes and Clang/
+NeverC, then the paged execution and source/export regressions. An intermediate
+element must retain original PC and RF; budgets must charge completed work,
+and replacing the runtime context must preserve architectural progress.
+The boundary tests replay native IRQ/NMI interruption indices, including fast
+string groups that complete multiple elements before accepting an event. This
+qualifies the same architectural boundary, not identical device arrival timing.
+They also repair first/later operand page faults in a real guest handler,
+return with IRETQ and resume all five memory-string families. CMPS/SCAS must
+retain pre-instruction arithmetic flags through every unfinished element.
+
 Faultable IRET is covered by `X64PagedExecutionTest.PagedInterruptReturnsMatchOriginalCPU`,
 `PagedIretComposesWithScheduledIRQAndNMI`,
 `PagedReturnFaultHandlerRepairsMappingAndRetries` and

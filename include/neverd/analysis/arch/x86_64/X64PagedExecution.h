@@ -24,6 +24,16 @@ namespace neverd::analysis {
 
 using X64PagedBody = uint64_t (*)(void *State, void *Exchange);
 
+/// Elementwise repeated memory strings with destination-first CMPS reads.
+/// Addr32 LODS entry has distinct
+/// observed RCX-high behavior on the qualified hybrid core types, including
+/// zero counts and first-element faults. Neither
+/// policy is inferred from the host running the generated source.
+enum class X64PagedRepeatProfile : uint8_t {
+  ClearLodsCountHigh,
+  PreserveLodsCountHigh,
+};
+
 struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
@@ -39,12 +49,16 @@ struct X64PagedExecutionOptions {
   /// Required before selector MOV/PUSH/POP effects. MOV SS also requires the
   /// generated scheduler's persistent interruptibility cells.
   std::optional<X64PagedSegmentMoveProfile> SegmentMoveProfile;
+  /// Each completed string element consumes one attempt; zero count consumes
+  /// one completion attempt. Earlier elements survive later faults/stops.
+  std::optional<X64PagedRepeatProfile> RepeatProfile;
 };
 
 struct X64PagedExecutionResult {
   uint64_t Exit = uint64_t(X64ContinuationExitV1::InvalidState);
   bool InstructionAttempted = false;
-  /// Includes successful software interrupt entry; a delivery fault is false.
+  /// Includes successful software interrupt entry; a delivery fault or an
+  /// intermediate REP element is false.
   bool InstructionCompleted = false;
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
@@ -57,8 +71,10 @@ struct X64PagedExecutionResult {
 /// also retains NMI unblocking on failure. LSS/LFS/LGS stage both destinations
 /// until their pointer reads, descriptor checks and accessed writes succeed.
 /// Selector MOV/PUSH/POP share those checks and stage stack updates too.
-/// This is not a REP/gather/XSAVE
-/// progress model. Generated bodies/validators and original bytes belong to the
+/// Memory string repeats commit one element and its restart state per step.
+/// Unfinished comparisons retain entry flags. Port strings and gather/XSAVE
+/// need separate progress bindings.
+/// Generated bodies/validators and original bytes belong to the
 /// same source export; passing unrelated or arbitrary function pointers
 /// violates this ABI.
 class X64PagedExecution final {

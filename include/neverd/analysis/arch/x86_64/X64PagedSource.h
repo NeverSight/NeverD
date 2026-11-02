@@ -23,6 +23,9 @@ enum class X64PagedExit : uint64_t {
   BackingFault = 18,
   Shutdown = 19,
   CodeChanged = 20,
+  /// One REP element committed at the original PC; the region drivers consume
+  /// an attempt and continue dispatch, allowing a budget stop or event poll.
+  RepeatContinue = 21,
 };
 
 /// Progress of the last runtime operation, independent of its final status.
@@ -36,6 +39,9 @@ inline constexpr uint64_t kX64PagedEventAccepted = 2;
 inline constexpr uint64_t kX64PagedAccessAddress = UINT64_MAX - 1;
 inline constexpr const char *kX64PagedAccessName = "neverd_x64_paged_access_v1";
 inline constexpr uint64_t kX64PagedStackAccess = 8;
+inline constexpr uint64_t kX64PagedRepeatSource = 1;
+inline constexpr uint64_t kX64PagedRepeatDestination = 2;
+inline constexpr uint64_t kX64PagedRepeatCompare = 4;
 enum class X64PagedAccess : uint64_t {
   Load,
   Store,
@@ -55,6 +61,9 @@ enum class X64PagedAccess : uint64_t {
   FarPointerLoad = 16,
   /// Selector MOV/PUSH/POP shares null-base policy and authenticated bytes.
   SegmentMove = 17,
+  /// Require the REP profile before operands. Address is the index-use mask;
+  /// size is the address width. Entry normalization survives guest faults.
+  BeginRepeat = 18,
 };
 
 struct X64PagedExchange {

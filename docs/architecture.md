@@ -60,6 +60,15 @@ The paged selector-store path
 prepares translation before publication so a post-paging #AC retains page-walk
 effects without a data write. MOV SS requires the scheduler's persistent shadow;
 the instruction-only driver refuses it. Device arrival remains producer-owned.
+`X64RepeatedString` authenticates the repeat/prefix grammar, then obtains the
+single-element operations from the existing x86 lifter. The continuation layer
+owns count completion and the original-PC restart boundary; paged execution
+commits each element and its register progress together. Its explicit processor
+profile distinguishes addr32 LODS high-count behavior on zero counts and
+first-element faults. Unfinished CMPS/SCAS retain the entry flags; only a
+terminal comparison publishes its arithmetic flags. The scheduler can
+poll between committed elements, and no iteration cursor is hidden in the
+execution context. Port effects retain their separate ownership requirements.
 See [paged RAM](x86-paged-memory.md) and
 [generated execution](x86-paged-execution.md); the default generated-C dispatcher
 retains its separate no-fault memory binding.

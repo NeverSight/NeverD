@@ -781,7 +781,7 @@ typedef struct neverd_x64_event_v1 {
       {"scheduled_event_domain",
        Request->Options.ScheduledEvents
            ? (Request->Options.PagedMemory
-                  ? "instruction-boundary IRQ/NMI over paged RAM; "
+                  ? "instruction/REP-element IRQ/NMI over paged RAM; "
                     "acknowledge after acceptance even on secondary "
                     "faults; persistent inhibition; bounded polls; "
                     "producer-owned arrival and controller priority"
@@ -802,7 +802,8 @@ typedef struct neverd_x64_event_v1 {
            : "disabled"},
       {"environment_binding",
        Request->Options.PagedMemory
-           ? "owned paged RAM; scalar instruction commit; recursive fault "
+           ? "owned paged RAM; scalar instruction and REP-element commit; "
+             "recursive fault "
              "delivery"
            : "explicit full-state callback; separately bounded"},
       {"call_return_policy",
@@ -959,10 +960,13 @@ typedef struct neverd_x64_event_v1 {
         "CPL0..3 64-bit scalar GPR/flags steps and canonical INT/INT3; "
         "owned ordinary physical RAM, "
         "one CPU and fresh page walks; declared paging width and MXCSR mask; "
-        "original-byte fetch verification, failure-atomic instruction state "
-        "and operand data, retained paging effects and recursive IDT faults; "
-        "no TF, native providers, REP/gather/XSAVE partial completion, LOCK, "
-        "intra-instruction asynchronous events, MMIO, CET/FRED, SMM or enclave "
+        "original-byte fetch verification, staged instruction/REP-element "
+        "state and operand data, retained paging/progress effects and "
+        "recursive "
+        "IDT faults; explicit MOVS/STOS/LODS/CMPS/SCAS progress profile; "
+        "no TF, native providers, port-string/gather/XSAVE partial completion, "
+        "LOCK, intra-element asynchronous events, MMIO, CET/FRED, SMM or "
+        "enclave "
         "execution; "
         "state, context and budgets are disjoint from guest RAM";
     Report["event_delivery_domain"] =
@@ -981,6 +985,13 @@ typedef struct neverd_x64_event_v1 {
     Report["alignment_fault_priority"] =
         "explicit runtime CPU binding when CPL3 AC and CR0.AM are set; "
         "canonical checks first; no host-policy inference";
+    Report["repeat_progress"] =
+        "explicit elementwise runtime profile; destination-first CMPS; "
+        "addr32 LODS count-high policy is bound, never host-inferred; "
+        "completed elements and zero-count/fault attempts consume budget; "
+        "unfinished CMPS/SCAS retain entry flags; prior elements survive "
+        "later backing stops; IRQ/NMI eligibility is producer-owned and "
+        "does not predict physical fast-string interruption grouping";
   }
   if (Request->NativeRtmAbortRegions)
     Report["native_rtm_abort_environment"] = llvm::json::Object{

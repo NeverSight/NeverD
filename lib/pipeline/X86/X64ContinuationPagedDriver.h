@@ -83,6 +83,8 @@ uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
   OS << "        if (!(neverd_x64_paged_progress_v1(context) & "
      << analysis::kX64PagedInstructionAttempted << ")) return status;\n"
      << "        --*budget;\n";
+  OS << "        if (status == "
+     << uint64_t(analysis::X64PagedExit::RepeatContinue) << ") status = 0;\n";
   if (FollowCalls) {
     OS << "        if (status == 1 || status == 3) {\n"
           "            switch (state->PC) {\n";

@@ -443,17 +443,69 @@ SDKs; each SDK's 44 efficient-core exports also match its performance-core
 outputs. The 186 earlier no-fault C/header outputs remain byte-identical.
 
 This binding owns scalar commits, long-mode selector MOV/PUSH/POP and far-pointer
-loads, and faultable long-mode interrupt/far returns.
-REP, gather/scatter, XSAVE and
+loads, faultable long-mode interrupt/far returns, and the bound REP memory-string
+iterations below. Port strings, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, SMI/AEX, legacy i386 dispatch,
 CET/FRED, MMIO, TLB and concurrent writers remain outside this binding.
-Intra-instruction events, device arrival and interrupt-controller selection
+Intra-element events, device arrival and interrupt-controller selection
 remain separate. Combining paged memory with `event_delivery`, direct dispatch
 or RTM regions is explicitly rejected. The [no-fault scheduler](x86-event-scheduling.md)
 retains its separate successful-RAM contract. LLVM release/pin completion is not implied.
 
+## Restartable REP memory strings
+
+Long-mode REP MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS use an explicit
+`RepeatProfile` binding. Each
+generated step executes one element through the ordinary scalar lifter and
+paged operand transaction. Its data, pointers and count commit together.
+Earlier completed elements survive a later architectural fault or missing
+physical backing. While repetition continues, PC stays at the original REP and RF is
+set for restart; final completion advances PC and clears RF. The memory runtime
+does not retain a hidden iteration cursor, so architectural state and owned RAM
+can be resumed with a new execution context.
+
+The instruction budget counts completed elements and faulting attempts. A
+zero-count instruction consumes one completion attempt without an operand
+access. A failed element's physical backing stop consumes none; earlier
+elements have already been charged. Status 21 reports an intermediate element
+from the direct runtime `execute` interface. Both generated region drivers
+handle that status and continue within the supplied budget. The scheduler
+polls between elements, consumes the incoming SS/STI window after an attempted
+element, and saves the original REP PC and RF for an accepted IRQ/NMI.
+
+The two profiles explicitly select the observed addr32 LODS entry behavior:
+`ClearLodsCountHigh` clears RCX's high half (qualified P-core behavior),
+and `PreserveLodsCountHigh` preserves it (qualified E-core behavior).
+Both retain RSI and RAX for empty LODS and first-element operand faults. Addr32
+MOVS/STOS zero-extend the count and their applicable index registers before
+the first operand, including zero counts and first-element guest faults.
+Addr32 CMPS/SCAS clear the count's high half at entry; their index high halves
+remain until a successful element writes them. A failed fetch precedes this
+entry normalization. Physical backing/admission stops discard the failed
+element's staged changes. Address32 wraps the implicit
+indexes before the optional source FS/GS base; destinations retain ES's zero
+long-mode base. Direction and operand widths come from the shared single
+element lifter. The source parser permits one prefix per group and a final
+REX, and requires F3 with MOVS/STOS/LODS or F2/F3 with CMPS/SCAS.
+
+CMPS/SCAS evaluate the comparison condition after each element, independent of
+the incoming ZF. Both profiles read the CMPS destination before its source,
+matching the qualified P/E cores across widths and address forms. The shared
+single-element lifter keeps this order, including the CMPSD string/SSE
+disambiguation path. Unfinished comparisons retain the pre-instruction flags for
+fault, interrupt, backing and budget boundaries; terminal comparisons publish
+their result flags. A zero count leaves arithmetic flags unchanged. This
+requires no hidden flags checkpoint in the execution context.
+
+Native IRQ/NMI comparisons replay the observed interruption index. Some fast
+string forms complete multiple elements before accepting the pending event;
+this elementwise binding does not predict a physical CPU's internal grouping.
+Arrival and eligibility remain producer-owned. INS/OUTS still require a
+device-side-effect contract and retain explicit native boundaries.
+
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
-volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/PUSH/POP, volume 3A paging, exception priority
+volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/PUSH/POP/REP,
+volume 3A paging, exception priority
 and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

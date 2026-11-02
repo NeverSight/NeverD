@@ -186,9 +186,11 @@ protected:
     auto Export = exportX64Continuation(image(Code, Base), Request, LLVM);
     ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
     ASSERT_EQ(Export->Source.find("unknown value"), std::string::npos);
+    ASSERT_EQ(Export->Source.find("bad source call"), std::string::npos);
     const auto Parsed = llvm::cantFail(llvm::json::parse(Export->Manifest));
     ASSERT_EQ(Parsed.getAsObject()->getInteger("native_requests"),
-              unsigned(ExpectNative));
+              unsigned(ExpectNative))
+        << Export->Manifest;
     auto Name = (LLVM ? "llvm" : "high") + Optimization +
                 (Compiler == NEVERD_TEST_CLANG ? "-clang" : "-neverc") + "-" +
                 testing::UnitTest::GetInstance()->current_test_info()->name() +
@@ -812,6 +814,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #endif
 #include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
+#include "X64PagedRepeatedStringBoundaryTests.inc"
+#include "X64PagedRepeatedStringTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"
 #include "X64PagedSegmentMoveBoundaryTests.inc"
