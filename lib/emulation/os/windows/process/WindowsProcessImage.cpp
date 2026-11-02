@@ -569,8 +569,9 @@ llvm::Expected<Image> readImage(const std::filesystem::path &Path,
     return std::move(E);
   if (auto E = readTLS(R, Out, Deferred))
     return std::move(E);
-  auto Exports = readPEProgramExports(
-      R.Raw, {Budget.MetadataBytes, Budget.Records, MaxName});
+  auto Exports =
+      readPEProgramExports(R.Raw, {Budget.MetadataBytes, Budget.Records,
+                                   pe_export_defaults::StringBytes});
   if (!Exports)
     return Exports.takeError();
   Budget.MetadataBytes -= Exports->BytesRead;
