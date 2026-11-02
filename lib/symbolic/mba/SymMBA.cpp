@@ -58,6 +58,117 @@ using namespace detail;
 
 namespace {
 
+SymRef foldReciprocalDivision(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                              size_t &Storage) {
+  const auto Op = Ctx.op(Root);
+  if (Op != SymOp::LShr && Op != SymOp::AShr && Op != SymOp::Extract)
+    return Root;
+  SymRef Product = Root;
+  unsigned Shift = 0;
+  if (Op != SymOp::Extract) {
+    if (!Ctx.isConst(Ctx.operand(Root, 1)))
+      return Root;
+    Shift =
+        Ctx.constValue(Ctx.operand(Root, 1)).getLimitedValue(Ctx.width(Root));
+    if (Shift >= Ctx.width(Root))
+      return Root;
+    Product = Ctx.operand(Root, 0);
+  }
+  const unsigned Window = Ctx.width(Product);
+  unsigned Low = 0;
+  if (Ctx.op(Product) == SymOp::Extract) {
+    Low = Ctx.node(Product).Aux;
+    Product = Ctx.operand(Product, 0);
+  }
+  if (Ctx.op(Product) != SymOp::Mul || Ctx.numOperands(Product) != 2 ||
+      !Ctx.isConst(Ctx.operand(Product, 0)))
+    return Root;
+  const auto Extension = Ctx.operand(Product, 1);
+  if (Ctx.op(Extension) != SymOp::ZExt)
+    return Root;
+  const unsigned Width = Ctx.width(Product);
+  if (Width > detail::limits::kMaxReciprocalProductWidth)
+    return Root;
+  const unsigned ProofWidth = 2 * Width + 1;
+  const size_t Words = (ProofWidth + 63) / 64;
+  const size_t Work = 32 * Words * Words;
+  const size_t Bytes = 16 * Words * sizeof(uint64_t);
+  if (Storage < Bytes || !Budget.consume(Work))
+    return Root;
+  Storage -= Bytes;
+  const auto Input = Ctx.operand(Extension, 0);
+  const unsigned InputWidth = Ctx.width(Input);
+  const auto Multiplier =
+      Ctx.constValue(Ctx.operand(Product, 0)).zext(ProofWidth);
+  if (Multiplier.isZero())
+    return Root;
+  const auto Maximum = llvm::APInt::getLowBitsSet(ProofWidth, InputWidth);
+  const auto LargestProduct = Maximum * Multiplier;
+  // Both the machine multiplication and the observed window must retain the
+  // whole unsigned product. AShr additionally requires a proved zero sign bit.
+  if (LargestProduct.getActiveBits() > Width ||
+      LargestProduct.getActiveBits() >
+          Low + Window - unsigned(Op == SymOp::AShr))
+    return Root;
+  const auto Scale = llvm::APInt::getOneBitSet(ProofWidth, Low + Shift);
+  auto Divisor = Scale.udiv(Multiplier);
+  if (!Scale.urem(Multiplier).isZero())
+    ++Divisor;
+  if (Divisor.isZero() || Divisor.getActiveBits() > InputWidth)
+    return Root;
+  const auto Error = Divisor * Multiplier - Scale;
+  const auto LastQuotient = Maximum.udiv(Divisor);
+  // For x=q*d+r the reciprocal gives q + floor((q*error+r*m)/scale).
+  // Error is nonnegative. Check the last complete interval and the final
+  // partial interval; those maximize the extra term over every input word.
+  if (!LastQuotient.isZero() &&
+      ((LastQuotient - 1) * Error + (Divisor - 1) * Multiplier).uge(Scale))
+    return Root;
+  if ((LastQuotient * Error + Maximum.urem(Divisor) * Multiplier).uge(Scale))
+    return Root;
+  auto Quotient = Ctx.mkUDiv(Input, Ctx.mkConst(Divisor.trunc(InputWidth)));
+  return Ctx.width(Root) < InputWidth
+             ? Ctx.mkExtract(Quotient, 0, Ctx.width(Root))
+             : Ctx.mkZExt(Quotient, Ctx.width(Root));
+}
+
+SymRef foldQuotientRemainder(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                             size_t &Storage) {
+  if (Ctx.op(Root) != SymOp::Add || Ctx.numOperands(Root) < 2 ||
+      Ctx.numOperands(Root) > detail::limits::kMaxProjectedBitWindowOperands)
+    return Root;
+  llvm::SmallVector<SymRef, 8> Terms(Ctx.operands(Root));
+  for (unsigned I = 0; I != Terms.size(); ++I) {
+    const auto Product = Terms[I];
+    if (Ctx.op(Product) != SymOp::Mul || Ctx.numOperands(Product) != 2 ||
+        !Ctx.isConst(Ctx.operand(Product, 0)))
+      continue;
+    const auto Quotient = Ctx.operand(Product, 1);
+    if (Ctx.op(Quotient) != SymOp::UDiv ||
+        !Ctx.isConst(Ctx.operand(Quotient, 1)))
+      continue;
+    const auto Divisor = Ctx.operand(Quotient, 1);
+    const size_t Words = (size_t(Ctx.width(Root)) + 63) / 64;
+    const size_t Bytes =
+        2 * Words * sizeof(uint64_t) + Terms.size() * sizeof(SymRef);
+    if (Storage < Bytes || !Budget.consume(2 * Words + Terms.size()))
+      return Root;
+    Storage -= Bytes;
+    if (!Ctx.constValue(Divisor).isZero() &&
+        Ctx.constValue(Ctx.operand(Product, 0)) == -Ctx.constValue(Divisor)) {
+      llvm::SmallVector<SymRef, 8> Dividend;
+      for (unsigned J = 0; J != Terms.size(); ++J)
+        if (J != I)
+          Dividend.push_back(Terms[J]);
+      const auto Input =
+          Dividend.size() == 1 ? Dividend.front() : Ctx.mkAdd(Dividend);
+      if (Ctx.operand(Quotient, 0) == Input)
+        return Ctx.mkURem(Input, Divisor);
+    }
+  }
+  return Root;
+}
+
 SymRef projectBitWindow(SymContext &Ctx, SymRef Source, unsigned Low,
                         unsigned Width, WorkBudget &Budget, size_t &Storage,
                         unsigned Depth = 0) {
@@ -468,6 +579,8 @@ SymRef finishLocalReadings(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     for (auto Child : Ctx.operands(R))
       Inputs.push_back(Done.lookup(Child.index()));
     auto Value = Inputs.empty() ? R : Ctx.rebuild(R, Inputs);
+    Value = foldReciprocalDivision(Ctx, Value, Budget, Storage);
+    Value = foldQuotientRemainder(Ctx, Value, Budget, Storage);
     Value = foldObservedWindow(Ctx, Value, Budget, Storage);
     Value = foldKnownBits(Ctx, Value, Known, Budget, Storage);
     Done[Index] = foldConditionalControls(Ctx, Value, Budget, Storage);
@@ -1744,6 +1857,8 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       continue;
     }
     Rebuilt = foldLiteralXorEquality(Ctx, Rebuilt, Budget, RefinementStorage);
+    Rebuilt = foldReciprocalDivision(Ctx, Rebuilt, Budget, RefinementStorage);
+    Rebuilt = foldQuotientRemainder(Ctx, Rebuilt, Budget, RefinementStorage);
     Rebuilt = foldObservedWindow(Ctx, Rebuilt, Budget, RefinementStorage);
     Rebuilt = foldKnownBits(Ctx, Rebuilt, Known, Budget, RefinementStorage);
     Rebuilt = foldConditionalControls(Ctx, Rebuilt, Budget, RefinementStorage);
