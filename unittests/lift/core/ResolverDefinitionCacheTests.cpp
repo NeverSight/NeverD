@@ -9,8 +9,11 @@
 
 #include "gtest/gtest.h"
 #include "jumptable/ResolverDefinitionCache.h"
+#include "jumptable/ResolverExactDefinitions.h"
 
+#include <algorithm>
 #include <array>
+#include <tuple>
 #include <vector>
 
 using namespace neverd;
@@ -147,4 +150,60 @@ TEST(ResolverDefinitionCache,
   EXPECT_EQ(search(Replacement, Blocks[1], 32, NdVar::tmp(0, 8), 100).Position,
             2);
   EXPECT_EQ(search(Cache, Blocks[0], 32, NdVar::tmp(0, 8), 100).Position, 1);
+}
+
+TEST(ResolverExactDefinitions, EveryColdAndWarmScanBoundaryMatchesLinearSearch) {
+  std::vector<LowOp> Ops(9);
+  Ops[1].Output = NdVar::reg(0, 1);
+  Ops[3].Output = NdVar::tmp(0, 8);
+  Ops[5].Output = NdVar::reg(0, 8);
+  Ops[7].Output = NdVar::reg(16, 4);
+  for (const auto Size : {size_t{0}, Ops.size()}) {
+    const llvm::ArrayRef<LowOp> Prefix(Ops.data(), Size);
+    detail::ResolverExactDefinitions Warm;
+    detail::ResolverExactDefinitions Fallback(0);
+    for (const auto Value : {NdVar{}, NdVar::reg(0, 1), NdVar::reg(0, 8),
+                             NdVar::reg(1, 1), NdVar::tmp(0, 8),
+                             NdVar::reg(16, 8)}) {
+      for (int From = -2; From <= static_cast<int>(Size) + 1; ++From) {
+        for (size_t Budget = 0; Budget <= Size + 1; ++Budget) {
+          SCOPED_TRACE(::testing::Message()
+                       << Size << ':' << From << ':' << Budget << ':'
+                       << Value.Offset << ':' << Value.Size);
+          auto Run = [&](auto &&Search) {
+            size_t Remaining = Budget;
+            bool Complete = true;
+            auto Consume = [&](size_t Work) {
+              if (Work > Remaining) {
+                Remaining = 0;
+                Complete = false;
+                return false;
+              }
+              Remaining -= Work;
+              return true;
+            };
+            const int Position = Search(Consume);
+            return std::make_tuple(Position, Remaining, Complete);
+          };
+          const auto Expected = Run([&](auto &Consume) {
+            for (int I = std::min(From, static_cast<int>(Size) - 1); I >= 0;
+                 --I) {
+              if (!Consume(1))
+                return -1;
+              if (Prefix[I].Output.Space == Value.Space &&
+                  Prefix[I].Output.Offset == Value.Offset)
+                return I;
+            }
+            return -1;
+          });
+          detail::ResolverExactDefinitions Cold;
+          for (auto *Index : {&Cold, &Warm, &Fallback})
+            EXPECT_EQ(Run([&](auto &Consume) {
+                        return Index->previous(Prefix, From, Value, Consume);
+                      }),
+                      Expected);
+        }
+      }
+    }
+  }
 }

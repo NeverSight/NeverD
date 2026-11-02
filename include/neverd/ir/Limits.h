@@ -317,6 +317,11 @@ inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 128;
 // lib/ir/low/jumptable/ResolverDefinitionCache.h
 inline constexpr size_t kResolverDefinitionCacheCapacity = 4096;
 
+// lib/ir/low/jumptable/ResolverExactDefinitions.h
+// Bound the query-local index to at most 2 MiB of position storage. Larger
+// prefixes keep the original metered scan; this never limits proof coverage.
+inline constexpr size_t kResolverExactDefinitionIndexMaxOps = 65536;
+
 // lib/ir/low/jumptable/ResolverMemoryDefinitionCache.h
 inline constexpr size_t kResolverMemoryDefinitionCacheCapacity = 1024;
 
