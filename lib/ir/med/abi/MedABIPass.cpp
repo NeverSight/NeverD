@@ -2872,6 +2872,9 @@ void recoverCallAbi(
       // the real variadic arguments so the callee reads the wrong slots
       // (printf("p[%d]=%.3f", i, v) then prints "p[0]=0.000").
       std::vector<MedVar> FoundFP;
+      // Win64's integer and floating registers share argument positions.
+      const bool PositionalFP =
+          PositionalSlots && !CI.ArgumentsInCalleeRegisterOrder;
       // The pre-SSA read summary already proves a complete scalar register
       // prefix with no vector inputs. Missing omitted-callee FP metadata
       // cannot turn residual vector state into another argument. A count-only
@@ -2979,6 +2982,31 @@ void recoverCallAbi(
         };
         for (int K = 0; K < FPLimit; ++K) {
           uint64_t Reg = FPRegs[K];
+          int Position = K;
+          if (PositionalFP) {
+            const auto Slot = llvm::find(FPParamRegs, Reg);
+            if (Slot == FPParamRegs.end())
+              continue;
+            Position = static_cast<int>(Slot - FPParamRegs.begin());
+            if (Position >= static_cast<int>(IntParamRegs.size()) ||
+                Position >= MaxArgs)
+              continue;
+            if (FoundMask[Position]) {
+              const bool SpeculativeIncoming =
+                  Found[Position].Kind == MedVar::Param &&
+                  PromoteParams.count(Found[Position].RegOff) &&
+                  !PromotedBefore.count(Found[Position].RegOff) &&
+                  llvm::none_of(Func.Params, [&](const MedVar &P) {
+                    return P.RegOff == Found[Position].RegOff;
+                  });
+              if ((SummarizedIntegerOperands &&
+                   Position < Op.CalleeRegisterArgs) ||
+                  (!SpeculativeIncoming &&
+                   !callLeftovers().containsForRegister(
+                       Found[Position], IntParamRegs[Position])))
+                continue;
+            }
+          }
           std::optional<MedVar> V;
           va_t ReachingWriteAddr = 0;
           const MedOp *Clobber = nullptr;
@@ -3047,7 +3075,7 @@ void recoverCallAbi(
             LiveIn.Size = ScalarBytes ? ScalarBytes : FwdFPArgSize;
             LiveIn.TheArch = TheArch;
             V = LiveIn;
-            auto &Promoted = PromoteFPParams[K];
+            auto &Promoted = PromoteFPParams[Position];
             if (Promoted.Size < LiveIn.Size)
               Promoted = LiveIn;
             if (ScalarBytes) {
@@ -3058,14 +3086,29 @@ void recoverCallAbi(
               Width = std::max(Width, ScalarBytes);
             }
           }
-          if (!V)
-            break; // FP arguments are consecutive from FP-argument 0
+          if (!V) {
+            if (PositionalFP)
+              continue;
+            break; // Independent FP banks use a consecutive prefix.
+          }
           if (!KnownFPCallee && Op.NumInputs == 1 && !Op.SourceCallHint &&
               !(VectorArgumentCallees &&
                 VectorArgumentCallees->count(CI.TargetAddr)) &&
-              callLeftovers().containsForRegister(*V, Reg))
+              callLeftovers().containsForRegister(*V, Reg)) {
+            if (PositionalFP)
+              continue;
             break;
-          FoundFP.push_back(*V);
+          }
+          if (PositionalFP) {
+            if (FoundMask[Position] && Found[Position].Kind == MedVar::Param &&
+                !PromotedBefore.count(Found[Position].RegOff))
+              PromoteParams.erase(Found[Position].RegOff);
+            Found[Position] = *V;
+            FoundMask[Position] = true;
+            FromStackScan[Position] = false;
+          } else {
+            FoundFP.push_back(*V);
+          }
         }
       }
 
@@ -3081,7 +3124,8 @@ void recoverCallAbi(
       // emit them.
       // The stack offset of each value the overflow run appends to FoundFP.
       std::vector<int64_t> FPOverflowOffsets;
-      if (CI.IsIndirect && !FPStackByOff.empty() && !FPParamRegs.empty() &&
+      if (!PositionalFP && CI.IsIndirect && !FPStackByOff.empty() &&
+          !FPParamRegs.empty() &&
           static_cast<int>(FoundFP.size()) ==
               static_cast<int>(FPParamRegs.size())) {
         const int NumRegArgSlots = static_cast<int>(IntParamRegs.size());
@@ -3183,12 +3227,12 @@ void recoverCallAbi(
       const bool EveryIntegerPosition =
           !CI.IsIndirect && VectorArgumentCallees &&
           VectorArgumentCallees->count(CI.TargetAddr);
-      int IntCap =
-          SummarizedRegisterPadding   ? NumIntRegArgs
-          : SummarizedIntegerOperands ? Op.CalleeRegisterArgs
-          : (CalleeHasFP && CalleeRegArgs >= 0 && !EveryIntegerPosition)
-              ? CalleeRegArgs
-              : NumIntRegArgs;
+      int IntCap = SummarizedRegisterPadding   ? NumIntRegArgs
+                   : SummarizedIntegerOperands ? Op.CalleeRegisterArgs
+                   : (!PositionalFP && CalleeHasFP && CalleeRegArgs >= 0 &&
+                      !EveryIntegerPosition)
+                       ? CalleeRegArgs
+                       : NumIntRegArgs;
 
       // Where 64-bit arguments are pair-aligned (ARM AAPCS: an even-odd
       // register pair, an 8-byte aligned stack slot), argument lanes are not
