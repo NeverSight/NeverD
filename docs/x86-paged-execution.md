@@ -108,6 +108,55 @@ A fault whose IDT entry subsequently hits a backing failure still consumes its a
 independently of the final status. Full fault and backing details
 are available through the context's `lastResult()` and `lastError()`.
 
+## Faultable LSS, LFS and LGS
+
+The paged V6 binding executes 16/32/64-bit far-pointer loads through the shared
+segment owner. Bind `X64PagedExecutionOptions::FarPointerProfile` to the target
+processor's qualified `OffsetFirst` order. It reads the offset, then the
+selector, then reads and validates the descriptor before its conditional
+qword accessed-bit update. The profile has been compared with original bytes
+on both local Intel hybrid core types. It is an explicit target binding, not a
+claim about every processor. Missing binding stops after instruction fetch and
+before operand access. The usual alignment-priority binding also applies.
+
+Operand reads use the current CPL and the original stack/data address role;
+descriptors use implicit supervisor accesses, including SMAP restrictions.
+SP/BP select #SS for noncanonical stack addresses, while R12/R13 remain data
+defaults. FS/GS overrides select data access. Single CS/DS/ES/SS overrides are
+admitted and ignored in 64-bit mode; they do not change the original default
+fault class. Duplicate prefix groups, forbidden LOCK/REP forms, register
+operands and incomplete encodings remain refused by the shared byte grammar.
+Each address32 pointer field wraps before adding the old FS/GS base, including
+EIP-relative addressing. Source registers and bases are captured before either
+destination changes.
+
+Validation covers CPL/RPL/DPL, data and readable/conforming code types, GDT/LDT
+bounds, descriptor canonicality, presence and accessed writes. Null SS is
+accepted at CPL0..2 only with matching RPL; CPL3 gets #GP(0). Null FS/GS uses
+the export's existing `null_segment_base_policy` (`clear` or `preserve`). An
+unbound policy refuses a null load after operand reads; it does not invent a
+guest exception. Null loads never consult the descriptor tables. Inactive
+cache attributes are not asserted equal to KVM's normalized inactive values.
+
+Both the GPR destination and segment cache commit only on success. A word GPR
+write preserves its upper bits; a dword write clears the upper half using the
+shared register definition. Faults retain the original PC and use the common
+IDT/#DF/shutdown owner. Ordinary physical backing stops leave both destinations
+and the instruction budget unchanged; an architectural fault still consumes
+an attempt if its handler entry then encounters missing backing. LSS does not
+start or renew MOV/POP-SS inhibition. The existing scheduler consumes incoming
+inhibition after the attempt and can deliver IRQ/NMI immediately afterward.
+
+The original-CPU matrix covers competing faults, cross-page pointer and
+descriptor accesses, accessed writes to read-only pages, aliased pointer/table
+storage, null selectors, privilege combinations and both hybrid core classes.
+Additional generated programs repair a missing page in a #PF handler, remove
+the error code, IRET and retry each of LSS/LFS/LGS. Address-wrap and pending-event
+programs compare complete usable caches, register state, fault frames and
+ordinary RAM. The portable runtime path uses scalar IR and callbacks. The
+existing LLVM fork intrinsics and NeverC native builtins remain separate native
+execution capabilities and need no source change for this runtime extension.
+
 ## Faultable IRET, IRETD and IRETQ
 
 Canonical `66 cf`, `cf` and `48 cf` use the same descriptor, return-frame,
@@ -314,7 +363,8 @@ comparisons overall. The RETF subset contains 27,648 comparisons, including
 SDKs; each SDK's 44 efficient-core exports also match its performance-core
 outputs. The 186 earlier no-fault C/header outputs remain byte-identical.
 
-This binding owns scalar commits and faultable long-mode interrupt/far returns.
+This binding owns scalar commits, long-mode far-pointer loads and faultable
+long-mode interrupt/far returns.
 REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, SMI/AEX, legacy i386 dispatch,
@@ -325,6 +375,6 @@ or RTM regions is explicitly rejected. The [no-fault scheduler](x86-event-schedu
 retains its separate successful-RAM contract. LLVM release/pin completion is not implied.
 
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
-volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET, volume 3A paging, exception priority
+volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS, volume 3A paging, exception priority
 and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

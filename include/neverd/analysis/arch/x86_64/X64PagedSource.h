@@ -49,6 +49,10 @@ enum class X64PagedAccess : uint64_t {
   InterruptReturn,
   /// Address is the RETF field width; size is the unsigned parameter discard.
   FarReturn,
+  /// Original bytes come from the authenticated step. Address transports the
+  /// source null-base policy: 0 unbound, 1 clear, 2 preserve; size is zero.
+  /// Bit 3 remains the scalar stack-access flag, so new kinds start at 16.
+  FarPointerLoad = 16,
 };
 
 struct X64PagedExchange {

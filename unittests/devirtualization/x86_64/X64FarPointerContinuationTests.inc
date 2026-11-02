@@ -315,19 +315,20 @@ int main(void) {
 
 TEST_F(X64ContinuationSourceTest,
        FarPointerRetainsOnlyCompleteSupportedEncodings) {
-  for (uint8_t Opcode : {0xb2, 0xb4, 0xb5}) {
-    std::vector<uint8_t> Prefixes{0x64, 0x66, 0x67};
-    do {
-      auto Code = Prefixes;
-      Code.insert(Code.end(), {0x4f, 0x0f, Opcode, 0x44, 0xac, 0xf9});
-      auto Units =
-          buildX64ContinuationSource(image(Code), {0x1000}, eventOptions());
-      ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
-      ASSERT_EQ(Units->size(), 1u);
-      EXPECT_FALSE(Units->front().RequiresNativeExecution);
-      EXPECT_EQ(Units->front().Bytes, Code);
-    } while (std::next_permutation(Prefixes.begin(), Prefixes.end()));
-  }
+  for (uint8_t Opcode : {0xb2, 0xb4, 0xb5})
+    for (uint8_t Segment : {0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65}) {
+      std::vector<uint8_t> Prefixes{Segment, 0x66, 0x67};
+      do {
+        auto Code = Prefixes;
+        Code.insert(Code.end(), {0x4f, 0x0f, Opcode, 0x44, 0xac, 0xf9});
+        auto Units =
+            buildX64ContinuationSource(image(Code), {0x1000}, eventOptions());
+        ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+        ASSERT_EQ(Units->size(), 1u);
+        EXPECT_FALSE(Units->front().RequiresNativeExecution);
+        EXPECT_EQ(Units->front().Bytes, Code);
+      } while (std::next_permutation(Prefixes.begin(), Prefixes.end()));
+    }
   for (std::vector<uint8_t> Bad : {std::vector<uint8_t>{0xf0, 0x0f, 0xb4, 3},
                                    {0xf2, 0x0f, 0xb4, 3},
                                    {0xf3, 0x0f, 0xb4, 3},
@@ -335,7 +336,7 @@ TEST_F(X64ContinuationSourceTest,
                                    {0x67, 0x67, 0x0f, 0xb4, 3},
                                    {0x64, 0x65, 0x0f, 0xb4, 3},
                                    {0x48, 0x66, 0x0f, 0xb4, 3},
-                                   {0x2e, 0x0f, 0xb4, 3},
+                                   {0x2e, 0x64, 0x0f, 0xb4, 3},
                                    {0x0f, 0xb4, 0xc3},
                                    {0x0f, 0xb2, 0xc3},
                                    {0x0f, 0xb4, 0x04},

@@ -11,8 +11,11 @@
 #include "neverd/analysis/arch/x86_64/X64PagedEventDelivery.h"
 
 #include "X64ContinuationDelivery.h"
+#include "X64ContinuationEvents.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Errc.h"
@@ -84,7 +87,7 @@ public:
   std::optional<X64ContinuationExitV1> Exit;
   std::optional<X64PagedAlignmentPriority> AlignmentPriority;
   bool Stopped = false;
-  bool ReturnEffects = false;
+  bool InstructionEffects = false;
 
   TransitionWriter(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                    const X64ContinuationEventV1 &Event, uint32_t MXCSRMask)
@@ -165,6 +168,18 @@ public:
     }
   }
 
+  void write(NdVar Destination, NdVar V) {
+    assert(Destination.isReg() && Destination.Offset <= x86reg::R15 &&
+           Destination.Offset % 8 == 0 && Destination.Size == V.Size &&
+           (V.Size == 2 || V.Size == 4 || V.Size == 8));
+    // A dword GPR write clears its upper half; a word write preserves it.
+    store(offsetof(X64ContinuationStateV1, GPR) + Destination.Offset,
+          getTargetRegInfo(Arch::X64).writeZeroExtends(Destination.Offset,
+                                                       Destination.Size)
+              ? NdVar::scalar(value(V), 8)
+              : V);
+  }
+
   NdVar eventValue(NdVar, uint64_t Offset, uint16_t Bytes) {
     auto V = temporary(Bytes);
     if (!Stopped) {
@@ -220,21 +235,22 @@ public:
 
   void eventStack(NdVar CPL) {
     if (!Stopped) {
-      Frame = true;
-      FrameCPL = value(CPL);
+      Explicit = Stack = true;
+      AccessCPL = value(CPL);
     }
   }
 
   void beginReturn() {
     if (!Stopped) {
       State.NMIBlocked = 0;
-      ReturnEffects = true;
+      InstructionEffects = true;
     }
   }
 
-  void returnStackAccess(bool Enable) {
-    Frame = Enable;
-    FrameCPL = State.Core.CS.Selector & 3;
+  void instructionAccess(bool Enable, bool Stack = false) {
+    Explicit = Enable;
+    this->Stack = Enable && Stack;
+    AccessCPL = State.Core.CS.Selector & 3;
   }
 
   void invalidateMonitor(std::optional<NdVar> = std::nullopt) {
@@ -276,11 +292,11 @@ private:
     const translate::X86LinearAccess Access{
         value(*Inputs.begin()),
         Write ? MemoryAccessKind::Write : MemoryAccessKind::Read,
-        Frame ? FrameCPL : uint8_t(0), !Frame, Frame};
-    const bool AlignmentFault = AlignmentPriority && Frame && FrameCPL == 3 &&
-                                (Memory.controls().CR0 & 0x40000) &&
-                                (Memory.controls().RFlags & 0x40000) &&
-                                (Access.Address & (Size - 1));
+        Explicit ? AccessCPL : uint8_t(0), !Explicit, Stack};
+    const bool AlignmentFault =
+        AlignmentPriority && Explicit && AccessCPL == 3 &&
+        (Memory.controls().CR0 & 0x40000) &&
+        (Memory.controls().RFlags & 0x40000) && (Access.Address & (Size - 1));
     if (AlignmentFault &&
         *AlignmentPriority == X64PagedAlignmentPriority::BeforePaging) {
       auto Checked =
@@ -322,7 +338,7 @@ private:
         Value |= uint64_t(Bytes[I]) << (I * 8);
       Values[Output.Offset] = Value;
     } else if (AlignmentPriority) {
-      ReturnEffects = true;
+      InstructionEffects = true;
     }
   }
 
@@ -330,8 +346,8 @@ private:
   X86PagedMemory &Memory;
   const X64ContinuationEventV1 &Event;
   llvm::SmallVector<uint64_t> Values;
-  bool Frame = false;
-  uint8_t FrameCPL = 0;
+  bool Explicit = false, Stack = false;
+  uint8_t AccessCPL = 0;
 };
 
 bool contributory(uint8_t Vector) {
@@ -436,7 +452,7 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   Result.BackingFault = W.Result.BackingFault;
   Result.Completed = W.Exit == X64ContinuationExitV1::PrivilegeReturn;
   Result.InstructionAttempted =
-      Result.Completed || bool(Result.Exception) || W.ReturnEffects;
+      Result.Completed || bool(Result.Exception) || W.InstructionEffects;
   if (Result.Completed) {
     State = Next;
     auto Controls = Memory.controls();
@@ -467,6 +483,39 @@ returnX64PagedFar(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   return returnFrame(
       State, Memory, FieldBytes, Discard, false, AlignmentPriority,
       Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
+}
+
+llvm::Expected<X64PagedInstructionTransitionResult>
+loadX64PagedFarPointer(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                       llvm::ArrayRef<uint8_t> Instruction,
+                       X64PagedAlignmentPriority AlignmentPriority,
+                       X64PagedFarPointerProfile Profile,
+                       std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
+  const auto Pointer = detail::x64FarPointerLoad(Instruction);
+  if (!Pointer)
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "invalid paged far-pointer encoding");
+  assert(Profile == X64PagedFarPointerProfile::OffsetFirst);
+  auto Next = State;
+  const X64ContinuationEventV1 Event{};
+  TransitionWriter W(Next, Memory, Event, 0);
+  W.AlignmentPriority = AlignmentPriority;
+  detail::X64ContinuationEvents<TransitionWriter> Transfer(
+      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
+  Transfer.farPointerLoad(*Pointer,
+                          State.Core.Core.Core.Core.PC + Instruction.size(),
+                          NullBasePolicy);
+  if (W.Error)
+    return std::move(*W.Error);
+  X64PagedInstructionTransitionResult Result;
+  Result.Exception = W.Fault;
+  Result.BackingFault = W.Result.BackingFault;
+  Result.Completed = W.Exit == X64ContinuationExitV1::Continue;
+  Result.InstructionAttempted =
+      Result.Completed || bool(Result.Exception) || W.InstructionEffects;
+  if (Result.Completed)
+    State = Next;
+  return Result;
 }
 
 } // namespace neverd::analysis

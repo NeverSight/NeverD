@@ -3559,3 +3559,21 @@ confirms that successful LSS does not start or renew MOV/POP-SS inhibition.
 Its expanded native scheduler oracle covers all three widths and both local
 core classes. Existing scheduler semantics are retained; this validation does
 not add paged segment loads or close the remaining global state-model gaps.
+
+
+## Paged far-pointer loads (November 2)
+
+The V6 paged executor now admits long-mode LSS/LFS/LGS through the shared
+segment semantics, including 16/32/64-bit destinations, all privilege levels,
+GDT/LDT access, null-selector policies, accessed writes and ordered #GP/#SS/#NP/
+#PF/#AC faults. Both C routes use the same runtime owner and qualified
+`OffsetFirst` processor profile. Single ignored long-mode CS/DS/ES/SS overrides
+are admitted by the shared raw grammar. IRQ/NMI scheduling and a generated
+page-repair/IRET/retry handler compose with the loads. See the
+[paged far-pointer contract](x86-paged-execution.md#faultable-lss-lfs-and-lgs).
+
+The earlier LSS audit above remains a historical scheduler qualification; this
+change adds the previously refused paged instruction execution. It does not
+complete legacy i386 dispatch, SMM/SGX software environments or partial-progress
+instructions. The final LLVM release/pin remains deferred until those global
+contracts are completed.

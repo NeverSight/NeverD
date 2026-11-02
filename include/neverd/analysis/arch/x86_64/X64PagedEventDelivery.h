@@ -15,6 +15,7 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/translate/X86/X86PagedMemory.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
@@ -39,6 +40,11 @@ enum class X64PagedFarReturnProfile : uint8_t {
   SelectorFirst,
   SelectorFirstTruncatedIP,
 };
+
+/// Bound order for LSS/LFS/LGS: read offset, then selector, then validate and
+/// update the descriptor as a qword. Descriptor reads precede RPL checks.
+/// Qualified on both local hybrid core types, never inferred from the host.
+enum class X64PagedFarPointerProfile : uint8_t { OffsetFirst };
 
 enum class X64PagedEventStatus : uint8_t {
   Delivered,
@@ -83,15 +89,17 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State,
                      translate::X86PagedMemory &Memory,
                      const X64ContinuationEventV1 &Event, uint32_t MXCSRMask);
 
-struct X64PagedReturnResult {
+struct X64PagedInstructionTransitionResult {
   bool Completed = false;
-  /// Completion, an architectural fault, or a retained return effect consumes
-  /// an attempt. A backing stop before RETF's first descriptor write does not.
+  /// Completion, an architectural fault, or a retained instruction effect
+  /// consumes an attempt. Page-table A/D effects alone do not. An ordinary
+  /// operand or descriptor backing stop before instruction effects does not.
   bool InstructionAttempted = false;
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
 };
 
+using X64PagedReturnResult = X64PagedInstructionTransitionResult;
 using X64PagedInterruptReturnResult = X64PagedReturnResult;
 
 /// Execute an authenticated 64-bit-mode IRET/IRETD/IRETQ after instruction
@@ -114,6 +122,17 @@ returnX64PagedFar(X64ContinuationStateV6 &State,
                   translate::X86PagedMemory &Memory, uint16_t FieldBytes,
                   uint16_t Discard, X64PagedAlignmentPriority AlignmentPriority,
                   X64PagedFarReturnProfile Profile);
+
+/// Execute an authenticated 64-bit-mode LSS/LFS/LGS. Explicit operands use
+/// the current CPL; descriptors use implicit supervisor privilege. Both
+/// destinations commit together. Fault delivery belongs to the executor.
+llvm::Expected<X64PagedInstructionTransitionResult>
+loadX64PagedFarPointer(X64ContinuationStateV6 &State,
+                       translate::X86PagedMemory &Memory,
+                       llvm::ArrayRef<uint8_t> Instruction,
+                       X64PagedAlignmentPriority AlignmentPriority,
+                       X64PagedFarPointerProfile Profile,
+                       std::optional<X64NullSegmentBasePolicy> NullBasePolicy);
 
 } // namespace neverd::analysis
 

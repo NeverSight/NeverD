@@ -65,7 +65,7 @@ protected:
   unsigned AddressBits;
   std::optional<NdVar> AccessedAddress;
   std::optional<NdVar> DeliveryExternal;
-  bool Returning = false;
+  bool InstructionDescriptors = false;
 
   static NdVar k(uint64_t V) { return NdVar::scalar(V, 8); }
 
@@ -149,11 +149,11 @@ protected:
   NdVar readStackMemory(NdVar Address, uint16_t Bytes,
                         std::optional<NdVar> When = std::nullopt) {
     if constexpr (Writer::FaultableMemory) {
-      W.returnStackAccess(true);
+      W.instructionAccess(true, true);
       auto Value = When
                        ? W.loadMemoryIf(*When, Address, NdVar::scalar(0, Bytes))
                        : op(NdOp::LOAD, {Address}, Bytes);
-      W.returnStackAccess(false);
+      W.instructionAccess(false);
       return Bytes == 8 ? Value : op(NdOp::INT_ZEXT, {Value});
     } else {
       return readMemory(Address, Bytes);
@@ -188,7 +188,7 @@ protected:
       W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), Base));
     const auto Address = op(NdOp::INT_ADD, {Base, Index});
     if constexpr (Writer::FaultableMemory) {
-      if (Returning) {
+      if (InstructionDescriptors) {
         // System descriptors are implicit supervisor accesses. A null return
         // SS must not read the CS descriptor again or acquire an accessed
         // write.
@@ -213,7 +213,7 @@ protected:
 
   void accessed(Descriptor D) {
     if constexpr (Writer::FaultableMemory) {
-      if (Returning) {
+      if (InstructionDescriptors) {
         W.storeIf(eq(masked(D.Value, uint64_t{1} << 40), k(0)), D.Address,
                   op(NdOp::INT_OR, {D.Value, k(uint64_t{1} << 40)}));
         return;

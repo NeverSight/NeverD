@@ -4,8 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Execute generated scalar steps and interrupt returns over explicit paged
-/// RAM.
+/// Execute generated scalar steps, segment loads and returns over explicit
+/// paged RAM.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
 #define NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
@@ -34,6 +34,8 @@ struct X64PagedExecutionOptions {
   /// Required before RETF accesses its frame. Includes the target processor's
   /// order of compatibility-IP truncation and canonical-address validation.
   std::optional<X64PagedFarReturnProfile> FarReturnProfile;
+  /// Required before LSS/LFS/LGS reads either pointer field or descriptor.
+  std::optional<X64PagedFarPointerProfile> FarPointerProfile;
 };
 
 struct X64PagedExecutionResult {
@@ -49,7 +51,9 @@ struct X64PagedExecutionResult {
 /// One confined CPU and owned ordinary RAM, without external writes while a
 /// step executes. Prepared stores are committed only after the complete scalar
 /// instruction succeeds. IRET/RETF retain ordered descriptor writes, and IRET
-/// also retains NMI unblocking on failure. This is not a REP/gather/XSAVE
+/// also retains NMI unblocking on failure. LSS/LFS/LGS stage both destinations
+/// until their pointer reads, descriptor checks and accessed writes succeed.
+/// This is not a REP/gather/XSAVE
 /// progress model. Generated bodies/validators and original bytes belong to the
 /// same source export; passing unrelated or arbitrary function pointers
 /// violates this ABI.

@@ -45,6 +45,7 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using Base::either;
   using Base::eq;
   using Base::faultIf;
+  using Base::InstructionDescriptors;
   using Base::k;
   using Base::less;
   using Base::load;
@@ -58,7 +59,6 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using Base::returnCode;
   using Base::returnData;
   using Base::returnedData;
-  using Base::Returning;
   using Base::returnStack;
   using Base::segment;
   using Base::segmentAttributes;
@@ -91,6 +91,10 @@ public:
 
   void farPointerLoad(const X64FarPointerLoad &F, uint64_t NextPC,
                       std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
+    if constexpr (Writer::FaultableMemory) {
+      DeliveryExternal = k(0);
+      InstructionDescriptors = true;
+    }
     auto Address = k(uint64_t(F.Displacement));
     if (F.Relative)
       Address = op(NdOp::INT_ADD, {Address, k(NextPC)});
@@ -118,11 +122,20 @@ public:
       Address = op(NdOp::INT_ADD, {Address, Base});
       SelectorAddress = op(NdOp::INT_ADD, {SelectorAddress, Base});
     }
-    range(Address, F.Bytes - 1);
-    range(SelectorAddress, 1);
+    if constexpr (!Writer::FaultableMemory) {
+      range(Address, F.Bytes - 1);
+      range(SelectorAddress, 1);
+    } else {
+      // Only SP/BP select the default stack segment. R12/R13 use DS despite
+      // sharing their low encoding bits; FS/GS overrides select data access.
+      const bool Stack = !F.Segment && (F.Base == 4 || F.Base == 5);
+      W.instructionAccess(true, Stack);
+    }
     const auto Value = op(NdOp::LOAD, {Address}, F.Bytes);
     const auto Selector =
         op(NdOp::INT_ZEXT, {op(NdOp::LOAD, {SelectorAddress}, 2)});
+    if constexpr (Writer::FaultableMemory)
+      W.instructionAccess(false);
     const bool SS = F.DestinationSegment == X64FarPointerSegment::SS;
     const bool GS = F.DestinationSegment == X64FarPointerSegment::GS;
     const uint64_t Offset = SS   ? offsetof(V5, SS)
@@ -135,11 +148,20 @@ public:
         GS ? offsetof(State, GSBase) : offsetof(State, FSBase);
     const unsigned UnusableBit = SS ? 2 : GS ? 32 : 16;
     const auto Null = eq(masked(Selector, 0xfffc), k(0));
+    NdVar CPL = k(0);
+    if constexpr (Writer::FaultableMemory)
+      CPL = masked(load(offsetof(V5, CS) + offsetof(Segment, Selector), 2), 3);
     if (SS || NullBasePolicy) {
-      // CPL0 permits only null SS selector 0. A null load never consults the
-      // GDT/LDT, even when their addresses are unmapped or noncanonical.
-      if (SS)
-        W.rejectIf(both(Null, ne(Selector, k(0))));
+      // Null SS is permitted at CPL0..2 with RPL=CPL. A null load never
+      // consults the GDT/LDT, even when their addresses are unmapped or
+      // noncanonical.
+      if (SS) {
+        if constexpr (Writer::FaultableMemory)
+          faultIf(both(Null, either(eq(CPL, k(3)), ne(Selector, CPL))), 13,
+                  k(0));
+        else
+          W.rejectIf(both(Null, ne(Selector, k(0))));
+      }
       W.exitIf(Null, [&] {
         if (!SS && *NullBasePolicy == X64NullSegmentBasePolicy::Clear)
           W.store(BaseOffset, k(0));
@@ -156,7 +178,23 @@ public:
     }
     const auto D = descriptor(Selector);
     const auto Access = shifted(D.Value, 40);
-    if (SS) {
+    if constexpr (Writer::FaultableMemory) {
+      const auto Error = masked(Selector, 0xfffc);
+      const auto DPL = masked(shifted(Access, 5), 3);
+      if (SS) {
+        faultIf(either(ne(masked(Selector, 3), CPL),
+                       either(ne(masked(Access, 0x1a), k(0x12)), ne(DPL, CPL))),
+                13, Error);
+      } else {
+        faultIf(either(eq(masked(Access, 0x10), k(0)),
+                       eq(masked(Access, 0x0a), k(8))),
+                13, Error);
+        faultIf(both(ne(masked(Access, 12), k(12)),
+                     either(less(DPL, masked(Selector, 3)), less(DPL, CPL))),
+                13, Error);
+      }
+      faultIf(eq(masked(Access, 0x80), k(0)), SS ? 12 : 11, Error);
+    } else if (SS) {
       W.rejectIf(ne(masked(Selector, 3), k(0)));
       // Present writable data, DPL=CPL=0; expand-down and A are independent.
       W.rejectIf(ne(masked(Access, 0xfa), k(0x92)));
@@ -190,7 +228,7 @@ public:
   std::vector<X64ContinuationCompatibilityChoice> iret(uint16_t Bytes) {
     if constexpr (Writer::FaultableMemory) {
       DeliveryExternal = k(0);
-      Returning = true;
+      InstructionDescriptors = true;
       W.beginReturn();
     }
     faultIf(ne(masked(load(offsetof(State, RFlags)), 0x4000), k(0)), 13, k(0));
@@ -296,7 +334,7 @@ public:
             bool TruncateCompatibilityIP = false) {
     if constexpr (Writer::FaultableMemory) {
       DeliveryExternal = k(0);
-      Returning = true;
+      InstructionDescriptors = true;
     }
     const auto SP = load(offsetof(State, GPR) + x86reg::RSP);
     NdVar PC, CS;

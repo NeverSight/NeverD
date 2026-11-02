@@ -158,25 +158,30 @@ protected:
     return Image;
   }
 
-  void compile(const std::vector<uint8_t> &Code, bool LLVM,
-               const std::string &Optimization, Run &Driver,
-               const std::vector<uint64_t> &Addresses = {0x1000},
-               const std::string &Compiler = NEVERD_TEST_CLANG,
-               uint64_t Base = 0x1000, Schedule *Scheduled = nullptr) {
+  void compile(
+      const std::vector<uint8_t> &Code, bool LLVM,
+      const std::string &Optimization, Run &Driver,
+      const std::vector<uint64_t> &Addresses = {0x1000},
+      const std::string &Compiler = NEVERD_TEST_CLANG, uint64_t Base = 0x1000,
+      Schedule *Scheduled = nullptr,
+      std::optional<X64NullSegmentBasePolicy> NullBasePolicy = std::nullopt) {
     llvm::json::Array PCs;
     for (auto PC : Addresses)
       PCs.push_back(PC);
     std::string Request;
     llvm::raw_string_ostream OS(Request);
-    OS << llvm::formatv("{0}",
-                        llvm::json::Value(llvm::json::Object{
-                            {"profile", "kernel-events-v6"},
-                            {"mxcsr_mask", "0xffff"},
-                            {"paging_address_bits", 48},
-                            {"paged_memory", true},
-                            {"scheduled_events", Scheduled != nullptr},
-                            {"follow_internal_calls", Scheduled != nullptr},
-                            {"instructions", std::move(PCs)}}));
+    llvm::json::Object Settings{{"profile", "kernel-events-v6"},
+                                {"mxcsr_mask", "0xffff"},
+                                {"paging_address_bits", 48},
+                                {"paged_memory", true},
+                                {"scheduled_events", Scheduled != nullptr},
+                                {"follow_internal_calls", Scheduled != nullptr},
+                                {"instructions", std::move(PCs)}};
+    if (NullBasePolicy)
+      Settings["null_segment_base_policy"] =
+          *NullBasePolicy == X64NullSegmentBasePolicy::Clear ? "clear"
+                                                             : "preserve";
+    OS << llvm::formatv("{0}", llvm::json::Value(std::move(Settings)));
     auto Export = exportX64Continuation(image(Code, Base), Request, LLVM);
     ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
     ASSERT_EQ(Export->Source.find("unknown value"), std::string::npos);
@@ -807,6 +812,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
   RecordProperty("software_completion_cpu_comparisons", SoftwareCompletions);
 }
 #endif
+#include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"

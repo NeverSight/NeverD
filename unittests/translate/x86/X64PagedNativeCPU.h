@@ -40,6 +40,7 @@ public:
   kvm_run *Run = nullptr;
   kvm_sregs Initial{};
   uint8_t PhysicalBits = 0;
+  bool SMAP = false;
   unsigned ReturnCoreType = 0;
   int ReturnProcessor = -1;
   std::optional<cpu_set_t> OriginalAffinity;
@@ -99,6 +100,8 @@ public:
     for (unsigned I = 0; I != CPUID->nent; ++I)
       if (CPUID->entries[I].function == 0x80000008)
         PhysicalBits = CPUID->entries[I].eax & 0xff;
+      else if (CPUID->entries[I].function == 7 && !CPUID->entries[I].index)
+        SMAP = CPUID->entries[I].ebx & (1u << 20);
     RunSize = ioctl(KVM, KVM_GET_VCPU_MMAP_SIZE, 0);
     ASSERT_GT(RunSize, 0);
     Run = static_cast<kvm_run *>(

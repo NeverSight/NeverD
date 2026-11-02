@@ -45,7 +45,12 @@ publication remains staged. RETF's compatibility-IP validation differs across
 the qualified hybrid core types, so the profile is explicit and the test oracle
 pins its processor. Scalar rollback cannot erase completed transition effects;
 backing stops after such effects charge an attempt. The existing LowIR remains the arithmetic authority;
-both C routes share an explicit imported-call ABI. Device arrival remains
+both C routes share an explicit imported-call ABI. Faultable LSS/LFS/LGS reuse
+that evaluator and the existing far-pointer template: explicit operand access
+keeps its current CPL and original stack/data fault class, while descriptor
+access remains implicit supervisor. A qualified offset-first profile controls
+reads and qword accessed writes; both destinations publish together. The raw
+byte grammar also owns ignored long-mode segment prefixes. Device arrival remains
 producer-owned. See [paged RAM](x86-paged-memory.md) and
 [generated execution](x86-paged-execution.md); the default generated-C dispatcher
 retains its separate no-fault memory binding.

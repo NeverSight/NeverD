@@ -46,6 +46,10 @@ struct Transaction {
     bool Interrupt;
   };
   std::optional<FrameReturn> Return;
+  struct FarPointerLoad {
+    std::optional<X64NullSegmentBasePolicy> NullBasePolicy;
+  };
+  std::optional<FarPointerLoad> FarPointer;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
 
@@ -76,7 +80,15 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
                                                uint64_t Size, uint64_t Flags) {
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
-  const auto Kind = X64PagedAccess(Flags & 7);
+  const auto Kind = X64PagedAccess(Flags & ~kX64PagedStackAccess);
+  if (Kind == X64PagedAccess::FarPointerLoad) {
+    T.FarPointer.emplace();
+    if (Address)
+      T.FarPointer->NullBasePolicy = Address == 1
+                                         ? X64NullSegmentBasePolicy::Clear
+                                         : X64NullSegmentBasePolicy::Preserve;
+    return 1;
+  }
   if (Kind == X64PagedAccess::InterruptReturn ||
       Kind == X64PagedAccess::FarReturn) {
     T.Return =
@@ -299,6 +311,32 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       return invalid("paged return stopped without an architectural outcome");
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = Returned->Exception;
+  }
+  if (T.FarPointer) {
+    if (!Options.FarPointerProfile)
+      return invalid("paged far-pointer load requires bound access order");
+    auto Loaded = loadX64PagedFarPointer(
+        Next, Memory, Bytes, T.AlignmentPriority, *Options.FarPointerProfile,
+        T.FarPointer->NullBasePolicy);
+    if (!Loaded)
+      return Loaded.takeError();
+    Last.InstructionAttempted = Loaded->InstructionAttempted;
+    if (Loaded->BackingFault) {
+      Last.Exit = uint64_t(X64PagedExit::BackingFault);
+      Last.BackingFault = Loaded->BackingFault;
+      return Last;
+    }
+    if (Loaded->Exception) {
+      T.Access.Status = X86PageWalkStatus::Exception;
+      T.Access.Exception = Loaded->Exception;
+    } else if (Loaded->Completed) {
+      Exit = uint64_t(X64ContinuationExitV1::Continue);
+    } else {
+      // An unbound null-base policy is an explicit refusal, with neither
+      // destination published. It must not become a synthesized guest #GP.
+      Last.Exit = uint64_t(X64ContinuationExitV1::InvalidState);
+      return Last;
+    }
   }
   if (T.Access.Status == X86PageWalkStatus::BackingFault) {
     Last.Exit = uint64_t(X64PagedExit::BackingFault);

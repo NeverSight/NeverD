@@ -43,15 +43,20 @@ x64FarPointerLoad(llvm::ArrayRef<uint8_t> Bytes) {
     return std::nullopt;
   X64FarPointerLoad F;
   size_t P = 0;
-  bool Operand16 = false, Address32 = false;
+  bool Operand16 = false, Address32 = false, SegmentPrefix = false;
   while (P < Bytes.size()) {
     if (Bytes[P] == 0x66 && !Operand16)
       Operand16 = true;
     else if (Bytes[P] == 0x67 && !Address32)
       Address32 = true;
-    else if ((Bytes[P] == 0x64 || Bytes[P] == 0x65) && !F.Segment)
-      F.Segment = Bytes[P] - 0x63;
-    else
+    else if ((Bytes[P] == 0x26 || Bytes[P] == 0x2e || Bytes[P] == 0x36 ||
+              Bytes[P] == 0x3e || Bytes[P] == 0x64 || Bytes[P] == 0x65) &&
+             !SegmentPrefix) {
+      SegmentPrefix = true;
+      // Long mode ignores CS/DS/ES/SS overrides, including for the default
+      // stack operand's canonical-address fault class.
+      F.Segment = Bytes[P] >= 0x64 ? Bytes[P] - 0x63 : 0;
+    } else
       break;
     ++P;
   }

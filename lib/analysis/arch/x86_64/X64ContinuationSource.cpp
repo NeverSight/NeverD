@@ -1522,24 +1522,24 @@ buildInstruction(SpecializationInstruction Instruction,
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
     PagedRoles = detail::x64PagedMemoryRoles(Instruction);
-    if ((!PagedRoles.Supported && !Iret && !FarReturn) || Sysret || Sysenter ||
-        Sysexit || FarPointer)
+    if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer) ||
+        Sysret || Sysenter || Sysexit)
       RequireNative(
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
-          !Iret && !FarReturn &&
+          !Iret && !FarReturn && !FarPointer &&
           !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
       const auto RegisterAllowed = [](NdVar V) {
         return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V));
       };
-      if (!RegisterAllowed(Op.Output))
+      if (!FarPointer && !RegisterAllowed(Op.Output))
         RequireNative("paged scalar execution requires a GPR or flags output");
       for (unsigned I = 0; I != Op.NumInputs; ++I)
-        if (!RegisterAllowed(Op.Inputs[I]))
+        if (!FarPointer && !RegisterAllowed(Op.Inputs[I]))
           RequireNative("paged scalar execution requires GPR or flags inputs");
     }
     if (!Options.ScheduledEvents &&
@@ -1616,7 +1616,7 @@ buildInstruction(SpecializationInstruction Instruction,
       Options.PagedMemory
           ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
                 Flags::IOPLMask | Flags::VirtualInterruptMask |
-                ((Iret || FarReturn) ? 0x4000 : 0)
+                ((Iret || FarReturn || FarPointer) ? 0x4000 : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
       : (Interrupt || FredReturn || UndefinedInstruction ||
          UserInterrupt == detail::X64UserInterrupt::Return)
@@ -1866,6 +1866,13 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (Options.PagedMemory && Interrupt) {
     W.pagedAccess(constant(*Interrupt), Instruction.Fallthrough.Address,
                   X64PagedAccess::SoftwareInterrupt, false);
+    W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
+  } else if (Options.PagedMemory && FarPointer) {
+    const uint64_t NullBase =
+        !Options.NullSegmentBasePolicy                                      ? 0
+        : *Options.NullSegmentBasePolicy == X64NullSegmentBasePolicy::Clear ? 1
+                                                                            : 2;
+    W.pagedAccess(constant(NullBase), 0, X64PagedAccess::FarPointerLoad, false);
     W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (Iret || FarReturn || Interrupt || FarPointer) {
     detail::X64ContinuationEvents<Writer> Event(W, *Options.PagingAddressBits);
