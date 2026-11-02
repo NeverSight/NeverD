@@ -4310,18 +4310,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return {};
   }
 
-  // If a normalization offset is present and the guard bound looks
-  // like it was applied to the original (pre-normalization) variable,
-  // adjust it down to reflect the actual table size.
-  if (Info.MaxEntries > 0 && Info.NormBase > 0) {
-    uint32_t Adj = pullBackBound(Info.MaxEntries, Info);
-    if (Adj != Info.MaxEntries && Adj >= limits::kMinJumpTableEntries) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  pullback: adjusted bound " << Info.MaxEntries << " -> "
-                 << Adj << " (normBase=" << Info.NormBase << ")\n");
-      Info.MaxEntries = Adj;
-    }
-  }
+  // Domain proofs already use the exact table-address index occurrence.
+  // Source-level normalization is only for recovering case labels; applying
+  // it to this bound again would discard reachable table slots.
 
   // A power-of-two-modulo / masked index (`and $(2^k-1)`, with an optional
   // following `dec` from a peeled iteration) is hard-bounded by the mask, for

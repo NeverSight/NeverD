@@ -88,6 +88,34 @@ TEST(MedNoReturn, PropagatesOnlyFromExplicitTerminatingFacts) {
   EXPECT_TRUE(Funcs[1].Blocks[1].Ops[0].DoesNotReturn);
 }
 
+TEST(MedNoReturn, ACompletelyLiftedLoopNeverReturns) {
+  // A loop with no terminating fact proves no-return only where the lift left
+  // nothing out, and its caller then never returns either.
+  constexpr va_t LoopEntry = 0x1000;
+  constexpr va_t CallerEntry = 0x2000;
+  for (const bool Complete : {false, true})
+    for (const bool UnprovenTable : {false, true}) {
+      SCOPED_TRACE(Complete);
+      SCOPED_TRACE(UnprovenTable);
+      std::vector<MedFunc> Funcs;
+      Funcs.push_back(
+          function(CallerEntry, {block(0, {callOp(LoopEntry), returnOp()})}));
+      MedFunc Loop =
+          function(LoopEntry, {block(0, {}, {1}), block(1, {}, {1})});
+      Loop.CompleteLiftCoverage = Complete;
+      if (UnprovenTable)
+        Loop.UnsafeIndirectBranchAddresses.insert(LoopEntry);
+      Funcs.push_back(std::move(Loop));
+
+      propagateInternalNoReturn(Funcs, Arch::AArch64);
+
+      const bool Proven = Complete && !UnprovenTable;
+      EXPECT_EQ(Funcs[1].DoesNotReturn, Proven);
+      EXPECT_EQ(Funcs[0].DoesNotReturn, Proven);
+      EXPECT_EQ(Funcs[0].Blocks[0].Ops[0].DoesNotReturn, Proven);
+    }
+}
+
 TEST(MedNoReturn, WhatTheUserStatesDecidesHowCallsEnd) {
   constexpr va_t ReturningEntry = 0x1000;
   constexpr va_t TrapEntry = 0x2000;

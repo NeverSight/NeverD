@@ -97,8 +97,16 @@ int extremes(int a) {
   float x = (a & 1) ? nan : (float)a;
   float y = (a & 2) ? -0.0f : (float)(a - 5);
   float z = (a & 4) ? 0.0f : (float)(7 - a);
-  float m = __builtin_elementwise_maximum(x, y);
-  float n = __builtin_elementwise_minimum(y, z);
+  float m, n;
+#if defined(__aarch64__)
+  __asm__("fmax %s0, %s1, %s2" : "=w"(m) : "w"(x), "w"(y));
+  __asm__("fmin %s0, %s1, %s2" : "=w"(n) : "w"(y), "w"(z));
+#else
+  m = x != x ? x : y != y ? y : x > y ? x : x < y ? y
+      : __builtin_signbit(x) ? y : x;
+  n = y != y ? y : z != z ? z : y < z ? y : y > z ? z
+      : __builtin_signbit(y) ? y : z;
+#endif
   return (m != m) + 2 * __builtin_signbit(n) + 4 * (m == m ? (int)m : 0) +
          64 * (n == n ? (int)n : 0);
 }

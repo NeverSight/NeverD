@@ -680,6 +680,17 @@ TEST(InternalNoReturn, MutualRecursionWithoutATrapProvesNothing) {
   EXPECT_FALSE(callAtBaseEndsItsBlock(Image));
 }
 
+TEST(InternalNoReturn, ACompletelyLiftedLoopNeverReturns) {
+  // callee: nop; L: jmp L -- no terminating fact, but nothing the lift left
+  // out can leave the loop.  A loop with an exit to a return still returns:
+  // nop; L: test eax, eax; jne L; ret.
+  EXPECT_TRUE(callAtBaseEndsItsBlock(imageWith(
+      callerThen({0x90, 0xeb, 0xfe}), {{Base, "caller"}, {0x1010, "spin"}})));
+  EXPECT_FALSE(callAtBaseEndsItsBlock(
+      imageWith(callerThen({0x90, 0x85, 0xc0, 0x75, 0xfc, 0xc3}),
+                {{Base, "caller"}, {0x1010, "spin_until"}})));
+}
+
 TEST(InternalNoReturn, ProofsStopAtTheDepthLimit) {
   // A chain of callees, each `call next; int3`, ending in `int 0x29`: one
   // within the depth limit is proved, one past it is not.
@@ -977,3 +988,46 @@ TEST(InternalNoReturn, SummaryStillLiftsAProvedCalleeForItsParameters) {
 }
 
 } // namespace
+
+TEST(InternalNoReturn, EntryMarkersAfterACallDoNotProveTermination) {
+  // A returning call can precede a BTI landing pad or a shrink-wrapped frame.
+  // The marker and even another discovered entry do not supply a call effect.
+  for (uint32_t Marker : {0xd503245fu, 0xd503233fu, 0xa9bf7bfdu}) {
+    std::vector<uint8_t> Code;
+    for (uint32_t Word : {0xaa1e03f3u, // mov x19, x30
+                          0x94000005u, // bl helper at +0x18
+                          Marker,
+                          0xaa1303feu, // mov x30, x19
+                          0xd65f03c0u, // ret
+                          0xd503201fu, // nop
+                          0xd65f03c0u})
+      for (unsigned I = 0; I < 4; ++I)
+        Code.push_back(static_cast<uint8_t>(Word >> (I * 8)));
+    auto Image = imageWith(Code, {});
+    Image.Arch = Arch::AArch64;
+    Image.Format = BinaryFormat::COFF;
+    for (bool KnownContinuation : {false, true}) {
+      SCOPED_TRACE(Marker);
+      SCOPED_TRACE(KnownContinuation);
+      std::set<va_t> Entries{Base};
+      if (KnownContinuation)
+        Entries.insert(Base + 8);
+      const InternalNoReturnIndex Index(Image, &Entries, nullptr, nullptr,
+                                        nullptr);
+      EXPECT_FALSE(Index.mayNeverReturn(Base));
+    }
+  }
+}
+
+TEST(InternalNoReturn, BranchScreenRequiresExecutableOwnership) {
+  auto Image = imageWith({0xeb, 0x0e}, {}); // jmp data at Base + 0x10
+  Image.Format = BinaryFormat::COFF;
+  Segment Data;
+  Data.VA = Base + 0x10;
+  Data.Size = 2;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data = {0xeb, 0xfe}; // resembles an infinite loop
+  Image.Segments.push_back(std::move(Data));
+  const InternalNoReturnIndex Index(Image, nullptr, nullptr, nullptr, nullptr);
+  EXPECT_FALSE(Index.mayNeverReturn(Base));
+}

@@ -100,7 +100,15 @@ bool lowFunctionNeverReturns(
         Pending.push_back(It->second);
     }
   }
-  return SawTerminator;
+  // Every reachable path either reached a terminator or returned to a visited
+  // block; an unresolved jump, decode failure or escaping path already
+  // returned false above.  An explicit terminator proves no-return on its own.
+  // A function whose paths all loop forever (SawTerminator stays false) never
+  // returns either, but only read a terminator-less walk that way for a
+  // complete lift: an unread byte, a path out of the image or a jump table
+  // with unproven targets could leave the cycle where the walk cannot see.
+  return SawTerminator || (Func.hasCompleteLiftCoverage() &&
+                           Func.UnsafeIndirectBranchAddresses.empty());
 }
 
 } // namespace neverd

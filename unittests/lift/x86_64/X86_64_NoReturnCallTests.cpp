@@ -173,9 +173,10 @@ TEST(X86_64NoReturnCall, ACallOfAFunctionEndingInExitEndsItsPath) {
       << Out.Source;
 }
 
-// spin_forever loops forever with no call or trap that proves it, so no proof
-// reaches it.  spin_pick's second call of it is still the last instruction of
-// spin_pick's code: the path ends there, and the C returns nothing after it.
+// spin_forever loops forever with no call or trap, but its loop lifts
+// completely, which alone proves it never returns.  spin_pick's second call
+// of it is also the last instruction of spin_pick's code: the path ends
+// there, and the C returns nothing after it.
 TEST(X86_64NoReturnCall, ACallThatEndsItsFunctionsCodeEndsItsPath) {
   const std::optional<BinaryImage> Img =
       loadFixture("test_noreturn_calls_x64_stripped.so");
@@ -194,7 +195,7 @@ TEST(X86_64NoReturnCall, ACallThatEndsItsFunctionsCodeEndsItsPath) {
   EXPECT_TRUE(Last->DoesNotReturn) << Out.Source;
   const HighFunc *Spin = functionAt(Out.Result, Last->CallAddr);
   ASSERT_NE(Spin, nullptr);
-  EXPECT_FALSE(Spin->DoesNotReturn) << Out.Source;
+  EXPECT_TRUE(Spin->DoesNotReturn) << Out.Source;
   // No path of spin_pick returns after a call of spin_forever.
   const size_t Begin = Out.Source.find(" spin_pick(int");
   ASSERT_NE(Begin, std::string::npos) << Out.Source;

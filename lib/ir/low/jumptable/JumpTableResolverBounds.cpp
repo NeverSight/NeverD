@@ -7463,23 +7463,4 @@ bool CFGBuilder::inferBoundsFromBitTestClamp(const BinaryImage &Img,
   return true;
 }
 
-//===----------------------------------------------------------------------===//
-// pullBackBound — adjust a guard bound through normalization operations
-//===----------------------------------------------------------------------===//
-
-uint32_t CFGBuilder::pullBackBound(uint32_t RawBound,
-                                   const JumpTableInfo &Info) const {
-  uint32_t Adjusted = RawBound;
-
-  if (Info.NormBase > 0 && Adjusted > static_cast<uint32_t>(Info.NormBase))
-    Adjusted -= static_cast<uint32_t>(Info.NormBase);
-
-  if (Info.NormShift > 0)
-    Adjusted >>= Info.NormShift;
-
-  if (Adjusted == 0)
-    return RawBound;
-  return Adjusted;
-}
-
 } // namespace neverd

@@ -5859,6 +5859,14 @@ std::string HighCWriter::unknownValueText(const HighExpr &E,
   return Text;
 }
 
+bool HighCWriter::isPlatformRegisterEntry(const HighExpr &E) const {
+  const auto &TRI = getTargetRegInfo(Opts.TheArch);
+  return E.Kind == ExprKind::Var && E.Var.Kind == MedVar::Reg &&
+         E.Var.SSAVer == 0 && E.Var.RenameTag < 0 &&
+         E.Var.Size == TRI.PointerSize &&
+         TRI.isPlatformRegister(E.Var.RegOff, Opts.Format);
+}
+
 std::string HighCWriter::unknownVarUse(const HighExpr &E,
                                        const std::string &Name,
                                        const std::string &RawName) {
@@ -5885,6 +5893,15 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
     if (E.Var.Kind == MedVar::Reg && TRI.isLinkRegister(E.Var.RegOff) &&
         E.Var.Size == TRI.PointerSize)
       return "(uintptr_t)__builtin_return_address(0)";
+    // The platform register's entry value is the platform's state, which C
+    // reads from the register itself.
+    if (isPlatformRegisterEntry(E) && TRI.GetRegName) {
+      if (Opts.Format == BinaryFormat::COFF)
+        return "__getReg(18)";
+      return "({ uint64_t __platform; __asm__ volatile(\"mov %0, " +
+             llvm::StringRef(TRI.GetRegName(E.Var.RegOff, E.Var.Size)).lower() +
+             "\" : \"=r\"(__platform)); __platform; })";
+    }
     if (x87HelperFor(E) == X87CHelper::ControlWord)
       return useX87Helper(X87CHelper::ControlWord) + "()";
     return unknownValueText(E, "register");

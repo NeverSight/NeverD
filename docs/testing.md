@@ -20038,3 +20038,28 @@ code modes/formats and NeverC's `verify_native_division.py` executes actual
 Linux i386/x64 processes, comparing native results and #DE instruction/register
 state. The latter requires host 32-bit development libraries for its i386
 harness; a missing toolchain is a failed prerequisite, never a skipped pass.
+
+## Packed AArch64 entries and no-return cycles
+
+The `NeverDAArch64DecodeValidityTests` target and the `NeverDLiftTests` suites
+`AArch64FunctionDiscovery`, `InternalNoReturn`, `MedNoReturn`,
+`MedCallLeftovers` and `X86_64NoReturnCall`
+cover packed entry markers, distant shrink-wrapped frames, unsupported SME ZA
+operands, complete versus incomplete no-return cycles, call continuations and
+executable ownership. `MedCallLeftovers.PlatformRegisterPreservationFollowsTheABI`
+checks x18 preservation and register-view widths across ELF, unknown, Mach-O and
+COFF conventions. `HighCPointerAddresses.PlatformRegisterReadRequiresAReservingABI`
+checks platform-specific C emission, cross-target compilation (including the
+Windows intrinsic declaration) and the generic ABI's unknown-value path.
+Run `NeverDCFGLoopXformTests` and the structured-C label tests when changing
+control-flow label insertion alongside these proofs.
+
+`NeverDJumpTableTests` includes
+`JTE_X86_32.NormalizedGuardKeepsEveryProvenTableSlot`, which checks five-entry
+switches after subtraction and after subtraction plus right shift. Run it with
+`CFGLoop2/X86CFGLoopRT.Verify/x86cly_statemachine` in
+`NeverDCFGLoopXformTests`; the latter compares execution of the original and
+recompiled cyclic dispatch. `AArch64_HighCExecution.FMaxAndFMinPropagateANaN`
+uses explicit FMAX/FMIN instructions in the input fixture. Compiling the
+emitted C still requires Clang's `__builtin_elementwise_maximum/minimum` support;
+select a recent fixture compiler when the system Clang lacks those builtins.
