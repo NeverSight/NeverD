@@ -23,6 +23,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/ParameterSites.h"
@@ -366,6 +367,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     return nullptr;
 
   auto *LLVMFunc = declareFunc(Func);
+  if (Func.AnalysisOnly)
+    LLVMFunc->addFnAttr(llvm_analysis_dispatch::FunctionAttribute);
   if (ReturnProtection)
     setLLVMAArch64ReturnProtection(*LLVMFunc, ReturnProtection->Protection);
   if (Func.HasUnresolvedSEHFrame)
@@ -961,7 +964,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         break;
       }
       if (Op.Opcode == NdOp::INDIR_BR) {
-        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder)) {
+        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder) &&
+            !emitAnalysisDispatch(Blk, Op, BBMap, Builder)) {
           // Every INDIR_BR that survives tail-call conversion must have a
           // proved finite destination set.  This includes the selected half of
           // a predicated PC write: it may legitimately have zero recovered

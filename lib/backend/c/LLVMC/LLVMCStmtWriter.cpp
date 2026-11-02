@@ -5770,6 +5770,8 @@ bool LLVMCWriter::writeFlatStringRoutine(const llvm::CallInst &Call, bool Movs,
 
 void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
                                 int Indent) {
+  if (writeAnalysisDispatchCall(Call, Indent))
+    return;
   if (const auto Allocation = llvmc::cStackAllocation(Call)) {
     // Plain alloca has function lifetime on both Clang and GCC. GCC's aligned
     // variant may release at a nested block exit, so align inside extra bytes.

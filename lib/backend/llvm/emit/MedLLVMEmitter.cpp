@@ -803,11 +803,19 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                      const std::vector<char> *BodyMask) {
 
   RefusedBodies.clear();
-  if (!AnalystSourceProjection) {
-    for (const auto &F : Funcs) {
-      if (F.AnalysisOnly ||
+  if (AnalysisRecoveryForSource)
+    for (const auto &F : Funcs)
+      if (!F.AnalysisOnly &&
           std::any_of(F.JumpTables.begin(), F.JumpTables.end(),
                       [](const auto &T) { return T.AnalysisOnly; }))
+        throw std::runtime_error(
+            "Tentative dispatch requires an analysis-only function");
+  if (!AnalystSourceProjection) {
+    for (const auto &F : Funcs) {
+      if (!AnalysisRecoveryForSource &&
+          (F.AnalysisOnly ||
+           std::any_of(F.JumpTables.begin(), F.JumpTables.end(),
+                       [](const auto &T) { return T.AnalysisOnly; })))
         throw std::runtime_error(
             "Tentative analysis recovery cannot authorize binary output");
       if (F.AnalystStackFrame)

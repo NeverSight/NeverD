@@ -23,6 +23,7 @@
 #include "LLVMCWriter.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/ParameterSites.h"
@@ -192,6 +193,8 @@ bool metadataReferencesFunction(
 } // anonymous namespace
 
 bool LLVMCWriter::isAnalysisOnlyFunction(const llvm::Function &Fn) const {
+  if (Fn.hasFnAttribute(llvm_analysis_dispatch::FunctionAttribute))
+    return true;
   if (Fn.getMetadata(windows_eh_md::FunctionAttachment) ||
       Fn.getMetadata(windows_eh_md::NativeAttachment))
     return true;
@@ -9708,7 +9711,8 @@ void LLVMCWriter::writeFunction(llvm::Function &Fn) {
   if (EmitFunctionWrapper)
     OS << x86NativeFunctionPreamble(Fn, Opts.TheArch);
   if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Fn) &&
-      (functionHasWindowsEHPads(Fn) || functionNeedsAnalysisOnlyEHWrap(Fn))) {
+      (Fn.hasFnAttribute(llvm_analysis_dispatch::FunctionAttribute) ||
+       functionHasWindowsEHPads(Fn) || functionNeedsAnalysisOnlyEHWrap(Fn))) {
     writeAnalysisOnlyFunction(Fn);
     return;
   }
@@ -9717,8 +9721,12 @@ void LLVMCWriter::writeFunction(llvm::Function &Fn) {
 
 void LLVMCWriter::writeAnalysisOnlyFunction(llvm::Function &Fn) {
   if (Opts.EmitComments) {
-    OS << "/* neverd.analysis-only: recovered Windows SEH/C++ as readable C. "
-          "*/\n";
+    if (Fn.hasFnAttribute(llvm_analysis_dispatch::FunctionAttribute))
+      OS << "/* neverd.analysis-only: tentative control flow or deferred "
+            "native state proof; not binary-output evidence. */\n";
+    else
+      OS << "/* neverd.analysis-only: recovered Windows SEH/C++ as readable C. "
+            "*/\n";
   }
   writeFunctionProjection(Fn);
 }

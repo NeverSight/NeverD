@@ -49,6 +49,7 @@
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
 #include "neverd/backend/DataSymbolMetadata.h"
+#include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -2986,6 +2987,7 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
     for (const auto &Block : Function)
       for (const auto &Instruction : Block) {
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+          (void)llvm_analysis_dispatch::address(*Call);
           (void)llvmAArch64AuthenticatedCall(*Call, Opts.TheArch);
           (void)classifyX87NativeState(*Call, Opts.TheArch);
         }

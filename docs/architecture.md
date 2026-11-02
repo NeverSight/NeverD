@@ -9826,7 +9826,7 @@ state transport.
 ## IR representations and routes
 
 `PipelineOptions::allowsAnalysisRecovery` separates display recovery from
-binary output. Ordinary PE32 analysis enables the bounded strategies in
+binary output. Both PE32 C source routes enable the bounded strategies in
 `CFGBuilderAnalysis.cpp`; patch, LLVM lift/dump and interpreter specialization
 do not. Standalone CFG builders remain strict unless explicitly opted in, and
 integer-frame and no-return proofs always use strict policy for their entire
@@ -9873,17 +9873,25 @@ target or pointer slot and raw binary80 operands. This names an uninterpreted
 display operation, supplies no runtime implementation, and does not relabel
 the machine call as an ordinary C floating-point call. Malformed operands and
 non-analysis source conversions retain the adapter refusal.
-Native LLVM emission rejects either marker before module construction; private
-source projection has its existing separate opt-in. Analysis-derived code
+Native LLVM emission rejects either marker before module construction. Private
+LLVM-to-C projection has a separate analysis opt-in and retains the function
+marker, original image storage and an explicit unknown-target exit. Its source
+cache cannot satisfy a native LLVM request. Analysis-derived code
 references are not published into the shared image. Unsupported instruction
 semantics and malformed decoder inputs retain the same strict failures in
 both modes.
 
-HighC annotates an analysis dispatch's unknown-target exit with its source
-address and the original indirect jump, when the image bytes decode to one.
+HighC and LLVMC share the annotation for an analysis dispatch's unknown-target
+exit with its source address and the original indirect jump, when the image
+bytes decode to one.
 Unavailable or changed bytes retain an explicit unresolved indirect-jump note.
 Only these display exits request instruction text; ordinary calls and output
 with comments disabled do not perform this extra decoding.
+LLVMC preserves the original exit address in an operand bundle through source
+optimization; a same-named ordinary callee is not an analysis marker. Both
+LLVM dispatch strategies share the successor-copy lookup, including x87
+peeled/steady blocks with the same original address. The display strategy
+retains physical target comparisons without clearing native selector refusals.
 
 `X86Virtualization.def` owns the implemented VMX/SVM operation inventory and
 operand roles. LowIR, MedIR verification, LLVM and both C routes consume its

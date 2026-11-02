@@ -1057,6 +1057,12 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## Closed control-flow regressions
 
+- HighC and LLVMC share original indirect-jump annotations for tentative
+  dispatch exits. The private LLVM source route retains physical candidate
+  addresses, an unknown-target marker and the original exit site through
+  optimization. Source caching does not authorize native LLVM or patch output;
+  missing instruction bytes keep an explicit generic unresolved-jump note.
+
 - ARM/Thumb HLT now uses the same resumable ownership checks as BKPT/UDF.
   HighC retains its instruction and code instead of substituting a fatal C
   trap. Sized/unsized boundaries, resumed return values, all narrow HLT codes

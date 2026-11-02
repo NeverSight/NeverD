@@ -12,10 +12,8 @@
 
 #include "AnalysisDispatch.h"
 
-#include "neverd/ir/Limits.h"
+#include "neverd/ir/med/MedAnalysisDispatch.h"
 
-#include <algorithm>
-#include <cstdint>
 #include <set>
 #include <utility>
 
@@ -24,14 +22,8 @@ namespace neverd::high_detail {
 bool appendAnalysisDispatch(HighFunc &Function, const MedOp &Branch,
                             const JumpTable &Table, ExprPtr Target,
                             const MedVar &Snapshot) {
-  if (!Function.AnalysisOnly || !Table.AnalysisOnly || Table.MutatedUnsafe ||
-      Table.InsnAddr != Branch.Addr || Branch.Opcode != NdOp::INDIR_BR ||
-      Branch.NumInputs != 1 || Branch.Inputs[0].Size != sizeof(uint32_t) ||
-      Snapshot.Size != Branch.Inputs[0].Size || !Target ||
-      Table.Targets.empty() ||
-      Table.Targets.size() > limits::ir::kAnalysisTableSlots ||
-      std::any_of(Table.Targets.begin(), Table.Targets.end(),
-                  [](va_t Address) { return Address > UINT32_MAX; }))
+  if (!hasAnalysisDispatchShape(Function.AnalysisOnly, Branch, Table) ||
+      Snapshot.Size != Branch.Inputs[0].Size || !Target)
     return false;
 
   const auto Type = NdType::makeInt(Snapshot.Size, false);

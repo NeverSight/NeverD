@@ -14,6 +14,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MedLLVMDispatchTargets.h"
+
 #include "neverd/Common.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -376,46 +378,7 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
     IndexVar = peelAffineSwitchVar(*CurMedFunc, *IndexVar, LabelDelta,
                                    /*MaxAffine=*/2, &Labels);
 
-  // Map each target address to its block, resolving through the dispatching
-  // block's own successors first.  An x87 peeled/steady loop yields duplicate
-  // blocks that share a start address (fixupFpuStack splits them by stack TOP),
-  // so only the matching successor copy is the correct case target.  A target
-  // that is not a successor (the ordinary single-copy table) falls back to a
-  // whole-function address lookup, preserving the historical behavior.
-  auto isSucc = [&](int Id) {
-    return std::find(Blk.Succs.begin(), Blk.Succs.end(), Id) != Blk.Succs.end();
-  };
-  std::map<va_t, int> SuccAddrToBlock;
-  for (auto &MB : CurMedFunc->Blocks)
-    if (isSucc(MB.Id) && MB.StartAddr != InvalidVA)
-      SuccAddrToBlock.emplace(MB.StartAddr, MB.Id);
-
-  auto blockForTarget = [&](va_t T) -> int {
-    auto It = SuccAddrToBlock.find(T);
-    if (It != SuccAddrToBlock.end())
-      return It->second;
-    for (auto &MB : CurMedFunc->Blocks)
-      // Earlier MedIR passes may remove all operations at the native case
-      // label (for example stack-restore epilogue work). The recorded block
-      // boundary remains the target identity after those removals.
-      if (MB.StartAddr == T)
-        return MB.Id;
-    return -1;
-  };
-
-  std::vector<llvm::BasicBlock *> CaseBlocks;
-  CaseBlocks.reserve(JT->Targets.size());
-  for (va_t T : JT->Targets) {
-    int BId = blockForTarget(T);
-    if (BId < 0) {
-      return false;
-    }
-    auto BIt = BBMap.find(BId);
-    if (BIt == BBMap.end()) {
-      return false;
-    }
-    CaseBlocks.push_back(BIt->second);
-  }
+  auto CaseBlocks = dispatchTargetBlocks(*CurMedFunc, Blk, JT->Targets, BBMap);
   if (CaseBlocks.empty()) {
     return false;
   }
