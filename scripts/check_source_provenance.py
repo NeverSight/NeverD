@@ -1262,6 +1262,32 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             "8507f9dd32a05243f4878770a6f932d5712d9cd9f705846a506ecd83482cdbdd",
         }),
     ),
+    HistoryAllowance(
+        path="docs/evidence/x86-paged-segment-moves-2026-11-02.json",
+        rule="private-path",
+        commits=frozenset({
+            "54323598076450a257620587802ca870430fdf05",
+            "905d4d0c15c25e3828565997ae4f01c333eda2b5",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of the newly integrated x86 evidence's "
+            "checkout prefix. Measurements, commands, outcomes and recorded "
+            "hashes are unchanged. Only exact line digests in its publication "
+            "and cleanup commits are covered; current and future private "
+            "paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            '81f03eaf68ac406b15b03ba433ef4e6676115841973649cc07b19a6cd254e088',
+            '8d719206964881010b7d9472acb23f16e80c5d6ea8f3ab0605d42dc39c58c658',
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'c41295a354819f2134cf4f962fb538dd474a56cf68b8ba699bd05e3cf0968a99',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+            'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
+        }),
+    ),
 )
 
 
