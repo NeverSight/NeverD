@@ -452,7 +452,7 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerAdmissionBackingAndNullPolicies) {
         ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver, {0x1000},
                                         NEVERD_TEST_CLANG, 0x1000, &Scheduled,
                                         Policy));
-        for (unsigned Case = 0; Case != 10; ++Case) {
+        for (unsigned Case = 0; Case != 12; ++Case) {
           SCOPED_TRACE(llvm::formatv("SS={0} llvm={1} preserve={2} case={3}",
                                      SS, LLVM, bool(Policy), Case)
                            .str());
@@ -462,7 +462,7 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerAdmissionBackingAndNullPolicies) {
           State.NMIBlocked = 1;
           put(0x5028, 0x00cf92000000ffffULL);
           put(0x30000, 0x87654321);
-          put(0x30008, Case >= 7 ? 0 : 40);
+          put(0x30008, Case >= 7 && Case <= 9 ? 0 : 40);
           X64PagedExecutionOptions Options;
           if (Case)
             Options.FarPointerProfile = X64PagedFarPointerProfile::OffsetFirst;
@@ -485,6 +485,23 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerAdmissionBackingAndNullPolicies) {
             put(0x13028, 0x50007); // A null load never consults the GDT.
           if (Case == 9)
             put(0x13100, 0);
+          if (Case == 10) {
+            Core.GPR[7] = 0x20ff8;
+            put(0x30ff8, 0x87654321);
+            put(0x13108,
+                0x50007); // Offset read succeeds, selector backing fails.
+          }
+          if (Case == 11) {
+            // Permit all page walks, then refuse only the descriptor A write
+            // at the physical-memory boundary, not through a guest #PF.
+            put(0x10000, 0x11027);
+            put(0x11000, 0x12027);
+            put(0x12000, 0x13027);
+            for (unsigned I = 0; I != 64; ++I)
+              put(0x13000 + I * 8, I * 4096 | 0x67);
+            put(0x13100, 0x30067);
+            RAM.Memory.front().Permissions = MemoryPermission::Read;
+          }
           const auto Old = State;
           Memory =
               llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
@@ -494,12 +511,12 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerAdmissionBackingAndNullPolicies) {
           Producer P;
           uint64_t Budget = 1, Polls = 1;
           const bool NullRefused = Case >= 7 && Case <= 8 && !SS && !Policy;
-          const bool Attempt = Case == 2 || Case >= 5;
+          const bool Attempt = Case == 2 || (Case >= 5 && Case <= 9);
           const unsigned Expected = Case == 0 || NullRefused ? 5
                                     : Case == 1              ? 20
                                     : Case == 2 || Case == 9 ? 7
                                     : Case == 6              ? 19
-                                    : Case >= 7              ? 9
+                                    : Case >= 7 && Case <= 9 ? 9
                                                              : 18;
           EXPECT_EQ(Scheduled(&State, reinterpret_cast<uint8_t *>(&Context),
                               &Budget, &Shadow, &Polls, Producer::peek,
@@ -516,6 +533,13 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerAdmissionBackingAndNullPolicies) {
             EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
           if (!Attempt || NullRefused)
             EXPECT_EQ(std::memcmp(&State, &Old, sizeof(State)), 0);
+          if (Case == 10 || Case == 11) {
+            ASSERT_TRUE(Context.lastResult().BackingFault);
+            EXPECT_EQ(Context.lastResult().BackingFault->Exit.Address,
+                      Case == 10 ? 0x50000u : 0x5028u);
+            EXPECT_EQ(Context.lastResult().BackingFault->AccessSize,
+                      Case == 10 ? 2u : 8u);
+          }
           if (Expected == 9) {
             EXPECT_EQ(Core.PC, 0x1004u);
             EXPECT_EQ(Core.GPR[0], 0x87654321u);
