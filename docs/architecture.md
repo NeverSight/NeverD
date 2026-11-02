@@ -502,13 +502,21 @@ aliasing prevents a native stack-slot omission proof. On demand, a bounded
 selection of complete Win64 bodies goes through normal source admission with
 the caller. LLVM verifies the joint module and checks the callee's real formal
 uses. Unknown values reaching memory, calls, returns or control reject expansion;
-dead register PHIs alone do not. The original native signatures and positional
+dead register PHIs alone do not. Complete support bodies are prepared from
+leaves to callers, once per query, within the same callee and expansion budgets.
+Shared descendants reuse that preparation; cycles and unresolved observations
+inside a child retain the original call. The original native signatures and positional
 stack storage remain unchanged. LLVM C inlines the admitted body. HighC uses
 the same admission to emit a separately named C helper with only the unused
 formal operands removed, preserving its memory effects and the caller's
-structured control flow. Helper names have body provenance but no invented
+structured control flow. Nested helper calls are rewritten before removing and
+renumbering the caller helper's formals, and only reachable helpers are emitted.
+Helper names have body provenance but no invented
 native addresses or editable native-variable identities. Their parameters do
-not describe a callable native ABI.
+not describe a callable native ABI. Their zero address marker must not bind a
+native debug declaration or frame at address zero; a real native definition at
+that address still uses its own debug context. A PE DLL without an entry also
+has no implicit DLL entry prototype.
 This path is lazy, budgeted and included in the session's source-view cache.
 It retains analysis options and reuses the existing image analysis cache.
 The optimized source module owns the admitted helper preparation within the

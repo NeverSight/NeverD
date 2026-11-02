@@ -17047,7 +17047,17 @@ optimized/unoptimized cache hits.
 C routes at O0/O2 under UBSan: pointer reads, writes and pointers into outgoing
 argument slots retain the same results and memory. Source helpers avoid image
 name collisions and do not publish synthetic native-variable identities.
-Observed missing slots and nested unavailable call inputs retain their refusals.
+The nested matrix covers one through four support bodies, a shared descendant,
+reversed body-table order, aliases into outgoing stack slots and cached HighC
+replay. Both C routes execute 52 generated programs at O0/O2 against independent
+result and memory oracles; Linux x64 also executes the original instructions.
+These value checks run on every CI host. Observed missing slots, nested observed
+inputs, recursion and exhausted support limits retain their refusals.
+A separate HighC execution case gives a real native definition at address zero
+a 32-bit debug return while a source helper retains its 64-bit result and memory
+effects. `SessionLLVMTest.DllEntryPrototypeRequiresARealPEEntry` checks absent
+and present DLL entries across x86, x64 and ARM64 image models, plus executable
+and native-subsystem controls.
 A direct LLVM dependency test distinguishes dead unknown PHIs from value returns
 and memory readers. `SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
 checks the optimized original-image view, repeat queries, native LLVM and the

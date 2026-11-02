@@ -712,7 +712,7 @@ bool Session::typesChanged(const types::TypeLibrary &Library,
 }
 
 std::string Session::platformEntryDeclaration() const {
-  if (Img.Format == BinaryFormat::COFF &&
+  if (Img.Format == BinaryFormat::COFF && Img.Entry &&
       (Img.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) &&
       (Img.DynInfo.PESubsystem == llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_GUI ||
        Img.DynInfo.PESubsystem == llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI))

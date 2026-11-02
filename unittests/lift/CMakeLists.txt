@@ -100,6 +100,10 @@ add_neverd_unittest(NeverDSourceInlineCallsTests
   core/SourceInlineCallsTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
+if(NEVERD_TEST_CLANG_EXECUTABLE)
+  target_compile_definitions(NeverDSourceInlineCallsTests PRIVATE
+    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+endif()
 
 add_neverd_unittest(NeverDX64FillReturnTests
   core/X64FillReturnTests.cpp

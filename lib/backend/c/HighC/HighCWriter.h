@@ -521,8 +521,10 @@ public:
                          SourceVariable *>
       RecordedSourceVariables;
   std::map<std::pair<va_t, std::string>, unsigned> SourceLocalClasses;
-  std::string debugNameForDisplacement(va_t Entry, int64_t Disp) const;
-  TypeRef debugTypeForDisplacement(va_t Entry, int64_t Disp) const;
+  std::string debugNameForDisplacement(const HighFunc &Function,
+                                       int64_t Disp) const;
+  TypeRef debugTypeForDisplacement(const HighFunc &Function,
+                                   int64_t Disp) const;
   TypeRef declaredParamType(const MedVar &V) const;
   /// The type \p Func's definition declares its HighIR parameter \p Index
   /// with, which its prototype and every use of the parameter share.
@@ -700,11 +702,15 @@ public:
   /// none for an indirect call whose callee is unknown, which names its own
   /// instruction: debug information gives the caller there.
   std::optional<FunctionSym> debugFunctionCalled(const HighExpr &E) const;
+  /// Synthetic source bodies have their own interface, even when their
+  /// address marker coincides with a real native debug declaration at zero.
+  std::optional<FunctionSym> debugFunction(const HighFunc &Function) const;
   std::optional<FunctionSym> debugCallee(const HighExpr &E) const;
-  /// The debug information's function at \p Entry, resolved once per
+  /// The native debug declaration of \p Function, resolved once per
   /// output: the statement tests ask for the current function's on every
   /// line, and resolving it reads names, declarations and prototypes.
-  const std::optional<FunctionSym> &resolvedFunction(va_t Entry) const;
+  const std::optional<FunctionSym> &
+  resolvedFunction(const HighFunc &Function) const;
   /// The pointer type a local is declared with where a typed call's pointer
   /// result declares it (collectCallResultNames, emitLocalDecls), whatever
   /// the type of its machine value; null for any other value or name.
@@ -1119,6 +1125,11 @@ public:
     return At == Opts.SourceBodyOrigins->end()
                ? std::nullopt
                : std::optional<va_t>(At->second);
+  }
+  /// Only native function declarations and frames have this context. Callees
+  /// and image types retain the output's shared debug context.
+  DebugContext *functionDebugContext(const HighFunc &Function) const {
+    return sourceBodyOrigin(Function) ? nullptr : Dbg;
   }
   DebugContext *Dbg;
   bool GuardAnalysisOnlyFunctions;

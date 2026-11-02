@@ -415,6 +415,26 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-event-scheduling-2026-11-01.json",
+        rule="private-path",
+        commits=frozenset({
+            "4d79df02530256028962c0051bda0dfa60f74bb3",
+            "c9312eb577c953406e5409f19adfae6ad6654684",
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of developer-specific compiler prefixes in "
+            "published event and division evidence. Recorded tool hashes and "
+            "test results are unchanged. Only the exact added/deleted line "
+            "digests in the publication and cleanup commits are covered; new "
+            "path occurrences remain findings."
+        ),
+        line_sha256=frozenset({
+            "372b20b03af4bd50bc4ef38b10ef9336c10a98044ab3ba581b34ef2690cc7ce1",
+            "5c8e87049719b559ab9f76a98307ac2a9bba8f4032fd877af6d2ee8f104066e8",
+        }),
+    ),
+    HistoryAllowance(
         path="docs/evidence/x86-hle-completion-2026-11-01.json",
         rule="private-path",
         commits=frozenset({
