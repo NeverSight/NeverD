@@ -135,17 +135,15 @@ public:
              [&] { W.leave(Exit::EventDeferred); });
 
     const auto SavedPC = event(Pointer, offsetof(Event, SavedPC), 8);
-    if constexpr (Writer::FaultableMemory) {
-      // INT/INT3 may end at the last canonical instruction byte. Their saved
-      // fallthrough is data, not a fetch or transfer to that address. Retain
-      // the separate no-fault source event API's narrower input contract.
-      canonical(choose(Software, k(0), SavedPC));
-    } else {
+    // A saved PC is frame data, not a target. Sequential execution can fault
+    // with an out-of-limit/noncanonical PC; an IRQ can also preempt that fetch.
+    // Only the separate no-fault source API retains its narrower input domain.
+    if constexpr (!Writer::FaultableMemory) {
       canonical(SavedPC);
+      W.rejectIf(both(
+          eq(masked(Attributes, 0x2000), k(0)),
+          less(load(offsetof(V5, CS) + offsetof(Segment, Limit), 4), SavedPC)));
     }
-    W.rejectIf(both(
-        eq(masked(Attributes, 0x2000), k(0)),
-        less(load(offsetof(V5, CS) + offsetof(Segment, Limit), 4), SavedPC)));
     const auto SavedFlags =
         choose(Software, masked(Flags, ~uint64_t{0x10000}),
                choose(either(Fault, Repeated),

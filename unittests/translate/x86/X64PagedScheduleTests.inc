@@ -581,4 +581,138 @@ TEST_F(X64PagedExecutionTest, PagedSchedulingMatchesNativeInstructionWindows) {
       }
   RecordProperty("cpu_comparisons", Comparisons);
 }
+TEST_F(X64PagedExecutionTest, SequentialFetchFaultSavesNoncanonicalPC) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  X64PagedNativeCPU CPU;
+  ASSERT_NO_FATAL_FAILURE(CPU.initialize());
+  if (IsSkipped())
+    return;
+  Features.PhysicalAddressBits = CPU.PhysicalBits;
+  constexpr uint64_t Base = 0x7ffffffff000;
+  constexpr uint64_t Start = Base + 4095;
+  const std::vector<uint8_t> Code(4097, 0x90);
+  unsigned Comparisons = 0;
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.push_back(NeverC);
+  for (const auto &Compiler : Compilers)
+    for (bool LLVM : {false, true})
+      for (const std::string O : {"-O0", "-O2"}) {
+        Run Driver = nullptr;
+        Schedule Scheduled = nullptr;
+        ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, O, Driver,
+                                        {Start, Start + 1}, Compiler, Base,
+                                        &Scheduled));
+        reset(Code);
+        auto &Core = State.Core.Core.Core.Core;
+        Core.PC = Start;
+        put(0x107f8, 0x14007);
+        put(0x14ff8, 0x15007);
+        put(0x15ff8, 0x16007);
+        put(0x16ff8, 0x1007);
+        X64ContinuationStateV6 Native;
+        bool Handler = false;
+        // Let the CPU execute NOP and attempt its sequential fetch. A host
+        // breakpoint at the noncanonical next PC cannot be the stop oracle.
+        ASSERT_NO_FATAL_FAILURE(CPU.execute(RAM.Memory.front().Bytes, State,
+                                            Controls.CR0, 1, Native, Handler,
+                                            true));
+        ASSERT_TRUE(Handler);
+        Memory =
+            llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+        X64PagedExecution Context(*Memory);
+        uint64_t Budget = 2, Polls = 2;
+        Shadows Shadow;
+        Producer P;
+        P.Ready = 0;
+        EXPECT_EQ(Scheduled(&State, reinterpret_cast<uint8_t *>(&Context),
+                            &Budget, &Shadow, &Polls, Producer::peek,
+                            Producer::accepted, &P),
+                  7u);
+        EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
+        EXPECT_EQ(Budget, 0u);
+        EXPECT_EQ(P.Polls, 2u);
+        EXPECT_EQ(P.Acks, 0u);
+        const auto &Expected = Native.Core.Core.Core.Core;
+        EXPECT_EQ(Core.PC, Expected.PC);
+        EXPECT_EQ(Core.RFlags, Expected.RFlags);
+        for (unsigned I = 0; I != 16; ++I)
+          EXPECT_EQ(Core.GPR[I], Expected.GPR[I]);
+        EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
+        const auto Actual = Memory->physicalMemory().snapshotMemoryRegions();
+        EXPECT_EQ(std::memcmp(Actual.front().Bytes.data(), CPU.RAM, 0x10000),
+                  0);
+        EXPECT_EQ(std::memcmp(Actual.front().Bytes.data() + 0x17000,
+                              CPU.RAM + 0x17000,
+                              X64PagedNativeCPU::Size - 0x17000),
+                  0);
+        ++Comparisons;
+      }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+TEST_F(X64PagedExecutionTest, EventFramesPreserveFaultingAndInterruptedPCData) {
+  X64PagedNativeCPU CPU;
+  ASSERT_NO_FATAL_FAILURE(CPU.initialize());
+  if (IsSkipped())
+    return;
+  Features.PhysicalAddressBits = CPU.PhysicalBits;
+  unsigned Comparisons = 0;
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    SCOPED_TRACE(Case);
+    reset({0x90});
+    auto &Core = State.Core.Core.Core.Core;
+    X64ContinuationEventV1 Event;
+    Event.Kind = X64ContinuationEventKind::Fault;
+    Event.Vector = 13;
+    if (Case < 2) {
+      State.Core.CS = {0, 0x1000, 40, uint16_t(Case ? 0x409b : 0x009b)};
+      put(0x5028, Case ? 0x00409b0000001000ULL : 0x00009b0000001000ULL);
+      Event.SavedPC = 0x1001;
+    } else {
+      // POPFQ enables an IRQ without STI inhibition. KVM selects the next
+      // boundary after the last canonical instruction byte independently.
+      Core.PC = 0x7fffffffffff;
+      put(0x107f8, 0x14007);
+      put(0x14ff8, 0x15007);
+      put(0x15ff8, 0x16007);
+      put(0x16ff8, 0x1007);
+      RAM.Memory.front().Bytes[0x1fff] = 0x9d;
+      put(Core.GPR[4], 0x202);
+      Event.Kind = X64ContinuationEventKind::Interrupt;
+      Event.Vector = 65;
+      Event.SavedPC = Core.PC + 1;
+    }
+    X64ContinuationStateV6 Native;
+    bool Handler = false;
+    ASSERT_NO_FATAL_FAILURE(CPU.execute(RAM.Memory.front().Bytes, State,
+                                        Controls.CR0, 1, Native, Handler, true,
+                                        Case == 2 ? &Event : nullptr));
+    ASSERT_TRUE(Handler);
+    Core.PC = Event.SavedPC;
+    if (Case == 2) {
+      Core.RFlags = 0x202;
+      Core.GPR[4] += 8;
+    }
+    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+    auto Result = deliverX64PagedEvent(State, *Memory, Event, 0xffff);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Status, X64PagedEventStatus::Delivered);
+    EXPECT_TRUE(Result->InputAccepted);
+    EXPECT_EQ(Result->DeliveredVector, Event.Vector);
+    const auto &Expected = Native.Core.Core.Core.Core;
+    EXPECT_EQ(Core.PC, Expected.PC);
+    EXPECT_EQ(Core.RFlags, Expected.RFlags);
+    for (unsigned I = 0; I != 16; ++I)
+      EXPECT_EQ(Core.GPR[I], Expected.GPR[I]);
+    EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
+    const auto Actual = Memory->physicalMemory().snapshotMemoryRegions();
+    EXPECT_EQ(std::memcmp(Actual.front().Bytes.data(), CPU.RAM, 0x10000), 0);
+    EXPECT_EQ(std::memcmp(Actual.front().Bytes.data() + 0x17000,
+                          CPU.RAM + 0x17000, X64PagedNativeCPU::Size - 0x17000),
+              0);
+    ++Comparisons;
+  }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
 #endif

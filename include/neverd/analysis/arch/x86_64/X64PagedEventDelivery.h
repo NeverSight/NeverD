@@ -52,6 +52,8 @@ struct X64PagedEventResult {
 /// Event.SavedPC supplies its successful fallthrough. Delivery faults restart
 /// State.PC, not that fallthrough; the numeric vector does not imply an error
 /// code or a fault exception class.
+/// SavedPC is frame data even when it exceeds the interrupted CS limit or is
+/// noncanonical. Handler targets retain their independent architectural checks.
 ///
 /// This entry stops before executing the handler. It does not provide legacy
 /// i386 task gates, FRED/CET entry, VMX event routing, SMM or SGX AEX. A #DF

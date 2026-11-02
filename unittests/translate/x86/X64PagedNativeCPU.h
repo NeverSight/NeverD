@@ -104,7 +104,7 @@ public:
           const neverd::analysis::X64ContinuationStateV6 &State, uint64_t CR0,
           unsigned InstructionBytes,
           neverd::analysis::X64ContinuationStateV6 &Output, bool &Fault,
-          bool SoftwareInterrupt = false,
+          bool DisableDebugStop = false,
           const neverd::analysis::X64ContinuationEventV1 *Pending = nullptr,
           uint64_t CR4 = 0x20) {
     ASSERT_EQ(Input.size(), Size);
@@ -151,7 +151,7 @@ public:
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &R), 0);
     kvm_guest_debug Debug{};
     Debug.control =
-        SoftwareInterrupt ? 0 : KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
+        DisableDebugStop ? 0 : KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
     Debug.arch.debugreg[0] = Core.PC + InstructionBytes;
     Debug.arch.debugreg[1] = 0x1800;
     Debug.arch.debugreg[2] = 0;

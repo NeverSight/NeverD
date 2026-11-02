@@ -3494,6 +3494,9 @@ CLI/STI now cover CPL/IOPL permissions, PVI-directed VIF changes and VIP faults
 in this code64 binding. The shared runtime also generates the pre-instruction
 #GP for CPL3/PVI with VIF and VIP both set, before any fetch or operand effect.
 The generated scheduler starts STI inhibition only when IF actually changes.
+Paged event frames also retain noncanonical or out-of-limit saved PCs as data.
+Original CPU cases cover a sequential x64 fetch fault, 16/32-bit compatibility
+CS-limit faults, and a POPFQ-enabled IRQ before a noncanonical fetch.
 The [paged contract](x86-paged-execution.md#paged-irqnmi-scheduling) describes
 ownership, runtime linkage and the remaining partial-instruction, device,
 legacy-mode, SMI and enclave boundaries. This is not global x86 completion or

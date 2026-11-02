@@ -77,7 +77,14 @@ machine-state domain. They do not invoke host OS services.
 The last canonical instruction byte is also valid for INT/INT3: the saved
 fallthrough may be noncanonical, because entry does not execute it. The shared
 faultable owner validates the handler target independently. Original CPU tests
-cover this boundary through both C routes and compilers.
+cover this boundary through both C routes and compilers. More generally, saved
+PC is always frame data for paged entry: a sequential fetch beyond canonical
+addresses or a compatibility CS limit must retain that faulting PC, and an IRQ
+can preempt the bad fetch. Native NOP-boundary and POPFQ/IRQ cases verify these
+paths; the old successful-RAM event API retains its narrower input contract.
+POPFQ constructs the original CPU's interrupt window in that fixture; its
+execution is not newly admitted by the paged source binding. The compatibility
+cases qualify event entry, not a complete legacy instruction dispatcher.
 
 #PF, #GP, #SS, #AC, #DE and canonical UD2's #UD retain the original restart PC.
 The [shared paged event owner](x86-paged-memory.md) performs IDT entry, including
