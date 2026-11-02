@@ -11894,16 +11894,24 @@ odd chains of the bitwise `INT_NOT`/`INT_NEGATE` operations across the same
 twelve architecture/format cells at 1, 2, 4, 8 and 16 bytes. Truncation and
 masking retain their conversion boundaries; the original LOAD and STORE remain.
 `ComplementPairsKeepAddressOriginsAndSSAChanges` retains exact address owners
-while rejecting a chain broken by a new register definition. The shared copy
-propagation loop reuses its SSA index and existing round budget.
+while rejecting a chain broken by a new register definition. The corresponding
+`DefaultNegationsCancelWithoutLosingWidthOrMemoryEffects` and
+`NegationPairsKeepAddressOriginsAndSSAChanges` cases apply the same checks to
+modular arithmetic negation. `NegationAndComplementDoNotCancelEachOther`
+retains mixed-operation chains. The shared copy propagation loop reuses its
+SSA index and existing round budget.
 `NeverDUnaryIdentitySourceTests` compiles both C routes at O0/O2 with undefined
 behavior checks, with pipeline optimization enabled and disabled. Independently
-encoded x64 and AArch64 fixtures cover two, three and four complements, plus
-32-bit narrowing, in PE/COFF, ELF and Mach-O. Each generated program checks 262
-input words against an independent unsigned-word oracle. On Linux x64 it also
-executes the original x64 instructions, including Win64 register passing;
-AArch64 fixtures use the host-compiled oracle, not native ARM64 execution.
-Other hosts explicitly skip this source execution suite.
+encoded x64 and AArch64 fixtures cover two, three and four complements or
+arithmetic negations, plus 32-bit narrowing, in PE/COFF, ELF and Mach-O. Each
+generated program checks 262 input words against an independent unsigned-word
+oracle, including the signed minimum. The portable source checks run on every
+host. Linux x64 additionally executes original x64 instructions, including
+Win64 register passing; the separate `NativeX64NegationsPreserveArithmeticFlags`
+case observes final carry and overflow after the arithmetic chain. Its focused
+CI identity is Linux-only, and other hosts explicitly skip that native case.
+AArch64 fixtures in this suite use the host-compiled oracle; they do not prove
+execution of the original ARM64 instructions.
 `HighCSourceCalls.ReusedConverterRebuildsClobberIdentityAndOrder` checks first
 record precedence and clearing/restoring clobbers between conversions of the
 same function, against a fresh converter. The worker code-edit checks cover

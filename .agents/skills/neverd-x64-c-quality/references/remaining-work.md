@@ -9,6 +9,15 @@ and unknown imports retain opaque aliases. O0/O2 object checks cover the reduced
 case and the existing MinGW whole-module fixture; these checks do not establish
 native regenerated exception execution or remove dynamic-stack proof failures.
 
+The default shared MedIR path now cancels same-width arithmetic negation
+pairs as well as complement pairs. Mixed operations, narrowing and new SSA
+definitions remain barriers; exact code-address origins and observed flag
+calculations survive. Public C execution checks compare signed-minimum and
+narrowing cases with original x64 instructions. Portable value checks run on
+every host, with Linux-only native flag execution identified separately in CI.
+This is a local value simplification, not recovery of missing entry state or
+proof of an arbitrary dynamic transfer's owner.
+
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 

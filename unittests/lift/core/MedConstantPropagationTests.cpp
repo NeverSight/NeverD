@@ -658,8 +658,7 @@ TEST(MedConstantPropagation,
           }
 }
 
-TEST(MedConstantPropagation,
-     DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects) {
+void checkUnaryPairs(bool Negation) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (auto Format :
          {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
@@ -678,7 +677,7 @@ TEST(MedConstantPropagation,
                 TRI.PointerSize);
             LowFunc Low;
             Low.Entry = 0x1000;
-            Low.Name = "complement_chain";
+            Low.Name = Negation ? "negation_chain" : "complement_chain";
             Low.Blocks.resize(1);
             auto &Block = Low.Blocks.front();
             Block.Id = 0;
@@ -698,10 +697,12 @@ TEST(MedConstantPropagation,
             Add(NdOp::LOAD, Value, {Address});
             for (unsigned I = 0; I < Depth; ++I) {
               const auto Next = NdVar::tmp(I + 1, Width);
-              // Both spellings denote the same bitwise complement. Retain
-              // their shared width even for values wider than a host word.
-              Add(I % 2 || Width > sizeof(uint64_t) ? NdOp::INT_NOT
-                                                    : NdOp::INT_NEGATE,
+              // Retain the operation width even beyond a host word. The
+              // two complement spellings have the same bit semantics.
+              Add(Negation
+                      ? NdOp::INT_NEG2
+                      : (I % 2 || Width > sizeof(uint64_t) ? NdOp::INT_NOT
+                                                           : NdOp::INT_NEGATE),
                   Next, {Value});
               Value = Next;
               if (Barrier && I == 0) {
@@ -723,7 +724,7 @@ TEST(MedConstantPropagation,
             const auto Med =
                 LowToMedConverter().convert(Low, Architecture, Format);
             ASSERT_TRUE(verifyMedFunc(Med, "complement-chain"));
-            unsigned Complements = 0, Loads = 0, Stores = 0;
+            unsigned UnaryOps = 0, Loads = 0, Stores = 0;
             std::vector<MedVar> Values;
             for (const auto &B : Med.Blocks)
               for (const auto &Op : B.Ops) {
@@ -747,18 +748,28 @@ TEST(MedConstantPropagation,
                 for (const auto &Op : B.Ops)
                   if (!Op.Dead && Op.Output == Value &&
                       Op.Output.Size == Value.Size) {
-                    Complements += Op.Opcode == NdOp::INT_NOT ||
-                                   Op.Opcode == NdOp::INT_NEGATE;
+                    UnaryOps += Negation ? Op.Opcode == NdOp::INT_NEG2
+                                         : (Op.Opcode == NdOp::INT_NOT ||
+                                            Op.Opcode == NdOp::INT_NEGATE);
                     Values.insert(Values.end(), Op.Inputs.begin(),
                                   Op.Inputs.begin() + Op.NumInputs);
                   }
             }
-            EXPECT_EQ(Complements, Barrier ? 2u : Depth % 2);
+            EXPECT_EQ(UnaryOps, Barrier ? 2u : Depth % 2);
             EXPECT_EQ(Loads, 1u);
             EXPECT_EQ(Stores, 1u);
           }
 }
-TEST(MedConstantPropagation, ComplementPairsKeepAddressOriginsAndSSAChanges) {
+TEST(MedConstantPropagation,
+     DefaultComplementsCancelWithoutLosingWidthOrMemoryEffects) {
+  checkUnaryPairs(false);
+}
+TEST(MedConstantPropagation,
+     DefaultNegationsCancelWithoutLosingWidthOrMemoryEffects) {
+  checkUnaryPairs(true);
+}
+
+void checkUnaryAddressPairs(bool Negation, bool Mixed = false) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (auto Format :
          {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
@@ -773,7 +784,7 @@ TEST(MedConstantPropagation, ComplementPairsKeepAddressOriginsAndSSAChanges) {
         const auto Address = NdVar::codeAddress(0x120020, Width, 0x120000);
         LowFunc Low;
         Low.Entry = 0x1000;
-        Low.Name = "complement_identity";
+        Low.Name = Negation ? "negation_identity" : "complement_identity";
         Low.Blocks.resize(1);
         auto &Block = Low.Blocks.front();
         Block.Id = 0;
@@ -789,28 +800,45 @@ TEST(MedConstantPropagation, ComplementPairsKeepAddressOriginsAndSSAChanges) {
             Op.addInput(Input);
           Block.Ops.push_back(Op);
         };
-        Add(NdOp::INT_NOT, First, {Address});
+        Add(Negation ? NdOp::INT_NEG2 : NdOp::INT_NOT, First, {Address});
         Add(NdOp::COPY, Register, {First});
         if (Redefine)
           Add(NdOp::INT_XOR, Register, {Register, NdVar::scalar(0x55, Width)});
-        Add(NdOp::INT_NEGATE, Last, {Register});
+        Add(Negation != Mixed ? NdOp::INT_NEG2 : NdOp::INT_NEGATE, Last,
+            {Register});
         Add(NdOp::RETURN, {}, {Last});
         const auto Med = LowToMedConverter().convert(Low, Architecture, Format);
         ASSERT_TRUE(verifyMedFunc(Med, "complement-identity"));
         const auto &Return = Med.Blocks.front().Ops.back();
         ASSERT_EQ(Return.Opcode, NdOp::RETURN);
         ASSERT_EQ(Return.NumInputs, 1u);
-        if (!Redefine) {
+        if (!Redefine && !Mixed) {
           EXPECT_EQ(Return.Inputs[0],
                     MedVar::makeConst(Address.Offset, Width, Address.Provenance,
                                       Address.AddressOwnerVA));
         } else {
-          // The register has a new SSA definition between the complements.
-          // This is no longer the original address, regardless of equal widths.
-          EXPECT_FALSE(Return.Inputs[0].isConst());
+          // A changed SSA value or a different unary operation cannot
+          // recover the original code-address identity.
+          EXPECT_NE(Return.Inputs[0],
+                    MedVar::makeConst(Address.Offset, Width, Address.Provenance,
+                                      Address.AddressOwnerVA));
+          if (!Mixed)
+            EXPECT_FALSE(Return.Inputs[0].isConst());
         }
       }
 }
+TEST(MedConstantPropagation, ComplementPairsKeepAddressOriginsAndSSAChanges) {
+  checkUnaryAddressPairs(false);
+}
+TEST(MedConstantPropagation, NegationPairsKeepAddressOriginsAndSSAChanges) {
+  checkUnaryAddressPairs(true);
+}
+
+TEST(MedConstantPropagation, NegationAndComplementDoNotCancelEachOther) {
+  checkUnaryAddressPairs(false, true);
+  checkUnaryAddressPairs(true, true);
+}
+
 TEST(MedConstantPropagation, AnnihilatingMaskKeepsMemoryEffectsAndProvenance) {
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (auto Format :

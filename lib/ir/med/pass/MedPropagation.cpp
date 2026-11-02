@@ -79,11 +79,13 @@ void LowToMedConverter::propagate(MedFunc &Func) {
     }
   }
 
-  // A complement pair is an identity only at one unchanged bit width. Look
-  // through named SSA producers, never through a truncate or a new register
-  // definition. Producers and their effects stay for the normal DCE owner.
-  const auto PlainComplement = [](const MedOp &Op) {
-    return (Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::INT_NEGATE) &&
+  // Complement and modular negation are distinct involutions at one unchanged
+  // bit width. Look through named SSA producers, never through a truncate or
+  // a new register definition. Producers and observed flag calculations stay
+  // for the normal DCE owner.
+  const auto PlainInvolution = [](const MedOp &Op) {
+    return (Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::INT_NEGATE ||
+            Op.Opcode == NdOp::INT_NEG2) &&
            Op.NumInputs == 1 && Op.Output.Size &&
            Op.Inputs[0].Size == Op.Output.Size && !Op.Dead &&
            Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
@@ -134,10 +136,12 @@ void LowToMedConverter::propagate(MedFunc &Func) {
             }
           }
         }
-        if (PlainComplement(Op)) {
+        if (PlainInvolution(Op)) {
           const auto At = Defs.find(keyOf(Op.Inputs[0]));
-          if (At != Defs.end() && PlainComplement(*At->second) &&
-              At->second->Output.Size == Op.Output.Size) {
+          if (At != Defs.end() && PlainInvolution(*At->second) &&
+              At->second->Output.Size == Op.Output.Size &&
+              (At->second->Opcode == NdOp::INT_NEG2) ==
+                  (Op.Opcode == NdOp::INT_NEG2)) {
             const auto Value = At->second->Inputs[0];
             Op.Opcode = NdOp::COPY;
             Op.Inputs[0] = Value;
