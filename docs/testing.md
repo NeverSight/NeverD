@@ -3300,6 +3300,14 @@ qualified P and E cores differ on RETFQ's noncanonical compatibility target.
 The [RETF evidence](evidence/x86-paged-retf-2026-11-02.json) retains both CPU-class
 runs, dual-SDK regressions and the earlier failing observations.
 
+`ScheduledLssDoesNotCreateMovSsShadow` verifies all LSS widths, null and valid
+SS, immediate post-LSS IRQ/NMI delivery, refusal progress and both dispatch
+forms. `ScheduledEventsMatchNativeInterruptWindows` additionally executes each
+width under incoming MOV-SS/STI inhibition on the original CPU. LSS must not
+rearm that inhibition. Capture the fixture's `.oracle.json` sidecars when
+running `scripts/isa/x86/verify_event_delivery.py --family schedule`; they bind
+the reported comparison counts to the exact harness hash.
+
 ## Allocator validation
 
 Use `python scripts/build.py BUILD_DIR` after CMake configuration to refresh

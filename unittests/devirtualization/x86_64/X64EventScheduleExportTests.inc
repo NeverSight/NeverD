@@ -145,6 +145,62 @@ int main(void) {
   }
 }
 
+TEST_F(X64ContinuationExportTest, ScheduledLssDoesNotCreateMovSsShadow) {
+  load({0x66, 0x0f, 0xb2, 0x03, 0x90, 0x90, 0x90, 0x90, 0x0f, 0xb2, 0x03,
+        0x90, 0x90, 0x90, 0x90, 0x90, 0x48, 0x0f, 0xb2, 0x03, 0x90, 0x90});
+  for (bool LLVM : {false, true})
+    for (const char *Dispatch : {"switch", "direct"}) {
+      const auto [Source, Manifest] = source(
+          request(
+              std::string(
+                  R"("event_delivery":true,"scheduled_events":true,"dispatch":")") +
+              Dispatch +
+              R"(","instructions":[4096,4100,4101,4104,4107,4108,4112,4116,4117])"),
+          LLVM);
+      execute(Source, std::string(Seed) + ScheduledFixture + R"C(
+int main(void) {
+  for(unsigned form=0;form<3;++form)for(unsigned nmi=0;nmi<2;++nmi)
+  for(unsigned null_ss=0;null_ss<2;++null_ss) {
+    unsigned width=2u<<form,length=form==1?3:4;
+    neverd_x64_state_v6 s=scheduled_seed(0x1000+8*form);
+    s.RFlags=2|(nmi?0:512);
+    schedule_gdt[4]=0x00cf93000000ffffULL;
+    unsigned char pointer[10]={0x34,0x12};uint16_t selector=null_ss?0:32;
+    memcpy(pointer+width,&selector,2);s.GPR[3]=(uintptr_t)pointer;
+    neverd_x64_interruptibility_v1 shadow={0};
+    producer_t p={0,0,2,nmi?3:2,nmi?2:65,1};uint64_t budget=1,polls=8;
+    CHECK(scheduled(&s,&budget,&shadow,&polls,&p)==9);
+    CHECK(!budget&&s.PC==0x1000+8*form+length&&!shadow.SSBlocked);
+    CHECK(!shadow.STIBlocked&&s.SS.Selector==selector&&!p.acks);
+    budget=1;CHECK(scheduled(&s,&budget,&shadow,&polls,&p)==7);
+    CHECK(budget==1&&saved_pc(&s)==0x1000+8*form+length&&p.acks==1);
+    CHECK(!shadow.SSBlocked&&!shadow.STIBlocked&&p.polls==2);
+  }
+  /* A refused descriptor load neither starts nor consumes inhibition. */
+  for(unsigned incoming=0;incoming<2;++incoming) {
+    neverd_x64_state_v6 s=scheduled_seed(0x1010),old;
+    uint64_t pointer[2]={0x1234,64};s.GPR[3]=(uintptr_t)pointer;old=s;
+    neverd_x64_interruptibility_v1 shadow={0,incoming,0,{0}};
+    producer_t p={0,0,2,2,65,1};uint64_t budget=1,polls=8;
+    CHECK(scheduled(&s,&budget,&shadow,&polls,&p)==5);
+    CHECK(budget==1&&shadow.SSBlocked==incoming&&!p.acks&&p.polls==1);
+    CHECK(!memcmp(&s,&old,sizeof(s)));
+  }
+  return 0;
+}
+)C");
+      if (const char *Directory =
+              std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+        fs::create_directories(Directory);
+        const std::string Name = std::string("scheduled-lss-") +
+                                 (LLVM ? "llvm-" : "high-") + Dispatch;
+        fs::copy_file(tmpFile("run.c"), fs::path(Directory) / (Name + ".c"),
+                      fs::copy_options::overwrite_existing);
+        std::ofstream(fs::path(Directory) / (Name + ".json")) << Manifest;
+      }
+    }
+}
+
 TEST_F(X64ContinuationExportTest,
        ScheduledEventsRejectWithoutConsumingInstruction) {
   load({0x90, 0x0f, 0xa2});
@@ -251,6 +307,7 @@ TEST_F(X64ContinuationExportTest, ScheduledEventsMatchNativeInterruptWindows) {
     std::vector<uint8_t> Bytes;
     std::vector<unsigned> Starts;
     unsigned Steps, Shadow, NMI;
+    unsigned PointerBytes = 0;
   };
   const Original Originals[] = {
       {{0xfb, 0x90, 0x90}, {0, 1, 2}, 2, 0, 0},
@@ -261,10 +318,25 @@ TEST_F(X64ContinuationExportTest, ScheduledEventsMatchNativeInterruptWindows) {
       {{0x90, 0x90}, {0, 1}, 1, 2, 0}, // Incoming KVM STI shadow.
       {{0x90, 0x90}, {0, 1}, 1, 1, 0}, // Incoming MOV-SS shadow.
       {{0x90, 0x90}, {0, 1}, 1, 1, 1}, // MOV-SS also blocks NMI.
+      // Unlike MOV/POP SS, LSS does not start a fresh inhibition window.
+      {{0x66, 0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 4, 5}, 1, 1, 0, 2},
+      {{0x66, 0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 4, 5}, 1, 2, 0, 2},
+      {{0x66, 0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 4, 5}, 1, 1, 1, 2},
+      {{0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 3, 4}, 1, 1, 0, 4},
+      {{0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 3, 4}, 1, 2, 0, 4},
+      {{0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 3, 4}, 1, 1, 1, 4},
+      {{0x48, 0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 4, 5}, 1, 1, 0, 8},
+      {{0x48, 0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 4, 5}, 1, 2, 0, 8},
+      {{0x48, 0x0f, 0xb2, 0x03, 0x90, 0x90}, {0, 4, 5}, 1, 1, 1, 8},
   };
+  const unsigned CasesPerProfile = std::size(Originals) * 16 * 2 * 4;
+  const unsigned LssCasesPerProfile =
+      std::count_if(std::begin(Originals), std::end(Originals),
+                    [](const auto &F) { return F.PointerBytes != 0; }) *
+      16 * 2 * 4;
   std::vector<uint8_t> Code;
   std::string Entries, Cases = R"C(
-static const struct {uint64_t pc;unsigned steps;unsigned char request[19];} originals[]={
+static const struct {uint64_t pc;unsigned steps,pointer_bytes;unsigned char request[19];} originals[]={
 )C";
   for (const auto &Original : Originals) {
     const uint64_t PC = 0x1000 + Code.size();
@@ -274,7 +346,8 @@ static const struct {uint64_t pc;unsigned steps;unsigned char request[19];} orig
       Entries += std::to_string(PC + Offset);
     }
     Cases += "{" + std::to_string(PC) + "ULL," +
-             std::to_string(Original.Steps) + ",{" +
+             std::to_string(Original.Steps) + "," +
+             std::to_string(Original.PointerBytes) + ",{" +
              std::to_string(Original.Bytes.size()) + "," +
              std::to_string(Original.NMI ? 3 : 2) + "," +
              std::to_string(Original.NMI ? 2 : 65) + "," +
@@ -285,7 +358,9 @@ static const struct {uint64_t pc;unsigned steps;unsigned char request[19];} orig
     Code.insert(Code.end(), Original.Bytes.begin(), Original.Bytes.end());
     Code.push_back(0x90); // Keep each original sequence's stop independent.
   }
-  Cases += "};\n";
+  Cases +=
+      "};\nenum { expected_comparisons = " + std::to_string(CasesPerProfile) +
+      " };\n";
   load(Code);
   for (bool LLVM : {false, true}) {
     auto [Source, Manifest] = source(
@@ -313,6 +388,12 @@ int main(void) {
     const unsigned vector=originals[test].request[2];
     memcpy((void *)0x8018,&descriptor,8);memcpy((void *)(uintptr_t)(0x8200+16*vector),&gate,8);
     memcpy((void *)(uintptr_t)(0x8208+16*vector),&zero,8);
+    if(originals[test].pointer_bytes) {
+      unsigned width=originals[test].pointer_bytes;uint16_t selector=32;
+      uint64_t data=0x00cf93000000ffffULL,value=0x1234;
+      memcpy((void *)0x8020,&data,8);memcpy((void *)0x8b00,&value,width);
+      memcpy((void *)(uintptr_t)(0x8b00+width),&selector,2);s.GPR[3]=0x8b00;
+    }
     neverd_x64_state_v6 want=s;memcpy(before,(void *)0x8000,4096);
     __asm__ volatile("outb %%al,$0xe9"::"a"(20),"D"(&want),"S"(originals[test].request):"memory");
     memcpy(after,(void *)0x8000,4096);memcpy((void *)0x8000,before,4096);
@@ -326,7 +407,7 @@ int main(void) {
     CHECK(!memcmp(&s,&want,sizeof(s))&&!memcmp((void *)0x8000,after,4096));
     ++comparisons;
   }
-  return comparisons==1024?0:1;
+  return comparisons==expected_comparisons?0:1;
 }
 )C";
     for (const char *Optimization : {"O0", "O2"}) {
@@ -346,6 +427,18 @@ int main(void) {
           LLVM ? "schedule-native-llvm" : "schedule-native-high";
       std::ofstream(fs::path(Directory) / (Prefix + ".json")) << Manifest;
       std::ofstream(fs::path(Directory) / (Prefix + ".source.c")) << Source;
+      const auto Harness = readOutput(File);
+      std::string Oracle;
+      llvm::raw_string_ostream Stream(Oracle);
+      Stream << llvm::json::Value(llvm::json::Object{
+          {"schema_version", 1},
+          {"harness_sha256",
+           llvm::toHex(llvm::SHA256::hash(llvm::arrayRefFromStringRef(Harness)),
+                       true)},
+          {"original_cpu_comparisons", int64_t(CasesPerProfile)},
+          {"lss_cpu_comparisons", int64_t(LssCasesPerProfile)}});
+      Stream.flush();
+      std::ofstream(fs::path(Directory) / (Prefix + ".oracle.json")) << Oracle;
       for (const auto &Entry : fs::directory_iterator(tmp()))
         if (Entry.is_regular_file() &&
             Entry.path().filename().string().starts_with(Prefix))
@@ -354,5 +447,7 @@ int main(void) {
                         fs::copy_options::overwrite_existing);
     }
   }
+  RecordProperty("cpu_comparisons", CasesPerProfile * 4);
+  RecordProperty("lss_cpu_comparisons", LssCasesPerProfile * 4);
 #endif
 }

@@ -60,7 +60,7 @@ def main():
     run([tools["clang"], "-std=gnu11", "-O2", fixture, "-o", runner], "runner")
     family = {
         "event": ("event", "neverd_x64_deliver_event_body_v6", 10 * 3 * 2 * 8 * 7 * 2),
-        "schedule": ("schedule-native", "neverd_x64_continue_events_v6", 1024),
+        "schedule": ("schedule-native", "neverd_x64_continue_events_v6", None),
         "memory-division": ("memory-division", "neverd_step_v6_[0-9A-F]+", 8000),
     }[args.family]
     for route in ("high", "llvm"):
@@ -77,6 +77,20 @@ def main():
                     not source.read_bytes().startswith(emitted.read_bytes()) or
                     manifest["native_requests"] != 0):
                 raise RuntimeError("source/manifest mismatch or unexecuted native boundary")
+        comparisons = family[2]
+        lss_comparisons = 0
+        if args.family == "schedule":
+            harness = args.sources / f"{family[0]}-{route}.c"
+            oracle = json.loads((args.sources / f"{family[0]}-{route}.oracle.json").read_text())
+            comparisons = oracle["original_cpu_comparisons"]
+            lss_comparisons = oracle["lss_cpu_comparisons"]
+            if (oracle["schema_version"] != 1 or
+                    oracle["harness_sha256"] != digest(harness) or
+                    not source.read_bytes().startswith(harness.read_bytes()) or
+                    type(comparisons) is not int or comparisons <= 0 or
+                    type(lss_comparisons) is not int or
+                    not 0 <= lss_comparisons <= comparisons):
+                raise RuntimeError("scheduler harness/count metadata mismatch")
         for level in ("O0", "O2"):
             stem = f"{family[0]}-{route}-{level}"
             ir = args.keep / (stem + ".ll")
@@ -106,10 +120,13 @@ def main():
                      "-o", elf], name + "-link")
                 run([tools["objcopy"], "-O", "binary", elf, binary], name + "-image")
                 run([runner, binary], name + "-run", timeout=30)
-                profiles.append({"route": route, "optimization": level,
-                                 "backend": backend, "source_sha256": digest(source),
-                                 "ir_sha256": digest(ir), "image_sha256": digest(binary),
-                                 "original_cpu_comparisons": family[2]})
+                profile = {"route": route, "optimization": level,
+                           "backend": backend, "source_sha256": digest(source),
+                           "ir_sha256": digest(ir), "image_sha256": digest(binary),
+                           "original_cpu_comparisons": comparisons}
+                if args.family == "schedule":
+                    profile["lss_cpu_comparisons"] = lss_comparisons
+                profiles.append(profile)
     report = {"schema_version": 1, "tools": {name: {"path": str(path),
                "sha256": digest(path)} for name, path in tools.items()},
               "family": args.family, "fixture_sha256": digest(fixture), "profiles": profiles,

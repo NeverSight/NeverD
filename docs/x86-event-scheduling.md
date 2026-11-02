@@ -73,6 +73,14 @@ completion or delivery. Invalid or unsupported steps expire neither shadow.
 The NMI/STI policy is explicit because processors may inhibit NMIs after STI;
 MOV-SS inhibition and architectural NMI blocking are checked independently.
 
+LSS does **not** create MOV/POP-SS inhibition. It loads its pointer and SS as a
+single instruction; an event arriving after a successful LSS may be delivered
+before the following instruction. An incoming MOV-SS/STI shadow expires on that
+LSS completion without being renewed. A refused load in the successful-RAM
+domain preserves the incoming shadow and budget. Intel SDM volume 3A revision
+093, section 7.8.3 explicitly distinguishes LSS from MOV/POP SS; creating an
+extra LSS shadow also fails the original-CPU interrupt-window comparison.
+
 This optional scheduler uses indexed instruction dispatch for either export
 dispatch setting. It does not poll inside REP, native services, HLE or other
 partial instructions. Native RTM region bindings are rejected: their checkpoint
@@ -87,15 +95,19 @@ APIC/devices, SGX AEX, SMI entry and CET/FRED routing remain unfinished boundari
 `ScheduledEvents*` checks persistent shadows, budgets, invalid entry, producer
 failure, acknowledgment, calls and synchronous exceptions. Its independent KVM
 fixture executes original STI/NOP, STI/STI, STI/CLI/STI, STI/JMP and STI/CALL,
-plus supplied STI/MOV-SS states and a blocked NMI. Each compiler profile compares
-all state and 4 KiB of RAM over 1,024 cases, including interrupt/trap gates,
-all stack alignments and varied flags. KVM's actual interrupt-window exit
+plus supplied STI/MOV-SS states, a blocked NMI and LSS at each operand width
+with pending IRQ/NMI. Each compiler profile compares all state and 4 KiB of RAM
+over 2,176 cases, including interrupt/trap gates, all stack alignments and varied
+flags. The LSS subset has 1,152 cases. KVM's actual interrupt-window exit
 selects the injection point, independently of the candidate scheduler.
 
 Capture artifacts with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` and run
 `scripts/isa/x86/verify_event_delivery.py --family schedule --sources DIR
 --compiler NEVERC --llvm-bin LLVM_BIN --keep OUTPUT`. This checks NeverC and
 both full LLVM backends and authenticates source hashes against manifests.
+For scheduling, capture the `.oracle.json` count/hash sidecar with each harness.
+The verifier reads those fixture-owned counts and checks the harness hash; it
+must not reuse the former hard-coded 1,024-case total for an expanded matrix.
 
 The [2026-11-01 qualification](evidence/x86-event-scheduling-2026-11-01.json)
 records 686 passing regressions across the full fork and pinned r6 SDK, with
@@ -115,3 +127,14 @@ faultable IRQ/NMI scheduling through both C routes, Clang/NeverC at O0/O2 and
 both SDKs. It includes all IRQ vectors, NMI, gate faults, inhibited and blocked
 inputs, PVI entry faults and multi-instruction inhibition windows. The 186
 prior no-fault C/header artifacts remain byte-identical.
+
+The [LSS boundary qualification](evidence/x86-lss-event-boundary-2026-11-02.json)
+records the expanded scheduler matrix and its source, runtime and paged-return
+regressions after integrating current dev: 594 passing tests, two LA57 skips,
+24 additional compiler/backend profiles and 257,422 CPU comparisons overall.
+The LSS subset contributes 46,080 comparisons. All 484 captured C/header/JSON
+exports match between SDKs; eight historical scheduling samples intentionally
+expand their selected instruction set, and the other 178 earlier outputs remain
+unchanged. The previously documented 544 IRET #AC VMX/NMI discrepancies remain
+separate from matching hardware fields. This validates existing LSS semantics;
+paged segment-load support remains outside the scalar/return admission contract.

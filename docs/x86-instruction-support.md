@@ -3553,3 +3553,9 @@ CPU comparisons across both SDKs and both local core classes. Of these, 27,648
 exercise RETF; 544 IRET #AC VMX/NMI discrepancies remain explicitly separated.
 All 474 primary exports match between SDKs, and the 186 prior no-fault outputs
 remain unchanged.
+
+The subsequent [LSS event-boundary audit](evidence/x86-lss-event-boundary-2026-11-02.json)
+confirms that successful LSS does not start or renew MOV/POP-SS inhibition.
+Its expanded native scheduler oracle covers all three widths and both local
+core classes. Existing scheduler semantics are retained; this validation does
+not add paged segment loads or close the remaining global state-model gaps.
