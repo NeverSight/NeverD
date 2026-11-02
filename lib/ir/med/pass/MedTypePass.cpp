@@ -927,6 +927,70 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   auto OnlyReturned = [&](const MedOp *Write) {
     return Write && !ReadInBody.count({Write->Output.Id, Write->Output.SSAVer});
   };
+  // Whether a merged epilogue's integer-return PHI takes, on every edge, the
+  // predecessor's last integer-return write, made after the value the
+  // floating-return PHI \p Float takes on that edge. find's
+  // get_relative_timestamp leaves strtod's double or its square in XMM0, then
+  // writes EAX's 1 or 0 on both paths to its shared `pop rbx; ret`.
+  auto IntegerWrittenLast = [&](const MedBlock &Join, const PhiNode &Float) {
+    const auto Writes = [](const MedOp &Op, uint64_t RegOff) {
+      return Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+             Op.Output.RegOff == RegOff && Op.Opcode != NdOp::SUBBYTES;
+    };
+    if (Float.ExceptionalEntry || Float.Args.empty())
+      return false;
+    // As for in-block writes, a value some branch decides on is a control
+    // value (a loop counter beside a floating accumulator), and a result is
+    // read by nothing but the return.
+    for (const auto &Phi : Join.Phis) {
+      if (Phi.Output.Kind != MedVar::Reg ||
+          Phi.Output.RegOff != TRI.IntReturnReg || Phi.ExceptionalEntry ||
+          Phi.Args.size() != Float.Args.size() ||
+          ReadInBody.count({Phi.Output.Id, Phi.Output.SSAVer}))
+        continue;
+      bool Later = true;
+      for (const auto &[Pred, Value] : Phi.Args) {
+        const auto FloatArm =
+            std::find_if(Float.Args.begin(), Float.Args.end(),
+                         [&](const auto &Arm) { return Arm.first == Pred; });
+        if (FloatArm == Float.Args.end() || Pred < 0 ||
+            Pred >= static_cast<int>(Func.Blocks.size())) {
+          Later = false;
+          break;
+        }
+        const MedBlock &Source = Func.Blocks[Pred];
+        std::optional<size_t> IntAt, FloatAt;
+        for (size_t I = 0; I < Source.Ops.size(); ++I) {
+          const MedOp &Op = Source.Ops[I];
+          if (Writes(Op, TRI.IntReturnReg))
+            IntAt = I;
+          if (FloatArm->second.isConst() ? Writes(Op, TRI.FPReturnReg)
+                                         : Op.Output == FloatArm->second)
+            FloatAt = I;
+        }
+        if (!IntAt) {
+          Later = false;
+          break;
+        }
+        const MedOp &Last = Source.Ops[*IntAt];
+        const bool Arrives = Value.isConst()
+                                 ? Last.Opcode == NdOp::COPY &&
+                                       Last.NumInputs == 1 &&
+                                       Last.Inputs[0].isConst() &&
+                                       Last.Inputs[0].ConstVal == Value.ConstVal
+                                 : Last.Output == Value;
+        if (!Arrives || TestedByBranch(&Last) ||
+            (FilterRestore && isReturnRegRestore(Defs, Source, Last, TRI)) ||
+            (FloatAt && *FloatAt > *IntAt)) {
+          Later = false;
+          break;
+        }
+      }
+      if (Later)
+        return true;
+    }
+    return false;
+  };
   for (const auto &Blk : Func.Blocks) {
     for (auto Rit = Blk.Ops.rbegin(); Rit != Blk.Ops.rend(); ++Rit) {
       if (Rit->Opcode != NdOp::RETURN)
@@ -1062,7 +1126,11 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
             }
             // Do not choose a narrow arm merely because it appears first:
             // a wider scalar candidate needs those bytes on every path.
-            if (CandidateWidth && DefinedBytes(Phi.Output) >= CandidateWidth) {
+            // Where every path writes the integer return register after the
+            // value this PHI takes, the integer is the result, as for writes
+            // in the RETURN's own block.
+            if (CandidateWidth && DefinedBytes(Phi.Output) >= CandidateWidth &&
+                !IntegerWrittenLast(Blk, Phi)) {
               FloatElem = CandidateWidth;
               FloatDist = 0;
               FloatViaPhi = true;

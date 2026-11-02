@@ -4620,6 +4620,82 @@ TEST(MedDCE, X86KeepsTheX87ReturnForReturnTyping) {
   EXPECT_TRUE(Func.FPReturnViaX87);
 }
 
+// A shared epilogue merges both return registers. Each path writing the
+// integer after the double it leaves in XMM0 returns the integer (find's
+// get_relative_timestamp); a loop counter that a branch decides on, beside a
+// floating accumulator, is no result.
+TEST(MedTypePass, MergedEpiloguesReturnTheRegisterWrittenLast) {
+  constexpr Arch TheArch = Arch::X64;
+  const auto &TRI = getTargetRegInfo(TheArch);
+  for (bool Counter : {false, true}) {
+    SCOPED_TRACE(Counter);
+    MedFunc Func;
+    Func.Entry = 0x1000;
+    Func.Blocks.resize(4);
+    for (int I = 0; I < 4; ++I) {
+      Func.Blocks[I].Id = I;
+      Func.Blocks[I].StartAddr = 0x1000 + 0x10 * I;
+    }
+    Func.Blocks[0].Succs = {1, 2};
+    Func.Blocks[1].Preds = Func.Blocks[2].Preds = {0};
+    Func.Blocks[1].Succs = Func.Blocks[2].Succs = {3};
+    Func.Blocks[3].Preds = {1, 2};
+    const MedVar Limit = reg(1, 0, 8, x86reg::RDI, TheArch);
+    addLiveIn(Func.Blocks[0], Limit);
+    const MedVar Zero = temp(2, 1, 1, TheArch);
+    Func.Blocks[0].Ops.push_back(
+        binary(NdOp::INT_EQUAL, Zero, Limit, MedVar::makeConst(0, 8)));
+    MedOp Branch;
+    Branch.Opcode = NdOp::COND_BR;
+    Branch.addInput(MedVar::makeConst(0x1020, 8));
+    Branch.addInput(Zero);
+    Func.Blocks[0].Ops.push_back(Branch);
+
+    const MedVar Sum = reg(10, 1, 8, TRI.FPReturnReg, TheArch);
+    const MedVar Count = reg(20, 1, 8, TRI.IntReturnReg, TheArch);
+    auto &Body = Func.Blocks[1].Ops;
+    Body.push_back(binary(NdOp::FLOAT_INT2FLOAT, Sum, MedVar::makeConst(42, 8),
+                          MedVar::makeConst(8, 4)));
+    if (Counter) {
+      Body.push_back(
+          binary(NdOp::INT_ADD, Count, Limit, MedVar::makeConst(1, 8)));
+      const MedVar More = temp(3, 1, 1, TheArch);
+      Body.push_back(binary(NdOp::INT_LESS, More, Count, Limit));
+      MedOp Loop;
+      Loop.Opcode = NdOp::COND_BR;
+      Loop.addInput(MedVar::makeConst(0x1030, 8));
+      Loop.addInput(More);
+      Body.push_back(Loop);
+    } else {
+      Body.push_back(unary(NdOp::COPY, Count, MedVar::makeConst(1, 8)));
+    }
+    const MedVar Square = reg(10, 2, 8, TRI.FPReturnReg, TheArch);
+    const MedVar None = reg(20, 2, 8, TRI.IntReturnReg, TheArch);
+    auto &Other = Func.Blocks[2].Ops;
+    Other.push_back(binary(NdOp::FLOAT_INT2FLOAT, Square,
+                           MedVar::makeConst(7, 8), MedVar::makeConst(8, 4)));
+    Other.push_back(unary(NdOp::COPY, None, MedVar::makeConst(0, 8)));
+
+    auto &Epilogue = Func.Blocks[3];
+    PhiNode Float;
+    Float.Output = reg(10, 3, 8, TRI.FPReturnReg, TheArch);
+    Float.Args = {{1, Sum}, {2, Square}};
+    PhiNode Integer;
+    Integer.Output = reg(20, 3, 8, TRI.IntReturnReg, TheArch);
+    Integer.Args = {{1, Count}, {2, None}};
+    Epilogue.Phis = {Float, Integer};
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.addInput(Integer.Output);
+    Epilogue.Ops.push_back(Return);
+
+    inferMedTypes(Func, TheArch);
+    ASSERT_TRUE(Func.ReturnType);
+    EXPECT_EQ(Func.ReturnType->Kind,
+              Counter ? NdTypeKind::Float : NdTypeKind::Int);
+  }
+}
+
 TEST(MedDCE, X86KeepsTheStackPointerWriteThatCommitsARuntimeAllocation) {
   // `push ebp; mov ebp,esp; mov esi,esp; sub esi,edx; mov esp,esi; ...;
   // mov esp,ebp; pop ebp; ret`: an i386 VLA whose array is addressed through
