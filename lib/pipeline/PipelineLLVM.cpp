@@ -233,8 +233,12 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
     const DebugContext *Dbg, const SourceViewOptions &View,
     const std::set<va_t> *PrototypeArgumentCallees,
     bool PreserveUnknownSourceValues,
-    llvm::ArrayRef<MedFunc> SourceCalleeDeclarations, bool OmitRefusedBodies) {
+    llvm::ArrayRef<MedFunc> SourceCalleeDeclarations, bool OmitRefusedBodies,
+    bool AnalysisRecoveryForSource) {
   const size_t N = Funcs.size();
+  const bool OriginalAnalysisImage =
+      AnalysisRecoveryForSource &&
+      llvm::any_of(Funcs, [](const MedFunc &F) { return F.AnalysisOnly; });
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
   const pipeline_detail::LLVMShardPlan ShardPlan =
@@ -254,6 +258,8 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
       // The shards' masks partition the unit, and a body left out is noted.
       Emitter.setMaskedBodiesOwnedElsewhere(true);
       Emitter.setPreserveUnknownSourceValues(PreserveUnknownSourceValues);
+      Emitter.setAnalysisRecoveryForSource(AnalysisRecoveryForSource);
+      Emitter.setOriginalImageStorageForSource(OriginalAnalysisImage);
       Emitter.setSourceCalleeDeclarations(SourceCalleeDeclarations);
       Emitter.setDebugContext(Dbg);
       Emitter.setPrototypeArgumentCallees(PrototypeArgumentCallees);

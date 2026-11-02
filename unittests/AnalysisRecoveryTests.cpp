@@ -13,7 +13,9 @@
 #include "../lib/pipeline/PipelineAnalysis.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/Limits.h"
@@ -27,6 +29,7 @@
 
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Verifier.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -476,8 +479,12 @@ TEST(AnalysisRecovery, PipelineModeOwnsTheOptIn) {
   EXPECT_FALSE(Options.allowsAnalysisRecovery());
   Options.PatchMode = false;
   Options.LiftMode = true;
-  Options.SourceProjection = true;
   EXPECT_FALSE(Options.allowsAnalysisRecovery());
+  Options.SourceProjection = true;
+  EXPECT_TRUE(Options.allowsAnalysisRecovery());
+  Options.PatchMode = true;
+  EXPECT_FALSE(Options.allowsAnalysisRecovery());
+  Options.PatchMode = false;
   Options.LiftMode = false;
   Options.DumpLlvm = true;
   EXPECT_FALSE(Options.allowsAnalysisRecovery());
@@ -741,6 +748,41 @@ TEST(AnalysisRecovery, UnprovedSelectorKeepsCandidateBodiesAndUnknownTarget) {
   EXPECT_THROW(MedLLVMEmitter().emit({Med}, Context, "display", Image.Arch, {},
                                      &Image, Image.Format),
                std::runtime_error);
+  MedLLVMEmitter Display;
+  Display.setAnalysisRecoveryForSource(true);
+  Display.setPreserveUnknownSourceValues(true);
+  Display.setOriginalImageStorageForSource(true);
+  auto Module = Display.emit({Med}, Context, "display", Image.Arch, {}, &Image,
+                             Image.Format);
+  ASSERT_TRUE(Module);
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  Options.EmitComments = true;
+  Source.clear();
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options, nullptr, &Image));
+  EXPECT_NE(Source.find("; /* 0x401003: jmp dword ptr [ecx*4 + 0x402000]; "
+                        "unresolved target */"),
+            std::string::npos);
+  EXPECT_NE(Source.find("neverd.analysis-only: tentative control flow"),
+            std::string::npos);
+  EXPECT_NE(Source.find("case 4198432ULL:"), std::string::npos);
+  EXPECT_NE(Source.find("case 4198448ULL:"), std::string::npos);
+  auto ChangedImage = Image;
+  ChangedImage.Segments[0].Data[3] = 0x90;
+  Source.clear();
+  ASSERT_TRUE(
+      LLVMCEmitter().emit(*Module, Output, Options, nullptr, &ChangedImage));
+  EXPECT_NE(Source.find("0x401003: indirect jump; unresolved target */"),
+            std::string::npos);
+  Options.EmitComments = false;
+  Source.clear();
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options, nullptr, &Image));
+  EXPECT_EQ(Source.find("unresolved target"), std::string::npos);
+  EXPECT_NE(Source.find("neverd_analysis_indirect_jump("), std::string::npos);
+  EXPECT_TRUE(Med.UnsafeIndirectBranchAddresses.count(Dispatch));
+  Med.AnalysisOnly = false;
+  EXPECT_THROW(Display.emit({Med}, Context, "unmarked", Image.Arch, {}, &Image,
+                            Image.Format),
+               std::runtime_error);
 }
 
 TEST(AnalysisRecovery, DisplayDispatchDoesNotClearDamagedTableEvidence) {
@@ -782,6 +824,146 @@ TEST(AnalysisRecovery, DisplayDispatchDoesNotClearDamagedTableEvidence) {
         Snapshot));
     EXPECT_TRUE(Output.Body.empty());
   }
+}
+
+TEST(AnalysisRecovery,
+     LLVMSourcePipelineKeepsResolvedSelectorAndAnalysisMarker) {
+  for (bool NoOpt : {false, true}) {
+    SCOPED_TRACE(NoOpt);
+    auto Image = analysisImage();
+    // A whole source unit must retain every tentative body and its marker.
+    const auto Original = Image.Segments[0].Data;
+    Image.Segments[0].Data.resize(8 * Original.size(), 0xcc);
+    Image.Segments[1].Data.assign(8 * 0x100, 0);
+    Image.CodePtrRelocSlots.clear();
+    Image.Symbols.clear();
+    std::set<va_t> Entries;
+    for (unsigned I = 0; I != 8; ++I) {
+      const size_t Offset = I * Original.size();
+      const va_t Entry = Image.Entry + Offset;
+      const va_t Table = Image.Segments[1].VA + I * 0x100;
+      std::copy(Original.begin(), Original.end(),
+                Image.Segments[0].Data.begin() + Offset);
+      for (unsigned Byte = 0; Byte != 4; ++Byte) {
+        Image.Segments[0].Data[Offset + 6 + Byte] = Table >> (Byte * 8);
+        Image.Segments[1].Data[I * 0x100 + Byte] = (Entry + 0x20) >> (Byte * 8);
+        Image.Segments[1].Data[I * 0x100 + 4 + Byte] =
+            (Entry + 0x30) >> (Byte * 8);
+      }
+      Image.CodePtrRelocSlots.insert({Table, Table + 4});
+      Image.Symbols.push_back(Symbol::makeFunc(Entry));
+      Entries.insert(Entry);
+    }
+    for (unsigned I = 0; I != Image.Segments.size(); ++I) {
+      auto &Segment = Image.Segments[I];
+      Segment.Size = Segment.FileSz = Segment.Data.size();
+      Image.Sections[I].Data = Segment.Data;
+      Image.Sections[I].Size = Image.Sections[I].FileSz = Segment.Data.size();
+    }
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.LiftMode = true;
+    Options.SourceProjection = true;
+    Options.NoOpt = NoOpt;
+    Options.OnlyFunctionEntries = Entries;
+    auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_TRUE(Result.LlvmModule);
+    ASSERT_EQ(Result.MedFuncs.size(), Entries.size());
+    ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    CEmitterOptions COptions;
+    COptions.TheArch = Image.Arch;
+    COptions.Format = Image.Format;
+    std::string Source;
+    llvm::raw_string_ostream Output(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                    nullptr, &Image));
+    EXPECT_NE(Source.find("neverd.analysis-only: tentative control flow"),
+              std::string::npos);
+    EXPECT_NE(Source.find("0x20"), std::string::npos);
+    EXPECT_NE(Source.find("0x30"), std::string::npos);
+    // This fixture's simple selector is proved after MedIR preparation. Only
+    // the refused-selector fixture above needs an unknown-target marker.
+    EXPECT_EQ(Source.find("neverd_analysis_indirect_jump"), std::string::npos);
+  }
+}
+
+TEST(AnalysisRecovery, LLVMDispatchSitesSurviveOptimizationAndMissingBytes) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("display_sites", Context);
+  auto *Type = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(Context), {llvm::Type::getInt32Ty(Context)}, false);
+  auto *Function = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "display_sites", Module);
+  Function->addFnAttr(llvm_analysis_dispatch::FunctionAttribute);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  auto *Left = llvm::BasicBlock::Create(Context, "left", Function);
+  auto *Right = llvm::BasicBlock::Create(Context, "right", Function);
+  llvm::IRBuilder<> Builder(Entry);
+  Builder.CreateCondBr(
+      Builder.CreateICmpEQ(Function->getArg(0), Builder.getInt32(0)), Left,
+      Right);
+  Builder.SetInsertPoint(Left);
+  llvm_analysis_dispatch::create(Builder, Function->getArg(0), 0x401010);
+  Builder.CreateUnreachable();
+  Builder.SetInsertPoint(Right);
+  llvm_analysis_dispatch::create(Builder, Function->getArg(0), 0x401020);
+  Builder.CreateUnreachable();
+  Pipeline::optimizeOrPromoteModule(Module);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  Function = Module.getFunction("display_sites");
+  ASSERT_TRUE(Function);
+  std::set<uint64_t> Sites;
+  for (const auto &Block : *Function)
+    for (const auto &Instruction : Block)
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+        if (auto Site = llvm_analysis_dispatch::address(*Call))
+          Sites.insert(*Site);
+  EXPECT_EQ(Sites, (std::set<uint64_t>{0x401010, 0x401020}));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options));
+  EXPECT_NE(Source.find("0x401010: indirect jump; unresolved target */"),
+            std::string::npos);
+  EXPECT_NE(Source.find("0x401020: indirect jump; unresolved target */"),
+            std::string::npos);
+  Function->removeFnAttr(llvm_analysis_dispatch::FunctionAttribute);
+  EXPECT_THROW(LLVMCEmitter().emit(Module, Output, Options),
+               std::invalid_argument);
+}
+
+TEST(AnalysisRecovery, OrdinarySameNamedLLVMCallIsNotADisplayExit) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("ordinary_call", Context);
+  auto *Type = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(Context), {llvm::Type::getInt32Ty(Context)}, false);
+  auto *Ordinary =
+      llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                             "__neverd_analysis_indirect_jump", Module);
+  auto *Caller = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "caller", Module);
+  auto *Block = llvm::BasicBlock::Create(Context, "entry", Caller);
+  llvm::IRBuilder<> Builder(Block);
+  auto *Call = Builder.CreateCall(Ordinary, {Caller->getArg(0)});
+  EXPECT_FALSE(llvm_analysis_dispatch::address(*Call));
+  Caller->addFnAttr(llvm_analysis_dispatch::FunctionAttribute);
+  auto *Exit =
+      llvm_analysis_dispatch::create(Builder, Caller->getArg(0), 0x401010);
+  EXPECT_NE(Exit->getCalledFunction(), Ordinary);
+  EXPECT_FALSE(Ordinary->hasFnAttribute(llvm_analysis_dispatch::ExitAttribute));
+  Builder.CreateUnreachable();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X86;
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options));
+  const auto Comment = Source.find("unresolved target */");
+  ASSERT_NE(Comment, std::string::npos);
+  EXPECT_EQ(Source.find("unresolved target */", Comment + 1),
+            std::string::npos);
 }
 
 } // namespace

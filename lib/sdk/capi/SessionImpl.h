@@ -1237,6 +1237,7 @@ struct Session {
     Emitter.setPreserveUnknownSourceValues(true);
     Emitter.setSourceCalleeDeclarations(NativeCalleeDeclarations);
     Emitter.setOriginalImageStorageForSource(OriginalImageStorage);
+    Emitter.setAnalysisRecoveryForSource(OriginalImageStorage);
     Emitter.setAnalystSourceProjection(UsingAnalystCallContracts);
     if (UsingAnalystCallContracts && CallVariant)
       Emitter.setSourceTargetSignatures(&CallVariant->TargetSignatures);

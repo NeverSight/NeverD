@@ -690,6 +690,7 @@ public:
   void writeInstructionImpl(llvm::Instruction &Inst, int Indent);
   void writeCall(llvm::CallInst &Call, const std::string &Name, int Indent);
   void writeCallLike(llvm::CallBase &Call, const std::string &Name, int Indent);
+  bool writeAnalysisDispatchCall(llvm::CallBase &Call, int Indent);
   /// Join `p ? field : 0` is the PHI dest, not a rematerialized then-arm
   /// field load used as a call arg (`Find(..., this->m.p->id)`).
   const llvm::PHINode *joinPhiForCallArg(const llvm::Value *Arg,

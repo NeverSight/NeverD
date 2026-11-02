@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
@@ -71,14 +72,14 @@ public:
                                           NoOpt, Emit);
   }
 
-  static LLVMEmissionResult emitShards(const std::vector<MedFunc> &Functions,
-                                       llvm::LLVMContext &Context,
-                                       const BinaryImage &Image,
-                                       unsigned Threads,
-                                       bool OmitRefusedBodies = false) {
-    return Pipeline::emitLLVMSharded(
-        Functions, Context, Image.Arch, {}, Image, Image.Format, true, Threads,
-        false, {}, nullptr, {}, nullptr, false, {}, OmitRefusedBodies);
+  static LLVMEmissionResult
+  emitShards(const std::vector<MedFunc> &Functions, llvm::LLVMContext &Context,
+             const BinaryImage &Image, unsigned Threads,
+             bool OmitRefusedBodies = false, bool AnalysisSource = false) {
+    return Pipeline::emitLLVMSharded(Functions, Context, Image.Arch, {}, Image,
+                                     Image.Format, true, Threads, false, {},
+                                     nullptr, {}, nullptr, AnalysisSource, {},
+                                     OmitRefusedBodies, AnalysisSource);
   }
 
   static void buildHighIR(const BinaryImage &Image, PipelineResult &Result) {
@@ -1884,6 +1885,27 @@ TEST(PipelineOutcome, RealShardedEmissionDefinesEverySourceFunction) {
     EXPECT_EQ(Function.getName(), Functions[Index++].Name);
   }
   EXPECT_EQ(Index, Functions.size());
+  for (auto &Function : Functions)
+    Function.AnalysisOnly = true;
+  for (unsigned Threads : {1u, 2u}) {
+    auto Rejected =
+        PipelineTestPeer::emitShards(Functions, Context, Image, Threads);
+    EXPECT_FALSE(Rejected.Module);
+    EXPECT_NE(Rejected.Error.find("Tentative analysis recovery"),
+              std::string::npos);
+    auto Display = PipelineTestPeer::emitShards(Functions, Context, Image,
+                                                Threads, false, true);
+    ASSERT_TRUE(Display.Module) << Display.Error;
+    ASSERT_FALSE(llvm::verifyModule(*Display.Module, &llvm::errs()));
+    unsigned Marked = 0;
+    for (const auto &Function : *Display.Module)
+      if (!Function.isDeclaration()) {
+        EXPECT_TRUE(
+            Function.hasFnAttribute(llvm_analysis_dispatch::FunctionAttribute));
+        ++Marked;
+      }
+    EXPECT_EQ(Marked, Functions.size());
+  }
 }
 
 // A body that refuses a stale address costs the unit only that definition:

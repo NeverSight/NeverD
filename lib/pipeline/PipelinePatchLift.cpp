@@ -371,7 +371,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                         &Result.CallPrototypeArguments,
                         Opts.SourceProjection && !Opts.PatchMode,
                         Result.OmittedCalleeDeclarations,
-                        Opts.OmitRefusedLLVMBodies && !Opts.PatchMode);
+                        Opts.OmitRefusedLLVMBodies && !Opts.PatchMode,
+                        Opts.SourceProjection && Opts.allowsAnalysisRecovery());
     Result.BackendUnhandledValueIntrinsics = Emission.UnhandledValueIntrinsics;
     Result.LLVMVerifierFailed = Emission.LLVMVerifierFailed;
     Result.LlvmModule = std::move(Emission.Module);
@@ -403,6 +404,12 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       MedEmitter.setMaskedBodiesOwnedElsewhere(!Mask.empty());
       MedEmitter.setPreserveUnknownSourceValues(Opts.SourceProjection &&
                                                 !Opts.PatchMode);
+      MedEmitter.setAnalysisRecoveryForSource(Opts.SourceProjection &&
+                                              Opts.allowsAnalysisRecovery());
+      MedEmitter.setOriginalImageStorageForSource(
+          Opts.SourceProjection && Opts.allowsAnalysisRecovery() &&
+          llvm::any_of(Result.MedFuncs,
+                       [](const MedFunc &F) { return F.AnalysisOnly; }));
       MedEmitter.setSourceCalleeDeclarations(Result.OmittedCalleeDeclarations);
       MedEmitter.setDebugContext(Dbg);
       MedEmitter.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
