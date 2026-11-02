@@ -9,6 +9,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 #include <algorithm>
 #include <utility>
@@ -208,4 +209,34 @@ TEST(MedCallLeftovers, UnknownTransportNeedsAnActualCallOrigin) {
   F.Blocks[0].Phis[0].Args.emplace_back(1, Clobber);
   EXPECT_TRUE(ValuesLeftByCalls(F).contains(Joined));
   EXPECT_TRUE(ValuesLeftByCalls(F).contains(Restored));
+}
+
+TEST(MedCallLeftovers, PlatformRegisterPreservationFollowsTheABI) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(0x2000, 8));
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::Unknown,
+                              BinaryFormat::MachO, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    const bool Reserved =
+        Format == BinaryFormat::MachO || Format == BinaryFormat::COFF;
+    const auto Ranges = TRI.callPreservedRanges(Format);
+    EXPECT_EQ(std::any_of(Ranges.begin(), Ranges.end(),
+                          [](const auto &Range) {
+                            return Range.Offset == a64reg::X18 &&
+                                   Range.Bytes == 8;
+                          }),
+              Reserved);
+    for (uint16_t Size : {4, 8}) {
+      EXPECT_EQ(TRI.isCallPreserved(a64reg::X18, Size, Format), Reserved);
+      EXPECT_EQ(callClobbersRegister(Call, a64reg::X18, Size, TRI, Format),
+                !Reserved);
+    }
+    EXPECT_EQ(TRI.callPreservedPrefixSize(a64reg::X18 + 4, 4, Format),
+              Reserved ? 4 : 0);
+    EXPECT_FALSE(TRI.isCallPreserved(a64reg::X18, 16, Format));
+    EXPECT_TRUE(callClobbersRegister(Call, a64reg::X18, 16, TRI, Format));
+    EXPECT_TRUE(callClobbersRegister(Call, a64reg::X17, 8, TRI, Format));
+  }
 }

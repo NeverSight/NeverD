@@ -654,6 +654,7 @@ public:
   std::string unknownValueText(const HighExpr &E, llvm::StringRef Kind);
   /// The failure an unknown value prints at its use, or empty when \p E
   /// names a value the function defines.
+  bool isPlatformRegisterEntry(const HighExpr &E) const;
   std::string unknownVarUse(const HighExpr &E, const std::string &Name,
                             const std::string &RawName);
   /// Pointer-sized Load chain used as a callee: `*(void **)p` / `**(void
@@ -1251,7 +1252,7 @@ public:
   bool NeedsX64WindowsSyscallHelper = false;
   /// The modeled supervisor calls the output makes, whose helpers it defines.
   std::set<Intrinsic> LinuxSyscallHelpers;
-  /// A Windows x86 function renders an <intrin.h>-only intrinsic.
+  /// A Windows function renders an <intrin.h>-only intrinsic.
   bool NeedsMsvcIntrinsics = false;
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;

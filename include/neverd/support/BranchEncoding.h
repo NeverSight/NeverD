@@ -40,6 +40,20 @@ inline int64_t a64BranchDisplacement(uint32_t Word) {
          A64InstructionBytes;
 }
 
+/// How far an A64 conditional branch \p Word -- B.cond, BC.cond, CBZ, CBNZ,
+/// TBZ or TBNZ -- branches, in bytes from itself, or std::nullopt when
+/// \p Word is no conditional branch.
+inline std::optional<int64_t> a64ConditionalBranchDisplacement(uint32_t Word) {
+  const bool TestsABit = A64TestBranch.matches(Word);
+  if (!TestsABit && !A64ConditionalBranch.matches(Word) &&
+      !A64CompareBranch.matches(Word))
+    return std::nullopt;
+  const BitField Offset =
+      TestsABit ? A64TestBranchOffset : A64ConditionalBranchOffset;
+  return llvm::SignExtend64(Offset.extract(Word), Offset.Width) *
+         A64InstructionBytes;
+}
+
 /// Where an A64 `b` or `bl` \p Word at \p Address branches, or std::nullopt
 /// when that lies outside the 64-bit address space.
 inline std::optional<uint64_t> a64BranchTarget(uint32_t Word,

@@ -339,6 +339,10 @@ static constexpr uint64_t Win64ExtraPreservedGPRs[] = {
 
 uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff, uint16_t Size,
                                                 BinaryFormat Format) const {
+  if (isPlatformRegister(PlatformRegister, Format) &&
+      RegOff >= PlatformRegister && RegOff - PlatformRegister < FullRegWidth &&
+      Size <= FullRegWidth - (RegOff - PlatformRegister))
+    return Size;
   const uint16_t Base = callPreservedPrefixSize(RegOff, Size);
   if (Base == Size || TheArch != Arch::X64 || Format != BinaryFormat::COFF)
     return Base;
@@ -376,6 +380,8 @@ TargetRegInfo::callPreservedRanges(BinaryFormat Format) const {
   if (TheArch != Arch::X86)
     Add(StackPointer, PointerSize);
   Add(FramePointer, PointerSize);
+  if (isPlatformRegister(PlatformRegister, Format))
+    Add(PlatformRegister, FullRegWidth);
   for (uint64_t Reg : CalleeSaveRegs)
     Add(Reg, FullRegWidth);
 

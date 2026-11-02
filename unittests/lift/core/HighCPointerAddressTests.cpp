@@ -24,6 +24,7 @@
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -2917,7 +2918,7 @@ TEST(LLVMCPointerAddresses, DataOnlyAddressedIsDeclared) {
 }
 
 /// Expect \p Source to be C a compiler accepts.
-void expectCSyntax(const std::string &Source) {
+void expectCSyntax(const std::string &Source, llvm::StringRef Target = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -2940,6 +2941,8 @@ void expectCSyntax(const std::string &Source) {
   }
   llvm::SmallVector<llvm::StringRef, 4> Arguments{Compiler, "-std=c11",
                                                   "-fsyntax-only", SourcePath};
+  if (!Target.empty())
+    Arguments.append({"-target", Target, "-ffreestanding"});
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
   std::string Error;
@@ -11023,12 +11026,20 @@ TEST(HighCPointerAddresses, X86CallPushStoresAreHidden) {
   S3.StoreVal = HighExpr::makeVar(Code);
   HighStmt Raise;
   Raise.Kind = StmtKind::Call;
-  Raise.CallExpr =
-      HighExpr::makeCall("RaiseException", 0x401200, {HighExpr::makeVar(Code)});
+  Raise.CallExpr = HighExpr::makeCall(
+      "RaiseException", 0x401200,
+      {HighExpr::makeVar(Code), HighExpr::makeConst(0, 4),
+       HighExpr::makeConst(0, 4), HighExpr::makeConst(0, 4)});
   Func.Body = {A8, S0, A9, S1, S2, LoadCode, S3, Raise};
   const std::string Source = emitFunctions({Func}, Arch::X86);
   EXPECT_NE(Source.find("RaiseException("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("*("), std::string::npos) << Source;
+  // Loading the exception code is observable; only the outgoing stack stores
+  // are redundant once the call carries all four arguments.
+  EXPECT_NE(Source.find("= *(int32_t *)0x403120;"), std::string::npos)
+      << Source;
+  EXPECT_FALSE(std::regex_search(Source, std::regex(R"((^|\n)\s*\*[^;\n]*=)")))
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, X86SehRegistrationSlotIsHidden) {
@@ -50265,4 +50276,42 @@ TEST(LLVMCPointerAddresses, HeaderImportsKeepScalarTypesAndVoidEffects) {
       )c",
                                 true);
     }
+}
+
+TEST(HighCPointerAddresses, PlatformRegisterReadRequiresAReservingABI) {
+  HighFunc Func;
+  Func.Name = "read_platform_register";
+  Func.ReturnType = NdType::makeInt(8, false);
+  MedVar Register;
+  Register.Kind = MedVar::Reg;
+  Register.Id = 18;
+  Register.Size = 8;
+  Register.RegOff = a64reg::X18;
+  Register.TheArch = Arch::AArch64;
+  returnValue(Func, HighExpr::makeVar(Register, Func.ReturnType));
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::Unknown,
+                              BinaryFormat::MachO, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = Format;
+    ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+    const bool Reserved =
+        Format == BinaryFormat::MachO || Format == BinaryFormat::COFF;
+    EXPECT_EQ(Source.find("__builtin_trap") == std::string::npos, Reserved)
+        << Source;
+    if (Format == BinaryFormat::MachO) {
+      EXPECT_NE(Source.find("mov %0, x18"), std::string::npos) << Source;
+      expectCSyntax(Source, "arm64-apple-macos");
+    }
+    if (Format == BinaryFormat::COFF) {
+      EXPECT_NE(Source.find("__getReg(18)"), std::string::npos) << Source;
+      EXPECT_NE(Source.find("#include <intrin.h>"), std::string::npos)
+          << Source;
+      EXPECT_EQ(Source.find("__asm__"), std::string::npos) << Source;
+      expectCSyntax(Source, "aarch64-pc-windows-msvc");
+    }
+  }
 }

@@ -1753,6 +1753,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   std::function<void(const ExprPtr &)> CheckExpr = [&](const ExprPtr &Expr) {
     if (!Expr || !Seen.insert(Expr.get()).second)
       return;
+    if (Opts.Format == BinaryFormat::COFF && isPlatformRegisterEntry(*Expr))
+      NeedsMsvcIntrinsics = true;
     CheckType(Expr->Type);
     CheckType(Expr->CastTo);
     HasFloatingArithmetic |=

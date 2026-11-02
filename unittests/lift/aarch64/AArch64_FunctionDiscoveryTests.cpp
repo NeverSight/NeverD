@@ -11,6 +11,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BranchEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
 
@@ -47,6 +48,57 @@ TEST(AArch64FunctionDiscovery, StrictPrologueAcceptsPairPushesBelowSp) {
   EXPECT_TRUE(isStrictPrologueWordAArch64(0xa9be53f3));
   // stp x0, x1, [x2, #16]! stores through another base register: no push.
   EXPECT_FALSE(isStrictPrologueWordAArch64(0xa9810440));
+}
+
+TEST(AArch64FunctionDiscovery, FindsAPackedEntryMarkerAfterABlockEnd) {
+  // Functions packed with no padding: a leaf `ret`, then one no call, symbol,
+  // unwind row or relocation names, then a shrink-wrapped one.  The marker
+  // after the ret begins the second; neither the marker of an in-function
+  // landing pad, which its predecessor falls through to, nor the prologue the
+  // third function's early-return test branches to past its ret begins one.
+  constexpr va_t ImageVA = 0x1000;
+  constexpr va_t PackedVA = ImageVA + 0x4;      // after the leaf's ret
+  constexpr va_t LandingVA = ImageVA + 0x10;    // a bti c inside PackedVA
+  constexpr va_t ShrinkWrapVA = ImageVA + 0x24; // the third's slow path
+  constexpr uint64_t TextSize = 0x2C;
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Base = ImageVA;
+  Img.Entry = ImageVA;
+  Segment Text;
+  Text.Name = "__TEXT";
+  Text.VA = ImageVA;
+  Text.Size = TextSize;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(TextSize, 0);
+  writeLE<uint32_t>(Text.Data.data(), 0xD65F03C0u);        // ret (leaf)
+  writeLE<uint32_t>(Text.Data.data() + 0x4, 0xD503233Fu);  // paciasp (PackedVA)
+  writeLE<uint32_t>(Text.Data.data() + 0x8, 0xD503201Fu);  // nop
+  writeLE<uint32_t>(Text.Data.data() + 0xC, 0xB4000020u);  // cbz x0, LandingVA
+  writeLE<uint32_t>(Text.Data.data() + 0x10, 0xD503245Fu); // bti c (LandingVA)
+  writeLE<uint32_t>(Text.Data.data() + 0x14, 0xD65F03C0u); // ret
+  writeLE<uint32_t>(Text.Data.data() + 0x18, 0xB5000060u); // cbnz x0, slow path
+  writeLE<uint32_t>(Text.Data.data() + 0x1C, 0xD503201Fu); // nop
+  writeLE<uint32_t>(Text.Data.data() + 0x20, 0xD65F03C0u); // ret (early)
+  writeLE<uint32_t>(Text.Data.data() + 0x24, 0xD503233Fu); // paciasp: slow path
+  writeLE<uint32_t>(Text.Data.data() + 0x28, 0xD65F03C0u); // ret
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(makeMachOSection("__text", ImageVA, TextSize,
+                                          /*ContainsInstructions=*/true));
+
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  FuncDetector Detector;
+  const auto Functions = Detector.detect(Img, Dec);
+  const auto Has = [&](va_t A) {
+    return std::any_of(Functions.begin(), Functions.end(),
+                       [&](const auto &F) { return F.first == A; });
+  };
+  EXPECT_TRUE(Has(PackedVA)) << "the packed entry after the ret";
+  EXPECT_FALSE(Has(LandingVA)) << "the in-function cbz landing pad";
+  EXPECT_FALSE(Has(ShrinkWrapVA)) << "the shrink-wrapped prologue";
 }
 
 TEST(AArch64FunctionDiscovery,
@@ -823,4 +875,51 @@ TEST(AArch64FunctionDiscovery, StartsAFrameAfterALandingPadAtThePad) {
   };
   EXPECT_EQ(At(StubVA), 1);
   EXPECT_EQ(At(StubVA + 4), 0);
+}
+
+TEST(AArch64FunctionDiscovery,
+     DistantConditionalTargetsKeepTheirFrameInTheCaller) {
+  constexpr va_t Base = 0x1000;
+  constexpr size_t FrameOffset = 0x1014;
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::MachO;
+  Img.Entry = Img.Base = Base;
+  Segment Text;
+  Text.VA = Base;
+  Text.Size = FrameOffset + 8;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  for (size_t I = 0; I < Text.Data.size(); I += 4)
+    writeLE<uint32_t>(Text.Data.data() + I, 0xd503201fu);
+  // cbnz x0, slow_path; ...; ret; slow_path: paciasp; ret
+  writeLE<uint32_t>(Text.Data.data(),
+                    0xb5000000u | (uint32_t(FrameOffset / 4) << 5));
+  writeLE<uint32_t>(Text.Data.data() + FrameOffset - 4, 0xd65f03c0u);
+  writeLE<uint32_t>(Text.Data.data() + FrameOffset, 0xd503233fu);
+  writeLE<uint32_t>(Text.Data.data() + FrameOffset + 4, 0xd65f03c0u);
+  Img.Segments.push_back(std::move(Text));
+  Img.Sections.push_back(
+      makeMachOSection("__text", Base, FrameOffset + 8, true));
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  const auto Functions = FuncDetector().detect(Img, Dec);
+  EXPECT_FALSE(
+      std::any_of(Functions.begin(), Functions.end(),
+                  [](const auto &F) { return F.first == Base + FrameOffset; }));
+}
+
+TEST(AArch64FunctionDiscovery, MarkersAndBlockEndsAreOnlyBoundaryCandidates) {
+  EXPECT_TRUE(isFunctionEntryMarkerWordAArch64(0xa9bf7bfdu));  // push -16
+  EXPECT_FALSE(isFunctionEntryMarkerWordAArch64(0xa9817bfdu)); // store at +16
+  EXPECT_FALSE(isAArch64BlockEndWord(0xd503201fu)); // nop falls through
+  EXPECT_FALSE(isAArch64BlockEndWord(0x94000001u)); // bl falls through
+  EXPECT_TRUE(isAArch64BlockEndWord(0xd65f03c0u));  // ret
+  for (uint32_t Word : {0x54000100u, 0x54000110u, 0xb4000100u, 0xb5000100u,
+                        0x36000100u, 0x37000100u})
+    EXPECT_EQ(branch::a64ConditionalBranchDisplacement(Word), 32);
+  EXPECT_EQ(branch::a64ConditionalBranchDisplacement(0x54ffffe0u), -4);
+  EXPECT_EQ(branch::a64ConditionalBranchDisplacement(0x3607ffe0u), -4);
+  EXPECT_FALSE(branch::a64ConditionalBranchDisplacement(0xd503201fu));
 }

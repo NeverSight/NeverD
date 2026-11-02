@@ -38,7 +38,8 @@ inline bool isArchitecturalNoReturn(const MedOp &Op, Arch) {
 bool hasProvenNoReturnExit(const MedFunc &Func, Arch TheArch);
 
 /// Prove internal no-return functions from explicit architectural terminators
-/// and already-known no-return calls, then mark every direct call to them.
+/// already-known no-return calls and fully lifted closed cycles, then mark
+/// every direct call to them.
 /// \p Stated is what the user states of functions by entry
 /// (BinaryImage::UserNoReturn): a call to one stated never to return ends
 /// its block, and a call to one stated to return does not, whatever its body

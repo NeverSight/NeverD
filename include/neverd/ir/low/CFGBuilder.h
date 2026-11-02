@@ -2483,7 +2483,6 @@ private:
       const;
   void detectNormalization(const InsnRecord &Rec, JumpTableInfo &Info);
   void detectStride(const InsnRecord &Rec, JumpTableInfo &Info);
-  uint32_t pullBackBound(uint32_t RawBound, const JumpTableInfo &Info) const;
   bool recoverCaseLabels(JumpTable &JT, const JumpTableInfo &Info) const;
   enum class JumpTableTargetReadPolicy {
     SwitchPublication,

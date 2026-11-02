@@ -17,7 +17,8 @@
 #     return x * 5;
 #   }
 #
-# spin.c: spin_forever loops forever; no call or trap proves it never returns.
+# spin.c: spin_forever loops forever with no call or trap; only its
+# completely lifted loop proves it never returns.
 #   __attribute__((visibility("hidden"))) void spin_forever(int code) {
 #     volatile int sink = code;
 #     for (;;)
