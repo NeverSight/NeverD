@@ -8574,6 +8574,19 @@ isolation.
 
 ## Modular MBA simplification
 
+`SymMBAObservedWindow.Reciprocal*` and
+`QuotientProductsRecoverOnlyTheirOwnRemainder` (in
+`NeverDSymMBAObservedWindowTests`) check exact reciprocal division, its
+rounding/overflow/sign boundaries, matching dividend identities and shared
+work budgets. Exhaustive byte inputs and independent APInt oracles cover
+accepted and refused forms. The rewrite proves the complete unsigned input
+domain before publishing a quotient.
+`HighSymSimplify.ReciprocalArithmeticKeepsItsUnprototypedCall` compiles and
+executes retained calls and recovered division/remainder at O0/O2 over 100,000
+inputs each. `ConstantDivisorProofKeepsTrapsAndOperandEffects` retains dynamic,
+zero, truncated-zero and signed divisors, as well as nested call effects.
+Run both focused owners after changing this proof or its HighIR publication.
+
 `SymExpr.ScaledUnsignedProductSlicesUseOnlyTheirRequiredWidth` and
 `ScaledProductWindowsCoverEveryBytePairAndWideCarriers` check non-low windows
 of unsigned products through 257-bit operands. Zero-extended factors use their

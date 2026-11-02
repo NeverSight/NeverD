@@ -244,8 +244,22 @@ bool isRewriteableNode(const ExprPtr &E) {
   case ExprKind::BinOp:
     if (E->Op == NdOp::SUBBYTES && !isIntegerSlice(E))
       return false;
-    return E->Op != NdOp::INT_DIV && E->Op != NdOp::INT_SDIV &&
-           E->Op != NdOp::INT_REM && E->Op != NdOp::INT_SREM &&
+    if (E->Op == NdOp::INT_DIV || E->Op == NdOp::INT_REM) {
+      // A proved reciprocal rewrite can introduce ordinary division. A
+      // nonzero literal divisor is total at this exact unsigned width;
+      // rejecting it would discard an already proved, shorter expression.
+      // Dynamic/zero divisors and signed overflow retain their boundaries.
+      if (E->Operands.size() != 2 || !E->Operands[1] ||
+          E->Operands[1]->Kind != ExprKind::Const)
+        return false;
+      const unsigned Width = bitWidthOf(E);
+      const unsigned Have = bitWidthOf(E->Operands[1]);
+      if (!Width || !Have)
+        return false;
+      const auto Divisor = literalAt(*E->Operands[1], Have, Width);
+      return Divisor && !Divisor->isZero();
+    }
+    return E->Op != NdOp::INT_SDIV && E->Op != NdOp::INT_SREM &&
            E->Op != NdOp::ATOMIC_ADD && E->Op != NdOp::ATOMIC_XCHG &&
            E->Op != NdOp::ATOMIC_CMPXCHG;
   case ExprKind::UnaryOp:

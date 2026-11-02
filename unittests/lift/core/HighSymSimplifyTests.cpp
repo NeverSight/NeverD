@@ -17,13 +17,16 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <string>
 #include <thread>
@@ -1994,6 +1997,102 @@ TEST(HighSymSimplify,
     const auto Text = Parallel[I].Body.back().RetVal->str();
     const bool Kill = I % 8 != 0 && I % 8 != 7;
     EXPECT_EQ(Text.find('|') != std::string::npos, Kill) << I << ": " << Text;
+  }
+}
+
+TEST(HighSymSimplify, ReciprocalArithmeticKeepsItsUnprototypedCall) {
+  auto V = tempOfSize(0, 4);
+  V.Kind = MedVar::Param;
+  const auto X = HighExpr::makeVar(V, NdType::makeInt(4, false));
+  const auto Input =
+      HighExpr::makeBinop(NdOp::INT_ADD, X, HighExpr::makeConst(17, 4));
+  const auto Product =
+      HighExpr::makeBinop(NdOp::INT_MULT, HighExpr::makeConst(0x51eb851f, 8),
+                          extendInteger(Input, 8, false));
+  auto High =
+      HighExpr::makeBinop(NdOp::SUBBYTES, Product, HighExpr::makeConst(4, 4));
+  High->Type = NdType::makeInt(4, false);
+  auto Quotient =
+      HighExpr::makeBinop(NdOp::INT_ASHR, High, HighExpr::makeConst(5, 4));
+  Quotient->Type = NdType::makeInt(4, false);
+  auto Remainder = HighExpr::makeBinop(
+      NdOp::INT_SUB, Input,
+      HighExpr::makeBinop(NdOp::INT_MULT, HighExpr::makeConst(100, 4),
+                          Quotient));
+  HighStmt Observe;
+  Observe.Kind = StmtKind::Call;
+  Observe.CallExpr = HighExpr::makeCall("observe_word", 0x401000, {Quotient});
+  Observe.CallExpr->Type = NdType::makeInt(4, false);
+  HighFunc F;
+  F.Name = "reciprocal_remainder";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}};
+  F.Body = {Observe, returnValue(Remainder)};
+  simplifyExprSemantics(F.Body);
+  ASSERT_EQ(F.Body.size(), 2u);
+  ASSERT_TRUE(F.Body.front().CallExpr);
+  EXPECT_EQ(F.Body.front().CallExpr->CallTarget, "observe_word");
+  ASSERT_EQ(F.Body.front().CallExpr->Operands.size(), 1u);
+  EXPECT_NE(F.Body.front().CallExpr->Operands.front()->str().find('/'),
+            std::string::npos);
+  EXPECT_NE(F.Body.back().RetVal->str().find('%'), std::string::npos);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  EXPECT_EQ(C.find("0x51EB851F"), std::string::npos) << C;
+  const std::string Program = C + R"C(
+static unsigned calls;
+static uint32_t observed;
+int observe_word(unsigned int word) { ++calls; observed = word; return 0; }
+int main(void) {
+  uint32_t x = 0;
+  for (unsigned i = 0; i != 100000; ++i) {
+    const uint32_t input = x + 17u;
+    calls = 0;
+    if (reciprocal_remainder(x) != input % 100u ||
+        observed != input / 100u || calls != 1)
+      return 1;
+    x = x * 1664525u + 1013904223u;
+  }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, ConstantDivisorProofKeepsTrapsAndOperandEffects) {
+  const auto X = HighExpr::makeVar(tempOfSize(0, 4), NdType::makeInt(4, false));
+  const auto Dynamic = HighExpr::makeVar(tempOfSize(1, 4), X->Type);
+  for (const auto Op : {NdOp::INT_DIV, NdOp::INT_REM}) {
+    const auto Safe = HighExpr::makeBinop(Op, X, HighExpr::makeConst(100, 4));
+    const auto SafeDifference = HighExpr::makeBinop(NdOp::INT_SUB, Safe, Safe);
+    const auto Reduced = simplified(SafeDifference);
+    ASSERT_EQ(Reduced->Kind, ExprKind::Const) << Reduced->str();
+    EXPECT_EQ(Reduced->ConstVal, 0u);
+    for (const auto Divisor : {Dynamic, HighExpr::makeConst(0, 4),
+                               HighExpr::makeConst(0x100000000, 8)}) {
+      const auto Unsafe = HighExpr::makeBinop(Op, X, Divisor);
+      const auto Difference =
+          HighExpr::makeBinop(NdOp::INT_SUB, Unsafe, Unsafe);
+      EXPECT_TRUE(containsNode(simplified(Difference), Unsafe));
+    }
+    const auto Call = HighExpr::makeCall("read_word", 0x401000, {});
+    Call->Type = X->Type;
+    const auto Effect =
+        HighExpr::makeBinop(Op, Call, HighExpr::makeConst(100, 4));
+    const auto Difference = HighExpr::makeBinop(NdOp::INT_SUB, Effect, Effect);
+    EXPECT_TRUE(containsNode(simplified(Difference), Call));
+  }
+  for (const auto Op : {NdOp::INT_SDIV, NdOp::INT_SREM}) {
+    const auto Unsafe =
+        HighExpr::makeBinop(Op, X, HighExpr::makeConst(0xffffffff, 4));
+    const auto Difference = HighExpr::makeBinop(NdOp::INT_SUB, Unsafe, Unsafe);
+    EXPECT_TRUE(containsNode(simplified(Difference), Unsafe));
   }
 }
 
