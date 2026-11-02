@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "feature": "owned legacy/PAE/IA-32e paged RAM, whole-operand commit and recursive IA-32e IDT delivery",
+  "commits": {
+    "neverd_implementation": "62c43075791ad2808f521b8f3ac8028f2f9513ed",
+    "neverd_integration": "62c43075791ad2808f521b8f3ac8028f2f9513ed",
+    "llvm": "1c67e6be645fd373c0820179c7849f52c5d723f9",
+    "neverc": "64b3d564921808a96066732e066130076424d7ea"
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "artifact_root": "/mnt/data/neverd-paging-20261101",
+  "regressions": [
+    {
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "passed": 40,
+      "failed": 0,
+      "skipped": 1,
+      "report": "native.xml",
+      "sha256": "d3598f80d2144c190981b447c1b4c30577836451051b1b63abacc8eb460729e0",
+      "log_sha256": "68266c2ed3b903d91762359cf93b01c70e169b6f58072a9ef85238907d6d5118",
+      "skips": [
+        {
+          "name": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "reason": "Bound KVM CPU has no LA57"
+        }
+      ]
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationSourceTests",
+      "passed": 144,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX64ContinuationSourceTests.xml",
+      "sha256": "6487e491b3c5bc91778f64458eda4d4c2709e3e227cde4e3a064286b48707e43",
+      "log_sha256": "2ae1dd1bc4ae2d51bd248700096dfa0e1dcee7aaec3b542a57e7c8b1ac599f22",
+      "skips": []
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationExportTests",
+      "passed": 76,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX64ContinuationExportTests.xml",
+      "sha256": "7bcf247f68891028a8b1c8bebb8c84e2452262b9f93418eb648f93e3f81cc569",
+      "log_sha256": "e42e61c74bb0b8c1f0c511ef5c39cee8fcd252eb08fbb3a74142a7055cb1191e",
+      "skips": []
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "passed": 40,
+      "failed": 0,
+      "skipped": 1,
+      "report": "r6.xml",
+      "sha256": "ded5e138ec1e3c5a4b482f72b4dad1285080a1c5e973401c1f51a670dbc846c0",
+      "log_sha256": "e86e0bb892b9bb1de108744c15fc9b6dd00ee41e84d843f1eeca37fc7b90762e",
+      "skips": [
+        {
+          "name": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "reason": "Bound KVM CPU has no LA57"
+        }
+      ]
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationSourceTests",
+      "passed": 144,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX64ContinuationSourceTests.xml",
+      "sha256": "d57d4f49724086d0a4a665d176403f83c018b552bf7ce8578239ab6aa5c67519",
+      "log_sha256": "a1a6aa7eedcb2f0e21bb9f05c7e29441abc2d223b3edff2678be0aa71fbee8df",
+      "skips": []
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationExportTests",
+      "passed": 76,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX64ContinuationExportTests.xml",
+      "sha256": "dee2ad5d9f07c02a1c0ea2985d19869caefce5e9782bbfe566df6a262a1c8662",
+      "log_sha256": "fb24786ab45698505751841d4f48b13da6ea4559af15322897fb493cd0a69a7b",
+      "skips": []
+    }
+  ],
+  "native_cpu_comparisons": [
+    {
+      "sdk": "native",
+      "paging_levels": 2,
+      "cpu_comparisons": 180,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "native",
+      "paging_levels": 3,
+      "cpu_comparisons": 192,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "native",
+      "paging_levels": 4,
+      "cpu_comparisons": 528,
+      "event_cpu_comparisons": 292
+    },
+    {
+      "sdk": "r6",
+      "paging_levels": 2,
+      "cpu_comparisons": 180,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "r6",
+      "paging_levels": 3,
+      "cpu_comparisons": 192,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "r6",
+      "paging_levels": 4,
+      "cpu_comparisons": 528,
+      "event_cpu_comparisons": 292
+    }
+  ],
+  "event_comparisons_are_subset": true,
+  "oracle": {
+    "host_cpu": "Intel Core i9-13900H",
+    "hypervisor": "KVM",
+    "original_instructions": [
+      "MOV memory load",
+      "MOV memory store",
+      "NOP instruction fetch",
+      "UD2",
+      "injected NMI before original NOP"
+    ],
+    "comparison": [
+      "complete operand data pages",
+      "fault vector and error code",
+      "CR2 on every nested page fault",
+      "successful page-table A/D updates",
+      "ordinary fault frame page",
+      "descriptor accessed bits",
+      "handler PC/SP/RFLAGS/CS/SS and NMI blocking",
+      "completed stack stores before a later fault",
+      "KVM_EXIT_SHUTDOWN"
+    ],
+    "exclusions": [
+      "implementation-dependent fault-time A updates",
+      "undefined saved program state for #DF",
+      "LA57 physical execution on this CPU",
+      "split locked descriptor A update: native #AC during #PF causes KVM_INTERNAL_ERROR_SIMUL_EX; wrapped GDT read binds A=1"
+    ]
+  },
+  "negative_controls": [
+    {
+      "case": "whole-operand canonicality versus missing first page",
+      "before": "native CPU #GP/#SS disagreed with walker #PF",
+      "fix": "check complete linear extent before any page walk"
+    },
+    {
+      "case": "descriptor aliases its own PTE",
+      "before": "unused conditional stack arm reread changed mapping and invented a backing failure",
+      "fix": "faultable same-level entry reads TSS only when stack switching is selected"
+    },
+    {
+      "case": "operand crosses 2^64",
+      "before": "native MOV completed while the memory API rejected integer overflow",
+      "fix": "modular linear extents retain canonical checks and fault/commit rules"
+    },
+    {
+      "case": "wrapped IDT/GDT/TSS base plus index",
+      "before": "native event entry succeeded while the concrete writer returned InvalidState",
+      "fix": "faultable table selection uses modular base/index addition"
+    },
+    {
+      "case": "handler stack top is zero",
+      "before": "native entry built a high-address frame while the model cascaded to shutdown",
+      "fix": "faultable frames use modular stack subtraction and canonical extent checks"
+    }
+  ],
+  "cross_sdk_exports": {
+    "identical_files": 282,
+    "extensions": [
+      ".c",
+      ".h",
+      ".json"
+    ],
+    "manifest_sha256": "4510b7e2186898dca08f9a44031d0d6f01260e9105b0d8379991bc2e66ee55e8"
+  },
+  "source_sha256": {
+    "include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h": "383a55b327685e0e2d4c23ef5283415cf0fbae317aebdd2400c5920d2e1f84ea",
+    "include/neverd/ir/Limits.h": "0ee28a670401f2d90735cdfe036c6e61e7618c4ff1cdd6b95421f2ef912735ec",
+    "include/neverd/translate/X86/X86PagedMemory.h": "f21f40bae5e05aa6d04e915431010b2e386464ead88b3f4376c1a089b0e17b12",
+    "include/neverd/translate/X86/X86Paging.h": "604cbd22e8e66066ff66c17a483823495b7dbb4d2526ffd24bd3bf154743b112",
+    "lib/analysis/arch/x86_64/X64ContinuationDelivery.h": "4370b0e2edbb1484c647e0612fac7190e13c980c3a383391cef9362cd428a2f5",
+    "lib/analysis/arch/x86_64/X64ContinuationEvents.h": "979156705908b05fa407bfc84fc322bb8721d66c9b22568eaeedfcb9d154e649",
+    "lib/analysis/arch/x86_64/X64ContinuationSegments.h": "7d10ef992052a64c81e5407615a9f536d3c3dda252940592f2eadbfd6df9eb37",
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": "24c99645ea0428b91047e27b04e061456a7d2294a216630b726802baf5d4b55f",
+    "lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp": "0efebb9369a2b435eddf3331d3c8792a17dcf2f6782f07974581ad28f4116b87",
+    "lib/ir/low/jumptable/JumpTableResolverShapes.cpp": "6dd732fc1005e4e45a71abff34413dc14793cc08b587f0b5f98d5e62ef0aab92",
+    "lib/ir/low/jumptable/ResolverExactDefinitions.h": "bde40c078be0a85a901881f38a36f395052fca7e63f3d36ae517d7b109564642",
+    "lib/translate/X86/X86PagedMemory.cpp": "d1be17a05a687b0f04e73c0e8191405700a757db22ab37d88e145d34bca4b982",
+    "lib/translate/X86/X86Paging.cpp": "d3c2e65a493d7d5137fa805180dbe2d539f5107fc8853fda115a238580b8c69f",
+    "unittests/lift/core/ResolverDefinitionCacheTests.cpp": "dbf78213d6aa126c532418a3e6843697cde0076ece6912ec826bf8d04c44a9e3",
+    "unittests/translate/x86/X64PagedEventDeliveryTests.cpp": "31a20f4f917a6be8ccd1df9b8248c2e1c8356e5ce7e2ae994e46ed8e6864c512",
+    "unittests/translate/x86/X86PagingNativeTests.cpp": "fc5f161f2f7059e8c49c8506550c49fa92f0995c3f8173dbd69d76a3275d45d9",
+    "unittests/translate/x86/X86PagingTests.cpp": "44b04048047565a21573a947bd0ef1566ef468d383ce6321937d2a33b4d739ef"
+  },
+  "specifications": [
+    {
+      "title": "Intel SDM volume 3A revision 093, chapters 5 and 7",
+      "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+      "download_url": "https://cdrdv2.intel.com/v1/dl/getContent/671190",
+      "sha256": "310c6a64513e8095abfc32b6a158539560f499d53444050343022f7dda240211"
+    }
+  ],
+  "limitations": [
+    "C++ paged-RAM/event binding; generated-C instruction dispatch memory context and restart/commit integration remain open",
+    "ordinary owned RAM, one CPU, fresh walks and enabled A20; no MMIO, EPT/NPT/HLAT, EPCM or TLB",
+    "legacy i386 segment/task-gate dispatch, SMI and SGX AEX remain open",
+    "APIC/device arrival and partial-instruction asynchronous events remain producer-owned",
+    "active CET/LASS/LAM and FRED IDT entry are refused; bus-lock/split-lock exception routing is unqualified",
+    "no LLVM release or pin completion is claimed"
+  ]
+}
