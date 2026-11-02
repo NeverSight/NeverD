@@ -3524,3 +3524,8 @@ This closes the paged event-entry/handler/IRET/retry path. It does not close
 legacy i386 dispatch/task gates, SMI/software SMM, SGX enclave/AEX/EPCM,
 REP/gather/XSAVE partial completion, or the external-device, TLB, CET/FRED and
 concurrent-memory domains. No final LLVM release or pin update is claimed.
+
+The [IRET evidence](evidence/x86-paged-iret-2026-11-02.json) records 566 passing
+tests, two LA57 skips and 130,290 CPU comparisons, including 11,780 new return
+and handler comparisons. It explicitly records 272 #AC VMX/NMI discrepancies;
+450 exports match across SDKs and 186 earlier no-fault outputs are unchanged.

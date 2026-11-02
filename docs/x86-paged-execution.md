@@ -248,6 +248,16 @@ All 422 captured exports match across SDKs, and 186 prior no-fault C/header
 outputs remain unchanged. Retained failing runs demonstrate the missing
 pre-instruction PVI fault and rejection of valid saved event-frame PCs.
 
+The [IRET qualification](evidence/x86-paged-iret-2026-11-02.json) records
+566 passing tests and two explicit LA57 skips across both SDKs, after integrating
+current `dev`. The 130,290 CPU comparisons include 11,780 new return/handler
+comparisons, with 4,624 IRET fault cases. The 272 #AC VMX/NMI discrepancies
+above remain separately reported; they are not counted as matching NMI bits.
+All 450 captured exports match across SDKs, and 186 prior no-fault C/header
+outputs remain byte-identical. Retained failures demonstrate the wrong frame
+order/CR2, lost descriptor writes, eager whole-frame canonical checks and
+incorrect same-CPL data-cache invalidation.
+
 This binding owns scalar commits and faultable long-mode interrupt returns.
 REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
