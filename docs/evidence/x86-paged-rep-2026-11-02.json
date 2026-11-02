@@ -38,7 +38,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final-admission/native/paged-p/result.xml"
       ],
@@ -67,7 +67,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*PagedRepeated*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/native/rep-e/result.xml"
       ],
@@ -96,7 +96,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/native/source/result.xml"
       ],
@@ -125,7 +125,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/native/export/result.xml"
       ],
@@ -154,7 +154,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/native/paging/result.xml"
       ],
@@ -183,7 +183,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86RepStateTests",
+        "build-x86-native/bin/NeverDX86RepStateTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/native/rep-native/result.xml"
       ],
@@ -212,7 +212,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86NativeStateAuditTests",
+        "build-x86-native/bin/NeverDX86NativeStateAuditTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/native/audit/result.xml"
       ],
@@ -241,7 +241,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/paged-p/result.xml"
       ],
@@ -270,7 +270,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*PagedRepeated*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/rep-e/result.xml"
       ],
@@ -299,7 +299,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/source/result.xml"
       ],
@@ -328,7 +328,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/export/result.xml"
       ],
@@ -357,7 +357,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/paging/result.xml"
       ],
@@ -386,7 +386,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86RepStateTests",
+        "build-x86/bin/NeverDX86RepStateTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/rep-native/result.xml"
       ],
@@ -415,7 +415,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86NativeStateAuditTests",
+        "build-x86/bin/NeverDX86NativeStateAuditTests",
         "--gtest_filter=*",
         "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/final/r6/audit/result.xml"
       ],
@@ -1054,19 +1054,19 @@
       "sdk": "native",
       "run": "paging",
       "test": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
-      "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:110\nBound KVM CPU has no LA57\n"
+      "reason": "unittests/translate/x86/X86PagingNativeTests.cpp:110\nBound KVM CPU has no LA57\n"
     },
     {
       "sdk": "r6",
       "run": "paging",
       "test": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
-      "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:110\nBound KVM CPU has no LA57\n"
+      "reason": "unittests/translate/x86/X86PagingNativeTests.cpp:110\nBound KVM CPU has no LA57\n"
     },
     {
       "sdk": "r6",
       "run": "rep-native",
       "test": "NativeContractsRejectWrongModeEffectsAndControls",
-      "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86RepStateTests.cpp:469\nnative REP interfaces require the qualified LLVM fork\n"
+      "reason": "unittests/lift/x86_64/X86RepStateTests.cpp:469\nnative REP interfaces require the qualified LLVM fork\n"
     }
   ],
   "builds": [
@@ -1219,7 +1219,7 @@
           "taskset",
           "-c",
           "0",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*PagedRepeated*",
           "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/native/p/result.xml"
         ],
@@ -1247,7 +1247,7 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*PagedRepeated*",
           "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/native/e/result.xml"
         ],
@@ -1275,7 +1275,7 @@
           "taskset",
           "-c",
           "0",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*PagedRepeated*",
           "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/r6/p/result.xml"
         ],
@@ -1303,7 +1303,7 @@
           "taskset",
           "-c",
           "12",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*PagedRepeated*",
           "--gtest_output=xml:/mnt/data/neverd-paged-rep-20261102/post-integration/r6/e/result.xml"
         ],
