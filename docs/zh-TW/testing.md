@@ -2228,6 +2228,12 @@ MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` 以 O0/O2 與 ASan/UBSan 執行 COFF/ELF/Mach-O 的正反向遍歷、中間複製、同寬轉換、讀寫及純寫路徑。`CursorStorageNeedsAnAddressPreservingMemoryPath` 拒絕純量常數、載入的指標、窄化及沒有記憶體消費者的算術；`DirectBoundedTablesKeepTheirExtent` 保留有界直接索引路徑。建置 `NeverDLiftTests` 後執行 `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`。
 
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` 以 O0/O2 與 ASan/UBSan 執行 COFF/ELF/Mach-O 中呼叫端透過具名、未具名及內部位址讀取資料的路徑。即使區域內沒有讀取操作且符號沒有大小，也必須保留全部原始位元組、位址別名及下一符號邊界；已知大小的純量維持原型別。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` 在兩種函式順序下執行同一位址節點的區域單位元組讀取和回傳用途，並使用相同的格式、命名、最佳化與 sanitizer 矩陣。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` 檢查超出共用嵌入上限的未定大小逸出物件，涵蓋 COFF、ELF、Mach-O、具名與未具名物件、listing 名稱及 ELF 重定位接納路徑；拒絕時輸出保持為空。
+
 LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行期選擇讀取任一 64 位元半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 及文件規定的 `-fno-strict-aliasing` 契約下涵蓋加法與基於對齊的 OR 定址。執行 `NeverDLLVMCValueTests`；相關框架、向量及顯示記錄測試涵蓋周邊儲存路徑。
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` 對 x64/AArch64 與 COFF/ELF/Mach-O 的可變游標迴圈執行 LLVM C 的 O0/O2 + ASan/UBSan 檢查。在明確的原始映像原始碼模式下，已確認的位址即使鄰近無關指標重定位，也使用共用的執行期映像。數值相同的一般整數保持純量；獨立指標映像保留既有驗證。執行 `NeverDMedLLVMDirectDataTests` 及指標重定位邊界測試。

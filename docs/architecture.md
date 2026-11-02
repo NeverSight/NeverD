@@ -17239,6 +17239,16 @@ The shared OR builder can discard an XOR operand when the accumulated constant c
 
 HighC follows pointer-width assignments, copies and addition/subtraction from ordinary memory operands to image-address constants. Loop backedges retain the complete object supplied by the existing symbol/section owner and its alignment residue. This function-local storage dependency walk does not substitute pointer values, prove dereference validity or follow loaded pointers and narrowing conversions. Direct bounded indexed accesses keep their existing extent proof.
 
+Proven image addresses materialized for callers retain that same bounded storage
+even when no local memory access or sized symbol supplies their extent. An
+interior address shares its owner's bytes and offset; a neighboring data symbol
+still ends the storage. A local scalar access width does not bound a caller's
+later accesses through the escaped address.
+
+Image storage classifies operand uses separately from shared expression nodes. A local memory use cannot hide a later escaping use, in either traversal order; the same classification controls bounded table extents.
+
+If an escaping unsized address has no admissible storage extent, including an extent beyond the shared embedding limit, emission fails explicitly before publishing source. It must not substitute a smaller scalar object.
+
 ## Native x64 dispatch frame source
 
 `loader/X86/X64DispatchFrame.h` recognizes the complete fixed instruction

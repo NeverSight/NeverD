@@ -2272,6 +2272,12 @@ MedIR 상수 전파와 복사 전파는 `canPropagateConstantToOperand`를 공�
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject`는 COFF/ELF/Mach-O의 정방향/역방향 루프, 중간 복사, 동일 너비 변환, 읽기/쓰기 및 쓰기 전용 경로를 O0/O2와 ASan/UBSan으로 실행합니다. `CursorStorageNeedsAnAddressPreservingMemoryPath`는 스칼라 상수, 로드된 포인터, 너비 축소 및 메모리 사용 없는 산술을 거부하며, `DirectBoundedTablesKeepTheirExtent`는 제한된 직접 인덱스 범위를 유지합니다. `NeverDLiftTests`를 빌드한 뒤 `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`를 실행합니다.
 
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` 는 COFF/ELF/Mach-O에서 이름이 있거나 없는 주소와 내부 주소를 통한 호출자의 읽기를 O0/O2와 ASan/UBSan으로 실행합니다. 지역 읽기나 심볼 크기가 없어도 원본 바이트 전체, 주소 별칭 및 다음 심볼 경계를 보존합니다. 크기가 알려진 스칼라는 기존 형식을 유지합니다.
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` 는 로컬 1바이트 읽기와 주소를 반환하는 함수가 공유하는 주소 노드를 두 함수 순서에서 실행하며, 같은 형식·이름·최적화·새니타이저 조합을 사용합니다.
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` 는 함수 밖으로 전달되는 크기 미지정 객체가 공유 임베딩 한도를 초과하면 거부합니다. COFF, ELF, Mach-O, 이름 유무, 목록 이름 및 ELF 재배치에 의한 허용을 검사하며, 거부 시 출력은 비어 있습니다.
+
 LLVM C의 합성 스택 슬롯은 실행 중 선택한 64비트 절반을 읽기 전에 128비트 정수 저장 전체를 유지합니다. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords`는 문서화된 `-fno-strict-aliasing` 계약과 ASan/UBSan을 사용하여 O0/O2에서 덧셈 및 정렬 기반 OR 주소 계산을 검증합니다. `NeverDLLVMCValueTests`와 관련 프레임, 벡터, 표시 레코드 테스트를 실행하세요.
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations`는 x64/AArch64 및 COFF/ELF/Mach-O의 가변 커서 루프를 LLVM C의 O0/O2와 ASan/UBSan으로 실행합니다. 명시적 원본 이미지 소스 모드에서는 관련 없는 포인터 재배치 옆에서도 확인된 주소가 공유 실행 이미지에 연결됩니다. 숫자가 같은 일반 정수는 스칼라로 유지되며 독립 포인터 미러의 기존 검증도 유지됩니다. `NeverDMedLLVMDirectDataTests`와 포인터 재배치 경계 테스트를 실행하세요.

@@ -2091,6 +2091,12 @@ Der gemeinsame OR-Konstruktor entfernt einen XOR-Operanden, wenn die angesammelt
 
 HighC verfolgt Zuweisungen, Kopien sowie Addition/Subtraktion in Zeigerbreite von gewöhnlichen Speicheroperanden bis zu Bildadresskonstanten. Schleifenrückkanten erhalten das vollständige Objekt innerhalb der bestehenden Symbol-/Abschnittsgrenzen und dessen Ausrichtungsrest. Diese funktionslokale Analyse ersetzt keine Zeigerwerte, beweist keine gültige Dereferenzierung und verfolgt weder geladene Zeiger noch verengende Konvertierungen. Direkt indizierte Zugriffe mit bewiesener Grenze behalten ihren bisherigen Umfangsnachweis.
 
+Nachgewiesene Bildadressen, die für Aufrufer materialisiert werden, behalten denselben begrenzten Speicherbereich, auch wenn weder ein lokaler Speicherzugriff noch ein Symbol mit Größenangabe ihren Umfang bestimmt. Eine innere Adresse teilt Bytes und Offset ihres Eigentümers; ein benachbartes Datensymbol begrenzt weiterhin den Speicher. Die Breite eines lokalen skalaren Zugriffs begrenzt spätere Zugriffe des Aufrufers über die weitergegebene Adresse nicht.
+
+Der Bildspeicher klassifiziert Operandenverwendungen getrennt von gemeinsam genutzten Ausdrucksknoten. Ein lokaler Speicherzugriff darf eine spätere Weitergabe der Adresse unabhängig von der Durchlaufreihenfolge nicht verdecken; dieselbe Klassifikation bestimmt begrenzte Tabellenbereiche.
+
+Hat eine weitergegebene Adresse ohne Größenangabe keinen zulässigen Speicherbereich, auch bei Überschreitung der gemeinsamen Einbettungsgrenze, schlägt die Ausgabe vor der Veröffentlichung des Quelltexts ausdrücklich fehl. Ein kleineres skalares Objekt darf den Bereich nicht ersetzen.
+
 LLVMC indiziert die LLVM-Blockreihenfolge einmal je unveränderlicher Funktionsprojektion. Layoutprüfungen für exklusive Sprünge und else-if verwenden diesen Index statt eines Funktionsdurchlaufs pro Kandidat. Beim Funktionswechsel wird der Index neu aufgebaut; Verzweigungssemantik und Quelltextgrenzen bleiben gleich.
 
 `wrapInterpreterMachineRegionChoiceSourceX64V2` verwendet einen getrennten Zustand von 472 Byte mit expliziten, stabilen FSBase/GSBase-Eingaben. Der gemeinsame Quelladapter nutzt die bestehende Zulassung segmentierter Speicherzugriffe und setzt skalare Zugriffe von 1/2/4/8 Byte mit 64-Bit-Offset vor beiden C-Ausgaben in Basis plus Offset um. Lineare Adressen dürfen sich auch mit Rückkehrzellen überlappen; Zustand und Datensatzfolgen bleiben getrennt. V1-Layouts und Ablehnungen bleiben unverändert. Andere Architekturzustände und Basisänderungen bleiben ausgeschlossen.

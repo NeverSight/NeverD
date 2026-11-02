@@ -19709,6 +19709,15 @@ The repeated-image regression also covers unrelated function-pointer relocations
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` executes forward/backward cursor loops, intermediate copies, same-width casts and read/write or store-only paths for COFF/ELF/Mach-O at O0/O2 with ASan/UBSan. `CursorStorageNeedsAnAddressPreservingMemoryPath` rejects scalar constants, loaded pointers, narrowing conversions and arithmetic without a memory consumer; `DirectBoundedTablesKeepTheirExtent` retains the bounded direct-index path. Build `NeverDLiftTests`, then run `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.
 
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` executes caller
+reads through named and unnamed base/interior addresses for COFF/ELF/Mach-O at
+O0/O2 with ASan/UBSan. No local load supplies an extent. All original bytes and
+pointer aliases survive, and the next unsized symbol bounds the storage.
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` executes a shared address node used by a local byte load and a returning function in both function orders, with the same format, naming, optimization and sanitizer matrix.
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` rejects an unsized escaped object beyond the shared embedding limit, across COFF, ELF and Mach-O, named and unnamed objects, listing names and ELF relocation admission. Refusal leaves the output empty.
+
 Synthetic LLVM C stack slots retain the complete 128-bit integer store before a runtime selection reads either 64-bit half. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` covers addition and alignment-based OR addressing at O0/O2 with ASan/UBSan and the documented `-fno-strict-aliasing` contract. Run `NeverDLLVMCValueTests`; related frame, vector and display-record suites check the surrounding storage paths.
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` executes mutable cursor loops for x64/AArch64 and COFF/ELF/Mach-O through LLVM C at O0/O2 with ASan/UBSan. In the explicit original-image source mode, exact address occurrences use the shared live image span even beside unrelated pointer relocations. Numeric collisions remain scalars; standalone pointer mirrors retain their existing validation. Run `NeverDMedLLVMDirectDataTests` and the pointer relocation boundary suites.

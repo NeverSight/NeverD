@@ -2097,6 +2097,12 @@ Le constructeur OR partagé élimine un opérande XOR si la constante accumulée
 
 HighC suit les affectations, copies et additions/soustractions de largeur pointeur depuis les opérandes mémoire ordinaires jusqu’aux constantes d’adresse image. Les retours de boucle conservent l’objet complet délimité par le propriétaire symbole/section existant et son résidu d’alignement. Ce parcours local à la fonction ne substitue pas les valeurs, ne prouve pas la validité des accès et ne traverse ni les pointeurs chargés ni les conversions réductrices. Les accès indexés directs bornés gardent leur preuve d’étendue.
 
+Les adresses image prouvées, matérialisées pour les appelants, conservent ce même stockage borné même si aucun accès mémoire local ni symbole doté d’une taille n’en précise l’étendue. Une adresse intérieure partage les octets et le décalage de son propriétaire ; le symbole de données voisin borne toujours le stockage. La largeur d’un accès scalaire local ne limite pas les accès ultérieurs de l’appelant par l’adresse qui sort de la fonction.
+
+Le stockage image classe les utilisations des opérandes séparément des nœuds d’expression partagés. Un accès mémoire local ne peut masquer une utilisation ultérieure qui transmet l’adresse hors de la fonction, quel que soit l’ordre de parcours ; cette même classification détermine les étendues des tables bornées.
+
+Si une adresse transmise hors de la fonction et dépourvue de taille n’a pas d’étendue de stockage admissible, notamment au-delà de la limite commune d’incorporation, l’émission échoue explicitement avant de publier le code source. Elle ne doit pas lui substituer un objet scalaire plus petit.
+
 LLVMC indexe une seule fois l’ordre des blocs LLVM pour chaque projection de fonction immuable. Les contrôles de disposition des sauts exclusifs et des else-if réutilisent cet index au lieu de parcourir la fonction pour chaque candidat. Un changement de fonction reconstruit l’index ; la sémantique des branches et les limites du source restent identiques.
 
 `wrapInterpreterMachineRegionChoiceSourceX64V2` utilise un état distinct de 472 octets avec FSBase/GSBase explicites et stables. L’adaptateur partagé réutilise l’admission mémoire segmentée et traduit les accès scalaires de 1/2/4/8 octets à déplacement de 64 bits en base plus déplacement avant les deux sorties C. Les adresses peuvent se chevaucher, y compris avec les cellules de retour ; état et bandes restent séparés. Les dispositions et refus V1 sont inchangés. Les autres états architecturaux et changements de base restent exclus.

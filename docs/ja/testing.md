@@ -2282,6 +2282,12 @@ MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を�
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` は COFF/ELF/Mach-O の前進/後退、途中のコピー、同幅変換、読み書きと書き込みのみの経路を O0/O2 と ASan/UBSan で実行します。`CursorStorageNeedsAnAddressPreservingMemoryPath` はスカラー定数、ロードされたポインタ、幅の縮小、メモリ利用のない算術を拒否し、`DirectBoundedTablesKeepTheirExtent` は有界な直接索引を維持します。`NeverDLiftTests` をビルドして `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4` を実行してください。
 
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` は COFF/ELF/Mach-O で、呼び出し元が名前付き・名前なし・内部アドレスを通じて読む経路を O0/O2 と ASan/UBSan で実行します。局所的な読み込みやシンボルのサイズがなくても、元の全バイト、アドレスの別名関係、次のシンボル境界を保持します。サイズが既知のスカラーは元の型を維持します。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` は、ローカルな1バイト読み出しとアドレスを返す関数で共有されるアドレスノードを、両方の関数順序と同じ形式・命名・最適化・サニタイザーの組み合わせで実行します。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` は、関数外へ渡されるサイズ不明のオブジェクトが共有の埋め込み上限を超える場合を拒否します。COFF・ELF・Mach-O、名前の有無、リスティング名、ELF再配置による採用を対象とし、拒否時は出力を空に保ちます。
+
 LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビット半分を読み出す前に、128 ビット整数の書き込み全体を保持します。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` は、文書化された `-fno-strict-aliasing` 契約と ASan/UBSan を使用し、O0/O2 で加算およびアラインメントに基づく OR アドレス計算を検証します。`NeverDLLVMCValueTests` と関連するフレーム、ベクトル、表示レコードのテストを実行してください。
 
 `MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` は x64/AArch64 と COFF/ELF/Mach-O の可変カーソルループを LLVM C の O0/O2 と ASan/UBSan で実行します。明示的な元イメージのソースモードでは、無関係なポインタ再配置の隣でも、確定したアドレスは共有の実行時イメージを使用します。同じ数値の整数はスカラーのままで、独立したポインタミラーの検証も維持されます。`NeverDMedLLVMDirectDataTests` とポインタ再配置境界テストを実行してください。
