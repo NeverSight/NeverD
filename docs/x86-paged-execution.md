@@ -305,6 +305,15 @@ outputs remain byte-identical. Retained failures demonstrate the wrong frame
 order/CR2, lost descriptor writes, eager whole-frame canonical checks and
 incorrect same-CPL data-cache invalidation.
 
+The [RETF qualification](evidence/x86-paged-retf-2026-11-02.json) records
+570 primary dual-SDK passing tests and eight additional efficient-core test
+runs, with the same two LA57 skips: 578 passes and 170,382 original-CPU
+comparisons overall. The RETF subset contains 27,648 comparisons, including
+15,312 fault cases. Expanded IRET matrices exercise both core classes and count
+544 #AC VMX/NMI discrepancies separately. All 474 primary exports match across
+SDKs; each SDK's 44 efficient-core exports also match its performance-core
+outputs. The 186 earlier no-fault C/header outputs remain byte-identical.
+
 This binding owns scalar commits and faultable long-mode interrupt/far returns.
 REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,

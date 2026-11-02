@@ -3547,3 +3547,9 @@ See the [runtime contract](x86-paged-execution.md#faultable-retf-and-parameter-c
 and [qualification evidence](evidence/x86-paged-retf-2026-11-02.json).
 The remaining legacy-mode, SMM, enclave, partial-instruction and external-device
 boundaries above still apply; LLVM release/pin completion is not implied.
+
+The RETF evidence records 578 passing test runs, two LA57 skips and 170,382
+CPU comparisons across both SDKs and both local core classes. Of these, 27,648
+exercise RETF; 544 IRET #AC VMX/NMI discrepancies remain explicitly separated.
+All 474 primary exports match between SDKs, and the 186 prior no-fault outputs
+remain unchanged.
