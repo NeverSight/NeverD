@@ -3575,6 +3575,13 @@ are admitted by the shared raw grammar. IRQ/NMI scheduling and a generated
 page-repair/IRET/retry handler compose with the loads. See the
 [paged far-pointer contract](x86-paged-execution.md#faultable-lss-lfs-and-lgs).
 
+The [qualification evidence](evidence/x86-paged-far-pointer-2026-11-02.json)
+records 604 passing test runs, two LA57 skips and 768,246 CPU comparisons,
+including 580,440 far-pointer comparisons. Both SDKs produce identical primary
+and E-core exports; all 484 prior outputs are unchanged. Existing IRET #AC
+VMX/NMI differences are counted separately. The native LLVM/NeverC compiler
+interface checks also pass without changes to those far-load interfaces.
+
 The earlier LSS audit above remains a historical scheduler qualification; this
 change adds the previously refused paged instruction execution. It does not
 complete legacy i386 dispatch, SMM/SGX software environments or partial-progress

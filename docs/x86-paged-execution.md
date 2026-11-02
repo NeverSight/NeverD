@@ -157,6 +157,19 @@ ordinary RAM. The portable runtime path uses scalar IR and callbacks. The
 existing LLVM fork intrinsics and NeverC native builtins remain separate native
 execution capabilities and need no source change for this runtime extension.
 
+The [November 2 qualification](evidence/x86-paged-far-pointer-2026-11-02.json)
+records 604 passing test runs, two unavailable LA57 oracle skips and 768,246
+original-CPU comparisons across the native-intrinsic and pinned r6 SDKs. The
+far-pointer subset is 580,440 comparisons, including 360,096 fault cases;
+these subsets are included in the total. The 99-form matrix exercises 181
+input/fault cases through both C routes, Clang/NeverC and O0/O2 on P/E cores.
+There are also 96 policy/backing checks, including failures after the offset
+read and at descriptor publication. All 556 primary and 124 additional E-core
+exports match across SDKs; all 484 earlier outputs are unchanged. The existing
+544 IRET #AC VMX/NMI discrepancies remain separately recorded. Five compiler
+interface tests and 33 new-pass-manager commands separately verify the existing
+native intrinsics; they are not added to the CPU totals.
+
 ## Faultable IRET, IRETD and IRETQ
 
 Canonical `66 cf`, `cf` and `48 cf` use the same descriptor, return-frame,
