@@ -2230,7 +2230,7 @@ MedIR 的常量传播和复制传播共用 `canPropagateConstantToOperand`：计
 
 `NeverDFiniteScalarBranchTests` 覆盖 x86/x64/AArch64 与 COFF/ELF/Mach-O 的无表算术分派、稀疏掩码、模运算、部分写入、调用破坏、临时量寿命、预算、外部入口和新增边。`NeverDFiniteScalarBranchSourceTests` 在优化开关、O0/O2、UBSan 下执行两条 C 路线的所有用例，并验证同时保存代码指针时的独立身份及跳过 SSA 的拒绝行为。
 
-`NeverDCalleeSourceCLI` 通过正式 CLI 检查独立编码的 x64 PE/ELF 调用链：地址和名称选择、传递调用定义、排除无关函数、普通单函数输出、恰好达到和超过深度上限、循环以及根函数和被调函数的拒绝。调用闭包失败时保留已有输出。完整三个函数的 C 单元在 O0/O2 编译执行并返回独立预期值；递归样例只做检查。
+`NeverDCalleeSourceCLI` 通过正式 CLI 检查独立编码的 x64 PE/ELF 调用链：地址和名称选择、传递调用定义、排除无关函数、普通单函数输出、恰好达到和超过深度上限、循环以及根函数和被调函数的拒绝。调用闭包失败时保留已有输出。完整三个函数的 C 单元在 O0/O2 编译执行并返回独立预期值；递归样例只做检查。 它还覆盖没有展开元数据或符号、以 NOP 填充分隔的直接被调叶函数，以及完成函数发现后按数值地址选择该叶函数。
 
 重复镜像访问回归还覆盖同一数据所有者内的不相关函数指针重定位、镜像内目标、位模式类似地址的整数填充值、源寄存器完成位移，以及通过更新后的源和目标寄存器再次读取。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` 检查 x86/x64 边界：动态输入、分段或缩减地址宽度、畸形接口及非地址输出不能取得完成事实。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` 检查输入保持，只有自然宽度的零次数用例在主机执行。完整范围检查拒绝截断映射和溢出次数。本机 LLVM 缺少原生 intrinsic 时，相应检查明确跳过。
 
