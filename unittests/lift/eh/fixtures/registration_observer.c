@@ -20,7 +20,8 @@ extern int __stdcall registration_entry(int);
 extern int __stdcall registration_entry(int, int, int, int);
 #elif REGISTRATION_PARENT_POP == 20
 extern int __stdcall registration_entry(int, int, int, int, int);
-#elif REGISTRATION_CASE == 5 || REGISTRATION_CASE == 6 || REGISTRATION_CASE == 12
+#elif REGISTRATION_CASE == 5 || REGISTRATION_CASE == 6 ||                      \
+    REGISTRATION_CASE == 12
 extern int registration_entry(int);
 #else
 extern int registration_entry(void);
@@ -184,7 +185,7 @@ void mainCRTStartup(void) {
 #if REGISTRATION_PARENT_POP
     unsigned stack_before, stack_after;
     volatile unsigned stack_guard[2] = {0x12345678, 0xa5c39e71};
-    __asm mov stack_before, esp
+    __asm { mov stack_before, esp }
 #endif
 #if REGISTRATION_STARTUP_INFO
     prepare_startup_observation();
@@ -233,7 +234,7 @@ void mainCRTStartup(void) {
 #endif
 #endif
 #if REGISTRATION_PARENT_POP
-    __asm mov stack_after, esp
+    __asm { mov stack_after, esp }
     chain_ok &= stack_before == stack_after && stack_guard[0] == 0x12345678 &&
                 stack_guard[1] == 0xa5c39e71;
 #endif
