@@ -569,6 +569,7 @@ add_neverd_unittest(NeverDLiftTests
   core/FPParameterMaskTests.cpp
   core/MedDceImplicitSpTests.cpp
   core/MedCallLeftoversTests.cpp
+  core/MedPositionalCallArgumentsTests.cpp
   core/MedStackDeltaTests.cpp
   core/MedVariadicTests.cpp
   eh/COFFExceptionTests.cpp
@@ -1753,6 +1754,10 @@ add_neverd_unittest(NeverDAAPCS64CallContractTests
 )
 target_include_directories(NeverDAAPCS64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+add_neverd_unittest(NeverDMedPositionalCallArgumentsTests
+  core/MedPositionalCallArgumentsTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Pipeline)
 
 add_neverd_unittest(NeverDWin64CallContractTests
   core/MedCallLeftoversTests.cpp

@@ -6764,6 +6764,13 @@ incoming stack read through thirty SP diamonds. SEH handler roots joining the
 protected range with the normal path build such webs. Each value's entry-SP
 offset is computed once.
 
+`NeverDMedPositionalCallArgumentsTests` checks Win64 shared integer/FP
+positions across direct/indirect calls, all mixed four-slot masks, stack
+arguments and absolute XMM positions. It retains explicit source operands,
+nonstandard callee register order and SysV's independent register banks.
+Run this focused owner and the shared ABI/call-contract suites after
+changing positional recovery.
+
 `NeverDFPParameterMaskTests` runs the shared ABI suite and `FPParameterMask.*`.
 The mask controls retain live bytes, earlier stores, ambiguous definitions and
 unmasked return paths while discarding only fully cleared or replaced bytes.

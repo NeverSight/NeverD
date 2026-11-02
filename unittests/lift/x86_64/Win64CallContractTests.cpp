@@ -275,10 +275,12 @@ TEST(SummarizedCallArguments, ScalarCallsDoNotAcquireIncidentalVectorState) {
             recoverCallAbi(Function, Arch::X64, {{0x2000, "consumer"}}, &Image);
             ASSERT_EQ(Function.CallInfos.size(), 1u);
             const auto &Recovered = Function.CallInfos.front().Args;
-            ASSERT_EQ(Recovered.size(), HasVectorSummary ? 2u : 3u);
+            const bool IndependentVector =
+                !HasVectorSummary && Format != BinaryFormat::COFF;
+            ASSERT_EQ(Recovered.size(), IndependentVector ? 3u : 2u);
             EXPECT_EQ(Recovered[0], Arguments[0]);
             EXPECT_EQ(Recovered[1], Arguments[1]);
-            if (!HasVectorSummary)
+            if (IndependentVector)
               EXPECT_EQ(Recovered[2], Scratch);
           }
         }
