@@ -355,9 +355,8 @@ bool hasMainSignature(const HighFunc &Func,
 } // namespace
 
 bool HighCWriter::takesMainSignature(const HighFunc &Func) const {
-  return hasMainSignature(Func, Dbg && Func.Entry
-                                    ? Dbg->resolveFunction(Func.Entry)
-                                    : std::nullopt);
+  return hasMainSignature(Func, Dbg && Func.Entry ? debugFunction(Func)
+                                                  : std::nullopt);
 }
 
 void HighCWriter::prepareFunctionIdentifiers(
@@ -449,8 +448,7 @@ void HighCWriter::prepareFunctionIdentifiers(
     if (Func.Entry &&
         (SourceName.empty() || isSynthesizedFuncName(SourceName))) {
       if (Dbg) {
-        if (auto Sym = Dbg->resolveFunction(Func.Entry);
-            Sym && !Sym->Name.empty())
+        if (auto Sym = debugFunction(Func); Sym && !Sym->Name.empty())
           SourceName = std::move(Sym->Name);
       }
       if ((SourceName.empty() || isSynthesizedFuncName(SourceName)) &&

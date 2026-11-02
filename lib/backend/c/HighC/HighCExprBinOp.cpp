@@ -1237,7 +1237,7 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
             DbgTy && (DbgTy->Kind == NdTypeKind::Int || DbgTy->IsEnum))
           return DbgTy;
         if (Dbg && CurrentFunc) {
-          if (const auto &FS = resolvedFunction(CurrentFunc->Entry); FS) {
+          if (const auto &FS = resolvedFunction(*CurrentFunc); FS) {
             const std::string Printed = copyForwardName(Raw);
             for (const auto &[PName, PTy] : FS->Params) {
               if (PName == Printed && PTy &&

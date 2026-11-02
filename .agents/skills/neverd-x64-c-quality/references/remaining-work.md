@@ -21,6 +21,19 @@ proof of an arbitrary dynamic transfer's owner.
 Use public fixtures and emitter tests as the durable contract. Private binary
 analysis and comparison output belong outside the repository.
 
+Unused scalar call formals now admit bounded nested source bodies. The shared
+LLVM proof prepares up to four complete supports from leaves to callers;
+HighC projects the same helper dependencies before removing outer formals.
+Shared callees, original outgoing-slot aliases and cached queries retain their
+results and memory effects. Observed missing inputs, recursive dependencies and
+exhausted bounds retain the original view. The selected private queries remain
+byte-identical; this does not recover their missing entry state, authenticate
+arbitrary nested pointer observers or execute Windows services.
+HighC also isolates these helpers from native debug declarations and frames at
+their zero address marker. A conflicting 32-bit native declaration previously
+truncated a 64-bit helper result. Real native address-zero declarations remain
+usable, and entryless PE DLLs no longer acquire an implicit DLL-entry prototype.
+
 The latest ordinary source qualification reduces the former 56 missing
 argument occurrences to **7 in each C route**, across four of the five roots.
 Actual-body specialization removes 47 unused stack-formal occurrences in one

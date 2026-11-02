@@ -150,6 +150,28 @@ TEST_F(SessionLLVMTest, ExactAddressZeroIgnoresHelperNamesAndDeclarations) {
   EXPECT_TRUE(State.LastError.empty());
 }
 
+TEST_F(SessionLLVMTest, DllEntryPrototypeRequiresARealPEEntry) {
+  State.Img.Format = BinaryFormat::COFF;
+  State.Img.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
+  State.Img.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_GUI;
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(unsigned(Architecture));
+    State.Img.Arch = Architecture;
+    State.Img.Bits =
+        Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    State.Img.Entry = 0;
+    EXPECT_TRUE(State.platformEntryDeclaration().empty());
+    State.Img.Entry = 0x1000;
+    EXPECT_NE(State.platformEntryDeclaration().find("DllEntryPoint"),
+              std::string::npos);
+  }
+  State.Img.DynInfo.PECharacteristics = 0;
+  EXPECT_TRUE(State.platformEntryDeclaration().empty());
+  State.Img.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
+  State.Img.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  EXPECT_TRUE(State.platformEntryDeclaration().empty());
+}
+
 TEST_F(SessionLLVMTest, SourceBodyExpansionKeepsNativeAndUnoptimizedQueries) {
   State.PipeRan = false;
   State.Img.Format = BinaryFormat::COFF;

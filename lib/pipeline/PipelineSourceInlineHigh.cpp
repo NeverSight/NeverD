@@ -177,6 +177,7 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
   struct Helper {
     HighFunc Function;
     SourceInlineBody Body;
+    std::set<va_t> Dependencies;
   };
   std::map<va_t, Helper> Helpers;
   // Names belong to this emitted unit, not to the image's native identities.
@@ -186,14 +187,69 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
       Names.insert(Symbol.Name);
   for (const auto &Function : Original.Functions)
     Names.insert(Function.Name);
-  for (const auto &Function : Recovered.HighFuncs) {
-    const auto At = Bodies.find(Function.Entry);
-    if (At == Bodies.end() || Function.Params.size() != At->second.Parameters ||
+  const auto ReplaceCall = [&](HighExpr &E, std::set<va_t> &Used) {
+    if (E.Kind != ExprKind::Call || E.IsIndirectCall || E.SourceCallHint)
+      return;
+    const auto At = Helpers.find(E.CallAddr);
+    if (At == Helpers.end() || E.Operands.size() != At->second.Body.Parameters)
+      return;
+    for (unsigned P : At->second.Body.Unused)
+      if (!simpleOperand(E.Operands[P], false))
+        return;
+    std::vector<ExprPtr> Arguments;
+    for (unsigned P = 0; P < E.Operands.size(); ++P)
+      if (!At->second.Body.Unused.count(P))
+        Arguments.push_back(E.Operands[P]);
+    Used.insert(E.CallAddr);
+    E.CallTarget = At->second.Function.Name;
+    E.CallAddr = 0;
+    E.Operands = std::move(Arguments);
+  };
+  std::map<va_t, const HighFunc *> Definitions;
+  for (const auto &Function : Recovered.HighFuncs)
+    if (Bodies.count(Function.Entry))
+      Definitions.emplace(Function.Entry, &Function);
+  std::set<va_t> Active, Rejected;
+  const auto Prepare = [&](auto &&Self, va_t Entry) -> bool {
+    if (Helpers.count(Entry))
+      return true;
+    if (Rejected.count(Entry) || !Active.insert(Entry).second)
+      return false;
+    const auto Reject = [&] {
+      Active.erase(Entry);
+      Rejected.insert(Entry);
+      return false;
+    };
+    const auto Definition = Definitions.find(Entry);
+    const auto At = Bodies.find(Entry);
+    if (Definition == Definitions.end() || At == Bodies.end())
+      return Reject();
+    const auto &Function = *Definition->second;
+    if (Function.Params.size() != At->second.Parameters ||
         Function.IsVariadic || Function.SourceTypeHint ||
         Function.StructuredExceptionRegions ||
         Function.UnstructuredExceptionRegions)
-      continue;
+      return Reject();
     HighFunc Copy = Function;
+    std::set<va_t> Dependencies;
+    HighCopies Calls;
+    bool Complete = true;
+    // Remove only the shared proof's unused call operands before remapping
+    // this helper's parameters. A discarded outer formal may occur solely in
+    // such an operand of a nested call; visiting it first would reject the
+    // valid helper or leave a dangling parameter reference.
+    Calls.function(Copy, [&](HighExpr &E) {
+      if (E.Kind == ExprKind::Call && !E.IsIndirectCall && !E.SourceCallHint &&
+          Bodies.count(E.CallAddr)) {
+        if (!Self(Self, E.CallAddr)) {
+          Complete = false;
+          return;
+        }
+        ReplaceCall(E, Dependencies);
+      }
+    });
+    if (!Complete || Calls.Failed)
+      return Reject();
     std::vector<int> Positions(Copy.Params.size(), -1);
     std::vector<HighParam> Parameters;
     for (unsigned P = 0; P < Copy.Params.size(); ++P)
@@ -218,7 +274,7 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
         Remap(Output);
     });
     if (Cloner.Failed)
-      continue;
+      return Reject();
     Copy.Params = std::move(Parameters);
     Copy.Name = "neverd_source_body_" + llvm::utohexstr(Function.Entry);
     while (!Names.insert(Copy.Name).second)
@@ -229,8 +285,13 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
     Copy.SourceFile.clear();
     Copy.SourceLine = 0;
     Copy.ExceptionMetadata.reset();
-    Helpers.emplace(Function.Entry, Helper{std::move(Copy), At->second});
-  }
+    Helpers.emplace(Function.Entry, Helper{std::move(Copy), At->second,
+                                           std::move(Dependencies)});
+    Active.erase(Entry);
+    return true;
+  };
+  for (const auto &[Entry, Body] : Bodies)
+    Prepare(Prepare, Entry);
   if (Helpers.empty())
     return std::nullopt;
 
@@ -238,31 +299,18 @@ specializeHighSourceBodies(const BinaryImage &Image, PipelineResult &Recovered,
   HighCopies Cloner;
   std::set<va_t> Used;
   for (auto &Function : Result.Functions)
-    Cloner.function(Function, [&](HighExpr &E) {
-      if (E.Kind != ExprKind::Call || E.IsIndirectCall || E.SourceCallHint)
-        return;
-      const auto At = Helpers.find(E.CallAddr);
-      if (At == Helpers.end() ||
-          E.Operands.size() != At->second.Body.Parameters)
-        return;
-      for (unsigned P : At->second.Body.Unused)
-        if (!simpleOperand(E.Operands[P], false))
-          return;
-      std::vector<ExprPtr> Arguments;
-      for (unsigned P = 0; P < E.Operands.size(); ++P)
-        if (!At->second.Body.Unused.count(P))
-          Arguments.push_back(E.Operands[P]);
-      Used.insert(E.CallAddr);
-      E.CallTarget = At->second.Function.Name;
-      E.CallAddr = 0;
-      E.Operands = std::move(Arguments);
-    });
+    Cloner.function(Function, [&](HighExpr &E) { ReplaceCall(E, Used); });
   if (Used.empty() || Cloner.Failed)
     return std::nullopt;
   for (auto &Observation : Result.Sources)
     if (const auto Old = Observation.Expression.lock())
       if (auto At = Cloner.Copies.find(Old.get()); At != Cloner.Copies.end())
         Observation.Expression = At->second;
+  std::vector<va_t> Pending(Used.begin(), Used.end());
+  for (size_t I = 0; I < Pending.size(); ++I)
+    for (va_t Dependency : Helpers.at(Pending[I]).Dependencies)
+      if (Used.insert(Dependency).second)
+        Pending.push_back(Dependency);
   for (va_t Entry : Used) {
     auto &Helper = Helpers.at(Entry).Function;
     Result.BodyOrigins.emplace(Helper.Name, Entry);

@@ -155,7 +155,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
       forEachExpr(Statement, [&](const ExprPtr &E) { VisitExpr(*E); });
     });
     if (Dbg)
-      if (auto Found = Dbg->resolveFunction(Function.Entry)) {
+      if (auto Found = debugFunction(Function)) {
         Visit(Found->ReturnType);
         for (const auto &[Name, Type] : Found->Params)
           Visit(Type);
@@ -269,7 +269,7 @@ void HighCWriter::writeSourceRecordDeclarations(
     for (const HighParam &Param : Function.Params)
       Visit(Param.Type);
     if (Dbg)
-      if (auto Found = Dbg->resolveFunction(Function.Entry))
+      if (auto Found = debugFunction(Function))
         Signature(*Found);
   }
   for (const auto &[Name, Function] : DebugExternSigs)
@@ -408,7 +408,7 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
     for (const HighLocal &Local : Func.Locals)
       AddType(Local.Type);
     if (Dbg)
-      if (auto Function = Dbg->resolveFunction(Func.Entry))
+      if (auto Function = debugFunction(Func))
         AddSignature(*Function);
   }
   for (const auto &[Identifier, Function] : DebugExternSigs)

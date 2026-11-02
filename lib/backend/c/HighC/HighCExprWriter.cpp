@@ -164,9 +164,10 @@ std::string frameStorageAddress(int64_t Displacement) {
          std::to_string(Magnitude) + ")";
 }
 
-std::string HighCWriter::debugNameForDisplacement(va_t Entry,
+std::string HighCWriter::debugNameForDisplacement(const HighFunc &Function,
                                                   int64_t Disp) const {
-  if (!Dbg)
+  auto *Debug = functionDebugContext(Function);
+  if (!Debug)
     return {};
   auto Accept = [](const std::optional<VariableSym> &Var) -> std::string {
     if (!Var || Var->Name.empty() || Var->IsParam)
@@ -174,19 +175,23 @@ std::string HighCWriter::debugNameForDisplacement(va_t Entry,
     return Var->Name;
   };
   if (CurrentFunc && CurrentFunc->FrameSize > 0) {
-    if (const std::string Name = Accept(Dbg->resolveStackPointerVariable(
-            Entry, Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
+    if (const std::string Name = Accept(Debug->resolveStackPointerVariable(
+            Function.Entry,
+            Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
         !Name.empty())
       return Name;
   }
-  if (const std::string Name = Accept(Dbg->resolveVariable(Entry, Disp));
+  if (const std::string Name =
+          Accept(Debug->resolveVariable(Function.Entry, Disp));
       !Name.empty())
     return Name;
   return {};
 }
 
-TypeRef HighCWriter::debugTypeForDisplacement(va_t Entry, int64_t Disp) const {
-  if (!Dbg)
+TypeRef HighCWriter::debugTypeForDisplacement(const HighFunc &Function,
+                                              int64_t Disp) const {
+  auto *Debug = functionDebugContext(Function);
+  if (!Debug)
     return {};
   auto Accept = [](const std::optional<VariableSym> &Var) -> TypeRef {
     if (!Var || !Var->Type || Var->IsParam)
@@ -195,12 +200,12 @@ TypeRef HighCWriter::debugTypeForDisplacement(va_t Entry, int64_t Disp) const {
   };
   TypeRef Ty;
   if (CurrentFunc && CurrentFunc->FrameSize > 0)
-    Ty = Accept(Dbg->resolveStackPointerVariable(
-        Entry, Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
+    Ty = Accept(Debug->resolveStackPointerVariable(
+        Function.Entry, Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
   if (!Ty)
-    Ty = Accept(Dbg->resolveVariable(Entry, Disp));
+    Ty = Accept(Debug->resolveVariable(Function.Entry, Disp));
   if (Ty)
-    Dbg->completeType(Ty);
+    Debug->completeType(Ty);
   // A local whose type C cannot spell keeps the type its accesses give it,
   // as a parameter keeps its machine type.
   TypeRef Display = cDisplayType(Ty);
@@ -280,7 +285,7 @@ std::string HighCWriter::rawVarName(const MedVar &V) const {
       const int64_t Candidates[] = {V.StackOff, V.StackOff + 4, V.StackOff - 4};
       for (int64_t Off : Candidates) {
         if (const std::string Name =
-                debugNameForDisplacement(CurrentFunc->Entry, Off);
+                debugNameForDisplacement(*CurrentFunc, Off);
             !Name.empty() && !isReservedParamDisplayName(Name))
           return Name;
       }
@@ -728,7 +733,7 @@ void HighCWriter::collectFrameRecordMembers(const HighFunc &Func,
   std::map<int64_t, TypeRef> DebugTypes;
   std::vector<std::pair<int64_t, int64_t>> RawObjects;
   for (int64_t Start : Starts)
-    if (TypeRef DebugTy = debugTypeForDisplacement(Func.Entry, Start)) {
+    if (TypeRef DebugTy = debugTypeForDisplacement(Func, Start)) {
       if (!isPlainInteger(DebugTy))
         RawObjects.push_back(
             {Start, Start + std::max<int64_t>(DebugTy->Size, 1)});
@@ -1820,7 +1825,7 @@ std::string HighCWriter::headerRoutineOfStub(const HighFunc &Func) const {
 bool HighCWriter::libraryDeclaresDefinition(const HighFunc &Func) const {
   if (!Dbg || !Func.Entry)
     return false;
-  const std::optional<FunctionSym> Declared = Dbg->resolveFunction(Func.Entry);
+  const std::optional<FunctionSym> Declared = debugFunction(Func);
   return Declared && Declared->PrototypeFromCLibrary;
 }
 
@@ -4934,7 +4939,7 @@ TypeRef HighCWriter::debugParamType(const MedVar &V) const {
       debugParamBinding(*CurrentFunc, static_cast<size_t>(V.Id));
   if (B.Index < 0 || !B.Whole)
     return nullptr;
-  const auto &FS = resolvedFunction(CurrentFunc->Entry);
+  const auto &FS = resolvedFunction(*CurrentFunc);
   if (!FS || static_cast<size_t>(B.Index) >= FS->Params.size())
     return nullptr;
   TypeRef Ty = FS->Params[B.Index].second;
@@ -5089,7 +5094,7 @@ TypeRef HighCWriter::declaredRecordPointee(const HighExpr &Base) const {
   if (!HasRecordParamTypes)
     return nullptr;
   if (Dbg) {
-    if (const auto &FS = resolvedFunction(CurrentFunc->Entry); FS) {
+    if (const auto &FS = resolvedFunction(*CurrentFunc); FS) {
       for (const auto &Param : FS->Params) {
         if (Param.first == Printed)
           return RecordFrom(Param.second);
@@ -6645,8 +6650,7 @@ bool HighCWriter::frameStorageAlignmentHolds(const HighExpr &Call) {
 
 const HighFunc::VaStartForwarder *
 HighCWriter::vaStartForwarder(const HighFunc &Func) const {
-  if (!Func.VaStart || Func.SourceTypeHint ||
-      (Dbg && Dbg->resolveFunction(Func.Entry)))
+  if (!Func.VaStart || Func.SourceTypeHint || (Dbg && debugFunction(Func)))
     return nullptr;
   if (!Func.VaStart->Junk.empty()) {
     // Decided once; a call back into the function while it is decided
@@ -8382,10 +8386,15 @@ bool HighCWriter::namesFileScope(llvm::StringRef Name) const {
 }
 
 const std::optional<FunctionSym> &
-HighCWriter::resolvedFunction(va_t Entry) const {
-  auto [It, Added] = ResolvedFunctions.try_emplace(Entry);
-  if (Added && Dbg)
-    It->second = Dbg->resolveFunction(Entry);
+HighCWriter::resolvedFunction(const HighFunc &Function) const {
+  auto *Debug = functionDebugContext(Function);
+  if (!Debug) {
+    static const std::optional<FunctionSym> None;
+    return None;
+  }
+  auto [It, Added] = ResolvedFunctions.try_emplace(Function.Entry);
+  if (Added)
+    It->second = Debug->resolveFunction(Function.Entry);
   return It->second;
 }
 
@@ -8403,7 +8412,7 @@ bool HighCWriter::isReservedParamDisplayName(llvm::StringRef Name) const {
     if (!Display.empty() && Name == Display)
       return true;
   if (Dbg && CurrentFunc) {
-    if (const auto &FS = resolvedFunction(CurrentFunc->Entry); FS) {
+    if (const auto &FS = resolvedFunction(*CurrentFunc); FS) {
       if (isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format) &&
           Name == "result")
         return true;
