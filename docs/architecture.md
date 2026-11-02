@@ -92,6 +92,16 @@ operands before writing either output and retains native divide errors even
 for unused results. Explicit continuation fault delivery remains owned by
 `X64ContinuationDivision.h`, before arithmetic and state publication.
 
+`X86DivisionUndefined.h` binds register and memory division to the shared
+legacy ModRM/SIB audit. Operand reads precede the division guard and every
+architectural write; all six arbitrary status bits follow successful division.
+`X64ContinuationSchedule` composes the same instruction bodies and LowIR event
+delivery at original instruction boundaries. Its optional entry validators
+copy the actual instruction guard and use distinct synthetic function identities;
+original-PC comparisons stay unchanged. The scheduler owns STI/shadow lifetime,
+poll accounting and post-delivery acknowledgment. Producers own arrival and
+controller priority. Neither C route invents a second descriptor/frame model.
+
 `X86SystemRegisterAsm.h` owns CR/DR register selection, native width and native
 LLVM/C API names. LLVM emission and both C projections share that contract.
 The LLVM-to-C adapter validates the complete native call or legacy assembly

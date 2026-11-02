@@ -10,6 +10,7 @@
 #include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "X64ContinuationEnvironment.h"
+#include "X64ContinuationSchedule.h"
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
@@ -108,6 +109,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_snp_instructions",
                                        "native_sev_guest_exit",
                                        "event_delivery",
+                                       "scheduled_events",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
                                        "follow_direct_jumps",
@@ -209,6 +211,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_snp_instructions", &Options.NativeSnpInstructions},
       {"native_sev_guest_exit", &Options.NativeSevGuestExit},
       {"event_delivery", &Options.EventDelivery},
+      {"scheduled_events", &Options.ScheduledEvents},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
@@ -232,6 +235,10 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     return invalid("native RTM regions require kernel-events-v6");
   if (Result.NativeRtmRegions && Result.NativeRtmAbortRegions)
     return invalid("select one native RTM environment binding");
+  if (Options.ScheduledEvents &&
+      (Result.NativeRtmRegions || Result.NativeRtmAbortRegions))
+    return invalid("scheduled events require instruction boundaries outside "
+                   "native RTM regions");
   if (const auto *Value = Object->get("native_hyperv_hypercall_entry")) {
     auto Entry = integer(*Value);
     if (!Entry)
@@ -540,19 +547,19 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   size_t Native = 0;
   uint64_t Work = Units->size();
   const auto AddFunction =
-      [&](const X64ContinuationInstructionSource &Unit) -> llvm::Error {
-    for (const auto &Block : Unit.Function.Blocks) {
+      [&](const LowFunc &Low,
+          const SourceFunctionTypeHint &ABI) -> llvm::Error {
+    for (const auto &Block : Low.Blocks) {
       if (Block.Ops.size() > Request->Options.MaxOperations - Work)
         return invalid("continuation source operation budget exhausted");
       Work += Block.Ops.size();
     }
     LowToMedConverter Converter;
-    std::map<va_t, SourceFunctionTypeHint> Hints{
-        {Unit.Address, Unit.SourceABI}};
+    std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, ABI}};
     Converter.setSourceCallHintsEnabled(true);
     Converter.setSourceEntryTypeHints(&Hints);
-    auto Function = Converter.convert(Unit.Function, Arch::X64);
-    Function.SourceTypeHint = Unit.SourceABI;
+    auto Function = Converter.convert(Low, Arch::X64);
+    Function.SourceTypeHint = ABI;
     inferMedTypes(Function, Arch::X64);
     if (!verifyMedFunc(Function, "x64-continuation-export"))
       return invalid("x64 continuation source failed MedIR verification");
@@ -563,11 +570,14 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     auto Event = buildX64ContinuationEventSource(Request->Options);
     if (!Event)
       return Event.takeError();
-    if (auto Error = AddFunction(*Event))
+    if (auto Error = AddFunction(Event->Function, Event->SourceABI))
       return std::move(Error);
   }
   for (const auto &Unit : *Units) {
-    if (auto Error = AddFunction(Unit))
+    if (Unit.EntryValidation)
+      if (auto Error = AddFunction(*Unit.EntryValidation, Unit.SourceABI))
+        return std::move(Error);
+    if (auto Error = AddFunction(Unit.Function, Unit.SourceABI))
       return std::move(Error);
     Native += Unit.RequiresNativeExecution;
     Manifest.push_back(
@@ -662,6 +672,8 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
   else
     driver(OS, *Units, Request->FollowInternalCalls);
   emitX64ContinuationEnvironment(OS, Version);
+  if (Request->Options.ScheduledEvents)
+    emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls);
   llvm::json::Array RtmAborts;
   if (Request->NativeRtmAbortRegions)
     RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
@@ -686,13 +698,25 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
       {"interface", "explicit-machine-state"},
       {"environment_driver", "neverd_x64_run_v" + std::to_string(Version)},
       {"event_delivery", Request->Options.EventDelivery},
+      {"scheduled_events", Request->Options.ScheduledEvents},
+      {"scheduled_event_driver", Request->Options.ScheduledEvents
+                                     ? "neverd_x64_continue_events_v6"
+                                     : "disabled"},
+      {"scheduled_event_domain", Request->Options.ScheduledEvents
+                                     ? "instruction-boundary IRQ/NMI; bounded "
+                                       "producer polls; acknowledge only after "
+                                       "delivery; persistent STI/MOV-SS "
+                                       "shadows; controller selection and "
+                                       "priority remain producer-owned"
+                                     : "disabled"},
       {"event_delivery_domain",
        Request->Options.EventDelivery
            ? "separate IA-32e event entry: CPL0..3, 64-bit or compatibility "
              "source; explicit selected event, saved PC, error code, CR2 and "
              "shadows; successful descriptor/TSS/stack RAM; no nested delivery "
              "faults, CET, FRED, SMM or enclave transitions; canonical UD2 "
-             "and register DIV/IDIV at 8/16/32/64 bits produce #UD/#DE"
+             "and register or successful-RAM DIV/IDIV at 8/16/32/64 bits "
+             "produce #UD/#DE"
            : "disabled"},
       {"environment_binding",
        "explicit full-state callback; separately bounded"},
@@ -830,9 +854,14 @@ uint64_t neverd_x64_deliver_event_v6(neverd_x64_state_v6 *state,
                              "invalidation; stable compiler mappings; "
                            : "") +
            std::string(Version == 13 ? "during input transport: " : "") +
+           std::string("successful sequential RAM; no MMIO, "
+                       "concurrent writes or memory faults; ") +
+           std::string(Request->Options.ScheduledEvents
+                           ? "explicit IRQ/NMI polling at instruction "
+                             "boundaries; no intra-instruction events; "
+                           : "no asynchronous events; ") +
            std::string(
-               "successful sequential RAM; no MMIO, "
-               "concurrent writes, memory faults or asynchronous events; exact "
+               "exact "
                "immutable "
                "instruction bytes; accessible disjoint state and budget; "
                "native "

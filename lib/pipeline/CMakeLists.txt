@@ -8,6 +8,7 @@ add_neverd_component_library(NeverDPipeline
   Pipeline.cpp
   X86/X64ContinuationEnvironment.cpp
   X86/X64ContinuationExport.cpp
+  X86/X64ContinuationSchedule.cpp
   X86/X64RtmAbortRegions.cpp
   X86/X64RtmRegions.cpp
   X86/X64SpecialRegions.cpp

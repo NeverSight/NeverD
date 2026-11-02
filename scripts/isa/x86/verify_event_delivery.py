@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify exported event delivery with NeverC and both full LLVM backends."""
+"""Qualify x64 event/continuation boundaries with NeverC and both LLVM backends."""
 
 import argparse
 import hashlib
@@ -21,6 +21,8 @@ def main():
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)
     parser.add_argument("--keep", type=Path, required=True)
+    parser.add_argument("--family", choices=("event", "schedule", "memory-division"),
+                        default="event")
     args = parser.parse_args()
     args.keep.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[3]
@@ -32,6 +34,12 @@ def main():
     for name, path in tools.items():
         if not path.is_file():
             parser.error(f"missing {name}: {path}")
+    if args.family == "memory-division":
+        runtime = Path(subprocess.check_output(
+            [tools["clang"], "-print-libgcc-file-name"], text=True).strip()).resolve()
+        if not runtime.is_file():
+            parser.error(f"missing compiler integer runtime: {runtime}")
+        tools["integer-runtime"] = runtime
     records, profiles = [], []
     environment = dict(os.environ, TMPDIR=str(args.keep.resolve()))
 
@@ -50,15 +58,27 @@ def main():
     fixture = root / "unittests/devirtualization/x86_64/fixtures/x64_continuation_kvm.c"
     runner = args.keep / "event-kvm-runner"
     run([tools["clang"], "-std=gnu11", "-O2", fixture, "-o", runner], "runner")
+    family = {
+        "event": ("event", "neverd_x64_deliver_event_body_v6", 10 * 3 * 2 * 8 * 7 * 2),
+        "schedule": ("schedule-native", "neverd_x64_continue_events_v6", 1024),
+        "memory-division": ("memory-division", "neverd_step_v6_[0-9A-F]+", 8000),
+    }[args.family]
     for route in ("high", "llvm"):
         # Preserve the independently generated original-instruction harness
         # and freestanding bootstrap verbatim, including its outb oracle call.
-        source = args.sources / f"event-{route}.O0.guest.c"
-        linker = args.sources / f"event-{route}.O0.ld"
+        source = args.sources / f"{family[0]}-{route}.O0.guest.c"
+        linker = args.sources / f"{family[0]}-{route}.O0.ld"
         if not source.is_file() or not linker.is_file():
-            parser.error("capture EventDeliveryMatchesNativeFaultsNmiAndIrq artifacts first")
+            parser.error(f"capture {family[0]} native test artifacts first")
+        if args.family != "event":
+            emitted = args.sources / f"{family[0]}-{route}.source.c"
+            manifest = json.loads((args.sources / f"{family[0]}-{route}.json").read_text())
+            if (digest(emitted) != manifest["source_sha256"] or
+                    not source.read_bytes().startswith(emitted.read_bytes()) or
+                    manifest["native_requests"] != 0):
+                raise RuntimeError("source/manifest mismatch or unexecuted native boundary")
         for level in ("O0", "O2"):
-            stem = f"event-{route}-{level}"
+            stem = f"{family[0]}-{route}-{level}"
             ir = args.keep / (stem + ".ll")
             flags = ["--target=x86_64-unknown-linux-gnu", "-std=c23", "-" + level,
                      "-fno-lto", "-ffreestanding", "-fno-builtin-mimalloc",
@@ -66,10 +86,10 @@ def main():
                      "-mno-red-zone", "-mgeneral-regs-only"]
             run([tools["neverc"], *flags, "-S", "-emit-llvm", source, "-o", ir],
                 stem + "-ir")
-            body = re.search(r"^define[^\n]*@neverd_x64_deliver_event_body_v6\b.*?^}",
-                             ir.read_text(), re.MULTILINE | re.DOTALL)
-            if not body or "asm " in body[0]:
-                raise RuntimeError("event delivery must retain its shared IR body without asm")
+            bodies = re.findall(r"^define[^\n]*@" + family[1] + r"\b.*?^}",
+                                ir.read_text(), re.MULTILINE | re.DOTALL)
+            if not bodies or any("asm " in body for body in bodies):
+                raise RuntimeError("continuation must retain its shared IR body without asm")
             for backend in ("neverc", "llvm-legacy", "llvm-new"):
                 name = stem + "-" + backend
                 obj, elf, binary = (args.keep / (name + suffix)
@@ -82,20 +102,23 @@ def main():
                          *(["-enable-new-pm"] if backend == "llvm-new" else []),
                          ir, "-o", obj], name + "-compile")
                 run([tools["ld.lld"], "-m", "elf_x86_64", "-T", linker,
-                     obj, "-o", elf], name + "-link")
+                     obj, *([tools["integer-runtime"]] if args.family == "memory-division" else []),
+                     "-o", elf], name + "-link")
                 run([tools["objcopy"], "-O", "binary", elf, binary], name + "-image")
                 run([runner, binary], name + "-run", timeout=30)
                 profiles.append({"route": route, "optimization": level,
                                  "backend": backend, "source_sha256": digest(source),
                                  "ir_sha256": digest(ir), "image_sha256": digest(binary),
-                                 "original_cpu_comparisons": 10 * 3 * 2 * 8 * 7 * 2})
+                                 "original_cpu_comparisons": family[2]})
     report = {"schema_version": 1, "tools": {name: {"path": str(path),
                "sha256": digest(path)} for name, path in tools.items()},
-              "fixture_sha256": digest(fixture), "profiles": profiles,
+              "family": args.family, "fixture_sha256": digest(fixture), "profiles": profiles,
               "original_cpu_comparisons": sum(p["original_cpu_comparisons"] for p in profiles),
               "limitations": ["IA-32e event delivery, not SMM/SGX or legacy task gates",
                               "successful delivery RAM; no nested delivery faults",
-                              "KVM native IRQ/NMI; original instructions produce tested faults"]}
+                              "KVM native IRQ/NMI; original instructions produce tested faults",
+                              "memory division requires successful operand RAM",
+                              "interrupt controller selection and priority remain producer-owned"]}
     (args.keep / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"PASS: {len(profiles)} profiles, {report['original_cpu_comparisons']} CPU comparisons")
 

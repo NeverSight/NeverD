@@ -190,6 +190,11 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   REQUIRE(events.interrupt.shadow == 0);
   events.nmi.masked = q->nmi_blocked;
   events.flags |= KVM_VCPUEVENT_VALID_NMI_PENDING;
+  if (kind == 20) {
+    REQUIRE(memory[immediate + 3] <= 2);
+    events.interrupt.shadow = memory[immediate + 3];
+    events.flags |= KVM_VCPUEVENT_VALID_SHADOW;
+  }
   REQUIRE(ioctl(cpu, KVM_SET_VCPU_EVENTS, &events) == 0);
   struct kvm_regs registers = {.rip = q->pc, .rflags = q->flags};
   for (unsigned i = 0; i != 16; ++i)
@@ -200,13 +205,14 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
                                              KVM_GUESTDBG_USE_HW_BP};
   // Kind 7 stops a supplied instruction at fallthrough. Kind 12 supplies an
   // IRET/RETF of any operand width and stops at the independent return target.
-  const int supplied = kind == 7 || kind == 12;
+  const int supplied = kind == 7 || kind == 12 || kind == 20 || kind == 21;
   const int fast_system = kind >= 9 && kind <= 11;
   const unsigned length = supplied ? memory[immediate] : 0;
   REQUIRE(!supplied || (length && length <= 15));
-  const uint64_t stop = kind == 7 ? registers.rip + length : 0x1800;
+  const uint64_t stop =
+      kind == 7 || kind == 21 ? registers.rip + length : 0x1800;
   debug.arch.debugreg[0] = stop;
-  debug.arch.debugreg[1] = 0x1801;
+  debug.arch.debugreg[1] = kind == 21 ? 0x1800 : 0x1801;
   debug.arch.debugreg[7] = 0x405;
   REQUIRE(ioctl(cpu, KVM_SET_GUEST_DEBUG, &debug) == 0);
   memory[registers.rip] = kind == 2 || kind >= 5 ? 0x48
@@ -227,13 +233,26 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
     }
   }
   if (supplied)
-    memcpy(memory + registers.rip, memory + immediate + 1, length);
+    memcpy(memory + registers.rip, memory + immediate + (kind == 20 ? 4 : 1),
+           length);
+  if (kind == 20) {
+    const uint8_t type = memory[immediate + 1], vector = memory[immediate + 2];
+    REQUIRE(type == 2 || (type == 3 && vector == 2));
+    if (type == 2) {
+      // Userspace IRQ chips must wait for KVM's architectural interrupt
+      // window. KVM_INTERRUPT alone requests injection, not a pending APIC
+      // interrupt; injecting while IF=0 makes VM-entry invalid on VMX.
+      run->request_interrupt_window = 1;
+    } else {
+      REQUIRE(ioctl(cpu, KVM_NMI, 0) == 0);
+    }
+  }
   if (fast_system) {
     const uint8_t code[] = {0x48, 0x0f, kind == 9 ? 0x34 : 0x35};
     memcpy(memory + registers.rip, code + (kind == 11 ? 0 : 1),
            kind == 11 ? 3 : 2);
   }
-  if (kind >= 13) {
+  if (kind >= 13 && kind <= 19) {
     // Faults execute original instructions. In particular KVM's event setter
     // is not used to synthesize #PF/#DE or their saved RF/error-code values.
     static const uint8_t code[][3] = {
@@ -266,6 +285,27 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
   // With a userspace IRQ chip, KVM_RUN reloads CR8 from this field.
   run->cr8 = before.cr8;
   REQUIRE(ioctl(cpu, KVM_RUN, 0) == 0);
+  if (kind == 20 && memory[immediate + 1] == 2) {
+    REQUIRE(run->exit_reason == KVM_EXIT_IRQ_WINDOW_OPEN);
+    REQUIRE(run->ready_for_interrupt_injection);
+    run->request_interrupt_window = 0;
+    struct kvm_interrupt irq = {.irq = memory[immediate + 2]};
+    REQUIRE(ioctl(cpu, KVM_INTERRUPT, &irq) == 0);
+    REQUIRE(ioctl(cpu, KVM_RUN, 0) == 0);
+  }
+  if (run->exit_reason != KVM_EXIT_DEBUG) {
+    struct kvm_regs failed;
+    REQUIRE(ioctl(cpu, KVM_GET_REGS, &failed) == 0);
+    fprintf(stderr,
+            "oracle kind=%u start=%llx exit=%u pc=%llx flags=%llx sp=%llx\n",
+            kind, (unsigned long long)q->pc, run->exit_reason,
+            (unsigned long long)failed.rip, (unsigned long long)failed.rflags,
+            (unsigned long long)failed.rsp);
+    if (run->exit_reason == KVM_EXIT_FAIL_ENTRY)
+      fprintf(
+          stderr, "VM-entry failure=%llx\n",
+          (unsigned long long)run->fail_entry.hardware_entry_failure_reason);
+  }
   REQUIRE(run->exit_reason == KVM_EXIT_DEBUG);
   REQUIRE(ioctl(cpu, KVM_GET_REGS, &registers) == 0);
   // An IRET frame with RF=1 suppresses the first execution breakpoint. The
@@ -274,7 +314,7 @@ static int event_query(int cpu, struct kvm_run *run, uint8_t *memory,
     registers.rip = 0x1800;
     registers.rflags |= 0x10000;
   }
-  REQUIRE(registers.rip == stop);
+  REQUIRE(registers.rip == stop || (kind == 21 && registers.rip == 0x1800));
   struct kvm_sregs after;
   REQUIRE(ioctl(cpu, KVM_GET_SREGS, &after) == 0);
   if (kind == 16) {
@@ -504,7 +544,7 @@ int main(int argc, char **argv) {
     REQUIRE(run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9 &&
             run->io.size == 1 && run->io.count == 1);
     const unsigned kind = *((uint8_t *)run + run->io.data_offset);
-    REQUIRE(kind >= 1 && kind <= 19);
+    REQUIRE(kind >= 1 && kind <= 21);
     const int fast_system = kind >= 9 && kind <= 11;
     if (fast_system) {
       int intel = 0, sep = 0;
@@ -523,7 +563,8 @@ int main(int argc, char **argv) {
     }
     REQUIRE(kind != 4 || registers.rsi <= UINT8_MAX);
     REQUIRE(kind != 6 || registers.rsi <= UINT16_MAX);
-    REQUIRE((kind != 7 && kind != 12) || registers.rsi <= memory_size - 16);
+    REQUIRE((kind != 7 && kind != 12 && kind != 20 && kind != 21) ||
+            registers.rsi <= memory_size - 19);
     REQUIRE(registers.rdi <= memory_size - (fast_system
                                                 ? sizeof(fast_system_state_t)
                                             : kind == 1 || kind == 8

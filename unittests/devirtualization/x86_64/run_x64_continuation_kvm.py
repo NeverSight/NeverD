@@ -48,6 +48,8 @@ def main():
     parser.add_argument("--clang", required=True)
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--optimization", choices=("O0", "O2"), required=True)
+    parser.add_argument("--compiler-runtime", action="store_true",
+                        help="link the host compiler's integer runtime for __int128 C arithmetic")
     args = parser.parse_args()
     if sys.platform != "linux" or platform.machine() not in ("x86_64", "amd64"):
         print("native x64 KVM requires a Linux x64 host", file=sys.stderr)
@@ -68,7 +70,10 @@ def main():
          "-fno-builtin", "-mgeneral-regs-only", "-mno-red-zone",
          "-fno-stack-protector", "-fno-pic", "-fno-pie", "-nostdlib", "-no-pie",
          "-Wl,--build-id=none", "-Wl,--oformat=binary", "-Wl,-T," + str(linker),
-         str(guest), "-o", str(binary)], check=True
+         str(guest),
+         *([subprocess.check_output([args.clang, "-print-libgcc-file-name"],
+                                    text=True).strip()] if args.compiler_runtime else []),
+         "-o", str(binary)], check=True
     )
     return subprocess.run([str(runner), str(binary)],
                           timeout=GUEST_TIMEOUT_SECONDS).returncode

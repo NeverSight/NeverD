@@ -1122,7 +1122,8 @@ SourceFunctionTypeHint sourceABI() {
 
 llvm::Expected<X64ContinuationInstructionSource>
 buildInstruction(SpecializationInstruction Instruction,
-                 const X64ContinuationSourceOptions &Options) {
+                 const X64ContinuationSourceOptions &Options,
+                 va_t ValidationAddress) {
   X64ContinuationInstructionSource Result;
   Result.Address = Instruction.Origin.Address;
   Result.Bytes = Instruction.NativeBytes;
@@ -1351,6 +1352,14 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool Division =
       Controls && std::any_of(Instruction.Ops.begin(), Instruction.Ops.end(),
                               divisionPreconditionIntrinsic);
+  Result.IsSti = Instruction.NativeBytes.size() == 1 &&
+                 Instruction.NativeBytes.front() == 0xfb;
+  if (Options.ScheduledEvents && !Result.IsSti &&
+      std::any_of(Instruction.Ops.begin(), Instruction.Ops.end(),
+                  [](const LowOp &Op) {
+                    return eventIntrinsic(Op, Intrinsic::Sti, 1);
+                  }))
+    RequireNative("scheduled STI requires its canonical shadow encoding");
   const auto Timestamp =
       Options.NativeTimestampReads
           ? x64::runtimeTimestampRegisters(Instruction,
@@ -1607,6 +1616,25 @@ buildInstruction(SpecializationInstruction Instruction,
   Guard.emit(NdOp::COND_BR, {}, {NdVar::cst(Rejected.StartAddr, 8), Bad});
   Writer Reject{Function, &Rejected, Options};
   Reject.leave(Exit::InvalidState);
+  if (Options.ScheduledEvents) {
+    // Copy the actual entry guard rather than recreating its flags, mode and
+    // state checks in the C scheduler. No instruction or guest RAM is read.
+    Result.EntryValidation = Function;
+    auto &Entry = *Result.EntryValidation;
+    Entry.Name += "_validate";
+    Entry.Entry = ValidationAddress;
+    for (auto &Block : Entry.Blocks) {
+      Block.StartAddr = ValidationAddress + Block.Id;
+      for (auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR)
+          Op.Inputs[0].Offset =
+              ValidationAddress + (Op.Inputs[0].Offset - Result.Address);
+    }
+    Writer Accepted{Entry, &Entry.Blocks[1], Options};
+    Accepted.leave(Exit::Continue);
+    for (auto &Block : Entry.Blocks)
+      finishBlock(Block);
+  }
   Writer W{Function, &Body, Options};
   if (MpxState)
     detail::X64ContinuationMpx<Writer>(W).validate();
@@ -1745,6 +1773,8 @@ buildX64ContinuationSource(const BinaryImage &Image,
                            llvm::ArrayRef<va_t> Addresses,
                            const X64ContinuationSourceOptions &Options) {
   const bool Controls = hasControlState(Options);
+  if (Options.ScheduledEvents && !Options.EventDelivery)
+    return invalid("scheduled events require event delivery");
   if (Options.EventDelivery &&
       Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
     return invalid("event delivery requires kernel-events-v6");
@@ -1832,8 +1862,18 @@ buildX64ContinuationSource(const BinaryImage &Image,
     return Instructions.takeError();
   uint64_t Work = Addresses.size();
   std::vector<X64ContinuationInstructionSource> Result;
+  // Helpers are module functions, so their identities must not collide with
+  // an original instruction or the event-delivery function at zero. Three
+  // labels belong to each copied entry guard; the original-PC comparison is
+  // an ordinary value and remains bound to the actual instruction address.
+  va_t ValidationAddress = InvalidVA - 3;
   for (auto &Instruction : *Instructions) {
-    auto Unit = buildInstruction(std::move(Instruction), Options);
+    if (Options.ScheduledEvents)
+      while (Unique.count(ValidationAddress))
+        ValidationAddress -= 3;
+    auto Unit =
+        buildInstruction(std::move(Instruction), Options, ValidationAddress);
+    ValidationAddress -= 3;
     if (!Unit)
       return Unit.takeError();
     for (const auto &Block : Unit->Function.Blocks) {
@@ -1841,6 +1881,12 @@ buildX64ContinuationSource(const BinaryImage &Image,
         return invalid("continuation source operation budget exhausted");
       Work += Block.Ops.size();
     }
+    if (Unit->EntryValidation)
+      for (const auto &Block : Unit->EntryValidation->Blocks) {
+        if (Block.Ops.size() > Options.MaxOperations - Work)
+          return invalid("continuation validation operation budget exhausted");
+        Work += Block.Ops.size();
+      }
     Result.push_back(std::move(*Unit));
   }
   return Result;

@@ -18462,6 +18462,30 @@ aggregate semantic target. The same tests remain in `NeverDSemanticTests`.
 These checks do not extend the profile to memory-divisor faults, nested #DF or
 a complete legacy i386 continuation dispatcher.
 
+The later `DivisionMemoryBindsEveryAddressEncoding` audit covers 166,122 raw
+memory forms, including every SIB byte, negative displacements, i386 address16,
+x64 address32 and FS/GS. Forged address-detail tests require refusal. Shared
+register/memory division audits live under `unittests/devirtualization/x86/`.
+`MemoryDivisionMatchesOriginalAddressesAndErrors` runs 80 original memory
+instructions and 8,000 input states per compiler profile on an independent KVM
+CPU. It compares all state and 8 KiB of RAM, including #DE frames and operand
+addresses that alias AX/DX. Operand memory must complete successfully.
+
+`ScheduledEvents*` covers entry validation before polling, resource exhaustion,
+producer metadata, acknowledgment, persistent STI/MOV-SS inhibition, calls and
+synchronous exceptions. `ScheduledEventsMatchNativeInterruptWindows` compares
+1,024 original CPU executions per profile. The KVM fixture asks for a real
+interrupt-window exit before injecting IRQ; prematurely injecting at IF=0 is
+not a valid oracle. Generated helper functions must have distinct module
+identities, or LLVM merges validator and instruction bodies and fails verification.
+
+For the native source artifacts, `verify_event_delivery.py --family schedule`
+and `--family memory-division` each qualify NeverC and both full LLVM backends
+at O0/O2. They authenticate the source against its manifest and reject native
+requests or inline assembly in candidate bodies. The memory fixture optionally
+links the host compiler's integer runtime for freestanding HighC `__int128`
+arithmetic; the qualification report records that archive's path and hash.
+
 Native integer division also has focused LLVM-C checks in
 `NeverDLLVMCValueTests`: filter `*X86*Div*:*NativeAssemblyKeepsOperandSnapshots*`.
 They cover the original assembly contract, the new intrinsic's complete effect

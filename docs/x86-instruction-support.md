@@ -3378,9 +3378,20 @@ Both C routes match original CPU DIV/IDIV at O0/O2, including divisor aliases,
 signed extrema and complete rejection/fault state. NeverC and the full LLVM
 legacy/new backends pass 24 execution profiles and 164,736 native comparisons.
 See [the qualification record](evidence/x86-division-2026-11-01.json) and
-[event contract](x86-event-delivery.md). Memory divisors and their access
-faults, redundant prefixes, recursive delivery faults, the legacy i386 source
-dispatcher and asynchronous scheduling retain their separate boundaries.
+[event contract](x86-event-delivery.md). The subsequent memory audit admits
+ordinary ModRM/SIB, displacement, address-size, RIP/EIP-relative and FS/GS
+division forms. Successful operand reads precede #DE and all state publication.
+It checks 166,122 memory encoding shapes across i386 and x64; the x64 source
+matrix compares 80 original memory instructions and 8,000 input states per
+compiler profile against an independent KVM CPU, including full #DE frames.
+Memory access faults, redundant prefixes, recursive delivery faults and the
+legacy i386 source dispatcher retain separate boundaries.
+
+The optional [IRQ/NMI scheduler](x86-event-scheduling.md) now connects event
+delivery to original instruction boundaries, with persistent STI/MOV-SS
+inhibition and acknowledgment only after delivery. Controller priority and
+arrival are explicit producer inputs; this does not implement APIC/devices,
+partial-instruction interruptions, SMI entry or enclave AEX.
 
 ## Native full-dividend division compiler interfaces
 

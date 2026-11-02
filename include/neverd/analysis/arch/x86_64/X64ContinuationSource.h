@@ -239,6 +239,9 @@ enum class X64ContinuationExitV1 : uint64_t {
   BoundsFault = 14,
   /// An explicit event is inhibited. Neither state nor RAM has changed.
   EventDeferred = 15,
+  /// The optional instruction-boundary scheduler needs another producer poll.
+  /// No instruction or event was executed at this boundary.
+  EventBudgetExhausted = 16,
 };
 
 enum class X64ContinuationProfile : uint8_t {
@@ -492,9 +495,14 @@ struct X64ContinuationSourceOptions {
   bool NativeSevGuestExit = false;
   /// V6 exports a separate event-delivery function through the same LowIR
   /// owner as INT/INT3. Its event producer supplies architectural restart
-  /// state, shadows and priority. Canonical UD2 and register DIV/IDIV at
-  /// 8/16/32/64 bits directly deliver #UD/#DE; other domains are unchanged.
+  /// state, shadows and priority. Canonical UD2 and register/successful-RAM
+  /// DIV/IDIV at 8/16/32/64 bits directly deliver #UD/#DE; other domains
+  /// remain.
   bool EventDelivery = false;
+  /// Export instruction-entry validation and interrupt-shadow attribution for
+  /// the optional bounded IRQ/NMI scheduler. Requires the V6 event interface.
+  /// External producers still own interrupt-controller selection and priority.
+  bool ScheduledEvents = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
 };
@@ -516,6 +524,12 @@ struct X64ContinuationInstructionSource {
   /// status. CALL/RET use the original stack and actual next PC. No argument
   /// count, callee preservation, private frame or return-slot proof is assumed.
   LowFunc Function;
+  /// Generated from the same entry guard, before any instruction effects.
+  /// Only present for ScheduledEvents. Returns Continue or InvalidState.
+  std::optional<LowFunc> EntryValidation;
+  /// A successfully completed canonical STI starts a one-instruction shadow
+  /// only if its original IF was zero. A rejected/native step starts none.
+  bool IsSti = false;
   SourceFunctionTypeHint SourceABI;
   /// The arbitrary-value slot order and original instruction-local timing.
   /// Empty for a native request, where no source instruction has executed.

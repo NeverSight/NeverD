@@ -16,7 +16,7 @@ compatibility entry, including a non-flat compatibility CS.
 }
 ```
 
-The same option connects canonical `UD2` and register `DIV`/`IDIV` at
+The same option connects canonical `UD2` and register or memory `DIV`/`IDIV` at
 8/16/32/64-bit operand widths to delivery. `UD2` delivers #UD. A zero divisor
 or unrepresentable quotient delivers #DE before quotient, remainder or arbitrary
 flags are published. Their saved PC is the original faulting instruction. The
@@ -24,9 +24,15 @@ driver charges one attempted instruction and stops at handler entry. Successful 
 retains its partial-register writes and six arbitrary status flags. The shared
 division owner checks the original double-width dividend, including when the
 divisor aliases AX/DX or uses AH/BH. Signed quotient bounds use unsigned
-magnitudes before any potentially undefined host division. Memory divisors,
-redundant prefixes and other instruction faults are not implicitly caught or
-inferred from a host signal.
+magnitudes before any potentially undefined host division. Admitted memory
+divisors require a successful operand read before the #DE check; ordinary
+ModRM/SIB, displacement, RIP/EIP-relative, address-size and FS/GS forms retain
+their original addressing. Memory-access faults, redundant prefixes and other
+instruction faults are not implicitly caught or inferred from a host signal.
+
+The optional [`scheduled_events` driver](x86-event-scheduling.md) polls a bounded
+external producer at original instruction boundaries, owns persistent STI and
+supplied MOV-SS inhibition, and acknowledges IRQ/NMI only after delivery.
 
 ## Event input and ownership
 
@@ -112,7 +118,7 @@ exercise the same refactored delivery owner.
 
 This adds event **delivery**, with direct instruction fault production for the
 stated UD2 and division forms. It does not implement page translation, arbitrary
-restartable memory faults, recursive faults/#DF escalation, APIC scheduling,
+restartable memory faults, recursive faults/#DF escalation, an APIC/device model,
 SMM/SGX event routing, CET/FRED event routing, or legacy non-IA-32e task
 gates. Compatibility entry here is not a complete i386 instruction dispatcher.
 Those boundaries must remain explicit in coverage claims and release decisions.
