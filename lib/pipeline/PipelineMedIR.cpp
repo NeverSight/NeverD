@@ -17,6 +17,7 @@
 #include "PipelineSEHRuntimeMemory.h"
 #include "PipelineSourceStackAccesses.h"
 #include "PipelineTrimStorage.h"
+#include "X86/X64CallRCX.h"
 #include "X86/X64FillReturn.h"
 
 #include "neverd/Common.h"
@@ -337,7 +338,9 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
     Work.assign(Next.begin(), Next.end());
   }
   std::vector<uint64_t> CallerWeights;
+  std::set<va_t> Emitted;
   for (const auto &Func : Result.MedFuncs) {
+    Emitted.insert(Func.Entry);
     uint64_t Weight = 1;
     for (const auto &Block : Func.Blocks)
       Weight += Block.Ops.size();
@@ -351,6 +354,8 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
       // of creating another large-stack coordinator for each source query.
       markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,
                                    Image.abiFormat(), &Image);
+      captureX64CallRCX(Result.MedFuncs[I], Image, Result.CallUnreadGPRs,
+                        Emitted);
     }
   });
 }

@@ -144,6 +144,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
           if (isX86RepStateIntrinsic(Id) &&
               !x86RepShapeIsValid(Id, x86RepMedShape(Op)))
             Err("invalid x86 REP completion contract", Blk.Id, Op.Addr);
+          if (Id == Intrinsic::X64CallRCX &&
+              !x64CallRCXShapeIsValid(x64CallRCXMedShape(Op)))
+            Err(X64CallRCXDiagnostic, Blk.Id, Op.Addr);
           if (isX86BoundedLeafPending(Id) ||
               (isX86BoundedLeafIntrinsic(Id) &&
                !x86BoundedLeafShapeIsValid(Id, x86BoundedLeafMedShape(Op))))

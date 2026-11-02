@@ -35,9 +35,35 @@ GPRFamilyMask readFamilies(const GPRReadWidths &Widths) {
   return Result;
 }
 
+struct Observation {
+  GPRFamilyMask Reads = 0;
+  GPRFamilyMask EntryKills = 0;
+};
+
+GPRFamilyMask entryKills(const LocalRegisterEffect &Effect, size_t &Budget) {
+  if (Effect.Incomplete || Effect.Unknown || Effect.UnknownEntryReads ||
+      Effect.UnknownObservers || Effect.Blocks.empty() ||
+      Effect.VariadicFrom >= 0)
+    return 0;
+  GPRFamilyMask Result = 0;
+  for (const auto &Step : Effect.Blocks.front().Steps) {
+    if (!Budget)
+      return 0;
+    --Budget;
+    // Only the unconditional entry prefix is authoritative. In particular,
+    // CALL's ABI output and may-write summaries are not definite writes.
+    if (Step.Callee != InvalidVA || Step.UnknownCall || Step.UnknownTailCall ||
+        Step.FixedArguments || Step.FixedTailCall || Step.TailCallee ||
+        Step.Exits)
+      break;
+    Result |= Step.Kills;
+  }
+  return Result & AllGPRs;
+}
+
 std::optional<GPRFamilyMask>
 entryReads(const LocalRegisterEffect &Effect,
-           const std::map<va_t, GPRFamilyMask> &CalleeReads, size_t &Budget) {
+           const std::map<va_t, Observation> &CalleeReads, size_t &Budget) {
   if (Effect.Incomplete || Effect.Unknown || Effect.UnknownEntryReads ||
       Effect.UnknownObservers || Effect.Blocks.empty() ||
       Effect.VariadicFrom >= 0)
@@ -78,13 +104,16 @@ entryReads(const LocalRegisterEffect &Effect,
           const auto Callee = CalleeReads.find(Step.Callee);
           // A prototype fixes source arguments, not implicit machine-state
           // observations. Initial pointer contents also cannot bind a call.
-          Next |= Step.UnknownCall || Step.UnknownTailCall ||
-                          Step.FixedArguments || Step.FixedTailCall ||
-                          Callee == CalleeReads.end()
-                      ? AllGPRs
-                      : Callee->second;
-          // Neither an ABI clobber nor a may-write summary proves that every
-          // return overwrites an input. Keep later reads live across the call.
+          if (Step.UnknownCall || Step.UnknownTailCall || Step.FixedArguments ||
+              Step.FixedTailCall || Callee == CalleeReads.end())
+            Next |= AllGPRs;
+          else {
+            // A complete entry prefix executes before every normal return.
+            // Reads within the callee still observe its incoming values;
+            // only the caller's later observation is satisfied by that write.
+            Next &= ~Callee->second.EntryKills;
+            Next |= Callee->second.Reads;
+          }
         } else {
           Next &= ~Step.Kills;
           // Partial writes cannot kill a whole family in this bit proof.
@@ -108,14 +137,14 @@ proveUnreadCallRegisters(const LocalRegisterEffectRefs &Funcs) {
   if (Funcs.size() > Budget)
     return {};
   Budget -= Funcs.size();
-  std::map<va_t, GPRFamilyMask> Reads;
+  std::map<va_t, Observation> Reads;
   std::map<va_t, std::set<va_t>> Readers;
   std::deque<va_t> Pending;
   std::set<va_t> Queued;
   for (const auto &[Entry, Effect] : Funcs) {
     if (!Effect)
       return {};
-    Reads.emplace(Entry, 0);
+    Reads.emplace(Entry, Observation{0, entryKills(*Effect, Budget)});
     Pending.push_back(Entry);
     Queued.insert(Entry);
     if (Effect->Blocks.size() > Budget)
@@ -137,7 +166,7 @@ proveUnreadCallRegisters(const LocalRegisterEffectRefs &Funcs) {
     const auto Next = entryReads(*Funcs.at(Entry), Reads, Budget);
     if (!Next)
       return {};
-    GPRFamilyMask &Read = Reads.at(Entry);
+    GPRFamilyMask &Read = Reads.at(Entry).Reads;
     if ((*Next | Read) == Read)
       continue;
     Read |= *Next;
@@ -155,15 +184,20 @@ proveUnreadCallRegisters(const LocalRegisterEffectRefs &Funcs) {
   // ordinary SP accesses. Never publish their absence as an observation proof.
   const auto &TRI = getTargetRegInfo(Arch::X64);
   GPRFamilyMask Candidates = AllGPRs;
+  GPRFamilyMask ReturnRegisters = 0;
   for (unsigned Family = 0; Family < kX64VectorFamilyBase; ++Family) {
     const uint64_t Register = Family * sizeof(uint64_t);
-    if (TRI.isStackPointer(Register) || TRI.isReturnControlReg(Register) ||
-        TRI.isReturnReg(Register) ||
-        llvm::is_contained(TRI.IntReturnRegs, Register))
+    if (TRI.isStackPointer(Register) || TRI.isReturnControlReg(Register))
       Candidates &= ~(GPRFamilyMask{1} << Family);
+    else if (TRI.isReturnReg(Register) ||
+             llvm::is_contained(TRI.IntReturnRegs, Register))
+      ReturnRegisters |= GPRFamilyMask{1} << Family;
   }
-  for (const auto &[Entry, Read] : Reads)
-    if (const auto Mask = Candidates & ~Read)
+  for (const auto &[Entry, Proof] : Reads)
+    // Return transport is not represented as an observation. Admit those
+    // families only when the complete entry prefix destroys their entry bits.
+    if (const auto Mask =
+            Candidates & ~(ReturnRegisters & ~Proof.EntryKills) & ~Proof.Reads)
       Unread.emplace(Entry, Mask);
   return Unread;
 }

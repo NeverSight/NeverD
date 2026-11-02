@@ -52,6 +52,7 @@ MULTI_OUT(Intrinsic::X86Enclv, 2);
 MULTI_OUT(Intrinsic::X86EncluPending, 4);
 MULTI_OUT(Intrinsic::X86GetsecPending, 4);
 MULTI_OUT(Intrinsic::X86EncluBounded, 4);
+MULTI_OUT(Intrinsic::X64CallRCX, 1);
 MULTI_OUT(Intrinsic::X86GetsecBounded, 4);
 
 #define NEVERD_A64_WRITEBACK_MULTI_OUTPUT(Id, Count) MULTI_OUT(Intrinsic::Id, Count);

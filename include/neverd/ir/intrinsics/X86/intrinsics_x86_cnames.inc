@@ -294,6 +294,7 @@ C(Intrinsic::X86FPMaskCompareMemoryState,
 C(Intrinsic::X86EncluPending, "__neverd_enclu_pending");
 C(Intrinsic::X86GetsecPending, "__neverd_getsec_pending");
 C(Intrinsic::X86EncluBounded, "__neverd_enclu_bounded");
+C(Intrinsic::X64CallRCX, "__neverd_win64_call_rcx");
 C(Intrinsic::X86GetsecBounded, "__neverd_getsec_bounded");
 
 C(Intrinsic::X86FourSourceMemory, "neverd_x86_four_source_memory");

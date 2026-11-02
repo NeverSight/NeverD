@@ -27,6 +27,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64SVEVector.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X64CallRCX.h"
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
 #include "neverd/ir/intrinsics/X86/X86BoundedLeaf.h"
@@ -969,6 +970,51 @@ inline X86SgxShape x86SgxMedShape(const MedOp &Op,
   if (Op.IntrinsicOutputs.size() == X86SgxAuxiliaryOutputs &&
       Op.IntrinsicOutputs[0].Id == Op.IntrinsicOutputs[1].Id)
     S.ValidId = false;
+  return S;
+}
+
+inline X64CallRCXShape x64CallRCXMedShape(const MedOp &Op,
+                                          Arch TargetArch = Arch::Unknown) {
+  X64CallRCXShape S;
+  S.Architecture = TargetArch;
+  S.Ordering = Op.MemoryOrdering;
+  S.AddressSpace = Op.MemoryAddressSpace;
+  S.ValidId = Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+              Op.NumInputs <= Op.Inputs.size() && Op.Inputs[0].isConst() &&
+              Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].ConstVal == uint64_t(Intrinsic::X64CallRCX) &&
+              !Op.SourceCallHint && !Op.ScalarCallSignature &&
+              !Op.IntegerCallSignature && !Op.IsTailCall && !Op.DoesNotReturn;
+  if (!S.ValidId)
+    return S;
+  S.WritableOutput =
+      (Op.Output.Kind == MedVar::Reg || Op.Output.Kind == MedVar::Temp) &&
+      Op.Output.Id >= 0;
+  S.OutputBytes = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  const auto CheckArch = [&](const MedVar &V) {
+    if (V.Kind != MedVar::Reg)
+      return;
+    if (S.Architecture == Arch::Unknown)
+      S.Architecture = V.TheArch;
+    else if (V.TheArch != S.Architecture)
+      S.ValidId = false;
+  };
+  CheckArch(Op.Output);
+  for (unsigned I = 0; I < S.Arguments && I < S.InputBytes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputBytes[I] = V.Size;
+    S.ScalarInputs[I] = isMedIntrinsicScalarInput(V) ||
+                        V.Kind == MedVar::Param || V.Kind == MedVar::Stack ||
+                        V.Kind == MedVar::RetVal;
+    CheckArch(V);
+  }
+  if (Op.IntrinsicOutputs.size() == 1) {
+    const auto &V = Op.IntrinsicOutputs.front();
+    S.WritableRCX = V.Kind == MedVar::Temp && V.Id >= 0 &&
+                    !(Op.Output.Kind == MedVar::Temp && V.Id == Op.Output.Id);
+    S.RCXBytes = V.Size;
+  }
   return S;
 }
 

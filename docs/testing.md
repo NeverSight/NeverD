@@ -18437,6 +18437,21 @@ It checks 12,624 count/alignment/address cases, RAX/RCX, complete fill extents a
 neighbor bytes. It stops before RET, loads no executable and starts no native
 process or VM. This instruction check is separate from whole-image execution
 qualification and does not establish general dynamic call-state recovery.
+`NeverDX64CallRCXTests` checks occurrence binding, changed source arguments,
+relocatable targets, unknown input slots, dead versus observed PHI cycles, and
+rejected ABI/profile changes. Both source writers retain the single call's
+memory and unwind effects, including in analysis-only HighC. Set
+`NEVERD_TEST_X64_CALL_RCX_EXPORT` to an existing directory to export the synthetic
+LLVM module, C, and `probe.c` for Windows object compilation; these tests execute
+no target code. `scripts/isa/x86/verify_call_rcx.py probe.c --output CHECK_DIR`
+compiles that synthetic probe at O0/O1/O2/O3/Os and checks 640 Unicorn cases,
+always stepping one instruction. It overwrites the volatile registers and home
+area, checks both results and nonvolatile GPR/XMM preservation, and interprets
+the compiler's COFF unwind records at the suspended call. No specimen or VM is
+started. Use `--clang`, `--objcopy`, and `--readobj` to select the tools.
+`NeverDCallRegisterUnreadTests` distinguishes unconditional entry writes
+from partial, conditional, opaque and may-write summaries, including implicit
+return families and nested calls.
 `Win64CallContract.RegisterQueryWindowsSourceCompilesWithItsHeaders` compiles
 both unmodified C units for the Windows x64 target with Clang's freestanding
 headers. HighC includes `<intrin.h>` for the Microsoft CPUID spelling and its

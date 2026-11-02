@@ -342,6 +342,7 @@ private:
                                 llvm::IRBuilder<> &Builder);
   llvm::Value *emitX86RepState(const MedOp &Op, Intrinsic Id,
                                llvm::IRBuilder<> &Builder);
+  llvm::Value *emitX64CallRCX(const MedOp &Op, llvm::IRBuilder<> &Builder);
   llvm::Value *emitX86BoundedLeaf(const MedOp &Op, Intrinsic Id,
                                   llvm::IRBuilder<> &B);
   llvm::Value *emitX86Sgx(const MedOp &Op, Intrinsic Id,

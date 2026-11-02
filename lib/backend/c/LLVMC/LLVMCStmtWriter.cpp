@@ -15,6 +15,7 @@
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
+#include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86AtomicRmw.h"
@@ -5652,6 +5653,12 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     if (ResultLive)
       OS << Name << " = ";
     OS << renderX86AtomicRmw(*Plan, ArgStrs.at(0), ArgStrs.at(1)) << ";\n";
+    return true;
+  }
+  if (auto NativeCall =
+          renderX64CallRCX(Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << *NativeCall;
     return true;
   }
   if (auto BoundedLeaf = renderX86BoundedLeafCall(Opts.TheArch, Call, Name,

@@ -71,6 +71,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMX86RepState.cpp
   X86/MedLLVMX86Sgx.cpp
   X86/MedLLVMX86BoundedLeaf.cpp
+  X86/MedLLVMX64CallRCX.cpp
   X86/MedLLVMX86AmxState.cpp
   X86/X87ImportCall.cpp
   data/MedLLVMConstClass.cpp

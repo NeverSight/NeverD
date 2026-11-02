@@ -110,6 +110,11 @@ add_neverd_unittest(NeverDX64FillReturnTests
   LINK_COMPONENTS Pipeline BackendC
 )
 
+add_neverd_unittest(NeverDX64CallRCXTests
+  core/X64CallRCXTests.cpp
+  LINK_COMPONENTS Pipeline BackendC
+)
+
 add_neverd_unittest(NeverDConstantBranchSourceTests
   core/ConstantBranchSourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC
