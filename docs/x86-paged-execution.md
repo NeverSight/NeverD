@@ -87,6 +87,13 @@ that original CPU run. Fault-time A/D updates are not equated because their
 publication can depend on the CPU. Additional checks cover self-modification,
 backing failure, invalid binding, write-fault restart and refusal boundaries.
 
+The [November 1 qualification](evidence/x86-paged-execution-2026-11-01.json)
+records 534 passing tests across the native-intrinsic and pinned r6 SDKs, with
+two explicit LA57 skips. Generated execution performs 6,080 original-CPU
+comparisons, including 3,120 fault cases; the paging/event regression adds 1,800
+comparisons. All 298 C/header/manifest artifacts match across SDKs, and the old
+source/header outputs remain unchanged.
+
 This is the scalar instruction commit domain. REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, IRQ/NMI scheduling, SMI/AEX, legacy i386 dispatch,
