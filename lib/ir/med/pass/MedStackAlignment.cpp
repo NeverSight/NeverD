@@ -1238,7 +1238,7 @@ std::optional<MedIntegerReturnRange>
 integerReturnRange(const MedFunc &Func, const LowFunc &Source,
                    const BinaryImage &Image) {
   const auto &TRI = getTargetRegInfo(Image.Arch);
-  if (!TRI.ReturnOperandIsValue ||
+  if (Func.AnalysisOnly || Source.AnalysisOnly || !TRI.ReturnOperandIsValue ||
       (TRI.PointerSize != 4 && TRI.PointerSize != 8) ||
       Func.Entry != Source.Entry || !Source.hasCompleteLiftCoverage() ||
       !Source.UnsafeIndirectBranchAddresses.empty() ||

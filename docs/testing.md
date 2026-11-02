@@ -589,6 +589,13 @@ bytes; they do not run the input program. Pair them with pipeline-outcome and
 registration-callee suites, then measure complete GOF2 analysis separately.
 Display success does not establish native exception reconstruction or patch
 equivalence, which continue to use independent strict builds.
+`AnalysisRecovery.DisplayKeepsAnUnprovedCallReturnSlotBody` retains the
+original CALL and load through the full display pipeline and checks native
+LLVM rejection of the tentative body.
+`PipelineSourceStackAccesses.TentativeBodiesKeepUnprovedCallSlotReads`
+requires the ordinary source proof to refuse an unresolved call-stack position
+while the tentative body keeps every physical operation. Return-range tests
+also reject either a LowIR or MedIR analysis marker as native callee evidence.
 `RegistrationTryLevel.CxxPipelineKeepsRuntimeContinuationsAcrossSelection`
 requests LLVM output explicitly to exercise that complete native proof.
 `JTE_X86_64.WideDivisionModuloKeepsHighDividendAndSignedness` checks direct

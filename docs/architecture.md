@@ -9839,6 +9839,12 @@ refusal address preserved in the function audit and LowIR dump; missing
 operations, decoder failures and unproved interior returns still reject.
 LowIR, MedIR and HighIR retain `AnalysisOnly`, and tentative tables carry their
 own marker. HighC comments identify tentative bodies.
+MedIR preparation keeps those bodies' physical stack operations instead of
+requiring a native C frame projection. A CALL return-slot proof that cannot
+finish therefore cannot discard an already decoded display body. The native
+proof and its work limit are unchanged. Tentative bodies also supply no callee
+return-range or source-arity certificates and cannot use native register-leaf
+call expansion.
 When a native selector proof still refuses a recovered table, the separate
 `high/lower/AnalysisDispatch.cpp` display strategy compares the original
 computed target against candidate addresses. It keeps the memory read, snapshots

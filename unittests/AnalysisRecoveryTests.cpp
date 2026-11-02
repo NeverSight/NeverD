@@ -171,6 +171,46 @@ TEST(AnalysisRecovery, ChangedStorageAndForeignTargetsDoNotPublishCandidates) {
   }
 }
 
+TEST(AnalysisRecovery, DisplayKeepsAnUnprovedCallReturnSlotBody) {
+  auto Image = analysisImage();
+  auto &Code = Image.Segments[0].Data;
+  const std::vector<uint8_t> Entry{
+      0x29, 0xc4,                         // sub esp,eax
+      0xe8, 0x79, 0x00, 0x00, 0x00,       // call 0x401080
+      0x8b, 0x4c, 0x24, 0xfc,             // mov ecx,[esp-4]
+      0xff, 0x24, 0x8d, 0x00, 0x20, 0x40, // jmp [ecx*4+0x402000]
+      0x00};
+  std::copy(Entry.begin(), Entry.end(), Code.begin());
+  Code[0x80] = 0xc3;
+  Image.Sections[0].Data = Code;
+  Image.Symbols.push_back(Symbol::makeFunc(0x401080, 1));
+
+  PipelineOptions Options;
+  Options.DumpLow = true;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {Image.Entry};
+  llvm::LLVMContext Context;
+  const auto Result = Pipeline().run(Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.LowFuncs.size(), 1u);
+  ASSERT_EQ(Result.MedFuncs.size(), 1u);
+  EXPECT_TRUE(Result.LowFuncs.front().AnalysisOnly);
+  const auto &Med = Result.MedFuncs.front();
+  EXPECT_TRUE(Med.AnalysisOnly);
+  EXPECT_TRUE(Med.CallReturnReads.empty());
+  size_t Calls = 0, Loads = 0;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops) {
+      Calls += Op.Opcode == NdOp::CALL;
+      Loads += Op.Opcode == NdOp::LOAD;
+    }
+  EXPECT_EQ(Calls, 1u);
+  EXPECT_GE(Loads, 1u);
+  EXPECT_THROW(MedLLVMEmitter().emit(Result.MedFuncs, Context, "display",
+                                     Image.Arch, {}, &Image, Image.Format),
+               std::runtime_error);
+}
+
 TEST(AnalysisRecovery, FloatingNoReturnProofDoesNotEnableDisplayTables) {
   auto Image = analysisImage();
   // FLDZ forces the no-return checker through its floating-stack rebuild.
