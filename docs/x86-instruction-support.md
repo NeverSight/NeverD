@@ -3501,3 +3501,8 @@ The [paged contract](x86-paged-execution.md#paged-irqnmi-scheduling) describes
 ownership, runtime linkage and the remaining partial-instruction, device,
 legacy-mode, SMI and enclave boundaries. This is not global x86 completion or
 an LLVM release/pin claim.
+
+The [November 2 qualification](evidence/x86-paged-scheduling-2026-11-02.json)
+records 558 passing tests, two LA57 oracle skips and 118,510 original-CPU
+comparisons across the native-intrinsic and pinned r6 SDKs. All 422 exported
+artifacts match between SDKs; 186 prior no-fault C/header outputs are unchanged.

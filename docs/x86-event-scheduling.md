@@ -109,3 +109,9 @@ References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articl
 revision 090, STI and Volume 3A interrupt inhibition;
 [KVM run interface](https://www.kernel.org/doc/html/latest/virt/kvm/api.html#the-kvm-run-structure),
 `request_interrupt_window` and `ready_for_interrupt_injection`.
+
+The [paged qualification](evidence/x86-paged-scheduling-2026-11-02.json) covers
+faultable IRQ/NMI scheduling through both C routes, Clang/NeverC at O0/O2 and
+both SDKs. It includes all IRQ vectors, NMI, gate faults, inhibited and blocked
+inputs, PVI entry faults and multi-instruction inhibition windows. The 186
+prior no-fault C/header artifacts remain byte-identical.

@@ -185,6 +185,14 @@ outputs remain unchanged. Retained counterexamples distinguish wrong software
 restart PCs, wrong alignment/page-fault ordering and rejection of a valid
 software entry at the last canonical instruction byte.
 
+The [paged scheduling qualification](evidence/x86-paged-scheduling-2026-11-02.json)
+records 558 passing tests and two explicit LA57 skips across both SDKs. It
+includes 118,510 original-CPU comparisons: 45,856 new scheduling/virtual-flags
+comparisons and 22 saved-PC boundary comparisons extend the earlier matrix.
+All 422 captured exports match across SDKs, and 186 prior no-fault C/header
+outputs remain unchanged. Retained failing runs demonstrate the missing
+pre-instruction PVI fault and rejection of valid saved event-frame PCs.
+
 This is the scalar instruction commit domain. REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, SMI/AEX, legacy i386 dispatch,
