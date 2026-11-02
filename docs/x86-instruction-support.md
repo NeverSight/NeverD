@@ -3529,3 +3529,21 @@ The [IRET evidence](evidence/x86-paged-iret-2026-11-02.json) records 566 passing
 tests, two LA57 skips and 130,290 CPU comparisons, including 11,780 new return
 and handler comparisons. It explicitly records 272 #AC VMX/NMI discrepancies;
 450 exports match across SDKs and 186 earlier no-fault outputs are unchanged.
+
+## Faultable far returns
+
+The paged V6 binding now also executes canonical RETF at all three field widths,
+including unsigned immediate cleanup, same/outer-CPL state transitions and
+fault-handler repair/retry. It shares descriptor/frame semantics with the
+existing source owner. Descriptor reads precede RPL errors; completed accessed
+writes survive later faults. NMI stays blocked, and early versus post-write
+backing stops retain distinct progress accounting.
+
+Two explicit processor profiles preserve the observed P/E-core difference in
+RETFQ compatibility-address validation. The oracle pins its processor and the
+qualification exercises both core classes; this is not a universal x86 ordering
+claim. Expanded IRET cases also correct competing descriptor-page/RPL faults.
+See the [runtime contract](x86-paged-execution.md#faultable-retf-and-parameter-cleanup)
+and [qualification evidence](evidence/x86-paged-retf-2026-11-02.json).
+The remaining legacy-mode, SMM, enclave, partial-instruction and external-device
+boundaries above still apply; LLVM release/pin completion is not implied.

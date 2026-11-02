@@ -3261,7 +3261,7 @@ returns separately; RETF/IRET must not lower to ordinary ABI returns.
 
 Faultable IRET is covered by `X64PagedExecutionTest.PagedInterruptReturnsMatchOriginalCPU`,
 `PagedIretComposesWithScheduledIRQAndNMI`,
-`PagedIretFaultHandlerRepairsMappingAndRetries` and
+`PagedReturnFaultHandlerRepairsMappingAndRetries` and
 `PagedIretDistinguishesAdmissionBackingAndShutdown` in
 `unittests/translate/x86/X64PagedReturnTests.inc`. Run them with the paged
 execution, paging, continuation source and continuation export targets. Set
@@ -3269,6 +3269,21 @@ execution, paging, continuation source and continuation export targets. Set
 comparison counts and the separate #AC VMX/NMI discrepancy count; neither
 undefined compatibility upper halves nor unusable SS attributes are silently
 counted as native equality. See [the runtime contract](x86-paged-execution.md#faultable-iret-iretd-and-iretq).
+
+Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
+`PagedFarReturnRetainedEffectsControlProgress` in
+`unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry
+test also executes a #PF handler repairing a RETF stack mapping. The matrix
+covers all three operand widths with no immediate, 16-byte cleanup and maximum
+unsigned cleanup, CPL/DPL combinations, LDT/conforming code, split frame
+fields, descriptor faults and explicit compatibility upper-half witnesses.
+The return oracle pins its thread and records its logical processor/core type.
+On hybrid machines run the return matrices on each core class (for example,
+`taskset -c CPU ... --gtest_filter='*PagedFarReturn*:*PagedInterruptReturns*:*ReturnFaultHandler*'`).
+Do not treat a migrating run as evidence for a single target profile: the
+qualified P and E cores differ on RETFQ's noncanonical compatibility target.
+The [RETF evidence](evidence/x86-paged-retf-2026-11-02.json) retains both CPU-class
+runs, dual-SDK regressions and the earlier failing observations.
 
 ## Allocator validation
 

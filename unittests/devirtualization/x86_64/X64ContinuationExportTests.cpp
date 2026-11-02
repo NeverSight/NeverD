@@ -1471,10 +1471,11 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 
 TEST_F(X64ContinuationExportTest,
        PagedMemoryExportsItsExplicitRuntimeContract) {
-  load({0x48, 0x8b, 0x07, 0xcd, 0x80, 0xcf, 0x66, 0xcf, 0x48, 0xcf});
+  load({0x48, 0x8b, 0x07, 0xcd, 0x80, 0xcf, 0x66, 0xcf, 0x48, 0xcf, 0xcb, 0x48,
+        0xca, 0x10, 0x00});
   const auto Request =
       request("\"instructions\":[\"0x1000\",\"0x1003\",\"0x1005\",\"0x1006\","
-              "\"0x1008\"],\"paged_memory\":true");
+              "\"0x1008\",\"0x100a\",\"0x100b\"],\"paged_memory\":true");
   for (bool LLVM : {false, true}) {
     const char *Report = nullptr;
     const auto Source = take(neverd_x64_continuation_source_v1(
@@ -1487,7 +1488,7 @@ TEST_F(X64ContinuationExportTest,
     EXPECT_EQ(Manifest->getAsObject()->getString("environment_driver"),
               "neverd_x64_run_paged_v6");
     EXPECT_EQ(Manifest->getAsObject()->getInteger("native_requests"), 0);
-    EXPECT_EQ(Manifest->getAsObject()->getInteger("modeled"), 5);
+    EXPECT_EQ(Manifest->getAsObject()->getInteger("modeled"), 7);
     EXPECT_NE(Source.find("neverd_x64_paged_access_v1"), std::string::npos);
     EXPECT_EQ(Source.find("unknown value"), std::string::npos);
   }

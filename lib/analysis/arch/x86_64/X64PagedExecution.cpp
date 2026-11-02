@@ -41,7 +41,11 @@ struct Transaction {
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
   std::optional<X64ContinuationEventV1> Event;
-  std::optional<uint16_t> InterruptReturn;
+  struct FrameReturn {
+    uint16_t Bytes, Discard;
+    bool Interrupt;
+  };
+  std::optional<FrameReturn> Return;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
 
@@ -73,8 +77,11 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & 7);
-  if (Kind == X64PagedAccess::InterruptReturn) {
-    T.InterruptReturn = uint16_t(Address);
+  if (Kind == X64PagedAccess::InterruptReturn ||
+      Kind == X64PagedAccess::FarReturn) {
+    T.Return =
+        Transaction::FrameReturn{uint16_t(Address), uint16_t(Size),
+                                 Kind == X64PagedAccess::InterruptReturn};
     return 1;
   }
   if (Kind == X64PagedAccess::InterruptFlagMask) {
@@ -263,15 +270,21 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     Exit = Body(NextBytes, ExchangeBytes);
   if (T.Error)
     return std::move(*T.Error);
-  if (T.InterruptReturn) {
-    if (!Options.IretAccessOrder)
-      return invalid("paged IRET requires bound frame-access order");
+  if (T.Return) {
+    if (T.Return->Interrupt ? !Options.IretAccessOrder
+                            : !Options.FarReturnProfile)
+      return invalid("paged return requires bound frame-access order");
     auto Returned =
-        returnX64PagedInterrupt(State, Memory, *T.InterruptReturn,
-                                T.AlignmentPriority, *Options.IretAccessOrder);
+        T.Return->Interrupt
+            ? returnX64PagedInterrupt(State, Memory, T.Return->Bytes,
+                                      T.AlignmentPriority,
+                                      *Options.IretAccessOrder)
+            : returnX64PagedFar(State, Memory, T.Return->Bytes,
+                                T.Return->Discard, T.AlignmentPriority,
+                                *Options.FarReturnProfile);
     if (!Returned)
       return Returned.takeError();
-    Last.InstructionAttempted = true;
+    Last.InstructionAttempted = Returned->InstructionAttempted;
     if (Returned->Completed) {
       Last.InstructionCompleted = true;
       Last.Exit = uint64_t(X64ContinuationExitV1::PrivilegeReturn);
@@ -283,7 +296,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       return Last;
     }
     if (!Returned->Exception)
-      return invalid("paged IRET stopped without an architectural outcome");
+      return invalid("paged return stopped without an architectural outcome");
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = Returned->Exception;
   }

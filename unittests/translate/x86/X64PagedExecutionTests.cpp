@@ -807,6 +807,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
   RecordProperty("software_completion_cpu_comparisons", SoftwareCompletions);
 }
 #endif
+#include "X64PagedFarReturnTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"
 

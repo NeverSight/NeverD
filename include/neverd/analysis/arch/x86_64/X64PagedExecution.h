@@ -31,6 +31,9 @@ struct X64PagedExecutionOptions {
   /// Required before executing IRET's return-frame accesses. Authentication
   /// and fetch still precede this instruction-specific runtime binding.
   std::optional<X64PagedIretAccessOrder> IretAccessOrder;
+  /// Required before RETF accesses its frame. Includes the target processor's
+  /// order of compatibility-IP truncation and canonical-address validation.
+  std::optional<X64PagedFarReturnProfile> FarReturnProfile;
 };
 
 struct X64PagedExecutionResult {
@@ -45,11 +48,11 @@ struct X64PagedExecutionResult {
 
 /// One confined CPU and owned ordinary RAM, without external writes while a
 /// step executes. Prepared stores are committed only after the complete scalar
-/// instruction succeeds. IRET separately retains its ordered descriptor writes
-/// and NMI unblocking on failure. This is not a REP/gather/XSAVE progress
-/// model. Generated bodies/validators and original bytes belong to the same
-/// source export; passing unrelated or arbitrary function pointers violates
-/// this ABI.
+/// instruction succeeds. IRET/RETF retain ordered descriptor writes, and IRET
+/// also retains NMI unblocking on failure. This is not a REP/gather/XSAVE
+/// progress model. Generated bodies/validators and original bytes belong to the
+/// same source export; passing unrelated or arbitrary function pointers
+/// violates this ABI.
 class X64PagedExecution final {
 public:
   explicit X64PagedExecution(translate::X86PagedMemory &Memory,

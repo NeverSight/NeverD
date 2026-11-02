@@ -54,6 +54,7 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using Base::op;
   using Base::range;
   using Base::readMemory;
+  using Base::readStackMemory;
   using Base::returnCode;
   using Base::returnData;
   using Base::returnedData;
@@ -197,12 +198,7 @@ public:
     if constexpr (!Writer::FaultableMemory)
       range(SP, 5 * Bytes - 1);
     const auto ReadFrame = [&](NdVar Address) {
-      if constexpr (Writer::FaultableMemory)
-        W.returnStackAccess(true);
-      const auto Value = readMemory(Address, Bytes);
-      if constexpr (Writer::FaultableMemory)
-        W.returnStackAccess(false);
-      return Value;
+      return readStackMemory(Address, Bytes);
     };
     NdVar PC, CS, Flags;
     if constexpr (Writer::FaultableMemory) {
@@ -221,9 +217,8 @@ public:
     if constexpr (Writer::FaultableMemory) {
       OldCPL =
           masked(load(offsetof(V5, CS) + offsetof(Segment, Selector), 2), 3);
-      faultIf(less(CPL, *OldCPL), 13, masked(CS, 0xfffc));
     }
-    const auto Code = returnCode(CS, CPL);
+    const auto Code = returnCode(CS, CPL, OldCPL);
     if constexpr (Writer::FaultableMemory)
       accessed(Code);
     const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));
@@ -296,55 +291,101 @@ public:
     return Choices;
   }
 
-  std::vector<X64ContinuationCompatibilityChoice> farReturn(uint16_t Bytes,
-                                                            uint16_t Discard) {
+  std::vector<X64ContinuationCompatibilityChoice>
+  farReturn(uint16_t Bytes, uint16_t Discard,
+            bool TruncateCompatibilityIP = false) {
+    if constexpr (Writer::FaultableMemory) {
+      DeliveryExternal = k(0);
+      Returning = true;
+    }
     const auto SP = load(offsetof(State, GPR) + x86reg::RSP);
-    range(SP, 2 * Bytes - 1);
-    const auto PC = readMemory(SP, Bytes);
-    const auto CS =
-        masked(readMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), Bytes), 0xffff);
-    canonical(PC);
+    NdVar PC, CS;
+    if constexpr (Writer::FaultableMemory) {
+      CS = masked(readStackMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), Bytes),
+                  0xffff);
+      PC = readStackMemory(SP, Bytes);
+    } else {
+      range(SP, 2 * Bytes - 1);
+      PC = readMemory(SP, Bytes);
+      CS = masked(readMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), Bytes), 0xffff);
+      canonical(PC);
+    }
     const auto CPL = masked(CS, 3);
-    const auto Outer = ne(CPL, k(0));
-    const auto Code = returnCode(CS, CPL);
+    NdVar Outer;
+    std::optional<NdVar> OldCPL;
+    if constexpr (Writer::FaultableMemory) {
+      OldCPL =
+          masked(load(offsetof(V5, CS) + offsetof(Segment, Selector), 2), 3);
+      Outer = less(*OldCPL, CPL);
+    } else {
+      Outer = ne(CPL, k(0));
+    }
+    const auto Code = returnCode(CS, CPL, OldCPL);
+    if constexpr (Writer::FaultableMemory)
+      accessed(Code);
     const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));
     const auto TargetPC = choose(Compatibility, masked(PC, UINT32_MAX), PC);
-    W.rejectIf(both(Compatibility, less(segmentLimit(Code.Value), TargetPC)));
-    range(SP, choose(Outer, k(4 * Bytes - 1 + Discard), k(2 * Bytes - 1)));
-    // Same-privilege RETF has only two frame words. Use already validated
-    // RAM for the unused SELECT arm; never touch an absent saved SS:RSP.
+    if constexpr (!Writer::FaultableMemory) {
+      W.rejectIf(both(Compatibility, less(segmentLimit(Code.Value), TargetPC)));
+      range(SP, choose(Outer, k(4 * Bytes - 1 + Discard), k(2 * Bytes - 1)));
+    }
     const auto Frame =
         choose(Outer, op(NdOp::INT_ADD, {SP, k(2 * Bytes + Discard)}), SP);
-    const auto NewSP = choose(Outer, readMemory(Frame, Bytes),
-                              op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
-    const auto SS = choose(
-        Outer,
-        masked(readMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), Bytes), 0xffff),
-        k(0));
+    NdVar NewSP, SS;
+    if constexpr (Writer::FaultableMemory) {
+      SS = masked(
+          readStackMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), Bytes, Outer),
+          0xffff);
+      NewSP = choose(Outer, readStackMemory(Frame, Bytes, Outer),
+                     op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
+    } else {
+      // The no-fault source uses validated RAM for its unused SELECT arm.
+      NewSP = choose(Outer, readMemory(Frame, Bytes),
+                     op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
+      SS =
+          choose(Outer,
+                 masked(readMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), Bytes),
+                        0xffff),
+                 k(0));
+    }
     const auto NullSS = eq(masked(SS, 0xfffc), k(0));
-    W.rejectIf(both(Compatibility, both(Outer, NullSS)));
-    const auto Stack = returnStack(CS, CPL, SS, NullSS);
+    faultIf(both(Compatibility, both(Outer, NullSS)), 13, k(0));
+    const auto Stack = returnStack(
+        CS, CPL, SS, NullSS,
+        Writer::FaultableMemory ? std::optional<NdVar>(Outer) : std::nullopt);
     const auto StackAttributes =
         choose(Outer, segmentAttributes(Stack.Value),
                load(offsetof(V5, SS) + offsetof(Segment, Attributes), 2));
     const auto CompatSP =
         compatibilityStack(SP, NewSP, StackAttributes, Discard);
-    accessed(Code);
+    if constexpr (!Writer::FaultableMemory)
+      accessed(Code);
     accessed(Stack);
+    if constexpr (Writer::FaultableMemory) {
+      faultIf(both(Compatibility, less(segmentLimit(Code.Value), TargetPC)), 13,
+              k(0));
+      canonical(TruncateCompatibilityIP ? TargetPC : PC);
+    }
     segment(offsetof(V5, CS), CS, Code.Value);
     segment(offsetof(V5, SS),
             choose(Outer, SS,
                    load(offsetof(V5, SS) + offsetof(Segment, Selector), 2)),
             Stack.Value, NullSS);
     const auto Unusable = masked(load(offsetof(V6, Unusable), 1), 0xfe);
-    returnData(CPL, choose(Outer,
-                           op(NdOp::INT_OR, {masked(Unusable, 0xfd),
-                                             choose(NullSS, k(2), k(0))}),
-                           Unusable));
+    const auto ReturnedUnusable = choose(
+        Outer,
+        op(NdOp::INT_OR, {masked(Unusable, 0xfd), choose(NullSS, k(2), k(0))}),
+        Unusable);
+    if constexpr (Writer::FaultableMemory) {
+      W.store(offsetof(V6, Unusable), narrow(ReturnedUnusable, 1));
+      W.exitIf(Outer, [&] { returnData(CPL, ReturnedUnusable); });
+    } else {
+      returnData(CPL, ReturnedUnusable);
+    }
     W.store(offsetof(State, GPR) + x86reg::RSP,
             choose(Compatibility, CompatSP,
                    op(NdOp::INT_ADD, {NewSP, k(Discard)})));
-    // RETF preserves flags except for ordinary RF clearing, and retains NMI
+    // RETF preserves flags except ordinary RF clearing, and retains NMI
     // blocking. No instruction at the returned target has executed yet.
     W.store(offsetof(State, RFlags),
             masked(load(offsetof(State, RFlags)), ~uint64_t{0x10000}));

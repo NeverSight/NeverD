@@ -19,11 +19,14 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #if defined(__linux__) && defined(__x86_64__)
+#include <cpuid.h>
 #include <fcntl.h>
 #include <linux/kvm.h>
+#include <sched.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -37,6 +40,9 @@ public:
   kvm_run *Run = nullptr;
   kvm_sregs Initial{};
   uint8_t PhysicalBits = 0;
+  unsigned ReturnCoreType = 0;
+  int ReturnProcessor = -1;
+  std::optional<cpu_set_t> OriginalAffinity;
   std::vector<uint64_t> CPUIDStorage;
 
   ~X64PagedNativeCPU() {
@@ -47,6 +53,25 @@ public:
     for (int FD : {CPU, VM, KVM})
       if (FD >= 0)
         close(FD);
+    if (OriginalAffinity)
+      EXPECT_EQ(sched_setaffinity(0, sizeof(cpu_set_t), &*OriginalAffinity), 0);
+  }
+
+  // Competing faults and compatibility-IP validation are processor bindings.
+  // A hybrid host must not migrate a comparison onto another core type after
+  // the test chooses its explicit profile. This never chooses runtime policy.
+  void pinForReturnComparison() {
+    OriginalAffinity.emplace();
+    ASSERT_EQ(sched_getaffinity(0, sizeof(cpu_set_t), &*OriginalAffinity), 0);
+    ReturnProcessor = sched_getcpu();
+    ASSERT_GE(ReturnProcessor, 0);
+    cpu_set_t Selected;
+    CPU_ZERO(&Selected);
+    CPU_SET(ReturnProcessor, &Selected);
+    ASSERT_EQ(sched_setaffinity(0, sizeof(Selected), &Selected), 0);
+    unsigned A, B, C, D;
+    if (__get_cpuid_count(0x1a, 0, &A, &B, &C, &D))
+      ReturnCoreType = A >> 24;
   }
 
   void initialize() {

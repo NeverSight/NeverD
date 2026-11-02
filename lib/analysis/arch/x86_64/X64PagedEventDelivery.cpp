@@ -84,6 +84,7 @@ public:
   std::optional<X64ContinuationExitV1> Exit;
   std::optional<X64PagedAlignmentPriority> AlignmentPriority;
   bool Stopped = false;
+  bool ReturnEffects = false;
 
   TransitionWriter(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                    const X64ContinuationEventV1 &Event, uint32_t MXCSRMask)
@@ -225,8 +226,10 @@ public:
   }
 
   void beginReturn() {
-    if (!Stopped)
+    if (!Stopped) {
       State.NMIBlocked = 0;
+      ReturnEffects = true;
+    }
   }
 
   void returnStackAccess(bool Enable) {
@@ -234,7 +237,8 @@ public:
     FrameCPL = State.Core.CS.Selector & 3;
   }
 
-  void invalidateMonitor() {} // The V6 state has no monitor bank.
+  void invalidateMonitor(std::optional<NdVar> = std::nullopt) {
+  } // The V6 state has no monitor bank.
 
   void compatibilityChoices(
       llvm::ArrayRef<X64ContinuationCompatibilityChoice> Choices) {
@@ -317,6 +321,8 @@ private:
       for (unsigned I = 0; I != Size; ++I)
         Value |= uint64_t(Bytes[I]) << (I * 8);
       Values[Output.Offset] = Value;
+    } else if (AlignmentPriority) {
+      ReturnEffects = true;
     }
   }
 
@@ -402,30 +408,35 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   }
 }
 
-llvm::Expected<X64PagedInterruptReturnResult>
-returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
-                        uint16_t FieldBytes,
-                        X64PagedAlignmentPriority AlignmentPriority,
-                        X64PagedIretAccessOrder AccessOrder) {
+namespace {
+llvm::Expected<X64PagedReturnResult>
+returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+            uint16_t FieldBytes, uint16_t Discard, bool Interrupt,
+            X64PagedAlignmentPriority AlignmentPriority,
+            bool TruncateCompatibilityIP = false) {
   assert((FieldBytes == 2 || FieldBytes == 4 || FieldBytes == 8) &&
-         "authenticated IRET operand size");
-  assert(AccessOrder == X64PagedIretAccessOrder::FlagsFirst);
+         "authenticated return operand size");
   auto Next = State;
   const X64ContinuationEventV1 Event{};
   TransitionWriter W(Next, Memory, Event, 0);
   W.AlignmentPriority = AlignmentPriority;
-  detail::X64ContinuationEvents<TransitionWriter>(
-      W, Memory.controls().CR4 & 0x1000 ? 57 : 48)
-      .iret(FieldBytes);
+  detail::X64ContinuationEvents<TransitionWriter> Transfer(
+      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
+  if (Interrupt)
+    Transfer.iret(FieldBytes);
+  else
+    Transfer.farReturn(FieldBytes, Discard, TruncateCompatibilityIP);
   // IRET unblocks NMI even on fault. Other register and segment-cache changes
   // are staged; the writer has already committed ordered RAM side effects.
   State.NMIBlocked = Next.NMIBlocked;
   if (W.Error)
     return std::move(*W.Error);
-  X64PagedInterruptReturnResult Result;
+  X64PagedReturnResult Result;
   Result.Exception = W.Fault;
   Result.BackingFault = W.Result.BackingFault;
   Result.Completed = W.Exit == X64ContinuationExitV1::PrivilegeReturn;
+  Result.InstructionAttempted =
+      Result.Completed || bool(Result.Exception) || W.ReturnEffects;
   if (Result.Completed) {
     State = Next;
     auto Controls = Memory.controls();
@@ -434,6 +445,28 @@ returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
       return std::move(Error);
   }
   return Result;
+}
+} // namespace
+
+llvm::Expected<X64PagedInterruptReturnResult>
+returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                        uint16_t FieldBytes,
+                        X64PagedAlignmentPriority AlignmentPriority,
+                        X64PagedIretAccessOrder AccessOrder) {
+  assert(AccessOrder == X64PagedIretAccessOrder::FlagsFirst);
+  return returnFrame(State, Memory, FieldBytes, 0, true, AlignmentPriority);
+}
+
+llvm::Expected<X64PagedReturnResult>
+returnX64PagedFar(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                  uint16_t FieldBytes, uint16_t Discard,
+                  X64PagedAlignmentPriority AlignmentPriority,
+                  X64PagedFarReturnProfile Profile) {
+  assert(Profile == X64PagedFarReturnProfile::SelectorFirst ||
+         Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
+  return returnFrame(
+      State, Memory, FieldBytes, Discard, false, AlignmentPriority,
+      Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
 }
 
 } // namespace neverd::analysis

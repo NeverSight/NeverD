@@ -37,11 +37,14 @@ with exact scalar values and this memory binding; source and concrete execution
 share descriptor/frame decisions. Recursive delivery owns #DF classification,
 CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
 to that memory, authenticates instruction fetches, stages restart state and
-commits prepared stores. Faultable IRET reuses the same continuation return
-and descriptor templates through that concrete evaluator. Its bound access
-order preserves descriptor writes and NMI unblocking on a later failure;
-register/segment publication remains staged. Scalar rollback cannot erase
-those completed transition effects. The existing LowIR remains the arithmetic authority;
+commits prepared stores. Faultable IRET and RETF reuse the same continuation
+return and descriptor templates through that concrete evaluator. Their bound
+processor profiles preserve ordered descriptor writes on a later failure;
+IRET also unblocks NMI, while RETF retains inhibition. Register/segment
+publication remains staged. RETF's compatibility-IP validation differs across
+the qualified hybrid core types, so the profile is explicit and the test oracle
+pins its processor. Scalar rollback cannot erase completed transition effects;
+backing stops after such effects charge an attempt. The existing LowIR remains the arithmetic authority;
 both C routes share an explicit imported-call ABI. Device arrival remains
 producer-owned. See [paged RAM](x86-paged-memory.md) and
 [generated execution](x86-paged-execution.md); the default generated-C dispatcher

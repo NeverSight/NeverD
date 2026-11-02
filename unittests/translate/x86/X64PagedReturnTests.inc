@@ -16,6 +16,9 @@ TEST_F(X64PagedExecutionTest, PagedInterruptReturnsMatchOriginalCPU) {
   ASSERT_NO_FATAL_FAILURE(CPU.initialize());
   if (testing::Test::IsSkipped())
     return;
+  ASSERT_NO_FATAL_FAILURE(CPU.pinForReturnComparison());
+  RecordProperty("return_processor", CPU.ReturnProcessor);
+  RecordProperty("return_core_type", CPU.ReturnCoreType);
   Features.PhysicalAddressBits = CPU.PhysicalBits;
   std::vector<uint8_t> Code(0x22, 0x90);
   Code[0] = 0xcf;
@@ -36,8 +39,8 @@ TEST_F(X64PagedExecutionTest, PagedInterruptReturnsMatchOriginalCPU) {
                                         {0x1000, 0x1010, 0x1020}, Compiler,
                                         0x1000, &Scheduled));
         for (unsigned Width : {2, 4, 8})
-          for (unsigned Case = 0; Case != 247; ++Case) {
-            if (Case >= 244 && Width != 8)
+          for (unsigned Case = 0; Case != 256; ++Case) {
+            if (Case >= 244 && Case < 250 && Width != 8)
               continue;
             SCOPED_TRACE(llvm::formatv("llvm={0} {1} width={2} case={3}", LLVM,
                                        O, Width, Case)
@@ -246,7 +249,7 @@ TEST_F(X64PagedExecutionTest, PagedInterruptReturnsMatchOriginalCPU) {
               put(0x15ff8, 0x16007);
               put(0x16ff8, 0x30007);
             }
-            if (Case >= 244) {
+            if (Case >= 244 && Case < 247) {
               const unsigned N = Case - 244;
               CS = 8;
               SS = N == 1 ? 16 : 0;
@@ -261,6 +264,46 @@ TEST_F(X64PagedExecutionTest, PagedInterruptReturnsMatchOriginalCPU) {
                 State.GDTR.Base = Core.GPR[4] + 3;
                 State.GDTR.Limit = 15;
               }
+            }
+            if (Case >= 247 && Case < 250) {
+              PC |= Case == 247   ? 0x100000000ULL
+                    : Case == 248 ? 0x1000000000000ULL
+                                  : 0xffffffff00000000ULL;
+              put(0x5028, 0x00cf9a000000ffffULL);
+            }
+            if (Case >= 250 && Case < 253) {
+              Core.GPR[4] = 0x1e000 - Width;
+              put(0x130e8, 0);
+              if (Case == 250)
+                CS = 0;
+              if (Case == 251) {
+                State.Core.CS = {0, UINT32_MAX, 27, 0xa0fb};
+                State.Core.SS = {0, UINT32_MAX, 35, 0xc0f3};
+              }
+              if (Case == 252)
+                put(0x5028, 0);
+            }
+            if (Case == 253 || Case == 254) {
+              if (Case == 253) {
+                State.Core.CS = {0, UINT32_MAX, 27, 0xa0fb};
+                State.Core.SS = {0, UINT32_MAX, 35, 0xc0f3};
+                CS = 0x1000;
+              } else {
+                CS |= 3;
+                SS = 0x1000;
+                put(0x5028, 0x00affa000000ffffULL);
+              }
+              State.GDTR.Limit = 0x1007;
+              std::memmove(RAM.Memory.front().Bytes.data() + 0x7000,
+                           RAM.Memory.front().Bytes.data() + 0x6000, 4096);
+              State.IDTR.Base = 0x7000;
+              put(0x6000, 0x00af9a000000ffffULL);
+              put(0x13030, 0);
+            }
+            if (Case == 255) {
+              State.Core.CS = {0, UINT32_MAX, 27, 0xa0fb};
+              State.Core.SS = {0, UINT32_MAX, 35, 0xc0f3};
+              put(0x5028, 0x00af1a000000ffffULL);
             }
             if (Core.GPR[4] < 0x40000 || Case >= 240)
               for (unsigned I = 0; I != 5; ++I) {
@@ -446,7 +489,7 @@ TEST_F(X64PagedExecutionTest, PagedIretComposesWithScheduledIRQAndNMI) {
   RecordProperty("cpu_comparisons", Comparisons);
 }
 
-TEST_F(X64PagedExecutionTest, PagedIretFaultHandlerRepairsMappingAndRetries) {
+TEST_F(X64PagedExecutionTest, PagedReturnFaultHandlerRepairsMappingAndRetries) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -463,56 +506,63 @@ TEST_F(X64PagedExecutionTest, PagedIretFaultHandlerRepairsMappingAndRetries) {
   std::copy(std::begin(HandlerCode), std::end(HandlerCode),
             Code.begin() + 0x1000);
   unsigned Comparisons = 0;
-  for (bool LLVM : {false, true}) {
-    Run Driver = nullptr;
-    Schedule Scheduled = nullptr;
-    ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver,
-                                    {0x1000, 0x2000, 0x200c, 0x2010},
-                                    NEVERD_TEST_CLANG, 0x1000, &Scheduled));
-    reset(Code);
-    auto &Core = State.Core.Core.Core.Core;
-    Core.GPR[4] = 0x1d000;
-    State.NMIBlocked = 1;
-    for (unsigned I = 0; I != 5; ++I) {
-      const uint64_t Frame[] = {0x1800, 8, 0x246, 0xe800, 16};
-      put(0x1d000 + I * 8, Frame[I]);
+  for (bool Far : {false, true})
+    for (bool LLVM : {false, true}) {
+      Code[1] = Far ? 0xcb : 0xcf;
+      Run Driver = nullptr;
+      Schedule Scheduled = nullptr;
+      ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver,
+                                      {0x1000, 0x2000, 0x200c, 0x2010},
+                                      NEVERD_TEST_CLANG, 0x1000, &Scheduled));
+      reset(Code);
+      auto &Core = State.Core.Core.Core.Core;
+      Core.GPR[4] = 0x1d000;
+      State.NMIBlocked = 1;
+      for (unsigned I = 0; I != 5; ++I) {
+        const uint64_t Frame[] = {0x1800, 8, 0x246, 0xe800, 16};
+        put(0x1d000 + I * 8, Frame[I]);
+      }
+      put(0x130e8, 0);
+      put(0x8024, 0x1c000);
+      put(0x60e0, 0x2000 | (uint64_t(8) << 16) | (uint64_t(1) << 32) |
+                      (uint64_t(0x8e) << 40));
+      X64ContinuationStateV6 Native;
+      bool Handler = false;
+      ASSERT_NO_FATAL_FAILURE(CPU.execute(RAM.Memory.front().Bytes, State,
+                                          Controls.CR0, 2, Native, Handler));
+      ASSERT_FALSE(Handler);
+      Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+      X64PagedExecution Context(
+          *Memory,
+          {.IretAccessOrder = X64PagedIretAccessOrder::FlagsFirst,
+           .FarReturnProfile = X64PagedFarReturnProfile::SelectorFirst});
+      for (unsigned Phase = 0; Phase != 3; ++Phase) {
+        uint64_t Budget = Phase == 1 ? 3 : 1;
+        EXPECT_EQ(
+            Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
+            Phase == 0 ? 7u : 6u);
+        EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
+        EXPECT_EQ(Budget, 0u);
+        EXPECT_EQ(Core.PC, Phase == 0   ? 0x2000u
+                           : Phase == 1 ? 0x1000u
+                                        : 0x1800u);
+        EXPECT_EQ(State.NMIBlocked, Far && Phase == 0 ? 1 : 0);
+      }
+      const auto &Want = Native.Core.Core.Core.Core;
+      EXPECT_EQ(Core.PC, Want.PC);
+      EXPECT_EQ(Core.RFlags, Want.RFlags);
+      for (unsigned I = 0; I != 16; ++I)
+        EXPECT_EQ(Core.GPR[I], Want.GPR[I]);
+      EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
+      auto ActualRAM =
+          Memory->physicalMemory().snapshotMemoryRegions().front().Bytes;
+      auto NativeRAM = std::vector<uint8_t>(CPU.RAM, CPU.RAM + CPU.Size);
+      std::fill(ActualRAM.begin() + 0x10000, ActualRAM.begin() + 0x14000, 0);
+      std::fill(NativeRAM.begin() + 0x10000, NativeRAM.begin() + 0x14000, 0);
+      EXPECT_EQ(ActualRAM, NativeRAM);
+      ++Comparisons;
     }
-    put(0x130e8, 0);
-    put(0x8024, 0x1c000);
-    put(0x60e0, 0x2000 | (uint64_t(8) << 16) | (uint64_t(1) << 32) |
-                    (uint64_t(0x8e) << 40));
-    X64ContinuationStateV6 Native;
-    bool Handler = false;
-    ASSERT_NO_FATAL_FAILURE(CPU.execute(RAM.Memory.front().Bytes, State,
-                                        Controls.CR0, 2, Native, Handler));
-    ASSERT_FALSE(Handler);
-    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-    X64PagedExecution Context(
-        *Memory, {.IretAccessOrder = X64PagedIretAccessOrder::FlagsFirst});
-    for (unsigned Phase = 0; Phase != 3; ++Phase) {
-      uint64_t Budget = Phase == 1 ? 3 : 1;
-      EXPECT_EQ(Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
-                Phase == 0 ? 7u : 6u);
-      EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
-      EXPECT_EQ(Budget, 0u);
-      EXPECT_EQ(Core.PC, Phase == 0 ? 0x2000u : Phase == 1 ? 0x1000u : 0x1800u);
-      EXPECT_EQ(State.NMIBlocked, 0);
-    }
-    const auto &Want = Native.Core.Core.Core.Core;
-    EXPECT_EQ(Core.PC, Want.PC);
-    EXPECT_EQ(Core.RFlags, Want.RFlags);
-    for (unsigned I = 0; I != 16; ++I)
-      EXPECT_EQ(Core.GPR[I], Want.GPR[I]);
-    EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
-    auto ActualRAM =
-        Memory->physicalMemory().snapshotMemoryRegions().front().Bytes;
-    auto NativeRAM = std::vector<uint8_t>(CPU.RAM, CPU.RAM + CPU.Size);
-    std::fill(ActualRAM.begin() + 0x10000, ActualRAM.begin() + 0x14000, 0);
-    std::fill(NativeRAM.begin() + 0x10000, NativeRAM.begin() + 0x14000, 0);
-    EXPECT_EQ(ActualRAM, NativeRAM);
-    ++Comparisons;
-  }
-  RecordProperty("iret_retry_cpu_comparisons", Comparisons);
+  RecordProperty("return_retry_cpu_comparisons", Comparisons);
   RecordProperty("cpu_comparisons", Comparisons);
 }
 

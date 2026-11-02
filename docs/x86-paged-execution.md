@@ -100,8 +100,10 @@ shutdown, and 20 reports changed code requiring relift. A completed instruction
 or an architectural fault attempt consumes one instruction-budget unit;
 native/invalid/changed-code stops and scalar operand backing failures do not.
 Once IRET begins, its NMI and descriptor effects prevent that rollback rule;
-even a return-frame backing failure consumes its attempt. A fault
-whose IDT entry subsequently hits a backing failure still consumes its attempt.
+even a return-frame backing failure consumes its attempt. RETF retains NMI
+inhibition and consumes an attempt on backing failure only after a descriptor
+write has committed. Page-walk A/D effects alone do not charge an attempt.
+A fault whose IDT entry subsequently hits a backing failure still consumes its attempt.
 `InstructionAttempted` and `Delivery.InputAccepted` retain these distinctions
 independently of the final status. Full fault and backing details
 are available through the context's `lastResult()` and `lastError()`.
@@ -117,8 +119,11 @@ return. Source admission authenticates the original bytes and LowIR shape.
 
 Bind `X64PagedExecutionOptions::IretAccessOrder` to the target processor's
 qualified order. The currently qualified `FlagsFirst` profile reads FLAGS,
-CS and IP, updates CS's accessed bit, then reads SS and SP, validates SS and
-updates its accessed bit, and finally validates the target IP. Accessed writes
+CS and IP, validates and updates CS's descriptor, then reads SS and SP,
+validates and updates SS's descriptor, and finally validates the target IP.
+Descriptor reads precede RPL validation, so a missing descriptor page wins over
+a simultaneous RPL error. A compatibility target is truncated before the final
+canonical-address check. Accessed writes
 use descriptor qwords. This order determines CR2 and the writes preceding a
 later fault; it is an explicit CPU binding, not a universal inference from
 Intel's pseudocode. Missing binding stops after byte authentication but before
@@ -158,6 +163,48 @@ retains Intel's architectural IRET unblocking rule rather than copying it.
 See the [Linux VMX source](https://github.com/torvalds/linux/blob/master/arch/x86/kvm/vmx/vmx.c)
 and Intel SDM volume 2, IRET/IRETD/IRETQ.
 
+## Faultable RETF and parameter cleanup
+
+Canonical `CB` and `CA imm16`, with no prefix, `66` or `48`, use the same
+faultable return owner. Bind `X64PagedExecutionOptions::FarReturnProfile` before
+executing them. Both profiles read CS before IP, validate and update the CS
+descriptor, then read SS before SP only for an outer return. Descriptor fetch
+precedes RPL validation; descriptor accessed writes precede late target faults.
+A same-CPL return never speculatively accesses an outer frame. NT is retained,
+RF clears on successful completion, and NMI inhibition remains unchanged.
+
+The two profiles differ in the final compatibility target check:
+
+| Profile | Canonical-address input | Locally qualified CPU |
+| --- | --- | --- |
+| `SelectorFirst` | Original saved IP | Core i9-13900H performance core, CPUID core type `0x40` |
+| `SelectorFirstTruncatedIP` | Truncated compatibility EIP | Core i9-13900H efficient core, CPUID core type `0x20` |
+
+This difference was reproduced by executing the same original RETFQ bytes on
+fixed cores. It is a target binding, not a claim about every processor with that
+core type, and runtime code never derives it from the machine running NeverD.
+The test oracle pins its thread before reading
+[CPUID's hybrid core type](https://www.intel.com/content/www/us/en/developer/articles/guide/12th-gen-intel-core-processor-gamedev-guide.html)
+and restores its prior affinity afterwards. Qualification runs exercise both
+classes explicitly. The original unpinned failure is retained as evidence.
+
+The unsigned immediate is applied to the current stack's parameters before
+locating an outer frame and to the returned stack after restoration. Operand
+width, target code mode and SS.B retain their separate roles. Outer returns
+revalidate data selectors; same-CPL returns preserve their caches. Compatibility
+GPR upper halves use explicit witnesses. Success publishes `PrivilegeReturn`
+without executing the target. A generated #PF handler can repair a mapping,
+IRET back to RETF, and retry the original instruction.
+
+Physical backing failures are embedding stops, not synthetic guest page
+faults. An early RETF backing stop preserves budget and interrupt inhibition;
+a stop after a descriptor write retains that write and charges an attempt.
+The caller must inspect retained state rather than assume transactional rollback.
+Architectural faults still use the common IDT/#DF/shutdown owner and original
+restart PC. Missing profile, changed code and fetch faults do not access the
+return frame. The [RETF qualification](evidence/x86-paged-retf-2026-11-02.json)
+also records the added competing-fault IRET cases and both hybrid core profiles.
+
 ## Paged IRQ/NMI scheduling
 
 Add `scheduled_events: true` to the paged binding to export:
@@ -190,8 +237,8 @@ owned by the common event algorithm.
 
 Completed instructions and architectural fault attempts expire supplied
 inhibition; an architectural fault whose delivery fails is still an attempt.
-Code changes and operand backing failures preserve inhibition and instruction
-budget. Polls are charged independently. Call/return following retains the
+Code changes and scalar operand backing failures preserve inhibition and
+instruction budget. Return backing stops use the retained-effect rules above. Polls are charged independently. Call/return following retains the
 export's explicit policy and can poll at the selected callee's entry.
 
 CLI/STI check CPL against IOPL. At CPL3 with CR4.PVI and IOPL below 3, they
@@ -258,7 +305,7 @@ outputs remain byte-identical. Retained failures demonstrate the wrong frame
 order/CR2, lost descriptor writes, eager whole-frame canonical checks and
 incorrect same-CPL data-cache invalidation.
 
-This binding owns scalar commits and faultable long-mode interrupt returns.
+This binding owns scalar commits and faultable long-mode interrupt/far returns.
 REP, gather/scatter, XSAVE and
 other partial-completion instructions need their own progress models. LOCK,
 native system providers, TF, SMI/AEX, legacy i386 dispatch,
@@ -269,6 +316,6 @@ or RTM regions is explicitly rejected. The [no-fault scheduler](x86-event-schedu
 retains its separate successful-RAM contract. LLVM release/pin completion is not implied.
 
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
-volume 2 CALL/DIV/IDIV/CMOV/CLI/STI/IRET, volume 3A paging, exception priority
+volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET, volume 3A paging, exception priority
 and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

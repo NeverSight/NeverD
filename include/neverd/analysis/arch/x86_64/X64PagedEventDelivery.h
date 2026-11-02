@@ -1,11 +1,11 @@
-//===- X64PagedEventDelivery.h - Paged IDT entry ----------------*- C++ -*-===//
+//===- X64PagedEventDelivery.h - Paged events and returns ------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
 /// Run the shared V6 event semantics over owned paged RAM, including faults
-/// during delivery, double faults and architectural shutdown.
+/// during delivery and returns, double faults and architectural shutdown.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEVENTDELIVERY_H
@@ -30,6 +30,15 @@ enum class X64PagedAlignmentPriority : uint8_t { BeforePaging, AfterPaging };
 /// order reads FLAGS, CS, IP, then SS and SP, and updates accessed descriptors
 /// as qwords. This is not inferred from the host or the ISA pseudocode.
 enum class X64PagedIretAccessOrder : uint8_t { FlagsFirst };
+/// Both profiles read CS then IP, validate and update the code descriptor,
+/// then read outer SS and SP. SelectorFirst checks the original saved IP for
+/// canonicality; SelectorFirstTruncatedIP truncates a compatibility target
+/// first. The qualified hybrid Intel host exhibits both behaviors on different
+/// core types, so this is an explicit target binding, never a host inference.
+enum class X64PagedFarReturnProfile : uint8_t {
+  SelectorFirst,
+  SelectorFirstTruncatedIP,
+};
 
 enum class X64PagedEventStatus : uint8_t {
   Delivered,
@@ -74,11 +83,16 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State,
                      translate::X86PagedMemory &Memory,
                      const X64ContinuationEventV1 &Event, uint32_t MXCSRMask);
 
-struct X64PagedInterruptReturnResult {
+struct X64PagedReturnResult {
   bool Completed = false;
+  /// Completion, an architectural fault, or a retained return effect consumes
+  /// an attempt. A backing stop before RETF's first descriptor write does not.
+  bool InstructionAttempted = false;
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
 };
+
+using X64PagedInterruptReturnResult = X64PagedReturnResult;
 
 /// Execute an authenticated 64-bit-mode IRET/IRETD/IRETQ after instruction
 /// fetch. Descriptor/page-table writes and NMI unblocking survive a later
@@ -90,6 +104,16 @@ returnX64PagedInterrupt(X64ContinuationStateV6 &State,
                         translate::X86PagedMemory &Memory, uint16_t FieldBytes,
                         X64PagedAlignmentPriority AlignmentPriority,
                         X64PagedIretAccessOrder AccessOrder);
+
+/// Execute an authenticated 64-bit-mode RETF, optionally releasing Discard
+/// bytes from both stacks on an outer return. NMI inhibition is retained.
+/// Ordered descriptor writes survive faults; register/cache state commits on
+/// success. A physical backing failure is an embedding stop, not a guest #PF.
+llvm::Expected<X64PagedReturnResult>
+returnX64PagedFar(X64ContinuationStateV6 &State,
+                  translate::X86PagedMemory &Memory, uint16_t FieldBytes,
+                  uint16_t Discard, X64PagedAlignmentPriority AlignmentPriority,
+                  X64PagedFarReturnProfile Profile);
 
 } // namespace neverd::analysis
 

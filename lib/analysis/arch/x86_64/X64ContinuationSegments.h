@@ -146,6 +146,20 @@ protected:
     NdVar Value;
   };
 
+  NdVar readStackMemory(NdVar Address, uint16_t Bytes,
+                        std::optional<NdVar> When = std::nullopt) {
+    if constexpr (Writer::FaultableMemory) {
+      W.returnStackAccess(true);
+      auto Value = When
+                       ? W.loadMemoryIf(*When, Address, NdVar::scalar(0, Bytes))
+                       : op(NdOp::LOAD, {Address}, Bytes);
+      W.returnStackAccess(false);
+      return Bytes == 8 ? Value : op(NdOp::INT_ZEXT, {Value});
+    } else {
+      return readMemory(Address, Bytes);
+    }
+  }
+
   Descriptor descriptor(NdVar Selector,
                         std::optional<NdVar> ReadIf = std::nullopt) {
     const auto Error =
@@ -267,15 +281,20 @@ protected:
     return op(NdOp::INT_OR, {Unusable, choose(Invalidate, k(Bit), k(0))});
   }
 
-  Descriptor returnCode(NdVar CS, NdVar CPL) {
+  Descriptor returnCode(NdVar CS, NdVar CPL,
+                        std::optional<NdVar> OldCPL = std::nullopt) {
     faultIf(eq(masked(CS, 0xfffc), k(0)), 13, k(0));
     const auto Code = descriptor(CS);
     const auto Access = shifted(Code.Value, 40);
     const auto DPL = masked(shifted(Access, 5), 3);
     if constexpr (Writer::FaultableMemory) {
+      // The bound return profiles fetch the descriptor before rejecting an
+      // inward RPL. A descriptor #PF therefore precedes that selector #GP.
       const auto Error = masked(CS, 0xfffc);
       faultIf(ne(masked(Access, 0x18), k(0x18)), 13, Error);
       faultIf(eq(masked(Access, 0x6000), k(0x6000)), 13, Error);
+      if (OldCPL)
+        faultIf(less(CPL, *OldCPL), 13, Error);
       faultIf(choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)),
               13, Error);
       faultIf(eq(masked(Access, 0x80), k(0)), 11, Error);
@@ -289,21 +308,29 @@ protected:
     return Code;
   }
 
-  Descriptor returnStack(NdVar CS, NdVar CPL, NdVar SS, NdVar NullSS) {
+  Descriptor returnStack(NdVar CS, NdVar CPL, NdVar SS, NdVar NullSS,
+                         std::optional<NdVar> When = std::nullopt) {
     if constexpr (Writer::FaultableMemory) {
-      faultIf(both(NullSS, either(eq(CPL, k(3)), ne(masked(SS, 3), CPL))), 13,
-              k(0));
+      const auto Enabled = [&](NdVar Bad) {
+        return When ? both(*When, Bad) : Bad;
+      };
+      faultIf(
+          Enabled(both(NullSS, either(eq(CPL, k(3)), ne(masked(SS, 3), CPL)))),
+          13, k(0));
       const auto Error = masked(SS, 0xfffc);
-      faultIf(both(eq(NullSS, NdVar::scalar(0, 1)), ne(masked(SS, 3), CPL)), 13,
-              Error);
-      const auto Stack = descriptor(SS, eq(NullSS, NdVar::scalar(0, 1)));
+      const auto Stack =
+          descriptor(SS, Enabled(eq(NullSS, NdVar::scalar(0, 1))));
+      faultIf(Enabled(both(eq(NullSS, NdVar::scalar(0, 1)),
+                           ne(masked(SS, 3), CPL))),
+              13, Error);
       const auto Access = shifted(Stack.Value, 40);
       const auto Invalid = either(ne(masked(Access, 0x1a), k(0x12)),
                                   ne(masked(shifted(Access, 5), 3), CPL));
-      faultIf(both(eq(NullSS, NdVar::scalar(0, 1)), Invalid), 13, Error);
-      faultIf(
-          both(eq(NullSS, NdVar::scalar(0, 1)), eq(masked(Access, 0x80), k(0))),
-          12, Error);
+      faultIf(Enabled(both(eq(NullSS, NdVar::scalar(0, 1)), Invalid)), 13,
+              Error);
+      faultIf(Enabled(both(eq(NullSS, NdVar::scalar(0, 1)),
+                           eq(masked(Access, 0x80), k(0)))),
+              12, Error);
       return Stack;
     }
     W.rejectIf(ne(masked(SS, 3), CPL));
