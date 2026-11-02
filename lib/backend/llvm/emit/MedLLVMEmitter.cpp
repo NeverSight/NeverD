@@ -751,11 +751,18 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
                      bool MergeableGlobals_,
                      const std::vector<char> *BodyMask) {
 
-  if (!AnalystSourceProjection)
-    for (const auto &F : Funcs)
+  if (!AnalystSourceProjection) {
+    for (const auto &F : Funcs) {
+      if (F.AnalysisOnly ||
+          std::any_of(F.JumpTables.begin(), F.JumpTables.end(),
+                      [](const auto &T) { return T.AnalysisOnly; }))
+        throw std::runtime_error(
+            "Tentative analysis recovery cannot authorize binary output");
       if (F.AnalystStackFrame)
         throw std::runtime_error(
             "Analyst stack corrections require a private source projection");
+    }
+  }
   MutableSourcePlans.clear();
   MutableReturnValue.reset();
   EmittingMutableBody = false;

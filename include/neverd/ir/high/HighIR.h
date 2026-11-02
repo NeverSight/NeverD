@@ -642,6 +642,7 @@ struct HighFunc {
   std::vector<HighLocal> Locals;
   std::vector<HighStmt> Body;
   std::optional<ExceptionFunction> ExceptionMetadata;
+  bool AnalysisOnly = false;
   bool HasUnresolvedSEHFrame = false;
   std::set<va_t> CxxContinuationTargets;
   unsigned StructuredExceptionRegions = 0;

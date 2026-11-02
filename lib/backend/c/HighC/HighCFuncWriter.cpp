@@ -372,6 +372,8 @@ int HighCWriter::indirectReturnParamId(const FunctionSym &FS) const {
 }
 
 bool HighCWriter::isAnalysisOnlyFunction(const HighFunc &Func) const {
+  if (Func.AnalysisOnly)
+    return true;
   if (Func.ExceptionMetadata &&
       carriesWindowsLanguageSemantics(*Func.ExceptionMetadata))
     return true;
@@ -1039,8 +1041,12 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
 
 void HighCWriter::writeAnalysisOnlyFunction(const HighFunc &Func) {
   if (Opts.EmitComments) {
-    OS << "/* neverd.analysis-only: recovered Windows SEH/C++ as readable C. "
-          "*/\n";
+    if (Func.AnalysisOnly)
+      OS << "/* neverd.analysis-only: tentative control flow or deferred "
+            "native state proof; not binary-output evidence. */\n";
+    else
+      OS << "/* neverd.analysis-only: recovered Windows SEH/C++ as readable C. "
+            "*/\n";
   }
   if (Func.HasUnresolvedSEHFrame)
     OS << "/* neverd.seh: unresolved runtime stack; unknown entry values "

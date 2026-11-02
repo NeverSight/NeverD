@@ -195,6 +195,13 @@ struct PipelineOptions {
   /// Borrowed for this run only. See PipelineAnalysisCache's lifetime and
   /// invalidation contract; nullptr preserves independent analysis.
   PipelineAnalysisCache *AnalysisCache = nullptr;
+
+  /// Display recovery may use tentative control-flow and stack relationships.
+  /// Binary output and specialization always request independent evidence.
+  bool allowsAnalysisRecovery() const {
+    return !PatchMode && !LiftMode && !DumpLlvm &&
+           !InterpreterSpecialization.has_value();
+  }
 };
 
 enum class PipelineFunctionDisposition {

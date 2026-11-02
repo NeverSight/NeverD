@@ -446,6 +446,7 @@ struct MedCallInfo {
 
 struct MedFunc {
   bool AnalystStackFrame = false;
+  bool AnalysisOnly = false;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
   std::string Name;

@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineAnalysis.h"
 #include "PipelineLowIRDetail.h"
 
 #include "neverd/Limits.h"
@@ -250,6 +251,23 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
     FuncEntries = Detector.detect(Img, Dec);
     LLVM_DEBUG(llvm::dbgs() << "pipeline: detected " << FuncEntries.size()
                             << " functions\n");
+  }
+
+  // Registration callbacks are not ordinary ABI entries. Analysis may show
+  // their checked code independently without proving a replacement frame.
+  const auto AnalysisCallbacks =
+      pipeline_detail::analysisCallbackEntries(Img, Opts);
+  if (!AnalysisCallbacks.empty()) {
+    std::set<va_t> Present;
+    for (const auto &Entry : FuncEntries)
+      Present.insert(Entry.first);
+    for (va_t Entry : AnalysisCallbacks)
+      if (Present.insert(Entry).second)
+        FuncEntries.emplace_back(
+            Entry, (kAutoFuncPrefix + llvm::utohexstr(Entry)).str());
+    llvm::stable_sort(FuncEntries, [](const auto &Left, const auto &Right) {
+      return Left.first < Right.first;
+    });
   }
 
   // mergeDebugSymbols also *adds* every PDB function that is not already a

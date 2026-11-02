@@ -5708,8 +5708,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     return PhysicalEntry && PhysicalEntry->CallVA == Call.Addr ? &*PhysicalEntry
                                                                : nullptr;
   };
-  std::map<std::pair<va_t, int>, std::optional<uint32_t>> IndependentCallPops;
-  auto independentCallPop = [&](const LowOp &Call) -> std::optional<uint32_t> {
+  std::map<std::pair<va_t, int>, std::optional<int64_t>> IndependentCallPops;
+  auto independentCallPop = [&](const LowOp &Call) -> std::optional<int64_t> {
     if (CurrentImg->Arch != Arch::X86 || !CurrentImg->isCOFF() ||
         CurrentImg->getPointerSize() != sizeof(uint32_t) ||
         Call.Opcode != NdOp::CALL || Call.NumInputs != 1 ||
@@ -5722,6 +5722,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         (PhysicalEntry &&
          PhysicalEntry->Helper.contains(Call.Inputs[0].Offset)))
       return std::nullopt;
+    if (usesAnalysisRecovery()) {
+      UsedCurrentImageEvidence = true;
+      return analysisCallStackDelta(Call);
+    }
     // Both negative and positive answers depend on current caller/callee
     // bytes. The structural graph may be reused; no value batch may retain
     // this image-dependent result beyond the current query transaction.

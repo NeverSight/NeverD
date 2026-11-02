@@ -986,6 +986,8 @@ struct JumpTableCompositeSelectorUseRef {
 };
 
 struct JumpTable {
+  /// Display candidates, not a proof that the selector stays in this table.
+  bool AnalysisOnly = false;
   va_t InsnAddr = 0;
   va_t BaseAddr = 0;
   /// Distinguishes an absent base from a relocation-proven table mapped at VA
@@ -1217,6 +1219,9 @@ struct LowFunctionTemporary {
 };
 
 struct LowFunc {
+  /// Tentative CFG/stack recovery or deferred native exception proofs. This
+  /// body is for analysis and cannot authorize binary reconstruction.
+  bool AnalysisOnly = false;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
   std::string Name;

@@ -75,6 +75,7 @@ struct ResolverGraphCacheTestAccess;
 struct RegistrationFrameQueryTestAccess;
 struct X87CallGraphCacheTestAccess;
 struct NoReturnProofTestAccess;
+struct AnalysisRecoveryTestAccess;
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
 using I386GOTOFFAmbiguityReplayKey = std::tuple<va_t, va_t, int, int, va_t>;
@@ -720,6 +721,11 @@ class CFGBuilder {
   friend class InternalNoReturnIndex;
 
 public:
+  /// Opt in to bounded PE32 display recovery. Results carry AnalysisOnly;
+  /// integer-frame proofs and default builders never consume these guesses.
+  void setAnalysisRecoveryEnabled(bool Enabled) {
+    AnalysisRecoveryEnabled = Enabled;
+  }
   /// Build CFG for a single function starting at EntryAddr.
   LowFunc build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                 const std::string &FuncName = "");
@@ -1154,6 +1160,7 @@ private:
   friend struct detail::RegistrationFrameQueryTestAccess;
   friend struct detail::X87CallGraphCacheTestAccess;
   friend struct detail::NoReturnProofTestAccess;
+  friend struct detail::AnalysisRecoveryTestAccess;
   std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;
   std::array<size_t, 5> x87CallGraphFlightStatsForTesting() const;
   bool waitForX87CallGraphWaitersForTesting(size_t Count) const;
@@ -1228,6 +1235,17 @@ private:
 
     bool operator==(const InsnRecord &Other) const = default;
   };
+
+  bool usesAnalysisRecovery() const;
+  std::optional<uint32_t> analysisCallStackPop(va_t Target) const;
+  std::optional<int64_t> analysisCallStackDelta(const LowOp &Call) const;
+  void recoverAnalysisTables(const BinaryImage &Img, Decoder &Dec,
+                             LowFunc &Func);
+  bool AnalysisRecoveryEnabled = false;
+  mutable bool AnalysisRecoveryUsed = false;
+  mutable size_t AnalysisStackWork = 0;
+  mutable std::map<va_t, std::optional<uint32_t>> AnalysisCallPops;
+  std::map<va_t, JumpTable> AnalysisTables;
 
   void explore(const BinaryImage &Img, Decoder &Dec, va_t Addr);
   /// Complete an AArch64 ADRP occurrence whose unmodified page-base register

@@ -214,6 +214,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
                       << Result.LowFuncs[I].Name << "\n";
         const LowFunc &LF = Result.LowFuncs[I];
         MedFunc Fallback;
+        Fallback.AnalysisOnly = LF.AnalysisOnly;
         Fallback.Name = LF.Name;
         Fallback.Entry = LF.Entry;
         Fallback.OriginalSize = LF.OriginalSize;

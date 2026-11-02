@@ -408,6 +408,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         HF.SourceFile = MF.SourceFile;
         HF.SourceLine = MF.SourceLine;
         HF.ExceptionMetadata = MF.ExceptionMetadata;
+        HF.AnalysisOnly = MF.AnalysisOnly;
         HF.HasUnresolvedSEHFrame = MF.HasUnresolvedSEHFrame;
         HF.ReturnType = MF.ReturnType ? MF.ReturnType : NdType::makeInt(4);
         HF.ReturnsNoValue = MF.ReturnsNoValue;
@@ -423,6 +424,8 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         FromLow.Name = LF.Name;
         FromLow.Entry = LF.Entry;
         FromLow.ExceptionMetadata = LF.ExceptionMetadata;
+        FromLow.AnalysisOnly = LF.AnalysisOnly;
+        HF.AnalysisOnly |= LF.AnalysisOnly;
         for (const auto &LB : LF.Blocks) {
           MedBlock MB;
           MB.Id = LB.Id;

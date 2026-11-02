@@ -4,6 +4,8 @@ add_neverd_component_library(NeverDIRHigh
   HighSourceFlow.cpp
   HighVariableEdits.cpp
   HighSourceInputs.cpp
+  lower/AnalysisCall.cpp
+  lower/AnalysisDispatch.cpp
   lower/CFStructurer.cpp
   lower/CallArgCollection.cpp
   lower/CallArgCollectionX86.cpp

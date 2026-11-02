@@ -1030,6 +1030,10 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
 
 LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                               va_t EntryAddr, const std::string &FuncName) {
+  AnalysisRecoveryUsed = false;
+  AnalysisStackWork = 0;
+  AnalysisCallPops.clear();
+  AnalysisTables.clear();
   RelativeRelocationRootSourceCachePrepared = false;
   RelativeRelocationRootSourceCacheImage = nullptr;
   RelativeRelocationRootSourceCacheArch = Arch::Unknown;
@@ -1362,6 +1366,9 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   rebuildBlocks(Func);
 
   multiStageResolve(Img, Dec, Func);
+
+  if (usesAnalysisRecovery())
+    recoverAnalysisTables(Img, Dec, Func);
 
   // PAGEOFF output provenance is consumed only after lifting, so authenticate
   // it on the final resolver CFG rather than during linear instruction
@@ -2014,6 +2021,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
                           << llvm::utohexstr(Func.Entry) << "\n");
+  Func.AnalysisOnly |= AnalysisRecoveryUsed;
+  if (AnalysisRecoveryUsed)
+    for (auto &Table : Func.JumpTables) {
+      Table.AnalysisOnly = true;
+      Table.SuppressibleRelocationSlots.clear();
+      Table.AuthenticatedTableLoads.clear();
+    }
   return Func;
 }
 

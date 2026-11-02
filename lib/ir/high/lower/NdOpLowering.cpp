@@ -17,6 +17,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "AnalysisCall.h"
+
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -118,6 +120,10 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
 
 void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
                                    const MedOp &CurOp) {
+  if (high_detail::appendAnalysisX87Call(Func, CurOp, [&](const MedVar &Value) {
+        return medvarToExpr(Value);
+      }))
+    return;
   va_t Target = 0;
   if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].isConst())
     Target = CurOp.Inputs[0].ConstVal;

@@ -4,6 +4,33 @@
 
 # Testing NeverD
 
+`NeverDAnalysisRecoveryTests` covers PE32 display/patch policy, an unbounded
+indexed table with independent machine-byte targets, conflicting returns,
+opaque calls, nonreturning loops, indirect tails, work ceilings, oversized
+tables, separately referenced adjacent tables, mutable storage, foreign
+entries, instruction-interior targets and builder reuse. Low-to-Med and native
+LLVM checks retain/reject the tentative marker, including a copied table whose
+function marker was cleared. External
+callback fixtures recheck current table bytes, keep selection scope and leave
+the image's ordinary function inventory unchanged. A state-restore/FILD
+fixture keeps the native refusal visible in analysis and rejected by patch;
+missing operations and ambiguous local returns cannot use this admission.
+`X87ImportCall.NativeCallsCarryTheOriginalStackArgumentsAndResult` checks
+native adapters, immediate and deferred analysis display, and the continuing
+LLVMC refusal across six import routines, three call routes and both optimizer
+settings. Malformed analysis call operands are rejected separately.
+An unproved dispatch selector retains both case bodies and an unknown-target
+arm in HighIR while preserving the native refusal. Damaged, oversized or
+unmarked tables cannot use that display route.
+The ELF control leaves the PE32 strategy disabled. These fixtures only decode
+bytes; they do not run the input program. Pair them with pipeline-outcome and
+registration-callee suites, then measure complete GOF2 analysis separately.
+Display success does not establish native exception reconstruction or patch
+equivalence, which continue to use independent strict builds.
+`ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
+the stack equation at its actual resolver use and switches back to strict
+policy with the same retained graph.
+
 `RegistrationCallABI.ThrowDispatchRequiresClosedAccessesAndCallbacks` and
 `RegistrationState.CxxDispatchBindingsCannotOutliveAnUnclosedOrigin` cover
 C++ dispatch binding lifetime, mapped access permissions,

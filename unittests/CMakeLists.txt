@@ -125,6 +125,10 @@ add_neverd_unittest(NeverDPipelineOutcomeTests
   CalleeSignatureMemoTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
+add_neverd_unittest(NeverDAnalysisRecoveryTests
+  AnalysisRecoveryTests.cpp
+  LINK_COMPONENTS Pipeline BackendLLVM
+)
 target_include_directories(NeverDPipelineOutcomeTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/pipeline")
 

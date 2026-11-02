@@ -3291,6 +3291,25 @@ struct NativeStackCaller {
   }
 };
 
+TEST(ResolverFrameModes, DisplayEquationDoesNotBecomeAStrictCachedAnswer) {
+  // The opaque nested call prevents a native stack proof. Its observed
+  // ordinary return still supplies a tentative four-byte display equation.
+  NativeStackCaller F({0xff, 0xd0, 0xc2, 4, 0});
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Q.FrameByteAddend = -4;
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+  B.setAnalysisRecoveryEnabled(true);
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{true}));
+  B.setAnalysisRecoveryEnabled(false);
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+  B.setAnalysisRecoveryEnabled(true);
+  const auto Proof = F.build(B);
+  EXPECT_FALSE(Proof.AnalysisOnly);
+  EXPECT_TRUE(Proof.hasCompleteLiftCoverage());
+}
+
 TEST(ResolverFrameModes, NativeReturnCleanupRequiresTheCurrentCalleeProof) {
   for (unsigned Pop : {0u, 4u, 12u, 65532u})
     for (bool Restore : {false, true}) {

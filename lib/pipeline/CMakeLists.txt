@@ -6,6 +6,7 @@ add_neverd_component_library(NeverDPipeline
   StateSourceBank.cpp
   evidence/ConstantStores.cpp
   Pipeline.cpp
+  PipelineAnalysis.cpp
   NativeSourceHints.cpp
   NativeSourcePreservation.cpp
   PipelineCallAbi.cpp

@@ -64,6 +64,17 @@ void CFGBuilder::linkExceptionalSuccessors(LowFunc &Func) {
     return;
   const ExceptionFunction &Metadata = *Func.ExceptionMetadata;
   Func.RegistrationStates.reset();
+  if (usesAnalysisRecovery() && Metadata.Registration) {
+    // Decoding retains the handler roots and original metadata. Native frame
+    // closure is a separate request, not a prerequisite for displaying code.
+    Func.AnalysisOnly = true;
+    Func.RegistrationStates.emplace();
+    Func.RegistrationStates->CallbackStatesComplete = false;
+    Func.RegistrationStates->CxxContinuationsComplete = false;
+    Func.RegistrationStates->Diagnostics.push_back(
+        "analysis view: native registration-frame proof deferred");
+    return;
+  }
   if (CurrentOrdinaryCxxGraph && CurrentOrdinaryCxxGraph->Builder == this &&
       CurrentOrdinaryCxxGraph->Image == CurrentImg &&
       CurrentOrdinaryCxxGraph->Entry == Func.Entry && Metadata.Registration &&

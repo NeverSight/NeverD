@@ -91,6 +91,11 @@ void Pipeline::dumpLowIR(const std::vector<LowFunc> &Funcs,
   for (auto &LF : Funcs) {
     OS << "func " << LF.Name << " @ 0x" << llvm::utohexstr(LF.Entry) << " ("
        << LF.Blocks.size() << " blocks)\n";
+    if (LF.AnalysisOnly)
+      OS << "  analysis-only: tentative recovery; not binary-output evidence\n";
+    for (va_t Address : LF.UnsupportedInstructionAddresses)
+      OS << "  native-semantics-unproven: 0x" << llvm::utohexstr(Address)
+         << "\n";
     dumpExceptionSummary(LF.ExceptionMetadata, OS, "  ");
     for (auto &Blk : LF.Blocks) {
       OS << "  block " << Blk.Id << " [0x" << llvm::utohexstr(Blk.StartAddr)
@@ -129,6 +134,8 @@ void Pipeline::dumpMedIR(const std::vector<MedFunc> &Funcs,
     OS << "func " << MF.Name << " @ 0x" << llvm::utohexstr(MF.Entry)
        << " cc=" << static_cast<int>(MF.CC) << " FrameSize=" << MF.FrameSize
        << "\n";
+    if (MF.AnalysisOnly)
+      OS << "  analysis-only: tentative recovery; not binary-output evidence\n";
     OS << "  params=" << MF.Params.size();
     for (const auto &P : MF.Params)
       OS << " " << P.display();
@@ -170,6 +177,8 @@ void Pipeline::dumpHighIR(const std::vector<HighFunc> &Funcs,
   OS << "\n=== HighIR Dump ===\n";
   for (auto &HF : Funcs) {
     OS << "func " << HF.Name << " @ 0x" << llvm::utohexstr(HF.Entry) << "\n";
+    if (HF.AnalysisOnly)
+      OS << "  analysis-only: tentative recovery; not binary-output evidence\n";
     dumpExceptionSummary(HF.ExceptionMetadata, OS, "  ");
     for (auto &Stmt : HF.Body)
       OS << "  " << Stmt.str(1) << "\n";

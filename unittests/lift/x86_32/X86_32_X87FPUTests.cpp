@@ -8,6 +8,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X87Context.h"
+#include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/ImportCallee.h"
@@ -527,6 +528,10 @@ TEST(X87ImportCall, NativeCallsCarryTheOriginalStackArgumentsAndResult) {
                          Result.LlvmModule->getFunction("examine_value")),
                      std::runtime_error);
         EXPECT_TRUE(C.empty());
+        ASSERT_FALSE(Result.MedFuncs.empty());
+        EXPECT_THROW(
+            MedToHighConverter::validateCallContracts(Result.MedFuncs.front()),
+            std::runtime_error);
         Options.LiftMode = false;
         Options.PatchMode = true;
         auto Patch = Pipeline().run(Image, Context, Options);
@@ -535,16 +540,21 @@ TEST(X87ImportCall, NativeCallsCarryTheOriginalStackArgumentsAndResult) {
         EXPECT_FALSE(llvm::verifyModule(*Patch.LlvmModule, &llvm::errs()));
         Options.PatchMode = false;
         auto Source = Pipeline().run(Image, Context, Options);
-        EXPECT_FALSE(Source.Success);
-        EXPECT_NE(Source.Error.find("x87 import call adapter"),
+        ASSERT_TRUE(Source.Success) << Source.Error;
+        ASSERT_FALSE(Source.HighFuncs.empty());
+        EXPECT_TRUE(Source.HighFuncs.front().AnalysisOnly);
+        std::string AnalysisC;
+        llvm::raw_string_ostream AnalysisOS(AnalysisC);
+        ASSERT_TRUE(HighCEmitter().emit(Source.HighFuncs, AnalysisOS, Emit));
+        EXPECT_NE(AnalysisC.find("neverd_analysis_x87_call"),
                   std::string::npos);
         Options.DeferHighIR = true;
         auto Deferred = Pipeline().run(Image, Context, Options);
         ASSERT_TRUE(Deferred.Success) << Deferred.Error;
         EXPECT_TRUE(Deferred.HighIRDeferred);
-        EXPECT_FALSE(Pipeline().resumeHighIR(Image, Options, Deferred));
-        EXPECT_NE(Deferred.Error.find("x87 import call adapter"),
-                  std::string::npos);
+        EXPECT_TRUE(Pipeline().resumeHighIR(Image, Options, Deferred));
+        ASSERT_FALSE(Deferred.HighFuncs.empty());
+        EXPECT_TRUE(Deferred.HighFuncs.front().AnalysisOnly);
       }
 }
 

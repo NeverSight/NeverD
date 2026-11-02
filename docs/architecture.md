@@ -5686,6 +5686,54 @@ For Win64 x64 images, whose C ABI never passes an x87 value, `ir/X87Context.h` o
 
 ## IR representations and routes
 
+`PipelineOptions::allowsAnalysisRecovery` separates display recovery from
+binary output. Ordinary PE32 analysis enables the bounded strategies in
+`CFGBuilderAnalysis.cpp`; patch, LLVM lift/dump and interpreter specialization
+do not. Standalone CFG builders remain strict unless explicitly opted in, and
+integer-frame and no-return proofs always use strict policy for their entire
+build, including floating-stack rebuilds.
+
+Display stack recovery assumes ordinary returning calls and uses a near-return
+pop only when every decoded return agrees. It does not recursively prove callees
+or turn conflicting/unknown exits into zero. Separate per-callee and per-function
+instruction limits bound this optional work. Unbounded canonical indexed PE32
+dispatches can also retain a bounded immutable relocation-table candidate whose
+targets stay inside the function and avoid existing instruction interiors.
+Separate relocated canonical dispatches delimit adjacent tables in the same
+relocation run. Input references and published targets share a bounded
+allowance; an oversized run without those boundaries is not truncated.
+This is a physical-table hypothesis, not a proved selector domain. It supplies
+no authenticated table-load or relocation-suppression permission.
+
+Display registration frames retain original instructions, handler roots and
+loader metadata without running native frame/callback closure. Their state
+receipt remains incomplete with an explicit deferred-proof diagnostic.
+`PipelineAnalysis.cpp` enumerates checked external PE32 C++ callback and handler
+entries for the current analysis selection. They remain separate analysis
+bodies rather than new ordinary ABI entries in the image. Post-lift native
+state refusals can retain their decoded operations for display, with every
+refusal address preserved in the function audit and LowIR dump; missing
+operations, decoder failures and unproved interior returns still reject.
+LowIR, MedIR and HighIR retain `AnalysisOnly`, and tentative tables carry their
+own marker. HighC comments identify tentative bodies.
+When a native selector proof still refuses a recovered table, the separate
+`high/lower/AnalysisDispatch.cpp` display strategy compares the original
+computed target against candidate addresses. It keeps the memory read, snapshots
+the target once, retains an explicit unknown-target arm and leaves the native
+refusal intact. It neither invents source case labels nor hides candidate bodies
+behind an unresolved transfer.
+An x87 import that lacks a portable C call adapter remains an explicit
+analysis call expression in `high/lower/AnalysisCall.cpp`, with its original
+target or pointer slot and raw binary80 operands. This names an uninterpreted
+display operation, supplies no runtime implementation, and does not relabel
+the machine call as an ordinary C floating-point call. Malformed operands and
+non-analysis source conversions retain the adapter refusal.
+Native LLVM emission rejects either marker before module construction; private
+source projection has its existing separate opt-in. Analysis-derived code
+references are not published into the shared image. Unsupported instruction
+semantics and malformed decoder inputs retain the same strict failures in
+both modes.
+
 `IntrinsicValueEffects` defines positive, shape-validated contracts for operations
 whose effects are entirely explicit values. `LowIntrinsicEffects` additionally
 validates LowIR operands and memory annotations. Jump-table consumer analysis and

@@ -49,6 +49,13 @@ inline constexpr unsigned kMedToHighSemanticThreadLimit = 1;
 inline constexpr size_t kCFGBuilderMaxRounds = 8;
 inline constexpr size_t kCFGBuilderMaxDependencies = 4096;
 
+/// Optional PE32 display recovery. No allowance is borrowed from proofs.
+inline constexpr size_t kAnalysisStackInstructionsPerCallee = 4096;
+inline constexpr size_t kAnalysisStackInstructionsPerFunction = 65536;
+inline constexpr size_t kAnalysisTableSlots = 256;
+inline constexpr size_t kAnalysisTableTargetsPerFunction = 4096;
+inline constexpr unsigned kAnalysisTableRounds = 8;
+
 /// Maximum lifted operations in an authenticated shared entry prefix.
 inline constexpr size_t kMaxRegistrationSharedPrefixOps = 64;
 

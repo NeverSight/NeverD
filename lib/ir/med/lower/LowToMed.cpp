@@ -741,6 +741,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
       armRelativeLiteralOutputs(Low, TheArch, Fmt);
 
   MedFunc Func;
+  Func.AnalysisOnly = SourceLow.AnalysisOnly || Low.AnalysisOnly ||
+                      std::any_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                                  [](const auto &T) { return T.AnalysisOnly; });
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
