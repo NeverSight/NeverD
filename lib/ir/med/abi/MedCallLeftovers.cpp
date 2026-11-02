@@ -12,15 +12,19 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include <cassert>
 #include <map>
 #include <optional>
+#include <set>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace neverd {
 namespace {
 
-std::tuple<int, int, int> valueKey(const MedVar &V) {
-  return {static_cast<int>(V.Kind), V.Id, V.SSAVer};
+std::tuple<int, int, int, uint16_t> valueKey(const MedVar &V) {
+  return {static_cast<int>(V.Kind), V.Id, V.SSAVer, V.Size};
 }
 
 /// Whether every call keeps all of the view: the convention preserves its
@@ -90,64 +94,131 @@ ValuesLeftByCalls::ValuesLeftByCalls(const MedFunc &Func)
 
 ValuesLeftByCalls::ValuesLeftByCalls(const MedFunc &Func,
                                      llvm::ArrayRef<MedVar> PossibleResults) {
+  // A candidate may read only a prefix of the SSA clobber. Its whole value
+  // must remain excluded; it is not an unused ABI scratch value.
   std::set<std::tuple<int, int, int>> ResultFields;
   for (const MedVar &Field : PossibleResults)
-    ResultFields.insert(valueKey(Field));
+    ResultFields.emplace(static_cast<int>(Field.Kind), Field.Id, Field.SSAVer);
   for (const MedStructReturnCandidate &Candidate : Func.StructReturnCandidates)
     for (const MedVar &Field : Candidate.Fields)
-      ResultFields.insert(valueKey(Field));
-  for (const MedCallClobber &Clobber : Func.CallClobbers)
-    if (Clobber.Value.Kind == MedVar::Reg && Clobber.PreservedPrefixSize == 0 &&
-        !ResultFields.count(valueKey(Clobber.Value)))
-      Values.insert(valueKey(Clobber.Value));
-  if (Values.empty())
-    return;
+      ResultFields.emplace(static_cast<int>(Field.Kind), Field.Id,
+                           Field.SSAVer);
 
-  // A join holds only what calls left where everything reaching it does.
-  // Take every join for one, then drop each that anything else reaches, and
-  // each that a dropped join reaches: the joins that remain, loops of them
-  // included, are all such joins.
-  std::set<std::tuple<int, int, int>> Joins;
-  std::vector<const PhiNode *> Phis;
-  for (const MedBlock &Block : Func.Blocks)
+  enum class OriginKind { Pending, Unspecified, Register, Other };
+  struct Origin {
+    OriginKind Kind = OriginKind::Pending;
+    uint64_t Register = 0;
+    bool operator==(const Origin &) const = default;
+  };
+  struct Node {
+    MedVar Output;
+    std::vector<MedVar> Inputs;
+    std::vector<size_t> Readers;
+    Origin State;
+    bool Seed = false;
+    bool Queued = true;
+  };
+  std::map<ValueKey, size_t> Index;
+  std::vector<Node> Nodes;
+  auto add = [&](MedVar Output, std::vector<MedVar> Inputs, Origin State,
+                 bool Seed = false) {
+    const bool Inserted = Index.emplace(valueKey(Output), Nodes.size()).second;
+    assert(Inserted && "multiple definitions of a transported SSA value");
+    (void)Inserted;
+    Nodes.push_back({Output, std::move(Inputs), {}, State, Seed});
+  };
+  for (const MedCallClobber &Clobber : Func.CallClobbers)
+    if (Clobber.Value.Kind == MedVar::Reg && Clobber.Value.Size &&
+        Clobber.PreservedPrefixSize == 0 &&
+        !ResultFields.count({static_cast<int>(Clobber.Value.Kind),
+                             Clobber.Value.Id, Clobber.Value.SSAVer}))
+      add(Clobber.Value, {}, {OriginKind::Register, Clobber.Value.RegOff},
+          true);
+
+  for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis)
-      if (Phi.Output.Kind == MedVar::Reg) {
-        Joins.insert(valueKey(Phi.Output));
-        Phis.push_back(&Phi);
+      if ((Phi.Output.Kind == MedVar::Reg || Phi.Output.Kind == MedVar::Temp) &&
+          Phi.Output.Size) {
+        std::vector<MedVar> Inputs;
+        for (const auto &[Pred, Incoming] : Phi.Args)
+          Inputs.push_back(Incoming);
+        if (Phi.ExceptionalEntry)
+          Inputs.push_back(*Phi.ExceptionalEntry);
+        add(Phi.Output, std::move(Inputs), {});
       }
-  std::map<std::tuple<int, int, int>, std::vector<const PhiNode *>> Readers;
-  std::vector<const PhiNode *> Dropped;
-  for (const PhiNode *Phi : Phis) {
-    bool ReachedByOther = Phi->Args.empty();
-    auto reachedBy = [&](const MedVar &Incoming) {
-      const auto Key = valueKey(Incoming);
-      Readers[Key].push_back(Phi);
-      ReachedByOther |= Incoming.Kind != MedVar::Unspecified &&
-                        !Values.count(Key) && !Joins.count(Key);
-    };
-    for (const auto &[Pred, Incoming] : Phi->Args)
-      reachedBy(Incoming);
-    // The exception dispatcher's entry is one more path.
-    if (Phi->ExceptionalEntry)
-      reachedBy(*Phi->ExceptionalEntry);
-    if (ReachedByOther)
-      Dropped.push_back(Phi);
+    for (const MedOp &Op : Block.Ops)
+      if (!Op.Dead && Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+          (Op.Output.Kind == MedVar::Reg || Op.Output.Kind == MedVar::Temp) &&
+          Op.Output.Size && Op.Output != Op.Inputs[0])
+        add(Op.Output, {Op.Inputs[0]}, {});
   }
-  while (!Dropped.empty()) {
-    const PhiNode *Phi = Dropped.back();
-    Dropped.pop_back();
-    const auto Key = valueKey(Phi->Output);
-    if (!Joins.erase(Key))
+  for (size_t I = 0; I < Nodes.size(); ++I)
+    for (const auto &Input : Nodes[I].Inputs)
+      if (const auto It = Index.find(valueKey(Input)); It != Index.end())
+        Nodes[It->second].Readers.push_back(I);
+
+  auto merge = [](Origin A, Origin B) {
+    if (A.Kind == OriginKind::Other || B.Kind == OriginKind::Other)
+      return Origin{OriginKind::Other};
+    if (A.Kind == OriginKind::Pending || A.Kind == OriginKind::Unspecified)
+      return B.Kind == OriginKind::Pending ? A : B;
+    if (B.Kind == OriginKind::Pending || B.Kind == OriginKind::Unspecified)
+      return A;
+    return A.Register == B.Register ? A : Origin{OriginKind::Other};
+  };
+  // Start with actual calls, not a presumed origin for every PHI. A cycle
+  // without a seed stays pending. A mixed/exceptional input invalidates all
+  // readers, including copies in a loop, without rescanning unrelated blocks.
+  std::vector<size_t> Work;
+  for (size_t I = 0; I < Nodes.size(); ++I)
+    Work.push_back(I);
+  for (size_t I = 0; I < Work.size(); ++I) {
+    auto &N = Nodes[Work[I]];
+    N.Queued = false;
+    if (N.Seed)
       continue;
-    if (const auto It = Readers.find(Key); It != Readers.end())
-      llvm::append_range(Dropped, It->second);
+    Origin Next;
+    if (N.Inputs.empty())
+      Next.Kind = OriginKind::Other;
+    for (const auto &Input : N.Inputs) {
+      Origin Source{OriginKind::Other};
+      if (Input.Size == N.Output.Size) {
+        if (Input.Kind == MedVar::Unspecified)
+          Source.Kind = OriginKind::Unspecified;
+        else if (const auto It = Index.find(valueKey(Input)); It != Index.end())
+          Source = Nodes[It->second].State;
+      }
+      Next = merge(Next, Source);
+    }
+    if (N.Output.Kind == MedVar::Reg) {
+      if (Next.Kind == OriginKind::Register && Next.Register != N.Output.RegOff)
+        Next = {OriginKind::Other};
+    }
+    if (Next == N.State)
+      continue;
+    N.State = Next;
+    for (size_t Reader : N.Readers)
+      if (!Nodes[Reader].Queued) {
+        Nodes[Reader].Queued = true;
+        Work.push_back(Reader);
+      }
   }
-  Values.insert(Joins.begin(), Joins.end());
+  for (const auto &N : Nodes)
+    if (N.State.Kind == OriginKind::Register)
+      Values.emplace(valueKey(N.Output), N.State.Register);
 }
 
 bool ValuesLeftByCalls::contains(const MedVar &V) const {
   return V.Kind == MedVar::Unspecified ||
-         (V.Kind == MedVar::Reg && Values.count(valueKey(V)));
+         (V.Kind == MedVar::Reg && containsForRegister(V, V.RegOff));
+}
+
+bool ValuesLeftByCalls::containsForRegister(const MedVar &V,
+                                            uint64_t RegOff) const {
+  if (V.Kind == MedVar::Unspecified)
+    return true;
+  const auto It = Values.find(valueKey(V));
+  return It != Values.end() && It->second == RegOff;
 }
 
 } // namespace neverd

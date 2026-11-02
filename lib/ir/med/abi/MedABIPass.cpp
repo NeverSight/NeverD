@@ -3305,7 +3305,8 @@ void recoverCallAbi(
         for (size_t I = 0; I < IntPart.size(); ++I) {
           if (IntPartSlots[I] < Known)
             continue;
-          if (!callLeftovers().contains(IntPart[I]))
+          if (!callLeftovers().containsForRegister(
+                  IntPart[I], IntParamRegs[IntPartSlots[I]]))
             continue;
           // An indirect call has no callee to say its stack slots are
           // arguments, nor has a variadic one for those past its named
@@ -3320,6 +3321,13 @@ void recoverCallAbi(
           const bool NoStackArguments =
               StackPart.empty() || (OpenStackArguments && !PositionalSlots);
           if (NoStackArguments) {
+            // Later real setup still establishes intervening unknown positions.
+            bool LaterSetup = false;
+            for (size_t J = I + 1; J < IntPart.size(); ++J)
+              LaterSetup |= !callLeftovers().containsForRegister(
+                  IntPart[J], IntParamRegs[IntPartSlots[J]]);
+            if (LaterSetup)
+              continue;
             for (size_t J = I; J < IntPart.size(); ++J)
               if (IntPart[J].Kind == MedVar::Param &&
                   !PromotedBefore.count(IntPart[J].RegOff))

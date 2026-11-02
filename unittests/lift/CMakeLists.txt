@@ -1755,6 +1755,7 @@ target_include_directories(NeverDAAPCS64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
 add_neverd_unittest(NeverDWin64CallContractTests
+  core/MedCallLeftoversTests.cpp
   core/FloatingCallLeftoversTests.cpp
   x86_64/Win64CallContractTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline
