@@ -252,6 +252,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
         continue;
       if (Op.Output.Kind == MedVar::Reg && TRI.isX87StackReg(Op.Output.RegOff))
         continue; // LowIR already bound the proven x87 result.
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == FPRet)
+        continue; // SSA already bound every reader to this FP result.
       // A call already remodeled as a multi-register struct return (its output
       // is the flat aggregate temp, its FP return register claimed by an
       // extract op) is handled there — do not also route its FP register here.
@@ -313,14 +315,31 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       if (!Consumed)
         continue;
 
-      int NewVer = NextVer++;
       MedVar Out;
-      Out.Kind = MedVar::Reg;
-      Out.Id = VecId;
-      Out.Size = FPReturnWidth;
-      Out.RegOff = FPRet;
-      Out.SSAVer = NewVer;
-      Out.TheArch = TargetArch;
+      const auto Existing = std::find_if(
+          Func.CallClobbers.begin(), Func.CallClobbers.end(),
+          [&](const MedCallClobber &Clobber) {
+            return Op.CallSiteId && Clobber.CallSiteId == Op.CallSiteId &&
+                   Clobber.Value.Kind == MedVar::Reg &&
+                   Clobber.Value.RegOff == FPRet && Clobber.Value.Id == VecId &&
+                   Clobber.Value.Size == FPReturnWidth &&
+                   Clobber.PreservedPrefixSize == 0;
+          });
+      if (Existing != Func.CallClobbers.end()) {
+        // This is the same post-call value SSA already gave every path.
+        // A fresh version would leave joins reading a second, independent
+        // observation of the very register now used as the call's result.
+        Out = Existing->Value;
+        Func.CallClobbers.erase(Existing);
+      } else {
+        Out.Kind = MedVar::Reg;
+        Out.Id = VecId;
+        Out.Size = FPReturnWidth;
+        Out.RegOff = FPRet;
+        Out.SSAVer = NextVer++;
+        Out.TheArch = TargetArch;
+      }
+      const int NewVer = Out.SSAVer;
       keepReplacedCallOutput(Func, Op, Op.Output);
       Op.Output = Out;
 
