@@ -746,13 +746,18 @@ inline constexpr int
         256;
 
 // lib/ir/low/jumptable/JumpTableResolverSlice.cpp
-inline constexpr int kJumpTableResolverSliceCanRetainInputSizeLimit = 8192;
+// A builder keeps its last complete resolver graph, one metered and one
+// unmetered, for later queries on the same CFG.  A reused graph pays its whole
+// cold charge, so these bounds trade only memory and comparison time.  A
+// function beyond them rebuilds its graph for every query; capstone's largest
+// decoder functions retain 17,888 instructions in 43 MB.
+inline constexpr int kJumpTableResolverSliceCanRetainInputSizeLimit = 32768;
 inline constexpr int kJumpTableResolverSliceCanRetainBBlockStartsSizeLimit =
     8192;
 inline constexpr int
     kJumpTableResolverSliceCanRetainBResolvedTableInfoSizeLimit = 1024;
 inline constexpr size_t kJumpTableResolverSliceCanRetainRemaining =
-    8 * 1024 * 1024;
+    64 * 1024 * 1024;
 inline constexpr int
     kJumpTableResolverSliceCFGBuilderTableLoadAddressesMatchRoleExactRelocationFreeAddressProofOccurrenceArithmeticProofSizeLimit =
         32;

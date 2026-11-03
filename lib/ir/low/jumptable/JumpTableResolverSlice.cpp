@@ -3088,9 +3088,10 @@ struct CFGBuilder::ResolverGraphCache {
             std::equal(A.Ops.begin(), A.Ops.end(), B.Ops.begin(), sameOp));
   }
 
-  // Cap retained input payloads at 8 MiB, and cap graph vertices separately.
-  // A single builder retains at most one graph; oversized inputs use the
-  // established uncached path. This bound also limits cache-comparison work.
+  // Cap retained input payloads (kJumpTableResolverSliceCanRetainRemaining),
+  // and cap graph vertices separately. A single builder retains at most one
+  // graph; oversized inputs use the established uncached path. This bound also
+  // limits cache-comparison work.
   static bool canRetain(const CFGBuilder &B,
                         const std::vector<ResolverInsnSnapshot> &Input,
                         const std::set<va_t> &ProofRoots) {
