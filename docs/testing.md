@@ -6988,6 +6988,10 @@ and returned incoming-area addresses must retain them. A partial save area
 cannot acquire the full-word variadic contract.
 Ignored scalar identities and vector upper-lane clears before a spill must
 also preserve its operation index, including a later wider register read.
+Decoded AL/AH/AX writes, bitwise transforms, alignment masks and conditional
+moves must retain a subsequently observed home value. Complete 32/64-bit
+definitions end the old address dependence. Loads, stored addresses, calls
+and returns exercise transformed incoming pointers under COFF, ELF and Mach-O.
 
 `NeverDCallStackRangeSourceTests` executes independent Win64 machine bytes
 beside both C routes on Linux x64. Fixed writes followed by indexed reads,
@@ -7003,6 +7007,14 @@ no synthetic arguments at default/NoOpt and O0/O2. All four store widths return
 the independently specified value; Linux x64 also compares 1,024 original
 machine-code calls per executable with varied incoming registers. Other hosts
 run the generated-C value check without claiming the native Win64 oracle.
+
+`TransformedHomePointersMatchNativeCalls` adds five caller/callee variants:
+bytewise XOR pairs, word identities, whole-word OR/complement and conditional
+pointer selection. Both C routes, default/NoOpt and O0/O2 produce 40 UBSan
+executables, each comparing 1,024 calls with original Win64 instructions on
+Linux x64. The conditional case exercises both the incoming-home and external
+pointer paths. This catches lost source initializers as well as missing ABI
+parameters; other hosts explicitly skip this native execution check.
 
 `CompleteFunctionCache` compares reconstructed default functions with cold
 builds, including address-taken roots, instruction coverage, relocation

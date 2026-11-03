@@ -215,6 +215,97 @@ TEST(CallStackRange, ReturningAnIncomingAddressKeepsItsObservedInputs) {
     }
 }
 
+TEST(CallStackRange, TransformedHomeAddressesRetainTheirIncomingValues) {
+  const std::vector<std::vector<uint8_t>> Transforms = {
+      {},
+      {0x88, 0xc0},                         // mov al,al
+      {0x88, 0xe4},                         // mov ah,ah
+      {0x66, 0x89, 0xc0},                   // mov ax,ax
+      {0x34, 1, 0x34, 1},                   // xor al,1; xor al,1
+      {0x48, 0x83, 0xc8, 0},                // or rax,0
+      {0x48, 0x83, 0xe0, 0xf8},             // and rax,-8 (already aligned)
+      {0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd0}, // not rax; not rax
+      {0x48, 0x0f, 0x45, 0xc2}};            // cmovne rax,rdx
+  for (size_t I = 0; I < Transforms.size(); ++I) {
+    SCOPED_TRACE(I);
+    auto Image = image();
+    Segment Code;
+    Code.VA = Image.Entry = 0x1000;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Data = {0x48, 0x89, 0x4c, 0x24, 8,  // mov [rsp+8],rcx
+                 0x48, 0x8d, 0x44, 0x24, 8}; // lea rax,[rsp+8]
+    Code.Data.insert(Code.Data.end(), Transforms[I].begin(),
+                     Transforms[I].end());
+    Code.Data.insert(Code.Data.end(),
+                     {0x48, 0x8b, 0x00, 0xc3}); // mov rax,[rax]; ret
+    Code.Size = Code.FileSz = Code.Data.size();
+    Image.Segments.push_back(std::move(Code));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Function = CFGBuilder().build(Image, Decode, Image.Entry);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Effect = localRegisterEffect(Image, Function);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], 8u);
+  }
+}
+
+TEST(CallStackRange, WholeRegisterDefinitionsEndTheOldStackDependence) {
+  for (bool Narrow : {false, true}) {
+    SCOPED_TRACE(Narrow);
+    auto Image = image();
+    Segment Code;
+    Code.VA = Image.Entry = 0x1000;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Data = {0x48, 0x89, 0x4c, 0x24, 8, // mov [rsp+8],rcx
+                 0x48, 0x8d, 0x44, 0x24, 8, // lea rax,[rsp+8]
+                 0x34, 1};                  // xor al,1
+    if (!Narrow)
+      Code.Data.push_back(0x48);
+    Code.Data.insert(Code.Data.end(),
+                     {0x89, 0xd0, 0xc3}); // mov [r/e]ax,[r/e]dx; ret
+    Code.Size = Code.FileSz = Code.Data.size();
+    Image.Segments.push_back(std::move(Code));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Function = CFGBuilder().build(Image, Decode, Image.Entry);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Effect = localRegisterEffect(Image, Function);
+    EXPECT_FALSE(Effect.UnknownStackReads);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], 0u);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RDX / 8],
+              Narrow ? 4u : 8u);
+  }
+}
+
+TEST(CallStackRange, DerivedIncomingPointersRemainObserversAcrossFormats) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (auto Observe : {NdOp::LOAD, NdOp::STORE, NdOp::CALL, NdOp::RETURN}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Format) << ':' << unsigned(Observe));
+      auto Image = image();
+      Image.Format = Format;
+      auto Function = indexedLoad(0x10);
+      auto &Block = Function.Blocks.front();
+      Block.Ops.resize(2);
+      append(Block, NdOp::INT_ADD, Index, {SP, NdVar::cst(40, 8)});
+      append(Block, NdOp::INT_AND, Index, {Index, NdVar::cst(uint64_t(-8), 8)});
+      if (Observe == NdOp::LOAD)
+        append(Block, Observe, NdVar::reg(x86reg::RAX, 8), {Index});
+      else if (Observe == NdOp::STORE)
+        append(Block, Observe, {}, {NdVar::cst(0x3000, 8), Index});
+      else if (Observe == NdOp::CALL)
+        append(Block, Observe, {}, {NdVar::cst(0x2000, 8)});
+      else
+        append(Block, Observe, {}, {Index});
+      EXPECT_TRUE(localRegisterEffect(Image, Function).UnknownStackReads);
+    }
+}
+
 TEST(CallStackRange, IgnoredStepsCannotMoveAHomeSpillOntoAnotherRead) {
   for (unsigned Bytes : {4u, 8u})
     for (bool Vector : {false, true})

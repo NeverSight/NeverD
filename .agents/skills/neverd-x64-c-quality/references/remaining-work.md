@@ -1,5 +1,13 @@
 # Remaining x64 C-quality work
 
+The incoming-stack summary now preserves address dependence through partial
+register writes, whole-word transforms and SELECT alternatives. HighC also
+retains the source storage and initializer when an indirect access reconstructs
+or conditionally selects that address. Public original-instruction comparisons
+cover both C routes, default/NoOpt and O0/O2 with UBSan. This fixes observed
+argument elision and uninitialized C reads; it does not recover unknown VM
+entry registers or authenticate a dynamic return owner.
+
 Win64's shared call-input summary now recognizes unread narrow home spills,
 so 1/2/4-byte saves no longer create unused positional parameters. Segmented
 and ordered writes retain their inputs, and a returned incoming-area pointer
