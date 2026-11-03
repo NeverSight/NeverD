@@ -227,14 +227,14 @@ collectDataAccessWidths(const BinaryImage &Img,
 /// What collectDataAccessWidths read of a list of functions: the extent it
 /// read each one with, and how many of them state each width at each
 /// address.  Reading another list of the same image then decodes only the
-/// functions whose extent differs, as when a lift gives a function its size.
+/// functions whose extent or unsized entry boundaries differ.
 class DataAccessScan {
 public:
   /// The widths collectDataAccessWidths(\p Img, \p Functions) gives.  \p Img
   /// is the image every earlier update read.  A function without a size
-  /// reads up to other functions' entries, so a list with other entries is
-  /// read again whole.  None, and nothing kept, when a decoder could not be
-  /// set up.
+  /// reads up to other functions' entries: changing that entry list replaces
+  /// all unsized contributions, while retaining unchanged sized bodies.
+  /// None, and nothing kept, when a decoder could not be set up.
   std::optional<DataAccessWidths> update(const BinaryImage &Img,
                                          llvm::ArrayRef<FuncInfo> Functions);
   void clear() {
@@ -248,6 +248,8 @@ private:
     va_t Address;
     unsigned Width;
     uint32_t Functions;
+    /// The subset whose decode also depended on Entries.
+    uint32_t UnsizedFunctions;
   };
   /// The extent each function was read with, by entry.
   std::vector<std::pair<va_t, uint64_t>> Extents;

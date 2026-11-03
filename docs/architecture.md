@@ -4193,7 +4193,14 @@ stateless full-lift width collector supplies an independent comparison oracle.
 
 Function selection also retains decoded image data-access widths. Their exact
 ordered function address/size inventory is checked after synchronization;
-changed extents rebuild the widths and discard source using the former names.
+changed extents update the widths and discard source using the former names.
+The width inventory counts unsized contributions separately. Changing function
+entries withdraws those contributions and decodes each current unsized body once;
+unchanged sized bodies remain valid, including their unwind-owned outlying chunks.
+This preserves entry-boundary semantics without rescanning every sized function
+or decoding removed unsized bodies against different boundaries. Synchronous and
+background discovery publish through the same retained inventory path, retiring
+emitted source before the new catalog's names are read.
 Publishing only a recovered extent preserves current function-name derivation
 and lookup indexes, since the names and their list positions stay unchanged.
 Names, exports and list changes retain their ordinary invalidation guards.
