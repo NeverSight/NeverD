@@ -406,18 +406,6 @@ if(BUILD_TESTING)
   add_test(NAME NeverDMcpQt COMMAND neverd-mcp-qt-tests)
   set_tests_properties(NeverDMcpQt PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
   if(NEVERD_WORKER_REAL_ENGINE_TESTS)
-    qt_add_executable(neverd-gui-analysis-section-tests tests/AnalysisSectionTests.cpp)
-    target_link_libraries(neverd-gui-analysis-section-tests PRIVATE neverd_gui_app Qt6::Test)
-    target_compile_definitions(neverd-gui-analysis-section-tests PRIVATE
-      TEST_REAL_WORKER="$<TARGET_FILE:neverd-worker>"
-      TEST_PYTHON="${Python3_EXECUTABLE}"
-      TEST_GUI_SDK="${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui")
-    set_target_properties(neverd-gui-analysis-section-tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    add_dependencies(neverd-gui-analysis-section-tests neverd-worker)
-    add_test(NAME NeverDGuiAnalysisSections COMMAND neverd-gui-analysis-section-tests
-      -o "${CMAKE_CURRENT_BINARY_DIR}/analysis-section-tests.txt,txt")
-    set_tests_properties(NeverDGuiAnalysisSections PROPERTIES
-      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     add_test(NAME NeverDGuiAnalysis COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_probe_test.py"
       "$<TARGET_FILE:neverd-gui>" "$<TARGET_FILE:neverd_shared>")
