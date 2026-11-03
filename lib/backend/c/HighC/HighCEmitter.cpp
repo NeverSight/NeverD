@@ -2123,6 +2123,16 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   for (const auto &Name : SourceObjectAddressHelpers)
     OS << "extern uintptr_t " << Name << "(void);\n";
 
+  // A declaration shows only what its function returns. The definition runs
+  // the whole analysis before it prints the body.
+  const auto DeclaredReturnType = [&](const HighFunc &Function) {
+    CurrentFunc = &Function;
+    Analysis = {};
+    const PrintedReturn Return = printedReturn(Function);
+    InferredVoid = Return.Void;
+    FuncReturnType = Return.Type;
+    return InferredVoid ? NdType::makeVoid() : FuncReturnType;
+  };
   // A source-bound native helper can appear after its caller in the emitted
   // module. Declare its actual recovered function signature before any body.
   std::set<const HighFunc *> Prototyped;
@@ -2135,10 +2145,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         !Prototyped.insert(Definition->second).second)
       continue;
     const auto &Function = *Definition->second;
-    CurrentFunc = &Function;
-    Analysis = {};
-    runAnalysisPasses(Function);
-    const auto ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
+    const auto ReturnType = DeclaredReturnType(Function);
     const auto Convention = Function.SourceTypeHint
                                 ? Function.SourceTypeHint->Convention
                                 : SourceFunctionTypeHint::ConventionKind::C;
@@ -2171,10 +2178,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   for (const auto *Function : SourceAddressDefinitions) {
     if (!Prototyped.insert(Function).second)
       continue;
-    CurrentFunc = Function;
-    Analysis = {};
-    runAnalysisPasses(*Function);
-    const auto ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
+    const auto ReturnType = DeclaredReturnType(*Function);
     std::string Declarator = functionIdentifier(*Function) + "(";
     const size_t ParamCount = emittedParamCount(*Function);
     for (size_t I = 0; I < ParamCount; ++I) {
@@ -2208,10 +2212,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
          !AddressTakenDefinitions.count(Function)) ||
         !Prototyped.insert(Function).second)
       continue;
-    CurrentFunc = Function;
-    Analysis = {};
-    runAnalysisPasses(*Function);
-    const auto ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
+    const auto ReturnType = DeclaredReturnType(*Function);
     NativeFrameConvention(*Function);
     if (Function->SourceTypeHint)
       OS << sourceConventionAttribute(Function->SourceTypeHint->Convention);

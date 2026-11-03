@@ -429,6 +429,16 @@ bool HighCWriter::isAnalysisOnlyFunction(const HighFunc &Func) const {
   return HasWindowsRegion;
 }
 
+HighCWriter::PrintedReturn
+HighCWriter::printedReturn(const HighFunc &Func) const {
+  const TypeRef DeclaredReturn = declaredFunctionReturnType(Func);
+  const bool Void = DeclaredReturn ? DeclaredReturn->Kind == NdTypeKind::Void
+                                   : analyzeVoidReturn(Func);
+  if (Void)
+    return {true, nullptr};
+  return {false, DeclaredReturn ? DeclaredReturn : Func.ReturnType};
+}
+
 void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   SEHExceptionCodeNames.clear();
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
@@ -519,9 +529,8 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   auto AllArgs = [](const HighExpr &E) { return E.Operands.size(); };
   collectUnknownOnlyNames(Func);
   // Whether C shows the function `void` decides what its returns read.
-  const TypeRef DeclaredReturn = declaredFunctionReturnType(Func);
-  InferredVoid = DeclaredReturn ? DeclaredReturn->Kind == NdTypeKind::Void
-                                : analyzeVoidReturn(Func);
+  const PrintedReturn Return = printedReturn(Func);
+  InferredVoid = Return.Void;
   Analysis.VoidReturns = InferredVoid;
   analyzeDeadStores(Analysis, Func, VarFn, ExprFn);
   analyzeUnusedAssigns(Analysis, Func, VarFn, AllArgs);
@@ -597,9 +606,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
     });
   }
 
-  FuncReturnType = InferredVoid
-                       ? nullptr
-                       : (DeclaredReturn ? DeclaredReturn : Func.ReturnType);
+  FuncReturnType = Return.Type;
 }
 
 void HighCWriter::collectDeferredUnknowns(const HighFunc &Func) {
