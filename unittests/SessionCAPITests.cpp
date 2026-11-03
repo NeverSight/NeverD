@@ -4284,73 +4284,205 @@ TEST_F(SessionCAPITest, DataAccessWidthsCheckEveryExtentAndDiscardOldSource) {
   Check(0u);
 }
 
-TEST_F(SessionCAPITest, DataAccessWidthsReadOnlyTheExtentsThatChange) {
-  // Reading the widths again decodes only the functions whose extent
-  // changed, and gives what a fresh read of every function gives, whatever
-  // the list became: sizes cleared, shortened or restored, functions
-  // dropped, added inside others, or listed twice with another size.
-  const auto Fixture = std::filesystem::path(__FILE__).parent_path() /
-                       "Inputs" / "source-patch" / "native-processes" /
-                       "x64-original.exe";
-  ASSERT_EQ(neverd_session_load(Session, Fixture.string().c_str()), 1);
-  auto &State = *neverd::sdk::toSession(Session);
-  ASSERT_GE(State.Functions.size(), 4u);
-  const auto Original = State.Functions;
-  auto Agree = [&] {
-    const auto *Widths =
+TEST_F(SessionCAPITest, DataAccessWidthsSurviveDiscoveryPublication) {
+  for (bool Background : {false, true}) {
+    SCOPED_TRACE(Background);
+    std::string Bytes = accessWidthCacheELF(8, 4);
+    // The qword reader calls the dword reader immediately before returning.
+    Bytes.replace(DataELFEntry - DataELFBase + 7, 6, "\xe8\x14\0\0\0\xc3",
+                  6); // call entry+0x20; ret
+    const auto Input = write("discovered-widths.elf", Bytes);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    // The image states the caller's extent; the detector must find its
+    // otherwise unlisted callee from the original call instruction.
+    State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, 13)};
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+    ASSERT_EQ(State.Functions.size(), 1u);
+    ASSERT_NE(neverd::sdk::SessionTestAccess::dataAccessWidths(State), nullptr);
+    ASSERT_EQ(State.AccessWidths->at(DataELFData), 8u);
+    const auto *Storage = &*State.AccessWidths->begin();
+    State.rememberFunctionSource(DataELFEntry,
+                                 neverd::sdk::Session::SourceRoute::PlainC,
+                                 "old width names", nullptr);
+    if (Background)
+      ASSERT_GE(neverd_session_discover_functions_step(Session), 0);
+    ASSERT_GE(neverd_session_discover_functions(Session), 2);
+    EXPECT_TRUE(State.FunctionSources.empty());
+    ASSERT_TRUE(State.AccessWidths);
+    EXPECT_EQ(&*State.AccessWidths->begin(), Storage);
+    const auto *Updated =
         neverd::sdk::SessionTestAccess::dataAccessWidths(State);
-    ASSERT_NE(Widths, nullptr);
-    const auto Fresh =
+    ASSERT_NE(Updated, nullptr);
+    EXPECT_EQ(Updated->at(DataELFData), 0u);
+    const auto Full =
         neverd::sdk::SessionTestAccess::collectDataAccessWidths(State);
-    ASSERT_TRUE(Fresh);
-    EXPECT_TRUE(std::equal(Widths->begin(), Widths->end(), Fresh->begin(),
-                           Fresh->end()));
-  };
-  Agree();
-  ASSERT_FALSE(State.AccessWidths->empty());
-  uint64_t Seed = 0x9e3779b97f4a7c15u;
-  auto Next = [&] {
-    Seed ^= Seed << 13;
-    Seed ^= Seed >> 7;
-    Seed ^= Seed << 17;
-    return Seed;
-  };
-  for (int Step = 0; Step < 200; ++Step) {
-    SCOPED_TRACE(Step);
-    auto &List = State.Functions;
-    const size_t I = Next() % List.size();
-    switch (Next() % 6) {
-    case 0:
-      List[I].Size = 0;
-      break;
-    case 1:
-      List[I].Size = Original[Next() % Original.size()].Size;
-      break;
-    case 2:
-      List[I].Size /= 2;
-      break;
-    case 3:
-      if (List.size() > 2)
-        List.erase(List.begin() + static_cast<std::ptrdiff_t>(I));
-      break;
-    case 4: {
-      neverd::sdk::FuncInfo Inside = List[I];
-      Inside.Entry += 1 + Next() % 8;
-      Inside.Size = Next() % 2 ? 0 : 16;
-      List.push_back(Inside);
-      break;
+    ASSERT_TRUE(Full);
+    EXPECT_TRUE(std::equal(Updated->begin(), Updated->end(), Full->begin(),
+                           Full->end()));
+  }
+}
+
+TEST_F(SessionCAPITest, DataAccessWidthsRespectChangedUnsizedBoundaries) {
+  for (bool SizedReader : {false, true}) {
+    for (bool Jump : {false, true}) {
+      SCOPED_TRACE(SizedReader);
+      SCOPED_TRACE(Jump);
+      std::string Code(0x60, '\xcc');
+      const auto Load = [&](unsigned Offset, unsigned Width) {
+        std::string Bytes = Width == 8 ? std::string("\x48\x8b\x05", 3)
+                                       : std::string("\x8b\x05", 2);
+        const auto Delta = static_cast<uint32_t>(
+            DataELFData - (DataELFEntry + Offset + Bytes.size() + 4));
+        for (unsigned I = 0; I < 4; ++I)
+          Bytes += static_cast<char>(Delta >> (8 * I));
+        Code.replace(Offset, Bytes.size(), Bytes);
+      };
+      Load(0, 8);
+      Code[7] = '\xc3';
+      std::fill(Code.begin() + 0x20, Code.begin() + 0x42, '\x90');
+      Load(0x20, 8);
+      if (Jump) {
+        Code.replace(0x27, 2, "\xeb\x17"); // jmp entry+0x40
+        Code[0x30] = '\xc3';
+      }
+      Load(0x42, 4);
+      Code[0x48] = '\xc3';
+      const auto Input = write("boundary-widths.elf",
+                               makeDataELF(std::string(8, '\x11'), Code));
+      ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+      auto &State = *neverd::sdk::toSession(Session);
+      State.Functions = {{DataELFEntry, SizedReader ? 8u : 0u, "reader"},
+                         {DataELFEntry + 0x20, 0, "unsized"}};
+      // The jump skips another entry. The affected boundary need not be
+      // adjacent to the unsized function's own entry.
+      if (Jump)
+        State.Functions.push_back({DataELFEntry + 0x30, 1, "skipped"});
+      const auto Check = [&](std::optional<unsigned> Expected) {
+        const auto *Widths =
+            neverd::sdk::SessionTestAccess::dataAccessWidths(State);
+        ASSERT_NE(Widths, nullptr);
+        EXPECT_EQ(Widths->at(DataELFData), Expected);
+        const auto Full =
+            neverd::sdk::SessionTestAccess::collectDataAccessWidths(State);
+        ASSERT_TRUE(Full);
+        EXPECT_TRUE(std::equal(Widths->begin(), Widths->end(), Full->begin(),
+                               Full->end()));
+      };
+      const auto Drop = [&](neverd::va_t Entry) {
+        llvm::erase_if(State.Functions,
+                       [=](const auto &F) { return F.Entry == Entry; });
+      };
+      Check(0u); // qword and dword reads disagree.
+      State.Functions.push_back({DataELFEntry + 0x40, 2, "boundary"});
+      Check(8u); // The new boundary hides the unsized body's dword read.
+      std::reverse(State.Functions.begin(), State.Functions.end());
+      Check(8u);
+      Drop(DataELFEntry + 0x40);
+      Check(0u);
+      for (auto &F : State.Functions)
+        if (F.Entry == DataELFEntry + 0x20)
+          F.Size = 9;
+      Check(8u); // Publishing an extent withdraws its former unsized reads.
+      State.Functions.push_back({DataELFEntry + 0x40, 2, "boundary"});
+      Check(8u);
+      for (auto &F : State.Functions)
+        if (F.Entry == DataELFEntry + 0x20)
+          F.Size = 0;
+      Check(8u);
+      Drop(DataELFEntry);
+      Check(8u); // The unsized function still states the shared qword width.
+      Drop(DataELFEntry + 0x40);
+      Check(0u);
+      Drop(DataELFEntry + 0x20);
+      Check(std::nullopt);
+      State.Functions.clear();
+      Check(std::nullopt);
     }
-    default: {
-      neverd::sdk::FuncInfo Twice = List[I];
-      Twice.Size += 1 + Next() % 32;
-      List.push_back(Twice);
-      break;
+  }
+}
+
+TEST_F(SessionCAPITest, DataAccessWidthsReadOnlyTheExtentsThatChange) {
+  for (const auto *Relative :
+       {"Inputs/source-patch/native-processes/x64-original.exe",
+        "types/fixtures/linux_libc_calls_x86",
+        "types/fixtures/linux_libc_calls_x64",
+        "types/fixtures/linux_libc_calls_arm",
+        "types/fixtures/linux_libc_calls_arm64",
+        "types/fixtures/darwin_libc_calls_x64",
+        "types/fixtures/darwin_libc_calls_arm64"}) {
+    SCOPED_TRACE(Relative);
+
+    // Reading the widths again decodes only the functions whose extent
+    // changed, and gives what a fresh read of every function gives, whatever
+    // the list became: sizes cleared, shortened or restored, functions
+    // dropped, added inside others, or listed twice with another size.
+    const auto Fixture =
+        std::filesystem::path(__FILE__).parent_path() / Relative;
+    ASSERT_EQ(neverd_session_load(Session, Fixture.string().c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    ASSERT_GE(State.Functions.size(), 4u);
+    const auto Original = State.Functions;
+    auto Agree = [&] {
+      const auto *Widths =
+          neverd::sdk::SessionTestAccess::dataAccessWidths(State);
+      ASSERT_NE(Widths, nullptr);
+      const auto Fresh =
+          neverd::sdk::SessionTestAccess::collectDataAccessWidths(State);
+      ASSERT_TRUE(Fresh);
+      EXPECT_TRUE(std::equal(Widths->begin(), Widths->end(), Fresh->begin(),
+                             Fresh->end()));
+    };
+    Agree();
+    // PIC fixtures can compute every memory base in preceding instructions,
+    // leaving this single-instruction width inventory empty. The original
+    // PE fixture also checks that the retained inventory contains accesses.
+    if (State.Img.isCOFF())
+      ASSERT_FALSE(State.AccessWidths->empty());
+    uint64_t Seed = 0x9e3779b97f4a7c15u;
+    auto Next = [&] {
+      Seed ^= Seed << 13;
+      Seed ^= Seed >> 7;
+      Seed ^= Seed << 17;
+      return Seed;
+    };
+    for (int Step = 0; Step < 200; ++Step) {
+      SCOPED_TRACE(Step);
+      auto &List = State.Functions;
+      const size_t I = Next() % List.size();
+      switch (Next() % 6) {
+      case 0:
+        List[I].Size = 0;
+        break;
+      case 1:
+        List[I].Size = Original[Next() % Original.size()].Size;
+        break;
+      case 2:
+        List[I].Size /= 2;
+        break;
+      case 3:
+        if (List.size() > 2)
+          List.erase(List.begin() + static_cast<std::ptrdiff_t>(I));
+        break;
+      case 4: {
+        neverd::sdk::FuncInfo Inside = List[I];
+        Inside.Entry += 1 + Next() % 8;
+        Inside.Size = Next() % 2 ? 0 : 16;
+        List.push_back(Inside);
+        break;
+      }
+      default: {
+        neverd::sdk::FuncInfo Twice = List[I];
+        Twice.Size += 1 + Next() % 32;
+        List.push_back(Twice);
+        break;
+      }
+      }
+      Agree();
     }
-    }
+    State.Functions = Original;
     Agree();
   }
-  State.Functions = Original;
-  Agree();
 }
 
 TEST_F(SessionCAPITest, DataAccessWidthsRetireOnEditsPolicyAndSignatures) {

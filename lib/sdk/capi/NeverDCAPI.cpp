@@ -1159,7 +1159,12 @@ detectFunctions(BinaryImage &Image, const std::function<bool()> &Cancelled) {
 void publishDiscovery(Session &S,
                       std::vector<std::pair<va_t, std::string>> Functions) {
   S.DiscoveredFunctions = std::move(Functions);
-  S.resetFunctionsFromImage();
+  // Discovery publishes entry facts, not new instruction bytes or relocation
+  // inputs. Keep decoded widths for the inventory update, as navigation does,
+  // while rebuilding names and retiring source from the previous catalog.
+  S.forgetEmittedSources();
+  S.ListInputs.reset();
+  S.refreshFunctionList();
 }
 
 enum class DiscoveryJobState { Pending, Complete, Cancelled };

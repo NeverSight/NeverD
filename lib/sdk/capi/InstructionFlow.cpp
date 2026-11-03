@@ -621,19 +621,32 @@ DataAccessScan::update(const BinaryImage &Img,
     Next.emplace_back(F->Entry, F->Size);
     NextEntries.push_back(F->Entry);
   }
-  // A function without a size reads up to the other functions' entries, so
-  // with other entries what it read before cannot be read again to take it
-  // back: read the list again whole.
-  if (NextEntries != Entries)
-    clear();
-  // The extents read again: those read before that the list no longer
-  // holds, which stop counting, and then those not read before.
-  std::vector<std::pair<va_t, uint64_t>> Read;
-  std::set_difference(Extents.begin(), Extents.end(), Next.begin(), Next.end(),
-                      std::back_inserter(Read));
+  const bool EntriesChanged = NextEntries != Entries;
+  // Sized bodies depend only on their extents. Unsized bodies also stop at
+  // other entries, including those reached by a jump: a changed entry list
+  // replaces their contributions together, without decoding the old bodies
+  // against either the old or the new boundaries.
+  std::vector<std::pair<va_t, uint64_t>> Read, Added;
+  auto Before = Extents.begin(), After = Next.begin();
+  while (Before != Extents.end() || After != Next.end()) {
+    if (After == Next.end() || (Before != Extents.end() && *Before < *After)) {
+      if (!EntriesChanged || Before->second)
+        Read.push_back(*Before);
+      ++Before;
+    } else if (Before == Extents.end() || *After < *Before) {
+      Added.push_back(*After++);
+    } else {
+      if (EntriesChanged && !After->second)
+        Added.push_back(*After);
+      ++Before;
+      ++After;
+    }
+  }
   const size_t Dropped = Read.size();
-  std::set_difference(Next.begin(), Next.end(), Extents.begin(), Extents.end(),
-                      std::back_inserter(Read));
+  if (Read.empty())
+    Read = std::move(Added);
+  else
+    Read.insert(Read.end(), Added.begin(), Added.end());
   // Each extent's accesses, which only the thread decoding it writes.
   std::vector<std::vector<std::pair<va_t, unsigned>>> Slots(Read.size());
   if (!Read.empty() &&
@@ -650,37 +663,51 @@ DataAccessScan::update(const BinaryImage &Img,
   }
   // A function counts once for each width it states at an address, and
   // only for a width that names data.
-  std::vector<std::tuple<va_t, unsigned, int>> Changes;
+  std::vector<std::tuple<va_t, unsigned, int, bool>> Changes;
   for (size_t Index = 0; Index < Read.size(); ++Index) {
     auto &Slot = Slots[Index];
     llvm::sort(Slot);
     Slot.erase(std::unique(Slot.begin(), Slot.end()), Slot.end());
     for (const auto &[Address, Width] : Slot)
       if (Width && Width <= MaxDataAccessWidth)
-        Changes.emplace_back(Address, Width, Index < Dropped ? -1 : 1);
+        Changes.emplace_back(Address, Width, Index < Dropped ? -1 : 1,
+                             Read[Index].second == 0);
   }
   llvm::sort(Changes);
+  if (EntriesChanged)
+    llvm::erase_if(Counts, [](Count &Stated) {
+      Stated.Functions -= Stated.UnsizedFunctions;
+      Stated.UnsizedFunctions = 0;
+      return Stated.Functions == 0;
+    });
   std::vector<Count> Merged;
   Merged.reserve(Counts.size() + Changes.size());
   auto Kept = Counts.begin();
   for (size_t I = 0; I < Changes.size();) {
     const va_t Address = std::get<0>(Changes[I]);
     const unsigned Width = std::get<1>(Changes[I]);
-    int64_t Total = 0;
+    int64_t Total = 0, Unsized = 0;
     for (; I < Changes.size() && std::get<0>(Changes[I]) == Address &&
            std::get<1>(Changes[I]) == Width;
-         ++I)
+         ++I) {
       Total += std::get<2>(Changes[I]);
+      if (std::get<3>(Changes[I]))
+        Unsized += std::get<2>(Changes[I]);
+    }
     for (; Kept != Counts.end() &&
            std::pair(Kept->Address, Kept->Width) < std::pair(Address, Width);
          ++Kept)
       Merged.push_back(*Kept);
     if (Kept != Counts.end() && Kept->Address == Address &&
-        Kept->Width == Width)
-      Total += (Kept++)->Functions;
-    assert(Total >= 0 && "an extent stops counting a width it never stated");
+        Kept->Width == Width) {
+      Total += Kept->Functions;
+      Unsized += (Kept++)->UnsizedFunctions;
+    }
+    assert(Total >= 0 && Unsized >= 0 && Unsized <= Total &&
+           "an extent stops counting a width it never stated");
     if (Total > 0)
-      Merged.push_back({Address, Width, static_cast<uint32_t>(Total)});
+      Merged.push_back({Address, Width, static_cast<uint32_t>(Total),
+                        static_cast<uint32_t>(Unsized)});
   }
   Merged.insert(Merged.end(), Kept, Counts.end());
   Counts = std::move(Merged);

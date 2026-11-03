@@ -5529,6 +5529,15 @@ fresh native decoding, preserves renamed source, and checks changed function
 addresses, extents and inventories. It also covers edits, policy/signature
 changes, feature changes between selections, failed loads and same-address
 image replacement. Width changes discard source using the preceding data names.
+`DataAccessWidthsRespectChangedUnsizedBoundaries` adds and removes entries across
+fallthrough and nonadjacent direct-jump boundaries, with shared and conflicting
+widths, both sized and unsized inventories, and size publication/retraction. Its
+explicit width expectations are also compared with a complete independent sweep.
+`DataAccessWidthsSurviveDiscoveryPublication` checks actual synchronous and
+background discovery of an unlisted direct callee, retained decoding facts,
+withdrawn old source and a newly conflicting width against full recomputation.
+The extent-mutation oracle runs 200 deterministic updates each on x86, x64,
+ARM32 and AArch64 fixtures across ELF, PE and Mach-O.
 
 With the optional Qt desktop targets enabled, `NeverDGuiController` exercises
 the production views against the deterministic worker. Its chooser regressions
