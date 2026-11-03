@@ -60,6 +60,14 @@ The paged selector-store path
 prepares translation before publication so a post-paging #AC retains page-walk
 effects without a data write. MOV SS requires the scheduler's persistent shadow;
 the instruction-only driver refuses it. Device arrival remains producer-owned.
+`X64PortIOEncoding` shares the strict long-mode prefix grammar with segment
+transitions. It authenticates scalar and string port forms once for source
+admission and runtime dispatch. `X64PagedPortIO` owns implicit-supervisor TSS
+permission reads, explicit device completion, and element/fragment publication;
+neither C renderer implements port permissions or accesses host ports. The
+paged executor retains device completion independently of exception delivery,
+so an IDT backing stop resumes delivery without replaying input. See the
+[device contract](x86-paged-execution.md#explicit-port-devices).
 `X64RepeatedString` authenticates the repeat/prefix grammar, then obtains the
 single-element operations from the existing x86 lifter. The continuation layer
 owns count completion and the original-PC restart boundary; paged execution

@@ -315,7 +315,7 @@ The distinction applies to the memory/fault gaps listed below.
 
 | Instructions or family | Missing contract |
 | --- | --- |
-| REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS now own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. INS/OUTS device effects, legacy segmented progress, physical fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
+| REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS now own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. INS/OUTS now use the explicit paged device binding below. Legacy segmented progress, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
 | LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. i386/compatibility forms and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
@@ -3637,3 +3637,29 @@ change adds the previously refused paged instruction execution. It does not
 complete legacy i386 dispatch, SMM/SGX software environments or partial-progress
 instructions. The final LLVM release/pin remains deferred until those global
 contracts are completed.
+
+### Paged port I/O device binding
+
+Long-mode IN/OUT and canonical single/F3 INS/OUTS now have an explicit paged
+V6 device path, including TSS permission checks, faults, partial completion,
+device pauses, page-fragment input writes and event resumption. The existing
+LLVM/NeverC native interfaces remain available; the software device path emits
+ordinary imported calls. This does not complete legacy i386 segmentation,
+physical device timing/read-ahead, or the other remaining system-state domains.
+See the [port contract](x86-paged-execution.md#explicit-port-devices).
+
+The [qualification record](evidence/x86-paged-port-io-2026-11-02.json) records
+779 passing tests and three explicit skips across the native LLVM SDK and r6.
+Both SDKs produce the same 704 C/header/manifest artifacts. The port matrix
+contains 154,496 KVM comparisons, including 75,840 fault states and 9,728 input
+effects retained on a fault. These are intercepted device-emulation results,
+not physical port qualification. The 4,096 omitted-#AC cases and 384 incorrect
+SS-override fault classifications are asserted separately and excluded from
+equivalence counts. Original CPU MOV probes and Intel's ignored-prefix rule
+support retaining #GP for noncanonical OUTS despite KVM reporting #SS.
+The report preserves the earlier counterexamples and superseded runs instead
+of treating their passing results as proof of the corrected implementation.
+After merging the shared register-DCE optimization from `e54aa42afd`, both
+SDKs pass all 38 focused DCE/port checks. All 24 port source/manifest files
+remain identical to the qualified exports; repeated comparisons are recorded
+separately from the primary totals.

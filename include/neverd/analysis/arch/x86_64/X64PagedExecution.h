@@ -11,6 +11,7 @@
 #define NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
 
 #include "neverd/analysis/arch/x86_64/X64PagedEventDelivery.h"
+#include "neverd/analysis/arch/x86_64/X64PagedPortIO.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -52,6 +53,8 @@ struct X64PagedExecutionOptions {
   /// Each completed string element consumes one attempt; zero count consumes
   /// one completion attempt. Earlier elements survive later faults/stops.
   std::optional<X64PagedRepeatProfile> RepeatProfile;
+  /// Required even for a zero-count port string. No host ports are accessed.
+  std::optional<X64PagedPortIOBinding> PortIO;
 };
 
 struct X64PagedExecutionResult {
@@ -60,6 +63,10 @@ struct X64PagedExecutionResult {
   /// Includes successful software interrupt entry; a delivery fault or an
   /// intermediate REP element is false.
   bool InstructionCompleted = false;
+  /// One irreversible device transfer, also retained on an INS guest fault.
+  bool DeviceTransferCompleted = false;
+  /// Bytes committed by this INS element, including a prefix on a later #PF.
+  uint8_t PortInputBytesWritten = 0;
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
   std::optional<X64PagedEventResult> Delivery;
@@ -72,8 +79,8 @@ struct X64PagedExecutionResult {
 /// until their pointer reads, descriptor checks and accessed writes succeed.
 /// Selector MOV/PUSH/POP share those checks and stage stack updates too.
 /// Memory string repeats commit one element and its restart state per step.
-/// Unfinished comparisons retain entry flags. Port strings and gather/XSAVE
-/// need separate progress bindings.
+/// Unfinished comparisons retain entry flags. Port transfers use a separate
+/// synchronous device binding; gather/XSAVE still need progress bindings.
 /// Generated bodies/validators and original bytes belong to the
 /// same source export; passing unrelated or arbitrary function pointers
 /// violates this ABI.

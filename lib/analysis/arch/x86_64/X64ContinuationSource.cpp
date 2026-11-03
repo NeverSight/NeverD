@@ -28,6 +28,7 @@
 #include "X64ControlTransitions.h"
 #include "X64FredReturnEncoding.h"
 #include "X64MachineFlags.h"
+#include "X64PortIOEncoding.h"
 #include "X64Recovery.h"
 #include "X64RepeatedString.h"
 #include "X64SegmentMoveEncoding.h"
@@ -1245,6 +1246,11 @@ buildInstruction(SpecializationInstruction Instruction,
     Instruction.Ops = Repeated->Operations;
     Instruction.UndefinedEffects = Repeated->Undefined;
   }
+  const auto PortIO =
+      Options.PagedMemory && Instruction.ProfileProjection ==
+                                 InterpreterProfileProjection::None
+          ? detail::x64PortIOEncoding(Instruction.NativeBytes)
+          : std::nullopt;
   const bool Controls = hasControlState(Options);
   const bool Smap =
       Options.Profile == X64ContinuationProfile::KernelSmapNoFaultV3;
@@ -1453,7 +1459,7 @@ buildInstruction(SpecializationInstruction Instruction,
       (Iret || FarReturn) &&
       Instruction.UndefinedEffects.Coverage == LowUndefinedCoverage::Missing &&
       Instruction.UndefinedEffects.Effects.empty();
-  if ((!FarPointer && !SegmentMove && !Repeated && !UserInterrupt &&
+  if ((!FarPointer && !SegmentMove && !Repeated && !PortIO && !UserInterrupt &&
        !FredReturn && !Vmrun && !Mpx && !Hypercall && !Snp && !Hle &&
        !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
@@ -1526,7 +1532,7 @@ buildInstruction(SpecializationInstruction Instruction,
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
-        !supportedOperation(Op, Options, Division)) {
+        !PortIO && !supportedOperation(Op, Options, Division)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
       if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
@@ -1547,8 +1553,9 @@ buildInstruction(SpecializationInstruction Instruction,
   }
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
-    PagedRoles = Repeated ? detail::X64PagedMemoryRoles{.Supported = true}
-                          : detail::x64PagedMemoryRoles(Instruction);
+    PagedRoles = (Repeated || PortIO)
+                     ? detail::X64PagedMemoryRoles{.Supported = true}
+                     : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
          !SegmentMove) ||
         Sysret || Sysenter || Sysexit)
@@ -1557,7 +1564,7 @@ buildInstruction(SpecializationInstruction Instruction,
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
-          !Iret && !FarReturn && !FarPointer && !SegmentMove &&
+          !Iret && !FarReturn && !FarPointer && !SegmentMove && !PortIO &&
           !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
@@ -1644,7 +1651,8 @@ buildInstruction(SpecializationInstruction Instruction,
       Options.PagedMemory
           ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
                 Flags::IOPLMask | Flags::VirtualInterruptMask |
-                ((Iret || FarReturn || FarPointer || SegmentMove || Repeated)
+                ((Iret || FarReturn || FarPointer || SegmentMove || Repeated ||
+                  PortIO)
                      ? 0x4000
                      : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
@@ -1886,6 +1894,9 @@ buildInstruction(SpecializationInstruction Instruction,
   } else if (UserInterrupt) {
     detail::X64ContinuationUserInterrupts<Writer>(W, Options)
         .execute(*UserInterrupt, Instruction.Fallthrough.Address);
+  } else if (PortIO) {
+    W.pagedAccess(constant(0), 0, X64PagedAccess::PortIO, false);
+    W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (Repeated) {
     detail::emitX64RepeatedString(W, *Repeated, Result.Address,
                                   Instruction.Fallthrough.Address);

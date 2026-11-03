@@ -26,6 +26,8 @@ enum class X64PagedExit : uint64_t {
   /// One REP element committed at the original PC; the region drivers consume
   /// an attempt and continue dispatch, allowing a budget stop or event poll.
   RepeatContinue = 21,
+  /// No device effect or element completion; restore availability and retry.
+  DeviceUnavailable = 22,
 };
 
 /// Progress of the last runtime operation, independent of its final status.
@@ -64,6 +66,8 @@ enum class X64PagedAccess : uint64_t {
   /// Require the REP profile before operands. Address is the index-use mask;
   /// size is the address width. Entry normalization survives guest faults.
   BeginRepeat = 18,
+  /// Original bytes own scalar/string operands; address and size are zero.
+  PortIO = 19,
 };
 
 struct X64PagedExchange {

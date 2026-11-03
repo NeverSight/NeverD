@@ -20109,3 +20109,20 @@ recompiled cyclic dispatch. `AArch64_HighCExecution.FMaxAndFMinPropagateANaN`
 uses explicit FMAX/FMIN instructions in the input fixture. Compiling the
 emitted C still requires Clang's `__builtin_elementwise_maximum/minimum` support;
 select a recent fixture compiler when the system Clang lacks those builtins.
+
+### Paged port device progress
+
+`NeverDX64PagedExecutionTests` owns `*PagedPort*`: scalar DX/imm8 ports and
+single/repeated string forms at all three widths, both address sizes, REX.W/66
+precedence, SS/FS/GS, CPL/IOPL, bitmap boundaries, faulted input effects,
+backing repair, callback refusal/error, NMI and page-fault handlers with IRET.
+`X64PagedPortDevice.h` supplies independent device tapes for the runtime and
+KVM. Original I/O is intercepted/emulated by KVM; these comparisons are recorded
+as `kvm_port_comparisons`, never native CPU equivalence. KVM's omitted #AC and
+incorrect #SS for SS-prefixed noncanonical OUTS are reported separately while
+the runtime's architectural #AC/#GP remain asserted. Split input
+stores qualify the explicit fragment policy; direct policy tests cover atomic
+input and memory-check-first input too. Both C routes compile with Clang and
+NeverC at O0/O2 for the matrix, and O2 for restart scenarios. Use both the local
+native SDK and pinned r6, preserving the production pin. See the
+[contract](x86-paged-execution.md#explicit-port-devices).

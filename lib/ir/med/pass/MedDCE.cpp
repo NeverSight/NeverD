@@ -228,12 +228,52 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       TargetArch == Arch::X86
           ? med_calling_conv_detail::i386NonstandardArgumentRegisters()
           : llvm::ArrayRef<uint64_t>();
-  auto seedParamWrites = [&](const std::vector<MedOp> &Ops, int Before,
+  // The walks below go backward from calls, intrinsics and returns, and
+  // neighboring walks pass the same ops.  Record once for each op, by its
+  // block's position and its own, what those walks ask of it.  No op changes
+  // until every walk is done.
+  std::vector<size_t> FirstOp;
+  FirstOp.reserve(Func.Blocks.size());
+  size_t NumOps = 0;
+  for (const MedBlock &Block : Func.Blocks) {
+    FirstOp.push_back(NumOps);
+    NumOps += Block.Ops.size();
+  }
+  auto opIndex = [&](const MedBlock &Block, int Index) {
+    return FirstOp[static_cast<size_t>(&Block - Func.Blocks.data())] +
+           static_cast<size_t>(Index);
+  };
+  enum : uint8_t {
+    SetupEndKnown = 1,
+    EndsSetup = 2,
+    // A parameter-write walk has passed the op, or one for a direct call.
+    ParamWritesWalked = 4,
+    DirectParamWritesWalked = 8,
+  };
+  std::vector<uint8_t> OpFacts(NumOps);
+  auto endsSetup = [&](const MedBlock &Block, int Index) {
+    uint8_t &Facts = OpFacts[opIndex(Block, Index)];
+    if (!(Facts & SetupEndKnown))
+      Facts |= SetupEndKnown |
+               (endsCallArgumentSetup(Block.Ops[static_cast<size_t>(Index)],
+                                      /*RegistersOnly=*/true)
+                    ? EndsSetup
+                    : 0);
+    return (Facts & EndsSetup) != 0;
+  };
+  // A walk ends where call setup does, or at an op that an earlier walk
+  // keeping at least its registers passed: that walk went on to the same end.
+  // A walk for a direct call keeps more registers than the others.
+  auto seedParamWrites = [&](const MedBlock &Block, int Before,
                              bool DirectCall) {
+    const uint8_t Walked =
+        DirectCall ? DirectParamWritesWalked : ParamWritesWalked;
     for (int J = Before; J >= 0; --J) {
-      const MedOp &Prev = Ops[static_cast<size_t>(J)];
-      if (endsCallArgumentSetup(Prev, /*RegistersOnly=*/true))
+      uint8_t &Facts = OpFacts[opIndex(Block, J)];
+      if ((Facts & Walked) || endsSetup(Block, J))
         break;
+      Facts |= ParamWritesWalked | (DirectCall ? DirectParamWritesWalked : 0);
+      const MedOp &Prev = Block.Ops[static_cast<size_t>(J)];
       if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
           (TRI.isParamReg(Prev.Output.RegOff) ||
            TRI.isVectorReg(Prev.Output.RegOff) ||
@@ -263,12 +303,21 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   llvm::DenseSet<std::pair<const MedBlock *, uint64_t>> ReachedEnds;
   llvm::DenseSet<std::pair<const MedBlock *, uint64_t>> ReachedArgumentEnds;
   llvm::SmallVector<std::pair<const MedBlock *, int>> ReachingWorklist;
+  // The ops each register's walks have passed, separately for the walks that
+  // stop where call setup ends.  A walk that reaches one of them stops too:
+  // the walk that passed it kept everything found from there.  With duplicate
+  // block IDs each query keeps its own visits, so nothing is recorded.
+  std::map<std::pair<uint64_t, bool>, std::vector<bool>> ReachingWalks;
   // Keep the definition of register \p RegOff that reaches the point after
   // op \p Before of \p Start on every incoming path: the newest write there,
   // else the register's PHI, else what reaches the end of each predecessor.
   auto seedReachingDef = [&](const MedBlock &Start, int Before, uint64_t RegOff,
                              bool Argument = false) {
     auto &Completed = Argument ? ReachedArgumentEnds : ReachedEnds;
+    std::vector<bool> *Walked =
+        UniqueBlockIds ? &ReachingWalks.try_emplace({RegOff, Argument}, NumOps)
+                              .first->second
+                       : nullptr;
     ReachingWorklist.push_back({&Start, Before});
     std::set<std::pair<int, int>> Visited;
     while (!ReachingWorklist.empty()) {
@@ -283,9 +332,17 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       }
       bool Found = false;
       for (int J = Last; J >= 0; --J) {
+        if (Walked) {
+          const size_t Index = opIndex(*Block, J);
+          if ((*Walked)[Index]) {
+            Found = true;
+            break;
+          }
+          (*Walked)[Index] = true;
+        }
         const MedOp &Op = Block->Ops[static_cast<size_t>(J)];
         const MedVar &Output = Op.Output;
-        if (Argument && endsCallArgumentSetup(Op, /*RegistersOnly=*/true)) {
+        if (Argument && endsSetup(*Block, J)) {
           // The preceding call's explicit result can be passed on, but
           // setup before a call or opaque intrinsic is no later argument.
           if (Output.Kind == MedVar::Reg && Output.Size &&
@@ -362,7 +419,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
           KeepUnresolvedRegisterSetup = true;
         }
       }
-      seedParamWrites(Blk.Ops, static_cast<int>(I) - 1, DirectCall);
+      seedParamWrites(Blk, static_cast<int>(I) - 1, DirectCall);
       // Setup can dominate several branches before the call. Keeping only
       // its immediate predecessor silently deletes these implicit inputs
       // before ABI recovery has bound them. Reuse the per-register walk,
@@ -387,7 +444,7 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       HasCall = IsCall;
       for (int PredId : Blk.Preds)
         if (const MedBlock *Pred = blockById(PredId))
-          seedParamWrites(Pred->Ops, static_cast<int>(Pred->Ops.size()) - 1,
+          seedParamWrites(*Pred, static_cast<int>(Pred->Ops.size()) - 1,
                           DirectCall);
     }
   }
