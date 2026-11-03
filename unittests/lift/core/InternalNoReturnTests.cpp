@@ -26,6 +26,17 @@ struct NoReturnProofTestAccess {
                     va_t Entry) {
     return Builder.buildNoReturnProof(Image, Dec, Entry, "proof");
   }
+  static std::optional<uint32_t> preserved(CFGBuilder &Builder,
+                                           const BinaryImage &Image,
+                                           va_t Caller, va_t Target) {
+    Builder.CurrentImg = &Image;
+    Builder.CurrentFuncEntry = Caller;
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.NumInputs = 1;
+    Call.Inputs[0] = NdVar::cst(Target, 8);
+    return Builder.provedCalleePreservedGPRs(Call, [](size_t) { return true; });
+  }
 };
 } // namespace neverd::detail
 
@@ -142,6 +153,53 @@ BinaryImage floatingForwarder(Arch Architecture, BinaryFormat Format,
 bool ownsX87(const BinaryImage &Image) {
   return x87ContextOwnsStack(Image.Arch, Image.abiFormat(),
                              Image.X87ContextOverride);
+}
+
+TEST(InternalNoReturn, RegisterPreservationReusesOnlyImageNames) {
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
+    std::vector<uint8_t> Code(0x30, 0xcc);
+    Code[0] = 0xc3;
+    putCall(Code, Base + 0x10, Base + 0x20);
+    Code[0x15] = 0xc3;
+    // mov eax, 1; ret
+    const uint8_t Leaf[] = {0xb8, 1, 0, 0, 0, 0xc3};
+    std::copy(std::begin(Leaf), std::end(Leaf), Code.begin() + 0x20);
+    auto Image = imageWith(
+        Code,
+        {{Base, "root"}, {Base + 0x10, "wrapper"}, {Base + 0x20, "leaf"}});
+    Image.Format = Format;
+    Image.LoadOnlyFunctionEntries.insert(Base);
+    for (auto &Symbol : Image.Symbols)
+      Symbol.Size = Symbol.Addr == Base ? 1 : 6;
+    const std::set<va_t> Entries{Base, Base + 0x10, Base + 0x20};
+    unsigned Callbacks = 0;
+    const libc::NoReturnTargetIndex Plain(Image);
+    const libc::NoReturnTargetIndex Resolved(
+        Image, [&](va_t) -> std::optional<std::string> {
+          ++Callbacks;
+          return "abort";
+        });
+    const libc::NoReturnTargetIndex Declared(Image, {}, [&](llvm::StringRef) {
+      ++Callbacks;
+      return true;
+    });
+    EXPECT_TRUE(Plain.isImageOnly());
+    EXPECT_FALSE(Resolved.isImageOnly());
+    EXPECT_FALSE(Declared.isImageOnly());
+    const auto Prove = [&](const libc::NoReturnTargetIndex *Names) {
+      CFGBuilder Builder;
+      Builder.setKnownFuncEntries(&Entries);
+      Builder.setNoReturnTargetIndex(Names);
+      return detail::NoReturnProofTestAccess::preserved(Builder, Image, Base,
+                                                        Base + 0x10);
+    };
+    const auto Live = Prove(nullptr);
+    ASSERT_TRUE(Live);
+    EXPECT_EQ(Prove(&Plain), Live);
+    EXPECT_EQ(Prove(&Resolved), Live);
+    EXPECT_EQ(Prove(&Declared), Live);
+    EXPECT_EQ(Callbacks, 0u);
+  }
 }
 
 TEST(InternalNoReturn, TerminationDoesNotDemandUnusedFloatingReturns) {

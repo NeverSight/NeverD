@@ -206,6 +206,7 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
   PointerCallees = collectPointerVariableCallees(Img);
   CodeOwners.reset();
   AbsoluteRelocationRoots.reset();
+  NoReturnTargets.reset();
   RuntimeRoutineCalls.reset();
   CodePointerTargets.reset();
   Callees.clear();
@@ -224,6 +225,12 @@ OmittedCalleeMemo::absoluteRelocationRoots() {
     AbsoluteRelocationRoots =
         std::make_shared<const detail::AbsoluteRelocationRootIndex>(*Image);
   return *AbsoluteRelocationRoots;
+}
+
+const libc::NoReturnTargetIndex &OmittedCalleeMemo::noReturnTargets() {
+  if (!NoReturnTargets)
+    NoReturnTargets = std::make_shared<const libc::NoReturnTargetIndex>(*Image);
+  return *NoReturnTargets;
 }
 
 const std::map<va_t, Intrinsic> &OmittedCalleeMemo::runtimeRoutineCalls() {
@@ -605,6 +612,11 @@ public:
         Builder.setAbsoluteRelocationRootIndex(
             Memo ? &Memo->absoluteRelocationRoots()
                  : &RelocationRoots.emplace(Img));
+        // Reuse the image's exact names across supplemental signature reads.
+        // A reader without a retained image memo keeps the live lookup: a
+        // whole symbol index per short-lived read costs more than it saves.
+        if (Memo)
+          Builder.setNoReturnTargetIndex(&Memo->noReturnTargets());
         OwnersLent = true;
       }
       Low.emplace(Builder.buildCallSignatureProof(
