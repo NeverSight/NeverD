@@ -194,21 +194,25 @@ TEST(CallStackRange, VariadicSaveAreasRequireWholeArgumentWords) {
 }
 
 TEST(CallStackRange, ReturningAnIncomingAddressKeepsItsObservedInputs) {
-  for (const int64_t Offset : {-8, 8, 40}) {
-    SCOPED_TRACE(Offset);
-    auto Function = indexedLoad(0x10);
-    auto &Block = Function.Blocks.front();
-    Block.Ops.resize(2); // Preserve the home spill, without a local load.
-    append(Block, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 8),
-           {SP, NdVar::cst(Offset, 8)});
-    append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
-    const auto Effect = localRegisterEffect(image(), Function);
-    EXPECT_EQ(Effect.UnknownStackReads, Offset >= 8);
-    const auto Solved =
-        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
-    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
-              Offset >= 8 ? 8u : 0u);
-  }
+  for (const auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (const int64_t Offset : {-8, 8, 40}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Format) << ':' << Offset);
+      auto Image = image();
+      Image.Format = Format;
+      auto Function = indexedLoad(0x10);
+      auto &Block = Function.Blocks.front();
+      Block.Ops.resize(2); // Preserve the home spill, without a local load.
+      append(Block, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 8),
+             {SP, NdVar::cst(Offset, 8)});
+      append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+      const auto Effect = localRegisterEffect(Image, Function);
+      EXPECT_EQ(Effect.UnknownStackReads, Offset >= 8);
+      const auto Solved =
+          solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+      EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+                Offset >= 8 || Format != BinaryFormat::COFF ? 8u : 0u);
+    }
 }
 
 TEST(CallStackRange, IgnoredStepsCannotMoveAHomeSpillOntoAnotherRead) {

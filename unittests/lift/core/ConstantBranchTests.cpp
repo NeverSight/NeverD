@@ -654,18 +654,24 @@ TEST(ConstantBranch, ImmutableReadsParticipateInScalarIdentities) {
       }
 }
 
-TEST(ConstantBranch, ReadOnlyMappingsOwnSectionLoadPermissions) {
-  // Section metadata cannot make a read-only mapping writable. The shared
-  // loader proof owns post-relocation permissions, including RELRO.
+TEST(ConstantBranch, ReadOnlyMappingsRespectFormatOwnedSectionPermissions) {
+  // PE sections own their mapping permissions. A contradictory normalized
+  // segment needs an explicit loader guarantee before overriding a write.
   for (auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
     for (auto Format :
-         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
-      auto Image = scalarLoadImage(Architecture, Format);
-      Image.Sections.back().Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
-      EXPECT_TRUE(addresses(build(Image))
-                      .count(Architecture == Arch::AArch64 ? 0x1014 : 0x1011));
-    }
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool LoaderGuarantee : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(Architecture) << ':' << unsigned(Format) << ':'
+                     << LoaderGuarantee);
+        auto Image = scalarLoadImage(Architecture, Format);
+        Image.Sections.back().Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+        Image.Segments.back().ReadOnlyAfterRelocations = LoaderGuarantee;
+        EXPECT_EQ(addresses(build(Image))
+                      .count(Architecture == Arch::AArch64 ? 0x1014 : 0x1011),
+                  Format != BinaryFormat::COFF || LoaderGuarantee);
+      }
 }
 
 TEST(ConstantBranch, UnprovedLoadsDoNotRecoverATarget) {
