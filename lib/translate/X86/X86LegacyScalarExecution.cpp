@@ -9,6 +9,8 @@
 
 #include "X86LegacyScalar.h"
 
+#include "llvm/ADT/APInt.h"
+
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -42,6 +44,10 @@ public:
       if (F.Operation == Op::MoveSigned)
         B = F.SourceBytes == 1 ? int8_t(B) : int16_t(B);
       write(F.Destination, N, B);
+      return;
+    }
+    if (F.division()) {
+      divide(F);
       return;
     }
     if (F.Operation == Op::Push) {
@@ -130,7 +136,7 @@ public:
         (!Value ? 64 : 0) | (Value & Sign ? 128 : 0) | (Overflow ? 0x800 : 0);
     if (F.Operation == Op::Increment || F.Operation == Op::Decrement)
       Flags = (Flags & ~1u) | (S.EFlags & 1);
-    S.EFlags = (S.EFlags & ~0x8d5u) | Flags;
+    S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) | Flags;
   }
 
   llvm::Expected<X86MemoryAccessResult> finish() {
@@ -146,6 +152,44 @@ private:
   X86MemoryAccessResult Result;
   std::optional<llvm::Error> Failure;
   std::optional<X86PagedMemory::PreparedStore> Store;
+
+  void divide(const X86LegacyScalarInstruction &F) {
+    uint32_t Source;
+    if (!read(F.Source, F.Bytes, Source))
+      return;
+    const unsigned Bits = F.Bytes * 8;
+    const uint32_t Mask = UINT32_MAX >> (32 - Bits);
+    const uint64_t Raw =
+        F.Bytes == 1
+            ? uint16_t(S.Core.GPR[0])
+            : (uint64_t(S.Core.GPR[2] & Mask) << Bits) | (S.Core.GPR[0] & Mask);
+    const bool Signed = F.Operation == Op::SignedDivide;
+    const llvm::APInt Dividend(2 * Bits, Raw);
+    const auto Right = Signed ? llvm::APInt(Bits, Source).sext(2 * Bits)
+                              : llvm::APInt(2 * Bits, Source);
+    if (!Source ||
+        (Signed && Dividend.isMinSignedValue() && Right.isAllOnes())) {
+      fault(0);
+      return;
+    }
+    llvm::APInt Quotient(2 * Bits, 0), Remainder(2 * Bits, 0);
+    if (Signed)
+      llvm::APInt::sdivrem(Dividend, Right, Quotient, Remainder);
+    else
+      llvm::APInt::udivrem(Dividend, Right, Quotient, Remainder);
+    if (Signed ? !Quotient.isSignedIntN(Bits)
+               : Quotient.getActiveBits() > Bits) {
+      fault(0);
+      return;
+    }
+    // Both results publish only after the operand and quotient checks. AH/AL
+    // can themselves supply the divisor, so all inputs were captured first.
+    writeRegister(0, F.Bytes, uint32_t(Quotient.getZExtValue()));
+    writeRegister(F.Bytes == 1 ? 4 : 2, F.Bytes,
+                  uint32_t(Remainder.getZExtValue()));
+    S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) |
+               *O.DivisionArithmeticFlags;
+  }
 
   bool fault(uint8_t Vector) {
     Result.Status = X86PageWalkStatus::Exception;

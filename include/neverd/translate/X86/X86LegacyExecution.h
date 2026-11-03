@@ -73,6 +73,8 @@ enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 /// stack advancement preserving high ESP on a word wrap.
 enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
+inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
+
 /// Both choices check stack access before the target limit, retaining page
 /// effects on a later fault. Only StoreBeforeTargetLimit publishes the return
 /// address before that check. Architectural registers restart in either case.
@@ -98,6 +100,9 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyScalarProfile> Scalars;
   std::optional<X86LegacyCallProfile> Calls;
   std::optional<X86LegacyFastSystemProfile> FastSystem;
+  /// Explicit CF/PF/AF/ZF/SF/OF image after successful DIV/IDIV. No other
+  /// bits are permitted. Faults preserve the original arithmetic flags.
+  std::optional<uint32_t> DivisionArithmeticFlags;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -134,9 +139,11 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// segment-transition owner, the explicit ordinary-RAM scalar owner, or
 /// NOP/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. Scalars include
 /// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
-/// PUSH/POP and near CALL/JMP/Jcc/RET. Register immediates retain their unbound
-/// interface; other scalars require Scalars, CALL requires Calls, and logical
-/// flags require an AF choice. The explicit FastSystem profile adds protected
+/// DIV/IDIV, PUSH/POP and near CALL/JMP/Jcc/RET. Register immediates retain
+/// their unbound interface; other scalars require Scalars, CALL requires Calls,
+/// and logical flags require an AF choice. Division requires an explicit
+/// arithmetic-flags image and delivers #DE for zero divisors or an
+/// unrepresentable quotient. The explicit FastSystem profile adds protected
 /// SYSENTER/SYSEXIT with live Sysenter inputs and fixed CS/SS caches. Ignored
 /// prefixes retain 32-bit targets; LOCK delivers #UD after original-byte fetch.
 /// These transfers stop before fetching their destination. On an architectural

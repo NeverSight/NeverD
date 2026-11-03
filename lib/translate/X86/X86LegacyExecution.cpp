@@ -95,6 +95,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     return invalid("legacy fast transfer requires a bound Intel SEP profile");
   if (Scalar && Scalar->logical() && !Options.LogicalAuxiliaryCarry)
     return invalid("legacy logical instruction requires an explicit AF choice");
+  if (Scalar && Scalar->division() &&
+      (!Options.DivisionArithmeticFlags ||
+       (*Options.DivisionArithmeticFlags & ~kX86LegacyArithmeticFlagsMask)))
+    return invalid(
+        "legacy division requires an explicit arithmetic-flags image");
   if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Call &&
       Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
       Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)

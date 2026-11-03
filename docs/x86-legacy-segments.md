@@ -247,6 +247,7 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | AND, OR, XOR, TEST | The same exact operand widths, with an explicit `LogicalAuxiliaryCarry` value for architecturally undefined AF. An absent choice refuses before fetch. |
 | INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
 | PUSH, POP | GPR, memory and PUSH immediate, with independent SS.B stack size. PUSH ESP observes old ESP; POP ESP publishes the popped value after advancement; POP memory uses incremented ESP for its explicit address. |
+| DIV, IDIV | Byte/word/dword register or segmented memory divisors, full double-width dividend, signed truncation toward zero, coupled quotient/remainder, and restartable zero/overflow #DE. |
 | Near CALL, JMP, Jcc, RET | Relative and indirect transfers, all sixteen condition codes, short branches and RET imm16. Taken targets use the operand width and code limit. Untaken conditional branches do not consult the target. |
 
 Register-immediate MOV preserves its earlier interface without the new scalar
@@ -264,6 +265,18 @@ visible if the operand aliases its own PTE. Physical read or write denial
 remains a backing stop, distinct from an architectural exception. Segment
 checks precede paging and the selected alignment priority. Logical undefined
 AF choices become observable only on successful completion.
+
+DIV/IDIV additionally require `DivisionArithmeticFlags`, an explicit EFLAGS
+image containing only CF/PF/AF/ZF/SF/OF (`kX86LegacyArithmeticFlagsMask`).
+These flags are architecturally undefined after successful division; the
+runtime does not infer a host-specific result. Divide-by-zero, quotient
+overflow and operand faults preserve the incoming flag image and dividend in
+the restart state. The operand is a read even on a read-only page; #PF write
+permission is never requested. Segment, alignment and page faults precede #DE.
+AL/AH and AX/DX aliases are captured before either result changes. An original
+handler can change the divisor, IRET and retry without host register repair.
+The native suite requires `NEVERD_TEST_LEGACY_DIVIDE_FLAGS=preserve` to bind
+the separately measured local CPU choice.
 
 CALL additionally requires `X86LegacyExecutionOptions::Calls`. Both profiles
 preflight the stack before checking the target code limit, so a competing stack
@@ -294,6 +307,13 @@ SDKs and both core types, 908 passing checks and two explicit LA57 skips.
 All 1,032 retained exports per SDK agree byte for byte. The record includes
 the exact source patch, binary hashes, build inputs and raw diagnostic hashes;
 it does not certify the remaining instruction or machine-state domains.
+
+The [November 3 division qualification](evidence/x86-legacy-division-2026-11-03.json)
+records 185,856 DIV/IDIV CPU comparisons across both SDKs, paging modes and
+P/E cores. All 428 available checks pass; two LA57 checks remain explicit
+skips. Separate regression counts are 85,120 existing scalar comparisons and
+9,648 fast-system comparisons. The retained source patch, frozen binaries,
+build receipts and raw results identify exactly what was tested.
 
 ## Protected SYSENTER and SYSEXIT
 

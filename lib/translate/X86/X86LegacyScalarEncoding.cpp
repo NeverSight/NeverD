@@ -95,6 +95,9 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
       Immediate(F.Bytes);
     } else if (Group == 2 || Group == 3) {
       F.Operation = Group == 2 ? Op::Complement : Op::Negate;
+    } else if (Group == 6 || Group == 7) {
+      F.Operation = Group == 6 ? Op::Divide : Op::SignedDivide;
+      std::swap(F.Source, F.Destination);
     } else {
       return std::nullopt;
     }

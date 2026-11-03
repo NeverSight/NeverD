@@ -638,6 +638,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
   RecordProperty("event_cpu_comparisons", EventComparisons);
 }
 
+#include "X86LegacyDivisionNativeTests.inc"
 #include "X86LegacyEventNativeTests.inc"
 #include "X86LegacyFastSystemNativeTests.inc"
 #include "X86LegacyReturnNativeTests.inc"

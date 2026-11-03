@@ -39,6 +39,8 @@ enum class X86LegacyScalarOperation {
   Decrement,
   Negate,
   Complement,
+  Divide,
+  SignedDivide,
   Push,
   Pop,
   Call,
@@ -57,6 +59,11 @@ struct X86LegacyScalarInstruction {
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   uint16_t Discard = 0;
   bool Relative = false;
+
+  bool division() const {
+    return Operation == X86LegacyScalarOperation::Divide ||
+           Operation == X86LegacyScalarOperation::SignedDivide;
+  }
 
   bool logical() const {
     return Operation == X86LegacyScalarOperation::Or ||

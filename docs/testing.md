@@ -41,6 +41,15 @@ CR2 and retained ordinary RAM remain checked. Repeat these tests on the
 qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
 See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
 
+`LegacyDivision/*` reuses the original protected scalar CPU fixture for byte,
+word and dword DIV/IDIV. It checks complete dividends, signed quotient bounds,
+all operand registers and byte aliases, explicit undefined flag choices,
+readonly pages, segment/page/alignment faults before #DE, and original
+#PF/#DE handlers followed by IRET/retry. Bind
+`NEVERD_TEST_LEGACY_DIVIDE_FLAGS=preserve` only for the measured CPU profile;
+the runtime instead accepts an explicit successful arithmetic-flags image.
+The shared fixture is owned once in `X86LegacyScalarNativeFixture.inc`.
+
 `LegacyReturns/*` in `NeverDX86PagingTests` compares original protected IRET,
 RETF and RETF imm16 across legacy paging/PAE, all CPLs, 16/32-bit code,
 operands and stack sizes, nonflat/conforming/LDT code, high ESP, wrapping,

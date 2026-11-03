@@ -58,7 +58,11 @@ GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final
-operand through the same plan. Logical AF is an explicit input. CALL's separate
+operand through the same plan. Logical AF is an explicit input. DIV/IDIV read
+one divisor before computing the full AX/DX:AX/EDX:EAX quotient and remainder.
+Zero divisors and unrepresentable quotients become restartable #DE without
+publishing either result. Their six undefined arithmetic flags require an
+explicit successful-completion image; operand faults retain original flags. CALL's separate
 profile checks stack access before the target limit and selects whether its
 data write precedes that check; page effects persist in both choices while
 architectural registers restart from the original instruction. Original scalar handler steps
