@@ -3078,10 +3078,10 @@ dependency closure; absent selected names and provider parse errors prevent
 an import. This owner
 is separate from the runtime priority merge of system and program types; the
 flattened generated headers add no provider merge during decompilation.
-Runtime merging resolves each named by-value dependency once per library for
-a size/alignment comparison. Temporary expressions stay on the stack and
-retain each declaration's kind; `TypeLibrary` still owns size and alignment
-semantics. Comparisons retain no state across records or merges, and prototype
+Runtime merging constructs one local named expression per library for a
+dependency's size/alignment comparison, looking up each declaration's kind
+once. `TypeLibrary` still owns size and alignment semantics. Comparisons retain
+no state across records or merges, and prototype
 checks read the library after rejected definitions have been removed or made
 opaque.
 When the runtime merge knows its Windows kernel provider, the `ntifs.h`
