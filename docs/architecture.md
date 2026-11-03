@@ -2847,6 +2847,10 @@ The C declaration lexer selects punctuation by its first byte, retaining the
 longest supported spelling before parsing declarations or constant expressions.
 Punctuation borrows the same parse input or spelling arena as identifiers;
 published types and diagnostics retain their existing ownership and positions.
+Storage and import annotation keywords use fixed `StringSwitch` cases, so
+ordinary declarators do not walk the full annotation table for each word.
+Matching remains exact and case-sensitive; pointer width annotations retain
+their existing typed handling before the ignored-annotation path.
 
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
 stream. MSVC flattens anonymous members into their parent, so
