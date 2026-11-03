@@ -3676,3 +3676,11 @@ accesses still refuse. See [the segment contract](x86-legacy-segments.md) for
 full-limit execution choices, mask behavior and the separation from descriptor
 loading, legacy dispatch and exception delivery. The global completion and
 LLVM release/pin gates remain open.
+
+The [cached-segment qualification](evidence/x86-legacy-segments-2026-11-02.json)
+records 528 passing tests, two LA57 skips, 12,864 original MOV comparisons and
+2,340 checked i386 objects. Clang ASan/UBSan and NeverC also pass 3,744 separate
+source transport runs plus 504 packed-constant comparisons. The 144 SDK output
+differences are explicitly classified as unused LLVMC result copies; 677 other
+C/header exports are identical. Physical RAO/AVX-512, complete i386 execution
+and the remaining global state environments are not inferred from these counts.

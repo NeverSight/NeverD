@@ -59,3 +59,17 @@ state transitions, task/call gates, real/VM86 modes, software SMM, enclave
 execution/AEX/EPCM, CET/FRED or the remaining partial-progress and device
 contracts. LLVM and NeverC already transport these native instruction controls;
 this change adds no compiler builtin, LLVM release, SDK pin or submodule update.
+
+The [November 2 qualification](evidence/x86-legacy-segments-2026-11-02.json)
+records 528 passing tests and two explicit LA57 skips across the native LLVM
+SDK and pinned r6. The new MOV matrix performs 12,864 comparisons across both
+SDKs and the local P/E core classes. Both source pipelines and the LLVM object
+route check 2,340 i386 objects. Separate Clang ASan/UBSan and NeverC recorders
+complete 3,744 source runs plus 504 NeverC packed-constant comparisons. These
+recorder results qualify operand transport, not physical RAO/AVX-512 behavior.
+
+Each SDK exports 821 C/header files. Of these, 677 are byte-identical; 144
+LLVMC files differ only by r6 retaining an unused result declaration/copy.
+Their native-operation text is identical, and both variants pass independent
+source execution. The evidence retains the input hashes, commands, build
+receipts and exact distinction instead of claiming all exports are identical.
