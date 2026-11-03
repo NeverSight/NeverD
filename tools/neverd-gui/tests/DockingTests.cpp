@@ -754,11 +754,27 @@ private slots:
         window.activateWindow();
       }
       QVERIFY(QTest::qWaitForWindowActive(&window));
+      class ClickTrace final : public QObject {
+        bool eventFilter(QObject *object, QEvent *event) override {
+          if (event->type() == QEvent::MouseButtonPress ||
+              event->type() == QEvent::MouseButtonRelease ||
+              event->type() == QEvent::MouseButtonDblClick) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            qInfo() << "Restore mouse event" << object << event->type()
+                    << mouse->position() << mouse->globalPosition();
+          }
+          return false;
+        }
+      } trace;
+      qApp->installEventFilter(&trace);
       QSignalSpy restoreClicks(restore, &QAbstractButton::clicked);
       qInfo() << "Before restore click" << window.windowState()
               << reopenedApplied.states << reopenedApplied.count
               << window.geometry() << window.normalGeometry()
-              << restore->mapToGlobal(restore->rect().center());
+              << restore->mapToGlobal(restore->rect().center())
+              << QApplication::widgetAt(restore->mapToGlobal(restore->rect().center()))
+              << restore->underMouse() << QApplication::activePopupWidget()
+              << QApplication::activeModalWidget();
       const auto recordRestore = qScopeGuard([&] {
         qInfo() << "After restore click" << restoreClicks.size()
                 << window.windowState() << reopenedApplied.states
