@@ -215,6 +215,14 @@ const TypeLibrary *headerLibrary(HeaderLibrary Library, std::string *Error) {
 
 HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
                              std::optional<HeaderLibrary> Provider) {
+  // An empty destination with the same layout rules receives every definition
+  // unchanged except for its origin. No program override can change a layout
+  // or remove a dependency. Prototype name checks still apply below, including
+  // dependencies missing from the headers themselves.
+  const bool CopiesHeaderLayout = Library.size() == 0 &&
+                                  Library.prototypes().empty() &&
+                                  Library.dataModel() == Headers.dataModel() &&
+                                  Library.recordABI() == Headers.recordABI();
   HeaderMerge Merge;
   std::vector<std::string> Added;
   llvm::StringSet<> Gone;
@@ -279,7 +287,7 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
   // one that holds a type the program sizes or aligns otherwise goes, as does
   // any type that names one gone.  A typedef has no layout of its own: it names
   // the program's type, as C binds it.
-  for (bool Changed = true; Changed;) {
+  for (bool Changed = !CopiesHeaderLayout; Changed;) {
     Changed = false;
     for (const std::string &Name : Added) {
       if (Gone.contains(Name))
@@ -343,8 +351,9 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
       for (const std::string &Name : mentionedTypeNames(Routine))
         Compatible &= Library.find(Name) != nullptr;
       const auto SameLayout = [&](const TypeExprRef &Type) {
-        return !Type || (Library.sizeOf(*Type) == Headers.sizeOf(*Type) &&
-                         Library.alignOf(*Type) == Headers.alignOf(*Type));
+        return CopiesHeaderLayout || !Type ||
+               (Library.sizeOf(*Type) == Headers.sizeOf(*Type) &&
+                Library.alignOf(*Type) == Headers.alignOf(*Type));
       };
       Compatible &= SameLayout(Entry.second->Return);
       for (const Parameter &Param : Entry.second->Params)

@@ -3095,6 +3095,12 @@ once. `TypeLibrary` still owns size and alignment semantics. Comparisons retain
 no state across records or merges, and prototype
 checks read the library after rejected definitions have been removed or made
 opaque.
+When the destination has no types or prototypes and its data model and record
+ABI match the headers, every definition is copied without a layout override.
+That case skips redundant layout comparison and conflict propagation. Prototype
+dependency and ordinary-name checks still run, including dependencies missing
+from the headers themselves. Any existing program name or different layout
+rules retain the ordinary comparison path.
 When the runtime merge knows its Windows kernel provider, the `ntifs.h`
 opaque `PEPROCESS`/`PETHREAD` aliases can use a complete PDB executive record
 whose first member is the corresponding kernel prefix at offset zero. This
