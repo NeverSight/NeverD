@@ -45,6 +45,19 @@ elif mode == "partial-frame":
 elif mode == "result-then-crash":
     write_frame(output, dict(type="result", **identity, result=dict(views=[])))
     raise SystemExit(19)
+elif mode == "deep-result":
+    # A valid envelope whose unchecked function list nests far below the frame
+    # limit; Python's encoder cannot produce it, so the frame is written raw.
+    digest = '"' + "0" * 64 + '"'
+    deep = "[" * 100000 + "]" * 100000
+    body = ('{"protocol":1,"type":"result","task_id":' + json.dumps(request["task_id"])
+            + ',"result":{"views":[],"artifacts":[{"title":"Deep","path":"deep.bin",'
+            + '"sha256":' + digest + '}],"image_addition":{"artifact":0,"sample_sha256":'
+            + digest + ',"description":{"schema":"neverd.analysis-section.v1",'
+            + '"name":"deep","address":"0x1000","permissions":"r","functions":['
+            + deep + ']}}}}').encode()
+    output.write(struct.pack(">I", len(body)) + body)
+    output.flush()
 elif mode == "descendant":
     marker = str(Path(request["output_dir"]) / "descendant-survived.txt")
     program = "import time;from pathlib import Path;time.sleep(1);Path(" + repr(marker) + ").write_text('survived')"

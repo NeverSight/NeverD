@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/DataAccessWidths.h"
+#include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/high/HighIR.h"
@@ -17,6 +18,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -378,8 +380,8 @@ TEST(CImageObjects, AccessesTypeObjectsTheCodeAlsoTakesTheAddressOf) {
     llvm::raw_string_ostream OS(Source);
     ASSERT_TRUE(HighCEmitter().emit(Funcs, OS, Options));
     EXPECT_NE(Source.find("int8_t done"), NotFound) << Source;
-    // An object no access sizes keeps a two-byte stand-in.
-    EXPECT_NE(Source.find("int16_t marker"), NotFound) << Source;
+    // The unsized address keeps its remaining storage; the sized byte
+    // above still has its scalar type.
     const std::string Check = Source + R"(
 int main(void) {
   mark();
@@ -387,6 +389,12 @@ int main(void) {
     return 1;
   if (done_address() != (int64_t)(uintptr_t)&done)
     return 2;
+  if (sizeof marker != 18)
+    return 3;
+  const unsigned char *bytes = (const unsigned char *)(uintptr_t)marker_address();
+  for (unsigned i = 0; i < 18; ++i)
+    if (bytes[i] != (i == 2 ? 0x34 : i == 3 ? 0x12 : 0))
+      return 4;
   return 0;
 }
 )";
@@ -562,6 +570,182 @@ int main(void) {
   }
 }
 
+TEST(CImageObjects, EscapingUnsizedAddressesKeepTheirImageStorage) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    for (bool Named : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << int(Format) << '/' << Named);
+      BinaryImage Img;
+      Img.Arch = Arch::X64;
+      Img.Bits = Bitness::Bits64;
+      Img.Format = Format;
+      std::vector<uint8_t> Data(96, 0xa5);
+      for (unsigned I = 0; I < 64; ++I)
+        Data[I] = I == 0 ? 0x80 : I == 1 ? 0 : (I * 13 + 3) & 255;
+      Img.Segments = {
+          segment(".text", TextVA, std::vector<uint8_t>(16),
+                  SegmentFlags::Readable | SegmentFlags::Executable),
+          segment(".rodata", RodataVA, std::move(Data),
+                  SegmentFlags::Readable)};
+      Img.Symbols = {dataSymbol("next_object", RodataVA + 64, 0)};
+      if (Named)
+        Img.Symbols.push_back(dataSymbol("payload", RodataVA, 0));
+      const TypeRef U64 = NdType::makeInt(8, false);
+      HighFunc Whole = function("whole", U64, TextVA);
+      Whole.Body = {returnStatement(HighExpr::makeConst(
+          RodataVA, 8, ConstantAddressProvenance::DataAddress))};
+      HighFunc Interior = function("interior", U64, TextVA + 4);
+      Interior.Body = {returnStatement(HighExpr::makeConst(
+          RodataVA + 16, 8, ConstantAddressProvenance::DataAddress))};
+      // Production naming is available, but no local load supplies an
+      // extent: only the caller reads these bytes.
+      DataAccessWidths Widths;
+      CEmitterOptions Options;
+      Options.TheArch = Img.Arch;
+      Options.Format = Format;
+      Options.Image = &Img;
+      Options.AccessWidths = &Widths;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(HighCEmitter().emit({Whole, Interior}, OS, Options));
+      OS.flush();
+      EXPECT_NE(Source.find("[64] = {"), NotFound) << Source;
+      EXPECT_EQ(Source.find("[96]"), NotFound) << Source;
+      const std::string Harness = Source + R"(
+int main(void) {
+  const unsigned char *all = (const unsigned char *)(uintptr_t)whole();
+  const unsigned char *part = (const unsigned char *)(uintptr_t)interior();
+  if (part != all + 16)
+    return 1;
+  for (unsigned i = 0; i < 64; ++i) {
+    unsigned char expected = i == 0 ? 0x80 : i == 1 ? 0 : (i * 13 + 3) & 255;
+    if (all[i] != expected || (part - 16)[i] != expected)
+      return 2;
+  }
+  return 0;
+}
+)";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Harness, {Level, "-fsanitize=address,undefined",
+                      "-fno-sanitize-recover=all"});
+    }
+  }
+}
+
+TEST(CImageObjects, SharedAddressUsesKeepStorageInEitherFunctionOrder) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    for (bool Named : {false, true}) {
+      BinaryImage Img;
+      Img.Arch = Arch::X64;
+      Img.Bits = Bitness::Bits64;
+      Img.Format = Format;
+      std::vector<uint8_t> Data(64);
+      for (unsigned I = 0; I < Data.size(); ++I)
+        Data[I] = I == 0 ? 0x80 : I == 1 ? 0 : (I * 13 + 3) & 255;
+      Img.Segments = {
+          segment(".text", TextVA, std::vector<uint8_t>(16),
+                  SegmentFlags::Readable | SegmentFlags::Executable),
+          segment(".data", DataVA, std::move(Data),
+                  SegmentFlags::Readable | SegmentFlags::Writable)};
+      if (Named)
+        Img.Symbols.push_back(dataSymbol("payload", DataVA, 0));
+      // These are two uses of the same node, not separately constructed
+      // constants with the same address. Reading one byte does not bound
+      // what the caller reaches through the returned pointer.
+      const auto Address = HighExpr::makeConst(
+          DataVA, 8, ConstantAddressProvenance::DataAddress);
+      HighFunc Whole = function("whole", NdType::makeInt(8, false), TextVA);
+      Whole.Body = {returnStatement(Address)};
+      HighFunc Read =
+          function("read_byte", NdType::makeInt(1, false), TextVA + 4);
+      Read.Body = {
+          returnStatement(HighExpr::makeLoad(Address, Read.ReturnType))};
+      DataAccessWidths Widths;
+      CEmitterOptions Options;
+      Options.TheArch = Img.Arch;
+      Options.Format = Format;
+      Options.Image = &Img;
+      Options.AccessWidths = &Widths;
+      for (bool ReadFirst : {true, false}) {
+        SCOPED_TRACE(::testing::Message()
+                     << int(Format) << '/' << Named << '/' << ReadFirst);
+        std::string Source;
+        llvm::raw_string_ostream OS(Source);
+        ASSERT_TRUE(
+            HighCEmitter().emit(ReadFirst ? std::vector<HighFunc>{Read, Whole}
+                                          : std::vector<HighFunc>{Whole, Read},
+                                OS, Options));
+        OS.flush();
+        const std::string Harness = Source + R"(
+int main(void) {
+  if (read_byte() != 0x80)
+    return 1;
+  const unsigned char *all = (const unsigned char *)(uintptr_t)whole();
+  for (unsigned i = 0; i < 64; ++i) {
+    unsigned char expected = i == 0 ? 0x80 : i == 1 ? 0 : (i * 13 + 3) & 255;
+    if (all[i] != expected)
+      return 2;
+  }
+  return 0;
+}
+)";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Harness, {Level, "-fsanitize=address,undefined",
+                        "-fno-sanitize-recover=all"});
+      }
+    }
+  }
+}
+
+TEST(CImageObjects, EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    for (bool Named : {false, true}) {
+      BinaryImage Img;
+      Img.Arch = Arch::X64;
+      Img.Bits = Bitness::Bits64;
+      Img.Format = Format;
+      Img.IsRelocatable = Format == BinaryFormat::ELF;
+      std::vector<uint8_t> Data(limits::kMaxSingleGlobalEmbedLen + 1, 0xa5);
+      Data[0] = 0x80;
+      Data[1] = 0;
+      Img.Segments = {
+          segment(".text", TextVA, std::vector<uint8_t>(16),
+                  SegmentFlags::Readable | SegmentFlags::Executable),
+          segment(".data", DataVA, std::move(Data),
+                  SegmentFlags::Readable | SegmentFlags::Writable)};
+      if (Named)
+        Img.Symbols.push_back(dataSymbol("payload", DataVA, 0));
+      HighFunc Whole = function("whole", NdType::makeInt(8, false), TextVA);
+      Whole.Body = {returnStatement(HighExpr::makeConst(
+          DataVA, 8, ConstantAddressProvenance::DataAddress))};
+      DataAccessWidths Widths;
+      for (bool ListingNames : {false, true}) {
+        // Without listing names, only a symbol or ELF relocation admits
+        // materializing an object for an otherwise unused address.
+        if (!ListingNames && !Named && !Img.IsRelocatable)
+          continue;
+        SCOPED_TRACE(::testing::Message()
+                     << int(Format) << '/' << Named << '/' << ListingNames);
+        CEmitterOptions Options;
+        Options.TheArch = Img.Arch;
+        Options.Format = Format;
+        Options.Image = &Img;
+        Options.AccessWidths = ListingNames ? &Widths : nullptr;
+        std::string Source;
+        llvm::raw_string_ostream OS(Source);
+        EXPECT_THROW(HighCEmitter().emit({Whole}, OS, Options),
+                     std::invalid_argument);
+        OS.flush();
+        EXPECT_TRUE(Source.empty()) << Source;
+      }
+    }
+  }
+}
+
 TEST(CImageObjects, ATableWhoseBytesReadAsTextStaysATable) {
   // {10, 20, 0x4241, 40}: the first word reads as the UTF-16 text "\n" and
   // the third as "AB", but no literal holds the table the caller reads.
@@ -701,11 +885,13 @@ BinaryImage dataImage(std::vector<uint8_t> Rodata, std::vector<uint8_t> Data) {
 }
 
 std::string emitWithImage(const std::vector<HighFunc> &Funcs,
-                          const BinaryImage &Img) {
+                          const BinaryImage &Img,
+                          const DataAccessWidths *Widths = nullptr) {
   CEmitterOptions Options;
   Options.TheArch = Img.Arch;
   Options.Format = Img.Format;
   Options.Image = &Img;
+  Options.AccessWidths = Widths;
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   EXPECT_TRUE(HighCEmitter().emit(Funcs, OS, Options));
@@ -903,10 +1089,14 @@ TEST(CImageObjects, DirectBoundedTablesKeepTheirExtent) {
       cursorArithmetic(NdOp::INT_MULT, cursorTemp(0),
                        HighExpr::makeConst(8, 8)));
   F.Body.push_back(returnStatement(HighExpr::makeLoad(Address, U64)));
-  const std::string Source = emitWithImage({F}, Img);
-  EXPECT_NE(Source.find("[32] = {"), NotFound) << Source;
-  EXPECT_EQ(Source.find("[56]"), NotFound) << Source;
-  source_call_execution_test::compileAndRun(Source + R"(
+  DataAccessWidths Widths;
+  for (bool ListingNames : {false, true}) {
+    SCOPED_TRACE(ListingNames);
+    const std::string Source =
+        emitWithImage({F}, Img, ListingNames ? &Widths : nullptr);
+    EXPECT_NE(Source.find("[32] = {"), NotFound) << Source;
+    EXPECT_EQ(Source.find("[56]"), NotFound) << Source;
+    source_call_execution_test::compileAndRun(Source + R"(
 int main(void) {
   for (uint64_t i = 0; i < 16; ++i)
     if (lookup(i) != 9 + (i & 3) * 13)
@@ -914,6 +1104,7 @@ int main(void) {
   return 0;
 }
 )");
+  }
 }
 
 TEST(CImageObjects, AnAtomicOnBytesTakesItsTypedPointer) {

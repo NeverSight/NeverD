@@ -575,11 +575,11 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
 
 MainWindow::~MainWindow() {
   plugins_->jobs().stopAll();
-  // The plugin panel's context reads this window's views. View teardown
-  // releases queries, whose session notifications must not reach a view that
-  // is being destroyed through it either.
+  // The session's plugin services read this window's views for the plugin
+  // context and outlive them. View teardown releases queries, whose session
+  // notifications refresh that context: it must not reach a view being
+  // destroyed.
   plugins_->setSelectionProvider({});
-  disconnect(&session_, nullptr, plugins_, nullptr);
   qApp->removeEventFilter(this);
   // The startup greeting has no widget parent: it is the application's only
   // visible window until a start is chosen.

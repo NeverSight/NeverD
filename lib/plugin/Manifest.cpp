@@ -24,6 +24,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <system_error>
 
 namespace neverd::plugin {
 using namespace limits;
@@ -130,24 +131,35 @@ std::filesystem::path programPath(const std::filesystem::path &Manifest,
   auto Path = fs::u8path(Program);
   if (Path.is_absolute())
     return Path;
+#ifdef _WIN32
+  // CreateProcess needs the image's extension, including for a bundled one.
+  if (!Path.has_extension())
+    Path += ".exe";
+  // The narrow environment uses the ANSI code page, not UTF-8.
+  const auto *Search = _wgetenv(L"PATH");
+  using Text = std::wstring;
+  constexpr wchar_t Separator = L';';
+#else
+  const auto *Search = std::getenv("PATH");
+  using Text = std::string;
+  constexpr char Separator = ':';
+#endif
   const auto Local = Manifest.parent_path() / Path;
   if (fs::is_regular_file(Local))
     return Local;
-  const auto *Search = std::getenv("PATH");
   if (!Search)
     return {};
-  std::istringstream Stream(Search);
-  std::string Directory;
-#ifdef _WIN32
-  constexpr char Separator = ';';
-  if (!Path.has_extension())
-    Path += ".exe";
-#else
-  constexpr char Separator = ':';
-#endif
+  std::basic_istringstream<Text::value_type> Stream(Search);
+  Text Directory;
   while (std::getline(Stream, Directory, Separator)) {
+#ifdef _WIN32
+    auto Candidate = fs::path(Directory) / Path;
+#else
     auto Candidate = fs::u8path(Directory) / Path;
-    if (fs::is_regular_file(Candidate))
+#endif
+    // An unusable search entry does not hide later ones.
+    std::error_code EC;
+    if (fs::is_regular_file(Candidate, EC))
       return fs::absolute(Candidate);
   }
   return {};
@@ -165,6 +177,30 @@ bool validIdentifier(std::string_view Value) {
   return std::regex_match(Value.begin(), Value.end(), Pattern);
 }
 
+Json parseJson(std::string_view Text) {
+  // nlohmann parses and destroys deep values iteratively, but copies them
+  // recursively; refuse the nesting before any consumer copies a value.
+  int Depth = 0;
+  bool Quoted = false, Escaped = false;
+  for (const char C : Text) {
+    if (Quoted) {
+      if (Escaped)
+        Escaped = false;
+      else if (C == '\\')
+        Escaped = true;
+      else if (C == '"')
+        Quoted = false;
+    } else if (C == '"')
+      Quoted = true;
+    else if (C == '[' || C == '{') {
+      if (++Depth > kMaxJsonDepth)
+        return Json(Json::value_t::discarded);
+    } else if ((C == ']' || C == '}') && Depth)
+      --Depth;
+  }
+  return Json::parse(Text.begin(), Text.end(), nullptr, false);
+}
+
 std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
                                      std::string &Error) {
   const auto Fail = [&](std::string Message) -> std::optional<Manifest> {
@@ -179,7 +215,7 @@ std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
   std::string Bytes(static_cast<size_t>(Size), '\0');
   if (!File.read(Bytes.data(), Bytes.size()))
     return Fail("Cannot read plugin manifest");
-  const auto Root = Json::parse(Bytes, nullptr, false);
+  const auto Root = parseJson(Bytes);
   if (Root.is_discarded() ||
       !fields(Root, {"schema", "id", "name", "version", "program", "arguments",
                      "actions", "queries", "icon", "services", "events"}) ||
@@ -199,7 +235,8 @@ std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
     M.Program = programPath(M.Path, Root["program"]);
     if (!std::filesystem::is_regular_file(M.Program))
       return Fail("Plugin program is unavailable");
-  } catch (const std::filesystem::filesystem_error &E) {
+  } catch (const std::system_error &E) {
+    // Includes filesystem_error and Windows path conversion failures.
     return Fail(E.what());
   }
   if (!get(Root, "arguments").is_array() ||

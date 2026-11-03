@@ -268,10 +268,9 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
                 item && item->data(0, TaskRole).toString() == task)
               log_->appendPlainText(text);
           });
-  connect(&session_, &Session::stateChanged, this,
-          &AnalysisPlugins::refreshContext);
-  connect(&session_, &Session::selectionChanged, this,
-          &AnalysisPlugins::refreshContext);
+  // PluginServices refreshes the context on session changes.
+  connect(&services_, &PluginServices::contextChanged, this,
+          &AnalysisPlugins::updateActions);
   connect(&services_, &PluginServices::message, this,
           &AnalysisPlugins::message);
   connect(&services_, &PluginServices::navigateRequested, this,
@@ -312,20 +311,11 @@ void AnalysisPlugins::restorePlugins() { services_.restorePlugins(); }
 
 void AnalysisPlugins::setSelectionProvider(
     std::function<QJsonObject()> provider) {
-  selection_ = std::move(provider);
-  refreshContext();
+  services_.setSelectionProvider(std::move(provider));
 }
-void AnalysisPlugins::refreshContext() {
-  auto context = selection_ ? selection_() : session_.selection();
-  context.insert("loaded", session_.loaded());
-  context.insert("epoch", QString::number(session_.epoch()));
-  context.insert("project_id", session_.queries().projectId());
-  context.insert("revision", session_.revision());
-  context.insert("input_path", session_.filePath());
-  context.insert("project_path", session_.projectPath());
-  context.insert("architecture", session_.architecture());
-  context.insert("format", session_.format());
-  jobs_.setContext(context);
+void AnalysisPlugins::refreshContext() { services_.refreshContext(); }
+void AnalysisPlugins::updateActions() {
+  const auto context = jobs_.context();
   for (auto *action : registered_) {
     const auto required = action->property("pluginContext").toString();
     action->setEnabled(
@@ -616,10 +606,29 @@ void AnalysisPlugins::invoke(const QString &plugin, const QJsonObject &action) {
                       QLatin1Char('/');
   QJsonObject preferences;
   for (const auto &value : fields) {
-    const auto id = value.toObject().value("id").toString();
-    if (settings.contains(prefix + id))
-      preferences.insert(id,
-                         QJsonValue::fromVariant(settings.value(prefix + id)));
+    const auto field = value.toObject();
+    const auto id = field.value("id").toString();
+    if (!settings.contains(prefix + id))
+      continue;
+    // INI files and the registry return remembered booleans and integers as
+    // text after a restart; decode them by the declared type.
+    const auto stored = settings.value(prefix + id);
+    const auto type = field.value("type").toString();
+    const auto text = stored.toString();
+    QJsonValue remembered = text;
+    bool decoded = true;
+    if (type == QLatin1String("boolean")) {
+      decoded = text == QLatin1String("true") || text == QLatin1String("false");
+      remembered = text == QLatin1String("true");
+    } else if (type == QLatin1String("integer"))
+      remembered = stored.toLongLong(&decoded);
+    // The dialog shows the default instead of a remembered value that the
+    // current declaration rejects.
+    QString rejected;
+    if (decoded && resolvePluginParameters(QJsonArray{field},
+                                           QJsonObject{{id, remembered}}, {},
+                                           {}, rejected))
+      preferences.insert(id, remembered);
   }
   QString configurationError;
   const auto effective =

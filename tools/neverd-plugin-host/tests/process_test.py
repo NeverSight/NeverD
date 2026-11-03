@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HOST = Path(sys.argv[1]).resolve()
@@ -106,7 +107,8 @@ raise SystemExit(run(handler))
         self.assertTrue((self.root / "provider.py").exists())
 
     def test_partial_protocol_and_crash_do_not_succeed(self):
-        for mode in ("partial-frame", "result-then-crash", "bad-hash", "escaping-artifact"):
+        for mode in ("partial-frame", "result-then-crash", "bad-hash", "escaping-artifact",
+                     "deep-result"):
             with self.subTest(mode=mode):
                 fixture = SDK.parent.parent / "unittests/plugin/process_provider.py"
                 self.declaration["arguments"] = [str(fixture), mode]
@@ -163,9 +165,54 @@ raise SystemExit(run(handler))
 """)
         output = self.root / "tree"
         self.invoke("--output", str(output))
-        import time
         time.sleep(1.2)
         self.assertFalse((output / "survived").exists())
+
+    @unittest.skipIf(os.name == "nt", "a Windows job contains every descendant")
+    def test_descendant_outside_the_process_group_cannot_hold_the_task(self):
+        self.script("""from neverd_gui_plugin import run
+from pathlib import Path
+import subprocess, sys
+def handler(task):
+    # A new session leaves the provider's process group but keeps its stdout.
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+    Path('escaped.pid').write_text(str(child.pid), encoding='utf-8')
+    return dict(views=[])
+raise SystemExit(run(handler))
+""")
+        def reap():
+            try:
+                os.kill(int((self.root / "escaped.pid").read_text(encoding="utf-8")), 9)
+            except (OSError, ValueError):
+                pass
+        self.addCleanup(reap)
+        started = time.monotonic()
+        report, _ = self.invoke(code=1)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(report["state"], "failed")
+        self.assertIn("kept its pipes open", report["diagnostic"])
+
+    @unittest.skipIf(os.name == "nt", "Windows passes an explicit handle list")
+    def test_provider_inherits_only_protocol_pipes(self):
+        read, write = os.pipe()
+        # A high number that the provider's interpreter does not open itself.
+        inherited = os.dup2(write, 200)
+        for descriptor in (read, write, inherited):
+            self.addCleanup(os.close, descriptor)
+        self.script("""from neverd_gui_plugin import run
+import os
+def handler(task):
+    try: os.fstat(200)
+    except OSError: text = 'closed'
+    else: text = 'inherited'
+    return dict(views=[dict(kind='text', title='Descriptor', text=text)])
+raise SystemExit(run(handler))
+""")
+        result = subprocess.run([str(HOST), "run", str(self.manifest), "run"], cwd=self.root,
+                                capture_output=True, timeout=12, pass_fds=(inherited,))
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(json.loads(result.stdout)["result"]["views"][0]["text"], "closed")
 
     def test_headless_action_context_is_explained(self):
         self.declaration["actions"][0]["context"] = "function"
@@ -225,6 +272,40 @@ raise SystemExit(run(handler))
         self.assertFalse(data["context"]["loaded"])
         self.assertEqual(data["notification"]["event"]["id"], "task.changed")
         self.assertEqual(data["services"]["missing"][0]["id"], "analysis.metadata")
+
+    def test_unicode_artifact_names(self):
+        # Windows cannot represent these in every ANSI code page.
+        self.script("""from neverd_gui_plugin import run
+def handler(task):
+    (task.output_dir / '报告 é.json').write_text('{}', encoding='utf-8')
+    return dict(views=[], artifacts=[task.artifact('报告 é.json', 'Report')])
+raise SystemExit(run(handler))
+""")
+        report, _ = self.invoke()
+        self.assertEqual(report["state"], "succeeded")
+
+    def test_bare_program_found_after_a_non_ascii_search_entry(self):
+        # A Windows ANSI environment encodes this entry as invalid UTF-8.
+        (self.root / "café").mkdir()
+        # Windows also exercises the implied .exe extension.
+        program = Path(sys.executable)
+        self.declaration["program"] = program.stem if os.name == "nt" else program.name
+        self.manifest.write_text(json.dumps(self.declaration), encoding="utf-8")
+        search = os.pathsep.join([str(self.root / "café"), str(program.parent)])
+        result = subprocess.run([str(HOST), "run", str(self.manifest), "run"], cwd=self.root,
+                                capture_output=True, timeout=12,
+                                env=dict(os.environ, PATH=search))
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(json.loads(result.stdout)["state"], "succeeded")
+
+    @unittest.skipIf(os.name == "nt", "Windows arguments are always Unicode")
+    def test_error_record_survives_non_utf8_arguments(self):
+        result = subprocess.run([bytes(HOST), b"run", bytes(self.manifest), b"\xff"],
+                                cwd=self.root, capture_output=True, timeout=12)
+        self.assertEqual(result.returncode, 2, result.stderr.decode("utf-8", errors="replace"))
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "error")
+        self.assertIn("�", report["message"])
 
 
 if __name__ == "__main__":

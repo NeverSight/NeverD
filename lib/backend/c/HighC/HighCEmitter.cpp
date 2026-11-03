@@ -3082,19 +3082,27 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
                        const HighExpr *Address = nullptr) {
     const auto Object = indexedObjectAt(Addr);
     if (!Object)
-      return;
+      return false;
     if (Address && Access && Addr - Object->first < Object->second &&
         !SymbolBounds(Addr, *Object))
       if (const auto Reach =
               ProvenReach(*Address, Addr, Access->Size, ReadingStmt);
           Reach && *Reach <= Object->second - (Addr - Object->first)) {
         BoundedAccesses.push_back({Addr, *Object, *Reach, Access, Written});
-        return;
+        return true;
       }
     WholeStretches.insert(Object->first);
     noteImageObject(Object->first, Access, Written, Access != nullptr);
     ImageObject &Obj = ImageObjects[Object->first];
     Obj.IndexedBytes = std::max(Obj.IndexedBytes, Object->second);
+    return true;
+  };
+  // An escaping address needs backing for every byte its object owns. A
+  // missing or over-limit extent cannot fall back to a guessed scalar.
+  const auto NoteEscapingStorage = [&](va_t Addr) {
+    if (!NoteWhole(Addr, nullptr, false))
+      throw std::invalid_argument(
+          "escaped image address has no materializable storage extent");
   };
   // A cursor can keep its image base outside the expression that reads it:
   // `p = &table; while (...) { use(*p); p += stride; }`. Follow storage
@@ -3544,13 +3552,13 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       });
     });
   }
-  // The constant addresses the code reads or writes at, as opposed to those
-  // it uses as values.
-  std::set<const HighExpr *> AccessAddresses;
-  auto NoteAccessAddress = [&](const HighExpr *Address) {
-    if (const HighExpr *Inner = unwrapIntegerView(Address);
-        Inner && Inner->Kind == ExprKind::Const)
-      AccessAddresses.insert(Inner);
+  // Record the operand slot, not its shared expression: the same constant
+  // can address a load and also escape as a returned or stored value.
+  std::set<const ExprPtr *> AccessOperands;
+  std::vector<const HighExpr *> ImageConstants;
+  std::set<const HighExpr *> SeenImageConstants;
+  auto NoteAccessAddress = [&](const ExprPtr &Address) {
+    AccessOperands.insert(&Address);
     // An access the image's headers hold prints through `__ImageBase`, and
     // one in another module's storage through its symbol's declaration.
     if (Address)
@@ -3579,7 +3587,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         Call.Operands.size() < 2 || !Call.Operands[0] || !Call.Operands[1] ||
         Call.Operands[1]->Kind != ExprKind::Const)
       return;
-    NoteAccessAddress(Call.Operands[0].get());
+    NoteAccessAddress(Call.Operands[0]);
     const uint64_t Bytes = Call.Operands[1]->ConstVal;
     if (auto VA = constAddress(*Call.Operands[0]);
         VA && Bytes > 1 && Bytes <= UINT16_MAX)
@@ -3589,11 +3597,11 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   std::optional<AArch64ImmediateHighBases> ImageMemoryBases;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
     const auto NoteImmediateStorage = [&](const auto &Instruction,
-                                          const HighExpr &Base) {
+                                          const ExprPtr &Base) {
       const auto *Constant =
           Instruction.hasRegisterIndex()
               ? nullptr
-              : ImageMemoryBases->imageConstant(Base, ReadingStmt);
+              : ImageMemoryBases->imageConstant(*Base, ReadingStmt);
       if (Constant) {
         const auto Span = aarch64ImmediateMemoryImageSpan(
             *Opts.Image, Instruction, Constant->ConstVal,
@@ -3605,7 +3613,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
               Span->Bytes > Object->second - (Span->Begin - Object->first))
             throw std::invalid_argument(
                 kAddressMemoryImmediateImageUnsupported);
-          NoteAccessAddress(&Base);
+          NoteAccessAddress(Base);
           NoteWhole(Span->Begin, nullptr, !Instruction.isLoad());
           ImageObjects[Object->first].AddressTaken = true;
         }
@@ -3617,12 +3625,12 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         NoteImmediateStorage(
             *aarch64AddressMemoryInstruction(
                 E.Operands[kAddressMemoryWordOperand]->ConstVal),
-            *E.Operands[kAddressMemoryBaseOperand]);
+            E.Operands[kAddressMemoryBaseOperand]);
       if (isAArch64WritebackMemoryIntrinsic(E.IntrinsicId) &&
           aarch64WritebackMemoryHighShapeIsValid(E))
         NoteImmediateStorage(*aarch64WritebackMemoryInstruction(
                                  E.Operands[kWritebackWordOperand]->ConstVal),
-                             *E.Operands[kWritebackBaseOperand]);
+                             E.Operands[kWritebackBaseOperand]);
     }
     if (OriginalMemoryBases.count({Reading, &E})) {
       for (size_t I = 0; I < E.Operands.size(); ++I)
@@ -3646,64 +3654,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
           NoteWhole(*Owner, nullptr, false);
         return;
       }
-    // An address into an object, not at its start, that the code keeps as a
-    // value is a pointer it walks over the object (`p = &sig[2]; p++`).
-    if (E.Kind == ExprKind::Const && !AccessAddresses.count(&E) &&
-        (E.ConstProvenance == ConstantAddressProvenance::Address ||
-         E.ConstProvenance == ConstantAddressProvenance::DataAddress))
-      if (const auto Object = sizedObjectAt(E.ConstVal);
-          Object && Object->first != E.ConstVal)
-        NoteWhole(E.ConstVal, nullptr, false);
-    if (E.Kind == ExprKind::Const && isImageDataAddress(E.ConstVal) &&
-        !stringLiteral(E.ConstVal)) {
-      bool Named = Opts.UserNames && Opts.UserNames->count(E.ConstVal);
-      if (!Named && Dbg) {
-        if (auto Data = Dbg->resolveDataObject(E.ConstVal);
-            Data && !Data->Name.empty() && !isStringLiteralName(Data->Name))
-          Named = true;
-      }
-      if (!Named && Opts.Image) {
-        if (const Symbol *Sym = Opts.Image->findSymbolAt(E.ConstVal);
-            Sym && !Sym->IsFunc && !Sym->Name.empty() &&
-            llvm::StringRef(Sym->Name).find(kAutoFuncPrefix) != 0)
-          Named = true;
-      }
-      // Empty/non-ASCII rdata stays a named object (`&pwstr`), not a hex
-      // immediate. Printable C/wchar literals still fold at the call site.
-      if (Named) {
-        noteImageAddress(E.ConstVal);
-        if (!AccessAddresses.count(&E))
-          ImageObjects[E.ConstVal].AddressTaken = true;
-      } else if (!AccessAddresses.count(&E) && Opts.Image &&
-                 Opts.Image->isELF() && Opts.Image->IsRelocatable &&
-                 (E.ConstProvenance == ConstantAddressProvenance::Address ||
-                  E.ConstProvenance ==
-                      ConstantAddressProvenance::DataAddress)) {
-        // An unnamed object whose start the code keeps as a value, at an
-        // address its relocation proves, is declared whole: the initializer
-        // of a local table that -O0 code copies with memcpy.  Only the
-        // sections of an ELF object hold one translation unit's data.  The
-        // unnamed bytes around such an address in a linked image are a whole
-        // section of other objects, and a Mach-O object's metadata sections
-        // point at symbols the output does not define.
-        NoteWhole(E.ConstVal, nullptr, false);
-      } else if (!AccessAddresses.count(&E) &&
-                 (E.ConstProvenance == ConstantAddressProvenance::Address ||
-                  E.ConstProvenance ==
-                      ConstantAddressProvenance::DataAddress) &&
-                 Opts.dataAccessWidths()) {
-        // Unnamed data whose address the code proves and keeps as a value
-        // takes the name the listing gives it (`&qword_140C4EE80`), not a
-        // number, when the emitter knows how the listing names data.  An
-        // address inside a sized object reaches that object, declared whole
-        // above.
-        const auto Object = sizedObjectAt(E.ConstVal);
-        if (!Object || Object->first == E.ConstVal) {
-          noteImageAddress(E.ConstVal);
-          ImageObjects[E.ConstVal].AddressTaken = true;
-        }
-      }
-    }
+    if (E.Kind == ExprKind::Const && SeenImageConstants.insert(&E).second)
+      ImageConstants.push_back(&E);
     // A data import read names the import's slot; the read-only pointer it
     // may be read through (MinGW's `.refptr`) is no object of the program's.
     if (E.Kind == ExprKind::Load &&
@@ -3733,7 +3685,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Load &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         !E.Operands.empty() && E.Operands[0]) {
-      NoteAccessAddress(E.Operands[0].get());
+      NoteAccessAddress(E.Operands[0]);
       if (auto VA = constAddress(*E.Operands[0])) {
         const uint16_t Size = E.Type ? E.Type->Size : 0;
         if (!foldReadonlyScalar(*VA, Size))
@@ -3758,7 +3710,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Store &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         E.Operands.size() >= 2 && E.Operands[0]) {
-      NoteAccessAddress(E.Operands[0].get());
+      NoteAccessAddress(E.Operands[0]);
       if (auto VA = constAddress(*E.Operands[0]))
         noteImageObject(*VA, E.Operands[1] ? E.Operands[1]->Type : nullptr,
                         true, true);
@@ -3777,7 +3729,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (const unsigned Bytes = x86FPStateMemoryBytes(
               E.IntrinsicId, E.Type->Size,
               static_cast<unsigned>(E.Operands[1]->ConstVal))) {
-        NoteAccessAddress(E.Operands[0].get());
+        NoteAccessAddress(E.Operands[0]);
         if (auto VA = constAddress(*E.Operands[0]))
           noteImageObject(*VA, NdType::makeInt(Bytes, false), false, true);
         // Through a base the code adds (i386 PIC code adds the GOT register
@@ -3823,7 +3775,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
           const bool Written = !Copy || I == 1;
           const auto ElementType =
               NdType::makeInt(Control->ElementBytes, false);
-          NoteAccessAddress(E.Operands[I].get());
+          NoteAccessAddress(E.Operands[I]);
           noteImageObject(Span->Begin, ElementType, Written, true);
           noteImageObject(*Address, ElementType, Written, true);
           ImageObject &Object = ImageObjects[Span->Begin];
@@ -3838,7 +3790,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
          E.Op == NdOp::ATOMIC_CMPXCHG) &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         !E.Operands.empty() && E.Operands[0]) {
-      NoteAccessAddress(E.Operands[0].get());
+      NoteAccessAddress(E.Operands[0]);
       if (auto VA = constAddress(*E.Operands[0]))
         noteImageObject(*VA, E.Type, true, true);
       NoteAtomic(*E.Operands[0], E.Type);
@@ -3910,7 +3862,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (S.Kind == StmtKind::Store &&
           S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           S.StoreAddr) {
-        NoteAccessAddress(S.StoreAddr.get());
+        NoteAccessAddress(S.StoreAddr);
         if (auto VA = constAddress(*S.StoreAddr))
           noteImageObject(*VA, S.StoreVal ? S.StoreVal->Type : nullptr, true,
                           true);
@@ -3930,78 +3882,156 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   Reading = nullptr;
   ReadingStmt = nullptr;
   ReadDefinitions();
+  // Classify each use after the memory owners have recorded their operand
+  // slots. A shared node may have both kinds of use; bounded tables and
+  // escaping image addresses consume this same classification.
+  std::vector<va_t> Values;
+  std::set<const HighExpr *> ValueExpressions, SeenAddresses, SeenValues;
+  const HighFunc *ValueFunction = nullptr;
+  std::function<void(const HighExpr &, bool)> NoteValues =
+      [&](const HighExpr &E, bool Addressing) {
+        auto &Seen = Addressing ? SeenAddresses : SeenValues;
+        if (!Seen.insert(&E).second)
+          return;
+        if (OriginalMemoryBases.count({ValueFunction, &E})) {
+          for (size_t I = 0; I < E.Operands.size(); ++I)
+            if (I != kAddressMemoryBaseOperand && E.Operands[I])
+              NoteValues(*E.Operands[I], false);
+          return;
+        }
+        if (E.Kind == ExprKind::Const) {
+          if (!Addressing) {
+            Values.push_back(E.ConstVal);
+            ValueExpressions.insert(&E);
+          }
+          return;
+        }
+        const auto Each = [&](bool Addresses) {
+          E.forEachChildExpr([&](const ExprPtr &Child) {
+            if (Child)
+              NoteValues(*Child, Addresses || AccessOperands.count(&Child));
+          });
+        };
+        // What a load or store reads or writes at, as the sum of a base
+        // and offsets in any view, is an address it uses, not a value; the
+        // address of an element it would read is a value.
+        switch (E.Kind) {
+        case ExprKind::Addr:
+          if (!E.Operands.empty() && E.Operands[0] &&
+              E.Operands[0]->Kind == ExprKind::Load &&
+              !E.Operands[0]->Operands.empty() && E.Operands[0]->Operands[0]) {
+            NoteValues(*E.Operands[0]->Operands[0], false);
+            return;
+          }
+          Each(false);
+          return;
+        case ExprKind::BinOp:
+          Each(Addressing && E.Op == NdOp::INT_ADD);
+          return;
+        case ExprKind::Cast:
+        case ExprKind::BitCast:
+          Each(Addressing);
+          return;
+        case ExprKind::UnaryOp:
+          Each(Addressing &&
+               (E.Op == NdOp::INT_ZEXT || E.Op == NdOp::INT_SEXT));
+          return;
+        default:
+          Each(false);
+          return;
+        }
+      };
+  for (const HighFunc &Func : Funcs) {
+    ValueFunction = &Func;
+    SeenAddresses.clear();
+    SeenValues.clear();
+    const TypeRef DeclaredReturn = declaredFunctionReturnType(Func);
+    const bool BareReturns = DeclaredReturn
+                                 ? DeclaredReturn->Kind == NdTypeKind::Void
+                                 : analyzeVoidReturn(Func);
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      if (BareReturns && S.Kind == StmtKind::Return && S.RetVal &&
+          !highCExpressionHasEffect(*S.RetVal))
+        return;
+      forEachExpr(S, [&](const ExprPtr &E) {
+        if (E)
+          NoteValues(*E, AccessOperands.count(&E));
+      });
+    });
+  }
+  for (const HighExpr *Constant : ImageConstants) {
+    const HighExpr &E = *Constant;
+    // An address into an object, not at its start, that the code keeps as a
+    // value is a pointer it walks over the object (`p = &sig[2]; p++`).
+    if (ValueExpressions.count(&E) &&
+        (E.ConstProvenance == ConstantAddressProvenance::Address ||
+         E.ConstProvenance == ConstantAddressProvenance::DataAddress))
+      if (const auto Object = sizedObjectAt(E.ConstVal);
+          Object && Object->first != E.ConstVal)
+        NoteWhole(E.ConstVal, nullptr, false);
+    if (isImageDataAddress(E.ConstVal) && !stringLiteral(E.ConstVal)) {
+      bool Named = Opts.UserNames && Opts.UserNames->count(E.ConstVal);
+      if (!Named && Dbg) {
+        if (auto Data = Dbg->resolveDataObject(E.ConstVal);
+            Data && !Data->Name.empty() && !isStringLiteralName(Data->Name))
+          Named = true;
+      }
+      if (!Named && Opts.Image) {
+        if (const Symbol *Sym = Opts.Image->findSymbolAt(E.ConstVal);
+            Sym && !Sym->IsFunc && !Sym->Name.empty() &&
+            llvm::StringRef(Sym->Name).find(kAutoFuncPrefix) != 0)
+          Named = true;
+      }
+      // Empty/non-ASCII rdata stays a named object (`&pwstr`), not a hex
+      // immediate. Printable C/wchar literals still fold at the call site.
+      if (Named) {
+        noteImageAddress(E.ConstVal);
+        if (ValueExpressions.count(&E)) {
+          ImageObjects[E.ConstVal].AddressTaken = true;
+          if ((E.ConstProvenance == ConstantAddressProvenance::Address ||
+               E.ConstProvenance == ConstantAddressProvenance::DataAddress) &&
+              !sizedObjectAt(E.ConstVal))
+            NoteEscapingStorage(E.ConstVal);
+        }
+      } else if (ValueExpressions.count(&E) && Opts.Image &&
+                 Opts.Image->isELF() && Opts.Image->IsRelocatable &&
+                 (E.ConstProvenance == ConstantAddressProvenance::Address ||
+                  E.ConstProvenance ==
+                      ConstantAddressProvenance::DataAddress)) {
+        // An unnamed object whose start the code keeps as a value, at an
+        // address its relocation proves, is declared whole: the initializer
+        // of a local table that -O0 code copies with memcpy. Without listing
+        // names, only ELF object sections supply this implicit materialization;
+        // linked images and Mach-O metadata retain their existing admission.
+        NoteEscapingStorage(E.ConstVal);
+      } else if (ValueExpressions.count(&E) &&
+                 (E.ConstProvenance == ConstantAddressProvenance::Address ||
+                  E.ConstProvenance ==
+                      ConstantAddressProvenance::DataAddress) &&
+                 Opts.dataAccessWidths()) {
+        // Unnamed data whose address the code proves and keeps as a value
+        // takes the name the listing gives it (`&qword_140C4EE80`), not a
+        // number, when the emitter knows how the listing names data.  An
+        // address inside a sized object reaches that object, declared whole
+        // above.
+        const auto Object = sizedObjectAt(E.ConstVal);
+        if (!Object || Object->first == E.ConstVal) {
+          noteImageAddress(E.ConstVal);
+          ImageObjects[E.ConstVal].AddressTaken = true;
+          // A caller may read past the scalar width observed here. Keep the
+          // storage bounded by the same symbols and section as an indexed
+          // access, including bytes before an interior address.
+          if (!Object)
+            NoteEscapingStorage(E.ConstVal);
+        }
+      }
+    }
+  }
   // A stretch the code reaches whole is declared whole, and so is one that
   // holds an address the code keeps as a value: through it the code may
-  // reach any byte of the stretch.  Otherwise the bounded accesses declare
+  // reach any byte of the stretch. Otherwise the bounded accesses declare
   // the bytes they reach of each table.
   if (!BoundedAccesses.empty()) {
-    std::vector<va_t> Values;
-    std::function<void(const HighExpr &, bool)> NoteValues =
-        [&](const HighExpr &E, bool Addressing) {
-          if (E.Kind == ExprKind::Const) {
-            if (!Addressing)
-              Values.push_back(E.ConstVal);
-            return;
-          }
-          const auto Each = [&](bool Addresses) {
-            E.forEachChildExpr([&](const ExprPtr &Child) {
-              if (Child)
-                NoteValues(*Child, Addresses);
-            });
-          };
-          // What a load or store reads or writes at, as the sum of a base
-          // and offsets in any view, is an address it uses, not a value; the
-          // address of an element it would read is a value.
-          switch (E.Kind) {
-          case ExprKind::Load:
-          case ExprKind::Store:
-            for (size_t I = 0; I < E.Operands.size(); ++I)
-              if (E.Operands[I])
-                NoteValues(*E.Operands[I], I == 0);
-            return;
-          case ExprKind::Addr:
-            if (!E.Operands.empty() && E.Operands[0] &&
-                E.Operands[0]->Kind == ExprKind::Load &&
-                !E.Operands[0]->Operands.empty() &&
-                E.Operands[0]->Operands[0]) {
-              NoteValues(*E.Operands[0]->Operands[0], false);
-              return;
-            }
-            Each(false);
-            return;
-          case ExprKind::BinOp:
-            Each(Addressing && E.Op == NdOp::INT_ADD);
-            return;
-          case ExprKind::Cast:
-          case ExprKind::BitCast:
-            Each(Addressing);
-            return;
-          case ExprKind::UnaryOp:
-            Each(Addressing &&
-                 (E.Op == NdOp::INT_ZEXT || E.Op == NdOp::INT_SEXT));
-            return;
-          // An alignment guard takes the address of the access it guards.
-          case ExprKind::Call:
-            if (E.IntrinsicId == Intrinsic::RequireAligned) {
-              for (size_t I = 0; I < E.Operands.size(); ++I)
-                if (E.Operands[I])
-                  NoteValues(*E.Operands[I], I == 0);
-              return;
-            }
-            Each(false);
-            return;
-          default:
-            Each(false);
-            return;
-          }
-        };
-    for (const HighFunc &Func : Funcs)
-      walkStmts(Func.Body, [&](const HighStmt &S) {
-        forEachExpr(S, [&](const ExprPtr &E) {
-          if (E)
-            NoteValues(*E, S.Kind == StmtKind::Store && &E == &S.StoreAddr);
-        });
-      });
     llvm::sort(Values);
     for (const BoundedAccess &Bounded : BoundedAccesses) {
       const auto [Begin, Bytes] = Bounded.Stretch;

@@ -11,10 +11,12 @@
 
 #include "neverd/plugin/Artifacts.h"
 #include "neverd/plugin/Config.h"
+#include "neverd/plugin/Manifest.h"
 #include "neverd/plugin/PluginCatalog.h"
 
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 
 using namespace neverd::plugin;
@@ -46,7 +48,8 @@ int runPluginCatalog(int Argc, char **Argv) {
     if (std::filesystem::file_size(Path) > limits::kMaxManifestBytes)
       throw std::runtime_error("Installation catalog exceeds 64 KiB");
     std::ifstream Input(Path, std::ios::binary);
-    const auto Document = Json::parse(Input, nullptr, false);
+    const std::string Bytes{std::istreambuf_iterator<char>(Input), {}};
+    const auto Document = parseJson(Bytes);
     auto Parsed = readInstallationRecords(Document, Error);
     if (!Parsed)
       throw std::runtime_error(Error.Message);
