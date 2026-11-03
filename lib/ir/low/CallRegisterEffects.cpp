@@ -668,8 +668,13 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
       auto Key = stackKeyOf(V);
       if (!Key)
         return;
-      if (!wholeWord(V))
-        Value = {};
+      if (!wholeWord(V)) {
+        // A byte or word register write leaves the rest of a stack address
+        // intact. Its new offset is unknown, not unrelated to the stack.
+        // The lifter emits a separate whole-register ZEXT for 32-bit writes.
+        Value =
+            V.isReg() && S.count(*Key) ? StackValue::unknown() : StackValue{};
+      }
       // The stack pointer always addresses the stack.
       if (*Key == SP && Value.K == StackValue::Unrelated)
         Value = StackValue::unknown();
@@ -707,9 +712,19 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         return std::nullopt;
       };
       const bool DirectTarget = Op.NumInputs > 0 && Op.Inputs[0].isConst();
+      // Reuse the register-read proof: a whole absorbing write has no old
+      // address dependence. Set still retains untouched bytes of a partial
+      // destination, so clearing AL cannot erase RAX's surviving high bits.
+      if (isLowSelfXor(Op) || lowAbsorbingConstant(Op)) {
+        Set(Op.Output, {});
+        continue;
+      }
       switch (Op.Opcode) {
       case NdOp::COPY:
         Set(Op.Output, In(0));
+        continue;
+      case NdOp::SELECT:
+        Set(Op.Output, joinStack(In(1), In(2)));
         continue;
       case NdOp::INT_ADD: {
         const StackValue A = In(0), B = In(1);
@@ -798,14 +813,20 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         }
         if (FPRead)
           ReadRange(In(1), *FPRead);
-        // Arithmetic on a stack address (a flag, an alignment mask) yields
-        // no address; an operation that may dereference a pointer into the
-        // incoming slots is a read this summary cannot bound.
+        // An operation that may dereference a pointer into the incoming
+        // slots is a read this summary cannot bound. Whole-word arithmetic
+        // can still yield an address (masking alignment bits, for example);
+        // preserve its dependence even when its offset is no longer affine.
         if (Op.Opcode == NdOp::INTRINSIC)
           for (unsigned K = 0; K < Op.NumInputs; ++K)
             if (!(FPRead && K == 1))
               Unknown |= Escapes(In(K));
-        Set(Op.Output, {});
+        StackValue Result;
+        if (wholeWord(Op.Output))
+          for (unsigned K = 0; K < Op.NumInputs; ++K)
+            if (In(K).K != StackValue::Unrelated)
+              Result = StackValue::unknown();
+        Set(Op.Output, Result);
         continue;
       }
       }

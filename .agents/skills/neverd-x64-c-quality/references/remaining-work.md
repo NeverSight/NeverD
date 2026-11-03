@@ -1,5 +1,20 @@
 # Remaining x64 C-quality work
 
+The public PE32 `xcpt4-msvc-x86-native-no-gs-o0.exe` filter regression now
+checks the current display contract: signed local and constant filter values
+remain visible even when native registration closure is deferred. An explicit
+strict run of entry `0x401580` still exhausts the registration-state proof
+budget and then refuses an unproved CALL return-slot observation. This is an
+open native-reconstruction/performance gap, not a passing native C result.
+
+The incoming-stack summary now preserves address dependence through partial
+register writes, whole-word transforms and SELECT alternatives. HighC also
+retains the source storage and initializer when an indirect access reconstructs
+or conditionally selects that address. Public original-instruction comparisons
+cover both C routes, default/NoOpt and O0/O2 with UBSan. This fixes observed
+argument elision and uninitialized C reads; it does not recover unknown VM
+entry registers or authenticate a dynamic return owner.
+
 Borrowed-frame read proofs now retain exact full-width incoming-pointer null
 tests and AND/OR-self transport. The shared flag owner marks its generated
 comparison zeroes as scalar, so actual x64 TEST/JZ guards work through both C

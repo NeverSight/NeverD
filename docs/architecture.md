@@ -9003,6 +9003,20 @@ complete argument words, even though an unused private spill may be narrower.
 Before final compaction, each LowIR operation owns exactly one register-summary
 step, including ignored identities, stack probes and vector upper-lane clears.
 Home-spill refinement therefore cannot erase a different operation's reads.
+Partial register writes retain a possible stack address in the untouched bytes.
+Whole-word arithmetic retains an unknown offset when it transforms an address;
+SELECT joins both address alternatives. A later full definition, including the
+lifter's explicit zero-extension after a 32-bit write, replaces the old fact.
+Whole absorbing writes reuse the register-read proof; a partial absorbing
+write still leaves the untouched address bytes observable.
+These facts feed the existing load, return and escape observers; losing an
+affine offset does not prove the value independent of incoming storage.
+
+HighC's frame collection and printed-use walk also distinguish a direct named
+access from the address values inside an unrecognized access expression.
+Byte extraction/reassembly and a conditional address can still observe the
+stored parameter. Their component frame addresses retain backing storage and
+initializers even when the whole load has no single named displacement.
 
 A complete scalar register summary also publishes an empty vector bank.
 Win64 does so only when no tracked vector family is read; a positional float
