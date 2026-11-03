@@ -3647,3 +3647,15 @@ LLVM/NeverC native interfaces remain available; the software device path emits
 ordinary imported calls. This does not complete legacy i386 segmentation,
 physical device timing/read-ahead, or the other remaining system-state domains.
 See the [port contract](x86-paged-execution.md#explicit-port-devices).
+
+The [qualification record](evidence/x86-paged-port-io-2026-11-02.json) records
+779 passing tests and three explicit skips across the native LLVM SDK and r6.
+Both SDKs produce the same 704 C/header/manifest artifacts. The port matrix
+contains 154,496 KVM comparisons, including 75,840 fault states and 9,728 input
+effects retained on a fault. These are intercepted device-emulation results,
+not physical port qualification. The 4,096 omitted-#AC cases and 384 incorrect
+SS-override fault classifications are asserted separately and excluded from
+equivalence counts. Original CPU MOV probes and Intel's ignored-prefix rule
+support retaining #GP for noncanonical OUTS despite KVM reporting #SS.
+The report preserves the earlier counterexamples and superseded runs instead
+of treating their passing results as proof of the corrected implementation.
