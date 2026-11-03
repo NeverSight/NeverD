@@ -333,6 +333,13 @@ public:
   void writeFunction(const HighFunc &Func);
   void writeAnalysisOnlyFunction(const HighFunc &Func);
   void writeFunctionProjection(const HighFunc &Func);
+  /// What C shows \p Func returning: nothing, or the type its declaration
+  /// gives, else its recovered return type.
+  struct PrintedReturn {
+    bool Void = false;
+    TypeRef Type;
+  };
+  PrintedReturn printedReturn(const HighFunc &Func) const;
   void runAnalysisPasses(const HighFunc &Func);
   void writeExceptionAnnotation(const HighFunc &Func);
   void writeSEHScopeAnnotation(const HighFunc &Func, int Indent = 0);
