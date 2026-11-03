@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace neverd::plugin {
@@ -102,11 +104,11 @@ void Protocol::receive(std::string_view Bytes) {
     }
     if (Input.size() < size_t(Size) + 4)
       return;
-    auto Value = Json::parse(Input.begin() + 4, Input.begin() + Size + 4,
-                             nullptr, false);
+    auto Value = parseJson(std::string_view(Input).substr(4, Size));
     Input.erase(0, Size + 4);
     if (Value.is_discarded() || !Value.is_object()) {
-      fail("Malformed plugin JSON");
+      fail("Malformed plugin JSON or nesting deeper than " +
+           std::to_string(kMaxJsonDepth) + " levels");
       return;
     }
     message(Value);

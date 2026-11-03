@@ -1139,6 +1139,51 @@ raise SystemExit(run(handler))
     if (!screenshot.isEmpty())
       QVERIFY(window.grab().save(screenshot));
   }
+  void rememberedParametersSurviveTextSettings() {
+    QTemporaryDir directory;
+    Session session(QStringLiteral(TEST_WORKER));
+    ActionRegistry registry;
+    AnalysisPlugins pane(session, registry);
+    QString error;
+    QVERIFY2(pane.jobs().install(prepare(directory.filePath("plugin")), error),
+             qPrintable(error));
+    // INI files and the registry return remembered values as text after a
+    // restart, unlike the typed values this process wrote.
+    const QString prefix("guiPlugins/workbench-explorer/background/");
+    QSettings settings;
+    settings.setValue(prefix + "steps", QStringLiteral("2"));
+    settings.setValue(prefix + "write_report", QStringLiteral("false"));
+    settings.setValue(prefix + "letter_case", QStringLiteral("upper"));
+    // Above the declared maximum: the dialog offers the default instead.
+    settings.setValue(prefix + "delay_ms", QStringLiteral("5000"));
+    auto *action = pane.findChild<QAction *>(
+        QStringLiteral("plugin.workbench-explorer:background"));
+    QVERIFY(action);
+    QTRY_VERIFY(action->isEnabled());
+    bool restored = false;
+    QTimer::singleShot(0, this, [&] {
+      auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+      if (!dialog)
+        return;
+      auto *steps = dialog->findChild<QSpinBox *>(
+          QStringLiteral("pluginParameter.steps"));
+      auto *delay = dialog->findChild<QSpinBox *>(
+          QStringLiteral("pluginParameter.delay_ms"));
+      auto *letters = dialog->findChild<QComboBox *>(
+          QStringLiteral("pluginParameter.letter_case"));
+      auto *report = dialog->findChild<QCheckBox *>(
+          QStringLiteral("pluginParameter.write_report"));
+      restored = steps && steps->value() == 2 && delay &&
+                 delay->value() == 100 && letters &&
+                 letters->currentText() == QLatin1String("upper") && report &&
+                 !report->isChecked();
+      dialog->reject();
+    });
+    action->trigger();
+    for (const auto *key : {"steps", "write_report", "letter_case", "delay_ms"})
+      settings.remove(prefix + key);
+    QVERIFY(restored);
+  }
   void guiMenusQueriesViewsAndUnload() {
     QTemporaryDir directory;
     const auto realInput = qEnvironmentVariable("NEVERD_PLUGIN_REAL_INPUT");
@@ -1248,6 +1293,27 @@ raise SystemExit(run(handler))
     pane->jobs().uninstall("workbench-explorer");
     QCOMPARE(window.actions().allActions().size(), actionCount - 4);
     QVERIFY(pane->contextActions().isEmpty());
+  }
+
+  void sessionChangesPublishOneContext() {
+    Session session(QStringLiteral(TEST_WORKER));
+    ActionRegistry registry;
+    AnalysisPlugins pane(session, registry);
+    auto focused = context();
+    focused.insert("selection_text", QStringLiteral("focused view"));
+    pane.setSelectionProvider([&] { return focused; });
+    // Every context published for a session change comes from the focused
+    // view; a second publisher would alternate it and its host events.
+    QList<QJsonObject> published;
+    connect(&pane.jobs(), &PluginJobs::jobsChanged, this,
+            [&] { published.append(pane.jobs().context()); });
+    emit session.stateChanged();
+    emit session.selectionChanged(QJsonObject{{"address", "0x10"}});
+    emit session.revisionChanged();
+    QVERIFY(!published.isEmpty());
+    for (const auto &value : published)
+      QCOMPARE(value.value("selection_text").toString(),
+               QStringLiteral("focused view"));
   }
 
   void contextMenuGroupsOverridesAndPersistence() {

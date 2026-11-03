@@ -65,6 +65,7 @@ signals:
 private:
   void restorePlugins();
   void refreshContext();
+  void updateActions();
   void rebuildActions();
   void configureMenus();
   void applyPresentation();
@@ -88,7 +89,6 @@ private:
   QHash<QString, QStringList> taskLogs_;
   QProgressBar *progress_;
   QList<QAction *> registered_;
-  std::function<QJsonObject()> selection_;
   QString displayed_;
 };
 } // namespace neverd::gui

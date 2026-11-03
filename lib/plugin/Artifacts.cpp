@@ -52,7 +52,10 @@ bool verifyArtifacts(const std::filesystem::path &Directory, const Json &Result,
   for (const auto &Artifact : Result["artifacts"]) {
     const auto Name = Artifact["path"].get<std::string>();
     const auto Relative = fs::u8path(Name);
-    auto Base = Relative.filename().string();
+    // Not string(): on Windows that converts through the ANSI code page and
+    // throws for names it cannot represent.
+    const auto Name8 = Relative.filename().u8string();
+    std::string Base(Name8.begin(), Name8.end());
     std::transform(Base.begin(), Base.end(), Base.begin(),
                    [](unsigned char C) { return char(std::tolower(C)); });
     if (Relative.is_absolute() || Name.find(':') != std::string::npos ||

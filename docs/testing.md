@@ -5565,6 +5565,10 @@ fresh native decoding, preserves renamed source, and checks changed function
 addresses, extents and inventories. It also covers edits, policy/signature
 changes, feature changes between selections, failed loads and same-address
 image replacement. Width changes discard source using the preceding data names.
+`DataAccessWidthsWaitForAnImageDataConsumer` checks that scalar-only C and
+optimized/unoptimized LLVMC views leave the inventory unread while publishing
+recovered functions. Later data views and reverse navigation match sessions
+that eagerly scanned; the HighC data view must obtain the complete qword width.
 `DataAccessWidthsRespectChangedUnsizedBoundaries` adds and removes entries across
 fallthrough and nonadjacent direct-jump boundaries, with shared and conflicting
 widths, both sized and unsized inventories, and size publication/retraction. Its
@@ -19752,7 +19756,7 @@ in both directions and repeat the check after filling the same image storage.
 The independently calculated result observes every copied byte. The generated
 code executes on x64 hosts; other hosts explicitly skip this execution check.
 
-`NeverDCalleeSourceCLI` checks independently encoded x64 PE and ELF call chains through the production CLI: address/name selection, transitive definitions, exclusion of unrelated functions, ordinary single-function output, exact/exceeded depth limits, cycles, and refused roots/callees. Failed closure preserves existing output. The complete three-function C unit compiles and returns the independent expected result at O0/O2; recursive controls are only inspected.
+`NeverDCalleeSourceCLI` checks independently encoded x64 PE and ELF call chains through the production CLI: address/name selection, transitive definitions, exclusion of unrelated functions, ordinary single-function output, exact/exceeded depth limits, cycles, and refused roots/callees. Failed closure preserves existing output. The complete three-function C unit compiles and returns the independent expected result at O0/O2; recursive controls are only inspected. It also covers a directly called leaf with no unwind metadata or symbol, separated by NOP padding, and numeric selection of that leaf after completed function discovery.
 
 The repeated-image regression also covers unrelated function-pointer relocations in the data owner, image destinations, address-like integer fill patterns, completed source-register displacement, and subsequent reads through both completed source and destination registers. `ConstantAddressFactsExcludeUnprovedAndNonAddressResults` checks the x86/x64 fact boundary; dynamic inputs, segmented/reduced-width addressing, malformed interfaces and non-address outputs cannot acquire completion facts. `ZeroCountAndOffsetFormsKeepTheirNumericInputs` checks input preservation; only its native-width zero-count cases execute on the host. Complete-span tests reject truncated mappings and overflowing counts. Native-intrinsic-specific checks remain explicit skips when the installed LLVM lacks those intrinsics.
 
@@ -19772,6 +19776,15 @@ The repeated-image regression also covers unrelated function-pointer relocations
 ## Image storage reached through advancing cursors
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` executes forward/backward cursor loops, intermediate copies, same-width casts and read/write or store-only paths for COFF/ELF/Mach-O at O0/O2 with ASan/UBSan. `CursorStorageNeedsAnAddressPreservingMemoryPath` rejects scalar constants, loaded pointers, narrowing conversions and arithmetic without a memory consumer; `DirectBoundedTablesKeepTheirExtent` retains the bounded direct-index path. Build `NeverDLiftTests`, then run `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.
+
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` executes caller
+reads through named and unnamed base/interior addresses for COFF/ELF/Mach-O at
+O0/O2 with ASan/UBSan. No local load supplies an extent. All original bytes and
+pointer aliases survive, and the next unsized symbol bounds the storage.
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` executes a shared address node used by a local byte load and a returning function in both function orders, with the same format, naming, optimization and sanitizer matrix.
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` rejects an unsized escaped object beyond the shared embedding limit, across COFF, ELF and Mach-O, named and unnamed objects, listing names and ELF relocation admission. Refusal leaves the output empty.
 
 Synthetic LLVM C stack slots retain the complete 128-bit integer store before a runtime selection reads either 64-bit half. `LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` covers addition and alignment-based OR addressing at O0/O2 with ASan/UBSan and the documented `-fno-strict-aliasing` contract. Run `NeverDLLVMCValueTests`; related frame, vector and display-record suites check the surrounding storage paths.
 

@@ -251,8 +251,14 @@ void PluginServices::recordReceipt(const QString &Task, const QString &State,
                  2);
 }
 
+void PluginServices::setSelectionProvider(
+    std::function<QJsonObject()> Provider) {
+  Selection = std::move(Provider);
+  refreshContext();
+}
+
 void PluginServices::refreshContext() {
-  auto Context = Project.selection();
+  auto Context = Selection ? Selection() : Project.selection();
   Context.insert("loaded", Project.loaded());
   Context.insert("epoch", QString::number(Project.epoch()));
   Context.insert("project_id", Project.queries().projectId());
@@ -262,6 +268,7 @@ void PluginServices::refreshContext() {
   Context.insert("architecture", Project.architecture());
   Context.insert("format", Project.format());
   Jobs.setContext(Context);
+  emit contextChanged();
 }
 
 void PluginServices::pruneQueries() {
