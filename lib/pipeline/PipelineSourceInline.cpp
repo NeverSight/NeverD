@@ -86,7 +86,9 @@ bool sameSourceCarriers(const llvm::Function &Before,
 /// This is a candidate filter, never an unused-native-parameter proof. A
 /// pointer can still observe the physical slot. Only expanding the validated
 /// body below lets the source optimizer discard an unused formal operand.
-std::set<unsigned> absentStackFormals(const MedFunc &Function) {
+std::set<unsigned>
+absentStackFormals(const MedFunc &Function,
+                   const std::set<unsigned> *Requested = nullptr) {
   if (Function.CC != CallingConv::Win64 || Function.SkippedSSA ||
       Function.SourceParametersBound || Function.IsVariadic ||
       Function.AnalystStackFrame ||
@@ -102,8 +104,18 @@ std::set<unsigned> absentStackFormals(const MedFunc &Function) {
       getTargetRegInfo(Arch::X64).integerArgumentLayout(BinaryFormat::COFF);
   std::set<unsigned> Candidates;
   for (unsigned P = Layout.Registers.size(); P < Function.Params.size(); ++P)
-    Candidates.insert(P);
-  size_t Remaining = limits::pipeline::kSourceInlineBodyOperations;
+    if (!Requested || Requested->count(P))
+      Candidates.insert(P);
+  // These implicit entry stores consume the formal even when no MedOp names
+  // it. This source expansion does not prove their physical bytes unread.
+  for (const auto &[Parameter, Offset] : Function.MutableStackParamHomes)
+    if (Parameter >= 0)
+      Candidates.erase(unsigned(Parameter));
+  if (Candidates.empty())
+    return {};
+  // This scan includes raw register/flag SSA and PHI operands. The smaller
+  // body bound applies to the emitted observable graph, before expansion.
+  size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
   const auto Observe = [&](const MedVar &Value) {
     if (Value.Kind == MedVar::Param && Value.Id >= 0)
       Candidates.erase(unsigned(Value.Id));
@@ -117,6 +129,8 @@ std::set<unsigned> absentStackFormals(const MedFunc &Function) {
       Remaining -= Phi.Args.size() + 1;
       for (const auto &[Pred, Value] : Phi.Args)
         Observe(Value);
+      if (Candidates.empty())
+        return {};
     }
     for (const auto &Op : Block.Ops) {
       if (!Remaining)
@@ -124,6 +138,8 @@ std::set<unsigned> absentStackFormals(const MedFunc &Function) {
       --Remaining;
       for (unsigned I = 0; I < Op.NumInputs; ++I)
         Observe(Op.Inputs[I]);
+      if (Candidates.empty())
+        return {};
     }
   }
   for (const auto &Call : Function.CallInfos) {
@@ -132,6 +148,8 @@ std::set<unsigned> absentStackFormals(const MedFunc &Function) {
     Remaining -= Call.Args.size();
     for (const auto &Arg : Call.Args)
       Observe(Arg);
+    if (Candidates.empty())
+      return {};
   }
   return Candidates;
 }
@@ -201,7 +219,7 @@ std::set<va_t> sourceInlineSupports(const PipelineResult &Original,
     if (At == Requests.end() || Roots.count(Body->Entry) ||
         !Original.OmittedCallees->SourceOriginalBlocks.count(Body->Entry))
       continue;
-    const auto Absent = absentStackFormals(*Body);
+    const auto Absent = absentStackFormals(*Body, &At->second);
     for (unsigned P : At->second)
       if (Absent.count(P)) {
         Supports.insert(Body->Entry);
@@ -295,8 +313,8 @@ SourceInlineResult specializeUnavailableSourceCalls(
   Pipeline::promoteScaffoldingAllocas(*Result.Module);
 
   size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
-  std::map<const llvm::Function *, size_t> Sizes;
-  for (const auto &Function : *Result.Module) {
+  std::map<const llvm::Function *, source_inline::BodyObservations> Bodies;
+  for (auto &Function : *Result.Module) {
     const auto Entry = address(Function);
     if (!Entry)
       continue;
@@ -305,12 +323,9 @@ SourceInlineResult specializeUnavailableSourceCalls(
           !sameSourceCarriers(*Root->second, Function))
         return {};
     } else if (Supports.count(*Entry)) {
-      size_t Size = 0;
-      for (const auto &Block : Function)
-        Size += Block.size();
-      if (!Function.isDeclaration() &&
-          Size <= limits::pipeline::kSourceInlineBodyOperations)
-        Sizes.emplace(&Function, Size);
+      if (!Function.isDeclaration())
+        if (const auto Body = source_inline::compactSourceBody(Function))
+          Bodies.emplace(&Function, *Body);
     }
   }
   unsigned Expanded = 0;
@@ -327,12 +342,13 @@ SourceInlineResult specializeUnavailableSourceCalls(
       auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
       auto *Callee = Call ? Call->getCalledFunction() : nullptr;
       if (!Callee || Callee->isDeclaration() || Call->hasOperandBundles() ||
-          Call->isMustTailCall() || !Sizes.count(Callee) ||
+          Call->isMustTailCall() || !Bodies.count(Callee) ||
           Callee->arg_size() != Call->arg_size())
         continue;
       Calls.push_back(Call);
     }
     bool DependenciesReady = true;
+    bool Changed = false;
     for (auto *Call : Calls) {
       auto *Callee = Call->getCalledFunction();
       // A missing argument can be discarded only after every nested input
@@ -351,7 +367,7 @@ SourceInlineResult specializeUnavailableSourceCalls(
         }
       if (!Unused)
         continue;
-      const size_t Size = Sizes.at(Callee);
+      const size_t Size = Bodies.at(Callee).Instructions;
       if (Size > limits::pipeline::kSourceInlineBodyOperations ||
           Size > Remaining)
         continue;
@@ -365,6 +381,7 @@ SourceInlineResult specializeUnavailableSourceCalls(
       const auto Target = address(*Callee);
       llvm::InlineFunctionInfo Info;
       if (llvm::InlineFunction(*Call, Info).isSuccess()) {
+        Changed = true;
         if (const auto Entry = address(Function); Entry && Roots.count(*Entry))
           ++Expanded;
         if (Target) {
@@ -377,16 +394,16 @@ SourceInlineResult specializeUnavailableSourceCalls(
     Active.erase(&Function);
     // Only support bodies need this admission proof. A root's remaining
     // unknown inputs stay in its source; no caller consumes its Ready flag.
-    if (!Sizes.count(&Function))
+    const auto Known = Bodies.find(&Function);
+    if (Known == Bodies.end())
       return true;
-    size_t Size = 0;
-    for (const auto &Block : Function)
-      Size += Block.size();
-    const bool Ready = DependenciesReady &&
-                       Size <= limits::pipeline::kSourceInlineBodyOperations &&
-                       !source_inline::hasUnavailableObservations(Function);
-    if (Ready && Sizes.count(&Function))
-      Sizes[&Function] = Size;
+    // A leaf's immutable observation graph was already checked above. Only
+    // expanding one of its calls invalidates that request-local result.
+    const auto Body = Changed ? source_inline::compactSourceBody(Function)
+                              : std::optional(Known->second);
+    const bool Ready = DependenciesReady && Body && !Body->Unavailable;
+    if (Ready)
+      Known->second = *Body;
     Prepared.emplace(&Function, Ready);
     return Ready;
   };

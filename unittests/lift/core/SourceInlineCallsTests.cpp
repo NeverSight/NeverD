@@ -20,10 +20,12 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -627,5 +629,90 @@ TEST(SourceInlineCalls, DeadUnknownPhisNeedNoInputButReadersDo) {
   Builder.CreateLoad(Builder.getInt8Ty(),
                      Builder.CreateIntToPtr(Phi, Builder.getPtrTy()));
   EXPECT_TRUE(source_inline::hasUnavailableObservations(*Function));
+}
+TEST(SourceInlineCalls, LargeCandidateScaffoldingStillNeedsTheActualBody) {
+  for (unsigned Mode : {0u, 3u, 5u}) {
+    SCOPED_TRACE(Mode);
+    auto Image = fixture(Mode);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = Options.SourceProjection = true;
+    Options.OnlyFunctionEntries = {Image.Entry};
+    auto Original = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Original.Success) << Original.Error;
+    ASSERT_TRUE(Original.LlvmModule);
+    const auto Before = source(*Original.LlvmModule);
+    ASSERT_NE(Before.find("__builtin_trap"), std::string::npos);
+
+    // Deliberately incomplete candidate information cannot authorize dropping
+    // a native input. Only recovering the original bytes below can do that.
+    auto Omitted =
+        std::make_shared<OmittedCalleeBodies>(*Original.OmittedCallees);
+    for (auto &Body : Omitted->Bodies)
+      if (Body->Entry == 0x1080) {
+        auto Candidate = std::make_shared<MedFunc>(*Body);
+        ASSERT_EQ(Candidate->Blocks.size(), 1u);
+        auto &Ops = Candidate->Blocks.front().Ops;
+        const auto Return = Ops.back();
+        Ops.clear();
+        for (size_t I = 0; I <= limits::pipeline::kSourceInlineBodyOperations;
+             ++I) {
+          MedOp Copy;
+          Copy.Opcode = NdOp::COPY;
+          Copy.NumInputs = 1;
+          Copy.Inputs[0] = MedVar::makeConst(0, 8);
+          Copy.Output.Kind = MedVar::Temp;
+          Copy.Output.Id = static_cast<int>(I);
+          Copy.Output.Size = 8;
+          Ops.push_back(Copy);
+        }
+        Ops.push_back(Return);
+        if (Mode == 5)
+          Candidate->MutableStackParamHomes = {{4, 40}, {5, 48}};
+        Body = std::move(Candidate);
+      }
+    Original.OmittedCallees = std::move(Omitted);
+
+    PipelineOptions HighOptions;
+    HighOptions.EmitDumpOutput = false;
+    HighOptions.OnlyFunctionEntries = {Image.Entry};
+    auto HighOriginal = Pipeline().run(Image, Context, HighOptions);
+    ASSERT_TRUE(HighOriginal.Success) << HighOriginal.Error;
+    SourceInlineHighView High{
+        HighOriginal.HighFuncs, HighOriginal.HighSources, {}};
+    EXPECT_EQ(hasUnavailableSourceStackCall(High.Functions, &Original),
+              Mode != 5);
+    auto Specialized = specializeUnavailableSourceCalls(
+        Image, Original, *Original.LlvmModule, nullptr, {}, {}, &High);
+    EXPECT_EQ(source(*Original.LlvmModule), Before);
+    if (Mode != 0) {
+      EXPECT_FALSE(Specialized.Module);
+      continue;
+    }
+    ASSERT_TRUE(Specialized.Module);
+    ASSERT_TRUE(Specialized.High);
+    EXPECT_EQ(source(*Specialized.Module).find("__builtin_trap"),
+              std::string::npos);
+    EXPECT_EQ(source(*Specialized.High, Image).find("__builtin_trap"),
+              std::string::npos);
+    EXPECT_FALSE(llvm::verifyModule(*Specialized.Module, &llvm::errs()));
+    if (const char *Directory =
+            std::getenv("NEVERD_TEST_SOURCE_INLINE_EXPORT")) {
+      const std::string Prefix = std::string(Directory) + "/";
+      ASSERT_FALSE(llvm::sys::fs::create_directories(Directory));
+      std::error_code Error;
+      llvm::raw_fd_ostream HighOut(Prefix + "high.c", Error);
+      ASSERT_FALSE(Error);
+      HighOut << source(*Specialized.High, Image);
+      llvm::raw_fd_ostream LLVMOut(Prefix + "llvm.c", Error);
+      ASSERT_FALSE(Error);
+      LLVMOut << source(*Specialized.Module);
+      llvm::raw_fd_ostream Native(Prefix + "synthetic.bin", Error);
+      ASSERT_FALSE(Error);
+      const auto &Code = Image.Segments.front().Data;
+      Native.write(reinterpret_cast<const char *>(Code.data()), Code.size());
+    }
+  }
 }
 } // namespace

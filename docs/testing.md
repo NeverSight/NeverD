@@ -18652,7 +18652,18 @@ effects. `SessionLLVMTest.DllEntryPrototypeRequiresARealPEEntry` checks absent
 and present DLL entries across x86, x64 and ARM64 image models, plus executable
 and native-subsystem controls.
 A direct LLVM dependency test distinguishes dead unknown PHIs from value returns
-and memory readers. `SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
+and memory readers. `SourceCallObservations.*` additionally checks bounded
+removal of dead register/flag calculations and unused PHI cycles before helper
+size admission. Unused loads, stores, ordinary calls, control decisions and
+observed unknown values remain; exhausting the scan or live-body budget leaves
+the function unchanged. Source handles follow deletion without losing retained
+memory observations. `LargeCandidateScaffoldingStillNeedsTheActualBody` supplies
+oversized, incomplete candidate information and verifies that only recovery of
+the original bytes can authorize expansion. Native slot readers and implicit
+mutable-parameter entry stores remain refused. These cases inspect IR and C
+without executing the fixture. Setting `NEVERD_TEST_SOURCE_INLINE_EXPORT`
+exports its synthetic bytes and both C routes for separate instruction stepping.
+`SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
 checks the optimized original-image view, repeat queries, native LLVM and the
 unoptimized view against the same session without changing the native callee's
 seven parameter positions. These are source and ABI tests, not full execution
