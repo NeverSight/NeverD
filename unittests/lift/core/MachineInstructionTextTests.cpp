@@ -117,6 +117,12 @@ TEST(MachineInstructionText, FFRTransfersKeepTheirEffectsAndRejectBadOperands) {
        {Intrinsic::A64_Wrffr, Intrinsic::A64_Rdffr, Intrinsic::A64_Setffr}) {
     EXPECT_TRUE(isSideeffectIntrinsic(Id));
     bool HasIntrinsics = false;
+    const std::vector<std::string> Operands =
+        Id == Intrinsic::A64_Setffr ? std::vector<std::string>{}
+                                    : std::vector<std::string>{"0"};
+    for (Arch Target : {Arch::ARM, Arch::X86, Arch::X64})
+      EXPECT_THROW(renderIntrinsicCall(Id, Target, Operands, 0, HasIntrinsics),
+                   std::invalid_argument);
     if (Id != Intrinsic::A64_Setffr) {
       EXPECT_TRUE(intrinsicInstructionText(Id, 16).empty());
       EXPECT_THROW(

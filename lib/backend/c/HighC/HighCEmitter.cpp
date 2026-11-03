@@ -2013,12 +2013,15 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> PairIntegerResults;
   std::map<std::string, std::vector<uint16_t>> FloatingParameters;
   std::set<std::string> ConflictingFloatingParameters;
+  bool NeedsExceptionReturn = false;
   const uint16_t RegisterBytes = pointerBytes(Opts.TheArch);
   for (const HighFunc &F : Funcs)
     walkStmts(F.Body, [&](const HighStmt &S) {
       const HighExpr *Top =
           S.Kind == StmtKind::Call ? S.CallExpr.get() : S.Val.get();
       std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
+        NeedsExceptionReturn |=
+            E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::Eret;
         if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None) {
           uint16_t &Bytes = ResultBytes[callIdentifier(E)];
           // A recovered register-pair result is wider than one machine word.
@@ -2065,6 +2068,11 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       };
       forEachExpr(S, [&](const ExprPtr &E) { Visit(*E); });
     });
+  // ERET names a runtime boundary, not a compiler builtin supplied by ACLE.
+  // Its declaration must retain the terminal contract in compiled C too.
+  if (NeedsExceptionReturn)
+    OS << "extern void " << intrinsicCName(Intrinsic::Eret)
+       << "(void) __attribute__((noreturn));\n";
   // A function whose address the code takes is declared as a callee is.
   for (const std::string &Symbol : AddressTakenFunctions) {
     const std::string Identifier = functionIdentifier(Symbol);

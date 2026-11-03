@@ -937,6 +937,7 @@ across function-lifetime mode temporaries.
 transfer in both decoder routes and strict/permissive lifting. LLVM and HighC
 retain the external no-return helper; malformed LowIR, MedIR and HighIR cannot
 publish values, extra operands or cross-target calls, including hidden bodies.
+Both C projections compile at O0/O2 with an external no-return declaration.
 Ordinary RET remains supported. Authenticated exception returns retain their
 explicit refusal. These tests do not execute exception-level restoration.
 Malformed-input checks reject invalid scalar kinds, mode widths and operand

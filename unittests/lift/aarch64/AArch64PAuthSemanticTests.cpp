@@ -2965,6 +2965,14 @@ TEST(AArch64ExceptionReturnSemantics, HandwrittenIRKeepsTheTransferShape) {
     ASSERT_TRUE(Helper);
     EXPECT_TRUE(Helper->doesNotReturn());
     EXPECT_EQ(Helper->getNumUses(), 1U);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::MachO;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+    Out.flush();
+    compileArm64eC(Source);
   }
 }
 
@@ -3065,5 +3073,6 @@ TEST(AArch64ExceptionReturnSemantics, HighCPublishesTheTerminalCall) {
     Out.flush();
     EXPECT_NE(Source.find(std::string(kHelperCall) + ";"), std::string::npos)
         << Source;
+    compileArm64eC(Source);
   }
 }

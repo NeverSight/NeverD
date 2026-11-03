@@ -55,6 +55,10 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
       (TheArch != Arch::AArch64 ||
        !aarch64ExceptionReturnShapeIsValid(Id, Ops.size() + 1, ResultBytes)))
     throw std::invalid_argument(kAArch64ExceptionReturnMalformed);
+  if ((Id == Intrinsic::A64_Wrffr || Id == Intrinsic::A64_Rdffr ||
+       Id == Intrinsic::A64_Setffr) &&
+      TheArch != Arch::AArch64)
+    throw std::invalid_argument("FFR transfers require AArch64");
   if (const char *Reason = x86NonlocalControlTransferReason(Id))
     throw std::invalid_argument(Reason);
   if (Id == Intrinsic::RawEnvironmentRequirementV1 ||

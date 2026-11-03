@@ -2303,8 +2303,10 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // A trap or a breakpoint whose code the intrinsic keeps spells as its
     // builtin, which takes no code: the statement prints the instruction
     // beside it.  One with no C name runs as the instruction itself.
+    // FFR transfers need the ARM renderer's physical-register clobbers.
     if (const std::string Instruction = intrinsicInstruction(E);
-        !Instruction.empty()) {
+        !Instruction.empty() && E.IntrinsicId != Intrinsic::A64_Wrffr &&
+        E.IntrinsicId != Intrinsic::A64_Rdffr) {
       const HighExpr *Operand = unwrapIntegerView(E.Operands[0].get());
       const std::optional<uint64_t> Code =
           Operand && Operand->Kind == ExprKind::Const
