@@ -41,6 +41,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [macOS HVF](macos-hvf.md) | Host-native hardware execution, entitlements, packaging and validation |
 | [Windows driver emulation](driver-emulation.md) | Bounded x64 WDM/KMDF lifecycle, requests, hardware scenarios, SEH, PnP subsets, backend selection and limits |
 | [Memory-safety audit & hunt](memory-safety.md) | Heap-lifetime and copy-overflow analysis: identity contract per format, sink/source catalog, verdicts, budgets, and JSON schema |
+| [Process-plugin SDK](process-plugin-sdk.md) | Standalone Python helper, protocol and independent examples |
 | [NPH process-plugin host](plugin-host.md) | Shared owners, task admission, protocol and process lifetime |
 | [Native plugins](plugins.md) | Pure-C descriptor ABI, callbacks and events, build/link workflow, discovery, and compatibility rules |
 | [Python plugins](python-plugins.md) | Typed authoring SDK, embedded host, lifecycle, loading, safety, tests, and publishing |

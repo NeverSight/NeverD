@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: f5f0bcd68d33eff4e5577e8377ff12730d6d35c6ec55853b7dd888cc777115e5 -->
+<!-- i18n-source: cea915c13566349896e2c0b632103d60b0e6faadd3ae606dbd3a3afe1f4418e0 -->
 
 [← NeverD-Projekt](project.md)
 
@@ -39,6 +39,7 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [macOS HVF](macos-hvf.md) | Hardwareausführung mit der Host-ISA, Signaturrechte, Paketierung und Prüfung |
 | [Emulation von Windows-Treibern](driver-emulation.md) | Begrenzter x64-WDM/KMDF-Lebenszyklus, Anforderungen, Hardwareszenarien, SEH, PnP-Teilmengen, Backend-Auswahl und Grenzen |
 | [Speicher-Audit und Hunt](memory-safety.md) | Heap-Lebensdauer- und Copy-Überlaufanalyse: Identitätsvertrag je Format, Senken-/Quellenkatalog, Urteile, Budgets und JSON-Schema |
+| [Prozess-Plugin-SDK (Englisch)](../process-plugin-sdk.md) | Eigenständiger Python-Helfer, Protokoll und unabhängige Beispiele |
 | [NPH-Prozess-Pluginhost (Englisch)](../plugin-host.md) | Gemeinsame Eigentümer, Aufgabenzulassung, Protokoll und Prozesslebensdauer |
 | [Native Plugins](plugins.md) | Reine C-Deskriptor-ABI, Callbacks und Ereignisse, Build-/Link-Ablauf, Erkennung und Kompatibilitätsregeln |
 | [Python-Plugins](python-plugins.md) | Plugin-Entwicklung, Session-/Event-API, Isolation, Tests und Veröffentlichung |
