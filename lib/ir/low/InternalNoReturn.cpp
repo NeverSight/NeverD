@@ -160,7 +160,8 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
   // function but a leaf, so no metadata may give a leaf routine its range;
   // its paths can still all end where nothing resumes them. An x86 image has
   // no such table, and no entry there marks a leaf.
-  if (screenedEnd(Target) == InvalidVA && Img.Format == BinaryFormat::COFF &&
+  if (screenedEnd(Target) == InvalidVA &&
+      (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::Raw) &&
       Img.Arch != Arch::X86) {
     const bool Ends = entryFlowNeverResumes(Target);
     std::lock_guard<std::mutex> Lock(Mutex);

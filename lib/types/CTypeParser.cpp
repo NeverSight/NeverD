@@ -1383,8 +1383,9 @@ private:
           ++Words.Double;
         else
           ++Words.WChar;
-      } else if (!Spec.Type && !AnyWord && isTypeName(W)) {
-        take();
+      } else if (!Spec.Type && !AnyWord) {
+        // Resolve the word and its kind together; ordinary typedefs need
+        // only one lookup in the library.
         if (auto Found = builtinWords().find(W); Found != builtinWords().end())
           Spec.Type = makeBuiltin(Found->second);
         else if (const std::optional<unsigned> Bytes =
@@ -1393,6 +1394,7 @@ private:
           // only the program's own is.
           const unsigned Own = Library.builtinBytes(Builtin::LongDouble);
           if (*Bytes != Own) {
+            take();
             fail(T, "'" + W.str() + "' is a long double of " +
                         std::to_string(*Bytes) +
                         " bytes, where the program's "
@@ -1401,22 +1403,23 @@ private:
             return false;
           }
           Spec.Type = makeBuiltin(Builtin::LongDouble);
-        } else if (vaListWord(W) && !Library.find(W)) {
+        } else if (const LocalType *Named = Library.find(W)) {
+          // A typedef the declarations made, such as glibc's size_t, keeps
+          // its name, including va_list when the header defines it.
+          Spec.Type = makeNamed(W.str(), Named->Kind);
+          Spec.TypeName = true;
+        } else if (vaListWord(W)) {
           // Windows and i386 pass the variable arguments' address; other
           // targets a record of their own, which a parameter passes as its
           // address too: x86-64's decays from an array, and AAPCS64 passes
           // a record that large by reference.
           if (Library.dataModel() == DataModel::LP64 && !InParameter) {
+            take();
             fail(T, "__builtin_va_list of an LP64 target is a record local "
                     "types do not know");
             return false;
           }
           Spec.Type = makePointer(makeBuiltin(Builtin::Char), pointerSize());
-        } else if (Library.find(W)) {
-          // A typedef the declarations made, such as glibc's size_t, keeps
-          // its name.
-          Spec.Type = named(W);
-          Spec.TypeName = true;
         } else if (W == "size_t" || W == "uintptr_t")
           Spec.Type = makeBuiltin(pointerSize() == 8 ? Builtin::ULongLong
                                                      : Builtin::UInt);
@@ -1424,7 +1427,8 @@ private:
           Spec.Type = makeBuiltin(pointerSize() == 8 ? Builtin::LongLong
                                                      : Builtin::Int);
         else
-          Spec.Type = named(W);
+          break;
+        take();
       } else {
         break;
       }

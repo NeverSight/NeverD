@@ -34,6 +34,11 @@ inline constexpr unsigned MaxMinLength = 1024;
 
 namespace neverd::limits::support {
 
+/// Coarse raw/PE code-discovery windows, not architectural page sizes.
+inline constexpr size_t kAArch64PageBytes = 4096;
+/// Unallocated or nonzero UDF words needed to classify a window as data.
+inline constexpr size_t kAArch64DataWordsPerPage = 64;
+
 // Hashing and copying loaded bytes. This is a checkpoint granularity, not a
 // maximum input size or a wall-clock deadline. Keep it a SHA-256 block
 // multiple.

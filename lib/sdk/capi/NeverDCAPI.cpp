@@ -115,6 +115,17 @@ std::optional<size_t> Session::functionIndexNamed(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+uint64_t listedFunctionSize(const LowFunc &Function,
+                            llvm::ArrayRef<va_t> SortedEntries) {
+  if (!Function.SizeFromBlocks)
+    return Function.OriginalSize;
+  const uint64_t Size = Function.contiguousSize([&](va_t Begin, va_t End) {
+    const auto Next = llvm::lower_bound(SortedEntries, Begin);
+    return Next != SortedEntries.end() && *Next < End;
+  });
+  return Size ? Size : Function.OriginalSize;
+}
+
 bool Session::synchronizeFunctions() {
   if (Img.Arch != Arch::SBF) {
     // Native function discovery lives in the pipeline, not in the loader.
@@ -126,6 +137,19 @@ bool Session::synchronizeFunctions() {
     const auto ByEntry = [](const FuncInfo &Left, const FuncInfo &Right) {
       return Left.Entry < Right.Entry;
     };
+    // Where a lifted function's size stops: the start of another the list
+    // or this run holds.
+    std::vector<va_t> Entries;
+    const auto sizeOf = [&](const LowFunc &Recovered) {
+      if (Recovered.SizeFromBlocks && Entries.empty()) {
+        for (const FuncInfo &Listed : Functions)
+          Entries.push_back(Listed.Entry);
+        for (const LowFunc &Function : PipeResult.LowFuncs)
+          Entries.push_back(Function.Entry);
+        llvm::sort(Entries);
+      }
+      return listedFunctionSize(Recovered, Entries);
+    };
     const auto PublishRecoveredSize = [&](FuncInfo &Listed,
                                           const LowFunc &Recovered) {
       // Discovery publishes entries without extents. Once a complete lift
@@ -133,8 +157,8 @@ bool Session::synchronizeFunctions() {
       // and a rebuild of the list gives it again (RecoveredSizes).  Keep
       // nonzero loader/debug/user extents authoritative.
       if (Listed.Size == 0 && Recovered.OriginalSize != 0) {
-        Listed.Size = Recovered.OriginalSize;
-        RecoveredSizes[Listed.Entry] = Recovered.OriginalSize;
+        Listed.Size = sizeOf(Recovered);
+        RecoveredSizes[Listed.Entry] = Listed.Size;
         const auto PreviousRevision = FunctionListRevision;
         functionListChanged();
         // An extent changes neither names nor their positions in the list.
@@ -193,7 +217,7 @@ bool Session::synchronizeFunctions() {
       const auto Rename = Renames.find(Function.Entry);
       const NameOrigin Origin = Origins.at(Function.Entry);
       Functions.push_back(
-          {Function.Entry, Function.OriginalSize,
+          {Function.Entry, sizeOf(Function),
            Rename == Renames.end() ? Function.Name : Rename->second,
            Rename == Renames.end() ? Origin : NameOrigin::User, Function.Name,
            Origin});

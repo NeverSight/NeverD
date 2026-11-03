@@ -29,7 +29,22 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 
+#include <stdexcept>
+
 namespace neverd {
+
+namespace {
+void requireSVE(llvm::IRBuilder<> &Builder) {
+  llvm::Function *Function = Builder.GetInsertBlock()->getParent();
+  std::string Features =
+      Function->getFnAttribute("target-features").getValueAsString().str();
+  if (!llvm::StringRef(Features).contains("+sve")) {
+    if (!Features.empty())
+      Features += ',';
+    Function->addFnAttr("target-features", Features + "+sve");
+  }
+}
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Memory barriers (DMB, DSB, ISB)
@@ -57,6 +72,28 @@ bool MedLLVMEmitter::emitAArch64Barrier(const MedOp &Op, Intrinsic IC,
     auto *AsmFnTy = llvm::FunctionType::get(VoidTy, {}, false);
     auto *IA = llvm::InlineAsm::get(AsmFnTy, Text, "~{memory}", true);
     Builder.CreateCall(IA, {});
+    return true;
+  }
+  case I::A64_Wrffr:
+  case I::A64_Rdffr:
+  case I::A64_Setffr: {
+    requireSVE(Builder);
+    // The FFR transfers run as their instructions (`wrffr p0.b`), as HighC
+    // prints them.
+    const bool Set = IC == I::A64_Setffr;
+    const auto Predicate = instructionOperand(Op);
+    if (Op.Output.Size || !Op.IntrinsicOutputs.empty() ||
+        Op.NumInputs != (Set ? 1 : 2) ||
+        (!Set && (!Predicate || *Predicate >= 16)))
+      throw std::invalid_argument("malformed AArch64 FFR transfer");
+    const std::string Text =
+        Set ? "setffr" : intrinsicInstructionText(IC, Predicate);
+    const std::string Clobber =
+        IC == I::A64_Rdffr ? "p" + std::to_string(*Predicate) : std::string();
+    auto *AsmFnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), false);
+    Builder.CreateCall(llvm::InlineAsm::get(
+        AsmFnTy, Text,
+        Clobber.empty() ? "~{memory}" : "~{" + Clobber + "},~{memory}", true));
     return true;
   }
   default:
@@ -111,6 +148,18 @@ bool MedLLVMEmitter::emitAArch64Exception(const MedOp &Op, Intrinsic IC,
     markInstructionText(
         *Builder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx), Kind, {}), Op,
         IC);
+    return true;
+  }
+  case I::Eret: {
+    // A terminal transfer to ELR with SPSR as PSTATE, as x86's IRET: a named
+    // no-return call, so LLVMC prints the same helper as HighC and nothing
+    // resumes after it.
+    auto *FnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), false);
+    llvm::FunctionCallee Callee =
+        Mod->getOrInsertFunction(intrinsicCName(IC), FnTy);
+    if (auto *Fn = llvm::dyn_cast<llvm::Function>(Callee.getCallee()))
+      Fn->addFnAttr(llvm::Attribute::NoReturn);
+    Builder.CreateCall(Callee)->setDoesNotReturn();
     return true;
   }
   case I::Svc:
@@ -176,11 +225,17 @@ bool MedLLVMEmitter::emitAArch64Sideeffect(const MedOp &Op, Intrinsic IC,
           HasRegister ? llvm::ArrayRef<llvm::Type *>(Builder.getInt64Ty())
                       : llvm::ArrayRef<llvm::Type *>(),
           false);
-      Builder.CreateCall(
-          llvm::InlineAsm::get(Type, Asm,
-                               HasRegister ? "r,~{memory}" : "~{memory}",
-                               /*hasSideEffects=*/true),
-          Arguments);
+      std::string Constraints = HasRegister ? "r,~{memory}" : "~{memory}";
+      if (IC == Intrinsic::A64_SveRegisterTransfer) {
+        requireSVE(Builder);
+        const std::string Clobber =
+            aarch64SveRegisterTransferClobber(Op.Inputs[1].ConstVal);
+        if (!Clobber.empty())
+          Constraints += ",~{" + Clobber + "}";
+      }
+      Builder.CreateCall(llvm::InlineAsm::get(Type, Asm, Constraints,
+                                              /*hasSideEffects=*/true),
+                         Arguments);
       return true;
     }
   }

@@ -1427,6 +1427,9 @@ struct LowFunc {
   bool AnalysisOnly = false;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
+  /// OriginalSize spans the blocks (computedSize): nothing the image or its
+  /// debug information states sizes the function.
+  bool SizeFromBlocks = false;
   std::string Name;
   std::string DebugName;
   std::string SourceFile;
@@ -1570,6 +1573,30 @@ struct LowFunc {
       if (B.EndAddr > MaxEnd)
         MaxEnd = B.EndAddr;
     return MaxEnd > Entry ? MaxEnd - Entry : 0;
+  }
+
+  /// The bytes from the entry to the end of the last block before another
+  /// function starts: a block joins them unless \p EntryIn(Begin, End)
+  /// finds a function starting in the gap or at the next block.  Padding, data
+  /// and code no path reaches inside the function count; code it runs out of
+  /// line, across other functions, does not.  Zero when no block starts at the
+  /// entry.
+  template <typename EntryInFn>
+  uint64_t contiguousSize(EntryInFn &&EntryIn) const {
+    std::vector<std::pair<va_t, va_t>> Ranges;
+    for (const auto &B : Blocks)
+      if (B.StartAddr >= Entry && B.EndAddr > B.StartAddr)
+        Ranges.emplace_back(B.StartAddr, B.EndAddr);
+    std::sort(Ranges.begin(), Ranges.end());
+    if (Ranges.empty() || Ranges.front().first != Entry)
+      return 0;
+    va_t End = Ranges.front().second;
+    for (const auto &[Begin, Stop] : Ranges) {
+      if (Begin >= End && EntryIn(End, Begin + 1))
+        break;
+      End = std::max(End, Stop);
+    }
+    return End - Entry;
   }
 };
 

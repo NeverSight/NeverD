@@ -141,9 +141,14 @@ std::string renderA64SystemInstruction(Intrinsic Id,
   if (HasOutput)
     return "({ uint64_t __result; __asm__ volatile(\"" + Template +
            "\" : \"=r\"(__result) : : \"memory\"); __result; })";
-  if (HasRegister)
+  if (HasRegister) {
+    const std::string Clobber = Id == Intrinsic::A64_SveRegisterTransfer
+                                    ? aarch64SveRegisterTransferClobber(*Field)
+                                    : std::string();
     return "__asm__ volatile(\"" + Template + "\" : : \"r\"(" + Ops[1] +
-           ") : \"memory\")";
+           ") : \"memory\"" + (Clobber.empty() ? "" : ", \"" + Clobber + "\"") +
+           ")";
+  }
   return "__asm__ volatile(\"" + Template + "\" ::: \"memory\")";
 }
 
@@ -863,8 +868,21 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
                                    uint16_t ResultBytes, bool &HasCIntrinsics,
                                    llvm::ArrayRef<uint16_t> OperandBytes) {
   using I = Intrinsic;
-  if (isAArch64ExceptionReturnIntrinsic(Id))
-    throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
+  if (!aarch64ExceptionReturnShapeIsValid(Id, Ops.size() + 1, ResultBytes))
+    throw std::invalid_argument(kAArch64ExceptionReturnMalformed);
+  if (Id == I::A64_Wrffr || Id == I::A64_Rdffr || Id == I::A64_Setffr) {
+    const bool Set = Id == I::A64_Setffr;
+    const auto Predicate = Ops.empty() ? std::nullopt : constantOperand(Ops[0]);
+    if (ResultBytes || Ops.size() != (Set ? 0 : 1) ||
+        (!Set && (!Predicate || *Predicate >= 16)))
+      throw std::invalid_argument("malformed AArch64 FFR transfer");
+    const std::string Text =
+        Set ? "setffr" : intrinsicInstructionText(Id, Predicate);
+    const std::string Clobber =
+        Id == I::A64_Rdffr ? "p" + std::to_string(*Predicate) : std::string();
+    return "__asm__ volatile(\"" + Text + "\" ::: \"memory\"" +
+           (Clobber.empty() ? "" : ", \"" + Clobber + "\"") + ")";
+  }
   if (isAArch64AddressMemoryIntrinsic(Id)) {
     const unsigned Count = aarch64AddressMemoryOperandCount(Id);
     const bool Store = isAArch64AddressStoreIntrinsic(Id);
@@ -1341,6 +1359,7 @@ std::string renderARMIntrinsicCall(Intrinsic Id,
   case I::Ic:
   case I::Tlbi:
   case I::At:
+  case I::A64_SveRegisterTransfer:
     return renderA64SystemInstruction(Id, Ops, ResultBytes, HasCIntrinsics);
   case I::ArmMrs:
   case I::ArmMsr:

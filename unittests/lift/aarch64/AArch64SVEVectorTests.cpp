@@ -844,6 +844,117 @@ TEST(AArch64SVEVector, LocalStateSurvivesValidatedOriginalScalarMemory) {
   expectStateRejected(Function);
 }
 
+TEST(AArch64SVEVector, LocalStateSurvivesIndependentSystemState) {
+  constexpr uint64_t FpcrField = 0xDA20;
+  constexpr uint64_t SvcrField = 0xDA12;
+  constexpr uint64_t PStateField = 0x0283;
+  const auto Result = temporary(kPAuthResultId, kScalarBytes);
+  const auto admitted = [](const MedOp &Op) {
+    auto Function = vectorFunction(kWideElement, kByteElement, Transport::Copy);
+    Function.Blocks.front().Ops.insert(
+        Function.Blocks.front().Ops.begin() + kCopyOperation, Op);
+    return validateAArch64SVEState(Function, Arch::AArch64) == nullptr;
+  };
+  for (const MedOp &Op :
+       {intrinsic(Intrinsic::A64_Setffr, {}, {}),
+        intrinsic(Intrinsic::Mrs, Result, {constant(FpcrField)}),
+        intrinsic(Intrinsic::Msr, {}, {constant(FpcrField), constant(0)}),
+        intrinsic(Intrinsic::A64_GetFPSR, Result, {}),
+        intrinsic(Intrinsic::A64_SetFPCR, {}, {constant(0)}),
+        intrinsic(Intrinsic::Brk, {}, {constant(0)})}) {
+    SCOPED_TRACE(Op.Inputs.front().ConstVal);
+    EXPECT_TRUE(admitted(Op));
+  }
+  // An SVCR write zeroes Z and P, the immediate form writes PSTATE fields
+  // such as streaming mode, and an FFR transfer without its predicate is
+  // unknown.
+  for (const MedOp &Op :
+       {intrinsic(Intrinsic::Msr, {}, {constant(SvcrField), constant(0)}),
+        intrinsic(Intrinsic::Msr, {}, {constant(PStateField), constant(1)}),
+        intrinsic(Intrinsic::A64_Wrffr, {}, {}),
+        intrinsic(Intrinsic::A64_Rdffr, {}, {})}) {
+    SCOPED_TRACE(Op.NumInputs);
+    EXPECT_FALSE(admitted(Op));
+  }
+}
+
+TEST(AArch64SVEVector, ImplicitRegisterTransfersCannotObserveLocalSSAState) {
+  // These instructions name physical Z/P registers, not the scalable SSA
+  // values. Admitting them would read stale hardware state or miss a write.
+  for (const MedOp &Op :
+       {intrinsic(Intrinsic::A64_Wrffr, {}, {constant(0, 1)}),
+        intrinsic(Intrinsic::A64_Rdffr, {}, {constant(0, 1)}),
+        intrinsic(Intrinsic::A64_SveRegisterTransfer, {},
+                  {constant(0xE5804000, 4), constant(kEntry)}),
+        intrinsic(Intrinsic::A64_SveRegisterTransfer, {},
+                  {constant(0x85804000, 4), constant(kEntry)})}) {
+    SCOPED_TRACE(Op.Inputs.front().ConstVal);
+    auto Function = vectorFunction(kWideElement, kByteElement, Transport::Copy);
+    Function.Blocks.front().Ops.insert(
+        Function.Blocks.front().Ops.begin() + kCopyOperation, Op);
+    expectStateRejected(Function);
+  }
+}
+
+TEST(AArch64SVEVector, OpaqueTransfersCompileWithTheirPhysicalClobbers) {
+  MedFunc Function;
+  Function.Name = "sve_physical_transfer";
+  Function.Entry = kEntry;
+  Function.ReturnType = NdType::makeVoid();
+  MedVar Base;
+  Base.Kind = MedVar::Param;
+  Base.TheArch = Arch::AArch64;
+  Base.Size = 8;
+  Function.Params.push_back(Base);
+  Function.Blocks.resize(1);
+  Function.Blocks.front().Id = 0;
+  Function.Blocks.front().StartAddr = kEntry;
+  Function.Blocks.front().Ops = {
+      intrinsic(Intrinsic::A64_Setffr, {}, {}),
+      intrinsic(Intrinsic::A64_Rdffr, {}, {constant(2, 1)}),
+      intrinsic(Intrinsic::A64_Wrffr, {}, {constant(2, 1)}),
+      intrinsic(Intrinsic::A64_SveRegisterTransfer, {},
+                {constant(0x85804000, 4), Base}),
+      operation(NdOp::RETURN, {}, {})};
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit({Function}, Context, Function.Name, Arch::AArch64);
+  ASSERT_TRUE(Module);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  bool SawPredicate = false, SawVector = false;
+  for (const auto &Block : *Module->getFunction(Function.Name))
+    for (const auto &Inst : Block)
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst))
+        if (const auto *Asm =
+                llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())) {
+          SawPredicate |=
+              llvm::StringRef(Asm->getConstraintString()).contains("~{p2}");
+          SawVector |=
+              llvm::StringRef(Asm->getConstraintString()).contains("~{z0}");
+        }
+  EXPECT_TRUE(SawPredicate);
+  EXPECT_TRUE(SawVector);
+  const auto Native =
+      Codegen().compile(*Module, Arch::AArch64, BinaryFormat::ELF, kTriple);
+  ASSERT_TRUE(Native.Success);
+  expectInstruction(
+      llvm::StringRef(reinterpret_cast<const char *>(Native.ObjectData.data()),
+                      Native.ObjectData.size()),
+      0x2519F002); // rdffr p2.b
+  const auto Source = highSource(Function);
+  EXPECT_NE(Source.find("\"p2\""), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\"z0\""), std::string::npos) << Source;
+  compileSource(Source, 0x2519F002);
+}
+
+TEST(AArch64SVEVector, ConstantCopyDefinesTheWholePredicate) {
+  auto Function = vectorFunction(kWideElement, kByteElement, Transport::Copy);
+  auto &Producer = Function.Blocks.front().Ops[kPredicateOperation];
+  Producer = operation(NdOp::COPY, Producer.Output,
+                       {constant(0, Producer.Output.Size)});
+  EXPECT_EQ(validateAArch64SVEState(Function, Arch::AArch64), nullptr);
+}
+
 TEST(AArch64SVEVector, UnresolvedPACMCannotPreserveLocalState) {
   auto Function = vectorFunction(kWideElement, kByteElement, Transport::Copy);
   Function.Blocks.front().Ops.insert(

@@ -16,6 +16,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/IR/BasicBlock.h"
@@ -485,6 +486,12 @@ TEST_F(SessionLLVMTest, EmissionExceptionsKeepTheSessionAndReason) {
   Exit.Opcode = NdOp::INTRINSIC;
   Exit.addInput(MedVar::makeConst(static_cast<uint64_t>(Intrinsic::Eret),
                                   sizeof(uint16_t)));
+  // ERET defines no value, so the emitter refuses one that claims X0.
+  Exit.Output.Kind = MedVar::Reg;
+  Exit.Output.TheArch = Arch::AArch64;
+  Exit.Output.RegOff = a64reg::X0;
+  Exit.Output.Size = 8;
+  Exit.Output.SSAVer = 1;
   Function.Blocks.front().Ops.insert(Function.Blocks.front().Ops.begin(), Exit);
   State.PipeResult.MedFuncs.push_back(Function);
   std::shared_ptr<LLVMSourceMap> Sources;
@@ -493,7 +500,7 @@ TEST_F(SessionLLVMTest, EmissionExceptionsKeepTheSessionAndReason) {
       State.clearError();
       EXPECT_NO_THROW(EXPECT_FALSE(
           State.emitNativeLlvm(NoOpt, nullptr, Sources, OriginalImage)));
-      EXPECT_NE(State.LastError.find(kAArch64ExceptionReturnUnsupported),
+      EXPECT_NE(State.LastError.find(kAArch64ExceptionReturnMalformed),
                 std::string::npos)
           << State.LastError;
       EXPECT_FALSE(Sources);

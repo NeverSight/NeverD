@@ -1025,6 +1025,36 @@ TEST(PipelineOutcome, HighIRContainsNonStandardExceptions) {
   EXPECT_EQ(Result.Error, "HighIR conversion failed: unknown exception");
 }
 
+// A function whose conversion threw keeps a goto skeleton, which is no C for
+// it: a unit leaves it out with the reason and its own view fails.
+TEST(PipelineOutcome, HighCRefusesAFunctionWhoseConversionFailed) {
+  constexpr char Reason[] = "skeleton conversion detail";
+  std::vector<HighFunc> Functions = {
+      convertedIdentity(sourceFunction(0x1200, "converted")),
+      convertedIdentity(sourceFunction(0x1300, "skeleton"))};
+  Functions.back().ConversionFailure = Reason;
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::AArch64;
+  Options.StructuredExceptionSyntax = false;
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  ASSERT_EQ(Refused.size(), 1u) << Source;
+  EXPECT_EQ(Refused.front().Entry, Functions.back().Entry);
+  EXPECT_EQ(Refused.front().Reason,
+            std::string("HighIR conversion failed: ") + Reason);
+  EXPECT_NE(Source.find("converted(void) {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("skeleton(void) {"), std::string::npos) << Source;
+  Options.RefusedDefinitions = nullptr;
+  std::string View;
+  llvm::raw_string_ostream ViewOS(View);
+  EXPECT_THROW(HighCEmitter().emit({Functions.back()}, ViewOS, Options),
+               std::invalid_argument);
+}
+
 TEST(PipelineOutcome, HighIRWorkerFailuresAreContainedAfterJoining) {
   ScopedThreadCount Threads(2);
   PipelineResult Result;
@@ -1147,9 +1177,10 @@ TEST(PipelineOutcome, HighIRFallsBackToLowIRGotoSkeleton) {
   CEmitterOptions Options;
   Options.TheArch = Image.Arch;
   Options.Format = BinaryFormat::COFF;
-  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Options));
-  EXPECT_NE(Source.find("goto L_"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("no structured body"), std::string::npos) << Source;
+  EXPECT_EQ(HF.ConversionFailure, "no MedIR body");
+  EXPECT_THROW(HighCEmitter().emit(Result.HighFuncs, Stream, Options),
+               std::invalid_argument);
+  EXPECT_TRUE(Source.empty());
 }
 
 TEST(PipelineOutcome,

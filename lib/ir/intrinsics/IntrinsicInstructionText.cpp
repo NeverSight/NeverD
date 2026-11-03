@@ -120,6 +120,8 @@ bool intrinsicCarriesInstructionOperand(Intrinsic Id) {
   case Intrinsic::ArmIsb:
   case Intrinsic::Ud0:
   case Intrinsic::Ud1:
+  case Intrinsic::A64_Wrffr:
+  case Intrinsic::A64_Rdffr:
     return true;
   default:
     return false;
@@ -162,8 +164,40 @@ std::string aarch64SystemRegisterName(uint64_t Encoding, bool Write) {
          std::to_string(F.Op2);
 }
 
+std::string aarch64SveRegisterTransferAsm(uint64_t Word) {
+  // LDR and STR of a whole Z or P register at the base plus a multiple of
+  // the vector or predicate length, with their imm9h:imm9l multiple.
+  if (Word > 0xFFFFFFFF ||
+      !isAArch64SveRegisterTransferWord(static_cast<uint32_t>(Word)))
+    return {};
+  const bool Load = (Word & 0x40000000) == 0;
+  const char Register = (Word & 0x4000) ? 'z' : 'p';
+  int Multiple =
+      static_cast<int>(((Word >> 16) & 0x3F) << 3 | ((Word >> 10) & 0x7));
+  if (Multiple & 0x100)
+    Multiple -= 0x200;
+  std::string Text = std::string(Load ? "ldr " : "str ") + Register +
+                     std::to_string(Word & 0x1F) + ", [$0";
+  if (Multiple)
+    Text += ", #" + std::to_string(Multiple) + ", mul vl";
+  return Text + "]";
+}
+
+std::string aarch64SveRegisterTransferClobber(uint64_t Word) {
+  if (Word > 0xFFFFFFFF ||
+      !isAArch64SveRegisterTransferWord(static_cast<uint32_t>(Word)) ||
+      (Word & 0x40000000))
+    return {};
+  return std::string((Word & 0x4000) ? "z" : "p") + std::to_string(Word & 0x1F);
+}
+
 std::string aarch64SystemInstructionAsm(Intrinsic Id, uint64_t Field,
                                         bool HasOutput, bool HasRegister) {
+  // A whole-register transfer names its registers in its instruction word,
+  // and reads its base from its register operand.
+  if (Id == Intrinsic::A64_SveRegisterTransfer)
+    return HasOutput || !HasRegister ? std::string()
+                                     : aarch64SveRegisterTransferAsm(Field);
   if (Field > 0xFFFF)
     return {};
   const SystemField F(Field);
@@ -352,6 +386,12 @@ std::string intrinsicInstructionText(Intrinsic Id,
     // imm8. Unified assembly accepts it in ARM mode as well.
     return std::string(*Operand > 0xFF ? "udf.w #" : "udf #") +
            hexImmediate(*Operand);
+  case Intrinsic::A64_Wrffr:
+    return *Operand < 16 ? "wrffr p" + std::to_string(*Operand) + ".b"
+                         : std::string();
+  case Intrinsic::A64_Rdffr:
+    return *Operand < 16 ? "rdffr p" + std::to_string(*Operand) + ".b"
+                         : std::string();
   default:
     break;
   }

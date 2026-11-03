@@ -660,6 +660,9 @@ struct HighFunc {
   std::vector<HighParam> Params;
   std::vector<HighLocal> Locals;
   std::vector<HighStmt> Body;
+  /// Why MedToHigh could not convert the function. Its Body is then only the
+  /// goto skeleton the pipeline keeps, which no writer presents as its C.
+  std::string ConversionFailure;
   std::optional<ExceptionFunction> ExceptionMetadata;
   bool AnalysisOnly = false;
   /// Entry-SP coordinates of frame PHIs when the Itanium C++ view enters

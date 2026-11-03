@@ -249,8 +249,10 @@ services and the eight additional registry/file/memory services in Microsoft
 WDK 10.0.26100.0. It compares overlapping phnt declarations. The known
 `ZwFlushInstructionCache` disagreement (ULONG versus SIZE_T) deliberately has
 no fixed contract; a separate test retains that conflict and a new conflict
-fails coverage. The
-`WindowsKernelABI.Wdk*` execution cases cover a transitive ordinary caller,
+fails coverage. The declaration-count floor follows each bundled provider:
+141 Zw declarations from the mingw-w64 x64 DDK and 134 from the ReactOS ARM64
+core DDK; every declaration still receives the same argument-contract checks.
+The `WindowsKernelABI.Wdk*` execution cases cover a transitive ordinary caller,
 narrow first/third BOOLEAN parameters, the fifth stack operand and an empty
 signature despite ambient reads. Both C backends run with pipeline optimization
 on/off and independently compiled O0/O2 code under ASan/UBSan.
@@ -959,12 +961,13 @@ unavailable execution is an explicit skip. Unresolved terminal prefixes and
 implicit-entry joins cannot escape into ordinary source. Frame fixtures reject
 mixed implicit/explicit signing recipes and preserve unrelated tail-call proofs
 across function-lifetime mode temporaries.
-`AArch64ExceptionReturnSemantics` rejects plain ERET in both decoder routes
-and strict/permissive lifting. Handwritten LowIR, MedIR and HighIR cannot
-bypass the ELR/SPSR/PSTATE requirement through void/value, masked-body or
-cross-target emission. Ordinary RET remains supported. Authenticated exception
-returns retain their existing explicit refusal; this is not an exception-level
-runtime implementation.
+`AArch64ExceptionReturnSemantics` checks plain ERET as an operand-free terminal
+transfer in both decoder routes and strict/permissive lifting. LLVM and HighC
+retain the external no-return helper; malformed LowIR, MedIR and HighIR cannot
+publish values, extra operands or cross-target calls, including hidden bodies.
+Both C projections compile at O0/O2 with an external no-return declaration.
+Ordinary RET remains supported. Authenticated exception returns retain their
+explicit refusal. These tests do not execute exception-level restoration.
 Malformed-input checks reject invalid scalar kinds, mode widths and operand
 counts in every PACM operation. Pending prefixes require their exact LowIR
 shape and remain inadmissible in MedIR and native output.
@@ -6257,6 +6260,9 @@ unknown bytes still produce their original diagnostic positions.
 `TypeParse.StorageQualifiersKeepDeclaratorsAndKeywordBoundaries` covers macro
 annotations, qualified pointers, explicit pointer widths, calling conventions,
 similar identifiers and transactional diagnostics across all three data models.
+`TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
+record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
+recovery after unknown or incompatible type words across those models.
 
 `DWARFTypeImportGo.ReadsGosStructuresAndFuncValues` builds a real Go program
 with the selected `NEVERD_TEST_GO` compiler (or `go` on PATH). It checks both
@@ -15058,6 +15064,13 @@ and EventLog public-interface cases after changing this boundary.
 Build the owning executable first, then select its label. This avoids relinking
 unrelated large semantic targets.
 
+On macOS, a standalone Clang (including Homebrew LLVM) may need an explicit
+SDK when a fixture links generated source. Run CTest with
+`SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"` in its environment if the
+linker cannot find `libSystem`. Compile-only checks can pass without that SDK,
+so they do not establish that native execution fixtures can link. Use the same
+SDK for both C projections and their native reference programs.
+
 ```bash
 # Lifter, loader, and format tests
 cmake --build build-release --target NeverDLiftTests --parallel 4
@@ -20225,3 +20238,32 @@ adversarial fixture is `unittests/plugin/process_provider.py`.
 `NeverDGuiPluginLaunch` checks startup argument handling. These offscreen cases
 do not establish native desktop gestures or screen-reader behavior. See
 [GUI process plugins](gui-plugins.md#development-and-verification) for commands.
+
+## Cumulative AArch64 and function-view integration
+
+Run `NeverDAArch64DecodeValidityTests`, `NeverDMachineInstructionTextTests`,
+`NeverDArm64eAnalysisTests`, `NeverDAArch64SVEPredicateTests`,
+`NeverDMedVariadicTests`, `NeverDHighControlFlowTests`,
+`NeverDCFGLoopXformTests` and the AArch64/ABI/no-return cases in
+`NeverDLiftTests` after changing these boundaries. The SVE vector suite checks
+opaque transfer clobbers through object emission and O0/O2 source compilation,
+and rejects mixing physical transfers with local scalable SSA state. Predicate
+instructions without a semantic contract are rejected through normal and fast
+decoders in both strict and permissive modes. This is not native SVE execution
+or privileged exception-return qualification.
+
+`AArch64FunctionDiscovery` covers zero-based raw images, actual returning and
+no-return calls, and distant branches into filler across scan chunks.
+`MedVariadic.IntegerOnlyVaListMustNameItsOwnSpillChain` rejects a va_list whose
+x7 copy is separate from its claimed contiguous argument save area.
+
+Run `NeverDPipelineOutcomeTests`, `NeverDSessionCAPITests`,
+`NeverDSessionLLVMTests`, `NeverDFunctionDisasmCAPITests`,
+`NeverDSessionFunctionDiscoveryTests` and `NeverDWorkerConstantBranch` for
+source-failure propagation, inferred extents, synthetic tail-call exclusion,
+raw address disassembly and listing ownership. `FunctionDisasmSize` checks
+adjacent and separated entries with unordered recovered blocks.
+`NeverDWorkerConstantBranch` also recovers a callee before its caller and
+checks that their shared tail keeps its declared, proven owner.
+`CImageObjects.DeclaredObjectsHoldTheImageBytes` compiles and executes UTF-16
+image declarations without requiring `uchar.h`, which macOS SDKs lack.

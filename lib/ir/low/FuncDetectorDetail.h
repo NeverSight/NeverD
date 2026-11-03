@@ -120,18 +120,26 @@ void scanSegmentCallsARM(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
                          std::set<va_t> &Out,
                          const Cancellation *Control = nullptr);
+/// Phase-local AArch64 entry evidence, merged before admitting markers.
+struct AArch64EntryScan {
+  std::vector<va_t> ConditionalTargets;
+  /// Candidate entry and the first byte after the preceding terminator.
+  std::vector<std::pair<va_t, va_t>> EntryCandidates;
+};
 void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
                              va_t Start, va_t End, std::set<va_t> &Out,
+                             AArch64EntryScan &Entries,
                              const Cancellation *Control = nullptr);
 
 inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
                              const Segment *Seg, va_t Start, va_t End,
                              std::set<va_t> &Out,
                              std::vector<std::pair<va_t, va_t>> &CodeAddresses,
-                             const Cancellation *Control = nullptr) {
+                             const Cancellation *Control,
+                             AArch64EntryScan &A64) {
   switch (Img.Arch) {
   case Arch::AArch64:
-    scanSegmentCallsAArch64(Img, Seg, Start, End, Out, Control);
+    scanSegmentCallsAArch64(Img, Seg, Start, End, Out, A64, Control);
     return;
   case Arch::ARM:
     scanSegmentCallsARM(Img, Dec, Seg, Start, End, Out, Control);

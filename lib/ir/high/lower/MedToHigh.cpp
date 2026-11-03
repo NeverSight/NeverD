@@ -1832,8 +1832,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     if (!EarlyCxxRegions)
       structureExceptionRegions(Func, Med);
     attachSEHHandlerEntryCopies(Func, Med);
-    // Keep the explicit CFG selected by the structuring limits. Region
-    // splicing here would repeatedly copy the same large continuation tails.
+    reduceLateGotos(Func);
     anchorDispatcherEntries(Func);
     Trace.high(Func, "after-exceptions");
     return Func;

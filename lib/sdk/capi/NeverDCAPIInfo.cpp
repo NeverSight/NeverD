@@ -69,7 +69,8 @@ void addCName(llvm::json::Object &Row, llvm::StringRef Symbol,
 }
 
 bool hasMainEntryPoint(const BinaryImage &Img) {
-  return Img.Entry != 0 || Img.Arch == Arch::EVM;
+  return Img.Entry != 0 || Img.Format == BinaryFormat::Raw ||
+         Img.Arch == Arch::EVM;
 }
 
 /// Render one compiler trailer. The whole point of reporting a trailer is that

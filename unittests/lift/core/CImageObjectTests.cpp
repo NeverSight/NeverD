@@ -195,7 +195,10 @@ TEST(CImageObjects, StringsDeclareTheirTextAndScalarsTheirValues) {
   EXPECT_NE(Source.find("const char16_t *u16s = u\"宽字符中文字符串\";"),
             NotFound)
       << Source;
-  EXPECT_NE(Source.find("#include <uchar.h>"), NotFound) << Source;
+  EXPECT_EQ(Source.find("#include <uchar.h>"), NotFound) << Source;
+  EXPECT_NE(Source.find("#ifndef __cplusplus\ntypedef uint16_t char16_t;\n"),
+            NotFound)
+      << Source;
   EXPECT_NE(Source.find("int32_t counter = 5;"), NotFound) << Source;
   // Unnamed data reads as the listing names it, with the value it holds.
   EXPECT_NE(Source.find("int64_t qword_4018 = 0x1234;"), NotFound) << Source;

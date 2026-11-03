@@ -76,8 +76,8 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
   if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
     return invalid("intrinsic has no constant intrinsic ID");
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-  if (isAArch64ExceptionReturnIntrinsic(Id))
-    return invalid(kAArch64ExceptionReturnUnsupported);
+  if (!aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs, Op.Output.Size))
+    return invalid(kAArch64ExceptionReturnMalformed);
   if (const char *Reason = x86NonlocalControlTransferReason(Id))
     return invalid(Reason);
   // The lifter publishes PACM as a pending instruction prefix. CFG resolves

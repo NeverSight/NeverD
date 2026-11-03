@@ -107,6 +107,11 @@ inline constexpr std::uint64_t kListingOwnerSearchDistance = 0x10000;
 inline constexpr std::size_t kListingMaxStringDisplay = 400;
 inline constexpr std::size_t kListingMaxUnsizedInstructions =
     ::neverd::sdk::kMaxUnsizedInstructions;
+/// A recovered body the listing copies. The engine bounds the CFG; this bounds
+/// the copy above the largest real functions, as a kernel's of 86K
+/// instructions. A larger body lists through the ordinary decoder.
+inline constexpr std::size_t kListingMaxRecoveredInstructions = std::size_t{1}
+                                                                << 18;
 inline constexpr std::uint64_t kListingMaxAlignment = 0x1000;
 // Classic listings name padding by the alignment of its end, up to this or the
 // smallest power of two longer than the padding.
@@ -115,6 +120,10 @@ inline constexpr std::uint64_t kListingClassicAlignmentLimit = 0x20;
 /// stable.
 inline constexpr std::uint64_t kListingMaxRepeatBytes = 0x1000;
 inline constexpr std::uint64_t kListingMinRepeatBytes = 4;
+/// The longest gap between two functions whose fixed-width instructions the
+/// listing decodes as code no function reaches, as the cases and slow paths
+/// a function's body leaves after its returns.
+inline constexpr std::uint64_t kListingMaxLooseGapBytes = 0x10000;
 inline constexpr std::size_t kListingMaxOverviewBuckets = 16384;
 inline constexpr int kListingOverviewSamples = 4;
 inline constexpr int kListingStringScanMinimum =

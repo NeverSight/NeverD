@@ -160,6 +160,15 @@ std::optional<X64VaStartGeometry>
 x64VaStartGeometry(VariadicScan &S, uint64_t VaStartWord, int64_t OverflowBase);
 std::optional<int> aapcs64FirstVariadicRegister(VariadicScan &S);
 
+/// The first variadic integer argument register of an AAPCS64 va_start
+/// that saves no vector register, as code built without the floating-point
+/// registers has it (the Linux kernel's -mgeneral-regs-only): x(first)
+/// through x7 spilled with their entry values to consecutive doublewords,
+/// and one va_list that points __gr_top just past them and __stack into the
+/// incoming arguments, and sets __gr_offs to minus their bytes.  A function
+/// that spills its own named parameters stores no such va_list.
+std::optional<int> aapcs64IntegerVariadicRegister(VariadicScan &S);
+
 /// The stores, as (block, operation) indices, that spill q0-q7 to the
 /// vector half of an AAPCS64 register save area no read observes.  The area
 /// is q(first) through q7 at entry in consecutive 16-byte slots, and one
