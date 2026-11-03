@@ -676,6 +676,9 @@ private slots:
       previous.setGeometry(normal);
       previous.show();
       QVERIFY(QTest::qWaitForWindowExposed(&previous));
+#ifdef Q_OS_MACOS
+      test::NativeWindowStates previousApplied(*previous.windowHandle());
+#endif
       // X11 can quantize a requested size at fractional scale. Save the
       // normal geometry accepted by the window manager.
       QTest::qWait(250);
@@ -687,7 +690,19 @@ private slots:
           QTRY_COMPARE(previous.size(),
                        previous.screen()->availableGeometry().size());
       }
+#ifdef Q_OS_MACOS
+      const QRect availableBeforeFullScreen =
+          previous.screen()->availableGeometry();
+#endif
       if (fullScreen) {
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() == QLatin1String("cocoa")) {
+          previous.raise();
+          previous.activateWindow();
+          if (!QTest::qWaitForWindowActive(&previous))
+            QSKIP("Cocoa full-screen validation requires a foreground window.");
+        }
+#endif
         if (legacy)
           previous.setWindowState(previous.windowState() |
                                   Qt::WindowFullScreen);
@@ -701,6 +716,18 @@ private slots:
         normal = previous.normalGeometry();
       geometry =
           legacy ? previous.saveGeometry() : frame->saveWindowedGeometry();
+#ifdef Q_OS_MACOS
+      if (fullScreen &&
+          QGuiApplication::platformName() == QLatin1String("cocoa")) {
+        // The saved geometry is the restart input. Finish the old fixture's
+        // native transition and restore the desktop work area before the new
+        // window receives input; QWidget's state flag changes before AppKit.
+        QTRY_VERIFY(previousApplied.is(Qt::WindowFullScreen));
+        QVERIFY(test::setNativeFullScreen(previous, false));
+        QTRY_COMPARE(previous.screen()->availableGeometry(),
+                     availableBeforeFullScreen);
+      }
+#endif
     }
     QTemporaryDir project;
     Session session(QString::fromLocal8Bit(TEST_WORKER));
@@ -749,8 +776,10 @@ private slots:
         window.activateWindow();
       }
       QVERIFY(QTest::qWaitForWindowActive(&window));
+      QSignalSpy restoreClicks(restore, &QAbstractButton::clicked);
       Pointer pointer;
       QVERIFY(pointer.click(*restore));
+      QTRY_COMPARE(restoreClicks.size(), 1);
       QTRY_VERIFY_WITH_TIMEOUT(!window.isMaximized(), 2000);
     }
     if (maximized &&
@@ -890,6 +919,11 @@ private slots:
     McpConnectionManager mcp;
     GuiSessionBroker broker;
     std::unique_ptr<QWidget> window;
+    // Keep the complete 60-pixel edge gesture on small runner desktops.
+    const QRect available =
+        QGuiApplication::primaryScreen()->availableGeometry();
+    const QRect testArea = available.adjusted(80, 80, -80, -80);
+    const QSize initialSize = QSize(950, 620).boundedTo(testArea.size());
     if (quickStart) {
       auto dialog = std::make_unique<QuickStartDialog>(
           [](QWidget *) { return QString(); });
@@ -907,12 +941,12 @@ private slots:
       file.close();
       // Opening the file shows the workbench. Set its initial size before
       // Wayland starts configuring that first surface.
-      workbench->resize(950, 620);
+      workbench->resize(initialSize);
       workbench->openFile(path);
       QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
       window = std::move(workbench);
     }
-    window->resize(950, 620);
+    window->resize(initialSize);
     window->show();
     QVERIFY(QTest::qWaitForWindowExposed(window.get()));
     QTest::qWait(250);
@@ -938,8 +972,10 @@ private slots:
       // received the maximized size.
       QTest::qWait(500);
     } else {
-      QVERIFY(place(*window, QPoint(100, 100)));
+      QVERIFY(place(*window, testArea.topLeft()));
       QTest::qWait(100);
+      QVERIFY(available.contains(
+          window->frameGeometry().adjusted(-60, -60, 60, 60)));
     }
     const QSize initial = window->size();
     const int shadow =

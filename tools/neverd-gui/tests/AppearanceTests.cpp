@@ -62,6 +62,13 @@
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
 #include <memory>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace neverd::gui;
 
 class AppearanceTests final : public QObject {
@@ -212,6 +219,21 @@ private slots:
       // Check placement only after showing it, before sampling the shadow.
       QVERIFY(backdrop.rect().contains(
           backdrop.mapFromGlobal(dialog->mapToGlobal(QPoint()))));
+#ifdef Q_OS_WIN
+      // A native sizing border must not inset our frameless client area.
+      // Otherwise fractional-scale screen mapping samples an inner shadow
+      // pixel even though the backing store paints at the window origin.
+      const auto handle = reinterpret_cast<HWND>(dialog->winId());
+      RECT frame{}, client{};
+      POINT origin{};
+      QVERIFY(GetWindowRect(handle, &frame));
+      QVERIFY(GetClientRect(handle, &client));
+      QVERIFY(ClientToScreen(handle, &origin));
+      QCOMPARE(origin.x, frame.left);
+      QCOMPARE(origin.y, frame.top);
+      QCOMPARE(client.right - client.left, frame.right - frame.left);
+      QCOMPARE(client.bottom - client.top, frame.bottom - frame.top);
+#endif
       const QImage painted = dialog->grab().toImage();
       QVERIFY(painted.pixelColor(0, 0).alpha() <
               painted.pixelColor(painted.width() / 2, painted.height() / 2)
