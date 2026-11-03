@@ -23,6 +23,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64CPA.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -2889,13 +2890,14 @@ MedFunc medFunction(bool HasOutput) {
 } // namespace exception_return_fixture
 } // namespace
 
-TEST(AArch64ExceptionReturnSemantics, RawInstructionsNeverPublishOrdinaryIR) {
+TEST(AArch64ExceptionReturnSemantics, RawExceptionReturnIsATerminalTransfer) {
   using namespace exception_return_fixture;
-  const uint32_t Words[] = {
-#define NEVERD_A64_ERET_WORD(Word) Word,
+  const std::pair<uint32_t, bool> Words[] = {
+#define NEVERD_A64_ERET_WORD(Word) {Word, false},
+#define NEVERD_A64_ERET_AUTHENTICATED_WORD(Word) {Word, true},
 #include "AArch64ExceptionReturnFixtures.def"
   };
-  for (uint32_t Word : Words)
+  for (const auto &[Word, Authenticated] : Words)
     for (bool Strict : {false, true})
       for (bool Fast : {false, true}) {
         SCOPED_TRACE(testing::Message() << Word << Strict << Fast);
@@ -2910,9 +2912,20 @@ TEST(AArch64ExceptionReturnSemantics, RawInstructionsNeverPublishOrdinaryIR) {
                  : Dec.decodeOne(Bytes.data(), Bytes.size(), kBase, Insn),
             kWordBytes);
         std::vector<LowOp> Ops;
-        EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
-        EXPECT_TRUE(Ops.empty());
+        if (Authenticated) {
+          EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops));
+        ASSERT_EQ(Ops.size(), 1U);
+        EXPECT_EQ(Ops.front().Opcode, NdOp::INTRINSIC);
+        ASSERT_EQ(Ops.front().NumInputs, 1);
+        EXPECT_EQ(Ops.front().Inputs[0].Offset,
+                  static_cast<uint64_t>(Intrinsic::Eret));
+        EXPECT_EQ(Ops.front().Output.Size, 0);
       }
+  EXPECT_TRUE(intrinsicNeverReturns(Intrinsic::Eret, std::nullopt));
   for (bool Fast : {false, true}) {
     const auto Ops = lift(kReturn, Fast);
     ASSERT_FALSE(Ops.empty());
@@ -2920,90 +2933,137 @@ TEST(AArch64ExceptionReturnSemantics, RawInstructionsNeverPublishOrdinaryIR) {
   }
 }
 
-TEST(AArch64ExceptionReturnSemantics, HandwrittenIRCannotReachLLVMFallback) {
+TEST(AArch64ExceptionReturnSemantics, HandwrittenIRKeepsTheTransferShape) {
   using namespace exception_return_fixture;
   for (bool HasOutput : {false, true}) {
+    SCOPED_TRACE(HasOutput);
     const auto Low = lowFunction(HasOutput);
     auto Error = validateLowInstructionBoundaries(Low.Blocks.front());
-    ASSERT_TRUE(bool(Error));
-    EXPECT_EQ(llvm::toString(std::move(Error)),
-              kAArch64ExceptionReturnUnsupported);
-    for (Arch Target : {Arch::AArch64, Arch::X64}) {
-      LowToMedConverter Converter;
-      EXPECT_THROW(Converter.convert(Low, Target, BinaryFormat::MachO),
+    const auto Function = medFunction(HasOutput);
+    LowToMedConverter Converter;
+    llvm::LLVMContext Context;
+    if (HasOutput) {
+      ASSERT_TRUE(bool(Error));
+      EXPECT_EQ(llvm::toString(std::move(Error)),
+                kAArch64ExceptionReturnMalformed);
+      EXPECT_THROW(Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO),
                    LowToMedConversionError);
-      const auto Function = medFunction(HasOutput);
       EXPECT_FALSE(verifyMedFunc(Function, kFunctionName));
-      for (bool Masked : {false, true}) {
+      EXPECT_THROW(MedLLVMEmitter().emit({Function}, Context, Function.Name,
+                                         Arch::AArch64),
+                   std::runtime_error);
+      continue;
+    }
+    EXPECT_FALSE(bool(Error));
+    EXPECT_NO_THROW(Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO));
+    EXPECT_TRUE(verifyMedFunc(Function, kFunctionName));
+    auto Module = MedLLVMEmitter().emit({Function}, Context, Function.Name,
+                                        Arch::AArch64);
+    ASSERT_TRUE(Module);
+    EXPECT_FALSE(llvm::verifyModule(*Module));
+    const auto *Helper = Module->getFunction(intrinsicCName(Intrinsic::Eret));
+    ASSERT_TRUE(Helper);
+    EXPECT_TRUE(Helper->doesNotReturn());
+    EXPECT_EQ(Helper->getNumUses(), 1U);
+  }
+}
+
+TEST(AArch64ExceptionReturnSemantics, DirectCRenderingCallsTheHelper) {
+  using namespace exception_return_fixture;
+  bool HasIntrinsics = false;
+  EXPECT_EQ(
+      renderIntrinsicCall(Intrinsic::Eret, Arch::AArch64, {}, 0, HasIntrinsics),
+      kHelperCall);
+}
+
+TEST(AArch64ExceptionReturnSemantics, EveryEmitterRejectsMalformedTransfers) {
+  using namespace exception_return_fixture;
+  for (Arch Target : {Arch::AArch64, Arch::ARM, Arch::X64, Arch::X86})
+    for (bool HasOutput : {false, true})
+      for (bool HasOperand : {false, true}) {
+        if (Target == Arch::AArch64 && !HasOutput && !HasOperand)
+          continue;
+        SCOPED_TRACE(testing::Message()
+                     << static_cast<int>(Target) << HasOutput << HasOperand);
+        auto Function = medFunction(HasOutput);
+        if (HasOperand)
+          Function.Blocks.front().Ops.front().addInput(MedVar::makeConst(1, 8));
         llvm::LLVMContext Context;
-        const std::vector<char> Mask{0};
-        EXPECT_THROW(MedLLVMEmitter().emit({Function}, Context, Function.Name,
-                                           Target, {}, nullptr,
-                                           BinaryFormat::MachO, false,
-                                           Masked ? &Mask : nullptr),
-                     std::runtime_error);
-      }
-    }
-  }
-  auto Ordinary = medFunction(false);
-  Ordinary.Blocks.front().Ops.erase(Ordinary.Blocks.front().Ops.begin());
-  EXPECT_TRUE(verifyMedFunc(Ordinary, kFunctionName));
-  llvm::LLVMContext Context;
-  auto Module =
-      MedLLVMEmitter().emit({Ordinary}, Context, Ordinary.Name, Arch::AArch64);
-  ASSERT_TRUE(Module);
-  EXPECT_FALSE(llvm::verifyModule(*Module));
-}
-
-TEST(AArch64ExceptionReturnSemantics, DirectCRenderingCannotEmitBareAssembly) {
-  using namespace exception_return_fixture;
-  for (uint16_t ResultBytes : {0u, kPointerBytes}) {
-    bool HasIntrinsics = false;
-    EXPECT_THROW(
-        renderARMIntrinsicCall(Intrinsic::Eret, {}, ResultBytes, HasIntrinsics),
-        std::invalid_argument);
-    for (Arch Target : {Arch::AArch64, Arch::ARM, Arch::X64, Arch::X86}) {
-      EXPECT_THROW(renderIntrinsicCall(Intrinsic::Eret, Target, {}, ResultBytes,
-                                       HasIntrinsics),
-                   std::invalid_argument);
-      EXPECT_THROW(MultiOutputRender{}(Target, Intrinsic::Eret, {}, {}, {}, {}),
-                   std::invalid_argument);
-    }
-    EXPECT_FALSE(HasIntrinsics);
-  }
-}
-
-TEST(AArch64ExceptionReturnSemantics, HiddenHighIRCannotPublishSource) {
-  using namespace exception_return_fixture;
-  for (bool Hidden : {false, true})
-    for (bool HasOutput : {false, true}) {
-      HighFunc Function;
-      Function.Entry = kBase;
-      Function.Name = kFunctionName;
-      Function.ReturnType = NdType::makeVoid();
-      HighStmt Invoke;
-      Invoke.Kind = StmtKind::ExprStmt;
-      Invoke.Val = std::make_shared<HighExpr>();
-      Invoke.Val->Kind = ExprKind::Call;
-      Invoke.Val->Type = HasOutput ? NdType::makeInt(kPointerBytes, false)
-                                   : NdType::makeVoid();
-      Invoke.Val->IntrinsicId = Intrinsic::Eret;
-      if (Hidden) {
-        HighStmt Branch;
-        Branch.Kind = StmtKind::If;
-        Branch.Cond = HighExpr::makeConst(0, 1);
-        Branch.Body.push_back(Invoke);
-        Function.Body.push_back(Branch);
-      } else
-        Function.Body.push_back(Invoke);
-      for (Arch Target : {Arch::AArch64, Arch::X64}) {
+        EXPECT_THROW(
+            MedLLVMEmitter().emit({Function}, Context, Function.Name, Target),
+            std::runtime_error);
+        bool HasIntrinsics = false;
+        const std::vector<std::string> Operands =
+            HasOperand ? std::vector<std::string>{"1"}
+                       : std::vector<std::string>{};
+        EXPECT_THROW(renderIntrinsicCall(Intrinsic::Eret, Target, Operands,
+                                         HasOutput ? 8 : 0, HasIntrinsics),
+                     std::invalid_argument);
+        HighFunc High;
+        High.Entry = kBase;
+        High.Name = kFunctionName;
+        High.ReturnType = NdType::makeVoid();
+        HighStmt Invoke;
+        Invoke.Kind = StmtKind::ExprStmt;
+        Invoke.Val = std::make_shared<HighExpr>();
+        Invoke.Val->Kind = ExprKind::Call;
+        Invoke.Val->Type =
+            HasOutput ? NdType::makeInt(8, false) : NdType::makeVoid();
+        Invoke.Val->IntrinsicId = Intrinsic::Eret;
+        if (HasOperand)
+          Invoke.Val->Operands.push_back(HighExpr::makeConst(1, 8));
+        HighStmt Hidden;
+        Hidden.Kind = StmtKind::If;
+        Hidden.Cond = HighExpr::makeConst(0, 1);
+        Hidden.Body.push_back(Invoke);
+        High.Body.push_back(Hidden);
         CEmitterOptions Options;
         Options.TheArch = Target;
         std::string Source;
-        llvm::raw_string_ostream Out(Source);
-        EXPECT_THROW(HighCEmitter().emit({Function}, Out, Options),
+        llvm::raw_string_ostream OS(Source);
+        EXPECT_THROW(HighCEmitter().emit({High}, OS, Options),
                      std::invalid_argument);
         EXPECT_TRUE(Source.empty());
       }
-    }
+  auto Function = medFunction(false);
+  Function.Blocks.front().Ops.front().IntrinsicOutputs.push_back(
+      MedVar::makeConst(1, 8));
+  EXPECT_FALSE(verifyMedFunc(Function, kFunctionName));
+  llvm::LLVMContext Context;
+  EXPECT_THROW(
+      MedLLVMEmitter().emit({Function}, Context, Function.Name, Arch::AArch64),
+      std::runtime_error);
+}
+
+TEST(AArch64ExceptionReturnSemantics, HighCPublishesTheTerminalCall) {
+  using namespace exception_return_fixture;
+  for (bool Hidden : {false, true}) {
+    SCOPED_TRACE(Hidden);
+    HighFunc Function;
+    Function.Entry = kBase;
+    Function.Name = kFunctionName;
+    Function.ReturnType = NdType::makeVoid();
+    HighStmt Invoke;
+    Invoke.Kind = StmtKind::ExprStmt;
+    Invoke.Val = std::make_shared<HighExpr>();
+    Invoke.Val->Kind = ExprKind::Call;
+    Invoke.Val->Type = NdType::makeVoid();
+    Invoke.Val->IntrinsicId = Intrinsic::Eret;
+    if (Hidden) {
+      HighStmt Branch;
+      Branch.Kind = StmtKind::If;
+      Branch.Cond = HighExpr::makeConst(0, 1);
+      Branch.Body.push_back(Invoke);
+      Function.Body.push_back(Branch);
+    } else
+      Function.Body.push_back(Invoke);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_NO_THROW(HighCEmitter().emit({Function}, Out, Options));
+    Out.flush();
+    EXPECT_NE(Source.find(std::string(kHelperCall) + ";"), std::string::npos)
+        << Source;
+  }
 }

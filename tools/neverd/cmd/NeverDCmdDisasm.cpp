@@ -180,13 +180,17 @@ int runDisasm(neverd_session_t Sess) {
   if (JsonOutput) {
     std::string FuncId = DisasmFunc.getValue();
     int FuncIdx = findFunction(Sess, FuncId);
-    if (FuncIdx < 0) {
+    // An address no listed function starts is disassembled from there, as
+    // the text form does.
+    const auto Entry = FuncIdx >= 0
+                           ? std::optional(neverd_func_entry(Sess, FuncIdx))
+                           : parseAddrArg(DisasmFunc);
+    if (!Entry) {
       WithColor::error() << "disasm failed: function not found\n";
       return 1;
     }
 
-    const char *Json =
-        neverd_disasm_json(Sess, neverd_func_entry(Sess, FuncIdx), 0);
+    const char *Json = neverd_disasm_json(Sess, *Entry, 0);
     if (Json) {
       outs() << Json << "\n";
       neverd_free_string(Json);

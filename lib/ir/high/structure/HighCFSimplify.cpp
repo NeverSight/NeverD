@@ -28,6 +28,7 @@
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -1291,7 +1292,7 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
 ///  * `if (c) { ...; goto Y; } S...; Y:`  ->  `if (c) { ... } else { S... }`.
 /// True when \p Stmts contains a break or continue that would bind to a loop
 /// wrapped around it.  A nested loop owns both; a switch owns only break.
-static bool hasLooseBreakOrContinue(const std::vector<HighStmt> &Stmts,
+static bool hasLooseBreakOrContinue(llvm::ArrayRef<HighStmt> Stmts,
                                     bool InSwitch = false) {
   for (const HighStmt &S : Stmts) {
     if (S.Kind == StmtKind::Continue ||
@@ -4187,20 +4188,29 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
   DropPlaceholders(Body);
 
   bool Changed = false;
-  // Statements in \p Stmts, counting nested ones.
-  std::function<size_t(const std::vector<HighStmt> &)> Size =
-      [&](const std::vector<HighStmt> &Stmts) {
-        size_t N = 0;
-        for (const HighStmt &S : Stmts) {
-          ++N;
-          N += Size(S.Body) + Size(S.ElseBody) + Size(S.DefaultBody);
-          for (const auto &C : S.Cases)
-            N += Size(C.Body);
-          for (const auto &ClauseBody : S.EHClauseBodies)
-            N += Size(ClauseBody);
-        }
-        return N;
-      };
+  // Statements in \p Stmts[From, To), counting nested ones, or \p Cap when
+  // there are at least that many.
+  std::function<size_t(const std::vector<HighStmt> &, size_t, size_t, size_t)>
+      SizeUpTo = [&](const std::vector<HighStmt> &Stmts, size_t From, size_t To,
+                     size_t Cap) -> size_t {
+    size_t N = 0;
+    const auto Add = [&](const std::vector<HighStmt> &Child) {
+      if (N < Cap)
+        N += SizeUpTo(Child, 0, Child.size(), Cap - N);
+    };
+    for (size_t K = From; K < To && N < Cap; ++K) {
+      const HighStmt &S = Stmts[K];
+      ++N;
+      Add(S.Body);
+      Add(S.ElseBody);
+      Add(S.DefaultBody);
+      for (const auto &C : S.Cases)
+        Add(C.Body);
+      for (const auto &ClauseBody : S.EHClauseBodies)
+        Add(ClauseBody);
+    }
+    return std::min(N, Cap);
+  };
   // Whether a jump enters \p S or a statement nested in it, or \p S holds
   // a loop, switch or try a copy would duplicate.
   std::function<bool(const HighStmt &)> Uncopyable = [&](const HighStmt &S) {
@@ -4262,6 +4272,19 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
   auto ArmOf = [](const Level &V) -> std::vector<HighStmt> & {
     return V.Then ? V.If->Body : V.If->ElseBody;
   };
+  // What Uncopyable said of each statement an exit's check has looked at,
+  // until the next rewrite changes the tree: every exit path through an if
+  // checks the same long tail of its arm.
+  std::unordered_map<const std::vector<HighStmt> *, std::vector<int8_t>>
+      SeenUncopyable;
+  auto uncopyableAt = [&](const std::vector<HighStmt> &List, size_t P) {
+    std::vector<int8_t> &Seen = SeenUncopyable[&List];
+    if (Seen.empty())
+      Seen.assign(List.size(), -1);
+    if (Seen[P] < 0)
+      Seen[P] = Uncopyable(List[P]);
+    return Seen[P] != 0;
+  };
   // Rewrites the exit at the end of \p Path when its label X follows L[I],
   // later in L or as \p After, what runs once L ends.
   auto copyExit = [&](std::vector<HighStmt> &L, size_t I, va_t After,
@@ -4276,6 +4299,29 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       ++J;
     if (J >= L.size() && X != After)
       return false;
+    // Level K's other arm continues, as before, with the tails of the levels
+    // above it, innermost first, then R = L[I + 1, J): the rewrite adds
+    // D - 1 copies of R and D - 2 - K of level K's tail.  Measure them first,
+    // counting no further than the limit, so a long R or tail is refused
+    // without being copied or inspected.
+    const size_t Limit = limits::kMaxSkippedCopyStatements;
+    size_t Added = (D - 1) * SizeUpTo(L, I + 1, J, Limit + 1);
+    for (size_t K = 0; K + 2 < D && Added <= Limit; ++K) {
+      const std::vector<HighStmt> &A = ArmOf(Path[K]);
+      Added += (D - 2 - K) * SizeUpTo(A, Path[K].Pos + 1, A.size(), Limit + 1);
+    }
+    if (Added > Limit)
+      return false;
+    for (size_t K = 0; K + 1 < D; ++K) {
+      const std::vector<HighStmt> &A = ArmOf(Path[K]);
+      for (size_t P = Path[K].Pos + 1; P < A.size(); ++P)
+        if (uncopyableAt(A, P))
+          return false;
+    }
+    for (size_t P = I + 1; P < J; ++P)
+      if (uncopyableAt(L, P))
+        return false;
+    SeenUncopyable.clear();
     // Tails[K]: the rest of level K's arm after the if one level down.
     std::vector<std::vector<HighStmt>> Tails(D - 1);
     for (size_t K = 0; K + 1 < D; ++K) {
@@ -4283,28 +4329,12 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       Tails[K].assign(A.begin() + Path[K].Pos + 1, A.end());
     }
     const std::vector<HighStmt> R(L.begin() + I + 1, L.begin() + J);
-    for (const auto &T : Tails)
-      for (const HighStmt &S : T)
-        if (Uncopyable(S))
-          return false;
-    for (const HighStmt &S : R)
-      if (Uncopyable(S))
-        return false;
-    // Level K's other arm continues, as before, with the tails of the levels
-    // above it, innermost first, then R.
     std::vector<std::vector<HighStmt>> Append(D);
-    size_t Total = 0;
     for (size_t K = 0; K < D; ++K) {
       for (size_t Up = K; Up-- > 0;)
         Append[K].insert(Append[K].end(), Tails[Up].begin(), Tails[Up].end());
       Append[K].insert(Append[K].end(), R.begin(), R.end());
-      Total += Size(Append[K]);
     }
-    size_t Original = Size(R);
-    for (const auto &T : Tails)
-      Original += Size(T);
-    if (Total - Original > limits::kMaxSkippedCopyStatements)
-      return false;
     for (size_t K = 0; K < D; ++K) {
       const Level &V = Path[K];
       std::vector<HighStmt> &A = ArmOf(V);
@@ -4334,6 +4364,26 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
 
   std::function<void(std::vector<HighStmt> &)> Visit = [&](std::vector<HighStmt>
                                                                &L) {
+    // The addresses of statements L has held. A label search for an address
+    // L has none of need not rescan the rest of L for every jump to it:
+    // statements leave L freely, and the rewrites that bring one in add it.
+    std::unordered_set<va_t> Held;
+    for (const HighStmt &S : L)
+      Held.insert(S.Addr);
+    // The first label at Addr after L[I], or L.size().
+    const auto labelAfter = [&](size_t I, va_t Addr) {
+      size_t J = Held.count(Addr) ? I + 1 : L.size();
+      while (J < L.size() && !(L[J].Addr == Addr && labelStart(L, J)))
+        ++J;
+      return J;
+    };
+    // One past the last label at Addr before L[I], or 0.
+    const auto labelBefore = [&](size_t I, va_t Addr) {
+      size_t K = Held.count(Addr) ? I : 0;
+      while (K > 0 && !(L[K - 1].Addr == Addr && labelStart(L, K - 1)))
+        --K;
+      return K;
+    };
     for (size_t I = 0; I < L.size(); ++I) {
       // `if (c) {} else { A }`  ->  `if (!c) { A }`.
       if (L[I].Kind == StmtKind::IfElse && L[I].Cond && L[I].Body.empty() &&
@@ -4352,15 +4402,16 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       if (L[I].Kind == StmtKind::Goto || isCondGoto(L[I])) {
         const bool Conditional = L[I].Kind == StmtKind::If;
         const va_t X = Conditional ? L[I].Body[0].GotoTarget : L[I].GotoTarget;
-        size_t K = I;
-        while (K > 0 && !(L[K - 1].Addr == X && labelStart(L, K - 1)))
-          --K;
+        size_t K = labelBefore(I, X);
         if (K > 0 && !labelStart(L, I) &&
             (Conditional || L[I].Addr == 0 || L[I].Addr == InvalidVA ||
              L[I].Addr != L[I - 1].Addr)) {
           --K;
-          std::vector<HighStmt> LoopBody(L.begin() + K, L.begin() + I);
-          if (!LoopBody.empty() && !hasLooseBreakOrContinue(LoopBody)) {
+          if (K < I && !hasLooseBreakOrContinue(
+                           llvm::ArrayRef<HighStmt>(L).slice(K, I - K))) {
+            std::vector<HighStmt> LoopBody(
+                std::make_move_iterator(L.begin() + K),
+                std::make_move_iterator(L.begin() + I));
             HighStmt Loop;
             Loop.Kind = Conditional ? StmtKind::DoWhile : StmtKind::While;
             Loop.Cond = Conditional ? L[I].Cond : HighExpr::makeConst(1, 1);
@@ -4368,6 +4419,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
             Loop.Body = std::move(LoopBody);
             --Uses[X];
             L.erase(L.begin() + K, L.begin() + I + 1);
+            Held.insert(Loop.Addr);
             L.insert(L.begin() + K, std::move(Loop));
             I = K;
             Changed = true;
@@ -4481,9 +4533,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       if (L[I].Kind == StmtKind::If && L[I].Cond && L[I].ElseBody.empty() &&
           !L[I].Body.empty() && L[I].Body.back().Kind == StmtKind::Goto) {
         const va_t Y = L[I].Body.back().GotoTarget;
-        size_t J = I + 1;
-        while (J < L.size() && !(L[J].Addr == Y && labelStart(L, J)))
-          ++J;
+        size_t J = labelAfter(I, Y);
         // A label after a terminator starts an out-of-line block; moving
         // that block (T1) reads better than wrapping everything before it.
         // Once the local rewrites have settled (SpliceRegions), a jump that
@@ -4520,9 +4570,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
           L[I].ElseBody.back().Kind == StmtKind::Goto &&
           (L[I].Body.empty() || !isTerminator(L[I].Body.back()))) {
         const va_t Y = L[I].ElseBody.back().GotoTarget;
-        size_t J = I + 1;
-        while (J < L.size() && !(L[J].Addr == Y && labelStart(L, J)))
-          ++J;
+        size_t J = labelAfter(I, Y);
         // The labels S starts and the jumps inside S to each address.
         std::vector<va_t> Labels;
         std::map<va_t, unsigned> Inside;
@@ -4653,10 +4701,9 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
         });
         if (L[I].Body.back().Kind == StmtKind::Goto)
           ArmTargets.erase(L[I].Body.back().GotoTarget);
-        size_t J = I + 1;
-        while (J < L.size() &&
-               !(labelStart(L, J) && ArmTargets.count(L[J].Addr)))
-          ++J;
+        size_t J = L.size();
+        for (const va_t Target : ArmTargets)
+          J = std::min(J, labelAfter(I, Target));
         if (J < L.size() && J > I + 1) {
           L[I].Kind = StmtKind::IfElse;
           L[I].ElseBody.assign(std::make_move_iterator(L.begin() + I + 1),
@@ -4691,6 +4738,8 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
             L[I].Body = std::move(Else);
             Else.clear();
           }
+          for (const HighStmt &S : Tail)
+            Held.insert(S.Addr);
           L.insert(L.begin() + I + 1, std::make_move_iterator(Tail.begin()),
                    std::make_move_iterator(Tail.end()));
           Changed = true;
@@ -4716,6 +4765,8 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
         std::vector<HighStmt> Tail = std::move(L[I].ElseBody);
         L[I].ElseBody.clear();
         L[I].Kind = StmtKind::If;
+        for (const HighStmt &S : Tail)
+          Held.insert(S.Addr);
         L.insert(L.begin() + I + 1, std::make_move_iterator(Tail.begin()),
                  std::make_move_iterator(Tail.end()));
         Changed = true;
@@ -4767,6 +4818,8 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
             L.erase(L.begin() + I + 1, L.end());
             L[I].Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, L[I].Cond);
             L[I].Body = std::move(R);
+            for (const HighStmt &S : T)
+              Held.insert(S.Addr);
             L.insert(L.end(), std::make_move_iterator(T.begin()),
                      std::make_move_iterator(T.end()));
             Changed = true;
@@ -4779,9 +4832,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       if (usesOf(X) != 1)
         continue;
       // T1: find X's block after this jump, entered only here.
-      size_t K = I + 1;
-      while (K < L.size() && !(L[K].Addr == X && labelStart(L, K)))
-        ++K;
+      size_t K = labelAfter(I, X);
       if (K >= L.size() || K == I + 1 || !isTerminator(L[K - 1]))
         continue;
       size_t M = K;
@@ -4808,9 +4859,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       if (Last.Kind != StmtKind::Goto)
         continue;
       const va_t Y = Last.GotoTarget;
-      size_t J = I + 1;
-      while (J < L.size() && !(L[J].Addr == Y && labelStart(L, J)))
-        ++J;
+      size_t J = labelAfter(I, Y);
       if (J >= L.size())
         continue;
       popGoto(L[I].Body);
@@ -4844,24 +4893,53 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
   // original statements become Nop.  Blocks never cross the boundary of a
   // try body or of one of its handlers, which only the exception dispatcher
   // enters, and carry no break/continue whose target the move could change.
+  // Which list of its enclosing statement holds a site, so that a splice
+  // need not walk the tree to find the lists the sites it shifts now sit in.
+  enum class ArmKind : uint8_t { Body, Else, Case, Default, Clause };
+  struct Arm {
+    ArmKind Kind = ArmKind::Body;
+    uint32_t Index = 0;
+    bool operator==(const Arm &Other) const {
+      return Kind == Other.Kind && Index == Other.Index;
+    }
+  };
   struct Site {
     std::vector<HighStmt> *List = nullptr;
     size_t Index = 0;
     /// The innermost try body or handler holding the site.
     const void *Try = nullptr;
-    // Index of the innermost enclosing statement in this round's parents.
+    // Index of the innermost enclosing statement in Parents.
     std::optional<size_t> Parent;
+    /// The list of that statement holding the site.
+    Arm In;
   };
   struct ParentSite {
-    const std::vector<HighStmt> *List;
+    std::vector<HighStmt> *List;
     size_t Index;
     std::optional<size_t> Parent;
+    Arm In;
   };
   struct ParentScope {
-    const std::vector<HighStmt> *List;
+    std::vector<HighStmt> *List;
     size_t Index;
     ParentScope *Parent;
     std::optional<size_t> Retained;
+    Arm In;
+  };
+  const auto listIn = [](HighStmt &S, Arm In) -> std::vector<HighStmt> & {
+    switch (In.Kind) {
+    case ArmKind::Body:
+      return S.Body;
+    case ArmKind::Else:
+      return S.ElseBody;
+    case ArmKind::Case:
+      return S.Cases[In.Index].Body;
+    case ArmKind::Default:
+      return S.DefaultBody;
+    case ArmKind::Clause:
+      return S.EHClauseBodies[In.Index];
+    }
+    llvm_unreachable("unknown statement arm");
   };
   // A no-op that a jump still enters falls through like any statement.
   auto prevNonNop = [&](const std::vector<HighStmt> &L,
@@ -4916,93 +4994,276 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
     }
     return std::nullopt;
   };
+  std::unordered_map<va_t, Site> Labels;
+  std::vector<std::pair<Site, va_t>> Gotos;
+  // Retain ancestors only when a label or goto needs them. Sites share
+  // these paths through indices, which survive table growth.
+  std::vector<ParentSite> Parents;
+  // Statements starting each address group: a jump can name an address
+  // only when exactly one statement starts it.
+  std::unordered_map<va_t, unsigned> Starts;
+  // Non-Nop label statements of each address: Labels holds the first.
+  std::unordered_map<va_t, unsigned> LabelStarts;
+  auto RetainParent = [&](auto &&Self,
+                          ParentScope *Scope) -> std::optional<size_t> {
+    if (!Scope)
+      return std::nullopt;
+    if (!Scope->Retained) {
+      const auto Parent = Self(Self, Scope->Parent);
+      Scope->Retained = Parents.size();
+      Parents.push_back({Scope->List, Scope->Index, Parent, Scope->In});
+    }
+    return Scope->Retained;
+  };
+  std::function<void(std::vector<HighStmt> &, const void *, ParentScope *, Arm)>
+      Collect = [&](std::vector<HighStmt> &L, const void *Try,
+                    ParentScope *Parent, Arm In) {
+        for (size_t I = 0; I < L.size(); ++I) {
+          HighStmt &S = L[I];
+          if (S.Addr != 0 && S.Addr != InvalidVA &&
+              (I == 0 || L[I - 1].Addr != S.Addr))
+            ++Starts[S.Addr];
+          if (labelStart(L, I) && S.Kind != StmtKind::Nop) {
+            ++LabelStarts[S.Addr];
+            Labels.emplace(
+                S.Addr,
+                Site{&L, I, Try, RetainParent(RetainParent, Parent), In});
+          }
+          if (S.Kind == StmtKind::Goto && usesOf(S.GotoTarget) == 1)
+            Gotos.push_back(
+                {Site{&L, I, Try, RetainParent(RetainParent, Parent), In},
+                 S.GotoTarget});
+          ParentScope Scope{&L, I, Parent, std::nullopt, In};
+          auto CollectChild = [&](std::vector<HighStmt> &Child,
+                                  const void *ChildTry, Arm ChildIn) {
+            if (!Child.empty())
+              Collect(Child, ChildTry, &Scope, ChildIn);
+          };
+          const bool IsTry = S.Kind == StmtKind::SEHTry ||
+                             S.Kind == StmtKind::CxxTry ||
+                             S.Kind == StmtKind::ItaniumTry;
+          CollectChild(S.Body, IsTry ? static_cast<const void *>(&S) : Try,
+                       {ArmKind::Body, 0});
+          CollectChild(S.ElseBody, Try, {ArmKind::Else, 0});
+          for (uint32_t C = 0; C < S.Cases.size(); ++C)
+            CollectChild(S.Cases[C].Body, Try, {ArmKind::Case, C});
+          CollectChild(S.DefaultBody, Try, {ArmKind::Default, 0});
+          for (uint32_t C = 0; C < S.EHClauseBodies.size(); ++C)
+            CollectChild(S.EHClauseBodies[C], &S.EHClauseBodies[C],
+                         {ArmKind::Clause, C});
+        }
+      };
+  const auto collectTables = [&] {
+    Labels.clear();
+    Gotos.clear();
+    Parents.clear();
+    Starts.clear();
+    LabelStarts.clear();
+    Collect(Body, nullptr, nullptr, Arm{});
+  };
+  // What runs after the list holding \p At falls off its end: the next
+  // statement after the if/else, block or switch around it, when exactly
+  // one statement starts that address.
+  auto FollowOf = [&](const Site &At) -> va_t {
+    for (auto P = At.Parent; P; P = Parents[*P].Parent) {
+      const auto &Ancestor = Parents[*P];
+      const auto *ParentList = Ancestor.List;
+      const size_t ParentIndex = Ancestor.Index;
+      const HighStmt &Parent = (*ParentList)[ParentIndex];
+      if (Parent.Kind != StmtKind::If && Parent.Kind != StmtKind::IfElse &&
+          Parent.Kind != StmtKind::Block && Parent.Kind != StmtKind::Switch)
+        return 0;
+      if (ParentIndex + 1 == ParentList->size())
+        continue;
+      const HighStmt &Next = (*ParentList)[ParentIndex + 1];
+      if (Next.Kind == StmtKind::Nop || Next.Addr == 0 ||
+          Next.Addr == InvalidVA || Next.Addr == Parent.Addr)
+        return 0;
+      auto It = Starts.find(Next.Addr);
+      return It != Starts.end() && It->second == 1 ? Next.Addr : 0;
+    }
+    return 0;
+  };
+  const auto groupStart = [](const std::vector<HighStmt> &L, size_t I) {
+    return L[I].Addr != 0 && L[I].Addr != InvalidVA &&
+           (I == 0 || L[I - 1].Addr != L[I].Addr);
+  };
+  const auto labelStatement = [&](const std::vector<HighStmt> &L, size_t I) {
+    return labelStart(L, I) && L[I].Kind != StmtKind::Nop;
+  };
+  // A statement whose predecessor a splice changes, as it was before.
+  struct Edge {
+    bool Present = false;
+    va_t Addr = 0;
+    bool Start = false;
+    bool Label = false;
+  };
+  const auto edgeAt = [&](const std::vector<HighStmt> &L, size_t I) {
+    return Edge{true, L[I].Addr, groupStart(L, I), labelStatement(L, I)};
+  };
+  // A splice of the block at Block, through LL[End], into the goto at Goto,
+  // the GotoIndex-th of Gotos: Inserted statements now start at
+  // GL[InsertAt], and the goto was erased or became an anchor.
+  struct Splice {
+    Site Block;
+    size_t End = 0;
+    Site Goto;
+    size_t GotoIndex = 0;
+    bool Anchored = false;
+    size_t InsertAt = 0;
+    size_t Inserted = 0;
+    va_t Target = 0;
+    va_t FallTarget = 0;
+    unsigned FallUses = 0;
+    bool BlockStarted = false;
+    Edge AfterBlock, AtGoto, AfterGoto;
+  };
+  // Moves the tables to the tree \p S left, as a collection of it would
+  // build them.  False when that needs an order of label statements only a
+  // collection gives: a label appears or changes where a predecessor
+  // changed, or a moved one shares its address.  So does a jump the block
+  // gains to its own address, which then still has a label.
+  const auto followSplice = [&](const Splice &S) -> bool {
+    if (S.FallTarget && (S.FallUses == 0 || S.FallTarget == S.Target))
+      return false;
+    const bool SameList =
+        S.Block.Parent == S.Goto.Parent && S.Block.In == S.Goto.In;
+    const size_t K = S.Block.Index, M = S.End, G0 = S.Goto.Index;
+    const size_t Delta = S.Inserted - (S.Anchored ? 0 : 1);
+    // Sites in the block move to GL; those after the goto in GL shift.
+    const auto remap = [&](std::optional<size_t> &Parent, Arm &In,
+                           size_t &Index) {
+      if (Parent == S.Block.Parent && In == S.Block.In && Index >= K &&
+          Index <= M) {
+        Parent = S.Goto.Parent;
+        In = S.Goto.In;
+        Index = S.InsertAt + (Index - K);
+        return true;
+      }
+      if (Parent == S.Goto.Parent && In == S.Goto.In && Index > G0)
+        Index += Delta;
+      return false;
+    };
+    // Earlier splices give a moved statement the goto's parent, which may
+    // come later in Parents: follow parents, not table order.
+    std::vector<std::optional<size_t>> Before(Parents.size());
+    std::vector<uint8_t> MovedParent(Parents.size());
+    for (size_t P = 0; P < Parents.size(); ++P) {
+      Before[P] = Parents[P].Parent;
+      MovedParent[P] =
+          remap(Parents[P].Parent, Parents[P].In, Parents[P].Index) ? 2 : 0;
+    }
+    std::function<bool(size_t)> moved = [&](size_t P) -> bool {
+      if (MovedParent[P] == 0)
+        MovedParent[P] = Before[P] && moved(*Before[P]) ? 2 : 1;
+      return MovedParent[P] == 2;
+    };
+    for (size_t P = 0; P < Parents.size(); ++P)
+      moved(P);
+    std::vector<uint8_t> Linked(Parents.size());
+    std::function<void(size_t)> link = [&](size_t P) {
+      if (Linked[P])
+        return;
+      Linked[P] = 1;
+      ParentSite &Entry = Parents[P];
+      if (!Entry.Parent) {
+        Entry.List = &Body;
+        return;
+      }
+      link(*Entry.Parent);
+      const ParentSite &Up = Parents[*Entry.Parent];
+      Entry.List = &listIn((*Up.List)[Up.Index], Entry.In);
+    };
+    for (size_t P = 0; P < Parents.size(); ++P)
+      link(P);
+    // The insertion can move the list the block left, when it sits in a
+    // statement after the goto: find both lists anew.
+    const auto listAt = [&](std::optional<size_t> Parent, Arm In) {
+      if (!Parent)
+        return &Body;
+      const ParentSite &Entry = Parents[*Parent];
+      return &listIn((*Entry.List)[Entry.Index], In);
+    };
+    std::vector<HighStmt> &LL = *listAt(S.Block.Parent, S.Block.In);
+    std::vector<HighStmt> &GL = *listAt(S.Goto.Parent, S.Goto.In);
+    const auto count = [&](va_t Addr, bool Before, bool After) {
+      if (After && !Before)
+        ++Starts[Addr];
+      else if (Before && !After)
+        --Starts[Addr];
+    };
+    // The block's first statement: no jump enters it now.
+    count(S.Target, S.BlockStarted, groupStart(GL, S.InsertAt));
+    const auto follow = [&](const Edge &Before, const std::vector<HighStmt> *L,
+                            size_t I) {
+      count(Before.Addr, Before.Start, L && groupStart(*L, I));
+      return (L && labelStatement(*L, I)) == Before.Label;
+    };
+    if (S.AfterBlock.Present &&
+        !follow(S.AfterBlock, &LL,
+                SameList && M + 1 > G0 ? M + 1 + Delta : M + 1))
+      return false;
+    if (!follow(S.AtGoto, S.Anchored ? &GL : nullptr, G0))
+      return false;
+    if (S.AfterGoto.Present && !follow(S.AfterGoto, &GL, G0 + 1 + Delta))
+      return false;
+    const auto relink = [&](Site &At) {
+      const std::optional<size_t> Up = At.Parent;
+      const bool Moved =
+          remap(At.Parent, At.In, At.Index) || (Up && MovedParent[*Up] == 2);
+      if (At.Parent) {
+        const ParentSite &Entry = Parents[*At.Parent];
+        At.List = &listIn((*Entry.List)[Entry.Index], At.In);
+      } else {
+        At.List = &Body;
+      }
+      return Moved;
+    };
+    Labels.erase(S.Target);
+    LabelStarts.erase(S.Target);
+    for (auto &[Addr, At] : Labels)
+      if (relink(At) && LabelStarts[Addr] > 1)
+        return false;
+    // The block's gotos follow it to where the goto was. One that entered
+    // FallTarget alone now shares it with the new jump.
+    std::vector<uint8_t> MovedGoto(Gotos.size());
+    for (size_t I = 0; I < Gotos.size(); ++I)
+      if (I != S.GotoIndex)
+        MovedGoto[I] = relink(Gotos[I].first);
+    const auto keep = [&](size_t I) {
+      return !(S.FallUses == 1 && Gotos[I].second == S.FallTarget);
+    };
+    std::vector<std::pair<Site, va_t>> Next;
+    Next.reserve(Gotos.size());
+    for (size_t I = 0; I < Gotos.size(); ++I) {
+      if (I == S.GotoIndex) {
+        for (size_t J = 0; J < Gotos.size(); ++J)
+          if (MovedGoto[J] && keep(J))
+            Next.push_back(Gotos[J]);
+      } else if (!MovedGoto[I] && keep(I)) {
+        Next.push_back(Gotos[I]);
+      }
+    }
+    Gotos = std::move(Next);
+    return true;
+  };
+  bool Stale = true;
   for (unsigned Applied = 0;
        Applied <
        ::neverd::limits::ir::kHighCFSimplifyReduceSingleUseGotosAppliedLimit;
        ++Applied) {
-    std::unordered_map<va_t, Site> Labels;
-    std::vector<std::pair<Site, va_t>> Gotos;
-    // Retain ancestors only when a label or goto needs them. Sites share
-    // these paths through indices, which survive table growth. Rebuild the
-    // table after every splice, before reusing any site.
-    std::vector<ParentSite> Parents;
-    auto RetainParent = [&](auto &&Self,
-                            ParentScope *Scope) -> std::optional<size_t> {
-      if (!Scope)
-        return std::nullopt;
-      if (!Scope->Retained) {
-        const auto Parent = Self(Self, Scope->Parent);
-        Scope->Retained = Parents.size();
-        Parents.push_back({Scope->List, Scope->Index, Parent});
-      }
-      return Scope->Retained;
-    };
-    // Statements starting each address group: a jump can name an address
-    // only when exactly one statement starts it.
-    std::unordered_map<va_t, unsigned> Starts;
-    std::function<void(std::vector<HighStmt> &, const void *, ParentScope *)>
-        Collect = [&](std::vector<HighStmt> &L, const void *Try,
-                      ParentScope *Parent) {
-          for (size_t I = 0; I < L.size(); ++I) {
-            HighStmt &S = L[I];
-            if (S.Addr != 0 && S.Addr != InvalidVA &&
-                (I == 0 || L[I - 1].Addr != S.Addr))
-              ++Starts[S.Addr];
-            if (labelStart(L, I) && S.Kind != StmtKind::Nop)
-              Labels.emplace(
-                  S.Addr, Site{&L, I, Try, RetainParent(RetainParent, Parent)});
-            if (S.Kind == StmtKind::Goto && usesOf(S.GotoTarget) == 1)
-              Gotos.push_back(
-                  {Site{&L, I, Try, RetainParent(RetainParent, Parent)},
-                   S.GotoTarget});
-            ParentScope Scope{&L, I, Parent, std::nullopt};
-            auto CollectChild = [&](std::vector<HighStmt> &Child,
-                                    const void *ChildTry) {
-              if (!Child.empty())
-                Collect(Child, ChildTry, &Scope);
-            };
-            const bool IsTry = S.Kind == StmtKind::SEHTry ||
-                               S.Kind == StmtKind::CxxTry ||
-                               S.Kind == StmtKind::ItaniumTry;
-            CollectChild(S.Body, IsTry ? static_cast<const void *>(&S) : Try);
-            CollectChild(S.ElseBody, Try);
-            for (auto &C : S.Cases)
-              CollectChild(C.Body, Try);
-            CollectChild(S.DefaultBody, Try);
-            for (auto &ClauseBody : S.EHClauseBodies)
-              CollectChild(ClauseBody, &ClauseBody);
-          }
-        };
-    Collect(Body, nullptr, nullptr);
-    // What runs after the list holding \p At falls off its end: the next
-    // statement after the if/else, block or switch around it, when exactly
-    // one statement starts that address.
-    auto FollowOf = [&](const Site &At) -> va_t {
-      for (auto P = At.Parent; P; P = Parents[*P].Parent) {
-        const auto &Ancestor = Parents[*P];
-        const auto *ParentList = Ancestor.List;
-        const size_t ParentIndex = Ancestor.Index;
-        const HighStmt &Parent = (*ParentList)[ParentIndex];
-        if (Parent.Kind != StmtKind::If && Parent.Kind != StmtKind::IfElse &&
-            Parent.Kind != StmtKind::Block && Parent.Kind != StmtKind::Switch)
-          return 0;
-        if (ParentIndex + 1 == ParentList->size())
-          continue;
-        const HighStmt &Next = (*ParentList)[ParentIndex + 1];
-        if (Next.Kind == StmtKind::Nop || Next.Addr == 0 ||
-            Next.Addr == InvalidVA || Next.Addr == Parent.Addr)
-          return 0;
-        auto It = Starts.find(Next.Addr);
-        return It != Starts.end() && It->second == 1 ? Next.Addr : 0;
-      }
-      return 0;
-    };
+    if (Stale) {
+      collectTables();
+      Stale = false;
+    }
     bool Done = false;
-    for (auto &[GotoSite, X] : Gotos) {
+    for (size_t GotoIndex = 0; GotoIndex < Gotos.size(); ++GotoIndex) {
+      const Site GotoSite = Gotos[GotoIndex].first;
+      const va_t X = Gotos[GotoIndex].second;
       auto LabelIt = Labels.find(X);
       if (LabelIt == Labels.end())
         continue;
-      Site &Block = LabelIt->second;
+      const Site Block = LabelIt->second;
       std::vector<HighStmt> &LL = *Block.List;
       const size_t K = Block.Index;
       const HighStmt *Prev = prevNonNop(LL, K);
@@ -5056,10 +5317,28 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
       }
       if (GotoSite.List == &LL && GotoSite.Index >= K && GotoSite.Index <= M)
         Bad = true;
-      std::vector<HighStmt> Moved(LL.begin() + K, LL.begin() + M + 1);
-      Bad |= hasLooseBreakOrContinue(Moved);
-      if (Bad)
+      if (Bad || hasLooseBreakOrContinue(
+                     llvm::ArrayRef<HighStmt>(LL).slice(K, M - K + 1)))
         continue;
+      std::vector<HighStmt> &GL = *GotoSite.List;
+      Splice Record;
+      Record.Block = Block;
+      Record.End = M;
+      Record.Goto = GotoSite;
+      Record.GotoIndex = GotoIndex;
+      Record.Target = X;
+      Record.FallTarget = FallTarget;
+      Record.FallUses = FallTarget ? usesOf(FallTarget) : 0;
+      Record.BlockStarted = groupStart(LL, K);
+      const bool SameList = &LL == &GL;
+      if (M + 1 < LL.size() && !(SameList && M + 1 == GotoSite.Index))
+        Record.AfterBlock = edgeAt(LL, M + 1);
+      Record.AtGoto = edgeAt(GL, GotoSite.Index);
+      if (GotoSite.Index + 1 < GL.size() &&
+          !(SameList && GotoSite.Index + 1 == K))
+        Record.AfterGoto = edgeAt(GL, GotoSite.Index + 1);
+      std::vector<HighStmt> Moved(std::make_move_iterator(LL.begin() + K),
+                                  std::make_move_iterator(LL.begin() + M + 1));
       if (FallTarget) {
         HighStmt Jump;
         Jump.Kind = StmtKind::Goto;
@@ -5072,24 +5351,32 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
         Removed.Kind = StmtKind::Nop;
         LL[J] = std::move(Removed);
       }
-      std::vector<HighStmt> &GL = *GotoSite.List;
       // A goto carrying an entered label keeps it as an empty block.
       HighStmt &G = GL[GotoSite.Index];
       size_t InsertAt = GotoSite.Index;
+      Record.Inserted = Moved.size();
       if (labelStart(GL, GotoSite.Index)) {
         HighStmt Anchor;
         Anchor.Kind = StmtKind::Block;
         Anchor.Addr = G.Addr;
         G = std::move(Anchor);
         ++InsertAt;
+        Record.Anchored = true;
+        GL.insert(GL.begin() + InsertAt, std::make_move_iterator(Moved.begin()),
+                  std::make_move_iterator(Moved.end()));
       } else {
-        GL.erase(GL.begin() + GotoSite.Index);
+        // The block's first statement takes the goto's place, so the
+        // statements after it shift once.
+        G = std::move(Moved.front());
+        GL.insert(GL.begin() + InsertAt + 1,
+                  std::make_move_iterator(Moved.begin() + 1),
+                  std::make_move_iterator(Moved.end()));
       }
-      GL.insert(GL.begin() + InsertAt, std::make_move_iterator(Moved.begin()),
-                std::make_move_iterator(Moved.end()));
+      Record.InsertAt = InsertAt;
       --Uses[X];
       Changed = true;
       Done = true;
+      Stale = !followSplice(Record);
       break;
     }
     if (!Done)

@@ -4849,6 +4849,32 @@ int parameterCount(const std::string &Source, const std::string &Name) {
              : static_cast<int>(Inside.count(',')) + 1;
 }
 
+TEST_F(SessionCAPITest, ABinaryFileAtZeroStartsAtItsEntry) {
+  // bl 0x10; ret; two zero words; mov x0, #1; ret: AArch64 code loaded at
+  // zero, as a kernel Image is, whose entry is its first byte.
+  std::string Code;
+  for (const uint32_t Word :
+       {0x94000004u, 0xD65F03C0u, 0u, 0u, 0xD2800020u, 0xD65F03C0u})
+    for (int Shift = 0; Shift < 32; Shift += 8)
+      Code.push_back(static_cast<char>(Word >> Shift));
+  const auto Path = write("image-at-zero.bin", Code);
+  ASSERT_EQ(neverd_session_set_load_options(
+                Session, R"({"loader":"binary","processor":"aarch64"})"),
+            0)
+      << takeString(neverd_last_error(Session));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  EXPECT_EQ(neverd_session_entry_addr(Session), 0u);
+  const std::string Entries = takeString(neverd_entrypoints_json(Session));
+  EXPECT_NE(Entries.find("\"entry\""), std::string::npos) << Entries;
+  ASSERT_GT(neverd_session_discover_functions(Session), 0);
+  EXPECT_GE(neverd_func_find_by_addr(Session, 0), 0);
+  EXPECT_GE(neverd_func_find_by_addr(Session, 0x10), 0);
+  // Code no function lists still disassembles, named for its address.
+  const std::string Loose = takeString(neverd_disasm_text(Session, "0x8", 0));
+  EXPECT_NE(Loose.find("sub_8"), std::string::npos) << Loose;
+}
+
 TEST_F(SessionCAPITest, BinaryFilesDecompileUnderThePlatformTheirCodeShows) {
   for (const bool Windows : {false, true}) {
     size_t Add = 0;

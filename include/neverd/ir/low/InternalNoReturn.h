@@ -50,8 +50,9 @@ public:
 
   /// True when the code range unwind or symbol metadata gives the function at
   /// \p Target holds no instruction that returns, decoded in order from its
-  /// start.  Without such a range in an x64, ARM or ARM64 PE image, true when
-  /// no path from the start reaches a return (entryFlowNeverResumes), as in a
+  /// start.  Without such a range in an x64, ARM or ARM64 PE or raw image, true
+  /// when no path from the start reaches a return (entryFlowNeverResumes), as
+  /// in a
   /// __fastfail stub or a routine that ends in a loop. Otherwise without such
   /// a range, past limits::kMaxNoReturnScreenBytes, or where a byte does not
   /// decode, the function may return. Where the user states of some function

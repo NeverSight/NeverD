@@ -538,6 +538,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
       };
       if (MF.Blocks.empty()) {
         keepIdentity();
+        Pending[FI].ConversionFailure = "no MedIR body";
         continue;
       }
       try {
@@ -570,15 +571,19 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         // Structuring can yield an empty body even when MedIR/LowIR exist.
         // Identity-only HighFuncs become trap stubs in HighC; emit a goto
         // skeleton instead so coverage cannot treat them as silent success.
-        if (HF.Body.empty())
+        if (HF.Body.empty()) {
           keepIdentity();
+          HF.ConversionFailure = "conversion produced no body";
+        }
       } catch (const std::exception &Error) {
         keepIdentity();
+        Pending[FI].ConversionFailure = Error.what();
         llvm::errs() << "pipeline: highir threw on " << MF.Name << " at 0x"
                      << llvm::utohexstr(MF.Entry) << ": " << Error.what()
                      << "\n";
       } catch (...) {
         keepIdentity();
+        Pending[FI].ConversionFailure = "HighIR conversion failed";
         llvm::errs() << "pipeline: highir threw on " << MF.Name << " at 0x"
                      << llvm::utohexstr(MF.Entry) << "\n";
       }

@@ -393,8 +393,19 @@ const char *neverd_function_disasm_json(neverd_session_t Sess,
   }
   std::map<va_t, const LowInstructionBoundary *> Boundaries;
   for (const LowBlock &Block : Function->Blocks)
-    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
+    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries) {
+      // A tail call into another function's entry is modeled at that entry
+      // as a synthetic one-byte `call; ret` whose operations carry no
+      // instruction sequence: it owns none of that function's bytes.
+      if (Boundary.Control == LowInstructionControl::TailCall &&
+          Boundary.OpCount &&
+          Boundary.FirstOp + Boundary.OpCount <= Block.Ops.size() &&
+          std::all_of(Block.Ops.begin() + Boundary.FirstOp,
+                      Block.Ops.begin() + Boundary.FirstOp + Boundary.OpCount,
+                      [](const LowOp &Op) { return Op.Seq < 0; }))
+        continue;
       Boundaries.emplace(Boundary.Address, &Boundary);
+    }
   const size_t Limit = std::clamp(MaxInsns, 1, kMaxFunctionDisasmPage);
   llvm::json::Array Rows;
   InstructionFlowScratch Scratch;
@@ -650,6 +661,11 @@ const char *neverd_disasm_text(neverd_session_t Sess,
       }
       if (!Function)
         Sym = S->Img.findSymbolAt(Addr);
+      // The list may hold only what loading found: code at an address no
+      // function or symbol starts is still disassembled from there, as
+      // decompilation of that address is.
+      if (!Function && !Sym && S->Img.isCodeAddress(Addr))
+        Function = FuncInfo{Addr, 0, "sub_" + llvm::utohexstr(Addr)};
     }
   } else {
     const auto Index = S->functionIndexNamed(FN);

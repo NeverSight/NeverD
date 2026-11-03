@@ -933,12 +933,12 @@ unavailable execution is an explicit skip. Unresolved terminal prefixes and
 implicit-entry joins cannot escape into ordinary source. Frame fixtures reject
 mixed implicit/explicit signing recipes and preserve unrelated tail-call proofs
 across function-lifetime mode temporaries.
-`AArch64ExceptionReturnSemantics` rejects plain ERET in both decoder routes
-and strict/permissive lifting. Handwritten LowIR, MedIR and HighIR cannot
-bypass the ELR/SPSR/PSTATE requirement through void/value, masked-body or
-cross-target emission. Ordinary RET remains supported. Authenticated exception
-returns retain their existing explicit refusal; this is not an exception-level
-runtime implementation.
+`AArch64ExceptionReturnSemantics` checks plain ERET as an operand-free terminal
+transfer in both decoder routes and strict/permissive lifting. LLVM and HighC
+retain the external no-return helper; malformed LowIR, MedIR and HighIR cannot
+publish values, extra operands or cross-target calls, including hidden bodies.
+Ordinary RET remains supported. Authenticated exception returns retain their
+explicit refusal. These tests do not execute exception-level restoration.
 Malformed-input checks reject invalid scalar kinds, mode widths and operand
 counts in every PACM operation. Pending prefixes require their exact LowIR
 shape and remain inadmissible in MedIR and native output.
@@ -20195,3 +20195,28 @@ adversarial fixture is `unittests/plugin/process_provider.py`.
 `NeverDGuiPluginLaunch` checks startup argument handling. These offscreen cases
 do not establish native desktop gestures or screen-reader behavior. See
 [GUI process plugins](gui-plugins.md#development-and-verification) for commands.
+
+## Cumulative AArch64 and function-view integration
+
+Run `NeverDAArch64DecodeValidityTests`, `NeverDMachineInstructionTextTests`,
+`NeverDArm64eAnalysisTests`, `NeverDAArch64SVEPredicateTests`,
+`NeverDMedVariadicTests`, `NeverDHighControlFlowTests`,
+`NeverDCFGLoopXformTests` and the AArch64/ABI/no-return cases in
+`NeverDLiftTests` after changing these boundaries. The SVE vector suite checks
+opaque transfer clobbers through object emission and O0/O2 source compilation,
+and rejects mixing physical transfers with local scalable SSA state. Predicate
+instructions without a semantic contract are rejected through normal and fast
+decoders in both strict and permissive modes. This is not native SVE execution
+or privileged exception-return qualification.
+
+`AArch64FunctionDiscovery` covers zero-based raw images, actual returning and
+no-return calls, and distant branches into filler across scan chunks.
+`MedVariadic.IntegerOnlyVaListMustNameItsOwnSpillChain` rejects a va_list whose
+x7 copy is separate from its claimed contiguous argument save area.
+
+Run `NeverDPipelineOutcomeTests`, `NeverDSessionCAPITests`,
+`NeverDSessionLLVMTests`, `NeverDFunctionDisasmCAPITests`,
+`NeverDSessionFunctionDiscoveryTests` and `NeverDWorkerConstantBranch` for
+source-failure propagation, inferred extents, synthetic tail-call exclusion,
+raw address disassembly and listing ownership. `FunctionDisasmSize` checks
+adjacent and separated entries with unordered recovered blocks.

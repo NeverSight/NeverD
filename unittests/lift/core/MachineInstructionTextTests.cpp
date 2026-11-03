@@ -23,6 +23,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/ARM/ArmCoprocessorAcle.h"
+#include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -37,6 +38,7 @@
 
 #include <capstone/capstone.h>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -99,6 +101,35 @@ TEST(MachineInstructionText, AArch64KeepsTrapCodesAndBarrierOptions) {
   A64({0xbf, 0x39, 0x03, 0xd5}, Intrinsic::Dmb, 0x9, "dmb ishld");
   A64({0x9f, 0x3f, 0x03, 0xd5}, Intrinsic::Dsb, 0xF, "dsb sy");
   A64({0xdf, 0x3f, 0x03, 0xd5}, Intrinsic::Isb, 0xF, "isb");
+}
+
+TEST(MachineInstructionText, AArch64KeepsTheFFRPredicate) {
+  expectLifted(Arch::AArch64, InstructionMode::Default,
+               {0x60, 0x90, 0x28, 0x25}, Intrinsic::A64_Wrffr, 0x3,
+               "wrffr p3.b");
+  expectLifted(Arch::AArch64, InstructionMode::Default,
+               {0x02, 0xf0, 0x19, 0x25}, Intrinsic::A64_Rdffr, 0x2,
+               "rdffr p2.b");
+}
+
+TEST(MachineInstructionText, FFRTransfersKeepTheirEffectsAndRejectBadOperands) {
+  for (Intrinsic Id :
+       {Intrinsic::A64_Wrffr, Intrinsic::A64_Rdffr, Intrinsic::A64_Setffr}) {
+    EXPECT_TRUE(isSideeffectIntrinsic(Id));
+    bool HasIntrinsics = false;
+    if (Id != Intrinsic::A64_Setffr) {
+      EXPECT_TRUE(intrinsicInstructionText(Id, 16).empty());
+      EXPECT_THROW(
+          renderIntrinsicCall(Id, Arch::AArch64, {"16"}, 0, HasIntrinsics),
+          std::invalid_argument);
+      EXPECT_THROW(renderIntrinsicCall(Id, Arch::AArch64, {}, 0, HasIntrinsics),
+                   std::invalid_argument);
+    }
+  }
+  EXPECT_EQ(aarch64SveRegisterTransferClobber(0x85804000), "z0");
+  EXPECT_EQ(aarch64SveRegisterTransferClobber(0x85BE0002), "p2");
+  EXPECT_TRUE(aarch64SveRegisterTransferClobber(0xE5804000).empty());
+  EXPECT_TRUE(aarch64SveRegisterTransferClobber(0xD503201F).empty());
 }
 
 TEST(MachineInstructionText, ARMKeepsTrapCodesAndBarrierOptions) {
@@ -691,6 +722,33 @@ TEST(MachineInstructionText, HighCPrintsSystemInstructions) {
                            NdType::makeVoid())),
       NdType::makeVoid());
   EXPECT_NE(C.find("__asm__ volatile(\"msr daifset, #0x2\" ::: \"memory\")"),
+            std::string::npos)
+      << C;
+}
+
+// LDR and STR of a whole Z or P register scale their offset by a length C
+// cannot name: they run as the instruction, with the base the C computes.
+TEST(MachineInstructionText, AArch64KeepsWholeSVERegisterTransfers) {
+  constexpr uint32_t StoreZ0 = 0xE5BB5800; // str z0, [x0, #-34, mul vl]
+  const Lifted Store = liftOne(Arch::AArch64, InstructionMode::Default,
+                               {0x00, 0x58, 0xbb, 0xe5});
+  EXPECT_EQ(Store.Id, Intrinsic::A64_SveRegisterTransfer);
+  EXPECT_EQ(Store.Operand, StoreZ0);
+  EXPECT_EQ(aarch64SystemInstructionAsm(Intrinsic::A64_SveRegisterTransfer,
+                                        StoreZ0, false, true),
+            "str z0, [$0, #-34, mul vl]");
+  EXPECT_EQ(aarch64SveRegisterTransferAsm(0x85BE0000),
+            "ldr p0, [$0, #-16, mul vl]");
+  EXPECT_EQ(aarch64SveRegisterTransferAsm(0xE5800000), "str p0, [$0]");
+  EXPECT_EQ(aarch64SveRegisterTransferAsm(0xD503201F), "");
+  const std::string C =
+      highCOf(callOf(intrinsicCall(Intrinsic::A64_SveRegisterTransfer,
+                                   {HighExpr::makeConst(StoreZ0, 4),
+                                    HighExpr::makeConst(0x4000, 8)},
+                                   NdType::makeVoid())),
+              NdType::makeVoid());
+  EXPECT_NE(C.find("__asm__ volatile(\"str z0, [%0, #-34, mul vl]\" : : "
+                   "\"r\"("),
             std::string::npos)
       << C;
 }

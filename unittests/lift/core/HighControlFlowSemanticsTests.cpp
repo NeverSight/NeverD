@@ -10735,6 +10735,33 @@ TEST(HighControlFlowSemantics, ARegionNeverSplicesIntoItsOwnDescendant) {
   }
 }
 
+TEST(HighControlFlowSemantics, LargeDispatchMovesKeepEveryDestination) {
+  // Each branch owns a long out-of-line continuation. Moving many of them
+  // changes the positions and parents of the branches still to be handled.
+  // Execute every dispatch choice after each pass, including the default.
+  constexpr unsigned Cases = 48;
+  constexpr unsigned Stores = 24;
+  HighFunc F;
+  for (unsigned I = 0; I < Cases; ++I) {
+    auto Branch = conditional(0x1000 + 4 * I, 0x10000 + 0x100 * I);
+    Branch.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                      HighExpr::makeConst(I, 8));
+    F.Body.push_back(std::move(Branch));
+  }
+  F.Body.push_back(result(0x2000, HighExpr::makeConst(999, 8)));
+  for (unsigned I = 0; I < Cases; ++I) {
+    for (unsigned J = 0; J < Stores; ++J)
+      F.Body.push_back(assign(0x10000 + 0x100 * I + 4 * J, 1, I + J));
+    F.Body.push_back(result(0x10000 + 0x100 * I + 4 * Stores, local(1)));
+  }
+  for (unsigned Round = 0; Round < 4; ++Round) {
+    for (unsigned I = 0; I <= Cases; ++I)
+      EXPECT_EQ(execute(F, I, true), I == Cases ? 999u : I + Stores - 1);
+    reduceSingleUseGotos(F.Body, /*SpliceRegions=*/true);
+  }
+  EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
+}
+
 TEST(HighControlFlowSemantics, CaseRegionHoldingATryMovesIntoItsCase) {
   // switch (x) { case 1: goto L; } return 8;
   // L: __try { v = 3; } __except (...) { v = 4; } return v;

@@ -1599,10 +1599,12 @@ not establish a scalable calling convention or physical register aliasing.
 Serial and sharded LLVM pipelines both return semantic refusals through the
 pipeline result without publishing a partial module or source map.
 
-Plain ERET retains its legacy intrinsic identity for stored IR compatibility,
-but all lifting and emission entry points reject it until an ELR/SPSR/PSTATE
-contract is available. It cannot become an ordinary return or a zero-valued
-unimplemented intrinsic. Authenticated exception returns remain unsupported.
+Plain ERET is an operand-free terminal intrinsic, rendered as the external
+no-return helper `neverd_exception_return()`. It cannot become an ordinary
+return or a zero-valued unimplemented intrinsic. All emission routes reject
+result values, extra operands and non-AArch64 targets. This representation
+requires a runtime helper; it does not implement ELR/SPSR/PSTATE restoration.
+Authenticated exception returns remain unsupported.
 
 Validated combined authenticated loads read memory and update only their
 explicit result pair. ABI recovery preserves earlier arguments in other
@@ -1773,8 +1775,11 @@ and the original transfer's instruction address. The worker indexes complete
 recovered instruction ranges separately from contiguous listing extents;
 explicit metadata chunks keep their own headers and share their parent's
 identity. Cold address navigation probes a bounded set of nearby entries and
-accepts only recovered instruction evidence, never proximity alone. Ambiguous
-ownership stays unresolved. The index survives display-cache eviction and is
+accepts only recovered instruction evidence, never proximity alone. Among
+several recovered owners of an instruction, the function whose extent contains
+it keeps it when it is one of them: code another entry jumps into stays in the
+body that reaches it from its own entry. Other ambiguous ownership stays
+unresolved. The index survives display-cache eviction and is
 cleared when function discovery or edits rebuild the listing. Reference
 overlays cover recovered bytes without erasing unrelated functions in the gaps.
 New GUI jumps and invalidated cursors request this bounded lookup through the
@@ -11356,7 +11361,7 @@ Large recovered functions that exceed the SSA construction limit can use `--llvm
 
 `analyzeMedMutableSource` owns normalized CFG validation, storage identities and conservative entry-byte requirements. These requirements are upper bounds on reads, not positive observability evidence. LLVM validates before module scans and reuses the plan to initialize entry values once. Block/value products and propagation work have separate bounds. C forwarding uses exact earlier stores for each load, with matching types and no partial aliases; cross-block joins retain explicit storage. Admission allows up to 65536 blocks and a matrix of up to 16,777,216 block/value pairs for each packed liveness set. Variable, operation and propagation-work ceilings remain independent. CFG validation bounds total predecessor metadata by the two-successor branch contract, counts incoming edges once, and checks each unique predecessor against its source's bounded successor list. Shared rejection exits therefore need no repeated full predecessor scan.
 
-SSA graphs exceeding the existing HighC structuring bounds retain blockwise control flow through final goto cleanup. The fallback does not splice large continuation regions again; required exception processing and entry anchors remain. Mutable-storage lowering keeps its separate validated path.
+SSA graphs exceeding the existing HighC structuring bounds are lowered block by block, and final goto cleanup still splices single-entry blocks and regions into their jumps. It moves them rather than copying their continuation trees; required exception processing and entry anchors remain. Mutable-storage lowering keeps its separate validated path.
 
 For validated mutable bodies, LLVM forwards exact private-slot values within an append-only basic block and keeps its final stores. Entry setup and block, function and module boundaries remain separate. Guest memory accesses stay explicit. C emission bounds scalar expression expansion and immediate-fold work, retaining named intermediates. Foldable constant expressions use LLVM’s target layout; unsupported expressions fail explicitly. Designated mutable return values, including zero, cannot become void returns.
 
@@ -17385,3 +17390,32 @@ profiles have no continuing software step. The reader retains raw ENCLU/RSM
 bytes, including prefixed forms; the owning projection alone admits the exact
 encoding. Other forms remain explicit native requests without state changes.
 See [the SGX state and native-runtime contract](x86-sgx-transfer.md).
+
+### Raw AArch64 entries and source publication
+
+A raw image can have its main entry at address zero. AArch64 marker discovery
+merges conditional targets across scan chunks before accepting a marker,
+including branches into replacement words before a shrink-wrapped prologue.
+A preceding direct call supplies a boundary only after the shared internal
+no-return proof succeeds. Direct calls can name overlapping entries and
+trap-only functions; a preceding fall-through instruction or UDF word alone
+cannot invalidate that evidence. Raw/PE data-window classification remains a
+heuristic for sweeping unidentified bytes, not a CFG or ABI proof.
+
+SDK function extents inferred from blocks stop before another known entry,
+including an entry exactly at the next block. Recovered instruction pages
+exclude synthetic tail-call stubs. HighIR fallback skeletons remain available
+for inspection but cannot be published as successful C implementations.
+
+An AArch64 integer-only variadic save area must end at the same `__gr_top`
+that its `va_list` names. A different copy of x7 cannot witness that chain.
+Linux kernel header recognition applies only to raw and PE images.
+
+Opaque SVE whole-register and FFR transfers retain their physical instruction
+operands. Register loads and RDFFR declare their physical output clobbers;
+LLVM requests SVE for these operations. They cannot share a function with
+modeled scalable SSA state until their operands have a common state contract.
+PTEST and predicated RDFFR/RDFFRS remain explicitly unsupported, rather than
+being represented as WRFFR. ERET is a terminal runtime helper with no operands
+or result, admitted only for AArch64; this is not an implementation of
+ELR/SPSR/PSTATE restoration by a portable C runtime.

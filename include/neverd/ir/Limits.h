@@ -18,6 +18,9 @@
 
 namespace neverd::limits::ir {
 
+/// Maximum replacement words between a terminator and a candidate entry.
+inline constexpr size_t kAArch64EntryFillerWords = 64;
+
 #define NEVERD_A64_SVE_STATE_LIMIT(Name, Value)                                \
   inline constexpr size_t Name = Value;
 #include "neverd/ir/med/AArch64/AArch64SVEState.def"

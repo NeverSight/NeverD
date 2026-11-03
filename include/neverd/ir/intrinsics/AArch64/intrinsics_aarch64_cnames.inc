@@ -16,6 +16,10 @@ C(Intrinsic::Dmb, "__dmb");
 C(Intrinsic::Dsb, "__dsb");
 C(Intrinsic::Isb, "__isb");
 
+// Exception return: a terminal transfer to ELR with SPSR as PSTATE, as x86's
+// neverd_interrupt_return.  The helper never returns.
+C(Intrinsic::Eret, "neverd_exception_return");
+
 // NEON permute / table
 C(Intrinsic::A64_Ext, "vextq");
 C(Intrinsic::A64_Tbl, "vqtbl1q");

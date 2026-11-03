@@ -5531,8 +5531,10 @@ void Pipeline::buildLowIR(
 
     if (Dbg && Dbg->hasInfo())
       annotateDebugInfo(Low, *Dbg);
-    if (Low.OriginalSize == 0)
+    if (Low.OriginalSize == 0) {
       Low.OriginalSize = Low.computedSize();
+      Low.SizeFromBlocks = true;
+    }
     // A `bsr` the code reaches only with a nonzero source writes its result:
     // the kept destination is no read of it.
     foldGuardedZeroSelects(Low);

@@ -78,6 +78,34 @@ bool scalarStateIntrinsic(Intrinsic Id) {
   }
 }
 
+/// SVCR (S3_3_C4_C2_2) in the MSR field: a write changes the streaming and ZA
+/// modes, which zeroes Z and P.
+constexpr uint64_t kSvcrField = 0xDA12;
+
+/// System operations that preserve the local scalable register values.
+/// Opaque FFR and whole-register transfers are excluded: their physical
+/// operands do not name the SSA values tracked here.
+bool independentOfVectorState(const MedOp &Op, Intrinsic Id) {
+  switch (Id) {
+  case Intrinsic::A64_Setffr:
+  case Intrinsic::Mrs:
+  case Intrinsic::A64_GetFPSR:
+  case Intrinsic::A64_GetFPCR:
+  case Intrinsic::A64_SetFPSR:
+  case Intrinsic::A64_SetFPCR:
+  case Intrinsic::Brk:
+  case Intrinsic::Hlt_A64:
+  case Intrinsic::Udf_A64:
+    return true;
+  case Intrinsic::Msr:
+    return Op.NumInputs == 3 && Op.Inputs[1].isConst() &&
+           Op.Inputs[1].ConstVal >> 14 != 0 &&
+           Op.Inputs[1].ConstVal != kSvcrField;
+  default:
+    return false;
+  }
+}
+
 struct ValueInfo {
   MedVar Value;
   bool Conflict = false;
@@ -145,7 +173,9 @@ const char *validateAArch64SVEState(const MedFunc &Func, Arch Architecture) {
     if (const auto Index = registerIndex(
             Value, kNeonRegisterBase, kNeonStorageBytes, kVectorRegisterCount))
       NeonRegisters.insert(*Index);
-    if (!Value.Size)
+    // A constant is no storage: a whole COPY of one defines its destination
+    // completely, as PFALSE does.
+    if (!Value.Size || Value.isConst())
       return nullptr;
     if (++Work > kSVEStateMaxWork || Values.size() >= kSVEStateMaxValues) {
       LimitExceeded = true;
@@ -228,8 +258,9 @@ const char *validateAArch64SVEState(const MedFunc &Func, Arch Architecture) {
       const bool PAuth = aarch64PAuthMedShapeIsValid(Op);
       const bool OriginalMemory = aarch64AddressMemoryMedShapeIsValid(Op);
       if (Op.Opcode == NdOp::INTRINSIC &&
-          (!Id || (!Vector && !Predicate && !PAuth && !OriginalMemory &&
-                   !scalarStateIntrinsic(*Id))))
+          (!Id ||
+           (!Vector && !Predicate && !PAuth && !OriginalMemory &&
+            !scalarStateIntrinsic(*Id) && !independentOfVectorState(Op, *Id))))
         return kStateCall;
       if ((Vector && !aarch64VectorMedShapeIsValid(Op)) ||
           (Predicate && !aarch64PtrueMedShapeIsValid(Op)))

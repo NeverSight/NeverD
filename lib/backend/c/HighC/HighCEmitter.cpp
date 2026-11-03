@@ -5249,8 +5249,12 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
                                              RequirementStatement)))
         throw std::invalid_argument(Reason);
     }
-    if (isAArch64ExceptionReturnIntrinsic(Expr->IntrinsicId))
-      throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
+    if (Expr->IntrinsicId == Intrinsic::Eret &&
+        (Opts.TheArch != Arch::AArch64 ||
+         !aarch64ExceptionReturnShapeIsValid(
+             Expr->IntrinsicId, Expr->Operands.size() + 1,
+             Expr->Type ? Expr->Type->Size : 0)))
+      throw std::invalid_argument(kAArch64ExceptionReturnMalformed);
     if (const char *Reason =
             x86NonlocalControlTransferReason(Expr->IntrinsicId))
       throw std::invalid_argument(Reason);
@@ -5293,6 +5297,9 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
   };
   for (size_t I = 0; I < Funcs.size(); ++I)
     Check(I, [&](const HighFunc &Func) {
+      if (!Func.ConversionFailure.empty())
+        throw std::invalid_argument("HighIR conversion failed: " +
+                                    Func.ConversionFailure);
       if (Func.ReturnProtection && Opts.TheArch != Arch::AArch64)
         throw std::invalid_argument(
             "AArch64 return protection requires AArch64 source emission");

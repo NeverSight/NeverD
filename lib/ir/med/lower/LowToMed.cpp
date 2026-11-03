@@ -804,8 +804,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
           llvm::report_fatal_error("intrinsic has no constant intrinsic ID");
         const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-        if (isAArch64ExceptionReturnIntrinsic(Id))
-          throw LowToMedConversionError(kAArch64ExceptionReturnUnsupported);
+        if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
+            !aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs,
+                                                Op.Output.Size))
+          throw LowToMedConversionError(kAArch64ExceptionReturnMalformed);
         if (const char *Reason = x86NonlocalControlTransferReason(Id))
           throw LowToMedConversionError(Reason);
         if (isX86BoundedLeafPending(Id))
