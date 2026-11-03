@@ -130,6 +130,17 @@ struct CEmitterOptions {
   /// writes eight bytes at, `unk_` where they differ or none states one.
   /// Without it, data is named by the accesses of the functions emitted.
   const DataAccessWidths *AccessWidths = nullptr;
+  /// Resolve the same inventory on demand when AccessWidths is absent. A
+  /// source view with no image-data names need not scan unrelated functions.
+  /// The provider owns the inventory and its lifetime through emission; it
+  /// should reuse its result, including an unavailable inventory, on repeat
+  /// queries. Writers do not retain it after emission.
+  std::function<const DataAccessWidths *()> ReadAccessWidths;
+  const DataAccessWidths *dataAccessWidths() const {
+    return AccessWidths       ? AccessWidths
+           : ReadAccessWidths ? ReadAccessWidths()
+                              : nullptr;
+  }
   /// Optional source-map sink. Recording never changes the emitted C text.
   CSourceMap *SourceMap = nullptr;
   /// HighC-only helper names and the original bodies they specialize. These

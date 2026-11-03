@@ -4224,6 +4224,14 @@ operand. Memory, implicit-stack, string, system and other instruction families
 retain full lifting. Full flow/reference queries remain unchanged; the
 stateless full-lift width collector supplies an independent comparison oracle.
 
+Source emitters read image data-access widths only when a data name or
+address-only object needs them. Session source views publish recovered functions
+before emission and supply a per-emission provider that resolves the inventory
+once, including an unavailable result. HighC and LLVMC use that same provider;
+an explicitly supplied inventory keeps precedence. Views without such consumers
+avoid the native scan, while explicit warmup still prepares it. The session
+continues to own the scan and its invalidation.
+
 Function selection also retains decoded image data-access widths. Their exact
 ordered function address/size inventory is checked after synchronization;
 changed extents update the widths and discard source using the former names.

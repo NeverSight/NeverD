@@ -1757,8 +1757,8 @@ void LLVMCWriter::writeReferencedImageObjects(
   };
   auto AddressType = [&](va_t VA) {
     unsigned Bytes = 1;
-    if (Opts.AccessWidths)
-      if (const auto Width = Opts.AccessWidths->at(VA);
+    if (const auto *Widths = Opts.dataAccessWidths())
+      if (const auto Width = Widths->at(VA);
           Width && (*Width == 2 || *Width == 4 || *Width == 8))
         Bytes = *Width;
     return llvm::Type::getIntNTy(Fns.front()->getContext(), Bytes * 8);

@@ -8325,8 +8325,9 @@ void HighCWriter::noteImageAddress(va_t Addr) {
   // symbol sizes, else as the accesses that name it, or the pointer a
   // relocated slot holds, which the type of any access replaces.
   uint64_t Size = Opts.Image ? Opts.Image->dataObjectSizeAt(Addr) : 0;
-  if (!Size && Opts.AccessWidths)
-    Size = Opts.AccessWidths->at(Addr).value_or(0);
+  if (!Size)
+    if (const auto *Widths = Opts.dataAccessWidths())
+      Size = Widths->at(Addr).value_or(0);
   if (!Size && Opts.Image &&
       (Opts.Image->CodePtrRelocSlots.count(Addr) ||
        Opts.Image->DataPtrRelocSlots.count(Addr)))
@@ -8341,8 +8342,8 @@ void HighCWriter::noteImageAddress(va_t Addr) {
 
 std::optional<uint64_t>
 HighCWriter::dataNameWidth(va_t Addr, const ImageObject &Obj) const {
-  if (Opts.AccessWidths) {
-    if (const auto Width = Opts.AccessWidths->at(Addr); Width && *Width)
+  if (const auto *Widths = Opts.dataAccessWidths()) {
+    if (const auto Width = Widths->at(Addr); Width && *Width)
       return *Width;
     return std::nullopt;
   }

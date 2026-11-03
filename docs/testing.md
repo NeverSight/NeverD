@@ -5588,6 +5588,10 @@ fresh native decoding, preserves renamed source, and checks changed function
 addresses, extents and inventories. It also covers edits, policy/signature
 changes, feature changes between selections, failed loads and same-address
 image replacement. Width changes discard source using the preceding data names.
+`DataAccessWidthsWaitForAnImageDataConsumer` checks that scalar-only C and
+optimized/unoptimized LLVMC views leave the inventory unread while publishing
+recovered functions. Later data views and reverse navigation match sessions
+that eagerly scanned; the HighC data view must obtain the complete qword width.
 `DataAccessWidthsRespectChangedUnsizedBoundaries` adds and removes entries across
 fallthrough and nonadjacent direct-jump boundaries, with shared and conflicting
 widths, both sized and unsized inventories, and size publication/retraction. Its

@@ -4004,10 +4004,11 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         // names, only ELF object sections supply this implicit materialization;
         // linked images and Mach-O metadata retain their existing admission.
         NoteEscapingStorage(E.ConstVal);
-      } else if (Opts.AccessWidths && ValueExpressions.count(&E) &&
+      } else if (ValueExpressions.count(&E) &&
                  (E.ConstProvenance == ConstantAddressProvenance::Address ||
                   E.ConstProvenance ==
-                      ConstantAddressProvenance::DataAddress)) {
+                      ConstantAddressProvenance::DataAddress) &&
+                 Opts.dataAccessWidths()) {
         // Unnamed data whose address the code proves and keeps as a value
         // takes the name the listing gives it (`&qword_140C4EE80`), not a
         // number, when the emitter knows how the listing names data.  An
@@ -4432,11 +4433,11 @@ void HighCWriter::writeImageObjects() {
     // As the listing names it: a slot the loader relocates a pointer into,
     // or one the code only calls through; the code's reads give a slot it
     // loads a callee from their width.
+    const auto *Widths = Opts.dataAccessWidths();
     const bool PointerSlot =
         Opts.Image->CodePtrRelocSlots.count(Addr) ||
         Opts.Image->DataPtrRelocSlots.count(Addr) ||
-        (Obj.CallSlot &&
-         !(Opts.AccessWidths && Opts.AccessWidths->at(Addr).has_value()));
+        (Obj.CallSlot && !(Widths && Widths->at(Addr).has_value()));
     const auto Binding = DataSymbolBindings.find(Addr);
     Obj.Name = GlobalIdentifierAllocator.allocate(
         Binding != DataSymbolBindings.end()
