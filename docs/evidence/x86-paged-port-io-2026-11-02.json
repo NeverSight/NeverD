@@ -1486,5 +1486,332 @@
     "probe-segment-fault-p.log": "4810b8fd282a29c15711b31098134144e8becd578db0088c85402a04704af545",
     "probe-segment-fault.cpp": "fc76cf504093bbd2d5d61c7ed21b789a0c9d233997674bbc0348338f99cedf69",
     "probe.cpp": "a3b31c9be1ea84a35c4753002472a4ac2dcee08a54b536281036b468b009fd4b"
+  },
+  "post_integration": {
+    "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+    "merged_dev_commit": "e54aa42afd35ba7656369e9b4908828b17fd0270",
+    "change": "Register DCE seed-walk reuse; merged without modifying the qualified port implementation.",
+    "totals": {
+      "passed": 38,
+      "failed": 0,
+      "skipped": 0,
+      "kvm_port_comparisons": 154496,
+      "kvm_port_fault_comparisons": 75840,
+      "kvm_port_input_fault_effects": 9728,
+      "kvm_port_missing_alignment_checks": 4096,
+      "kvm_port_wrong_ss_faults": 384,
+      "port_restart_checks": 2880,
+      "port_permission_checks": 88,
+      "port_fragment_checks": 120
+    },
+    "counts_are_separate_repetitions_not_new_instruction_coverage": true,
+    "reports": [
+      {
+        "name": "p",
+        "sdk": "native",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-port-strings-20261102/integration/native/p/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedPort*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-port-strings-20261102/integration/native/p/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-port-strings-20261102/integration/native/p/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+        "sha256": "88acd7b23e804c07ced0c1359088e7c66617f5b1a6899c205bf2a13dc74c4bda",
+        "log_sha256": "fba3dddab2a2d3e65f90b898ca7c3eb8b94047cc6fcd70c15ce2627064b570a9"
+      },
+      {
+        "name": "e",
+        "sdk": "native",
+        "cpu": 12,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-port-strings-20261102/integration/native/e/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedPort*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-port-strings-20261102/integration/native/e/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-port-strings-20261102/integration/native/e/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+        "sha256": "75a80e678cefa1ffe34f048893f6614c1ca6e0d7059c1a0d3fe93bd64040a9ff",
+        "log_sha256": "b009360567c521cda8c8e0237675cc5107219646d0266f25d9019d9bfc93a072"
+      },
+      {
+        "name": "dce",
+        "sdk": "native",
+        "exit_code": 0,
+        "command": [
+          "build-x86-native/bin/NeverDMedDceTests",
+          "--gtest_output=xml:/mnt/data/neverd-paged-port-strings-20261102/integration/native/dce/result.xml"
+        ],
+        "report": "/mnt/data/neverd-paged-port-strings-20261102/integration/native/dce/result.xml",
+        "tests": 9,
+        "failed": 0,
+        "skipped": 0,
+        "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+        "sha256": "0e5b057c0a85a1b367b79f345d4af8311c64b7208742a143461823679b0b8fc1",
+        "log_sha256": "80474463c113591c559eb236facd017d065f623e506135244b50a42cb8ee9232"
+      },
+      {
+        "name": "p",
+        "sdk": "r6",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-port-strings-20261102/integration/r6/p/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedPort*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-port-strings-20261102/integration/r6/p/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-port-strings-20261102/integration/r6/p/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+        "sha256": "c0b1bba0b56f374ca691f5792c3497a1fb7d5e78752f765aab0e69de1edb87c6",
+        "log_sha256": "619be56578782ab80d033378799c8746bd537795454ea4bb11eb5e79ea780f4b"
+      },
+      {
+        "name": "e",
+        "sdk": "r6",
+        "cpu": 12,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-paged-port-strings-20261102/integration/r6/e/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*PagedPort*",
+          "--gtest_output=xml:/mnt/data/neverd-paged-port-strings-20261102/integration/r6/e/result.xml"
+        ],
+        "exit_code": 0,
+        "report": "/mnt/data/neverd-paged-port-strings-20261102/integration/r6/e/result.xml",
+        "tests": 5,
+        "failed": 0,
+        "skipped": 0,
+        "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+        "sha256": "496e23116b212b147039a3432da37b8614662626ecda87b97938ab9a8045a9c1",
+        "log_sha256": "9421e3af6b78218b2c909c96669a98b22cad354c7db5393b5b5dbac3894ec2a0"
+      },
+      {
+        "name": "dce",
+        "sdk": "r6",
+        "exit_code": 0,
+        "command": [
+          "build-x86/bin/NeverDMedDceTests",
+          "--gtest_output=xml:/mnt/data/neverd-paged-port-strings-20261102/integration/r6/dce/result.xml"
+        ],
+        "report": "/mnt/data/neverd-paged-port-strings-20261102/integration/r6/dce/result.xml",
+        "tests": 9,
+        "failed": 0,
+        "skipped": 0,
+        "source_commit": "201b6e7344a4f1554ee4ac86f839d47f8d0690f9",
+        "sha256": "649d1331879a8a32042c969c52cbfa4deb1d1b6d606f9a88629db3f501478dc3",
+        "log_sha256": "99306d42ab363609cf517eeb66e3d0d7c9d284ceb4937faccb793cba3b606aad"
+      }
+    ],
+    "observations": [
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedPortTransfersPreserveRestartAndDeviceEffects",
+        "port_restart_checks": 720
+      },
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedPortPermissionWalksKeepFaultsDistinct",
+        "port_permission_checks": 22
+      },
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedPortInputFragmentsRetainOnlyBoundEffects",
+        "port_fragment_checks": 30
+      },
+      {
+        "sdk": "native",
+        "run": "p",
+        "test": "PagedPortTransfersMatchKVM",
+        "processor": 0,
+        "core_type": 64,
+        "oracle": "KVM intercepted port emulation and synthetic device",
+        "kvm_port_missing_alignment_checks": 1024,
+        "kvm_port_wrong_ss_faults": 96,
+        "kvm_port_comparisons": 38624,
+        "kvm_port_fault_comparisons": 18960,
+        "kvm_port_input_fault_effects": 2432
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedPortTransfersPreserveRestartAndDeviceEffects",
+        "port_restart_checks": 720
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedPortPermissionWalksKeepFaultsDistinct",
+        "port_permission_checks": 22
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedPortInputFragmentsRetainOnlyBoundEffects",
+        "port_fragment_checks": 30
+      },
+      {
+        "sdk": "native",
+        "run": "e",
+        "test": "PagedPortTransfersMatchKVM",
+        "processor": 12,
+        "core_type": 32,
+        "oracle": "KVM intercepted port emulation and synthetic device",
+        "kvm_port_missing_alignment_checks": 1024,
+        "kvm_port_wrong_ss_faults": 96,
+        "kvm_port_comparisons": 38624,
+        "kvm_port_fault_comparisons": 18960,
+        "kvm_port_input_fault_effects": 2432
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedPortTransfersPreserveRestartAndDeviceEffects",
+        "port_restart_checks": 720
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedPortPermissionWalksKeepFaultsDistinct",
+        "port_permission_checks": 22
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedPortInputFragmentsRetainOnlyBoundEffects",
+        "port_fragment_checks": 30
+      },
+      {
+        "sdk": "r6",
+        "run": "p",
+        "test": "PagedPortTransfersMatchKVM",
+        "processor": 0,
+        "core_type": 64,
+        "oracle": "KVM intercepted port emulation and synthetic device",
+        "kvm_port_missing_alignment_checks": 1024,
+        "kvm_port_wrong_ss_faults": 96,
+        "kvm_port_comparisons": 38624,
+        "kvm_port_fault_comparisons": 18960,
+        "kvm_port_input_fault_effects": 2432
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedPortTransfersPreserveRestartAndDeviceEffects",
+        "port_restart_checks": 720
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedPortPermissionWalksKeepFaultsDistinct",
+        "port_permission_checks": 22
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedPortInputFragmentsRetainOnlyBoundEffects",
+        "port_fragment_checks": 30
+      },
+      {
+        "sdk": "r6",
+        "run": "e",
+        "test": "PagedPortTransfersMatchKVM",
+        "processor": 12,
+        "core_type": 32,
+        "oracle": "KVM intercepted port emulation and synthetic device",
+        "kvm_port_missing_alignment_checks": 1024,
+        "kvm_port_wrong_ss_faults": 96,
+        "kvm_port_comparisons": 38624,
+        "kvm_port_fault_comparisons": 18960,
+        "kvm_port_input_fault_effects": 2432
+      }
+    ],
+    "builds": [
+      {
+        "sdk": "native",
+        "receipt": "native-integration-build-receipt.json",
+        "sha256": "f5edf01b2b76c72123c0db4970c36e3ef478011075240236103b26ac32cd56fc",
+        "options": [
+          "--target",
+          "NeverDX64PagedExecutionTests",
+          "--target",
+          "NeverDMedDceTests",
+          "--parallel",
+          "3"
+        ],
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+      },
+      {
+        "sdk": "r6",
+        "receipt": "r6-integration-build-receipt.json",
+        "sha256": "2771302b7fd5cc4de57c3d05e9fa63207e45322aed461cf31b7725de841db793",
+        "options": [
+          "--target",
+          "NeverDX64PagedExecutionTests",
+          "--target",
+          "NeverDMedDceTests",
+          "--parallel",
+          "3"
+        ],
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+      }
+    ],
+    "exports_identical_to_qualified_implementation": 24,
+    "dce_source_sha256": "25450ddaf483f989c8c01f28cd5e5f0d9c4f901ddc43bed95593e7a13cb43965",
+    "build_logs": {
+      "build-native-integration.log": "c8258e38cadf2f9992ae9d63acf21545946a1529585c32b07f9c9c69c089c935",
+      "build-r6-integration.log": "7b98fcfe894b26b3a90c7c446b8503b7ae363eeeaebeba476bf836ad9c5b4819"
+    }
   }
 }

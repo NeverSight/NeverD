@@ -3659,3 +3659,7 @@ equivalence counts. Original CPU MOV probes and Intel's ignored-prefix rule
 support retaining #GP for noncanonical OUTS despite KVM reporting #SS.
 The report preserves the earlier counterexamples and superseded runs instead
 of treating their passing results as proof of the corrected implementation.
+After merging the shared register-DCE optimization from `e54aa42afd`, both
+SDKs pass all 38 focused DCE/port checks. All 24 port source/manifest files
+remain identical to the qualified exports; repeated comparisons are recorded
+separately from the primary totals.
