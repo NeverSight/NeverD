@@ -15033,6 +15033,13 @@ and EventLog public-interface cases after changing this boundary.
 Build the owning executable first, then select its label. This avoids relinking
 unrelated large semantic targets.
 
+On macOS, a standalone Clang (including Homebrew LLVM) may need an explicit
+SDK when a fixture links generated source. Run CTest with
+`SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"` in its environment if the
+linker cannot find `libSystem`. Compile-only checks can pass without that SDK,
+so they do not establish that native execution fixtures can link. Use the same
+SDK for both C projections and their native reference programs.
+
 ```bash
 # Lifter, loader, and format tests
 cmake --build build-release --target NeverDLiftTests --parallel 4
