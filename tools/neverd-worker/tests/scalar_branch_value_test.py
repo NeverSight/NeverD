@@ -121,15 +121,25 @@ def run(worker, compiler):
                 for route in ("c", "llvmc"):
                     source = ok(client, "decompile", {"address": entry, "representation": route,
                                 "offset": 0, "limit": 2048})
-                    assert source["complete"], source
+                    total = source["total_lines"]
+                    pages = [source["text"]]
+                    while not source["complete"]:
+                        offset = source["next_offset"]
+                        assert offset > source["offset"], (name, route, offset)
+                        source = ok(client, "decompile", {"address": entry, "representation": route,
+                                    "offset": offset, "limit": 2048})
+                        assert source["total_lines"] == total, (name, route, source["total_lines"])
+                        assert source["offset"] == offset and source["text"], (name, route, offset)
+                        pages.append(source["text"])
+                    text = "".join(pages)
                     unit = area / (route + ".c")
-                    definition = re.search(r"\bdispatch_probe\(([^)]*)\)\s*\{", source["text"])
-                    assert definition, source
+                    definition = re.search(r"\bdispatch_probe\(([^)]*)\)\s*\{", text)
+                    assert definition, (name, route, "missing function definition")
                     parameters = definition.group(1).strip()
                     count = 0 if parameters in ("", "void") else len(parameters.split(","))
                     assert count <= 2, (name, route, parameters)
                     arguments = ", ".join(("a", "b")[:count])
-                    unit.write_text(source["text"] + "\nstatic uint64_t inputs[] = {" +
+                    unit.write_text(text + "\nstatic uint64_t inputs[] = {" +
                                     ",".join(hex(value) + "ULL" for value in INPUTS) + "};\n" +
                                     "int main(void) { for (unsigned i=0;i<sizeof(inputs)/sizeof(inputs[0]);++i) "
                                     "for (unsigned j=0;j<sizeof(inputs)/sizeof(inputs[0]);++j) { "

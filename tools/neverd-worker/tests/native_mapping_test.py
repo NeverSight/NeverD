@@ -1,20 +1,68 @@
 #!/usr/bin/env python3
 """Real native C ABI mapped pages through worker IPC; old engines skip explicitly."""
 from pathlib import Path
+import os
+import re
 import struct
 import sys
 import tempfile
+from unittest.mock import patch
 from transport_test import Client
 
 
-def native_elf(arm64, base):
-    code = bytes.fromhex("e0008052c0035fd6" if arm64 else "b807000000c3")
+def native_elf(arm64, base, code=None):
+    if code is None:
+        code = bytes.fromhex("e0008052c0035fd6" if arm64 else "b807000000c3")
     entry = base + 120
     ident = b"\x7fELF\x02\x01\x01" + bytes(9)
     header = struct.pack("<16sHHIQQQIHHHHHH", ident, 2, 183 if arm64 else 62, 1,
                          entry, 64, 0, 0, 64, 56, 1, 64, 0, 0)
     segment = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base, 120 + len(code), 120 + len(code), 4096)
     return header + segment + code, entry
+
+
+def discovered_entry(executable, directory):
+    # Loading the stripped x64 image finds the direct-call targets first;
+    # discovery publishes its unsized image entry only during the view request.
+    code = bytearray(bytes.fromhex("4883ec08"))
+    neighbors = [128 + index * 16 for index in range(8)]
+    for target in neighbors:
+        code += b"\xe8" + struct.pack("<i", target - len(code) - 5)
+    code += bytes.fromhex("4883c408c3")
+    for index, target in enumerate(neighbors):
+        code += b"\xcc" * (target - len(code))
+        code += b"\xb8" + struct.pack("<I", index + 1) + b"\xc3"
+    data, entry = native_elf(False, 0x400000, code)
+    binary = Path(directory) / "discovered-entry.elf"
+    binary.write_bytes(data)
+    for stage in ("c", "llvmc", "source", "low", "med", "high", "llvm", "cfg"):
+        with patch.dict(os.environ, {"NEVERD_NATIVE_PHASES": "1"}):
+            with Client(executable) as client:
+                opened = client.call("open", {"path": str(binary), "read_only": True,
+                                              "analysis": False, "warm": False})
+                assert opened["status"] == "ok", opened
+                assert opened["payload"]["function_count"] == len(neighbors), opened
+                functions = client.call("functions")["payload"]["items"]
+                assert hex(entry) not in {item["address"] for item in functions}, functions
+                operation = "cfg" if stage == "cfg" else "decompile"
+                reply = client.call(operation, {"address": hex(entry),
+                                                "representation": stage, "limit": 2048})
+                assert reply["status"] == "ok", reply
+                if operation == "decompile":
+                    assert reply["payload"]["address"] == hex(entry), reply
+                    assert reply["payload"]["complete"] and reply["payload"]["text"], reply
+                else:
+                    assert reply["payload"]["entry"] == hex(entry), reply
+                functions = client.call("functions")["payload"]["items"]
+                assert {item["address"] for item in functions} == {
+                    hex(entry), *(hex(entry + offset) for offset in neighbors)}, functions
+        # Count real pipeline work rather than assert a machine-dependent time.
+        # Probing neighboring owners used to analyze every nearby function and
+        # then prepare the requested entry again.
+        invocations = re.findall(
+            rb"\[neverd-pipeline-stage\] invocation=(\d+) stage=decoder event=begin",
+            client.logs)
+        assert len(invocations) == 1, (stage, invocations, client.logs.decode())
 
 
 def paged_view(client, entry, stage):
@@ -139,6 +187,7 @@ def run(executable):
                     assert reply["payload"]["rows"] == []
             finally:
                 client.close()
+        discovered_entry(executable, directory)
         print("real native x86/AArch64: recovered function navigation, high-VA Low/Med/High instruction anchors, stable paged rows and explicit C/High/LLVM mapping status passed")
         return 0
 

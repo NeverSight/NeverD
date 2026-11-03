@@ -2619,6 +2619,8 @@ both C routes for readonly loads, NOT, NEG, sign-extended target offsets and
 four mixed Boolean/arithmetic identities over unknown scalar inputs, direct
 predecessor state transport, unanimous joined paths and identities containing
 immutable image loads.
+Source execution reads every page, including the long-prefix case that exceeds
+one worker response.
 Independent native ELF x64 fixtures return a known result past an overlapping
 unreachable E9. HighC and LLVMC execute against that result at O0/O2 with UBSan;
 144 independent input pairs include zero, all ones, sign and alternating bits.
@@ -5491,6 +5493,12 @@ restricted and whole-image scope, repeated and switched entries, address zero,
 unloaded sessions and unknown ARM mode. `NeverDWorkerSourceCache` verifies
 preparation does not render discarded C and that a failed function switch
 requires real preparation before the preceding function's CFG is read again.
+`NeverDWorkerNativeMapping` requests a stripped x64 image's entry before
+discovery has published it, with eight already known call targets nearby.
+Each source, IR and CFG route must prepare one pipeline invocation, without
+first analyzing neighboring owners. This counts actual work instead of imposing
+a timing threshold; the same suite retains x64/AArch64 navigation and mapping
+checks under both discovery orders.
 
 `PipelineOutcome.AnalysisCache*` compares cold and retained call chains in
 one- and four-thread runs, including physical floating returns and integer

@@ -5417,6 +5417,10 @@ std::optional<std::uint64_t> Listing::chunkOwner(std::uint64_t address) {
   auto &d = *impl_;
   d.discover();
   d.build();
+  // Discovery can publish an entry absent from the caller's initial lookup.
+  // Keep its identity before probing nearby functions for chunk ownership.
+  if (d.functionAtEntry(address))
+    return address;
   if (const int f = d.functionIndex(address); f >= 0) {
     if (d.functions[f].chunkOf)
       return d.ownerOf(f).entry;

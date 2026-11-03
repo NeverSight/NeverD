@@ -1919,8 +1919,11 @@ keeping the decode cursor and cached projection inside the chunk. Reading a
 chunk must not register it as another function and churn the listing generation.
 Source, IR and graph requests share that bounded owner lookup before preparing
 analysis or choosing a document or layout cache key. Explicit function entries
-retain their identities; an unresolved address retains the ordinary entry
-request. Navigation keeps the requested byte address separately from its owner.
+retain their identities, including entries just published by discovery during
+that lookup. Check the refreshed catalog for an exact entry before decoding
+nearby functions to recover ownership. An unresolved address retains the
+ordinary entry request. Navigation keeps the requested byte address separately
+from its owner.
 GUI refreshes retain loaded context within the per-side query budget and keep a
 prefetch margin, so replacing unchanged rows does not shrink and regrow the
 window used to route branch arrows. Revision and navigation fences still apply.
