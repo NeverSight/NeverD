@@ -596,8 +596,9 @@ nonobservation proof. Complete support bodies are prepared from
 leaves to callers, once per query, within the same callee and expansion budgets.
 Shared descendants reuse that preparation; cycles and unresolved observations
 inside a child retain the original call. The original native signatures and positional
-stack storage remain unchanged. Both C routes share one separately named helper
-per admitted body, with only the unused
+stack storage remain unchanged. LLVM C keeps the existing expansion for a
+single use and shares one separately named helper across repeated uses of an
+admitted body. HighC always uses named helpers. Both remove only unused
 formal operands removed, preserving its memory effects and the caller's
 control flow. `PipelineSourceCallHelpers` clones the LLVM body once and remaps
 its source observations; repeated calls reuse that definition. The explicit

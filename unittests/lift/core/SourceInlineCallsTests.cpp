@@ -39,7 +39,7 @@
 namespace {
 using namespace neverd;
 
-BinaryImage fixture(unsigned Mode) {
+BinaryImage fixture(unsigned Mode, bool Repeated = false) {
   BinaryImage Image;
   Image.Arch = Arch::X64;
   Image.Bits = Bitness::Bits64;
@@ -50,6 +50,8 @@ BinaryImage fixture(unsigned Mode) {
   Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Code.Data = {0x48, 0x83, 0xec, 0x38,        // sub rsp,56
                0x48, 0x89, 0x54, 0x24, 0x30}; // mov [rsp+48],rdx
+  if (Repeated)
+    Code.Data[3] = 0x48; // 16 private bytes beyond the outgoing arguments.
   if (Mode == 2) {
     const uint8_t Alias[] = {0x48, 0x89, 0x54, 0x24, 0x28, // mov [rsp+40],rdx
                              0x48, 0x8d, 0x4c, 0x24, 0x28, // lea rcx,[rsp+40]
@@ -57,12 +59,31 @@ BinaryImage fixture(unsigned Mode) {
                              0x17}; // add [rsp+48],23
     Code.Data.insert(Code.Data.end(), std::begin(Alias), std::end(Alias));
   }
+  if (Repeated) {
+    const uint8_t Save[] = {0x48, 0x89, 0x4c, 0x24, 0x38,  // mov [rsp+56],rcx
+                            0x48, 0x8b, 0x44, 0x24, 0x30,  // mov rax,[rsp+48]
+                            0x48, 0x89, 0x44, 0x24, 0x40}; // mov [rsp+64],rax
+    Code.Data.insert(Code.Data.end(), std::begin(Save), std::end(Save));
+  }
   const uint32_t Delta = 0x80 - Code.Data.size() - 5;
   Code.Data.push_back(0xe8);
   for (unsigned I = 0; I != 4; ++I)
     Code.Data.push_back(Delta >> (8 * I));
+  if (Repeated) {
+    // Outgoing argument slots are call-clobbered. Reinitialize the actual
+    // seventh argument, keeping the missing fifth/sixth inputs missing.
+    const uint8_t Restore[] = {0x48, 0x8b, 0x4c, 0x24, 0x38, 0x48, 0x8b, 0x44,
+                               0x24, 0x40, 0x48, 0x89, 0x44, 0x24, 0x30};
+    Code.Data.insert(Code.Data.end(), std::begin(Restore), std::end(Restore));
+    const uint32_t Again = 0x80 - Code.Data.size() - 5;
+    Code.Data.push_back(0xe8);
+    for (unsigned I = 0; I != 4; ++I)
+      Code.Data.push_back(Again >> (8 * I));
+  }
   const uint8_t Return[] = {0x48, 0x83, 0xc4, 0x38, 0xc3};
   Code.Data.insert(Code.Data.end(), std::begin(Return), std::end(Return));
+  if (Repeated)
+    Code.Data[Code.Data.size() - 2] = 0x48;
   const size_t CallerBytes = Code.Data.size();
   Code.Data.resize(0x80, 0xcc);
   const uint8_t Callee[] = {0x48, 0x8b, 0x44, 0x24, 0x38, // mov rax,[rsp+56]
@@ -701,7 +722,7 @@ TEST(SourceInlineCalls, SharedBodyKeepsEffectsIdentityAndCallObservations) {
 TEST(SourceInlineCalls, SelectedSourceIncludesHelperDefinitionsAndProviders) {
   for (unsigned Mode : {0u, 1u, 2u}) {
     SCOPED_TRACE(Mode);
-    auto Image = fixture(Mode);
+    auto Image = fixture(Mode, /*Repeated=*/true);
     llvm::LLVMContext Context;
     PipelineOptions Options;
     Options.EmitDumpOutput = false;
@@ -727,13 +748,26 @@ TEST(SourceInlineCalls, SelectedSourceIncludesHelperDefinitionsAndProviders) {
     ASSERT_NE(At, std::string::npos) << Text;
     At = Text.find(Name, At + 1);
     ASSERT_NE(At, std::string::npos) << Text;
-    At = Text.find(Name, At + 1);
+    At = Text.rfind(Name);
     ASSERT_NE(At, std::string::npos) << Text;
-    EXPECT_EQ(Text.find(Name, At + 1), std::string::npos) << Text;
     EXPECT_NE(Text.find(") {", At), std::string::npos) << Text;
     EXPECT_NE(Text.find("static uint64_t neverd_source_body_"),
               std::string::npos)
         << Text;
+    if (const char *Directory =
+            std::getenv("NEVERD_TEST_SOURCE_INLINE_EXPORT")) {
+      const std::string Prefix =
+          std::string(Directory) + "/mode" + std::to_string(Mode) + "/";
+      ASSERT_FALSE(llvm::sys::fs::create_directories(Prefix));
+      std::error_code Error;
+      llvm::raw_fd_ostream Out(Prefix + "llvm.c", Error);
+      ASSERT_FALSE(Error);
+      Out << Text;
+      llvm::raw_fd_ostream Bytes(Prefix + "synthetic.bin", Error);
+      ASSERT_FALSE(Error);
+      const auto &Data = Image.Segments.front().Data;
+      Bytes.write(reinterpret_cast<const char *>(Data.data()), Data.size());
+    }
   }
 }
 
@@ -815,7 +849,7 @@ TEST(SourceInlineCalls, SelectedHelperClosureOmitsUnrelatedNativeBodies) {
 TEST(SourceInlineCalls, LargeCandidateScaffoldingStillNeedsTheActualBody) {
   for (unsigned Mode : {0u, 3u, 5u}) {
     SCOPED_TRACE(Mode);
-    auto Image = fixture(Mode);
+    auto Image = fixture(Mode, /*Repeated=*/true);
     llvm::LLVMContext Context;
     PipelineOptions Options;
     Options.EmitDumpOutput = false;

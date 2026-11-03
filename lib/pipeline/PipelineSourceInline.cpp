@@ -384,7 +384,9 @@ SourceInlineResult specializeUnavailableSourceCalls(
       const auto Entry = address(Function);
       const bool Root = Entry && Roots.count(*Entry);
       bool Replaced = false;
-      if (Root) {
+      // Keep the existing one-call expansion. Sharing pays for a definition
+      // only when more than one use would duplicate the admitted body.
+      if (Root && (!Callee->hasOneUse() || SharedBodies.count(Callee))) {
         auto At = SharedBodies.find(Callee);
         if (At == SharedBodies.end())
           At = SharedBodies
