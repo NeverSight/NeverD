@@ -44,7 +44,13 @@ caches while retaining descriptor/frame RAM effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
 `ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and
 recursive-fault classification with IA-32e. The legacy entry is an internal
-execution interface, not a general i386 source dispatcher or an IRET/task engine.
+execution interface, not a general i386 source dispatcher or a task engine.
+`translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
+executor, retaining ordered descriptor writes and IRET NMI unblocking on later
+faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible
+data-cache invalidation and IRET flag restoration with the x64 source and
+faultable owners. Frame access order and mode-specific stack transitions remain
+in their respective owners, with explicit target profiles.
 See [legacy segment operands](x86-legacy-segments.md).
 
 `translate/X86/X86Paging` owns architectural linear-address translation over
@@ -8984,6 +8990,16 @@ before writing, including arguments it only passes on to its own callees.
 For Win64 calls LowToMed publishes those argument registers as CALL inputs.
 SSA then sees a caller's pass-through argument, and HighC passes exactly the
 arguments the callee reads. Stack arguments follow the 32-byte home area.
+
+Win64 home-spill input elision accepts ordinary stores of an incoming
+register's low bytes only when their home slot is unread and does not escape.
+FS/GS and ordered stores keep their register observations. Returning an
+incoming-area address also retains its possible readers; it cannot establish
+a variadic forwarding contract. The variadic save-area rule still requires
+complete argument words, even though an unused private spill may be narrower.
+Before final compaction, each LowIR operation owns exactly one register-summary
+step, including ignored identities, stack probes and vector upper-lane clears.
+Home-spill refinement therefore cannot erase a different operation's reads.
 
 A complete scalar register summary also publishes an empty vector bank.
 Win64 does so only when no tracked vector family is read; a positional float

@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Win64's shared call-input summary now recognizes unread narrow home spills,
+so 1/2/4-byte saves no longer create unused positional parameters. Segmented
+and ordered writes retain their inputs, and a returned incoming-area pointer
+remains an observer. Variadic save areas still require complete words.
+The summary also preserves one step per LowIR operation until compaction, so
+ignored scalar/vector operations cannot redirect a spill edit to another read.
+Both C routes execute the public no-argument caller/callee fixture at O0/O2, with an
+original x64 oracle on Linux. This closes that input-summary gap; hidden VM
+register state and arbitrary return-address ownership remain separate proofs.
+
 Address-only imported runtime symbols now retain their import origin separately
 from relocated data. LLVM C uses the existing format-specific runtime prototype
 for their aliases, including headers and weak linkage. This closes the MinGW
@@ -42,9 +52,9 @@ The second caller now has no missing ordinary argument. HighC keeps structured
 callers and emits separate source helpers; LLVM C inlines the same admitted
 bodies. The remaining occurrences are two registry-query stack inputs, four
 device-property-query register inputs and one hibernation-adjustment register
-input. Partial home spills, nested observers, complete Windows execution and
-automatic ordinary/state composition remain open. Counts of 56 below describe
-earlier qualifications, not the current source output.
+input. Observed or escaping home storage, nested observers, complete Windows
+execution and automatic ordinary/state composition remain open. Counts of 56
+below describe earlier qualifications, not the current source output.
 
 HighC integer call results now keep their lifted carrier in both expressions
 and local declarations. Direct and indirect MedIR calls use the same result

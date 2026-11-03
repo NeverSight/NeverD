@@ -77,10 +77,25 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool INT = Instruction.size() == 2 && Instruction[0] == 0xcd;
   const bool UD2 = Instruction.size() == 2 && Instruction[0] == 0x0f &&
                    Instruction[1] == 0x0b;
-  if (!Segment && !Immediate && !Single && !INT && !UD2)
+  const bool IRET = Body.size() == 1 && Body[0] == 0xcf;
+  const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
+                    (Body.size() == 3 && Body[0] == 0xca);
+  if (!Segment && !Immediate && !Single && !INT && !UD2 && !IRET && !RETF)
     return invalid("unsupported or malformed legacy step instruction");
   if (State.EFlags & 0x100)
     return invalid("legacy TF stepping requires a debug-event producer");
+  if (IRET && (State.EFlags & 0x4000))
+    return invalid("legacy nested-task IRET requires task-switch state");
+  if ((IRET || RETF) &&
+      (Options.Returns != X86LegacyReturnProfile::OrderedFrame ||
+       (Options.Segments.AlignmentPriority &&
+        *Options.Segments.AlignmentPriority !=
+            X86AlignmentPriority::BeforePaging &&
+        *Options.Segments.AlignmentPriority !=
+            X86AlignmentPriority::AfterPaging) ||
+       (State.Core.CPL == 3 && (Memory.controls().CR0 & 0x40000) &&
+        (State.EFlags & 0x40000) && !Options.Segments.AlignmentPriority)))
+    return invalid("legacy return requires a bound return/alignment profile");
   if (Segment &&
       (Options.Segments.Profile !=
            X86LegacySegmentProfile::WordStackOffsetFirst ||
@@ -145,6 +160,30 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   }
   if (R.BackingFault)
     return R;
+  if (!R.Exception && (IRET || RETF)) {
+    auto Returned = State;
+    const uint16_t Discard = RETF && Body[0] == 0xca
+                                 ? uint16_t(Body[1]) | uint16_t(Body[2]) << 8
+                                 : 0;
+    auto Got = detail::returnLegacyFrame(Returned, Memory, Width, Discard, IRET,
+                                         Options);
+    State.NMIBlocked = Returned.NMIBlocked;
+    if (!Got)
+      return Got.takeError();
+    R.InstructionAttempted = true;
+    if (Accept(*Got)) {
+      State = Returned;
+      State.SSBlocked = State.STIBlocked = false;
+      auto Controls = Memory.controls();
+      Controls.RFlags = State.EFlags;
+      if (auto Error = Memory.bindControls(Controls))
+        return std::move(Error);
+      R.InstructionCompleted = true;
+      return R;
+    }
+    if (R.BackingFault)
+      return R;
+  }
   auto Next = State.Core;
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false;
