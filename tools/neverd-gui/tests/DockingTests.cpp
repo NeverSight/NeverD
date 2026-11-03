@@ -688,12 +688,29 @@ private slots:
           QTRY_COMPARE(previous.size(),
                        previous.screen()->availableGeometry().size());
       }
+#ifdef Q_OS_MACOS
+      const QRect availableBeforeFullScreen =
+          previous.screen()->availableGeometry();
+#endif
       if (fullScreen) {
-        if (legacy)
-          previous.setWindowState(previous.windowState() |
-                                  Qt::WindowFullScreen);
-        else
-          frame->toggleFullScreen();
+        const auto enterFullScreen = [&] {
+          if (legacy)
+            previous.setWindowState(previous.windowState() |
+                                    Qt::WindowFullScreen);
+          else
+            frame->toggleFullScreen();
+        };
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() == QLatin1String("cocoa")) {
+          previous.raise();
+          previous.activateWindow();
+          if (!QTest::qWaitForWindowActive(&previous))
+            QSKIP("Cocoa full-screen validation requires a foreground window.");
+          QVERIFY(test::setNativeWindowState(previous, Qt::WindowFullScreen,
+                                             enterFullScreen));
+        } else
+#endif
+          enterFullScreen();
         QTRY_VERIFY(previous.isFullScreen());
         if (QGuiApplication::platformName() == QLatin1String("windows"))
           QTRY_COMPARE(previous.size(), previous.screen()->geometry().size());
@@ -705,6 +722,17 @@ private slots:
       qInfo() << "Previous restore fixture" << previous.windowState()
               << previousApplied.states << previousApplied.count
               << previous.geometry() << previous.normalGeometry();
+#ifdef Q_OS_MACOS
+      if (fullScreen &&
+          QGuiApplication::platformName() == QLatin1String("cocoa")) {
+        // The saved geometry is the restart input. Finish the old fixture's
+        // native transition and restore the desktop work area before the new
+        // window receives input; QWidget's state flag changes before AppKit.
+        QVERIFY(test::setNativeFullScreen(previous, false));
+        QTRY_COMPARE(previous.screen()->availableGeometry(),
+                     availableBeforeFullScreen);
+      }
+#endif
     }
     QTemporaryDir project;
     Session session(QString::fromLocal8Bit(TEST_WORKER));

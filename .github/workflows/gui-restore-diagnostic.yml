@@ -47,7 +47,7 @@ jobs:
           output = Path('restore-evidence')
           output.mkdir()
           records = []
-          for attempt in range(4):
+          for attempt in range(12):
               path = output / f'round-{attempt + 1:02}.txt'
               command = ['build-gui/bin/neverd-gui-docking-tests',
                          'quickStartChoosesWorkbenchSize', 'workbenchReopensWindowed',
