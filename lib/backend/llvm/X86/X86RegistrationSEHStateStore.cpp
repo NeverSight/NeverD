@@ -10,17 +10,22 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/RegistrationFrameProofAddress.h"
+#include "neverd/backend/llvm/RegistrationFrameStores.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHStateStore.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/MC/BinaryRewrite.h"
 
 #include <climits>
+#include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>

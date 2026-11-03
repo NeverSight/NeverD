@@ -2230,7 +2230,7 @@ MedIR 的常量传播和复制传播共用 `canPropagateConstantToOperand`：计
 
 `NeverDFiniteScalarBranchTests` 覆盖 x86/x64/AArch64 与 COFF/ELF/Mach-O 的无表算术分派、稀疏掩码、模运算、部分写入、调用破坏、临时量寿命、预算、外部入口和新增边。`NeverDFiniteScalarBranchSourceTests` 在优化开关、O0/O2、UBSan 下执行两条 C 路线的所有用例，并验证同时保存代码指针时的独立身份及跳过 SSA 的拒绝行为。
 
-`NeverDCalleeSourceCLI` 通过正式 CLI 检查独立编码的 x64 PE/ELF 调用链：地址和名称选择、传递调用定义、排除无关函数、普通单函数输出、恰好达到和超过深度上限、循环以及根函数和被调函数的拒绝。调用闭包失败时保留已有输出。完整三个函数的 C 单元在 O0/O2 编译执行并返回独立预期值；递归样例只做检查。
+`NeverDCalleeSourceCLI` 通过正式 CLI 检查独立编码的 x64 PE/ELF 调用链：地址和名称选择、传递调用定义、排除无关函数、普通单函数输出、恰好达到和超过深度上限、循环以及根函数和被调函数的拒绝。调用闭包失败时保留已有输出。完整三个函数的 C 单元在 O0/O2 编译执行并返回独立预期值；递归样例只做检查。 它还覆盖没有展开元数据或符号、以 NOP 填充分隔的直接被调叶函数，以及完成函数发现后按数值地址选择该叶函数。
 
 重复镜像访问回归还覆盖同一数据所有者内的不相关函数指针重定位、镜像内目标、位模式类似地址的整数填充值、源寄存器完成位移，以及通过更新后的源和目标寄存器再次读取。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` 检查 x86/x64 边界：动态输入、分段或缩减地址宽度、畸形接口及非地址输出不能取得完成事实。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` 检查输入保持，只有自然宽度的零次数用例在主机执行。完整范围检查拒绝截断映射和溢出次数。本机 LLVM 缺少原生 intrinsic 时，相应检查明确跳过。
 
@@ -2250,6 +2250,12 @@ MedIR 的常量传播和复制传播共用 `canPropagateConstantToOperand`：计
 ## 递增指针访问的映像存储
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` 以 O0/O2 和 ASan/UBSan 执行 COFF/ELF/Mach-O 的正反向遍历、中间复制、同宽转换、读写及纯写路径。`CursorStorageNeedsAnAddressPreservingMemoryPath` 拒绝标量常量、加载的指针、窄化及没有内存消费者的算术；`DirectBoundedTablesKeepTheirExtent` 保留有界直接索引路径。构建 `NeverDLiftTests` 后运行 `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`。
+
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` 以 O0/O2 和 ASan/UBSan 执行 COFF/ELF/Mach-O 中调用者通过有名、无名及内部地址读取数据的路径。即使局部没有读取操作且符号没有尺寸，也必须保留全部原始字节、地址别名及下一符号边界；已有尺寸的标量保持原类型。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` 在两种函数顺序下执行同一地址节点的局部单字节读取和返回用途，并使用相同的格式、命名、优化与 sanitizer 矩阵。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` 检查超出共享嵌入上限的无尺寸逸出对象，覆盖 COFF、ELF、Mach-O、有名和无名对象、listing 名称与 ELF 重定位接纳路径；拒绝时输出保持为空。
 
 LLVM C 的合成栈槽保留完整的 128 位整数写入，再由运行时选择读取任一 64 位半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 和文档规定的 `-fno-strict-aliasing` 契约下覆盖加法及基于对齐的 OR 寻址。运行 `NeverDLLVMCValueTests`；相关帧、向量和显示记录测试覆盖相邻存储路径。
 

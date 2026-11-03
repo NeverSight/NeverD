@@ -2207,7 +2207,7 @@ MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計
 
 `NeverDFiniteScalarBranchTests` 涵蓋 x86/x64/AArch64 與 COFF/ELF/Mach-O 的無表算術分派、稀疏遮罩、模運算、部分寫入、呼叫破壞、暫存量生命期、預算、外部入口及新增邊。`NeverDFiniteScalarBranchSourceTests` 在最佳化開關、O0/O2、UBSan 下執行兩條 C 路徑的所有案例，並驗證同時儲存程式碼指標的獨立身分及略過 SSA 的拒絕行為。
 
-`NeverDCalleeSourceCLI` 透過正式 CLI 檢查獨立編碼的 x64 PE/ELF 呼叫鏈：位址與名稱選取、遞移呼叫定義、排除無關函式、普通單函式輸出、剛好達到與超過深度上限、循環以及根函式與被呼叫函式的拒絕。呼叫閉包失敗時保留既有輸出。完整三函式 C 單元在 O0/O2 編譯執行並傳回獨立預期值；遞迴案例只做檢查。
+`NeverDCalleeSourceCLI` 透過正式 CLI 檢查獨立編碼的 x64 PE/ELF 呼叫鏈：位址與名稱選取、遞移呼叫定義、排除無關函式、普通單函式輸出、剛好達到與超過深度上限、循環以及根函式與被呼叫函式的拒絕。呼叫閉包失敗時保留既有輸出。完整三函式 C 單元在 O0/O2 編譯執行並傳回獨立預期值；遞迴案例只做檢查。 它也涵蓋沒有展開中繼資料或符號、以 NOP 填充分隔的直接被呼叫葉函式，以及完成函式探索後依數值位址選取該葉函式。
 
 重複映像存取回歸亦涵蓋同一資料擁有者內的無關函式指標重定位、映像內目標、位元類似位址的整數填充值、來源暫存器完成位移，以及透過更新後的來源與目標暫存器再次讀取。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` 檢查 x86/x64 邊界：動態輸入、分段或縮減位址寬度、異常介面與非位址輸出不能取得完成事實。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` 檢查輸入保持，僅自然寬度的零次數案例在主機執行。完整範圍測試拒絕截斷映射與溢出次數。本機 LLVM 缺少原生 intrinsic 時，相應測試明確跳過。
 
@@ -2227,6 +2227,12 @@ MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計
 ## 遞增指標存取的映像儲存
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` 以 O0/O2 與 ASan/UBSan 執行 COFF/ELF/Mach-O 的正反向遍歷、中間複製、同寬轉換、讀寫及純寫路徑。`CursorStorageNeedsAnAddressPreservingMemoryPath` 拒絕純量常數、載入的指標、窄化及沒有記憶體消費者的算術；`DirectBoundedTablesKeepTheirExtent` 保留有界直接索引路徑。建置 `NeverDLiftTests` 後執行 `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`。
+
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` 以 O0/O2 與 ASan/UBSan 執行 COFF/ELF/Mach-O 中呼叫端透過具名、未具名及內部位址讀取資料的路徑。即使區域內沒有讀取操作且符號沒有大小，也必須保留全部原始位元組、位址別名及下一符號邊界；已知大小的純量維持原型別。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` 在兩種函式順序下執行同一位址節點的區域單位元組讀取和回傳用途，並使用相同的格式、命名、最佳化與 sanitizer 矩陣。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` 檢查超出共用嵌入上限的未定大小逸出物件，涵蓋 COFF、ELF、Mach-O、具名與未具名物件、listing 名稱及 ELF 重定位接納路徑；拒絕時輸出保持為空。
 
 LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行期選擇讀取任一 64 位元半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 及文件規定的 `-fno-strict-aliasing` 契約下涵蓋加法與基於對齊的 OR 定址。執行 `NeverDLLVMCValueTests`；相關框架、向量及顯示記錄測試涵蓋周邊儲存路徑。
 

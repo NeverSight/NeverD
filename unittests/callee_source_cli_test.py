@@ -164,6 +164,27 @@ def check(args, directory, kind, make_image):
             exe = directory / ('control-' + kind + optimization + '.exe')
             run([str(args.compiler), '-std=gnu11', optimization, str(harness), '-o', str(exe)])
             run([str(exe)])
+    # A directly called leaf need not have unwind rows or symbols. NOPs
+    # before it also leave no INT3 padding hint for load-time discovery.
+    code, sizes = bodies(3)
+    code = bytearray(code)
+    start, end = STRIDE + sizes[1], 2 * STRIDE
+    code[start:end] = b'\x90' * (end - start)
+    payload, entry = make_image(bytes(code), sizes[:2])
+    path = directory / ('leaf-without-metadata.' + kind)
+    path.write_bytes(payload)
+    text, _ = decompile(path, entry)
+    assert definitions(text) == {f'sub_{entry + STRIDE * i:X}' for i in range(3)}, text
+    assert 'neverd.not-decompiled' not in text, text
+    leaf, _ = decompile(path, entry + 2 * STRIDE)
+    assert definitions(leaf) == {f'sub_{entry + 2 * STRIDE:X}'}, leaf
+    if args.compiler:
+        harness = directory / 'leaf-harness.c'
+        harness.write_text(text + f'\nint main(void) {{ return sub_{entry:X}() != 39; }}\n')
+        for optimization in ('-O0', '-O2'):
+            exe = directory / ('leaf-control-' + kind + optimization + '.exe')
+            run([str(args.compiler), '-std=gnu11', optimization, str(harness), '-o', str(exe)])
+            run([str(exe)])
     # The closure ends exactly at the public depth ceiling, then exceeds it.
     path, entry = fixture(65)
     text, _ = decompile(path, entry)

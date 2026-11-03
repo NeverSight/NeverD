@@ -17252,7 +17252,7 @@ and copies extending beyond a guessed scalar or string terminator. A range
 crossing its mapped segment refuses source emission. This does not infer the
 extent of a dynamic count, a segmented address or an address-size override.
 
-`--func --callees` loads the complete function inventory before querying the shared call tree and selecting a source unit. Single-function loading must not hide unselected callees from that query. The CLI reuses the SDK graph limits and refuses both a truncated listing and a depth-limited tree before writing output. Imports and signature-identified library code remain declarations; refused selected callees retain their existing diagnostic notes.
+`--func --callees` loads the complete function inventory before querying the shared call tree and selecting a source unit. Single-function loading must not hide unselected callees from that query. The CLI reuses the SDK graph limits and refuses both a truncated listing and a depth-limited tree before writing output. Imports and signature-identified library code remain declarations; refused selected callees retain their existing diagnostic notes. Before querying that tree, the CLI completes the SDK function-discovery pass. Loading symbol and unwind inventories alone does not reveal every directly called leaf; discovery failure aborts the export.
 
 HighC and LLVM emission share `x86RepAccessSpan` for these complete ranges. At the actual MOVS/STOS memory operand, LLVM selects ordinary image backing even when an unrelated function-pointer relocation shares its owner. Counts and unproven immediate fill patterns retain their integer bits. Rebased operands translate the actual hardware completion delta back to the input address model; they do not reconstruct runtime results from the count. `x86RepConstantAddressOutput` supplies normal-completion address facts for later memory uses, including the auxiliary MOVS destination result. These facts require constant address, count and direction with flat natural-width addressing; they neither eliminate the instruction nor prove that it cannot fault. Zero-count, segmented and reduced-address-width forms retain their existing input handling.
 
@@ -17272,6 +17272,16 @@ The shared OR builder can discard an XOR operand when the accumulated constant c
 ## Image storage reached through advancing cursors
 
 HighC follows pointer-width assignments, copies and addition/subtraction from ordinary memory operands to image-address constants. Loop backedges retain the complete object supplied by the existing symbol/section owner and its alignment residue. This function-local storage dependency walk does not substitute pointer values, prove dereference validity or follow loaded pointers and narrowing conversions. Direct bounded indexed accesses keep their existing extent proof.
+
+Proven image addresses materialized for callers retain that same bounded storage
+even when no local memory access or sized symbol supplies their extent. An
+interior address shares its owner's bytes and offset; a neighboring data symbol
+still ends the storage. A local scalar access width does not bound a caller's
+later accesses through the escaped address.
+
+Image storage classifies operand uses separately from shared expression nodes. A local memory use cannot hide a later escaping use, in either traversal order; the same classification controls bounded table extents.
+
+If an escaping unsized address has no admissible storage extent, including an extent beyond the shared embedding limit, emission fails explicitly before publishing source. It must not substitute a smaller scalar object.
 
 ## Native x64 dispatch frame source
 
