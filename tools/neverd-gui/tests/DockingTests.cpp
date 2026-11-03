@@ -693,24 +693,19 @@ private slots:
           previous.screen()->availableGeometry();
 #endif
       if (fullScreen) {
-        const auto enterFullScreen = [&] {
-          if (legacy)
-            previous.setWindowState(previous.windowState() |
-                                    Qt::WindowFullScreen);
-          else
-            frame->toggleFullScreen();
-        };
 #ifdef Q_OS_MACOS
         if (QGuiApplication::platformName() == QLatin1String("cocoa")) {
           previous.raise();
           previous.activateWindow();
           if (!QTest::qWaitForWindowActive(&previous))
             QSKIP("Cocoa full-screen validation requires a foreground window.");
-          QVERIFY(test::setNativeWindowState(previous, Qt::WindowFullScreen,
-                                             enterFullScreen));
-        } else
+        }
 #endif
-          enterFullScreen();
+        if (legacy)
+          previous.setWindowState(previous.windowState() |
+                                  Qt::WindowFullScreen);
+        else
+          frame->toggleFullScreen();
         QTRY_VERIFY(previous.isFullScreen());
         if (QGuiApplication::platformName() == QLatin1String("windows"))
           QTRY_COMPARE(previous.size(), previous.screen()->geometry().size());
@@ -728,6 +723,7 @@ private slots:
         // The saved geometry is the restart input. Finish the old fixture's
         // native transition and restore the desktop work area before the new
         // window receives input; QWidget's state flag changes before AppKit.
+        QTRY_VERIFY(previousApplied.is(Qt::WindowFullScreen));
         QVERIFY(test::setNativeFullScreen(previous, false));
         QTRY_COMPARE(previous.screen()->availableGeometry(),
                      availableBeforeFullScreen);
