@@ -1150,9 +1150,12 @@ TEST(HeaderLibrary, EveryUnambiguousDdkNativeServiceHasAnExactCallContract) {
                   Contract->ArgWidths[I])
             << "parameter " << I;
     }
+    // The bundled mingw-w64 x64 DDK has 141 Zw declarations; the ReactOS
+    // ARM64 core DDK has 134. Check each provider's own source inventory.
+    EXPECT_GE(Declared,
+              KernelId == HeaderLibrary::WindowsKernelX64 ? 141u : 134u);
     // Review a new conflict instead of silently increasing the exception set.
     // The known FlushInstructionCache disagreement has a separate check below.
-    EXPECT_GE(Declared, 141u);
     EXPECT_EQ(Conflicting, 1u);
   }
 }

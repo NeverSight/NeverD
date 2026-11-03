@@ -223,8 +223,10 @@ services and the eight additional registry/file/memory services in Microsoft
 WDK 10.0.26100.0. It compares overlapping phnt declarations. The known
 `ZwFlushInstructionCache` disagreement (ULONG versus SIZE_T) deliberately has
 no fixed contract; a separate test retains that conflict and a new conflict
-fails coverage. The
-`WindowsKernelABI.Wdk*` execution cases cover a transitive ordinary caller,
+fails coverage. The declaration-count floor follows each bundled provider:
+141 Zw declarations from the mingw-w64 x64 DDK and 134 from the ReactOS ARM64
+core DDK; every declaration still receives the same argument-contract checks.
+The `WindowsKernelABI.Wdk*` execution cases cover a transitive ordinary caller,
 narrow first/third BOOLEAN parameters, the fifth stack operand and an empty
 signature despite ambient reads. Both C backends run with pipeline optimization
 on/off and independently compiled O0/O2 code under ASan/UBSan.
