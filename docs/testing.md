@@ -18671,7 +18671,12 @@ oversized, incomplete candidate information and verifies that only recovery of
 the original bytes can authorize expansion. Native slot readers and implicit
 mutable-parameter entry stores remain refused. These cases inspect IR and C
 without executing the fixture. Setting `NEVERD_TEST_SOURCE_INLINE_EXPORT`
-exports its synthetic bytes and both C routes for separate instruction stepping.
+exports its synthetic bytes and both C routes (including selected-function
+LLVM C) for separate instruction stepping. Static shared-body tests check repeated
+calls, retained volatile loads/stores, argument attribute remapping, removal of
+stale `allocsize` indices, unchanged native signatures and source observations.
+Selected C must carry the complete reachable helper definition closure and its
+providers and data, while excluding unrelated helpers and native bodies.
 `SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
 checks the optimized original-image view, repeat queries, native LLVM and the
 unoptimized view against the same session without changing the native callee's

@@ -10,6 +10,7 @@
 #include "PipelineSourceInline.h"
 
 #include "PipelineCallAbiDetail.h"
+#include "PipelineSourceCallHelpers.h"
 #include "PipelineSourceCallObservations.h"
 #include "PipelineSourceInlineHigh.h"
 #include "PipelineSourceStackAccesses.h"
@@ -329,6 +330,7 @@ SourceInlineResult specializeUnavailableSourceCalls(
     }
   }
   unsigned Expanded = 0;
+  std::map<const llvm::Function *, source_inline::SharedBody> SharedBodies;
   std::map<va_t, SourceInlineBody> ExpandedBodies;
   std::map<llvm::Function *, bool> Prepared;
   std::set<llvm::Function *> Active;
@@ -379,10 +381,25 @@ SourceInlineResult specializeUnavailableSourceCalls(
             unavailable(Call->getArgOperand(P)))
           Body.Unused.insert(P);
       const auto Target = address(*Callee);
-      llvm::InlineFunctionInfo Info;
-      if (llvm::InlineFunction(*Call, Info).isSuccess()) {
+      const auto Entry = address(Function);
+      const bool Root = Entry && Roots.count(*Entry);
+      bool Replaced = false;
+      if (Root) {
+        auto At = SharedBodies.find(Callee);
+        if (At == SharedBodies.end())
+          At = SharedBodies
+                   .emplace(Callee,
+                            source_inline::shareBody(*Callee, *Result.Sources))
+                   .first;
+        source_inline::callSharedBody(*Call, At->second);
+        Replaced = true;
+      } else {
+        llvm::InlineFunctionInfo Info;
+        Replaced = llvm::InlineFunction(*Call, Info).isSuccess();
+      }
+      if (Replaced) {
         Changed = true;
-        if (const auto Entry = address(Function); Entry && Roots.count(*Entry))
+        if (Root)
           ++Expanded;
         if (Target) {
           auto &Saved = ExpandedBodies[*Target];

@@ -596,10 +596,15 @@ nonobservation proof. Complete support bodies are prepared from
 leaves to callers, once per query, within the same callee and expansion budgets.
 Shared descendants reuse that preparation; cycles and unresolved observations
 inside a child retain the original call. The original native signatures and positional
-stack storage remain unchanged. LLVM C inlines the admitted body. HighC uses
-the same admission to emit a separately named C helper with only the unused
+stack storage remain unchanged. Both C routes share one separately named helper
+per admitted body, with only the unused
 formal operands removed, preserving its memory effects and the caller's
-structured control flow. Nested helper calls are rewritten before removing and
+control flow. `PipelineSourceCallHelpers` clones the LLVM body once and remaps
+its source observations; repeated calls reuse that definition. The explicit
+`neverd.source-body` attribute makes selected LLVM C emission include the
+reachable helper definitions, their imports and data, through the same source
+validation and normalization as the selected function. Ordinary native callees
+remain declarations. Nested helper calls are rewritten before removing and
 renumbering the caller helper's formals, and only reachable helpers are emitted.
 Helper names have body provenance but no invented
 native addresses or editable native-variable identities. Their parameters do
