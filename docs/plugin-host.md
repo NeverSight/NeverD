@@ -57,3 +57,39 @@ ctest --test-dir build-plugin-host --output-on-failure
 `NeverDPluginHost.*` covers activation failure, retirement, registration
 replacement, cleanup errors, separate projects, dispatch, asynchronous close,
 late cleanup, task completion, retirement, receipt failures and configuration.
+
+## Shared services and events
+
+`Services` and `Events` register under NPH owners. Services have an ID, exact
+major version, context consistency policy, effect and optional payload schemas.
+Registration validates the schema; invocation checks that exact registration,
+its owner and captured context before acquiring a lease. Host and project
+domains prevent cross-project calls. Payload semantics remain with the service
+owner. `HostServices` bridges `project.context@1` and the existing
+`analysis.<query-name>@1` read operations in `Services.def`.
+
+Events bind exact subscription identities and the same project domains.
+Unsubscription, owner retirement and provider replacement invalidate old
+bindings. Reentrant callbacks may unregister resources without deleting a
+replacement. Events notify consumers; they do not refresh a running task's
+captured analysis context.
+
+## Shared process actions and installation catalog
+
+`ProcessActions` launches providers and owns framing, deadlines, cancellation,
+artifact verification and receipt completion. GUI and headless consumers supply
+their project query/command adapters instead of duplicating this machinery.
+Actions preserve captured parameters and context. Cancellation during a starting
+notification is rechecked before provider launch.
+
+`PluginCatalog` keeps saved installation intent separate from discovery,
+compatibility and activation. An enabled record can remain unavailable with a
+diagnostic. Importing the same active manifest reuses its registration; changing
+contributions requires retiring the existing component. Removal forgets saved
+intent and retires runtime resources; it does not erase provider files or undo
+accepted project changes. Late retirement cannot remove a newer generation.
+
+`NeverDPluginServices.*` tests service versions, context, lifetimes, reentrant
+callbacks, event subscriptions, replacement and the host bridge.
+`NeverDPluginCatalog.*` tests intent, repair, generations, portable installation
+records, cleanup and queue ordering. All run in the standalone NPH build above.
