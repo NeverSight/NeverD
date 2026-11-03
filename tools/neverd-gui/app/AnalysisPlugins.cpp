@@ -606,10 +606,29 @@ void AnalysisPlugins::invoke(const QString &plugin, const QJsonObject &action) {
                       QLatin1Char('/');
   QJsonObject preferences;
   for (const auto &value : fields) {
-    const auto id = value.toObject().value("id").toString();
-    if (settings.contains(prefix + id))
-      preferences.insert(id,
-                         QJsonValue::fromVariant(settings.value(prefix + id)));
+    const auto field = value.toObject();
+    const auto id = field.value("id").toString();
+    if (!settings.contains(prefix + id))
+      continue;
+    // INI files and the registry return remembered booleans and integers as
+    // text after a restart; decode them by the declared type.
+    const auto stored = settings.value(prefix + id);
+    const auto type = field.value("type").toString();
+    const auto text = stored.toString();
+    QJsonValue remembered = text;
+    bool decoded = true;
+    if (type == QLatin1String("boolean")) {
+      decoded = text == QLatin1String("true") || text == QLatin1String("false");
+      remembered = text == QLatin1String("true");
+    } else if (type == QLatin1String("integer"))
+      remembered = stored.toLongLong(&decoded);
+    // The dialog shows the default instead of a remembered value that the
+    // current declaration rejects.
+    QString rejected;
+    if (decoded && resolvePluginParameters(QJsonArray{field},
+                                           QJsonObject{{id, remembered}}, {},
+                                           {}, rejected))
+      preferences.insert(id, remembered);
   }
   QString configurationError;
   const auto effective =
