@@ -447,10 +447,13 @@ protected:
       EXPECT_EQ(Special.cr2, Expected->Exception->CR2.value_or(0x76543210));
       EXPECT_EQ(State.GPR, OriginalState.GPR);
       EXPECT_FALSE(Expected->LoadsSSWithInhibition);
-      if (CPL)
+      if (CPL) {
         EXPECT_EQ(get(Registers.rsp + 20, 4), OriginalRegisters.rsp);
-      else
+        EXPECT_EQ(get(Registers.rsp + 24, 4) & 0xffff,
+                  OriginalState.Segments[2].Selector);
+      } else {
         EXPECT_EQ(Registers.rsp + 20, OriginalRegisters.rsp);
+      }
       for (unsigned I = 0; I != State.Segments.size(); ++I) {
         EXPECT_EQ(State.Segments[I].Selector,
                   OriginalState.Segments[I].Selector);
@@ -466,16 +469,20 @@ protected:
       EXPECT_EQ(State.GPR[4], uint32_t(Registers.rsp));
       EXPECT_EQ(Expected->LoadsSSWithInhibition,
                 !Read && !Far && SegmentIndex == 2);
-      for (unsigned I = 0; I != Segments.size(); ++I) {
-        const auto Native = Cache(*Segments[I]);
-        const auto &Bound = State.Segments[I];
-        EXPECT_EQ(Bound.Selector, Native.Selector);
-        EXPECT_EQ(Bound.Unusable, Native.Unusable);
-        if (!Bound.Unusable) {
-          EXPECT_EQ(Bound.Base, Native.Base);
-          EXPECT_EQ(Bound.Limit, Native.Limit);
-          EXPECT_EQ(Bound.Attributes, Native.Attributes);
-        }
+    }
+    for (unsigned I = 0; I != Segments.size(); ++I) {
+      // The fault handler changes CS, and changes SS only on an outer-ring
+      // entry. All other cache fields remain directly observable in hardware.
+      if (Expected->Exception && (I == 1 || (I == 2 && CPL)))
+        continue;
+      const auto Native = Cache(*Segments[I]);
+      const auto &Bound = State.Segments[I];
+      EXPECT_EQ(Bound.Selector, Native.Selector);
+      EXPECT_EQ(Bound.Unusable, Native.Unusable);
+      if (!Bound.Unusable) {
+        EXPECT_EQ(Bound.Base, Native.Base);
+        EXPECT_EQ(Bound.Limit, Native.Limit);
+        EXPECT_EQ(Bound.Attributes, Native.Attributes);
       }
     }
     if (Encoding != UINT32_MAX && !Expected->Exception) {

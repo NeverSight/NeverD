@@ -4,7 +4,8 @@
   "date": "2026-11-02",
   "scope": "Protected legacy selector MOV/PUSH/POP and LDS/LES/LSS/LFS/LGS instruction transitions; shared data/stack descriptor rules with x64 continuation lowering.",
   "base_commit": "788de79688",
-  "qualification_composition": "The main paging and E-core matrices include the corrected explicit alignment binding. A subsequent test-only extension adds cases 108-110 for crossed descriptor writes; those disjoint cases run separately on both core classes. Executable production code stays unchanged; the final format-only edit below wraps a pre-existing public-header comment. Superseded paging runs and targeted alignment reruns are excluded from totals.",
+  "qualification_composition": "Final paging and E-core matrices include the corrected alignment binding, cases 108-110 for crossed descriptor writes, direct fault-cache checks and the saved outer-ring SS selector. Other suites retain their earlier qualified inputs. Executable segment code is unchanged; the format-only edit below wraps a pre-existing comment. Superseded probes and matrices are excluded from totals.",
+  "final_selector_matrix_base_commit": "8596b742368a55250478b10cd875be8c94ebde9d",
   "source_inputs_sha256": {
     "include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h": "f180cd854bb92b26230800a6862b5a91f1a06e5935b8fbe15def1b107952f616",
     "include/neverd/ir/X86/X86LegacySegments.h": "54630b9cb169b05ad75f5baff8d1e39a6d8bcf67ee8fe32b7602ca5e5d25e1fa",
@@ -21,7 +22,7 @@
     "lib/translate/X86/X86Paging.cpp": "724ce4a99ef55728d1c34395b130950002e25f7afa3a2efc9e24af6574aa4343",
     "unittests/translate/CMakeLists.txt": "f070fde8137c3e517a03e2b947e98d0e0e08a78e9577ebb12389794673c3b9f8",
     "unittests/translate/x86/X86LegacySegmentExecutionTests.cpp": "e6303055e75637197daf8bfb5664a6ec182d4dbb79f43a4bb0af67aaaf024de8",
-    "unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc": "810a8f3e3f64abcc9c8c7af3ef86001e9c369c498400f47bff6db18a480d65a1",
+    "unittests/translate/x86/X86LegacySegmentLoadNativeTests.inc": "0857d7e34b2f8a690a3954f28f4bd28d11b38882970b56d393cd239c25975e90",
     "unittests/translate/x86/X86PagingNativeTests.cpp": "82b41cfe3b2c6dc3cb0300498b144d1cfed4583a01209545f78ab3d5b234ecc9"
   },
   "final_format_only_edit": {
@@ -119,6 +120,19 @@
         "dependency_snapshot_sha256": "fba07fcb5eaafcda0adb8a341719b7cc2a18e127d049cd40716070986343b215",
         "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
         "cmake_cache_sha256": "7cfddef690d5c5490625bce51262c92c319ad583bfa7a1fc7a3b3193b1f86b19"
+      },
+      {
+        "receipt_sha256": "9c2fba84fd2420f4798d7300c03b9dfde3b5bd8434d6b1f77f2850d8838ff56a",
+        "options": [
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "2"
+        ],
+        "configuration": "Release",
+        "dependency_snapshot_sha256": "cb8322f023f5938759849c269aa68a5216b0a6c2517a2f62effac106585ad52c",
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "cmake_cache_sha256": "7cfddef690d5c5490625bce51262c92c319ad583bfa7a1fc7a3b3193b1f86b19"
       }
     ],
     "r6": [
@@ -166,6 +180,19 @@
         "dependency_snapshot_sha256": "edeeb583b381b99cc22a2ad8ed913006d0757ff0a39f664343db784984d5160e",
         "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
         "cmake_cache_sha256": "f505b80552abb24c3b44eb99c0d241c4f013d5950dac8e4147484d80bc782fcd"
+      },
+      {
+        "receipt_sha256": "e681903546631f23b4a6bac2eec2a552cb666b71f2deb37f6ece01891e209ce9",
+        "options": [
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "2"
+        ],
+        "configuration": "Release",
+        "dependency_snapshot_sha256": "0788ed813ebedb4e09f4471797de0f1f969a6a631800a6cc6f548bed92928436",
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "cmake_cache_sha256": "f505b80552abb24c3b44eb99c0d241c4f013d5950dac8e4147484d80bc782fcd"
       }
     ]
   },
@@ -204,26 +231,26 @@
         "--mount",
         "python3",
         "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/native/paging/NeverDX86PagingTests/tmp",
+        "${ARTIFACT_ROOT}/native/final-paging/NeverDX86PagingTests/tmp",
         "taskset",
         "-c",
         "0-11",
         "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/native/paging/NeverDX86PagingTests/result.xml"
+        "--gtest_output=xml:${ARTIFACT_ROOT}/native/final-paging/NeverDX86PagingTests/result.xml"
       ],
       "exit_code": 0,
-      "tests": 66,
+      "tests": 68,
       "failures": 0,
       "errors": 0,
       "skipped": 1,
       "sdk": "native",
-      "passed": 65,
-      "report": "${ARTIFACT_ROOT}/native/paging/NeverDX86PagingTests/result.xml",
-      "report_sha256": "9ed5d3f89a8dca5b298e4c84a528c76bea8adb7d53fbbf9612246f1540c70311",
-      "log": "${ARTIFACT_ROOT}/native/paging/NeverDX86PagingTests/run.log",
-      "log_sha256": "a6096155d383ce917c320e4c02cb1e201c974f705db6fdfbb778190ebbd8eed0",
+      "passed": 67,
+      "report": "${ARTIFACT_ROOT}/native/final-paging/NeverDX86PagingTests/result.xml",
+      "report_sha256": "3f565d33ece5d63e070064f423bedb3a2f66f1b3b81c48a8b38045b31a76b298",
+      "log": "${ARTIFACT_ROOT}/native/final-paging/NeverDX86PagingTests/run.log",
+      "log_sha256": "df5c8a6fb18f0ce9feaa7fe0d6a745d55b0a9e9a23922ed60942aed39d756e5c",
       "properties": [
         {
           "suite": "PagingModes/X86PagingNativeTest",
@@ -319,6 +346,20 @@
           "values": {
             "cpu_comparisons": "324",
             "alignment_priority": "before"
+          }
+        },
+        {
+          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
+          "test": "OriginalAccessedWriteSpansBothDescriptorPages/0",
+          "values": {
+            "cpu_comparisons": "960"
+          }
+        },
+        {
+          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
+          "test": "OriginalAccessedWriteSpansBothDescriptorPages/1",
+          "values": {
+            "cpu_comparisons": "960"
           }
         },
         {
@@ -1273,26 +1314,26 @@
         "--mount",
         "python3",
         "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/native/e-core/legacy-loads-e/tmp",
+        "${ARTIFACT_ROOT}/native/final-e-core/legacy-loads-e/tmp",
         "taskset",
         "-c",
         "12",
         "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=X86LegacySegmentExecutionTest.*:LegacySegmentLoads/*",
         "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/native/e-core/legacy-loads-e/result.xml"
+        "--gtest_output=xml:${ARTIFACT_ROOT}/native/final-e-core/legacy-loads-e/result.xml"
       ],
       "exit_code": 0,
-      "tests": 17,
+      "tests": 19,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
       "sdk": "native",
-      "passed": 17,
-      "report": "${ARTIFACT_ROOT}/native/e-core/legacy-loads-e/result.xml",
-      "report_sha256": "7e56fc340b7c886026b03ceccf424956eb620ee97b50148ac4f8b065f90c51b8",
-      "log": "${ARTIFACT_ROOT}/native/e-core/legacy-loads-e/run.log",
-      "log_sha256": "7eb99ff8160edb1f94b1a22ad16ba323ba70aaf6bc6d379cf79e0466946893dd",
+      "passed": 19,
+      "report": "${ARTIFACT_ROOT}/native/final-e-core/legacy-loads-e/result.xml",
+      "report_sha256": "067af05c34153881d47599a5e4a6084b7c2bed15728dce52d860974470802331",
+      "log": "${ARTIFACT_ROOT}/native/final-e-core/legacy-loads-e/run.log",
+      "log_sha256": "c2f338426a6aeb50f859e3dba10243fa610bdbe8d01046d41bd126096e3414f7",
       "properties": [
         {
           "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
@@ -1365,97 +1406,7 @@
             "cpu_comparisons": "324",
             "alignment_priority": "before"
           }
-        }
-      ],
-      "skips": [],
-      "artifacts": {
-        "files": 0,
-        "manifest_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
-      }
-    },
-    {
-      "name": "descriptor",
-      "target": "NeverDX86PagingTests",
-      "command": [
-        "unshare",
-        "--user",
-        "--map-root-user",
-        "--mount",
-        "python3",
-        "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/native/descriptor/descriptor/tmp",
-        "taskset",
-        "-c",
-        "0-11",
-        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
-        "--gtest_filter=*OriginalAccessedWriteSpans*",
-        "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/native/descriptor/descriptor/result.xml"
-      ],
-      "exit_code": 0,
-      "tests": 2,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0,
-      "sdk": "native",
-      "passed": 2,
-      "report": "${ARTIFACT_ROOT}/native/descriptor/descriptor/result.xml",
-      "report_sha256": "0d50d6b165d59081643fc17e1b0c5fb4f4d9c38e36440fe84cea73c3473d3bf1",
-      "log": "${ARTIFACT_ROOT}/native/descriptor/descriptor/run.log",
-      "log_sha256": "9c9f4bd2a3dcaeaa2938d1a3b37da1c4a852c2fda69cd7adf939d78340be6c69",
-      "properties": [
-        {
-          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
-          "test": "OriginalAccessedWriteSpansBothDescriptorPages/0",
-          "values": {
-            "cpu_comparisons": "960"
-          }
         },
-        {
-          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
-          "test": "OriginalAccessedWriteSpansBothDescriptorPages/1",
-          "values": {
-            "cpu_comparisons": "960"
-          }
-        }
-      ],
-      "skips": [],
-      "artifacts": {
-        "files": 0,
-        "manifest_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
-      }
-    },
-    {
-      "name": "descriptor-e",
-      "target": "NeverDX86PagingTests",
-      "command": [
-        "unshare",
-        "--user",
-        "--map-root-user",
-        "--mount",
-        "python3",
-        "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/native/descriptor-e/descriptor-e/tmp",
-        "taskset",
-        "-c",
-        "12",
-        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
-        "--gtest_filter=*OriginalAccessedWriteSpans*",
-        "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/native/descriptor-e/descriptor-e/result.xml"
-      ],
-      "exit_code": 0,
-      "tests": 2,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0,
-      "sdk": "native",
-      "passed": 2,
-      "report": "${ARTIFACT_ROOT}/native/descriptor-e/descriptor-e/result.xml",
-      "report_sha256": "3cc5514c3b6fc6e7aded6a00d78792e3a04b4ddab9e5e15333bb086e0baa31f9",
-      "log": "${ARTIFACT_ROOT}/native/descriptor-e/descriptor-e/run.log",
-      "log_sha256": "fe73305fdebbe1f408824db4364ae6b1d65d3a28480f4b947565d9d1d8907575",
-      "properties": [
         {
           "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
           "test": "OriginalAccessedWriteSpansBothDescriptorPages/0",
@@ -1487,26 +1438,26 @@
         "--mount",
         "python3",
         "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/r6/paging/NeverDX86PagingTests/tmp",
+        "${ARTIFACT_ROOT}/r6/final-paging/NeverDX86PagingTests/tmp",
         "taskset",
         "-c",
         "0-11",
         "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/r6/paging/NeverDX86PagingTests/result.xml"
+        "--gtest_output=xml:${ARTIFACT_ROOT}/r6/final-paging/NeverDX86PagingTests/result.xml"
       ],
       "exit_code": 0,
-      "tests": 66,
+      "tests": 68,
       "failures": 0,
       "errors": 0,
       "skipped": 1,
       "sdk": "r6",
-      "passed": 65,
-      "report": "${ARTIFACT_ROOT}/r6/paging/NeverDX86PagingTests/result.xml",
-      "report_sha256": "bb96f1c68c0afe8f44b0259f3c8f4294fd1b929bdca5df588657daa62e69d3ee",
-      "log": "${ARTIFACT_ROOT}/r6/paging/NeverDX86PagingTests/run.log",
-      "log_sha256": "4c2288392924012808002ae7384f8115996230ab5af76cc3cceba5bc665acb91",
+      "passed": 67,
+      "report": "${ARTIFACT_ROOT}/r6/final-paging/NeverDX86PagingTests/result.xml",
+      "report_sha256": "6fa97a901b366c28c48196fff9d62a61890d9c4db3ae17bb8b024aca7a19bec7",
+      "log": "${ARTIFACT_ROOT}/r6/final-paging/NeverDX86PagingTests/run.log",
+      "log_sha256": "d709ce4ff1ceac2e2af9d46aa886f4f286a062e614cc6e265845c61de041fd0b",
       "properties": [
         {
           "suite": "PagingModes/X86PagingNativeTest",
@@ -1602,6 +1553,20 @@
           "values": {
             "cpu_comparisons": "324",
             "alignment_priority": "before"
+          }
+        },
+        {
+          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
+          "test": "OriginalAccessedWriteSpansBothDescriptorPages/0",
+          "values": {
+            "cpu_comparisons": "960"
+          }
+        },
+        {
+          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
+          "test": "OriginalAccessedWriteSpansBothDescriptorPages/1",
+          "values": {
+            "cpu_comparisons": "960"
           }
         },
         {
@@ -2584,26 +2549,26 @@
         "--mount",
         "python3",
         "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/r6/e-core/legacy-loads-e/tmp",
+        "${ARTIFACT_ROOT}/r6/final-e-core/legacy-loads-e/tmp",
         "taskset",
         "-c",
         "12",
         "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=X86LegacySegmentExecutionTest.*:LegacySegmentLoads/*",
         "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/r6/e-core/legacy-loads-e/result.xml"
+        "--gtest_output=xml:${ARTIFACT_ROOT}/r6/final-e-core/legacy-loads-e/result.xml"
       ],
       "exit_code": 0,
-      "tests": 17,
+      "tests": 19,
       "failures": 0,
       "errors": 0,
       "skipped": 0,
       "sdk": "r6",
-      "passed": 17,
-      "report": "${ARTIFACT_ROOT}/r6/e-core/legacy-loads-e/result.xml",
-      "report_sha256": "a40ea61220cea7afa48ecc8209b1ecf57b8078c0bec009312b6dd2f36c8cb2b8",
-      "log": "${ARTIFACT_ROOT}/r6/e-core/legacy-loads-e/run.log",
-      "log_sha256": "c288433b63731d6816460c09172df50bb8ac071d86e805114cb2d47df357b410",
+      "passed": 19,
+      "report": "${ARTIFACT_ROOT}/r6/final-e-core/legacy-loads-e/result.xml",
+      "report_sha256": "acbc02439084c7e633794a629602f4bf65927ae1fe38202386171fa841218367",
+      "log": "${ARTIFACT_ROOT}/r6/final-e-core/legacy-loads-e/run.log",
+      "log_sha256": "1ae63a358b62569f3a66f6a5929cf726ee3cf93065c82e9a90b4f3aa97516b34",
       "properties": [
         {
           "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
@@ -2676,97 +2641,7 @@
             "cpu_comparisons": "324",
             "alignment_priority": "before"
           }
-        }
-      ],
-      "skips": [],
-      "artifacts": {
-        "files": 0,
-        "manifest_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
-      }
-    },
-    {
-      "name": "descriptor",
-      "target": "NeverDX86PagingTests",
-      "command": [
-        "unshare",
-        "--user",
-        "--map-root-user",
-        "--mount",
-        "python3",
-        "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/r6/descriptor/descriptor/tmp",
-        "taskset",
-        "-c",
-        "0-11",
-        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
-        "--gtest_filter=*OriginalAccessedWriteSpans*",
-        "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/r6/descriptor/descriptor/result.xml"
-      ],
-      "exit_code": 0,
-      "tests": 2,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0,
-      "sdk": "r6",
-      "passed": 2,
-      "report": "${ARTIFACT_ROOT}/r6/descriptor/descriptor/result.xml",
-      "report_sha256": "6bb3f075f546c23fa6038a9e210fc647756da7d177cf10611fe0606af3a562ad",
-      "log": "${ARTIFACT_ROOT}/r6/descriptor/descriptor/run.log",
-      "log_sha256": "8d26dee81d6c52a0f83af42005a6b98b1efb74b681a72cd546f57e5651acd778",
-      "properties": [
-        {
-          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
-          "test": "OriginalAccessedWriteSpansBothDescriptorPages/0",
-          "values": {
-            "cpu_comparisons": "960"
-          }
         },
-        {
-          "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
-          "test": "OriginalAccessedWriteSpansBothDescriptorPages/1",
-          "values": {
-            "cpu_comparisons": "960"
-          }
-        }
-      ],
-      "skips": [],
-      "artifacts": {
-        "files": 0,
-        "manifest_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
-      }
-    },
-    {
-      "name": "descriptor-e",
-      "target": "NeverDX86PagingTests",
-      "command": [
-        "unshare",
-        "--user",
-        "--map-root-user",
-        "--mount",
-        "python3",
-        "${PRIVATE_TMP_HELPER}",
-        "${ARTIFACT_ROOT}/r6/descriptor-e/descriptor-e/tmp",
-        "taskset",
-        "-c",
-        "12",
-        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
-        "--gtest_filter=*OriginalAccessedWriteSpans*",
-        "--gtest_break_on_failure",
-        "--gtest_output=xml:${ARTIFACT_ROOT}/r6/descriptor-e/descriptor-e/result.xml"
-      ],
-      "exit_code": 0,
-      "tests": 2,
-      "failures": 0,
-      "errors": 0,
-      "skipped": 0,
-      "sdk": "r6",
-      "passed": 2,
-      "report": "${ARTIFACT_ROOT}/r6/descriptor-e/descriptor-e/result.xml",
-      "report_sha256": "cef8c782021629c83d4897a5c8da01edb12142d2cb2185e9c01782b30333b989",
-      "log": "${ARTIFACT_ROOT}/r6/descriptor-e/descriptor-e/run.log",
-      "log_sha256": "131aff71e38ab008a86bbb621271bbf8e17ec9bda7e5f85211dc33f194abde34",
-      "properties": [
         {
           "suite": "LegacySegmentLoads/X86LegacySegmentLoadNativeTest",
           "test": "OriginalAccessedWriteSpansBothDescriptorPages/0",
@@ -2836,7 +2711,7 @@
     "All ModRM and SIB memory forms used by this grammar, every segment override, nonflat source caches and source/destination GPR aliasing.",
     "All CPL/RPL/DPL combinations and descriptor types, null loads, descriptor bounds/accessed writes, explicit and implicit-supervisor fault priority, descriptor and operand linear wrap.",
     "A descriptor crossing two pages faults on either read-only page when its accessed bit is clear, including the first page without the accessed bit; an already-accessed descriptor skips that write.",
-    "All represented GPRs, valid segment cache fields, visible selectors, unusable bits, operand/descriptor bytes and fault vector/error/CR2; null-cache hidden fields and exception-delivery writes are explicitly excluded.",
+    "All represented GPRs, valid segment cache fields, visible selectors, unusable bits, operand/descriptor bytes and fault vector/error/CR2, fault-preserved data/same-ring stack caches and the saved outer-ring SS; null-cache hidden fields and exception-delivery writes are explicitly excluded.",
     "Legacy selector operands on both bound core classes use #AC before competing #PF; two-byte alignment for selector MOV/POP/PUSH differs from a four-byte LxS offset field. This does not select the policy of unrelated scalar instructions."
   ],
   "repaired_probe": {
@@ -2853,5 +2728,280 @@
   "references": [
     "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
     "Intel SDM revision 093: volume 2 MOV, POP, PUSH and LDS/LES/LFS/LGS/LSS; volume 3A sections 3.4, 6.3-6.6."
-  ]
+  ],
+  "post_merge_integration": {
+    "tested_commit": "8596b742368a55250478b10cd875be8c94ebde9d",
+    "merged_dev_commit": "553445bc43747dd16874de17e4deae4d9ab3a207",
+    "implementation_commit": "27ddb5403d4b121f6fffe0fe3ae6f38ec3c50483",
+    "additional_inputs_sha256": {
+      "lib/types/CTypeParser.cpp": "a17f19d87aeb63b033dda05bff702a336f2760f1841ae131c043f660414dacea",
+      "unittests/types/TypeParseTests.cpp": "7f146de451fc33ce42b7c4a9563b9842fe8be172b98cd3434311f1acec20d5b9"
+    },
+    "date": "2026-11-03",
+    "builds": {
+      "native": {
+        "status": "success",
+        "options": [
+          "--target",
+          "NeverDTypeParseTests",
+          "NeverDX64PagedExecutionTests",
+          "--parallel",
+          "4"
+        ],
+        "configuration": "Release",
+        "inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "cache_sha256": "7cfddef690d5c5490625bce51262c92c319ad583bfa7a1fc7a3b3193b1f86b19",
+        "receipt_sha256": "3b38eb90361f5d420ec71e2c64f95c43ccb3e4bc4d63ea41b3b42f8d80f028be"
+      },
+      "r6": {
+        "status": "success",
+        "options": [
+          "--target",
+          "NeverDTypeParseTests",
+          "NeverDX64PagedExecutionTests",
+          "--parallel",
+          "4"
+        ],
+        "configuration": "Release",
+        "inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "cache_sha256": "f505b80552abb24c3b44eb99c0d241c4f013d5950dac8e4147484d80bc782fcd",
+        "receipt_sha256": "bc5c2553b528f62f9ed906c4e7e0b77accdee089a476d39b4d08c10f5917ef8e"
+      }
+    },
+    "runs": [
+      {
+        "target": "NeverDTypeParseTests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIVATE_TMP_HELPER}",
+          "${ARTIFACT_ROOT}/native/integration/NeverDTypeParseTests/tmp",
+          "taskset",
+          "-c",
+          "0-11",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDTypeParseTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACT_ROOT}/native/integration/NeverDTypeParseTests/result.xml"
+        ],
+        "exit_code": 0,
+        "tests": 53,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1,
+        "sdk": "native",
+        "passed": 52,
+        "skips": [
+          {
+            "suite": "TypeParseKernel",
+            "test": "ReadsBackEveryKernelTypeAsRendered",
+            "reason": "${NEVERD_WORKTREE}/unittests/types/TypeParseTests.cpp:1923\nNEVERD_TYPES_NTKRNLMP is not set\n"
+          }
+        ],
+        "report": "${ARTIFACT_ROOT}/native/integration/NeverDTypeParseTests/result.xml",
+        "report_sha256": "ddf1e96db53046ed7d3ef13e11e04d5a4ad915c9caf1a8bb7bf6649cc4d97bc3",
+        "log": "${ARTIFACT_ROOT}/native/integration/NeverDTypeParseTests/run.log",
+        "log_sha256": "8bca5db3ff6a4b14660d4915034b6b4a09542a3c0a618e2494c78ccc6cef244a"
+      },
+      {
+        "target": "NeverDX64PagedExecutionTests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIVATE_TMP_HELPER}",
+          "${ARTIFACT_ROOT}/native/integration/NeverDX64PagedExecutionTests/tmp",
+          "taskset",
+          "-c",
+          "0-11",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACT_ROOT}/native/integration/NeverDX64PagedExecutionTests/result.xml"
+        ],
+        "exit_code": 0,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "sdk": "native",
+        "passed": 50,
+        "skips": [],
+        "report": "${ARTIFACT_ROOT}/native/integration/NeverDX64PagedExecutionTests/result.xml",
+        "report_sha256": "988a5da6e14a81f3ea8e23ec72c1533d07a65ef54494626e6e77d08160e84ab9",
+        "log": "${ARTIFACT_ROOT}/native/integration/NeverDX64PagedExecutionTests/run.log",
+        "log_sha256": "5a9d2edc147d845bac45bd32cd057ab9ee25870684e276c080242106da8d84f5"
+      },
+      {
+        "target": "NeverDTypeParseTests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIVATE_TMP_HELPER}",
+          "${ARTIFACT_ROOT}/r6/integration/NeverDTypeParseTests/tmp",
+          "taskset",
+          "-c",
+          "0-11",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDTypeParseTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACT_ROOT}/r6/integration/NeverDTypeParseTests/result.xml"
+        ],
+        "exit_code": 0,
+        "tests": 53,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1,
+        "sdk": "r6",
+        "passed": 52,
+        "skips": [
+          {
+            "suite": "TypeParseKernel",
+            "test": "ReadsBackEveryKernelTypeAsRendered",
+            "reason": "${NEVERD_WORKTREE}/unittests/types/TypeParseTests.cpp:1923\nNEVERD_TYPES_NTKRNLMP is not set\n"
+          }
+        ],
+        "report": "${ARTIFACT_ROOT}/r6/integration/NeverDTypeParseTests/result.xml",
+        "report_sha256": "7fa25955de725ce2f4808242c2d8a8c66b4a0b7817d7edc0f4d344c2b604ec68",
+        "log": "${ARTIFACT_ROOT}/r6/integration/NeverDTypeParseTests/run.log",
+        "log_sha256": "17d3837c1387ce28306a520919f8da9e639e42d35782098f2dbbc4846011f0db"
+      },
+      {
+        "target": "NeverDX64PagedExecutionTests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIVATE_TMP_HELPER}",
+          "${ARTIFACT_ROOT}/r6/integration/NeverDX64PagedExecutionTests/tmp",
+          "taskset",
+          "-c",
+          "0-11",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACT_ROOT}/r6/integration/NeverDX64PagedExecutionTests/result.xml"
+        ],
+        "exit_code": 0,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "sdk": "r6",
+        "passed": 50,
+        "skips": [],
+        "report": "${ARTIFACT_ROOT}/r6/integration/NeverDX64PagedExecutionTests/result.xml",
+        "report_sha256": "7d788967c1718eaece6879e985b64950ea980d0dbf468c91c6af0ca5982a05f1",
+        "log": "${ARTIFACT_ROOT}/r6/integration/NeverDX64PagedExecutionTests/run.log",
+        "log_sha256": "d51a988a1abd354197a63bc5e2cd38d831c6bcec1b2673c4ff1c892e5abe1042"
+      }
+    ],
+    "paged_exports": [
+      {
+        "sdk": "native",
+        "files": 704,
+        "all_match_premerge": true,
+        "manifest_sha256": "584137dec2c0cdd150ad22c7f1d20355d3b13e2d2b63072263ba9a4e6c442dea"
+      },
+      {
+        "sdk": "r6",
+        "files": 704,
+        "all_match_premerge": true,
+        "manifest_sha256": "584137dec2c0cdd150ad22c7f1d20355d3b13e2d2b63072263ba9a4e6c442dea"
+      }
+    ],
+    "parser_comparison": {
+      "scope": "Four existing complete parseCTypes request tests, four alternating pairs on CPU 0 with NEVERD_THREADS=1; this component check makes no whole-decompilation speed claim.",
+      "command": [
+        "taskset",
+        "-c",
+        "0",
+        "${TYPE_PARSE_TESTS}",
+        "--gtest_filter=TypeParse.ReadsWhatGnuPreprocessedHeadersHold:TypeParse.MicrosoftLegacyDeclspecKeepsAlignmentAndFunctionContracts:TypeParse.MicrosoftFixedWidthPointerAliasesKeepTheirWidths:TypeParse.ReadsTypedefsPrototypesAndFunctionPointers",
+        "--gtest_repeat=11519",
+        "--gtest_brief=1"
+      ],
+      "output_comparison": "All non-timing test-log bytes match; individual tests assert the parser contracts.",
+      "same_dependency_sources_and_configuration": true,
+      "baseline_receipt_sha256": "616c1409d4e7ff43716f3f28e11e94d0bd75513742771b55d883cd877d963ebd",
+      "baseline_binary_sha256": "361ee002b09c350ddaa4e02e6df07b7d8f3b3bb1f17d151f584aed8adac8eefb",
+      "candidate_binary_sha256": "9a9ca687b61376dc67bb36c7c3223d11af9717942d2b00a904796b6e998a9631",
+      "measurement_manifest_sha256": "edb466ace958f771e2a1617352001e76128a42d191c723b0d8afda1a67faccd4",
+      "measurement_storage": "Raw CPU/wall samples and local timing summary stay outside the repository.",
+      "runs": [
+        {
+          "label": "0-before",
+          "repeats": 11519,
+          "configuration": "before",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "1ffd8cb57f0b66508086f381c0beca5a75a45cfecc57b7106227c4dbf51cc29f"
+        },
+        {
+          "label": "0-after",
+          "repeats": 11519,
+          "configuration": "after",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "1ffd8cb57f0b66508086f381c0beca5a75a45cfecc57b7106227c4dbf51cc29f"
+        },
+        {
+          "label": "1-after",
+          "repeats": 11519,
+          "configuration": "after",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "e563068566c56cd79abbcfd12eee4e0f89112a55ce589a4d8b3d059dab8889ee"
+        },
+        {
+          "label": "1-before",
+          "repeats": 11519,
+          "configuration": "before",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "e563068566c56cd79abbcfd12eee4e0f89112a55ce589a4d8b3d059dab8889ee"
+        },
+        {
+          "label": "2-before",
+          "repeats": 11519,
+          "configuration": "before",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "e563068566c56cd79abbcfd12eee4e0f89112a55ce589a4d8b3d059dab8889ee"
+        },
+        {
+          "label": "2-after",
+          "repeats": 11519,
+          "configuration": "after",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "e563068566c56cd79abbcfd12eee4e0f89112a55ce589a4d8b3d059dab8889ee"
+        },
+        {
+          "label": "3-after",
+          "repeats": 11519,
+          "configuration": "after",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "e563068566c56cd79abbcfd12eee4e0f89112a55ce589a4d8b3d059dab8889ee"
+        },
+        {
+          "label": "3-before",
+          "repeats": 11519,
+          "configuration": "before",
+          "normalized_output_sha256": "11212888b8e56d9c84f7052d9522a292c7490bbeba36a053ac8c394dbb7ab50a",
+          "log_sha256": "e563068566c56cd79abbcfd12eee4e0f89112a55ce589a4d8b3d059dab8889ee"
+        }
+      ]
+    },
+    "totals": {
+      "passed": 204,
+      "skipped": 2,
+      "failures": 0
+    },
+    "accounting": "These checks and repeated parser comparisons are separate from the original 1536-pass qualification totals."
+  }
 }

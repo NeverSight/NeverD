@@ -134,16 +134,27 @@ from the host.
 The original-instruction tests independently author GDT/LDT entries and raw
 selector instructions in KVM. They compare every GPR, all usable segment
 cache fields, selectors/unusable bits, explicit operand and descriptor bytes,
-fault vector/error/CR2 and the old fault-stack pointer. A following NOP passes
-the MOV/POP SS debug-inhibition boundary without changing registers. The
+fault vector/error/CR2 and the old fault-stack pointer/selector. On faults,
+data caches and same-ring SS remain directly observable and are checked
+against hardware. Handler CS and, on outer-ring entry, replacement SS are
+excluded. A following NOP passes the MOV/POP SS debug-inhibition boundary
+without changing registers. The
 exception handler itself remains an oracle fixture; these results do not
 qualify a software i386 event-delivery implementation. Hidden fields of null
 unusable caches and unrelated exception-frame memory are excluded explicitly.
 The matrix records 174,368 comparisons across legacy paging and PAE, both SDKs,
-and the local P/E core classes. The cross-page accessed-write cases run
-separately after the main matrix; their counts are included once. The three
-shared paged/continuation suites also export 1,032 files per SDK; all are
-byte-identical across the two toolchains. The qualification totals 1,536
+and the local P/E core classes. Its final runs include the cross-page
+accessed-write and preserved-cache fault cases; superseded diagnostic runs
+are excluded from the totals. The three shared paged/continuation suites also
+export 1,032 files per SDK; all are byte-identical across the two toolchains.
+The qualification totals 1,536
 passing tests and 34 explicit skips, including LA57, absent native AMX,
 NeverC's i386 frontend and older SDK interfaces. See
 [the selector-load qualification](evidence/x86-legacy-segment-loads-2026-11-02.json).
+
+After integrating `553445bc43`'s C annotation-keyword change, both SDKs pass
+204 additional type-parser and paged-source checks, with two optional kernel
+type-corpus skips. All 704 paged-source exports per SDK still match the earlier
+qualification. These integration checks are recorded separately from the
+primary totals; the paired parser component check retains its raw measurements
+locally and makes no whole-decompilation performance claim.
