@@ -9,6 +9,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/libc/LibCNames.h"
 
 #include "llvm/ADT/ScopeExit.h"
 
@@ -44,6 +45,9 @@ std::optional<uint32_t> CFGBuilder::provedCalleePreservedGPRs(
     return false;
   };
   const BinaryImage &Image = *CurrentImg;
+  const auto *Names = NoReturnTargets && NoReturnTargets->isImageOnly()
+                          ? NoReturnTargets
+                          : nullptr;
   std::map<va_t, LocalRegisterEffect> Effects;
   std::map<va_t, unsigned> Depths{{Target, 0}};
   std::vector<va_t> Pending{Target};
@@ -64,6 +68,7 @@ std::optional<uint32_t> CFGBuilder::provedCalleePreservedGPRs(
     Builder.setKnownFuncEntries(KnownFuncEntries);
     Builder.setAbsoluteRelocationRootIndex(AbsoluteRelocationRoots);
     Builder.setExecutableCodeOwnerIndex(ExecutableCodeOwners);
+    Builder.setNoReturnTargetIndex(Names);
     // No no-return callback or shared cache can re-enter this in-progress
     // proof. Unmodelled tails and unresolved control retain an unknown effect.
     const LowFunc Body = Builder.buildIntegerFrameProof(Image, Dec, Entry, "");
@@ -72,7 +77,7 @@ std::optional<uint32_t> CFGBuilder::provedCalleePreservedGPRs(
       Work += Block.Ops.size();
     if (!Spend(Work))
       return std::nullopt;
-    LocalRegisterEffect Effect = localRegisterEffect(Image, Body);
+    LocalRegisterEffect Effect = localRegisterEffect(Image, Body, Names);
     if (Effect.Unknown || Effect.Incomplete)
       return std::nullopt;
     for (va_t Callee : Effect.Callees) {

@@ -410,6 +410,10 @@ public:
   /// Drop demand-loaded name answers between sequential runs of the same
   /// immutable image. All querying workers must have joined first.
   void clearMemoizedNames();
+  /// Whether queries read only this image and the builtin name tables.
+  /// Nested CFG proofs may reuse such an index without invoking a caller's
+  /// resolver or declaration callback while that proof is in progress.
+  bool isImageOnly() const { return !ResolveName && !Declared; }
 
 private:
   const BinaryImage *Image;
