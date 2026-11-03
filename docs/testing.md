@@ -6232,6 +6232,9 @@ unknown bytes still produce their original diagnostic positions.
 `TypeParse.StorageQualifiersKeepDeclaratorsAndKeywordBoundaries` covers macro
 annotations, qualified pointers, explicit pointer widths, calling conventions,
 similar identifiers and transactional diagnostics across all three data models.
+`TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
+record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
+recovery after unknown or incompatible type words across those models.
 
 `DWARFTypeImportGo.ReadsGosStructuresAndFuncValues` builds a real Go program
 with the selected `NEVERD_TEST_GO` compiler (or `go` on PATH). It checks both
