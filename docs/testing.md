@@ -6957,6 +6957,14 @@ unless the complete range is proved. Run it with the finite scalar branch,
 call-register unread, FP parameter mask and Med prologue-save suites when
 changing their shared dataflow.
 
+The same suite checks 1/2/4/8-byte home spills, original FS/GS-prefixed store
+instructions, ordered stores, overlapping readers and returned home pointers.
+Narrow private spills must not invent parameters; externally observable writes
+and returned incoming-area addresses must retain them. A partial save area
+cannot acquire the full-word variadic contract.
+Ignored scalar identities and vector upper-lane clears before a spill must
+also preserve its operation index, including a later wider register read.
+
 `NeverDCallStackRangeSourceTests` executes independent Win64 machine bytes
 beside both C routes on Linux x64. Fixed writes followed by indexed reads,
 and indexed writes followed by fixed reads, must share storage. The matrix
@@ -6965,6 +6973,12 @@ UBSan, comparing 1,024 inputs in each of 32 configurations. Run
 `NeverDLLVMCFrameMemoryTests` and `NeverDCSourcePresentationTests` for the
 associated frame-alias and rendering changes. These checks establish local
 storage semantics, not Windows service execution or inferred alias exclusions.
+
+Its unread-home caller/callee matrix additionally compiles both C routes with
+no synthetic arguments at default/NoOpt and O0/O2. All four store widths return
+the independently specified value; Linux x64 also compares 1,024 original
+machine-code calls per executable with varied incoming registers. Other hosts
+run the generated-C value check without claiming the native Win64 oracle.
 
 `CompleteFunctionCache` compares reconstructed default functions with cold
 builds, including address-taken roots, instruction coverage, relocation
