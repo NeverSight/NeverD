@@ -387,6 +387,8 @@ bool configureSBF(neverd_session_t Sess) {
 /// with imports and library code that byte signatures name left declared.
 const char *decompileWithCallees(neverd_session_t Sess, uint64_t Root,
                                  std::string &Out) {
+  if (neverd_session_discover_functions(Sess) < 0)
+    return "the functions cannot be discovered";
   const std::string Options =
       "{\"root\":\"0x" + utohexstr(Root) +
       "\",\"max_depth\":" + std::to_string(sdk::kMaxCallPathDepth) +

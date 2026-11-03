@@ -499,8 +499,9 @@ TEST(ImmutableScalar, BudgetChargesTheInventoryBeforeARead) {
 }
 
 TEST(ImmutableScalar, WideOperandFixupsCannotSupplyStableBytes) {
+  constexpr uint8_t Widths[] = {8, 16, UINT8_MAX};
   for (bool CodeOperand : {false, true})
-    for (uint8_t Width : {8, 16, UINT8_MAX}) {
+    for (uint8_t Width : Widths) {
       auto Image = codeImage();
       Image.BaseRelocations.clear();
       RelocatedAddressField Field;

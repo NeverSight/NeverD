@@ -16,6 +16,7 @@
 
 #include "neverd/plugin/Artifacts.h"
 #include "neverd/plugin/Config.h"
+#include "neverd/plugin/Manifest.h"
 #include "neverd/plugin/PluginCatalog.h"
 
 #include <atomic>
@@ -23,6 +24,7 @@
 #include <csignal>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <random>
 #include <sstream>
 #ifdef _WIN32
@@ -56,7 +58,8 @@ Json readConfig(const std::string &Path) {
   if (std::filesystem::file_size(FilePath) > limits::kMaxManifestBytes)
     throw std::runtime_error("Configuration file exceeds 64 KiB");
   std::ifstream File(FilePath, std::ios::binary);
-  auto Result = Json::parse(File, nullptr, false);
+  const std::string Bytes{std::istreambuf_iterator<char>(File), {}};
+  auto Result = parseJson(Bytes);
   if (!Result.is_object())
     throw std::runtime_error("Configuration must be a JSON object");
   return Result;
@@ -273,10 +276,11 @@ int mainUtf8(int Argc, char **Argv) {
     return run(Argc, Argv);
   } catch (const std::exception &Error) {
     std::cerr << Error.what() << '\n';
+    // Messages can carry argument or OS path bytes that are not UTF-8.
     std::cout << Json{{"status", "error"},
                       {"code", "plugin_host_error"},
                       {"message", Error.what()}}
-                     .dump()
+                     .dump(-1, ' ', false, Json::error_handler_t::replace)
               << '\n';
     return Cancelled.load() ? 130 : 2;
   }

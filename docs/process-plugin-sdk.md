@@ -9,11 +9,15 @@ including a separately built C++ executable, can implement the same framing.
 ## Provider lifecycle
 
 The host launches the manifest's executable and argument list without a shell.
-Frames have a four-byte big-endian length followed by UTF-8 JSON. The provider
-first sends `hello`; the host sends one captured `start` invocation. Progress,
-logs, queries and their replies carry the exact task identity. The provider
-sends one `result` and exits. `run(handler)` owns this exchange. Reserve stdout
-for protocol frames. Cancellation terminates the provider process tree.
+Frames have a four-byte big-endian length followed by UTF-8 JSON nested at most
+64 levels deep. The provider first sends `hello`; the host sends one captured
+`start` invocation. Progress, logs, queries and their replies carry the exact
+task identity. The provider sends one `result` and exits. `run(handler)` owns
+this exchange. Reserve stdout for protocol frames. Exit and cancellation
+terminate the provider process tree: its Windows job or POSIX process group.
+A POSIX descendant that starts its own session or group is outside that tree;
+if it still holds the provider's pipes one second after the provider exits,
+the task fails.
 
 `Task` exposes context, validated parameters, output directory, progress,
 logs, declared queries, services and event subscriptions. Query failures retain

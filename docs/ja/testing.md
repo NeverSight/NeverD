@@ -2261,7 +2261,7 @@ MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を�
 
 `NeverDFiniteScalarBranchTests` は x86/x64/AArch64、COFF/ELF/Mach-O のテーブルなし算術分岐、疎なマスク、剰余算術、部分書き込み、破壊、テンポラリーの寿命、予算、外部入口、新しい辺を検証します。`NeverDFiniteScalarBranchSourceTests` は最適化の有無、O0/O2、UBSan で両 C 経路の全ケースを実行し、同時に保存するコードポインターの識別と SSA 省略時の拒否も確認します。
 
-`NeverDCalleeSourceCLI` は独自に符号化した x64 PE/ELF 呼び出し列を実際の CLI で確認します。アドレス・名前選択、推移的な定義、無関係な関数の除外、単一関数出力、深さ上限の境界と超過、循環、ルートと呼び出し先の拒否を検査します。閉包が失敗した場合は既存出力を保存します。三関数の完全な C 単位を O0/O2 でコンパイル・実行し、独立した期待値を確認します。再帰例は検査のみです。
+`NeverDCalleeSourceCLI` は独自に符号化した x64 PE/ELF 呼び出し列を実際の CLI で確認します。アドレス・名前選択、推移的な定義、無関係な関数の除外、単一関数出力、深さ上限の境界と超過、循環、ルートと呼び出し先の拒否を検査します。閉包が失敗した場合は既存出力を保存します。三関数の完全な C 単位を O0/O2 でコンパイル・実行し、独立した期待値を確認します。再帰例は検査のみです。 さらに、アンワインドメタデータもシンボルもなく NOP パディングで区切られた直接呼び出し先のリーフ関数と、関数検出完了後にそのリーフを数値アドレスで選択する場合を検証します。
 
 反復イメージアクセスの回帰は、同じ領域内の無関係な関数ポインター再配置、イメージ内の宛先、アドレスに似た整数の埋め込み値、完了後のソース変位と両レジスターを使った後続の読み取りも検査する。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` は x86/x64 で動的入力、セグメント、縮小幅、不正なインターフェース、非アドレス出力を除外する。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` は入力の保持を検査し、自然幅のゼロ回数ケースだけをホストで実行する。完全範囲の検査は切り詰められたマッピングと回数のオーバーフローを拒否する。LLVM に対応するネイティブ intrinsic がない検査は明示的にスキップする。
 
@@ -2281,6 +2281,12 @@ MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を�
 ## 進むカーソルが参照するイメージ領域
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` は COFF/ELF/Mach-O の前進/後退、途中のコピー、同幅変換、読み書きと書き込みのみの経路を O0/O2 と ASan/UBSan で実行します。`CursorStorageNeedsAnAddressPreservingMemoryPath` はスカラー定数、ロードされたポインタ、幅の縮小、メモリ利用のない算術を拒否し、`DirectBoundedTablesKeepTheirExtent` は有界な直接索引を維持します。`NeverDLiftTests` をビルドして `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4` を実行してください。
+
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` は COFF/ELF/Mach-O で、呼び出し元が名前付き・名前なし・内部アドレスを通じて読む経路を O0/O2 と ASan/UBSan で実行します。局所的な読み込みやシンボルのサイズがなくても、元の全バイト、アドレスの別名関係、次のシンボル境界を保持します。サイズが既知のスカラーは元の型を維持します。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` は、ローカルな1バイト読み出しとアドレスを返す関数で共有されるアドレスノードを、両方の関数順序と同じ形式・命名・最適化・サニタイザーの組み合わせで実行します。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` は、関数外へ渡されるサイズ不明のオブジェクトが共有の埋め込み上限を超える場合を拒否します。COFF・ELF・Mach-O、名前の有無、リスティング名、ELF再配置による採用を対象とし、拒否時は出力を空に保ちます。
 
 LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビット半分を読み出す前に、128 ビット整数の書き込み全体を保持します。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` は、文書化された `-fno-strict-aliasing` 契約と ASan/UBSan を使用し、O0/O2 で加算およびアラインメントに基づく OR アドレス計算を検証します。`NeverDLLVMCValueTests` と関連するフレーム、ベクトル、表示レコードのテストを実行してください。
 
