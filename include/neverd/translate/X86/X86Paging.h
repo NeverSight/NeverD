@@ -64,6 +64,10 @@ struct X86LinearAccess {
   bool ImplicitSupervisor = false;
   /// Noncanonical stack addresses raise #SS(0), other addresses #GP(0).
   bool Stack = false;
+  /// Legacy explicit operands after whole-segment checking may cross the
+  /// 32-bit linear wrap. IA-32e and implicit system references cannot select
+  /// this flag. It does not waive segment-offset limit checks.
+  bool Wrap32 = false;
 };
 
 struct X86MemoryException {
@@ -102,7 +106,7 @@ llvm::Error validateX86PagingState(const X86PagingFeatures &Features,
 /// Controls have already passed validateX86PagingState. Noncanonical operands
 /// report #GP/#SS before any #PF, even when the first byte has no translation.
 /// IA-32e operands wrap modulo 2^64; both ends must remain canonical.
-/// The caller splits legacy linear wrap after applying segment checks.
+/// Legacy linear wrap requires explicit Wrap32 after segment checks.
 llvm::Expected<std::optional<X86MemoryException>>
 checkX86LinearAccess(const X86PagingState &State, const X86LinearAccess &Access,
                      uint64_t Bytes);

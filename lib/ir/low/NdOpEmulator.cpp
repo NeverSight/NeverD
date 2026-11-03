@@ -384,12 +384,12 @@ void NdOpEmulator::writeOutputBytes(const NdVar &Output,
 }
 
 std::optional<std::vector<uint8_t>>
-NdOpEmulator::loadMemoryBytes(uint64_t Addr, uint16_t Size) const {
+NdOpEmulator::loadMemoryBytes(uint64_t Addr, uint16_t Size, bool Wrap32) const {
   if (Size == 0 || Size - 1 > UINT64_MAX - Addr)
     return std::nullopt;
   std::vector<uint8_t> Bytes(Size);
   for (uint16_t I = 0; I < Size; ++I) {
-    const uint64_t ByteAddress = Addr + I;
+    const uint64_t ByteAddress = Wrap32 ? uint32_t(Addr + I) : Addr + I;
     if (const auto Stored = MemStoreBytes.find(ByteAddress);
         Stored != MemStoreBytes.end()) {
       Bytes[I] = Stored->second;
@@ -406,11 +406,11 @@ NdOpEmulator::loadMemoryBytes(uint64_t Addr, uint16_t Size) const {
   return Bytes;
 }
 
-std::optional<uint64_t> NdOpEmulator::loadMemory(uint64_t Addr,
-                                                 uint16_t Size) const {
+std::optional<uint64_t> NdOpEmulator::loadMemory(uint64_t Addr, uint16_t Size,
+                                                 bool Wrap32) const {
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return std::nullopt;
-  const auto Bytes = loadMemoryBytes(Addr, Size);
+  const auto Bytes = loadMemoryBytes(Addr, Size, Wrap32);
   if (!Bytes)
     return std::nullopt;
   uint64_t Val = 0;
@@ -418,13 +418,14 @@ std::optional<uint64_t> NdOpEmulator::loadMemory(uint64_t Addr,
   return Val;
 }
 
-bool NdOpEmulator::canWriteMemoryBytes(uint64_t Addr, uint16_t Size) const {
+bool NdOpEmulator::canWriteMemoryBytes(uint64_t Addr, uint16_t Size,
+                                       bool Wrap32) const {
   if (Size == 0 || Size - 1 > UINT64_MAX - Addr)
     return false;
   if (!StrictMode)
     return true;
   for (uint16_t I = 0; I < Size; ++I) {
-    const uint64_t ByteAddress = Addr + I;
+    const uint64_t ByteAddress = Wrap32 ? uint32_t(Addr + I) : Addr + I;
     const Segment *Mapped = Img.getSegmentFor(ByteAddress);
     if (!Mapped || !Mapped->isWritable() || ByteAddress < Mapped->VA ||
         ByteAddress - Mapped->VA >= Mapped->Size)
@@ -434,11 +435,12 @@ bool NdOpEmulator::canWriteMemoryBytes(uint64_t Addr, uint16_t Size) const {
 }
 
 bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
-                                    llvm::ArrayRef<uint8_t> Value) {
+                                    llvm::ArrayRef<uint8_t> Value,
+                                    bool Wrap32) {
   if (Value.empty() || Value.size() > UINT16_MAX)
     return false;
   const uint16_t Size = static_cast<uint16_t>(Value.size());
-  if (!canWriteMemoryBytes(Addr, Size))
+  if (!canWriteMemoryBytes(Addr, Size, Wrap32))
     return false;
   if (!MemStore.contains(Addr) &&
       static_cast<int>(MemStore.size()) >= limits::kMaxEmulatorStoreEntries) {
@@ -453,16 +455,17 @@ bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
   std::memcpy(&Low, Value.data(), std::min<size_t>(Value.size(), sizeof(Low)));
   MemStore[Addr] = Low;
   for (uint16_t I = 0; I < Size; ++I)
-    MemStoreBytes[Addr + I] = Value[I];
+    MemStoreBytes[Wrap32 ? uint32_t(Addr + I) : Addr + I] = Value[I];
   return true;
 }
 
-bool NdOpEmulator::storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value) {
+bool NdOpEmulator::storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value,
+                               bool Wrap32) {
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
     return false;
   std::array<uint8_t, sizeof(Value)> Bytes{};
   std::memcpy(Bytes.data(), &Value, Size);
-  return storeMemoryBytes(Addr, llvm::ArrayRef(Bytes).take_front(Size));
+  return storeMemoryBytes(Addr, llvm::ArrayRef(Bytes).take_front(Size), Wrap32);
 }
 
 void NdOpEmulator::setCallPreservedRegisters(std::vector<uint64_t> Regs) {

@@ -19,6 +19,7 @@ add_neverd_component_library(NeverDIRLowValidation
   X86/X87PortableABI.cpp
   X86/X86MpxContext.cpp
   X86/X86MpxMemory.cpp
+  X86/X86LegacySegments.cpp
 
   LINK_COMPONENTS
   Digest
@@ -172,6 +173,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationEntryABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp
+  X86/X86LegacySegmentsEmulator.cpp
   X86/X86FourSource.cpp
   NdOpEmulatorFloatConvert.cpp
   X86/NdOpEmulatorX86FPArith.cpp

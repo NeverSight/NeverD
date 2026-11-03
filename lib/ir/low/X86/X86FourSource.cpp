@@ -65,10 +65,6 @@ bool NdOpEmulator::executeX86FourSource(const LowOp &Op) {
     return false;
   const auto Use = x86FourSourceOperandUse(C, readOperand(Op.Inputs[4]));
   const auto Mask = readOperand(Op.Inputs[4]) & Use.LaneMask;
-  // Native execution owns CS/ES/SS descriptor state. A zero mask suppresses
-  // that observation; active accesses cannot use the ordinary DS image.
-  if (Use.Address && C.SegmentPrefix)
-    return false;
   if ((Use.Accumulator && !Known(Op.Inputs[2])) ||
       (Use.Address && (!Known(Op.Inputs[1]) || (!C.integer() && !MXCSRKnown))))
     return false;
@@ -98,10 +94,13 @@ bool NdOpEmulator::executeX86FourSource(const LowOp &Op) {
   // publishing numerical status or a destination result.
   std::array<uint32_t, X86FourSourceCount> MemoryWords{};
   if (Use.Address) {
-    const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    const auto Address = resolveX86NativeMemoryAddress(
+        Op, C.SegmentPrefix, readOperand(Op.Inputs[1]), sizeof(MemoryWords),
+        false);
     if (!Address)
       return false;
-    const auto Bytes = loadMemoryBytes(*Address, sizeof(MemoryWords));
+    const auto Bytes =
+        loadMemoryBytes(*Address, sizeof(MemoryWords), C.SegmentPrefix != 0);
     if (!Bytes)
       return false;
     for (unsigned I = 0; I < X86FourSourceCount; ++I)

@@ -11,6 +11,7 @@ Guest linear addresses are never cast to host pointers.
 
 | Owner | Responsibility |
 | --- | --- |
+| `ir/X86/X86LegacySegments` | Already-loaded protected 16/32-bit segment permissions and complete offset limits. |
 | `translate/X86/X86Paging` | CPU-bound paging controls, address translation, page permissions, A/D updates and architectural fault metadata. |
 | `translate/GuestMemoryRuntime` | Owned physical bytes, backing permissions, extent validation and physical access failures. |
 | `translate/X86/X86PagedMemory` | Whole-operand read/fetch publication and physical store preflight across discontiguous pages. |
@@ -52,6 +53,12 @@ A fault on a later page retains earlier page-table A/D updates. Physical RAM
 regions use read/write backing permissions; guest execution permission is owned
 by paging. Stores that alias their own paging structures use the translations
 established before operand publication.
+
+The explicit legacy `loadSegment`/`storeSegment` binding applies cached segment
+permissions and bounds before any page walk, and preserves modulo-2^32 linear
+wrap after base addition. Full-limit crossings require a per-execution choice.
+See [legacy segment operands](x86-legacy-segments.md) for mode, cache-loading
+and instruction-boundary responsibilities.
 
 ## Faults during event delivery
 

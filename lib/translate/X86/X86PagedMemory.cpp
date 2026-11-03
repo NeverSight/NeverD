@@ -9,6 +9,8 @@
 
 #include "neverd/translate/X86/X86PagedMemory.h"
 
+#include "neverd/translate/TranslationResult.h"
+
 #include "llvm/Support/Errc.h"
 
 #include <algorithm>
@@ -30,6 +32,30 @@ X86MemoryAccessResult backingFault(const GuestMemoryAccessResult &Access) {
   Result.Status = X86PageWalkStatus::BackingFault;
   Result.BackingFault = Access.Fault;
   return Result;
+}
+
+llvm::Expected<X86LegacySegmentResult>
+segmentAccess(const X86PagingState &State, const X86SegmentedAccess &A,
+              uint64_t Bytes) {
+  if (!(State.CR0 & 1) || (State.EFER & 0x400) || (State.RFlags & 0x20000) ||
+      A.CPL > 3 || !Bytes || Bytes > kMemoryFaultMaxAccessBytes)
+    return invalid("segmented operands require legacy protected-mode state");
+  X86SegmentAccessKind Kind;
+  switch (A.Kind) {
+  case MemoryAccessKind::Read:
+    Kind = X86SegmentAccessKind::Read;
+    break;
+  case MemoryAccessKind::Write:
+    Kind = X86SegmentAccessKind::Write;
+    break;
+  case MemoryAccessKind::Execute:
+    Kind = X86SegmentAccessKind::Execute;
+    break;
+  default:
+    return invalid("invalid segmented access kind");
+  }
+  return checkX86LegacySegmentAccess(
+      A.Cache, {A.Segment, Kind, A.Offset, uint32_t(Bytes), A.FullLimitChoice});
 }
 
 } // namespace
@@ -95,8 +121,11 @@ X86PagedMemory::plan(const X86LinearAccess &Access, uint64_t Bytes) {
     const uint64_t Size = std::min(Remaining, 4096 - (Current.Address & 4095));
     P.Fragments.push_back({Translation->PhysicalAddress, Size});
     Remaining -= Size;
-    if (Remaining)
+    if (Remaining) {
       Current.Address += Size;
+      if (Access.Wrap32)
+        Current.Address = uint32_t(Current.Address);
+    }
   }
   return P;
 }
@@ -172,6 +201,55 @@ llvm::Expected<X86MemoryAccessResult>
 X86PagedMemory::store(const X86LinearAccess &Access,
                       llvm::ArrayRef<uint8_t> Input) {
   auto Store = prepareStore(Access, Input.size());
+  if (!Store)
+    return Store.takeError();
+  if (Store->Status == X86PageWalkStatus::Completed)
+    commitStore(*Store, Input);
+  return static_cast<X86MemoryAccessResult &&>(*Store);
+}
+
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::loadSegment(const X86SegmentedAccess &A,
+                            llvm::MutableArrayRef<uint8_t> Output) {
+  if (A.Kind != MemoryAccessKind::Read && A.Kind != MemoryAccessKind::Execute)
+    return invalid("segmented load requires read or instruction-fetch access");
+  auto Check = segmentAccess(Controls, A, Output.size());
+  if (!Check)
+    return Check.takeError();
+  if (Check->FaultVector) {
+    X86MemoryAccessResult Result;
+    Result.Status = X86PageWalkStatus::Exception;
+    Result.Exception = X86MemoryException{*Check->FaultVector, 0, std::nullopt};
+    return Result;
+  }
+  return load({Check->Linear, A.Kind, A.CPL, false,
+               A.Segment == X86SegmentRegister::SS, true},
+              Output);
+}
+
+llvm::Expected<X86PagedMemory::PreparedStore>
+X86PagedMemory::prepareSegmentStore(const X86SegmentedAccess &A,
+                                    uint64_t Bytes) {
+  if (A.Kind != MemoryAccessKind::Write)
+    return invalid("segmented store requires write access");
+  auto Check = segmentAccess(Controls, A, Bytes);
+  if (!Check)
+    return Check.takeError();
+  if (Check->FaultVector) {
+    PreparedStore Result;
+    Result.Status = X86PageWalkStatus::Exception;
+    Result.Exception = X86MemoryException{*Check->FaultVector, 0, std::nullopt};
+    return Result;
+  }
+  return prepareStore({Check->Linear, A.Kind, A.CPL, false,
+                       A.Segment == X86SegmentRegister::SS, true},
+                      Bytes);
+}
+
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::storeSegment(const X86SegmentedAccess &Access,
+                             llvm::ArrayRef<uint8_t> Input) {
+  auto Store = prepareSegmentStore(Access, Input.size());
   if (!Store)
     return Store.takeError();
   if (Store->Status == X86PageWalkStatus::Completed)

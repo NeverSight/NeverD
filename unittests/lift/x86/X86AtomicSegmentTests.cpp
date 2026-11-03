@@ -240,6 +240,41 @@ TEST(X86AtomicSegment, AddressWrappingPrecedesSegmentSelection) {
   RecordProperty("wrapped_offsets", Checks);
 }
 
+TEST(X86AtomicSegment, BoundCacheOwnsRightsExtentAndOneOperationOnly) {
+  for (unsigned Kind = 0; Kind < Ids.size(); ++Kind)
+    for (unsigned Prefix : {0x26u, 0x2eu, 0x36u})
+      for (bool Bounds : {false, true}) {
+        auto Op = atomic(Kind, Prefix);
+        BinaryImage Image;
+        Image.Arch = Arch::X86;
+        Segment Data;
+        Data.VA = 0x14000;
+        Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+        Data.Data = {0x31, 0x31, 0x31, 0x31};
+        Data.Size = Data.FileSz = 4;
+        Image.Segments.push_back(std::move(Data));
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        X86LegacySegmentCache C{0x10000, Bounds ? 0x4003u : 0x4002u, 0,
+                                uint16_t(Prefix == 0x2e ? 0x409b : 0x4093),
+                                false};
+        const bool Allowed = Bounds && Prefix != 0x2e;
+        EXPECT_EQ(E.stepX86LegacySegment(Op, C), Allowed);
+        EXPECT_FALSE(E.step(Op)); // No stale binding from the preceding call.
+        LowOp Load;
+        Load.Opcode = NdOp::LOAD;
+        Load.Output = NdVar::tmp(1000, 4);
+        Load.addInput(NdVar::scalar(0x14000, 8));
+        ASSERT_TRUE(E.step(Load));
+        const uint32_t Old = 0x31313131, Source = Op.Inputs[2].Offset;
+        const uint32_t Result = Kind == 0   ? Old + Source
+                                : Kind == 1 ? Old & Source
+                                : Kind == 2 ? Old | Source
+                                            : Old ^ Source;
+        EXPECT_EQ(E.getRegister(1000), Allowed ? Result : Old);
+      }
+}
+
 using X86AtomicSegmentSource = X86NativeSegmentFixture;
 
 TEST_F(X86AtomicSegmentSource, AllFourKindsKeepSegmentsAndRawOffsets) {

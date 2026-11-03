@@ -24,6 +24,17 @@ LA57 are explicit skips. Shared event-template edits also run the full
 `NeverDX64ContinuationSourceTests` and `NeverDX64ContinuationExportTests` on the
 native-intrinsic SDK and pinned r6 SDK. See [the contract](x86-paged-memory.md).
 
+`X86LegacySegments.*` and `LegacyPagingModes/X86LegacySegmentNativeTest.*`
+in `NeverDX86PagingTests` check cached protected segments, whole-offset bounds,
+expand-down D/B behavior, per-execution full-limit choices and linear wrap.
+The original byte/word/dword MOV oracle combines all six segment registers with
+legacy/PAE paging and competing #GP/#SS/#PF faults. Run it alongside
+`NeverDX86AtomicSegmentTests`, `NeverDX86FourSourceSegmentTests` and
+`NeverDX86EVEXCompressExpandMemoryTests` for the concrete intrinsic adapters.
+The adapters retain zero-mask suppression and ordered compact-store partial
+publication; their one-operation binding cannot leak into a later `step`.
+See [the scope and oracle contract](x86-legacy-segments.md).
+
 Hyper-V page transport uses the same two source targets below. Filter
 `^(X64ContinuationExportTest\.HyperV|X86KvmSource\.HyperV)` for explicit binding,
 full state, rep/fast outputs, upper-lane preservation and invalid contracts.
@@ -1565,7 +1576,8 @@ section-difference relocation pairs before controlled execution.
 addr16/addr32 wrapping, implicit SS, explicit segment overrides and all three
 decoder routes under strict/permissive lifting. Malformed control/mode/address-
 space combinations refuse. With otherwise known inputs and mapped memory,
-concrete CS/ES/SS access refuses before reading or storing. The shared native
+unbound concrete CS/ES/SS access refuses before reading or storing. The explicit
+per-operation cache tests cover rights, whole-operand bounds and binding expiry. The shared native
 segment fixture compiles 360 LLVM/HighC/LLVMC objects across ELF/COFF/Mach-O
 and default/NoOpt pipelines, keeping raw segment offsets beside an ordinary DS
 object with the same numeric address. Absolute displacements and constants

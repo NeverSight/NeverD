@@ -10,6 +10,7 @@
 #ifndef NEVERD_TRANSLATE_X86_X86PAGEDMEMORY_H
 #define NEVERD_TRANSLATE_X86_X86PAGEDMEMORY_H
 
+#include "neverd/ir/X86/X86LegacySegments.h"
 #include "neverd/translate/GuestMemoryRuntime.h"
 #include "neverd/translate/X86/X86Paging.h"
 
@@ -18,9 +19,19 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace neverd::translate {
+
+struct X86SegmentedAccess {
+  X86SegmentRegister Segment;
+  X86LegacySegmentCache Cache;
+  uint32_t Offset;
+  MemoryAccessKind Kind;
+  uint8_t CPL;
+  std::optional<X86FullSegmentLimitChoice> FullLimitChoice;
+};
 
 /// Owned physical ordinary RAM and explicitly bound paging controls for one
 /// confined CPU. Physical regions use Read/Write backing permissions; Execute
@@ -51,12 +62,24 @@ public:
   llvm::Expected<X86MemoryAccessResult> store(const X86LinearAccess &Access,
                                               llvm::ArrayRef<uint8_t> Input);
 
+  /// Protected legacy 16/32-bit operands with already loaded caches. Segment
+  /// checks precede all page walks; linear wrap still retains whole-operand
+  /// publication. Alignment, instruction commit and exception delivery remain
+  /// the caller's owners. No selector reload or GDT lookup is inferred.
+  llvm::Expected<X86MemoryAccessResult>
+  loadSegment(const X86SegmentedAccess &Access,
+              llvm::MutableArrayRef<uint8_t> Output);
+  llvm::Expected<X86MemoryAccessResult>
+  storeSegment(const X86SegmentedAccess &Access, llvm::ArrayRef<uint8_t> Input);
+
   /// A successful plan retains translations and physical write permission.
   /// Commit before rebinding controls or mutating physical RAM; page-table A/D
   /// effects of preparation remain visible even if the instruction faults.
   struct PreparedStore;
   llvm::Expected<PreparedStore> prepareStore(const X86LinearAccess &Access,
                                              uint64_t Bytes);
+  llvm::Expected<PreparedStore>
+  prepareSegmentStore(const X86SegmentedAccess &Access, uint64_t Bytes);
   void commitStore(const PreparedStore &Store, llvm::ArrayRef<uint8_t> Input);
 
 private:

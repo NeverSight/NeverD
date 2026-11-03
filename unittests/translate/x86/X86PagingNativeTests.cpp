@@ -633,6 +633,8 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
   RecordProperty("event_cpu_comparisons", EventComparisons);
 }
 
+#include "X86LegacySegmentNativeTests.inc"
+
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,
                          testing::Values(2u, 3u, 4u, 5u));
 

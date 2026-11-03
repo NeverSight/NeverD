@@ -22,6 +22,7 @@
 #ifndef NEVERD_IR_LOW_NDOP_EMULATOR_H
 #define NEVERD_IR_LOW_NDOP_EMULATOR_H
 
+#include "neverd/ir/X86/X86LegacySegments.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/symbolic/SymExplore.h"
@@ -164,6 +165,15 @@ public:
   /// Without those bindings step() refuses before any effect.
   bool step(const LowOp &Op);
 
+  /// Execute one native CS/ES/SS memory intrinsic with an authenticated legacy
+  /// protected-mode cache. The binding applies only to this call; it cannot
+  /// survive a segment reload, unknown call or later instruction. Ordinary
+  /// image memory remains the existing flat projection, without paging or
+  /// exception delivery. Full-limit ambiguity requires an execution choice.
+  bool stepX86LegacySegment(
+      const LowOp &Op, const X86LegacySegmentCache &Cache,
+      std::optional<X86FullSegmentLimitChoice> Choice = std::nullopt);
+
   /// Execute a sequence of ops.  Stops at the first terminator.  For backwards
   /// compatibility, a same-address non-zero COND_BR/control sequence is treated
   /// as one legacy predicated instruction; without boundaries this overload
@@ -251,6 +261,8 @@ private:
   std::optional<uint64_t> X86ShadowStackPointer;
   std::optional<uint32_t> X86IA32Pasid;
   std::optional<uint8_t> X86LinearAddressBits;
+  const X86LegacySegmentCache *X86OperandSegment = nullptr;
+  std::optional<X86FullSegmentLimitChoice> X86OperandSegmentChoice;
   bool StepOverCalls = false;
   bool StrictMode = false;
   bool X86Approx12ReferenceMode = false;
@@ -271,6 +283,11 @@ private:
                          uint64_t Bytes) const;
   std::optional<uint64_t> resolveMemoryAddress(const LowOp &Op,
                                                uint64_t Offset) const;
+  std::optional<uint64_t> resolveX86NativeMemoryAddress(const LowOp &Op,
+                                                        unsigned Prefix,
+                                                        uint64_t Offset,
+                                                        uint16_t Bytes,
+                                                        bool Write) const;
   bool isX86CanonicalMemoryRange(uint64_t Address, uint64_t Size) const;
   std::optional<uint64_t> checkX86FPStateMemory(const LowOp &Op, uint16_t Bytes,
                                                 unsigned Alignment, bool Write);
@@ -278,14 +295,18 @@ private:
   loadX86FPStateMemory(const LowOp &Op, uint16_t Bytes, unsigned Alignment);
   void writeOutput(const NdVar &Output, uint64_t Value);
   void writeOutputBytes(const NdVar &Output, llvm::ArrayRef<uint8_t> Value);
-  std::optional<std::vector<uint8_t>> loadMemoryBytes(uint64_t Addr,
-                                                      uint16_t Size) const;
-  std::optional<uint64_t> loadMemory(uint64_t Addr, uint16_t Size) const;
-  bool canWriteMemoryBytes(uint64_t Addr, uint16_t Size) const;
+  std::optional<std::vector<uint8_t>>
+  loadMemoryBytes(uint64_t Addr, uint16_t Size, bool Wrap32 = false) const;
+  std::optional<uint64_t> loadMemory(uint64_t Addr, uint16_t Size,
+                                     bool Wrap32 = false) const;
+  bool canWriteMemoryBytes(uint64_t Addr, uint16_t Size,
+                           bool Wrap32 = false) const;
   /// Returns false when the write-back store had no room, which is recorded
   /// either way and only ends the path in strict mode.
-  bool storeMemoryBytes(uint64_t Addr, llvm::ArrayRef<uint8_t> Value);
-  bool storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value);
+  bool storeMemoryBytes(uint64_t Addr, llvm::ArrayRef<uint8_t> Value,
+                        bool Wrap32 = false);
+  bool storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value,
+                   bool Wrap32 = false);
 
   bool stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following);
   bool executeArith(const LowOp &Op);

@@ -29,6 +29,13 @@ shared across architectures and format-owned tests stay with their consumers.
 Directory moves do not change component targets, intrinsic identities, exported
 symbols or instruction semantics.
 
+`ir/X86/X86LegacySegments` owns already-loaded protected 16/32-bit segment
+operand permissions and complete offset bounds. `X86PagedMemory` composes this
+owner with page walks and 32-bit linear wrap; the native-memory concrete
+adapter applies it to one explicitly bound CS/ES/SS operation. Descriptor
+loading, mode transitions and exception delivery remain separate authorities.
+See [legacy segment operands](x86-legacy-segments.md).
+
 `translate/X86/X86Paging` owns architectural linear-address translation over
 `GuestMemoryRuntime` physical storage. `X86PagedMemory` composes it into
 restartable operands without turning physical backing failures into #PF.
