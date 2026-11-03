@@ -20220,3 +20220,7 @@ Run `NeverDPipelineOutcomeTests`, `NeverDSessionCAPITests`,
 source-failure propagation, inferred extents, synthetic tail-call exclusion,
 raw address disassembly and listing ownership. `FunctionDisasmSize` checks
 adjacent and separated entries with unordered recovered blocks.
+`NeverDWorkerConstantBranch` also recovers a callee before its caller and
+checks that their shared tail keeps its declared, proven owner.
+`CImageObjects.DeclaredObjectsHoldTheImageBytes` compiles and executes UTF-16
+image declarations without requiring `uchar.h`, which macOS SDKs lack.

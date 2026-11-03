@@ -2123,6 +2123,16 @@ struct Listing::Impl {
   /// Index of the function whose decoded extent contains \p address.
   int functionIndex(std::uint64_t address) {
     const auto [index, recovered] = functionOwnerIndex(address);
+    if (recovered) {
+      const int declared = declaredFunctionIndex(address);
+      // Another body may have been viewed first. Establish whether the
+      // declared body also reaches this instruction before resolving their
+      // shared tail; navigation order must not select its owner.
+      if (declared >= 0 && declared != index && !functions[declared].chunkOf) {
+        decode(declared);
+        return functionOwnerIndex(address).first;
+      }
+    }
     if (recovered || index < 0)
       return index;
     const auto &function = functions[index];

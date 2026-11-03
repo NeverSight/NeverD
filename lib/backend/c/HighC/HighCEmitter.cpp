@@ -1826,11 +1826,16 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
         if (Statement.Kind == StmtKind::SEHTry)
           Headers.insert("excpt.h");
       });
-  // char16_t and char32_t strings.
+  // C++ has character-type keywords; C needs aliases for the same stored
+  // code units. macOS does not supply uchar.h, so declare only the aliases
+  // used by image strings, as the local-type renderer does.
+  bool NeedsChar16 = false, NeedsChar32 = false;
   for (const auto &[Addr, Obj] : ImageObjects)
     for (const auto &String : {Obj.String, Obj.PointsTo})
-      if (String && String->UnitBytes > 1 && !imageBackingAddress(Addr))
-        Headers.insert("uchar.h");
+      if (String && !imageBackingAddress(Addr)) {
+        NeedsChar16 |= String->UnitBytes == 2;
+        NeedsChar32 |= String->UnitBytes == 4;
+      }
   if (NeedsBool)
     Headers.insert("stdbool.h");
   if (!MemoryTypes.empty())
@@ -1902,6 +1907,14 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     OS << "#define _GNU_SOURCE 1\n";
   for (auto &H : Headers)
     OS << "#include <" << H << ">\n";
+  if (NeedsChar16 || NeedsChar32) {
+    OS << "#ifndef __cplusplus\n";
+    if (NeedsChar16)
+      OS << "typedef uint16_t char16_t;\n";
+    if (NeedsChar32)
+      OS << "typedef uint32_t char32_t;\n";
+    OS << "#endif\n";
+  }
   // MinGW omits this declaration when Clang supplies the builtin, while
   // Clang's intrin.h declares it only for _MSC_VER. A builtin still needs its
   // prototype in C. Match the intrinsic's exact interface on either compiler.
