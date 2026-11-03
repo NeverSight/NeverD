@@ -593,6 +593,27 @@ TEST_F(X86PagingTest, GuestFetchUsesNXInsteadOfPhysicalExecutePermission) {
   EXPECT_EQ(Bytes, Before);
 }
 
+TEST_F(X86PagingTest, PreparedReadKeepsOutputWholeOnPhysicalReadDenial) {
+  fourLevels();
+  put(0x4008, 0xa007);
+  auto RAM = llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+  RAM.Memory = Memory->snapshotMemoryRegions();
+  RAM.Memory[0].Bytes.resize(0xa000);
+  RAM.Memory.push_back(
+      {0xa000, MemoryPermission::Write, 0, std::vector<uint8_t>(4096, 0x55)});
+  auto P = llvm::cantFail(X86PagedMemory::create(RAM, F, S));
+  auto Store =
+      llvm::cantFail(P->prepareStore({0xffe, MemoryAccessKind::Write, 3}, 4));
+  ASSERT_EQ(Store.Status, X86PageWalkStatus::Completed);
+  std::array<uint8_t, 4> Output{0xa5, 0xa5, 0xa5, 0xa5};
+  const auto R = llvm::cantFail(P->loadPreparedStore(Store, Output));
+  EXPECT_EQ(R.Status, X86PageWalkStatus::BackingFault);
+  EXPECT_FALSE(R.Exception);
+  EXPECT_EQ(Output, (std::array<uint8_t, 4>{0xa5, 0xa5, 0xa5, 0xa5}));
+  EXPECT_EQ(P->physicalMemory().loadScalar(0x4008, GuestScalarWidth::I64).Value,
+            0xa067u);
+}
+
 TEST_F(X86PagingTest, InvalidRebindingPreservesThePreviousPagingControls) {
   fourLevels();
   auto P = paged();

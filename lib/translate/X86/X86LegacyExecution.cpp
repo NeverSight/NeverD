@@ -10,6 +10,7 @@
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyScalar.h"
 #include "X86LegacySegmentEncoding.h"
 
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
@@ -62,14 +63,14 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
   const auto Segment =
       detail::decodeLegacySegmentInstruction(Instruction, Code32);
+  const auto Scalar =
+      detail::decodeLegacyScalarInstruction(Instruction, Code32);
   auto Body = Instruction;
   unsigned Width = Code32 ? 4 : 2;
   if (Body.front() == 0x66) {
     Width = 6 - Width;
     Body = Body.drop_front();
   }
-  const bool Immediate =
-      Body.size() == Width + 1 && Body.front() >= 0xb8 && Body.front() <= 0xbf;
   const bool Single = Instruction.size() == 1 &&
                       (Instruction[0] == 0x90 || Instruction[0] == 0xfa ||
                        Instruction[0] == 0xfb || Instruction[0] == 0xcc ||
@@ -80,8 +81,19 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool IRET = Body.size() == 1 && Body[0] == 0xcf;
   const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
                     (Body.size() == 3 && Body[0] == 0xca);
-  if (!Segment && !Immediate && !Single && !INT && !UD2 && !IRET && !RETF)
+  if (!Segment && !Scalar && !Single && !INT && !UD2 && !IRET && !RETF)
     return invalid("unsupported or malformed legacy step instruction");
+  if (Scalar &&
+      !(Scalar->Operation == detail::X86LegacyScalarOperation::Move &&
+        Scalar->Destination.Register && Scalar->Source.Immediate) &&
+      Options.Scalars != X86LegacyScalarProfile::OrderedRAM)
+    return invalid("legacy scalar step requires a bound ordinary-RAM profile");
+  if (Scalar && Scalar->logical() && !Options.LogicalAuxiliaryCarry)
+    return invalid("legacy logical instruction requires an explicit AF choice");
+  if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Call &&
+      Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
+      Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)
+    return invalid("legacy CALL requires a bound stack publication profile");
   if (State.EFlags & 0x100)
     return invalid("legacy TF stepping requires a debug-event producer");
   if (IRET && (State.EFlags & 0x4000))
@@ -96,7 +108,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
        (State.Core.CPL == 3 && (Memory.controls().CR0 & 0x40000) &&
         (State.EFlags & 0x40000) && !Options.Segments.AlignmentPriority)))
     return invalid("legacy return requires a bound return/alignment profile");
-  if (Segment &&
+  if ((Segment || Scalar) &&
       (Options.Segments.Profile !=
            X86LegacySegmentProfile::WordStackOffsetFirst ||
        (Options.Segments.AlignmentPriority &&
@@ -106,7 +118,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
             X86AlignmentPriority::AfterPaging) ||
        (State.Core.CPL == 3 && (Memory.controls().CR0 & 0x40000) &&
         (State.EFlags & 0x40000) && !Options.Segments.AlignmentPriority)))
-    return invalid("legacy segment step requires an operand profile");
+    return invalid("legacy operand step requires a bound operand profile");
   if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
     return std::move(Error);
   X86LegacyExecutionResult R;
@@ -187,7 +199,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   auto Next = State.Core;
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false;
-  const auto NextIP = uint32_t(State.EIP + Instruction.size());
+  auto NextIP = uint32_t(State.EIP + Instruction.size());
   if (!R.Exception && Segment) {
     auto Got = executeX86LegacySegmentInstruction(Next, Memory, Instruction,
                                                   Options.Segments);
@@ -195,12 +207,17 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Got.takeError();
     Accept(*Got);
     SS = Got->LoadsSSWithInhibition && !State.SSBlocked;
-  } else if (!R.Exception && Immediate) {
-    uint32_t Value = 0;
-    for (unsigned I = 0; I != Width; ++I)
-      Value |= uint32_t(Body[I + 1]) << (I * 8);
-    auto &Register = Next.GPR[Body.front() - 0xb8];
-    Register = Width == 4 ? Value : (Register & 0xffff0000) | Value;
+  } else if (!R.Exception && Scalar) {
+    auto Staged = State;
+    auto Got =
+        detail::executeLegacyScalar(Staged, Memory, *Scalar, NextIP, Options);
+    if (!Got)
+      return Got.takeError();
+    if (Accept(*Got)) {
+      Next = Staged.Core;
+      NextIP = Staged.EIP;
+      Flags = Staged.EFlags;
+    }
   } else if (!R.Exception) {
     const auto Opcode = Body.front();
     if (Opcode == 0xfa || Opcode == 0xfb) {

@@ -227,12 +227,73 @@ The [November 3 evidence](evidence/x86-legacy-event-entry-2026-11-03.json)
 records commands, source hashes, SDK inputs, CPU affinity, independent native
 matrices, corrected probes and regression results.
 
-This is a bounded internal execution interface. General i386 scalar/source
+This is a bounded internal execution interface. The scalar binding below
+extends its ordinary instruction execution. General i386 source
 dispatch, task/call-gate transitions, real/VM86, CET/FRED, software
 SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
 not completed by it. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
+
+## Protected scalar execution
+
+`X86LegacyExecutionOptions::Scalars = OrderedRAM` binds the original-byte
+executor to one CPU and ordinary paged RAM for these protected-mode families:
+
+| Family | Admitted forms |
+| --- | --- |
+| MOV, MOVSX, MOVZX, LEA | Byte/word/dword GPR and memory operands, high byte registers, immediate and moffs moves, independent 16/32-bit addresses and operands. LEA consumes the effective offset without consulting segment or paging permissions. |
+| ADD, ADC, SUB, SBB, CMP | Register/memory, accumulator-immediate and group-immediate forms, including signed imm8 and all six arithmetic flags. |
+| AND, OR, XOR, TEST | The same exact operand widths, with an explicit `LogicalAuxiliaryCarry` value for architecturally undefined AF. An absent choice refuses before fetch. |
+| INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
+| PUSH, POP | GPR, memory and PUSH immediate, with independent SS.B stack size. PUSH ESP observes old ESP; POP ESP publishes the popped value after advancement; POP memory uses incremented ESP for its explicit address. |
+| Near CALL, JMP, Jcc, RET | Relative and indirect transfers, all sixteen condition codes, short branches and RET imm16. Taken targets use the operand width and code limit. Untaken conditional branches do not consult the target. |
+
+Register-immediate MOV preserves its earlier interface without the new scalar
+profile. Other scalars require that explicit binding. Original instruction
+fetch, pending virtual interrupts, IDT faults, RF, CR2 and persistent shadows
+continue through the existing execution owner. Malformed, unsupported or
+unbound instructions fail before memory access. No decoder name alone grants
+an execution contract.
+
+Register and flag writes are staged until completion. Stores preflight the
+whole operand before writing data. Read/modify/write instructions request
+write permission first, preserving the write bit in #PF, and read through
+that same physical plan. Page-table A/D effects survive later faults and are
+visible if the operand aliases its own PTE. Physical read or write denial
+remains a backing stop, distinct from an architectural exception. Segment
+checks precede paging and the selected alignment priority. Logical undefined
+AF choices become observable only on successful completion.
+
+CALL additionally requires `X86LegacyExecutionOptions::Calls`. Both profiles
+preflight the stack before checking the target code limit, so a competing stack
+#PF takes precedence and page-table effects survive a later target #GP.
+`StoreBeforeTargetLimit` publishes the return address before that limit check;
+`CheckBeforeTargetLimit` commits it only after the check succeeds. The qualified
+Intel i9-13900H P core requires the first choice and its E core the second.
+In both cases the fault frame retains original ESP/EIP. Missing or invalid
+choices refuse before fetch; neither the runtime nor the test infers a choice
+from the current host. The CPU matrix checks direct and indirect CALL, stack
+data and A/D bits. This differs from reading SDM pseudocode as a required
+access order. Word-stack POP memory uses incremented low SP while retaining
+high ESP; its wrapping cases have separate CPU comparisons.
+[Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+The native handler test executes original MOV to repair a missing PTE,
+ADD ESP to remove the error code, IRET to restore the interrupted context,
+and retries the original load. Neither side receives a host-side PTE repair
+or register adjustment between these instructions. This covers legacy paging
+and PAE, CPL0..3, and independent code/stack sizes. It closes that earlier
+handler boundary for the admitted scalar instructions; it does not supply a
+general i386 source exporter, a TLB/cache model, devices, LOCK/HLE, task gates,
+real/VM86 state, debug producers or other unlisted instructions.
+
+The [November 3 scalar qualification](evidence/x86-legacy-scalars-2026-11-03.json)
+records both CALL counterexamples, 85,120 scalar CPU comparisons across two
+SDKs and both core types, 908 passing checks and two explicit LA57 skips.
+All 1,032 retained exports per SDK agree byte for byte. The record includes
+the exact source patch, binary hashes, build inputs and raw diagnostic hashes;
+it does not certify the remaining instruction or machine-state domains.
 
 ## Protected IRET and far returns
 

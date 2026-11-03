@@ -35,6 +35,8 @@ protected:
   std::unique_ptr<X86PagedMemory> M;
 
   void SetUp() override {
+    O.Scalars = X86LegacyScalarProfile::OrderedRAM;
+    O.Calls = X86LegacyCallProfile::StoreBeforeTargetLimit;
     auto RAM =
         llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
     RAM.Memory.push_back({0, MemoryPermission::Read | MemoryPermission::Write,
@@ -489,6 +491,230 @@ TEST_F(X86LegacyExecutionTest, UnownedTransitionsPropagateCheckedErrors) {
   ASSERT_FALSE(bool(Data));
   llvm::consumeError(Data.takeError());
   EXPECT_EQ(S.Core.Segments[3].Selector, 35);
+}
+
+TEST_F(X86LegacyExecutionTest, OriginalHandlerRepairsPageAndRetriesLoad) {
+  put(0x5804, 0xb000, GuestScalarWidth::I32);
+  put(0xd004, 0x89abcdef, GuestScalarWidth::I32);
+  put(0x11034, 0xd006, GuestScalarWidth::I32);
+  S.Core.GPR[7] = 0xd004;
+  S.Core.GPR[0] = 0x12345678;
+  const auto Original = S;
+  auto R = run({0x8b, 0x07});
+  ASSERT_EQ(R.DeliveredVector, 14);
+  EXPECT_EQ(get(S.Core.GPR[4]), 4u);
+  EXPECT_EQ(S.Core.GPR[0], Original.Core.GPR[0]);
+  EXPECT_EQ(S.CR2, 0xd004u);
+  EXPECT_TRUE(run({0xc7, 0x05, 0x34, 0x10, 0x01, 0, 7, 0xd0, 0, 0})
+                  .InstructionCompleted);
+  EXPECT_TRUE(run({0x83, 0xc4, 4}).InstructionCompleted);
+  EXPECT_TRUE(run({0xcf}).InstructionCompleted);
+  EXPECT_EQ(S.EIP, Original.EIP);
+  EXPECT_EQ(S.Core.GPR[4], Original.Core.GPR[4]);
+  EXPECT_EQ(S.Core.CPL, Original.Core.CPL);
+  EXPECT_EQ(S.EFlags, Original.EFlags);
+  EXPECT_TRUE(run({0x8b, 0x07}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[0], 0x89abcdefu);
+  EXPECT_EQ(S.EIP, Original.EIP + 2);
+}
+
+TEST_F(X86LegacyExecutionTest, ScalarByteRegistersAndMixedAddressWidths) {
+  S.Core.GPR[0] = 0x12345678;
+  S.Core.GPR[3] = 0xabcdb000;
+  S.Core.GPR[6] = 0x98760002;
+  EXPECT_TRUE(run({0xb4, 0x80}).InstructionCompleted); // MOV AH, 80h.
+  EXPECT_EQ(S.Core.GPR[0], 0x12348078u);
+  EXPECT_TRUE(run({0x67, 0x88, 0x60, 1}).InstructionCompleted);
+  EXPECT_EQ(get(0xb003, GuestScalarWidth::I8), 0x80u);
+  EXPECT_TRUE(run({0x67, 0x0f, 0xbe, 0x48, 1}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[1], 0xffffff80u);
+  EXPECT_TRUE(run({0x66, 0x0f, 0xb6, 0xc4}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[0], 0x12340080u);
+}
+
+TEST_F(X86LegacyExecutionTest, LEADoesNotConsultSegmentOrPageState) {
+  S.Core.Segments[4].Unusable = true;
+  S.Core.GPR[0] = 0xfffffff0;
+  S.Core.GPR[1] = 7;
+  EXPECT_TRUE(run({0x64, 0x8d, 0x54, 0x88, 0x20}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[2], 0x2cu);
+  EXPECT_EQ(S.CR2, 0x12345678u);
+}
+
+TEST_F(X86LegacyExecutionTest, StackAliasesUseArchitecturalEvaluationOrder) {
+  S.Core.GPR[4] = 0xc100;
+  EXPECT_TRUE(run({0x54}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[4], 0xc0fcu);
+  EXPECT_EQ(get(0xc0fc), 0xc100u);
+  EXPECT_TRUE(run({0x8f, 0x04, 0x24}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[4], 0xc100u);
+  EXPECT_EQ(get(0xc100), 0xc100u);
+  put(0xc100, 0xb100, GuestScalarWidth::I32);
+  EXPECT_TRUE(run({0x5c}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[4], 0xb100u);
+  S.Core.Segments[2].Attributes &= ~0x4000;
+  S.Core.GPR[4] = 0xabcd0000;
+  EXPECT_TRUE(run({0x6a, 0xff}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[4], 0xabcdfffcu);
+  EXPECT_EQ(get(0xfffc), 0xffffffffu);
+  EXPECT_TRUE(run({0x58}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[0], 0xffffffffu);
+  EXPECT_EQ(S.Core.GPR[4], 0xabcd0000u);
+}
+
+TEST_F(X86LegacyExecutionTest, ReadModifyWriteFaultReportsWriteAndKeepsState) {
+  S.Core.GPR[7] = 0xc000;
+  put(0xc000, 0xffffffff, GuestScalarWidth::I32);
+  put(0x11030, 0xc005, GuestScalarWidth::I32);
+  auto R = run({0x83, 0x07, 1});
+  ASSERT_EQ(R.DeliveredVector, 14);
+  EXPECT_EQ(get(S.Core.GPR[4]), 7u);
+  EXPECT_EQ(get(0xc000), 0xffffffffu);
+  EXPECT_EQ(get(S.Core.GPR[4] + 12), 0x10202u);
+}
+
+TEST_F(X86LegacyExecutionTest, PreparedReadObservesOwnPageTableAccessedDirty) {
+  S.Core.GPR[7] = 0x11044;
+  EXPECT_TRUE(run({0x83, 0x07, 1}).InstructionCompleted);
+  EXPECT_EQ(get(0x11044), 0x11068u);
+}
+
+TEST_F(X86LegacyExecutionTest, CarryBorrowAndPartialFlagsAreExact) {
+  S.Core.GPR[0] = 0xffffffff;
+  S.EFlags = 0x203;
+  EXPECT_TRUE(run({0x14, 0}).InstructionCompleted); // ADC AL, 0.
+  EXPECT_EQ(S.Core.GPR[0], 0xffffff00u);
+  EXPECT_EQ(S.EFlags, 0x257u);
+  EXPECT_TRUE(run({0x66, 0x1d, 0xff, 0xff}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[0], 0xffffff00u);
+  EXPECT_EQ(S.EFlags & 0x8d5, 0x95u);
+  S.Core.GPR[0] = 0x7fffffff;
+  EXPECT_TRUE(run({0x40}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[0], 0x80000000u);
+  EXPECT_EQ(S.EFlags & 0x8d5, 0x895u);
+  EXPECT_TRUE(run({0xf7, 0xd8}).InstructionCompleted);
+  EXPECT_EQ(S.Core.GPR[0], 0x80000000u);
+  EXPECT_EQ(S.EFlags & 0x8d5, 0x885u);
+}
+
+TEST_F(X86LegacyExecutionTest, LogicalUndefinedAFRequiresExplicitChoice) {
+  auto R = executeX86LegacyInstruction(S, *M, {0x31, 0xc0}, O);
+  ASSERT_FALSE(bool(R));
+  EXPECT_NE(llvm::toString(R.takeError()).find("AF choice"), std::string::npos);
+  EXPECT_EQ(S.EIP, 0x1000u);
+  for (bool AF : {false, true}) {
+    O.LogicalAuxiliaryCarry = AF;
+    EXPECT_TRUE(run({0x31, 0xc0}).InstructionCompleted);
+    EXPECT_EQ(S.EFlags & 0x8d5, AF ? 0x54u : 0x44u);
+  }
+}
+
+TEST_F(X86LegacyExecutionTest, NearCallReturnAndUntakenLimitFailure) {
+  EXPECT_TRUE(run({0xe8, 0xfb, 0x1f, 0, 0}).InstructionCompleted);
+  EXPECT_EQ(S.EIP, 0x3000u);
+  EXPECT_EQ(S.Core.GPR[4], 0xcffcu);
+  EXPECT_EQ(get(0xcffc), 0x1005u);
+  EXPECT_TRUE(run({0xc2, 8, 0}).InstructionCompleted);
+  EXPECT_EQ(S.EIP, 0x1005u);
+  EXPECT_EQ(S.Core.GPR[4], 0xd008u);
+  S.Core.Segments[1].Limit = 0x100a;
+  S.Core.Segments[1].Attributes &= ~0x8000;
+  S.EFlags = 0x202;
+  EXPECT_TRUE(run({0x74, 0x40}).InstructionCompleted);
+  EXPECT_EQ(S.EIP, 0x1007u);
+  const auto R = run({0x75, 0x40});
+  EXPECT_EQ(R.DeliveredVector, 13);
+  EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1007u);
+}
+
+TEST_F(X86LegacyExecutionTest, CallTargetFaultBindsStackDataPublication) {
+  for (auto Choice : {X86LegacyCallProfile::StoreBeforeTargetLimit,
+                      X86LegacyCallProfile::CheckBeforeTargetLimit}) {
+    SetUp();
+    O.Calls = Choice;
+    S.Core.Segments[1].Limit = 0x3fff;
+    S.Core.GPR[0] = 0x4000;
+    put(0xcffc, 0x12345678, GuestScalarWidth::I32);
+    auto R = run({0xff, 0xd0});
+    ASSERT_EQ(R.DeliveredVector, 13);
+    EXPECT_EQ(get(0xcffc),
+              Choice == X86LegacyCallProfile::StoreBeforeTargetLimit
+                  ? 0x1002u
+                  : 0x12345678u);
+    EXPECT_EQ(get(0x11030) & 0x60, 0x60u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1000u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 12), 0x10202u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 16), 0xd000u);
+  }
+}
+
+TEST_F(X86LegacyExecutionTest, CallStackPageFaultPrecedesTargetCheck) {
+  for (auto Choice : {X86LegacyCallProfile::StoreBeforeTargetLimit,
+                      X86LegacyCallProfile::CheckBeforeTargetLimit}) {
+    SetUp();
+    O.Calls = Choice;
+    S.Core.Segments[1].Limit = 0x3fff;
+    S.Core.GPR[0] = 0x4000;
+    put(0xcffc, 0x12345678, GuestScalarWidth::I32);
+    put(0x11030, 0xc006, GuestScalarWidth::I32);
+    auto R = run({0xff, 0xd0});
+    ASSERT_EQ(R.DeliveredVector, 14);
+    EXPECT_EQ(S.CR2, 0xcffcu);
+    EXPECT_EQ(get(0xcffc), 0x12345678u);
+    EXPECT_EQ(get(0x11030), 0xc006u);
+    EXPECT_EQ(get(S.Core.GPR[4]), 6u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1000u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 16), 0xd000u);
+  }
+}
+
+TEST_F(X86LegacyExecutionTest, CallRequiresPublicationChoiceBeforeFetch) {
+  O.Calls.reset();
+  auto R = executeX86LegacyInstruction(S, *M, {0xff, 0xd0}, O);
+  ASSERT_FALSE(bool(R));
+  EXPECT_NE(llvm::toString(R.takeError()).find("stack publication profile"),
+            std::string::npos);
+  EXPECT_EQ(S.EIP, 0x1000u);
+  EXPECT_EQ(get(0x11004), 0x1007u);
+}
+
+TEST_F(X86LegacyExecutionTest, ScalarRequiresBoundMemoryOrder) {
+  O.Scalars.reset();
+  auto R = executeX86LegacyInstruction(S, *M, {0xff, 0xd0}, O);
+  ASSERT_FALSE(bool(R));
+  EXPECT_NE(llvm::toString(R.takeError()).find("ordinary-RAM profile"),
+            std::string::npos);
+  EXPECT_EQ(S.EIP, 0x1000u);
+  EXPECT_TRUE(run({0xb8, 1, 0, 0, 0}).InstructionCompleted);
+}
+
+TEST_F(X86LegacyExecutionTest, PopFaultKeepsPreIncrementStackPointer) {
+  put(0x5804, 0xb000, GuestScalarWidth::I32);
+  S.Core.GPR[4] = 0xcffc;
+  put(0xcffc, 0x12345678, GuestScalarWidth::I32);
+  put(0x11034, 0, GuestScalarWidth::I32);
+  const auto R = run({0x8f, 0x04, 0x24});
+  EXPECT_EQ(R.DeliveredVector, 14);
+  EXPECT_EQ(S.CR2, 0xd000u);
+  EXPECT_EQ(get(S.Core.GPR[4]), 6u);
+  EXPECT_EQ(get(S.Core.GPR[4] + 16), 0xcffcu);
+}
+
+TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
+  for (const std::vector<uint8_t> Bytes : {std::vector<uint8_t>{0x8b},
+                                           {0xc7, 0x08, 0, 0, 0, 0},
+                                           {0x8d, 0xc0},
+                                           {0x8f, 0xc8},
+                                           {0xff, 0xd8},
+                                           {0x66, 0x66, 0x50},
+                                           {0xf0, 0x83, 0x00, 1},
+                                           {0xf3, 0xa4},
+                                           {0xc3, 0}}) {
+    auto R = executeX86LegacyInstruction(S, *M, Bytes, O);
+    ASSERT_FALSE(bool(R));
+    llvm::consumeError(R.takeError());
+    EXPECT_EQ(S.EIP, 0x1000u);
+  }
 }
 
 } // namespace

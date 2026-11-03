@@ -313,6 +313,15 @@ connects selected instruction bodies and REP memory-string progress to this
 C++ runtime. Ordinary no-fault dispatchers retain their successful-RAM contract.
 The distinction applies to the memory/fault gaps listed below.
 
+The [protected legacy scalar binding](x86-legacy-segments.md#protected-scalar-execution)
+now runs byte/word/dword moves, extensions, LEA, scalar arithmetic/logical
+operations, stack operations and near branches/calls/returns through the
+original-byte i386 executor. Its original handler can repair a missing PTE,
+remove the error code, IRET and retry. This is an explicit ordinary-RAM
+execution contract with an explicit CALL stack-publication choice for the
+observed P/E-core difference; general i386 source export and unlisted instruction/state
+families remain separate work.
+
 | Instructions or family | Missing contract |
 | --- | --- |
 | REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS now own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. INS/OUTS now use the explicit paged device binding below. Legacy segmented progress, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |

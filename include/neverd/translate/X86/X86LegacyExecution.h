@@ -61,6 +61,18 @@ enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 /// one CPU.
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 
+/// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
+/// stack advancement preserving high ESP on a word wrap.
+enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
+
+/// Both choices check stack access before the target limit, retaining page
+/// effects on a later fault. Only StoreBeforeTargetLimit publishes the return
+/// address before that check. Architectural registers restart in either case.
+enum class X86LegacyCallProfile : uint8_t {
+  StoreBeforeTargetLimit,
+  CheckBeforeTargetLimit,
+};
+
 struct X86LegacyExecutionOptions {
   X86LegacySegmentExecutionOptions Segments;
   std::optional<X86LegacyEventProfile> Events;
@@ -68,6 +80,11 @@ struct X86LegacyExecutionOptions {
   /// does not affect MOV/POP SS's NMI inhibition.
   std::optional<bool> NMIBlockedBySTI;
   std::optional<X86LegacyReturnProfile> Returns;
+  /// Explicit value of architecturally undefined AF after AND/OR/XOR/TEST.
+  /// Required only for these instructions; faults preserve incoming flags.
+  std::optional<bool> LogicalAuxiliaryCarry;
+  std::optional<X86LegacyScalarProfile> Scalars;
+  std::optional<X86LegacyCallProfile> Calls;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -101,16 +118,20 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyExecutionOptions &Options);
 
 /// Authenticates original bytes through CS and paging, then executes the
-/// segment-transition owner or
-/// NOP/MOV-immediate/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. On an
-/// architectural fault, enters the IDT with the original EIP. On success,
-/// commits fallthrough, clears RF and advances persistent SS/STI inhibition.
-/// Changed code returns CodeChanged at the first mismatch. Unimplemented or
-/// malformed instructions return Error, never a synthesized #UD or NOP. TF
-/// stepping and hardware debug event production are not supplied here. Returns
-/// stop at their destination, preserve RF restored by IRETD, and end SS/STI
-/// inhibition. IRET unblocks NMI after fetch, including on a later fault; RETF
-/// preserves NMI blocking.
+/// segment-transition owner, the explicit ordinary-RAM scalar owner, or
+/// NOP/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. Scalars include
+/// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
+/// PUSH/POP and near CALL/JMP/Jcc/RET. Register immediates retain their unbound
+/// interface; other scalars require Scalars, CALL requires Calls, and logical
+/// flags require an AF choice. On an architectural fault, enters the IDT with
+/// the original EIP. On
+/// success, commits fallthrough/branch state, clears RF and advances SS/STI
+/// inhibition. Changed code returns CodeChanged at the first mismatch.
+/// Unimplemented or malformed instructions return Error, never a synthesized
+/// #UD or NOP. TF stepping and hardware debug event production are not supplied
+/// here. Returns stop at their destination, preserve RF restored by IRETD, and
+/// end SS/STI inhibition. IRET unblocks NMI after fetch, including on a later
+/// fault; RETF preserves NMI blocking.
 llvm::Expected<X86LegacyExecutionResult>
 executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,

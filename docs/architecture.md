@@ -51,6 +51,19 @@ faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessibl
 data-cache invalidation and IRET flag restoration with the x64 source and
 faultable owners. Frame access order and mode-specific stack transitions remain
 in their respective owners, with explicit target profiles.
+`translate/X86/X86LegacyEncoding` owns strict legacy prefixes and ModRM/SIB
+addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
+authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged
+GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
+Segment permissions and page walks remain in their existing owners. A scalar
+read/modify/write prepares write permission once, reads those exact physical
+fragments through `X86PagedMemory::loadPreparedStore`, and commits the final
+operand through the same plan. Logical AF is an explicit input. CALL's separate
+profile checks stack access before the target limit and selects whether its
+data write precedes that check; page effects persist in both choices while
+architectural registers restart from the original instruction. Original scalar handler steps
+can repair a missing PTE, consume the error code, IRET and retry without host
+patches to architectural state.
 See [legacy segment operands](x86-legacy-segments.md).
 
 `translate/X86/X86Paging` owns architectural linear-address translation over

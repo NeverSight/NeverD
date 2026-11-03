@@ -180,6 +180,25 @@ X86PagedMemory::prepareStore(const X86LinearAccess &Access, uint64_t Bytes) {
   return Store;
 }
 
+llvm::Expected<X86MemoryAccessResult>
+X86PagedMemory::loadPreparedStore(const PreparedStore &Store,
+                                  llvm::MutableArrayRef<uint8_t> Output) {
+  assert(Store.Status == X86PageWalkStatus::Completed && Store.Owner == this &&
+         Store.Bytes == Output.size() && "read the successful original plan");
+  std::vector<uint8_t> Bytes(Output.size());
+  size_t Offset = 0;
+  for (const auto &Fragment : Store.Fragments) {
+    const auto R = Physical->loadBytes(
+        Fragment.PhysicalAddress,
+        llvm::MutableArrayRef(Bytes).slice(Offset, Fragment.Size));
+    if (R.Status == GuestMemoryAccessStatus::Fault)
+      return backingFault(R);
+    Offset += Fragment.Size;
+  }
+  std::copy(Bytes.begin(), Bytes.end(), Output.begin());
+  return static_cast<const X86MemoryAccessResult &>(Store);
+}
+
 void X86PagedMemory::commitStore(const PreparedStore &Store,
                                  llvm::ArrayRef<uint8_t> Input) {
   assert(Store.Status == X86PageWalkStatus::Completed && Store.Owner == this &&

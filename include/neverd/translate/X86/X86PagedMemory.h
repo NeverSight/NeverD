@@ -80,6 +80,13 @@ public:
                                              uint64_t Bytes);
   llvm::Expected<PreparedStore>
   prepareSegmentStore(const X86SegmentedAccess &Access, uint64_t Bytes);
+  /// Read the exact fragments of a successful write plan for a read/modify/
+  /// write instruction. This retains write-fault classification and does not
+  /// walk again through page-table bytes changed by preparation. Physical
+  /// read failures remain backing stops. Commit/lifetime rules are as above.
+  llvm::Expected<X86MemoryAccessResult>
+  loadPreparedStore(const PreparedStore &Store,
+                    llvm::MutableArrayRef<uint8_t> Output);
   void commitStore(const PreparedStore &Store, llvm::ArrayRef<uint8_t> Input);
 
 private:

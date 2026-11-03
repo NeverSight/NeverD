@@ -59,6 +59,22 @@ continuation source/export, virtualization source and MPX context/encoding
 on both SDKs after changes to the shared return rules; also repeat the return
 matrix on the qualified E core. See [protected returns](x86-legacy-segments.md#protected-iret-and-far-returns).
 
+`LegacyScalars/*` in `NeverDX86PagingTests` compares original protected scalar
+instructions under KVM against the ordinary-RAM executor. It covers arithmetic
+flags, high-byte aliases, independent operand/address/stack sizes, memory and
+descriptor permissions, competing alignment/page faults, all Jcc conditions,
+CALL stack-store publication and page effects on a target-limit fault, and original handler
+PTE repair/ADD ESP/IRET/retry without host state patches. The same explicit
+`NEVERD_TEST_LEGACY_ALIGNMENT=before` binding selects qualified scalar #AC
+ordering. Bind `NEVERD_TEST_LEGACY_CALL=store` on the qualified P core and
+`NEVERD_TEST_LEGACY_CALL=check` on the qualified E core. Both check the stack
+before the target limit; only the P-core choice retains its data store on
+target #GP. The suite does not infer this choice from affinity or the host CPU.
+Run the complete paging suite after changing the shared legacy
+operand grammar, and the x64 paged execution and continuation source/export
+suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
+CPU matrix on the qualified E core; retain skips as missing coverage.
+
 `X86LegacySegmentExecutionTest` in `NeverDX86PagingTests` checks protected
 selector transition admission, null-cache invalidation, accessed-write faults,
 old-SS stack sizing, coupled far-pointer publication, alignment priority and
