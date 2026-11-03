@@ -32,6 +32,102 @@
 namespace {
 using namespace neverd;
 
+TEST(CallStackRangeSource, UnreadNarrowHomesDoNotReachTheCallerSignature) {
+  for (unsigned Bytes : {1u, 2u, 4u, 8u})
+    for (bool NoOpt : {false, true})
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Bytes << ':' << NoOpt << ':' << LLVM);
+        BinaryImage Image;
+        Image.Arch = Arch::X64;
+        Image.Bits = Bitness::Bits64;
+        Image.Format = BinaryFormat::COFF;
+        Image.Base = Image.Entry = 0x1000;
+        Segment Text;
+        Text.VA = Image.Entry;
+        Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        Text.Data = {0x48, 0x83, 0xec, 0x28,    // sub rsp,40
+                     0xe8, 0x37, 0,    0,    0, // call home_probe
+                     0x48, 0x83, 0xc4, 0x28, 0xc3};
+        const size_t CallerBytes = Text.Data.size();
+        Text.Data.resize(0x40, 0xcc);
+        if (Bytes == 2)
+          Text.Data.push_back(0x66);
+        Text.Data.push_back(Bytes == 8 ? 0x4c : 0x44);
+        Text.Data.insert(Text.Data.end(),
+                         {uint8_t(Bytes == 1 ? 0x88 : 0x89), 0x4c, 0x24, 0x20,
+                          0xb8, 42, 0, 0, 0, 0xc3}); // mov [rsp+32],r9; eax=42
+        Text.Size = Text.FileSz = Text.Data.size();
+        const size_t CalleeBytes = Text.Data.size() - 0x40;
+        Image.Segments.push_back(std::move(Text));
+        auto Caller = Symbol::makeFunc(0x1000);
+        Caller.Name = "caller_home_probe";
+        Caller.Size = CallerBytes;
+        auto Callee = Symbol::makeFunc(0x1040);
+        Callee.Name = "home_probe";
+        Callee.Size = CalleeBytes;
+        Image.Symbols = {Caller, Callee};
+
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.SourceProjection = true;
+        Options.NoOpt = NoOpt;
+        Options.LiftMode = LLVM;
+        Options.OnlyFunctionEntries = {0x1000, 0x1040};
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_TRUE(Result.CallEntryReadGPRs.count(0x1040));
+        EXPECT_EQ(Result.CallEntryReadGPRs.at(0x1040)[x86reg::R9 / 8], 0u);
+        std::string Source = "#define _GNU_SOURCE\n#include <stdint.h>\n";
+        llvm::raw_string_ostream Output(Source);
+        CEmitterOptions COptions;
+        COptions.EmitIncludes = false;
+        COptions.TheArch = Image.Arch;
+        COptions.Format = Image.Format;
+        COptions.Image = &Image;
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          ASSERT_TRUE(
+              LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+        } else
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+        EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
+        EXPECT_EQ(Source.find("arg"), std::string::npos) << Source;
+#if defined(__x86_64__) && defined(__linux__)
+        Output << "\n#include <sys/mman.h>\n#include <string.h>\n"
+                  "static const unsigned char original[] = {";
+        for (uint8_t Byte : Image.Segments.front().Data)
+          Output << unsigned(Byte) << ',';
+        Output << R"C(
+};
+int main(void) {
+    void *code = mmap(0, sizeof(original), PROT_READ|PROT_WRITE|PROT_EXEC,
+                      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) return 1;
+    memcpy(code, original, sizeof(original));
+    __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+    typedef uint64_t (__attribute__((ms_abi)) *native_fn)(uint64_t, uint64_t,
+                                                       uint64_t, uint64_t);
+    for (uint64_t i = 0; i != 1024; ++i) {
+        uint64_t salt = i * UINT64_C(0x9e3779b97f4a7c15);
+        if (((native_fn)code)(i, ~i, salt, ~salt) != 42) return 2;
+        if (caller_home_probe() != 42) return 3;
+    }
+    return munmap(code, sizeof(original)) != 0;
+}
+)C";
+#else
+        Output << "\nint main(void) { return caller_home_probe() != 42; }\n";
+#endif
+        for (const char *Optimization : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source, {Optimization, "-fsanitize=undefined",
+                       "-fno-sanitize-recover=all"});
+      }
+}
+
 TEST(CallStackRangeSource, IndexedLocalsMatchNativeReadsAndWrites) {
 #if !defined(__x86_64__) || !defined(__linux__)
   GTEST_SKIP() << "the original Win64 instructions require Linux x64 mmap";

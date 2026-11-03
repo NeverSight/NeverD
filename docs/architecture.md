@@ -8982,6 +8982,16 @@ For Win64 calls LowToMed publishes those argument registers as CALL inputs.
 SSA then sees a caller's pass-through argument, and HighC passes exactly the
 arguments the callee reads. Stack arguments follow the 32-byte home area.
 
+Win64 home-spill input elision accepts ordinary stores of an incoming
+register's low bytes only when their home slot is unread and does not escape.
+FS/GS and ordered stores keep their register observations. Returning an
+incoming-area address also retains its possible readers; it cannot establish
+a variadic forwarding contract. The variadic save-area rule still requires
+complete argument words, even though an unused private spill may be narrower.
+Before final compaction, each LowIR operation owns exactly one register-summary
+step, including ignored identities, stack probes and vector upper-lane clears.
+Home-spill refinement therefore cannot erase a different operation's reads.
+
 A complete scalar register summary also publishes an empty vector bank.
 Win64 does so only when no tracked vector family is read; a positional float
 or overlapping integer/vector input retains its existing contract. The shared
