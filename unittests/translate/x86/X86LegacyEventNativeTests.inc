@@ -27,7 +27,7 @@ protected:
     const uint32_t TSS = Case == 32   ? 0xa000 - (TSS32 ? 8 : 4)
                          : Case == 33 ? 0xa000 - (TSS32 ? 10 : 6)
                                       : 0x5800;
-    constexpr uint32_t Target = 0x3000, FaultStop = 0x2800;
+    constexpr uint32_t Target = 0x3000, Stop = 0x4000, VectorRecord = 0x4800;
     std::memset(RAM, 0, MemorySize);
     put(0x10000, Legacy ? 0x11007 : 0x11001, PTWidth);
     if (!Legacy)
@@ -108,9 +108,32 @@ protected:
       put(TSS + Offset, Ring == TargetCPL ? NewSP : 0xb000, TSS32 ? 4 : 2);
       put(TSS + Offset + (TSS32 ? 4 : 2), Ring == TargetCPL ? NewSS : 16, 2);
     }
-    for (unsigned V = 0; V != 256; ++V)
-      put(IDT + V * 8,
-          FaultStop | (uint64_t{8} << 16) | (uint64_t{0xee} << 40));
+    // Each entry records its own vector with a register-preserving MOV, then
+    // jumps to a common hardware breakpoint. This distinguishes faults that
+    // have identical error codes and frames, without taking another exception.
+    const auto Handler = [&](uint32_t Address, uint8_t V, bool Wide) {
+      uint32_t Cursor = Address;
+      if (!Wide) {
+        RAM[Cursor++] = 0x66;
+        RAM[Cursor++] = 0x67;
+      }
+      RAM[Cursor++] = 0xc7;
+      RAM[Cursor++] = 0x05;
+      put(Cursor, VectorRecord, 4);
+      Cursor += 4;
+      put(Cursor, V, 4);
+      Cursor += 4;
+      if (!Wide)
+        RAM[Cursor++] = 0x66;
+      RAM[Cursor++] = 0xe9;
+      put(Cursor, Stop - (Cursor + 4), 4);
+    };
+    for (unsigned V = 0; V != 256; ++V) {
+      const uint32_t Entry = 0x2000 + V * 16;
+      put(IDT + V * 8, Entry | (uint64_t{8} << 16) | (uint64_t{0xee} << 40));
+      Handler(Entry, V, true);
+    }
+    Handler(Target, Vector, Code32);
     if (Case == 24)
       IDTBase = 0xaffc - Vector * 8;
     const uint64_t Gate = (TargetIP & 0xffff) | (uint64_t(Selector) << 16) |
@@ -178,7 +201,7 @@ protected:
                                            ? std::vector<uint8_t>{0x0f, 0x0b}
                                            : std::vector<uint8_t>{0xcd, Vector};
     std::copy(Instruction.begin(), Instruction.end(), RAM + Code);
-    RAM[Target] = RAM[FaultStop] = 0xf4;
+    RAM[Stop] = 0xf4;
     X86LegacyExecutionState State;
     const auto Cache = [](const kvm_segment &C) {
       return X86LegacySegmentCache{uint32_t(C.base), C.limit, C.selector,
@@ -242,9 +265,8 @@ protected:
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &Registers), 0);
     kvm_guest_debug Debug{};
     Debug.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
-    Debug.arch.debugreg[0] = Target;
-    Debug.arch.debugreg[1] = FaultStop;
-    Debug.arch.debugreg[7] = 0x405;
+    Debug.arch.debugreg[0] = Stop;
+    Debug.arch.debugreg[7] = 0x401;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
     if (EventKind == 2)
       ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
@@ -264,7 +286,13 @@ protected:
     EXPECT_EQ(Special.cr2, State.CR2);
     if (!Shutdown) {
       ASSERT_EQ(Expected->Status, X86LegacyExecutionStatus::EventDelivered);
-      EXPECT_EQ(Registers.rip, State.EIP);
+      EXPECT_EQ(Registers.rip, Stop);
+      const auto Delivered = get(VectorRecord, 4);
+      EXPECT_EQ(Delivered, Expected->DeliveredVector);
+      const uint32_t Entry = Delivered == Vector
+                                 ? (Gate32 ? TargetIP : uint16_t(TargetIP))
+                                 : 0x2000 + Delivered * 16;
+      EXPECT_EQ(Entry, State.EIP);
       const std::array<uint32_t, 8> GPR{
           uint32_t(Registers.rax), uint32_t(Registers.rcx),
           uint32_t(Registers.rdx), uint32_t(Registers.rbx),

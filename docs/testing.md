@@ -20,7 +20,9 @@ See [the generated execution contract](x86-paged-execution.md).
 16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,
 EIP, ESP, flags, CR2, descriptor bytes and frame memory across all privilege
 levels, conforming targets, GDT/LDT, gate/code/stack/TSS widths, IRQ/NMI,
-software/fault classification, entry failures, #DF and shutdown. TSS page
+software/fault classification, entry failures, #DF and shutdown. Each native
+entry records its vector with register-preserving MOV/JMP before the debugger
+stop, so equal error codes cannot hide a wrong delivered exception. TSS page
 boundaries distinguish the offset-first read and its actual extent. Separate
 flags/high-ESP cases distinguish target SS.D/B from gate or TSS width.
 Original instruction sequences test CS-base/limit fetch, sequential EIP above
