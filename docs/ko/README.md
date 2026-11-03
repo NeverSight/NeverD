@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: cea915c13566349896e2c0b632103d60b0e6faadd3ae606dbd3a3afe1f4418e0 -->
+<!-- i18n-source: 94dee57ee027f151dab4552ab101a5387ee571d24d447a250e7550c573b77f74 -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -40,6 +40,7 @@
 | [Windows 드라이버 에뮬레이션](driver-emulation.md) | 제한된 x64 WDM/KMDF 수명 주기, 요청, 하드웨어 시나리오, SEH, PnP 하위 집합, 백엔드 선택 및 제한 |
 | [메모리 안전성 감사와 헌트](memory-safety.md) | 힙 수명과 복사 오버플로 분석: 형식별 신원 계약, 싱크/소스 카탈로그, 판정, 예산, JSON 스키마 |
 | [프로세스 플러그인 SDK(영문)](../process-plugin-sdk.md) | 독립 Python 도우미, 프로토콜 및 예제 |
+| [Tools 계층(영문)](../tools-layer.md) | 정확한 플러그인 호출, 고정된 소비자 단계 및 작업 기록 |
 | [NPH 프로세스 플러그인 호스트(영문)](../plugin-host.md) | 공유 소유권, 작업 수락, 프로토콜 및 프로세스 수명 |
 | [네이티브 플러그인](plugins.md) | 순수 C descriptor ABI, callback과 event, build/link workflow, discovery 및 호환성 규칙 |
 | [Python 플러그인](python-plugins.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
