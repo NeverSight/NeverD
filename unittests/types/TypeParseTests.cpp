@@ -116,6 +116,79 @@ TEST(TypeParse, StorageQualifiersKeepDeclaratorsAndKeywordBoundaries) {
   }
 }
 
+TEST(TypeParse, NamedSpecifiersKeepPrecedenceAndUnknownWordPositions) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    auto Library = parsed(R"(
+      typedef unsigned short size_t;
+      typedef unsigned int va_list;
+      typedef unsigned char uint64_t;
+      struct Entry { int value; };
+      enum Mode { First, Second };
+      Entry *Inspect(size_t count, va_list arguments, uint64_t bits, Mode mode);
+    )",
+                          {}, Model);
+    const auto *Inspect = Library.findPrototype("Inspect");
+    ASSERT_NE(Inspect, nullptr);
+    ASSERT_EQ(Inspect->Params.size(), 4u);
+    ASSERT_EQ(Inspect->Return->Kind, TypeExprKind::Pointer);
+    ASSERT_NE(Inspect->Return->Element, nullptr);
+    EXPECT_EQ(Inspect->Return->Element->NamedKind, TypeKind::Struct);
+    // Declared size_t and va_list keep their names. The parser's fixed
+    // builtin spellings retain precedence even if a header redeclares one.
+    EXPECT_EQ(Inspect->Params[0].Type->Name, "size_t");
+    EXPECT_EQ(Library.sizeOf(*Inspect->Params[0].Type), 2u);
+    EXPECT_EQ(Inspect->Params[1].Type->Name, "va_list");
+    EXPECT_EQ(Library.sizeOf(*Inspect->Params[1].Type), 4u);
+    EXPECT_EQ(Inspect->Params[2].Type->Kind, TypeExprKind::Builtin);
+    EXPECT_EQ(Inspect->Params[2].Type->TheBuiltin, Builtin::ULongLong);
+    EXPECT_EQ(Inspect->Params[3].Type->NamedKind, TypeKind::Enum);
+
+    ParseOptions Going;
+    Going.KeepGoing = true;
+    const auto Read = parseCTypes("int Before(void);\n  Missing Broken(void);\n"
+                                  "int After(size_t count);",
+                                  Library, Going);
+    ASSERT_EQ(Read.Problems.size(), 1u);
+    EXPECT_EQ(Read.Problems[0].Line, 2u);
+    EXPECT_EQ(Read.Problems[0].Column, 3u);
+    EXPECT_EQ(Read.Problems[0].Message, "'Missing' names no type");
+    EXPECT_NE(Library.findPrototype("Before"), nullptr);
+    EXPECT_NE(Library.findPrototype("After"), nullptr);
+    EXPECT_EQ(Library.findPrototype("Broken"), nullptr);
+
+    TypeLibrary Defaults(Model);
+    const auto Fallback = parseFunctionDeclaration(
+        "size_t Inspect(uintptr_t address, va_list arguments)", Defaults);
+    ASSERT_TRUE(Fallback.ok());
+    EXPECT_EQ(Defaults.sizeOf(*Fallback.Function->Return), pointerBytes(Model));
+    EXPECT_EQ(Fallback.Function->Params[1].Type->Kind, TypeExprKind::Pointer);
+    const unsigned Own = Defaults.builtinBytes(Builtin::LongDouble);
+    const auto Other = exactLongDoubleName(Own == 8 ? 16 : 8);
+    const auto WrongSize =
+        parseCTypes("\n" + Other + " BadLong(void);\nint AfterLong(void);",
+                    Defaults, Going);
+    ASSERT_EQ(WrongSize.Problems.size(), 1u);
+    EXPECT_EQ(WrongSize.Problems[0].Line, 2u);
+    EXPECT_EQ(WrongSize.Problems[0].Column, 1u);
+    EXPECT_NE(WrongSize.Problems[0].Message.find("is a long double of"),
+              std::string::npos);
+    EXPECT_NE(Defaults.findPrototype("AfterLong"), nullptr);
+    if (Model == DataModel::LP64) {
+      const auto Refused =
+          parseCTypes("va_list Bad(void);\nint After(void);", Defaults, Going);
+      ASSERT_EQ(Refused.Problems.size(), 1u);
+      EXPECT_EQ(Refused.Problems[0].Line, 1u);
+      EXPECT_EQ(Refused.Problems[0].Column, 1u);
+      EXPECT_EQ(Refused.Problems[0].Message,
+                "__builtin_va_list of an LP64 target is a record local "
+                "types do not know");
+      EXPECT_NE(Defaults.findPrototype("After"), nullptr);
+    }
+  }
+}
+
 TEST(TypeParse, LaysAStructureOutAsMSVC) {
   const TypeLibrary Library = parsed(R"(
     struct A { char c; int i; short s; };
