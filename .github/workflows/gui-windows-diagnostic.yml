@@ -7,6 +7,7 @@ on:
       - '.github/workflows/gui-windows-diagnostic.yml'
       - 'tools/neverd-gui/tests/AppearanceTests.cpp'
       - 'tools/neverd-gui/tests/DockingTests.cpp'
+      - 'tools/neverd-gui/app/platform/WindowFrameWindows.cpp'
 
 permissions:
   contents: read
@@ -45,7 +46,7 @@ jobs:
             -DNEVERD_ENGINE_LIBRARY="$GITHUB_WORKSPACE/build-fixture/bin/neverd_fixture.dll" \
             -DNEVERD_ENGINE_IMPLIB="$GITHUB_WORKSPACE/build-fixture/bin/neverd_fixture.lib" \
             -DNEVERD_WORKER_REAL_ENGINE_TESTS=OFF
-          python scripts/build.py build-gui --target neverd-gui-docking-tests neverd-gui-appearance-tests --parallel 3
+          python scripts/build.py build-gui --target neverd-gui-docking-tests neverd-gui-appearance-tests neverd-gui-unit-tests --parallel 3
           cp build-fixture/bin/neverd_fixture.dll build-gui/bin/
       - name: Inspect native input and fractional-scale composition
         run: |
@@ -56,18 +57,19 @@ jobs:
           from pathlib import Path
           output = Path('windows-gui-evidence')
           output.mkdir()
-          cases = [('resize', 'neverd-gui-docking-tests', 'framedWindowEdgesResize', '1'),
-                   ('shadow-100', 'neverd-gui-appearance-tests', 'windowShadowCompositesWithDesktop:dialog-show', '1'),
-                   ('shadow-150', 'neverd-gui-appearance-tests', 'windowShadowCompositesWithDesktop:dialog-show', '1.5')]
+          cases = [('docking-100', 'neverd-gui-docking-tests', [], '1'),
+                   ('appearance-100', 'neverd-gui-appearance-tests', [], '1'),
+                   ('appearance-150', 'neverd-gui-appearance-tests', [], '1.5'),
+                   ('native-frame', 'neverd-gui-unit-tests', ['nativeFrameKeepsTheTitleBarOnScreen'], '1')]
           records = []
           for name, binary, selection, scale in cases:
               captures = output / name
               captures.mkdir()
               log = output / (name + '.txt')
-              command = ['build-gui/bin/' + binary + '.exe', selection, '-o', str(log) + ',txt']
+              command = ['build-gui/bin/' + binary + '.exe', *selection, '-o', str(log) + ',txt']
               record = {'name': name, 'command': command, 'scale': scale}
               try:
-                  result = subprocess.run(command, capture_output=True, text=True, timeout=180,
+                  result = subprocess.run(command, capture_output=True, text=True, timeout=300,
                                           env={**os.environ, 'QT_SCALE_FACTOR': scale,
                                                'NEVERD_APPEARANCE_CAPTURES': str(captures)})
                   record['returncode'] = result.returncode
