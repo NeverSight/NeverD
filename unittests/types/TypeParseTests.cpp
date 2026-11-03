@@ -65,6 +65,57 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 
 } // namespace
 
+TEST(TypeParse, StorageQualifiersKeepDeclaratorsAndKeywordBoundaries) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    TypeLibrary Library = parsed(R"(
+      #define INLINE_API NTKERNELAPI __forceinline
+      typedef unsigned int __forceinline_count;
+      struct Entry { unsigned int inline_count; };
+      INLINE_API const struct Entry * __stdcall Inspect(
+          const struct Entry * __restrict _Nonnull item,
+          __forceinline_count count);
+      static inline unsigned int __forceinline_suffix(unsigned int _NullableX);
+      typedef void *P;
+      typedef P __ptr32 P32;
+      typedef P __ptr64 P64;
+      _Static_assert(sizeof(P32) == 4, "explicit narrow pointer");
+      _Static_assert(sizeof(P64) == 8, "explicit wide pointer");
+    )",
+                                 {}, Model);
+    const auto *Inspect = Library.findPrototype("Inspect");
+    ASSERT_NE(Inspect, nullptr);
+    ASSERT_EQ(Inspect->Params.size(), 2u);
+    EXPECT_EQ(Inspect->Params[0].Name, "item");
+    EXPECT_EQ(Inspect->Params[1].Name, "count");
+    EXPECT_EQ(Inspect->Params[1].Type->Name, "__forceinline_count");
+    EXPECT_EQ(Inspect->Convention, Model == DataModel::ILP32
+                                       ? CallingConvention::Stdcall
+                                       : CallingConvention::Unspecified);
+    ASSERT_EQ(Inspect->Return->Kind, TypeExprKind::Pointer);
+    ASSERT_NE(Inspect->Return->Element, nullptr);
+    EXPECT_TRUE(Inspect->Return->Element->Const);
+    const auto *Suffix = Library.findPrototype("__forceinline_suffix");
+    ASSERT_NE(Suffix, nullptr);
+    ASSERT_EQ(Suffix->Params.size(), 1u);
+    EXPECT_EQ(Suffix->Params[0].Name, "_NullableX");
+    EXPECT_EQ(recordOf(Library, "Entry").Members.front().Name, "inline_count");
+
+    // Similar words are identifiers, not storage annotations. A failed
+    // declaration must not publish its preceding valid declaration either.
+    const auto Before = Library.prototypes().size();
+    const auto Rejected =
+        parseCTypes("int Prior(void);\nInline int Broken(void);", Library);
+    ASSERT_EQ(Rejected.Problems.size(), 1u);
+    EXPECT_EQ(Rejected.Problems[0].Line, 2u);
+    EXPECT_EQ(Rejected.Problems[0].Column, 1u);
+    EXPECT_EQ(Rejected.Problems[0].Message, "'Inline' names no type");
+    EXPECT_EQ(Library.prototypes().size(), Before);
+    EXPECT_EQ(Library.findPrototype("Prior"), nullptr);
+  }
+}
+
 TEST(TypeParse, LaysAStructureOutAsMSVC) {
   const TypeLibrary Library = parsed(R"(
     struct A { char c; int i; short s; };

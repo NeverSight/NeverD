@@ -584,44 +584,46 @@ std::optional<CallingConvention> conventionWord(llvm::StringRef Word) {
 
 /// Words a declaration may hold that do not change its type.
 bool ignoredWord(llvm::StringRef Word) {
-  return llvm::is_contained(
-      std::initializer_list<llvm::StringRef>{"extern",
-                                             "static",
-                                             "inline",
-                                             "_inline",
-                                             "__inline",
-                                             "__inline__",
-                                             "__forceinline",
-                                             "__extension__",
-                                             "__w64",
-                                             "register",
-                                             "auto",
-                                             "constexpr",
-                                             "virtual",
-                                             "explicit",
-                                             "mutable",
-                                             "__unaligned",
-                                             "NTKERNELAPI",
-                                             "NTSYSAPI",
-                                             "NTSYSCALLAPI",
-                                             "NTHALAPI",
-                                             "DECLSPEC_IMPORT",
-                                             "FORCEINLINE",
-                                             "__restrict",
-                                             "restrict",
-                                             "__restrict__",
-                                             "_Atomic",
-                                             "thread_local",
-                                             "__ptr32",
-                                             "__ptr64",
-                                             "__sptr",
-                                             "__uptr",
-                                             "_Nonnull",
-                                             "_Nullable",
-                                             "_Null_unspecified",
-                                             "_Nullable_result",
-                                             "__based"},
-      Word);
+  // Expose the fixed spellings to the compiler. A table walk here repeats
+  // for each type, declarator and parameter in the system headers.
+  return llvm::StringSwitch<bool>(Word)
+      .Case("extern", true)
+      .Case("static", true)
+      .Case("inline", true)
+      .Case("_inline", true)
+      .Case("__inline", true)
+      .Case("__inline__", true)
+      .Case("__forceinline", true)
+      .Case("__extension__", true)
+      .Case("__w64", true)
+      .Case("register", true)
+      .Case("auto", true)
+      .Case("constexpr", true)
+      .Case("virtual", true)
+      .Case("explicit", true)
+      .Case("mutable", true)
+      .Case("__unaligned", true)
+      .Case("NTKERNELAPI", true)
+      .Case("NTSYSAPI", true)
+      .Case("NTSYSCALLAPI", true)
+      .Case("NTHALAPI", true)
+      .Case("DECLSPEC_IMPORT", true)
+      .Case("FORCEINLINE", true)
+      .Case("__restrict", true)
+      .Case("restrict", true)
+      .Case("__restrict__", true)
+      .Case("_Atomic", true)
+      .Case("thread_local", true)
+      .Case("__ptr32", true)
+      .Case("__ptr64", true)
+      .Case("__sptr", true)
+      .Case("__uptr", true)
+      .Case("_Nonnull", true)
+      .Case("_Nullable", true)
+      .Case("_Null_unspecified", true)
+      .Case("_Nullable_result", true)
+      .Case("__based", true)
+      .Default(false);
 }
 
 /// Whether a target with 64-bit pointers keeps \p Convention.

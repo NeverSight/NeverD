@@ -6224,6 +6224,9 @@ longest-match operators, qualified names, callbacks, variadics, member access,
 constant expressions and transactional errors on ILP32, LP64 and LLP64. The
 first-byte punctuation dispatch retains the supported spellings and lengths;
 unknown bytes still produce their original diagnostic positions.
+`TypeParse.StorageQualifiersKeepDeclaratorsAndKeywordBoundaries` covers macro
+annotations, qualified pointers, explicit pointer widths, calling conventions,
+similar identifiers and transactional diagnostics across all three data models.
 
 `DWARFTypeImportGo.ReadsGosStructuresAndFuncValues` builds a real Go program
 with the selected `NEVERD_TEST_GO` compiler (or `go` on PATH). It checks both
