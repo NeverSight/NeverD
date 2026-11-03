@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.24)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(NeverDTools LANGUAGES CXX)
+  include(CTest)
+endif()
+if(NOT TARGET neverd_plugin_protocol)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugin" plugin-host)
+endif()
+add_library(neverd_tools STATIC ToolRegistry.cpp ProcessTools.cpp)
+target_link_libraries(neverd_tools PUBLIC neverd_plugin_protocol)
+set_target_properties(neverd_tools PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
+  add_executable(neverd-tools-tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/plugin/ToolsTests.cpp")
+  target_link_libraries(neverd-tools-tests PRIVATE neverd_tools)
+  foreach(case dispatch async replacement activation context continuation
+      deduplication retirement receipt task schemas foreign reentrant admission)
+    add_test(NAME NeverDTools.${case} COMMAND neverd-tools-tests ${case})
+    set_tests_properties(NeverDTools.${case} PROPERTIES TIMEOUT 30)
+  endforeach()
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_executable(neverd-tools-process-tests
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/plugin/ProcessActionsTests.cpp")
+    target_link_libraries(neverd-tools-process-tests PRIVATE neverd_tools)
+    foreach(case close sequential conflict queued_close starting_close)
+      add_test(NAME NeverDTools.process_${case} COMMAND neverd-tools-process-tests
+        ${case} "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/neverd-plugin-host/tests/tools_provider.py")
+      set_tests_properties(NeverDTools.process_${case} PROPERTIES TIMEOUT 30)
+    endforeach()
+  endif()
+endif()
