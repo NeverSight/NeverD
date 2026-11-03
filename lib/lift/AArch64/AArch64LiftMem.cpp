@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64/AArch64Lifter.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -27,6 +28,20 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
                             const cs_aarch64 &ARM64) {
   if (Insn->size == kAddressMemoryWordBytes) {
     const uint32_t Word = readLE<uint32_t>(Insn->bytes);
+    // LDR and STR of a whole Z or P register move the vector or predicate
+    // length at the base plus a multiple of it: state the lift tracks no
+    // value of, so the word keeps the register and the multiple.
+    if (isAArch64SveRegisterTransferWord(Word)) {
+      const unsigned Base = (Word >> 5) & 0x1F;
+      S.emitVoidIntrinsic(
+          Intrinsic::A64_SveRegisterTransfer,
+          {NdVar::scalar(Word, kAddressMemoryWordBytes),
+           NdVar::reg(Base == 31
+                          ? a64reg::SP
+                          : a64reg::X0 + Base * kAddressMemoryPointerBytes,
+                      kAddressMemoryPointerBytes)});
+      return true;
+    }
     if (isAArch64OrderedUnscaledMemoryEncoding(Word) &&
         !aarch64AddressMemoryInstruction(Word))
       throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);

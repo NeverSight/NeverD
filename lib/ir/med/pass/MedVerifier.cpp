@@ -69,8 +69,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
         else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
                  Op.Inputs[0].isConst()) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
-          if (isAArch64ExceptionReturnIntrinsic(Id))
-            Err(kAArch64ExceptionReturnUnsupported, Blk.Id, Op.Addr);
+          if (!aarch64ExceptionReturnShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size, Op.IntrinsicOutputs.size()))
+            Err(kAArch64ExceptionReturnMalformed, Blk.Id, Op.Addr);
           if (const char *Reason = x86NonlocalControlTransferReason(Id))
             Err(Reason, Blk.Id, Op.Addr);
           if (isAArch64AddressMemoryIntrinsic(Id) &&

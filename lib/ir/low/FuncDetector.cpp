@@ -177,6 +177,14 @@ va_t forwardingJumpTarget(const BinaryImage &Img, Decoder &Dec, va_t Entry) {
   return Target;
 }
 
+/// Whether \p Img names where its execution starts. A binary file's entry is
+/// always within its bytes, the base when none is given, so it may be 0, as
+/// an AArch64 Linux kernel Image's is; elsewhere 0 marks an image without
+/// one, as a relocatable object.
+bool hasEntryPoint(const BinaryImage &Img) {
+  return Img.Entry != 0 || Img.Format == BinaryFormat::Raw;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -251,7 +259,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   std::vector<std::pair<va_t, std::string>> Results;
   std::set<va_t> VerifiedCandidates;
 
-  if (Img.Entry != 0 && Img.isFunctionEntryCandidateAt(Img.Entry)) {
+  if (hasEntryPoint(Img) && Img.isFunctionEntryCandidateAt(Img.Entry)) {
     Entries.insert(Img.Entry);
     Results.push_back({Img.Entry, Img.getFunctionNameAt(Img.Entry)});
   }
@@ -512,13 +520,17 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   // Raw-image prologues and addressed x64 IBT markers supply entry evidence
   // independently of a return inside the bounded candidate probe.
   std::set<va_t> CodePointerTargets;
+  // AArch64 entry markers after the end of a function, which begin only
+  // functions, supply that evidence the same way.
+  std::set<va_t> MarkedEntries;
   // The entries other evidence found before the prologue scan adds its own.
   std::set<va_t> EvidencedX86Entries;
-  if (Img.Entry != 0 && !RelocationsOnly) {
+  if (hasEntryPoint(Img) && !RelocationsOnly) {
     scanCallTargets(Img, Dec, DirectCallTargets, CodeNamedByCode);
     std::erase_if(DirectCallTargets, [&](va_t Addr) {
       return !Img.isFunctionEntryCandidateAt(Addr);
     });
+    MarkedEntries = MarkedAArch64Entries;
     Entries.insert(DirectCallTargets.begin(), DirectCallTargets.end());
     // A binary file has no symbols, unwind tables or relocations to name
     // the functions its code only takes the address of.  A target starts
@@ -723,7 +735,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
           {Addr, (kAutoFuncPrefix + llvm::utohexstr(Addr)).str()});
   }
 
-  if (Img.Entry != 0 || RelocationsOnly) {
+  if (hasEntryPoint(Img) || RelocationsOnly) {
     std::set<va_t> Trusted{Img.Entry};
     Trusted.insert(ExceptionEntries.begin(), ExceptionEntries.end());
     // PE exports are untyped: executable-section data can legally appear in
@@ -811,6 +823,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
                                    UnsymbolizedX86Entries.count(Addr) != 0 ||
                                    IsX86LinkedCallOrRelocTarget(Addr) ||
                                    CodePointerTargets.count(Addr) != 0 ||
+                                   MarkedEntries.count(Addr) != 0 ||
                                    (!IsX64LinkedCodeAddresses &&
                                     CodeNamedTargets.count(Addr) != 0),
                                IsX64LinkedCodeAddresses &&
@@ -1264,6 +1277,19 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
 void FuncDetector::scanCallTargets(
     const BinaryImage &Img, Decoder &Dec, std::set<va_t> &Out,
     std::vector<std::pair<va_t, va_t>> &CodeAddresses) {
+  MarkedAArch64Entries.clear();
+  func_detect_detail::AArch64EntryScan A64Entries;
+  const auto finishAArch64 = [&] {
+    auto &Targets = A64Entries.ConditionalTargets;
+    llvm::sort(Targets);
+    for (const auto &[Entry, After] : A64Entries.EntryCandidates) {
+      const auto Target = llvm::lower_bound(Targets, After);
+      if (Target == Targets.end() || *Target > Entry) {
+        Out.insert(Entry);
+        MarkedAArch64Entries.insert(Entry);
+      }
+    }
+  };
   struct ScanChunk {
     const Segment *Seg;
     va_t Start;
@@ -1388,7 +1414,9 @@ void FuncDetector::scanCallTargets(
   if (Chunks.size() <= 1 && PieceJobs.empty()) {
     for (auto &[Seg, Start, End] : Chunks)
       func_detect_detail::scanSegmentCalls(Img, Dec, Seg, Start, End, Out,
-                                           CodeAddresses, Cancellation);
+                                           CodeAddresses, Cancellation,
+                                           A64Entries);
+    finishAArch64();
     Dec.setDetail(PreviousDetail);
     Dec.setText(PreviousText);
     return;
@@ -1443,6 +1471,7 @@ void FuncDetector::scanCallTargets(
       LocalDec.setDetail(false);
       LocalDec.setText(false);
     }
+    func_detect_detail::AArch64EntryScan LocalA64;
     std::set<va_t> LocalEntries;
     std::vector<std::pair<va_t, va_t>> LocalCodeAddresses;
 
@@ -1474,11 +1503,17 @@ void FuncDetector::scanCallTargets(
       auto &[Seg, Start, End] = Chunks[Job - PieceJobs.size()];
       func_detect_detail::scanSegmentCalls(Img, LocalDec, Seg, Start, End,
                                            LocalEntries, LocalCodeAddresses,
-                                           Cancellation);
+                                           Cancellation, LocalA64);
     }
 
     std::lock_guard<std::mutex> Lk(Mtx);
     Out.insert(LocalEntries.begin(), LocalEntries.end());
+    A64Entries.ConditionalTargets.insert(A64Entries.ConditionalTargets.end(),
+                                         LocalA64.ConditionalTargets.begin(),
+                                         LocalA64.ConditionalTargets.end());
+    A64Entries.EntryCandidates.insert(A64Entries.EntryCandidates.end(),
+                                      LocalA64.EntryCandidates.begin(),
+                                      LocalA64.EntryCandidates.end());
     CodeAddresses.insert(CodeAddresses.end(), LocalCodeAddresses.begin(),
                          LocalCodeAddresses.end());
   };
@@ -1588,8 +1623,10 @@ void FuncDetector::scanCallTargets(
                                    : *std::prev(Last);
     }
     func_detect_detail::scanSegmentCalls(Img, Dec, Chunk.Seg, From, Chunk.End,
-                                         Out, CodeAddresses, Cancellation);
+                                         Out, CodeAddresses, Cancellation,
+                                         A64Entries);
   }
+  finishAArch64();
   Dec.setDetail(PreviousDetail);
   Dec.setText(PreviousText);
 }

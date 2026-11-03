@@ -80,3 +80,25 @@ TEST(AArch64DecodeValidity, ZAOperandsRefuseSemanticsBeforeSharedHandlers) {
     EXPECT_TRUE(Ops.empty());
   }
 }
+
+TEST(AArch64DecodeValidity, PredicateTestsCannotMasqueradeAsFFRWrites) {
+  // PTEST, predicated RDFFR and RDFFRS have predicate/flag results that the
+  // legacy opaque WRFFR operation does not model.
+  for (uint32_t Word : {0x2550c020u, 0x2518f020u, 0x2558f020u})
+    for (bool Strict : {false, true})
+      for (bool Fast : {false, true}) {
+        SCOPED_TRACE(testing::Message() << Word << Strict << Fast);
+        Decoder D;
+        ASSERT_TRUE(D.init(Arch::AArch64));
+        D.setStrict(Strict);
+        uint8_t Bytes[4];
+        writeLE<uint32_t>(Bytes, Word);
+        DecodedInsn I;
+        ASSERT_EQ(Fast ? D.decodeOneForLift(Bytes, 4, 0x1000, I)
+                       : D.decodeOne(Bytes, 4, 0x1000, I),
+                  4);
+        std::vector<LowOp> Ops;
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      }
+}

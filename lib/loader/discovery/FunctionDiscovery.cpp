@@ -13,6 +13,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/Limits.h"
+#include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -478,12 +479,43 @@ void scanPaddingBoundaries(BinaryImage &Img, const LoadProgress &Progress) {
       }
       continue;
     }
+    // A binary file's or a PE's AArch64 bytes can hold constants, as a kernel
+    // Image's one executable section holds its read-only data: a page of
+    // them, after a zero word, begins no function.
+    const bool MayHoldData =
+        Img.Arch == Arch::AArch64 &&
+        (Img.Format == BinaryFormat::Raw || Img.Format == BinaryFormat::COFF);
+    va_t ClassifiedPage = InvalidVA;
+    bool DataPage = false;
+    const auto InDataPage = [&](size_t I) {
+      const va_t Page =
+          (Seg.VA + I) &
+          ~static_cast<va_t>(limits::support::kAArch64PageBytes - 1);
+      if (Page != ClassifiedPage) {
+        ClassifiedPage = Page;
+        const size_t From =
+            static_cast<size_t>(std::max(Page, Seg.VA) - Seg.VA);
+        const size_t To = std::min<size_t>(
+            static_cast<size_t>(Page + limits::support::kAArch64PageBytes -
+                                Seg.VA),
+            N);
+        DataPage = isAArch64DataPage(D + From, To - From);
+      }
+      return DataPage;
+    };
     // Only a boundary a prologue can begin at is looked at.
     const size_t Skew = static_cast<size_t>((Seg.VA + First + 1) % Alignment);
     for (size_t I = First + 1 + (Skew ? Alignment - Skew : 0); I < N;
          I += Alignment) {
       Progress.check();
-      if (D[I - 1] == PadByte && D[I] != PadByte)
+      // AArch64 pads with whole zero words: a constant whose high byte is
+      // zero, before a word that reads as a branch, ends no padding.
+      const bool Boundary = Img.Arch == Arch::AArch64
+                                ? I >= 4 && N - I >= 4 &&
+                                      readLE<uint32_t>(D + I - 4) == 0 &&
+                                      readLE<uint32_t>(D + I) != 0
+                                : D[I - 1] == PadByte && D[I] != PadByte;
+      if (Boundary && !(MayHoldData && InDataPage(I)))
         Consider(I);
     }
   }

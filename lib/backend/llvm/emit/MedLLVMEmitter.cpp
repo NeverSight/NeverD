@@ -888,6 +888,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
               "intrinsic has an invalid intrinsic ID shape");
         if (Op.Opcode == NdOp::INTRINSIC) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+          if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
+              !aarch64ExceptionReturnShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size, Op.IntrinsicOutputs.size()))
+            throw std::runtime_error(kAArch64ExceptionReturnMalformed);
           if (Id == Intrinsic::X86FourSourceMemory &&
               ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
                !x86FourSourceShapeIsValid(x86FourSourceMedShape(Op, TheArch))))
@@ -896,8 +900,6 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
               ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
                !x86CompactShapeIsValid(Id, x86CompactMedShape(Op, TheArch))))
             throw std::invalid_argument(X86CompactMalformed);
-          if (ChecksBody && isAArch64ExceptionReturnIntrinsic(Id))
-            Refuse(kAArch64ExceptionReturnUnsupported);
           if (const char *Reason =
                   ChecksBody ? x86NonlocalControlTransferReason(Id) : nullptr)
             Refuse(Reason);

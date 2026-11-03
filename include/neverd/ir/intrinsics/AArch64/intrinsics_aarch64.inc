@@ -51,7 +51,7 @@ A64_Tstart, A64_Tcommit, A64_Tcancel, A64_Ttest,
 A64_Gcssttr, A64_Gcsstr, A64_Genter, A64_Gexit,
 
 // SVE.
-A64_Wrffr, A64_Setffr,
+A64_Wrffr, A64_Setffr, A64_Rdffr, A64_SveRegisterTransfer,
 
 // Misc system.
 A64_Wkdmc, A64_Wkdmd,

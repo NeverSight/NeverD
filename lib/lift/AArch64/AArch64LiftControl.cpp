@@ -355,12 +355,14 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
   // YIELD/WFE/WFI/SEV/SEVL → HINT in Capstone 6 (handled by HINT case)
 
   // --- Exception return ---
-  // Restoring ELR/SPSR/PSTATE is not an ordinary function return. Refuse
-  // before publishing LowIR, including when permissive lifting is selected.
-#define NEVERD_A64_EXCEPTION_RETURN_INTRINSIC(Id, InsnID)                      \
-  case AARCH64_INS_##InsnID:                                                   \
-    throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
-#include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.def"
+  // ERET is not an ordinary function return: it transfers control to the
+  // current exception level's ELR with its SPSR as PSTATE, which the MSRs
+  // before it write as their own side effects.  Like x86's IRET it is a
+  // terminal state transfer that never resumes here; it reconstructs no
+  // exception level change and grants no source ABI contract.
+  case AARCH64_INS_ERET:
+    S.emitVoidIntrinsic(Intrinsic::Eret);
+    break;
 
   // --- CLREX (clear exclusive monitor) ---
   case AARCH64_INS_CLREX:
