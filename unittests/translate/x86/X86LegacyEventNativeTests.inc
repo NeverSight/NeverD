@@ -52,14 +52,17 @@ protected:
     uint64_t StackDescriptor =
         (Stack32 ? 0x00cf92000000ffffULL : 0x000092000000ffffULL) |
         (uint64_t(TargetCPL) << 45);
-    uint32_t NewSP = Case == 23   ? 0xf004
-                     : Case == 35 ? 0xabcde000
-                     : Case == 36 ? 0xe003
-                                  : 0xe000;
+    uint32_t NewSP = Case == 23 || Case == 38 ? 0xf004
+                     : Case == 35             ? 0xabcde000
+                     : Case == 36             ? 0xe003
+                                              : 0xe000;
     uint16_t NewSS = 80 | TargetCPL;
     uint32_t CodeAddress = GDT + 64;
     uint32_t IDTBase = IDT;
-    uint8_t Vector = EventKind == 1 ? 6 : EventKind == 2 ? 2 : 64;
+    uint8_t Vector = EventKind == 1   ? 6
+                     : EventKind == 2 ? 2
+                     : EventKind == 4 ? 13
+                                      : 64;
     if (Case == 29 && (EventKind == 0 || EventKind == 3))
       Vector = 14;
     uint32_t TargetIP = Target;
@@ -92,7 +95,7 @@ protected:
     if (Case == 16)
       StackDescriptor =
           (StackDescriptor & ~uint64_t{0x008f00000000ffffULL}) | (NewSP - 24);
-    if (Case == 17)
+    if (Case == 17 || Case == 37 || Case == 38)
       CodeDescriptor &= ~uint64_t{0x008f00000000ffffULL};
     if (Case == 26)
       CodeDescriptor |= uint64_t{1} << 40;
@@ -151,9 +154,9 @@ protected:
     }
     if (Case == 21)
       Clear(TSS, 1);
-    if (Case == 22)
+    if (Case == 22 || Case == 37)
       Clear(NewSP - 1, 1);
-    if (Case == 23)
+    if (Case == 23 || Case == 38)
       Clear(0xefff, 1);
     if (Case == 24)
       Clear(0xb000, 1);
@@ -197,12 +200,16 @@ protected:
     kvm_regs Registers{};
     Registers.rip = Code;
     Registers.rsp = Case == 34 ? 0xabcdd100 : Case == 36 ? 0xd103 : 0xd100;
-    Registers.rax = 0x11223344;
+    Registers.rax = EventKind == 4 ? 0 : 0x11223344;
     Registers.rflags = 0x2d7 | ExtraFlags;
     std::vector<uint8_t> Instruction = EventKind == 1
                                            ? std::vector<uint8_t>{0x0f, 0x0b}
                                            : std::vector<uint8_t>{0xcd, Vector};
     std::copy(Instruction.begin(), Instruction.end(), RAM + Code);
+    if (EventKind == 4) {
+      Instruction = {0x8e, 0xd0}; // Null MOV SS generates a real #GP(0).
+      std::copy(Instruction.begin(), Instruction.end(), RAM + Code);
+    }
     RAM[Stop] = 0xf4;
     X86LegacyExecutionState State;
     const auto Cache = [](const kvm_segment &C) {
@@ -248,7 +255,7 @@ protected:
         X86LegacyEventProfile::OrderedFrame,
         false};
     auto Expected =
-        EventKind <= 1
+        EventKind <= 1 || EventKind == 4
             ? executeX86LegacyInstruction(State, *Memory, Instruction, Options)
             : deliverX86LegacyEvent(State, *Memory,
                                     {uint32_t(Code), 0, 0, Vector,
@@ -334,7 +341,7 @@ TEST_P(X86LegacyEventNativeTest, OriginalGateWidthsPrivilegesAndFrames) {
         for (bool Code32 : {false, true})
           for (bool Stack32 : {false, true})
             for (bool TSS32 : {false, true})
-              for (unsigned Event = 0; Event != 4; ++Event)
+              for (unsigned Event = 0; Event != 5; ++Event)
                 for (unsigned Case : {0u, 1u, 27u, 28u, 29u, 30u})
                   ASSERT_NO_FATAL_FAILURE(compare(CPL, TargetCPL, Gate32,
                                                   Code32, Stack32, TSS32, Event,
@@ -345,7 +352,7 @@ TEST_P(X86LegacyEventNativeTest, OriginalGateWidthsPrivilegesAndFrames) {
 TEST_P(X86LegacyEventNativeTest, OriginalDescriptorAndDeliveryFaults) {
   for (unsigned CPL : {0u, 3u})
     for (bool Gate32 : {false, true})
-      for (unsigned Event = 0; Event != 4; ++Event)
+      for (unsigned Event = 0; Event != 5; ++Event)
         for (unsigned Case = 2; Case != 27; ++Case) {
           if (Case == 25)
             continue;
@@ -361,7 +368,7 @@ TEST_P(X86LegacyEventNativeTest, OriginalDescriptorAndDeliveryFaults) {
 TEST_P(X86LegacyEventNativeTest, OriginalTSSAccessExtent) {
   for (bool Gate32 : {false, true})
     for (bool TSS32 : {false, true})
-      for (unsigned Event = 0; Event != 4; ++Event)
+      for (unsigned Event = 0; Event != 5; ++Event)
         for (unsigned Case : {21u, 32u, 33u})
           ASSERT_NO_FATAL_FAILURE(
               compare(3, 0, Gate32, true, true, TSS32, Event, Case));
@@ -373,7 +380,7 @@ TEST_P(X86LegacyEventNativeTest, OriginalEntryFlagsAndStackState) {
     for (bool Gate32 : {false, true})
       for (bool Stack32 : {false, true})
         for (bool TSS32 : {false, true})
-          for (unsigned Event = 0; Event != 4; ++Event)
+          for (unsigned Event = 0; Event != 5; ++Event)
             for (uint32_t Flags : {0u, 0x10000u, 0x244c00u})
               for (unsigned Case : {0u, 19u, 22u, 23u, 31u, 34u, 35u, 36u}) {
                 if (Case == 31 && Gate32)
@@ -381,6 +388,15 @@ TEST_P(X86LegacyEventNativeTest, OriginalEntryFlagsAndStackState) {
                 ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, Gate32, true, Stack32,
                                                 TSS32, Event, Case, Flags));
               }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyEventNativeTest, OriginalTargetLimitFaultRetainsFrameWrites) {
+  for (bool Gate32 : {false, true})
+    for (unsigned Event = 0; Event != 5; ++Event)
+      for (unsigned Case : {17u, 37u, 38u})
+        ASSERT_NO_FATAL_FAILURE(
+            compare(3, 0, Gate32, true, true, true, Event, Case, 0, true));
   RecordProperty("cpu_comparisons", Comparisons);
 }
 

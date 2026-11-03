@@ -48,7 +48,10 @@ struct X86LegacyEvent {
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
 /// TSS reads and ordered frame pushes. A 16-bit target stack preserves old
 /// ESP high bits. Consecutive MOV/POP SS does not extend an incoming shadow.
-/// The producer owns event selection, APIC/debug state and machine-check
+/// Target IP-limit validation follows the frame stores. Recursive #DF retains
+/// the failed fault's saved RF image; its saved PC/caches use the original
+/// state. These #DF choices bind otherwise architecturally undefined program
+/// state. The producer owns event selection, APIC/debug state and machine-check
 /// recovery. Task gates, VM86 and CET need separate bindings.
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 

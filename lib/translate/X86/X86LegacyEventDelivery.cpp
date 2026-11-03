@@ -53,8 +53,9 @@ public:
   using Rules = neverd::detail::X86SegmentDescriptorRules<Entry>;
 
   Entry(X86LegacyExecutionState &State, X86PagedMemory &Memory,
-        const X86LegacyEvent &Event, const X86LegacyExecutionOptions &Options)
-      : S(State), M(Memory), E(Event), O(Options),
+        const X86LegacyEvent &Event, const X86LegacyExecutionOptions &Options,
+        uint32_t SavedFlags)
+      : S(State), M(Memory), E(Event), O(Options), Flags(SavedFlags),
         External(E.Kind != Kind::Software) {}
 
   static Value k(uint64_t V) { return V; }
@@ -89,6 +90,7 @@ private:
   X86PagedMemory &M;
   const X86LegacyEvent &E;
   const X86LegacyExecutionOptions &O;
+  uint32_t Flags;
   uint32_t External;
   X86MemoryAccessResult R;
   llvm::Error Failure = llvm::Error::success();
@@ -247,13 +249,8 @@ private:
       Failure = Range.takeError();
       return;
     }
-    if (faultIf(bool(Range->FaultVector), 12,
-                Inner ? SS.Selector & 0xfffc : 0) ||
-        faultIf(IP > CS.Limit, 13, 0))
+    if (faultIf(bool(Range->FaultVector), 12, Inner ? SS.Selector & 0xfffc : 0))
       return;
-    const uint32_t Flags = E.Kind == Kind::Software ? S.EFlags & ~0x10000u
-                           : E.Kind == Kind::Fault  ? S.EFlags | 0x10000u
-                                                    : S.EFlags;
     const uint32_t Values[]{
         S.Core.Segments[2].Selector, S.Core.GPR[4], Flags,
         S.Core.Segments[1].Selector, E.SavedEIP,    E.ErrorCode};
@@ -263,6 +260,10 @@ private:
       if (!access(SS.Base + (SP & Mask), Width, V, true, false, CPL))
         return;
     }
+    // OrderedFrame checks the target offset after the frame, including an
+    // error code. Earlier stores and a competing stack #PF take precedence.
+    if (faultIf(IP > CS.Limit, 13, 0))
+      return;
     S.Core.Segments[1] = CS;
     S.Core.Segments[2] = SS;
     S.Core.CPL = CPL;
@@ -308,9 +309,17 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   const auto FaultEIP =
       Input.Kind == Kind::Software ? State.EIP : Input.SavedEIP;
   auto Event = Input;
+  auto SavedFlags = State.EFlags;
   for (;;) {
+    // OrderedFrame preserves the failed fault entry's RF image if the next
+    // attempt becomes #DF. The architectural state after #DF is undefined;
+    // this behavior is part of the explicitly bound processor profile.
+    if (Event.Kind == Kind::Fault)
+      SavedFlags |= 0x10000u;
+    else if (Event.Kind == Kind::Software)
+      SavedFlags &= ~0x10000u;
     ++R.DeliveryAttempts;
-    auto Got = Entry(State, Memory, Event, Options).run();
+    auto Got = Entry(State, Memory, Event, Options, SavedFlags).run();
     if (!Got)
       return Got.takeError();
     R.SelfModifications.insert(R.SelfModifications.end(),

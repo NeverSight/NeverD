@@ -25,8 +25,10 @@ entry records its vector with register-preserving MOV/JMP before the debugger
 stop, so equal error codes cannot hide a wrong delivered exception. A second
 fault-gate bank stays at the original CPL to expose #TS/#SS/#NP directly when
 the attempted inner stack is invalid; the kernel bank also checks #DF/shutdown.
-TSS page
-boundaries distinguish the offset-first read and its actual extent. Separate
+Real null-selector MOV SS produces a contributory #GP before entry; failed
+target-limit entries and competing stack #PF cases compare their retained
+frames, including error codes and recursive #DF's saved RF profile choice.
+TSS page boundaries distinguish the offset-first read and its actual extent. Separate
 flags/high-ESP cases distinguish target SS.D/B from gate or TSS width.
 Original instruction sequences test CS-base/limit fetch, sequential EIP above
 FFFFh in 16-bit code, MOV/POP SS, LSS, CLI/STI and pending IRQ/NMI shadows.

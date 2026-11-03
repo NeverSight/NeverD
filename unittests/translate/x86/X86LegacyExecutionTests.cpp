@@ -187,6 +187,28 @@ TEST_F(X86LegacyExecutionTest,
   EXPECT_EQ(S.Core.GPR[4], 0xd000u);
 }
 
+TEST_F(X86LegacyExecutionTest,
+       TargetLimitFailureKeepsFrameAndFaultRFThroughDoubleFault) {
+  S.EFlags = 0x202;
+  S.Core.GPR[0] = 0;
+  put(0x7040, 0x00409a0000000000ULL); // Ring-zero CS with limit zero.
+  put(0x6000 + 13 * 8, 0x2000 | (uint64_t{64} << 16) | (uint64_t{0xee} << 40));
+  // A same-ring #DF entry leaves the failed inner-ring frame observable.
+  put(0x6000 + 8 * 8, 0x2000 | (uint64_t{27} << 16) | (uint64_t{0xee} << 40));
+  auto R = run({0x8e, 0xd0});
+  ASSERT_EQ(R.Status, X86LegacyExecutionStatus::EventDelivered);
+  EXPECT_EQ(R.DeliveredVector, 8);
+  EXPECT_EQ(R.DeliveryAttempts, 2u);
+  EXPECT_EQ(S.Core.CPL, 3);
+  EXPECT_EQ(S.Core.GPR[4], 0xcff0u);
+  const uint32_t FailedFrame[]{0, 0x1000, 27, 0x10202, 0xd000, 35};
+  for (unsigned I = 0; I != 6; ++I)
+    EXPECT_EQ(get(0xdfe8 + 4 * I), FailedFrame[I]);
+  EXPECT_EQ(get(0xcff0), 0u);
+  EXPECT_EQ(get(0xcffc), 0x10202u);
+  EXPECT_EQ(get(0x7040, GuestScalarWidth::I64), 0x00409b0000000000ULL);
+}
+
 TEST_F(X86LegacyExecutionTest, CLIAndSTIUseIOPLAndVirtualInterruptFlags) {
   S.EFlags = 0x3002;
   EXPECT_TRUE(run({0xfb}).InstructionCompleted);

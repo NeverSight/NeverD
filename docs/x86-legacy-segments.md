@@ -196,6 +196,12 @@ high word while the low word comes from the TSS; a 32-bit target stack uses
 the TSS value. Gate width, TSS width and stack address size remain independent.
 Earlier descriptor and frame stores survive a later entry failure, while
 registers, caches and EIP commit together only after the full entry succeeds.
+Target EIP-limit validation follows the complete frame, including its error
+code; a competing frame-page fault wins and retains the preceding writes.
+Recursive #DF preserves the failed fault entry's saved RF image and uses the
+original saved PC and register/cache bank. The architecture leaves #DF program
+state undefined: these are qualified profile choices, not portable guarantees
+for every x86 processor. The IA-32e oracle retains its separate #DF exclusions.
 CR2 survives a subsequent #DF or shutdown. NMI blocking starts when the event
 is accepted, including when entry subsequently faults. A missing physical
 backing remains a host binding failure, never a synthesized guest #PF.
