@@ -20165,3 +20165,24 @@ input and memory-check-first input too. Both C routes compile with Clang and
 NeverC at O0/O2 for the matrix, and O2 for restart scenarios. Use both the local
 native SDK and pinned r6, preserving the production pin. See the
 [contract](x86-paged-execution.md#explicit-port-devices).
+
+## NPH process-plugin adapters
+
+The standalone `lib/plugin`, `lib/tools` and `tools/neverd-plugin-host` builds
+exercise owner/task lifetime, registration replacement, services/events,
+installation intent, frozen Tools calls and real child processes without Qt or
+the engine. Build through `scripts/build.py`; `NeverDPluginHost.*`,
+`NeverDPluginServices.*`, `NeverDPluginCatalog.*`, `NeverDTools.*`,
+`NeverDProcessPluginSDK`, `NeverDPluginCLI` and `NeverDToolsConsumer` are their
+CTest entry points. The CLI registers real-worker checks when an engine-backed
+worker is present and `NEVERD_WORKER_REAL_ENGINE_TESTS` is enabled. The dedicated
+NPH workflow qualifies Windows, Linux and macOS separately.
+
+The GUI's `NeverDGuiPlugins` test uses the fixture worker and actual external
+Python providers. It covers forms, task grouping, result controls, artifact
+checks, menu placement, activation/retirement, independent Session settings,
+manager diagnostics and query/event lifetimes after pane deletion. The shared
+adversarial fixture is `unittests/plugin/process_provider.py`.
+`NeverDGuiPluginLaunch` checks startup argument handling. These offscreen cases
+do not establish native desktop gestures or screen-reader behavior. See
+[GUI process plugins](gui-plugins.md#development-and-verification) for commands.

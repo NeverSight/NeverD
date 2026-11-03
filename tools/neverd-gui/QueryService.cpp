@@ -786,12 +786,17 @@ QueryService::SubscriptionId QueryService::graphViewport(QJsonObject payload,
   return state_->add({"cfg_viewport", std::move(payload)}, State::Graph, owner,
                      std::move(complete));
 }
-QueryService::SubscriptionId QueryService::enqueueCommand(QString operation,
-                                                          QJsonObject payload,
-                                                          QObject *owner,
-                                                          Completion complete) {
-  return state_->add({std::move(operation), std::move(payload)}, State::Command,
-                     owner, std::move(complete));
+QueryService::SubscriptionId
+QueryService::enqueueCommand(QString operation, QJsonObject payload,
+                             QObject *owner, Completion complete,
+                             QString expectedRevision) {
+  QuerySpec spec{std::move(operation), std::move(payload)};
+  if (!expectedRevision.isEmpty()) {
+    spec.policy = QuerySpec::Exact;
+    spec.expectedRevision = std::move(expectedRevision);
+  }
+  return state_->add(std::move(spec), State::Command, owner,
+                     std::move(complete));
 }
 void QueryService::unsubscribe(SubscriptionId id) {
   state_->detach(id);

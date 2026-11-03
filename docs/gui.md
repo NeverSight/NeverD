@@ -1711,3 +1711,16 @@ Python exposes `preview_byte_patch`, `apply_byte_patch`, `revert_byte_patch`,
 `byte_patches`, `save_byte_patches`, `load_byte_patches`, `assemble` and
 `export_byte_patches`. Applying changes memory; saving is explicit. Saving
 refuses an externally modified patch sidecar instead of overwriting it.
+
+## External process plugins
+
+Use **Plugins → Plugin manager…** to import a process manifest, change saved
+enablement, retry activation, inspect a diagnostic or uninstall a registration.
+The manager keeps requested settings separate from NPH activation state.
+Commands and task history are grouped by plugin name and stable ID. Context
+menu settings choose direct actions with optional icons or a Plugins submenu.
+The task pane starts hidden and opens on invocation. Providers run outside the
+GUI; their shared task runtime survives closing and recreating that pane.
+
+See [GUI process plugins](gui-plugins.md), [NPH](plugin-host.md) and the
+[independent SDK examples](process-plugin-sdk.md) for authoring and verification.

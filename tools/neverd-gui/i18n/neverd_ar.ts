@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>إدخال تعليق(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>تثبيت الإضافات وتفعيلها وتعطيلها وإزالتها</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>مدير الإضافات(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3401,6 +3409,10 @@ After:
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>اختر ملفًا بحجم من بايت واحد إلى ‎%1، وعنوانًا ست عشريًا، واسم قسم. تحتاج الدالة إلى اسم وأذونات تنفيذ.</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>مهام الإضافات</translation>
     </message>
 </context>
 <context>
@@ -10382,6 +10394,454 @@ Your previous graph is still available.</source>
     <message>
         <source>%1 s</source>
         <translation>%1 ث</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> أيقونة</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> موضع</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · المهمة %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 ث</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>إلغاء المهمة(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>تصدير الناتج(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>استيراد إضافة(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>إضافة الشفرة المستعادة كقسم تحليل ثم فتح أول دالة فيه</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>الناتج:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>استعراض…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>اختيار أيقونة الأمر</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>اختر الأوامر التي تظهر مباشرة في القائمة السياقية. تُجمع الأوامر الأخرى ضمن Plugins → اسم الإضافة. تقبل الأيقونات builtin:name أو ملف PNG أو ICO أو SVG محليًا.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>الأمر</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>إعدادات القائمة السياقية…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>مباشرة في القائمة السياقية</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>المدة</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>تصدير الناتج</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>تصدير الناتج إلى ملف جديد</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>الأيقونة</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>الأيقونة غير متاحة: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>أيقونات (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>استورد إضافة تعمل كعملية لإضافة أوامر.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>استيراد الشفرة إلى الصورة</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>استيراد إضافة تعمل كعملية</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>استيراد إضافة تعمل كعملية…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>سجل %1</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>إعدادات القوائم…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>الإضافات(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>الإضافة</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>إضافة / مهمة</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>تم تصدير ناتج الإضافة إلى %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>القوائم السياقية للإضافات</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>أيقونة الإضافة غير متاحة: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>مدير الإضافات…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>بيانات الإضافات (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>سجل مهام الإضافة</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>مهام الإضافات ونتائجها</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>الإضافات</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>القائمة الفرعية Plugins</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>الموضع</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>تم استيراد الإضافة التي تعمل كعملية: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>التقدم</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>تغيّر المشروع أثناء فتح مربع حوار الإضافة</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>تذكّر هذه القيم لهذا الإجراء</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>شغّل أمرًا من الإضافة لعرض مهامها ونتائجها.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>اختر مهمة ضمن %1 لعرض نتيجتها.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>تقدم مهمة الإضافة المحددة</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>عرض السجل(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>الحالة</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>نتائج المهام</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>المهام مجمّعة حسب الإضافة</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>لم يعد تسجيل هذا الإجراء نشطًا.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>جارٍ التفعيل</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>التفعيل</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>التفعيل: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>نشط</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>جيل المكوّن: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>تعذر فتح مجلد الإضافة.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>خدمات القراءة المعلنة: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>التشخيص: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>تعطيل</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>تفعيل</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>مفعّل</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>مفعّل عند البدء: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>تصفية حسب اسم الإضافة أو معرّفها أو مسارها</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>تصفية الإضافات</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>استورد بيان إضافة تعمل كعملية لإضافة أوامر. لا تبدأ البرامج الموفّرة إلا عند تشغيل أمر.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>استيراد إضافة…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>استيراد إضافة تعمل كعملية</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>غير نشط</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>أزيل سجل التثبيت. تم الاحتفاظ بملفات الإضافة ونواتج المهام.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>أزيل سجل التثبيت؛ يجري إيقاف المهام النشطة.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>الإضافات المثبّتة التي تعمل كعمليات</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>البيان: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>لا</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>فتح المجلد</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>الإضافة</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>تم تعطيل الإضافة. احتُفظ بسجل التثبيت وأُلغيت المهام النشطة.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>تم تفعيل الإضافة.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>تم استيراد الإضافة: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>مدير الإضافات</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>بيانات الإضافات (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>الإضافة: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>التسجيلات: %1؛ الاستدعاءات النشطة: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>إزالة التسجيل المحفوظ. سيُحتفظ بملفات الإضافة ونواتج المهام.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>إعادة محاولة التفعيل</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>اختر إضافة لعرض بيانها وحالة تفعيلها وتشخيصاتها.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>تفاصيل الإضافة المحددة</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>جارٍ الإيقاف</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>النوع: عملية خارجية</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>غير متاح</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>إلغاء التثبيت</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>الإصدار</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>الإصدار: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>بانتظار انتهاء المهام وتنظيف عمليات النشر المقبولة.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>نعم</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>تعذرت قراءة إيصال النشر: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>تعذرت استعادة الإضافة %1 من %2: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>تم استيراد قسم التحليل %1. احفظ المشروع للاحتفاظ به.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>تغيّرت حالة الإضافة، لكن تعذر حفظ تفضيل بدء التشغيل.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>اكتملت عملية المشروع، لكن تعذر حفظ إيصالها: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>أُغلقت الجلسة قبل وصول إيصال النشر.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>لم يعد مثيل الإضافة نشطًا.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>بانتظار إيصال المشروع.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>رسم نتائج الإضافة</translation>
     </message>
 </context>
 </TS>

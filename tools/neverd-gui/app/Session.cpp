@@ -1,6 +1,7 @@
 #include "Session.h"
 
 #include "../ResourceLimits.h"
+#include "PluginServices.h"
 #include "ProjectDatabase.h"
 #include "SettingsKeys.h"
 
@@ -244,8 +245,15 @@ Session::Session(QString workerPath, QObject *parent)
 }
 
 Session::~Session() {
+  pluginServices_.reset();
   disconnect(&client_, nullptr, this, nullptr);
   disconnect(&queries_, nullptr, this, nullptr);
+}
+
+PluginServices &Session::pluginServices() {
+  if (!pluginServices_)
+    pluginServices_ = std::make_unique<PluginServices>(*this);
+  return *pluginServices_;
 }
 
 QString Session::fileName() const { return QFileInfo(filePath_).fileName(); }
@@ -439,7 +447,7 @@ void Session::produceBinary(const QString &operation,
 }
 
 void Session::command(const QString &operation, const QJsonObject &payload,
-                      Callback done, Failure failed) {
+                      Callback done, Failure failed, QString expectedRevision) {
   // Only edits and their saving make the project dirty while in flight; an
   // open, reload or analysis does not.
   const bool edit = isEdit(operation);
@@ -492,9 +500,14 @@ void Session::command(const QString &operation, const QJsonObject &payload,
               transitionReady_ = false;
             }
           }
+        } else if (failed) {
+          failed(QStringLiteral("context_changed"),
+                 QStringLiteral(
+                     "Project context changed before the command receipt"));
         }
         emit stateChanged();
-      });
+      },
+      std::move(expectedRevision));
 }
 
 void Session::resetState() {
@@ -1867,9 +1880,9 @@ void Session::refreshBytePatches() {
 }
 
 void Session::addAnalysisSection(const QJsonObject &description, Reply done,
-                                 Failure failed) {
+                                 Failure failed, QString expectedRevision) {
   command(QStringLiteral("analysis_section_add"), description, std::move(done),
-          std::move(failed));
+          std::move(failed), std::move(expectedRevision));
 }
 void Session::removeAnalysisSection(const QString &name, Reply done,
                                     Failure failed) {

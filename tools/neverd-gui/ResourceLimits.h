@@ -18,6 +18,7 @@
 
 #include "neverd/diff/Limits.h"
 #include "neverd/patch/Limits.h"
+#include "neverd/plugin/Config.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/Limits.h"
 
@@ -43,6 +44,26 @@ inline constexpr int kPatchLogHexCharacters = 64;
 inline constexpr int kPatchLogInstructions = 4;
 inline constexpr int kRewriteDialogWidth = 960;
 inline constexpr int kRewriteDialogHeight = 720;
+
+// External GUI process plugins. These are host admission and presentation
+// bounds; semantic section validation remains owned by the SDK.
+namespace plugin {
+inline constexpr int kRuntimePollMilliseconds = 20;
+inline constexpr int kMaxQueuedJobs = ::neverd::plugin::kMaxQueuedTasks;
+inline constexpr int kMaxHistoryRows = ::neverd::plugin::kMaxTaskHistory;
+inline constexpr int kMaxLogRows = 1000;
+inline constexpr int kRefreshIntervalMs = 500;
+inline constexpr int kTaskTreeMinimumRows = 3;
+inline constexpr int kTaskTreeInitialHeight = 120;
+inline constexpr int kTaskTreeNameInitialWidth = 420;
+inline constexpr int kMaxSelectionCharacters = 65536;
+inline constexpr int kMaxIconBytes = 1 << 20;
+inline constexpr int kMaxIconDimension = 1024;
+inline constexpr int kManagerWidth = 940;
+inline constexpr int kManagerHeight = 620;
+inline constexpr int kMenuSettingsWidth = 900;
+inline constexpr int kMenuSettingsHeight = 420;
+} // namespace plugin
 
 // Binary comparison views. Rows and request admission stay bounded separately.
 inline constexpr int kComparisonPageSize =

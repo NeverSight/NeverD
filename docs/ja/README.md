@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 94dee57ee027f151dab4552ab101a5387ee571d24d447a250e7550c573b77f74 -->
+<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -41,6 +41,7 @@
 | [メモリ安全性の監査とハント](memory-safety.md) | ヒープ寿命とコピー越境解析：形式ごとの識別契約、シンク／ソースカタログ、判定、予算、JSON スキーマ |
 | [プロセスプラグイン SDK（英語）](../process-plugin-sdk.md) | 独立した Python ヘルパー、プロトコルとサンプル |
 | [Tools 層（英語）](../tools-layer.md) | 厳密なプラグイン呼び出し、固定された利用側ステップと操作記録 |
+| [GUI プロセスプラグイン（英語）](../gui-plugins.md) | マネージャー、メニュー配置、タスク結果とプロセスプロトコル |
 | [NPH プロセスプラグインホスト（英語）](../plugin-host.md) | 共有の所有権、タスク受付、プロトコルとプロセスの寿命 |
 | [ネイティブプラグイン](plugins.md) | 純粋 C descriptor ABI、callback と event、build/link workflow、discovery、互換性規則 |
 | [Python プラグイン](python-plugins.md) | プラグイン作成、セッション／イベント API、分離、テスト、公開 |

@@ -16,9 +16,11 @@
 #include <QSet>
 #include <QTimer>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace neverd::gui {
+class PluginServices;
 
 /// How to load a binary, as the load dialog chooses it.
 struct LoadOptions {
@@ -77,6 +79,7 @@ public:
   ~Session() override;
 
   QueryService &queries() { return queries_; }
+  PluginServices &pluginServices();
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }
@@ -386,7 +389,7 @@ public:
 
   /// Extend the active image and refresh its revision and dependent views.
   void addAnalysisSection(const QJsonObject &description, Reply done = {},
-                          Failure failed = {});
+                          Failure failed = {}, QString expectedRevision = {});
   void removeAnalysisSection(const QString &name, Reply done = {},
                              Failure failed = {});
 
@@ -445,12 +448,14 @@ signals:
   void projectFileChanged(const QString &suffix);
 
 private:
+  std::unique_ptr<PluginServices> pluginServices_;
   HighlightLocks highlightLocks_;
   /// The operations the worker offers (its hello).
   QSet<QString> capabilities_;
   using Callback = std::function<void(const QJsonObject &payload)>;
   void command(const QString &operation, const QJsonObject &payload,
-               Callback done, Failure failed = {});
+               Callback done, Failure failed = {},
+               QString expectedRevision = {});
   void receive(const QJsonObject &message);
   void applyBackgroundSnapshot(const QJsonObject &snapshot);
   void startWorker();

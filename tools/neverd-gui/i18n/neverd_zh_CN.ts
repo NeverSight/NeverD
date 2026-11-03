@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>输入注释(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>安装、启用、禁用和移除插件</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>插件管理器(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3371,6 +3379,10 @@ After:
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>请选择大小为 1 字节到 %1 的文件、十六进制地址和段名称。函数需要名称和可执行权限。</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>插件任务</translation>
     </message>
 </context>
 <context>
@@ -10202,6 +10214,454 @@ Your previous graph is still available.</source>
     <message>
         <source>%1 s</source>
         <translation>%1 秒</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> 图标</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 位置</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · 任务 %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>取消任务(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>导出产物(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>导入插件(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>将恢复的代码添加为分析节区，再打开其中的第一个函数</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>产物：</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>选择命令图标</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>选择直接显示在右键菜单中的命令。其他命令按“Plugins → 插件名称”分组。图标支持 builtin:name 或本地 PNG、ICO、SVG 文件。</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>命令</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>右键菜单设置…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>直接显示在右键菜单</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>用时</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>导出产物</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>将产物导出到新文件</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>图标</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>图标不可用：%1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>图标 (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>导入进程插件以添加命令。</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>将代码导入映像</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>导入进程插件</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>导入进程插件…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 的日志</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>菜单设置…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>插件(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>插件</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>插件 / 任务</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>插件产物已导出至 %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>插件右键菜单</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>插件图标不可用：%1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>插件管理器…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>插件清单 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>插件任务日志</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>插件任务和结果</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>插件</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins 子菜单</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>位置</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>已导入进程插件：%1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>进度</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>插件对话框打开期间工程发生了变化</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>记住此动作的参数值</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>运行插件命令以查看任务和结果。</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>选择 %1 下的任务以查看结果。</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>所选插件任务的进度</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>显示日志(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>状态</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>任务结果</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>按插件分组的任务</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>此动作的注册项已不再活动。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>正在激活</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>激活状态</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>激活状态：%1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>已激活</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>组件代次：%1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>无法打开插件文件夹。</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>声明的只读服务：%1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>诊断信息：%1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>禁用</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>启用</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>已启用</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>启动时启用：%1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>按插件名称、ID 或路径筛选</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>筛选插件</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>导入进程插件清单以添加命令。仅运行命令时才会启动提供程序。</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>导入插件…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>导入进程插件</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>未激活</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>已移除安装记录。插件文件和任务产物已保留。</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>已移除安装记录，正在停止运行中的任务。</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>已安装的进程插件</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>清单：%1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>否</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>打开文件夹</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>插件</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>已禁用插件。安装记录已保留，运行中的任务已取消。</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>已启用插件。</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>已导入插件：%1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>插件管理器</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>插件清单 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>插件：%1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>注册项：%1；活动调用：%2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>移除已保存的注册记录。插件文件和任务产物将保留。</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>重试激活</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>选择插件以查看清单、激活状态和诊断信息。</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>所选插件详情</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>正在停止</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>类型：外部进程</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>不可用</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>卸载</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>版本</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>版本：%1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>正在等待任务退出和已受理发布的清理。</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>是</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>无法读取发布回执：%1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>无法从 %2 恢复插件 %1：%3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>已导入分析节区 %1。保存工程以保留更改。</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>插件状态已更改，但无法保存启动偏好。</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>工程操作已完成，但无法保存回执：%1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>会话已关闭，尚未收到发布回执。</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>插件实例已不再活动。</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>正在等待工程回执。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>插件结果图</translation>
     </message>
 </context>
 </TS>

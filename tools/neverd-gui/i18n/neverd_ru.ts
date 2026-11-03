@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>Ввести &amp;комментарий...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>Установка, включение, отключение и удаление плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>Менеджер плагинов...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3383,6 +3391,10 @@ After:
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>Выберите файл размером от 1 байта до %1, шестнадцатеричный адрес и имя секции. Функции нужны имя и права на выполнение.</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>Задачи плагинов</translation>
     </message>
 </context>
 <context>
@@ -10274,6 +10286,454 @@ Your previous graph is still available.</source>
     <message>
         <source>%1 s</source>
         <translation>%1 с</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> значок</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> положение</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · Задача %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 с</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>&amp;Отменить задачу</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>&amp;Экспорт артефакта…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>&amp;Импорт плагина…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>Добавить восстановленный код как секцию анализа и открыть первую функцию</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>Артефакт:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>Выбрать значок команды</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>Выберите команды для прямого показа в контекстном меню. Остальные сгруппированы в Plugins → имя плагина. Значком может быть builtin:name или локальный файл PNG, ICO либо SVG.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>Команда</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>Настройки контекстного меню…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>Прямо в контекстном меню</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>Время</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>Экспорт артефакта</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>Экспорт артефакта в новый файл</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>Значок</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>Значок недоступен: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>Значки (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>Импортируйте процессный плагин для добавления команд.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>Импорт кода в образ</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Импорт процессного плагина</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>Импорт процессного плагина…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>Журнал %1</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>Настройки меню…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>Пла&amp;гины</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Плагин</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>Плагин / задача</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>Артефакт плагина экспортирован в %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>Контекстные меню плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>Значок плагина недоступен: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>Менеджер плагинов…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Манифесты плагинов (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>Журнал задач плагина</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>Задачи и результаты плагинов</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>Плагины</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Подменю Plugins</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>Положение</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>Процессный плагин импортирован: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>Ход выполнения</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>Проект изменился, пока диалог плагина был открыт</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>Запомнить эти значения для действия</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>Выполните команду плагина, чтобы увидеть задачи и результаты.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>Выберите задачу в %1 для просмотра результата.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>Ход выбранной задачи плагина</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>Показать &amp;журнал</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>Состояние</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>Результаты задач</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>Задачи по плагинам</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>Регистрация этого действия больше не активна.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>Активация</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>Активация</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>Активация: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>Активен</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>Поколение компонента: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>Не удалось открыть папку плагина.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>Заявленные службы чтения: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Диагностика: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>Отключить</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>Включить</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>Включён</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>Включён при запуске: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>Фильтр по имени, ID или пути плагина</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>Фильтр плагинов</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>Импортируйте манифест процессного плагина для добавления команд. Провайдер запускается только при выполнении команды.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Импорт плагина…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Импорт процессного плагина</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>Неактивен</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>Запись установки удалена. Файлы плагина и артефакты задач сохранены.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>Запись установки удалена; выполняемые задачи останавливаются.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>Установленные процессные плагины</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>Манифест: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>Нет</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>Открыть папку</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Плагин</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>Плагин отключён. Запись установки сохранена; активные задачи отменены.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>Плагин включён.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Плагин импортирован: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>Менеджер плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Манифесты плагинов (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>Плагин: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>Регистраций: %1; активных вызовов: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>Удалить сохранённую регистрацию. Файлы плагина и артефакты задач будут сохранены.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>Повторить активацию</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>Выберите плагин для просмотра манифеста, активации и диагностики.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>Сведения о выбранном плагине</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>Остановка</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>Тип: внешний процесс</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>Недоступен</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>Версия</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>Версия: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>Ожидание завершения задач и очистки принятых публикаций.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Да</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>Не удалось прочитать квитанцию публикации: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>Не удалось восстановить плагин %1 из %2: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>Секция анализа %1 импортирована. Сохраните проект, чтобы оставить её.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>Состояние плагина изменено, но настройку запуска сохранить не удалось.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>Операция с проектом завершена, но её квитанцию сохранить не удалось: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>Сеанс закрыт до получения квитанции публикации.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>Экземпляр плагина больше не активен.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>Ожидание квитанции проекта.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>Граф результатов плагина</translation>
     </message>
 </context>
 </TS>

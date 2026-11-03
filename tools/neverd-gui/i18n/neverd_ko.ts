@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>주석 입력(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>플러그인 설치, 활성화, 비활성화 및 제거</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>플러그인 관리자(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3371,6 +3379,10 @@ After:
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>1바이트에서 %1 사이의 파일, 16진수 주소와 섹션 이름을 지정하세요. 함수에는 이름과 실행 권한이 필요합니다.</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>플러그인 작업</translation>
     </message>
 </context>
 <context>
@@ -10202,6 +10214,454 @@ Your previous graph is still available.</source>
     <message>
         <source>%1 s</source>
         <translation>%1초</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> 아이콘</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 위치</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · 작업 %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1초</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>작업 취소(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>산출물 내보내기(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>플러그인 가져오기(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>복원 코드를 분석 섹션으로 추가한 뒤 첫 함수를 엽니다</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>산출물:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>명령 아이콘 선택</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>컨텍스트 메뉴에 직접 표시할 명령을 선택하세요. 다른 명령은 Plugins → 플러그인 이름 아래에 그룹화됩니다. 아이콘은 builtin:name 또는 로컬 PNG, ICO, SVG 파일을 사용할 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>명령</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>컨텍스트 메뉴 설정…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>컨텍스트 메뉴에 직접 표시</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>경과 시간</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>산출물 내보내기</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>산출물을 새 파일로 내보내기</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>아이콘</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>아이콘을 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>아이콘 (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>프로세스 플러그인을 가져와 명령을 추가하세요.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>이미지로 코드 가져오기</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>프로세스 플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>프로세스 플러그인 가져오기…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 로그</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>메뉴 설정…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>플러그인(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>플러그인</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>플러그인 / 작업</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>플러그인 산출물을 %1에 내보냈습니다</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>플러그인 컨텍스트 메뉴</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>플러그인 아이콘을 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>플러그인 관리자…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>플러그인 매니페스트 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>플러그인 작업 로그</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>플러그인 작업 및 결과</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>플러그인</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins 하위 메뉴</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>위치</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>프로세스 플러그인을 가져왔습니다: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>진행률</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>플러그인 대화 상자가 열린 동안 프로젝트가 변경되었습니다</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>이 동작의 값 기억하기</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>플러그인 명령을 실행하면 작업과 결과를 볼 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>%1 아래의 작업을 선택하면 결과를 볼 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>선택한 플러그인 작업 진행률</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>로그 표시(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>상태</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>작업 결과</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>플러그인별 작업</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>이 동작의 등록이 더 이상 활성 상태가 아닙니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>활성화 중</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>활성화 상태</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>활성화 상태: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>활성</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>구성 요소 세대: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>플러그인 폴더를 열 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>선언된 읽기 서비스: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>진단: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>비활성화</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>활성화</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>활성화됨</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>시작 시 활성화: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>플러그인 이름, ID 또는 경로로 필터링</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>플러그인 필터링</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>프로세스 플러그인 매니페스트를 가져와 명령을 추가하세요. 제공 프로그램은 명령 실행 시에만 시작됩니다.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>플러그인 가져오기…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>프로세스 플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>비활성</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>설치 기록을 제거했습니다. 플러그인 파일과 작업 산출물은 유지됩니다.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>설치 기록을 제거했습니다. 실행 중인 작업을 중지합니다.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>설치된 프로세스 플러그인</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>매니페스트: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>아니요</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>폴더 열기</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>플러그인</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>플러그인을 비활성화했습니다. 설치 기록은 유지되며 실행 중인 작업은 취소됩니다.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>플러그인을 활성화했습니다.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>플러그인을 가져왔습니다: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>플러그인 관리자</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>플러그인 매니페스트 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>플러그인: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>등록: %1; 활성 호출: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>저장된 등록을 제거합니다. 플러그인 파일과 작업 산출물은 유지됩니다.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>활성화 다시 시도</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>플러그인을 선택하면 매니페스트, 활성화 상태 및 진단을 볼 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>선택한 플러그인 세부 정보</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>중지 중</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>유형: 외부 프로세스</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>사용 불가</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>제거</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>버전</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>버전: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>작업 종료와 수락된 게시 작업 정리를 기다리는 중입니다.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>예</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>게시 처리 결과를 읽을 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>%2에서 플러그인 %1을 복원하지 못했습니다: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>분석 섹션 %1을 가져왔습니다. 유지하려면 프로젝트를 저장하세요.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>플러그인 상태는 변경되었지만 시작 설정을 저장하지 못했습니다.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>프로젝트 작업은 완료되었지만 처리 결과를 저장하지 못했습니다: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>게시 처리 결과가 도착하기 전에 세션이 닫혔습니다.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>플러그인 인스턴스가 더 이상 활성 상태가 아닙니다.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>프로젝트 처리 결과를 기다리는 중입니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>플러그인 결과 그래프</translation>
     </message>
 </context>
 </TS>

@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>輸入註解(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>安裝、啟用、停用及移除外掛</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>外掛管理員(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3371,6 +3379,10 @@ After:
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>請選擇大小為 1 位元組到 %1 的檔案、十六進位位址和區段名稱。函式需要名稱和可執行權限。</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>外掛工作</translation>
     </message>
 </context>
 <context>
@@ -10202,6 +10214,454 @@ Your previous graph is still available.</source>
     <message>
         <source>%1 s</source>
         <translation>%1 秒</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> 圖示</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 位置</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · 工作 %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>取消工作(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>匯出產物(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>匯入外掛(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>將還原的程式碼新增為分析區段，再開啟其中第一個函式</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>產物：</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>瀏覽…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>選擇命令圖示</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>選擇直接顯示於快顯功能表的命令。其他命令依「Plugins → 外掛名稱」分組。圖示支援 builtin:name 或本機 PNG、ICO、SVG 檔案。</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>命令</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>快顯功能表設定…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>直接顯示於快顯功能表</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>經過時間</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>匯出產物</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>將產物匯出至新檔案</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>圖示</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>圖示無法使用：%1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>圖示 (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>匯入行程外掛以新增命令。</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>將程式碼匯入映像</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>匯入行程外掛</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>匯入行程外掛…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 的記錄</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>功能表設定…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>外掛(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>外掛</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>外掛 / 工作</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>外掛產物已匯出至 %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>外掛快顯功能表</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>外掛圖示無法使用：%1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>外掛管理員…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>外掛資訊清單 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>外掛工作記錄</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>外掛工作與結果</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>外掛</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins 子功能表</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>位置</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>已匯入行程外掛：%1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>進度</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>外掛對話方塊開啟期間專案已變更</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>記住此動作的參數值</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>執行外掛命令以檢視工作及結果。</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>選取 %1 下的工作以檢視結果。</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>所選外掛工作的進度</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>顯示記錄(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>狀態</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>工作結果</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>依外掛分組的工作</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>此動作的註冊項目已不再作用。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>正在啟用</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>啟用狀態</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>啟用狀態：%1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>已啟用</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>元件世代：%1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>無法開啟外掛資料夾。</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>宣告的唯讀服務：%1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>診斷資訊：%1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>停用</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>啟用</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>已啟用</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>啟動時啟用：%1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>依外掛名稱、ID 或路徑篩選</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>篩選外掛</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>匯入行程外掛資訊清單以新增命令。僅執行命令時才會啟動提供程式。</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>匯入外掛…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>匯入行程外掛</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>未啟用</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>已移除安裝記錄。外掛檔案與工作產物均予保留。</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>已移除安裝記錄，正在停止執行中的工作。</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>已安裝的行程外掛</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>資訊清單：%1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>否</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>開啟資料夾</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>外掛</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>已停用外掛。安裝記錄已保留，執行中的工作已取消。</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>已啟用外掛。</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>已匯入外掛：%1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>外掛管理員</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>外掛資訊清單 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>外掛：%1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>註冊項目：%1；作用中的呼叫：%2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>移除已儲存的註冊記錄。外掛檔案與工作產物將予保留。</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>重試啟用</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>選取外掛以檢視資訊清單、啟用狀態及診斷資訊。</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>所選外掛詳細資料</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>正在停止</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>類型：外部行程</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>無法使用</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>解除安裝</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>版本</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>版本：%1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>正在等候工作結束與已接受發佈的清理。</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>是</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>無法讀取發佈回執：%1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>無法從 %2 還原外掛 %1：%3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>已匯入分析區段 %1。請儲存專案以保留變更。</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>外掛狀態已變更，但無法儲存啟動偏好。</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>專案操作已完成，但無法儲存回執：%1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>工作階段已關閉，尚未收到發佈回執。</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>外掛執行個體已不再作用。</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>正在等候專案回執。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>外掛結果圖</translation>
     </message>
 </context>
 </TS>

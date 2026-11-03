@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>Saisir un &amp;commentaire...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>Installer, activer, désactiver et supprimer des plugins</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>Gestionnaire de plugins...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3377,6 +3385,10 @@ Après :
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>Choisissez un fichier de 1 octet à %1, une adresse hexadécimale et un nom de section. Une fonction nécessite un nom et des droits d&apos;exécution.</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>Tâches des plugins</translation>
     </message>
 </context>
 <context>
@@ -10238,6 +10250,454 @@ Votre graphe précédent reste disponible.</translation>
     <message>
         <source>%1 s</source>
         <translation>%1 s</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> icône</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> position</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · Tâche %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 s</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>&amp;Annuler la tâche</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>&amp;Exporter le résultat…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>&amp;Importer un plugin…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>Ajouter le code récupéré comme section d’analyse, puis ouvrir sa première fonction</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>Résultat :</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Parcourir…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>Choisir l’icône de la commande</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>Choisissez les commandes affichées directement dans le menu contextuel. Les autres sont regroupées sous Plugins → nom du plugin. Les icônes acceptent builtin:name ou un fichier local PNG, ICO ou SVG.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>Commande</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>Paramètres du menu contextuel…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>Menu contextuel direct</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>Durée</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>Exporter le résultat</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>Exporter le résultat vers un nouveau fichier</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>Icône</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>Icône indisponible : %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>Icônes (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>Importez un plugin de processus pour ajouter des commandes.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>Importer le code dans l’image</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Importer un plugin de processus</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>Importer un plugin de processus…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>Journal de %1</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>Paramètres des menus…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>Plu&amp;gins</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Plugin</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>Plugin / tâche</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>Résultat du plugin exporté vers %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>Menus contextuels des plugins</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>Icône du plugin indisponible : %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>Gestionnaire de plugins…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Manifestes de plugins (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>Journal des tâches du plugin</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>Tâches et résultats des plugins</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>Plugins</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Sous-menu Plugins</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>Position</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>Plugin de processus importé : %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>Progression</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>Le projet a changé pendant l’ouverture de la boîte de dialogue du plugin</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>Mémoriser ces valeurs pour cette action</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>Exécutez une commande de plugin pour voir ses tâches et résultats.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>Sélectionnez une tâche sous %1 pour voir son résultat.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>Progression de la tâche de plugin sélectionnée</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>Afficher le &amp;journal</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>État</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>Résultats des tâches</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>Tâches regroupées par plugin</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>Cette inscription d’action n’est plus active.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>Activation en cours</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>Activation</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>Activation : %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>Actif</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>Génération du composant : %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>Impossible d’ouvrir le dossier du plugin.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>Services de lecture déclarés : %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Diagnostic : %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>Désactiver</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>Activer</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>Activé</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>Activé au démarrage : %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>Filtrer par nom, ID ou chemin du plugin</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>Filtrer les plugins</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>Importez un manifeste de plugin de processus pour ajouter des commandes. Les fournisseurs ne démarrent qu’à l’exécution d’une commande.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Importer un plugin…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Importer un plugin de processus</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>Inactif</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>Installation supprimée. Les fichiers du plugin et les résultats des tâches sont conservés.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>Installation supprimée ; arrêt des tâches actives.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>Plugins de processus installés</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>Manifeste : %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>Non</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>Ouvrir le dossier</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Plugin</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>Plugin désactivé. Son installation est conservée ; les tâches actives sont annulées.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>Plugin activé.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Plugin importé : %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>Gestionnaire de plugins</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Manifestes de plugins (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>Plugin : %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>Inscriptions : %1 ; appels actifs : %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>Supprimer l’inscription enregistrée. Les fichiers du plugin et les résultats des tâches sont conservés.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>Réessayer l’activation</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>Sélectionnez un plugin pour voir son manifeste, son activation et ses diagnostics.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>Détails du plugin sélectionné</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>Arrêt en cours</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>Type : processus externe</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>Indisponible</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>Désinstaller</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>Version</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>Version : %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>En attente de la fin des tâches et du nettoyage des publications acceptées.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Oui</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>Impossible de lire le reçu de publication : %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>Impossible de restaurer le plugin %1 depuis %2 : %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>Section d’analyse %1 importée. Enregistrez le projet pour la conserver.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>L’état du plugin a changé, mais sa préférence de démarrage n’a pas pu être enregistrée.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>L’opération du projet est terminée, mais son reçu n’a pas pu être enregistré : %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>La session s’est fermée avant la réception du reçu de publication.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>L’instance du plugin n’est plus active.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>En attente du reçu du projet.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>Graphe des résultats du plugin</translation>
     </message>
 </context>
 </TS>
