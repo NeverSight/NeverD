@@ -1,6 +1,6 @@
 **Langues**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: f5f0bcd68d33eff4e5577e8377ff12730d6d35c6ec55853b7dd888cc777115e5 -->
+<!-- i18n-source: cea915c13566349896e2c0b632103d60b0e6faadd3ae606dbd3a3afe1f4418e0 -->
 
 [← Projet NeverD](project.md)
 
@@ -39,6 +39,7 @@ Les guides anglais se trouvent directement dans `docs/`. Les traductions sont re
 | [macOS HVF](macos-hvf.md) | Exécution matérielle avec l’ISA de l’hôte, droits de signature, packaging et validation |
 | [Émulation des pilotes Windows](driver-emulation.md) | Cycle WDM/KMDF x64 borné, requêtes, scénarios matériels, SEH, sous-ensembles PnP, choix du moteur et limites |
 | [Audit et chasse de sûreté mémoire](memory-safety.md) | Analyse de durée de vie du tas et de débordement de copie : contrat d’identité par format, catalogue puits/sources, verdicts, budgets et schéma JSON |
+| [SDK de plugins de processus (anglais)](../process-plugin-sdk.md) | Assistant Python autonome, protocole et exemples indépendants |
 | [Hôte NPH de plugins de processus (anglais)](../plugin-host.md) | Propriétaires partagés, admission des tâches, protocole et durée de vie des processus |
 | [Plugins natifs](plugins.md) | ABI de descripteur en C pur, callbacks et événements, procédure de compilation/liaison, découverte et règles de compatibilité |
 | [Plugins Python](python-plugins.md) | Création, API de session et d’événements, isolation, tests et publication |

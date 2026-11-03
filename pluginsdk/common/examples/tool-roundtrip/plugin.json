@@ -1,0 +1,19 @@
+{
+  "schema": "neverd.gui-plugin.v1",
+  "id": "tool-roundtrip",
+  "name": "Function report and naming",
+  "version": "1.0.0",
+  "program": "python",
+  "arguments": ["plugin.py"],
+  "queries": ["disasm", "resolve"],
+  "actions": [
+    {
+      "id": "report", "title": "Inspect entry instructions", "context": "function",
+      "parameters": [{"id": "limit", "title": "Instruction window", "type": "integer", "default": 16, "minimum": 1, "maximum": 128}]
+    },
+    {
+      "id": "apply-name", "title": "Apply the reviewed name", "context": "function",
+      "parameters": [{"id": "name", "title": "Reviewed name", "type": "string", "default": "reviewed_entry"}]
+    }
+  ]
+}

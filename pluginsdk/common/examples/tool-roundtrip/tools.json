@@ -1,0 +1,35 @@
+{
+  "schema": "neverd.tools.v1",
+  "tools": [
+    {
+      "id": "report", "action": "report",
+      "description": "Inspect a bounded instruction window at the selected function and suggest a review name. The report does not claim whole-function coverage.",
+      "effect": "artifact", "headless": true,
+      "output_schema": {
+        "type": "object", "additionalProperties": false,
+        "required": ["address", "instruction_count", "calls", "suggested_name", "current_name"],
+        "properties": {
+          "address": {"type": "string"},
+          "instruction_count": {"type": "integer", "minimum": 1},
+          "calls": {"type": "integer", "minimum": 0},
+          "suggested_name": {"type": "string"},
+          "current_name": {"type": "string"}
+        }
+      }
+    },
+    {
+      "id": "apply-name", "action": "apply-name",
+      "description": "Apply a reviewed name to the exact entry in a prior report. Requires that report's original project revision and returns the committed project receipt.",
+      "effect": "project_write", "headless": true,
+      "commands": ["rename"], "continuation_of": "report",
+      "output_schema": {
+        "type": "object", "additionalProperties": false,
+        "required": ["address", "name", "saved", "revision"],
+        "properties": {
+          "address": {"type": "string"}, "name": {"type": "string"},
+          "saved": {"type": "boolean"}, "revision": {"type": "string"}
+        }
+      }
+    }
+  ]
+}

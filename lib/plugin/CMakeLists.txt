@@ -52,3 +52,13 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     set_tests_properties(NeverDPluginHost.${case} PROPERTIES TIMEOUT 30)
   endforeach()
 endif()
+
+if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME NeverDProcessPluginSDK
+      COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+        -s "${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui/tests" -v)
+    set_tests_properties(NeverDProcessPluginSDK PROPERTIES TIMEOUT 60)
+  endif()
+endif()

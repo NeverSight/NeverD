@@ -1,6 +1,6 @@
 **語言**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: f5f0bcd68d33eff4e5577e8377ff12730d6d35c6ec55853b7dd888cc777115e5 -->
+<!-- i18n-source: cea915c13566349896e2c0b632103d60b0e6faadd3ae606dbd3a3afe1f4418e0 -->
 
 [← NeverD 專案](project.md)
 
@@ -39,6 +39,7 @@
 | [macOS HVF](macos-hvf.md) | 主機同架構硬體執行、簽章權限、封裝與驗證 |
 | [Windows 驅動程式模擬](driver-emulation.md) | 有界 x64 WDM/KMDF 生命週期、請求、硬體情境、SEH、PnP 子集、後端選擇及限制 |
 | [記憶體安全稽核與獵取](memory-safety.md) | 堆積生命週期與拷貝越界分析：各格式身分契約、匯/源目錄、判定、預算與 JSON 模式 |
+| [行程外掛 SDK（英文）](../process-plugin-sdk.md) | 獨立 Python 輔助程式、通訊協定與獨立範例 |
 | [NPH 行程外掛宿主（英文）](../plugin-host.md) | 共用擁有權、工作准入、通訊協定與行程生命週期 |
 | [原生外掛](plugins.md) | 純 C 描述元 ABI、回呼與事件、建置/連結流程、探索順序及相容性規則 |
 | [Python 外掛](python-plugins.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
