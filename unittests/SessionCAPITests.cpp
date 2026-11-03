@@ -2505,9 +2505,10 @@ constexpr uint64_t DataELFEntry = DataELFBase + 0xb0;
 constexpr uint64_t DataELFData = DataELFBase + 0x1000;
 
 // An x86-64 executable whose code segment runs \p Code (by default a
-// return) and whose separate read-only segment holds \p Data.
+// return) and whose separate data segment is read-only unless Writable.
 std::string makeDataELF(std::string_view Data,
-                        std::string_view Code = std::string_view("\xc3", 1)) {
+                        std::string_view Code = std::string_view("\xc3", 1),
+                        bool Writable = false) {
   using ELF = llvm::object::ELF64LE;
   using namespace llvm::ELF;
   constexpr uint64_t Base = DataELFBase;
@@ -2539,7 +2540,7 @@ std::string makeDataELF(std::string_view Data,
   Segments[0].p_memsz = CodeOffset + Code.size();
   Segments[0].p_align = 0x1000;
   Segments[1].p_type = PT_LOAD;
-  Segments[1].p_flags = PF_R;
+  Segments[1].p_flags = PF_R | (Writable ? PF_W : 0);
   Segments[1].p_offset = DataOffset;
   Segments[1].p_vaddr = Base + DataOffset;
   Segments[1].p_paddr = Base + DataOffset;
@@ -3527,11 +3528,11 @@ TEST_F(SessionCAPITest, UserNamesNameDataInSymbolsAndC) {
       std::string::npos);
 }
 
-TEST_F(SessionCAPITest, DataTakesItsListingNameWhereOnlyItsAddressIsTaken) {
+TEST_F(SessionCAPITest, ReturnedImageAddressKeepsStorageAcrossAccessWidths) {
   // The entry calls a reader for each access width, then returns the address
-  // of the data they read, which no symbol names.  Decompiled alone, as the
-  // workbench shows it, the entry names the data as the listing does: by the
-  // width every function's accesses share there.
+  // of the data they read, which no symbol names. Its escaping pointer must
+  // retain the whole object, whether other functions agree on one width,
+  // disagree or never access it. A width-derived scalar is not its extent.
   const auto Bytes32 = [](uint64_t Value) {
     std::string Bytes;
     for (unsigned I = 0; I < 4; ++I)
@@ -3557,10 +3558,9 @@ TEST_F(SessionCAPITest, DataTakesItsListingNameWhereOnlyItsAddressIsTaken) {
     return Entry + Readers;
   };
   const std::string Data = llvm::utohexstr(DataELFData);
-  const std::pair<std::vector<unsigned>, std::string> Cases[] = {
-      {{8}, "qword_"}, {{8, 4}, "unk_"}, {{}, "unk_"}};
-  for (const auto &[Widths, Prefix] : Cases) {
-    SCOPED_TRACE(Prefix + std::to_string(Widths.size()));
+  const std::vector<unsigned> Cases[] = {{8}, {8, 4}, {}};
+  for (const auto &Widths : Cases) {
+    SCOPED_TRACE(Widths.size());
     const auto Input =
         write("listing-names-" + std::to_string(Widths.size()) + ".elf",
               makeDataELF(std::string(8, '\x11'), Program(Widths)));
@@ -3570,11 +3570,11 @@ TEST_F(SessionCAPITest, DataTakesItsListingNameWhereOnlyItsAddressIsTaken) {
     ASSERT_GE(neverd_session_discover_functions(Names),
               static_cast<int>(Widths.size()) + 1);
     const std::string HighC = takeString(neverd_decompile(Names, DataELFEntry));
-    EXPECT_NE(HighC.find("&" + Prefix + Data), std::string::npos) << HighC;
-    // Declared as wide as the accesses the name says.
-    if (Prefix == "qword_")
-      EXPECT_NE(HighC.find("int64_t qword_" + Data + " = "), std::string::npos)
-          << HighC;
+    EXPECT_NE(HighC.find("unsigned char g_" + Data + "_bytes[8] = "),
+              std::string::npos)
+        << HighC;
+    EXPECT_NE(HighC.find("&g_" + Data + "_bytes[0]"), std::string::npos)
+        << HighC;
     const std::string LLVMC =
         takeString(neverd_decompile_llvm(Names, DataELFEntry));
     // LLVMC's loaded-image view keeps one external storage identity. Naming
@@ -3645,7 +3645,9 @@ std::string accessWidthCacheELF(unsigned FirstWidth = 8,
     Load += '\xc3';
     Code.replace(Offset, Load.size(), Load);
   }
-  return makeDataELF(std::string(8, '\x11'), Code);
+  // The source consumes the width of a real image object, rather than
+  // folding a read-only load to an integer constant before naming it.
+  return makeDataELF(std::string(8, '\x11'), Code, /*Writable=*/true);
 }
 
 void seedAccessWidthFunctions(neverd_session_t Session) {
@@ -4108,6 +4110,61 @@ TEST(InstructionDataAccesses, ScalarFilterAgreesWithCompleteLowIR) {
       ++Decoded;
     }
     EXPECT_GT(Decoded, 10000u);
+  }
+}
+
+TEST_F(SessionCAPITest, DataAccessWidthsWaitForAnImageDataConsumer) {
+  std::string Bytes = accessWidthCacheELF();
+  // The second function returns a scalar, while the first still reads an
+  // unnamed qword. A later data view must see the complete image inventory.
+  Bytes.replace(DataELFEntry - DataELFBase + 0x20, 6,
+                std::string("\xb8\x2a\x00\x00\x00\xc3", 6));
+  const auto Input = write("deferred-widths.elf", Bytes);
+  for (int Route : {0, 1, 2}) {
+    SCOPED_TRACE(Route);
+    auto Emit = [&](neverd_session_t State, neverd_va_t Entry) {
+      return takeString(Route
+                            ? neverd_decompile_llvm_ex(State, Entry, Route - 1)
+                            : neverd_decompile(State, Entry));
+    };
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    seedAccessWidthFunctions(Session);
+    auto &State = *neverd::sdk::toSession(Session);
+    ASSERT_FALSE(State.AccessWidths);
+    const auto Scalar = Emit(Session, DataELFEntry + 0x20);
+    ASSERT_FALSE(Scalar.empty()) << takeString(neverd_last_error(Session));
+    EXPECT_TRUE(Scalar.find("42") != std::string::npos ||
+                Scalar.find("0x2A") != std::string::npos)
+        << Scalar;
+    EXPECT_TRUE(State.NativeFunctionsSynchronized);
+    EXPECT_FALSE(State.AccessWidths);
+    EXPECT_EQ(Emit(Session, DataELFEntry + 0x20), Scalar);
+    EXPECT_FALSE(State.AccessWidths);
+
+    const auto Data = Emit(Session, DataELFEntry);
+    ASSERT_FALSE(Data.empty()) << takeString(neverd_last_error(Session));
+    // LLVMC can name the shared original-image backing without asking for
+    // per-object widths. HighC's qword name requires the full inventory.
+    if (Route == 0) {
+      ASSERT_TRUE(State.AccessWidths);
+      EXPECT_EQ(State.AccessWidths->at(DataELFData), 8u);
+      EXPECT_NE(Data.find("qword_401000"), std::string::npos) << Data;
+    }
+    // Resolving the inventory explicitly must not change either source,
+    // including navigation back from a data-using function.
+    ASSERT_NE(neverd::sdk::SessionTestAccess::dataAccessWidths(State), nullptr);
+    EXPECT_EQ(Emit(Session, DataELFEntry + 0x20), Scalar);
+    EXPECT_EQ(Emit(Session, DataELFEntry), Data);
+
+    std::unique_ptr<void, decltype(&neverd_session_destroy)> Eager(
+        neverd_session_create(), neverd_session_destroy);
+    ASSERT_EQ(neverd_session_load(Eager.get(), Input.c_str()), 1);
+    seedAccessWidthFunctions(Eager.get());
+    ASSERT_NE(neverd::sdk::SessionTestAccess::dataAccessWidths(
+                  *neverd::sdk::toSession(Eager.get())),
+              nullptr);
+    EXPECT_EQ(Emit(Eager.get(), DataELFEntry), Data);
+    EXPECT_EQ(Emit(Eager.get(), DataELFEntry + 0x20), Scalar);
   }
 }
 
