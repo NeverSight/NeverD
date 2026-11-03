@@ -273,6 +273,40 @@ raise SystemExit(run(handler))
         self.assertEqual(data["notification"]["event"]["id"], "task.changed")
         self.assertEqual(data["services"]["missing"][0]["id"], "analysis.metadata")
 
+    def test_unicode_artifact_names(self):
+        # Windows cannot represent these in every ANSI code page.
+        self.script("""from neverd_gui_plugin import run
+def handler(task):
+    (task.output_dir / '报告 é.json').write_text('{}', encoding='utf-8')
+    return dict(views=[], artifacts=[task.artifact('报告 é.json', 'Report')])
+raise SystemExit(run(handler))
+""")
+        report, _ = self.invoke()
+        self.assertEqual(report["state"], "succeeded")
+
+    def test_bare_program_found_after_a_non_ascii_search_entry(self):
+        # A Windows ANSI environment encodes this entry as invalid UTF-8.
+        (self.root / "café").mkdir()
+        # Windows also exercises the implied .exe extension.
+        program = Path(sys.executable)
+        self.declaration["program"] = program.stem if os.name == "nt" else program.name
+        self.manifest.write_text(json.dumps(self.declaration), encoding="utf-8")
+        search = os.pathsep.join([str(self.root / "café"), str(program.parent)])
+        result = subprocess.run([str(HOST), "run", str(self.manifest), "run"], cwd=self.root,
+                                capture_output=True, timeout=12,
+                                env=dict(os.environ, PATH=search))
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(json.loads(result.stdout)["state"], "succeeded")
+
+    @unittest.skipIf(os.name == "nt", "Windows arguments are always Unicode")
+    def test_error_record_survives_non_utf8_arguments(self):
+        result = subprocess.run([bytes(HOST), b"run", bytes(self.manifest), b"\xff"],
+                                cwd=self.root, capture_output=True, timeout=12)
+        self.assertEqual(result.returncode, 2, result.stderr.decode("utf-8", errors="replace"))
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "error")
+        self.assertIn("�", report["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -276,10 +276,11 @@ int mainUtf8(int Argc, char **Argv) {
     return run(Argc, Argv);
   } catch (const std::exception &Error) {
     std::cerr << Error.what() << '\n';
+    // Messages can carry argument or OS path bytes that are not UTF-8.
     std::cout << Json{{"status", "error"},
                       {"code", "plugin_host_error"},
                       {"message", Error.what()}}
-                     .dump()
+                     .dump(-1, ' ', false, Json::error_handler_t::replace)
               << '\n';
     return Cancelled.load() ? 130 : 2;
   }

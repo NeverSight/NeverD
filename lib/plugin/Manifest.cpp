@@ -24,6 +24,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <system_error>
 
 namespace neverd::plugin {
 using namespace limits;
@@ -130,24 +131,35 @@ std::filesystem::path programPath(const std::filesystem::path &Manifest,
   auto Path = fs::u8path(Program);
   if (Path.is_absolute())
     return Path;
+#ifdef _WIN32
+  // CreateProcess needs the image's extension, including for a bundled one.
+  if (!Path.has_extension())
+    Path += ".exe";
+  // The narrow environment uses the ANSI code page, not UTF-8.
+  const auto *Search = _wgetenv(L"PATH");
+  using Text = std::wstring;
+  constexpr wchar_t Separator = L';';
+#else
+  const auto *Search = std::getenv("PATH");
+  using Text = std::string;
+  constexpr char Separator = ':';
+#endif
   const auto Local = Manifest.parent_path() / Path;
   if (fs::is_regular_file(Local))
     return Local;
-  const auto *Search = std::getenv("PATH");
   if (!Search)
     return {};
-  std::istringstream Stream(Search);
-  std::string Directory;
-#ifdef _WIN32
-  constexpr char Separator = ';';
-  if (!Path.has_extension())
-    Path += ".exe";
-#else
-  constexpr char Separator = ':';
-#endif
+  std::basic_istringstream<Text::value_type> Stream(Search);
+  Text Directory;
   while (std::getline(Stream, Directory, Separator)) {
+#ifdef _WIN32
+    auto Candidate = fs::path(Directory) / Path;
+#else
     auto Candidate = fs::u8path(Directory) / Path;
-    if (fs::is_regular_file(Candidate))
+#endif
+    // An unusable search entry does not hide later ones.
+    std::error_code EC;
+    if (fs::is_regular_file(Candidate, EC))
       return fs::absolute(Candidate);
   }
   return {};
@@ -223,7 +235,8 @@ std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
     M.Program = programPath(M.Path, Root["program"]);
     if (!std::filesystem::is_regular_file(M.Program))
       return Fail("Plugin program is unavailable");
-  } catch (const std::filesystem::filesystem_error &E) {
+  } catch (const std::system_error &E) {
+    // Includes filesystem_error and Windows path conversion failures.
     return Fail(E.what());
   }
   if (!get(Root, "arguments").is_array() ||
