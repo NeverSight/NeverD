@@ -13,13 +13,14 @@ protected:
 
   void compare(unsigned CPL, unsigned TargetCPL, bool Gate32, bool Code32,
                bool Stack32, bool TSS32, unsigned EventKind, unsigned Case,
-               uint32_t ExtraFlags = 0) {
+               uint32_t ExtraFlags = 0, bool SameRingFaults = false) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message()
                  << "cpl=" << CPL << " target=" << TargetCPL << " gate32="
                  << Gate32 << " code32=" << Code32 << " stack32=" << Stack32
                  << " tss32=" << TSS32 << " event=" << EventKind
-                 << " case=" << Case << " extra_flags=" << ExtraFlags);
+                 << " case=" << Case << " extra_flags=" << ExtraFlags
+                 << " same_ring_faults=" << SameRingFaults);
     const bool Legacy = GetParam() == 2;
     const unsigned PTWidth = Legacy ? 4 : 8;
     const uint64_t PT = Legacy ? 0x11000 : 0x12000;
@@ -130,7 +131,8 @@ protected:
     };
     for (unsigned V = 0; V != 256; ++V) {
       const uint32_t Entry = 0x2000 + V * 16;
-      put(IDT + V * 8, Entry | (uint64_t{8} << 16) | (uint64_t{0xee} << 40));
+      put(IDT + V * 8, Entry | (uint64_t(SameRingFaults ? 24 | CPL : 8) << 16) |
+                           (uint64_t{0xee} << 40));
       Handler(Entry, V, true);
     }
     Handler(Target, Vector, Code32);
@@ -349,6 +351,9 @@ TEST_P(X86LegacyEventNativeTest, OriginalDescriptorAndDeliveryFaults) {
             continue;
           ASSERT_NO_FATAL_FAILURE(
               compare(CPL, 0, Gate32, true, true, true, Event, Case));
+          if (CPL == 3)
+            ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, Gate32, true, true, true,
+                                            Event, Case, 0, true));
         }
   RecordProperty("cpu_comparisons", Comparisons);
 }

@@ -22,7 +22,10 @@ EIP, ESP, flags, CR2, descriptor bytes and frame memory across all privilege
 levels, conforming targets, GDT/LDT, gate/code/stack/TSS widths, IRQ/NMI,
 software/fault classification, entry failures, #DF and shutdown. Each native
 entry records its vector with register-preserving MOV/JMP before the debugger
-stop, so equal error codes cannot hide a wrong delivered exception. TSS page
+stop, so equal error codes cannot hide a wrong delivered exception. A second
+fault-gate bank stays at the original CPL to expose #TS/#SS/#NP directly when
+the attempted inner stack is invalid; the kernel bank also checks #DF/shutdown.
+TSS page
 boundaries distinguish the offset-first read and its actual extent. Separate
 flags/high-ESP cases distinguish target SS.D/B from gate or TSS width.
 Original instruction sequences test CS-base/limit fetch, sequential EIP above
