@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
+<!-- i18n-source: f5f0bcd68d33eff4e5577e8377ff12730d6d35c6ec55853b7dd888cc777115e5 -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -39,6 +39,7 @@
 | [macOS HVF](macos-hvf.md) | ホストと同じ ISA のハードウェア実行、署名権限、パッケージと検証 |
 | [Windows ドライバーエミュレーション](driver-emulation.md) | 有界 x64 WDM/KMDF ライフサイクル、要求、ハードウェアシナリオ、SEH、PnP サブセット、バックエンド選択と制限 |
 | [メモリ安全性の監査とハント](memory-safety.md) | ヒープ寿命とコピー越境解析：形式ごとの識別契約、シンク／ソースカタログ、判定、予算、JSON スキーマ |
+| [NPH プロセスプラグインホスト（英語）](../plugin-host.md) | 共有の所有権、タスク受付、プロトコルとプロセスの寿命 |
 | [ネイティブプラグイン](plugins.md) | 純粋 C descriptor ABI、callback と event、build/link workflow、discovery、互換性規則 |
 | [Python プラグイン](python-plugins.md) | プラグイン作成、セッション／イベント API、分離、テスト、公開 |
 | [モバイル対応の概要](mobile.md) | Android / iOS の入力、ソース出力、CLI の流れと制限 |
