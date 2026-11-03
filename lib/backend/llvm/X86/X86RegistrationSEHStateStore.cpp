@@ -1,11 +1,10 @@
-//===- X86RegistrationSEHStateStore.cpp - Computed SEH state proof --------===//
+//===- X86RegistrationSEHStateStore.cpp - Computed state proofs -----------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Share current LLVM state-value and parent-store proofs between native
-/// callback lowering and independently replayed COFF installation.
+/// Shared validation of computed source states and native registration writes.
 
 #include "neverd/backend/llvm/X86RegistrationSEHStateStore.h"
 
