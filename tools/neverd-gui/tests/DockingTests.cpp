@@ -676,6 +676,7 @@ private slots:
       previous.setGeometry(normal);
       previous.show();
       QVERIFY(QTest::qWaitForWindowExposed(&previous));
+      test::NativeWindowStates previousApplied(*previous.windowHandle());
       // X11 can quantize a requested size at fractional scale. Save the
       // normal geometry accepted by the window manager.
       QTest::qWait(250);
@@ -701,12 +702,16 @@ private slots:
         normal = previous.normalGeometry();
       geometry =
           legacy ? previous.saveGeometry() : frame->saveWindowedGeometry();
+      qInfo() << "Previous restore fixture" << previous.windowState()
+              << previousApplied.states << previousApplied.count
+              << previous.geometry() << previous.normalGeometry();
     }
     QTemporaryDir project;
     Session session(QString::fromLocal8Bit(TEST_WORKER));
     McpConnectionManager mcp;
     GuiSessionBroker broker;
     MainWindow window(session, mcp, broker);
+    test::NativeWindowStates reopenedApplied(*window.windowHandle());
     window.setLayoutPath(project.filePath(QStringLiteral("layout.json")));
     // Startup restores the geometry while the native workbench is still hidden,
     // before a file is loaded and before its first Show event.
@@ -749,6 +754,17 @@ private slots:
         window.activateWindow();
       }
       QVERIFY(QTest::qWaitForWindowActive(&window));
+      QSignalSpy restoreClicks(restore, &QAbstractButton::clicked);
+      qInfo() << "Before restore click" << window.windowState()
+              << reopenedApplied.states << reopenedApplied.count
+              << window.geometry() << window.normalGeometry()
+              << restore->mapToGlobal(restore->rect().center());
+      const auto recordRestore = qScopeGuard([&] {
+        qInfo() << "After restore click" << restoreClicks.size()
+                << window.windowState() << reopenedApplied.states
+                << reopenedApplied.count << window.geometry()
+                << window.normalGeometry();
+      });
       Pointer pointer;
       QVERIFY(pointer.click(*restore));
       QTRY_VERIFY_WITH_TIMEOUT(!window.isMaximized(), 2000);
