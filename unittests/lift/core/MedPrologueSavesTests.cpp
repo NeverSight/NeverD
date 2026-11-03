@@ -4801,4 +4801,120 @@ TEST(SourceFrameBorrows, PartialOverwritesMustPrecedeEveryBorrowRead) {
     }
 }
 
+TEST(SourceFrameBorrows, NullTestsDoNotObserveBorrowedContents) {
+  for (unsigned Case = 0; Case != 27; ++Case) {
+    SCOPED_TRACE(Case);
+    MedFunc Caller;
+    Caller.Entry = 0x1000;
+    Caller.CC = CallingConv::Win64;
+    Caller.FrameSize = 0x38;
+    auto Condition = temp(20);
+    Condition.Size = 1;
+    if (Case == 22 || Case == 23) {
+      Condition.Kind = MedVar::Flag;
+      Condition.RegOff = Case == 22 ? x86reg::ZF : x86reg::RCX;
+    }
+    MedBlock Entry;
+    Entry.Id = 0;
+    Entry.StartAddr = Caller.Entry;
+    Entry.Ops = {
+        op(NdOp::COPY, sp(0), {sp(0)}),
+        op(NdOp::INT_SUB, sp(1), {sp(0), MedVar::makeConst(0x38, 8)}),
+        op(NdOp::INT_ADD, temp(10), {sp(1), MedVar::makeConst(0x20, 8)}),
+        op(NdOp::STORE, none(), {temp(10), rcx(0)}),
+        op(NdOp::CALL, Condition, {MedVar::makeConst(0x2000, 8), temp(10)}),
+        op(NdOp::INT_ADD, sp(2), {sp(1), MedVar::makeConst(0x38, 8)}),
+        op(NdOp::RETURN, none(), {Condition})};
+    Entry.Ops[4].CalleeRegisterArgs = 1;
+    Entry.Ops[4].CalleeStackArgs = 0;
+    Entry.Ops[4].CalleeVectorArgs = 0;
+    Caller.Blocks = {Entry};
+    MedCallInfo Call;
+    Call.BlockId = 0;
+    Call.OpIdx = 4;
+    Call.TargetAddr = 0x2000;
+    Call.Args = {temp(10)};
+    Caller.CallInfos = {Call};
+
+    MedFunc Callee;
+    Callee.Entry = Call.TargetAddr;
+    Callee.CC = CallingConv::Win64;
+    Callee.Params = {rcx(0)};
+    MedBlock Body;
+    Body.Id = 0;
+    Body.StartAddr = Callee.Entry;
+    Body.Ops = {op(NdOp::COPY, rcx(0), {rcx(0)}),
+                op(Case & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL, Condition,
+                   {rcx(0), MedVar::makeConst(
+                                0, 8, ConstantAddressProvenance::Scalar)}),
+                op(NdOp::STORE, none(), {rcx(0), MedVar::makeConst(37, 4)}),
+                op(NdOp::RETURN, none(), {Condition})};
+    if (Case == 2 || Case == 3)
+      std::swap(Body.Ops[1].Inputs[0], Body.Ops[1].Inputs[1]);
+    if (Case == 4) {
+      // An address test never erases a real reader of the untouched suffix.
+      Body.Ops.insert(Body.Ops.begin() + 3, op(NdOp::LOAD, temp(30), {rcx(0)}));
+    }
+    if (Case == 5)
+      Body.Ops[1].Inputs[1] = MedVar::makeConst(0x1000, 8);
+    if (Case == 6)
+      Body.Ops[1].Inputs[1] = reg(30, x86reg::RDX, 0);
+    if (Case == 7)
+      Body.Ops[1].Inputs[0].Size = 4;
+    if (Case == 8)
+      Body.Ops[1].Inputs[1].Size = 4;
+    if (Case == 9)
+      Body.Ops[1].Output.Size = 8;
+    if (Case == 10)
+      Body.Ops[1].MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+    if (Case == 11)
+      Body.Ops.insert(
+          Body.Ops.begin() + 2,
+          op(NdOp::STORE, none(), {MedVar::makeConst(0x3000, 8), rcx(0)}));
+    if (Case == 12) {
+      // An arbitrary affine pointer can wrap to null. The complete incoming
+      // borrow, rather than an adjusted address, owns this narrow permission.
+      Body.Ops.insert(
+          Body.Ops.begin() + 1,
+          op(NdOp::INT_ADD, temp(31), {rcx(0), MedVar::makeConst(1, 8)}));
+      Body.Ops[2].Inputs[0] = temp(31);
+    }
+    if (Case == 13)
+      Body.Ops[1].Inputs[1].Provenance = ConstantAddressProvenance::DataAddress;
+    if (Case == 14)
+      Body.Ops[1].Inputs[1].Provenance = ConstantAddressProvenance::Unknown;
+    if (Case == 15)
+      Body.Ops[1].IntrinsicOutputs.push_back(temp(32));
+    if (Case == 16)
+      Body.Ops[1].Output.Kind = MedVar::Stack;
+    if ((Case >= 17 && Case < 22) || Case >= 24) {
+      Body.Ops.insert(Body.Ops.begin() + 1,
+                      op(Case == 18 ? NdOp::INT_OR : NdOp::INT_AND, temp(33),
+                         {rcx(0), rcx(0)}));
+      Body.Ops[2].Inputs[0] = temp(33);
+      if (Case == 19)
+        Body.Ops[1].Inputs[1] = reg(30, x86reg::RDX, 0);
+      if (Case == 20)
+        Body.Ops[1].Inputs[1].Size = 4;
+      if (Case == 21)
+        Body.Ops[1].IntrinsicOutputs.push_back(temp(32));
+      if (Case == 24)
+        Body.Ops[1].Output.Kind = MedVar::Stack;
+      if (Case == 25)
+        Body.Ops[1].Output.Id = -1;
+      if (Case == 26)
+        Body.Ops[1].Inputs[1].RegOff = x86reg::RDX;
+    }
+    Callee.Blocks = {Body};
+    const auto Before = Callee.Blocks[0].Ops;
+    markUnobservedBorrowedFrameStores(Caller, Arch::X64, BinaryFormat::COFF,
+                                      {{Callee.Entry, &Callee}});
+    EXPECT_EQ(Caller.Blocks[0].Ops[3].PrologueSave,
+              Case < 4 || Case == 17 || Case == 18 || Case == 22);
+    EXPECT_FALSE(Callee.Blocks[0].Ops[2].PrologueSave);
+    EXPECT_EQ(Callee.Blocks[0].Ops.size(), Before.size());
+    EXPECT_EQ(Callee.Blocks[0].Ops.back().Inputs[0], Condition);
+  }
+}
+
 } // namespace

@@ -11056,6 +11056,20 @@ boundaries. High-byte GPR inputs, scalar vector lanes and callee-SP aliases are
 negative controls too. Its nested variants include raw omitted-body operands,
 recursive calls, stale target/position bindings, stack and hidden-register
 readers, GS/EH observers, capture, and exact/one-over call-depth bounds.
+`SourceFrameBorrows.NullTestsDoNotObserveBorrowedContents` checks both operand
+orders and equality directions for complete incoming pointers. Real reads of
+partially overwritten storage, pointer capture, adjusted pointers, narrow or
+malformed comparisons and non-scalar zeroes retain the store. The original
+comparison and returned Boolean stay in the callee.
+It also covers exact AND/OR-self transport and retained architectural flag
+outputs, with width, identity and malformed-output negative controls.
+`Win64CallContract.NullGuardedBorrowKeepsItsActualReadExtent` statically lifts
+the actual x64 TEST/JZ sequence through both C routes, with optimization enabled
+or disabled and the callee selected or omitted. The guarded real reader keeps
+its extent; a neighboring unknown-byte read still refuses removal.
+`MedFlagConstants.GeneratedComparisonZeroIsScalar` checks generated flag-fold
+zeroes on x64, x86, AArch64 and ARM, while a real subtraction preserves its
+address operand's provenance. These two tests do not launch emitted code.
 `Win64CallContract.BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes`
 executes both source routes at O0/O2 with UBSan, with optimization enabled or
 disabled and with the callee selected or omitted. Its observing negative control
