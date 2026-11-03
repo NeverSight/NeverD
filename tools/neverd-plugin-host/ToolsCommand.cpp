@@ -13,6 +13,7 @@
 
 #include "neverd/plugin/Artifacts.h"
 #include "neverd/plugin/Config.h"
+#include "neverd/plugin/Manifest.h"
 #include "neverd/tools/ProcessTools.h"
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <stdexcept>
 #include <thread>
@@ -120,7 +122,8 @@ int runTools(int Argc, char **Argv, std::function<bool()> Cancelled) {
   if (std::filesystem::file_size(CatalogPath) > limits::kMaxManifestBytes)
     throw std::runtime_error("Tools catalog exceeds 64 KiB");
   std::ifstream File(CatalogPath, std::ios::binary);
-  auto Catalog = Json::parse(File, nullptr, false);
+  const std::string Bytes{std::istreambuf_iterator<char>(File), {}};
+  auto Catalog = parseJson(Bytes);
   std::filesystem::path Worker, Input, Output;
   std::string Address, Function;
   bool Writable = false;
@@ -332,7 +335,7 @@ int runTools(int Argc, char **Argv, std::function<bool()> Cancelled) {
     readConsumer(
         StopReader,
         [&](std::string Line) {
-          auto Request = Json::parse(Line, nullptr, false);
+          auto Request = parseJson(Line);
           Queue.post([&, Request = std::move(Request)] { Handle(Request); });
         },
         [&] {

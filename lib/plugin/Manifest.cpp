@@ -165,6 +165,30 @@ bool validIdentifier(std::string_view Value) {
   return std::regex_match(Value.begin(), Value.end(), Pattern);
 }
 
+Json parseJson(std::string_view Text) {
+  // nlohmann parses and destroys deep values iteratively, but copies them
+  // recursively; refuse the nesting before any consumer copies a value.
+  int Depth = 0;
+  bool Quoted = false, Escaped = false;
+  for (const char C : Text) {
+    if (Quoted) {
+      if (Escaped)
+        Escaped = false;
+      else if (C == '\\')
+        Escaped = true;
+      else if (C == '"')
+        Quoted = false;
+    } else if (C == '"')
+      Quoted = true;
+    else if (C == '[' || C == '{') {
+      if (++Depth > kMaxJsonDepth)
+        return Json(Json::value_t::discarded);
+    } else if ((C == ']' || C == '}') && Depth)
+      --Depth;
+  }
+  return Json::parse(Text.begin(), Text.end(), nullptr, false);
+}
+
 std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
                                      std::string &Error) {
   const auto Fail = [&](std::string Message) -> std::optional<Manifest> {
@@ -179,7 +203,7 @@ std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
   std::string Bytes(static_cast<size_t>(Size), '\0');
   if (!File.read(Bytes.data(), Bytes.size()))
     return Fail("Cannot read plugin manifest");
-  const auto Root = Json::parse(Bytes, nullptr, false);
+  const auto Root = parseJson(Bytes);
   if (Root.is_discarded() ||
       !fields(Root, {"schema", "id", "name", "version", "program", "arguments",
                      "actions", "queries", "icon", "services", "events"}) ||

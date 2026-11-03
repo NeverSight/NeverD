@@ -106,7 +106,8 @@ raise SystemExit(run(handler))
         self.assertTrue((self.root / "provider.py").exists())
 
     def test_partial_protocol_and_crash_do_not_succeed(self):
-        for mode in ("partial-frame", "result-then-crash", "bad-hash", "escaping-artifact"):
+        for mode in ("partial-frame", "result-then-crash", "bad-hash", "escaping-artifact",
+                     "deep-result"):
             with self.subTest(mode=mode):
                 fixture = SDK.parent.parent / "unittests/plugin/process_provider.py"
                 self.declaration["arguments"] = [str(fixture), mode]

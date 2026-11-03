@@ -20,6 +20,8 @@ inline constexpr size_t kMaxTaskHistory = 64;
 
 namespace limits {
 inline constexpr int kMaxFrameBytes = 1 << 20;
+/// Copying and serializing a parsed JSON value recurse once per nesting level.
+inline constexpr int kMaxJsonDepth = 64;
 inline constexpr int kMaxArtifactBytes = 64 << 20;
 inline constexpr int kMaxImageImportBytes = 3 << 20;
 inline constexpr int kMaxTransportBytes = 16 << 20;

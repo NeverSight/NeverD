@@ -23,6 +23,9 @@
 namespace neverd::plugin {
 using Json = nlohmann::json;
 bool validIdentifier(std::string_view Value);
+/// Parses JSON from a provider, manifest or consumer. Malformed text and
+/// nesting deeper than limits::kMaxJsonDepth return a discarded value.
+Json parseJson(std::string_view Text);
 
 struct CapabilityRequirement {
   std::string Id;
