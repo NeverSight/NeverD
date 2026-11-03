@@ -304,6 +304,24 @@ including inaccessible descriptors, exact-width guard pages and old-base/new-bas
 sequencing. SDK/CLI requests retain the policy in the manifest; an SDK driver
 test resumes through a coupled SS/RSP switch and uses the new stack.
 
+## Native protected code16 transfers
+
+The full LLVM fork accepts `llvm.x86.sysexit32` and the 16/32-bit IRET/RETF
+intrinsics, including far-return immediate cleanup, from protected code16.
+The compiler keeps its 32-bit stack ABI; terminal frame carriers assign the
+full ESP immediately before IRET/RETF. Code16 emits the operand-size override
+for dword returns and omits it for word returns. SYSRET and long-mode-only
+returns still reject this target. This does not add a NeverC i386 frontend.
+
+[The November 3 qualification](evidence/x86-native-code16-transfers-2026-11-03.json)
+records 87,040 code16 SYSEXIT state pairs and 21,504 code16 frame-transfer pairs
+across the local P/E cores, plus separate code32/x64 compiler regressions.
+Independent original-byte vCPUs check full represented state and RAM; deliberately
+corrupted ECX/ESP carriers must fail. Machine-verified assembly/object tests
+check prefixes, dynamic frames and invalid modes. Native instruction ownership
+and software CPU execution remain separate contracts. The production SDK and
+LLVM gitlink remain unchanged pending global completion.
+
 ## Known remaining gaps
 
 The [owned paged-RAM and faultable IA-32e IDT path](x86-paged-memory.md) now
@@ -761,7 +779,7 @@ tests. These are development checkpoints, not a released or pinned SDK.
 | `llvm.x86.{vmload,vmsave,invlpga}.addr32` and `.addr16` | x86-64 and i386 respectively | Explicit address-size override with i32 or i16 address input; the native `67` prefix, full i32 INVLPGA ASID and instruction-owned memory effects survive lowering. |
 | `llvm.x86.stgi/clgi/clac/stac/hlt`, `llvm.x86.swapgs` | i386 and x86-64; SWAPGS requires x86-64 | Ordered native GIF, AC, halt/resume and GS-base effects, preserving arithmetic flags. HLT is resumable, with neither `noreturn` nor `willreturn`. |
 | `llvm.x86.sysret32`, `llvm.x86.sysret64` | x86-64 | Explicit operand-width PC/flags and an i64 destination stack. A terminal carrier expands to adjacent MOV-to-RSP and SYSRET at final MC emission. No compiler-frame access or ABI epilogue may follow the stack switch. |
-| `llvm.x86.sysexit32`, `llvm.x86.sysexit64` | i386 and x86-64; the 64-bit form requires x86-64 | Explicit operand-width PC/stack, nonreturning control and ambient instruction-boundary flags. The native instruction installs the destination stack and MSR-selected segments. |
+| `llvm.x86.sysexit32`, `llvm.x86.sysexit64` | protected code16, i386 and x86-64; the 64-bit form requires x86-64 | Explicit operand-width PC/stack, nonreturning control and ambient instruction-boundary flags. The native instruction installs the destination stack and MSR-selected segments. |
 | `llvm.x86.vmfunc.eptp.switch` | i386 and x86-64 | VMFUNC leaf 0, EAX=0 and complete i32 ECX EPTP index; native validation and VM exit behavior, without a fabricated VMfail status. |
 | `llvm.x86.cpuidex` | i386 and x86-64 | Leaf/subleaf inputs and four i32 output slots for EAX/EBX/ECX/EDX, retaining the caller's nonvolatile registers. |
 | `llvm.x86.readcr/readdr`, `llvm.x86.writecr/writedr` | x86-64 | Immediate register selector, full i64 values and ordered, potentially trapping accesses. CR0/2/3/4/8 and DR0..7 retain their native encodings and undefined arithmetic flags. |

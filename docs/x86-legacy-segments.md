@@ -334,9 +334,10 @@ terminal compiler operations with their declared ambient-state contracts.
 The [November 3 transfer qualification](evidence/x86-legacy-fast-system-2026-11-03.json)
 records 19,296 original SYSENTER/SYSEXIT comparisons across both SDKs and core
 types, 85,120 scalar regression comparisons, 946 passing tests and two LA57
-skips. The retained 1,032 exports per SDK agree byte for byte. Native LLVM
-code16 SYSEXIT32 compilation and NeverC's absent i386 frontend target remain
-separate from this qualified software execution interface.
+skips. The retained 1,032 exports per SDK agree byte for byte. The full LLVM
+fork now independently qualifies native code16 SYSEXIT32, IRET and far-return
+compiler transport in [the code16 evidence](evidence/x86-native-code16-transfers-2026-11-03.json).
+NeverC's absent i386 frontend target remains separate from this software interface.
 After merging the subsequent `dev` source-address changes, 154 focused tests
 and 9,648 original CPU comparisons pass on the resulting tree. The evidence
 records this integration separately and retains both SDK build inputs.
