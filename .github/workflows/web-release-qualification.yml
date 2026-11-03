@@ -74,7 +74,8 @@ jobs:
   release-gate:
     name: Web release qualification gate
     needs: [inputs, producers, resources]
-    if: ${{ always() }}
+    # Respect workflow cancellation, including closed or superseded PRs.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require both complete qualifications
