@@ -104,6 +104,13 @@ struct FuncInfo {
   bool operator==(const FuncInfo &) const = default;
 };
 
+/// The size a function list gives \p Function: what the image or its debug
+/// information states, else the bytes from its entry to the end of its last
+/// block before another of \p SortedEntries starts
+/// (LowFunc::contiguousSize), not the span to its farthest out-of-line part.
+uint64_t listedFunctionSize(const LowFunc &Function,
+                            llvm::ArrayRef<va_t> SortedEntries);
+
 struct Session {
   enum class SanitizePublicationFaultForTesting : uint8_t {
     None,

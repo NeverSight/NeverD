@@ -116,11 +116,24 @@ bool liftSVEPredicate(AArch64Lifter &L, AArch64Lifter::LiftState &S,
     }
     break;
   }
-  case AARCH64_INS_PTEST:
   case AARCH64_INS_RDFFR:
+    // The unpredicated RDFFR names the predicate (Pd, bits 3:0) FFR is read
+    // into, the instruction the C prints.
+    if (const uint32_t Word = readLE<uint32_t>(Insn->bytes);
+        (Word & 0xFFFFFFF0) == 0x2519F000) {
+      S.emitVoidIntrinsic(Intrinsic::A64_Rdffr, {NdVar::cst(Word & 0xF, 1)});
+      break;
+    }
+    [[fallthrough]];
+  case AARCH64_INS_PTEST:
   case AARCH64_INS_RDFFRS:
+    throw UnliftedInstruction(S.Addr, Insn->mnemonic, Insn->op_str);
   case AARCH64_INS_WRFFR:
-    S.emitIntrinsic(Intrinsic::A64_Wrffr);
+    // The predicate WRFFR copies into FFR (Pn, bits 8:5) names the
+    // instruction the C prints.
+    S.emitVoidIntrinsic(
+        Intrinsic::A64_Wrffr,
+        {NdVar::cst((readLE<uint32_t>(Insn->bytes) >> 5) & 0xF, 1)});
     break;
   case AARCH64_INS_SETFFR:
     S.emitIntrinsic(Intrinsic::A64_Setffr);

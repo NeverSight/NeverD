@@ -11,9 +11,10 @@
 /// area base.  Each recognizer lives in its own file (MedVariadicDetail.h):
 ///   - x86-64: the va_start GP/FP-offset word + register save area;
 ///   - i386: the stack va_list home-and-reload;
-///   - AArch64: the AAPCS64 dual GP+FP save area, or, where every variadic
-///     argument is on the stack (Apple arm64), the home-slot round-trip and
-///     -O2 register-walk overflow shapes;
+///   - AArch64: the AAPCS64 dual GP+FP save area, or the integer one with
+///     its va_list where no vector register is saved, or, where every
+///     variadic argument is on the stack (Apple arm64), the home-slot
+///     round-trip and -O2 register-walk overflow shapes;
 ///   - ARM32: the save area abutting entry SP.
 ///
 /// detectVariadic is declared in MedCallingConv.cpp and called from detectCc;
@@ -260,6 +261,9 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
         FirstVariadicRegister = aapcs64FirstVariadicRegister(S);
         UnreadVectorSpills =
             unreadAAPCS64VectorSpills(S, FirstVariadicRegister.value_or(-1));
+      } else if (const auto First = aapcs64IntegerVariadicRegister(S)) {
+        Marked = true;
+        FirstVariadicRegister = *First;
       }
     }
     break;

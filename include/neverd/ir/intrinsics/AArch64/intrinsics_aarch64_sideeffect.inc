@@ -35,6 +35,10 @@ SIDEEFFECT(Intrinsic::A64_WspZeroExtend);
 SIDEEFFECT(Intrinsic::Stg);
 // cache / TLB
 SIDEEFFECT(Intrinsic::Dc);
+SIDEEFFECT(Intrinsic::A64_SveRegisterTransfer);
+SIDEEFFECT(Intrinsic::A64_Wrffr);
+SIDEEFFECT(Intrinsic::A64_Rdffr);
+SIDEEFFECT(Intrinsic::A64_Setffr);
 SIDEEFFECT(Intrinsic::Ic);
 SIDEEFFECT(Intrinsic::Tlbi);
 SIDEEFFECT(Intrinsic::At);

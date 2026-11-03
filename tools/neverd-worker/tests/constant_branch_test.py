@@ -15,6 +15,13 @@ def ok(client, operation, payload=None):
     return result["payload"]
 
 
+def discovered(client):
+    """Waits for the step discovery an open starts to list every entry."""
+    client.next(lambda m: m.get("type") == "heartbeat"
+                and (m.get("background") or {}).get("discovery_complete"),
+                timeout=30)
+
+
 def verify_function_views(client, address, entry):
     """A fragment selects the same source, IR and graph as its proven owner."""
     address, entry = hex(address), hex(entry)
@@ -291,6 +298,123 @@ def run(executable):
             assert sum("END OF FUNCTION CHUNK" in row["text"] for row in lines) == 1, lines
             verify_function_views(client, entry + 1, entry + 0x30)
             verify_function_views(client, entry + 3, entry + 0x30)
+
+        # ARM64: the caller's tail after its call is also the callee's, which
+        # jumps into it. Both recover those instructions; they stay code in
+        # the caller, whose body reaches them from its own entry, and the
+        # callee keeps its identity.
+        shared = Path(directory) / "shared-tail.elf"
+        code = bytes.fromhex("fd7bbfa907000094fd7bc1a800040091c0035fd6"
+                             + "1f2003d5" * 3 + "a00080d2faffff17")
+        shared_segment = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base,
+                                     120 + len(code), 120 + len(code), 4096)
+        shared.write_bytes(arm64_header + shared_segment + code)
+        for options in ({}, {"analysis": True, "warm": False, "step_discovery": True}):
+            with Client(executable) as client:
+                ok(client, "open", {"path": str(shared), **options})
+                # Recovering the callee first records its claim on the tail.
+                callee = ok(client, "listing", {"address": hex(entry + 0x20),
+                            "before": 0, "after": 12,
+                            "recover_address": hex(entry + 0x20)})["lines"]
+                assert any(row["address"] == hex(entry + 0x20) and row["kind"] == "insn"
+                           and row.get("function_address") == hex(entry + 0x20)
+                           for row in callee), callee
+                assert ok(client, "resolve", {"query": hex(entry + 0x20)})[
+                    "function_address"] == hex(entry + 0x20)
+                for tail in (entry + 0xC, entry + 0x10):
+                    for recover in (False, True):
+                        request = {"address": hex(tail), "before": 0, "after": 8}
+                        if recover:
+                            request["recover_address"] = hex(tail)
+                        page = ok(client, "listing", request)
+                        assert any(row["address"] == hex(tail) and row["kind"] == "insn"
+                                   and row.get("function_address") == hex(entry)
+                                   for row in page["lines"]), page
+                    assert ok(client, "resolve", {"query": hex(tail)})[
+                        "function_address"] == hex(entry)
+
+        # ARM64 code no recovered body reaches still lists as code: the
+        # instructions after the caller's returns, as an unresolved jump
+        # table's cases, and an alternative between two functions before the
+        # padding that aligns the second. Padding a body jumps over aligns
+        # the instruction after it.
+        loose = Path(directory) / "loose-code.elf"
+        # The callees start at 0x400100 and 0x400140, which padding aligns.
+        words = ([0xA9BF7BFD, 0x94000021, 0x94000030, 0xB40000E0, 0xA8C17BFD,
+                  0xD65F03C0, 0xD2800060, 0xD65F03C0, 0xD28000A0, 0xD65F03C0,
+                  0xA8C17BFD, 0xD2800040, 0xD65F03C0] + [0] * 21
+                 + [0xB4000080, 0xD2800020, 0xD65F03C0, 0xD503201F,
+                    0xD2800040, 0xD65F03C0, 0xF9804021, 0xF9808021]
+                 + [0] * 8 + [0xD2800080, 0xD65F03C0])
+        assert entry + 0x88 == 0x400100 and entry + 0xC8 == 0x400140
+        code = struct.pack("<%dI" % len(words), *words)
+        loose_segment = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base,
+                                    120 + len(code), 120 + len(code), 4096)
+        loose.write_bytes(arm64_header + loose_segment + code)
+
+        def rows_at(client, address, recover):
+            request = {"address": hex(address), "before": 0, "after": 24}
+            if recover:
+                request["recover_address"] = hex(address)
+            return {row["address"]: row for row in reversed(
+                ok(client, "listing", request)["lines"])
+                if row["kind"] in ("insn", "data")}
+
+        with Client(executable) as client:
+            ok(client, "open", {"path": str(loose), "analysis": True,
+                                "warm": False, "step_discovery": True})
+            discovered(client)
+            for recover in (False, True):
+                unreached = rows_at(client, entry + 0x18, recover)
+                for offset in (0x18, 0x1C, 0x20, 0x24):
+                    assert unreached[hex(entry + offset)]["kind"] == "insn", unreached
+                jumped = rows_at(client, entry + 0x94, recover)
+                assert jumped[hex(entry + 0x94)]["kind"] == "data", jumped
+                assert "align" in jumped[hex(entry + 0x94)]["text"], jumped
+                assert jumped[hex(entry + 0x98)]["kind"] == "insn", jumped
+                between = rows_at(client, entry + 0xA0, recover)
+                for offset in (0xA0, 0xA4):
+                    row = between[hex(entry + offset)]
+                    assert row["kind"] == "insn" and "prfm" in row["text"], between
+                padding = between[hex(entry + 0xA8)]
+                assert padding["kind"] == "data" and "align" in padding["text"], between
+                assert between[hex(entry + 0xC8)].get("function_address") == hex(entry + 0xC8), between
+
+        # Zero words no body reaches read as UDF #0 but are no code: they pad
+        # to an alignment, as between a vector table's entries.  A small
+        # constant, which reads as UDF #imm, keeps a gap data; NOPs that align
+        # nothing are code.
+        # The zero words end at 0x400100 and the callees start at 0x400140,
+        # aligned, and 0x400164, which no padding aligns.
+        words = ([0xA9BF7BFD, 0x94000031, 0x94000039, 0xB40003E0, 0xA8C17BFD,
+                  0xD65F03C0, 0xD2800060, 0xD65F03C0] + [0] * 26
+                 + [0xA8C17BFD, 0xD2800040, 0xD65F03C0, 0x00000123] + [0] * 12
+                 + [0xD2800080, 0xD65F03C0, 0x91000421] + [0xD503201F] * 6
+                 + [0xD28000A0, 0xD65F03C0])
+        assert entry + 0x88 == 0x400100 and entry + 0xC8 == 0x400140
+        code = struct.pack("<%dI" % len(words), *words)
+        padded = Path(directory) / "zero-padding.elf"
+        padded_segment = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base,
+                                     120 + len(code), 120 + len(code), 4096)
+        padded.write_bytes(arm64_header + padded_segment + code)
+        with Client(executable) as client:
+            ok(client, "open", {"path": str(padded), "analysis": True,
+                                "warm": False, "step_discovery": True})
+            discovered(client)
+            for recover in (False, True):
+                hole = rows_at(client, entry + 0x18, recover)
+                for offset in (0x18, 0x1C):
+                    assert hole[hex(entry + offset)]["kind"] == "insn", hole
+                assert hole[hex(entry + 0x20)]["kind"] == "data", hole
+                assert "align" in hole[hex(entry + 0x20)]["text"], hole
+                assert rows_at(client, entry + 0x88, recover)[
+                    hex(entry + 0x88)]["kind"] == "insn"
+                constant = rows_at(client, entry + 0x94, recover)
+                assert constant[hex(entry + 0x94)]["kind"] == "data", constant
+                unaligned = rows_at(client, entry + 0xD0, recover)
+                for offset in range(0xD0, 0xEC, 4):
+                    assert unaligned[hex(entry + offset)]["kind"] == "insn", unaligned
+                assert unaligned[hex(entry + 0xEC)].get("function_address") == hex(entry + 0xEC), unaligned
 
         # A rejected lift must leave the native bytes inspectable, with an
         # explicit linear-view warning rather than a fabricated recovered CFG.

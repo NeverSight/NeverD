@@ -9,6 +9,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <vector>
@@ -498,6 +499,29 @@ struct AAPCS64VaStart {
     return Count;
   }
 };
+
+TEST(MedVariadic, IntegerOnlyVaListMustNameItsOwnSpillChain) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (bool DetachedTop : {false, true}) {
+    SCOPED_TRACE(DetachedTop);
+    AAPCS64VaStart V;
+    auto &Ops = V.F.Blocks.front().Ops;
+    std::erase_if(Ops, [&](const MedOp &Op) {
+      return Op.Opcode == NdOp::STORE && Op.Inputs[1].Kind == MedVar::Reg &&
+             TRI.isFPArgReg(Op.Inputs[1].RegOff);
+    });
+    if (DetachedTop) {
+      const auto X7 = reg(17, 0, 8, TRI.IntParamRegs.back());
+      V.add(op(NdOp::STORE, {}, {V.at(0x40), X7}));
+      const auto Top = V.at(0x48);
+      V.storeAt(AAPCS64VaStart::VaList + 8).Inputs[1] = Top;
+    }
+    detectVariadic(V.F, TRI, Arch::AArch64, BinaryFormat::ELF);
+    EXPECT_EQ(V.F.IsVariadic, !DetachedTop);
+    if (!DetachedTop)
+      EXPECT_EQ(V.F.VariadicFirstRegister, 1);
+  }
+}
 
 TEST(MedVariadic, AAPCS64DropsTheVectorSaveAreaNoReadObserves) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);

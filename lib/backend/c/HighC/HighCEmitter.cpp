@@ -1826,11 +1826,16 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
         if (Statement.Kind == StmtKind::SEHTry)
           Headers.insert("excpt.h");
       });
-  // char16_t and char32_t strings.
+  // C++ has character-type keywords; C needs aliases for the same stored
+  // code units. macOS does not supply uchar.h, so declare only the aliases
+  // used by image strings, as the local-type renderer does.
+  bool NeedsChar16 = false, NeedsChar32 = false;
   for (const auto &[Addr, Obj] : ImageObjects)
     for (const auto &String : {Obj.String, Obj.PointsTo})
-      if (String && String->UnitBytes > 1 && !imageBackingAddress(Addr))
-        Headers.insert("uchar.h");
+      if (String && !imageBackingAddress(Addr)) {
+        NeedsChar16 |= String->UnitBytes == 2;
+        NeedsChar32 |= String->UnitBytes == 4;
+      }
   if (NeedsBool)
     Headers.insert("stdbool.h");
   if (!MemoryTypes.empty())
@@ -1902,6 +1907,14 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     OS << "#define _GNU_SOURCE 1\n";
   for (auto &H : Headers)
     OS << "#include <" << H << ">\n";
+  if (NeedsChar16 || NeedsChar32) {
+    OS << "#ifndef __cplusplus\n";
+    if (NeedsChar16)
+      OS << "typedef uint16_t char16_t;\n";
+    if (NeedsChar32)
+      OS << "typedef uint32_t char32_t;\n";
+    OS << "#endif\n";
+  }
   // MinGW omits this declaration when Clang supplies the builtin, while
   // Clang's intrin.h declares it only for _MSC_VER. A builtin still needs its
   // prototype in C. Match the intrinsic's exact interface on either compiler.
@@ -2000,12 +2013,15 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> PairIntegerResults;
   std::map<std::string, std::vector<uint16_t>> FloatingParameters;
   std::set<std::string> ConflictingFloatingParameters;
+  bool NeedsExceptionReturn = false;
   const uint16_t RegisterBytes = pointerBytes(Opts.TheArch);
   for (const HighFunc &F : Funcs)
     walkStmts(F.Body, [&](const HighStmt &S) {
       const HighExpr *Top =
           S.Kind == StmtKind::Call ? S.CallExpr.get() : S.Val.get();
       std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
+        NeedsExceptionReturn |=
+            E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::Eret;
         if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None) {
           uint16_t &Bytes = ResultBytes[callIdentifier(E)];
           // A recovered register-pair result is wider than one machine word.
@@ -2052,6 +2068,11 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       };
       forEachExpr(S, [&](const ExprPtr &E) { Visit(*E); });
     });
+  // ERET names a runtime boundary, not a compiler builtin supplied by ACLE.
+  // Its declaration must retain the terminal contract in compiled C too.
+  if (NeedsExceptionReturn)
+    OS << "extern void " << intrinsicCName(Intrinsic::Eret)
+       << "(void) __attribute__((noreturn));\n";
   // A function whose address the code takes is declared as a callee is.
   for (const std::string &Symbol : AddressTakenFunctions) {
     const std::string Identifier = functionIdentifier(Symbol);
@@ -5250,8 +5271,12 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
                                              RequirementStatement)))
         throw std::invalid_argument(Reason);
     }
-    if (isAArch64ExceptionReturnIntrinsic(Expr->IntrinsicId))
-      throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
+    if (Expr->IntrinsicId == Intrinsic::Eret &&
+        (Opts.TheArch != Arch::AArch64 ||
+         !aarch64ExceptionReturnShapeIsValid(
+             Expr->IntrinsicId, Expr->Operands.size() + 1,
+             Expr->Type ? Expr->Type->Size : 0)))
+      throw std::invalid_argument(kAArch64ExceptionReturnMalformed);
     if (const char *Reason =
             x86NonlocalControlTransferReason(Expr->IntrinsicId))
       throw std::invalid_argument(Reason);
@@ -5294,6 +5319,9 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
   };
   for (size_t I = 0; I < Funcs.size(); ++I)
     Check(I, [&](const HighFunc &Func) {
+      if (!Func.ConversionFailure.empty())
+        throw std::invalid_argument("HighIR conversion failed: " +
+                                    Func.ConversionFailure);
       if (Func.ReturnProtection && Opts.TheArch != Arch::AArch64)
         throw std::invalid_argument(
             "AArch64 return protection requires AArch64 source emission");

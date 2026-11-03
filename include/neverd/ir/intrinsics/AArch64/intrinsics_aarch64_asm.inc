@@ -46,6 +46,7 @@ A(Intrinsic::A64_Ttest,    "ttest");
 A(Intrinsic::A64_Wkdmc,    "wkdmc");
 A(Intrinsic::A64_Wkdmd,    "wkdmd");
 A(Intrinsic::A64_Wrffr,    "wrffr");
+A(Intrinsic::A64_Rdffr,    "rdffr");
 A(Intrinsic::A64_Setffr,   "setffr");
 A(Intrinsic::A64_Xaflag,   "xaflag");
 A(Intrinsic::A64_Axflag,   "axflag");

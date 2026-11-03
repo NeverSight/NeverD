@@ -597,9 +597,15 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   // A single-function view needs its native EH handlers, not every function
   // from an earlier whole-image analysis. Follow only authenticated clauses;
   // include nested handlers once and retain their original ABI.
+  // Indexed only for a view with handlers to follow.
   std::map<va_t, const HighFunc *> ByEntry;
-  for (const HighFunc &Func : S->PipeResult.HighFuncs)
-    ByEntry[Func.Entry] = &Func;
+  const auto handlerAt = [&](va_t Entry) -> const HighFunc * {
+    if (ByEntry.empty())
+      for (const HighFunc &Func : S->PipeResult.HighFuncs)
+        ByEntry[Func.Entry] = &Func;
+    const auto It = ByEntry.find(Entry);
+    return It == ByEntry.end() ? nullptr : It->second;
+  };
   std::set<va_t> Included = {HF->Entry};
   std::vector<const HighFunc *> Needed = {HF};
   // Termination handlers are out-of-line funclets gathered only so their
@@ -612,10 +618,9 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
         for (const auto &Clause : Stmt.EHClauses)
           if (Clause.Kind == HighEHClauseKind::SEHFinally &&
               Clause.FilterOrActionVA != FuncEntry)
-            if (auto It = ByEntry.find(Clause.FilterOrActionVA);
-                It != ByEntry.end() &&
-                Included.insert(Clause.FilterOrActionVA).second) {
-              Needed.push_back(It->second);
+            if (const HighFunc *Handler = handlerAt(Clause.FilterOrActionVA);
+                Handler && Included.insert(Clause.FilterOrActionVA).second) {
+              Needed.push_back(Handler);
               SEHFuncletSources.insert(Clause.FilterOrActionVA);
             }
         return;
@@ -626,9 +631,9 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
         const va_t Entry = Clause.Kind == HighEHClauseKind::CxxCleanup
                                ? Clause.FilterOrActionVA
                                : Clause.HandlerVA;
-        if (auto It = ByEntry.find(Entry);
-            It != ByEntry.end() && Included.insert(Entry).second)
-          Needed.push_back(It->second);
+        if (const HighFunc *Handler = handlerAt(Entry);
+            Handler && Included.insert(Entry).second)
+          Needed.push_back(Handler);
       }
     });
   std::vector<HighFunc> Related;
@@ -667,7 +672,11 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
                 highVariableSnapshot(*Attached, S->SourceOptions.Symbolic),
                 S->SourceOptions)
           : std::string();
-  HighSourceMap EditedSources = S->PipeResult.HighSources;
+  // The analysis's observations of every function. A specialization or an
+  // edit gives the view its own; the view reads the rest in place, as a whole
+  // image's run holds millions.
+  const HighSourceMap *Sources = &S->PipeResult.HighSources;
+  HighSourceMap EditedSources;
   std::map<std::string, va_t> SourceBodyOrigins;
   if (!S->UsingAnalystCallContracts &&
       supportsSourceCallSpecialization(S->Img, S->PipeResult,
@@ -682,13 +691,14 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
       PipelineOptions AnalysisOptions;
       S->applyAnalysisOptions(AnalysisOptions);
       AnalysisOptions.AnalysisCache = &S->AnalysisCache;
-      SourceInlineHighView Original{Single, EditedSources, {}};
+      SourceInlineHighView Original{Single, *Sources, {}};
       auto Specialized = projectSpecializedHighSourceCalls(
           S->Img, *Prepared->PreparedHigh, AnalysisOptions, S->decompileDebug(),
           Original);
       if (Specialized) {
         Single = std::move(Specialized->Functions);
         EditedSources = std::move(Specialized->Sources);
+        Sources = &EditedSources;
         SourceBodyOrigins = std::move(Specialized->BodyOrigins);
       }
     }
@@ -706,16 +716,17 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
           std::find_if(Single.begin(), Single.end(),
                        [&](const HighFunc &F) { return F.Entry == FuncEntry; });
       auto Changed = editHighVariable(
-          *Current, EditedSources,
+          *Current, *Sources,
           {Edit.Kind == "map" ? HighVariableEdit::Map : HighVariableEdit::Split,
            Edit.From, Edit.To});
       Status.Refusal = Changed.Refusal;
       if (Changed) {
         *Current = std::move(Changed.Function);
-        for (const auto &Observation : EditedSources)
+        for (const auto &Observation : *Sources)
           if (Observation.Function != FuncEntry)
             Changed.Sources.push_back(Observation);
         EditedSources = std::move(Changed.Sources);
+        Sources = &EditedSources;
         Status.Applied = true;
         Status.Outputs = std::move(Changed.Outputs);
         VariableSnapshot = editedVariableSnapshot(VariableSnapshot, Edit);
@@ -751,7 +762,7 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Opts.ReadAccessWidths = deferredAccessWidths(*S, AccessWidths);
   if (SourceMap) {
     SourceMap->Recognitions = &S->PipeResult.LibraryRecognitions;
-    SourceMap->HighSources = &EditedSources;
+    SourceMap->HighSources = Sources;
     Opts.SourceMap = SourceMap;
   }
   DebugContext *Debug = S->decompileDebug();
@@ -2140,10 +2151,15 @@ static std::vector<FuncInfo> runFunctions(const PipelineRunner &R) {
   for (const Symbol *Sym : R.Img.getFunctionSymbols())
     if (Entries.insert(Sym->Addr).second)
       Functions.push_back({Sym->Addr, Sym->Size, Sym->Name});
+  std::vector<va_t> SortedEntries(Entries.begin(), Entries.end());
+  for (const LowFunc &Function : R.Result.LowFuncs)
+    SortedEntries.push_back(Function.Entry);
+  llvm::sort(SortedEntries);
   for (const LowFunc &Function : R.Result.LowFuncs)
     if (Entries.insert(Function.Entry).second)
-      Functions.push_back(
-          {Function.Entry, Function.OriginalSize, Function.Name});
+      Functions.push_back({Function.Entry,
+                           listedFunctionSize(Function, SortedEntries),
+                           Function.Name});
   return Functions;
 }
 

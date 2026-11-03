@@ -1,11 +1,11 @@
-//===- AArch64ExceptionReturn.h - Exception-return admission ----*- C++ -*-===//
+//===- AArch64ExceptionReturn.h - Exception-return shape --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Exception return needs an ELR/SPSR/PSTATE contract. The legacy intrinsic
-/// cannot describe that state transfer and must not reach ordinary emitters.
+/// ERET is a terminal transfer to ELR with SPSR as PSTATE, as x86's IRET: its
+/// intrinsic reads no operand besides its ID and defines no value.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_INTRINSICS_AARCH64_AARCH64EXCEPTIONRETURN_H
@@ -15,19 +15,15 @@
 
 namespace neverd {
 
-#define NEVERD_A64_EXCEPTION_RETURN_TEXT(Name, Text)                           \
-  inline constexpr char Name[] = Text;
-#include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.def"
+inline constexpr char kAArch64ExceptionReturnMalformed[] =
+    "AArch64 exception return reads no operand and defines no value";
 
-inline bool isAArch64ExceptionReturnIntrinsic(Intrinsic Id) {
-  switch (Id) {
-#define NEVERD_A64_EXCEPTION_RETURN_INTRINSIC(Id, Insn)                        \
-  case Intrinsic::Id:                                                          \
-    return true;
-#include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.def"
-  default:
-    return false;
-  }
+/// \p NumInputs counts the intrinsic ID. Other intrinsics are not checked.
+inline bool aarch64ExceptionReturnShapeIsValid(Intrinsic Id, unsigned NumInputs,
+                                               unsigned OutputBytes,
+                                               unsigned ExtraOutputs = 0) {
+  return Id != Intrinsic::Eret ||
+         (NumInputs == 1 && OutputBytes == 0 && ExtraOutputs == 0);
 }
 
 } // namespace neverd

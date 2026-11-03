@@ -25,6 +25,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -75,6 +76,27 @@ long vmix(int n, ...) {
 }
 )C";
 
+// Ints again, for code built without the vector registers (the Linux
+// kernel's -mgeneral-regs-only): va_start saves x1-x7 and no q register.
+// One caller passes two variadic ints, the other none.
+constexpr char kGeneralRegisterKernel[] = R"C(
+int vgsum(int n, ...) __attribute__((noinline));
+int vgsum_two(int x) __attribute__((noinline));
+int vgsum_none(void) __attribute__((noinline));
+int vgsum(int n, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, n);
+  int s = 0;
+  for (int i = 0; i < n; i++)
+    s = s * 131 + __builtin_va_arg(ap, int);
+  __builtin_va_end(ap);
+  return s;
+}
+int vgsum_two(int x) { return vgsum(2, x, x + 1); }
+int vgsum_none(void) { return vgsum(0); }
+int vgsum_e(int x) { return vgsum_two(x) ^ vgsum_none(); }
+)C";
+
 std::string readText(const fs::path &Path) {
   std::ifstream Input(Path);
   return std::string(std::istreambuf_iterator<char>(Input), {});
@@ -84,16 +106,20 @@ std::string readText(const fs::path &Path) {
 
 class AArch64_VariadicSaveArea : public NeverDLiftTest {
 protected:
-  /// \p Kernel compiled for \p Target at -O2 as an object.
+  /// \p Kernel compiled for \p Target at -O2 as an object, with \p Flags.
   fs::path compile(const std::string &Target, const std::string &Kernel,
-                   const std::string &Name) {
+                   const std::string &Name,
+                   std::initializer_list<std::string> Flags = {}) {
     const auto Source = tmpFile(Name + ".c");
     const auto Object = tmpFile(Name + ".o");
     std::ofstream(Source) << Kernel;
-    const auto Compiled = exec(
-        NEVERD_TEST_CLANG, {"-target", Target, "-O2", "-fno-stack-protector",
-                            "-fno-asynchronous-unwind-tables", "-c",
-                            Source.string(), "-o", Object.string()});
+    std::vector<std::string> Arguments{"-target", Target, "-O2",
+                                       "-fno-stack-protector",
+                                       "-fno-asynchronous-unwind-tables"};
+    Arguments.insert(Arguments.end(), Flags);
+    Arguments.insert(Arguments.end(),
+                     {"-c", Source.string(), "-o", Object.string()});
+    const auto Compiled = exec(NEVERD_TEST_CLANG, Arguments);
     EXPECT_EQ(Compiled.exitCode, 0) << Compiled.err;
     return Object;
   }
@@ -192,6 +218,37 @@ TEST_F(AArch64_VariadicSaveArea, AnIntegerWalkLeavesTheVectorHalfUnread) {
   const std::string LLVMC = readText(tmpFile("decompiled.c"));
   ASSERT_EQ(LLVMC.find("unknown"), std::string::npos) << LLVMC;
   expectRunsLikeKernel(LLVMC, kIntegerKernel, "vmany_e", {"vmany_e", "vmany"},
+                       {0, 1, -1, 0x15, 0x27, 0x3F, 0x12345678});
+}
+
+// With no vector half, the integer save area and the va_list that addresses
+// it still make the function variadic: each call passes the arguments its
+// caller sets, so a caller passing none takes no parameter for x1-x7 and no
+// call reads a register nothing set.
+TEST_F(AArch64_VariadicSaveArea, AnIntegerOnlySaveAreaIsVariadic) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Object = compile("aarch64-linux-gnu", kGeneralRegisterKernel,
+                              "gprs", {"-mgeneral-regs-only"});
+  const std::string Body = medFunction(Object, "vgsum");
+  ASSERT_FALSE(Body.empty());
+  EXPECT_EQ(spills(Body, "Q[0-7]"), 0u) << Body;
+  EXPECT_EQ(spills(Body, "X[1-7]"), 7u) << Body;
+
+  const auto High = decompileToHighC(Object);
+  ASSERT_EQ(High.exitCode, 0) << High.err;
+  const std::string HighC = readText(tmpFile("decompiled_high.c"));
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+  EXPECT_TRUE(
+      std::regex_search(HighC, std::regex(R"(\bvgsum_none\(void\) \{)")))
+      << HighC;
+
+  const auto Low = decompileToC(Object);
+  ASSERT_EQ(Low.exitCode, 0) << Low.err;
+  const std::string LLVMC = readText(tmpFile("decompiled.c"));
+  ASSERT_EQ(LLVMC.find("unknown"), std::string::npos) << LLVMC;
+  expectRunsLikeKernel(LLVMC, kGeneralRegisterKernel, "vgsum_e",
+                       {"vgsum_e", "vgsum_two", "vgsum_none", "vgsum"},
                        {0, 1, -1, 0x15, 0x27, 0x3F, 0x12345678});
 }
 

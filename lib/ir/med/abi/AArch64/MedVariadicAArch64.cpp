@@ -6,8 +6,9 @@
 ///
 /// \file
 /// The AAPCS64 variadic prologue recognizer: the register save area that
-/// spills most of both the GP and FP argument registers at entry, and the
-/// proof that no read observes its vector half.
+/// spills most of both the GP and FP argument registers at entry, or only the
+/// GP ones under the va_list that addresses them, and the proof that no read
+/// observes its vector half.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -521,6 +522,83 @@ bool hasAAPCS64VariadicPrologue(VariadicScan &S) {
 /// in the frame.  A named parameter's own slot (-O0) lies elsewhere.
 std::optional<int> aapcs64FirstVariadicRegister(VariadicScan &S) {
   return firstSavedArgumentRegister(S, std::nullopt);
+}
+
+std::optional<int> aapcs64IntegerVariadicRegister(VariadicScan &S) {
+  const MedFunc &Func = S.Func;
+  const llvm::ArrayRef<uint64_t> IntegerRegs = S.TRI.IntParamRegs;
+  const int64_t PointerSize = S.TRI.PointerSize;
+  if (IntegerRegs.empty() || PointerSize == 0 ||
+      countParamRegSpills(Func, S.TRI.FPParamRegs) != 0)
+    return std::nullopt;
+  // Just past each slot x7 is spilled to, where __gr_top may point.
+  std::set<int64_t> IntegerTops;
+  std::map<int64_t, std::vector<const MedOp *>> StoresAt;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode != NdOp::STORE || Op.NumInputs < 2 ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        continue;
+      const auto At = entrySpDelta(S, Op.Inputs[0], 0);
+      if (!At)
+        continue;
+      StoresAt[*At].push_back(&Op);
+      const MedVar &Value = Op.Inputs[1];
+      if (Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
+          Value.RegOff == IntegerRegs.back() && Value.Size == PointerSize)
+        IntegerTops.insert(*At + PointerSize);
+    }
+  const auto Constants = constantValues(S);
+  const auto ConstantOf = [&](const MedVar &V) -> std::optional<uint64_t> {
+    if (V.isConst())
+      return V.ConstVal;
+    const auto It = Constants.find(VariadicValueIndex::keyOf(V));
+    if (It == Constants.end())
+      return std::nullopt;
+    return It->second;
+  };
+  // __gr_offs is minus the bytes of the saved registers: one 4-byte store,
+  // or the low word of one 8-byte store of both offsets.
+  const auto StoresGrOffs = [&](int64_t VaList, int First) {
+    const auto Expected = static_cast<uint32_t>(
+        -static_cast<int64_t>(IntegerRegs.size() - First) * PointerSize);
+    const auto It = StoresAt.find(VaList + kVaListGrOffs);
+    return It != StoresAt.end() &&
+           llvm::any_of(It->second, [&](const MedOp *Op) {
+             const auto Value = ConstantOf(Op->Inputs[1]);
+             return Value &&
+                    (Op->Inputs[1].Size == kVaListOffsBytes ||
+                     Op->Inputs[1].Size == 2 * kVaListOffsBytes) &&
+                    static_cast<uint32_t>(*Value) == Expected;
+           });
+  };
+  const auto StoresStack = [&](int64_t VaList) {
+    const auto It = StoresAt.find(VaList + kVaListStack);
+    return It != StoresAt.end() &&
+           llvm::any_of(It->second, [&](const MedOp *Op) {
+             const auto Value = entrySpDelta(S, Op->Inputs[1], 0);
+             return Op->Inputs[1].Size == PointerSize && Value && *Value >= 0;
+           });
+  };
+  // One va_list points __gr_top just past the spills, __stack into the
+  // incoming arguments, and sets __gr_offs.
+  for (const auto &[At, Stores] : StoresAt)
+    for (const MedOp *Op : Stores) {
+      const auto Value = entrySpDelta(S, Op->Inputs[1], 0);
+      if (Op->Inputs[1].Size != PointerSize || !Value ||
+          !IntegerTops.count(*Value))
+        continue;
+      const int64_t VaList = At - kVaListGrTop;
+      if (!StoresStack(VaList))
+        continue;
+      // The contiguous spill chain must end at this va_list's __gr_top,
+      // not at a different copy of x7 elsewhere in the frame.
+      const int First = firstSavedArgumentRegister(S, *Value - PointerSize);
+      if (First < static_cast<int>(IntegerRegs.size()) &&
+          StoresGrOffs(VaList, First))
+        return First;
+    }
+  return std::nullopt;
 }
 
 std::vector<std::pair<size_t, size_t>>

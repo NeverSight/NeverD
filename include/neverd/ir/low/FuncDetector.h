@@ -90,6 +90,7 @@ private:
                             bool KeepInconclusive = false,
                             bool RequireCallableExit = false);
 
+  std::set<va_t> MarkedAArch64Entries;
   std::set<va_t> Entries;
   std::set<va_t> UnsymbolizedX86Entries;
   std::set<va_t> RelocatedCandidates;

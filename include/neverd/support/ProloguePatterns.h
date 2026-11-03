@@ -19,6 +19,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/support/ISAEncoding.h"
+#include "neverd/support/Limits.h"
 
 #include "llvm/Support/Endian.h"
 
@@ -409,6 +410,30 @@ inline bool isAArch64BlockEndWord(uint32_t W) {
   if ((W & 0xFFFF0000) == 0x00000000) // udf #imm (zero padding reads as udf)
     return true;
   return false;
+}
+
+/// Whether \p W lies in the A64 encoding space no instruction occupies: the
+/// unallocated top-level groups, and the reserved group outside UDF and SME.
+inline bool isAArch64UnallocatedWord(uint32_t W) {
+  const uint32_t Op0 = (W >> 25) & 0xF;
+  return Op0 == 0x1 || Op0 == 0x3 ||
+         (Op0 == 0 && (W >> 16) != 0 && (W >> 31) == 0);
+}
+
+/// Whether the \p Size bytes at \p Bytes, a page or the part of one an image
+/// holds, are data by limits::support::kAArch64DataWordsPerPage.
+inline bool isAArch64DataPage(const uint8_t *Bytes, size_t Size) {
+  size_t DataWords = 0;
+  for (size_t At = 0;
+       At + 4 <= Size && DataWords < limits::support::kAArch64DataWordsPerPage;
+       At += 4) {
+    const uint32_t W = static_cast<uint32_t>(Bytes[At]) |
+                       static_cast<uint32_t>(Bytes[At + 1]) << 8 |
+                       static_cast<uint32_t>(Bytes[At + 2]) << 16 |
+                       static_cast<uint32_t>(Bytes[At + 3]) << 24;
+    DataWords += isAArch64UnallocatedWord(W) || (W != 0 && (W >> 16) == 0);
+  }
+  return DataWords >= limits::support::kAArch64DataWordsPerPage;
 }
 
 // ===--------------------------------------------------------------------===//
