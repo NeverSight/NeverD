@@ -15,6 +15,15 @@ cover both C routes, default/NoOpt and O0/O2 with UBSan. This fixes observed
 argument elision and uninitialized C reads; it does not recover unknown VM
 entry registers or authenticate a dynamic return owner.
 
+Borrowed-frame read proofs now retain exact full-width incoming-pointer null
+tests and AND/OR-self transport. The shared flag owner marks its generated
+comparison zeroes as scalar, so actual x64 TEST/JZ guards work through both C
+routes. Narrow, adjusted, captured or genuinely read pointers remain checked.
+This closes the guarded private-store regression, not native allocator effects:
+the selected ordinary-source qualification still has two outer stack-argument
+gaps. Partial home writes and pointers preserved in native spills still need
+their own complete observation proof.
+
 Win64's shared call-input summary now recognizes unread narrow home spills,
 so 1/2/4-byte saves no longer create unused positional parameters. Segmented
 and ordered writes retain their inputs, and a returned incoming-area pointer

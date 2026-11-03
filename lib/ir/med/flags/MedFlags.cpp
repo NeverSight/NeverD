@@ -375,13 +375,16 @@ CmpSource findCmpSource(const std::vector<MedOp> &Ops, int SearchEnd,
         } else if (Prev.Opcode == NdOp::INT_AND &&
                    Prev.Inputs[0] == Prev.Inputs[1]) {
           Result.A = Prev.Inputs[0];
-          Result.B = MedVar::makeConst(0, Prev.Inputs[0].Size);
+          Result.B = MedVar::makeConst(0, Prev.Inputs[0].Size,
+                                       ConstantAddressProvenance::Scalar);
         } else if (Prev.Opcode == NdOp::INT_AND) {
           Result.A = ResultVar;
-          Result.B = MedVar::makeConst(0, ResultVar.Size);
+          Result.B = MedVar::makeConst(0, ResultVar.Size,
+                                       ConstantAddressProvenance::Scalar);
         } else {
           Result.A = Prev.Output;
-          Result.B = MedVar::makeConst(0, Prev.Output.Size);
+          Result.B = MedVar::makeConst(0, Prev.Output.Size,
+                                       ConstantAddressProvenance::Scalar);
         }
         Result.Valid = true;
         break;
@@ -842,7 +845,8 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
       MedVar CmpA, CmpB;
       if (SelIsTst) {
         CmpA = SelAndResult;
-        CmpB = MedVar::makeConst(0, SelAndResult.Size);
+        CmpB = MedVar::makeConst(0, SelAndResult.Size,
+                                 ConstantAddressProvenance::Scalar);
       } else {
         CmpA = SelCmp.A;
         CmpB = SelCmp.B;
