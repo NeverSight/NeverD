@@ -28,6 +28,8 @@ struct X86LegacySegmentInstruction : X86LegacyAddress {
 inline std::optional<X86LegacySegmentInstruction>
 decodeLegacySegmentInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   X86LegacyEncoding Reader(Bytes, Code32);
+  if (Reader.Group1Prefix)
+    return std::nullopt;
   X86LegacySegmentInstruction F;
   F.Bytes = Reader.OperandBytes;
   F.AddressBytes = Reader.AddressBytes;

@@ -10,6 +10,7 @@
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyFastSystem.h"
 #include "X86LegacyScalar.h"
 #include "X86LegacySegmentEncoding.h"
 
@@ -65,6 +66,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       detail::decodeLegacySegmentInstruction(Instruction, Code32);
   const auto Scalar =
       detail::decodeLegacyScalarInstruction(Instruction, Code32);
+  const auto FastSystem = detail::decodeLegacyFastSystem(Instruction, Code32);
   auto Body = Instruction;
   unsigned Width = Code32 ? 4 : 2;
   if (Body.front() == 0x66) {
@@ -81,13 +83,16 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool IRET = Body.size() == 1 && Body[0] == 0xcf;
   const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
                     (Body.size() == 3 && Body[0] == 0xca);
-  if (!Segment && !Scalar && !Single && !INT && !UD2 && !IRET && !RETF)
+  if (!Segment && !Scalar && !FastSystem && !Single && !INT && !UD2 && !IRET &&
+      !RETF)
     return invalid("unsupported or malformed legacy step instruction");
   if (Scalar &&
       !(Scalar->Operation == detail::X86LegacyScalarOperation::Move &&
         Scalar->Destination.Register && Scalar->Source.Immediate) &&
       Options.Scalars != X86LegacyScalarProfile::OrderedRAM)
     return invalid("legacy scalar step requires a bound ordinary-RAM profile");
+  if (FastSystem && Options.FastSystem != X86LegacyFastSystemProfile::IntelSEP)
+    return invalid("legacy fast transfer requires a bound Intel SEP profile");
   if (Scalar && Scalar->logical() && !Options.LogicalAuxiliaryCarry)
     return invalid("legacy logical instruction requires an explicit AF choice");
   if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Call &&
@@ -200,7 +205,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false;
   auto NextIP = uint32_t(State.EIP + Instruction.size());
-  if (!R.Exception && Segment) {
+  if (!R.Exception && FastSystem) {
+    R.Exception = detail::executeLegacyFastSystem(Next, Flags, NextIP,
+                                                  State.Sysenter, *FastSystem);
+  } else if (!R.Exception && Segment) {
     auto Got = executeX86LegacySegmentInstruction(Next, Memory, Instruction,
                                                   Options.Segments);
     if (!Got)

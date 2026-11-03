@@ -13,6 +13,7 @@
 #include "X64ContinuationSegments.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/ir/X86/X86FastSystemRules.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -132,7 +133,8 @@ public:
     for (bool Code : {true, false}) {
       const NdVar Added = W.temporary(), Selected = W.temporary();
       const NdVar Selector = W.temporary(2);
-      const unsigned Add = (Enter ? 0 : Wide ? 32 : 16) + (Code ? 0 : 8);
+      const unsigned Add =
+          neverd::detail::x86FastSystemSelectorOffset(Enter, Wide, Code);
       W.emit(NdOp::INT_ADD, Added, {Base, k(Add)});
       W.emit(NdOp::INT_OR, Selected, {Added, k(Enter ? 0 : 3)});
       W.emit(NdOp::SUBBYTES, Selector, {Selected, k(0)});
@@ -147,7 +149,7 @@ public:
     const NdVar Flags = W.temporary();
     W.emit(NdOp::INT_AND, Flags,
            {W.load(offsetof(State, RFlags)),
-            k(~uint64_t{Enter ? 0x30200u : 0x10000u})});
+            k(~uint64_t{neverd::detail::x86FastSystemClearedFlags(Enter)})});
     W.store(offsetof(State, RFlags), Flags);
     W.write(NdVar::reg(x86reg::RSP, 8), SP);
     if (!Enter)

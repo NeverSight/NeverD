@@ -11,6 +11,7 @@
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSEGMENTS_H
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/ir/X86/X86FastSystemRules.h"
 #include "neverd/ir/X86/X86ReturnRules.h"
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 #include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
@@ -51,8 +52,8 @@ void writeX64FlatContinuationSegment(Writer &W, bool Code, NdVar Selector,
   W.store(Offset + offsetof(Segment, Limit), NdVar::scalar(UINT32_MAX, 4));
   W.store(Offset + offsetof(Segment, Selector), Selector);
   W.store(Offset + offsetof(Segment, Attributes),
-          NdVar::scalar((Code ? (Wide ? 0xa09b : 0xc09b) : 0xc093) | (CPL << 5),
-                        2));
+          NdVar::scalar(
+              neverd::detail::x86FlatSystemAttributes(Code, Wide, CPL), 2));
 }
 
 template <class Writer> class X64ContinuationSegments {

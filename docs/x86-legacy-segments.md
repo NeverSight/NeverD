@@ -295,6 +295,49 @@ All 1,032 retained exports per SDK agree byte for byte. The record includes
 the exact source patch, binary hashes, build inputs and raw diagnostic hashes;
 it does not certify the remaining instruction or machine-state domains.
 
+## Protected SYSENTER and SYSEXIT
+
+Bind `X86LegacyExecutionOptions::FastSystem` to `IntelSEP` and supply
+`X86LegacyExecutionState::Sysenter` with the low 32-bit CS, ESP and EIP MSR
+inputs. This binding asserts an Intel processor supporting SEP; it does not
+derive feature or MSR state from the host. Existing protected-state admission
+continues to exclude CET/FRED, real/VM86, IA-32e and TF debug production.
+
+SYSENTER can enter from CPL0..3. It installs EIP/ESP from those MSRs, selects
+CPL0 and clears IF/VM/RF. SYSEXIT requires CPL0, takes its full 32-bit EIP/ESP
+from EDX/ECX, selects CPL3 and clears RF while preserving other admitted flags.
+Both install fixed flat 32-bit CS/SS caches and retain every other loaded cache
+and GPR. Selectors wrap at sixteen bits, including usable null-index selectors.
+Neither instruction looks up descriptors or reads either stack. The runtime
+does not fetch the destination until the next requested step; a missing target
+page therefore faults from the newly installed context on that next step.
+NMI blocking survives; completion ends incoming SS/STI inhibition.
+
+The shared strict prefix grammar accepts one prefix from each legacy group.
+Operand/address-size, segment and REP prefixes do not narrow these targets.
+LOCK delivers #UD after original-byte authentication and before MSR or
+privilege checks. An MSR CS value with bits 15:2 clear, or SYSEXIT above CPL0,
+delivers #GP(0) with the original instruction's restart state. Fetch failures
+precede these instruction faults. Duplicate groups, malformed extents and a
+missing profile remain explicit errors before fetch.
+
+The CPU comparison retains complete registers, segment caches, defined flags,
+CR2, frame bytes and ordinary RAM. It exercises nonflat entry and absent tables
+or destination stacks, in addition to privilege, selector, width and prefix
+matrices. `X86FastSystemRules` supplies the fixed cache/selector/flag decisions
+to both this runtime and the x64 continuation source owner. This does not add
+a general legacy source dispatcher or an implementation of OS services. The
+existing LLVM/NeverC native SYSENTER and SYSEXIT interfaces remain separate
+terminal compiler operations with their declared ambient-state contracts.
+[Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+The [November 3 transfer qualification](evidence/x86-legacy-fast-system-2026-11-03.json)
+records 19,296 original SYSENTER/SYSEXIT comparisons across both SDKs and core
+types, 85,120 scalar regression comparisons, 946 passing tests and two LA57
+skips. The retained 1,032 exports per SDK agree byte for byte. Native LLVM
+code16 SYSEXIT32 compilation and NeverC's absent i386 frontend target remain
+separate from this qualified software execution interface.
+
 ## Protected IRET and far returns
 
 Canonical `CF`, `CB` and `CA imm16`, optionally prefixed with `66`, execute

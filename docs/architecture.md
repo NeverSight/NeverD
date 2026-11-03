@@ -64,6 +64,13 @@ data write precedes that check; page effects persist in both choices while
 architectural registers restart from the original instruction. Original scalar handler steps
 can repair a missing PTE, consume the error code, IRET and retry without host
 patches to architectural state.
+`translate/X86/X86LegacyFastSystem` owns protected SYSENTER/SYSEXIT with an
+explicit Intel SEP binding and low MSR inputs. It authenticates ignored
+prefixes through the same strict reader and classifies LOCK as #UD after
+fetch. `ir/X86/X86FastSystemRules` shares fixed segment attributes, selector
+offsets and cleared flag bits with the x64 continuation owner. Each transport
+publishes its own complete state; the legacy owner performs no target fetch,
+stack access or descriptor lookup during a successful transfer.
 See [legacy segment operands](x86-legacy-segments.md).
 
 `translate/X86/X86Paging` owns architectural linear-address translation over

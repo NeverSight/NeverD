@@ -717,4 +717,6 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
   }
 }
 
+#include "X86LegacyFastSystemTests.inc"
+
 } // namespace

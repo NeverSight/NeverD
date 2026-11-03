@@ -37,6 +37,7 @@ class X86LegacyEncoding {
 public:
   unsigned OperandBytes, AddressBytes;
   std::optional<X86SegmentRegister> Segment;
+  uint8_t Group1Prefix = 0;
 
   X86LegacyEncoding(llvm::ArrayRef<uint8_t> Bytes, bool Code32)
       : OperandBytes(Code32 ? 4 : 2), AddressBytes(OperandBytes), Rest(Bytes),
@@ -44,7 +45,9 @@ public:
     bool OperandOverride = false, AddressOverride = false;
     while (!Rest.empty()) {
       const uint8_t B = Rest.front();
-      if (B == 0x66 && !OperandOverride) {
+      if ((B == 0xf0 || B == 0xf2 || B == 0xf3) && !Group1Prefix) {
+        Group1Prefix = B;
+      } else if (B == 0x66 && !OperandOverride) {
         OperandOverride = true;
         OperandBytes = 6 - OperandBytes;
       } else if (B == 0x67 && !AddressOverride) {

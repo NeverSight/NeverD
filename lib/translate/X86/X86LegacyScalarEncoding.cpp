@@ -19,6 +19,8 @@ std::optional<X86LegacyScalarInstruction>
 decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   using Op = X86LegacyScalarOperation;
   X86LegacyEncoding R(Bytes, Code32);
+  if (R.Group1Prefix)
+    return std::nullopt;
   X86LegacyScalarInstruction F;
   F.Bytes = F.SourceBytes = R.OperandBytes;
   const uint8_t B = R.byte();

@@ -22,6 +22,13 @@
 
 namespace neverd::translate {
 
+/// Low 32-bit architectural inputs for non-IA-32e SYSENTER/SYSEXIT.
+struct X86LegacySysenterState {
+  uint32_t CS = 0;
+  uint32_t ESP = 0;
+  uint32_t EIP = 0;
+};
+
 struct X86LegacyExecutionState {
   X86LegacySegmentState Core;
   uint32_t EIP = 0;
@@ -33,6 +40,7 @@ struct X86LegacyExecutionState {
   bool STIBlocked = false;
   bool SSBlocked = false;
   bool NMIBlocked = false;
+  X86LegacySysenterState Sysenter;
 };
 
 using X86LegacyEventKind = X86EventKind;
@@ -73,6 +81,10 @@ enum class X86LegacyCallProfile : uint8_t {
   CheckBeforeTargetLimit,
 };
 
+/// Intel SEP with explicit MSRs, no CET/FRED and no debug-event producer.
+/// Transfers install fixed caches without reading descriptors or either stack.
+enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
+
 struct X86LegacyExecutionOptions {
   X86LegacySegmentExecutionOptions Segments;
   std::optional<X86LegacyEventProfile> Events;
@@ -85,6 +97,7 @@ struct X86LegacyExecutionOptions {
   std::optional<bool> LogicalAuxiliaryCarry;
   std::optional<X86LegacyScalarProfile> Scalars;
   std::optional<X86LegacyCallProfile> Calls;
+  std::optional<X86LegacyFastSystemProfile> FastSystem;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -123,8 +136,11 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
 /// PUSH/POP and near CALL/JMP/Jcc/RET. Register immediates retain their unbound
 /// interface; other scalars require Scalars, CALL requires Calls, and logical
-/// flags require an AF choice. On an architectural fault, enters the IDT with
-/// the original EIP. On
+/// flags require an AF choice. The explicit FastSystem profile adds protected
+/// SYSENTER/SYSEXIT with live Sysenter inputs and fixed CS/SS caches. Ignored
+/// prefixes retain 32-bit targets; LOCK delivers #UD after original-byte fetch.
+/// These transfers stop before fetching their destination. On an architectural
+/// fault, enters the IDT with the original EIP. On
 /// success, commits fallthrough/branch state, clears RF and advances SS/STI
 /// inhibition. Changed code returns CodeChanged at the first mismatch.
 /// Unimplemented or malformed instructions return Error, never a synthesized

@@ -75,6 +75,19 @@ operand grammar, and the x64 paged execution and continuation source/export
 suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
 CPU matrix on the qualified E core; retain skips as missing coverage.
 
+`LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
+SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack
+sizes, nonflat entry, selector wrap, flags, caches and complete restart frames.
+Bind `NEVERD_TEST_LEGACY_FAST_SYSTEM=intel` for the qualified Intel SEP profile.
+Absent tables and new stacks check that a successful transfer does not read
+them. Ignored prefixes, LOCK #UD, null-MSR/privilege #GP and original-fetch
+segment/page faults exercise precedence. Software tests additionally separate
+the transfer from its destination's subsequent fetch fault and check NMI and
+shadow lifetime. Run both SDKs and the qualified P/E cores, plus the complete
+paging, paged execution and continuation source/export suites after changing
+the shared prefix or fixed-cache rules. These are transfer comparisons, not
+an operating-system service implementation.
+
 `X86LegacySegmentExecutionTest` in `NeverDX86PagingTests` checks protected
 selector transition admission, null-cache invalidation, accessed-write faults,
 old-SS stack sizing, coupled far-pointer publication, alignment priority and
