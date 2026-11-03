@@ -93,3 +93,77 @@ accepted project changes. Late retirement cannot remove a newer generation.
 callbacks, event subscriptions, replacement and the host bridge.
 `NeverDPluginCatalog.*` tests intent, repair, generations, portable installation
 records, cleanup and queue ordering. All run in the standalone NPH build above.
+
+## Run the same independent provider in CLI and GUI
+
+Prepare the existing Workbench Explorer example, which has no TVM dependency:
+
+```powershell
+python pluginsdk/gui/examples/workbench-explorer/prepare.py E:/plugins/workbench-explorer
+neverd-plugin-host list E:/plugins/workbench-explorer/plugin-developer.json
+neverd-plugin-host run E:/plugins/workbench-explorer/plugin-developer.json context
+neverd-plugin-host run E:/plugins/workbench-explorer/plugin-developer.json background
+```
+
+The `background` action demonstrates progress, effective parameters and a
+SHA-256-bound report artifact. Run a real function report through the existing
+analysis worker with:
+
+```powershell
+neverd-plugin-host run E:/plugins/workbench-explorer/plugin.json report `
+  --worker E:/neverd/bin/neverd-worker.exe --input E:/samples/example.exe `
+  --function 0x140001000 --address 0x140001000 --output E:/reports/function-1
+```
+
+Use an actual function address from the input. `--output` must be a new directory.
+Without it the CLI creates a new task directory under `neverd-plugin-results`.
+The bridge opens the input read-only, forwards declared reads with captured
+project/revision identity and preserves worker errors. Image publication remains an explicit host operation. Without a worker/input, only actions
+whose required context is `none` can run.
+
+stdout contains one JSON record. Progress, diagnostics and the receipt path go
+to stderr. Exit codes are 0 for success, 1 for a failed/timed-out provider task,
+2 for configuration/startup errors, and 130 for cancellation. Ctrl+C requests
+cancellation and drains the native child transport before exiting.
+
+Import the same manifest through the GUI's plugin action. Its command schema,
+effective parameters, wire validation and task completion rules are identical.
+GUI views render the structured result that the CLI returns as JSON.
+
+## Headless catalog and Tools consumer
+
+```powershell
+neverd-plugin-host plugins E:/plugins/catalog.json import E:/plugins/workbench-explorer/plugin.json
+neverd-plugin-host plugins E:/plugins/catalog.json list
+neverd-plugin-host plugins E:/plugins/catalog.json explain workbench-explorer
+neverd-plugin-host plugins E:/plugins/catalog.json disable workbench-explorer
+neverd-plugin-host plugins E:/plugins/catalog.json enable workbench-explorer
+neverd-plugin-host plugins E:/plugins/catalog.json remove workbench-explorer
+```
+
+Catalog reads start no provider. Failed enablement saves the user's requested
+intent and retains its diagnostic. The shared atomic file writer persists the
+portable `neverd.plugin-catalog.v1` projection. Removal retains provider files.
+
+`neverd-plugin-host tools <plugin.json> <tools.json> --output <new-directory>`
+accepts JSON-lines resolve, call, inspect, cancel and release operations.
+See [Tools](tools-layer.md) and the independent Tool Roundtrip caller for the
+complete protocol. Project writes require the explicit
+`--allow-project-writes` option and declared commands. The initial adapter
+supports rename through the existing worker revision and history contract.
+
+## Standalone CLI build
+
+```sh
+cmake -S tools/neverd-plugin-host -B build-nph -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+python3 scripts/build.py build-nph --parallel 4
+ctest --test-dir build-nph --build-config Release --output-on-failure
+```
+
+This configuration does not find Qt or build the analysis engine. Windows uses
+BCrypt, macOS CommonCrypto and Linux OpenSSL Crypto for artifact digests.
+`NeverDPluginCLI` launches actual providers and tests Unicode paths, framing,
+artifacts, progress, cancellation, failures, deadlines and persisted catalog
+intent. `NeverDToolsConsumer` checks the JSON-lines consumer. Builds with an
+actual worker and `NEVERD_WORKER_REAL_ENGINE_TESTS` also register
+`NeverDPluginWorker` and `NeverDToolsWorker` for analysis and project readback.
