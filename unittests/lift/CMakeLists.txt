@@ -97,6 +97,7 @@ add_neverd_unittest(NeverDCallStackRangeSourceTests
 )
 
 add_neverd_unittest(NeverDSourceInlineCallsTests
+  core/SourceCallObservationsTests.cpp
   core/SourceInlineCallsTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )

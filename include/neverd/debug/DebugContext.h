@@ -228,6 +228,13 @@ public:
     (void)Name;
     return std::nullopt;
   }
+  /// The same no-return answer as resolvePrototype, without requiring a
+  /// provider to materialize a returning routine's complete type graph.
+  /// A positive answer still requires that provider's prototype validation.
+  virtual bool prototypeDoesNotReturn(llvm::StringRef Name) const {
+    const auto Prototype = resolvePrototype(Name);
+    return Prototype && Prototype->NoReturn;
+  }
   /// Public name only.  PDB `--func` must not walk the owning module's
   /// S_LOCAL stream just to replace `sub_<va>`.
   virtual std::optional<std::string> functionName(va_t Addr) const {

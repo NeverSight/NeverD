@@ -7,6 +7,7 @@
 /// Missing formal operands do not authorize erasing physical memory effects.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/pipeline/PipelineSourceCallHelpers.h"
 #include "../../../lib/pipeline/PipelineSourceCallObservations.h"
 #include "../../../lib/pipeline/PipelineSourceInline.h"
 #include "SourceCallExecution.h"
@@ -15,15 +16,18 @@
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -35,7 +39,7 @@
 namespace {
 using namespace neverd;
 
-BinaryImage fixture(unsigned Mode) {
+BinaryImage fixture(unsigned Mode, bool Repeated = false) {
   BinaryImage Image;
   Image.Arch = Arch::X64;
   Image.Bits = Bitness::Bits64;
@@ -46,6 +50,8 @@ BinaryImage fixture(unsigned Mode) {
   Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Code.Data = {0x48, 0x83, 0xec, 0x38,        // sub rsp,56
                0x48, 0x89, 0x54, 0x24, 0x30}; // mov [rsp+48],rdx
+  if (Repeated)
+    Code.Data[3] = 0x48; // 16 private bytes beyond the outgoing arguments.
   if (Mode == 2) {
     const uint8_t Alias[] = {0x48, 0x89, 0x54, 0x24, 0x28, // mov [rsp+40],rdx
                              0x48, 0x8d, 0x4c, 0x24, 0x28, // lea rcx,[rsp+40]
@@ -53,12 +59,31 @@ BinaryImage fixture(unsigned Mode) {
                              0x17}; // add [rsp+48],23
     Code.Data.insert(Code.Data.end(), std::begin(Alias), std::end(Alias));
   }
+  if (Repeated) {
+    const uint8_t Save[] = {0x48, 0x89, 0x4c, 0x24, 0x38,  // mov [rsp+56],rcx
+                            0x48, 0x8b, 0x44, 0x24, 0x30,  // mov rax,[rsp+48]
+                            0x48, 0x89, 0x44, 0x24, 0x40}; // mov [rsp+64],rax
+    Code.Data.insert(Code.Data.end(), std::begin(Save), std::end(Save));
+  }
   const uint32_t Delta = 0x80 - Code.Data.size() - 5;
   Code.Data.push_back(0xe8);
   for (unsigned I = 0; I != 4; ++I)
     Code.Data.push_back(Delta >> (8 * I));
+  if (Repeated) {
+    // Outgoing argument slots are call-clobbered. Reinitialize the actual
+    // seventh argument, keeping the missing fifth/sixth inputs missing.
+    const uint8_t Restore[] = {0x48, 0x8b, 0x4c, 0x24, 0x38, 0x48, 0x8b, 0x44,
+                               0x24, 0x40, 0x48, 0x89, 0x44, 0x24, 0x30};
+    Code.Data.insert(Code.Data.end(), std::begin(Restore), std::end(Restore));
+    const uint32_t Again = 0x80 - Code.Data.size() - 5;
+    Code.Data.push_back(0xe8);
+    for (unsigned I = 0; I != 4; ++I)
+      Code.Data.push_back(Again >> (8 * I));
+  }
   const uint8_t Return[] = {0x48, 0x83, 0xc4, 0x38, 0xc3};
   Code.Data.insert(Code.Data.end(), std::begin(Return), std::end(Return));
+  if (Repeated)
+    Code.Data[Code.Data.size() - 2] = 0x48;
   const size_t CallerBytes = Code.Data.size();
   Code.Data.resize(0x80, 0xcc);
   const uint8_t Callee[] = {0x48, 0x8b, 0x44, 0x24, 0x38, // mov rax,[rsp+56]
@@ -627,5 +652,288 @@ TEST(SourceInlineCalls, DeadUnknownPhisNeedNoInputButReadersDo) {
   Builder.CreateLoad(Builder.getInt8Ty(),
                      Builder.CreateIntToPtr(Phi, Builder.getPtrTy()));
   EXPECT_TRUE(source_inline::hasUnavailableObservations(*Function));
+}
+
+TEST(SourceInlineCalls, SharedBodyKeepsEffectsIdentityAndCallObservations) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("shared", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Type = llvm::FunctionType::get(
+      Builder.getInt64Ty(),
+      {Builder.getPtrTy(), Builder.getInt64Ty(), Builder.getInt64Ty()}, false);
+  auto *Native = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "native_body", Module);
+  rewrite_source::setOriginalVA(*Native, 0x1000);
+  Native->addParamAttr(0, llvm::Attribute::NonNull);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Native));
+  auto *Load = Builder.CreateLoad(Builder.getInt64Ty(), Native->getArg(0));
+  Load->setVolatile(true);
+  auto *Value = Builder.CreateAdd(Load, Native->getArg(2));
+  auto *Store = Builder.CreateStore(Value, Native->getArg(0));
+  Store->setVolatile(true);
+  Builder.CreateRet(Value);
+  auto *Root = llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                      "root", Module);
+  rewrite_source::setOriginalVA(*Root, 0x2000);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Root));
+  auto *First = Builder.CreateCall(
+      Native, {Root->getArg(0), Root->getArg(1), Root->getArg(2)});
+  auto *Second =
+      Builder.CreateCall(Native, {Root->getArg(0), Root->getArg(1), First});
+  Builder.CreateRet(Second);
+  LLVMSourceMap Sources;
+  Sources.Functions[0x1000] = Native;
+  Sources.Functions[0x2000] = Root;
+  Sources.Observations.push_back({0x1000, {}, Load});
+  Sources.Observations.push_back({0x2000, {}, First});
+  const auto Shared = source_inline::shareBody(*Native, Sources);
+  source_inline::callSharedBody(*First, Shared);
+  source_inline::callSharedBody(*Second, Shared);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  EXPECT_EQ(Shared.Parameters, (llvm::SmallVector<unsigned, 8>{0, 2}));
+  EXPECT_EQ(Native->getFunctionType(), Type);
+  EXPECT_EQ(Native->arg_size(), 3u);
+  EXPECT_EQ(Shared.Function->arg_size(), 2u);
+  EXPECT_TRUE(Shared.Function->hasInternalLinkage());
+  EXPECT_TRUE(Shared.Function->hasFnAttribute(LLVMSourceBody));
+  EXPECT_TRUE(Shared.Function->hasParamAttribute(0, llvm::Attribute::NonNull));
+  auto Origin = rewrite_source::getOriginalVA(*Shared.Function);
+  ASSERT_TRUE(bool(Origin));
+  EXPECT_FALSE(*Origin);
+  EXPECT_EQ(static_cast<llvm::Value *>(Sources.Functions.at(0x2000)), Root);
+  EXPECT_EQ(static_cast<llvm::Value *>(Sources.Functions.at(0x1000)),
+            Shared.Function);
+  const auto *ClonedLoad =
+      llvm::dyn_cast<llvm::LoadInst>(Sources.Observations[0].Value);
+  ASSERT_NE(ClonedLoad, nullptr);
+  EXPECT_TRUE(ClonedLoad->isVolatile());
+  EXPECT_EQ(ClonedLoad->getFunction(), Shared.Function);
+  const auto *NewCall =
+      llvm::dyn_cast<llvm::CallInst>(Sources.Observations[1].Value);
+  ASSERT_NE(NewCall, nullptr);
+  EXPECT_EQ(NewCall->getCalledFunction(), Shared.Function);
+  EXPECT_EQ(Shared.Function->getNumUses(), 2u);
+  const auto *ClonedStore = llvm::dyn_cast<llvm::StoreInst>(
+      &*std::next(Shared.Function->front().begin(), 2));
+  ASSERT_NE(ClonedStore, nullptr);
+  EXPECT_TRUE(ClonedStore->isVolatile());
+}
+
+TEST(SourceInlineCalls, SelectedSourceIncludesHelperDefinitionsAndProviders) {
+  for (unsigned Mode : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Mode);
+    auto Image = fixture(Mode, /*Repeated=*/true);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = Options.SourceProjection = true;
+    Options.OnlyFunctionEntries = {Image.Entry};
+    auto Original = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Original.Success) << Original.Error;
+    auto Specialized = specializeUnavailableSourceCalls(
+        Image, Original, *Original.LlvmModule, nullptr, {}, {});
+    ASSERT_TRUE(Specialized.Module);
+    auto *Root = Specialized.Module->getFunction("caller_probe");
+    ASSERT_NE(Root, nullptr);
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    CEmitterOptions Emission;
+    Emission.TheArch = Image.Arch;
+    Emission.Format = Image.abiFormat();
+    ASSERT_TRUE(LLVMCEmitter().emit(*Specialized.Module, OS, Emission, nullptr,
+                                    &Image, Root));
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+    const auto Name = "neverd_source_body_callee_probe(";
+    auto At = Text.find(Name);
+    ASSERT_NE(At, std::string::npos) << Text;
+    At = Text.find(Name, At + 1);
+    ASSERT_NE(At, std::string::npos) << Text;
+    At = Text.rfind(Name);
+    ASSERT_NE(At, std::string::npos) << Text;
+    EXPECT_NE(Text.find(") {", At), std::string::npos) << Text;
+    EXPECT_NE(Text.find("static uint64_t neverd_source_body_"),
+              std::string::npos)
+        << Text;
+    if (const char *Directory =
+            std::getenv("NEVERD_TEST_SOURCE_INLINE_EXPORT")) {
+      const std::string Prefix =
+          std::string(Directory) + "/mode" + std::to_string(Mode) + "/";
+      ASSERT_FALSE(llvm::sys::fs::create_directories(Prefix));
+      std::error_code Error;
+      llvm::raw_fd_ostream Out(Prefix + "llvm.c", Error);
+      ASSERT_FALSE(Error);
+      Out << Text;
+      llvm::raw_fd_ostream Bytes(Prefix + "synthetic.bin", Error);
+      ASSERT_FALSE(Error);
+      const auto &Data = Image.Segments.front().Data;
+      Bytes.write(reinterpret_cast<const char *>(Data.data()), Data.size());
+    }
+  }
+}
+
+TEST(SourceInlineCalls, SharedBodyDropsOldAllocSizeIndices) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("attributes", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Type = llvm::FunctionType::get(
+      Builder.getPtrTy(),
+      {Builder.getPtrTy(), Builder.getInt64Ty(), Builder.getInt64Ty()}, false);
+  auto *Native = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "native", Module);
+  const auto Size =
+      llvm::Attribute::getWithAllocSizeArgs(Context, 1, std::nullopt);
+  Native->addFnAttr(Size);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Native));
+  Builder.CreateRet(Builder.CreateGEP(Builder.getInt8Ty(), Native->getArg(0),
+                                      Native->getArg(2)));
+  auto *Root = llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                      "root", Module);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Root));
+  auto *Call = Builder.CreateCall(
+      Native, {Root->getArg(0), Root->getArg(1), Root->getArg(2)});
+  Call->addFnAttr(Size);
+  auto *Return = Builder.CreateRet(Call);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  LLVMSourceMap Sources;
+  const auto Shared = source_inline::shareBody(*Native, Sources);
+  source_inline::callSharedBody(*Call, Shared);
+  EXPECT_FALSE(Shared.Function->hasFnAttribute(llvm::Attribute::AllocSize));
+  EXPECT_FALSE(llvm::cast<llvm::CallInst>(Return->getReturnValue())
+                   ->hasFnAttr(llvm::Attribute::AllocSize));
+  EXPECT_TRUE(Native->hasFnAttribute(llvm::Attribute::AllocSize));
+  EXPECT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+}
+
+TEST(SourceInlineCalls, SelectedHelperClosureOmitsUnrelatedNativeBodies) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("selection", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Type = llvm::FunctionType::get(Builder.getInt64Ty(), false);
+  const auto Function = [&](llvm::StringRef Name, bool Helper) {
+    auto *F = llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                     Name, Module);
+    if (Helper)
+      F->addFnAttr(LLVMSourceBody);
+    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+    return F;
+  };
+  auto *Native = Function("ordinary", false);
+  Builder.CreateRet(Builder.getInt64(999));
+  Function("neverd_source_body_unused", true);
+  Builder.CreateRet(Builder.getInt64(777));
+  auto *Leaf = Function("leaf", true);
+  auto *Global = new llvm::GlobalVariable(
+      Module, Builder.getInt64Ty(), false, llvm::GlobalValue::InternalLinkage,
+      Builder.getInt64(42), "helper_memory");
+  auto *Load = Builder.CreateLoad(Builder.getInt64Ty(), Global);
+  Load->setVolatile(true);
+  Builder.CreateRet(Builder.CreateAdd(Load, Builder.CreateCall(Native)));
+  auto *Shared = Function("shared", true);
+  Builder.CreateRet(
+      Builder.CreateAdd(Builder.CreateCall(Leaf), Builder.CreateCall(Leaf)));
+  auto *Root = Function("root", false);
+  Builder.CreateRet(Builder.CreateCall(Shared));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, {}, nullptr, nullptr, Root));
+  for (const char *Name : {"root", "shared", "leaf"})
+    EXPECT_NE(Text.find(std::string(Name) + "() {"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("helper_memory"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("ordinary(void);"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("ordinary() {"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("neverd_source_body_unused"), std::string::npos) << Text;
+  EXPECT_FALSE(Native->isDeclaration());
+}
+
+TEST(SourceInlineCalls, LargeCandidateScaffoldingStillNeedsTheActualBody) {
+  for (unsigned Mode : {0u, 3u, 5u}) {
+    SCOPED_TRACE(Mode);
+    auto Image = fixture(Mode, /*Repeated=*/true);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = Options.SourceProjection = true;
+    Options.OnlyFunctionEntries = {Image.Entry};
+    auto Original = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Original.Success) << Original.Error;
+    ASSERT_TRUE(Original.LlvmModule);
+    const auto Before = source(*Original.LlvmModule);
+    ASSERT_NE(Before.find("__builtin_trap"), std::string::npos);
+
+    // Deliberately incomplete candidate information cannot authorize dropping
+    // a native input. Only recovering the original bytes below can do that.
+    auto Omitted =
+        std::make_shared<OmittedCalleeBodies>(*Original.OmittedCallees);
+    for (auto &Body : Omitted->Bodies)
+      if (Body->Entry == 0x1080) {
+        auto Candidate = std::make_shared<MedFunc>(*Body);
+        ASSERT_EQ(Candidate->Blocks.size(), 1u);
+        auto &Ops = Candidate->Blocks.front().Ops;
+        const auto Return = Ops.back();
+        Ops.clear();
+        for (size_t I = 0; I <= limits::pipeline::kSourceInlineBodyOperations;
+             ++I) {
+          MedOp Copy;
+          Copy.Opcode = NdOp::COPY;
+          Copy.NumInputs = 1;
+          Copy.Inputs[0] = MedVar::makeConst(0, 8);
+          Copy.Output.Kind = MedVar::Temp;
+          Copy.Output.Id = static_cast<int>(I);
+          Copy.Output.Size = 8;
+          Ops.push_back(Copy);
+        }
+        Ops.push_back(Return);
+        if (Mode == 5)
+          Candidate->MutableStackParamHomes = {{4, 40}, {5, 48}};
+        Body = std::move(Candidate);
+      }
+    Original.OmittedCallees = std::move(Omitted);
+
+    PipelineOptions HighOptions;
+    HighOptions.EmitDumpOutput = false;
+    HighOptions.OnlyFunctionEntries = {Image.Entry};
+    auto HighOriginal = Pipeline().run(Image, Context, HighOptions);
+    ASSERT_TRUE(HighOriginal.Success) << HighOriginal.Error;
+    SourceInlineHighView High{
+        HighOriginal.HighFuncs, HighOriginal.HighSources, {}};
+    EXPECT_EQ(hasUnavailableSourceStackCall(High.Functions, &Original),
+              Mode != 5);
+    auto Specialized = specializeUnavailableSourceCalls(
+        Image, Original, *Original.LlvmModule, nullptr, {}, {}, &High);
+    EXPECT_EQ(source(*Original.LlvmModule), Before);
+    if (Mode != 0) {
+      EXPECT_FALSE(Specialized.Module);
+      continue;
+    }
+    ASSERT_TRUE(Specialized.Module);
+    ASSERT_TRUE(Specialized.High);
+    EXPECT_EQ(source(*Specialized.Module).find("__builtin_trap"),
+              std::string::npos);
+    EXPECT_EQ(source(*Specialized.High, Image).find("__builtin_trap"),
+              std::string::npos);
+    EXPECT_FALSE(llvm::verifyModule(*Specialized.Module, &llvm::errs()));
+    if (const char *Directory =
+            std::getenv("NEVERD_TEST_SOURCE_INLINE_EXPORT")) {
+      const std::string Prefix = std::string(Directory) + "/";
+      ASSERT_FALSE(llvm::sys::fs::create_directories(Directory));
+      std::error_code Error;
+      llvm::raw_fd_ostream HighOut(Prefix + "high.c", Error);
+      ASSERT_FALSE(Error);
+      HighOut << source(*Specialized.High, Image);
+      llvm::raw_fd_ostream LLVMOut(Prefix + "llvm.c", Error);
+      ASSERT_FALSE(Error);
+      CEmitterOptions Emission;
+      Emission.TheArch = Image.Arch;
+      Emission.Format = Image.abiFormat();
+      ASSERT_TRUE(LLVMCEmitter().emit(
+          *Specialized.Module, LLVMOut, Emission, nullptr, &Image,
+          Specialized.Module->getFunction("caller_probe")));
+      llvm::raw_fd_ostream Native(Prefix + "synthetic.bin", Error);
+      ASSERT_FALSE(Error);
+      const auto &Code = Image.Segments.front().Data;
+      Native.write(reinterpret_cast<const char *>(Code.data()), Code.size());
+    }
+  }
 }
 } // namespace
