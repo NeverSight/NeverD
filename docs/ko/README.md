@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
+<!-- i18n-source: f5f0bcd68d33eff4e5577e8377ff12730d6d35c6ec55853b7dd888cc777115e5 -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -39,6 +39,7 @@
 | [macOS HVF](macos-hvf.md) | 호스트와 동일한 ISA의 하드웨어 실행, 서명 권한, 패키징과 검증 |
 | [Windows 드라이버 에뮬레이션](driver-emulation.md) | 제한된 x64 WDM/KMDF 수명 주기, 요청, 하드웨어 시나리오, SEH, PnP 하위 집합, 백엔드 선택 및 제한 |
 | [메모리 안전성 감사와 헌트](memory-safety.md) | 힙 수명과 복사 오버플로 분석: 형식별 신원 계약, 싱크/소스 카탈로그, 판정, 예산, JSON 스키마 |
+| [NPH 프로세스 플러그인 호스트(영문)](../plugin-host.md) | 공유 소유권, 작업 수락, 프로토콜 및 프로세스 수명 |
 | [네이티브 플러그인](plugins.md) | 순수 C descriptor ABI, callback과 event, build/link workflow, discovery 및 호환성 규칙 |
 | [Python 플러그인](python-plugins.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
 | [모바일 지원 개요](mobile.md) | Android / iOS 입력, 소스 출력, CLI 흐름 및 제한 |

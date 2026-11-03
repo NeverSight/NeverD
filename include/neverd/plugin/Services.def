@@ -1,0 +1,23 @@
+//===- Services.def - Process plugin query services -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Existing v1 read services. Semantic validation belongs to the SDK/worker.
+// NEVERD_PLUGIN_QUERY(Name)
+//===----------------------------------------------------------------------===//
+#ifndef NEVERD_PLUGIN_QUERY
+#define NEVERD_PLUGIN_QUERY(Name)
+#endif
+NEVERD_PLUGIN_QUERY("metadata")
+NEVERD_PLUGIN_QUERY("functions")
+NEVERD_PLUGIN_QUERY("disasm")
+NEVERD_PLUGIN_QUERY("decompile")
+NEVERD_PLUGIN_QUERY("cfg")
+NEVERD_PLUGIN_QUERY("xrefs")
+NEVERD_PLUGIN_QUERY("strings")
+NEVERD_PLUGIN_QUERY("bytes")
+NEVERD_PLUGIN_QUERY("imports")
+NEVERD_PLUGIN_QUERY("resolve")
+NEVERD_PLUGIN_QUERY("analysis_sections")
+#undef NEVERD_PLUGIN_QUERY
