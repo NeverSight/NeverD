@@ -17,6 +17,7 @@
 #include "../CIdentifier.h"
 #include "../CSourceRecorder.h"
 #include "../DebugParamBinding.h"
+#include "LLVMCSourceFunctions.h"
 
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/c/CEmitterOptions.h"
@@ -887,6 +888,7 @@ public:
   bool GuardAnalysisOnlyFunctions;
   CSourceRecorder *SourceRecorder = nullptr;
   const llvm::Function *OnlyFunction = nullptr;
+  llvmc::SourceFunctions SelectedFunctions;
   std::set<const llvm::GlobalValue *> SelectedGlobals;
   std::set<std::string> EmittedGlobalNames;
   /// The routines writeImportCalleeDecls declares, ordinary identifiers a

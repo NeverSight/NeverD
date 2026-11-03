@@ -3018,7 +3018,7 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
   auto [It, Inserted] = DefinitionPointers.try_emplace(&Fn);
   auto &Types = It->second;
   if (!Inserted || Opts.PreserveLLVMFunctionTypes || Fn.isDeclaration() ||
-      (OnlyFunction && OnlyFunction != &Fn))
+      !SelectedFunctions.contains(Fn))
     return Types;
   // setupFunction admits a definition's signature only at its original entry.
   // Symbol-name fallback is for external declarations, not this projection.
@@ -3157,7 +3157,7 @@ bool LLVMCWriter::calleeReturnsNothing(const llvm::CallBase &Call) const {
     return true;
   // A definition prints its settled result (setupFunction's InferredVoid);
   // another the unit only declares keeps the type its LLVM declaration has.
-  if (Callee->isDeclaration() || (OnlyFunction && Callee != OnlyFunction) ||
+  if (Callee->isDeclaration() || !SelectedFunctions.contains(*Callee) ||
       !llvm_value_provenance::returnsNoValue(*Callee))
     return false;
   const std::optional<FunctionSym> Debug = debugFunction(*Callee);
@@ -10210,6 +10210,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         RetStr = typeToC(NdType::makeInt(Return->Size, Return->IsSigned));
     std::string Signature;
     llvm::raw_string_ostream SignatureOS(Signature);
+    if (Fn.hasFnAttribute(LLVMSourceBody))
+      SignatureOS << "static ";
     SignatureOS << RetStr << " " << FName << "(";
 
     unsigned ParamIdx = 0;

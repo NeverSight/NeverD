@@ -480,8 +480,12 @@ struct RestoreOutput {
 
 void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   OnlyFunction = Only;
-  SelectedGlobals =
-      Only ? referencedGlobals(*Only) : std::set<const llvm::GlobalValue *>{};
+  SelectedFunctions = llvmc::SourceFunctions(Only);
+  SelectedGlobals.clear();
+  for (const auto *Function : SelectedFunctions.selected()) {
+    const auto Globals = referencedGlobals(*Function);
+    SelectedGlobals.insert(Globals.begin(), Globals.end());
+  }
   EmittedGlobalNames.clear();
   DeclaredCalleeNames.clear();
   RecordPointerTags.clear();
@@ -717,7 +721,7 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
     for (auto &Fn : Mod) {
       if (Fn.isDeclaration())
         continue;
-      if (OnlyFunction && &Fn != OnlyFunction)
+      if (!SelectedFunctions.contains(Fn))
         continue;
       if (Refusing) {
         std::string Text;
@@ -763,7 +767,7 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
       writeImportCalleeDecls(Mod);
       WriteFunctions();
     }
-    writeReferencedImageObjects({OnlyFunction}, Tail);
+    writeReferencedImageObjects(SelectedFunctions.selected(), Tail);
     OS << Tail;
     recordSourceNames(Mod);
     return;
@@ -890,7 +894,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   };
 
   for (auto &Fn : Mod) {
-    if (OnlyFunction && &Fn != OnlyFunction)
+    if (!SelectedFunctions.contains(Fn))
       continue;
     // Windows exception handling prints as `__try` with the filter
     // dispositions and intrinsics <excpt.h> defines.
@@ -1428,7 +1432,7 @@ void LLVMCWriter::writeStructDefs(llvm::Module &Mod) {
       VisitStorage(Global.getValueType());
   for (auto &Fn : Mod) {
     Visit(Fn.getFunctionType());
-    if (OnlyFunction && &Fn != OnlyFunction)
+    if (!SelectedFunctions.contains(Fn))
       continue;
     for (auto &BB : Fn)
       for (auto &Inst : BB) {
@@ -1918,7 +1922,7 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
            hasCSpelling(cDisplayType(Type));
   };
   for (const auto &Fn : Mod) {
-    if (Fn.isDeclaration() || (OnlyFunction && &Fn != OnlyFunction))
+    if (Fn.isDeclaration() || !SelectedFunctions.contains(Fn))
       continue;
     for (const auto &Block : Fn)
       for (const auto &Inst : Block) {
@@ -2212,7 +2216,7 @@ void LLVMCWriter::writeImportCalleeDecls(llvm::Module &Mod) {
   // (`__gmon_start__`).
   std::set<std::string> Weak;
   for (const llvm::Function &Fn : Mod) {
-    if (Fn.isDeclaration() || (OnlyFunction && &Fn != OnlyFunction))
+    if (Fn.isDeclaration() || !SelectedFunctions.contains(Fn))
       continue;
     for (const llvm::BasicBlock &Block : Fn)
       for (const llvm::Instruction &Inst : Block) {
@@ -2506,8 +2510,11 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     if (const auto Source = SourceImportPrototypes.find(Name);
         Fn.isDeclaration() && Source != SourceImportPrototypes.end())
       OS << sourceImportDeclaration(Source->second, Name);
-    else
+    else {
+      if (Fn.hasFnAttribute(LLVMSourceBody))
+        OS << "static ";
       OS << sourceFunctionDeclaration(Fn, Name, Params);
+    }
     // An import whose identifier is not its symbol links by the symbol, which
     // a comment spells as its language does.
     std::string Comment;
@@ -2833,8 +2840,9 @@ static bool containsArrayValue(llvm::Type *Ty) {
   return false;
 }
 
-static void validateArrayValueBoundaries(const llvm::Module &Mod,
-                                         const llvm::Function *Only) {
+static void
+validateArrayValueBoundaries(const llvm::Module &Mod,
+                             const llvmc::SourceFunctions &Selected) {
   const auto &Target = Mod.getTargetTriple();
   // A C record is a value carrier, but that alone does not authenticate its
   // ABI against a raw LLVM aggregate. Admit the word pairs for which both
@@ -2923,7 +2931,7 @@ static void validateArrayValueBoundaries(const llvm::Module &Mod,
           "C projection has an unsupported array argument ABI");
   };
   for (const auto &Fn : Mod) {
-    if (Only && &Fn != Only)
+    if (!Selected.contains(Fn))
       continue;
     CheckSignature(Fn.getFunctionType(), Fn.getCallingConv(),
                    Fn.getAttributes());
@@ -3010,15 +3018,17 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
         }
       }
   }
-  if (Only && referencesVectorGlobal(*Only))
-    throw std::runtime_error(
-        "C projection references unsupported vector global storage");
+  const llvmc::SourceFunctions Selected(Only);
+  for (const auto *Function : Selected.selected())
+    if (referencesVectorGlobal(*Function))
+      throw std::runtime_error(
+          "C projection references unsupported vector global storage");
   bool HasVectors = false;
   if (!Only)
     for (const auto &Global : Mod.globals())
       HasVectors |= containsVectorType(Global.getValueType());
   for (const auto &Function : Mod) {
-    if (Only && &Function != Only)
+    if (!Selected.contains(Function))
       continue;
     if (Function.hasFnAttribute("neverd.x87-import-adapter"))
       throw std::runtime_error(
@@ -3048,8 +3058,12 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
   }
   if (llvm::verifyModule(Mod, &llvm::errs()))
     return false;
-  validateArrayValueBoundaries(Mod, Only);
-  llvmc::validateCStackAllocations(Mod, Only);
+  validateArrayValueBoundaries(Mod, Selected);
+  if (Only)
+    for (const auto *Function : Selected.selected())
+      llvmc::validateCStackAllocations(Mod, Function);
+  else
+    llvmc::validateCStackAllocations(Mod, nullptr);
   // Source normalization must not mutate the caller's IR. Remove dead
   // computations left by recovered control flow even when semantic
   // optimization is disabled; they can otherwise reference unneeded image
@@ -3089,19 +3103,28 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
     lowerCIntegerReductions(*Projection);
     lowerPackedVectorBitcasts(*Projection);
   }
-  llvmc::lowerCStackAllocations(*Projection, ProjectionOnly);
+  const llvmc::SourceFunctions ProjectionFunctions(ProjectionOnly);
+  if (ProjectionOnly)
+    for (const auto *Function : ProjectionFunctions.selected())
+      llvmc::lowerCStackAllocations(*Projection, Function);
+  else
+    llvmc::lowerCStackAllocations(*Projection, nullptr);
   // Native image/debug projections keep their separate source contracts.
   // Pure scalar loop recovery proves its exact replacement before publishing
   // into this private clone and retains the existing path on refusal.
-  if (!Dbg && !Img && !Opts.Image)
-    llvmc::recoverScalarLoops(*Projection, ProjectionOnly);
+  if (!Dbg && !Img && !Opts.Image) {
+    if (ProjectionOnly)
+      for (const auto *Function : ProjectionFunctions.selected())
+        llvmc::recoverScalarLoops(*Projection, Function);
+    else
+      llvmc::recoverScalarLoops(*Projection, nullptr);
+  }
   if (!Dbg && !Img && !Opts.Image)
     for (auto &Function : *Projection)
-      if (!Function.isDeclaration() &&
-          (!ProjectionOnly || &Function == ProjectionOnly))
+      if (!Function.isDeclaration() && ProjectionFunctions.contains(Function))
         promoteCallResultHomes(Function);
   for (auto &Function : *Projection)
-    if (!ProjectionOnly || &Function == ProjectionOnly) {
+    if (ProjectionFunctions.contains(Function)) {
       llvmc::simplifyIntegerSlices(Function);
       llvmc::simplifyBitTests(Function);
       llvmc::factorCommonBranchTests(Function);
@@ -3157,7 +3180,7 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
           throw std::runtime_error(
               "C projection retains an unsupported vector global");
     for (const auto &F : *Projection) {
-      if (ProjectionOnly && &F != ProjectionOnly)
+      if (!ProjectionFunctions.contains(F))
         continue;
       if (!ProjectionOnly && F.isDeclaration() && F.isIntrinsic())
         continue;
