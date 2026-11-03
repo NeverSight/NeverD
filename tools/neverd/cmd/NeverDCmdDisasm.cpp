@@ -23,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>

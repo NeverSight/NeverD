@@ -367,10 +367,11 @@ if(BUILD_TESTING)
     add_dependencies(neverd-gui-tests neverd-worker-test-server neverd-gui)
     add_test(NAME NeverDGuiController COMMAND neverd-gui-tests
       ${_neverd_controller_test_log_args})
-    # The full controller inventory takes several minutes on hosted runners;
-    # individual waits still use the test's own bounded operation deadlines.
+    # The full controller inventory takes about ten minutes on hosted macOS
+    # runners and grows with it. Individual waits still use the test's own
+    # bounded operation deadlines; this limit only ends a hung run.
     set_tests_properties(NeverDGuiController PROPERTIES
-      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 600)
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 1800)
     qt_add_executable(neverd-gui-patch-tests tests/PatchTests.cpp)
     target_link_libraries(neverd-gui-patch-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-patch-tests PRIVATE

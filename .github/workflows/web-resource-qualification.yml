@@ -11,6 +11,7 @@ on:
       - 'lib/web/SessionDataPack*.cpp'
       - 'lib/web/compression/Gzip.*'
       - 'unittests/web/DataPack*'
+      - 'scripts/build_web_icu.sh'
       - '.github/workflows/web-resource-qualification.yml'
   pull_request:
     paths:
@@ -19,6 +20,7 @@ on:
       - 'lib/web/SessionDataPack*.cpp'
       - 'lib/web/compression/Gzip.*'
       - 'unittests/web/DataPack*'
+      - 'scripts/build_web_icu.sh'
       - '.github/workflows/web-resource-qualification.yml'
 
 permissions:
@@ -42,8 +44,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
-      - name: Install build and namespace dependencies
-        run: brew install cmake ninja icu4c@77
+      - name: Prepare pinned ICU and build tools
+        run: |
+          brew install cmake ninja
+          bash scripts/build_web_icu.sh "$RUNNER_TEMP/web-icu" 3
       - name: Obtain and verify the fixed redistributable input
         shell: bash
         run: |
@@ -66,7 +70,7 @@ jobs:
             -DNEVERD_ENABLE_WEB_ANALYSIS=ON \
             -DNEVERD_ENABLE_WEB_JAVASCRIPT=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
-            -DICU_ROOT="$(brew --prefix icu4c@77)"
+            -DICU_ROOT="$RUNNER_TEMP/web-icu/install"
           python scripts/build.py build-web-qualification \
             --target NeverDWebArtifactTests NeverDWebSDKTests \
             NeverDWebGzipWithoutDecoderTests --parallel 3

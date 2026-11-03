@@ -86,7 +86,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install cmake ninja icu4c@77
+          brew install cmake ninja
+          bash scripts/build_web_icu.sh "$RUNNER_TEMP/web-icu" 3
           git init "$RUNNER_TEMP/zstd"
           git -C "$RUNNER_TEMP/zstd" remote add origin https://github.com/facebook/zstd.git
           git -C "$RUNNER_TEMP/zstd" fetch --depth 1 origin f8745da6ff1ad1e7bab384bd1f9d742439278e99
@@ -107,7 +108,7 @@ jobs:
             -DNEVERD_ENABLE_WEB_ANALYSIS=ON \
             -DNEVERD_ENABLE_WEB_JAVASCRIPT=ON \
             -DNEVERD_ENABLE_PYTHON_PLUGINS=OFF \
-            -DICU_ROOT="$(brew --prefix icu4c@77)" \
+            -DICU_ROOT="$RUNNER_TEMP/web-icu/install" \
             -Dzstd_DIR="$RUNNER_TEMP/web-codecs/lib/cmake/zstd"
           python scripts/build.py build-web-qualification --parallel 3 \
             --target NeverDWebArtifactTests NeverDWebSourceMapTests \

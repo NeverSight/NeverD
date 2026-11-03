@@ -1,4 +1,5 @@
 import ast
+import itertools
 import json
 import os
 import re
@@ -31,6 +32,28 @@ CONFIGURE_ONLY_OPTIONS = tuple(
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def test_web_release_gate_honors_cancellation_and_requires_complete_results(self):
+        shell = "/bin/bash" if Path("/bin/bash").is_file() else shutil.which("bash")
+        if shell is None:
+            self.skipTest("bash is unavailable")
+        source = WORKFLOW.with_name("web-release-qualification.yml").read_text()
+        gate = source.split("\n  release-gate:\n", 1)[1]
+        self.assertIn("needs: [inputs, producers, resources]", gate)
+        self.assertIn("if: ${{ !cancelled() }}", gate)
+        step = self.workflow_step_containing(source, "Require both complete qualifications")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        keys = ("INPUT_RESULT", "PRODUCER_RESULT", "RESOURCE_RESULT")
+        for results in itertools.product(("success", "failure", "cancelled", "skipped"),
+                                         repeat=3):
+            with self.subTest(results=results):
+                result = subprocess.run(
+                    [shell, "--noprofile", "--norc", "-c", script],
+                    env={**os.environ, **dict(zip(keys, results))},
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode == 0,
+                                 results == ("success",) * 3,
+                                 result.stdout + result.stderr)
+
     def test_acceleration_matrix_runs_with_native_bash_and_default_options(self):
         shell = "/bin/bash" if Path("/bin/bash").is_file() else shutil.which("bash")
         if shell is None:
