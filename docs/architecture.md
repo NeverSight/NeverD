@@ -3078,11 +3078,12 @@ dependency closure; absent selected names and provider parse errors prevent
 an import. This owner
 is separate from the runtime priority merge of system and program types; the
 flattened generated headers add no provider merge during decompilation.
-Runtime merging compares each named by-value dependency's layout once while
-the two libraries' definitions stay fixed. The comparison belongs to that
-merge only; growing conflicts still propagate independently, and prototype
+Runtime merging resolves each named by-value dependency once per library for
+a size/alignment comparison. Temporary expressions stay on the stack and
+retain each declaration's kind; `TypeLibrary` still owns size and alignment
+semantics. Comparisons retain no state across records or merges, and prototype
 checks read the library after rejected definitions have been removed or made
-opaque. Later merges and type edits cannot reuse an earlier comparison.
+opaque.
 When the runtime merge knows its Windows kernel provider, the `ntifs.h`
 opaque `PEPROCESS`/`PETHREAD` aliases can use a complete PDB executive record
 whose first member is the corresponding kernel prefix at offset zero. This

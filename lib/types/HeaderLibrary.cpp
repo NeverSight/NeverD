@@ -10,7 +10,6 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
-#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <array>
@@ -56,17 +55,24 @@ bool hasOrdinaryTypeName(const LocalType &Type) {
          Type.TypedefNamed;
 }
 
-/// The size \p Library gives the type named \p Name, as a member holds it.
-std::optional<uint64_t> sizeOfNamed(const TypeLibrary &Library,
-                                    llvm::StringRef Name) {
-  const LocalType *Type = Library.find(Name);
-  return Type ? Library.sizeOf(*makeNamed(Name.str(), Type->Kind))
-              : std::nullopt;
-}
-
-uint32_t alignOfNamed(const TypeLibrary &Library, llvm::StringRef Name) {
-  const LocalType *Type = Library.find(Name);
-  return Type ? Library.alignOf(*makeNamed(Name.str(), Type->Kind)) : 0;
+/// Compare a named dependency without allocating shared expressions for each
+/// size/alignment query. Each library still resolves the name under its own
+/// definitions, and a missing declaration retains its absent size/alignment.
+bool sameNamedLayout(const TypeLibrary &Library, const TypeLibrary &Headers,
+                     llvm::StringRef Name) {
+  const LocalType *Own = Library.find(Name);
+  const LocalType *Header = Headers.find(Name);
+  const TypeExpr OwnRef{.Kind = TypeExprKind::Named,
+                        .Name = Name.str(),
+                        .NamedKind = Own ? Own->Kind : TypeKind::Struct};
+  const TypeExpr HeaderRef{.Kind = TypeExprKind::Named,
+                           .Name = Name.str(),
+                           .NamedKind =
+                               Header ? Header->Kind : TypeKind::Struct};
+  return (Own ? Library.sizeOf(OwnRef) : std::nullopt) ==
+             (Header ? Headers.sizeOf(HeaderRef) : std::nullopt) &&
+         (Own ? Library.alignOf(OwnRef) : 0) ==
+             (Header ? Headers.alignOf(HeaderRef) : 0);
 }
 
 llvm::StringRef supplementSource(HeaderLibrary Library) {
@@ -273,18 +279,6 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
   // one that holds a type the program sizes or aligns otherwise goes, as does
   // any type that names one gone.  A typedef has no layout of its own: it names
   // the program's type, as C binds it.
-  // Definitions stay unchanged until conflicts have propagated. Compare a
-  // dependency's layout once across records and propagation rounds; Gone is
-  // still checked separately as it grows. Do not reuse these comparisons after
-  // the conflicting definitions are removed below.
-  llvm::StringMap<bool> SameLayouts;
-  const auto SameLayout = [&](llvm::StringRef Name) {
-    auto [At, Inserted] = SameLayouts.try_emplace(Name, false);
-    if (Inserted)
-      At->second = sizeOfNamed(Library, Name) == sizeOfNamed(Headers, Name) &&
-                   alignOfNamed(Library, Name) == alignOfNamed(Headers, Name);
-    return At->second;
-  };
   for (bool Changed = true; Changed;) {
     Changed = false;
     for (const std::string &Name : Added) {
@@ -304,7 +298,8 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
               Incompatible = true;
           }
       for (const std::string &Held : valueDependencyNames(*Type))
-        if (Gone.contains(Held) || (LaidOut && !SameLayout(Held))) {
+        if (Gone.contains(Held) ||
+            (LaidOut && !sameNamedLayout(Library, Headers, Held))) {
           Incompatible = true;
           break;
         }
