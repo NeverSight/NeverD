@@ -868,6 +868,19 @@ LocalTypesDebugContext::resolvePrototype(llvm::StringRef Name) const {
   return Signature;
 }
 
+bool LocalTypesDebugContext::prototypeDoesNotReturn(
+    llvm::StringRef Name) const {
+  // The context's type library is immutable. A missing or returning
+  // declaration cannot make this predicate true, regardless of its types.
+  // Do not populate the full signature cache for every name in the image.
+  const auto *Function = Types->findPrototype(Name);
+  if (!Function || !Function->NoReturn)
+    return false;
+  // Keep the ordinary resolver's validation for positive declarations: an
+  // unrepresentable return or parameter type must not terminate a CFG path.
+  return DebugContext::prototypeDoesNotReturn(Name);
+}
+
 std::optional<FunctionSym> LocalTypesDebugContext::entrySignature() const {
   if (!EntryDeclaration.empty()) {
     const auto Read = types::parseFunctionDeclaration(EntryDeclaration, *Types);

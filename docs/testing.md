@@ -6601,6 +6601,11 @@ caller at `0x140a3aad4` is an integration witness: its two zero arguments must
 survive omitted-callee recovery and its HighC must compile at O0 and O2.
 `IsNoReturnTarget.ExportsAndDeclaredPrototypesNameNoReturnRoutines` covers
 exports and `_Noreturn` prototypes in the no-return index.
+`DebugContext.NoReturnQueryUsesTheProvidersValidatedPrototype` retains existing
+providers' declaration behavior. `LocalTypesDebugContext.NoReturnQueryMatchesValidatedPrototype`
+compares the cheap declaration query with the full resolver across ILP32, LLP64
+and LP64, including recursive pointer records, variadic declarations, missing
+names and invalid no-return parameter/return types before and after cache fill.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires
@@ -18695,7 +18700,23 @@ effects. `SessionLLVMTest.DllEntryPrototypeRequiresARealPEEntry` checks absent
 and present DLL entries across x86, x64 and ARM64 image models, plus executable
 and native-subsystem controls.
 A direct LLVM dependency test distinguishes dead unknown PHIs from value returns
-and memory readers. `SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
+and memory readers. `SourceCallObservations.*` additionally checks bounded
+removal of dead register/flag calculations and unused PHI cycles before helper
+size admission. Unused loads, stores, ordinary calls, control decisions and
+observed unknown values remain; exhausting the scan or live-body budget leaves
+the function unchanged. Source handles follow deletion without losing retained
+memory observations. `LargeCandidateScaffoldingStillNeedsTheActualBody` supplies
+oversized, incomplete candidate information and verifies that only recovery of
+the original bytes can authorize expansion. Native slot readers and implicit
+mutable-parameter entry stores remain refused. These cases inspect IR and C
+without executing the fixture. Setting `NEVERD_TEST_SOURCE_INLINE_EXPORT`
+exports its synthetic bytes and both C routes (including selected-function
+LLVM C) for separate instruction stepping. Static shared-body tests check repeated
+calls, retained volatile loads/stores, argument attribute remapping, removal of
+stale `allocsize` indices, unchanged native signatures and source observations.
+Selected C must carry the complete reachable helper definition closure and its
+providers and data, while excluding unrelated helpers and native bodies.
+`SessionLLVMTest.SourceBodyExpansionKeepsNativeAndUnoptimizedQueries`
 checks the optimized original-image view, repeat queries, native LLVM and the
 unoptimized view against the same session without changing the native callee's
 seven parameter positions. These are source and ABI tests, not full execution
