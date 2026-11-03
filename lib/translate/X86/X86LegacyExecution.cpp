@@ -114,8 +114,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     Delivered->InstructionAttempted = true;
     Delivered->InstructionCompleted =
         Completed &&
-        Delivered->Status == X86LegacyExecutionStatus::EventDelivered &&
-        !Delivered->Exception;
+        (Event.Kind == X86LegacyEventKind::Trap ||
+         (Delivered->Status == X86LegacyExecutionStatus::EventDelivered &&
+          !Delivered->Exception));
     if (!Delivered->Exception)
       Delivered->Exception = R.Exception;
     Delivered->SelfModifications.insert(Delivered->SelfModifications.begin(),
@@ -183,6 +184,13 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                              : Opcode == 0xcc ? 3
                              : Opcode == 0xce ? 4
                                               : 1;
+      if (Opcode == 0xf1) {
+        // ICEBP completes before its debug trap. A failed #DB entry keeps
+        // the fallthrough and must not restore pre-instruction RF or STI.
+        State.EIP = NextIP;
+        State.EFlags = Flags & ~0x10000u;
+        State.STIBlocked = false;
+      }
       return Enter({NextIP, 0, 0, Vector,
                     Opcode == 0xf1 ? X86LegacyEventKind::Trap
                                    : X86LegacyEventKind::Software},

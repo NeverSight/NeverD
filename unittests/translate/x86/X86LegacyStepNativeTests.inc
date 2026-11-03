@@ -14,6 +14,7 @@ protected:
   void compare(bool Code32, unsigned Case) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message() << "code32=" << Code32 << " case=" << Case);
+    const bool NoDebugger = Case >= 14;
     const bool Legacy = GetParam() == 2;
     const unsigned Width = Legacy ? 4 : 8;
     const uint32_t PT = Legacy ? 0x181000 : 0x182000;
@@ -25,9 +26,13 @@ protected:
       put(PT + I * Width, I * 4096 | 7, Width);
     put(0x7008, 0x00cf9b000000ffffULL);
     put(0x7010, 0x00cf93000000ffffULL);
-    for (unsigned V = 0; V != 256; ++V)
-      put(0x6000 + V * 8,
-          0x2800 | (uint64_t{8} << 16) | (uint64_t{0x8e} << 40));
+    for (unsigned V = 0; V != 256; ++V) {
+      const uint32_t Entry = 0x2800 + (NoDebugger ? V * 16 : 0);
+      put(0x6000 + V * 8, Entry | (uint64_t{8} << 16) | (uint64_t{0x8e} << 40));
+      RAM[Entry] = 0xf4;
+    }
+    if (Case == 19)
+      put(0x6008, 0x2810 | (uint64_t{8} << 16) | (uint64_t{0x0e} << 40));
     put(0xd000, 16, 2);
     put(0x9000, 0xb000, 4);
     put(0x9004, 16, 2);
@@ -57,6 +62,10 @@ protected:
     Registers.rsp = 0xd000;
     Registers.rip = Case == 6 ? 0xffff : Case == 7 || Case == 8 ? 0xfffe : Code;
     Registers.rflags = 2 | (Case == 3 || Case == 4 ? 0 : 0x200);
+    if (Case >= 15)
+      Registers.rflags |= 0x10000;
+    if (Case == 17)
+      Registers.rflags |= 0x800;
     std::vector<std::vector<uint8_t>> Instructions;
     const std::vector<uint8_t> LoadSS{0x8e, 0xd0};
     if (Case == 0) {
@@ -81,6 +90,10 @@ protected:
       Instructions = {{0x0f, 0xb2, 0x27}};
       if (!Code32)
         Instructions[0].insert(Instructions[0].begin(), {0x66, 0x67});
+    } else if (NoDebugger) {
+      Instructions = {{uint8_t(Case == 16                 ? 0xcc
+                               : Case == 17 || Case == 18 ? 0xce
+                                                          : 0xf1)}};
     } else {
       Instructions = {{0x90}};
     }
@@ -89,7 +102,7 @@ protected:
       std::copy(Bytes.begin(), Bytes.end(), RAM + Special.cs.base + End);
       End += Bytes.size();
     }
-    RAM[Special.cs.base + End] = 0x90;
+    RAM[Special.cs.base + End] = NoDebugger ? 0xf4 : 0x90;
     RAM[Special.cs.base + End + 1] = 0xf4;
     RAM[0x2800] = 0xf4;
     X86LegacyExecutionState State;
@@ -149,6 +162,8 @@ protected:
     for (const auto &Bytes : Instructions) {
       auto R = llvm::cantFail(
           executeX86LegacyInstruction(State, *Memory, Bytes, Options));
+      if (NoDebugger)
+        EXPECT_TRUE(R.InstructionCompleted);
       if (R.Status == X86LegacyExecutionStatus::EventDelivered)
         break;
       ASSERT_EQ(R.Status, X86LegacyExecutionStatus::Completed);
@@ -177,6 +192,10 @@ protected:
     Debug.arch.debugreg[2] = Special.cs.base + uint16_t(End);
     Debug.arch.debugreg[3] = Special.cs.base + End + 1;
     Debug.arch.debugreg[7] = Pending ? 0x405 : 0x455;
+    // ICEBP must reach the real #DB handler. KVM's hardware-debug mode
+    // intercepts that exception, so these cases stop through privileged HLT.
+    if (NoDebugger)
+      Debug.control = 0;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
     if (Pending && Case == 11)
       ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
@@ -192,20 +211,22 @@ protected:
       ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &IRQ), 0);
     }
     ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
-    ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_DEBUG));
+    ASSERT_EQ(Run->exit_reason,
+              unsigned(NoDebugger ? KVM_EXIT_HLT : KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
     kvm_vcpu_events FinalEvents{};
     ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &FinalEvents), 0);
     EXPECT_EQ(bool(FinalEvents.nmi.masked), State.NMIBlocked);
-    EXPECT_EQ(Registers.rip, State.EIP);
+    EXPECT_EQ(Registers.rip - NoDebugger, State.EIP);
     const std::array<uint32_t, 8> GPR{
         uint32_t(Registers.rax), uint32_t(Registers.rcx),
         uint32_t(Registers.rdx), uint32_t(Registers.rbx),
         uint32_t(Registers.rsp), uint32_t(Registers.rbp),
         uint32_t(Registers.rsi), uint32_t(Registers.rdi)};
     EXPECT_EQ(GPR, State.Core.GPR);
-    EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000}, State.EFlags);
+    EXPECT_EQ(Registers.rflags & (NoDebugger ? UINT64_MAX : ~uint64_t{0x10000}),
+              State.EFlags);
     EXPECT_EQ(Special.cr2, State.CR2);
     for (unsigned I = 0; I != Segments.size(); ++I) {
       const auto Native = Cache(*Segments[I]);
@@ -228,6 +249,13 @@ protected:
 TEST_P(X86LegacyStepNativeTest, OriginalFetchCompletionAndPendingEvents) {
   for (bool Code32 : {false, true})
     for (unsigned Case = 0; Case != 14; ++Case)
+      ASSERT_NO_FATAL_FAILURE(compare(Code32, Case));
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyStepNativeTest, OriginalSoftwareDebugAndOverflow) {
+  for (bool Code32 : {false, true})
+    for (unsigned Case = 14; Case != 20; ++Case)
       ASSERT_NO_FATAL_FAILURE(compare(Code32, Case));
   RecordProperty("cpu_comparisons", Comparisons);
 }

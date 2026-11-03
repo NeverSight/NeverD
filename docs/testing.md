@@ -32,6 +32,9 @@ TSS page boundaries distinguish the offset-first read and its actual extent. Sep
 flags/high-ESP cases distinguish target SS.D/B from gate or TSS width.
 Original instruction sequences test CS-base/limit fetch, sequential EIP above
 FFFFh in 16-bit code, MOV/POP SS, LSS, CLI/STI and pending IRQ/NMI shadows.
+INT1, INT3 and INTO cases disable KVM guest debugging and stop through HLT,
+so the original #DB reaches its real IDT entry instead of a debugger intercept.
+They compare saved RF and fallthrough, including a failed INT1 gate.
 IRQ injection waits for `KVM_EXIT_IRQ_WINDOW_OPEN`. The native debugger's RF
 bit and shutdown's undefined register bank are excluded; saved frame flags,
 CR2 and retained ordinary RAM remain checked. Repeat these tests on the

@@ -178,6 +178,9 @@ CLI/STI with IOPL/PVI checks, INT, INT3, INTO, INT1 and UD2. An unimplemented
 instruction returns an error; only an authenticated UD2 generates its #UD.
 Sequential EIP is not truncated solely because CS.D is zero. Code-base and
 limit checks still apply to each fetched byte.
+INT1/ICEBP completes before its debug trap: it clears RF, advances EIP and
+ends the STI window even when the subsequent #DB entry fails. Its gate DPL
+and EXT handling remain those of a debug event, not an INT n software entry.
 
 Event entry supports 16/32-bit interrupt and trap gates, conforming code,
 GDT/LDT targets, all four CPLs, inner-ring stacks from 16/32-bit TSS caches,

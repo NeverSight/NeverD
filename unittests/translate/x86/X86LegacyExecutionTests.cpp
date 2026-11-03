@@ -285,4 +285,17 @@ TEST_F(X86LegacyExecutionTest, BackingFailureIsNotAGuestPageFault) {
   EXPECT_TRUE(S.NMIBlocked);
 }
 
+TEST_F(X86LegacyExecutionTest, DebugTrapCompletesBeforeFaultableEntry) {
+  S.STIBlocked = true;
+  put(0x11018, 0x30007, GuestScalarWidth::I32);
+  auto R = run({0xf1});
+  EXPECT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+  EXPECT_TRUE(R.InstructionAttempted);
+  EXPECT_TRUE(R.InstructionCompleted);
+  EXPECT_EQ(S.EIP, 0x1001u);
+  EXPECT_EQ(S.EFlags, 0x202u);
+  EXPECT_FALSE(S.STIBlocked);
+  EXPECT_EQ(S.Core.GPR[4], 0xd000u);
+}
+
 } // namespace
