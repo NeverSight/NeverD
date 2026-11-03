@@ -107,7 +107,7 @@ public:
 
   llvm::Expected<X86LegacySegmentExecutionResult> finish() {
     if (Failure)
-      return std::move(Failure);
+      return std::move(*Failure);
     return std::move(R);
   }
 
@@ -116,7 +116,7 @@ private:
   X86PagedMemory &M;
   const X86LegacySegmentExecutionOptions &O;
   X86LegacySegmentExecutionResult R;
-  llvm::Error Failure = llvm::Error::success();
+  std::optional<llvm::Error> Failure;
 
   X86LegacySegmentCache &cache(X86SegmentRegister Segment) {
     return S.Segments[unsigned(Segment)];

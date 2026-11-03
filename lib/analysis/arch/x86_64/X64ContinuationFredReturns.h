@@ -141,7 +141,7 @@ public:
       W.compatibilityChoices(Choices);
       userFinish(masked(PC, UINT32_MAX), Flags, masked(SP, UINT32_MAX), SS);
     });
-    const auto Code = returnCode(SelectorCS, k(3));
+    const auto Code = returnCode(SelectorCS);
     const auto Stack = returnStack(SelectorCS, k(3), SelectorSS,
                                    eq(masked(SelectorSS, 0xfffc), k(0)));
     const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));

@@ -11,6 +11,7 @@
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSEGMENTS_H
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/ir/X86/X86ReturnRules.h"
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 #include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 #include "neverd/ir/low/LowIR.h"
@@ -60,6 +61,8 @@ protected:
   using Rules =
       neverd::detail::X86SegmentDescriptorRules<X64ContinuationSegments>;
   friend Rules;
+  using ReturnRules = neverd::detail::X86ReturnRules<X64ContinuationSegments>;
+  friend ReturnRules;
   using State = X64ContinuationStateV1;
   using V5 = X64ContinuationStateV5;
   using V6 = X64ContinuationStateV6;
@@ -275,39 +278,25 @@ protected:
         (Base ? offsetof(Segment, Attributes) : offsetof(Metadata, Attributes));
     const auto Selector = load(SelectorOffset, 2);
     const auto Attributes = load(AttributeOffset, 2);
-    const auto Invalidate = both(
-        ne(CPL, k(0)), either(eq(masked(Selector, 0xfffc), k(0)),
-                              both(less(masked(shifted(Attributes, 5), 3), CPL),
-                                   ne(masked(Attributes, 12), k(12)))));
+    const auto Invalidate =
+        ReturnRules::invalidateData(*this, Selector, Attributes, CPL);
     W.store(SelectorOffset, narrow(choose(Invalidate, k(0), Selector), 2));
     return op(NdOp::INT_OR, {Unusable, choose(Invalidate, k(Bit), k(0))});
   }
 
-  Descriptor returnCode(NdVar CS, NdVar CPL,
-                        std::optional<NdVar> OldCPL = std::nullopt) {
+  Descriptor returnCode(NdVar CS, std::optional<NdVar> OldCPL = std::nullopt) {
     faultIf(eq(masked(CS, 0xfffc), k(0)), 13, k(0));
     const auto Code = descriptor(CS);
-    const auto Access = shifted(Code.Value, 40);
-    const auto DPL = masked(shifted(Access, 5), 3);
-    if constexpr (Writer::FaultableMemory) {
-      // The bound return profiles fetch the descriptor before rejecting an
-      // inward RPL. A descriptor #PF therefore precedes that selector #GP.
-      const auto Error = masked(CS, 0xfffc);
-      faultIf(ne(masked(Access, 0x18), k(0x18)), 13, Error);
-      faultIf(eq(masked(Access, 0x6000), k(0x6000)), 13, Error);
-      if (OldCPL)
-        faultIf(less(CPL, *OldCPL), 13, Error);
-      faultIf(choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)),
-              13, Error);
-      faultIf(eq(masked(Access, 0x80), k(0)), 11, Error);
-    } else {
-      W.rejectIf(ne(masked(Access, 0x98), k(0x98)));
-      W.rejectIf(eq(masked(Access, 0x6000), k(0x6000)));
-      W.rejectIf(
-          choose(ne(masked(Access, 4), k(0)), less(CPL, DPL), ne(CPL, DPL)));
+    // Fetch precedes inward-RPL rejection under the bound return profiles.
+    ReturnRules::checkCode(*this, CS, Code.Value, OldCPL.value_or(k(0)), true);
+    if constexpr (!Writer::FaultableMemory)
       AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
-    }
     return Code;
+  }
+
+  NdVar interruptReturnFlags(NdVar Old, NdVar Saved, NdVar CPL,
+                             unsigned Bytes) {
+    return ReturnRules::interruptFlags(*this, Old, Saved, CPL, Bytes);
   }
 
   Descriptor returnStack(NdVar CS, NdVar CPL, NdVar SS, NdVar NullSS,

@@ -55,12 +55,17 @@ struct X86LegacyEvent {
 /// recovery. Task gates, VM86 and CET need separate bindings.
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 
+/// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
+/// outer SS/SP reads and late target-limit checks. Ordinary RAM, one CPU.
+enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
+
 struct X86LegacyExecutionOptions {
   X86LegacySegmentExecutionOptions Segments;
   std::optional<X86LegacyEventProfile> Events;
   /// Required for NMI eligibility under STI when no other blocker decides it;
   /// does not affect MOV/POP SS's NMI inhibition.
   std::optional<bool> NMIBlockedBySTI;
+  std::optional<X86LegacyReturnProfile> Returns;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -95,12 +100,15 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 
 /// Authenticates original bytes through CS and paging, then executes the
 /// segment-transition owner or
-/// NOP/MOV-immediate/CLI/STI/INT/INT3/INTO/INT1/UD2. On an architectural fault,
-/// enters the IDT with the original EIP. On success, commits fallthrough,
-/// clears RF and advances persistent SS/STI inhibition. Changed code returns
-/// CodeChanged at the first mismatch. Unimplemented or malformed instructions
-/// return Error, never a synthesized #UD or NOP. TF stepping and hardware debug
-/// event production are not supplied here.
+/// NOP/MOV-immediate/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. On an
+/// architectural fault, enters the IDT with the original EIP. On success,
+/// commits fallthrough, clears RF and advances persistent SS/STI inhibition.
+/// Changed code returns CodeChanged at the first mismatch. Unimplemented or
+/// malformed instructions return Error, never a synthesized #UD or NOP. TF
+/// stepping and hardware debug event production are not supplied here. Returns
+/// stop at their destination, preserve RF restored by IRETD, and end SS/STI
+/// inhibition. IRET unblocks NMI after fetch, including on a later fault; RETF
+/// preserves NMI blocking.
 llvm::Expected<X86LegacyExecutionResult>
 executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,
