@@ -43025,13 +43025,24 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86FilterThunksPrintTheirValue) {
   ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
   const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
   bool ReadsTheLocal = false;
-  for (llvm::StringRef Line : llvm::split(Source, '\n'))
+  bool ExecutesTheHandler = false;
+  for (llvm::StringRef Line : llvm::split(Source, '\n')) {
     // The filter result is a signed 32-bit value; a uint32_t frame carrier
     // needs the cast to retain EXCEPTION_CONTINUE_EXECUTION (-1).
+    // Default display recovery defers native registration closure, so its
+    // unstructured annotation must retain the same value at the exact thunk.
     ReadsTheLocal |=
         Line.ends_with("__except (stack_storage.var_m20) {") ||
-        Line.ends_with("__except ((int32_t)stack_storage.var_m20) {");
+        Line.ends_with("__except ((int32_t)stack_storage.var_m20) {") ||
+        (Line.contains("filter @ 0x401683, handler @ 0x401687, state=1, ") &&
+         Line.ends_with("filter_value=(int32_t)stack_storage.var_m20"));
+    ExecutesTheHandler |=
+        Line.ends_with("__except (EXCEPTION_EXECUTE_HANDLER) {") ||
+        (Line.contains("filter @ 0x4029BD, handler @ 0x4029C3, state=46, ") &&
+         Line.ends_with("filter_value=EXCEPTION_EXECUTE_HANDLER"));
+  }
   EXPECT_TRUE(ReadsTheLocal) << Source;
+  EXPECT_TRUE(ExecutesTheHandler) << Source;
   // 0x4029BD is `mov eax, 1; ret`, 0x401683 the frame read.
   EXPECT_EQ(Source.find("sub_4029BD"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("sub_401683"), std::string::npos) << Source;

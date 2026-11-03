@@ -1,5 +1,12 @@
 # Remaining x64 C-quality work
 
+The public PE32 `xcpt4-msvc-x86-native-no-gs-o0.exe` filter regression now
+checks the current display contract: signed local and constant filter values
+remain visible even when native registration closure is deferred. An explicit
+strict run of entry `0x401580` still exhausts the registration-state proof
+budget and then refuses an unproved CALL return-slot observation. This is an
+open native-reconstruction/performance gap, not a passing native C result.
+
 The incoming-stack summary now preserves address dependence through partial
 register writes, whole-word transforms and SELECT alternatives. HighC also
 retains the source storage and initializer when an indirect access reconstructs

@@ -13576,8 +13576,11 @@ its distinct filter and handler acquire their entry proofs only from the
 continued callback state. Unit controls require both roots and reject complete
 proof publication when a filter path has an unknown disposition.
 The genuine `CorpusFuncLoadX86FilterThunksPrintTheirValue` regression retains
-structured filters when an ordinary finally's raise selects a handler: that
-path must not be treated as a failed nonlocal resumption.
+the signed local read and constant filter value without calling either thunk
+through an ordinary function ABI. Default PE32 display recovery deliberately
+defers native registration closure, so the check accepts the exact filter's
+unstructured annotation as well as its structured spelling. This display
+check does not establish native exception reconstruction.
 Each execution alternates both filter paths across four invocations, checks the
 resumed TryLevel and nonvolatile register, and requires the exact cleanup trace
 and restored registration chain. The source reconstruction and independent
