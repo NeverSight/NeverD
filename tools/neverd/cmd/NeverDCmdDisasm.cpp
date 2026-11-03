@@ -23,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -182,9 +183,9 @@ int runDisasm(neverd_session_t Sess) {
     int FuncIdx = findFunction(Sess, FuncId);
     // An address no listed function starts is disassembled from there, as
     // the text form does.
-    const auto Entry = FuncIdx >= 0
-                           ? std::optional(neverd_func_entry(Sess, FuncIdx))
-                           : parseAddrArg(DisasmFunc);
+    const auto Entry =
+        FuncIdx >= 0 ? std::optional<uint64_t>(neverd_func_entry(Sess, FuncIdx))
+                     : parseAddrArg(DisasmFunc);
     if (!Entry) {
       WithColor::error() << "disasm failed: function not found\n";
       return 1;
