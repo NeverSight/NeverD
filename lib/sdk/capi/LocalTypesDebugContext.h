@@ -200,6 +200,7 @@ public:
   /// for a name without a prototype or a type the decompiler cannot describe.
   std::optional<FunctionSym>
   resolvePrototype(llvm::StringRef Name) const override;
+  bool prototypeDoesNotReturn(llvm::StringRef Name) const override;
 
   /// The signature of the user's declaration of the function at \p Entry.
   /// None where the user declared none, or one that no longer reads against

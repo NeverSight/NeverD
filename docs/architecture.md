@@ -587,14 +587,25 @@ aliasing prevents a native stack-slot omission proof. On demand, a bounded
 selection of complete Win64 bodies goes through normal source admission with
 the caller. LLVM verifies the joint module and checks the callee's real formal
 uses. Unknown values reaching memory, calls, returns or control reject expansion;
-dead register PHIs alone do not. Complete support bodies are prepared from
+dead register PHIs alone do not. The observable dependency closure owns the
+body-size limit: bounded cleanup removes dead register/flag calculations before
+admission while retaining every load, store, ordinary call and terminator. The
+scan still shares the existing work bound. Candidate checks reject parameters
+with implicit mutable entry stores early; source cleanup supplies no native-slot
+nonobservation proof. Complete support bodies are prepared from
 leaves to callers, once per query, within the same callee and expansion budgets.
 Shared descendants reuse that preparation; cycles and unresolved observations
 inside a child retain the original call. The original native signatures and positional
-stack storage remain unchanged. LLVM C inlines the admitted body. HighC uses
-the same admission to emit a separately named C helper with only the unused
+stack storage remain unchanged. LLVM C keeps the existing expansion for a
+single use and shares one separately named helper across repeated uses of an
+admitted body. HighC always uses named helpers. Both remove only unused
 formal operands removed, preserving its memory effects and the caller's
-structured control flow. Nested helper calls are rewritten before removing and
+control flow. `PipelineSourceCallHelpers` clones the LLVM body once and remaps
+its source observations; repeated calls reuse that definition. The explicit
+`neverd.source-body` attribute makes selected LLVM C emission include the
+reachable helper definitions, their imports and data, through the same source
+validation and normalization as the selected function. Ordinary native callees
+remain declarations. Nested helper calls are rewritten before removing and
 renumbering the caller helper's formals, and only reachable helpers are emitted.
 Helper names have body provenance but no invented
 native addresses or editable native-variable identities. Their parameters do
@@ -3870,7 +3881,13 @@ writers read it, so that a caller returning what a `void` routine left in
 RAX returns nothing too. A routine never returns where its name says so, as
 the tables (`isNoReturnFunction`) or a `_Noreturn` prototype
 (`resolvePrototype`) do: an import, a symbol, or an export the image's own
-code calls (`NoReturnTargetIndex`). A name a program may also give a routine
+code calls (`NoReturnTargetIndex`). Its declaration query uses
+`DebugContext::prototypeDoesNotReturn`, which has exactly the resolver's answer.
+The local-type provider can reject missing or returning declarations directly
+from its immutable library, without converting and caching every image symbol's
+parameter/return graph. Positive declarations still pass full prototype
+validation; an unsupported type cannot terminate a CFG path.
+A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
 `terminate` never returns. Its cached and demand-loaded lookups share
