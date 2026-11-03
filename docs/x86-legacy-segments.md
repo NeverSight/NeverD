@@ -313,5 +313,11 @@ or optional type providers. The additional selector-boundary probes exposed
 and corrected four-byte CS/SS overreads after the earlier matrix had passed.
 Superseded runs do not enter these totals. Each SDK exports 1,032 shared
 paged/continuation artifacts, all byte-identical across the SDKs.
+After integrating `dc0f9db8f1`'s supplemental no-return lookup change, both
+SDKs pass 784 additional pipeline, no-return, source/export, paged execution
+and CLI checks without skips. The legacy return/event/segment/page inputs
+remain unchanged, and all 1,032 exports per SDK still match the primary
+qualification. These integration results are recorded separately; the
+original qualified binaries are retained by hash.
 The architectural reference is Intel SDM revision 093, volume 2 IRET and RET,
 available from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
