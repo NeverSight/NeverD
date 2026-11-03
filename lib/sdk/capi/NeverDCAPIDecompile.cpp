@@ -46,6 +46,7 @@
 #include "llvm/Support/SaveAndRestore.h"
 
 #include <limits>
+#include <optional>
 #include <set>
 #include <stdexcept>
 
@@ -53,6 +54,20 @@ using namespace neverd;
 using namespace neverd::sdk;
 
 namespace {
+/// One source emission's inventory, read only when a data name needs it.
+/// The session still owns synchronization, invalidation and the native scan.
+auto deferredAccessWidths(Session &S,
+                          std::optional<const DataAccessWidths *> &Widths) {
+  // Publishing recovered functions and names still precedes source emission.
+  // Only the native width scan is deferred.
+  (void)S.synchronizeFunctions();
+  return [&S, &Widths] {
+    if (!Widths)
+      Widths = S.dataAccessWidths();
+    return *Widths;
+  };
+}
+
 struct IRRowOrigin {
   std::string ObjectId;
   const char *Kind = "decoration";
@@ -743,7 +758,8 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Opts.Format = S->Img.abiFormat();
   Opts.Image = &S->Img;
   Opts.UserNames = &S->Renames;
-  Opts.AccessWidths = S->dataAccessWidths();
+  std::optional<const DataAccessWidths *> AccessWidths;
+  Opts.ReadAccessWidths = deferredAccessWidths(*S, AccessWidths);
   if (SourceMap) {
     SourceMap->Recognitions = &S->PipeResult.LibraryRecognitions;
     SourceMap->HighSources = Sources;
@@ -867,7 +883,8 @@ static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Opts.TheArch = S->Img.Arch;
   Opts.Format = S->Img.abiFormat();
   Opts.UserNames = &S->Renames;
-  Opts.AccessWidths = S->dataAccessWidths();
+  std::optional<const DataAccessWidths *> AccessWidths;
+  Opts.ReadAccessWidths = deferredAccessWidths(*S, AccessWidths);
   if (SourceMap) {
     SourceMap->Recognitions = &S->PipeResult.LibraryRecognitions;
     SourceMap->LLVMSources = Native->Sources.get();
