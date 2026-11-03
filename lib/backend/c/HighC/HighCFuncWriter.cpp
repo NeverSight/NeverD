@@ -1397,9 +1397,13 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
       }
       return;
     }
+    // A non-affine access consumes its component addresses as values. They
+    // still need storage and initializers when split into bytes or rebuilt
+    // by arithmetic, even though the complete address names no fixed slot.
+    const bool ChildIsAddress = AsAddress && frameDisplacement(E);
     for (const ExprPtr &Op : E.Operands)
       if (Op)
-        Walk(*Op, AsAddress);
+        Walk(*Op, ChildIsAddress);
     // An indirect call's target is read like an operand: a function pointer
     // kept in a frame slot is that slot.
     if (E.IndirectTarget)
@@ -6573,6 +6577,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     std::function<void(const HighExpr &, bool)> Walk = [&](const HighExpr &N,
                                                            bool AsAddress) {
       if (N.Kind == ExprKind::Var || N.Kind == ExprKind::Phi) {
+        if (!AsAddress)
+          if (auto Slot = namedFrameSlot(N))
+            PrintedAddrSlots.insert(*Slot);
         const std::string Name = copyForwardName(varName(N.Var));
         if (auto Fwd = ValueForward.find(Name);
             Fwd != ValueForward.end() && Fwd->second)
@@ -6622,9 +6629,10 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
           Walk(*N.Operands[1], false);
         return;
       }
+      const bool ChildIsAddress = AsAddress && frameDisplacement(N);
       for (const ExprPtr &Op : N.Operands)
         if (Op)
-          Walk(*Op, AsAddress);
+          Walk(*Op, ChildIsAddress);
       // An indirect call reads its target as a value.
       if (N.IndirectTarget)
         Walk(*N.IndirectTarget, false);
