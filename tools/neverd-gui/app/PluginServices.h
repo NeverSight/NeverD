@@ -16,8 +16,10 @@
 #include "plugins/PluginJobs.h"
 
 #include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QSet>
+#include <functional>
 #include <map>
 #include <optional>
 
@@ -42,6 +44,10 @@ public:
   bool installPlugin(const QString &Path, QString &Error);
   bool setPluginEnabled(const QString &Id, bool Enabled, QString &Error);
   void uninstallPlugin(const QString &Id);
+  /// The workbench's focused selection; the session selection when unset.
+  void setSelectionProvider(std::function<QJsonObject()> Provider);
+  /// The only publisher of the plugin context. Every refresh builds it from the
+  /// same selection source, so host events see only real changes.
   void refreshContext();
   bool pending(const QString &Task) const { return Pending.contains(Task); }
   QString receipt(const QString &Task) const { return Receipts.value(Task); }
@@ -49,6 +55,7 @@ public:
 
 signals:
   void pluginsChanged();
+  void contextChanged();
   void changed(const QString &Task);
   void message(const QString &Text, int Level);
   void navigateRequested(neverd::gui::Address Address);
@@ -62,6 +69,7 @@ private:
   bool beginPublication(const QString &Task);
   Session &Project;
   PluginJobs Jobs;
+  std::function<QJsonObject()> Selection;
   bool PluginsRestored = false;
   QHash<QString, QObject *> QueryOwners;
   QSet<QString> Pending;

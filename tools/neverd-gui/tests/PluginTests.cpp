@@ -1250,6 +1250,27 @@ raise SystemExit(run(handler))
     QVERIFY(pane->contextActions().isEmpty());
   }
 
+  void sessionChangesPublishOneContext() {
+    Session session(QStringLiteral(TEST_WORKER));
+    ActionRegistry registry;
+    AnalysisPlugins pane(session, registry);
+    auto focused = context();
+    focused.insert("selection_text", QStringLiteral("focused view"));
+    pane.setSelectionProvider([&] { return focused; });
+    // Every context published for a session change comes from the focused
+    // view; a second publisher would alternate it and its host events.
+    QList<QJsonObject> published;
+    connect(&pane.jobs(), &PluginJobs::jobsChanged, this,
+            [&] { published.append(pane.jobs().context()); });
+    emit session.stateChanged();
+    emit session.selectionChanged(QJsonObject{{"address", "0x10"}});
+    emit session.revisionChanged();
+    QVERIFY(!published.isEmpty());
+    for (const auto &value : published)
+      QCOMPARE(value.value("selection_text").toString(),
+               QStringLiteral("focused view"));
+  }
+
   void contextMenuGroupsOverridesAndPersistence() {
     Theme::instance().apply();
     QTemporaryDir directory;
