@@ -712,6 +712,13 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         return std::nullopt;
       };
       const bool DirectTarget = Op.NumInputs > 0 && Op.Inputs[0].isConst();
+      // Reuse the register-read proof: a whole absorbing write has no old
+      // address dependence. Set still retains untouched bytes of a partial
+      // destination, so clearing AL cannot erase RAX's surviving high bits.
+      if (isLowSelfXor(Op) || lowAbsorbingConstant(Op)) {
+        Set(Op.Output, {});
+        continue;
+      }
       switch (Op.Opcode) {
       case NdOp::COPY:
         Set(Op.Output, In(0));

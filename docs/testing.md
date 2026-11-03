@@ -6992,6 +6992,8 @@ Decoded AL/AH/AX writes, bitwise transforms, alignment masks and conditional
 moves must retain a subsequently observed home value. Complete 32/64-bit
 definitions end the old address dependence. Loads, stored addresses, calls
 and returns exercise transformed incoming pointers under COFF, ELF and Mach-O.
+Whole-register XOR-zero, AND-zero and OR-all-ones also end the dependence;
+their byte-only counterparts retain the untouched address bits.
 
 `NeverDCallStackRangeSourceTests` executes independent Win64 machine bytes
 beside both C routes on Linux x64. Fixed writes followed by indexed reads,

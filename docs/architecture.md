@@ -8995,6 +8995,8 @@ Partial register writes retain a possible stack address in the untouched bytes.
 Whole-word arithmetic retains an unknown offset when it transforms an address;
 SELECT joins both address alternatives. A later full definition, including the
 lifter's explicit zero-extension after a 32-bit write, replaces the old fact.
+Whole absorbing writes reuse the register-read proof; a partial absorbing
+write still leaves the untouched address bytes observable.
 These facts feed the existing load, return and escape observers; losing an
 affine offset does not prove the value independent of incoming storage.
 

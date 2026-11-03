@@ -281,6 +281,31 @@ TEST(CallStackRange, WholeRegisterDefinitionsEndTheOldStackDependence) {
   }
 }
 
+TEST(CallStackRange, AbsorbingWritesEndOnlyWholeAddressDependencies) {
+  for (const auto Opcode : {NdOp::INT_XOR, NdOp::INT_AND, NdOp::INT_OR})
+    for (unsigned Bytes : {1u, 8u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Opcode) << ':' << Bytes);
+      auto Function = indexedLoad(0x10);
+      auto &Block = Function.Blocks.front();
+      Block.Ops.resize(2);
+      const auto AX = NdVar::reg(x86reg::RAX, Bytes);
+      append(Block, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 8),
+             {SP, NdVar::cst(8, 8)});
+      append(Block, Opcode, AX,
+             {AX, Opcode == NdOp::INT_XOR
+                      ? AX
+                      : NdVar::scalar(Opcode == NdOp::INT_OR ? UINT64_MAX : 0,
+                                      Bytes)});
+      append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+      const auto Effect = localRegisterEffect(image(), Function);
+      EXPECT_EQ(Effect.UnknownStackReads, Bytes != 8);
+      const auto Solved =
+          solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+      EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+                Bytes == 8 ? 0u : 8u);
+    }
+}
+
 TEST(CallStackRange, DerivedIncomingPointersRemainObserversAcrossFormats) {
   for (auto Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
